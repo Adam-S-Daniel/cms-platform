@@ -2,3 +2,5 @@
 /.claude/settings.json
 # Real per-site deploy params (secrets) — only the .example.env is tracked
 infrastructure/site-params.env
+__pycache__/
+*.pyc
