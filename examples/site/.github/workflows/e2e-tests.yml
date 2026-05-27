@@ -1,0 +1,50 @@
+# Thin caller — copied into a site repo as `.github/workflows/e2e-tests.yml`.
+# Owns the PR trigger + paths-ignore + run-name; delegates the whole
+# Playwright suite to the platform's reusable workflow. The harness,
+# specs, configs, and the post-failure-comment composite action all live
+# in the platform repo — this caller only supplies the site's identity
+# (deployed URLs) as inputs. Keep `platform_ref` equal to the `@vX.Y.Z`
+# pin on the `uses:` line so the harness matches the workflow version.
+name: E2E Tests
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    branches:
+      - main
+    # Skip when nothing the e2e suite can observe has changed. The suite
+    # hits DEPLOYED URLs (prod / preview), so the salient set is the site
+    # source that ends up in the build, plus the caller itself. Tune per
+    # site; docs/infra/tooling that never reach the rendered site stay out.
+    paths-ignore:
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'docs/**'
+      - 'infrastructure/**'
+      - 'oauth-proxy/**'
+      - 'LICENSE'
+      - '.gitignore'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  e2e:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/e2e-tests.yml@v0.1.0
+    with:
+      # Validate against the PR's own preview surface. Switch to `prod`
+      # for a post-merge / nightly run, or `local` if the caller first
+      # builds + serves the site itself (this reusable workflow does not).
+      target: preview
+      prod_url: https://example.com
+      apex: example.com
+      browser: chromium
+      pr_number: ${{ github.event.pull_request.number }}
+      # Pin to the SAME ref as the `uses:` pin above so the harness matches.
+      platform_ref: v0.1.0
+    secrets:
+      # Optional — drop this line if the site has no PAT. Preview discovery
+      # then uses the job GITHUB_TOKEN and real-lane CMS specs self-skip.
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
