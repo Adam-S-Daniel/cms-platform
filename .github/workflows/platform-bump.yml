@@ -1,0 +1,47 @@
+# Reusable down-sync helper. Complements Dependabot (which bumps the `uses:@tag`
+# pins + the theme gem): this keeps the `platform_ref:` workflow inputs and a
+# `.platform-version` record in step with the latest cms-platform release.
+name: Platform bump (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
+    secrets:
+      gh_token: { required: false }
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+      - name: Bump platform_ref + .platform-version to latest release
+        env:
+          GH_TOKEN: ${{ secrets.gh_token || github.token }}
+          PLATFORM: ${{ inputs.platform_repo }}
+        run: |
+          set -euo pipefail
+          LATEST=$(gh release view --repo "$PLATFORM" --json tagName -q .tagName 2>/dev/null || echo "")
+          [ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
+          CUR=$(cat .platform-version 2>/dev/null || echo "")
+          [ "$LATEST" = "$CUR" ] && { echo "already on $LATEST"; exit 0; }
+          echo "$LATEST" > .platform-version
+          for f in $(grep -rl 'platform_ref:' .github/workflows/ 2>/dev/null || true); do
+            sed -i -E "s/(platform_ref:[[:space:]]*).*/\1$LATEST/" "$f"
+          done
+          git diff --quiet && { echo "no changes"; exit 0; }
+          BRANCH="platform/bump-$LATEST"
+          git config user.name  cms-platform-bot
+          git config user.email cms-platform-bot@users.noreply.github.com
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore: bump cms-platform to $LATEST"
+          git push -f origin "$BRANCH"
+          gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
+            --title "Bump cms-platform to $LATEST" \
+            --body "Updates \`.platform-version\` + \`platform_ref:\` inputs. Dependabot bumps the \`uses:@\` pins and the theme gem separately." \
+          || gh pr edit "$BRANCH" --body "Bump cms-platform to $LATEST."
