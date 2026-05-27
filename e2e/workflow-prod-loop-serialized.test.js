@@ -31,8 +31,14 @@ const LOOPS = {
 };
 const LOOP_WORKFLOWS = Object.keys(LOOPS);
 const SHARED_GROUP = "prod-mutating-loop";
-const AWAIT_ACTION = "./.github/actions/await-prod-deploy";
-const GATE_ACTION = "./.github/actions/cms-recursion-gate";
+// PLATFORM PORT NOTE: the loop workflows became `workflow_call` reusables
+// (a consuming SITE invokes them), so each job checks the platform out
+// into `.cms-platform/` and references its composites by that local path.
+// The harness resolves the recursion-churn module from either `e2e/`
+// (platform dogfooding) or `.cms-platform/e2e/` (a consuming site), and
+// these `uses:` paths point at the platform checkout accordingly.
+const AWAIT_ACTION = "./.cms-platform/.github/actions/await-prod-deploy";
+const GATE_ACTION = "./.cms-platform/.github/actions/cms-recursion-gate";
 const GATE_JOB = "recursion-gate";
 const GATE_IF = "${{ needs." + GATE_JOB + ".outputs.run == 'true' }}";
 // PLATFORM PORT NOTE: adamdaniel.ai's loop workflows carried a third

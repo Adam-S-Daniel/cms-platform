@@ -1,0 +1,52 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/cms-publish-loop-host.yml`. Owns the schedule / push
+# triggers + run-name; delegates the host-repo canary publish loop to the
+# platform's reusable workflow. The e2e harness + the cms-recursion-gate /
+# await-prod-deploy / post-failure-comment composites all live in the
+# platform repo. Keep `platform_ref` equal to the `@vX.Y.Z` pin on the
+# `uses:` line.
+#
+# Site identity (CMS_PROD_URL / CMS_APEX) is read from THIS repo's VARS by
+# the reusable workflow.
+name: CMS Publish Loop — Host Repo (canary collection)
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || github.event_name == 'push'
+        && format('push — {0} @{1}', github.ref_name, github.actor)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # 12:00 UTC daily. All real-prod loops serialize through the shared
+    # `prod-mutating-loop` concurrency group declared on each loop's
+    # heavy job, so mutual exclusion is structural, not time-based.
+    - cron: '0 12 * * *'
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/cms-publish-loop-host.yml
+      - admin/**
+      - _e2e/canary-post.md
+      - _e2e/canary-page.md
+      - _e2e/canary-project.md
+      - playwright.config.js
+      - package.json
+      - package-lock.json
+      - _config.yml
+      - _layouts/canary.html
+      - _layouts/default.html
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  host-loop:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cms-publish-loop-host.yml@v0.1.0
+    with:
+      # Pin to the SAME ref as the `uses:` pin above so the harness matches.
+      platform_ref: v0.1.0
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

@@ -1,21 +1,20 @@
-name: CMS Publish Loop — Host Repo (canary collection)
-run-name: >-
-  ${{ github.event_name == 'schedule'
-        && format('scheduled — {0}', github.event.schedule)
-   || github.event_name == 'push'
-        && format('push — {0} @{1}', github.ref_name, github.actor)
-   || format('manual — @{0}', github.actor) }}
-
+# Reusable host-repo canary publish loop for platform sites.
+#
+# A consuming site calls this from a thin wrapper that owns the schedule /
+# push / workflow_dispatch triggers + run-name (see
+# examples/site/.github/workflows/cms-publish-loop-host.yml). The e2e
+# harness, the cms-recursion-gate + await-prod-deploy + post-failure-comment
+# composites all live in the PLATFORM repo, so each job checks the platform
+# out into `.cms-platform/` and runs the suite from there. Site identity
+# (CMS_PROD_URL / CMS_APEX) resolves to the CALLER's repo VARS under
+# workflow_call.
+#
 # Runs the full Decap → cms PR → auto-merge → deploy-production loop
 # end-to-end against prod, mutating a `_e2e/` canary entry (default
 # canary-post). Mirrors cms-publish-loop-prod.yml's structure but
 # targets the canary collection instead of `_posts/`.
 #
 # PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main):
-#   - Runs in the PLATFORM repo (dogfooding): the e2e harness + the
-#     recursion-churn module live here under e2e/, so no .cms-platform/
-#     checkout is needed and the recursion-gate composite resolves the
-#     churn module straight from the workspace.
 #   - The site's deployed identity is parameterized via repo VARS
 #     (CMS_PROD_URL / CMS_APEX) so a consuming deployment supplies its
 #     own URLs; CMS_REPO falls back to github.repository.
@@ -33,32 +32,24 @@ run-name: >-
 # Spec gating: e2e/cms-publish-loop.spec.js self-skips when
 # `RUN_HOST_REPO_PUBLISH_LOOP=1` is unset, so the spec only runs inside
 # this workflow.
+name: CMS Publish Loop — Host Repo (canary collection) (reusable)
 
 on:
-  schedule:
-    # 12:00 UTC daily. All real-prod loops serialize through the shared
-    # `prod-mutating-loop` concurrency group declared on each loop's
-    # heavy job, so mutual exclusion is structural, not time-based.
-    - cron: '0 12 * * *'
-  push:
-    branches: [main]
-    paths:
-      # Deliberately NO e2e/** entries. The spec/helper files this loop
-      # runs are validated by the daily `schedule` run and on-demand
-      # `workflow_dispatch` — both ignore `paths:` and always fire.
-      - .github/workflows/cms-publish-loop-host.yml
-      - admin/**
-      - _e2e/canary-post.md
-      - _e2e/canary-page.md
-      - _e2e/canary-project.md
-      - playwright.config.js
-      - package.json
-      - package-lock.json
-      - _config.yml
-      - _layouts/canary.html
-      - _layouts/default.html
-  workflow_dispatch:
-    # Manual trigger for debugging the spec.
+  workflow_call:
+    inputs:
+      platform_repo:
+        description: "owner/name of the platform repo holding the e2e harness + composite actions."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the harness from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+    secrets:
+      CMS_E2E_PAT:
+        required: false
 
 permissions:
   # The spec drives admin via a fine-grained PAT (CMS_E2E_PAT) — the
@@ -94,9 +85,17 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
         with:
           fetch-depth: 2
+
+      - name: Checkout platform (e2e harness + composite actions)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
       - name: Recursion gate
         id: gate
-        uses: ./.github/actions/cms-recursion-gate
+        uses: ./.cms-platform/.github/actions/cms-recursion-gate
         with:
           loop: host
 
@@ -140,17 +139,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
 
+      - name: Checkout platform (e2e harness + composite actions)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
         with:
           node-version: "20"
 
       - name: Install harness deps
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         run: npm ci
 
       - name: Install Playwright browser + system deps
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         run: npx playwright install --with-deps chromium
 
       # Post-merge only: do NOT drive prod until THIS commit is live
@@ -160,12 +166,12 @@ jobs:
       # the deploy failed.
       - name: Await prod deploy of this merge
         if: ${{ github.event_name == 'push' }}
-        uses: ./.github/actions/await-prod-deploy
+        uses: ./.cms-platform/.github/actions/await-prod-deploy
         with:
           prod-url: ${{ vars.CMS_PROD_URL }}
 
       - name: Run host-repo publish loop + delete-published specs
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         env:
           # Fine-grained PAT scoped to the host repo (contents r/w +
           # pull_requests r/w + metadata r).
@@ -201,7 +207,7 @@ jobs:
         with:
           name: host-loop-results
           path: |
-            e2e/test-results/
+            .cms-platform/e2e/test-results/
             /tmp/host-loop.log
           retention-days: 14
 
@@ -210,7 +216,7 @@ jobs:
       # canonical pattern; the composite is mode-driven.
       - name: Post failure summary
         if: ${{ failure() && github.event_name == 'pull_request' }}
-        uses: ./.github/actions/post-failure-comment
+        uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: post
           log-file: /tmp/host-loop.log
@@ -219,7 +225,7 @@ jobs:
 
       - name: Resolve failure summary on success
         if: ${{ success() && github.event_name == 'pull_request' }}
-        uses: ./.github/actions/post-failure-comment
+        uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: resolve
           marker: host-loop-failure-summary

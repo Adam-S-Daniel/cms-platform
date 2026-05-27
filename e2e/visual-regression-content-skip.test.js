@@ -20,8 +20,23 @@ const { parseYaml } = require("./workflow-yaml-utils");
 // workflow's `paths:` list, this test fails and the PR has to either
 // (a) explicitly remove the path again or (b) document why the
 // invariant changed by editing this test.
+//
+// PLATFORM PORT NOTE: visual-regression.yml became a `workflow_call`
+// reusable, so the `on.pull_request` trigger + its content-skip `paths:`
+// list now live on the THIN CALLER a site copies in
+// (examples/site/.github/workflows/visual-regression.yml). The reusable
+// has no `paths:` of its own; this lint reads the canonical caller, which
+// is the file that actually carries the trigger.
 
-const WORKFLOW = path.join(__dirname, "..", ".github", "workflows", "visual-regression.yml");
+const WORKFLOW = path.join(
+  __dirname,
+  "..",
+  "examples",
+  "site",
+  ".github",
+  "workflows",
+  "visual-regression.yml",
+);
 
 // CMS-managed content paths. These MUST NOT appear in the workflow's
 // `paths:` list. Mirror admin/config.yml's collection folders.

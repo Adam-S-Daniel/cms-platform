@@ -1,21 +1,19 @@
-name: Visual Regression
-run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
-
+# Reusable visual-regression workflow for platform sites.
+#
+# A consuming site calls this from a thin wrapper that owns the
+# pull_request trigger + paths filter + run-name (see
+# examples/site/.github/workflows/visual-regression.yml). The video
+# pipeline (detect-changed-pages.js, compute-visual-diffs.js,
+# generate-video.sh, regression-video.spec.js,
+# playwright.regression.config.js) lives in the PLATFORM repo's e2e/, so
+# the generate job checks the platform out into `.cms-platform/` and runs
+# the pipeline from there. The LOCAL `bundle exec jekyll build` builds the
+# CONSUMING site (checked out at the workspace root); the screenshots the
+# spec produces land under `.cms-platform/e2e/screenshots/`.
+#
 # PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main)
 # ---------------------------------------------------
-# This workflow is pinned to a FULL-WORKFLOW shape (NOT reusable +
-# thin caller) by two platform lints that read it straight from
-# .github/workflows/visual-regression.yml:
-#   - e2e/visual-regression-content-skip.test.js — asserts the
-#     `on.pull_request.paths` content-skip list (no CMS-content paths;
-#     templates/styling present).
-#   - e2e/visual-regression-skip-review.test.js — asserts the `generate`
-#     job's `visually-different` output, the compute-visual-diffs
-#     $GITHUB_OUTPUT echo, and the conditional `regression-review`
-#     environment on `approve-regression`.
-# So it stays a full workflow that runs in the PLATFORM repo (dogfooding).
-#
-# It is also the most site-specific of the e2e family and is NOT fully
+# This is the most site-specific of the e2e family and is NOT fully
 # generalizable:
 #   - It runs a LOCAL `bundle exec jekyll build` — the consuming repo
 #     must ship its own Gemfile/Gemfile.lock + buildable Jekyll site
@@ -36,42 +34,42 @@ run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, githu
 #   - The video-pipeline tools (detect-changed-pages.js,
 #     compute-visual-diffs.js, generate-video.sh, regression-video.spec.js,
 #     playwright.regression.config.js) live in the platform's e2e/ and
-#     run from there.
+#     run from there (.cms-platform/e2e).
+#
+# The generate job's `visually-different` output + the conditional
+# `regression-review` environment on approve-regression are preserved
+# (locked by e2e/visual-regression-skip-review.test.js). The content-skip
+# `paths:` list now lives on the thin caller (locked there by
+# e2e/visual-regression-content-skip.test.js after this port).
+name: Visual Regression (reusable)
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches:
-      - main
-    # Positive path list — only run when the diff can shift rendered
-    # output OR change a tool the regression pipeline uses. Content-only
-    # PRs (CMS collections + media uploads) are intentionally absent:
-    # pixel diffs there are by design. (Locked by
-    # e2e/visual-regression-content-skip.test.js.)
-    paths:
-      - '_layouts/**'
-      - '_includes/**'
-      - '_plugins/**'
-      - '_data/**'
-      - 'admin/**'
-      - '_config.yml'
-      - 'Gemfile'
-      - 'Gemfile.lock'
-      - 'index.html'
-      - '404.html'
-      - 'robots.txt'
-      - 'preview.md'
-      - 'assets/css/**'
-      - 'assets/js/**'
-      - 'assets/images/logo.svg'
-      # Tools the regression pipeline itself depends on (in the platform's
-      # e2e/, but listed so a vendored/site-local copy also triggers).
-      - '.github/workflows/visual-regression.yml'
-      - 'e2e/detect-changed-pages.js'
-      - 'e2e/compute-visual-diffs.js'
-      - 'e2e/generate-video.sh'
-      - 'e2e/regression-video.spec.js'
-      - 'e2e/playwright.regression.config.js'
+  workflow_call:
+    inputs:
+      platform_repo:
+        description: "owner/name of the platform repo holding the e2e video-regression pipeline."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the pipeline from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+    secrets:
+      # OIDC role assumed for the S3 upload + CloudFront invalidation.
+      # Optional: when unset the AWS steps no-op (they also gate on
+      # PREVIEW_BUCKET being set).
+      AWS_ROLE_ARN:
+        required: false
+      # CloudFront distribution for the preview bucket. Optional — the
+      # invalidation step gates on it being set.
+      PREVIEW_CLOUDFRONT_ID:
+        required: false
+      # Optional PAT for any platform-side API calls. Declared so a caller
+      # can wire it through; unused steps tolerate it being unset.
+      CMS_E2E_PAT:
+        required: false
 
 permissions:
   contents: read
@@ -103,6 +101,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Checkout platform (e2e video-regression pipeline)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
       - name: Fetch main branch
         run: git fetch origin main
 
@@ -117,10 +122,10 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: e2e/package-lock.json
+          cache-dependency-path: .cms-platform/e2e/package-lock.json
 
       - name: Install npm dependencies
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         run: npm ci
 
       - name: Cache Playwright browsers
@@ -128,24 +133,24 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5 (2026-04-13)
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('.cms-platform/e2e/package-lock.json') }}
 
       - name: Install Playwright browsers
         if: steps.pw-cache.outputs.cache-hit != 'true'
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         run: npx playwright install chromium --with-deps
 
       - name: Install Playwright OS deps (browsers cached)
         if: steps.pw-cache.outputs.cache-hit == 'true'
         timeout-minutes: 5
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         run: npx playwright install-deps chromium
 
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
       - name: Detect changed pages
-        run: node e2e/detect-changed-pages.js > /tmp/page-changes.json
+        run: node .cms-platform/e2e/detect-changed-pages.js > /tmp/page-changes.json
 
       - name: Show page changes
         run: cat /tmp/page-changes.json
@@ -157,7 +162,7 @@ jobs:
 
       - name: Run regression video screenshots
         continue-on-error: true
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         env:
           PAGE_CHANGES_PATH: /tmp/page-changes.json
         run: npx playwright test --config=playwright.regression.config.js
@@ -166,19 +171,19 @@ jobs:
         id: compute
         run: |
           set -euo pipefail
-          node e2e/compute-visual-diffs.js \
+          node .cms-platform/e2e/compute-visual-diffs.js \
             /tmp/page-changes.json \
-            e2e/screenshots/regression/pr \
-            e2e/screenshots/regression/prod \
-            e2e/screenshots/regression/diffs.json
-          cat e2e/screenshots/regression/diffs.json || true
+            .cms-platform/e2e/screenshots/regression/pr \
+            .cms-platform/e2e/screenshots/regression/prod \
+            .cms-platform/e2e/screenshots/regression/diffs.json
+          cat .cms-platform/e2e/screenshots/regression/diffs.json || true
           # Robust read of the visuallyDifferent total. A MISSING/EMPTY
           # diffs.json is tolerated as 0; a PRESENT-but-malformed one
           # fails LOUD with an actionable message instead of a cryptic
           # SyntaxError.
           VD=$(node -e '
             const fs = require("fs");
-            const p = "e2e/screenshots/regression/diffs.json";
+            const p = ".cms-platform/e2e/screenshots/regression/diffs.json";
             if (!fs.existsSync(p)) {
               console.error("[visreg] " + p + " not written — treating as 0 visually-different.");
               process.stdout.write("0");
@@ -203,7 +208,7 @@ jobs:
           echo "visually-different=$VD" >> "$GITHUB_OUTPUT"
 
       - name: Generate comparison video
-        run: bash e2e/generate-video.sh /tmp/page-changes.json e2e/screenshots/regression/diffs.json
+        run: bash .cms-platform/e2e/generate-video.sh /tmp/page-changes.json .cms-platform/e2e/screenshots/regression/diffs.json
 
       # AWS / S3 / CloudFront / PR-comment steps are skipped for
       # Dependabot PRs (no OIDC role access) and no-op when the AWS
@@ -218,11 +223,11 @@ jobs:
       - name: Upload video and diffs JSON to S3
         if: github.actor != 'dependabot[bot]' && env.PREVIEW_BUCKET != ''
         run: |
-          aws s3 cp e2e/screenshots/regression/comparison.mp4 \
+          aws s3 cp .cms-platform/e2e/screenshots/regression/comparison.mp4 \
             "s3://${PREVIEW_BUCKET}/pr-${PR_NUMBER}/regression.mp4" \
             --cache-control "no-cache, must-revalidate" \
             --content-type "video/mp4"
-          aws s3 cp e2e/screenshots/regression/diffs.json \
+          aws s3 cp .cms-platform/e2e/screenshots/regression/diffs.json \
             "s3://${PREVIEW_BUCKET}/pr-${PR_NUMBER}/regression.json" \
             --cache-control "no-cache, must-revalidate" \
             --content-type "application/json"
@@ -255,7 +260,7 @@ jobs:
               }
             };
             const changes = readJsonOrNull('/tmp/page-changes.json');
-            const diffs = readJsonOrNull('e2e/screenshots/regression/diffs.json');
+            const diffs = readJsonOrNull('.cms-platform/e2e/screenshots/regression/diffs.json');
             if (!changes || !diffs) {
               console.warn('[visreg] regression inputs unavailable — not posting/updating the comment this run.');
               return;
@@ -333,8 +338,8 @@ jobs:
         with:
           name: regression-video
           path: |
-            e2e/screenshots/regression/comparison.mp4
-            e2e/screenshots/regression/diffs.json
+            .cms-platform/e2e/screenshots/regression/comparison.mp4
+            .cms-platform/e2e/screenshots/regression/diffs.json
           retention-days: 14
 
   approve-regression:

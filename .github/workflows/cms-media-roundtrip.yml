@@ -1,11 +1,14 @@
-name: CMS Media Roundtrip — Prod (real upload + delete)
-run-name: >-
-  ${{ github.event_name == 'schedule'
-        && format('scheduled — {0}', github.event.schedule)
-   || github.event_name == 'push'
-        && format('push — {0} @{1}', github.ref_name, github.actor)
-   || format('manual — @{0}', github.actor) }}
-
+# Reusable prod media-roundtrip loop for platform sites.
+#
+# A consuming site calls this from a thin wrapper that owns the schedule /
+# push / workflow_dispatch triggers + run-name (see
+# examples/site/.github/workflows/cms-media-roundtrip.yml). The e2e
+# harness, the cms-recursion-gate + await-prod-deploy + post-failure-comment
+# composites all live in the PLATFORM repo, so each job checks the platform
+# out into `.cms-platform/` and runs the suite from there. Site identity
+# (CMS_PROD_URL / CMS_APEX) + the PROD_PLAYGROUND_MODE sunset gate resolve
+# to the CALLER's repo VARS under workflow_call.
+#
 # Runs the full Decap Media-UI lifecycle end-to-end against prod:
 # upload a unique image via the Media UI → attach to a real _posts/
 # entry → publish → assert it loads → remove from the post → publish →
@@ -13,37 +16,32 @@ run-name: >-
 # e2e/cms-media-roundtrip.spec.js for the rationale.
 #
 # PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main): same shape as
-# cms-publish-loop-prod.yml — runs in the platform repo (dogfooding),
-# site identity via repo VARS, GHCR ci-runner image + build-image job +
-# container: block DROPPED in favour of inline deps, stuck-PR
-# diagnostic DROPPED. The shared prod-mutating-loop lane,
-# await-prod-deploy gate, recursion-gate job, and the
-# PROD_PLAYGROUND_MODE sunset gate are preserved.
+# cms-publish-loop-prod.yml — site identity via repo VARS, GHCR ci-runner
+# image + build-image job + container: block DROPPED in favour of inline
+# deps, stuck-PR diagnostic DROPPED. The shared prod-mutating-loop lane,
+# await-prod-deploy gate, recursion-gate job, and the PROD_PLAYGROUND_MODE
+# sunset gate are preserved.
 #
 # Sunset path: gated on the repo variable `PROD_PLAYGROUND_MODE` (see
 # cms-publish-loop-prod.yml).
+name: CMS Media Roundtrip — Prod (real upload + delete) (reusable)
 
 on:
-  schedule:
-    - cron: '0 15 * * *'
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/cms-media-roundtrip.yml
-      - e2e/cms-media-roundtrip.spec.js
-      - e2e/prod-mutate-fixture.js
-      - e2e/decap-pat.js
-      - e2e/github-actions-poll.js
-      - e2e/deploy-pill.js
-      - e2e/cms-fixture-pr.js
-      - e2e/base.js
-      - admin/**
-      - playwright.config.js
-      - package.json
-      - package-lock.json
-      - _config.yml
-      - _layouts/post.html
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      platform_repo:
+        description: "owner/name of the platform repo holding the e2e harness + composite actions."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the harness from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+    secrets:
+      CMS_E2E_PAT:
+        required: false
 
 permissions:
   # The spec drives admin via a fine-grained PAT (CMS_E2E_PAT); the
@@ -70,9 +68,17 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
         with:
           fetch-depth: 2
+
+      - name: Checkout platform (e2e harness + composite actions)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
       - name: Recursion gate
         id: gate
-        uses: ./.github/actions/cms-recursion-gate
+        uses: ./.cms-platform/.github/actions/cms-recursion-gate
         with:
           loop: media
 
@@ -115,17 +121,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
 
+      - name: Checkout platform (e2e harness + composite actions)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
         with:
           node-version: "20"
 
       - name: Install harness deps
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         run: npm ci
 
       - name: Install Playwright browser + system deps
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         run: npx playwright install --with-deps chromium
 
       # Post-merge only: do NOT drive prod until THIS commit is live.
@@ -133,7 +146,7 @@ jobs:
       # off (the spec self-skips, so there is nothing to gate).
       - name: Await prod deploy of this merge
         if: ${{ github.event_name == 'push' && vars.PROD_PLAYGROUND_MODE == 'true' }}
-        uses: ./.github/actions/await-prod-deploy
+        uses: ./.cms-platform/.github/actions/await-prod-deploy
         with:
           prod-url: ${{ vars.CMS_PROD_URL }}
 
@@ -143,7 +156,7 @@ jobs:
 
       - name: Run media round-trip spec
         if: vars.PROD_PLAYGROUND_MODE == 'true'
-        working-directory: e2e
+        working-directory: .cms-platform/e2e
         env:
           CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
           TARGET: prod
@@ -164,13 +177,13 @@ jobs:
         with:
           name: media-roundtrip-results
           path: |
-            e2e/test-results/
+            .cms-platform/e2e/test-results/
             /tmp/media-roundtrip.log
           retention-days: 14
 
       - name: Post failure summary
         if: ${{ failure() && vars.PROD_PLAYGROUND_MODE == 'true' }}
-        uses: ./.github/actions/post-failure-comment
+        uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: post
           log-file: /tmp/media-roundtrip.log
@@ -179,7 +192,7 @@ jobs:
 
       - name: Resolve failure summary on success
         if: ${{ success() && vars.PROD_PLAYGROUND_MODE == 'true' }}
-        uses: ./.github/actions/post-failure-comment
+        uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: resolve
           marker: media-roundtrip-failure-summary

@@ -1,0 +1,42 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/cms-publish-loop-prod.yml`. Owns the push /
+# workflow_dispatch triggers + run-name; delegates the prod-mutation
+# playground loop to the platform's reusable workflow. The e2e harness +
+# the cms-recursion-gate / await-prod-deploy / post-failure-comment
+# composites all live in the platform repo. Keep `platform_ref` equal to
+# the `@vX.Y.Z` pin on the `uses:` line.
+#
+# Site identity (CMS_PROD_URL / CMS_APEX) + the PROD_PLAYGROUND_MODE
+# sunset gate are read from THIS repo's VARS by the reusable workflow.
+name: CMS Publish Loop — Prod Mutation Playground
+run-name: >-
+  ${{ github.event_name == 'push'
+        && format('push — {0} @{1}', github.ref_name, github.actor)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/cms-publish-loop-prod.yml
+      - admin/**
+      - playwright.config.js
+      - package.json
+      - package-lock.json
+      - _config.yml
+      - _layouts/post.html
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  prod-loop:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cms-publish-loop-prod.yml@v0.1.0
+    with:
+      # Pin to the SAME ref as the `uses:` pin above so the harness matches.
+      platform_ref: v0.1.0
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

@@ -37,11 +37,31 @@ const path = require("node:path");
 const { test, expect } = require("./base");
 const { listWorkflows, parseYaml, events } = require("./workflow-yaml-utils");
 
+// A workflow triggered PURELY by `workflow_call` never displays its own
+// run-name — the title shown in the Actions tab is the CALLER's. The
+// platform's reusable workflows (e2e-tests, cms-publish-loop-*,
+// cms-preview-loops, visual-regression, parity-preview, …) are all
+// `workflow_call`-only and deliberately carry NO `run-name:`; the thin
+// caller a site copies in owns the trigger + the dynamic run-name. So the
+// run-name requirement (presence + per-event branch) does not apply to a
+// reusable — exempt it here, exactly as this file's header anticipated.
+const isWorkflowCallOnly = (doc) => {
+  const evs = events(doc && doc.on);
+  return evs.length === 1 && evs[0] === "workflow_call";
+};
+
 for (const file of listWorkflows()) {
   const name = path.basename(file);
 
   test(`${name} :: declares a dynamic run-name`, () => {
     const doc = parseYaml(fs.readFileSync(file, "utf8")) || {};
+    // workflow_call-only reusables show the caller's title, not their own
+    // — they need no run-name. The caller carries it (and is itself linted
+    // where it lives).
+    test.skip(
+      isWorkflowCallOnly(doc),
+      `${name} is a workflow_call-only reusable — its run-name is never displayed (the caller's is).`,
+    );
     const runName = doc["run-name"];
 
     expect(
@@ -78,6 +98,10 @@ for (const file of listWorkflows()) {
 
   test(`${name} :: multi-event run-name branches on the trigger`, () => {
     const doc = parseYaml(fs.readFileSync(file, "utf8")) || {};
+    test.skip(
+      isWorkflowCallOnly(doc),
+      `${name} is a workflow_call-only reusable — run-name is the caller's.`,
+    );
     const declared = events(doc.on);
     const runName = typeof doc["run-name"] === "string" ? doc["run-name"] : "";
 
