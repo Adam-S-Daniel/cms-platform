@@ -1,0 +1,12 @@
+name: CMS Editorial Workflow
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+on:
+  pull_request:
+    types: [opened, synchronize, labeled]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+jobs:
+  editorial:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cms-editorial-workflow.yml@v0.1.0
