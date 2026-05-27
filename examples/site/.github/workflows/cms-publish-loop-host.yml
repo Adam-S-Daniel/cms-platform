@@ -22,6 +22,7 @@ on:
     # `prod-mutating-loop` concurrency group declared on each loop's
     # heavy job, so mutual exclusion is structural, not time-based.
     - cron: '0 12 * * *'
+  workflow_dispatch:
   push:
     branches: [main]
     paths:

@@ -97,8 +97,25 @@ to ship a buildable Jekyll site + Gemfile, AWS OIDC/S3/CloudFront, and a
 
 ## Remaining work
 
-- Port `cms-editorial-workflow` (done), `sweep-stale-cms-prs` (done),
-  `publish-scheduled-posts` (done), `secrets-scan` (done), `required-check-stubs`.
+Ported as reusable `workflow_call` + thin callers: deploy (prod+preview),
+`cms-editorial-workflow`, `secrets-scan`, `publish-scheduled-posts`,
+`sweep-stale-cms-prs`, and the full **e2e matrix** (`e2e-tests` + the 10
+loop/visual/parity/media workflows + the `await-prod-deploy` /
+`cms-recursion-gate` / `post-failure-comment` composites + the `e2e/` harness).
+
+Still open:
+- Not yet ported: `required-check-stubs`, `auto-resolve-newline-conflict`,
+  `cleanup-stale-fixture-branches`, `dependabot-auto-merge`,
+  `dependabot-comment-sync`, `label-non-decap-prs`, `code-quality`,
+  `regenerate-manual` (some are adamdaniel-specific glue).
+- **e2e meta-lints** assume adamdaniel's repo layout and need platform/site
+  adaptation: `visual-regression-content-skip.test.js` reads `admin/config.yml`
+  (platform ships `config.base.yml`); `playwright-image-drift.test.js` needs an
+  un-ported `scripts/check-playwright-image-drift.js`; the workflow-structure
+  lints were adjusted for the reusable shape. Dropped adamdaniel-only CI (GHCR
+  `ci-runner-image`, `select-specs` sharding, the finalize merge-gate) is intentional.
+- **Visual-regression baselines are site-specific** — a new site regenerates
+  snapshots (`npx playwright test --update-snapshots`).
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
