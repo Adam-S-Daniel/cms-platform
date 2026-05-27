@@ -1,0 +1,287 @@
+# Composite action: post a Playwright failure summary as a PR
+# comment, scrubbed of secrets via gitleaks. Resolves the comment
+# to a "passing on <sha>" stub on the next green run.
+#
+# Why this exists: workflow logs are only readable by anyone with
+# Actions read access (and only by the Claude agent via a
+# screenshot or paste). Surfacing the failure block as a marker-
+# tagged PR comment makes it visible inline to humans and via
+# `mcp__github__pull_request_read` to the agent, with no extra
+# infra (uses `actions/github-script` for the API call).
+#
+# DESIGN (v3): caller-side gating. Earlier versions tried to
+# detect job state inside the action via `${{ job.status }}` and
+# `failure()` / `success()` — both proved unreliable in this
+# composite context (no comment landed across multiple runs).
+# v3 makes the action mode-driven and pushes the gate to the
+# CALLER, where `failure()` / `success()` are the canonical,
+# well-tested workflow primitives. Result: two call sites per
+# workflow (one for failure, one for resolve), but the action
+# itself is dumb and reliable.
+#
+# Bundles extract-playwright-failures.sh and scrub-secrets.js
+# INTO this action's own directory and resolves them via
+# `${{ github.action_path }}`, so the action is fully self-contained
+# and works in any repo that checks the platform out (no dependence
+# on a `scripts/` dir at the consuming repo's root). Designed to work
+# whether the
+# caller runs as root in a container (Playwright Docker image) or
+# as a non-root user on `ubuntu-latest` — gitleaks installs to
+# `$HOME/.local/bin` either way, no sudo required.
+#
+# Usage (single-job workflow, fires on `pull_request`):
+#
+#   - name: Post failure summary
+#     if: ${{ failure() && github.event_name == 'pull_request' }}
+#     uses: ./.github/actions/post-failure-comment
+#     with:
+#       mode: post
+#       log-file: /tmp/host-loop.log
+#       marker: host-loop-failure-summary
+#       title: host-loop
+#
+#   - name: Resolve failure summary on success
+#     if: ${{ success() && github.event_name == 'pull_request' }}
+#     uses: ./.github/actions/post-failure-comment
+#     with:
+#       mode: resolve
+#       marker: host-loop-failure-summary
+#       title: host-loop
+#
+# For workflow_dispatch (no pull_request payload), pass
+# `pr-number: ${{ inputs.pr_number }}` and drop the
+# `github.event_name == 'pull_request'` part of the `if:`.
+
+name: Post failure summary to PR
+description: Scrub a Playwright log via gitleaks and post (or resolve) a PR failure-summary comment.
+
+inputs:
+  mode:
+    description: |
+      Either `post` (install gitleaks + scrub the log + post the
+      failure-summary comment) or `resolve` (stamp the existing
+      comment to "passing on <sha>"). The caller decides which
+      mode to invoke via its own `if: failure()` / `if: success()`
+      gate; the action does NOT detect job state itself.
+    required: true
+  marker:
+    description: |
+      Unique HTML-comment marker for this workflow's summary
+      (e.g. `host-loop-failure-summary`). Two workflows must NOT
+      share a marker — they would clobber each other's comments.
+    required: true
+  title:
+    description: |
+      Short label shown in the comment heading
+      (e.g. "host-loop", "prod-mutate", "E2E tests").
+    required: true
+  log-file:
+    description: |
+      Path to the captured Playwright/test log to scrub. Required
+      when `mode: post`; ignored when `mode: resolve` (resolve
+      doesn't read the log).
+    required: false
+    default: ""
+  gitleaks-version:
+    description: Version of gitleaks to install for scrubbing.
+    required: false
+    default: "8.21.2"
+  pr-number:
+    description: |
+      Explicit PR number to comment on. Required when the workflow
+      fires on `workflow_dispatch` (or any non-`pull_request`
+      event), since `github.event.pull_request` is empty in that
+      case. When unset, the action falls back to
+      `context.payload.pull_request.number`.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Sanity log
+      shell: bash
+      env:
+        ACTION_MODE: ${{ inputs.mode }}
+        ACTION_MARKER: ${{ inputs.marker }}
+        ACTION_LOG_FILE: ${{ inputs.log-file }}
+        ACTION_PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        # Echo received inputs so a future workflow-log inspection
+        # confirms the action was invoked with the expected args.
+        # If a future maintainer sees no failure-summary comment on
+        # a failed run, this output is the first thing to check.
+        echo "::notice::post-failure-comment invoked: mode=${ACTION_MODE} marker=${ACTION_MARKER} log=${ACTION_LOG_FILE} pr-override=${ACTION_PR_NUMBER:-(none)} event=${GITHUB_EVENT_NAME}"
+
+    - name: Install gitleaks
+      if: ${{ inputs.mode == 'post' }}
+      shell: bash
+      env:
+        GITLEAKS_VERSION: ${{ inputs.gitleaks-version }}
+      run: |
+        # User-writable install path so the action works whether
+        # the job runs as root in a container (Playwright image)
+        # or as a non-root user on ubuntu-latest. Add to PATH for
+        # subsequent steps via $GITHUB_PATH.
+        set -euo pipefail
+        mkdir -p "$HOME/.local/bin"
+        curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+          | tar -xzC "$HOME/.local/bin" gitleaks
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/gitleaks" version
+
+    - name: Extract and scrub failure summary
+      if: ${{ inputs.mode == 'post' }}
+      shell: bash
+      env:
+        LOG_FILE: ${{ inputs.log-file }}
+        # github.action_path resolves to this composite action's own
+        # directory in whatever repo checked it out, so the bundled
+        # scripts travel WITH the action — no dependence on a `scripts/`
+        # dir at the consuming repo's root.
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # The extractor + scrubber are bundled alongside this action's
+        # action.yml (copied into the action dir at port time), so they
+        # resolve via $ACTION_PATH regardless of the consuming repo's
+        # layout. The caller still runs actions/checkout for the log file,
+        # but the scripts themselves no longer need to live in the repo.
+        EXTRACTOR="$ACTION_PATH/extract-playwright-failures.sh"
+        SCRUBBER="$ACTION_PATH/scrub-secrets.js"
+        # Ensure gitleaks is reachable for the node scrubber.
+        export PATH="$HOME/.local/bin:$PATH"
+
+        if [ -z "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
+          echo "(no log captured${LOG_FILE:+ at $LOG_FILE})" > /tmp/failures-final.txt
+          exit 0
+        fi
+
+        bash "$EXTRACTOR" "$LOG_FILE" > /tmp/failures-raw.txt || true
+        if [ ! -s /tmp/failures-raw.txt ]; then
+          # Extractor matches Playwright's `--reporter=list` blocks;
+          # fall back to log tail for non-test failures (Decap PR
+          # creation timeout, deploy chain failure, etc.).
+          tail -c 80000 "$LOG_FILE" > /tmp/failures-raw.txt
+        fi
+
+        node "$SCRUBBER" /tmp/failures-raw.txt /tmp/failures-clean.txt
+        # Truncate to fit comfortably in a GitHub comment
+        # (hard cap ~65 535 chars; leave headroom for surrounding
+        # markdown).
+        head -c 60000 /tmp/failures-clean.txt > /tmp/failures-final.txt
+
+    - name: Post failure summary to PR
+      if: ${{ inputs.mode == 'post' && (github.event_name == 'pull_request' || inputs.pr-number != '') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+      env:
+        # Pass inputs via env vars to avoid script-injection: the
+        # actions/github-script README explicitly recommends this
+        # over inlining `${{ inputs.x }}` into the script body.
+        FAILURE_MARKER: ${{ inputs.marker }}
+        FAILURE_TITLE: ${{ inputs.title }}
+        PR_NUMBER_OVERRIDE: ${{ inputs.pr-number }}
+      with:
+        script: |
+          const fs = require('fs');
+          const summary = fs.readFileSync('/tmp/failures-final.txt', 'utf8');
+          const marker = `<!-- ${process.env.FAILURE_MARKER} -->`;
+          const title = process.env.FAILURE_TITLE;
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+          let pr;
+          let sha;
+          if (process.env.PR_NUMBER_OVERRIDE) {
+            pr = parseInt(process.env.PR_NUMBER_OVERRIDE, 10);
+            const { data: prData } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr,
+            });
+            sha = prData.head.sha.slice(0, 7);
+          } else {
+            pr = context.payload.pull_request.number;
+            sha = context.payload.pull_request.head.sha.slice(0, 7);
+          }
+
+          const body = [
+            marker,
+            `## ${title} failure on \`${sha}\``,
+            '',
+            `[View full run](${runUrl})`,
+            '',
+            '<details>',
+            '<summary>Failure log (secrets redacted via gitleaks)</summary>',
+            '',
+            '```',
+            summary || '(no failure block matched the extractor; see the run for full output)',
+            '```',
+            '',
+            '</details>',
+            '',
+            '*Posted automatically. The comment refreshes on every CI run; the most recent failures are always shown here.*',
+          ].join('\n');
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: pr,
+          });
+          const existing = comments.find(c => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+              body,
+            });
+          }
+
+    - name: Resolve failure-summary comment on success
+      if: ${{ inputs.mode == 'resolve' && (github.event_name == 'pull_request' || inputs.pr-number != '') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+      env:
+        FAILURE_MARKER: ${{ inputs.marker }}
+        FAILURE_TITLE: ${{ inputs.title }}
+        PR_NUMBER_OVERRIDE: ${{ inputs.pr-number }}
+      with:
+        script: |
+          const marker = `<!-- ${process.env.FAILURE_MARKER} -->`;
+          const title = process.env.FAILURE_TITLE;
+
+          let pr;
+          let sha;
+          if (process.env.PR_NUMBER_OVERRIDE) {
+            pr = parseInt(process.env.PR_NUMBER_OVERRIDE, 10);
+            const { data: prData } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr,
+            });
+            sha = prData.head.sha.slice(0, 7);
+          } else {
+            pr = context.payload.pull_request.number;
+            sha = context.payload.pull_request.head.sha.slice(0, 7);
+          }
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: pr,
+          });
+          const existing = comments.find(c => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body: `${marker}\n## ${title} passing on \`${sha}\`\n\n_Cleared by the most recent green run._`,
+            });
+          }
