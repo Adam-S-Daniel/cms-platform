@@ -1,0 +1,4 @@
+- button "Save" [disabled]
+- 'button "Status: Draft"'
+- button "Publish"
+- button "Delete unpublished changes"
