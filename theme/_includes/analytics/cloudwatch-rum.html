@@ -1,0 +1,50 @@
+{%- assign _rum = site.analytics.cloudwatch_rum -%}
+{%- if jekyll.environment == "production" and _rum.app_monitor_id and _rum.app_monitor_id != "" -%}
+{%- assign _region = _rum.region | default: "us-east-1" -%}
+<script>
+(function() {
+  // Honor `?rum=off` / `?rum=on` query-param triggers so users can opt
+  // their devices in/out by visiting a URL once. Persists in
+  // localStorage; survives until the user clears site data. Used by
+  // the site owner to exclude personal/household devices from RUM
+  // metrics — visit `https://adamdaniel.ai/?rum=off` once per device
+  // (per browser profile) and the snippet stays silent thereafter.
+  // IP-based per-network filtering isn't possible because RUM events
+  // ship browser-direct to AWS, so opt-out has to be a client-side
+  // signal.
+  try {
+    var qs = new URLSearchParams(location.search);
+    if (qs.get("rum") === "off") localStorage.setItem("rum-opt-out", "1");
+    else if (qs.get("rum") === "on") localStorage.removeItem("rum-opt-out");
+  } catch (e) { /* localStorage unavailable; continue */ }
+
+  // Skip in automated browsers (Playwright, Puppeteer, Selenium).
+  // GitHub Actions test runs ship Chromium with navigator.webdriver
+  // set to true; bot traffic shouldn't pollute real-user metrics.
+  if (navigator.webdriver) return;
+
+  // Skip when the per-device opt-out flag is set (see query-param
+  // handler above).
+  try {
+    if (localStorage.getItem("rum-opt-out") === "1") return;
+  } catch (e) { /* localStorage unavailable; fall through */ }
+
+  // Original RUM SDK loader (unchanged).
+  (function(n,i,v,r,s,c,x,z){x=window.AwsRumClient={q:[],n:n,i:i,v:v,r:r,c:c};window[n]=function(c,p){x.q.push({c:c,p:p});};z=document.createElement('script');z.async=true;z.src=s;document.head.insertBefore(z,document.head.getElementsByTagName('script')[0]);})(
+    'cwr',
+    '{{ _rum.app_monitor_id }}',
+    '1.0.0',
+    '{{ _region }}',
+    'https://client.rum.{{ _region }}.amazonaws.com/1.x/cwr.js',
+    {
+      sessionSampleRate: 1,
+      identityPoolId: "{{ _rum.identity_pool_id }}",
+      endpoint: "https://dataplane.rum.{{ _region }}.amazonaws.com",
+      telemetries: ["performance","errors","http"],
+      allowCookies: false,
+      enableXRay: false
+    }
+  );
+})();
+</script>
+{%- endif -%}

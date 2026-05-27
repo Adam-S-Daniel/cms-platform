@@ -1,0 +1,35 @@
+---
+layout: default
+---
+<div class="container">
+  <article class="post">
+    <header class="post-header">
+      <div class="post-meta">
+        {% if page.technology %}
+        <span class="project-tech">{{ page.technology }}</span>
+        {% endif %}
+        {% if page.featured %}
+        <span class="tag-pill" style="border-color: var(--accent); color: var(--accent);">Featured</span>
+        {% endif %}
+      </div>
+      <h1>{{ page.title }}</h1>
+      {% if page.url_link %}
+      <a class="project-link" href="{{ page.url_link }}" target="_blank" rel="noopener noreferrer">
+        View Project ↗
+      </a>
+      {% endif %}
+    </header>
+
+    {% if page.images and page.images.size > 0 %}
+    <div style="display:grid; gap:1rem; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); margin-bottom: 2rem;">
+      {% for img in page.images %}
+      <img src="{{ img | relative_url }}" alt="{{ page.title }}" style="width:100%; border-radius:8px; border:1px solid var(--border);">
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="post-content">
+      {{ content }}
+    </div>
+  </article>
+</div>

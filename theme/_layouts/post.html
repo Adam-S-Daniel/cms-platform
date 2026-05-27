@@ -1,0 +1,36 @@
+---
+layout: default
+---
+{% assign words = content | number_of_words %}
+{% assign reading_time = words | divided_by: 200 | plus: 1 %}
+
+<div class="container">
+  <article class="post">
+    <header class="post-header">
+      <div class="post-meta">
+        <time class="post-date" datetime="{{ page.date | date_to_xmlschema }}">
+          {{ page.date | date: "%B %-d, %Y" }}
+        </time>
+        <span class="post-reading-time">{{ reading_time }} min read</span>
+        {% if page.tags %}
+        <div class="post-tags">
+          {% for tag in page.tags %}
+          <a class="tag-pill" href="{{ '/tags/' | append: tag | slugify | relative_url }}">{{ tag }}</a>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <h1>{{ page.title }}</h1>
+      {% if page.featured_image and page.featured_image != "" %}
+      <img class="featured-image" src="{{ page.featured_image | relative_url }}" alt="{{ page.title }}">
+      {% endif %}
+    </header>
+
+    <div class="post-content">
+      {{ content }}
+    </div>
+
+    {% assign _share_url = page.url | absolute_url %}
+    {% include share-row.html url=_share_url title=page.title %}
+  </article>
+</div>

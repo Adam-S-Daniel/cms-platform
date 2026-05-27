@@ -1,0 +1,15 @@
+{%- comment -%}
+  Small RSS/Atom feed link. Pass `href` (root-relative) and `label`.
+  Renders as a single icon with a screen-reader label and a tooltip.
+{%- endcomment -%}
+<a class="feed-link" href="{{ include.href | relative_url }}" title="{{ include.label }}" aria-label="{{ include.label }}">
+  {%- comment -%}
+    width/height are kept as HTML attributes (not just CSS) so the icon
+    stays small even if main.css hasn't reached the visitor yet — without
+    them, an SVG with viewBox and no intrinsic size falls back to the
+    default replaced-element 300×150 box and dominates the viewport.
+  {%- endcomment -%}
+  <svg class="feed-link-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+    <path d="M6.18 17.82a2.18 2.18 0 1 0 0-4.36 2.18 2.18 0 0 0 0 4.36ZM4 4.44v3.13c8.05 0 14.43 6.38 14.43 14.43h3.13C21.56 12.66 13.78 4.88 4 4.44Zm0 5.65v3.13a8.66 8.66 0 0 1 8.62 8.62h3.13C15.75 14.55 11.5 10.09 4 10.09Z"/>
+  </svg>
+</a>

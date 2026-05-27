@@ -1,0 +1,43 @@
+---
+layout: default
+---
+{% comment %}
+  `_tags/<slug>.md` collection docs put the human label in `name`, while
+  the auto-generated tag pages (from the auto_tag_pages plugin) hit the
+  Jekyll::Page accessor and need to use `tag_name` to avoid the filename
+  ("index.html") leaking through.
+{% endcomment %}
+{% assign tag_label = page.tag_name | default: page.name %}
+<div class="container">
+  {%- assign _tag_slug = tag_label | slugify -%}
+  {%- assign _tag_feed = '/tags/' | append: _tag_slug | append: '/feed.xml' -%}
+  {%- assign _feed_label = 'Subscribe to “' | append: tag_label | append: '” posts (Atom feed)' -%}
+  <div class="page-header">
+    <div class="page-header-with-feed">
+      <h1>{{ tag_label }}</h1>
+      {% include feed-link.html href=_tag_feed label=_feed_label %}
+    </div>
+    <p class="subtitle">Tag</p>
+  </div>
+
+  {% assign tagged_posts = site.posts | where_exp: "post", "post.tags contains tag_label" %}
+  {% if tagged_posts.size > 0 %}
+  <ul class="post-list">
+    {% for post in tagged_posts %}
+    <li class="post-item">
+      <div class="post-meta">
+        <time class="post-date" datetime="{{ post.date | date_to_xmlschema }}">
+          {{ post.date | date: "%B %-d, %Y" }}
+        </time>
+      </div>
+      <h2 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h2>
+      {% if post.excerpt %}
+      <p class="post-excerpt">{{ post.excerpt }}</p>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p style="color: var(--text-dim);">No posts yet with this tag.</p>
+  {% endif %}
+</div>
