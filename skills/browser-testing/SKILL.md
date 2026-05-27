@@ -241,7 +241,7 @@ test.afterAll(async () => {
 - Fixture-delete mutations: file existence (`fileExistsOnMain(filePath)`).
 - The check must return *quickly* and *cheaply*. One `gh /contents/` call per spec is fine; anything heavier and the harness becomes its own flake source.
 
-**Reference implementations.** `cms-publish-loop.spec.js` (PR #421), `cms-publish-loop-preview.spec.js` (PR #423), `cms-publish-loop-prod-mutate.spec.js` (PR #426), `cms-unpublish-republish.spec.js`, `cms-delete-published.spec.js`, `cms-preview-pr-self-contained.spec.js`. Search for `test.afterAll` + `[cleanup-harness]` to find them.
+**Reference implementations.** Restore-to-baseline variant (mutated a persistent fixture, safety-net rewrites it): `cms-publish-loop.spec.js` (PR #421), `cms-publish-loop-preview.spec.js` (PR #423), `cms-unpublish-republish.spec.js`. Existence-only-delete variant (created an ephemeral per-run post, safety-net deletes any leftover orphan): `cms-delete-published.spec.js`, plus `cms-publish-loop-prod-mutate.spec.js` and `cms-media-roundtrip.spec.js` since #1771 step 4 made the prod loops ephemeral (they previously mutated a persistent `_posts/` canary in place via PR #426). `cms-preview-pr-self-contained.spec.js`. Search for `test.afterAll` + `[cleanup-harness]` to find them.
 
 **Anti-pattern: try/finally in the test body.** Functionally similar but conflates "test logic" with "harness logic" and forces the cleanup code to live inside the test closure. `test.afterAll()` reads better, runs even when the test was skipped (the harness self-skips on `if (!pendingFixture) return;`), and matches the shape every other spec uses.
 
