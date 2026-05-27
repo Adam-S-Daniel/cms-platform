@@ -1,0 +1,4 @@
+# Local harness prefs (not for the published platform)
+/.claude/settings.json
+# Real per-site deploy params (secrets) — only the .example.env is tracked
+infrastructure/site-params.env

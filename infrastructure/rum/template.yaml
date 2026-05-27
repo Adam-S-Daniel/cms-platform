@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  CloudWatch RUM analytics for a platform site.
+
+  Creates:
+    1. Cognito identity pool with unauthenticated identities — RUM uses guest
+       identities to issue short-lived credentials for `rum:PutRumEvents`.
+    2. IAM role assumed by guest identities, scoped to `rum:PutRumEvents` on
+       this app monitor only.
+    3. The RUM app monitor itself, with `CwLogEnabled: true` so events are
+       mirrored to CloudWatch Logs (RUM's own retention is 30 days; the Logs
+       mirror is the long-term store).
+
+  After deploying, copy the AppMonitorId and IdentityPoolId outputs into
+  `_config.yml` under `analytics.cloudwatch_rum`. Then deploy the site and
+  load it once to confirm the dashboard receives data.
+
+  Run:
+    bash infrastructure/rum/deploy.sh
+
+Parameters:
+
+  AppMonitorName:
+    Type: String
+    Default: cms-site
+    Description: "Name of the RUM app monitor; also the suffix used for the Logs group."
+
+  Domain:
+    Type: String
+    Default: example.com
+    Description: "Top-level domain that RUM events will be accepted from."
+
+  SessionSampleRate:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 1
+    Description: >
+      Fraction of sessions to sample (0–1). Default 1 = capture every session.
+      Lower this only if event volume becomes a cost concern.
+
+Resources:
+
+  # ── Cognito identity pool for unauthenticated RUM clients ──────────────────
+  #
+  # RUM's web client trades a guest identity for short-lived AWS credentials
+  # via Cognito, then calls `rum:PutRumEvents`. The pool itself holds no
+  # state — its only job is to issue tokens against the unauthenticated role
+  # below.
+  #
+  RumIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub "${AppMonitorName}-rum"
+      AllowUnauthenticatedIdentities: true
+
+  # ── IAM role assumed by unauthenticated identities ─────────────────────────
+  #
+  # The trust policy locks the role to *this* identity pool's unauthenticated
+  # identities — no other pool can assume it. The inline policy is the
+  # smallest grant that keeps RUM working: `rum:PutRumEvents` against the
+  # specific app monitor ARN.
+  #
+  RumGuestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "cognito-identity.amazonaws.com:aud": !Ref RumIdentityPool
+              "ForAnyValue:StringLike":
+                "cognito-identity.amazonaws.com:amr": unauthenticated
+      Policies:
+        - PolicyName: PutRumEvents
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: rum:PutRumEvents
+                Resource: !Sub "arn:${AWS::Partition}:rum:${AWS::Region}:${AWS::AccountId}:appmonitor/${AppMonitorName}"
+
+  RumIdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref RumIdentityPool
+      Roles:
+        unauthenticated: !GetAtt RumGuestRole.Arn
+
+  # ── RUM app monitor ────────────────────────────────────────────────────────
+  #
+  # `CwLogEnabled: true` mirrors every event to a CloudWatch Logs group named
+  # `/aws/vendedlogs/RUMAccessLogs/<AppMonitorName>`. RUM's own dashboard
+  # retention is 30 days; the Logs mirror is the long-term store and is what
+  # makes the data portable (subscription filter → S3 → Athena, etc).
+  #
+  # `AllowCookies: false` keeps the integration cookie-less. `EnableXRay:
+  # false` skips X-Ray tracing — turn it on later if you want trace IDs to
+  # link to AWS X-Ray.
+  #
+  RumAppMonitor:
+    Type: AWS::RUM::AppMonitor
+    Properties:
+      Name: !Ref AppMonitorName
+      Domain: !Ref Domain
+      CwLogEnabled: true
+      AppMonitorConfiguration:
+        AllowCookies: false
+        EnableXRay: false
+        SessionSampleRate: !Ref SessionSampleRate
+        Telemetries:
+          - performance
+          - errors
+          - http
+        IdentityPoolId: !Ref RumIdentityPool
+        GuestRoleArn: !GetAtt RumGuestRole.Arn
+
+Outputs:
+
+  AppMonitorId:
+    Description: >
+      The RUM app monitor ID. Paste into `_config.yml` under
+      `analytics.cloudwatch_rum.app_monitor_id`.
+    Value: !GetAtt RumAppMonitor.Id
+
+  AppMonitorName:
+    Description: "RUM app monitor name (also the CloudWatch Logs group suffix)."
+    Value: !Ref AppMonitorName
+
+  IdentityPoolId:
+    Description: >
+      Cognito identity pool ID. Paste into `_config.yml` under
+      `analytics.cloudwatch_rum.identity_pool_id`.
+    Value: !Ref RumIdentityPool
+
+  Region:
+    Description: "AWS region the app monitor was deployed to."
+    Value: !Ref AWS::Region
+
+  LogGroupName:
+    Description: >
+      CloudWatch Logs group RUM events are mirrored to (created on first
+      event). Use this for long-term retention and S3 export.
+    Value: !Sub "/aws/vendedlogs/RUMAccessLogs/${AppMonitorName}"
