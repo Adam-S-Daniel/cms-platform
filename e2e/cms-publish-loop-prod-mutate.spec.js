@@ -43,12 +43,7 @@
  *
  * The CREATE leg publishes through Decap's editor (Status → Ready →
  * Publish → "Publish now"), exactly like the proven
- * cms-delete-published.spec.js. Publish Now is what transitions Decap's
- * editor into the PUBLISHED state — without it the entry stays a NEW
- * editorial draft (isNewEntry=true, hasUnpublishedChanges=true) and the
- * delete leg only ever sees "Delete unpublished entry", which removes the
- * draft branch and NOT the file on main, so the URL never 404s (the
- * iteration-1/2 failure of this spec). The merge still lands via
+ * cms-delete-published.spec.js. The merge lands via
  * cms-editorial-workflow `auto-merge-when-ready`: Status:Ready applies
  * `decap-cms/pending_publish` (engages auto-merge), and Publish Now's
  * synchronous merge attempt is 422'd by branch protection while required
@@ -56,11 +51,24 @@
  * and adds the `cms/ready` label, re-engaging the SAME auto-merge job. The
  * PR then lands once checks pass (commit prefix `publish:` preserved). This
  * is the proven prod path; cms-delete-published.spec.js's green host-loop
- * runs land their merge exactly this way. (Historical note: the earlier
- * "NOT Publish Now / run 26512944320 / PR #1774" guidance was about the
- * OLD in-place-edit cleanup-merge, a different scenario; it does not apply
- * to this ephemeral create→serve→UI-delete flow, where Publish Now is
- * required for the UI delete to remove from main.)
+ * runs land their merge exactly this way.
+ *
+ * The DELETE leg is the #1771 iteration-3 fix (run 26529125192). Publish
+ * Now alone is NOT enough to make the UI delete remove the file from main:
+ * the shim hands Decap a SYNTHETIC `merged:true` while the create PR
+ * auto-merges for real only ~5–15 min later, so the `cms/posts/<slug>`
+ * editorial branch lingers. If the delete leg re-opens the entry during
+ * that window, Decap's loadUnpublishedEntry re-loads it as an OPEN editorial
+ * draft (isNewEntry=true, hasUnpublishedChanges=true) → the editor shows
+ * "Delete unpublished entry" → the click calls onDeleteUnpublishedChanges,
+ * which drops only the draft branch, never main, so the URL never 404s
+ * (iterations 1–3 all failed on this). The fix: the delete leg first waits
+ * for the create PR to MERGE for real, then reopenForPublishedDelete()
+ * poll-reloads the editor until Decap drops the (now-merged) editorial
+ * entry and re-loads the published file ("Delete published entry", no
+ * Status chip), and only THEN clicks delete — so the click hits onDelete
+ * (delete from main → a delete PR). See e2e/cms-editor-ui.js's
+ * reopenForPublishedDelete for the full analysis.
  *
  * The explicit `cms/ready` labelling of the create PR (and the delete PR)
  * is kept as belt-and-braces so auto-merge is engaged even if the shim's
@@ -74,8 +82,9 @@
  *      Save → Status:Ready → Publish Now → cms/posts/<dated-slug> PR.
  *   2. Label cms/ready (belt-and-braces) → auto-merge → deploy-production.
  *   3. Assert /blog/<slug>/ serves 200 with this run's marker.
- *   4. Re-open the entry, Delete via the Decap "Delete published entry"
- *      UI → cms PR → cms/ready → auto-merge → deploy-production.
+ *   4. Wait for the create PR to MERGE, re-open the entry in PUBLISHED
+ *      state, Delete via the Decap "Delete published entry" UI → cms PR →
+ *      cms/ready → auto-merge → deploy-production.
  *   5. Assert /blog/<slug>/ 404s.
  *   afterAll: existence-only delete (if the post is STILL on main, open a
  *   labelled removal PR via removeFixtureViaPr). No content-restore — the
@@ -96,10 +105,17 @@ const {
   addLabel,
   gh,
   waitForCmsPullRequest,
+  waitForMerge,
   makeDeployQueueExtender,
 } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
-const { setPublished, saveEntry, publishViaUi, clickEditorDelete } = require("./cms-editor-ui");
+const {
+  setPublished,
+  saveEntry,
+  publishViaUi,
+  clickEditorDelete,
+  reopenForPublishedDelete,
+} = require("./cms-editor-ui");
 const { prodTarget } = require("./cms-host");
 const { loudBail } = require("./fixture-baseline");
 const { EPHEMERAL_DATE, buildProdMutatePost } = require("./prod-mutate-fixture");
@@ -283,6 +299,7 @@ test(
     // cms-editorial-workflow.yml's auto-merge-when-ready; this explicit
     // label guarantees auto-merge is enabled even if the shim's recovery is
     // delayed. addLabel is idempotent, so a duplicate is a no-op.
+    let createPrNumber = null;
     await test.step("Wait for Decap to open the create cms/... PR, label cms/ready", async () => {
       const pr = await waitForCmsPullRequest({
         base: "main",
@@ -291,6 +308,7 @@ test(
         timeoutMs: 5 * 60 * 1000,
       });
       expect(pr.number, "Decap create PR number").toBeGreaterThan(0);
+      createPrNumber = pr.number;
       await addLabel({ prNumber: pr.number, label: "cms/ready" });
     });
 
@@ -313,19 +331,43 @@ test(
     });
 
     // ── 6. Delete the post via the Decap UI ──────────────────────────
-    await test.step("Navigate to the ephemeral post entry for the delete leg", async () => {
-      // After Save/auto-merge Decap may unmount the editor; navigate
-      // explicitly to the entry's editor URL so the delete menu is on a
-      // known DOM. The dated file slug is deterministic.
-      await page.goto(`${PROD_ADMIN}#/collections/posts/entries/${fileSlug}`, {
-        waitUntil: "domcontentloaded",
-      });
-      await expect(page.getByRole("textbox", { name: /^Title$/i })).toBeVisible({
-        timeout: 30_000,
-      });
+    //
+    // CRITICAL ORDERING (#1771 follow-up, iteration-3 root cause —
+    // run 26529125192): the delete leg MUST NOT fire until the create
+    // PR has truly MERGED and its `cms/posts/<slug>` editorial branch is
+    // gone. In editorial_workflow mode Decap overrides
+    // loadEntry → loadUnpublishedEntry (withWorkflow.js); while the
+    // create branch still exists (between the publish-via-auto-merge
+    // shim's synthetic `merged:true` and the REAL auto-merge ~5–15 min
+    // later), re-navigating to the entry re-loads it as an OPEN editorial
+    // draft. The editor then shows "Status: Draft" + "Delete unpublished
+    // entry", and a Delete click calls onDeleteUnpublishedChanges —
+    // dropping only the draft branch, never main. The post keeps serving,
+    // no delete-from-main PR opens, and the 404-wait times out (exactly
+    // the observed failure: post live, delete leg idle, NO delete PR).
+    //
+    // Gate on the create PR's real merge first; then re-open the editor
+    // and poll-reload until Decap loads the now-published entry (no
+    // editorial branch ⇒ no Status chip ⇒ "Delete published entry").
+    await test.step("Wait for the create PR to actually merge (not just the synthetic Publish-Now ack)", async () => {
+      // The Publish-Now shim returns a synthetic merged:true to Decap, but
+      // the PR lands for real only once required checks pass + auto-merge
+      // fires. The URL already served above (deploy runs only post-merge),
+      // so the merge is usually done; this confirms it deterministically
+      // and is what lets the delete leg open a delete-FROM-MAIN change.
+      expect(createPrNumber, "create PR number captured for merge wait").toBeTruthy();
+      await waitForMerge({ prNumber: createPrNumber, timeoutMs: 5 * 60 * 1000 });
     });
 
-    await test.step("Click the editor's Delete button → opens delete cms/... PR", async () => {
+    await test.step("Re-open the post in PUBLISHED state for the delete leg", async () => {
+      // Poll-reloads the editor until the editorial Status chip is gone
+      // and "Delete published entry" is present — i.e. Decap has dropped
+      // the (now-merged) editorial entry and re-loaded the published file.
+      // Only in that state does the Delete click remove the file from main.
+      await reopenForPublishedDelete(page, `${PROD_ADMIN}#/collections/posts/entries/${fileSlug}`);
+    });
+
+    await test.step("Click the editor's Delete button → opens delete-from-main cms/... PR", async () => {
       await clickEditorDelete(page);
       // The persistent page.on("dialog") accepts the native confirm. If
       // Decap uses an in-page modal instead, click its confirm button.

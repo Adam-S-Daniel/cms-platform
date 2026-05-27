@@ -106,19 +106,29 @@ async function publishViaUi(page) {
 //   !hasUnpublishedChanges && !isModification        → "Delete published entry"
 //   simple mode (local backend)                      → "Delete entry" / "Delete new entry"
 //
-// History (#1771 follow-up): the ephemeral prod canaries originally
-// published via the `cms/ready` label only, NOT Decap's "Publish Now" — so
-// the external auto-merge landed the post on main while Decap's editor
-// still held it as a brand-new editorial-workflow draft (isNewEntry=true,
-// hasUnpublishedChanges=true). That state surfaces "Delete unpublished
-// entry", which the earlier `/delete (published )?entry/i` locator never
-// matched — the click timed out at 30s and the run failed; and even after
-// the locator was widened, that label deletes only the draft branch (never
-// the file on main), so the URL never 404'd. The fix (this follow-up) is
-// that BOTH ephemeral specs now publish via Status:Ready → Publish Now
-// (publishViaUi), exactly like the proven cms-delete-published.spec.js, so
-// Decap reaches the PUBLISHED state and the delete leg hits "Delete
-// published entry" → a delete-from-main PR.
+// History (#1771 follow-up, iterations 1–3): the ephemeral prod canaries
+// originally published via the `cms/ready` label only (iter 1/2), NOT
+// Decap's "Publish Now" — the external auto-merge landed the post on main
+// while Decap's editor still held it as a brand-new editorial-workflow
+// draft (isNewEntry=true, hasUnpublishedChanges=true). #1801 added
+// publishViaUi (Status:Ready → Publish Now) to push the editor toward the
+// PUBLISHED state. But the run-26529125192 failure proved publishViaUi
+// alone is NOT enough: "Publish Now" hits branch protection (checks
+// pending), so admin/publish-via-auto-merge.js catches the 422, labels
+// `cms/ready`, and hands Decap a SYNTHETIC `merged:true`. The PR then
+// auto-merges for REAL only ~5–15 min later. In the gap, the
+// `cms/posts/<slug>` editorial branch still exists, so when the delete leg
+// re-navigates to the entry Decap's loadUnpublishedEntry (the
+// editorial-workflow loadEntry override, withWorkflow.js) re-loads it as an
+// OPEN draft (currentStatus set, hasUnpublishedChanges=true). EditorToolbar
+// then wires Delete to onDeleteUnpublishedChanges (line 654), which drops
+// only the draft branch — never main — so no delete-from-main PR opens and
+// the URL never 404s. The iteration-3 fix (this follow-up) is
+// reopenForPublishedDelete() below: the specs first wait for the create PR
+// to MERGE for real, then poll-reload the editor until Decap drops the
+// editorial entry and re-loads the published file ("Delete published
+// entry", no Status chip), and only THEN click delete — so the click hits
+// onDelete (delete from main).
 //
 // Match ALL five label variants anyway so the click is robust regardless of
 // which editorial state Decap shows. The control is a real <button> (the styled
@@ -156,6 +166,115 @@ async function clickEditorDelete(page, { visibleTimeout = 15_000, clickTimeout =
   await btn.click({ timeout: clickTimeout });
 }
 
+// The "Delete published entry" affordance — the ONLY delete that removes
+// the file from `main`. Matches that one label exclusively (a `\b`-style
+// anchor: not "Delete UNpublished entry", not "Delete published CHANGES").
+// `(?<!un)` rejects "unpublished"; the literal " entry" tail rejects
+// "...published changes".
+function publishedDeleteButton(page) {
+  return page.getByRole("button", { name: /delete (?<!un)published entry/i }).first();
+}
+
+// The editorial-workflow "Status: …" chip Decap renders ONLY while the
+// entry is loaded as an unpublished editorial-workflow entry (i.e.
+// `currentStatus` is set — see Editor.js mapStateToProps `currentStatus =
+// unPublishedEntry && unPublishedEntry.get('status')`). Its presence is
+// the ground-truth signal that the editor is in the DRAFT/"Delete
+// unpublished entry" state, where a Delete click hits
+// `onDeleteUnpublishedChanges` (drops the draft branch, never touches
+// main — EditorToolbar.js line 654).
+function editorialStatusChip(page) {
+  return page.getByRole("button", { name: /^Status:\s*(Draft|In review|Ready)$/i }).first();
+}
+
+// Re-open an entry's editor for a delete-FROM-MAIN, ROBUST against the
+// editorial-workflow re-load race (#1771 follow-up, the iteration-3 root
+// cause). See e2e/cms-editor-ui.test.js / the spec headers for the full
+// write-up. Short version:
+//
+// In editorial_workflow mode Decap overrides loadEntry → loadUnpublishedEntry
+// (withWorkflow.js). When you navigate to `#/collections/<col>/entries/<slug>`
+// and the entry's `cms/<col>/<slug>` editorial branch STILL EXISTS — which
+// it does between the synthetic `merged:true` the publish-via-auto-merge
+// shim hands Decap and the REAL auto-merge landing ~5–15 min later —
+// `retrieveUnpublishedEntryData` returns the open editorial entry, so the
+// editor renders the DRAFT toolbar ("Status: Draft" + "Delete unpublished
+// entry"). A Delete click there calls `onDeleteUnpublishedChanges` and
+// removes only the draft branch; the file on main is untouched, no
+// delete-from-main PR opens, and the URL never 404s (the exact run
+// 26529125192 failure: post served, then the delete leg timed out with NO
+// delete PR ever opened).
+//
+// The deterministic fix is to NOT click delete until Decap has re-loaded
+// the entry as a plain PUBLISHED entry (no editorial branch ⇒ no
+// `currentStatus` ⇒ "Delete published entry"). We poll-reload the editor
+// until the editorial Status chip is GONE and the "Delete published entry"
+// button is present. The caller is responsible for having first confirmed
+// the create PR actually merged (the branch is what Decap keys off, and
+// auto-merge with SQUASH closes+deletes it); this loop additionally
+// tolerates the lag between merge and Decap's local-state catch-up by
+// hard-reloading (which re-runs loadUnpublishedEntry against fresh
+// backend state).
+async function reopenForPublishedDelete(
+  page,
+  entryUrl,
+  { titleName = /^Title$/i, totalTimeoutMs = 6 * 60 * 1000, perAttemptMs = 30_000 } = {},
+) {
+  const titleLocator = page.getByRole("textbox", { name: titleName });
+  const deadline = Date.now() + totalTimeoutMs;
+  let attempt = 0;
+  // Assigned on every loop pass (the if/else below is exhaustive) before
+  // the deadline check reads it, so no initializer is needed — and a dead
+  // initializer trips no-useless-assignment.
+  let lastState;
+  for (;;) {
+    attempt += 1;
+    // Navigate to the entry route, then HARD RELOAD every pass. The page
+    // is typically already on this entry's editor route (the create leg
+    // mounted it), so a same-hash goto alone would not re-mount the
+    // component; the reload re-runs componentDidMount → loadUnpublishedEntry
+    // against fresh backend state. Once the (now-merged) editorial branch
+    // is gone, Decap's loadUnpublishedEntry hits notUnderEditorialWorkflow
+    // and falls through to loadEntry (the published file), so the DRAFT
+    // toolbar disappears and "Delete published entry" renders.
+    await page.goto(entryUrl, { waitUntil: "domcontentloaded" });
+    await page.reload({ waitUntil: "domcontentloaded" });
+
+    // Wait for the editor to mount at all (Title field present).
+    if (!(await titleLocator.isVisible({ timeout: perAttemptMs }).catch(() => false))) {
+      lastState = "editor never mounted (Title field absent)";
+    } else {
+      const draftChipVisible = await editorialStatusChip(page)
+        .isVisible({ timeout: 2_000 })
+        .catch(() => false);
+      const publishedDeleteVisible = await publishedDeleteButton(page)
+        .isVisible({ timeout: 2_000 })
+        .catch(() => false);
+      if (!draftChipVisible && publishedDeleteVisible) {
+        // PUBLISHED state reached: Delete will hit onDelete (delete from
+        // main → a cms/<col>/<slug> delete PR / direct main commit).
+        return;
+      }
+      lastState = draftChipVisible
+        ? 'editorial DRAFT state (Status chip present → "Delete unpublished entry"; a delete here ' +
+          "would drop only the draft branch, not main)"
+        : 'no editorial chip but "Delete published entry" not yet rendered (editor still hydrating)';
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Editor for ${entryUrl} never reached the PUBLISHED delete state within ` +
+          `${Math.round(totalTimeoutMs / 1000)}s (${attempt} attempt(s)); last seen: ${lastState}. ` +
+          "Decap is still loading the entry as an open editorial-workflow draft — the create " +
+          "PR's cms/* branch has not been merged+removed yet, so a Delete click would call " +
+          "onDeleteUnpublishedChanges (draft branch only) instead of onDelete (delete from main). " +
+          "Ensure the create PR is fully merged before re-opening for delete.",
+      );
+    }
+    await page.waitForTimeout(8_000);
+  }
+}
+
 module.exports = {
   publishedSwitch,
   setPublished,
@@ -164,4 +283,7 @@ module.exports = {
   publishViaUi,
   editorDeleteButton,
   clickEditorDelete,
+  publishedDeleteButton,
+  editorialStatusChip,
+  reopenForPublishedDelete,
 };
