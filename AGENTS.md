@@ -57,13 +57,48 @@ node scaffold/create-site.js /tmp/x --yes --domain d --repo d --owner o   # scaf
 # drift-guard + workflows: python3 -c 'import yaml,...' parse + bash -n the run: blocks
 ```
 
+## E2E workflow matrix (ported)
+
+The full e2e/Playwright matrix is ported. Two shapes:
+
+- **Reusable + thin caller** (caller in `examples/site/.github/workflows/`):
+  `e2e-tests`, `cms-publish-loop-preview`, `cms-delete-published-preview`,
+  `cms-preview-loops` (workflow_dispatch); `canary-prod` (schedule + dispatch);
+  `parity-preview`, `preview-media` (pull_request, always-run + early-skip — the
+  reusable's selector/salient-detector IS the skip, so the caller has NO `paths:`
+  to avoid the required-check missing-check trap). Each checks the platform out
+  into `.cms-platform/` and references composites by `./.cms-platform/.github/actions/`.
+- **Full workflow in `.github/workflows/`** (pinned to that shape by platform
+  lints, run in the platform's dogfooding context, reference composites by local
+  `./.github/actions/`): the three real-prod loops `cms-publish-loop-prod` /
+  `cms-media-roundtrip` / `cms-publish-loop-host` (lint:
+  `e2e/workflow-prod-loop-serialized.test.js` — shared `prod-mutating-loop`
+  concurrency lane on each loop job, byte-identical; `recursion-gate` job +
+  `await-prod-deploy` gate) and `visual-regression` (lints:
+  `e2e/visual-regression-content-skip.test.js` + `-skip-review.test.js` — the
+  `paths:` content-skip list, the `visually-different` output, the conditional
+  `regression-review` environment).
+
+Composites ported: `.github/actions/await-prod-deploy` (commit-json-url now
+derives from a `prod-url` input; no hardcoded site URL), `.github/actions/cms-recursion-gate`
+(resolves `cms-recursion-churn.js` from the workspace or `.cms-platform/`).
+
+**Deliberately NOT ported / simplified** (adamdaniel-only infra — see each
+workflow's "PLATFORM PORT NOTES" header): the GHCR `ci-runner-image` prebaked
+Jekyll/Ruby image + the `build-image` jobs + `container:` blocks (deps install
+inline instead); the stuck-PR diagnostic steps (depend on un-ported
+`scripts/diagnose-stuck-pr.js` + `auto-resolve-newline-conflict.js`); the
+preview-loop `if: ${{ false }}` operational disable (an adamdaniel dispatcher
+incident, not a platform invariant). The prod-loop serialization lint was
+updated to expect the two-job (no build-image) inline-deps shape while keeping
+every load-bearing invariant. `visual-regression` still needs the consuming repo
+to ship a buildable Jekyll site + Gemfile, AWS OIDC/S3/CloudFront, and a
+`regression-review` Environment; baselines regenerate per-site.
+
 ## Remaining work
 
-- Port the workflow long-tail: `cms-editorial-workflow`, `sweep-stale-cms-prs`,
-  `publish-scheduled-posts`, `secrets-scan`, `required-check-stubs`, then the
-  e2e/Playwright matrix (`cms-publish-loop*`, `e2e-tests`, `visual-regression`,
-  `parity-preview`, `cms-media-roundtrip`, `canary-prod`) + the
-  `post-failure-comment` composite + its scripts.
+- Port `cms-editorial-workflow` (done), `sweep-stale-cms-prs` (done),
+  `publish-scheduled-posts` (done), `secrets-scan` (done), `required-check-stubs`.
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 

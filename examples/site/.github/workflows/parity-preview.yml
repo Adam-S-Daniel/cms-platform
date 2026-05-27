@@ -1,0 +1,29 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/parity-preview.yml`. Owns the pull_request trigger
+# + run-name; delegates the @parity-preview gate to the platform's
+# reusable workflow. ALWAYS-RUN + EARLY-SKIP lives inside the reusable's
+# selector, so this caller intentionally has NO `paths:` filter (a
+# `paths:` filter would re-create the missing-check trap if this gate is
+# ever made required).
+name: Parity (preview)
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  parity:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/parity-preview.yml@v0.1.0
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      base_ref: ${{ github.base_ref }}
+      apex: example.com
+      platform_ref: v0.1.0
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

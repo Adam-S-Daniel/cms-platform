@@ -35,13 +35,18 @@ const AWAIT_ACTION = "./.github/actions/await-prod-deploy";
 const GATE_ACTION = "./.github/actions/cms-recursion-gate";
 const GATE_JOB = "recursion-gate";
 const GATE_IF = "${{ needs." + GATE_JOB + ".outputs.run == 'true' }}";
-// build-image is the reusable-workflow caller that produces the
-// prebaked ci-runner image consumed by each loop's `container.image:`.
-// Independent of recursion-gate so a Dockerfile/lockfile-only push
-// still rebuilds the image even when the recursion gate skips the
-// heavy loop. See .github/workflows/ci-runner-image.yml.
-const BUILD_IMAGE_JOB = "build-image";
-const BUILD_IMAGE_USES = "./.github/workflows/ci-runner-image.yml";
+// PLATFORM PORT NOTE: adamdaniel.ai's loop workflows carried a third
+// `build-image` job that called a reusable `ci-runner-image.yml`
+// workflow to produce a prebaked GHCR `container.image:` (Ruby/Jekyll/
+// gitleaks baked in). That image is adamdaniel-only infra (pushed to
+// that repo's GHCR namespace) and the wrong layering for a reusable
+// platform, so the port DROPPED build-image + the `container:` block in
+// favour of installing deps inline (Node + npm ci + playwright install,
+// the same shape e2e-tests.yml uses). These lints therefore expect TWO
+// jobs (recursion-gate + the heavy loop job) and no `container:`. Every
+// load-bearing invariant the original guarded — the shared
+// prod-mutating-loop lane on the loop job, the await-prod-deploy gate,
+// and the recursion-gate job — is preserved.
 
 const asArray = (v) => (Array.isArray(v) ? v : v == null ? [] : [v]);
 
@@ -101,29 +106,37 @@ test.describe("real-prod loop workflows are serialized + deploy-gated (#1101)", 
     ).toBe(blocks[0]);
   });
 
-  test("each workflow has exactly the recursion-gate + build-image + loop jobs", () => {
+  test("each workflow has exactly the recursion-gate + loop jobs (no build-image — platform port)", () => {
     for (const wf of LOOP_WORKFLOWS) {
       const doc = parseYaml(readWorkflow(wf));
       const names = Object.keys(doc.jobs);
+      // PLATFORM PORT: the GHCR build-image job was dropped (see the
+      // BUILD_IMAGE port note at the top of this file). Two jobs remain.
       expect(
         names.sort(),
-        `${wf} must have exactly three jobs: ${GATE_JOB} + ${BUILD_IMAGE_JOB} + ${LOOPS[wf].job}`,
-      ).toEqual([GATE_JOB, BUILD_IMAGE_JOB, LOOPS[wf].job].sort());
+        `${wf} must have exactly two jobs: ${GATE_JOB} + ${LOOPS[wf].job}`,
+      ).toEqual([GATE_JOB, LOOPS[wf].job].sort());
     }
   });
 
-  test("each workflow's build-image job is the reusable ci-runner-image workflow", () => {
+  test("each loop job installs deps inline (no GHCR container — platform port)", () => {
     for (const wf of LOOP_WORKFLOWS) {
       const doc = parseYaml(readWorkflow(wf));
-      const buildJob = doc.jobs[BUILD_IMAGE_JOB];
+      const loopJob = doc.jobs[LOOPS[wf].job];
+      // No `container:` (the prebaked GHCR image was dropped); deps come
+      // from a `npm ci` step in the e2e working directory instead.
       expect(
-        buildJob,
-        `${wf} must define a ${BUILD_IMAGE_JOB} job calling the reusable image-build workflow`,
+        loopJob.container,
+        `${wf}: ${LOOPS[wf].job} must NOT declare a container (GHCR ci-runner image dropped in the platform port)`,
+      ).toBeFalsy();
+      const steps = loopJob.steps || [];
+      const npmCi = steps.find(
+        (s) => s && typeof s.run === "string" && /npm ci/.test(s.run),
+      );
+      expect(
+        npmCi,
+        `${wf}: ${LOOPS[wf].job} must install harness deps inline with \`npm ci\` (replacing the prebaked image)`,
       ).toBeTruthy();
-      expect(
-        buildJob.uses,
-        `${wf}: ${BUILD_IMAGE_JOB}.uses must point at ${BUILD_IMAGE_USES}`,
-      ).toBe(BUILD_IMAGE_USES);
     }
   });
 
