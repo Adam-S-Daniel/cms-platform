@@ -1,0 +1,195 @@
+# Reusable production deploy for platform sites.
+#
+# A consuming site calls this from a thin wrapper that owns the `on: push`
+# trigger + paths-ignore (see examples/site/.github/workflows/deploy-production.yml).
+# Builds Jekyll, syncs `_site/` to the site's production bucket, invalidates
+# CloudFront, and registers a GitHub Deployment so admin/deploy-status-pill.js
+# can surface deploy state in the editor.
+name: Deploy to Production (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      apex_domain:
+        description: "Site apex domain, e.g. example.com (no scheme)."
+        required: true
+        type: string
+      prod_bucket:
+        description: "S3 bucket name for the production site."
+        required: true
+        type: string
+      aws_region:
+        description: "AWS region for S3 + CloudFront."
+        required: false
+        type: string
+        default: us-east-1
+      ruby_version:
+        required: false
+        type: string
+        default: "3.2"
+    secrets:
+      AWS_ROLE_ARN:
+        description: "OIDC role to assume for S3/CloudFront."
+        required: true
+      PRODUCTION_CLOUDFRONT_ID:
+        description: "Production CloudFront distribution id (optional; skips invalidation when empty)."
+        required: false
+
+permissions:
+  contents: read
+  id-token: write   # needed for AWS OIDC authentication
+  deployments: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run
+# in-progress and latest queued. We do NOT cancel in-progress runs, so that
+# a production deploy is never interrupted mid-flight. (Scoped per-repo, so
+# each site's deploys are independent.)
+concurrency:
+  group: "production"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ inputs.aws_region }}
+      PRODUCTION_BUCKET: ${{ inputs.prod_bucket }}
+      APEX_DOMAIN: ${{ inputs.apex_domain }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.PRODUCTION_CLOUDFRONT_ID }}
+
+    steps:
+      - name: Register GitHub Deployment (in_progress)
+        id: deploy-start
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        with:
+          script: |
+            const { data: deployment } = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: 'production',
+              auto_merge: false,
+              required_contexts: [],
+              production_environment: true,
+              description: 'deploy-production.yml run',
+            });
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.id,
+              state: 'in_progress',
+              log_url: runUrl,
+              description: 'Building + syncing to S3 + invalidating CloudFront',
+            });
+            core.setOutput('deployment_id', deployment.id);
+            core.notice(`Registered production deployment ${deployment.id} (in_progress)`);
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          fetch-depth: 0   # needed for last-modified dates in Jekyll
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f  # v1.310.0 (2026-05-20)
+        with:
+          ruby-version: ${{ inputs.ruby_version }}
+          bundler-cache: true   # runs `bundle install` and caches gems
+
+      - name: Calculate reading times
+        run: |
+          # Auto-calculate reading_time for every post that has `reading_time`
+          # left blank (or 0). We write the value into a _data file consumed
+          # by the Liquid templates, keeping the source Markdown unmodified.
+          mkdir -p _data
+          echo "# Auto-generated — do not edit" > _data/reading_times.yml
+          # `nullglob` expands an empty `_posts/*.md` to nothing rather than
+          # the literal pattern, so a brand-new repo with no posts doesn't
+          # emit a bogus reading-time entry.
+          shopt -s nullglob
+          for f in _posts/*.md; do
+            slug=$(basename "$f" .md)
+            # shellcheck disable=SC2002
+            words=$(cat "$f" | sed '/^---/,/^---/d' | wc -w)
+            mins=$(( (words / 200) + 1 ))
+            echo "${slug}: ${mins}" >> _data/reading_times.yml
+          done
+
+      - name: Build Jekyll site
+        env:
+          JEKYLL_ENV: production
+        run: bundle exec jekyll build
+
+      - name: Write deploy-time commit metadata
+        # Surfaces the deployed commit in the admin's top-right corner via
+        # admin/index.html. Use HEAD rather than github.sha to sidestep
+        # shallow-clone issues; on push events they're identical.
+        run: |
+          mkdir -p ./_site/admin
+          SHA=$(git rev-parse HEAD)
+          ISO=$(git log -1 --format=%cI HEAD)
+          cat > ./_site/admin/commit.json <<JSON
+          { "sha": "${SHA}", "iso": "${ISO}", "branch": "main" }
+          JSON
+          cat ./_site/admin/commit.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885  # v6.1.1 (2026-05-05)
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync to S3
+        # `--exclude` keeps the local-dev / e2e-test admin variants out of
+        # the public bucket. `aws s3 sync --delete --exclude X` will NOT
+        # delete X from the destination, so the explicit `aws s3 rm` below
+        # cleans up copies on buckets predating this exclude.
+        run: |
+          aws s3 sync ./_site "s3://${PRODUCTION_BUCKET}/" \
+            --delete \
+            --cache-control "public, max-age=86400" \
+            --exclude 'admin/index-local.html' \
+            --exclude 'admin/config-local.yml' \
+            --exclude 'admin/index-test.html' \
+            --exclude 'admin/config-test.yml'
+
+      - name: Remove stale dev-only admin objects
+        # Idempotent purge of admin/*-local and admin/*-test objects that
+        # earlier deploys uploaded before they were excluded above.
+        run: |
+          for key in admin/index-local.html admin/config-local.yml \
+                     admin/index-test.html admin/config-test.yml; do
+            aws s3 rm "s3://${PRODUCTION_BUCKET}/${key}"
+          done
+
+      - name: Invalidate CloudFront cache
+        if: env.CLOUDFRONT_DISTRIBUTION_ID != ''
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*"
+
+      - name: Update GitHub Deployment status (success/failure)
+        if: always() && steps.deploy-start.outputs.deployment_id
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        env:
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const id = ${{ steps.deploy-start.outputs.deployment_id }};
+            const job = process.env.JOB_STATUS;        // success | failure | cancelled
+            const state = job === 'success' ? 'success' : 'failure';
+            const apex = process.env.APEX_DOMAIN;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: id,
+              state,
+              environment_url: state === 'success' ? `https://${apex}/` : undefined,
+              log_url: runUrl,
+              description: state === 'success'
+                ? `${apex} is live with the latest commit`
+                : `deploy-production.yml ${job}`,
+            });
+            core.notice(`Production deployment ${id} → ${state}`);
