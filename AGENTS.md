@@ -99,21 +99,42 @@ to ship a buildable Jekyll site + Gemfile, AWS OIDC/S3/CloudFront, and a
 
 Ported as reusable `workflow_call` + thin callers: deploy (prod+preview),
 `cms-editorial-workflow`, `secrets-scan`, `publish-scheduled-posts`,
-`sweep-stale-cms-prs`, and the full **e2e matrix** (`e2e-tests` + the 10
+`sweep-stale-cms-prs`, the full **e2e matrix** (`e2e-tests` + the 10
 loop/visual/parity/media workflows + the `await-prod-deploy` /
-`cms-recursion-gate` / `post-failure-comment` composites + the `e2e/` harness).
+`cms-recursion-gate` / `post-failure-comment` composites + the `e2e/` harness),
+and the **hygiene long-tail**: `auto-resolve-newline-conflict` (+ its
+`scripts/auto-resolve-newline-conflict.js`), `cleanup-stale-fixture-branches`,
+`dependabot-auto-merge`, `dependabot-comment-sync` (+ its
+`scripts/sync-action-pin-comments.sh`; the adamdaniel-only PAT secret was
+generalised to the `workflow_sha_comment_pat` input, and the executed script is
+now platform-pinned via `.cms-platform/` rather than the PR-head copy — strictly
+tighter than the original `pull_request_target` posture), and
+`label-non-decap-prs` (keys its Decap-branch prefix off the platform
+`e2e/cms-fixture-pr.js` `FIXTURE_BRANCH_PREFIX`).
+
+Both **e2e meta-lints** are now fixed: `visual-regression-content-skip.test.js`
+reads `admin/config.base.yml` (the platform's Decap config; `config.yml` is
+render-only) and `playwright-image-drift.test.js` loads against the now-ported
+`scripts/check-playwright-image-drift.js`. The workflow-structure lints were
+already adjusted for the reusable shape (`workflow-run-name` / `dependabot-skip`
+exempt `workflow_call`-only reusables). Dropped adamdaniel-only CI (GHCR
+`ci-runner-image`, `select-specs` sharding, the finalize merge-gate) is intentional.
 
 Still open:
-- Not yet ported: `required-check-stubs`, `auto-resolve-newline-conflict`,
-  `cleanup-stale-fixture-branches`, `dependabot-auto-merge`,
-  `dependabot-comment-sync`, `label-non-decap-prs`, `code-quality`,
-  `regenerate-manual` (some are adamdaniel-specific glue).
-- **e2e meta-lints** assume adamdaniel's repo layout and need platform/site
-  adaptation: `visual-regression-content-skip.test.js` reads `admin/config.yml`
-  (platform ships `config.base.yml`); `playwright-image-drift.test.js` needs an
-  un-ported `scripts/check-playwright-image-drift.js`; the workflow-structure
-  lints were adjusted for the reusable shape. Dropped adamdaniel-only CI (GHCR
-  `ci-runner-image`, `select-specs` sharding, the finalize merge-gate) is intentional.
+- **Deliberate skips — NOT ported** (each is repo-/site-specific machinery, not a
+  reusable; a consuming site authors its own):
+  - `required-check-stubs` — encodes the repo's specific required-check /
+    path-filter topology; each site authors its own.
+  - `code-quality` — platform-self-CI (lints the machinery itself), not a site
+    reusable; needs separate adaptation to lint cms-platform.
+  - `regenerate-manual` — site-specific docs (Contributor Manual) generation.
+  - `ci-runner-image` — adamdaniel-only GHCR image; already dropped in the e2e
+    port (inline deps used instead).
+- **`playwright-image-drift` real-repo subtest caveat**: the guard's
+  "real repo is drift-free" subtest reads a root `package-lock.json` +
+  `.github/ci-runner/Dockerfile`, neither of which the machinery repo ships
+  (no installable lockfile here); it exercises fully against the synthetic
+  `scaffold()` fixtures and runs green in a consuming site that has both.
 - **Visual-regression baselines are site-specific** — a new site regenerates
   snapshots (`npx playwright test --update-snapshots`).
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`

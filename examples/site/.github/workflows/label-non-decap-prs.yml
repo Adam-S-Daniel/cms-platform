@@ -1,0 +1,49 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/label-non-decap-prs.yml`. Owns the `pull_request` +
+# `push` + `workflow_dispatch` triggers + run-name; delegates the labelling
+# (and the all-PR backfill) to the platform's reusable workflow. The Decap
+# branch convention the labeller keys off lives in the platform repo — this
+# caller only supplies the triggers. Keep `platform_ref` equal to the
+# `@vX.Y.Z` pin on the `uses:` line.
+name: Label non-Decap PRs
+run-name: >-
+  ${{ github.event_name == 'pull_request'
+        && format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title)
+   || github.event_name == 'push'
+        && format('push — {0} @{1}', github.ref_name, github.actor)
+   || format('manual — @{0}{1}', github.actor, inputs.dry_run && ' — dry-run' || '') }}
+
+# No `paths:` filter on the pull_request trigger, by design: a non-Decap PR
+# can touch any file, so the tag decision is independent of the diff
+# (path-filtering would make the workflow miss the PRs it exists to catch).
+# The pull_request job is a single labelling API call — no checkout of the
+# site, no build — and fires only on opened/reopened, never per-push.
+on:
+  pull_request:
+    types: [opened, reopened]
+  push:
+    branches: [main]
+    paths:
+      # Only this workflow's own file — so the all-PR backfill runs when
+      # the workflow first lands (and on later edits to it), never on
+      # ordinary content/code pushes to main.
+      - '.github/workflows/label-non-decap-prs.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Log what would be labelled without applying any labels'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  label-non-decap:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/label-non-decap-prs.yml@v0.1.0
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      # Pin to the SAME ref as the `uses:` pin above so the module matches.
+      platform_ref: v0.1.0

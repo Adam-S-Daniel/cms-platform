@@ -1,0 +1,154 @@
+# Reusable: auto-resolve newline-only merge conflicts on CMS PRs.
+#
+# A consuming site calls this from a thin wrapper that owns the
+# `workflow_run` + `workflow_dispatch` triggers + run-name (see
+# examples/site/.github/workflows/auto-resolve-newline-conflict.yml). The
+# resolver script (auto-resolve-newline-conflict.js) is NOT in the site repo,
+# so this workflow checks the platform repo out into `.cms-platform/` (a
+# dot-dir Jekyll ignores) and runs it from there. Pin `platform_ref` to the
+# same tag/sha the caller pins this workflow to.
+name: Auto-resolve newline-only merge conflicts on CMS PRs (reusable)
+
+# Belt-and-suspenders for PR #882 — a `cms/e2e/canary-post` Decap PR
+# whose only diff vs main was Slate-mangled newlines (`\n` → `\n\n`,
+# `\n\n` → `\n\n\n\n`, blank between `---` and body eaten). The primary
+# fix landed in `admin/config.yml` (e2e collection body → `widget: text`,
+# plain textarea, no round-trip), but this resolver protects against
+# regressions in any CMS-managed collection.
+#
+# Trigger model
+# ─────────────
+# Two triggers, both arrive at the same script (declared on the caller):
+#
+#   - `workflow_run` on completion of CMS Editorial Workflow's
+#     `validate-content`. Decap pushes to a cms/<col>/<slug> branch
+#     every time the editor saves; that fires the editorial workflow,
+#     whose validate-content job is the natural rendezvous point.
+#     ~10–20 s after each push the resolver gets to look.
+#   - `workflow_dispatch` with an explicit PR number — for manual
+#     "resolve PR #X" out of band, mirroring the dry-run/threshold
+#     inputs on `sweep-stale-cms-prs.yml`.
+#
+# Why not `pull_request: synchronize`? GitHub doesn't surface
+# `mergeable_state` synchronously on that event — we'd have to poll —
+# and the editor pushes per-keystroke, fanning out runs. The
+# editorial-workflow rendezvous handles both concerns: one event per
+# logical save, and `mergeable_state` has settled by then.
+#
+# The script's own gates (`scripts/auto-resolve-newline-conflict.js`)
+# enforce: PR state == open, mergeable_state == dirty, head ref in
+# allowlist, author in allowlist, no fork, every changed file is in
+# the path allowlist and canonical-collapses to main. Anything that
+# misses a gate either skips silently or comments with an explanation
+# of what would need a human's attention.
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: 'PR number to resolve (required for dispatch path)'
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: 'Log decisions but make no writes'
+        type: boolean
+        required: false
+        default: false
+      run_pr_number:
+        description: 'PR number from the workflow_run payload (caller passes github.event.workflow_run.pull_requests[0].number)'
+        type: string
+        required: false
+        default: ''
+      platform_repo:
+        description: "owner/name of the platform repo holding the resolver script."
+        type: string
+        required: false
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the script from (pin to the same ref as this workflow)."
+        type: string
+        required: false
+        default: main
+    secrets:
+      CMS_E2E_PAT:
+        description: "User-scoped token so the PR-close event fires downstream workflows (e.g. preview-teardown)."
+        required: false
+
+permissions:
+  # The resolver script uses `CMS_E2E_PAT` for writes — these
+  # permissions only apply to GITHUB_TOKEN, which we don't use here.
+  # Set to minimum so the workflow_run trigger doesn't accidentally
+  # gain write access via the upstream workflow's token.
+  contents: read
+  pull-requests: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # One in-flight resolve per PR. `cancel-in-progress: false` — a
+    # second push during the resolve should queue, not race; the
+    # idempotency-comment key keeps the queued run from re-doing the
+    # same work.
+    concurrency:
+      group: >-
+        auto-resolve-newline-conflict-${{
+          inputs.pr_number ||
+          inputs.run_pr_number ||
+          'noop'
+        }}
+      cancel-in-progress: false
+    steps:
+      # Decode which PR we're working on. For the workflow_run path, the
+      # triggering run's payload may have zero `pull_requests` if it
+      # was kicked off from a non-PR event (e.g. push to a long-lived
+      # branch). In that case we exit cleanly — there's no PR to
+      # consider.
+      - name: Resolve PR number from inputs
+        id: pr
+        env:
+          DISPATCH_PR: ${{ inputs.pr_number }}
+          RUN_PR_NUM: ${{ inputs.run_pr_number }}
+        run: |
+          if [[ -n "${DISPATCH_PR}" ]]; then
+            echo "number=${DISPATCH_PR}" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Resolving PR #${DISPATCH_PR} (workflow_dispatch)"
+          elif [[ -n "${RUN_PR_NUM}" ]]; then
+            echo "number=${RUN_PR_NUM}" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Resolving PR #${RUN_PR_NUM} (workflow_run rendezvous)"
+          else
+            echo "number=" >> "${GITHUB_OUTPUT}"
+            echo "::notice::No PR number on trigger payload; nothing to resolve"
+          fi
+
+      - name: Checkout platform scripts
+        if: steps.pr.outputs.number != ''
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+          # Shallow — the resolver reads everything else via the
+          # GitHub API; we only need the script file from this ref.
+          fetch-depth: 1
+
+      - name: Setup Node
+        if: steps.pr.outputs.number != ''
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
+        with:
+          node-version: '20'
+
+      - name: Auto-resolve newline-only conflict
+        if: steps.pr.outputs.number != ''
+        env:
+          # CMS_E2E_PAT, NOT GITHUB_TOKEN. We only close PRs from this
+          # workflow (no force-push), but the PR-close event needs to
+          # fire downstream workflows (e.g. preview-teardown) that
+          # ignore GITHUB_TOKEN-authored events. The PAT is the same
+          # token cms-editorial-workflow.yml uses for the same reason.
+          GH_TOKEN: ${{ secrets.CMS_E2E_PAT }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: node .cms-platform/scripts/auto-resolve-newline-conflict.js

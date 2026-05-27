@@ -1,0 +1,246 @@
+# Reusable: refresh the trailing `# vX.Y.Z (YYYY-MM-DD)` comments on
+# every workflow `uses:` line that Dependabot just bumped, so the comment
+# stays in lockstep with the SHA.
+#
+# A consuming site calls this from a thin wrapper that owns the
+# `pull_request_target` + `push` + `workflow_dispatch` triggers, the
+# `paths:` filter, and the run-name (see
+# examples/site/.github/workflows/dependabot-comment-sync.yml). The sync
+# logic lives in scripts/sync-action-pin-comments.sh, which is NOT in the
+# site repo, so this workflow checks the platform repo out into
+# `.cms-platform/` and runs the script from there. Pin `platform_ref` to the
+# same tag/sha the caller pins this workflow to.
+name: Dependabot comment sync (reusable)
+
+# Dependabot rewrites the SHA and the version part of the comment but
+# never the date — over a few bumps, the comment can drift multiple
+# releases out of date (see PR #135: comment said v1.302.0 (2026-04-15)
+# while the SHA was already at v1.305.0 (2026-04-21)).
+#
+# ── Trigger choice: pull_request_target, NOT pull_request ──────────
+#
+# Dependabot-triggered `pull_request` events get a read-only
+# GITHUB_TOKEN by design — pushing back to the PR branch would fail
+# with 403. `pull_request_target` runs in the BASE repo's context
+# with the full GITHUB_TOKEN, so we can push the follow-up commit. The
+# trigger is declared on the CALLER; this reusable inherits the event.
+#
+# ── Why GITHUB_TOKEN isn't enough: workflow-file protection ────────
+#
+# GitHub Apps (which is what GITHUB_TOKEN authenticates as) cannot
+# create or update files under `.github/workflows/` without a special
+# `workflows: write` permission, and that permission can NOT be
+# requested via a workflow's `permissions:` block. Pushing back a
+# Dependabot action-bump (which by definition modifies workflow files)
+# with GITHUB_TOKEN fails with:
+#
+#   ! [remote rejected] HEAD -> dependabot/...
+#     refusing to allow a GitHub App to create or update workflow
+#     `.github/workflows/...` without `workflows` permission
+#
+# The fix is a fine-grained Personal Access Token with the
+# `workflows` permission, passed in as the `workflow_sha_comment_pat`
+# secret. To create one: github.com → Settings → Developer settings →
+# Personal access tokens → Fine-grained → scope to the site repo, set
+# "Workflows: Read and write" + "Contents: Read and write" + "Pull
+# requests: Read", expire in 1 year, store it as a repo secret and wire
+# it through the caller.
+#
+# When the PAT is unset the job logs a clear notice and exits cleanly
+# so the workflow doesn't show up red on every Dependabot PR — the
+# feature is opt-in via the PAT secret.
+#
+# Standard `pull_request_target` security caveat: the workflow runs at
+# the BASE-branch HEAD, so any malicious change in the PR diff CAN'T
+# influence what runs here. Two further hardening properties specific
+# to this port:
+#
+#   1. The EXECUTED script (sync-action-pin-comments.sh) is fetched
+#      from the PLATFORM repo at the pinned `platform_ref` — NOT from
+#      the checked-out PR head. So the script is platform-authoritative
+#      and a PR branch cannot substitute its own version. (The original
+#      adamdaniel.ai workflow ran the PR-branch copy of the script; the
+#      platform checkout removes that vector entirely.)
+#   2. The PR head IS checked out — but only as the mutation TARGET
+#      (the workflow YAML to rewrite + the branch to push back). No
+#      `npm install`, no eval, no `bash <(cat ./script-from-pr)`. The
+#      job is gated on the PR author being dependabot[bot] at the first
+#      step, so a PR from any other account never starts the runner.
+#
+# Note: GitHub deliberately ignores changes to `pull_request_target`
+# workflow files in PRs — security policy. So the CALLER file itself
+# can't be modified by a PR; it always runs at the base-ref version.
+#
+# ── Path filter ───────────────────────────────────────────────────
+#
+# The workflow only does anything when a Dependabot PR touched a
+# workflow file (since that's where SHA pins live). The `paths:` filter
+# that skips the runner round-trip for npm / bundler PRs lives on the
+# CALLER's `pull_request_target` trigger.
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo:
+        description: "owner/name of the platform repo holding the sync script."
+        type: string
+        required: false
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the script from (pin to the same ref as this workflow)."
+        type: string
+        required: false
+        default: main
+    secrets:
+      workflow_sha_comment_pat:
+        description: >-
+          Fine-grained PAT with `workflows: write` + `contents: write` +
+          `pull requests: read` so the follow-up commit can push back the
+          refreshed workflow files. When unset the job skips cleanly.
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  # Scope by PR number when present, else by ref. On `push` events
+  # `github.event.pull_request.number` is empty, so falling back to
+  # `github.ref` gives each branch its own push lane, so the
+  # phantom-suppression push run completes as `success` instead of being
+  # cancelled by a sibling push.
+  group: dependabot-comment-sync-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    # NOTE on the dependabot-only gate: the gate lives in the FIRST step,
+    # not as a job-level `if:`. A job-level `if:` that skips the whole job
+    # makes GHA record the run as `conclusion=failure`; moving the gate to
+    # step 1 keeps the run conclusion `success` in every case (push /
+    # non-Dependabot PR / dispatch) and leaves the Actions tab clean.
+    runs-on: ubuntu-latest
+    env:
+      # Hoist the PAT to job-level env so the `if:` checks below can
+      # reference `env.PAT` instead of `secrets.X`. GHA's expression
+      # evaluator forbids `secrets.X` in step-level `if:` conditions; it
+      # raises "Unrecognized named-value: 'secrets'" at parse time. Secrets
+      # ARE valid in `env:` blocks at every scope, and `env.X` IS allowed
+      # in `if:` conditions, so the hoist is the documented escape hatch.
+      PAT: ${{ secrets.workflow_sha_comment_pat }}
+    steps:
+      - name: Skip non-Dependabot context
+        # Three early-exit paths so GHA records the run as `success`
+        # rather than `failure`:
+        #   1. `push` (any branch): pure phantom-suppression anchor.
+        #   2. Non-Dependabot `pull_request_target`: notice + exit 0.
+        #   3. `workflow_dispatch` (manual): no PR head to sync; no-op.
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request_target' && github.event.pull_request.user.login != 'dependabot[bot]')
+        run: |
+          case "${{ github.event_name }}" in
+            push)
+              echo "::notice::Push event — comment-sync is dependabot-only; this run exists to suppress GHA's phantom-failure pattern. Skipping cleanly."
+              ;;
+            workflow_dispatch)
+              echo "::notice::Manual dispatch — comment-sync is dependabot-only; nothing to do. Skipping cleanly."
+              ;;
+            *)
+              echo "::notice::PR is from ${{ github.event.pull_request.user.login }}, not dependabot[bot]; comment-sync is dependabot-only — skipping cleanly."
+              ;;
+          esac
+          exit 0
+
+      - name: Bail early if the workflow PAT is unset
+        # Without a PAT carrying the `workflows` permission, pushing
+        # back a Dependabot action-bump fails with "refusing to allow
+        # a GitHub App to create or update workflow ... without
+        # workflows permission". Skip cleanly with a notice rather
+        # than fail loudly on every Dependabot PR.
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT == ''
+        run: |
+          echo "::notice::workflow_sha_comment_pat secret is not configured. Skipping comment-sync — see this workflow's header for setup instructions."
+          exit 0
+
+      - name: Checkout PR head
+        # `pull_request_target` defaults to the BASE ref. We need
+        # the PR's HEAD to read+rewrite the just-bumped workflow
+        # files. Dependabot's branches always live in the base
+        # repo (Dependabot doesn't push to forks), so head.repo
+        # is the same as the base repo — but spell it out so a
+        # future tweak to support fork PRs doesn't silently break
+        # this workflow. The EXECUTED script is fetched separately
+        # from the platform repo (see next step), so this checkout
+        # is the mutation target only — never a source of code run.
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          fetch-depth: 0
+          # Use the PAT (with `workflows: write`) for both the
+          # initial fetch and the persisted credential `git push`
+          # uses below. GITHUB_TOKEN can't push workflow-file
+          # changes — see this workflow's header for why.
+          token: ${{ secrets.workflow_sha_comment_pat }}
+          persist-credentials: true
+
+      - name: Checkout platform scripts
+        # The sync script is platform-authoritative — fetched from the
+        # pinned platform ref into a dot-dir, NOT taken from the PR head
+        # tree. This is the hardening property the original lacked.
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Configure git author
+        # Author the follow-up commit as Dependabot so GitHub's
+        # auto-merge gate (which requires the PR head to be
+        # authored by Dependabot or by the PR creator) keeps
+        # working. The 49699333+ ID is Dependabot's official
+        # noreply email per https://api.github.com/users/dependabot%5Bbot%5D.
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        run: |
+          git config user.name "dependabot[bot]"
+          git config user.email "49699333+dependabot[bot]@users.noreply.github.com"
+
+      - name: Sync action-pin comments
+        # `gh` is preinstalled on ubuntu-latest. The script reads
+        # the GitHub API via gh's standard env var. GITHUB_TOKEN
+        # is fine for the read-only API calls the script makes
+        # (listing tags, resolving commits) — only the push needs
+        # the workflow-scoped PAT. Run the PLATFORM copy of the script
+        # against the PR-head tree (cwd is the PR checkout).
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .cms-platform/scripts/sync-action-pin-comments.sh
+
+      - name: Commit and push if changes
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        # No-op when the script left the tree clean. When it did
+        # rewrite something, commit as Dependabot and push back
+        # to the PR branch. The commit becomes part of the same
+        # PR's CI run; dependabot-auto-merge needs no changes — it
+        # waits on required-status-checks against the combined head,
+        # which now includes our follow-up commit. The .cms-platform
+        # checkout is excluded from the commit (git add -A would stage
+        # it) by removing it first.
+        run: |
+          set -euo pipefail
+          rm -rf .cms-platform
+          if git diff --quiet; then
+            echo "no comment drift; nothing to commit"
+            exit 0
+          fi
+          git add -A
+          git commit -m "$(cat <<'EOF'
+          chore(deps): refresh action-pin comments to match new SHA
+
+          Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+          EOF
+          )"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+# Intentionally inert line (no functional effect).

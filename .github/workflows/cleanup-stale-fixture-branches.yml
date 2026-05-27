@@ -1,0 +1,119 @@
+# Reusable: sweep stale e2e fixture branches.
+#
+# A consuming site calls this from a thin wrapper that owns the `schedule`
+# + `workflow_dispatch` triggers + run-name (see
+# examples/site/.github/workflows/cleanup-stale-fixture-branches.yml). No
+# external script deps — the sweep runs entirely in github-script against the
+# CALLING repo (context.repo). Nothing site-specific is hardcoded.
+name: Cleanup stale e2e fixture branches (reusable)
+
+# Sweeps stale `cms/e2e-fixture/*` branches the publish-loop and
+# delete-published specs leave behind when their cleanup paths fail.
+#
+# Steady state: every fixture branch the specs open auto-deletes on
+# merge (the repo has `delete_branch_on_merge: true`), and the
+# in-spec `closePrAndDeleteBranch` helper deletes the branch on test
+# failure too. This workflow is the third line of defence: a daily
+# sweep that closes any open `cms/e2e-fixture/*` PR older than 24h and
+# deletes its branch. Without it, repeated test crashes could pile up
+# zombie PRs that confuse waitForCmsPullRequest's matcher.
+#
+# Trigger (declared on the caller): cron daily, plus workflow_dispatch
+# for manual sweeps. Slot the cron ahead of the cms-publish-loop-host
+# run so any leftover branches from yesterday are gone before today's
+# run starts.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # Sweeps are idempotent; if one is already running, the second is
+  # safely a no-op. cancel-in-progress=false keeps both alive.
+  group: cleanup-stale-fixture-branches
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Sweep stale fixture branches
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        with:
+          script: |
+            const PREFIX = 'cms/e2e-fixture/';
+            const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+            const cutoff = Date.now() - MAX_AGE_MS;
+
+            // 1. Close any open PR on a fixture branch that's older
+            //    than 24h. Anything younger could still be in flight
+            //    inside a running test; leave it alone.
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            for (const pr of prs) {
+              if (!pr.head || !pr.head.ref) continue;
+              if (!pr.head.ref.startsWith(PREFIX)) continue;
+              const created = Date.parse(pr.created_at);
+              if (Number.isFinite(created) && created > cutoff) {
+                core.info(`Skipping fresh fixture PR #${pr.number} (${pr.head.ref}, age < 24h).`);
+                continue;
+              }
+              core.info(`Closing stale fixture PR #${pr.number} on ${pr.head.ref}.`);
+              try {
+                await github.rest.pulls.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  state: 'closed',
+                });
+              } catch (err) {
+                core.warning(`Failed to close PR #${pr.number}: ${err.message}`);
+              }
+            }
+
+            // 2. Delete any cms/e2e-fixture/* branch older than 24h
+            //    that no longer has an open PR. Branches younger than
+            //    24h could be the active test's seed/cleanup branch.
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const fixtureBranches = branches.filter((b) => b.name.startsWith(PREFIX));
+            for (const b of fixtureBranches) {
+              // Pull the head commit timestamp so we can age-gate.
+              let committedAt = 0;
+              try {
+                const commit = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: b.commit.sha,
+                });
+                committedAt = Date.parse(commit.data.commit.committer.date) || 0;
+              } catch (err) {
+                core.warning(`Failed to read commit ${b.commit.sha} for branch ${b.name}: ${err.message}`);
+                continue;
+              }
+              if (committedAt > cutoff) {
+                core.info(`Skipping fresh fixture branch ${b.name} (age < 24h).`);
+                continue;
+              }
+              core.info(`Deleting stale fixture branch ${b.name}.`);
+              try {
+                await github.rest.git.deleteRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `heads/${b.name}`,
+                });
+              } catch (err) {
+                core.warning(`Failed to delete branch ${b.name}: ${err.message}`);
+              }
+            }

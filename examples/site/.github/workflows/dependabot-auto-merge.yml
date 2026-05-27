@@ -1,0 +1,19 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/dependabot-auto-merge.yml`. Owns the `pull_request`
+# trigger + run-name; delegates the Dependabot unattended-merge gate to the
+# platform's reusable workflow. Auto-merges the platform-bump / gem
+# Dependabot PRs once the site's required checks on main are green.
+name: Dependabot auto-merge
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/dependabot-auto-merge.yml@v0.1.0

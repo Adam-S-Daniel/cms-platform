@@ -98,7 +98,10 @@ test.describe("visual-regression workflow: content-only PRs are skipped", () => 
     // Sanity check: if a new collection is added to admin/config.yml,
     // its folder should also be added to FORBIDDEN_PATHS above.
     const cfg = YAML.parse(
-      fs.readFileSync(path.join(__dirname, "..", "admin", "config.yml"), "utf8"),
+      // Platform ships the Decap config as admin/config.base.yml; the
+      // rendered admin/config.yml is build-output only and absent from the
+      // source tree, so read the base config here.
+      fs.readFileSync(path.join(__dirname, "..", "admin", "config.base.yml"), "utf8"),
     );
     const folders = ((cfg && cfg.collections) || [])
       .map((c) => c && c.folder)

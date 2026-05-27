@@ -1,0 +1,55 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/auto-resolve-newline-conflict.yml`. Owns the
+# `workflow_run` + `workflow_dispatch` triggers + run-name; delegates the
+# newline-conflict resolution to the platform's reusable workflow. The
+# resolver script lives in the platform repo — this caller only translates
+# the trigger payload into the reusable's inputs. Keep `platform_ref` equal
+# to the `@vX.Y.Z` pin on the `uses:` line so the script matches the
+# workflow version.
+name: Auto-resolve newline-only merge conflicts on CMS PRs
+run-name: >-
+  ${{ github.event_name == 'workflow_run'
+        && format('chained — after {0} #{1}', github.event.workflow_run.name, github.event.workflow_run.run_number)
+   || format('manual — PR #{0}{1} @{2}', inputs.pr_number, inputs.dry_run && ' — dry-run' || '', github.actor) }}
+
+on:
+  workflow_run:
+    workflows: ["CMS Editorial Workflow"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to resolve (required for dispatch)'
+        type: string
+        required: true
+      dry_run:
+        description: 'Log decisions but make no writes'
+        type: boolean
+        default: false
+
+permissions:
+  # The resolver script uses CMS_E2E_PAT for writes; GITHUB_TOKEN stays
+  # minimal so the workflow_run trigger doesn't gain write access via the
+  # upstream workflow's token.
+  contents: read
+  pull-requests: read
+
+jobs:
+  resolve:
+    # workflow_run fires regardless of the triggering workflow's
+    # outcome. We only want to attempt resolution after a clean
+    # validate-content run (a failing one signals genuine content
+    # problems we don't want to paper over) OR an explicit manual
+    # dispatch.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/auto-resolve-newline-conflict.yml@v0.1.0
+    with:
+      pr_number: ${{ github.event.inputs.pr_number || '' }}
+      run_pr_number: ${{ (github.event.workflow_run.pull_requests[0] && github.event.workflow_run.pull_requests[0].number) || '' }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      # Pin to the SAME ref as the `uses:` pin above so the script matches.
+      platform_ref: v0.1.0
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
