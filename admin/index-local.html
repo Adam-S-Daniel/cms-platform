@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Content Manager — Adam Daniel (Local Dev)</title>
+  <style>
+    /* Same minimum as admin/index.html — just the floating Live Preview
+     * link's affordances. The cobalt-thermal theme was retired; live
+     * preview at /preview/?collection=<n> is the WYSIWYG. */
+    .floating-link {
+      position: fixed;
+      right: 1.5rem;
+      bottom: 1.5rem;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1rem;
+      background: #ffffff;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      color: #24292f;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 0.85rem;
+      text-decoration: none;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    }
+    .floating-link:hover {
+      border-color: #0969da;
+      color: #0969da;
+    }
+    .floating-link svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+  </style>
+
+  <!-- Responsive layer for the Decap shell — see admin/index.html and
+       docs/decisions/0003-extend-decap-for-mobile-instead-of-forking.md.
+       Mirrored here so the local dev shell (decap-server backend)
+       reproduces the prod narrow-viewport behaviour. -->
+  <link rel="stylesheet" href="admin-mobile.css" />
+</head>
+<body>
+  <!-- Live Preview link — see admin/index.html for rationale. -->
+  <a id="live-preview-link" class="floating-link" href="/preview/" target="_blank" rel="noopener"
+     title="Opens a new tab. Hit Save in the editor for the preview to fill in.">
+    <svg viewBox="0 0 24 24"><path d="M12 5c-7 0-10 7-10 7s3 7 10 7 10-7 10-7-3-7-10-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+    Live Preview
+  </a>
+  <script>
+    (function () {
+      var link = document.getElementById('live-preview-link');
+      function updateHref() {
+        var m = /#\/collections\/([^\/]+)/.exec(location.hash || '');
+        link.href = '/preview/' + (m ? '?collection=' + encodeURIComponent(m[1]) : '');
+      }
+      window.addEventListener('hashchange', updateHref);
+      updateHref();
+    })();
+  </script>
+
+  <!-- Tell Decap CMS to use the local config file -->
+  <link rel="cms-config-url" type="text/yaml" href="config-local.yml">
+
+  <!--
+    Decap CMS — same pinned exact version as admin/index.html. The local
+    config sets `local_backend: true` so saves go through the
+    decap-server proxy (port 8081) into the working tree instead of
+    GitHub.
+  -->
+  <script src="https://unpkg.com/decap-cms@3.12.2/dist/decap-cms.js"></script>
+
+  <!-- "HTML Embed" editor component — see admin/index.html for rationale. -->
+  <script src="editor-component-html-embed.js" defer></script>
+
+  <!-- Live Preview bridge: broadcasts entry data on every save to any
+       open /preview/ tab. Loads after Decap so `window.CMS` exists. -->
+  <script src="preview-bridge.js" defer></script>
+
+  <!-- Single source of truth for the live URL — see admin/index.html. -->
+  <script src="live-url-derive.js" defer></script>
+
+  <!-- "View page on site:" banner — see admin/index.html for rationale.
+       Loads after live-url-derive.js, before native-preview-href.js. -->
+  <script src="live-url-banner.js" defer></script>
+
+  <!-- Native "View Live" toolbar override — see admin/index.html. -->
+  <script src="native-preview-href.js" defer></script>
+
+  <!-- Posts list dashboard — see admin/index.html (#1042). -->
+  <script src="posts-list-enhance.js" defer></script>
+
+  <!-- Commit indicator — see admin/index.html for the full rationale.
+       Locally, run scripts/write-commit-json.sh to populate commit.json
+       (otherwise the pill stays hidden). -->
+  <script>
+    (function () {
+      var REPO_URL = 'https://github.com/Adam-S-Daniel/adamdaniel.ai';
+      fetch('commit.json', { cache: 'no-cache' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (c) {
+          if (!c || !c.sha) return;
+          var d = c.iso ? new Date(c.iso) : null;
+          var dateLabel = d
+            ? d.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' })
+            : '';
+          var isPreview = c.branch && c.branch !== 'main';
+          var a = document.createElement('a');
+          a.id = 'cms-commit-pill';
+          a.href = REPO_URL + '/commit/' + c.sha;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.title = 'Deployed commit — opens on GitHub';
+          a.innerHTML = (isPreview
+            ? '<span style="color:#bf8700;font-weight:600;margin-right:0.5em">PREVIEW: ' +
+                String(c.branch).replace(/[<>&"']/g, '') + '</span>'
+            : '') +
+            '<span>' + c.sha.slice(0, 7) +
+            (dateLabel ? '  ' + dateLabel : '') + '</span>';
+          a.style.cssText = 'position:fixed;top:60px;right:12px;z-index:10000;padding:0.25rem 0.55rem;background:rgba(255,255,255,0.95);border:1px solid ' + (isPreview ? '#bf8700' : '#d0d7de') + ';border-radius:4px;color:#57606a;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.7rem;letter-spacing:0.04em;text-decoration:none;box-shadow:0 1px 3px rgba(0,0,0,0.08);';
+          document.body.appendChild(a);
+        })
+        .catch(function () {});
+    })();
+  </script>
+</body>
+</html>
