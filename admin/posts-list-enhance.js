@@ -624,7 +624,9 @@
       bits.push(
         '<a href="https://preview-pr' +
           esc(pr.number) +
-          "." + window.CMS_APEX + "/blog/" +
+          "." +
+          window.CMS_APEX +
+          "/blog/" +
           esc(urlSlug(card.slug)) +
           '/" target="_blank" rel="noopener" title="Per-PR preview ' +
           "environment for the unmerged draft (open PR #" +

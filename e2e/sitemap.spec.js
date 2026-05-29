@@ -153,17 +153,15 @@ function readSitemapLocs() {
 }
 
 test.describe("sitemap structure @parity", () => {
-  // When the sitemap hasn't been built yet (e.g. someone runs this single
-  // spec without the webServer fixture warming `jekyll build`), surface a
-  // clear failure rather than a generic ENOENT stack.
-  test.beforeAll(() => {
-    if (!fs.existsSync(SITEMAP_PATH)) {
-      throw new Error(
-        `_site/sitemap.xml not found at ${SITEMAP_PATH}. ` +
-          "The Playwright webServer step runs `bundle exec jekyll build` before " +
-          "tests; if you're running this spec standalone, build first.",
-      );
-    }
+  // Skip in any lane without a local Jekyll build (TARGET=preview/prod crawl
+  // deployed surfaces and don't build _site). This spec asserts the
+  // locally-built _site/sitemap.xml; it runs fully in the local lane and
+  // self-skips elsewhere rather than ENOENT-failing the parity-preview lane.
+  test.beforeEach(() => {
+    test.skip(
+      !fs.existsSync(SITEMAP_PATH),
+      "_site/sitemap.xml not built (non-local target) — local-build sitemap parity spec",
+    );
   });
 
   test("every published _posts/*.md appears as a <loc> entry @parity", () => {

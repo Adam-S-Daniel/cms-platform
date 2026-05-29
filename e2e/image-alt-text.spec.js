@@ -126,7 +126,15 @@ test.describe(
   // webkit-iphone16. See playwright.config.js.
   { tag: ["@admin-read"] },
   () => {
-    test.beforeEach(() => {});
+    test.beforeEach(() => {
+      // Self-skip when there's no local Jekyll build (TARGET=preview/prod):
+      // this audit walks the locally-built _site/sitemap.xml; it runs fully
+      // in the local lane and skips elsewhere instead of ENOENT-failing.
+      test.skip(
+        !fs.existsSync(SITEMAP_PATH),
+        "_site/sitemap.xml not built (non-local target) — local-build image-alt audit",
+      );
+    });
 
     test("every <img> on every sitemap URL has alt, role=presentation, or aria-hidden", async ({
       page,
