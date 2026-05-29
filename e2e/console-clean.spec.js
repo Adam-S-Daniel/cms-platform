@@ -2,13 +2,14 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { slugify, parseFrontMatter, isPublished, isTestFixturePost } = require("./public-content");
 
 // B4. Console-clean content pages — @parity
 // ─────────────────────────────────────────────────────────────────────────────
-// Navigates every published content URL on the site and fails if any page
-// emits a `console.error` or unhandled `pageerror`. The tag `@parity` marks
-// this as a check that should give the same answer in non-prod and prod —
-// content rendering is environment-agnostic, so a regression here means the
+// Navigates every published PUBLIC-CONTENT URL on the site and fails if any
+// page emits a `console.error` or unhandled `pageerror`. The tag `@parity`
+// marks this as a check that should give the same answer in non-prod and prod
+// — content rendering is environment-agnostic, so a regression here means the
 // same failure in both.
 //
 // URL list is built at load time from the source repo (not the rendered site)
@@ -28,42 +29,24 @@ const { test, expect } = require("./base");
 //
 // `_e2e/` canaries are skipped — `noindex,nofollow` system content driven by
 // the publish-loop tests; not advertised to readers.
+//
+// E2E TEST-FIXTURE canaries in `_posts/` are skipped via the shared
+// `isTestFixturePost` predicate (e2e/public-content.js). This is the #1771
+// Cat-2 fix: the ephemeral prod-loop posts
+// (`_posts/2099-12-31-e2e-{prod-mutate,media-roundtrip}-<runId>.md`) are
+// born `published: true` through the Decap UI and briefly serve mid-run.
+// They are noindex test fixtures (validated by the loop specs themselves),
+// NOT public content — and a transient 404 of a deleted-but-not-swept
+// orphan's resource must not red-fail this REQUIRED check (which would
+// poison every cms PR, including the loop's own create PR). The predicate
+// keys on the structural `e2e-` slug signature because the UI-created
+// posts carry neither `test_fixture: true` nor `sitemap: false` (the
+// posts collection has no widget for them).
 
 const REPO_ROOT = path.join(__dirname, "..");
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 const TAGS_DIR = path.join(REPO_ROOT, "_tags");
 const PAGES_DIR = path.join(REPO_ROOT, "pages");
-
-// Mirrors Jekyll's slugify default + Decap's slug derivation. Same shape as
-// e2e/cms-preview-url.spec.js so the two specs agree on what the live URL is.
-function slugify(s) {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function parseFrontMatter(filepath) {
-  const src = fs.readFileSync(filepath, "utf8");
-  const match = src.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return null;
-  const fm = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!kv) continue;
-    let value = kv[2];
-    // Strip an inline YAML comment ("# ..." preceded by whitespace). The
-    // contributor pages in `pages/*.md` use these to document opt-out
-    // semantics ("published: false  # Set to true to restore."). Without
-    // this strip, the published check below treats the comment as part
-    // of the value and never matches.
-    value = value.replace(/\s+#.*$/, "");
-    value = value.trim();
-    value = value.replace(/^["'](.*)["']$/, "$1");
-    fm[kv[1]] = value;
-  }
-  return fm;
-}
 
 function listMd(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -87,19 +70,20 @@ function buildContentUrls() {
   // being asserted on; one that omits the key entirely (Jekyll publishes
   // it) is still covered.
   //
-  // ALSO skip `sitemap: false` posts. Test-fixture canaries (e.g. the
-  // prod-mutate playground's `2099-01-01-e2e-mutation-canary.md`) get
-  // briefly flipped to `published: true` mid-run; their `sitemap:
-  // false` flag is the canonical "this is hidden by design" signal.
-  // Asserting that the URL is console-clean against TARGET=prod
-  // breaks because prod (correctly) still has the BASELINE
-  // `published: false` and the URL 404s — even though the cms PR's
-  // source tree says published: true.
+  // ALSO skip E2E test-fixture canaries via the shared isTestFixturePost
+  // predicate (e2e/public-content.js). It excludes posts flagged
+  // `test_fixture: true` OR `sitemap: false` (the persistent `_e2e`/unpublish
+  // canaries) AND posts whose slug/filename carries the `e2e-` canary
+  // signature (the ephemeral prod-loop posts created through the Decap UI,
+  // which carry NEITHER flag because the posts collection has no widget for
+  // them — #1771 Cat-2 fix). These are noindex test fixtures validated by
+  // the loop specs themselves; a transient orphan's 404'd resource must not
+  // red this REQUIRED public-content check.
   for (const file of listMd(POSTS_DIR)) {
     const fm = parseFrontMatter(path.join(POSTS_DIR, file));
     if (!fm) continue;
-    if (fm.published === "false") continue;
-    if (fm.sitemap === "false" || fm.sitemap === false) continue;
+    if (!isPublished(fm)) continue;
+    if (isTestFixturePost(fm, { filename: file })) continue;
     const slugSource = fm.slug && fm.slug !== "" ? fm.slug : fm.title;
     if (!slugSource) continue;
     urls.add(`/blog/${slugify(slugSource)}/`);
@@ -118,7 +102,7 @@ function buildContentUrls() {
   for (const file of listMd(PAGES_DIR)) {
     const fm = parseFrontMatter(path.join(PAGES_DIR, file));
     if (!fm) continue;
-    if (fm.published === "false") continue;
+    if (!isPublished(fm)) continue;
     if (!fm.permalink) continue;
     urls.add(fm.permalink);
   }

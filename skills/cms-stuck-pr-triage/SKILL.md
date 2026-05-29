@@ -1,11 +1,11 @@
 ---
 name: cms-stuck-pr-triage
-description: Diagnose "stuck" or "repeatedly failing" runs of cms-publish-loop-host.yml, cms-publish-loop-prod.yml, canary-prod.yml, or any workflow that opens a `cms/<col>/<slug>` PR via Decap and waits for it to auto-merge. The workflow itself is rarely the bug — almost always the cause is a long-lived BLOCKED PR whose CI ran on a stale base. Use when the user says a publish-loop is "stuck", cancels & restarts a run, or asks why a daily canary keeps failing.
+description: Diagnose "stuck" or "repeatedly failing" runs of cms-publish-loop-host.yml, cms-publish-loop-prod.yml, canary-prod.yml, or any workflow that opens a `cms/<col>/<slug>` PR via Decap and waits for it to auto-merge. The workflow itself is rarely the bug — almost always the cause is a long-lived BLOCKED PR whose CI ran on a stale base, or a PR stuck BLOCKED with all checks green. Use when the user says a publish-loop is "stuck", cancels & restarts a run, or asks why a daily canary keeps failing.
 ---
 
 # CMS publish-loop / canary stuck-PR triage
 
-The publish-loop and canary workflows in this repo (`cms-publish-loop-host.yml`, `cms-publish-loop-prod.yml`, `canary-prod.yml`, plus the in-progress `cms-preview-pr-self-contained.spec.js` harness) all follow the same shape: open a `cms/<col>/<slug>` PR via Decap CMS → wait for the editorial-workflow auto-merge to fire → wait for `deploy-production.yml` to finish → assert the live URL.
+The publish-loop and canary workflows in this platform (`cms-publish-loop-host.yml`, `cms-publish-loop-prod.yml`, `canary-prod.yml`, plus the preview loops in `cms-preview-loops.yml`) all follow the same shape: open a `cms/<col>/<slug>` PR via Decap CMS → wait for the editorial-workflow auto-merge to fire → wait for `deploy-production.yml` to finish → assert the live URL.
 
 When a run "gets stuck" it almost never means the workflow is misbehaving. The default failure mode is:
 
@@ -18,25 +18,20 @@ Most user-facing symptoms ("stuck for 30 min", "cancelled and restarted three ti
 - The user says any of: "publish-loop is stuck / failing / not succeeding", "I cancelled a stuck run", "the canary keeps failing", "this workflow has been running for an hour".
 - A `gh run view` log ends with `Error: Timed out waiting for PR #N to merge`.
 - A workflow run was just cancelled and a new one was kicked off — before suggesting any workflow changes, finish this triage.
-- After landing changes that affect e2e spec selection (`select-specs.js`, lane filtering, FANOUT_PATTERNS, the spec set itself), proactively audit open `cms/*` PRs whose CI ran against the pre-fix tree.
+- After landing changes that affect e2e spec selection (lane filtering, the spec set itself), proactively audit open `cms/*` PRs whose CI ran against the pre-fix tree.
 
-## Shortcut: look at the auto-generated diagnostic first
+## This is a manual / agent procedure — there is no diagnostic script
 
-Most of the manual procedure below has been automated. When a publish-loop / preview-loop / prod-mutate workflow times out on a `Timed out waiting` line, two PR comments land on the failing run's PR:
+The platform deliberately ships **no** `scripts/diagnose-stuck-pr.js` (and no `Diagnose stuck PRs` workflow step). Earlier prose described an auto-generated `*-stuck-pr-diagnostic` PR comment produced by that script; that machinery is **not** part of the platform. Do not look for it. Run the `gh`-CLI procedure below by hand (or have an agent run it).
 
-1. `host-loop-failure-summary` (or `preview-loop-failure-summary`, `prod-mutate-failure-summary`) — the scrubbed Playwright failure block. **The wait-helper's error message itself now includes an inline diagnostic** appended by `e2e/with-stuck-pr-diagnostic.js`, so most of the time the answer is right there inside the failure block.
-2. `host-loop-stuck-pr-diagnostic` (or `preview-loop-stuck-pr-diagnostic`, `prod-mutate-stuck-pr-diagnostic`) — the **workflow-level catch-all**, posted by a `Diagnose stuck PRs` step that runs only when the log contains `Timed out waiting`. Covers the outer-Playwright-timeout case where the wait helper never got to augment its error.
-
-Both comments are produced by `scripts/diagnose-stuck-pr.js` (read-only, 25-s timebox, always exits 0). The diagnostic enumerates open `cms/*` PRs, classifies each by `mergeable_state`, labels `dirty` PRs as **newline-only → `auto-resolve-newline-conflict.yml` will close on next run** vs **not auto-resolvable; manual rebase needed**, lists failing required checks for `blocked` PRs, and (for URL-class timeouts) reports the `deploy-production` queue depth.
-
-**Read the diagnostic before running the procedure below.** It usually points at the offending PR directly. The procedure remains here as the manual fallback for cases the diagnostic flagged as `indeterminate` or where a human judgement call is needed.
+The platform *does* ship a smaller helper, `e2e/with-stuck-pr-diagnostic.js`, which the wait-helper uses to **append an inline diagnostic to its own error message** when it times out. So when a publish-loop spec times out, the scrubbed failure block surfaced by `post-failure-comment` (markers `host-loop-failure-summary`, `prod-mutate-failure-summary`, `preview-loop-failure-summary`) often already contains the offending PR number and its merge state. Read that comment first — but the enumeration / classification / remediation below is all manual.
 
 ## Procedure
 
 ### 1. List the open `cms/*` PRs and their merge state
 
 ```bash
-gh pr list --state open --search "head:cms" \
+gh pr list --state open --search "head:cms" --limit 1000 \
   --json number,title,mergeStateStatus,createdAt \
   --jq '.[] | [.createdAt, .number, .mergeStateStatus, .title] | @tsv'
 ```
@@ -55,7 +50,26 @@ Two diagnostic questions the output answers:
 - **Is the failure a current bug or a stale-base artefact?** Compare `baseRefOid` to current `origin/main` (`git log origin/main --oneline -1`). If the PR was opened against an older base than a recent fix that landed on main, its CI ran against the pre-fix tree. Re-running the same checks against current main would likely pass.
 - **Is auto-merge enabled?** If `autoMergeRequest` is null, the spec failed to enable auto-merge in the first place — that's a different bug (look at the spec's `gh api PUT pull/N/merge` shim error). If it's set, the PR is waiting on its required checks to pass before GitHub fires the merge.
 
-### 3. Decide: rebase, close, or wait
+### 3. The "BLOCKED but every check is green" case
+
+A distinct failure mode: `mergeStateStatus: BLOCKED`, `autoMergeRequest` already populated, yet **every** required check's latest run is SUCCESS / NEUTRAL / SKIPPED. This is a GitHub merge-state-evaluator caching bug — two auto-merge-enabling label events landed in the same second, GitHub cached the BLOCKED snapshot taken mid-mutation, and no later event re-triggers evaluation. The PR sits green-but-BLOCKED until the nightly sweep closes it.
+
+```bash
+# Confirm the pattern: BLOCKED + auto-merge on + no non-green required check
+gh pr view <N> --json mergeStateStatus,autoMergeRequest,statusCheckRollup \
+  --jq '{state: .mergeStateStatus, automerge: (.autoMergeRequest != null),
+         non_green: [.statusCheckRollup[] | select(.conclusion=="FAILURE" or .conclusion=="CANCELLED" or .status=="IN_PROGRESS") | .name]}'
+```
+
+If `cms-automerge-nudge.yml` has been ported into the platform, it handles this automatically: it runs every 5 minutes and re-calls `enablePullRequestAutoMerge` (a no-op that re-triggers GitHub's merge-state evaluation) against any `automated-test`-labelled PR matching exactly this pattern, dropping worst-case time-to-merge from "until the sweep closes it" to ~5 min. It only touches PRs that (1) carry `automated-test`, (2) already have auto-merge enabled, (3) are BLOCKED, and (4) have all required checks green — so it never re-enables auto-merge a human disabled and never touches a real editor's draft.
+
+If that workflow is **not** yet present (or you don't want to wait for its cron), nudge the stuck PR by hand — re-enabling auto-merge re-evaluates the merge state:
+
+```bash
+gh pr merge <N> --auto --merge   # no-op re-enable; re-triggers GitHub's merge-state eval
+```
+
+### 4. Decide: rebase, close, nudge, or wait
 
 - **Stale-base, fix is on main**: the cleanest move is to *close* the stale PR (Decap will open a fresh one on the next workflow run, on top of current main):
   ```bash
@@ -63,7 +77,9 @@ Two diagnostic questions the output answers:
   ```
   Rebase + force-push also works but is more fragile — if the spec used a content-based slug, the next run rewrites the same branch and races with the rebase.
 
-- **Real failure, fix not yet on main**: investigate the failing check. The `e2e (1)`, `parity`, `finalize` failures on a CMS PR are usually content-spec drift (a spec hardcodes a fixture that was deleted from main); see `e2e/content-fixtures.js`'s `discoverPost` / `discoverTags` for the dynamic-discovery pattern.
+- **BLOCKED with all checks green**: nudge auto-merge (§3) rather than closing — the PR is mergeable, GitHub just didn't notice.
+
+- **Real failure, fix not yet on main**: investigate the failing check. `e2e`/`parity` failures on a CMS PR are usually content-spec drift (a spec hardcodes a fixture that was deleted from main); see `e2e/content-fixtures.js`'s discovery helpers for the dynamic-discovery pattern.
 
 - **Pending checks, recent PR**: if the PR was opened in the last few minutes and `statusCheckRollup` shows `IN_PROGRESS`, just wait — the publish-loop run that's currently watching it should succeed when the checks settle.
 
@@ -84,7 +100,9 @@ Two diagnostic questions the output answers:
   # cms/draft, decap-cms/draft  →  fine; spec will see Status:Draft
   ```
 
-### 4. After cleaning the queue, re-trigger the workflow
+- **`dirty` (merge conflict)**: a `cms/*` PR can go `dirty` when its branch and main both touched the same trailing newline. `auto-resolve-newline-conflict.yml` re-resolves newline-only conflicts on the next run and lets the PR merge; if the conflict is more than whitespace, a manual rebase is needed. Check the diff before assuming it's auto-resolvable.
+
+### 5. After cleaning the queue, re-trigger the workflow
 
 ```bash
 gh workflow run cms-publish-loop-host.yml         # or cms-publish-loop-prod.yml / canary-prod.yml
@@ -93,13 +111,13 @@ gh run watch                                       # follow the new run live
 
 The new run opens a fresh `cms/<col>/<slug>` PR on top of current main; with the queue clean it should auto-merge cleanly.
 
-### 5. Delete-spec specific: `delete:` flag on the collection
+### 6. Delete-spec specific: `delete:` flag on the collection
 
-`cms-delete-published.spec.js` clicks the Decap UI's "Delete published entry" menuitem. Decap renders that menuitem ONLY when the entry's collection has `delete: true` in `admin/config.yml`. If the collection is `delete: false` the status menu opens but renders an empty list, the menuitem never appears, and `getByRole("menuitem", { name: /delete (published )?entry/i }).click()` times out at the action-timeout (run #25491225206 hit exactly this on the e2e collection until PR #302 set `delete: true`).
+`cms-delete-published-preview.yml`'s delete spec clicks the Decap UI's "Delete published entry" menuitem. Decap renders that menuitem ONLY when the entry's collection has `delete: true` in `admin/config.yml`. If the collection is `delete: false` the status menu opens but renders an empty list, the menuitem never appears, and `getByRole("menuitem", { name: /delete (published )?entry/i }).click()` times out at the action-timeout.
 
 When triaging a stuck delete-spec, before chasing infrastructure: `grep -A1 "name: e2e\|name: posts\|name: <collection>" admin/config.yml` and check the `delete:` flag for the relevant collection.
 
-### 6. Empty status-menu pattern (Published button opens, nothing inside)
+### 7. Empty status-menu pattern (Published button opens, nothing inside)
 
 The artifact's `error-context.md` snapshot looks like:
 
@@ -109,29 +127,30 @@ The artifact's `error-context.md` snapshot looks like:
     - list      # ← empty, no items
 ```
 
-This is the same `delete: false` symptom from §5 — the menu rendered, but Decap had no items to put in it because the collection's capability flags forbade them. Could also indicate the spec's selector matched a non-clickable element (rare; check the UI's actual structure for the entry state).
+This is the same `delete: false` symptom from §6 — the menu rendered, but Decap had no items to put in it because the collection's capability flags forbade them. Could also indicate the spec's selector matched a non-clickable element (rare; check the UI's actual structure for the entry state).
 
 ## What ISN'T the bug (red herrings to ignore unless you've ruled out the above)
 
-- **`WARNING: Error loading config file: open /root/.docker/config.json: permission denied`** at the top of a job log. This is a benign GHA quirk — every container job emits it because Docker tries to read a config that doesn't exist in the playwright image. Ignore.
-- **Workflow run dispatched against `main` rather than a feature branch.** The cron trigger fires from `main` daily; `workflow_dispatch` from `main` is identical. There's no reason to gate this. The user's intuition that "running it from main caused this" is a mis-attribution; the cause is in the open-PR queue regardless of which ref dispatched the run.
-- **Concurrency cancellation.** The publish-loop workflows use `cancel-in-progress: false`, so cron + dispatch + PR runs queue rather than killing each other. Six "cancelled" runs in a row in the run-list are almost always user-cancellations of stuck runs, not concurrency interference.
+- **`WARNING: Error loading config file: open /root/.docker/config.json: permission denied`** at the top of a job log. A benign GHA quirk. Ignore.
+- **Workflow run dispatched against `main` rather than a feature branch.** The cron trigger fires from `main` daily; `workflow_dispatch` from `main` is identical. The user's intuition that "running it from main caused this" is a mis-attribution; the cause is in the open-PR queue regardless of which ref dispatched the run.
+- **Concurrency cancellation.** The publish-loop workflows use `cancel-in-progress: false`, so cron + dispatch + PR runs queue rather than killing each other. A run of "cancelled" runs in the run-list is almost always user-cancellations of stuck runs, not concurrency interference.
 
 ## Why this matters
 
-The publish-loop is the only test that exercises the live Decap → editorial-workflow → auto-merge → deploy-production chain. When it's broken, the only pre-prod safety net for the actual publish flow is broken. Every minute the user spends restarting cancelled runs without diagnosing the open PR queue is a minute the canary is silently red. The first action when one of these workflows looks "stuck" is *always* `gh pr list --state open --search "head:cms"`.
+The publish-loop is the only test that exercises the live Decap → editorial-workflow → auto-merge → deploy-production chain. When it's broken, the only pre-prod safety net for the actual publish flow is broken. Every minute spent restarting cancelled runs without diagnosing the open PR queue is a minute the canary is silently red. The first action when one of these workflows looks "stuck" is *always* `gh pr list --state open --search "head:cms"`.
 
 ## Cleanup vs triage
 
-Don't manually close every orphan PR you find — `.github/workflows/sweep-stale-cms-prs.yml` runs nightly at 04:00 UTC and handles the routine cases. Triage that finds the *root cause* of why the sweep alone isn't enough is the goal; if you're just closing leftovers, use the workflow's `workflow_dispatch` with `dry_run: false` instead.
+Don't manually close every orphan PR you find — `.github/workflows/sweep-stale-cms-prs.yml` runs nightly and handles the routine cases. Triage that finds the *root cause* of why the sweep alone isn't enough is the goal; if you're just closing leftovers, use the workflow's `workflow_dispatch` with `dry_run: false` instead.
 
-The sweep has three tiers: branch-prefix safelist (closes + deletes), `automated-test` label (closes only — Decap reuses branches), and orphaned branches with no open PR (deletes). Per-PR opt-out via the `keep` label; per-branch opt-out via `[sweep-keep]` in the tip commit message. See AGENTS.md "`sweep-stale-cms-prs.yml`" for the full table.
+The sweep has three tiers: branch-prefix safelist (closes + deletes), `automated-test` label (closes only — Decap reuses branches), and orphaned branches with no open PR (deletes). Per-PR opt-out via the `keep` label; per-branch opt-out via `[sweep-keep]` in the tip commit message. See `sweep-stale-cms-prs.yml`'s header for the full table.
 
 **Pagination rule** (applies to any future addition): `gh pr list` defaults to `--limit 30` and silently truncates above that. `--paginate` is NOT a flag for `gh pr list` — that's gh-api-only. Always `--limit 1000` for top-level listings, `--limit 1` for existence checks. The sweep workflow's comments document this inline; mirror it in any new sweep tier or related cleanup script.
 
 ## Reference
 
-- Workflows: `.github/workflows/cms-publish-loop-host.yml`, `cms-publish-loop-prod.yml`, `canary-prod.yml`, `sweep-stale-cms-prs.yml`
-- Specs: `e2e/cms-publish-loop.spec.js`, `e2e/cms-publish-loop-prod-mutate.spec.js`, `e2e/cms-publish-loop-preview.spec.js`, `e2e/cms-delete-published.spec.js`, `e2e/cms-preview-pr-self-contained.spec.js`
-- Spec-helper that owns the timeout: `e2e/github-actions-poll.js#waitForMerge` (the `Timed out waiting for PR #N to merge` error originates here)
-- Content-fixture discovery (the de-coupled pattern that prevents PR-CI failures when fixtures change): `e2e/content-fixtures.js`
+- Triage workflows the platform ships: `.github/workflows/sweep-stale-cms-prs.yml` (nightly cleanup), `.github/workflows/auto-resolve-newline-conflict.yml` (re-resolves newline-only `cms/*` conflicts), `.github/workflows/cms-automerge-nudge.yml` (re-evaluates green-but-BLOCKED CMS PRs every 5 min — *once ported*).
+- Loop workflows: `.github/workflows/cms-publish-loop-host.yml`, `cms-publish-loop-prod.yml`, `canary-prod.yml`, `cms-preview-loops.yml`.
+- Failure surfacing: `post-failure-comment` composite action (markers `host-loop-failure-summary`, `prod-mutate-failure-summary`, `preview-loop-failure-summary`); inline error augmentation by `e2e/with-stuck-pr-diagnostic.js`.
+- Spec-helper that owns the timeout: `e2e/github-actions-poll.js` (the `Timed out waiting for PR #N to merge` error originates in its `waitForMerge`).
+- Content-fixture discovery (the de-coupled pattern that prevents PR-CI failures when fixtures change): `e2e/content-fixtures.js`.

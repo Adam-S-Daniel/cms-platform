@@ -50,7 +50,7 @@ Parameters:
     Type: String
     Description: >
       Wildcard DNS + cert alias for PR previews. Each PR deploys to
-      preview-pr${N}.adamdaniel.ai (matched by the wildcard) and a
+      preview-pr${N}.<apex> (matched by the wildcard) and a
       CloudFront Function maps the hostname to the S3 object-key prefix.
 
   ProductionBucketName:
@@ -180,13 +180,13 @@ Resources:
   # ── ACM wildcard certificate for preview subdomains ──────────────────────
   #
   # Must be in us-east-1 for CloudFront. DNS validation via Route53. Covers
-  # preview-pr1.adamdaniel.ai, preview-pr2.adamdaniel.ai, and any future
+  # preview-pr1.<apex>, preview-pr2.<apex>, and any future
   # single-label subdomain — a single cert for the whole preview fleet.
-  # Doesn't cover the apex adamdaniel.ai, which keeps its own prod cert.
+  # Doesn't cover the apex <apex>, which keeps its own prod cert.
   #
-  # Note: CloudFront allows *.adamdaniel.ai on this distribution to coexist
-  # with the production distribution's specific adamdaniel.ai +
-  # www.adamdaniel.ai aliases. Requests for those specific hosts win over
+  # Note: CloudFront allows *.<apex> on this distribution to coexist
+  # with the production distribution's specific <apex> +
+  # www.<apex> aliases. Requests for those specific hosts win over
   # the wildcard.
   #
   PreviewCertificate:
@@ -201,14 +201,14 @@ Resources:
   # ── CloudFront Function: host → S3 object-key prefix ─────────────────────
   #
   # Runs at viewer-request on every request to the preview distribution.
-  # Extracts the PR number from preview-prN.adamdaniel.ai and prepends
+  # Extracts the PR number from preview-prN.<apex> and prepends
   # /pr-N to the URI before CloudFront looks up the object in S3. The
   # browser-facing URL stays clean (no /pr-N/ prefix), and the S3 object
   # key matches what deploy-preview.yml syncs.
   #
   # Hosts that don't match the pattern fall through unchanged — useful for
-  # anyone browsing directly to adamdaniel.ai (which is caught by the prod
-  # distribution anyway) or to preview.adamdaniel.ai.
+  # anyone browsing directly to <apex> (which is caught by the prod
+  # distribution anyway) or to preview.<apex>.
   #
   PreviewRouterFunction:
     Type: AWS::CloudFront::Function
@@ -219,8 +219,8 @@ Resources:
         Comment: "preview-prN / preview-cms-<slug> .<apex> → /<prefix>/<uri> for S3 origin"
         Runtime: cloudfront-js-2.0
       # Two host patterns map to two S3 object-key prefixes:
-      #   preview-prN.adamdaniel.ai           → /pr-N/<uri>
-      #   preview-cms-<slug>.adamdaniel.ai    → /cms-<slug>/<uri>
+      #   preview-prN.<apex>           → /pr-N/<uri>
+      #   preview-cms-<slug>.<apex>    → /cms-<slug>/<uri>
       #
       # The cms-<slug> form gives editors a stable per-entry preview URL
       # that survives across draft cycles for the same entry. The
@@ -271,11 +271,11 @@ Resources:
   # so when it 302s a no-trailing-slash directory request (e.g. /admin →
   # /admin/) it includes its own internal path, surfacing /pr-N/admin/ in
   # the Location header. The browser would then navigate to
-  # https://preview-prN.adamdaniel.ai/pr-N/admin/, which has no /pr-N/ in
+  # https://preview-prN.<apex>/pr-N/admin/, which has no /pr-N/ in
   # the visible URL space and 404s.
   #
   # This function strips the matching /pr-N/ prefix from Location on
-  # responses to a preview-prN.adamdaniel.ai host, restoring the clean
+  # responses to a preview-prN.<apex> host, restoring the clean
   # public path. Only same-PR prefixes are stripped: a /pr-99/ leak on a
   # pr-23 host is left visible so it fails loudly rather than silently
   # routing somewhere unexpected. Absolute-URL Locations and non-3xx
@@ -301,7 +301,7 @@ Resources:
       #
       #   2. **noindex header.** Preview environments must NEVER show
       #      up in search results — they're per-PR ephemeral copies of
-      #      adamdaniel.ai content, often with future-dated canaries
+      #      the production site's content, often with future-dated canaries
       #      and unpublished posts. The shared `robots.txt` allows
       #      crawling on the production host, but per-host robots
       #      files aren't reliable across crawlers, so we add an
@@ -311,7 +311,7 @@ Resources:
       #      types (HTML, images, feeds, etc.).
       #
       # Production responses don't pass through this function (the
-      # production distribution doesn't attach it), so adamdaniel.ai
+      # production distribution doesn't attach it), so the production apex
       # itself stays default-indexable.
       FunctionCode: !Sub |
         function handler(event) {
@@ -359,7 +359,7 @@ Resources:
           }
         }
 
-  # ── CloudFront distribution for preview-pr*.adamdaniel.ai ────────────────
+  # ── CloudFront distribution for preview-pr*.<apex> ───────────────────────
   #
   # Uses the S3 website endpoint as a custom origin (not OAC) so that S3
   # website hosting features (index documents per directory) work correctly.
@@ -398,11 +398,11 @@ Resources:
         DefaultRootObject: index.html
         HttpVersion: http2and3
 
-  # ── Route53 wildcard alias for *.adamdaniel.ai → preview distribution ───
+  # ── Route53 wildcard alias for *.<apex> → preview distribution ──────────
   #
   # The wildcard matches every single-label subdomain not explicitly
-  # claimed by another record in this zone. `adamdaniel.ai` (apex) and
-  # `www.adamdaniel.ai` have their own specific records pointing at the
+  # claimed by another record in this zone. The apex (`<apex>`) and
+  # `www.<apex>` have their own specific records pointing at the
   # production distribution, so they take precedence over the wildcard.
   #
   PreviewDnsRecord:
@@ -417,7 +417,7 @@ Resources:
 
   # ── ACM certificate for production domain ─────────────────────────────────
   #
-  # Covers both the apex (adamdaniel.ai) and www subdomain. Must be in
+  # Covers both the apex (<apex>) and www subdomain. Must be in
   # us-east-1 for CloudFront. DNS validation via Route53.
   #
   ProductionCertificate:
@@ -433,7 +433,7 @@ Resources:
         - DomainName: !Sub "www.${ProductionDomainName}"
           HostedZoneId: !Ref HostedZoneId
 
-  # ── CloudFront distribution for adamdaniel.ai (production) ──────────────
+  # ── CloudFront distribution for <apex> (production) ──────────────────────
   #
   # Uses the S3 website endpoint as a custom origin (not OAC) so that S3
   # website hosting features (index documents per directory) work correctly.
@@ -477,7 +477,7 @@ Resources:
             ResponsePagePath: /404.html
             ErrorCachingMinTTL: 300
 
-  # ── Route53 alias records for adamdaniel.ai ─────────────────────────────
+  # ── Route53 alias records for <apex> ────────────────────────────────────
   ProductionDnsRecord:
     Type: AWS::Route53::RecordSet
     Properties:
@@ -516,10 +516,10 @@ Resources:
 
   # ── IAM role for GitHub Actions ───────────────────────────────────────────
   #
-  # Trust policy: only workflows in Adam-S-Daniel/adamdaniel.ai can assume this
+  # Trust policy: only workflows in ${GitHubOrg}/${GitHubRepo} can assume this
   # role, and only when GitHub's OIDC token audience is sts.amazonaws.com.
   #
-  # Permissions: scoped to adamdaniel-ai-* prefixed resources wherever possible.
+  # Permissions: scoped to <prefix>-* prefixed resources wherever possible.
   #
   GitHubActionsRole:
     Type: AWS::IAM::Role
@@ -563,7 +563,7 @@ Resources:
                   - !Sub "arn:aws:s3:::${ProductionBucketName}"
                   - !Sub "arn:aws:s3:::${ProductionBucketName}/*"
 
-        # ── CloudFormation: manage stacks with adamdaniel-ai- prefix ───────
+        # ── CloudFormation: manage stacks with <prefix>- prefix ────────────
         - PolicyName: CloudFormationAccess
           PolicyDocument:
             Version: "2012-10-17"

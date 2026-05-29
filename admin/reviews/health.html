@@ -3,7 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>QA Health — Adam Daniel</title>
+  <!-- Neutral placeholder title for the un-rendered file; replaced at
+       runtime from the injected window.CMS_SITE_TITLE (render-decap-config.rb
+       writes it into <head> at build, from the site's _config.yml `title`),
+       so the dashboard carries no hardcoded site identity. -->
+  <title>QA Health — CMS</title>
+  <script>
+    // window.CMS_SITE_TITLE is injected ahead of this script (see
+    // render-decap-config.rb). When present, brand the tab from the site's
+    // configured title; otherwise keep the neutral placeholder above.
+    if (window.CMS_SITE_TITLE) {
+      document.title = 'QA Health — ' + window.CMS_SITE_TITLE;
+    }
+  </script>
   <style>
     :root {
       color-scheme: dark;
@@ -242,10 +254,16 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    const REPO_OWNER = 'Adam-S-Daniel';
-    const REPO_NAME = 'adamdaniel.ai';
+    // Site identity is injected at build by scripts/render-decap-config.rb
+    // (window.CMS_REPO / CMS_OAUTH_BASE_URL — derived from _config.yml's
+    // cms.repository and cms.oauth_base_url), mirroring how admin/index.html
+    // consumes the same globals. No hardcoded site identity here so the
+    // platform stays site-agnostic.
+    const REPO_PARTS = String(window.CMS_REPO || '').split('/');
+    const REPO_OWNER = REPO_PARTS[0] || '';
+    const REPO_NAME = REPO_PARTS[1] || '';
     const API = 'https://api.github.com';
-    const OAUTH_URL = 'https://sq8d4876v8.execute-api.us-east-1.amazonaws.com/prod/auth';
+    const OAUTH_URL = (window.CMS_OAUTH_BASE_URL || '') + '/prod/auth';
     // Same key the reviews dashboard uses — sign-in there carries over.
     const TOKEN_KEY = 'gh_reviews_token';
     const CACHE_PREFIX = 'gh_health_cache:';

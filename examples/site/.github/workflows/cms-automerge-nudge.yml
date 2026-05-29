@@ -1,0 +1,58 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/cms-automerge-nudge.yml`. Owns the schedule /
+# workflow_dispatch triggers + run-name + concurrency lane; delegates the
+# stuck-PR recovery to the platform's reusable workflow.
+#
+# Re-enables auto-merge every 5 minutes on any open CMS canary PR whose
+# required checks are all green but whose mergeStateStatus is still
+# BLOCKED (issue #1815 Blocker 1 — see the reusable's header for the
+# full #1812 differential).
+#
+# The `required_contexts` list below MUST stay in lock-step with THIS
+# repo's `.github/rulesets/main.json` `required_status_checks` array
+# (lint-locked by this repo's copy of e2e/cms-automerge-nudge.test.js).
+# Keep `@vX.Y.Z` on the `uses:` line pinned to a released platform tag.
+name: CMS auto-merge nudge
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # Every 5 minutes — well under the 6h sweep threshold so a stuck PR
+    # is recovered long before it would be closed. Cron load is ~288
+    # runs/day, each <1 min, one GraphQL query + 0-N tiny mutations.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # Single global lane — only one nudge pass at a time. cancel-in-progress
+  # is fine here: if a new pass starts mid-flight, the cancelled pass'
+  # work is recovered by the next pass (the mutation is idempotent and
+  # the next pass re-queries fresh state).
+  group: cms-automerge-nudge
+  cancel-in-progress: true
+
+jobs:
+  nudge:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cms-automerge-nudge.yml@v0.1.0
+    with:
+      # Required-status-check contexts this site's branch protection
+      # enforces — mirror `.github/rulesets/main.json`. One per line.
+      required_contexts: |
+        validate-content
+        scan
+        select
+        unit
+        parity
+        e2e (1)
+        e2e-admin
+        finalize
+        preview-media
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

@@ -20,7 +20,7 @@
  * baseline. The path/body are a pure function of the runId; nothing ever
  * reads a path it also writes (the #1771 invariant).
  *
- * Born-published + future-dated:
+ * Born-published + future-dated (the canonical `composePost` text):
  *   - `published: true` from creation — the loop never toggles a
  *     persistent file; it creates a live post and deletes it.
  *   - date `2099-12-31` so the post serves the SAME way the old
@@ -34,6 +34,24 @@
  *   - `test_fixture: true` so `admin/posts-list-enhance.js` hides it
  *     from the Posts list by default (issue #1042), exactly like the old
  *     committed canaries.
+ *
+ * IMPORTANT — what the LIVE post actually carries vs this text. The
+ * `composePost` front matter above is the canonical/intended shape, and
+ * it's what the afterAll harness-hygiene fallback writes (via
+ * `removeFixtureViaPr` it's a DELETE, but a future seed path would use
+ * this text). The PRIMARY create leg, however, is genuinely UI-driven —
+ * the spec types Title/URL Slug/Date/Body into Decap's "+ New Post" form
+ * and toggles Published. Decap writes ONLY the fields the `posts`
+ * collection declares (admin/config*.yml), which does NOT include
+ * `sitemap`/`robots`, and whose `test_fixture` is `widget: hidden,
+ * default: false` — a hidden widget the editor can't toggle. So the post
+ * that actually lands on `main` from the UI carries `published: true`,
+ * the future date, `test_fixture: false`, and NO `sitemap`/`robots`
+ * keys. That is why the public-content @parity crawls cannot rely on
+ * `test_fixture: true` / `sitemap: false` to exclude these canaries and
+ * key on the structural `e2e-` slug signature instead — see
+ * e2e/public-content.js (`isTestFixturePost`). The `slug:`/`date:` the
+ * spec types are reliably present, so the signature is robust.
  *
  * The body marker IS the runId (structural, in the slug AND the body) so
  * a Slate `widget: markdown` round-trip on the body can't strip the

@@ -11,6 +11,8 @@ Workflow logs in this repo are not directly readable by the Claude agent (no `gh
 
 The composite action at `.github/actions/post-failure-comment/action.yml` solves this: it scrubs the captured log via `gitleaks` and posts (or updates, via marker-based dedup) a PR comment with the failure block. PR comments arrive as `<github-webhook-activity>` events the agent can read directly, and are also fetchable via `mcp__github__pull_request_read`.
 
+The action is **self-contained**: its extractor and scrubber scripts are co-located in the action's own directory and resolved via `$ACTION_PATH` (`${{ github.action_path }}`), so the action travels with whatever repo checks the platform out — there is no dependence on a `scripts/` dir at the consuming site's root.
+
 Built once; every Playwright-running workflow should call it.
 
 ## Caller convention
@@ -105,7 +107,7 @@ The caller-side gating in the patterns above is the only approach that has been 
    - `host-loop-failure-summary` — `cms-publish-loop-host.yml`
    - `prod-mutate-failure-summary` — `cms-publish-loop-prod.yml`
    - `preview-loop-failure-summary` — `cms-publish-loop-preview.yml`
-3. **Have `actions/checkout` run first.** The action shells out to `$GITHUB_WORKSPACE/scripts/extract-playwright-failures.sh` and `$GITHUB_WORKSPACE/scripts/scrub-secrets.js`. No checkout = no scripts.
+3. **Check out the platform so the action is on disk.** The action shells out to its co-located `$ACTION_PATH/extract-playwright-failures.sh` and `$ACTION_PATH/scrub-secrets.js` (`$ACTION_PATH` = `${{ github.action_path }}`). The scripts ship inside the action's own directory, so you do NOT need a `scripts/` dir at the consuming repo's root — but the action's directory must be present, which means the workflow must check out the repo/path that contains `.github/actions/post-failure-comment/` (e.g. the reusable `e2e-tests.yml` checks the platform out into `.cms-platform/` and references the action as `./.cms-platform/.github/actions/post-failure-comment`). You still want `actions/checkout` for the *site* so the captured log path exists, but the extractor + scrubber no longer depend on a site-root `scripts/` dir.
 4. **Grant `pull-requests: write` to the workflow.** The default `GITHUB_TOKEN` works for posting comments on the same repo, BUT only if the workflow's `permissions:` block explicitly grants it. Without this, the embedded `actions/github-script` call 403s silently — the workflow log shows the error but no comment is posted, which can fool a casual review. The composite action does NOT require `CMS_E2E_PAT`. Minimum block:
 
    ```yaml
@@ -119,7 +121,7 @@ The caller-side gating in the patterns above is the only approach that has been 
 | Step | Gate | Notes |
 |---|---|---|
 | Install gitleaks | `outcome == 'failure'` | Installs to `$HOME/.local/bin` (no sudo). Adds to `$GITHUB_PATH` so subsequent steps see it. |
-| Extract & scrub | `outcome == 'failure'` | Runs `extract-playwright-failures.sh`; falls back to `tail -c 80000` if the extractor finds nothing. Scrubs via `scrub-secrets.js` (gitleaks). Truncates to 60 KB. |
+| Extract & scrub | `outcome == 'failure'` | Runs `$ACTION_PATH/extract-playwright-failures.sh`; falls back to `tail -c 80000` if the extractor finds nothing. Scrubs via `$ACTION_PATH/scrub-secrets.js` (gitleaks). Truncates to 60 KB. |
 | Post comment | `outcome == 'failure'` AND (`pull_request` event OR `pr-number` set) | Marker-based update-or-create. |
 | Resolve on success | `outcome == 'success'` AND (`pull_request` event OR `pr-number` set) | Replaces an existing failure comment with a "passing on `<sha>`" stub. |
 
@@ -131,9 +133,9 @@ Inputs to the embedded `actions/github-script` calls are passed via `env:` and r
 
 ## Security: gitleaks pass-through is non-optional
 
-Every comment that lands on a PR via this action runs through `scripts/scrub-secrets.js` (which shells out to `gitleaks detect --no-git --source <log>`) inside the action's `Extract and scrub failure summary` step. There is **no caller-side switch** to disable it.
+Every comment that lands on a PR via this action runs through `$ACTION_PATH/scrub-secrets.js` (which shells out to `gitleaks detect --no-git --source <log>`) inside the action's `Extract and scrub failure summary` step. There is **no caller-side switch** to disable it.
 
-If you extend the action with new modes or new emit-paths, keep the scrubber call on **every** code path that emits log content into a comment body. A leaked PAT, AWS key, or token in failure output that bypasses gitleaks would be visible to anyone with read access to the PR (which on a public repo means the open internet, including search-engine indexers). The pre-commit `scripts/secrets-scan.sh` hook prevents secrets from reaching local git history; the gitleaks pass-through here is the equivalent guard for everything that reaches a PR comment.
+If you extend the action with new modes or new emit-paths, keep the scrubber call on **every** code path that emits log content into a comment body. A leaked PAT, AWS key, or token in failure output that bypasses gitleaks would be visible to anyone with read access to the PR (which on a public repo means the open internet, including search-engine indexers). The platform's `secrets-scan.yml` workflow prevents secrets from reaching git history; the gitleaks pass-through here is the equivalent guard for everything that reaches a PR comment.
 
 Triple-check this when:
 - Adding a new `mode:` value (e.g. `digest`, `summary`, anything that emits log content).
@@ -143,7 +145,7 @@ Triple-check this when:
 ## Common refactor pitfalls
 
 - **Missing `pull-requests: write` permission** — the most subtle and most common. The default `GITHUB_TOKEN` is read-only unless explicitly elevated; without elevation the comment-post 403s silently and the workflow looks like it ran the comment step but produced no comment. ALWAYS add `pull-requests: write` to a workflow's `permissions:` block when wiring this action in. Verified by listing PR comments after a deliberately-broken push (see "Testing your wiring" below).
-- **Forgetting `actions/checkout`** — happens when slotting the action into a one-step workflow. The action's extractor + scrubber require the repo on disk. Add a checkout step if there isn't one.
+- **The action's directory isn't on disk** — happens when slotting the action into a one-step workflow that never checks out the repo/path holding `.github/actions/post-failure-comment/`. The extractor + scrubber are co-located in that directory and resolved via `$ACTION_PATH`, so the action dir itself must be present (a `uses: ./...` path can't resolve otherwise). In the reusable platform model the harness checks the platform out into `.cms-platform/` and references `./.cms-platform/.github/actions/post-failure-comment`. A separate site `actions/checkout` is still wanted so the captured log path exists.
 - **Overlapping markers** — copy-pasting from another workflow without changing the marker. Always pick a globally-unique slug.
 - **Wrong outcome source** — `${{ job.status }}` is the canonical source for single-job workflows. For workflows with multiple dependent jobs (like `e2e-tests.yml`'s post-job), pass `${{ needs.<job>.result }}` instead — and remember `needs.<job>.result` only reflects ONE upstream job. If the workflow has multiple matrix jobs that should all gate the comment, AND-combine them in an intermediate step.
 - **Skipping the gate on `pull_request`** — for workflows that ALSO fire on `schedule` or `workflow_dispatch`, the action's `if:` will skip posting (no PR context) but the gitleaks install still runs. To save runtime, add `&& github.event_name == 'pull_request'` to the caller's `if:` or use `pr-number` for explicit-target workflows.
@@ -164,7 +166,9 @@ Triple-check this when:
 
 ## Files
 
+All three live together in the action's directory and travel with it (resolved at runtime via `$ACTION_PATH` = `${{ github.action_path }}`):
+
 - `.github/actions/post-failure-comment/action.yml` — the composite action.
-- `scripts/extract-playwright-failures.sh` — awk-based extractor for Playwright `--reporter=list` failure blocks.
-- `scripts/scrub-secrets.js` — gitleaks-backed scrubber. Replaces detected secrets in-place with `<REDACTED:RuleID>`.
+- `.github/actions/post-failure-comment/extract-playwright-failures.sh` — awk-based extractor for Playwright `--reporter=list` failure blocks.
+- `.github/actions/post-failure-comment/scrub-secrets.js` — gitleaks-backed scrubber. Replaces detected secrets in-place with `<REDACTED:RuleID>`.
 - AGENTS.md "Failure-comment composite action" — short reference; this skill is the long-form.

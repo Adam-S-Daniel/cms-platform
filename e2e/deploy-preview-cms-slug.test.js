@@ -9,10 +9,15 @@ const { parseYaml, allStrings } = require("./workflow-yaml-utils");
 // docs/preview-pr-ruleset-spike.md. The structural invariant is:
 //
 //   1. Both `deploy-preview` and `teardown-preview` derive `cms_slug`
-//      from `head_ref` via the SAME shared scripts/cms-preview-slug.sh
+//      from `head_ref` via the SAME shared cms-preview-slug.sh
 //      (otherwise a cleanup mismatch would orphan S3 files when the slug
-//      shape drifts). Because teardown has no build step of its own, it
-//      gains a Checkout so the script is on disk.
+//      shape drifts). In the platform's REUSABLE workflow neither job has
+//      the helper scripts checked out by default, so EACH job adds a
+//      `Checkout platform scripts` step (repository: <platform_repo>,
+//      path: .cms-platform) and runs the script from
+//      `./.cms-platform/scripts/cms-preview-slug.sh`. The deploy job ALSO
+//      checks out the consuming site's own repo (to build Jekyll), so it
+//      carries two checkouts; teardown carries one.
 //   2. The deploy job syncs the alias prefix `cms-<slug>/` and registers
 //      a `preview-cms-<slug>` GitHub Deployment.
 //   3. The teardown job removes the alias prefix.
@@ -24,7 +29,8 @@ const { parseYaml, allStrings } = require("./workflow-yaml-utils");
 // The workflow-structure invariants are asserted off the parsed
 // workflow — job/step shape structurally, and shell/JS shapes against
 // the parser's resolved string values; the slug-derivation invariants
-// run the real script.
+// run the real script (which lives at scripts/cms-preview-slug.sh in the
+// platform repo and is invoked from .cms-platform/ in the workflow).
 
 const WORKFLOW = path.join(__dirname, "..", ".github", "workflows", "deploy-preview.yml");
 
@@ -56,25 +62,43 @@ test.describe("deploy-preview workflow: per-CMS-slug preview alias", () => {
   test("both jobs derive cms_slug via the shared cms-preview-slug.sh", () => {
     // Exactly two call sites — one in deploy-preview, one in
     // teardown-preview — so they can never disagree on the slug shape.
-    const matches = workflowStrings().match(/\.\/scripts\/cms-preview-slug\.sh/g) || [];
+    // In the reusable workflow the script is run from the platform
+    // checkout under `.cms-platform/`, so the invocation path is
+    // `./.cms-platform/scripts/cms-preview-slug.sh`.
+    const matches =
+      workflowStrings().match(/\.\/\.cms-platform\/scripts\/cms-preview-slug\.sh/g) || [];
     expect(
       matches.length,
-      `expected exactly two cms-preview-slug.sh call sites (deploy + teardown); found ${matches.length}`,
+      `expected exactly two .cms-platform/scripts/cms-preview-slug.sh call sites (deploy + teardown); found ${matches.length}`,
     ).toBe(2);
   });
 
-  test("both jobs check out the repo so the shared script is on disk", () => {
-    // The deploy job always checked out; teardown now must too (it has no
-    // build step that would otherwise put scripts/ on disk). Two checkouts
-    // total guards against a future edit dropping the teardown one and
-    // breaking the slug computation at PR-close.
-    const checkouts = allSteps().filter(
-      (s) => s && typeof s.uses === "string" && s.uses.startsWith("actions/checkout@"),
-    );
-    expect(
-      checkouts.length,
-      `expected a Checkout in both deploy + teardown; found ${checkouts.length}`,
-    ).toBe(2);
+  test("both jobs check out the platform scripts so the shared slug script is on disk", () => {
+    // The reusable workflow ships no helper scripts in the consuming site
+    // repo, so BOTH jobs must add a `Checkout platform scripts` step
+    // (repository: <platform_repo>, path: .cms-platform) before they can
+    // run cms-preview-slug.sh. Assert one such platform-scripts checkout
+    // PER JOB — that's the invariant that guards against a future edit
+    // dropping the teardown checkout and breaking the slug computation at
+    // PR-close. (The deploy job additionally checks out the site repo to
+    // build Jekyll, so its total checkout count is higher; we key on the
+    // path:.cms-platform checkouts specifically, not the raw total.)
+    for (const job of ["deploy-preview", "teardown-preview"]) {
+      const steps = (workflow().jobs[job] || {}).steps || [];
+      const platformCheckouts = steps.filter(
+        (s) =>
+          s &&
+          typeof s.uses === "string" &&
+          s.uses.startsWith("actions/checkout@") &&
+          s.with &&
+          s.with.path === ".cms-platform",
+      );
+      expect(
+        platformCheckouts.length,
+        `${job} must check out the platform scripts into .cms-platform exactly once so ` +
+          `cms-preview-slug.sh is on disk; found ${platformCheckouts.length}`,
+      ).toBe(1);
+    }
   });
 
   test("deploy syncs the cms-<slug> S3 prefix", () => {

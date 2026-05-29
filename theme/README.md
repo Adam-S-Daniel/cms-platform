@@ -33,7 +33,12 @@ cms:
 - `assets/` — `css/main.css`, `js/marked.min.js`, a placeholder `images/logo.svg`
   (override per site), plus the `images/uploads` + `widgets` dirs.
 - `lib/cms-platform-theme/` — the plugins (`auto_tag_pages`, `cachebust_filter`,
-  `normalize_empty_slug`, `tag_feeds`) and `decap_config_hook` (a `post_write`
-  hook that runs the Decap render — see `admin/README.md`).
+  `exclude_e2e_posts`, `normalize_empty_slug`, `tag_feeds`) and
+  `decap_config_hook` (a `post_write` hook that runs the Decap render — see
+  `admin/README.md`). `exclude_e2e_posts` keeps e2e / test-fixture posts (slug
+  starts with `e2e-` or `test_fixture: true`) out of every public aggregation
+  surface (feed, sitemap, tag archives + per-tag feeds, listings) by stamping a
+  shared `feed_exclude`/`sitemap: false` marker, while the post still serves at
+  its own `/blog/<slug>/` URL.
 
 Updates flow to sites via a gem-version bump (Dependabot, `bundler` ecosystem).

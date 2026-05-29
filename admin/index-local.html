@@ -3,7 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Content Manager — Adam Daniel (Local Dev)</title>
+  <!-- Neutral placeholder title for the un-rendered file; replaced at
+       runtime from the injected window.CMS_SITE_TITLE (render-decap-config.rb
+       writes it into <head> at build, from the site's _config.yml `title`),
+       so the admin chrome carries no hardcoded site identity. The "(Local
+       Dev)" suffix marks the decap-server backend either way. -->
+  <title>Content Manager — CMS (Local Dev)</title>
+  <script>
+    // window.CMS_SITE_TITLE is injected ahead of this script (see
+    // render-decap-config.rb). When present, brand the tab from the site's
+    // configured title; otherwise keep the neutral placeholder above.
+    if (window.CMS_SITE_TITLE) {
+      document.title = window.CMS_SITE_TITLE + ' — Content Manager (Local Dev)';
+    }
+  </script>
   <style>
     /* Same minimum as admin/index.html — just the floating Live Preview
      * link's affordances. The cobalt-thermal theme was retired; live
@@ -98,7 +111,10 @@
        (otherwise the pill stays hidden). -->
   <script>
     (function () {
-      var REPO_URL = 'https://github.com/Adam-S-Daniel/adamdaniel.ai';
+      // Repo derived from the injected identity (render-decap-config.rb writes
+      // window.CMS_REPO into <head> at build, before this script). Mirrors how
+      // posts-list-enhance.js consumes the same global.
+      var REPO_URL = 'https://github.com/' + window.CMS_REPO;
       fetch('commit.json', { cache: 'no-cache' })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (c) {

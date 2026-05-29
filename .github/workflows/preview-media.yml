@@ -135,6 +135,10 @@ jobs:
           # config, or the post/canary layouts. (The workflow + spec
           # self-references from the original were dropped: those files
           # live in the platform repo now, not the site.)
+          # PORT NOTE: the original's `scripts/patch-preview-config.sh`
+          # anchor is intentionally omitted from this SITE-side salient
+          # grep — that script is platform-owned and can never appear in
+          # a site PR diff, so an anchor for it here would be dead weight.
           if echo "$changed" | grep -Eq \
             '^(assets/images/uploads/|admin/config(-local)?\.yml$|_config\.yml$|_layouts/(post|canary)\.html$)'; then
             echo "salient=true" >> "$GITHUB_OUTPUT"

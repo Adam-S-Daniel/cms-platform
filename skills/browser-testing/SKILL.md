@@ -8,6 +8,18 @@ compatibility: Requires Node.js 20+, Ruby 3.2+ with Jekyll, Playwright browsers 
 
 All e2e tests run across 8 Playwright projects covering browsers, viewports, text sizes, and color settings. Tests run fully parallel.
 
+## Platform CI shape (read this first)
+
+The platform ships ONE reusable e2e workflow, `.github/workflows/e2e-tests.yml`, called by a thin per-site wrapper. It is deliberately simple, and several details in the older prose below describe a richer setup that the platform does **not** have:
+
+- **Single job, `runs-on: ubuntu-latest`.** There is no `e2e` / `parity` / `finalize` job split and no downstream aggregation job. The `finalize`-job patterns, the per-test-video assembly job, and "post the comment from a downstream job" advice elsewhere in this file are NOT how the platform runs.
+- **No container image.** Browsers are installed inline on the runner: `npx playwright install --with-deps <browser>` (the workflow's `browser` input, default `chromium`; `all` installs every engine). The `mcr.microsoft.com/playwright:v<version>-noble` container, the "browsers are baked into the image" claims, and the image-version-drift `select` check are NOT part of the reusable workflow. (A `scripts/check-playwright-image-drift.js` exists, but the reusable e2e workflow doesn't use a container.)
+- **No diff-aware spec selection and no dynamic sharding.** The reusable workflow runs `npx playwright test --reporter=list` once — it does not call `select-specs.js`, build a `[1..shard_count]` matrix, or fan out 4 ways. The `select` job, `shard_count` envelope, and 4-way-fanout described later are upstream-only (adamdaniel.ai); they have not been ported to the platform.
+- **Parameterized on env, not site identity.** The suite reads `TARGET`, `CMS_PROD_URL`, `CMS_APEX`, `CMS_REPO` (= `${{ github.repository }}`), and `PR_NUMBER` from the workflow inputs/env, so a new site passes its URLs as inputs rather than editing the harness.
+- **Failure surfacing via the co-located composite.** On failure (when `pr_number` is set) the job calls `./.cms-platform/.github/actions/post-failure-comment` (`mode: post`, marker `e2e-failure-summary`); on success it resolves the same comment. The platform is checked out into `.cms-platform/`, so the action is referenced by that local path.
+
+Treat the sections below as authoritative for *writing specs and using the Playwright matrix locally*. Where they describe CI orchestration (container, sharding, finalize, image-drift, diff-aware selection), defer to this note — that machinery lives in the upstream site, not the platform's reusable workflow.
+
 ## Key files
 
 | File | Purpose |
@@ -15,9 +27,9 @@ All e2e tests run across 8 Playwright projects covering browsers, viewports, tex
 | `playwright.config.js` | Matrix definition, webServer config, parallelism |
 | `e2e/base.js` | Custom fixture — extends `test` with `rootFontSize` option, plus the per-test screenshot capture hook (`attachPerTestCapture`) |
 | `e2e/*.spec.js` | Test files — import `{ test, expect }` from `./base` |
-| `e2e/select-specs.js` | Diff-aware spec selector — maps changed files to relevant specs and emits a `shard_count` envelope so a small subset doesn't pay for the full 4-way fanout |
-| `e2e/generate-test-videos.js` | Assembles per-test screenshot frames into `<safe-test-id>.mp4` + `_combined.mp4` with a 96px banner via ImageMagick + ffmpeg |
-| `.github/workflows/e2e-tests.yml` | CI — runs the selector on PRs, then the e2e/parity/finalize jobs inside the prebuilt `mcr.microsoft.com/playwright:v<version>-noble` container (browsers + apt deps baked in), full matrix on push to main |
+| `e2e/select-specs.js` | Diff-aware spec selector (upstream-only; the platform's reusable e2e-tests.yml does NOT invoke it — see "Platform CI shape") — maps changed files to relevant specs and emits a `shard_count` envelope |
+| `e2e/generate-test-videos.js` | Assembles per-test screenshot frames into `<safe-test-id>.mp4` + `_combined.mp4` with a 96px banner via ImageMagick + ffmpeg (run locally; the platform CI does not assemble videos) |
+| `.github/workflows/e2e-tests.yml` | CI — reusable single `ubuntu-latest` job: `npm ci` → `npx playwright install --with-deps <browser>` → `npx playwright test --reporter=list`, then post/resolve the failure comment. No container, no selector, no sharding, no finalize job. See "Platform CI shape". |
 
 ## Matrix projects
 
@@ -107,7 +119,7 @@ npx playwright test --debug --project chromium-desktop
 - `fullyParallel: true` — tests across all projects and within files run concurrently
 - Playwright auto-detects worker count from CPU cores
 - The `webServer` builds Jekyll once; all workers share port 4000
-- CI installs all 3 browser engines in one step for maximum parallelism
+- The platform's reusable CI installs the single requested browser engine (`browser` input, default `chromium`); pass `all` to install every engine. The full 3-engine cross-browser matrix is for local runs and the upstream site's full-matrix push builds.
 
 ## Screenshots and video
 
@@ -267,7 +279,9 @@ await expectReachable(page, page.getByRole("button", { name: /^Save$/ }), "edito
 
 When a control's region can be occluded only by *content* (e.g. the media grid populated with assets — which the in-browser test-repo backend uploads unreliably), assert the layout *fact* instead of staging the occluder: e.g. the header isn't clipped (`scrollHeight <= clientHeight`) and the controls sit within the header's box. See the media-library test in `admin-no-occlusion.spec.js`.
 
-## Diff-aware spec selection
+## Diff-aware spec selection (upstream-only)
+
+> The platform's reusable `e2e-tests.yml` does NOT use any of this — it runs the whole suite once per call (see "Platform CI shape"). The selector + sharding live in the upstream adamdaniel.ai site and are documented here for context / potential future port. `select-specs.js` and `select-specs.test.js` ship in the harness, but no platform workflow invokes them.
 
 The full matrix is 8 projects × ~25 specs. A content-only edit shouldn't pay for the cross-browser admin-CMS specs, the preview-bridge specs, or the CloudFront router specs — those tests can't possibly be affected. `e2e/select-specs.js` reads the PR's `git diff --name-only origin/main...HEAD` and returns one of three scopes:
 
@@ -281,9 +295,11 @@ Push to main bypasses the selector and runs the full matrix, since "the diff" fo
 
 `e2e/select-specs.test.js` covers each rule.
 
-### Dynamic shard count
+### Dynamic shard count (upstream-only)
 
-The selector also returns a `shard_count` field — `1` for tiny baseline-only runs, `2` for mid-sized subsets, `4` for full-matrix and large subsets. `e2e-tests.yml` reads this and builds a `[1..shard_count]` matrix array, so a baseline-only PR no longer pays the 4× container bring-up cost. The `e2e (1)` required check is always present because the matrix array always starts at 1.
+> Same caveat as above — the platform's reusable workflow does not shard. This describes the upstream site's `e2e-tests.yml`.
+
+The selector also returns a `shard_count` field — `1` for tiny baseline-only runs, `2` for mid-sized subsets, `4` for full-matrix and large subsets. The upstream `e2e-tests.yml` reads this and builds a `[1..shard_count]` matrix array, so a baseline-only PR no longer pays the 4× container bring-up cost. The `e2e (1)` required check is always present because the matrix array always starts at 1.
 
 ### Spec-header opt-out: `@select-skip-when-head-ref-prefix:`
 
@@ -296,19 +312,23 @@ const { test, expect } = require("./base");
 
 Comma-separated prefixes are allowed (`cms/, claude/`). The selector reads `GITHUB_HEAD_REF` and drops matching specs from the rule-matched set; the `ALWAYS_RUN` baseline is exempt. Used to shave bring-up time on cms-bot PRs that don't need most browser specs.
 
-## CI container image
+## CI: browser install (no container)
 
-Every Playwright job in `.github/workflows/` runs inside `mcr.microsoft.com/playwright:v<version>-noble` (currently `v1.59.1-noble`). The image bakes in chromium + firefox + webkit binaries and their apt dependencies, so workflows do NOT call `playwright install` or `playwright install-deps` on the matrix — those steps are obsolete. The `select` job's "Verify Playwright image version matches lockfile" step fails the build if any workflow's image tag drifts from `package-lock.json`'s `@playwright/test` version, and prints a one-line `sed` fix-up. To bump:
+The platform's reusable `e2e-tests.yml` runs on plain `ubuntu-latest` and installs the requested browser engine inline:
 
-```bash
-sed -i 's|mcr.microsoft.com/playwright:v[^"[:space:]]*-noble|mcr.microsoft.com/playwright:v<NEW>-noble|g' .github/workflows/*.yml
+```yaml
+# from e2e-tests.yml — browser input defaults to "chromium"; "all" installs every engine
+- name: Install Playwright browser + system deps
+  run: npx playwright install --with-deps "$PW_BROWSER"
 ```
 
-Inside the container, `ruby/setup-ruby` still needs `libyaml-0-2` + `build-essential` (not in the noble image); the e2e and parity jobs apt-install them in their first step.
+`--with-deps` pulls the OS libraries the engine needs on the runner. There is no `mcr.microsoft.com/playwright:...-noble` container, so the "browsers baked into the image" model and the image-version-drift check do NOT apply to the reusable workflow.
+
+> Note: a `scripts/check-playwright-image-drift.js` exists in the platform for sites that DO containerize their own workflows, but the platform's reusable e2e workflow is not one of them. If you containerize a downstream site's Playwright workflow, then the image tag must match `package-lock.json`'s `@playwright/test` version, and `ruby/setup-ruby` inside a noble container still needs `libyaml-0-2` + `build-essential` apt-installed first.
 
 ## Per-test screenshot videos (`per-test-videos` artifact)
 
-Every browser-based test captures one full-page screenshot per `framenavigated` event. The `finalize` job composites each frame with a 96px metadata banner above the screenshot via ImageMagick `convert`, concatenates the resulting PNG sequence per test into `<safe-test-id>.mp4`, and stitches them all together as `_combined.mp4`. The output ships as the `per-test-videos` artifact (separate from `playwright-report`, 7-day retention).
+Every browser-based test captures one full-page screenshot per `framenavigated` event. Running `node e2e/generate-test-videos.js` composites each frame with a 96px metadata banner above the screenshot via ImageMagick `convert`, concatenates the resulting PNG sequence per test into `<safe-test-id>.mp4`, and stitches them all together as `_combined.mp4`. This is a local/manual step — the platform's reusable e2e workflow uploads `playwright-report` but does NOT have a `finalize` job that assembles per-test videos. (Upstream adamdaniel.ai runs the assembly in its `finalize` job and ships a `per-test-videos` artifact, 7-day retention.)
 
 - Capture fixture: `attachPerTestCapture` in `e2e/base.js`.
 - Frame storage: `test-results/per-test-frames/<safe-test-id>/{NNNN.png,meta.json}`.

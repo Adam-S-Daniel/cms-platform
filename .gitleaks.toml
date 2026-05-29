@@ -1,0 +1,32 @@
+# gitleaks configuration. Extends the default ruleset with allowlist
+# entries for known test fixtures so CI doesn't flag them as leaks.
+#
+# Real secrets (cloud-provider keys, GitHub PATs, JWTs, generic
+# high-entropy strings) still trigger findings; only the literal
+# fixtures below are suppressed.
+#
+# When adding a new test that hardcodes a fake-looking token, add it
+# here rather than disabling gitleaks. See AGENTS.md "Secrets scan".
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "CMS platform test fixtures"
+paths = [
+  # OAuth Lambda unit tests use literal "test_client_id",
+  # "test_client_secret", and "ghp_test_access_token".
+  '''oauth-proxy/test_lambda\.py''',
+  # Admin-reviews specs hardcode a fake GitHub PAT to drive the auth
+  # flow without touching the real OAuth proxy.
+  '''e2e/admin-reviews-(auth|stats)\.spec\.js''',
+  # The scrubber's own comments reference rule IDs and example
+  # secrets in docstrings.
+  '''scripts/scrub-secrets\.js''',
+]
+regexes = [
+  # Belt-and-braces: any ghp_*test*/ghp_*fake* literal anywhere.
+  '''ghp_(test|fake)[A-Za-z0-9_]*''',
+  # OAuth client placeholder pair used in test_lambda.py.
+  '''test_client_(id|secret)''',
+]

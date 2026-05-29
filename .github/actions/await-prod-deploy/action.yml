@@ -37,9 +37,10 @@ inputs:
     default: ""
   commit-json-url:
     description: >-
-      Prod endpoint serving the deployed sha/iso/branch JSON. Required
-      input (no site-specific default): pass it directly, or leave it
-      empty and pass `prod-url` to derive `<prod-url>/admin/commit.json`.
+      Prod endpoint serving the deployed sha/iso/branch JSON. Optional
+      (no site-specific default): pass it directly, or leave it empty and
+      pass `prod-url` to derive `<prod-url>/admin/commit.json`. With
+      neither, the CDN-reflect ground-truth check is skipped.
     required: false
     default: ""
   grace-seconds:

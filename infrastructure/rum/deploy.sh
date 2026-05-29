@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# deploy.sh — CloudWatch RUM analytics for adamdaniel.ai
+# deploy.sh — CloudWatch RUM analytics for a platform site
 # =============================================================================
 #
 # One-time setup that creates:

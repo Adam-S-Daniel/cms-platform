@@ -4,7 +4,14 @@
 {%- assign tag_slug = tag | slugify -%}
 {%- assign feed_url = '/tags/' | append: tag_slug | append: '/feed.xml' | absolute_url -%}
 {%- assign html_url = '/tags/' | append: tag_slug | append: '/' | absolute_url -%}
-{%- assign tag_posts = site.posts | where_exp: 'p', 'p.tags contains tag' | where: 'published', true | sort: 'date' | reverse -%}
+{%- comment -%}
+  Exclude e2e / test-fixture posts via the shared `feed_exclude` marker
+  stamped by _plugins/exclude_e2e_posts.rb (slug starts with `e2e-` or
+  `test_fixture: true`), the same discriminator the site-wide feed.xml,
+  sitemap, and listings use. Keeps a published canary tagged like a real
+  post out of the per-tag feed while it still serves at /blog/<slug>/.
+{%- endcomment -%}
+{%- assign tag_posts = site.posts | where_exp: 'p', 'p.tags contains tag' | where: 'published', true | where_exp: 'p', 'p.feed_exclude != true' | sort: 'date' | reverse -%}
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <generator uri="https://jekyllrb.com/" version="{{ jekyll.version }}">Jekyll</generator>

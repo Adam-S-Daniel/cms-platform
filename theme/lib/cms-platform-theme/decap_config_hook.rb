@@ -20,6 +20,7 @@ module CmsPlatformTheme
       oauth = cms["oauth_base_url"] || ""
       apex  = url.empty? ? "" : URI(url).host.to_s.sub(/\Awww\./, "")
       logo  = cms["logo_url"] || (url.empty? ? "" : "#{url}/assets/images/logo.svg")
+      title = (site.config["title"] || "").to_s
       tokens = { "CMS_REPO" => repo, "CMS_OAUTH_BASE_URL" => oauth,
                  "CMS_SITE_URL" => url, "CMS_DISPLAY_URL" => url, "CMS_LOGO_URL" => logo }
 
@@ -34,8 +35,13 @@ module CmsPlatformTheme
       lb = File.join(src, "config-local.base.yml")
       render.call(lb, File.join(out, "config-local.yml")) if File.exist?(lb)
 
-      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};</script>}
-      Dir.glob(File.join(out, "index*.html")).each do |h|
+      # Inject the SAME window.CMS_* identity globals as scripts/render-decap-config.rb
+      # into BOTH the Decap shells (index*.html) AND the review dashboards
+      # (reviews/*.html). Kept in lockstep with the script by
+      # e2e/decap-config-render-parity.test.js — update both or the lint fails.
+      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};</script>}
+      shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html"))
+      shells.each do |h|
         s = File.read(h)
         next if s.include?("window.CMS_REPO")
         File.write(h, s.sub(/<head>/i, "<head>\n#{js}"))

@@ -103,6 +103,7 @@ async function main() {
     sub(fs.readFileSync(path.join(PLATFORM_ROOT, "infrastructure/site-params.example.env"), "utf8"))
       .replace(/^export GITHUB_REPO=.*$/m, `export GITHUB_REPO="${repo}"`)
       .replace(/^export APEX_DOMAIN=.*$/m, `export APEX_DOMAIN="${domain}"`)
+      .replace(/^export ALLOWED_ORIGINS=.*$/m, `export ALLOWED_ORIGINS="https://${domain}"`)
       .replace(/^export STACK_NAME=.*$/m, `export STACK_NAME="${prefix}-oauth-proxy"`)
   );
   write(target, ".platform-version", PLATFORM_VERSION + "\n");

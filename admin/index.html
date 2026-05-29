@@ -3,7 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Content Manager — Adam Daniel</title>
+  <!-- Minimal Decap CMS admin shell: it carries no custom site theme (the
+       legacy cobalt theme was removed); the editor's live-preview pane
+       renders the real site layout instead. Keep this admin shell minimal. -->
+  <!-- Neutral placeholder title for the un-rendered file; replaced at
+       runtime from the injected window.CMS_SITE_TITLE (render-decap-config.rb
+       writes it into <head> at build, from the site's _config.yml `title`),
+       so the admin chrome carries no hardcoded site identity. -->
+  <title>Content Manager — CMS</title>
+  <script>
+    // window.CMS_SITE_TITLE is injected ahead of this script (see
+    // render-decap-config.rb). When present, brand the tab from the site's
+    // configured title; otherwise keep the neutral placeholder above.
+    if (window.CMS_SITE_TITLE) {
+      document.title = window.CMS_SITE_TITLE + ' — Content Manager';
+    }
+  </script>
   <style>
     /* Decap CMS ships its own UI styling — we only carry the minimum
      * here for the floating-link affordances and the deployed-commit
@@ -177,7 +192,10 @@
   -->
   <script>
     (function () {
-      var REPO_URL = 'https://github.com/Adam-S-Daniel/adamdaniel.ai';
+      // Repo derived from the injected identity (render-decap-config.rb writes
+      // window.CMS_REPO into <head> at build, before this script). Mirrors how
+      // posts-list-enhance.js consumes the same global.
+      var REPO_URL = 'https://github.com/' + window.CMS_REPO;
       fetch('commit.json', { cache: 'no-cache' })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (c) {

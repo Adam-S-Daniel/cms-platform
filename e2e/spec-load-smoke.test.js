@@ -4,11 +4,23 @@
  * does I/O at module scope on a path that doesn't exist in CI.
  * (Audit finding #3.)
  *
- * Approach: a static lint that flags top-level (depth-0)
- * `fs.readFileSync(LITERAL)` / `fs.readdirSync(LITERAL)` calls against
- * a literal path that doesn't exist on disk. Anything inside a
- * function body or a test() callback is fine — those don't run at
- * require-time.
+ * Approach: a static lint that flags two module-scope (depth-0) I/O
+ * patterns; anything inside a function body or a test() callback is fine
+ * (those don't run at require-time):
+ *
+ *   (a) STRING-LITERAL path: `fs.readFileSync("…")` / `fs.readdirSync("…")`
+ *       against a literal path that doesn't exist on disk.
+ *
+ *   (b) IDENTIFIER path: `fs.readFileSync(IDENT)` / `fs.readdirSync(IDENT)`
+ *       where the argument is a bare identifier (e.g. `POSTS_DIR`). This
+ *       catches the cms-preview-url.spec.js class — a module-scope read of
+ *       a `path.join(...)`-derived constant that resolves to a directory
+ *       absent in the bare platform repo (no `_posts/`), which ENOENT-
+ *       aborts Playwright's WHOLE collection. We can't resolve an
+ *       identifier's runtime value statically, so we require the read to
+ *       be GUARDED on the same line by an `fs.existsSync(...)` check (the
+ *       `existsSync(X) ? readdirSync(X) : []` pattern). An unguarded
+ *       depth-0 identifier read is the offence.
  *
  * Why static rather than running `playwright test --list`:
  * Playwright's `testDir: "./e2e"` picks this very file up, so a
@@ -51,6 +63,31 @@ function topLevelLines(src) {
 
 const FS_LITERAL_RE = /\bfs\.read(?:File|dir)Sync\(\s*["'`]([^"'`]+)["'`]/g;
 
+// An `fs.read{File,dir}Sync(` whose first argument is a BARE IDENTIFIER
+// (a JS name, optionally dotted/member like `obj.dir`) — i.e. NOT a
+// string literal and NOT a nested call. `\s*` after `fs` spans newlines,
+// so the multiline `fs\n  .readdirSync(POSTS_DIR)` form (the exact shape
+// the cms-preview-url.spec.js `_posts/` read had) is caught too. We can't
+// resolve the identifier's runtime value statically, so a depth-0 read of
+// one is an offence UNLESS it is GUARDED (see GUARD_SIGNAL_RE) or sits in
+// a function/arrow definition that doesn't execute at require-time.
+const FS_IDENTIFIER_RE = /\bfs\s*\.\s*read(?:File|dir)Sync\(\s*([A-Za-z_$][\w$.]*)\s*[),]/g;
+
+// Guard / non-execution signals that make a depth-0 identifier read safe.
+// All must appear BEFORE the read within the surrounding statement (a
+// `=>` or `?` that appears AFTER the read — e.g. a chained
+// `.filter((f) => …)` — is NOT a guard, so we only scan the text leading
+// up to the match):
+//   - existsSync(...)            — an explicit existence check, e.g.
+//                                  `existsSync(X) ? readdirSync(X) : []`.
+//   - a ternary `?`              — a precomputed-boolean guard such as
+//                                  `guideExists ? parseSections(read(X)) : []`.
+//   - `=>` or `function`         — the read sits in a (nested) function
+//                                  body declared here, so it runs lazily,
+//                                  not at module load (`const read = (p)
+//                                  => fs.readFileSync(p, …)`).
+const GUARD_SIGNAL_RE = /existsSync\s*\(|\?|=>|\bfunction\b/;
+
 const specs = fs
   .readdirSync(SPEC_DIR)
   .filter((f) => /\.spec\.js$/.test(f))
@@ -59,7 +96,11 @@ const specs = fs
 for (const spec of specs) {
   test(`module-scope I/O in ${path.basename(spec)} reads only existing paths`, () => {
     const offenders = [];
-    for (const line of topLevelLines(fs.readFileSync(spec, "utf8"))) {
+    const topLines = topLevelLines(fs.readFileSync(spec, "utf8"));
+
+    // (a) string-literal path that doesn't exist on disk — per-line so the
+    // reported offender quotes the exact source line.
+    for (const line of topLines) {
       let m;
       FS_LITERAL_RE.lastIndex = 0;
       while ((m = FS_LITERAL_RE.exec(line)) !== null) {
@@ -73,10 +114,45 @@ for (const spec of specs) {
         }
       }
     }
+
+    // (b) identifier-path read with no guard. Scanned against the JOINED
+    // depth-0 text (not per-line) so the multiline `fs\n.readdirSync(IDENT)`
+    // form is detected. The identifier's value is opaque to a static lint,
+    // so an UNGUARDED depth-0 read can ENOENT-abort Playwright's whole
+    // collection if the path is absent in some checkout (the
+    // cms-preview-url.spec.js / `_posts/` class). A guard signal in a
+    // window around the match (the surrounding statement) clears it.
+    const joined = topLines.join("\n");
+    let mi;
+    FS_IDENTIFIER_RE.lastIndex = 0;
+    while ((mi = FS_IDENTIFIER_RE.exec(joined)) !== null) {
+      const ident = mi[1];
+      // Scan only the text leading up to the read within its statement —
+      // a guard (`existsSync`, `?`, `=>`, `function`) is meaningful only
+      // when it precedes the read. Bound the look-back at the previous
+      // statement boundary (`;` or `{`/`}`) so a guard on an UNRELATED
+      // earlier statement can't mask this read.
+      const stmtStart = Math.max(
+        joined.lastIndexOf(";", mi.index),
+        joined.lastIndexOf("{", mi.index),
+        joined.lastIndexOf("}", mi.index),
+      );
+      const before = joined.slice(stmtStart + 1, mi.index);
+      if (!GUARD_SIGNAL_RE.test(before)) {
+        const lineText = joined
+          .slice(joined.lastIndexOf("\n", mi.index) + 1, joined.indexOf("\n", mi.index) + 1 || undefined)
+          .trim();
+        offenders.push({
+          line: lineText || mi[0].trim(),
+          literal: `${ident} (unguarded identifier path — wrap in existsSync(${ident}) ? … : [])`,
+        });
+      }
+    }
+
     expect(
       offenders,
-      `${path.basename(spec)} has module-scope I/O on a missing path. ` +
-        `Lazy-load inside a test() body instead. Offenders:\n` +
+      `${path.basename(spec)} has module-scope I/O on a missing/unguarded path. ` +
+        `Lazy-load inside a test() body, or guard with fs.existsSync(...). Offenders:\n` +
         offenders.map((o) => `  ${o.literal}  in: ${o.line}`).join("\n"),
     ).toEqual([]);
   });

@@ -39,6 +39,24 @@ structural scaffolding (collection types) is opt-in via `admin/collections.site.
   against throwaway inputs; syntax-check YAML/bash/Ruby/JS. See "Verify" below.
 - **Record knowledge here (AGENTS.md) and/or in `skills/`, not only in agent
   memory** — Adam's standing preference.
+- **Two render paths stay in lockstep.** The live Decap config + `window.CMS_*`
+  identity globals are produced by BOTH `scripts/render-decap-config.rb`
+  (deploy-time) and the theme-gem Jekyll hook
+  `theme/lib/cms-platform-theme/decap_config_hook.rb` (build-time — the path gem
+  consumers use). Both must inject the same keys
+  (`CMS_REPO`/`CMS_SITE_ORIGIN`/`CMS_APEX`/`CMS_OAUTH_BASE_URL`/`CMS_SITE_TITLE`)
+  into the same shells (`admin/index*.html` + `admin/reviews/*.html`);
+  `e2e/decap-config-render-parity.test.js` fails on drift. Admin chrome (titles,
+  reviews dashboards) reads identity from these globals — never hardcode it.
+- **`GITHUB_SCOPE` is lockstepped across three files** — `oauth-proxy/lambda.py`,
+  `oauth-proxy/template.yaml`, `oauth-proxy/deploy.sh` (default `repo,user,workflow`).
+- **De-identified prose uses placeholders:** `<apex>` (production apex), `*.<apex>`,
+  `<prefix>` (apex with dots→hyphens), `<owner>/<repo>`, `<your-site>`.
+- **Theme-gem ruby unit tests live in `theme/spec/`** (plain ruby — no rspec/minitest;
+  `ruby theme/spec/<name>_test.rb`); excluded from the gemspec `spec.files` glob.
+- **`e2e/` deps install via `cd e2e && npm ci`** (`e2e/package-lock.json` is tracked —
+  consumers need it). The CloudFront-Function specs simulate `Fn::Sub` by substituting
+  a synthetic `example.test` apex, so platform specs stay site-agnostic.
 
 ## Adding / porting a workflow
 
@@ -120,13 +138,33 @@ already adjusted for the reusable shape (`workflow-run-name` / `dependabot-skip`
 exempt `workflow_call`-only reusables). Dropped adamdaniel-only CI (GHCR
 `ci-runner-image`, `select-specs` sharding, the finalize merge-gate) is intentional.
 
+**Completeness pass (PR #1 refresh, 2026-05-29).** Ported the `adamdaniel.ai@main`
+fix clusters that postdated the initial extraction: `#1810` e2e/test-fixture
+exclusion from public aggregation (theme `exclude_e2e_posts` plugin + `feed_exclude`
+filtering in `auto_tag_pages` / `tag_feeds` / `atom_feed.xml` / `tag.html`),
+`#1840`+`#1809` slug consolidation + the shared `e2e/public-content.js` crawl-set
+(+ `slugify-parity` / `preview-deploy-superset` / `e2e-posts-public-exclusion`
+tests), `#1844` probe ⊆ deploy (`select-specs.affectsDeployedPreview`),
+`#1824`/`#1830`/`#1845` prod-loop + media-roundtrip robustness, and `#1825`
+**`cms-automerge-nudge`** — now a reusable `workflow_call` (site supplies its
+required-check contexts as an input) + thin caller + lint; treat it like the other
+reusables for the run-name/dispatch lint exemption. Also shipped the missing
+`scripts/scrub-secrets.js` (the failure reporter referenced a path the platform
+didn't ship — un-scrubbed PR output was a secret-leak), local pre-commit hygiene
+(`.githooks/pre-commit`, `scripts/secrets-scan.sh` + `lint-staged.sh`, `.gitleaks.toml`
+as the single allowlist shared with `secrets-scan.yml`), and `e2e/package-lock.json`.
+Stale identity-bound tests were re-parameterized to the env/`window.CMS_*` model.
+
 Still open:
 - **Deliberate skips — NOT ported** (each is repo-/site-specific machinery, not a
   reusable; a consuming site authors its own):
   - `required-check-stubs` — encodes the repo's specific required-check /
     path-filter topology; each site authors its own.
   - `code-quality` — platform-self-CI (lints the machinery itself), not a site
-    reusable; needs separate adaptation to lint cms-platform.
+    reusable. Being addressed via a **self-test fixture** (a buildable site so
+    `cd e2e && npm ci && npx playwright test` runs the harness standalone), then
+    adapting `code-quality` to lint cms-platform. Until then, ~12 build-dependent
+    e2e specs only go green in a consuming-site context (dogfood / fixture).
   - `regenerate-manual` — site-specific docs (Contributor Manual) generation.
   - `ci-runner-image` — adamdaniel-only GHCR image; already dropped in the e2e
     port (inline deps used instead).

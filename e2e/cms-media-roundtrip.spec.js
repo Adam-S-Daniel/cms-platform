@@ -104,6 +104,8 @@ const {
   publishViaUi,
   clickEditorDelete,
   reopenForPublishedDelete,
+  openMediaLibrary,
+  closeMediaLibrary,
 } = require("./cms-editor-ui");
 const { EPHEMERAL_DATE, buildMediaRoundtripPost } = require("./prod-mutate-fixture");
 
@@ -125,10 +127,14 @@ const UPLOADS_DIR = "assets/images/uploads";
 const PROD_CANARY = process.env.PROD_CANARY === "1";
 
 // One full real-prod loop: create+attach → live, delete post → 404,
-// delete image → 404. Three deploy waits at 15 min each + setup ≈ 55 min
-// worst case; typical happy path ~25-30 min. Retries disabled — mutates
-// real prod; a retry re-runs the same broken chain.
-const TEST_TIMEOUT_MS = 55 * 60 * 1000;
+// delete image → 404. Three deploy waits at 15 min each + the enlarged
+// 25-min reopenForPublishedDelete resync budget + the 30-min waitForMerge
+// budget (#1815) + setup. Bumped 80 → 100 min so the worst-case sum fits
+// without truncating a leg; typical happy path is still ~25-30 min.
+// Comfortably inside the 110-min job timeout (cms-media-roundtrip.yml).
+// Retries disabled — mutates real prod; a retry re-runs the same broken
+// chain.
+const TEST_TIMEOUT_MS = 100 * 60 * 1000;
 
 test.describe.configure({
   mode: "serial",
@@ -385,8 +391,15 @@ test(
       // post-merge), so the merge is usually done; this confirms it
       // deterministically and is what lets the delete leg open a
       // delete-FROM-MAIN change rather than dropping the draft branch.
+      // 30-min budget (was 10): real prod create PRs regularly take
+      // 15-30 min to auto-merge under runner contention or when the CMS
+      // editorial-workflow concurrency cancels intermediate validate-content
+      // runs and the SUCCESS only lands on the final reattempt (#1815).
+      // The serve gates above hint the deploy completed, but the PR
+      // object can still lag flipping `merged:true`; this absorbs that
+      // without failing a healthy run.
       expect(createPrNumber, "create PR number captured for merge wait").toBeTruthy();
-      await waitForMerge({ prNumber: createPrNumber, timeoutMs: 5 * 60 * 1000 });
+      await waitForMerge({ prNumber: createPrNumber, timeoutMs: 30 * 60 * 1000 });
     });
 
     await test.step("Re-open the post in PUBLISHED state for the delete leg", async () => {
@@ -394,7 +407,14 @@ test(
       // and "Delete published entry" is present — i.e. Decap has dropped
       // the (now-merged) editorial entry and re-loaded the published file.
       // Only in that state does the Delete click remove the file from main.
-      await reopenForPublishedDelete(page, `${PROD_ADMIN}#/collections/posts/entries/${fileSlug}`);
+      // Pass the spec's fileExistsOnMain as a Contents-API cross-check so a
+      // timeout's error message can tell "Decap is slow" from "merge never
+      // landed" (#1815). adminUrl enables the navigate-away-and-back
+      // fallback inside the helper.
+      await reopenForPublishedDelete(page, `${PROD_ADMIN}#/collections/posts/entries/${fileSlug}`, {
+        crossCheck: () => fileExistsOnMain(filePath),
+        adminUrl: PROD_ADMIN,
+      });
     });
 
     await test.step("Click the editor's Delete button → opens delete-from-main cms/... PR", async () => {
@@ -466,9 +486,28 @@ test(
       });
     });
 
-    // ── 10. Delete the uploaded asset via the standalone Media UI ────
-    await test.step("Delete the image via the standalone Media library UI", async () => {
-      await page.goto(`${PROD_ADMIN}#/media`, { waitUntil: "domcontentloaded" });
+    // ── 10. Delete the uploaded asset via the global Media library UI ─
+    await test.step("Delete the image via the Media library modal", async () => {
+      // Decap's global media library is a MODAL opened from the top-nav
+      // "Media" button — it is NOT a page route. The earlier
+      // `page.goto(`${PROD_ADMIN}#/media`)` rendered Decap's NotFound
+      // ("Not Found") every time, because Decap registers no `/media`
+      // route (the standalone media page does not exist in this 3.12.2
+      // setup); the library only opens as an overlay (runs 26597250490 /
+      // 26602619236, both screenshots: nav present + "Not Found" body).
+      //
+      // Bounce through admin root for a clean nav (the post-delete leg
+      // left the page on a deep entry route), then CLICK "Media" to open
+      // the library overlay and wait for its header. Proven pattern:
+      // e2e/admin-no-occlusion.spec.js's media-library modal test.
+      await page.goto(PROD_ADMIN, { waitUntil: "domcontentloaded" });
+      await expect(page.getByRole("link", { name: /^Posts$/i })).toBeVisible({
+        timeout: 60_000,
+      });
+      // openMediaLibrary (shared, cms-editor-ui.js) clicks the top-nav
+      // "Media" button and waits for the library header — the supported
+      // way to reach the global library (there is no `#/media` route).
+      await openMediaLibrary(page);
       const card = page.getByText(imageName, { exact: false }).first();
       await expect(
         card,
@@ -486,6 +525,11 @@ test(
           timeout: 30_000,
         })
         .toBe(false);
+      // Close the overlay before the next step navigates: Decap's media
+      // modal is a Redux-state overlay, not route-bound, so a later
+      // page.goto won't dismiss it and the Posts-list nav wait would
+      // 60s-time-out behind it (#1815, run 26604334850).
+      await closeMediaLibrary(page);
     });
 
     // ── 11. Drive the image delete through to the live site ──────────
@@ -536,7 +580,11 @@ test(
     await test.step("Wait for the image URL to 404 on adamdaniel.ai", async () => {
       // Back to a stable pill-mount route. The deleted post's editor is
       // gone; the /media route has no pill, so navigate to the Posts list.
+      // Reload after the hash-nav: belt-and-braces so any lingering media
+      // overlay is cleared and the posts list remounts cleanly before we
+      // wait on its nav link (#1815).
       await page.goto(`${PROD_ADMIN}#/collections/posts`, { waitUntil: "domcontentloaded" });
+      await page.reload({ waitUntil: "domcontentloaded" });
       await expect(page.getByRole("link", { name: /^Posts$/i })).toBeVisible({ timeout: 60_000 });
       await waitForChangeReflected({
         page,
@@ -616,7 +664,9 @@ test.afterAll(async () => {
       console.warn(`[cleanup-harness] could not remove ${filePath}: ${e && e.message}`);
     }
   } else {
-    console.log(`[cleanup-harness] ${filePath} gone from main; UI delete succeeded`);
+    console.log(
+      `[cleanup-harness] ${filePath} gone from main; UI delete succeeded — no safety net needed`,
+    );
   }
 
   // Leftover per-run upload → direct Contents-API delete (the name is

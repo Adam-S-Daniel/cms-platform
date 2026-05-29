@@ -20,7 +20,14 @@ layout: default
     <p class="subtitle">Tag</p>
   </div>
 
-  {% assign tagged_posts = site.posts | where_exp: "post", "post.tags contains tag_label" %}
+  {%- comment -%}
+    Exclude e2e / test-fixture posts via the shared `feed_exclude` marker
+    stamped by _plugins/exclude_e2e_posts.rb (slug starts with `e2e-` or
+    `test_fixture: true`) — the same discriminator the feed, sitemap, and
+    other listings use. A published canary tagged like a real post must not
+    appear in the tag archive, though it still serves at /blog/<slug>/.
+  {%- endcomment -%}
+  {% assign tagged_posts = site.posts | where_exp: "post", "post.tags contains tag_label" | where_exp: "post", "post.feed_exclude != true" %}
   {% if tagged_posts.size > 0 %}
   <ul class="post-list">
     {% for post in tagged_posts %}

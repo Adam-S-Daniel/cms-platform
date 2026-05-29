@@ -83,7 +83,12 @@ if defined?(Jekyll::Generator)
         def generate(site)
           missing, all_tags = AutoTagPages.summarise(
             curated: curated_tags(site),
-            post_tag_lists: site.posts.docs.map { |p| Array(p.data['tags']) },
+            # Skip e2e / test-fixture posts (feed_exclude stamped by
+            # _plugins/exclude_e2e_posts.rb): their tags must not mint a
+            # public /tags/<slug>/ archive, inflate a tag's count, or add a
+            # tag-cloud pill. A canary tagged like a real post still serves
+            # at /blog/<slug>/ — it just doesn't surface in tag aggregation.
+            post_tag_lists: public_posts(site).map { |p| Array(p.data['tags']) },
             slugify: ->(name) { Jekyll::Utils.slugify(name) },
           )
 
@@ -92,6 +97,13 @@ if defined?(Jekyll::Generator)
         end
 
         private
+
+        # Posts that count for PUBLIC tag aggregation — every post minus
+        # the e2e / test fixtures marked `feed_exclude` by
+        # _plugins/exclude_e2e_posts.rb.
+        def public_posts(site)
+          site.posts.docs.reject { |p| p.data['feed_exclude'] == true }
+        end
 
         # Shape the `_tags/` collection (if any) into the `[{name,
         # description}, ...]` list `summarise` expects.

@@ -212,18 +212,19 @@ test.describe(
         body: "After the publish settles, the post is reachable at its public URL — here `/blog/<slug>/`. In production the same URL pattern is served by CloudFront once `deploy-production.yml` finishes its `aws s3 sync` and invalidation, typically within ~2 minutes of the merge.",
       });
 
-      // ── Inline tag → auto-generated archive page ─────────────────────
-      // The auto_tag_pages plugin should manufacture /tags/<slug>/ for
-      // any tag a post uses, even if no curated _tags/<slug>.md exists.
-      // This catches plugin regressions that break the post → tag-archive
-      // handoff (issue #27 territory).
+      // ── e2e fixture posts are EXCLUDED from tag archives ─────────────
+      // SMOKE_SLUG is an `e2e-` fixture, so the `exclude_e2e_posts` plugin
+      // keeps it out of public aggregation — including tag generation. Its
+      // tag therefore mints NO public `/tags/<slug>/` archive; otherwise the
+      // canary would leak into a public listing (the feed-leak fix). The
+      // `auto_tag_pages` minting path for REAL posts is covered by
+      // e2e-posts-public-exclusion.test.js (real post → `/tags/<tag>/` 200).
       const tagURL = `/tags/${SMOKE_TAG_SLUG}/`;
       const tagResp = await page.goto(tagURL);
-      expect(tagResp.status(), `${tagURL} should be 200`).toBe(200);
-      await expect(
-        page.getByRole("link", { name: SMOKE_TITLE }).first(),
-        "auto-generated tag archive should list the new post",
-      ).toBeVisible();
+      expect(
+        tagResp.status(),
+        `${tagURL} must NOT be minted — e2e fixture posts are excluded from tag archives`,
+      ).not.toBe(200);
     });
   },
 );

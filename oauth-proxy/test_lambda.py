@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 # Set required env vars before importing the handler
 os.environ.setdefault("GITHUB_CLIENT_ID", "test_client_id")
 os.environ.setdefault("GITHUB_CLIENT_SECRET", "test_client_secret")
-os.environ.setdefault("ALLOWED_ORIGINS", "https://adamdaniel.ai")
+os.environ.setdefault("ALLOWED_ORIGINS", "https://example.com")
 
 # `lambda` is a reserved word, so it can't be a plain `import`; load it
 # dynamically after the env vars above and the sys.path shim are in place.
@@ -29,7 +29,7 @@ def _event(path: str, params: dict | None = None, method: str = "GET") -> dict:
         "rawPath": path,
         "requestContext": {"http": {"method": method}},
         "queryStringParameters": params or {},
-        "headers": {"origin": "https://adamdaniel.ai"},
+        "headers": {"origin": "https://example.com"},
     }
 
 

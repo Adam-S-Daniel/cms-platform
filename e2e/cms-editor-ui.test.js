@@ -69,8 +69,32 @@ test.describe("cms-editor-ui shared helper — anti-drift lint (#1723)", () => {
       "expectPublished",
       "saveEntry",
       "publishViaUi",
+      "openMediaLibrary",
+      "mediaLibraryTop",
+      "mediaLibraryButton",
     ]) {
       expect(typeof m[fn], `cms-editor-ui must export ${fn}()`).toBe("function");
     }
+  });
+
+  test("the media-library LibraryTop selector lives ONLY in cms-editor-ui.js", () => {
+    // Mirrors the Published-switch anti-drift lint above: the brittle
+    // `[class*="LibraryTop"]` selector + the open-and-wait sequence were
+    // copy-pasted across cms-media-roundtrip.spec.js and
+    // admin-no-occlusion.spec.js (#1815). They now live once in
+    // cms-editor-ui.js (openMediaLibrary / mediaLibraryTop /
+    // MEDIA_LIBRARY_TOP_SELECTOR). Callers that need the literal (e.g. a
+    // page.evaluate DOM query) import the exported constant. Fail loud if
+    // a spec re-hand-rolls the literal.
+    const offenders = [];
+    for (const f of specFiles()) {
+      if (f === HELPER) continue;
+      const src = fs.readFileSync(path.join(E2E_DIR, f), "utf8");
+      if (/\[class\*=["']LibraryTop["']\]/.test(src)) offenders.push(f);
+    }
+    expect(
+      offenders,
+      `these files hand-roll the LibraryTop selector instead of importing it from ${HELPER}: ${offenders.join(", ")}`,
+    ).toEqual([]);
   });
 });

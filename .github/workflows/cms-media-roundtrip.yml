@@ -116,7 +116,7 @@ jobs:
       CMS_REPO: ${{ github.repository }}
     # Recursion guard delegated to the `recursion-gate` job above.
     if: ${{ needs.recursion-gate.outputs.run == 'true' }}
-    timeout-minutes: 95
+    timeout-minutes: 110
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)

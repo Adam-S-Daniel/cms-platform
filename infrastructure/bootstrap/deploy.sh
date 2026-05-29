@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# deploy.sh — Bootstrap AWS account for adamdaniel.ai CI/CD
+# deploy.sh — Bootstrap AWS account for a platform site's CI/CD
 # =============================================================================
 #
 # One-time setup that creates:

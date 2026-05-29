@@ -34,6 +34,112 @@ const { execSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
+// ── Probe ⊆ deploy invariant (#1815 follow-up) ───────────────────────
+// A preview probe (parity-preview.yml's @parity-preview run, or
+// preview-media.yml's media gate) is only meaningful when the PR
+// changes the DEPLOYED preview site. deploy-preview.yml — the workflow
+// that BUILDS preview-pr<N>.<apex> — uses a workflow-level
+// `paths-ignore` (e2e/**, docs/**, package.json, …). A PR that touches
+// ONLY paths-ignored files deploys NO preview, so any consumer that
+// still decides to probe one hard-fails after a ~20-min timeout. That
+// actually happened on a PR editing only e2e/sitemap.spec.js.
+//
+// `affectsDeployedPreview(file)` is the single source of truth for
+// "would deploy-preview build for this file?" It is derived FROM
+// deploy-preview.yml's own paths-ignore list (parsed at require-time)
+// so it can't drift from the workflow it mirrors.
+const { parseYaml } = require("./workflow-yaml-utils");
+
+// PLATFORM PORT NOTE: deploy-preview.yml is a `workflow_call` reusable
+// here, so the `on: pull_request` trigger + its `paths-ignore` list live
+// on the THIN CALLER a site copies in
+// (examples/site/.github/workflows/deploy-preview.yml). The reusable at
+// .github/workflows/deploy-preview.yml has no `pull_request` trigger of
+// its own, so we read the canonical caller — the file that actually
+// carries the paths-ignore — directly. (Same convention as
+// visual-regression-content-skip.test.js.)
+const DEPLOY_PREVIEW_CALLER = path.join(
+  __dirname,
+  "..",
+  "examples",
+  "site",
+  ".github",
+  "workflows",
+  "deploy-preview.yml",
+);
+
+// Read deploy-preview.yml's `on.pull_request.paths-ignore` array. This
+// is the authoritative set of globs that, when they account for EVERY
+// changed file, make deploy-preview skip (no preview built).
+function loadDeployPreviewPathsIgnore() {
+  const doc = parseYaml(fs.readFileSync(DEPLOY_PREVIEW_CALLER, "utf8"));
+  // `on` is a reserved YAML word; the parser may surface the key as the
+  // boolean `true` OR the string "on" depending on quoting. Check both.
+  const on = (doc && (doc.on ?? doc.true ?? doc["on"])) || {};
+  const pr = on.pull_request || {};
+  const ignore = pr["paths-ignore"] || [];
+  return Array.isArray(ignore) ? ignore.slice() : [];
+}
+
+// Convert a single GitHub-Actions path glob into a predicate. We mirror
+// the subset of fnmatch the deploy-preview.yml paths-ignore actually
+// uses: a trailing `/` or `/**` (e.g. `e2e/**`, `docs/**`) is a
+// directory-prefix match; `*` matches within a path segment (no `/`);
+// `**` matches across segments; anything else is an exact path match
+// (e.g. `README.md`, `package.json`, a named workflow file).
+function globToMatcher(glob) {
+  // Directory-prefix forms: `dir/**` or `dir/` match the dir and
+  // everything beneath it.
+  const dirPrefix = glob.endsWith("/**")
+    ? glob.slice(0, -3)
+    : glob.endsWith("/")
+      ? glob.slice(0, -1)
+      : null;
+  if (dirPrefix !== null) {
+    return (file) => file === dirPrefix || file.startsWith(`${dirPrefix}/`);
+  }
+  // General glob → RegExp. `**` → match anything (incl. `/`); `*` →
+  // match anything except `/` (within-segment); other regex
+  // metacharacters are escaped. Exact paths fall out of this with no
+  // wildcards.
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        re += ".*";
+        i++;
+      } else {
+        re += "[^/]*";
+      }
+    } else if (/[.+?^${}()|[\]\\]/.test(c)) {
+      re += `\\${c}`;
+    } else {
+      re += c;
+    }
+  }
+  const rx = new RegExp(`^${re}$`);
+  return (file) => rx.test(file);
+}
+
+const DEPLOY_PREVIEW_PATHS_IGNORE = loadDeployPreviewPathsIgnore();
+const DEPLOY_PREVIEW_IGNORE_MATCHERS = DEPLOY_PREVIEW_PATHS_IGNORE.map(globToMatcher);
+
+// True when deploy-preview.yml WOULD build a preview for a PR touching
+// `file` — i.e. `file` is NOT covered by deploy-preview's paths-ignore.
+// (GitHub's paths-ignore skips a workflow only when *every* changed
+// file matches; per-file this predicate answers "does this one file, on
+// its own, keep deploy-preview firing?" — which is exactly the
+// granularity the probe selectors need.)
+function affectsDeployedPreview(file) {
+  return !DEPLOY_PREVIEW_IGNORE_MATCHERS.some((m) => m(file));
+}
+
+// Convenience: does ANY changed file affect the deployed preview?
+function anyAffectsDeployedPreview(changedFiles) {
+  return changedFiles.some((f) => affectsDeployedPreview(f));
+}
+
 const ALWAYS_RUN = [
   "e2e/compute-visual-diffs.test.js",
   "e2e/cms-config.spec.js",
@@ -85,6 +191,11 @@ const RENDER_FANOUT_PATTERNS = [
   /^assets\/css\//,
   /^_plugins\//,
   /^Gemfile/,
+  // Custom site-wide Atom feed source (replaces jekyll-feed's /feed.xml).
+  // A change here alters the deployed feed for every post, so fan out the
+  // full matrix — feeds-and-share.spec.js + e2e-posts-public-exclusion.test.js
+  // need to re-run.
+  /^feed\.xml$/,
 ];
 
 // Additional fanout files that change how the TEST SUITE runs but NOT
@@ -328,6 +439,11 @@ const SPEC_RULES = {
   // config, plugins), so anything that can change the rendered tree
   // selects them. Picked up by parity-preview.yml's spec selector
   // (see PARITY_PREVIEW_SPECS / selectParityPreviewSpecs below).
+  //
+  // The sitemap / console-clean / image-alt crawls share their
+  // public-content enumeration + test-fixture exclusion via
+  // e2e/public-content.js (#1771 Cat-2) — a change there can shift which
+  // `/blog/` posts are crawled, so it re-selects all three.
   "e2e/sitemap.spec.js": [
     /^_posts\//,
     /^_projects\//,
@@ -336,6 +452,7 @@ const SPEC_RULES = {
     /^_config\.yml$/,
     /^_layouts\//,
     /^_plugins\//,
+    /^e2e\/public-content\.js$/,
   ],
   "e2e/console-clean.spec.js": [
     /^_posts\//,
@@ -347,6 +464,7 @@ const SPEC_RULES = {
     /^_plugins\//,
     /^assets\/css\//,
     /^assets\/js\//,
+    /^e2e\/public-content\.js$/,
   ],
   "e2e/draft-isolation.spec.js": [
     /^_posts\//,
@@ -362,7 +480,14 @@ const SPEC_RULES = {
     /^_layouts\//,
     /^_includes\//,
     /^assets\/images\//,
+    /^e2e\/public-content\.js$/,
   ],
+  // Pure-node unit test for the shared public-content crawl-set
+  // predicate. Selects on a change to the module it locks (or its own
+  // change via the direct-edit rule); also tracks prod-mutate-fixture.js
+  // since the predicate's `e2e-` slug signature must keep matching the
+  // ephemeral-canary slugs that module builds.
+  "e2e/public-content.test.js": [/^e2e\/public-content\.js$/, /^e2e\/prod-mutate-fixture\.js$/],
   "e2e/glow-banding.spec.js": [
     // CSS-only spec; otherwise idle. Picks up via fanout.
   ],
@@ -731,26 +856,50 @@ const PARITY_PREVIEW_SPECS = [
   "e2e/sitemap.spec.js",
 ];
 
-// "Direct edit to the spec file itself" counts as applicable so that
-// renaming/touching a parity-preview spec exercises it once before merge.
+// PROBE-LESS selector (#1815 follow-up): a preview probe is only
+// meaningful when the PR changes the DEPLOYED preview site. So this
+// selector NEVER fires for a file deploy-preview wouldn't deploy for —
+// even if that file is a @parity-preview spec's own source or a shared
+// test helper named in SPEC_RULES.
+//
+// Two probe-less rules, both anchored on affectsDeployedPreview:
+//   1. NO "direct edit" branch. Bare-editing a @parity-preview spec
+//      (e.g. e2e/sitemap.spec.js) deploys no preview, so demanding a
+//      parity-preview probe for it hard-fails after ~20 min waiting for
+//      a preview that never built (the real incident this fixes). The
+//      edited spec STILL runs in the normal e2e matrix (against prod
+//      for @parity) via selectSpecs' direct-edit rule — we only drop
+//      its demand for a *preview* probe here.
+//   2. Salience (RENDER_FANOUT + SPEC_RULES) is computed only over
+//      changedFiles that affectsDeployedPreview. This keeps every
+//      deployed-content trigger (_posts/, _layouts/, _config.yml,
+//      assets/, admin/, …) — each of which also makes deploy-preview
+//      build — while dropping test-code triggers like
+//      e2e/public-content.js (a SPEC_RULES entry for sitemap/
+//      console-clean/image-alt) that change no deployed output.
+//
+// RENDER-fanout-not-TEST-fanout (#1723) reasoning still holds: the
+// local-matrix selector fans out on BOTH sets, but parity-preview must
+// fan out only on RENDER changes — test/CI fanout (e2e-tests.yml,
+// package-lock.json, playwright config, e2e/base.js) changes test
+// execution, not the deployed site. affectsDeployedPreview is the
+// belt-and-braces enforcement: every one of those test-infra files is
+// also paths-ignored by deploy-preview, so the pre-filter drops them
+// too.
 function selectParityPreviewSpecs(changedFiles) {
+  // Restrict to files deploy-preview would actually build a preview
+  // for. Anything paths-ignored (e2e/**, docs/**, package.json, …)
+  // can't make a preview exist, so it can't justify a preview probe.
+  const deployAffecting = changedFiles.filter((f) => affectsDeployedPreview(f));
   const selected = [];
-  // RENDER fanout only — NOT the test-infra fanout. parity-preview
-  // probes the deployed preview; only changes that alter the rendered
-  // tree warrant re-checking it, and those are exactly the ones that
-  // make deploy-preview produce a preview to check against. Test/CI
-  // fanout files (e2e-tests.yml, package-lock.json, playwright config,
-  // e2e/base.js) change test execution, not the deployed site, and
-  // never produce a preview — so they must not force a parity-preview
-  // run that would then hard-fail for want of a preview (#1723 follow-up).
-  const fanout = changedFiles.some((f) => RENDER_FANOUT_PATTERNS.some((p) => p.test(f)));
+  const fanout = deployAffecting.some((f) => RENDER_FANOUT_PATTERNS.some((p) => p.test(f)));
   for (const spec of PARITY_PREVIEW_SPECS) {
-    if (fanout || changedFiles.includes(spec)) {
+    if (fanout) {
       selected.push(spec);
       continue;
     }
     const rules = SPEC_RULES[spec] || [];
-    if (rules.some((p) => changedFiles.some((f) => p.test(f)))) {
+    if (rules.some((p) => deployAffecting.some((f) => p.test(f)))) {
       selected.push(spec);
     }
   }
@@ -765,6 +914,9 @@ module.exports = {
   SPEC_RULES,
   HEAVY,
   PARITY_PREVIEW_SPECS,
+  affectsDeployedPreview,
+  anyAffectsDeployedPreview,
+  DEPLOY_PREVIEW_PATHS_IGNORE,
   selectSpecs,
   selectParityPreviewSpecs,
   getChangedFiles,

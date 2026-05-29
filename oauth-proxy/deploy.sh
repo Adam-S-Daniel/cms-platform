@@ -10,8 +10,8 @@
 #   • A GitHub OAuth App created at:
 #       https://github.com/settings/developers → "OAuth Apps" → "New OAuth App"
 #     Settings to use:
-#       Application name:      adamdaniel.ai CMS
-#       Homepage URL:          https://adamdaniel.ai
+#       Application name:      <your-site> CMS
+#       Homepage URL:          https://<your-site>
 #       Authorization callback URL: (run this script once to get the URL, then update)
 #
 # Usage:
@@ -29,7 +29,10 @@ FUNCTION_NAME="${FUNCTION_NAME:-${STACK_NAME}}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 SAM_S3_BUCKET="${SAM_S3_BUCKET:-}"
 ALLOWED_ORIGINS="${ALLOWED_ORIGINS:?set ALLOWED_ORIGINS, e.g. https://example.com}"
-GITHUB_SCOPE="${GITHUB_SCOPE:-repo,user}"
+GITHUB_SCOPE="${GITHUB_SCOPE:-repo,user,workflow}"
+# Repo identity for the Next-Steps backend snippet (already in site-params.env).
+GITHUB_ORG="${GITHUB_ORG:-Adam-S-Daniel}"
+GITHUB_REPO="${GITHUB_REPO:-<repo>}"
 
 # ── Colour output ──────────────────────────────────────────────────────────
 BLUE='\033[0;34m'
@@ -129,7 +132,7 @@ echo "  │  2. Update admin/config.yml in your repo:                       │"
 echo "  │                                                                 │"
 echo "  │     backend:                                                    │"
 echo "  │       name: github                                              │"
-echo "  │       repo: Adam-S-Daniel/adamdaniel.ai                        │"
+echo -e "  │       repo: ${YELLOW}${GITHUB_ORG}/${GITHUB_REPO}${NC}"
 echo "  │       branch: main                                              │"
 echo -e "  │       base_url: ${YELLOW}${API_URL}${NC}"
 echo "  │       auth_endpoint: prod/auth                                  │"

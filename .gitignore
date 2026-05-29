@@ -4,3 +4,17 @@
 infrastructure/site-params.env
 __pycache__/
 *.pyc
+
+# Node deps (installed via `cd e2e && npm ci`); package-lock.json IS tracked
+node_modules/
+# Ephemeral Playwright outputs
+e2e/test-results/
+e2e/playwright-report/
+playwright-report/
+test-results/
+# Local Jekyll build artifacts
+_site/
+.jekyll-cache/
+.sass-cache/
+vendor/
+.bundle/

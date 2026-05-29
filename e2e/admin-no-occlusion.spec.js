@@ -21,6 +21,7 @@
  */
 const { test, expect } = require("./base");
 const { expectReachable } = require("./ui-visibility");
+const { openMediaLibrary, MEDIA_LIBRARY_TOP_SELECTOR } = require("./cms-editor-ui");
 
 const SEED_POST_SLUG = "2026-04-25-replacement-test-post-1";
 const SEED_POST_CONTENT = [
@@ -127,9 +128,9 @@ test.describe(
       page,
     }) => {
       await login(page);
-      await page.getByRole("button", { name: "Media", exact: true }).first().click();
-      const libraryTop = page.locator('[class*="LibraryTop"]').first();
-      await expect(libraryTop).toBeVisible({ timeout: 30_000 });
+      // openMediaLibrary (shared, cms-editor-ui.js): click "Media" + wait
+      // for the library header.
+      const libraryTop = await openMediaLibrary(page);
       // The selection-dependent controls (Copy Path / Download / Delete
       // selected) render immediately, disabled, even on an empty library
       // — so we exercise the header layout without depending on the
@@ -162,8 +163,8 @@ test.describe(
       //    vanished). These two facts — header not clipped, buttons
       //    inside the header — fail if that regresses, without needing a
       //    populated grid to occlude against.
-      const header = await page.evaluate(() => {
-        const lt = document.querySelector('[class*="LibraryTop"]');
+      const header = await page.evaluate((sel) => {
+        const lt = document.querySelector(sel);
         const ltRect = lt.getBoundingClientRect();
         const overflowing = [];
         for (const b of lt.querySelectorAll("button, label")) {
@@ -182,7 +183,7 @@ test.describe(
           scrollH: lt.scrollHeight,
           overflowing,
         };
-      });
+      }, MEDIA_LIBRARY_TOP_SELECTOR);
       expect(
         header.scrollH,
         `Media-library header is clipped (scrollHeight ${header.scrollH} > clientHeight ${header.clientH}) — wrapped controls are hidden`,

@@ -20,6 +20,13 @@ const { test, expect } = require("./base");
 const SHIM_PATH = path.resolve(__dirname, "../admin/publish-via-auto-merge.js");
 const SHIM_SOURCE = fs.readFileSync(SHIM_PATH, "utf8");
 
+// The shim builds its recovery API base from `window.CMS_REPO` — the
+// platform is parameterized, so a site injects `window.CMS_REPO` (mirrors
+// admin/config.yml's `repo:`). The test sets a SITE-AGNOSTIC value and
+// asserts the configured repo flows through into the issues/labels URL.
+const TEST_REPO = "TestOwner/test-repo";
+const API_BASE = `https://api.github.com/repos/${TEST_REPO}`;
+
 /** Build a fresh sandbox + load the shim into it; returns helpers. */
 function bootShim() {
   const calls = [];
@@ -84,6 +91,9 @@ function bootShim() {
     },
     window: {
       fetch: fakeFetch,
+      // Site identity is injected by the host page; the shim reads it to
+      // build the recovery API base. Site-agnostic test value.
+      CMS_REPO: TEST_REPO,
     },
   };
   sandbox.window.window = sandbox.window;
@@ -132,10 +142,7 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
   test("non-targeted requests pass through untouched", async () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ ok: 1 }, { status: 200 });
-    const res = await fetch(
-      "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/contents/_posts/x.md",
-      { method: "GET" },
-    );
+    const res = await fetch(`${API_BASE}/contents/_posts/x.md`, { method: "GET" });
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(1);
     expect(calls[0].method).toBe("GET");
@@ -155,7 +162,7 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ tree: [] }, { status: 200 });
     const request = {
-      url: "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/git/trees/main?recursive=1",
+      url: `${API_BASE}/git/trees/main?recursive=1`,
       method: "GET",
     };
     const res = await fetch(request);
@@ -167,10 +174,10 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
   test("PR merge that returns 200 passes through (no recovery)", async () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ merged: true, sha: "abc" }, { status: 200 });
-    const res = await fetch(
-      "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/pulls/42/merge",
-      { method: "PUT", headers: { Authorization: "Bearer t" } },
-    );
+    const res = await fetch(`${API_BASE}/pulls/42/merge`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer t" },
+    });
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(1);
   });
@@ -179,10 +186,10 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ message: "Repository rule violations found" }, { status: 422 });
     queueResponse({ id: 1 }, { status: 200 }); // labels response
-    const res = await fetch(
-      "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/pulls/42/merge",
-      { method: "PUT", headers: { Authorization: "Bearer t" } },
-    );
+    const res = await fetch(`${API_BASE}/pulls/42/merge`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer t" },
+    });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.merged).toBe(true);
@@ -190,9 +197,8 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0].method).toBe("PUT");
     expect(calls[1].method).toBe("POST");
-    expect(calls[1].url).toBe(
-      "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/issues/42/labels",
-    );
+    // The recovery POST targets the CONFIGURED repo's issues/labels endpoint.
+    expect(calls[1].url).toBe(`${API_BASE}/issues/42/labels`);
     expect(JSON.parse(calls[1].body)).toEqual({ labels: ["cms/ready"] });
     expect(calls[1].headers.Authorization).toBe("Bearer t");
   });
@@ -200,10 +206,10 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
   test("PR merge 422 with non-ruleset message does NOT recover", async () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ message: "Pull request is in unstable state" }, { status: 422 });
-    const res = await fetch(
-      "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/pulls/42/merge",
-      { method: "PUT", headers: { Authorization: "Bearer t" } },
-    );
+    const res = await fetch(`${API_BASE}/pulls/42/merge`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer t" },
+    });
     expect(res.status).toBe(422);
     expect(calls).toHaveLength(1);
   });
@@ -212,10 +218,10 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ message: "Repository rule violations found" }, { status: 422 });
     queueResponse({ message: "Bad credentials" }, { status: 401 });
-    const res = await fetch(
-      "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/pulls/42/merge",
-      { method: "PUT", headers: { Authorization: "Bearer t" } },
-    );
+    const res = await fetch(`${API_BASE}/pulls/42/merge`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer t" },
+    });
     expect(res.status).toBe(422);
     expect(calls).toHaveLength(2);
   });
@@ -228,10 +234,10 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     // behaviour so a future refactor knows what was intentional.
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ message: "Repository rule violations found" }, { status: 422 });
-    const res = await fetch(
-      "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/pulls/42/merge?foo=bar",
-      { method: "PUT", headers: { Authorization: "Bearer t" } },
-    );
+    const res = await fetch(`${API_BASE}/pulls/42/merge?foo=bar`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer t" },
+    });
     expect(res.status).toBe(422);
     expect(calls).toHaveLength(1); // no recovery
   });
@@ -250,7 +256,7 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
         return this._store[k.toLowerCase()] || null;
       },
     };
-    await fetch("https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/pulls/7/merge", {
+    await fetch(`${API_BASE}/pulls/7/merge`, {
       method: "PUT",
       headers,
     });

@@ -609,8 +609,33 @@ test.describe("selectParityPreviewSpecs — render-only fanout (#1723 follow-up)
     }
   });
 
-  test("a parity-preview spec's own file change still selects (just that spec)", () => {
-    expect(selectParityPreviewSpecs(["e2e/sitemap.spec.js"])).toEqual(["e2e/sitemap.spec.js"]);
+  test("a parity-preview spec's OWN file change selects NOTHING (probe-less, #1815)", () => {
+    // PROBE-LESS: bare-editing a @parity-preview spec deploys no
+    // preview (e2e/** is in deploy-preview's paths-ignore), so it must
+    // NOT demand a parity-preview probe — that's the ~20-min hard-fail
+    // this fix removes. The spec still runs in the normal e2e matrix
+    // (selectSpecs' direct-edit rule); we only drop its *preview* probe.
+    expect(selectParityPreviewSpecs(["e2e/sitemap.spec.js"])).toEqual([]);
+    // selectSpecs (the e2e-matrix selector) is UNCHANGED — the edited
+    // spec still runs there.
+    expect(selectSpecs(["e2e/sitemap.spec.js"]).files).toContain("e2e/sitemap.spec.js");
+  });
+
+  test("a SPEC_RULES test-helper (e2e/public-content.js) selects NO parity-preview spec (#1815)", () => {
+    // e2e/public-content.js is a SPEC_RULES trigger for sitemap /
+    // console-clean / image-alt-text, but it's test code under
+    // deploy-preview's e2e/** paths-ignore — it deploys no preview, so
+    // it must not force a parity-preview probe.
+    expect(selectParityPreviewSpecs(["e2e/public-content.js"])).toEqual([]);
+  });
+
+  test("a deployed-content change (_posts/) DOES still select the relevant parity specs", () => {
+    // _posts/ IS deployed (and triggers deploy-preview), so the posts-
+    // driven parity-preview specs must still be selected.
+    const selected = selectParityPreviewSpecs(["_posts/2024-01-01-x.md"]);
+    expect(selected).toContain("e2e/sitemap.spec.js");
+    expect(selected).toContain("e2e/console-clean.spec.js");
+    expect(selected).toContain("e2e/image-alt-text.spec.js");
   });
 
   test("admin/ change still selects admin-bundle-parity via its SPEC_RULE (deployed surface)", () => {

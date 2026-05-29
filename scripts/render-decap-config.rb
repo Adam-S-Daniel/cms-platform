@@ -25,6 +25,7 @@ build     = ARGV[1] || File.join(site_root, '_site')
 cfg  = YAML.load_file(File.join(site_root, '_config.yml')) || {}
 cms  = cfg['cms'] || {}
 url  = (cfg['url'] || '').sub(%r{/+\z}, '')
+title = (cfg['title'] || '').to_s
 repo = cms['repository'] or abort 'render-decap-config: _config.yml needs cms.repository'
 oauth = cms['oauth_base_url'] || ''
 apex  = url.empty? ? '' : URI(url).host.to_s.sub(/\Awww\./, '')
@@ -52,9 +53,17 @@ render.call(File.join(admin_src, 'config.base.yml'), File.join(admin_out, 'confi
 lb = File.join(admin_src, 'config-local.base.yml')
 render.call(lb, File.join(admin_out, 'config-local.yml')) if File.exist?(lb)
 
-# 2. inject window.CMS_* into the built admin HTML shells (read by admin/*.js).
-js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};</script>}
-Dir.glob(File.join(admin_out, 'index*.html')).each do |h|
+# 2. inject window.CMS_* into the built admin HTML shells (read by admin/*.js
+#    and admin/reviews/*.html). Both the Decap shells (index*.html) and the
+#    visual-regression review dashboards (reviews/index.html, reviews/health.html)
+#    derive their site identity from these globals — REPO_OWNER/REPO_NAME from
+#    CMS_REPO, APEX_DOMAIN from CMS_APEX, OAUTH_URL from CMS_OAUTH_BASE_URL,
+#    document.title from CMS_SITE_TITLE (the site's _config.yml `title`) —
+#    instead of hardcoding it, so the platform stays site-agnostic.
+js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};</script>}
+shells = Dir.glob(File.join(admin_out, 'index*.html')) +
+         Dir.glob(File.join(admin_out, 'reviews', '*.html'))
+shells.each do |h|
   s = File.read(h)
   next if s.include?('window.CMS_REPO')
   File.write(h, s.sub(/<head>/i, "<head>\n#{js}"))

@@ -134,11 +134,23 @@
     );
   }
 
-  // url slug = on-disk slug minus Jekyll's `YYYY-MM-DD-` _posts prefix.
-  // Jekyll's `permalink: /blog/:slug/` strips that prefix, so this is
-  // exactly the live URL slug (mirrors admin/live-url-derive.js).
+  // url slug = on-disk slug minus Jekyll's `YYYY-MM-DD-` _posts prefix,
+  // THEN run through Jekyll's slugify. `permalink: /blog/:slug/` strips the
+  // date prefix AND passes the result through `Jekyll::Utils.slugify`
+  // (lowercase + collapse non-[a-z0-9] runs to single `-` + trim). Posts
+  // created through Decap arrive pre-slugified, but a post committed outside
+  // Decap (e.g. the `2026-05-28-quoting-anthropic-opus-4-8-safety-"somewhat-
+  // less-robust".md` content post, #1815) keeps its raw punctuation in the
+  // filename; date-stripping alone produced a `published ↗` link with the
+  // curly quotes that 404s, because the live URL drops them. Reuse the SINGLE
+  // slugify owned by admin/live-url-derive.js (loaded first, `defer`, so
+  // `window.LiveURL` is always defined here — same load-order contract
+  // live-url-banner.js relies on). The cross-runtime twin in
+  // e2e/public-content.js is drift-locked to it by e2e/slugify-parity.test.js.
   function urlSlug(fileSlug) {
-    return String(fileSlug || "").replace(/^\d{4}-\d{2}-\d{2}-/, "");
+    var dateStripped = String(fileSlug || "").replace(/^\d{4}-\d{2}-\d{2}-/, "");
+    var L = window.LiveURL;
+    return L && L.slugify ? L.slugify(dateStripped) : dateStripped;
   }
 
   function publicUrl(fileSlug) {

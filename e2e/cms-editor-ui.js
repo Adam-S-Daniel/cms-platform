@@ -218,31 +218,112 @@ function editorialStatusChip(page) {
 async function reopenForPublishedDelete(
   page,
   entryUrl,
-  { titleName = /^Title$/i, totalTimeoutMs = 6 * 60 * 1000, perAttemptMs = 30_000 } = {},
+  // totalTimeoutMs bumped 13 → 25 min (#1815 / #1771 follow-up). The
+  // 13-min budget timed out in real prod (run 26551283809): after the
+  // create PR's SQUASH auto-merge, Decap's loadUnpublishedEntry has to
+  // re-sync past the deleted editorial branch AND past any concurrent
+  // editorial-workflow runs Decap kicks off during hydration. Under
+  // runner contention (a concurrent loop holding the deploy queue,
+  // GitHub API lag) the resync regularly exceeds 13 min. 25 min
+  // comfortably covers it and still fits inside the spec's TEST_TIMEOUT_MS
+  // (80 min prod / 100 min media), which in turn fits the job timeout
+  // (90 / 110 min).
+  //
+  // `crossCheck` (optional) is called every attempt; it should return a
+  // Promise<boolean> indicating whether the create PR's file is present on
+  // `main` (Contents-API cross-check). When provided, the error message
+  // distinguishes "Decap is slow but the merge has landed" from "the
+  // merge never landed at all" so triage is unambiguous.
+  {
+    titleName = /^Title$/i,
+    totalTimeoutMs = 25 * 60 * 1000,
+    perAttemptMs = 30_000,
+    crossCheck = null,
+    adminUrl = null,
+  } = {},
 ) {
   const titleLocator = page.getByRole("textbox", { name: titleName });
+  // Decap's nav menu surfaces the "Posts" link only when the admin app is
+  // fully past its login flow. We use it as the proof-of-login signal
+  // before deep-navigating to the entry URL.
+  const postsLink = page.getByRole("link", { name: /^Posts$/i }).first();
+  // Decap's transient login state surfaces a "Logging in..." chip. If we
+  // see it on the deep entry route, the session has lapsed (Decap is
+  // re-authenticating). The bounce-through-admin-root below recovers it.
+  const loggingInChip = page.getByText(/^Logging in\.\.\.$/i).first();
   const deadline = Date.now() + totalTimeoutMs;
   let attempt = 0;
-  // Assigned on every loop pass (the if/else below is exhaustive) before
-  // the deadline check reads it, so no initializer is needed — and a dead
-  // initializer trips no-useless-assignment.
   let lastState;
+  let lastCrossCheck = null;
+  let lastLoggingIn = false;
   for (;;) {
     attempt += 1;
-    // Navigate to the entry route, then HARD RELOAD every pass. The page
-    // is typically already on this entry's editor route (the create leg
-    // mounted it), so a same-hash goto alone would not re-mount the
-    // component; the reload re-runs componentDidMount → loadUnpublishedEntry
-    // against fresh backend state. Once the (now-merged) editorial branch
-    // is gone, Decap's loadUnpublishedEntry hits notUnderEditorialWorkflow
-    // and falls through to loadEntry (the published file), so the DRAFT
-    // toolbar disappears and "Delete published entry" renders.
+
+    // Bounce through admin ROOT every attempt (#1815, run 26592333311).
+    // Without this, a deep goto(entryUrl) on a session whose Decap login
+    // state lapsed during the long create-PR-merge wait surfaces the
+    // "Logging in..." spinner forever — the editor never mounts and
+    // Title never appears. Navigating to `${adminUrl}` (the Decap app
+    // root) re-runs the login routing and lets Decap complete its
+    // localStorage-replay before we deep-link into the entry. The Posts
+    // link is the canonical "Decap is logged in and the nav rendered"
+    // signal.
+    //
+    // page.addInitScript from decap-pat.seedDecapAuth re-injects the
+    // PAT-backed localStorage record on every navigation, so this also
+    // re-seeds the auth without the spec having to call seedDecapAuth
+    // again.
+    if (adminUrl) {
+      await page.goto(adminUrl, { waitUntil: "domcontentloaded" });
+      // Best-effort: don't fail the attempt if Posts doesn't render fast
+      // enough — the subsequent entry navigation may still recover. We
+      // just need to give Decap a chance to complete login. The
+      // `.catch(() => false)` (not a banned `() => {}`) flows the miss
+      // into a logged conditional so the choice to proceed is explicit
+      // (silent-catch-lint).
+      const postsRendered = await postsLink
+        .waitFor({ state: "visible", timeout: Math.min(perAttemptMs, 15_000) })
+        .then(() => true)
+        .catch(() => false);
+      if (!postsRendered) {
+        console.warn(
+          `[reopenForPublishedDelete] attempt ${attempt}: Posts nav not visible within the ` +
+            "bounded wait after bouncing through admin root; proceeding to the entry route anyway " +
+            "(Decap may still be finishing login).",
+        );
+      }
+    }
+
     await page.goto(entryUrl, { waitUntil: "domcontentloaded" });
     await page.reload({ waitUntil: "domcontentloaded" });
 
+    // Run the optional Contents-API cross-check ONCE per attempt so the
+    // error message can quote a deterministic state.
+    if (crossCheck) {
+      try {
+        lastCrossCheck = await crossCheck();
+      } catch (_) {
+        lastCrossCheck = null;
+      }
+    }
+
     // Wait for the editor to mount at all (Title field present).
-    if (!(await titleLocator.isVisible({ timeout: perAttemptMs }).catch(() => false))) {
-      lastState = "editor never mounted (Title field absent)";
+    // `waitFor({state:"visible",timeout})` is mandatory here — Playwright's
+    // `locator.isVisible()` ignores any timeout option and returns
+    // synchronously, so a same-named check would race Decap's hydration
+    // and return false for the entire poll budget (#1815, run 26592333311
+    // logged 170 instant attempts in 1500s).
+    const titleVisible = await titleLocator
+      .waitFor({ state: "visible", timeout: perAttemptMs })
+      .then(() => true)
+      .catch(() => false);
+    if (!titleVisible) {
+      lastLoggingIn = await loggingInChip.isVisible().catch(() => false);
+      lastState = lastLoggingIn
+        ? 'editor never mounted (Title field absent; "Logging in..." chip ' +
+          "still visible — Decap is stuck re-authenticating, the bounce " +
+          "through admin root did not complete the login flow this attempt)"
+        : "editor never mounted (Title field absent)";
     } else {
       const draftChipVisible = await editorialStatusChip(page)
         .isVisible({ timeout: 2_000 })
@@ -262,16 +343,91 @@ async function reopenForPublishedDelete(
     }
 
     if (Date.now() >= deadline) {
+      const crossCheckLine =
+        lastCrossCheck === true
+          ? " Contents-API cross-check on main: file IS present (the create PR's merge HAS landed — " +
+            "Decap is failing to catch up to it; this is a Decap-side hydration bug, not a missing merge)."
+          : lastCrossCheck === false
+            ? " Contents-API cross-check on main: file is ABSENT (the create PR's merge has NOT " +
+              "landed; widen waitForMerge or investigate why auto-merge stalled)."
+            : "";
+      const loginLine = lastLoggingIn
+        ? ' Last attempt observed Decap stuck on the "Logging in..." spinner: the PAT-backed ' +
+          "localStorage record is present (page.addInitScript re-injects it on every nav) but Decap's " +
+          "login flow is not completing. Suspect: rate-limited GitHub validation or a stale Decap " +
+          "Redux slice surviving the bounce. Consider clearing browser context (cookies + " +
+          "localStorage) and re-seeding before the next reopen attempt."
+        : "";
       throw new Error(
         `Editor for ${entryUrl} never reached the PUBLISHED delete state within ` +
-          `${Math.round(totalTimeoutMs / 1000)}s (${attempt} attempt(s)); last seen: ${lastState}. ` +
-          "Decap is still loading the entry as an open editorial-workflow draft — the create " +
+          `${Math.round(totalTimeoutMs / 1000)}s (${attempt} attempt(s)); last seen: ${lastState}.` +
+          crossCheckLine +
+          loginLine +
+          " Decap is still loading the entry as an open editorial-workflow draft — the create " +
           "PR's cms/* branch has not been merged+removed yet, so a Delete click would call " +
           "onDeleteUnpublishedChanges (draft branch only) instead of onDelete (delete from main). " +
           "Ensure the create PR is fully merged before re-opening for delete.",
       );
     }
     await page.waitForTimeout(8_000);
+  }
+}
+
+// Decap's GLOBAL media library is a MODAL opened from the top-nav
+// "Media" button — it is NOT a page route. `page.goto("…/admin/#/media")`
+// renders Decap's NotFound ("Not Found") because Decap 3.12.2 registers
+// no `/media` page route (#1815, runs 26597250490 / 26602619236). The
+// library's header is a container whose class contains "LibraryTop"; it
+// holds the Upload / Copy / Download / Delete-selected controls and sits
+// above the asset grid. Single-sourced here so the open-and-wait
+// sequence and the brittle `[class*="LibraryTop"]` selector can't drift
+// across specs (was copy-pasted in cms-media-roundtrip.spec.js +
+// admin-no-occlusion.spec.js).
+const MEDIA_LIBRARY_TOP_SELECTOR = '[class*="LibraryTop"]';
+
+// The top-nav button that opens the global media library overlay.
+function mediaLibraryButton(page) {
+  return page.getByRole("button", { name: "Media", exact: true }).first();
+}
+
+// The media library modal's header container (Upload / Delete-selected /
+// Copy / Download live inside it). Callers scope header-control lookups
+// to this so they don't match same-named controls elsewhere.
+function mediaLibraryTop(page) {
+  return page.locator(MEDIA_LIBRARY_TOP_SELECTOR).first();
+}
+
+// Open the global media library overlay (click "Media") and wait for its
+// header to render. Returns the LibraryTop locator so callers can scope
+// header-control interactions. Caller is responsible for being on a
+// route where the top nav is present (e.g. after loading the admin root).
+async function openMediaLibrary(page, { timeout = 30_000 } = {}) {
+  await mediaLibraryButton(page).click();
+  const top = mediaLibraryTop(page);
+  await expect(top, "Decap media library modal should open").toBeVisible({ timeout });
+  return top;
+}
+
+// Close the media library overlay. CRITICAL before any subsequent admin
+// navigation: Decap's media library is a Redux-state overlay, NOT a
+// route — a `page.goto(...)` does NOT dismiss it, so a later nav-link
+// wait times out behind the still-open modal (#1815, run 26604334850:
+// after deleting the asset the modal stayed up and the Posts-list wait
+// 60s-timed-out behind it). No-op if the modal isn't open. Escape is
+// Decap's modal-close affordance; a full reload is the guaranteed
+// fallback (the overlay is client state, so a reload always clears it).
+async function closeMediaLibrary(page, { timeout = 10_000 } = {}) {
+  const top = mediaLibraryTop(page);
+  if (!(await top.isVisible().catch(() => false))) return;
+  await page.keyboard.press("Escape");
+  const closed = await top
+    .waitFor({ state: "hidden", timeout })
+    .then(() => true)
+    .catch(() => false);
+  if (!closed) {
+    // Escape didn't dismiss it (Decap shape/version change) — a full
+    // reload reliably clears the client-state overlay.
+    await page.reload({ waitUntil: "domcontentloaded" });
   }
 }
 
@@ -286,4 +442,9 @@ module.exports = {
   publishedDeleteButton,
   editorialStatusChip,
   reopenForPublishedDelete,
+  MEDIA_LIBRARY_TOP_SELECTOR,
+  mediaLibraryButton,
+  mediaLibraryTop,
+  openMediaLibrary,
+  closeMediaLibrary,
 };

@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect, TARGET } = require("./base");
+const { isTestFixturePost } = require("./public-content");
 
 // Plan unit B2 — Image alt-text audit (`@parity`).
 //
@@ -89,6 +90,14 @@ function toLocalPath(absoluteUrl) {
 // here. Audited on `local` where they DO render.
 const ADMIN_DEV_SHELLS = new Set(["/admin/index-local.html", "/admin/index-test.html"]);
 
+// Derive the post URL slug from a `/blog/<slug>/` path so the shared
+// test-fixture predicate can match the structural `e2e-` canary signature.
+// Returns null for non-/blog/ paths (homepage, tags, etc.).
+function blogSlugFromPath(urlPath) {
+  const m = urlPath.match(/^\/blog\/([^/]+)\/?$/);
+  return m ? m[1] : null;
+}
+
 function shouldSkip(urlPath, target) {
   // `/preview/` is the in-CMS WYSIWYG preview shell — its `<img>` content
   // is injected at runtime via postMessage, so a static crawl audits an
@@ -96,6 +105,17 @@ function shouldSkip(urlPath, target) {
   if (urlPath.startsWith("/preview/")) return true;
   if (URL_ALLOWLIST.has(urlPath)) return true;
   if (target !== "local" && ADMIN_DEV_SHELLS.has(urlPath)) return true;
+  // Skip E2E test-fixture canaries. The ephemeral prod-loop posts
+  // (`/blog/e2e-{prod-mutate,media-roundtrip}-<runId>/`) are born
+  // `published: true` through the Decap UI and briefly appear in the
+  // sitemap mid-run (the posts collection has no `sitemap:`/`robots:`
+  // widget, so the UI can't mark them noindex). They are noindex test
+  // fixtures, not public content — and a transient orphan one of them
+  // leaves on `main` must not red this REQUIRED @parity check on an
+  // unrelated PR (#1771 Cat-2 fix). Keyed on the shared `e2e-` slug
+  // signature via the single source of truth in public-content.js.
+  const slug = blogSlugFromPath(urlPath);
+  if (slug && isTestFixturePost(null, { urlSlug: slug })) return true;
   return false;
 }
 

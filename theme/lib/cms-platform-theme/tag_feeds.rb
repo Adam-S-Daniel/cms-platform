@@ -45,7 +45,14 @@ if defined?(Jekyll::Generator)
         def generate(site)
           curated = (site.collections['tags']&.docs || [])
                     .filter_map { |d| d.data['name'] }
-          from_posts = site.posts.docs.flat_map { |p| Array(p.data['tags']) }.compact
+          # Skip e2e / test-fixture posts (feed_exclude stamped by
+          # _plugins/exclude_e2e_posts.rb) so a tag carried ONLY by a
+          # published canary never mints a public /tags/<slug>/feed.xml.
+          # The per-tag feed body (_layouts/atom_feed.xml) also filters
+          # feed_exclude, so even a tag shared with a real post never
+          # lists the canary.
+          public_posts = site.posts.docs.reject { |p| p.data['feed_exclude'] == true }
+          from_posts = public_posts.flat_map { |p| Array(p.data['tags']) }.compact
           (curated + from_posts).uniq.each do |name|
             site.pages << FeedPage.new(site, name)
           end

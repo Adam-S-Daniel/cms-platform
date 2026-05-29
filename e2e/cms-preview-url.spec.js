@@ -36,8 +36,16 @@ function parseFrontMatter(filepath) {
   return fm;
 }
 
-const publishedPosts = fs
-  .readdirSync(POSTS_DIR)
+// The bare platform ships no `_posts/` (a consuming SITE provides them),
+// so guard the module-scope directory read: if `_posts/` is absent,
+// iterate over nothing. This keeps the spec collectable in the platform
+// repo without an ENOENT aborting Playwright's WHOLE collection, while a
+// consuming site with real posts still exercises every per-post
+// round-trip assertion unchanged. (Upstream adamdaniel.ai always ships
+// `_posts/`, so it reads the dir directly; the platform needs the guard.)
+const postFiles = fs.existsSync(POSTS_DIR) ? fs.readdirSync(POSTS_DIR) : [];
+
+const publishedPosts = postFiles
   .filter((f) => f.endsWith(".md"))
   .map((file) => ({ file, fm: parseFrontMatter(path.join(POSTS_DIR, file)) }))
   .filter(({ fm }) => fm && fm.published === "true")
