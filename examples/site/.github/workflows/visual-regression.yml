@@ -55,10 +55,10 @@ permissions:
 
 jobs:
   visual-regression:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/visual-regression.yml@v0.1.0
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/visual-regression.yml@v0.1.1
     with:
       # Pin to the SAME ref as the `uses:` pin above so the pipeline matches.
-      platform_ref: v0.1.0
+      platform_ref: v0.1.1
     secrets:
       # Optional — drop any the site doesn't use. The AWS steps no-op when
       # PREVIEW_BUCKET (a repo var) is unset; the CloudFront invalidation
