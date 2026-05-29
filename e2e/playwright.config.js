@@ -1,4 +1,28 @@
 const { defineConfig } = require("@playwright/test");
+const path = require("node:path");
+
+// SITE_ROOT — the consuming SITE's repo root, which the local lane builds
+// + serves. When the harness lives AT the site root (adamdaniel.ai@main,
+// where `e2e/` sits at the repo root) `path.resolve(__dirname, "..")` IS
+// the site, so the env var is unset and this default holds. When the
+// platform is consumed (checked out into `<site>/.cms-platform/` and the
+// harness copied to `<site>/e2e/`, or run in place) the reusable workflow
+// exports `SITE_ROOT=$GITHUB_WORKSPACE` so the local `webServer` builds the
+// SITE, not the platform. This is the SAME invariant `e2e/base.js`'s
+// `REPO_ROOT` (and ~20 specs' own `path.resolve(__dirname, "..")`) rely on
+// for their site-file reads — keep the harness placed so that resolves to
+// the site, and SITE_ROOT here agrees with it.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
+
+// Absolute path to the harness's own node_modules/.bin. The local webServer
+// commands `cd ${SITE_ROOT}` first (so `serve`/`decap-server` resolve site
+// files + write into the SITE tree), but the SITE has no node_modules, so
+// referencing the binaries by absolute path keeps them resolvable from the
+// harness regardless of CWD. (`jekyll` is a Ruby gem run via the site's
+// `bundle exec`, so it isn't here.)
+const HARNESS_BIN = path.join(__dirname, "node_modules", ".bin");
+const SERVE_BIN = path.join(HARNESS_BIN, "serve");
+const DECAP_SERVER_BIN = path.join(HARNESS_BIN, "decap-server");
 
 const DESKTOP = { width: 1920, height: 1080 };
 const LAPTOP = { width: 1366, height: 768 };
@@ -71,15 +95,22 @@ module.exports = defineConfig({
   webServer: IS_LOCAL
     ? [
         {
-          command: "cd .. && bundle exec jekyll build --quiet && npx serve _site -l 4000 --no-clipboard",
+          // Build + serve the SITE (SITE_ROOT), not the harness's parent —
+          // see the SITE_ROOT note at the top of this file. `cd ${SITE_ROOT}`
+          // makes both `bundle exec jekyll build` (reads the site's Gemfile +
+          // _config.yml) and the served `_site` resolve to the consuming site.
+          command: `cd ${SITE_ROOT} && bundle exec jekyll build --quiet && "${SERVE_BIN}" ${SITE_ROOT}/_site -l 4000 --no-clipboard`,
           port: 4000,
           reuseExistingServer: !process.env.CI,
         },
         {
           // Decap CMS local-backend proxy: handles file IO for `local_backend: true`
           // in admin/config-local.yml. Without it, the smoke spec's Login →
-          // Save / Delete cycle has nowhere to write to.
-          command: "npx decap-server",
+          // Save / Delete cycle has nowhere to write to. decap-server writes
+          // relative to its CWD, so it MUST run from the SITE root (this `cd`
+          // was missing — a latent bug that only worked because the harness
+          // lived at the site root) or saves land in the wrong tree.
+          command: `cd ${SITE_ROOT} && "${DECAP_SERVER_BIN}"`,
           port: 8081,
           reuseExistingServer: !process.env.CI,
         },

@@ -1,0 +1,61 @@
+title: Fixture Site
+description: "Minimal cms-platform consuming-site fixture — the local-lane self-test vehicle."
+url: "https://fixture.example"
+baseurl: ""
+author:
+  name: Fixture Author
+
+theme: cms-platform-theme
+
+markdown: kramdown
+highlighter: rouge
+permalink: /blog/:slug/
+
+# Build future-dated posts. The e2e prod-loop / exclusion fixtures use a
+# far-future date (2099-12-31) as a stable, collision-free canary slot; with
+# Jekyll's default `future: false` they'd be SKIPPED and the `feed_exclude`
+# path would never be exercised. adamdaniel.ai sets this for the same reason.
+future: true
+
+cms:
+  repository: Adam-S-Daniel/cms-platform-fixture
+  oauth_base_url: ""
+
+collections:
+  projects: { output: false, permalink: /projects/:slug/ }
+  tags: { output: true, permalink: /tags/:slug/ }
+  e2e: { output: true, permalink: /e2e/:slug/ }
+
+defaults:
+  - { scope: { path: "", type: "posts" },    values: { layout: "post" } }
+  - { scope: { path: "", type: "projects" }, values: { layout: "project" } }
+  - { scope: { path: "", type: "tags" },     values: { layout: "tag" } }
+  - { scope: { path: "pages" },              values: { layout: "page" } }
+  - { scope: { path: "", type: "e2e" },      values: { layout: "canary", sitemap: false, robots: "noindex,nofollow" } }
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-feed
+  - jekyll-sitemap
+
+# Keep the consumed e2e harness + the checked-out platform OUT of the
+# built site. When the platform is consumed, the reusable workflow copies
+# the harness to `<site>/e2e/` and checks the platform into
+# `<site>/.cms-platform/`; neither is site content and both would pollute
+# `_site` (and break the e2e-posts-exclusion / sitemap specs that read
+# `_site`) if Jekyll rendered them. adamdaniel.ai@main excludes `e2e` for
+# the same reason. The dot-prefixed `.cms-platform` is ignored by Jekyll by
+# default, but listing it is explicit + future-proof.
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+  - .bundle
+  - node_modules
+  - e2e
+  - .cms-platform
+  - infrastructure
+  - oauth-proxy
+  - scripts
+  - README.md
+  - "*.env"

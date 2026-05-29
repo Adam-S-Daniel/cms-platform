@@ -34,14 +34,26 @@ jobs:
   e2e:
     uses: Adam-S-Daniel/cms-platform/.github/workflows/e2e-tests.yml@v0.1.0
     with:
-      # Validate against the PR's own preview surface. Switch to `prod`
-      # for a post-merge / nightly run, or `local` if the caller first
-      # builds + serves the site itself (this reusable workflow does not).
-      target: preview
+      # The HEAVY lane: target `local` builds + serves THIS site (real
+      # `jekyll build` + decap-server) and runs the FULL Playwright matrix,
+      # including the @admin-write CMS round-trips, with the harness checked
+      # out from the platform. `browser: all` installs every engine so the
+      # webkit / firefox public projects + the webkit-iphone16 admin-read
+      # project all run. The reusable workflow places the harness at
+      # `<site>/e2e` and sets SITE_ROOT so the build resolves to this site —
+      # your `_config.yml` MUST exclude `e2e` + `.cms-platform` (scaffold's
+      # generated config does) and you need a working Gemfile.
+      #
+      # A site may ALSO add a SEPARATE job here with `target: preview` (or
+      # `prod`) to validate the deployed surface — that lane skips the local
+      # build and hits the PR's preview-pr<N> host / the apex directly.
+      target: local
       prod_url: https://example.com
       apex: example.com
-      browser: chromium
+      browser: all
       pr_number: ${{ github.event.pull_request.number }}
+      # Gate for prod-mutate / real-loop specs; leave empty for normal PR runs.
+      prod_playground_mode: ""
       # Pin to the SAME ref as the `uses:` pin above so the harness matches.
       platform_ref: v0.1.0
     secrets:

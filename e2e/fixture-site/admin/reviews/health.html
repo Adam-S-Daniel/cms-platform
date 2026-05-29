@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Neutral placeholder title for the un-rendered file; replaced at
+       runtime from the injected window.CMS_SITE_TITLE (render-decap-config.rb
+       writes it into <head> at build, from the site's _config.yml `title`),
+       so the dashboard carries no hardcoded site identity. -->
+  <title>QA Health — CMS</title>
+  <script>
+    // window.CMS_SITE_TITLE is injected ahead of this script (see
+    // render-decap-config.rb). When present, brand the tab from the site's
+    // configured title; otherwise keep the neutral placeholder above.
+    if (window.CMS_SITE_TITLE) {
+      document.title = 'QA Health — ' + window.CMS_SITE_TITLE;
+    }
+  </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --primary: #285aff;
+      --bg-page: #04060f;
+      --bg-surface: #060d1f;
+      --bg-elevated: #0a1530;
+      --bg-overlay: #111e40;
+      --text-primary: #d8e4ff;
+      --text-secondary: #c8d4f0;
+      --text-muted: #8ab0e8;
+      --border-subtle: #1a2a5e;
+      --border-default: #2a3a7e;
+      --success: #22c27a;
+      --error: #ff4d6d;
+      --warning: #f4b942;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      height: 100%; margin: 0; padding: 0;
+      background: var(--bg-page);
+      color: var(--text-primary);
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background: radial-gradient(ellipse 70% 50% at 50% 20%, rgba(40,90,255,0.12), transparent 70%);
+      pointer-events: none; z-index: 0;
+    }
+
+    .container {
+      position: relative; z-index: 1;
+      max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem;
+    }
+
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 2rem; padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    header h1 {
+      font-size: 1.4rem; font-weight: 300;
+      letter-spacing: 0.04em; margin: 0;
+    }
+    .header-actions { display: flex; gap: 0.75rem; align-items: center; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.5rem 1rem; border: 1px solid var(--border-default);
+      border-radius: 6px; background: var(--bg-elevated);
+      color: var(--text-secondary); font-size: 0.8rem;
+      cursor: pointer; text-decoration: none;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .btn:hover { border-color: var(--primary); background: var(--bg-overlay); }
+
+    .user-info {
+      font-size: 0.75rem; color: var(--text-muted);
+    }
+
+    #auth-screen {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 60vh; gap: 1.5rem;
+      text-align: center;
+    }
+    #auth-screen h2 { font-weight: 200; font-size: 1.6rem; margin: 0; }
+    #auth-screen p { color: var(--text-muted); margin: 0; font-size: 0.9rem; }
+    #login-btn {
+      padding: 0.7rem 2rem; border-radius: 8px;
+      background: var(--primary); border: none;
+      color: white; font-size: 0.9rem; cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    #login-btn:hover { opacity: 0.85; }
+
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .health-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 1.25rem;
+      transition: border-color 0.2s;
+      display: flex; flex-direction: column; gap: 0.65rem;
+    }
+    .health-card:hover { border-color: var(--border-default); }
+
+    .health-card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .health-card-title {
+      font-size: 0.95rem; font-weight: 400;
+      margin: 0; color: var(--text-primary);
+      word-break: break-word;
+    }
+
+    .health-indicator {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.7rem; text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      flex-shrink: 0;
+    }
+    .health-indicator::before {
+      content: '';
+      width: 8px; height: 8px; border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+    }
+    .health-indicator.health-success {
+      background: rgba(34,194,122,0.12);
+      color: var(--success);
+      border: 1px solid rgba(34,194,122,0.25);
+    }
+    .health-indicator.health-failure {
+      background: rgba(255,77,109,0.12);
+      color: var(--error);
+      border: 1px solid rgba(255,77,109,0.25);
+    }
+    .health-indicator.health-progress {
+      background: rgba(244,185,66,0.12);
+      color: var(--warning);
+      border: 1px solid rgba(244,185,66,0.25);
+    }
+    .health-indicator.health-progress::before {
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    .health-indicator.health-unknown {
+      background: rgba(138,176,232,0.08);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+
+    .health-card-meta {
+      display: flex; flex-direction: column; gap: 0.3rem;
+      font-size: 0.75rem; color: var(--text-muted);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+    .health-card-meta-row {
+      display: flex; gap: 0.5rem; align-items: baseline;
+    }
+    .health-card-meta-label {
+      color: var(--text-muted); opacity: 0.7;
+      min-width: 4.5rem;
+    }
+    .health-card-meta-value {
+      color: var(--text-secondary); flex: 1;
+      word-break: break-word;
+    }
+
+    .health-card-link {
+      margin-top: auto;
+      font-size: 0.75rem;
+      color: var(--primary);
+      text-decoration: none;
+      display: inline-flex; align-items: center; gap: 0.3rem;
+    }
+    .health-card-link:hover { text-decoration: underline; }
+
+    .health-card.health-card-error {
+      opacity: 0.85;
+    }
+    .health-card-message {
+      font-size: 0.8rem; color: var(--text-muted);
+      margin: 0; font-style: italic;
+    }
+
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid transparent; border-top-color: currentColor;
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .toast {
+      position: fixed; bottom: 2rem; left: 50%;
+      transform: translateX(-50%); padding: 0.7rem 1.5rem;
+      background: var(--bg-overlay); border: 1px solid var(--border-default);
+      border-radius: 8px; color: var(--text-primary);
+      font-size: 0.85rem; z-index: 9999;
+      opacity: 0; transition: opacity 0.3s;
+    }
+    .toast.visible { opacity: 1; }
+
+    .last-refresh {
+      font-size: 0.7rem; color: var(--text-muted);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="auth-screen" style="display:none">
+      <h2>QA Health Dashboard</h2>
+      <p>Sign in with GitHub to view recent workflow status.</p>
+      <button id="login-btn">Sign in with GitHub</button>
+    </div>
+
+    <div id="dashboard" style="display:none">
+      <header>
+        <div>
+          <h1>QA Health</h1>
+          <span class="user-info" id="user-info"></span>
+          <span class="last-refresh" id="last-refresh"></span>
+        </div>
+        <div class="header-actions">
+          <a href="/admin/reviews/" class="btn">Reviews</a>
+          <a href="/admin/" class="btn">Back to CMS</a>
+          <button class="btn" id="refresh-btn">Refresh</button>
+        </div>
+      </header>
+      <div id="health-list" class="health-grid"></div>
+    </div>
+
+    <div id="loading" style="text-align:center;padding:4rem;">
+      <div class="spinner" style="width:24px;height:24px;border-width:3px;color:var(--primary);margin:0 auto 1rem;"></div>
+      <p style="color:var(--text-muted);font-size:0.85rem;">Loading...</p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // Site identity is injected at build by scripts/render-decap-config.rb
+    // (window.CMS_REPO / CMS_OAUTH_BASE_URL — derived from _config.yml's
+    // cms.repository and cms.oauth_base_url), mirroring how admin/index.html
+    // consumes the same globals. No hardcoded site identity here so the
+    // platform stays site-agnostic.
+    const REPO_PARTS = String(window.CMS_REPO || '').split('/');
+    const REPO_OWNER = REPO_PARTS[0] || '';
+    const REPO_NAME = REPO_PARTS[1] || '';
+    const API = 'https://api.github.com';
+    const OAUTH_URL = (window.CMS_OAUTH_BASE_URL || '') + '/prod/auth';
+    // Same key the reviews dashboard uses — sign-in there carries over.
+    const TOKEN_KEY = 'gh_reviews_token';
+    const CACHE_PREFIX = 'gh_health_cache:';
+    const CACHE_TTL_MS = 60 * 1000;
+    const REFRESH_INTERVAL_MS = 60 * 1000;
+
+    // Each workflow is identified by its filename in `.github/workflows/`.
+    // The label is what we render in the card header. Keep this list in
+    // sync with the actual workflows we care about — adding a new entry
+    // here adds a new tile, no other code changes needed.
+    const WORKFLOWS = [
+      { file: 'e2e-tests.yml', label: 'E2E Tests' },
+      { file: 'cms-editorial-workflow.yml', label: 'Validate Content' },
+      { file: 'deploy-production.yml', label: 'Deploy to Production' },
+      { file: 'canary-prod.yml', label: 'Production Canary' },
+      { file: 'cms-publish-loop-prod.yml', label: 'CMS Publish Loop (prod)' },
+    ];
+
+    let refreshTimer = null;
+
+    function getToken() { return localStorage.getItem(TOKEN_KEY); }
+    function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+    function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+    function cacheKey(file) { return `${CACHE_PREFIX}${file}`; }
+
+    function readCache(file) {
+      try {
+        const raw = localStorage.getItem(cacheKey(file));
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.cachedAt !== 'number') return null;
+        if (Date.now() - parsed.cachedAt > CACHE_TTL_MS) return null;
+        return parsed;
+      } catch {
+        return null;
+      }
+    }
+
+    function writeCache(file, payload) {
+      try {
+        localStorage.setItem(
+          cacheKey(file),
+          JSON.stringify({ cachedAt: Date.now(), ...payload }),
+        );
+      } catch {
+        // localStorage quota errors aren't worth surfacing.
+      }
+    }
+
+    function clearAllCache() {
+      for (const wf of WORKFLOWS) {
+        localStorage.removeItem(cacheKey(wf.file));
+      }
+    }
+
+    async function ghFetch(path, opts = {}) {
+      const token = getToken();
+      const res = await fetch(`${API}${path}`, {
+        ...opts,
+        headers: {
+          'Authorization': `token ${token}`,
+          'Accept': 'application/vnd.github+json',
+          ...(opts.headers || {}),
+        },
+      });
+      if (res.status === 401) {
+        clearToken();
+        showAuth();
+        throw new Error('Token expired');
+      }
+      return res;
+    }
+
+    function show(id) {
+      ['auth-screen', 'dashboard', 'loading'].forEach(x => {
+        document.getElementById(x).style.display = x === id ? '' : 'none';
+      });
+    }
+
+    function showAuth() {
+      show('auth-screen');
+      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    }
+
+    function showToast(msg, duration) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('visible');
+      setTimeout(() => el.classList.remove('visible'), duration || 3000);
+    }
+
+    document.getElementById('login-btn').addEventListener('click', () => {
+      const w = 600, h = 700;
+      const left = (screen.width - w) / 2;
+      const top = (screen.height - h) / 2;
+      const popup = window.open(OAUTH_URL, 'github-auth',
+        `width=${w},height=${h},left=${left},top=${top}`);
+
+      // Decap / Netlify CMS handshake — same handler shape as the
+      // reviews dashboard. The OAuth proxy popup won't release the
+      // token until it sees the opener echo back its
+      // "authorizing:<provider>" message.
+      window.addEventListener('message', function handler(e) {
+        const data = e.data;
+        if (typeof data !== 'string') return;
+
+        if (data === 'authorizing:github') {
+          if (popup && !popup.closed) popup.postMessage(data, e.origin);
+          return;
+        }
+
+        const m = data.match(/^authorization:github:(success|error):(.*)$/s);
+        if (!m) return;
+
+        window.removeEventListener('message', handler);
+
+        if (m[1] === 'error') {
+          showToast('Authorization failed', 5000);
+          if (popup && !popup.closed) popup.close();
+          return;
+        }
+
+        let token;
+        try { token = JSON.parse(m[2]).token; }
+        catch { showToast('Authorization response was malformed', 5000); return; }
+
+        if (!token) { showToast('Authorization succeeded but no token returned', 5000); return; }
+
+        setToken(token);
+        if (popup && !popup.closed) popup.close();
+        init();
+      });
+    });
+
+    document.getElementById('refresh-btn').addEventListener('click', () => {
+      // Manual refresh busts the cache so the user gets fresh data.
+      clearAllCache();
+      loadHealth();
+    });
+
+    async function init() {
+      const token = getToken();
+      if (!token) { showAuth(); return; }
+
+      show('loading');
+      try {
+        const res = await ghFetch('/user');
+        if (!res.ok) { showAuth(); return; }
+        const user = await res.json();
+        document.getElementById('user-info').textContent = `Signed in as ${user.login}`;
+        show('dashboard');
+        await loadHealth();
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = setInterval(loadHealth, REFRESH_INTERVAL_MS);
+      } catch {
+        showAuth();
+      }
+    }
+
+    async function fetchWorkflowStatus(workflow) {
+      const cached = readCache(workflow.file);
+      if (cached) return cached;
+
+      const path = `/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${workflow.file}/runs?per_page=1`;
+      try {
+        const res = await ghFetch(path);
+        if (res.status === 404) {
+          const payload = { state: 'missing' };
+          writeCache(workflow.file, payload);
+          return payload;
+        }
+        if (!res.ok) {
+          // Don't cache transient errors — let the next refresh retry.
+          return { state: 'error', message: `HTTP ${res.status}` };
+        }
+        const body = await res.json();
+        const run = (body.workflow_runs || [])[0];
+        if (!run) {
+          const payload = { state: 'no-runs' };
+          writeCache(workflow.file, payload);
+          return payload;
+        }
+        const payload = { state: 'ok', run };
+        writeCache(workflow.file, payload);
+        return payload;
+      } catch (err) {
+        return { state: 'error', message: err.message || 'Network error' };
+      }
+    }
+
+    function indicatorFor(run) {
+      // Map the GitHub Actions run state onto our three traffic-light
+      // colours. `status` differentiates queued/in_progress/completed;
+      // `conclusion` is set once the run finishes (success/failure/...).
+      if (!run) return { cls: 'health-unknown', label: 'unknown' };
+      const status = run.status;
+      if (status && status !== 'completed') {
+        return { cls: 'health-progress', label: status.replace(/_/g, ' ') };
+      }
+      const conclusion = run.conclusion;
+      if (conclusion === 'success') return { cls: 'health-success', label: 'success' };
+      if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'startup_failure') {
+        return { cls: 'health-failure', label: conclusion.replace(/_/g, ' ') };
+      }
+      if (conclusion === 'cancelled' || conclusion === 'skipped' || conclusion === 'neutral') {
+        return { cls: 'health-unknown', label: conclusion };
+      }
+      return { cls: 'health-unknown', label: conclusion || 'unknown' };
+    }
+
+    function formatTimestamp(iso) {
+      if (!iso) return '—';
+      try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return iso;
+        // Locale string is fine for an internal dashboard.
+        return d.toLocaleString();
+      } catch {
+        return iso;
+      }
+    }
+
+    function renderCard(workflow, payload) {
+      if (payload.state === 'missing') {
+        return `
+          <div class="health-card health-card-error" data-workflow="${escapeHtml(workflow.file)}" data-state="missing">
+            <div class="health-card-header">
+              <h3 class="health-card-title">${escapeHtml(workflow.label)}</h3>
+              <span class="health-indicator health-unknown" data-status="missing">not deployed</span>
+            </div>
+            <p class="health-card-message">Workflow not yet deployed to <code>${escapeHtml(workflow.file)}</code>.</p>
+          </div>`;
+      }
+      if (payload.state === 'no-runs') {
+        return `
+          <div class="health-card health-card-error" data-workflow="${escapeHtml(workflow.file)}" data-state="no-runs">
+            <div class="health-card-header">
+              <h3 class="health-card-title">${escapeHtml(workflow.label)}</h3>
+              <span class="health-indicator health-unknown" data-status="no-runs">no runs</span>
+            </div>
+            <p class="health-card-message">No runs recorded yet for this workflow.</p>
+          </div>`;
+      }
+      if (payload.state === 'error') {
+        return `
+          <div class="health-card health-card-error" data-workflow="${escapeHtml(workflow.file)}" data-state="error">
+            <div class="health-card-header">
+              <h3 class="health-card-title">${escapeHtml(workflow.label)}</h3>
+              <span class="health-indicator health-failure" data-status="error">API error</span>
+            </div>
+            <p class="health-card-message">${escapeHtml(payload.message || 'API error')}</p>
+          </div>`;
+      }
+
+      const run = payload.run;
+      const indicator = indicatorFor(run);
+      const runNumber = run.run_number != null ? `#${run.run_number}` : '—';
+      const timestamp = formatTimestamp(run.created_at);
+      const url = run.html_url || `https://github.com/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${encodeURIComponent(workflow.file)}`;
+
+      return `
+        <div class="health-card" data-workflow="${escapeHtml(workflow.file)}" data-state="ok">
+          <div class="health-card-header">
+            <h3 class="health-card-title">${escapeHtml(workflow.label)}</h3>
+            <span class="health-indicator ${indicator.cls}" data-status="${escapeHtml(indicator.label)}">${escapeHtml(indicator.label)}</span>
+          </div>
+          <div class="health-card-meta">
+            <div class="health-card-meta-row">
+              <span class="health-card-meta-label">Run</span>
+              <span class="health-card-meta-value">${escapeHtml(runNumber)}</span>
+            </div>
+            <div class="health-card-meta-row">
+              <span class="health-card-meta-label">Created</span>
+              <span class="health-card-meta-value">${escapeHtml(timestamp)}</span>
+            </div>
+          </div>
+          <a class="health-card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">View on GitHub &rarr;</a>
+        </div>`;
+    }
+
+    async function loadHealth() {
+      const list = document.getElementById('health-list');
+
+      // Kick off all five fetches concurrently. Each handles its own
+      // errors so one slow / failing workflow doesn't block the rest.
+      const results = await Promise.all(
+        WORKFLOWS.map((wf) => fetchWorkflowStatus(wf).then((payload) => ({ wf, payload }))),
+      );
+
+      list.innerHTML = results.map(({ wf, payload }) => renderCard(wf, payload)).join('');
+
+      const lastRefresh = document.getElementById('last-refresh');
+      if (lastRefresh) {
+        lastRefresh.textContent = ` · refreshed ${new Date().toLocaleTimeString()}`;
+      }
+    }
+
+    function escapeHtml(str) {
+      const d = document.createElement('div');
+      d.textContent = str == null ? '' : String(str);
+      return d.innerHTML;
+    }
+
+    init();
+  </script>
+</body>
+</html>

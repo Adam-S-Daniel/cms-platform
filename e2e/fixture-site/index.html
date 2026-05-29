@@ -1,0 +1,22 @@
+---
+layout: default
+title: Home
+---
+<div class="container">
+  <h1>{{ site.title }}</h1>
+  <p>{{ site.description }}</p>
+
+  {%- comment -%} Exclude e2e test-fixture canaries (feed_exclude is stamped by
+  exclude_e2e_posts.rb on any `e2e-`-slug or `test_fixture: true` post). They
+  still serve at /blog/<slug>/ but must not surface on the homepage. {%- endcomment -%}
+  {% assign published_posts = site.posts | where: "published", true | where_exp: "post", "post.feed_exclude != true" %}
+  <h2>Latest Posts</h2>
+  <ul class="post-list">
+    {% for post in published_posts %}
+    <li class="post-item">
+      <h3 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h3>
+    </li>
+    {% endfor %}
+  </ul>
+  <p><a href="{{ '/blog/' | relative_url }}">Blog</a> · <a href="{{ '/tags/' | relative_url }}">Tags</a></p>
+</div>

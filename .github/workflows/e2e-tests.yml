@@ -17,6 +17,19 @@
 # tag/sha the caller pins this workflow to so the harness matches the
 # workflow version.
 #
+# Two lanes, selected by `target`:
+#   * preview / prod — hit the DEPLOYED surface (no build). Run from the
+#     platform checkout (`.cms-platform/e2e`); e2e/base.js resolves baseURL
+#     from CMS_PROD_URL / CMS_APEX.
+#   * local — run the FULL matrix against a freshly-built SITE: a real
+#     `jekyll build` of the site + `npx serve _site` + `decap-server`, incl.
+#     the @admin-write CMS round-trips. Because ~50 specs resolve the SITE
+#     via `path.resolve(<harness>/e2e, "..")`, the harness is PLACED at
+#     `<site>/e2e` (copied from the platform checkout) and SITE_ROOT is set
+#     to $GITHUB_WORKSPACE so playwright.config.js's webServer builds/serves
+#     the SITE. The site must exclude `e2e` + `.cms-platform` from its Jekyll
+#     build (scaffold/create-site.js does this) and have a working Gemfile.
+#
 # This is the FIRST of the e2e workflow family to be ported; the rest
 # (cms-publish-loop-*, visual-regression, parity-preview, etc.) follow
 # the same checkout-platform-into-.cms-platform pattern.
@@ -60,6 +73,11 @@ on:
         required: false
         type: string
         default: main
+      prod_playground_mode:
+        description: "Wired to PROD_PLAYGROUND_MODE in the job env. Prod-mutate / real-loop specs gate on it; leave empty for normal runs."
+        required: false
+        type: string
+        default: ""
     secrets:
       # Optional PAT for the GitHub API calls e2e/base.js makes when
       # TARGET=preview discovers the latest open PR, and for any real-lane
@@ -90,6 +108,9 @@ jobs:
       # workflow.
       CMS_REPO: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number }}
+      # Gate for prod-mutate / real-loop specs (they self-skip unless this
+      # is set to the value they expect). Inert when empty — the default.
+      PROD_PLAYGROUND_MODE: ${{ inputs.prod_playground_mode }}
     steps:
       - name: Checkout site
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
@@ -125,14 +146,48 @@ jobs:
             npx playwright install --with-deps "$PW_BROWSER"
           fi
 
+      # ── LOCAL lane only: build + serve the SITE and run the FULL matrix ──
+      # The local lane (target: local) runs a real `jekyll build` of the
+      # SITE + decap-server + the @admin-write CMS round-trips, with the
+      # harness checked out from the platform. The site-file reads in ~50
+      # specs resolve the SITE via `path.resolve(<harness>/e2e, "..")`
+      # (e2e/base.js's REPO_ROOT + each spec's own copy of that line). For
+      # that to land on the consuming SITE, the harness must sit at
+      # `<site>/e2e` — so we PLACE the npm-ci'd harness there. The
+      # workspace root IS the checked-out site (the first checkout step), and
+      # the consuming site removed its own `e2e/` in the dogfood (and excludes
+      # `e2e`/`.cms-platform` from the Jekyll build), so there's no collision.
+      # playwright.config.js's local webServer reads SITE_ROOT to know which
+      # tree to `jekyll build` + serve + point decap-server at.
+      - name: Place harness at site root (local lane)
+        if: ${{ inputs.target == 'local' }}
+        run: |
+          set -euo pipefail
+          # Copy the prepared harness (specs, config, AND node_modules from
+          # `npm ci` above) to <workspace>/e2e so REPO_ROOT == the site.
+          cp -a .cms-platform/e2e "$GITHUB_WORKSPACE/e2e"
+
+      - name: Setup Ruby + Bundler (local lane)
+        if: ${{ inputs.target == 'local' }}
+        uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f  # v1.310.0 (2026-05-20)
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true   # bundle install + cache, keyed on the SITE Gemfile
+
       - name: Run Playwright suite
         id: pw
-        working-directory: .cms-platform/e2e
+        # Local lane runs from the placed <site>/e2e so REPO_ROOT resolves
+        # to the site; preview/prod run from the platform checkout (no build).
+        working-directory: ${{ inputs.target == 'local' && 'e2e' || '.cms-platform/e2e' }}
         env:
           # Self-skip / API auth for preview discovery + real-lane CMS
           # specs. Falls back to the job GITHUB_TOKEN when no PAT is set.
           CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
           GITHUB_TOKEN: ${{ secrets.CMS_E2E_PAT || secrets.GITHUB_TOKEN }}
+          # Local lane: tell playwright.config.js's webServer which tree to
+          # build + serve + run decap-server against. Empty (and ignored) for
+          # preview/prod, which hit deployed surfaces with no local build.
+          SITE_ROOT: ${{ inputs.target == 'local' && github.workspace || '' }}
         run: |
           set -o pipefail
           npx playwright test --reporter=list 2>&1 | tee /tmp/playwright-output.log
@@ -142,7 +197,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 (2026-04-10)
         with:
           name: playwright-report
-          path: .cms-platform/e2e/playwright-report
+          # Local lane reports under <site>/e2e; preview/prod under the
+          # platform checkout. Upload both globs; if-no-files-found: ignore
+          # makes the absent one a no-op.
+          path: |
+            e2e/playwright-report
+            .cms-platform/e2e/playwright-report
           if-no-files-found: ignore
           retention-days: 7
 

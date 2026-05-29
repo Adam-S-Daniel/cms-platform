@@ -161,6 +161,14 @@ exclude:
   - scripts
   - README.md
   - "*.env"
+  # The e2e lane checks the platform out into .cms-platform/ and (for the
+  # local lane) PLACES the harness at <site>/e2e. Neither is site content;
+  # excluding them keeps the harness (specs, configs, node_modules) and the
+  # platform checkout out of _site so they can't pollute the build or break
+  # the e2e-posts-exclusion / sitemap specs that read _site. (.cms-platform
+  # is dot-prefixed so Jekyll ignores it by default; listing it is explicit.)
+  - e2e
+  - .cms-platform
 `;
 }
 
