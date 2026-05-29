@@ -106,7 +106,15 @@ async function main() {
       .replace(/^export ALLOWED_ORIGINS=.*$/m, `export ALLOWED_ORIGINS="https://${domain}"`)
       .replace(/^export STACK_NAME=.*$/m, `export STACK_NAME="${prefix}-oauth-proxy"`)
   );
-  write(target, ".platform-version", PLATFORM_VERSION + "\n");
+  write(
+    target,
+    "platform.lock",
+    `# cms-platform lock — the platform release this site is pinned to.\n` +
+      `# Bumped by the platform-bump workflow; Dependabot bumps the uses:@ pins\n` +
+      `# and the theme gem in lockstep. See the platform's docs/SYNC.md.\n` +
+      `platform_repo: ${PLATFORM_REPO}\n` +
+      `platform_ref: ${PLATFORM_VERSION}\n`
+  );
 
   write(target, "_posts/" + seedDate() + "-hello-world.md", SEED_POST(title));
   write(target, "pages/about.md", SEED_ABOUT(title));
@@ -237,7 +245,7 @@ content + identity.
 
 - Production: https://${domain}
 - Repo: ${owner}/${repo}
-- Platform: \`${PLATFORM_REPO}@${PLATFORM_VERSION}\` (see \`.platform-version\`)
+- Platform: \`${PLATFORM_REPO}@${PLATFORM_VERSION}\` (see \`platform.lock\`)
 
 ## Local dev
 

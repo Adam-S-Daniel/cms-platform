@@ -13,5 +13,5 @@ Generates `_config.yml` (identity + `cms:` block + `theme:`), `Gemfile` (pins th
 theme gem in `:jekyll_plugins`), the thin workflow callers + `dependabot.yml`
 (placeholders filled from your domain), copies the platform-owned `admin/` base
 and `.claude/skills`, seeds minimal content (a post, an about page, the e2e
-canary, an index), writes `infrastructure/site-params.env` and `.platform-version`,
+canary, an index), writes `infrastructure/site-params.env` and `platform.lock`,
 and prints the bootstrap + DNS next steps.

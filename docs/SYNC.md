@@ -8,7 +8,7 @@ How platform changes reach sites, and how site-side improvements get back.
 |---|---|
 | Reusable workflow `uses:@<tag>` pins | **Dependabot** `github-actions` ecosystem (`examples/site/.github/dependabot.yml`) |
 | `cms-platform-theme` gem (layouts/includes/assets/plugins + Decap render hook) | **Dependabot** `bundler` ecosystem |
-| `platform_ref:` workflow inputs + `.platform-version` | **`platform-bump`** reusable workflow (Dependabot doesn't touch `with:` inputs) |
+| `platform_ref:` workflow inputs + `platform.lock` | **`platform-bump`** reusable workflow (Dependabot doesn't touch `with:` inputs) |
 | Skills (`.claude/skills`) | **`skills-sync`** reusable workflow (rsync + PR, platform-authoritative) |
 | AWS infra templates | re-run `infrastructure/*/deploy.sh` with the new templates |
 
