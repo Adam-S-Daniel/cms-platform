@@ -177,6 +177,9 @@ exclude:
   # is dot-prefixed so Jekyll ignores it by default; listing it is explicit.)
   - e2e
   - .cms-platform
+  - platform.lock
+  - admin/README.md
+  - admin/collections.site.yml.example
 `;
 }
 
