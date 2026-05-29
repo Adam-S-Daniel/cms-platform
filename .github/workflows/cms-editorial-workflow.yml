@@ -1,6 +1,9 @@
 name: CMS Editorial Workflow
 on:
   workflow_call:
+    secrets:
+      CMS_E2E_PAT:
+        required: false
 permissions:
   contents: read
   pull-requests: write
@@ -212,7 +215,7 @@ jobs:
           # as that user, GitHub merges the PR with that user's
           # identity, and the resulting push to main DOES fire
           # deploy-production.yml like every other non-bot push.
-          github-token: ${{ secrets.CMS_E2E_PAT }}
+          github-token: ${{ secrets.CMS_E2E_PAT || secrets.GITHUB_TOKEN }}
           script: |
             // The synonym labels (`cms/ready`, `decap-cms/ready`,
             // `decap-cms/pending_publish`) can arrive after the PR has

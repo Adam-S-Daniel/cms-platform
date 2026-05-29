@@ -105,6 +105,10 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install selector dep (yaml) for the early-skip gate
+        working-directory: .cms-platform/e2e
+        run: npm install --no-save --no-audit --no-fund yaml@2.9.0
+
       - name: Select applicable @parity specs
         id: select
         # Reuse the platform's e2e/select-specs.js SPEC_RULES — the same

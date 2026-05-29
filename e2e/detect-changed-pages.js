@@ -2,7 +2,16 @@ const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const ROOT = path.resolve(__dirname, "..");
+// ROOT — the SITE repo root, where `git diff origin/main...HEAD` must run and
+// where _site/_posts/_projects/_tags/pages live. When the harness sits AT the
+// site root, `path.resolve(__dirname, "..")` IS the site (default). When the
+// platform is CONSUMED, this file runs from `<site>/.cms-platform/e2e/`, where
+// the platform-relative `..` points at the SHALLOW platform checkout (no
+// origin/main → `git diff` fails with "no merge base"). SITE_ROOT /
+// GITHUB_WORKSPACE both name the SITE checkout (the one fetched with
+// fetch-depth:0 + `git fetch origin main`). Mirrors playwright.config.js's
+// SITE_ROOT resolution.
+const ROOT = process.env.SITE_ROOT || process.env.GITHUB_WORKSPACE || path.resolve(__dirname, "..");
 
 function git(cmd) {
   return execSync(cmd, { cwd: ROOT, encoding: "utf-8" }).trim();

@@ -58,21 +58,37 @@ const { parseYaml } = require("./workflow-yaml-utils");
 // its own, so we read the canonical caller — the file that actually
 // carries the paths-ignore — directly. (Same convention as
 // visual-regression-content-skip.test.js.)
-const DEPLOY_PREVIEW_CALLER = path.join(
-  __dirname,
-  "..",
-  "examples",
-  "site",
-  ".github",
-  "workflows",
-  "deploy-preview.yml",
-);
+//
+// CONSUMER PORTABILITY: this harness runs in two layouts. In the PLATFORM
+// checkout the caller lives at examples/site/.github/workflows/deploy-preview.yml.
+// In a CONSUMER site the harness is placed at the SITE root, so the caller
+// it copied in lives at .github/workflows/deploy-preview.yml relative to the
+// site root (i.e. __dirname/../.github/...). Probe both; the FIRST that
+// exists wins. If neither exists (bare platform fragment with no examples/,
+// or an unexpected layout) we degrade gracefully — see
+// loadDeployPreviewPathsIgnore.
+const DEPLOY_PREVIEW_CALLER_CANDIDATES = [
+  path.join(__dirname, "..", "examples", "site", ".github", "workflows", "deploy-preview.yml"), // platform layout
+  path.join(__dirname, "..", ".github", "workflows", "deploy-preview.yml"), // consumer (harness at site root)
+];
+
+function resolveDeployPreviewCaller() {
+  return DEPLOY_PREVIEW_CALLER_CANDIDATES.find((p) => fs.existsSync(p));
+}
 
 // Read deploy-preview.yml's `on.pull_request.paths-ignore` array. This
 // is the authoritative set of globs that, when they account for EVERY
 // changed file, make deploy-preview skip (no preview built).
+//
+// When no caller can be located, return [] — an empty paths-ignore means
+// affectsDeployedPreview() answers `true` for every file (over-eager), the
+// documented safe default: a preview probe might run when it strictly
+// needn't, but we never WRONGLY skip a probe a real deployed-content change
+// requires.
 function loadDeployPreviewPathsIgnore() {
-  const doc = parseYaml(fs.readFileSync(DEPLOY_PREVIEW_CALLER, "utf8"));
+  const caller = resolveDeployPreviewCaller();
+  if (!caller) return [];
+  const doc = parseYaml(fs.readFileSync(caller, "utf8"));
   // `on` is a reserved YAML word; the parser may surface the key as the
   // boolean `true` OR the string "on" depending on quoting. Check both.
   const on = (doc && (doc.on ?? doc.true ?? doc["on"])) || {};
@@ -122,8 +138,28 @@ function globToMatcher(glob) {
   return (file) => rx.test(file);
 }
 
-const DEPLOY_PREVIEW_PATHS_IGNORE = loadDeployPreviewPathsIgnore();
-const DEPLOY_PREVIEW_IGNORE_MATCHERS = DEPLOY_PREVIEW_PATHS_IGNORE.map(globToMatcher);
+// LAZY + memoized. Computing these at module scope made `require(
+// './select-specs')` do eager file I/O (reading + parsing the
+// deploy-preview caller) at import time — which THREW in the consumer
+// layout where the platform-relative examples/ path is absent, aborting
+// every importer (select-specs.test.js and the three workflow callers).
+// Deferring the read until the first affectsDeployedPreview() call keeps
+// require() side-effect-free, so importing the module's pure selectors /
+// constants never touches the filesystem.
+let _deployPreviewPathsIgnore; // memo for the raw glob list
+let _deployPreviewIgnoreMatchers; // memo for the compiled matchers
+function getDeployPreviewPathsIgnore() {
+  if (_deployPreviewPathsIgnore === undefined) {
+    _deployPreviewPathsIgnore = loadDeployPreviewPathsIgnore();
+  }
+  return _deployPreviewPathsIgnore;
+}
+function getDeployPreviewIgnoreMatchers() {
+  if (_deployPreviewIgnoreMatchers === undefined) {
+    _deployPreviewIgnoreMatchers = getDeployPreviewPathsIgnore().map(globToMatcher);
+  }
+  return _deployPreviewIgnoreMatchers;
+}
 
 // True when deploy-preview.yml WOULD build a preview for a PR touching
 // `file` — i.e. `file` is NOT covered by deploy-preview's paths-ignore.
@@ -132,7 +168,7 @@ const DEPLOY_PREVIEW_IGNORE_MATCHERS = DEPLOY_PREVIEW_PATHS_IGNORE.map(globToMat
 // its own, keep deploy-preview firing?" — which is exactly the
 // granularity the probe selectors need.)
 function affectsDeployedPreview(file) {
-  return !DEPLOY_PREVIEW_IGNORE_MATCHERS.some((m) => m(file));
+  return !getDeployPreviewIgnoreMatchers().some((m) => m(file));
 }
 
 // Convenience: does ANY changed file affect the deployed preview?
@@ -916,7 +952,6 @@ module.exports = {
   PARITY_PREVIEW_SPECS,
   affectsDeployedPreview,
   anyAffectsDeployedPreview,
-  DEPLOY_PREVIEW_PATHS_IGNORE,
   selectSpecs,
   selectParityPreviewSpecs,
   getChangedFiles,
@@ -925,6 +960,16 @@ module.exports = {
   filterByLane,
   pickShardCount,
 };
+
+// Preserve the legacy `DEPLOY_PREVIEW_PATHS_IGNORE` export as a LAZY getter
+// (it used to be an eagerly-computed array constant). A property getter
+// keeps `require('./select-specs').DEPLOY_PREVIEW_PATHS_IGNORE` returning
+// the parsed list for any external reader, but defers the file read to
+// first access — so plain `require()` of this module performs no I/O.
+Object.defineProperty(module.exports, "DEPLOY_PREVIEW_PATHS_IGNORE", {
+  enumerable: true,
+  get: getDeployPreviewPathsIgnore,
+});
 
 if (require.main === module) {
   const args = process.argv.slice(2);
