@@ -14,6 +14,104 @@ const path = require("node:path");
 // the site, and SITE_ROOT here agrees with it.
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
+// CONSUMER mode — true when this harness runs against a consuming SITE
+// (SITE_ROOT is set, the harness placed at the site root, the site built +
+// served). When SITE_ROOT is UNSET we're in the platform's OWN self-CI
+// (cwd == platform repo, `e2e/` at the platform root), and the full suite —
+// including the meta-lints — runs.
+//
+// PLATFORM_META_SPECS are the "meta" specs: they assert the PLATFORM'S OWN
+// source — its GitHub workflows, scripts, infra, harness internals, lint
+// rules, and fixture machinery (workflow-graph, *-lint, select-lane,
+// spec-load-smoke, run-cms-loop, the platform's *.test.js harness unit
+// tests, etc.). They read files that exist only in the platform tree
+// (`.github/workflows/*`, `scripts/*`, the harness's own `e2e/*.js`
+// helpers) and make sense ONLY when run against the platform checkout. A
+// CONSUMER ships the rendered SITE (the harness placed at site root, the
+// gem-rendered admin under `_site/admin/`) and has none of that source, so
+// these specs would ENOENT-fail or assert against the wrong tree. In
+// CONSUMER mode they are testIgnore'd; the consumer runs only SITE specs
+// (the real CMS round-trips + public-page contracts). The names are kept as
+// basenames; the regex below matches them anywhere under the testDir.
+const CONSUMER = !!process.env.SITE_ROOT;
+const PLATFORM_META_SPECS = [
+  "admin-bundle-parity.spec.js",
+  "admin-css-banned-patterns.test.js",
+  "admin-pin-invariant.test.js",
+  "admin-theme-removed.test.js",
+  "analytics-cloudwatch-rum.test.js",
+  "auto-merge-uses-queue.test.js",
+  "blog-slug-literal-lint.test.js",
+  "cms-automerge-nudge.test.js",
+  "cms-editor-ui.test.js",
+  "cms-host.test.js",
+  "cms-label-contract.spec.js",
+  "cms-recursion-churn.test.js",
+  "cms-scheduled-post.spec.js",
+  "cloudfront-preview-location-fixer.spec.js",
+  "cloudfront-preview-router.spec.js",
+  "compute-visual-diffs.test.js",
+  "decap-config-render-parity.test.js",
+  "dependabot-skip.test.js",
+  "deploy-commit-metadata.test.js",
+  "deploy-pill.test.js",
+  "deploy-preview-cms-slug.test.js",
+  "deploy-status-pill-robustness.test.js",
+  "detect-changed-pages.test.js",
+  "fixture-baseline.test.js",
+  "generate-test-videos.test.js",
+  "github-actions-poll.test.js",
+  "live-failures-reporter.test.js",
+  "matchmedia-skip-lint.test.js",
+  "parity-tag-lint.test.js",
+  "playwright-image-drift.test.js",
+  "posts-list-enhance-reorder.test.js",
+  "preview-bot-comment.test.js",
+  "preview-config-patch.spec.js",
+  "preview-deploy-superset.test.js",
+  "prod-mutate-fixture.test.js",
+  "public-content.test.js",
+  "publish-via-auto-merge.test.js",
+  "publish-via-auto-merge-browser.spec.js",
+  "regression-video.spec.js",
+  "run-cms-loop.test.js",
+  "select-lane.test.js",
+  "select-specs.test.js",
+  "silent-catch-lint.test.js",
+  "sitemap-prune.test.js",
+  "slugify-parity.test.js",
+  "spec-load-smoke.test.js",
+  "visual-change-guard.spec.js",
+  "visual-regression-content-skip.test.js",
+  "visual-regression-skip-review.test.js",
+  "workflow-github-sha-lint.test.js",
+  "workflow-graph.test.js",
+  "workflow-prod-loop-serialized.test.js",
+  "workflow-run-name.test.js",
+  "workflow-shell-glob-lint.test.js",
+  "workflow-triggers.test.js",
+];
+
+// A single regex matching any PLATFORM_META_SPEC basename. Each name is
+// escaped (the `.` in `.spec.js` / `.test.js` is a literal) and anchored to
+// a path separator (or string start) on the left + end-of-string on the
+// right, so `cms-host.test.js` matches `e2e/cms-host.test.js` but never a
+// hypothetical `xcms-host.test.js`.
+const META_SPECS_RE = new RegExp(
+  "(?:^|[\\\\/])(?:" +
+    PLATFORM_META_SPECS.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") +
+    ")$",
+);
+
+// regression-video.spec.js is ALWAYS ignored (it's a video-fixture
+// generator, not a test — and it's also in the meta list above). In
+// CONSUMER mode we additionally ignore every meta spec. Playwright's
+// `testIgnore` accepts an array of regexes (OR-combined), so we pass the
+// always-on regression ignore plus the meta-specs ignore only when CONSUMER.
+const TEST_IGNORE = CONSUMER
+  ? [/regression-video\.spec\.js/, META_SPECS_RE]
+  : /regression-video\.spec\.js/;
+
 // Absolute path to the harness's own node_modules/.bin. The local webServer
 // commands `cd ${SITE_ROOT}` first (so `serve`/`decap-server` resolve site
 // files + write into the SITE tree), but the SITE has no node_modules, so
@@ -74,7 +172,7 @@ const IS_LOCAL = TARGET === "local";
 
 module.exports = defineConfig({
   testDir: ".",
-  testIgnore: /regression-video\.spec\.js/,
+  testIgnore: TEST_IGNORE,
   // Install-on-miss browser self-heal (#1723 Cat 4): a sub-ms no-op when
   // the prebaked browsers match this @playwright/test version (the normal
   // path); installs only the missing build(s) on the rare image/cache

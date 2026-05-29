@@ -1,10 +1,20 @@
-// @lane: local — fs reads of admin/config*.yml; pure-Node permalink invariants
+// @lane: local — fs reads of the rendered _site/admin/config.yml; pure-Node permalink invariants
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
 
+// SITE_ROOT-aware resolution. The Posts preview_path is read from the
+// RENDERED Decap config the gem's render hook emits to
+// `<site>/_site/admin/config.yml` during the local-lane build (the source
+// `admin/config.yml` doesn't exist — only the `config.base.yml` template).
+// config-local.yml is platform-only test scaffolding, so the
+// config.yml-vs-config-local.yml parity assertion is dropped; the permalink
+// invariant is kept against the rendered config. `_posts` stays the
+// consuming site's own.
 const REPO_ROOT = path.join(__dirname, "..");
-const POSTS_DIR = path.join(REPO_ROOT, "_posts");
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
+const POSTS_DIR = path.join(SITE_ROOT, "_posts");
+const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
 
 // The CMS computes the "View on Live Site" URL from this template. Both admin
 // configs must keep it in sync with Jekyll's `permalink: /blog/:slug/` — if it
@@ -68,11 +78,18 @@ const publishedPosts = postFiles
   });
 
 test.describe("CMS preview URL round-trip", () => {
-  test("admin/config.yml and admin/config-local.yml share the Posts preview_path", () => {
-    const remote = fs.readFileSync(path.join(REPO_ROOT, "admin/config.yml"), "utf8");
-    const local = fs.readFileSync(path.join(REPO_ROOT, "admin/config-local.yml"), "utf8");
-    expect(remote).toContain(POSTS_PREVIEW_PATH);
-    expect(local).toContain(POSTS_PREVIEW_PATH);
+  test("rendered admin/config.yml declares the Posts preview_path", () => {
+    // The cross-config "config.yml and config-local.yml share preview_path"
+    // parity assertion was dropped: config-local.yml is platform-only test
+    // scaffolding (the local-backend decap-server variant), so a consumer
+    // has only the rendered prod config. Skip (rather than ENOENT-fail) when
+    // `_site` isn't built — mirrors the sitemap.spec self-skip.
+    test.skip(
+      !fs.existsSync(RENDERED_CONFIG),
+      `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config preview_path check only runs in the local lane`,
+    );
+    const rendered = fs.readFileSync(RENDERED_CONFIG, "utf8");
+    expect(rendered).toContain(POSTS_PREVIEW_PATH);
   });
 
   for (const { file, fm } of publishedPosts) {

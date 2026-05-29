@@ -1,4 +1,4 @@
-// @lane: local — cross-checks Decap config + Jekyll permalink output via local fs
+// @lane: local — cross-checks the RENDERED _site/admin Decap config + Jekyll permalink output via local fs
 const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
@@ -40,14 +40,28 @@ const { test, expect } = require("./base");
 //
 // Pure-Node spec — no browser, no servers, just file I/O and YAML parse.
 
+// SITE_ROOT-aware resolution. The Decap config + admin shell are RENDERED
+// into `<site>/_site/admin/` by the gem's render hook during the local-lane
+// build (the source `admin/config.yml` doesn't exist — only the
+// `config.base.yml` template — and the index*.html / native-preview-href.js
+// shells are likewise build-emitted into `_site/admin/`). So cross-check the
+// rendered admin tree, the exact bytes the browser loads. `_config.yml` is
+// the consuming site's own and stays at the site root.
 const REPO_ROOT = path.join(__dirname, "..");
-const ADMIN_CONFIG = path.join(REPO_ROOT, "admin/config.yml");
-const JEKYLL_CONFIG = path.join(REPO_ROOT, "_config.yml");
-const NATIVE_PREVIEW_OVERRIDE = path.join(REPO_ROOT, "admin/native-preview-href.js");
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
+const SITE_ADMIN = path.join(SITE_ROOT, "_site", "admin");
+const ADMIN_CONFIG = path.join(SITE_ADMIN, "config.yml");
+const JEKYLL_CONFIG = path.join(SITE_ROOT, "_config.yml");
+const NATIVE_PREVIEW_OVERRIDE = path.join(SITE_ADMIN, "native-preview-href.js");
+// The rendered admin ships index.html + index-local.html (the render hook
+// emits config-local.yml too). index-test.html is platform-only test
+// scaffolding that the deploy/build drops, so it may be absent in a
+// consumer; overrideScriptIsLoaded() below tolerates a missing shell by
+// only requiring the override be referenced from the shells that DO exist.
 const INDEX_FILES = [
-  path.join(REPO_ROOT, "admin/index.html"),
-  path.join(REPO_ROOT, "admin/index-local.html"),
-  path.join(REPO_ROOT, "admin/index-test.html"),
+  path.join(SITE_ADMIN, "index.html"),
+  path.join(SITE_ADMIN, "index-local.html"),
+  path.join(SITE_ADMIN, "index-test.html"),
 ];
 
 // Synthetic entry — kept simple so the substitution math is obvious. The
@@ -113,16 +127,19 @@ function expandJekyllPermalink(permalink, fieldSlug) {
 }
 
 function overrideScriptIsLoaded() {
-  // The override file must exist on disk AND be referenced from every index
-  // file. Either condition failing means the runtime fix isn't actually
-  // wired up, so we can't fall back to it.
+  // The override file must exist on disk AND be referenced from every
+  // rendered index shell that's PRESENT. The "all three shells" requirement
+  // is relaxed for consumer mode: the render hook emits index.html +
+  // index-local.html but index-test.html is platform-only test scaffolding
+  // that the build can drop, so a missing shell is tolerated — we require
+  // the override be referenced from at least one present shell and from
+  // every shell that does exist. (In the platform self-CI all three are
+  // rendered, so this is identical to the old behaviour there.)
   if (!fs.existsSync(NATIVE_PREVIEW_OVERRIDE)) return false;
   const NEEDLE = /<script\s[^>]*src=["']native-preview-href\.js["']/;
-  for (const file of INDEX_FILES) {
-    if (!fs.existsSync(file)) return false;
-    if (!NEEDLE.test(readText(file))) return false;
-  }
-  return true;
+  const present = INDEX_FILES.filter((file) => fs.existsSync(file));
+  if (present.length === 0) return false;
+  return present.every((file) => NEEDLE.test(readText(file)));
 }
 
 // Collections we model. Each entry says which Jekyll permalink to look up
@@ -137,6 +154,16 @@ const COLLECTIONS = [
 ];
 
 test.describe("CMS permalink contract — Decap two-pass vs Jekyll", () => {
+  // The rendered admin config only exists after the local Jekyll build +
+  // render hook run; skip (rather than ENOENT-fail) when `_site` isn't built
+  // — mirrors the sitemap.spec self-skip for the preview/prod lanes.
+  test.beforeEach(() => {
+    test.skip(
+      !fs.existsSync(ADMIN_CONFIG),
+      `${ADMIN_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config permalink contract only runs in the local lane`,
+    );
+  });
+
   for (const { name, jekyllKey } of COLLECTIONS) {
     test(`${name} — Decap preview URL matches Jekyll URL (or override is loaded)`, () => {
       const adminCfg = YAML.parse(readText(ADMIN_CONFIG));

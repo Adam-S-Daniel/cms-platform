@@ -1,4 +1,4 @@
-// @lane: local — fs reads of admin/config*.yml + drives the local /admin shell
+// @lane: local — fs reads of the rendered _site/admin/config.yml + drives the local /admin shell
 const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
@@ -30,12 +30,18 @@ const { test, expect } = require("./base");
 // `published: true` with no `publish_date` renders bare ("title (date)")
 // — the steady-state published case.
 
+// SITE_ROOT-aware resolution. The summary template is asserted against the
+// RENDERED Decap config the gem's render hook emits to
+// `<site>/_site/admin/config.yml` during the local-lane build (the source
+// `admin/config.yml` doesn't exist — only the `config.base.yml` template).
+// The cross-config "shared verbatim across all three" check is meaningless
+// in a consumer (config-local.yml / config-test.yml are platform-only test
+// scaffolding, with config-test.yml never even rendered), so it's reduced to
+// a single rendered-config assertion.
 const REPO_ROOT = path.join(__dirname, "..");
-const CONFIGS = [
-  path.join(REPO_ROOT, "admin/config.yml"),
-  path.join(REPO_ROOT, "admin/config-local.yml"),
-  path.join(REPO_ROOT, "admin/config-test.yml"),
-];
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
+const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
+const CONFIGS = [RENDERED_CONFIG];
 
 // The date is rendered with Decap's parsed-date tokens
 // {{year}}-{{month}}-{{day}} rather than `{{date | date('MMM D, YYYY')}}`.
@@ -79,17 +85,28 @@ test.describe(
   () => {
     test.describe.configure({ mode: "serial" });
 
+    // The rendered config only exists after the local Jekyll build + render
+    // hook run; skip (rather than ENOENT-fail) when `_site` isn't built —
+    // mirrors the sitemap.spec self-skip for the preview/prod lanes.
+    test.beforeEach(() => {
+      test.skip(
+        !fs.existsSync(RENDERED_CONFIG),
+        `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config summary check only runs in the local lane`,
+      );
+    });
+
     for (const configPath of CONFIGS) {
-      const label = path.relative(REPO_ROOT, configPath);
+      const label = path.relative(SITE_ROOT, configPath);
 
       test(`${label}: posts.summary line equals the locked template verbatim`, () => {
         const posts = findCollection(parseConfig(configPath), "posts");
         expect(posts, "posts collection must exist").not.toBeNull();
         const summary = summaryOf(posts);
         expect(summary, "posts collection must declare a summary template").not.toBeNull();
-        // The literal template is shared across all three configs — drift
-        // between them would mean the local / test runs render a different
-        // list label than production.
+        // Lock the rendered config's summary against the canonical template
+        // verbatim. (The former cross-config "shared across all three" drift
+        // lock is dropped in consumer mode — config-local.yml / config-test.yml
+        // are platform-only test scaffolding.)
         expect(summary).toBe(EXPECTED_SUMMARY);
       });
 

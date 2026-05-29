@@ -12,13 +12,20 @@ const { test, expect } = require("./base");
 // could drift from the version we test against. Decap exposes the
 // shipped version on the `CMS` global as `CMS.VERSION`.
 
+// SITE_ROOT-aware resolution. The pinned decap-cms version is read from the
+// BUILT/served admin shell `<site>/_site/admin/index.html` (the shell the
+// `page.goto("/admin/index.html")` half below actually loads), not the
+// source `admin/index.html`. The render hook copies the shell into
+// `_site/admin/` during the local-lane build; reading the served bytes keeps
+// the static pin and the runtime version probe in lockstep.
 const REPO_ROOT = path.join(__dirname, "..");
-const INDEX_HTML = path.join(REPO_ROOT, "admin/index.html");
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
+const INDEX_HTML = path.join(SITE_ROOT, "_site", "admin", "index.html");
 
 function readPinnedVersion() {
   const html = fs.readFileSync(INDEX_HTML, "utf8");
   const m = html.match(/decap-cms@(\d+\.\d+\.\d+)\/dist\//);
-  expect(m, "admin/index.html must pin decap-cms@X.Y.Z").not.toBeNull();
+  expect(m, "_site/admin/index.html must pin decap-cms@X.Y.Z").not.toBeNull();
   return m[1];
 }
 
@@ -37,6 +44,13 @@ test.describe(
     test.describe.configure({ timeout: 120_000 });
 
     test.beforeEach(async ({ page }) => {
+      // The served shell only exists after the local Jekyll build + render
+      // hook run; skip (rather than ENOENT-fail) when `_site` isn't built —
+      // mirrors the sitemap.spec self-skip for the preview/prod lanes.
+      test.skip(
+        !fs.existsSync(INDEX_HTML),
+        `${INDEX_HTML} not built (run the local Jekyll build + render-decap-config.rb) — bundle-version pin check only runs in the local lane`,
+      );
       page.on("pageerror", (err) => console.log(`[pageerror] ${err.name}: ${err.message}`));
     });
 

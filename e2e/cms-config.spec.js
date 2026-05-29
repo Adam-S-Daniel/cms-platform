@@ -1,4 +1,4 @@
-// @lane: local — pure-fs invariants on admin/config*.yml; no browser navigation
+// @lane: local — pure-fs invariants on the RENDERED _site/admin/config.yml; no browser navigation
 const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
@@ -14,16 +14,24 @@ const { test, expect } = require("./base");
 // byte-identical to the URL written into content (no broken images, no
 // literal `{{year}}` in the standalone Media library's Copy Path).
 
+// SITE_ROOT-aware config resolution. The gem's Decap render hook
+// (scripts/render-decap-config.rb) emits the LIVE Decap config to
+// `<site>/_site/admin/config.yml` during the local-lane build — there is no
+// hand-authored source `admin/config.yml` (the platform ships only
+// `admin/config.base.yml` templates). So assert the RENDERED config, the
+// exact bytes Decap loads at runtime. In a consumer SITE_ROOT points at the
+// site; in the platform's own self-CI it falls back to the harness's parent
+// (which is the platform/site root — same invariant base.js's REPO_ROOT
+// relies on). The config-local.yml / config-test.yml variants are
+// platform-only test scaffolding (config-test.yml is never even rendered,
+// and config-local.yml only matters to the local-backend decap-server), so
+// the cross-config "shared verbatim across all three" parity checks are
+// dropped here — only the production-config invariants against the rendered
+// config remain.
 const REPO_ROOT = path.join(__dirname, "..");
-const CONFIGS = [
-  path.join(REPO_ROOT, "admin/config.yml"),
-  path.join(REPO_ROOT, "admin/config-local.yml"),
-  // config-test.yml is the editorial-workflow + test-repo backend
-  // entrypoint that cms-editorial-workflow.spec.js drives. Its
-  // collection schema must mirror production so the spec catches
-  // real production-shape regressions.
-  path.join(REPO_ROOT, "admin/config-test.yml"),
-];
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
+const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
+const CONFIGS = [RENDERED_CONFIG];
 
 // Parse a Decap config file with the real YAML parser, so collections,
 // fields, widgets, hints, and any future anchors are read as structure
@@ -45,8 +53,19 @@ function findField(collection, fieldName) {
 test.describe("Decap CMS config invariants", () => {
   test.describe.configure({ mode: "serial" });
 
+  // The rendered config only exists after the local Jekyll build + the gem's
+  // Decap render hook run. Skip (rather than ENOENT-fail) when `_site` isn't
+  // built — mirrors the sitemap.spec self-skip so the preview/prod lanes
+  // (which crawl deployed surfaces and never build `_site`) stay green.
+  test.beforeEach(() => {
+    test.skip(
+      !fs.existsSync(RENDERED_CONFIG),
+      `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config invariants only run in the local lane`,
+    );
+  });
+
   for (const configPath of CONFIGS) {
-    const label = path.relative(REPO_ROOT, configPath);
+    const label = path.relative(SITE_ROOT, configPath);
 
     test(`${label}: media_folder/public_folder are flat, template-free, and consistent`, () => {
       // Decap appends ONLY the uploaded file's basename to
@@ -133,8 +152,8 @@ test.describe("Decap CMS config invariants", () => {
     });
   }
 
-  test("admin/config.yml enables the editorial workflow", () => {
-    const cfg = parseConfig(path.join(REPO_ROOT, "admin/config.yml"));
+  test("rendered admin/config.yml enables the editorial workflow", () => {
+    const cfg = parseConfig(RENDERED_CONFIG);
     // Without this, every Save commits straight to main and bypasses the
     // PR-based draft → preview → visual-regression-approval pipeline that
     // the rest of the system (cms-editorial-workflow.yml, the cms/draft
@@ -142,15 +161,12 @@ test.describe("Decap CMS config invariants", () => {
     expect(cfg.publish_mode).toBe("editorial_workflow");
   });
 
-  test("admin/config-test.yml uses test-repo backend with editorial workflow", () => {
-    const cfg = parseConfig(path.join(REPO_ROOT, "admin/config-test.yml"));
-    // The whole point of this config is to exercise the editorial
-    // workflow + GitHub-style backend code path that local_backend
-    // forces off. If either of these regresses, cms-editorial-workflow.spec.js
-    // reverts to testing nothing meaningfully different from cms-smoke.
-    expect(cfg.backend && cfg.backend.name).toBe("test-repo");
-    expect(cfg.publish_mode).toBe("editorial_workflow");
-  });
+  // The former "admin/config-test.yml uses test-repo backend" assertion was
+  // dropped: config-test.yml is platform-only test scaffolding (the
+  // editorial-workflow spec's test-repo entrypoint) — the render hook never
+  // emits it into `_site/admin/`, so a consumer has no rendered test config
+  // to assert against. The editorial-workflow code path is still exercised
+  // by cms-editorial-workflow.spec.js itself in the platform self-CI.
 
   // ── Editor capability invariants ─────────────────────────────────────
   //
@@ -159,7 +175,7 @@ test.describe("Decap CMS config invariants", () => {
   // config edit removes a capability by accident, these tests fail fast.
 
   for (const configPath of CONFIGS) {
-    const label = path.relative(REPO_ROOT, configPath);
+    const label = path.relative(SITE_ROOT, configPath);
 
     test(`${label}: each content collection allows create + delete`, () => {
       const cfg = parseConfig(configPath);
@@ -273,7 +289,7 @@ test.describe("Decap CMS config invariants", () => {
     // admin/config.yml's `pages.permalink.default` produces a path of
     // the same shape preview_path generates, so an editor who accepts
     // the default doesn't end up with a "View on Live Site" 404.
-    const cfg = parseConfig(path.join(REPO_ROOT, "admin/config.yml"));
+    const cfg = parseConfig(RENDERED_CONFIG);
     const previewPath = previewPathFor(cfg, "pages");
     expect(previewPath).not.toBeNull();
 

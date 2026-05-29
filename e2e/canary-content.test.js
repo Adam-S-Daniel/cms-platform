@@ -12,6 +12,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { CANARIES, readCanarySource } = require("./canary-content");
 
+// SITE_ROOT-aware resolution of the RENDERED Decap config. The gem's render
+// hook (scripts/render-decap-config.rb) emits the live config to
+// `<site>/_site/admin/config.yml` during the local-lane build — the source
+// `admin/config.yml` doesn't exist (the platform ships only the
+// `config.base.yml` template). The checked-in `_e2e/*.md` canary files this
+// spec byte-locks are REAL content fixtures (read via canary-content.js) and
+// stay at the site root; only the config.yml read is re-rooted here.
+const SITE_ROOT = process.env.SITE_ROOT || path.join(__dirname, "..");
+const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
+
 test.describe("Canary content invariants", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -49,7 +59,14 @@ test.describe("Canary content invariants", () => {
   });
 
   test("admin/config.yml exposes the e2e canary collection", () => {
-    const cfg = fs.readFileSync(path.join(__dirname, "..", "admin", "config.yml"), "utf8");
+    // The rendered config only exists after the local Jekyll build + render
+    // hook run; skip (rather than ENOENT-fail) when `_site` isn't built —
+    // mirrors the sitemap.spec self-skip for the preview/prod lanes.
+    test.skip(
+      !fs.existsSync(RENDERED_CONFIG),
+      `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config canary check only runs in the local lane`,
+    );
+    const cfg = fs.readFileSync(RENDERED_CONFIG, "utf8");
     // The publish-loop test drives admin actions on this collection.
     // If it disappears, the test goes silently green (no PR opened ≠
     // success) — fail loudly here.

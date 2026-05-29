@@ -1,4 +1,4 @@
-// @lane: local — patches admin/config.yml on disk and execs scripts/patch-preview-config.sh
+// @lane: local — patches the rendered _site/admin/config.yml and execs scripts/patch-preview-config.sh
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -30,8 +30,19 @@ const { test, expect } = require("./base");
 // Pure-Node spec (no browser): just file I/O, exec, and string diff.
 // Skipped on Windows because the patch script is bash + sed -i.
 
+// SITE_ROOT-aware resolution. The patch input is the RENDERED Decap config
+// the gem's render hook emits to `<site>/_site/admin/config.yml` during the
+// local-lane build (there's no hand-authored source `admin/config.yml`); the
+// patch SCRIPT (scripts/patch-preview-config.sh) is a PLATFORM artifact —
+// it's run by the platform's deploy-preview workflow, not shipped to a
+// consuming site. So the realistic fix asserts the delta against the
+// rendered config, and the spec self-skips when either the rendered config
+// isn't built (preview/prod lanes) or the patch script isn't present (a
+// consumer that doesn't ship `scripts/`).
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
 const PATCH_SCRIPT = path.join(REPO_ROOT, "scripts/patch-preview-config.sh");
+const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
 
 // Fixture values — what the script would substitute into a real
 // preview deploy. Concrete strings make the spec reproducible without
@@ -41,11 +52,14 @@ const FIXTURE_BRANCH = "cms/draft-test";
 const FIXTURE_HOST = "preview-pr999.adamdaniel.ai";
 const FIXTURE_PREVIEW_URL = `https://${FIXTURE_HOST}`;
 
-// Each config that ships with the repo. config-test.yml has no
-// `  branch:` field (it uses `backend.name: test-repo`), so the
-// branch sed silently no-ops there. The allowed-delta check accepts
+// The single rendered Decap config the patch script would substitute into a
+// real preview deploy. The former local/test config variants are dropped:
+// config-test.yml is platform-only test scaffolding (never rendered, and it
+// has no `  branch:` field anyway) and config-local.yml only matters to the
+// local-backend decap-server — neither is the prod config the
+// deploy-preview workflow actually patches. The allowed-delta check accepts
 // "fewer than three changes, but every change is in the set."
-const CONFIGS = ["admin/config.yml", "admin/config-local.yml", "admin/config-test.yml"];
+const CONFIGS = [RENDERED_CONFIG];
 
 // A line is allowed to change if and only if its NEW form looks like
 // the output of one of the three sed substitutions. Matching the
@@ -122,11 +136,23 @@ function formatUnexpectedDelta(label, change) {
 
 test.describe("scripts/patch-preview-config.sh delta lock", () => {
   test.skip(os.platform() === "win32", "patch-preview-config.sh requires bash + GNU sed");
+  // Self-skip when the patch SCRIPT isn't present (a consumer that doesn't
+  // ship `scripts/`) or the RENDERED config isn't built (preview/prod lanes
+  // that crawl deployed surfaces and never build `_site`). Mirrors the
+  // sitemap.spec self-skip so neither case ENOENT-fails the suite.
+  test.skip(
+    !fs.existsSync(PATCH_SCRIPT),
+    `${PATCH_SCRIPT} not present — patch-preview-config.sh is a platform deploy artifact; the delta lock only runs in the platform tree`,
+  );
+  test.skip(
+    !fs.existsSync(RENDERED_CONFIG),
+    `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config delta lock only runs in the local lane`,
+  );
 
   test.describe.configure({ mode: "serial" });
 
-  for (const relPath of CONFIGS) {
-    const sourcePath = path.join(REPO_ROOT, relPath);
+  for (const sourcePath of CONFIGS) {
+    const relPath = path.relative(SITE_ROOT, sourcePath);
     let tempfile = null;
 
     test(`${relPath}: only site_url, display_url, and backend.branch differ after patching`, () => {
@@ -137,7 +163,7 @@ test.describe("scripts/patch-preview-config.sh delta lock", () => {
       const suffix = crypto.randomBytes(8).toString("hex");
       tempfile = path.join(
         os.tmpdir(),
-        `cms-config-preview-delta-${path.basename(relPath)}-${suffix}`,
+        `cms-config-preview-delta-${path.basename(sourcePath)}-${suffix}`,
       );
       fs.writeFileSync(tempfile, originalText);
 

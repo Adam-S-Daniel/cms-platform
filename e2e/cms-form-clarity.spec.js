@@ -1,4 +1,4 @@
-// @lane: local — drives the local /admin shell to assert form hint text
+// @lane: local — asserts form hint text from the rendered _site/admin/config.yml; drives the local /admin shell
 /**
  * @file e2e/cms-form-clarity.spec.js
  *
@@ -21,7 +21,16 @@ const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
 
+// SITE_ROOT-aware resolution. The field hints are read from the RENDERED
+// Decap config the gem's render hook emits to `<site>/_site/admin/config.yml`
+// during the local-lane build (the source `admin/config.yml` doesn't exist —
+// only the `config.base.yml` template). config-local.yml / config-test.yml
+// are platform-only test scaffolding (config-test.yml is never even
+// rendered), so the local/test hint snapshots are dropped; the hint-text
+// drift lock is kept against the rendered prod config.
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
+const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
 
 // ── Config readers ───────────────────────────────────────────────────
 //
@@ -88,84 +97,23 @@ const PROD_HINTS = {
   },
 };
 
-const LOCAL_HINTS = {
-  posts: {
-    title: null,
-    slug: "URL path segment (leave blank to auto-generate from title). Must match any existing published URL to avoid breaking inbound links.",
-    excerpt: null,
-    featured_image: null,
-    published:
-      "ON = goes live on the next deploy. Leave OFF to schedule a future publish via the Publish Date below — the scheduled-posts workflow flips this toggle on when the date arrives.",
-    publish_date:
-      "Optional. Future date/time (UTC) to auto-publish this post. Only honoured when Published above is OFF — if Published is ON, the post goes live immediately and this field is ignored.",
-    body: "Full post content. For a real-layout preview that updates on every Save, open /preview/?collection=posts in a second tab.",
-  },
-  tags: {
-    name: null,
-    description: null,
-  },
-  projects: {
-    title: null,
-    technology: null,
-    url_link: null,
-    featured: null,
-    images: null,
-    description: null,
-  },
-  pages: {
-    title: null,
-    permalink: null,
-    published: null,
-    body: null,
-  },
-};
+// The former LOCAL_HINTS / TEST_HINTS snapshots (for config-local.yml /
+// config-test.yml) were removed: those configs are platform-only test
+// scaffolding (config-test.yml is never rendered into `_site`, and
+// config-local.yml only matters to the local-backend decap-server). A
+// consumer ships only the rendered prod config, whose hint contract is
+// PROD_HINTS above.
 
-const TEST_HINTS = {
-  posts: {
-    title: null,
-    slug: null,
-    excerpt: null,
-    featured_image: null,
-    published:
-      "ON = goes live on the next deploy. Leave OFF to schedule a future publish via the Publish Date below.",
-    publish_date: null,
-    body: "Open /preview/?collection=posts in a second tab for the real-layout preview.",
-  },
-  tags: {
-    name: null,
-    description: null,
-  },
-  projects: {
-    title: null,
-    technology: null,
-    url_link: null,
-    featured: null,
-    images: null,
-    description: null,
-  },
-  pages: {
-    title: null,
-    permalink: null,
-    published: null,
-    body: null,
-  },
-};
-
+// Only the rendered prod config is asserted. The config-local.yml /
+// config-test.yml fixtures (LOCAL_HINTS / TEST_HINTS) are dropped: they're
+// platform-only test scaffolding (config-test.yml is never rendered, and the
+// reduced local/test hint sets only matter to the local-backend
+// decap-server). PROD_HINTS is the hint contract a consuming editor sees.
 const FIXTURES = [
   {
-    file: path.join(REPO_ROOT, "admin/config.yml"),
-    label: "admin/config.yml",
+    file: RENDERED_CONFIG,
+    label: path.relative(SITE_ROOT, RENDERED_CONFIG),
     expected: PROD_HINTS,
-  },
-  {
-    file: path.join(REPO_ROOT, "admin/config-local.yml"),
-    label: "admin/config-local.yml",
-    expected: LOCAL_HINTS,
-  },
-  {
-    file: path.join(REPO_ROOT, "admin/config-test.yml"),
-    label: "admin/config-test.yml",
-    expected: TEST_HINTS,
   },
 ];
 
@@ -177,6 +125,16 @@ test.describe(
   { tag: ["@admin-read"] },
   () => {
     test.describe.configure({ mode: "serial" });
+
+    // The rendered config only exists after the local Jekyll build + render
+    // hook run; skip (rather than ENOENT-fail) when `_site` isn't built —
+    // mirrors the sitemap.spec self-skip for the preview/prod lanes.
+    test.beforeEach(() => {
+      test.skip(
+        !fs.existsSync(RENDERED_CONFIG),
+        `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config hint snapshots only run in the local lane`,
+      );
+    });
 
     for (const { file, label, expected } of FIXTURES) {
       test(`${label}: every locked hint matches its expected literal`, () => {

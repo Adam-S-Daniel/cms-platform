@@ -1,4 +1,4 @@
-// @lane: local — pure-fs invariants on the #1042 admin posts changes; no browser
+// @lane: local — pure-fs invariants on the #1042 admin posts changes (rendered _site/admin); no browser
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
@@ -29,14 +29,31 @@ const { test, expect } = require("./base");
 // manual-walkthrough specs, which still click a list card with this
 // script active.
 
+// SITE_ROOT-aware resolution. The admin shell (index*.html), the admin JS
+// (live-url-banner.js, native-preview-href.js, posts-list-enhance.js, …) and
+// the Decap config are all RENDERED into `<site>/_site/admin/` by the gem's
+// render hook during the local-lane build — the source `admin/config.yml`
+// doesn't exist (only the `config.base.yml` template). So read the rendered
+// admin tree, the exact bytes the browser loads. config-local.yml / config-
+// test.yml are platform-only test scaffolding (config-test.yml is never
+// rendered, config-local.yml only matters to the local-backend decap-server),
+// so the cross-config parity is reduced to the single rendered config. The
+// `_posts` read (the test_fixture flag check) stays against the consuming
+// site's own `_posts`.
 const REPO_ROOT = path.join(__dirname, "..");
-const ADMIN = path.join(REPO_ROOT, "admin");
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
+const ADMIN = path.join(SITE_ROOT, "_site", "admin");
+// All three candidate shells; index-test.html is platform-only test
+// scaffolding the build can drop, so each per-shell test self-skips when its
+// shell isn't rendered (keeps test collection stable regardless of build
+// state). index.html + index-local.html are always emitted by the render
+// hook in the local lane.
 const INDEX_FILES = ["index.html", "index-local.html", "index-test.html"].map((f) =>
   path.join(ADMIN, f),
 );
-const CONFIGS = ["config.yml", "config-local.yml", "config-test.yml"].map((f) =>
-  path.join(ADMIN, f),
-);
+const CONFIGS = [path.join(ADMIN, "config.yml")];
+// Marker for "the rendered admin tree exists" — gates every test below.
+const RENDERED_CONFIG = path.join(ADMIN, "config.yml");
 
 const read = (p) => fs.readFileSync(p, "utf8");
 const scriptIdx = (html, file) => {
@@ -47,6 +64,16 @@ const scriptIdx = (html, file) => {
 
 test.describe("Issue #1042 — admin posts UI", () => {
   test.describe.configure({ mode: "serial" });
+
+  // The rendered admin tree only exists after the local Jekyll build +
+  // render hook run; skip (rather than ENOENT-fail) when `_site` isn't built
+  // — mirrors the sitemap.spec self-skip for the preview/prod lanes.
+  test.beforeEach(() => {
+    test.skip(
+      !fs.existsSync(RENDERED_CONFIG),
+      `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-admin invariants only run in the local lane`,
+    );
+  });
 
   // ── 1. Live-URL banner restored + correctly ordered ──────────────
   test("admin/live-url-banner.js exists and renders the testable anchor", () => {
@@ -67,8 +94,12 @@ test.describe("Issue #1042 — admin posts UI", () => {
   });
 
   for (const idx of INDEX_FILES) {
-    const rel = path.relative(REPO_ROOT, idx);
+    const rel = path.relative(SITE_ROOT, idx);
     test(`${rel}: loads derive → banner → override → posts-list-enhance`, () => {
+      // index-test.html is platform-only scaffolding the build can drop;
+      // skip the load-order check for any shell that isn't rendered. The
+      // always-emitted index.html + index-local.html still run.
+      test.skip(!fs.existsSync(idx), `${rel} not rendered into _site/admin — platform-only shell`);
       const html = read(idx);
       const derive = scriptIdx(html, "live-url-derive.js");
       const banner = scriptIdx(html, "live-url-banner.js");
@@ -152,7 +183,7 @@ test.describe("Issue #1042 — admin posts UI", () => {
 
   // ── 3. Config + canary invariants ────────────────────────────────
   for (const cfg of CONFIGS) {
-    const rel = path.relative(REPO_ROOT, cfg);
+    const rel = path.relative(SITE_ROOT, cfg);
     test(`${rel}: INVALID-DATE fix + Automated tests filter + test_fixture field`, () => {
       const yml = read(cfg);
       // The dayjs `date(...)` summary filter is the INVALID DATE bug.
@@ -169,7 +200,9 @@ test.describe("Issue #1042 — admin posts UI", () => {
   }
 
   test("canary _posts carry test_fixture: true; the real post does not", () => {
-    const postsDir = path.join(REPO_ROOT, "_posts");
+    // The consuming site's own `_posts` (NOT the rendered `_site`) — the
+    // checked-in canary + real-post fixtures live in the site source tree.
+    const postsDir = path.join(SITE_ROOT, "_posts");
     // Only the toggle-only unpublish canary is a PERSISTENT committed
     // `_posts/` fixture now: #1771 step 4 retired the prod-mutate +
     // media canaries for EPHEMERAL per-run posts (created + deleted within
@@ -214,7 +247,21 @@ test.describe("Issue #1042 — admin posts UI", () => {
 test.describe("Admin preview/PR links + Check-for-Preview fix", () => {
   const PLE = path.join(ADMIN, "posts-list-enhance.js");
   const BANNER = path.join(ADMIN, "live-url-banner.js");
+  // deploy-preview.yml is a PLATFORM workflow file (resolved at the
+  // platform/site REPO_ROOT, not the rendered `_site`); a consuming site
+  // that doesn't ship `.github/workflows/` won't have it, so the workflow
+  // assertion self-skips when it's absent.
   const WF = path.join(REPO_ROOT, ".github", "workflows", "deploy-preview.yml");
+
+  // The rendered admin JS only exists after the local Jekyll build + render
+  // hook run; skip the admin-JS/config assertions (rather than ENOENT-fail)
+  // when `_site` isn't built — mirrors the sitemap.spec self-skip.
+  test.beforeEach(() => {
+    test.skip(
+      !fs.existsSync(RENDERED_CONFIG),
+      `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-admin invariants only run in the local lane`,
+    );
+  });
 
   test("posts-list-enhance.js: relabelled links, diff URLs, view-published-changes", () => {
     const src = read(PLE);
@@ -271,6 +318,12 @@ test.describe("Admin preview/PR links + Check-for-Preview fix", () => {
   });
 
   test("deploy-preview.yml: publishes the deploy/preview commit status", () => {
+    // deploy-preview.yml ships only in the platform tree; a consumer that
+    // doesn't vendor `.github/workflows/` has nothing to assert here.
+    test.skip(
+      !fs.existsSync(WF),
+      `${WF} not present — deploy-preview.yml is a platform workflow; this assertion only runs in the platform tree`,
+    );
     const wf = read(WF);
     expect(
       wf,
@@ -287,7 +340,7 @@ test.describe("Admin preview/PR links + Check-for-Preview fix", () => {
   });
 
   for (const cfg of CONFIGS) {
-    const rel = path.relative(REPO_ROOT, cfg);
+    const rel = path.relative(SITE_ROOT, cfg);
     test(`${rel}: backend.preview_context pins deploy/preview`, () => {
       expect(
         read(cfg),
