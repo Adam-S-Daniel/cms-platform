@@ -19,11 +19,11 @@ permissions:
 
 jobs:
   parity:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/parity-preview.yml@v0.1.0
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/parity-preview.yml@v0.1.1
     with:
       pr_number: ${{ github.event.pull_request.number }}
       base_ref: ${{ github.base_ref }}
       apex: example.com
-      platform_ref: v0.1.0
+      platform_ref: v0.1.1
     secrets:
       CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

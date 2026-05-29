@@ -18,7 +18,7 @@ const readline = require("readline");
 
 const PLATFORM_ROOT = path.resolve(__dirname, "..");
 const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
-const PLATFORM_VERSION = "v0.1.0";
+const PLATFORM_VERSION = "v0.1.1";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -84,8 +84,8 @@ async function main() {
     s
       .replace(/example-com/g, prefix)
       .replace(/example\.com/g, domain)
-      .replace(/platform_ref:\s*v0\.1\.0/g, `platform_ref: ${PLATFORM_VERSION}`)
-      .replace(/@v0\.1\.0/g, `@${PLATFORM_VERSION}`);
+      .replace(/platform_ref:\s*v\d+\.\d+\.\d+/g, `platform_ref: ${PLATFORM_VERSION}`)
+      .replace(/@v\d+\.\d+\.\d+/g, `@${PLATFORM_VERSION}`);
 
   if (fs.existsSync(target) && fs.readdirSync(target).length)
     throw new Error(`target ${target} is not empty`);
@@ -121,6 +121,11 @@ async function main() {
   write(target, "_e2e/canary-post.md", SEED_CANARY);
   write(target, "index.html", SEED_INDEX);
   write(target, ".gitignore", SITE_GITIGNORE);
+  // The secrets-scan reusable runs the gitleaks binary with --config
+  // .gitleaks.toml when present; ship the platform's fixture allowlist so a
+  // fresh site scans clean. (gitleaks-action is license-gated for org repos,
+  // so the reusable uses the binary — see .github/workflows/secrets-scan.yml.)
+  write(target, ".gitleaks.toml", fs.readFileSync(path.join(PLATFORM_ROOT, ".gitleaks.toml"), "utf8"));
   write(target, "README.md", siteReadme({ title, domain, owner, repo }));
 
   console.log(nextSteps({ target, domain, owner, repo, prefix }));

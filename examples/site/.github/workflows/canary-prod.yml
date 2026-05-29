@@ -22,8 +22,8 @@ permissions:
 
 jobs:
   probe:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/canary-prod.yml@v0.1.0
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/canary-prod.yml@v0.1.1
     with:
       prod_url: https://example.com
       apex: example.com
-      platform_ref: v0.1.0
+      platform_ref: v0.1.1

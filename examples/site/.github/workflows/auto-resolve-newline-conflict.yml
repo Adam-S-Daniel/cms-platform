@@ -44,12 +44,12 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/auto-resolve-newline-conflict.yml@v0.1.0
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/auto-resolve-newline-conflict.yml@v0.1.1
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
       run_pr_number: ${{ (github.event.workflow_run.pull_requests[0] && github.event.workflow_run.pull_requests[0].number) || '' }}
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
       # Pin to the SAME ref as the `uses:` pin above so the script matches.
-      platform_ref: v0.1.0
+      platform_ref: v0.1.1
     secrets:
       CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

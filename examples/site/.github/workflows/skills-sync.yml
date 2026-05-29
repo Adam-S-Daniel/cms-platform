@@ -9,9 +9,9 @@ permissions:
   pull-requests: write
 jobs:
   sync:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/skills-sync.yml@v0.1.0
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/skills-sync.yml@v0.1.1
     with:
-      platform_ref: v0.1.0
+      platform_ref: v0.1.1
     secrets:
       # Optional: a PAT so the sync PR triggers CI. Omit to use GITHUB_TOKEN.
       gh_token: ${{ secrets.CMS_PLATFORM_PAT }}
