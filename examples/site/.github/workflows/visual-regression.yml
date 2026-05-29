@@ -1,0 +1,68 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/visual-regression.yml`. Owns the pull_request trigger
+# + content-skip `paths:` filter + run-name; delegates the visual-regression
+# video pipeline to the platform's reusable workflow. The pipeline
+# (detect-changed-pages.js, compute-visual-diffs.js, generate-video.sh,
+# regression-video.spec.js, playwright.regression.config.js) lives in the
+# platform repo's e2e/. Keep `platform_ref` equal to the `@vX.Y.Z` pin on
+# the `uses:` line.
+#
+# Site identity (CMS_APEX / PREVIEW_BUCKET / AWS_REGION) is read from THIS
+# repo's VARS by the reusable workflow; AWS/CloudFront secrets are wired
+# through the `secrets:` block below.
+name: Visual Regression
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+    # Positive path list — only run when the diff can shift rendered
+    # output OR change a tool the regression pipeline uses. Content-only
+    # PRs (CMS collections + media uploads) are intentionally absent:
+    # pixel diffs there are by design. (Locked by
+    # e2e/visual-regression-content-skip.test.js.)
+    paths:
+      - '_layouts/**'
+      - '_includes/**'
+      - '_plugins/**'
+      - '_data/**'
+      - 'admin/**'
+      - '_config.yml'
+      - 'Gemfile'
+      - 'Gemfile.lock'
+      - 'index.html'
+      - '404.html'
+      - 'robots.txt'
+      - 'preview.md'
+      - 'assets/css/**'
+      - 'assets/js/**'
+      - 'assets/images/logo.svg'
+      # Tools the regression pipeline itself depends on (in the platform's
+      # e2e/, but listed so a vendored/site-local copy also triggers).
+      - '.github/workflows/visual-regression.yml'
+      - 'e2e/detect-changed-pages.js'
+      - 'e2e/compute-visual-diffs.js'
+      - 'e2e/generate-video.sh'
+      - 'e2e/regression-video.spec.js'
+      - 'e2e/playwright.regression.config.js'
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  visual-regression:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/visual-regression.yml@v0.1.0
+    with:
+      # Pin to the SAME ref as the `uses:` pin above so the pipeline matches.
+      platform_ref: v0.1.0
+    secrets:
+      # Optional — drop any the site doesn't use. The AWS steps no-op when
+      # PREVIEW_BUCKET (a repo var) is unset; the CloudFront invalidation
+      # also gates on PREVIEW_CLOUDFRONT_ID.
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      PREVIEW_CLOUDFRONT_ID: ${{ secrets.PREVIEW_CLOUDFRONT_ID }}
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

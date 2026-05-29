@@ -1,0 +1,16 @@
+---
+layout: default
+title: Tags
+permalink: /tags/
+---
+<div class="container">
+  <h1>Tags</h1>
+  {%- comment -%} site.all_tags is built by theme/lib/cms-platform-theme/auto_tag_pages.rb,
+  which already excludes feed_exclude posts — so a tag carried ONLY by an e2e
+  fixture post never appears here. {%- endcomment -%}
+  <ul class="tag-list">
+    {% for tag in site.all_tags %}
+    <li><a href="{{ tag.url | relative_url }}">{{ tag.name }}</a> ({{ tag.count }})</li>
+    {% endfor %}
+  </ul>
+</div>

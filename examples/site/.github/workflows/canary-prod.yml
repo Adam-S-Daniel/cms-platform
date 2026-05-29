@@ -1,0 +1,29 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/canary-prod.yml`. Owns the schedule + dispatch
+# trigger + run-name; delegates the read-only prod canary probe to the
+# platform's reusable workflow. Keep `platform_ref` equal to the
+# `@vX.Y.Z` pin on the `uses:` line.
+name: Production Canary
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # 12:00 UTC daily — tune per site. Keep clear of any prod-mutating
+    # loop crons so the probes don't share prod state.
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/canary-prod.yml@v0.1.0
+    with:
+      prod_url: https://example.com
+      apex: example.com
+      platform_ref: v0.1.0

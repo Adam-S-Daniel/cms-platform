@@ -1,0 +1,14 @@
+# Down-sync: Dependabot opens PRs bumping the platform pins when cms-platform
+# tags a release.
+version: 2
+updates:
+  # Bumps `uses: Adam-S-Daniel/cms-platform/...@<tag>` in the workflow callers.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+  # Bumps the cms-platform-theme gem.
+  - package-ecosystem: bundler
+    directory: "/"
+    schedule:
+      interval: weekly

@@ -1,0 +1,771 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  One-time bootstrap stack for a platform site's CI/CD infrastructure.
+
+  Creates:
+    1. S3 bucket for CloudFormation/SAM deployment artifacts
+    2. ACM wildcard certificate *.<apex> + CloudFront distribution
+       serving every preview-prN.<apex> subdomain off one bucket
+    3. ACM certificate + CloudFront distribution for the apex (production)
+    4. Route53 DNS records for preview wildcard and production domains
+    5. GitHub OIDC identity provider in AWS IAM
+    6. IAM role for GitHub Actions (assumed via OIDC — no long-lived keys)
+
+  Prerequisites: S3 buckets for previews and production (see parameter defaults)
+  must already exist with static website hosting enabled.
+
+  Run once per AWS account:
+    bash infrastructure/bootstrap/deploy.sh
+
+Parameters:
+
+  GitHubOrg:
+    Type: String
+    Default: Adam-S-Daniel
+    Description: "GitHub organization or user that owns the repository"
+
+  GitHubRepo:
+    Type: String
+    Description: "GitHub repository name (e.g. example.com)"
+
+  ResourcePrefix:
+    Type: String
+    AllowedPattern: "^[a-z0-9-]+$"
+    Description: >
+      Lowercase prefix for the named AWS resources this stack creates and for
+      the IAM scoping (the GitHub Actions role, plus the CloudFormation /
+      Lambda / Logs ARNs that role may touch). Convention: the apex domain with
+      dots as hyphens, e.g. `example-com`. Buckets are named separately below.
+
+  ArtifactBucketName:
+    Type: String
+    Description: "S3 bucket name for CloudFormation/SAM deployment artifacts"
+
+  PreviewBucketName:
+    Type: String
+    Description: "S3 bucket name for PR preview deployments (static website hosting)"
+
+  PreviewDomainName:
+    Type: String
+    Description: >
+      Wildcard DNS + cert alias for PR previews. Each PR deploys to
+      preview-pr${N}.<apex> (matched by the wildcard) and a
+      CloudFront Function maps the hostname to the S3 object-key prefix.
+
+  ProductionBucketName:
+    Type: String
+    Description: "S3 bucket name for the production site (static website hosting)"
+
+  ProductionDomainName:
+    Type: String
+    Description: "Primary custom domain for the production site"
+
+  HostedZoneId:
+    Type: String
+    AllowedPattern: "^Z[A-Z0-9]+$"
+    Description: "Route53 hosted zone ID for the apex domain (e.g. Z02339993KRS1LII3B24S)"
+
+  CreateOIDCProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Set to 'false' if a GitHub OIDC provider already exists in this account
+      (e.g., created by another stack). Only one provider per URL is allowed.
+
+Conditions:
+  ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+
+Resources:
+
+  # ── S3 bucket for CloudFormation / SAM artifacts ──────────────────────────
+  CfnArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ArtifactBucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  # ── S3 bucket for PR preview deployments ────────────────────────────────────
+  #
+  # Imported into the stack. DeletionPolicy: Retain keeps this bucket alive
+  # even if the logical resource is removed from the template — we lost the
+  # earlier ProductionBucket + ProductionBucketPolicy that way and the
+  # production site went down with them (see commit history).
+  #
+  PreviewBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref PreviewBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: 404.html
+
+  PreviewBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    Properties:
+      Bucket: !Ref PreviewBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadForWebsite
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${PreviewBucketName}/*"
+
+  # ── S3 bucket for production site ──────────────────────────────────────────
+  #
+  # Imported into the stack (one-time via `create-change-set --change-set-type
+  # IMPORT` — deploy.sh doesn't do imports). DeletionPolicy: Retain keeps the
+  # bucket alive even if the resource is later removed from the template, so
+  # production can't silently lose its website config + policy the way it did
+  # when earlier versions of this stack removed them.
+  #
+  ProductionBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref ProductionBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: 404.html
+
+  ProductionBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    Properties:
+      Bucket: !Ref ProductionBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadForWebsite
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${ProductionBucketName}/*"
+
+  # ── ACM wildcard certificate for preview subdomains ──────────────────────
+  #
+  # Must be in us-east-1 for CloudFront. DNS validation via Route53. Covers
+  # preview-pr1.<apex>, preview-pr2.<apex>, and any future
+  # single-label subdomain — a single cert for the whole preview fleet.
+  # Doesn't cover the apex <apex>, which keeps its own prod cert.
+  #
+  # Note: CloudFront allows *.<apex> on this distribution to coexist
+  # with the production distribution's specific <apex> +
+  # www.<apex> aliases. Requests for those specific hosts win over
+  # the wildcard.
+  #
+  PreviewCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref PreviewDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref PreviewDomainName
+          HostedZoneId: !Ref HostedZoneId
+
+  # ── CloudFront Function: host → S3 object-key prefix ─────────────────────
+  #
+  # Runs at viewer-request on every request to the preview distribution.
+  # Extracts the PR number from preview-prN.<apex> and prepends
+  # /pr-N to the URI before CloudFront looks up the object in S3. The
+  # browser-facing URL stays clean (no /pr-N/ prefix), and the S3 object
+  # key matches what deploy-preview.yml syncs.
+  #
+  # Hosts that don't match the pattern fall through unchanged — useful for
+  # anyone browsing directly to <apex> (which is caught by the prod
+  # distribution anyway) or to preview.<apex>.
+  #
+  PreviewRouterFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-preview-router"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: "preview-prN / preview-cms-<slug> .<apex> → /<prefix>/<uri> for S3 origin"
+        Runtime: cloudfront-js-2.0
+      # Two host patterns map to two S3 object-key prefixes:
+      #   preview-prN.<apex>           → /pr-N/<uri>
+      #   preview-cms-<slug>.<apex>    → /cms-<slug>/<uri>
+      #
+      # The cms-<slug> form gives editors a stable per-entry preview URL
+      # that survives across draft cycles for the same entry. The
+      # preview-prN form changes when Decap closes & re-opens a PR for
+      # the same canary; the cms-<slug> form does not. See
+      # docs/preview-pr-ruleset-spike.md for the full reasoning.
+      #
+      # Slug shape: lowercase ASCII + digits + hyphens. Decap derives it
+      # from `cms/<collection>/<slug>` head refs by replacing `/` with
+      # `-`, so `cms/posts/foo-bar` → `posts-foo-bar`.
+      #
+      # Hosts that don't match either pattern fall through unchanged.
+      # `!Sub` bakes the apex (${ProductionDomainName}) into the function at
+      # deploy time — CloudFront Functions can't read stack params at runtime.
+      # Host matching uses string ops (not a dynamic RegExp) to stay within the
+      # cloudfront-js-2.0 runtime and keep the apex's dots literal. The only
+      # `${...}` is the injected domain; the static `/^[0-9]+$/` etc. contain no
+      # `${`, so `!Sub` leaves them untouched.
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          var host = request.headers.host && request.headers.host.value;
+          if (!host) return request;
+          var suffix = '.${ProductionDomainName}';
+          if (host.slice(-suffix.length) !== suffix) return request;
+          var label = host.slice(0, host.length - suffix.length);
+          if (label.indexOf('preview-pr') === 0) {
+            var pr = label.slice(10);            // 'preview-pr'.length
+            if (pr.length > 0 && /^[0-9]+$/.test(pr)) {
+              request.uri = '/pr-' + pr + request.uri;
+              return request;
+            }
+          } else if (label.indexOf('preview-cms-') === 0) {
+            var slug = label.slice(12);          // 'preview-cms-'.length
+            if (slug.length > 0 && /^[a-z0-9-]+$/.test(slug)) {
+              request.uri = '/cms-' + slug + request.uri;
+              return request;
+            }
+          }
+          return request;
+        }
+
+  # ── CloudFront Function: strip /pr-N/ from response Location headers ────
+  #
+  # Runs at viewer-response on the same distribution as the request-side
+  # PreviewRouterFunction. The router rewrites the request URI by prepending
+  # /pr-N before sending it to S3, but S3 doesn't know about the rewrite —
+  # so when it 302s a no-trailing-slash directory request (e.g. /admin →
+  # /admin/) it includes its own internal path, surfacing /pr-N/admin/ in
+  # the Location header. The browser would then navigate to
+  # https://preview-prN.<apex>/pr-N/admin/, which has no /pr-N/ in
+  # the visible URL space and 404s.
+  #
+  # This function strips the matching /pr-N/ prefix from Location on
+  # responses to a preview-prN.<apex> host, restoring the clean
+  # public path. Only same-PR prefixes are stripped: a /pr-99/ leak on a
+  # pr-23 host is left visible so it fails loudly rather than silently
+  # routing somewhere unexpected. Absolute-URL Locations and non-3xx
+  # responses are no-ops.
+  #
+  PreviewLocationFixerFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-preview-location-fixer"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: "Strip /pr-N/ or /cms-<slug>/ from Location, and inject X-Robots-Tag: noindex on every preview response"
+        Runtime: cloudfront-js-2.0
+      # Two responsibilities, both viewer-response, on the preview
+      # distribution only:
+      #
+      #   1. **Location-header stripping.** When the upstream rewriter
+      #      prepended `/pr-N/` (or `/cms-<slug>/`) to the request URI,
+      #      S3's same-prefix `/admin → /admin/` redirect leaks the
+      #      internal path back into the response Location. Strip
+      #      same-host prefixes; leave cross-host prefixes visible so
+      #      misrouted responses fail loudly.
+      #
+      #   2. **noindex header.** Preview environments must NEVER show
+      #      up in search results — they're per-PR ephemeral copies of
+      #      the production site's content, often with future-dated canaries
+      #      and unpublished posts. The shared `robots.txt` allows
+      #      crawling on the production host, but per-host robots
+      #      files aren't reliable across crawlers, so we add an
+      #      `X-Robots-Tag: noindex, nofollow` HTTP header on every
+      #      response from this distribution. The header is more
+      #      authoritative than robots.txt and applies to all asset
+      #      types (HTML, images, feeds, etc.).
+      #
+      # Production responses don't pass through this function (the
+      # production distribution doesn't attach it), so the production apex
+      # itself stays default-indexable.
+      FunctionCode: !Sub |
+        function handler(event) {
+          var response = event.response;
+
+          // (2) noindex header — applies to EVERY response from this
+          // distribution, regardless of status code or path. Use
+          // `value` per CloudFront Functions header API.
+          response.headers['x-robots-tag'] = {
+            value: 'noindex, nofollow'
+          };
+
+          // (1) Location-header stripping for redirects only.
+          var status = Number(response.statusCode);
+          if (status < 300 || status >= 400) return response;
+
+          var loc = response.headers && response.headers.location;
+          if (!loc || !loc.value) return response;
+
+          var host = event.request.headers.host && event.request.headers.host.value;
+          if (!host) return response;
+
+          var suffix = '.${ProductionDomainName}';
+          if (host.slice(-suffix.length) !== suffix) return response;
+          var label = host.slice(0, host.length - suffix.length);
+          if (label.indexOf('preview-pr') === 0) {
+            var pr = label.slice(10);            // 'preview-pr'.length
+            if (pr.length > 0 && /^[0-9]+$/.test(pr)) {
+              stripPrefix(loc, '/pr-' + pr);
+            }
+          } else if (label.indexOf('preview-cms-') === 0) {
+            var slug = label.slice(12);          // 'preview-cms-'.length
+            if (slug.length > 0 && /^[a-z0-9-]+$/.test(slug)) {
+              stripPrefix(loc, '/cms-' + slug);
+            }
+          }
+
+          return response;
+        }
+
+        function stripPrefix(loc, prefix) {
+          if (loc.value === prefix || loc.value.indexOf(prefix + '/') === 0) {
+            var stripped = loc.value.slice(prefix.length);
+            loc.value = stripped.length === 0 ? '/' : stripped;
+          }
+        }
+
+  # ── CloudFront distribution for preview-pr*.<apex> ───────────────────────
+  #
+  # Uses the S3 website endpoint as a custom origin (not OAC) so that S3
+  # website hosting features (index documents per directory) work correctly.
+  #
+  PreviewDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: PreviewCertificate
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "PR previews for ${GitHubOrg}/${GitHubRepo}"
+        Aliases:
+          - !Ref PreviewDomainName
+        ViewerCertificate:
+          AcmCertificateArn: !Ref PreviewCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        DefaultCacheBehavior:
+          TargetOriginId: s3-website
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt PreviewRouterFunction.FunctionARN
+            - EventType: viewer-response
+              FunctionARN: !GetAtt PreviewLocationFixerFunction.FunctionARN
+        Origins:
+          - Id: s3-website
+            DomainName: !Sub "${PreviewBucketName}.s3-website-${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: 80
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+
+  # ── Route53 wildcard alias for *.<apex> → preview distribution ──────────
+  #
+  # The wildcard matches every single-label subdomain not explicitly
+  # claimed by another record in this zone. The apex (`<apex>`) and
+  # `www.<apex>` have their own specific records pointing at the
+  # production distribution, so they take precedence over the wildcard.
+  #
+  PreviewDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref PreviewDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt PreviewDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront's fixed hosted zone ID
+
+  # ── ACM certificate for production domain ─────────────────────────────────
+  #
+  # Covers both the apex (<apex>) and www subdomain. Must be in
+  # us-east-1 for CloudFront. DNS validation via Route53.
+  #
+  ProductionCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref ProductionDomainName
+      SubjectAlternativeNames:
+        - !Sub "www.${ProductionDomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref ProductionDomainName
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub "www.${ProductionDomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+  # ── CloudFront distribution for <apex> (production) ──────────────────────
+  #
+  # Uses the S3 website endpoint as a custom origin (not OAC) so that S3
+  # website hosting features (index documents per directory) work correctly.
+  #
+  ProductionDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: ProductionCertificate
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "Production site for ${ProductionDomainName}"
+        Aliases:
+          - !Ref ProductionDomainName
+          - !Sub "www.${ProductionDomainName}"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref ProductionCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        DefaultCacheBehavior:
+          TargetOriginId: s3-website
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+        Origins:
+          - Id: s3-website
+            DomainName: !Sub "${ProductionBucketName}.s3-website-${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: 80
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /404.html
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: /404.html
+            ErrorCachingMinTTL: 300
+
+  # ── Route53 alias records for <apex> ────────────────────────────────────
+  ProductionDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref ProductionDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ProductionDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront's fixed hosted zone ID
+
+  ProductionWwwDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "www.${ProductionDomainName}"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ProductionDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  # ── GitHub OIDC identity provider ─────────────────────────────────────────
+  #
+  # Allows GitHub Actions to assume IAM roles without long-lived credentials.
+  # AWS validates the full certificate chain for GitHub's OIDC provider, so the
+  # thumbprint value is not security-critical — but the property is required.
+  #
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  # ── IAM role for GitHub Actions ───────────────────────────────────────────
+  #
+  # Trust policy: only workflows in ${GitHubOrg}/${GitHubRepo} can assume this
+  # role, and only when GitHub's OIDC token audience is sts.amazonaws.com.
+  #
+  # Permissions: scoped to <prefix>-* prefixed resources wherever possible.
+  #
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-github-actions"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateOIDCProvider
+                - !GetAtt GitHubOIDCProvider.Arn
+                - !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+              StringLike:
+                "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubOrg}/${GitHubRepo}:*"
+      Policies:
+
+        # ── S3: artifacts + preview + production buckets ──────────────────
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}"
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}/*"
+                  - !Sub "arn:aws:s3:::${PreviewBucketName}"
+                  - !Sub "arn:aws:s3:::${PreviewBucketName}/*"
+                  - !Sub "arn:aws:s3:::${ProductionBucketName}"
+                  - !Sub "arn:aws:s3:::${ProductionBucketName}/*"
+
+        # ── CloudFormation: manage stacks with <prefix>- prefix ────────────
+        - PolicyName: CloudFormationAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ListStackResources
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:ListChangeSets
+                  - cloudformation:TagResource
+                Resource:
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/${ResourcePrefix}-*/*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                Resource:
+                  - "arn:aws:cloudformation:*:aws:transform/*"
+
+        # ── CloudFront: manage distributions ───────────────────────────────
+        - PolicyName: CloudFrontAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateDistribution
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:ListDistributions
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:TagResource
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                  - cloudfront:ListInvalidations
+                  - cloudfront:CreateOriginAccessControl
+                  - cloudfront:GetOriginAccessControl
+                  - cloudfront:UpdateOriginAccessControl
+                  - cloudfront:DeleteOriginAccessControl
+                  - cloudfront:ListOriginAccessControls
+                Resource: "*"
+
+        # ── ACM: manage certificates (must be us-east-1 for CloudFront) ────
+        - PolicyName: ACMAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - acm:RequestCertificate
+                  - acm:DescribeCertificate
+                  - acm:ListCertificates
+                  - acm:DeleteCertificate
+                  - acm:AddTagsToCertificate
+                  - acm:ListTagsForCertificate
+                Resource: "*"
+
+        # ── Route53: manage DNS records ────────────────────────────────────
+        - PolicyName: Route53Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetHostedZone
+                  - route53:ListResourceRecordSets
+                  - route53:GetChange
+                  - route53:ListHostedZones
+                Resource:
+                  - "arn:aws:route53:::hostedzone/*"
+                  - "arn:aws:route53:::change/*"
+
+        # ── IAM: manage roles created by SAM for Lambda execution ──────────
+        - PolicyName: IAMAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ResourcePrefix}-*"
+
+        # ── Lambda: manage functions ───────────────────────────────────────
+        - PolicyName: LambdaAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:ListFunctions
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:aws:lambda:*:${AWS::AccountId}:function:${ResourcePrefix}-*"
+
+        # ── API Gateway: manage HTTP APIs ──────────────────────────────────
+        - PolicyName: APIGatewayAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - apigateway:PATCH
+                  - apigateway:DELETE
+                  - apigateway:TagResource
+                Resource:
+                  - !Sub "arn:aws:apigateway:*::/apis/*"
+                  - !Sub "arn:aws:apigateway:*::/apis"
+                  - !Sub "arn:aws:apigateway:*::/tags/*"
+
+        # ── CloudWatch Logs: manage log groups ─────────────────────────────
+        - PolicyName: CloudWatchLogsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DescribeLogGroups
+                  - logs:TagResource
+                Resource:
+                  - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/${ResourcePrefix}-*"
+
+Outputs:
+
+  RoleArn:
+    Description: >
+      IAM role ARN for GitHub Actions. Add this as a GitHub Actions secret
+      named AWS_ROLE_ARN.
+    Value: !GetAtt GitHubActionsRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RoleArn"
+
+  ArtifactsBucketName:
+    Description: "S3 bucket for CloudFormation/SAM deployment artifacts"
+    Value: !Ref CfnArtifactsBucket
+
+  PreviewURL:
+    Description: >
+      HTTPS URL template for PR preview deployments. Substitute the PR
+      number into `preview-pr${N}` to reach a specific preview.
+    Value: !Sub "https://preview-pr<N>.${ProductionDomainName}"
+
+  PreviewDistributionId:
+    Description: "CloudFront distribution ID for preview cache invalidation"
+    Value: !Ref PreviewDistribution
+
+  PreviewDistributionDomain:
+    Description: "CloudFront domain name for the preview distribution"
+    Value: !GetAtt PreviewDistribution.DomainName
+
+  ProductionURL:
+    Description: "HTTPS URL for the production site"
+    Value: !Sub "https://${ProductionDomainName}"
+
+  ProductionDistributionId:
+    Description: "CloudFront distribution ID for production cache invalidation"
+    Value: !Ref ProductionDistribution
+
+  ProductionDistributionDomain:
+    Description: "CloudFront domain name for the production distribution"
+    Value: !GetAtt ProductionDistribution.DomainName
+
+  OIDCProviderArn:
+    Description: "GitHub OIDC identity provider ARN"
+    Value: !If
+      - ShouldCreateOIDCProvider
+      - !GetAtt GitHubOIDCProvider.Arn
+      - "N/A (provider not created by this stack)"

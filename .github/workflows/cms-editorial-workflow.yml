@@ -1,0 +1,254 @@
+name: CMS Editorial Workflow
+on:
+  workflow_call:
+    secrets:
+      CMS_E2E_PAT:
+        required: false
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+# Concurrency is now per-job (see each job's `concurrency:` block).
+# Workflow-level `cancel-in-progress: true` was racing the labeled
+# event for cms/ready: a same-second `opened` + `labeled` pair would
+# create two runs (one per event), the workflow-level group would
+# cancel the first, and whichever run survived determined whether
+# auto-merge-when-ready fired (its `if:` only matches the labeled
+# event, so the survivor needed to be the labeled-event run for
+# auto-merge to be enabled). When the opened-event run won the
+# race — observed on PRs #210 and similar fixture PRs — auto-merge
+# was never enabled, the PR sat for 12 minutes, and the spec timed
+# out in waitForMerge.
+#
+# Splitting concurrency into per-job groups keeps the per-keystroke
+# cancel optimization on validate-content (cheap re-run cost on
+# Decap's rapid saves) while ensuring auto-merge-when-ready always
+# runs to completion when its labeled event fires.
+
+jobs:
+  validate-content:
+    # Cancel previous validation runs when the CMS pushes another
+    # commit to the same draft PR (Decap pushes per-keystroke during
+    # editing). Each new commit invalidates the prior run's verdict,
+    # so cancelling the in-flight one saves ~30s of CI per keystroke.
+    concurrency:
+      group: cms-editorial-validate-content-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f  # v1.310.0 (2026-05-20)
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+
+      - name: Validate front matter
+        run: |
+          # `nullglob` makes `_posts/*.md` expand to an empty list rather
+          # than the literal pattern when there are no posts (otherwise
+          # grep tries to read `_posts/*.md` as a filename and the loop
+          # falsely flags it as a missing-title post).
+          shopt -s nullglob
+          echo "Checking post front matter..."
+          ERRORS=0
+
+          for f in _posts/*.md; do
+            # Every post must have title, date, and published fields
+            if ! grep -q "^title:" "$f"; then
+              echo "ERROR: $f is missing 'title' field"
+              ERRORS=$((ERRORS+1))
+            fi
+            if ! grep -q "^date:" "$f"; then
+              echo "ERROR: $f is missing 'date' field"
+              ERRORS=$((ERRORS+1))
+            fi
+          done
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "Found $ERRORS validation error(s). Please fix before merging."
+            exit 1
+          fi
+          echo "All content validated successfully."
+
+      - name: Jekyll build check
+        env:
+          JEKYLL_ENV: test
+        run: bundle exec jekyll build --quiet
+
+      - name: Apply draft label on new PR
+        if: github.event.action == 'opened'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        with:
+          script: |
+            // Ensure the 'cms/draft' label exists
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                name:  'cms/draft',
+                color: '1a2a5e',
+                description: 'Content draft — not ready for publish',
+              });
+            } catch (_) {}
+
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                name:  'cms/ready',
+                color: '22c27a',
+                description: 'Content approved and ready to publish',
+              });
+            } catch (_) {}
+
+            var labels = ['cms/draft'];
+
+            // Mark CMS PRs whose base isn't `main` as preview-only — they
+            // exist to demonstrate / test the parent feature branch's
+            // changes against real content, and the content edit itself
+            // is not meant to flow to main when the feature merges.
+            if (context.payload.pull_request.base.ref !== 'main') {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  name:  'cms/preview-only',
+                  color: 'f5a623',
+                  description: 'CMS edit made on a feature-branch preview — drop this content from the parent branch when it merges to main',
+                });
+              } catch (_) {}
+              labels.push('cms/preview-only');
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: labels,
+            });
+
+  auto-merge-when-ready:
+    # Fires when an editor promotes a draft to "Ready":
+    #
+    #   - `decap-cms/pending_publish` is what Decap CMS 3.x actually
+    #     applies when the editor changes the Status dropdown from
+    #     Draft / In Review to Ready in editorial-workflow mode.
+    #     (The doc comment used to claim Decap applies
+    #     `decap-cms/ready`, but that's a label name Decap never
+    #     actually emits — empirical check on PR #220's event
+    #     timeline confirmed the real label is
+    #     `decap-cms/pending_publish`. The semantic is the same:
+    #     "approved, ready to publish".) This is the path 99% of
+    #     edits take.
+    #   - `decap-cms/ready` is kept as a synonym in case a future
+    #     Decap rename emits it, or in case a different backend
+    #     still uses that name. Cheap to keep; harmless to leave.
+    #   - `cms/ready` is the legacy bare-name label this workflow
+    #     applies on `opened` (so a manual label add still works)
+    #     and was the only label this job listened for before the
+    #     Decap namespacing landed. The shim in
+    #     admin/publish-via-auto-merge.js also adds it when it
+    #     catches a 422 from a direct merge attempt.
+    #
+    # If multiple fire, the second `labeled` event re-runs this job;
+    # `enablePullRequestAutoMerge` is idempotent so the duplicate is
+    # a no-op.
+    #
+    # NOTE: `decap-cms/pending_review` is intentionally NOT in this
+    # list. It means "submitted for review" — the entry isn't yet
+    # approved, so auto-merging at that point would skip the human-
+    # review step that the editorial workflow exists to support.
+    if: >
+      github.event.action == 'labeled' &&
+      (github.event.label.name == 'cms/ready' ||
+       github.event.label.name == 'decap-cms/ready' ||
+       github.event.label.name == 'decap-cms/pending_publish')
+    # Per-job concurrency with cancel-in-progress:false so multiple
+    # rapid label toggles queue rather than cancel each other.
+    # `enablePullRequestAutoMerge` is idempotent — re-running it on
+    # an already-auto-mergeable PR is a no-op. The workflow-level
+    # cancel that used to live here was THE bug: a same-second
+    # opened+labeled pair on a new PR could let the opened-event
+    # run cancel the labeled-event run mid-evaluation, leaving
+    # auto-merge unenabled and the PR stuck for ~12 min. (Observed
+    # on PR #210 — only `auto_squash_enabled` event missing in its
+    # timeline despite the cms/ready label being added.)
+    concurrency:
+      group: cms-editorial-auto-merge-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    # `needs: validate-content` removed: enablePullRequestAutoMerge
+    # only sets the *intent* to merge — GitHub waits for the
+    # required-status-checks ruleset (which includes validate-content)
+    # before actually firing the merge. Making this job wait on
+    # validate-content was redundant *and* coupled it to the same
+    # cancel-in-progress mechanic that caused the original bug.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge for CMS PR
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        with:
+          # CMS_E2E_PAT, NOT the default GITHUB_TOKEN. GitHub's policy
+          # is that push events created by GITHUB_TOKEN don't trigger
+          # downstream workflows (the same anti-loop guard that makes
+          # `pull_request_target` necessary for Dependabot PRs). When
+          # we used GITHUB_TOKEN to enable auto-merge, the eventual
+          # merge happened as github-actions[bot]; the push to main
+          # from that merge silently failed to fire
+          # deploy-production.yml. Real-world impact: every CMS edit
+          # via Decap's "Status: Ready → auto-merge" path merged the
+          # PR but never deployed to S3, so the live site stayed at
+          # whatever the last NON-CMS push had built. Empirical: PR
+          # #238's seed merge at 23:32 didn't trigger
+          # deploy-production until a non-bot push (PR #241) landed
+          # at 23:46.
+          #
+          # Using CMS_E2E_PAT means `enablePullRequestAutoMerge` runs
+          # as that user, GitHub merges the PR with that user's
+          # identity, and the resulting push to main DOES fire
+          # deploy-production.yml like every other non-bot push.
+          github-token: ${{ secrets.CMS_E2E_PAT || secrets.GITHUB_TOKEN }}
+          script: |
+            // The synonym labels (`cms/ready`, `decap-cms/ready`,
+            // `decap-cms/pending_publish`) can arrive after the PR has
+            // already merged — e.g. Decap applies `decap-cms/pending_publish`
+            // and the shim's `cms/ready` in quick succession, the first
+            // run enables auto-merge, GitHub squashes immediately, and
+            // the second `labeled` event then fires this job against a
+            // PR whose state is already MERGED. `enablePullRequestAutoMerge`
+            // responds with the GraphQL error "Pull request is already
+            // merged" in that case. The desired end state — merged — is
+            // already achieved, so swallow that specific error and exit
+            // success rather than failing the run and tripping the
+            // stuck-PR triage path.
+            try {
+              await github.graphql(`
+                mutation($pullRequestId: ID!) {
+                  enablePullRequestAutoMerge(input: {
+                    pullRequestId: $pullRequestId,
+                    mergeMethod: SQUASH,
+                    commitHeadline: "publish: ${context.payload.pull_request.title}"
+                  }) {
+                    pullRequest {
+                      autoMergeRequest { enabledAt }
+                    }
+                  }
+                }
+              `, { pullRequestId: context.payload.pull_request.node_id });
+            } catch (err) {
+              const msg = String(err && err.message || err);
+              if (/pull request is already merged/i.test(msg)) {
+                core.info(`PR #${context.payload.pull_request.number} is already merged; nothing to do.`);
+                return;
+              }
+              throw err;
+            }
+

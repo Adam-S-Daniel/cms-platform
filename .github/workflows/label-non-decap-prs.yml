@@ -1,0 +1,223 @@
+# Reusable: tag PRs that were NOT created by Decap CMS.
+#
+# A consuming site calls this from a thin wrapper that owns the
+# `pull_request` + `push` + `workflow_dispatch` triggers + run-name (see
+# examples/site/.github/workflows/label-non-decap-prs.yml). The Decap branch
+# convention this labeller keys off (`cms/<collection>/<slug>`) is sourced
+# from the platform's `e2e/cms-fixture-pr.js` (FIXTURE_BRANCH_PREFIX), which
+# is NOT in the site repo, so this workflow checks the platform out into
+# `.cms-platform/` and requires the module from there. Pin `platform_ref` to
+# the same tag/sha the caller pins this workflow to.
+name: Label non-Decap PRs (reusable)
+
+# Decap CMS opens every content PR on a `cms/<collection>/<slug>` head
+# branch — that's its default `branchPrefix`, and the rest of the repo
+# already keys off it (e2e/cms-fixture-pr.js's FIXTURE_BRANCH_PREFIX,
+# sweep-stale-cms-prs.yml's prefix safelist). PRs from any other source —
+# dependabot/*, claude/*, feat/*, fix/*, chore/*, a human's branch — are NOT
+# Decap-created, so this workflow tags them `not-decap-created`. (The
+# `cms/draft` label is NOT a usable signal: cms-editorial-workflow.yml
+# applies it to EVERY opened PR, dependabot's included.)
+#
+# Three entry points (declared on the caller):
+#   - pull_request (opened, reopened): tag the single PR as it arrives.
+#   - push to main touching the caller file: run the full backfill once when
+#     the workflow lands (and again on any later edit). This is how the
+#     retroactive pass over every pre-existing PR happens automatically.
+#   - workflow_dispatch: run the same backfill on demand. Pass
+#     `dry_run: true` to log the verdict without mutating labels.
+#
+# The backfill scans every PR (open + closed + merged) and tags the
+# non-Decap ones. It is idempotent and additive (never removes a label), so
+# it is safe to re-run at any time. Because the first run is a burst of
+# hundreds of mutating requests, it throttles to ~1 request/second and
+# retries on secondary-rate-limit / 5xx, so it can't half-finish.
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: 'Log what would be labelled without applying any labels'
+        type: boolean
+        required: false
+        default: false
+      platform_repo:
+        description: "owner/name of the platform repo holding e2e/cms-fixture-pr.js."
+        type: string
+        required: false
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the module from (pin to the same ref as this workflow)."
+        type: string
+        required: false
+        default: main
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: label-non-decap-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  label-non-decap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout platform module
+        # The Decap branch-prefix constant the labeller keys off lives in
+        # the platform's e2e/cms-fixture-pr.js (FIXTURE_BRANCH_PREFIX). Fetch
+        # it from the pinned ref so the labeller and the fixture harness
+        # agree on the `cms/` convention.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Tag PR(s) not created by Decap
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        with:
+          script: |
+            const path = require('path');
+            // Source the Decap branch convention from the platform module so
+            // the labeller stays in lockstep with the fixture harness. The
+            // fixture prefix is `cms/e2e-fixture`; the Decap branchPrefix the
+            // CMS itself uses is its first segment (`cms/`).
+            const { FIXTURE_BRANCH_PREFIX } = require(
+              path.join(process.env.GITHUB_WORKSPACE, '.cms-platform', 'e2e', 'cms-fixture-pr.js'),
+            );
+            const DECAP_BRANCH_PREFIX = `${FIXTURE_BRANCH_PREFIX.split('/')[0]}/`;
+
+            const LABEL = 'not-decap-created';
+            const { owner, repo } = context.repo;
+            const dryRun = process.env.DRY_RUN === 'true';
+            // GitHub asks callers to space out mutating requests by ~1s.
+            // The backfill's first run is a burst of hundreds of label-adds,
+            // so we honour that to avoid tripping the secondary rate limit.
+            const THROTTLE_MS = 1000;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            // A PR is Decap-created when its head branch uses Decap's
+            // `cms/<collection>/<slug>` convention. The body marker and
+            // the `decap-cms/*` status labels are corroborating signals,
+            // checked too so a genuine Decap PR is never mis-tagged even
+            // if some future bundle changes the branch prefix.
+            const isDecap = (pr) => {
+              if ((pr.head?.ref || '').startsWith(DECAP_BRANCH_PREFIX)) return true;
+              if ((pr.body || '').startsWith('Automatically generated by Decap CMS')) return true;
+              const names = (pr.labels || []).map((l) => (typeof l === 'string' ? l : l.name) || '');
+              return names.some((n) => n.startsWith('decap-cms/'));
+            };
+
+            const hasLabel = (pr) =>
+              (pr.labels || []).some((l) => (typeof l === 'string' ? l : l.name) === LABEL);
+
+            // addLabels is additive (POST .../labels), so it never clobbers
+            // a PR's existing labels (e.g. cms/draft). Retry on the transient
+            // failures a few-hundred-request sweep can hit.
+            async function addLabelWithRetry(number) {
+              for (let attempt = 1; ; attempt++) {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner,
+                    repo,
+                    issue_number: number,
+                    labels: [LABEL],
+                  });
+                  return;
+                } catch (err) {
+                  const status = err?.status;
+                  const secondary = /secondary rate limit|abuse/i.test(String(err?.message || ''));
+                  const retryable =
+                    status === 403 || status === 429 || (status >= 500 && status <= 599) || secondary;
+                  if (!retryable || attempt >= 5) throw err;
+                  const retryAfter = Number(err?.response?.headers?.['retry-after']);
+                  const waitMs = retryAfter ? retryAfter * 1000 : Math.min(60000, 1000 * 2 ** attempt);
+                  core.warning(
+                    `addLabels #${number} failed (attempt ${attempt}, status ${status}` +
+                      `${secondary ? ', secondary-rate' : ''}); retrying in ${waitMs}ms`,
+                  );
+                  await sleep(waitMs);
+                }
+              }
+            }
+
+            // Ensure the label exists before we try to apply it.
+            try {
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name: LABEL,
+                color: 'ededed',
+                description: 'PR was not created by Decap CMS (head branch is not cms/<col>/<slug>)',
+              });
+            } catch (_) {
+              /* already exists */
+            }
+
+            async function tag(pr) {
+              if (isDecap(pr)) return 'decap';
+              if (hasLabel(pr)) return 'already-tagged';
+              if (dryRun) {
+                core.info(`[dry-run] would tag #${pr.number} [${pr.head?.ref}]`);
+                return 'would-tag';
+              }
+              await addLabelWithRetry(pr.number);
+              core.info(`tagged #${pr.number} [${pr.head?.ref}]`);
+              return 'tagged';
+            }
+
+            // pull_request → tag just the PR that triggered us.
+            // Everything else (push to main, workflow_dispatch) → full backfill.
+            if (context.eventName === 'pull_request') {
+              const pr = context.payload.pull_request;
+              const r = await tag(pr);
+              core.info(`PR #${pr.number} [${pr.head?.ref}] → ${r}`);
+              return;
+            }
+
+            const t0 = Date.now();
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'all',
+              per_page: 100,
+            });
+            const counts = { scanned: prs.length };
+            for (const pr of prs) {
+              let r;
+              try {
+                r = await tag(pr);
+              } catch (err) {
+                r = 'error';
+                core.error(`#${pr.number} [${pr.head?.ref}]: ${err?.message || err}`);
+              }
+              counts[r] = (counts[r] || 0) + 1;
+              // Throttle only on an actual mutation; skips/dry-run stay fast.
+              if (r === 'tagged') await sleep(THROTTLE_MS);
+            }
+            const elapsedSec = Math.round((Date.now() - t0) / 1000);
+            core.notice(
+              `Backfill ${dryRun ? '(dry-run) ' : ''}over ${counts.scanned} PR(s) in ` +
+                `${elapsedSec}s: ${JSON.stringify(counts)}`,
+            );
+            await core.summary
+              .addHeading('not-decap-created backfill', 2)
+              .addRaw(dryRun ? '_dry-run — no labels were applied_\n\n' : '')
+              .addTable([
+                [
+                  { data: 'metric', header: true },
+                  { data: 'count', header: true },
+                ],
+                ['PRs scanned', String(counts.scanned)],
+                ['Decap (skipped)', String(counts.decap || 0)],
+                ['already tagged', String(counts['already-tagged'] || 0)],
+                [dryRun ? 'would tag' : 'tagged', String((dryRun ? counts['would-tag'] : counts.tagged) || 0)],
+                ['errors', String(counts.error || 0)],
+                ['elapsed (s)', String(elapsedSec)],
+              ])
+              .write();

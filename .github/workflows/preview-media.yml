@@ -1,0 +1,240 @@
+# Reusable, lightweight, READ-ONLY preview-media merge gate.
+#
+# Asserts that a committed image under the flat media_folder
+# (assets/images/uploads/) actually resolves on the PR's
+# already-deployed preview-pr<N>.<apex> surface — verifying the flat
+# media_folder / broken-images regression class on the real
+# S3+CloudFront preview build rather than only structurally or against a
+# local Jekyll build.
+#
+# Required-check shape — ALWAYS-RUN + EARLY-SKIP, NOT workflow `paths:`.
+# A required check that uses paths/paths-ignore hits the missing-check
+# trap. So this fires on every PR, detects media-salient changes in an
+# early step, and reports success immediately when nothing salient
+# changed. The context is therefore always present — no stub needed.
+#
+# Preview-unavailable behaviour — HARD-FAIL on a media-salient PR, which
+# in practice requires deploy-preview to have succeeded for that PR.
+#
+# A consuming site calls this from a thin wrapper that owns the
+# pull_request trigger + run-name (see examples/site/.github/workflows/
+# preview-media.yml). The harness + composite live in the platform,
+# checked out into `.cms-platform/`.
+#
+# PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main): GHCR build-image +
+# `container:` DROPPED for inline deps; the container-only
+# `/__w/<repo>/<repo>` safe.directory line was DROPPED (the workspace
+# safe.directory entry remains). The salient regex matches the SITE-side
+# media paths; the workflow + spec self-references were dropped since
+# those files now live in the platform, not the site.
+name: Preview Media Gate (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: "PR number whose preview surface to probe; wired to PR_NUMBER."
+        required: true
+        type: string
+      base_ref:
+        description: "Base ref the PR targets (e.g. main); used for the salient-path diff."
+        required: false
+        type: string
+        default: main
+      apex:
+        description: "Site apex domain, e.g. example.com (no scheme). Builds preview-pr<N>.<apex>; wired to CMS_APEX."
+        required: true
+        type: string
+      platform_repo:
+        description: "owner/name of the platform repo holding the e2e harness + composite action."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the harness from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  # post-failure-comment composite needs this to post the failure
+  # summary on the PR (preview-unreachable or probe failure).
+  pull-requests: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Job name == GitHub check context == `preview-media`.
+  preview-media:
+    runs-on: ubuntu-latest
+    env:
+      CMS_APEX: ${{ inputs.apex }}
+      CMS_REPO: ${{ github.repository }}
+    # Generous: a media-salient PR must wait for deploy-preview + CDN
+    # propagation before the probe; the wait step bounds at ~20 min.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout site
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          # Need history so the salient-path diff against the base tip is
+          # accurate.
+          fetch-depth: 0
+
+      - name: Checkout platform (e2e harness + composite action)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
+        with:
+          node-version: "20"
+
+      - name: Mark workspace safe for git
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Detect media-salient changes
+        id: salient
+        # If nothing media-salient changed, the gate is not applicable
+        # and we report success immediately (early-skip) so the required
+        # context is always present without ever blocking a non-media PR.
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -o pipefail
+          git fetch origin "$BASE_REF" --depth=500 || true
+          echo "::group::salient diff refs"
+          echo "base_ref = $BASE_REF"
+          echo "HEAD            = $(git rev-parse HEAD 2>&1)"
+          echo "origin/$BASE_REF    = $(git rev-parse "origin/$BASE_REF" 2>&1)"
+          echo "merge-base      = $(git merge-base "origin/$BASE_REF" HEAD 2>&1)"
+          echo "diff cmd        = git diff --name-only origin/$BASE_REF...HEAD"
+          echo "::endgroup::"
+          # Fail CLOSED: a non-zero git diff must NOT be swallowed by
+          # `|| true` — an empty changed set matches no salient path, so
+          # the gate would silently report salient=false and let a
+          # media-salient PR merge without the preview probe. Hard-fail
+          # instead so a media-salient PR can never merge un-probed.
+          if ! changed=$(git diff --name-only "origin/${BASE_REF}...HEAD"); then
+            msg="preview-media could not compute the changed-file set against origin/${BASE_REF} (git diff exited non-zero). Failing the required gate CLOSED so a media-salient PR cannot merge without the preview probe. This indicates a CI/environment problem (e.g. git safe.directory), not a content issue — re-run the job; if it persists, investigate the workflow."
+            echo "::error title=preview-media::${msg}"
+            echo "$msg" | tee /tmp/preview-media.log
+            exit 1
+          fi
+          echo "Changed files:"
+          # shellcheck disable=SC2001
+          echo "$changed" | sed 's/^/  /'
+          # Salient = the flat media_folder, the Decap config, the site
+          # config, or the post/canary layouts. (The workflow + spec
+          # self-references from the original were dropped: those files
+          # live in the platform repo now, not the site.)
+          # PORT NOTE: the original's `scripts/patch-preview-config.sh`
+          # anchor is intentionally omitted from this SITE-side salient
+          # grep — that script is platform-owned and can never appear in
+          # a site PR diff, so an anchor for it here would be dead weight.
+          if echo "$changed" | grep -Eq \
+            '^(assets/images/uploads/|admin/config(-local)?\.yml$|_config\.yml$|_layouts/(post|canary)\.html$)'; then
+            echo "salient=true" >> "$GITHUB_OUTPUT"
+            echo "Media-salient change detected — running the preview probe."
+          else
+            echo "salient=false" >> "$GITHUB_OUTPUT"
+            echo "No media-salient change — preview-media gate not applicable; reporting success."
+          fi
+
+      - name: Install harness deps
+        if: steps.salient.outputs.salient == 'true'
+        working-directory: .cms-platform/e2e
+        run: npm ci
+
+      - name: Install Playwright browser + system deps
+        if: steps.salient.outputs.salient == 'true'
+        working-directory: .cms-platform/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Wait for the preview surface (bounded)
+        if: steps.salient.outputs.salient == 'true'
+        id: preview
+        # deploy-preview is path-filtered + non-required, so the
+        # preview-pr<N> surface may not exist yet. Poll the site root
+        # with a generous bound; record reachability. This step never
+        # fails — the "Require preview" step below converts an
+        # unreachable preview into a hard failure.
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CMS_APEX: ${{ inputs.apex }}
+        run: |
+          set -uo pipefail
+          host="https://preview-pr${PR_NUMBER}.${CMS_APEX}"
+          echo "Probing ${host}/ for readiness (bounded ~20 min)…"
+          reachable=false
+          for _ in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${host}/" || echo "000")
+            echo "  ${host}/ -> ${code}"
+            if [ "$code" = "200" ]; then
+              reachable=true
+              break
+            fi
+            sleep 30
+          done
+          echo "reachable=${reachable}" >> "$GITHUB_OUTPUT"
+          echo "host=${host}" >> "$GITHUB_OUTPUT"
+
+      - name: Require preview (hard-fail if unreachable on a salient PR)
+        if: ${{ steps.salient.outputs.salient == 'true' && steps.preview.outputs.reachable != 'true' }}
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CMS_APEX: ${{ inputs.apex }}
+        run: |
+          msg="preview-pr${PR_NUMBER}.${CMS_APEX} was not reachable within ~20 min on a media-salient PR. The preview-media gate requires a live preview surface (deploy-preview must have succeeded) to verify the flat media_folder path on the deployed build. If deploy-preview was path-skipped or failed, make a change that triggers it (or re-run deploy-preview) and push again; a maintainer can override if a preview genuinely cannot be produced."
+          echo "::error title=preview-media::${msg}"
+          echo "$msg" | tee /tmp/preview-media.log
+          exit 1
+
+      - name: Run preview media-resolve probe
+        if: ${{ steps.salient.outputs.salient == 'true' && steps.preview.outputs.reachable == 'true' }}
+        working-directory: .cms-platform/e2e
+        env:
+          # TARGET=prod skips the local Jekyll webServer — the spec hits
+          # the deployed preview directly.
+          TARGET: prod
+          # Opt-in that turns preview-media-resolves.spec.js ON, ONLY
+          # after the preview-pr<N> root is confirmed reachable.
+          RUN_PREVIEW_MEDIA_PROBE: "1"
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -o pipefail
+          npx playwright test \
+            preview-media-resolves.spec.js \
+            --project=chromium-desktop-1080 \
+            --reporter=list \
+            --max-failures=1 \
+            2>&1 | tee /tmp/preview-media.log
+
+      - name: Post failure summary
+        # Also fires when the salient detector itself hard-failed (fail
+        # closed): it exits before setting `salient`, so cover its
+        # outcome too — it tees the reason into /tmp/preview-media.log.
+        if: ${{ failure() && (steps.salient.outputs.salient == 'true' || steps.salient.outcome == 'failure') }}
+        uses: ./.cms-platform/.github/actions/post-failure-comment
+        with:
+          mode: post
+          log-file: /tmp/preview-media.log
+          marker: preview-media-failure-summary
+          title: preview-media
+          pr-number: ${{ inputs.pr_number }}
+
+      - name: Resolve failure summary on success
+        if: ${{ success() && steps.salient.outputs.salient == 'true' && steps.preview.outputs.reachable == 'true' }}
+        uses: ./.cms-platform/.github/actions/post-failure-comment
+        with:
+          mode: resolve
+          marker: preview-media-failure-summary
+          title: preview-media
+          pr-number: ${{ inputs.pr_number }}

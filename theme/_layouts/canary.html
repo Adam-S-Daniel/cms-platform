@@ -1,0 +1,26 @@
+---
+layout: default
+---
+<!--
+  Canary entries are reachable but unadvertised: they're the stable target
+  for the e2e publish-loop tests and must always render innocuous content
+  between runs. `noindex,nofollow` keeps them out of search engines; the
+  `canary_id` data attribute gives the tests a stable hook for assertions.
+-->
+{% assign baseline = page.canary_baseline | default: "E2E canary entry" %}
+<article class="canary-entry"
+         data-canary-id="{{ page.canary_id }}"
+         data-canary-baseline="{{ baseline | escape }}">
+  <header>
+    <h1>{{ page.title }}</h1>
+    <p class="canary-note">
+      <strong>This URL is reserved for automated end-to-end tests.</strong>
+      It exists at a stable address so test runs can verify that admin
+      actions propagate to the public site. Between runs the body is
+      reset to a known baseline.
+    </p>
+  </header>
+  <section class="canary-body">
+    {{ content }}
+  </section>
+</article>

@@ -1,0 +1,27 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/preview-media.yml`. Owns the pull_request trigger +
+# run-name; delegates the read-only preview-media merge gate to the
+# platform's reusable workflow. ALWAYS-RUN + EARLY-SKIP lives inside the
+# reusable's salient detector, so this caller has NO `paths:` filter
+# (required-check shape — a `paths:` filter would hit the missing-check
+# trap).
+name: Preview Media Gate
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview-media:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/preview-media.yml@v0.1.0
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      base_ref: ${{ github.base_ref }}
+      apex: example.com
+      platform_ref: v0.1.0

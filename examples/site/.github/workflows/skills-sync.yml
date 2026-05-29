@@ -1,0 +1,17 @@
+# Thin caller — weekly skills sync from the platform. Pin platform_ref to a tag.
+name: Skills sync
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  sync:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/skills-sync.yml@v0.1.0
+    with:
+      platform_ref: v0.1.0
+    secrets:
+      # Optional: a PAT so the sync PR triggers CI. Omit to use GITHUB_TOKEN.
+      gh_token: ${{ secrets.CMS_PLATFORM_PAT }}

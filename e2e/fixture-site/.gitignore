@@ -1,0 +1,13 @@
+# Build + dependency artifacts for the local-lane self-test fixture.
+# The fixture's SOURCE is committed; everything Jekyll/bundler/decap-server
+# produces at validation time is not.
+_site/
+.jekyll-cache/
+.sass-cache/
+Gemfile.lock
+vendor/
+.bundle/
+# Rendered Decap configs — the theme's decap_config_hook.rb writes these
+# into _site/admin/ at build; they never belong in source.
+admin/config.yml
+admin/config-local.yml

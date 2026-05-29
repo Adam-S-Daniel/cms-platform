@@ -1,0 +1,13 @@
+<header class="site-header">
+  <div class="container">
+    <a class="site-logo" href="{{ '/' | relative_url }}">{{ site.title }}</a>
+    <nav class="site-nav" aria-label="Main navigation">
+      <a href="{{ '/blog/' | relative_url }}" {% if page.url contains '/blog' %}class="active"{% endif %}>Blog</a>
+      {% comment %} Disabled sections — uncomment a line to re-enable that page. See also: `published:` in projects/index.html, pages/about.md, pages/contact.md, and `output:` for the projects collection in _config.yml.
+      <a href="{{ '/projects/' | relative_url }}" {% if page.url contains '/projects' %}class="active"{% endif %}>Projects</a>
+      <a href="{{ '/pages/about/' | relative_url }}" {% if page.url contains '/about' %}class="active"{% endif %}>About</a>
+      <a href="{{ '/pages/contact/' | relative_url }}" {% if page.url contains '/contact' %}class="active"{% endif %}>Contact</a>
+      {% endcomment %}
+    </nav>
+  </div>
+</header>

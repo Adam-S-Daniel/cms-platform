@@ -1,0 +1,9 @@
+name: Platform drift guard
+on:
+  pull_request:
+    paths: ['admin/**', '.claude/skills/**']
+jobs:
+  guard:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-drift-guard.yml@v0.1.0
+    with:
+      platform_ref: v0.1.0

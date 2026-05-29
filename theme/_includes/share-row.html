@@ -1,0 +1,67 @@
+{%- comment -%}
+  Understated share row for posts. Renders five icon links: LinkedIn, X,
+  Bluesky, Mastodon (instance prompt), Copy link. No labels, just icons
+  with title attributes — visual weight stays close to a post-meta line.
+
+  `include.url`   — absolute post URL (used for share intents).
+  `include.title` — post title.
+{%- endcomment -%}
+{%- assign share_url = include.url -%}
+{%- assign share_title = include.title -%}
+{%- assign share_url_enc = share_url | url_encode -%}
+{%- assign share_title_enc = share_title | url_encode -%}
+<aside class="share-row" aria-label="Share this post">
+  <span class="share-row-label">Share</span>
+  <a class="share-link" href="https://www.linkedin.com/sharing/share-offsite/?url={{ share_url_enc }}" target="_blank" rel="noopener noreferrer" title="Share on LinkedIn" aria-label="Share on LinkedIn">
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.13 1.45-2.13 2.94v5.67h-3.55V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43A2.06 2.06 0 1 1 5.34 3.3a2.06 2.06 0 0 1 0 4.13zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.72v20.56C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.72V1.72C24 .77 23.2 0 22.22 0z"/></svg>
+  </a>
+  <a class="share-link" href="https://twitter.com/intent/tweet?text={{ share_title_enc }}&url={{ share_url_enc }}" target="_blank" rel="noopener noreferrer" title="Share on X" aria-label="Share on X">
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+  </a>
+  <a class="share-link" href="https://bsky.app/intent/compose?text={{ share_title_enc }}%20{{ share_url_enc }}" target="_blank" rel="noopener noreferrer" title="Share on Bluesky" aria-label="Share on Bluesky">
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5.667 4.013c2.96 2.224 6.144 6.733 7.31 9.156 1.165-2.423 4.349-6.932 7.31-9.156 2.137-1.604 5.6-2.846 5.6 1.106 0 .79-.452 6.633-.717 7.582-.923 3.298-4.286 4.138-7.279 3.629 5.231.89 6.561 3.84 3.687 6.79-5.46 5.601-7.847-1.405-8.46-3.198-.112-.328-.165-.482-.166-.351-.001-.131-.054.023-.166.351-.612 1.793-3 8.799-8.46 3.198-2.873-2.95-1.543-5.9 3.687-6.79-2.992.509-6.355-.331-7.279-3.629C.42 11.752-.032 5.91-.032 5.119c0-3.952 3.463-2.71 5.6-1.106z"/></svg>
+  </a>
+  <button type="button" class="share-link share-mastodon" data-share-mastodon-url="{{ share_url }}" data-share-mastodon-text="{{ share_title | xml_escape }}" title="Share on Mastodon" aria-label="Share on Mastodon">
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M23.268 5.313c-.35-2.578-2.617-4.61-5.304-5.004C17.51.242 15.792 0 11.813 0h-.03c-3.98 0-4.835.242-5.288.309C3.882.692 1.496 2.518.917 5.127.64 6.412.61 7.837.661 9.143c.073 1.874.088 3.745.26 5.611.118 1.24.325 2.47.62 3.68.55 2.237 2.777 4.098 4.96 4.857a13.3 13.3 0 0 0 7.273.383c.265-.062.527-.134.786-.215.585-.186 1.27-.394 1.774-.756.007-.005.014-.01.018-.016.245-.21.215-.527.198-.667-.026-.197-.169-.347-.366-.366a.633.633 0 0 0-.183.018 13.6 13.6 0 0 1-3.181.371c-1.892 0-3.83-.524-4.155-2.473a3.6 3.6 0 0 1-.034-.507c.51.124 1.026.226 1.546.305a23 23 0 0 0 4.359.156c1.451-.092 2.825-.215 4.213-.572.273-.07.532-.16.798-.23 1.408-.378 2.79-1.282 3.404-2.683.218-.5.342-1.04.367-1.586.062-1.395.062-2.79 0-4.184ZM19.93 14.137c-1.195.43-2.434.7-3.687.83-1.255.13-2.518.224-3.78.224-1.262 0-2.524-.094-3.78-.224a26.85 26.85 0 0 1-3.687-.83c-.106-.04-.2-.114-.247-.219-.052-.114-.064-.244-.034-.366.052-.197.247-.31.451-.31.058 0 .106.012.165.022 1.142.319 2.301.561 3.475.728 1.156.158 2.328.247 3.501.247 1.173 0 2.345-.089 3.501-.247a23.5 23.5 0 0 0 3.475-.728c.058-.01.106-.022.165-.022.204 0 .399.114.451.31.03.122.018.252-.034.366a.488.488 0 0 1-.247.219Z"/></svg>
+  </button>
+  <button type="button" class="share-link share-copy" data-share-copy-url="{{ share_url }}" title="Copy link" aria-label="Copy link">
+    <svg class="share-icon-default" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3.9 12a3.1 3.1 0 0 1 3.1-3.1h4V7H7a5 5 0 0 0 0 10h4v-1.9H7A3.1 3.1 0 0 1 3.9 12zm4.1 1h8v-2H8v2zm9-6h-4v1.9h4a3.1 3.1 0 0 1 0 6.2h-4V17h4a5 5 0 0 0 0-10z"/></svg>
+    <svg class="share-icon-success" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+  </button>
+</aside>
+<script>
+(function(){
+  document.querySelectorAll('.share-copy').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var url = btn.getAttribute('data-share-copy-url');
+      var ok = function(){
+        btn.classList.add('share-copied');
+        setTimeout(function(){ btn.classList.remove('share-copied'); }, 1800);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(ok).catch(function(){
+          window.prompt('Copy this link', url);
+        });
+      } else {
+        window.prompt('Copy this link', url);
+      }
+    });
+  });
+  document.querySelectorAll('.share-mastodon').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var key = 'mastodon-instance';
+      var stored = '';
+      try { stored = window.localStorage.getItem(key) || ''; } catch(e){}
+      var raw = window.prompt('Your Mastodon instance (e.g. mastodon.social):', stored || 'mastodon.social');
+      if (!raw) return;
+      var host = raw.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      if (!/^[a-z0-9.\-]+\.[a-z]{2,}$/i.test(host)) return;
+      try { window.localStorage.setItem(key, host); } catch(e){}
+      var text = btn.getAttribute('data-share-mastodon-text') || '';
+      var url = btn.getAttribute('data-share-mastodon-url') || '';
+      var target = 'https://' + host + '/share?text=' + encodeURIComponent(text + ' ' + url);
+      window.open(target, '_blank', 'noopener,noreferrer');
+    });
+  });
+})();
+</script>

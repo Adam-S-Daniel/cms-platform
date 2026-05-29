@@ -1,0 +1,16 @@
+name: Publish Scheduled Posts
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || format('manual — @{0}', github.actor) }}
+on:
+  schedule:
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-scheduled-posts.yml@v0.1.0
+    with:
+      platform_ref: v0.1.0

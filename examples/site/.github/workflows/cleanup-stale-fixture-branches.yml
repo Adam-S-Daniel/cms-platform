@@ -1,0 +1,25 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/cleanup-stale-fixture-branches.yml`. Owns the
+# `schedule` + `workflow_dispatch` triggers + run-name; delegates the
+# fixture-branch sweep to the platform's reusable workflow. The sweep needs
+# no site identity — it runs against this repo via the github-script context.
+name: Cleanup stale e2e fixture branches
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # Daily at 11:00 UTC. Slot ahead of the cms-publish-loop-host run so any
+    # leftover fixture branches from yesterday are gone before today's run.
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sweep:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cleanup-stale-fixture-branches.yml@v0.1.0

@@ -1,0 +1,45 @@
+# Thin caller — copied into a site repo as `.github/workflows/deploy-production.yml`.
+# It owns the trigger + paths-ignore; the build/deploy logic lives in the
+# platform's reusable workflow. Pin `@vX.Y.Z` to a cms-platform release and let
+# Dependabot (github-actions ecosystem) open the bump PRs.
+name: Deploy to Production
+run-name: >-
+  ${{ github.event_name == 'push'
+        && format('push — {0} @{1}', github.ref_name, github.actor)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  push:
+    branches: [main]
+    # Customize per site. Skip pushes that can't change what's served from S3
+    # (docs, infra-as-code, tests, dev tooling). Keep this workflow file itself
+    # OUT of the list so caller-only changes still validate via a real run.
+    paths-ignore:
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'docs/**'
+      - 'e2e/**'
+      - 'tests/**'
+      - 'infrastructure/**'
+      - 'oauth-proxy/**'
+      - 'scripts/**'
+  # Manual force-deploy (workflow_dispatch ignores paths-ignore).
+  workflow_dispatch:
+
+# Reusable workflows are capped by the caller's token permissions — grant here
+# what deploy-production.yml declares it needs.
+permissions:
+  contents: read
+  id-token: write
+  deployments: write
+
+jobs:
+  deploy:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-production.yml@v0.1.0
+    with:
+      apex_domain: example.com
+      prod_bucket: example-com-production
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      PRODUCTION_CLOUDFRONT_ID: ${{ secrets.PRODUCTION_CLOUDFRONT_ID }}

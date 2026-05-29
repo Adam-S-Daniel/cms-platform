@@ -1,0 +1,125 @@
+name: CMS recursion gate
+description: >-
+  Decide whether a real-prod loop workflow should run on this event.
+  On a `push` to main, RUN iff the push changed at least one file
+  OUTSIDE this loop's own canary-churn set; SKIP iff every changed file
+  is part of it (the loop feeding itself via Decap's auto-merged
+  cms/<col>/<slug> commit). schedule / workflow_dispatch always run.
+  Fails OPEN (run) on any ambiguity — branch-create, an unreachable
+  before-sha, a git-diff error, or an empty delta — so a possibly-real
+  machinery change is never silently skipped.
+
+  Replaces the old `!startsWith(head_commit.message, 'publish: ')`
+  job-level guard, which Decap's own `Update {{collection}} "{{slug}}"`
+  squash template structurally evaded (see e2e/cms-recursion-churn.js).
+  Bash + Node only — no transitive `uses:` (clean for SHA-pinning;
+  mirrors the await-prod-deploy precedent). The caller MUST check the
+  repo out with `fetch-depth: 2` so `git diff <before> <sha>` resolves.
+
+inputs:
+  loop:
+    description: "Loop key — host | media | prod (selects the self-churn set in e2e/cms-recursion-churn.js)."
+    required: true
+  event-name:
+    description: "github.event_name."
+    required: false
+    default: ${{ github.event_name }}
+  before:
+    description: "github.event.before — the pre-push main tip (push events)."
+    required: false
+    default: ${{ github.event.before }}
+  sha:
+    description: "github.sha — the post-push tip to diff against."
+    required: false
+    default: ${{ github.sha }}
+
+outputs:
+  run:
+    description: "'true' to run the loop job, 'false' to skip it (loop fed itself)."
+    value: ${{ steps.decide.outputs.run }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide (changed-files recursion gate)
+      id: decide
+      shell: bash
+      env:
+        RG_LOOP: ${{ inputs.loop }}
+        RG_EVENT: ${{ inputs.event-name }}
+        RG_BEFORE: ${{ inputs.before }}
+        RG_SHA: ${{ inputs.sha }}
+      run: |
+        set -uo pipefail
+        emit() {
+          echo "run=$1" >> "$GITHUB_OUTPUT"
+          echo "::notice::cms-recursion-gate[$RG_LOOP] event=$RG_EVENT → run=$1 ($2)"
+        }
+
+        # schedule / workflow_dispatch: no merge to inspect — always run.
+        if [ "$RG_EVENT" != "push" ]; then
+          emit true "non-push event always runs"; exit 0
+        fi
+
+        ZERO=0000000000000000000000000000000000000000
+        if [ -z "${RG_BEFORE:-}" ] || [ "$RG_BEFORE" = "$ZERO" ]; then
+          emit true "no usable before-sha (branch create / force) — fail-open"; exit 0
+        fi
+
+        # checkout is fetch-depth:2 (covers the common single-commit
+        # squash push: before == parent of sha). A deeper / force push
+        # may need `before` fetched on demand; if it still can't be
+        # resolved, fail open rather than guess.
+        if ! git cat-file -e "${RG_BEFORE}^{commit}" 2>/dev/null; then
+          git fetch --no-tags --depth=1 origin "$RG_BEFORE" 2>/dev/null || true
+        fi
+        if ! git cat-file -e "${RG_BEFORE}^{commit}" 2>/dev/null; then
+          emit true "before-sha $RG_BEFORE unreachable — fail-open"; exit 0
+        fi
+
+        if ! changed="$(git diff --name-only "$RG_BEFORE" "$RG_SHA" 2>/dev/null)"; then
+          emit true "git diff failed — fail-open"; exit 0
+        fi
+        if [ -z "$changed" ]; then
+          emit true "empty changed set — fail-open"; exit 0
+        fi
+
+        echo "::group::cms-recursion-gate[$RG_LOOP] changed files ($RG_BEFORE..$RG_SHA)"
+        printf '%s\n' "$changed"
+        echo "::endgroup::"
+
+        # Pure decision against the single-source churn map. require()
+        # by absolute path so the composite's CWD is irrelevant; the
+        # module has zero external deps. The churn module ships with the
+        # PLATFORM's e2e harness — resolve it whether the harness lives
+        # at the workspace root (platform dogfooding itself) or under
+        # .cms-platform/ (a consuming site that checked the platform out
+        # there). Falls open on a require() miss.
+        decision="$(printf '%s\n' "$changed" | RG_LOOP="$RG_LOOP" node -e '
+          const path = require("path");
+          const fs = require("fs");
+          const ws = process.env.GITHUB_WORKSPACE || ".";
+          const candidates = [
+            path.join(ws, "e2e", "cms-recursion-churn.js"),
+            path.join(ws, ".cms-platform", "e2e", "cms-recursion-churn.js"),
+          ];
+          const mod = candidates.find((p) => fs.existsSync(p));
+          let s = "";
+          process.stdin.on("data", (d) => (s += d)).on("end", () => {
+            const paths = s.split("\n").map((x) => x.trim()).filter(Boolean);
+            try {
+              if (!mod) throw new Error("cms-recursion-churn.js not found in " + candidates.join(", "));
+              const { shouldRunLoop } = require(mod);
+              process.stdout.write(shouldRunLoop(process.env.RG_LOOP, paths) ? "true" : "false");
+            } catch (e) {
+              process.stderr.write("cms-recursion-gate node error: " + String((e && e.message) || e));
+              process.stdout.write("true"); // fail open
+            }
+          });
+        ')" || decision=true
+
+        case "$decision" in
+          true)  emit true  "changed set includes non-self-churn paths" ;;
+          false) emit false "every changed file ∈ ${RG_LOOP} self-churn set (loop fed itself)" ;;
+          *)     emit true  "unrecognised decision '$decision' — fail-open" ;;
+        esac

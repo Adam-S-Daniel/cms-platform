@@ -1,0 +1,44 @@
+name: Publish Scheduled Posts
+on:
+  workflow_call:
+    inputs:
+      platform_repo:
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        type: string
+        default: main
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          # Use the default GITHUB_TOKEN; the push below will trigger
+          # deploy-production.yml via the standard push event.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout platform scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Check and publish due posts
+        id: check
+        run: python3 .cms-platform/scripts/publish_scheduled_posts.py
+
+      - name: Commit and push
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add _posts/
+          git commit -m "chore: auto-publish ${{ steps.check.outputs.count }} scheduled post(s)"
+          git push origin main
+

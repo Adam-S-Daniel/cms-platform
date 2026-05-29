@@ -1,0 +1,208 @@
+name: Await prod deploy
+description: >-
+  Block a real-prod loop until THIS commit is actually live on the
+  site's production URL before it drives the production admin. On a
+  post-merge push the loop workflows fire on the same event as
+  deploy-production.yml; without this gate they would validate a stale
+  pre-merge site. No-op when no deploy run exists for the SHA (the push
+  only touched deploy-production `paths-ignore` files, e.g. e2e/**) so
+  it never hangs on a deploy that was never going to happen. The caller
+  gates this to `github.event_name == 'push'` (workflow_dispatch /
+  schedule have no associated merge and intentionally run against the
+  current prod site).
+
+inputs:
+  sha:
+    description: "Merge commit SHA that must be live on prod."
+    required: false
+    default: ${{ github.sha }}
+  repo:
+    description: "owner/name (defaults to the current repo)."
+    required: false
+    default: ${{ github.repository }}
+  token:
+    description: "Token with `actions: read` scope to query deploy runs."
+    required: false
+    default: ${{ github.token }}
+  deploy-workflow-file:
+    description: "Deploy workflow file name (the REST workflow_id)."
+    required: false
+    default: deploy-production.yml
+  prod-url:
+    description: >-
+      Deployed production URL (scheme included, no trailing slash), e.g.
+      https://example.com. Used to derive the default commit-json-url
+      when that is not supplied explicitly.
+    required: false
+    default: ""
+  commit-json-url:
+    description: >-
+      Prod endpoint serving the deployed sha/iso/branch JSON. Optional
+      (no site-specific default): pass it directly, or leave it empty and
+      pass `prod-url` to derive `<prod-url>/admin/commit.json`. With
+      neither, the CDN-reflect ground-truth check is skipped.
+    required: false
+    default: ""
+  grace-seconds:
+    description: >-
+      How long to wait for a deploy run to APPEAR before concluding the
+      push was deploy-irrelevant (paths-ignore) and proceeding.
+    required: false
+    default: "150"
+  deploy-timeout-seconds:
+    description: Max wait for the deploy run to conclude.
+    required: false
+    default: "900"
+  reflect-timeout-seconds:
+    description: Max wait for the CDN to serve the merge SHA.
+    required: false
+    default: "600"
+
+runs:
+  using: composite
+  steps:
+    - name: Await prod deploy of ${{ inputs.sha }}
+      shell: bash
+      env:
+        AD_SHA: ${{ inputs.sha }}
+        AD_REPO: ${{ inputs.repo }}
+        AD_TOKEN: ${{ inputs.token }}
+        AD_WF: ${{ inputs.deploy-workflow-file }}
+        AD_PROD_URL: ${{ inputs.prod-url }}
+        AD_COMMIT_URL: ${{ inputs.commit-json-url }}
+        AD_GRACE_S: ${{ inputs.grace-seconds }}
+        AD_DEPLOY_TIMEOUT_S: ${{ inputs.deploy-timeout-seconds }}
+        AD_REFLECT_TIMEOUT_S: ${{ inputs.reflect-timeout-seconds }}
+      run: |
+        set -uo pipefail
+        echo "::group::Await prod deploy of $AD_SHA"
+
+        # Resolve the commit.json endpoint. Prefer an explicit
+        # commit-json-url; otherwise derive it from prod-url. With
+        # neither, there is no ground truth to poll — skip the reflect
+        # check rather than hang (a site without a commit.json endpoint
+        # gets only the deploy-run gate, steps 1-2).
+        if [ -z "$AD_COMMIT_URL" ] && [ -n "$AD_PROD_URL" ]; then
+          AD_COMMIT_URL="${AD_PROD_URL%/}/admin/commit.json"
+        fi
+
+        # Portable JSON read: the runner has node but not necessarily
+        # jq/gh. `jget <expr>` reads stdin JSON and prints the
+        # expression (empty string on any error).
+        jget() {
+          node -e '
+            let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+              try{const j=JSON.parse(s);
+                let v=j;for(const k of process.argv[1].split("."))v=v==null?v:v[k];
+                process.stdout.write(v==null?"":String(v));
+              }catch(e){process.stdout.write("");}
+            });' "$1"
+        }
+        api() {
+          curl -fsS --max-time 25 \
+            -H "Authorization: Bearer $AD_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com$1"
+        }
+
+        # 1. Wait (bounded) for a Deploy to Production run for this SHA
+        #    to exist. None after the grace window ⇒ the push only
+        #    touched deploy-production paths-ignore files (no deploy was
+        #    ever going to run) ⇒ prod is already correct for what this
+        #    push changed ⇒ proceed.
+        run_id=""
+        deadline=$(( $(date +%s) + AD_GRACE_S ))
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+          body="$(api "/repos/$AD_REPO/actions/workflows/$AD_WF/runs?head_sha=$AD_SHA&per_page=1" || true)"
+          run_id="$(printf '%s' "$body" | node -e '
+            let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+              try{const j=JSON.parse(s);const r=(j.workflow_runs||[])[0];
+                process.stdout.write(r?String(r.id):"");}catch(e){process.stdout.write("");}
+            });')"
+          [ -n "$run_id" ] && break
+          sleep 10
+        done
+        if [ -z "$run_id" ]; then
+          echo "::notice::No '$AD_WF' run for $AD_SHA after ${AD_GRACE_S}s — deploy-irrelevant push (paths-ignore); proceeding without wait."
+          echo "::endgroup::"; exit 0
+        fi
+        echo "Deploy run for $AD_SHA = $run_id; waiting for it to conclude…"
+
+        # 2. Wait for that deploy run to conclude, then defer to GROUND
+        #    TRUTH (step 3) regardless of HOW it concluded — do NOT
+        #    hard-fail on a non-success conclusion here. The `production`
+        #    lane is `cancel-in-progress: false`, so a deploy QUEUED for
+        #    THIS merge can be superseded (conclusion 'cancelled') by a
+        #    newer sibling/canary deploy that carried main — including
+        #    this merge's tree — forward. prod then ends up AHEAD of the
+        #    merge and is perfectly live, yet the merge's OWN run shows a
+        #    non-success conclusion. Hard-failing here reds the gate on a
+        #    healthy prod. Defer to step 3, which asks the only question
+        #    that matters: does prod serve THIS SHA or a newer
+        #    descendant? That check is strictly STRONGER than trusting
+        #    the run's conclusion, so "never drive a stale prod" still
+        #    holds — a genuinely stale or failed-and-not-superseded prod
+        #    never reaches the merge SHA or a descendant within step 3's
+        #    window and fails loud THERE. We only log the conclusion
+        #    here, for triage.
+        status=""; concl=""
+        end=$(( $(date +%s) + AD_DEPLOY_TIMEOUT_S ))
+        while [ "$(date +%s)" -lt "$end" ]; do
+          rb="$(api "/repos/$AD_REPO/actions/runs/$run_id" || true)"
+          status="$(printf '%s' "$rb" | jget status)"
+          concl="$(printf '%s' "$rb" | jget conclusion)"
+          if [ "$status" = "completed" ]; then
+            if [ "$concl" = "success" ]; then
+              echo "Deploy run $run_id succeeded."
+            else
+              echo "::warning::Deploy run $run_id for $AD_SHA concluded '$concl' (likely superseded in the 'production' lane by a newer deploy). Deferring to ground truth — what prod actually serves — in step 3 below."
+            fi
+            break
+          fi
+          sleep 15
+        done
+        if [ "$status" != "completed" ]; then
+          echo "::warning::Deploy run $run_id of $AD_SHA did not conclude within ${AD_DEPLOY_TIMEOUT_S}s; deferring to ground truth (prod commit.json) in step 3 rather than failing on the run state alone."
+        fi
+
+        # 3. deploy-production success ≠ edge serving it yet (CloudFront
+        #    invalidation lag). Confirm the user-facing truth: prod
+        #    /admin/commit.json reports THIS SHA *or a newer descendant*.
+        #    A descendant means main advanced past this merge (a sibling/
+        #    canary merge deployed while this lane-serialized loop waited
+        #    its turn) so prod is AHEAD of the merge — the opposite of
+        #    stale, so proceeding is correct ("never drive a stale prod"
+        #    still holds). Requiring an EXACT match instead timed out
+        #    spuriously whenever prod moved forward during the wait.
+        #
+        #    No commit.json endpoint configured ⇒ no ground truth to
+        #    poll. The deploy-run gate (steps 1-2) already concluded;
+        #    proceed.
+        if [ -z "$AD_COMMIT_URL" ]; then
+          echo "::notice::No commit-json-url/prod-url configured — skipping the CDN-reflect ground-truth check; deploy-run gate (steps 1-2) was sufficient."
+          echo "::endgroup::"; exit 0
+        fi
+        rel=""
+        end=$(( $(date +%s) + AD_REFLECT_TIMEOUT_S ))
+        while [ "$(date +%s)" -lt "$end" ]; do
+          live="$(curl -fsS --max-time 15 "$AD_COMMIT_URL" 2>/dev/null | jget sha || true)"
+          if [ "$live" = "$AD_SHA" ]; then
+            echo "$AD_COMMIT_URL now serves $AD_SHA — prod is live with the merge; proceeding."
+            echo "::endgroup::"; exit 0
+          fi
+          if [ -n "$live" ]; then
+            # GitHub compare base...head: status "ahead" ⇒ head (live)
+            # contains base (AD_SHA) plus more commits ⇒ prod is a
+            # descendant of the merge ⇒ ahead, not stale ⇒ proceed.
+            rel="$(api "/repos/$AD_REPO/compare/$AD_SHA...$live" 2>/dev/null | jget status || true)"
+            if [ "$rel" = "ahead" ]; then
+              echo "$AD_COMMIT_URL serves $live — a descendant of $AD_SHA (prod is ahead of the merge, not stale); proceeding."
+              echo "::endgroup::"; exit 0
+            fi
+          fi
+          echo "prod commit.json sha=${live:-<unreachable>} (want $AD_SHA or newer; compare=${rel:-?}) — waiting for CloudFront…"
+          sleep 15
+        done
+        echo "::error::Deploy chain for $AD_SHA (run $run_id) did not go live: $AD_COMMIT_URL never served $AD_SHA or a newer descendant within ${AD_REFLECT_TIMEOUT_S}s (CDN/invalidation stuck, or prod genuinely stale/diverged from the merge — not merely superseded)."
+        echo "::endgroup::"; exit 1

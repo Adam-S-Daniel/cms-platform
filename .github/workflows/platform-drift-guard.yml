@@ -1,0 +1,65 @@
+# Reusable up-sync guard. Runs on a site PR: platform-owned files that live in
+# the site (admin/, .claude/skills/) must byte-match the platform at the site's
+# pinned ref. A PR that changes one fails the check with guidance to make the
+# change in cms-platform instead — that's the site→platform route. Site-owned
+# seams (collections.site.yml) and generated configs are exempt.
+name: Platform drift guard (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
+      platform_ref:  { type: string, default: main }
+      paths:         { type: string, default: "admin .claude/skills" }
+      ignore:        { type: string, default: "admin/collections.site.yml admin/config.yml admin/config-local.yml" }
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+      - name: Fetch platform baseline
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+      - name: Compare platform-owned files
+        env:
+          PATHS: ${{ inputs.paths }}
+          IGNORE: ${{ inputs.ignore }}
+          REF: ${{ inputs.platform_ref }}
+          PLATFORM: ${{ inputs.platform_repo }}
+        run: |
+          set -uo pipefail
+          # The platform stores skills under skills/; in the site they live under
+          # .claude/skills/. Map site path -> platform path for the baseline.
+          baseline_for() {
+            case "$1" in
+              .claude/skills/*) echo ".cms-platform/skills/${1#.claude/skills/}";;
+              *) echo ".cms-platform/$1";;
+            esac
+          }
+          drift=0
+          for p in $PATHS; do
+            [ -d "$p" ] || [ -f "$p" ] || continue
+            while IFS= read -r -d '' f; do
+              rel="${f#./}"
+              case " $IGNORE " in *" $rel "*) continue;; esac
+              base="$(baseline_for "$rel")"
+              [ -f "$base" ] || continue   # site-only file → not platform-owned
+              if ! diff -q "$f" "$base" >/dev/null 2>&1; then
+                echo "::error file=$rel::'$rel' differs from ${PLATFORM}@${REF}. Make this change in cms-platform (open a PR there), tag a release, and let the bump flow back."
+                drift=1
+              fi
+            done < <(find "$p" -type f -print0 2>/dev/null)
+          done
+          rm -rf .cms-platform
+          if [ "$drift" = 1 ]; then
+            echo "Platform-owned files were edited in the site. Site-owned seams (e.g. admin/collections.site.yml) are exempt."
+            exit 1
+          fi
+          echo "No platform drift."

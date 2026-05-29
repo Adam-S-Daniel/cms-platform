@@ -1,0 +1,46 @@
+# Thin caller — copied into a site repo as `.github/workflows/deploy-preview.yml`.
+# Owns the PR trigger + paths-ignore + run-name; delegates build/deploy/teardown
+# to the platform's reusable workflow. Keep `platform_ref` equal to the `@vX.Y.Z`
+# pin so the helper scripts match the workflow version.
+name: Deploy Preview
+run-name: >-
+  ${{ github.event.action == 'closed'
+        && format('PR #{0} — teardown', github.event.pull_request.number)
+   || format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+    # Customize per site (mirror deploy-production's list for what can't change
+    # the built site).
+    paths-ignore:
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'docs/**'
+      - 'e2e/**'
+      - 'tests/**'
+      - 'infrastructure/**'
+      - 'oauth-proxy/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+  deployments: write
+  statuses: write
+
+jobs:
+  preview:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-preview.yml@v0.1.0
+    with:
+      apex_domain: example.com
+      preview_bucket: example-com-previews
+      # Keep unique per site so multiple sites' bots never clobber comments.
+      bot_marker: example-com-preview-bot
+      # Pin to the SAME ref as the `uses:` pin above so the helper scripts match.
+      platform_ref: v0.1.0
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      PREVIEW_CLOUDFRONT_ID: ${{ secrets.PREVIEW_CLOUDFRONT_ID }}

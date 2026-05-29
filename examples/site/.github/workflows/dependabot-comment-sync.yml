@@ -1,0 +1,56 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/dependabot-comment-sync.yml`. Owns the
+# `pull_request_target` + `push` + `workflow_dispatch` triggers, the
+# `paths:` filter, and the run-name; delegates the comment-sync logic to the
+# platform's reusable workflow. The sync script lives in the platform repo —
+# this caller only carries the triggers and wires the workflow-scoped PAT
+# through. Keep `platform_ref` equal to the `@vX.Y.Z` pin on the `uses:` line
+# so the script matches the workflow version.
+#
+# SECURITY: the `pull_request_target` posture is preserved from the platform
+# reusable's header — the executed script is platform-authoritative (fetched
+# from `platform_ref`, never from the PR head), the Dependabot-only gate runs
+# at the reusable's first step, and GitHub ignores PR edits to THIS file
+# (pull_request_target always runs the base-ref version). Don't add an
+# untrusted-PR-head checkout here; the reusable already handles the PR-head
+# checkout as a mutation target only.
+name: Dependabot comment sync
+run-name: >-
+  ${{ github.event_name == 'pull_request_target'
+        && format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title)
+   || github.event_name == 'push'
+        && format('push — {0} @{1}', github.ref_name, github.actor)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  # `workflow_dispatch` is here for manual debugging — re-run the sync
+  # against a Dependabot PR head when investigating why its action-pin
+  # comments weren't refreshed.
+  workflow_dispatch:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/**'
+  # `push` to every branch suppresses GitHub Actions' phantom failure
+  # runs: without a `push:` trigger, GHA records a phantom
+  # `event=push`/`conclusion=failure`/zero-jobs run on every push. A real
+  # push handler that skips cleanly at the reusable's first step replaces
+  # the phantom red rows with a real ~5 second `success` run.
+  push:
+    branches: ['**']
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  sync:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/dependabot-comment-sync.yml@v0.1.0
+    with:
+      # Pin to the SAME ref as the `uses:` pin above so the script matches.
+      platform_ref: v0.1.0
+    secrets:
+      # Fine-grained PAT with `workflows: write` so the follow-up commit can
+      # push the refreshed workflow files. Drop this line if the site hasn't
+      # configured the PAT — the reusable then skips cleanly with a notice.
+      workflow_sha_comment_pat: ${{ secrets.WORKFLOW_SHA_COMMENT_PAT }}

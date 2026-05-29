@@ -1,0 +1,16 @@
+# Opt-in per-site collections. Copy to admin/collections.site.yml to add or
+# override collections; the render splices these list items into the platform's
+# base collections at build time (the platform machinery collections — posts,
+# tags, projects, pages, and the mandatory e2e canary — always stay).
+#
+# Indentation must match the base collections list (2 spaces for `- name:`).
+  - name: notes
+    label: Notes
+    label_singular: Note
+    folder: _notes
+    create: true
+    delete: true
+    slug: "{{slug}}"
+    fields:
+      - { name: title, label: Title, widget: string, required: true }
+      - { name: body,  label: Body,  widget: markdown, required: true }

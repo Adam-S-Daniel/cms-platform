@@ -1,0 +1,370 @@
+---
+layout: default
+---
+{% comment %}
+  Live preview shell. Rendered with the real site chrome (default layout)
+  so typography, header, footer, and CSS are identical to production by
+  construction — changing a layout or stylesheet automatically flows into
+  the preview without a separate code path.
+
+  The shell hosts three hidden layout fragments — post, page, project —
+  mirroring the field structure of each Jekyll layout. The client script
+  picks one based on ?collection=, exposes named slots via
+  [data-preview-slot="…"], and streams draft content in from the CMS via
+  window.postMessage({ type: "cms-preview-update", fields: {…} }).
+
+  Security: all messages are origin-checked against the preview page's
+  own origin, so only same-origin callers (the CMS admin) can update it.
+{% endcomment %}
+
+<meta name="robots" content="noindex, nofollow">
+
+<style>
+  /* Empty-state overlay — visible until the first cms-preview-update
+     message arrives. Editors land here from the Live Preview link in
+     the admin and need to know that the preview only fills in after
+     they hit Save (or Publish now) on the entry. */
+  #preview-empty-state {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: var(--bg-page, #04060f);
+    color: var(--text-secondary, #c8d4f0);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    text-align: center; padding: 2rem;
+    z-index: 100;
+    transition: opacity 0.3s ease;
+  }
+  #preview-empty-state.hidden { opacity: 0; pointer-events: none; }
+  #preview-empty-state h2 {
+    font-weight: 200; font-size: 1.6rem;
+    margin: 0 0 1rem; color: var(--text-primary, #d8e4ff);
+  }
+  #preview-empty-state p { margin: 0.25rem 0; max-width: 32rem; }
+  #preview-empty-state code {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.85em;
+    background: rgba(40, 90, 255, 0.12);
+    padding: 0.1em 0.4em; border-radius: 3px;
+  }
+  #preview-empty-state .hint {
+    margin-top: 1.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted, #8ab0e8);
+    letter-spacing: 0.04em;
+  }
+
+  /* Advisory shown when the rendered body contains an HTML embed. The
+     preview pipes markdown through marked.js → innerHTML, so <script>
+     tags inside an embed do NOT execute here. The banner points authors
+     at the PR preview environment, where the page loads as a real
+     document and scripts run normally. */
+  #preview-embed-banner {
+    position: fixed; top: 0; left: 0; right: 0;
+    z-index: 90;
+    padding: 0.5rem 1rem;
+    background: rgba(40, 90, 255, 0.12);
+    border-bottom: 1px solid rgba(40, 90, 255, 0.4);
+    color: var(--text-primary, #d8e4ff);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 0.8rem;
+    text-align: center;
+    letter-spacing: 0.02em;
+  }
+  #preview-embed-banner code {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.9em;
+    background: rgba(40, 90, 255, 0.18);
+    padding: 0.05em 0.35em; border-radius: 3px;
+  }
+</style>
+
+<div id="preview-empty-state">
+  <h2>Live preview</h2>
+  <p>Hit <code>Save</code> or <code>Publish now</code> on the entry you're
+  editing in the admin tab — this preview will fill in automatically.</p>
+  <p class="hint">Keep this tab open while you edit.</p>
+</div>
+
+<div id="preview-embed-banner" hidden>
+  This post contains an HTML embed. <code>&lt;script&gt;</code> tags do not
+  execute in this preview — open the PR preview environment for full fidelity.
+</div>
+
+<div class="preview-root" data-preview-root>
+  <!-- Post layout — mirrors _layouts/post.html -->
+  <div class="container preview-variant" data-preview-layout="posts" hidden>
+    <article class="post">
+      <header class="post-header">
+        <div class="post-meta">
+          <time class="post-date" data-preview-slot="date"></time>
+          <span class="post-reading-time" data-preview-slot="reading-time"></span>
+          <div class="post-tags" data-preview-slot="tags"></div>
+        </div>
+        <h1 data-preview-slot="title"></h1>
+        <img class="featured-image" data-preview-slot="featured-image" alt="" hidden>
+      </header>
+      <div class="post-content" data-preview-slot="body"></div>
+    </article>
+  </div>
+
+  <!-- Page layout — mirrors _layouts/page.html -->
+  <div class="container preview-variant" data-preview-layout="pages" hidden>
+    <div class="page-header">
+      <h1 data-preview-slot="title"></h1>
+    </div>
+    <div class="page-content" data-preview-slot="body"></div>
+  </div>
+
+  <!-- Project layout — mirrors _layouts/project.html -->
+  <div class="container preview-variant" data-preview-layout="projects" hidden>
+    <article class="post">
+      <header class="post-header">
+        <div class="post-meta">
+          <span class="project-tech" data-preview-slot="technology" hidden></span>
+          <span class="tag-pill" data-preview-slot="featured-badge"
+                style="border-color: var(--accent); color: var(--accent);" hidden>Featured</span>
+        </div>
+        <h1 data-preview-slot="title"></h1>
+        <a class="project-link" data-preview-slot="project-link"
+           target="_blank" rel="noopener noreferrer" hidden>View Project ↗</a>
+      </header>
+      <div class="post-content" data-preview-slot="body"></div>
+    </article>
+  </div>
+</div>
+
+<!--
+  Try unpkg first so browsers with a warm CDN edge load ~0ms; fall back to
+  the vendored copy synchronously (via document.write during parsing, so
+  it's loaded before the inline script below runs) when the CDN is
+  blocked, offline, or returning a bad response.
+-->
+<script src="https://unpkg.com/marked@13.0.0/marked.min.js"></script>
+<script>
+  if (typeof window.marked === "undefined") {
+    document.write(
+      '<script src="{{ "/assets/js/marked.min.js" | relative_url }}"><\/script>'
+    );
+  }
+</script>
+<script>
+(function () {
+  "use strict";
+
+  // Cross-origin postMessages are rejected. Same-origin only.
+  var EXPECTED_ORIGIN = window.location.origin;
+
+  var params = new URLSearchParams(window.location.search);
+  var collection = params.get("collection") || "posts";
+
+  // Pick the requested variant and strip the rest from the DOM entirely,
+  // so ambiguous selectors like `.post-header h1` only resolve to one
+  // element and the document reflects just the active layout. Fall back
+  // to posts for unknown collections.
+  var variants = Array.from(
+    document.querySelectorAll("[data-preview-layout]")
+  );
+  var active = variants.find(function (el) {
+    return el.getAttribute("data-preview-layout") === collection;
+  });
+  if (!active) {
+    active = variants.find(function (el) {
+      return el.getAttribute("data-preview-layout") === "posts";
+    });
+    collection = "posts";
+  }
+  variants.forEach(function (el) {
+    if (el === active) el.hidden = false;
+    else el.remove();
+  });
+
+  // Scope slot lookups to the active variant so the duplicated
+  // [data-preview-slot="title"] across variants doesn't collide.
+  function slot(name) {
+    return active.querySelector(
+      '[data-preview-slot="' + CSS.escape(name) + '"]'
+    );
+  }
+
+  function setText(name, value) {
+    var el = slot(name);
+    if (el) el.textContent = value == null ? "" : String(value);
+  }
+
+  function setHTML(name, html) {
+    var el = slot(name);
+    if (el) el.innerHTML = html == null ? "" : html;
+  }
+
+  function setAttr(name, attr, value) {
+    var el = slot(name);
+    if (!el) return;
+    if (value) {
+      el.setAttribute(attr, value);
+      el.hidden = false;
+    } else {
+      el.removeAttribute(attr);
+      el.hidden = true;
+    }
+  }
+
+  function syncFeaturedImageAlt(title) {
+    // A11y: mirror the post <h1> into the hero image's alt. Matches the
+    // real post layout (`_layouts/post.html`) which sets alt="{{ page.title }}".
+    var img = slot("featured-image");
+    if (img) img.setAttribute("alt", title || "");
+  }
+
+  function formatDate(raw) {
+    if (!raw) return "";
+    var d = new Date(raw);
+    if (isNaN(d.getTime())) return String(raw);
+    try {
+      return d.toLocaleDateString("en-US", {
+        year: "numeric", month: "long", day: "numeric"
+      });
+    } catch (_) {
+      return d.toISOString().slice(0, 10);
+    }
+  }
+
+  function estimateReadingTime(markdown) {
+    var text = String(markdown || "").replace(/```[\s\S]*?```/g, " ");
+    var words = text.split(/\s+/).filter(Boolean).length;
+    return Math.max(1, Math.ceil(words / 200)) + " min read";
+  }
+
+  function renderMarkdown(md) {
+    if (!md) return "";
+    if (typeof window.marked === "undefined") {
+      // marked hasn't loaded yet; render as preformatted text as a
+      // graceful fallback so the page isn't blank.
+      var pre = document.createElement("pre");
+      pre.textContent = md;
+      return pre.outerHTML;
+    }
+    return window.marked.parse(String(md));
+  }
+
+  function renderTags(tags) {
+    var el = slot("tags");
+    if (!el) return;
+    el.innerHTML = "";
+    if (!Array.isArray(tags) || tags.length === 0) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    tags.forEach(function (tag) {
+      var a = document.createElement("a");
+      a.className = "tag-pill";
+      a.href = "#";
+      a.textContent = String(tag);
+      el.appendChild(a);
+    });
+  }
+
+  function apply(fields) {
+    fields = fields || {};
+
+    // First update — hide the empty-state overlay. Subsequent updates
+    // are no-ops here.
+    var emptyState = document.getElementById("preview-empty-state");
+    if (emptyState && !emptyState.classList.contains("hidden")) {
+      emptyState.classList.add("hidden");
+      // Detach after the fade so it can't capture any clicks/scrolls.
+      setTimeout(function () { emptyState.remove(); }, 400);
+    }
+
+    setText("title", fields.title || "");
+
+    if ("body" in fields) {
+      setHTML("body", renderMarkdown(fields.body));
+    } else if ("description" in fields) {
+      setHTML("body", renderMarkdown(fields.description));
+    }
+
+    // Show the embed advisory whenever the rendered body contains an
+    // <div class="post-embed"> wrapper (the marker the "HTML Embed"
+    // editor component emits). innerHTML doesn't execute <script>, so
+    // authors need to know they should test JS-bearing widgets on the
+    // PR preview environment.
+    var embedBanner = document.getElementById("preview-embed-banner");
+    if (embedBanner) {
+      var bodySlot = slot("body");
+      var hasEmbed = !!(bodySlot && bodySlot.querySelector(".post-embed"));
+      embedBanner.hidden = !hasEmbed;
+    }
+
+    if (collection === "posts") {
+      setAttr("featured-image", "src", fields.featured_image || "");
+      syncFeaturedImageAlt(fields.title || "");
+      setText("date", formatDate(fields.date));
+      setText(
+        "reading-time",
+        estimateReadingTime(fields.body || "")
+      );
+      renderTags(fields.tags);
+    }
+
+    if (collection === "projects") {
+      var tech = slot("technology");
+      if (tech) {
+        tech.textContent = fields.technology || "";
+        tech.hidden = !fields.technology;
+      }
+      setAttr("project-link", "href", fields.url_link || "");
+      var badge = slot("featured-badge");
+      if (badge) badge.hidden = !fields.featured;
+    }
+  }
+
+  function isTrustedOrigin(origin) {
+    // postMessage events synthesised within the same document have an
+    // empty origin in some browsers; treat that as trusted since it
+    // can only come from our own page.
+    return origin === EXPECTED_ORIGIN || origin === "";
+  }
+
+  window.addEventListener("message", function (event) {
+    if (!isTrustedOrigin(event.origin)) return;
+    var data = event.data;
+    if (!data || data.type !== "cms-preview-update") return;
+    apply(data.fields);
+  });
+
+  // BroadcastChannel is the transport the admin bridge uses so it doesn't
+  // need to hold a live reference to the preview tab. Same-origin only by
+  // construction — browsers scope channels to the origin.
+  try {
+    var channel = new BroadcastChannel("adamdaniel-cms-preview");
+    channel.addEventListener("message", function (event) {
+      var data = event.data;
+      if (!data || data.type !== "cms-preview-update") return;
+      apply(data.fields);
+    });
+  } catch (_) {
+    // BroadcastChannel unavailable (very old browser) — postMessage still works.
+  }
+
+  function emitReady() {
+    var msg = { type: "cms-preview-ready", collection: collection };
+    window.__cmsPreviewReady = msg;
+    // Notify whoever opened us (popup case) and our embedder (iframe case).
+    try { if (window.opener) window.opener.postMessage(msg, EXPECTED_ORIGIN); } catch (_) {}
+    try { if (window.parent && window.parent !== window) window.parent.postMessage(msg, EXPECTED_ORIGIN); } catch (_) {}
+    // Also echo to this window so same-window listeners (e.g. tests) see it.
+    window.postMessage(msg, EXPECTED_ORIGIN);
+  }
+
+  // Expose a manual trigger for tests that attach their listener after load.
+  window.__cmsPreviewEmitReady = emitReady;
+
+  if (document.readyState === "complete") {
+    emitReady();
+  } else {
+    window.addEventListener("load", emitReady, { once: true });
+  }
+})();
+</script>

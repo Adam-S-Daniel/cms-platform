@@ -1,0 +1,238 @@
+# Reusable per-PR @parity gate against the deployed preview surface.
+#
+# Runs the subset of @parity specs that are preview-compatible (no Decap
+# local_backend dependency) against the PR's already-deployed
+# preview-pr<N>.<apex> surface:
+#
+#   1. Each spec is path-conditioned — selectParityPreviewSpecs() in the
+#      platform's e2e/select-specs.js maps each spec to the paths whose
+#      changes can affect what it covers. No applicable file changed →
+#      the job reports success without running anything.
+#   2. TARGET=preview + PR_NUMBER set, so e2e/base.js routes every
+#      page.goto/page.request at https://preview-pr<N>.<apex>.
+#   3. needs:deploy-preview semantics via a bounded poll (GHA has no
+#      cross-workflow needs:): the wait step blocks until preview-pr<N>
+#      serves 200, max ~20 min.
+#
+# ALWAYS-RUN + EARLY-SKIP (NOT workflow `paths:`): the @parity selector
+# lives inside the job so the check context is always present.
+# Non-salient PRs early-skip green in ~10 s with no wait-for-preview.
+#
+# A consuming site calls this from a thin wrapper that owns the
+# pull_request trigger + run-name (see examples/site/.github/workflows/
+# parity-preview.yml). The harness + composite live in the platform,
+# checked out into `.cms-platform/`.
+#
+# PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main): GHCR build-image +
+# `container:` DROPPED for inline deps; the `bundle exec jekyll build`
+# step (the parity-preview specs that read _site/ need a local build)
+# and the container-only `/__w/<repo>/<repo>` safe.directory line were
+# DROPPED — this reusable does NOT build the site itself, so a consuming
+# site that needs the _site/-reading parity specs must run them in a
+# job that has built the site. The deployed-preview parity specs
+# (sitemap/console-clean/admin-bundle-parity) work as-is.
+name: Parity (preview, reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: "PR number whose preview surface to probe; wired to PR_NUMBER."
+        required: true
+        type: string
+      base_ref:
+        description: "Base ref the PR targets (e.g. main); used for the salient-path diff."
+        required: false
+        type: string
+        default: main
+      apex:
+        description: "Site apex domain, e.g. example.com (no scheme). Builds preview-pr<N>.<apex>; wired to CMS_APEX."
+        required: true
+        type: string
+      platform_repo:
+        description: "owner/name of the platform repo holding the e2e harness + composite action."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the harness from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+    secrets:
+      CMS_E2E_PAT:
+        required: false
+
+permissions:
+  contents: read
+  # post-failure-comment composite needs this to post the failure
+  # summary on the PR (preview-unreachable or spec failure).
+  pull-requests: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Job name == GitHub check context. Kept as `parity` to match an
+  # existing required_status_checks entry if the consuming site gates on
+  # it; rename to match the site's ruleset if different.
+  parity:
+    runs-on: ubuntu-latest
+    env:
+      CMS_APEX: ${{ inputs.apex }}
+      CMS_REPO: ${{ github.repository }}
+    # Worst case: 20 min preview wait + spec runs. Generous bound so the
+    # gate doesn't flake on a slow deploy-preview.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout site
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          # Need history so the salient-path diff against the base tip is
+          # accurate.
+          fetch-depth: 0
+
+      - name: Checkout platform (e2e harness + composite action)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
+        with:
+          node-version: "20"
+
+      - name: Install selector dep (yaml) for the early-skip gate
+        working-directory: .cms-platform/e2e
+        run: npm install --no-save --no-audit --no-fund yaml@2.9.0
+
+      - name: Select applicable @parity specs
+        id: select
+        # Reuse the platform's e2e/select-specs.js SPEC_RULES — the same
+        # single source of truth the regular e2e matrix uses. Runs the
+        # selector's git diff against the SITE tree (CWD = workspace
+        # root) while invoking the PLATFORM's copy of the script. Emits
+        # the subset as a space-separated list on `specs`, plus `count`
+        # for the early-skip gate. Runs BEFORE the heavy install so a
+        # non-salient PR pays nothing.
+        env:
+          GITHUB_BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -o pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch origin "$GITHUB_BASE_REF" --depth=500 || true
+          node .cms-platform/e2e/select-specs.js --parity-preview --base "origin/$GITHUB_BASE_REF" \
+            | tee /tmp/parity-select.json
+          specs=$(node -e "
+            const j = JSON.parse(require('fs').readFileSync('/tmp/parity-select.json','utf8'));
+            process.stdout.write((j.files || []).join(' '));
+          ")
+          echo "specs=${specs}" >> "$GITHUB_OUTPUT"
+          if [ -z "$specs" ]; then
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            echo "No applicable parity-preview spec for this diff — reporting success."
+          else
+            echo "count=$(echo "$specs" | wc -w | tr -d ' ')" >> "$GITHUB_OUTPUT"
+            echo "Applicable specs:"
+            echo "$specs" | tr ' ' '\n' | sed 's/^/  /'
+          fi
+
+      - name: Install harness deps
+        if: steps.select.outputs.count != '0'
+        working-directory: .cms-platform/e2e
+        run: npm ci
+
+      - name: Install Playwright browser + system deps
+        if: steps.select.outputs.count != '0'
+        working-directory: .cms-platform/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Wait for the preview surface (bounded)
+        if: steps.select.outputs.count != '0'
+        id: preview
+        # deploy-preview is a different workflow so we can't `needs:` it.
+        # Poll the preview host with a generous bound (~20 min), then
+        # hard-fail in the next step if it never came up.
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CMS_APEX: ${{ inputs.apex }}
+        run: |
+          set -uo pipefail
+          host="https://preview-pr${PR_NUMBER}.${CMS_APEX}"
+          echo "Probing ${host}/ for readiness (bounded ~20 min)…"
+          reachable=false
+          for _ in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${host}/" || echo "000")
+            echo "  ${host}/ -> ${code}"
+            if [ "$code" = "200" ]; then
+              reachable=true
+              break
+            fi
+            sleep 30
+          done
+          echo "reachable=${reachable}" >> "$GITHUB_OUTPUT"
+          echo "host=${host}" >> "$GITHUB_OUTPUT"
+
+      - name: Require preview (hard-fail if unreachable on a salient PR)
+        if: ${{ steps.select.outputs.count != '0' && steps.preview.outputs.reachable != 'true' }}
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CMS_APEX: ${{ inputs.apex }}
+        run: |
+          msg="preview-pr${PR_NUMBER}.${CMS_APEX} was not reachable within ~20 min on a parity-salient PR. parity-preview asserts the deployed preview matches this PR's intent; without a live preview the gate cannot run. If deploy-preview was path-skipped or failed, make a change that triggers it (or re-run deploy-preview) and push again."
+          echo "::error title=parity-preview::${msg}"
+          echo "$msg" | tee /tmp/parity-preview.log
+          exit 1
+
+      - name: Run @parity-preview specs
+        if: ${{ steps.select.outputs.count != '0' && steps.preview.outputs.reachable == 'true' }}
+        working-directory: .cms-platform/e2e
+        env:
+          # Routes Playwright baseURL + page.request at
+          # https://preview-pr<N>.<apex> (PR_NUMBER short-circuits base.js's
+          # gh lookup).
+          TARGET: preview
+          PR_NUMBER: ${{ inputs.pr_number }}
+          GITHUB_TOKEN: ${{ secrets.CMS_E2E_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          # The @parity specs span the public lane (chromium-desktop-1080)
+          # and the admin lane (chromium-desktop-3k); run both. Playwright
+          # handles per-spec project gating.
+          npx playwright test ${{ steps.select.outputs.specs }} \
+            --project=chromium-desktop-1080 --project=chromium-desktop-3k \
+            --reporter=list \
+            2>&1 | tee /tmp/parity-preview.log
+
+      - name: Upload artifacts
+        if: ${{ !cancelled() && steps.select.outputs.count != '0' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 (2026-04-10)
+        with:
+          name: test-results-parity-preview
+          path: |
+            .cms-platform/e2e/test-results/
+            /tmp/parity-preview.log
+            /tmp/parity-select.json
+          retention-days: 7
+
+      - name: Post failure summary
+        if: ${{ failure() && steps.select.outputs.count != '0' }}
+        uses: ./.cms-platform/.github/actions/post-failure-comment
+        with:
+          mode: post
+          log-file: /tmp/parity-preview.log
+          marker: parity-preview-failure-summary
+          title: parity-preview
+          pr-number: ${{ inputs.pr_number }}
+
+      - name: Resolve failure summary on success
+        if: ${{ success() && steps.select.outputs.count != '0' }}
+        uses: ./.cms-platform/.github/actions/post-failure-comment
+        with:
+          mode: resolve
+          marker: parity-preview-failure-summary
+          title: parity-preview
+          pr-number: ${{ inputs.pr_number }}

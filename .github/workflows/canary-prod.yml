@@ -1,0 +1,177 @@
+# Reusable production canary for platform sites.
+#
+# Daily read-only probe of the `_e2e/canary-*` URLs on the deployed
+# production site. The full publish-loop spec exercises the mutating
+# end-to-end pipeline but only fires when CMS paths change; this canary
+# fills the always-on gap: every morning, fetch the canary URLs and
+# assert each returns 200 with its baseline body. On failure it opens
+# (or comments on) a `production-canary` issue.
+#
+# A consuming site calls this from a thin wrapper that owns the
+# schedule + run-name (see examples/site/.github/workflows/
+# canary-prod.yml). The harness lives in the platform, checked out into
+# `.cms-platform/`. Site identity (prod URL / apex) is wired via inputs
+# to the CMS_* env contract.
+#
+# PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main): GHCR build-image +
+# `container:` DROPPED for inline deps; because deps install on
+# ubuntu-latest (which ships `gh` preinstalled), the container-only
+# "Install GitHub CLI" step was DROPPED; the stuck-PR diagnostic step
+# (un-ported sweep tooling) was DROPPED. The issue body is parameterized
+# off the prod URL input instead of hardcoding the apex.
+#
+# Read-only by construction: PROD_CANARY=1 makes the publish-loop spec
+# self-skip and run the read-only @canary-readonly test; no CMS_E2E_PAT
+# is supplied, so there is nothing to leak.
+name: Production Canary (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      prod_url:
+        description: "Deployed production URL, e.g. https://example.com (scheme included); wired to CMS_PROD_URL."
+        required: false
+        type: string
+        default: ""
+      apex:
+        description: "Site apex domain, e.g. example.com (no scheme); wired to CMS_APEX."
+        required: false
+        type: string
+        default: ""
+      platform_repo:
+        description: "owner/name of the platform repo holding the e2e harness."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the harness from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  # Needed to open a `production-canary` issue when the probe fails.
+  issues: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      CMS_PROD_URL: ${{ inputs.prod_url }}
+      CMS_APEX: ${{ inputs.apex }}
+      CMS_REPO: ${{ github.repository }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout site
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+
+      - name: Checkout platform (e2e harness)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
+        with:
+          node-version: "20"
+
+      - name: Install harness deps
+        working-directory: .cms-platform/e2e
+        run: npm ci
+
+      - name: Install Playwright browser + system deps
+        working-directory: .cms-platform/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run @canary-readonly probe against prod
+        id: probe
+        working-directory: .cms-platform/e2e
+        env:
+          PROD_CANARY: '1'
+          TARGET: prod
+        run: |
+          set -o pipefail
+          npx playwright test \
+            cms-publish-loop.spec.js \
+            --project=chromium-desktop-1080 \
+            --grep '@canary-readonly' \
+            --reporter=list \
+            2>&1 | tee /tmp/canary-output.log
+
+      - name: Upload canary log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 (2026-04-10)
+        with:
+          name: canary-prod-log
+          path: /tmp/canary-output.log
+          retention-days: 14
+
+      - name: Open issue on canary failure
+        if: failure() && steps.probe.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PROD_URL: ${{ inputs.prod_url }}
+        run: |
+          set -uo pipefail
+          # Truncate the log so the issue body fits comfortably under
+          # GitHub's ~65k-char limit even after gh CLI's framing.
+          tail -c 50000 /tmp/canary-output.log > /tmp/canary-tail.log || true
+          DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+          SITE="${PROD_URL:-the production site}"
+
+          # If a canary issue is already open, comment on it instead of
+          # opening a duplicate. A stuck deploy producing days of canary
+          # failures should not generate one issue per day.
+          EXISTING=$(gh issue list \
+            --label production-canary \
+            --state open \
+            --limit 1 \
+            --json number \
+            --jq '.[0].number' || echo "")
+
+          BODY=$(cat <<EOF
+          Daily production canary failed at ${DATE}.
+
+          [View run](${RUN_URL})
+
+          The \`@canary-readonly\` test asserts that the \`_e2e/canary-*\`
+          URLs on \`${SITE}\` still return 200 with their baseline content.
+          A failure here means one of:
+
+          - The canary entry has drifted from its baseline (a publish-loop
+            run crashed mid-flight without resetting the body).
+          - \`deploy-production\` has stalled and stale content is being
+            served.
+          - The CDN is serving a 5xx (origin or distribution outage).
+          - The \`_e2e/\` collection or its layout has been broken by a
+            recent change.
+
+          Last 50 KB of the test log (secrets are not used by this probe):
+
+          \`\`\`
+          $(cat /tmp/canary-tail.log)
+          \`\`\`
+
+          This issue auto-opens from the reusable \`canary-prod\` workflow.
+          Close once the next scheduled run (or a manual dispatch) is green.
+          EOF
+          )
+
+          if [ -n "$EXISTING" ]; then
+            echo "Existing production-canary issue #${EXISTING} is open — adding a comment."
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "Production canary failed (${DATE})" \
+              --label production-canary \
+              --body "$BODY"
+          fi

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="{{ page.description | default: site.description }}">
+  {%- if page.robots -%}
+  <meta name="robots" content="{{ page.robots }}">
+  {%- endif -%}
+  <link rel="stylesheet" href="{{ '/assets/css/main.css' | cachebust }}">
+  {% seo %}
+  <link rel="alternate" type="application/atom+xml" title="{{ site.title }}" href="{{ '/feed.xml' | relative_url }}">
+  {%- if page.layout == 'tag' -%}
+  {%- assign _tag = page.tag_name | default: page.name -%}
+  {%- assign _tag_slug = _tag | slugify -%}
+  <link rel="alternate" type="application/atom+xml" title="{{ site.title }}: {{ _tag }}" href="{{ '/tags/' | append: _tag_slug | append: '/feed.xml' | relative_url }}">
+  {%- endif -%}
+  {% include analytics/cloudwatch-rum.html %}
+</head>
+<body>
+  <div class="site-wrapper">
+    {% include header.html %}
+    <main id="main-content">
+      {{ content }}
+    </main>
+    {% include footer.html %}
+  </div>
+</body>
+</html>

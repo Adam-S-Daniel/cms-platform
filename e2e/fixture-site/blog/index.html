@@ -1,0 +1,27 @@
+---
+layout: default
+title: Blog
+permalink: /blog/
+---
+<div class="container">
+  <h1>Blog</h1>
+  {% include feed-link.html href="/feed.xml" label="Subscribe to all posts (Atom feed)" %}
+
+  {%- comment -%} Exclude e2e test-fixture canaries via the shared `feed_exclude`
+  marker (stamped by exclude_e2e_posts.rb). They still serve at /blog/<slug>/. {%- endcomment -%}
+  {% assign published_posts = site.posts | where: "published", true | where_exp: "post", "post.feed_exclude != true" %}
+  <ul class="post-list">
+    {% for post in published_posts %}
+    <li class="post-item">
+      <h3 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h3>
+      {% if post.tags %}
+      <div class="post-tags">
+        {% for tag in post.tags %}
+        <a class="tag-pill" href="{{ '/tags/' | append: tag | slugify | relative_url }}">{{ tag }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>

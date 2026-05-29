@@ -1,0 +1,31 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/cms-publish-loop-preview.yml`. Owns the
+# workflow_dispatch trigger + run-name; delegates the preview-env
+# publish loop to the platform's reusable workflow. Keep `platform_ref`
+# equal to the `@vX.Y.Z` pin on the `uses:` line.
+name: CMS Publish Loop — Preview Env
+run-name: "${{ format('manual — PR #{0} @{1}', inputs.pr_number, github.actor) }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: >-
+          Parent PR number (the preview env to target). Must be open with
+          deploy-preview having run successfully.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview-loop:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cms-publish-loop-preview.yml@v0.1.0
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      apex: example.com
+      platform_ref: v0.1.0
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

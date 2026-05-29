@@ -1,0 +1,31 @@
+# Local harness prefs (not for the published platform)
+/.claude/settings.json
+# Real per-site deploy params (secrets) — only the .example.env is tracked
+infrastructure/site-params.env
+__pycache__/
+*.pyc
+
+# Node deps (installed via `cd e2e && npm ci`); package-lock.json IS tracked
+node_modules/
+# Ephemeral Playwright outputs
+e2e/test-results/
+e2e/playwright-report/
+playwright-report/
+test-results/
+# Local Jekyll build artifacts
+_site/
+.jekyll-cache/
+.sass-cache/
+vendor/
+.bundle/
+
+# e2e local-lane self-test fixture (e2e/fixture-site/): its SOURCE is
+# tracked; everything bundler / Jekyll / the theme's Decap render hook
+# produce at validation time is not. (_site/, vendor/, .bundle/,
+# .jekyll-cache/ are already covered above at any depth; these add the
+# fixture-specific ones.)
+e2e/fixture-site/Gemfile.lock
+# The theme's decap_config_hook.rb renders these into the fixture's admin/
+# at build — generated, never source.
+e2e/fixture-site/admin/config.yml
+e2e/fixture-site/admin/config-local.yml

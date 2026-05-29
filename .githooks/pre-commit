@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Pre-commit guard chain for Git < 2.54 (no `[hook "<name>"]` config support).
+# Used via `git config --local core.hooksPath .githooks`.
+# On Git >= 2.54 the same guards are registered individually via
+# .gitconfig-fragment.
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+"$ROOT/scripts/secrets-scan.sh"
+"$ROOT/scripts/lint-staged.sh"

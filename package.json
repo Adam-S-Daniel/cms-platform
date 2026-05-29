@@ -1,0 +1,8 @@
+{
+  "name": "cms-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reusable Jekyll + Decap CMS + AWS platform for bidirectionally-synced sites.",
+  "license": "MIT",
+  "bin": { "create-cms-site": "scaffold/create-site.js" }
+}

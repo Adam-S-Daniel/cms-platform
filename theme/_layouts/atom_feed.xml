@@ -1,0 +1,63 @@
+---
+---
+{%- assign tag = page.tag_name -%}
+{%- assign tag_slug = tag | slugify -%}
+{%- assign feed_url = '/tags/' | append: tag_slug | append: '/feed.xml' | absolute_url -%}
+{%- assign html_url = '/tags/' | append: tag_slug | append: '/' | absolute_url -%}
+{%- comment -%}
+  Exclude e2e / test-fixture posts via the shared `feed_exclude` marker
+  stamped by _plugins/exclude_e2e_posts.rb (slug starts with `e2e-` or
+  `test_fixture: true`), the same discriminator the site-wide feed.xml,
+  sitemap, and listings use. Keeps a published canary tagged like a real
+  post out of the per-tag feed while it still serves at /blog/<slug>/.
+{%- endcomment -%}
+{%- assign tag_posts = site.posts | where_exp: 'p', 'p.tags contains tag' | where: 'published', true | where_exp: 'p', 'p.feed_exclude != true' | sort: 'date' | reverse -%}
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <generator uri="https://jekyllrb.com/" version="{{ jekyll.version }}">Jekyll</generator>
+  <link href="{{ feed_url }}" rel="self" type="application/atom+xml" />
+  <link href="{{ html_url }}" rel="alternate" type="text/html" />
+  {%- if tag_posts.first %}
+  <updated>{{ tag_posts.first.date | date_to_xmlschema }}</updated>
+  {%- else %}
+  <updated>{{ site.time | date_to_xmlschema }}</updated>
+  {%- endif %}
+  <id>{{ feed_url }}</id>
+  <title type="html">{{ site.title | xml_escape }}: {{ tag | xml_escape }}</title>
+  <subtitle>Posts tagged &quot;{{ tag | xml_escape }}&quot; on {{ site.title | xml_escape }}.</subtitle>
+  {%- if site.author %}
+  <author>
+    <name>{{ site.author.name | xml_escape }}</name>
+    {%- if site.author.email %}
+    <email>{{ site.author.email | xml_escape }}</email>
+    {%- endif %}
+  </author>
+  {%- endif %}
+  {%- for post in tag_posts %}
+  <entry>
+    <title type="html">{{ post.title | smartify | xml_escape }}</title>
+    <link href="{{ post.url | absolute_url }}" rel="alternate" type="text/html" title="{{ post.title | xml_escape }}" />
+    <published>{{ post.date | date_to_xmlschema }}</published>
+    <updated>{{ post.date | date_to_xmlschema }}</updated>
+    <id>{{ post.id | absolute_url | xml_escape }}</id>
+    <content type="html" xml:base="{{ post.url | absolute_url | xml_escape }}">{{ post.content | strip | xml_escape }}</content>
+    {%- if site.author %}
+    <author>
+      <name>{{ site.author.name | xml_escape }}</name>
+      {%- if site.author.email %}
+      <email>{{ site.author.email | xml_escape }}</email>
+      {%- endif %}
+    </author>
+    {%- endif %}
+    {%- for t in post.tags %}
+    <category term="{{ t | xml_escape }}" />
+    {%- endfor %}
+    {%- if post.excerpt and post.excerpt != "" %}
+    <summary type="html">{{ post.excerpt | strip_html | normalize_whitespace | xml_escape }}</summary>
+    {%- endif %}
+    {%- if post.featured_image and post.featured_image != "" %}
+    <media:thumbnail xmlns:media="http://search.yahoo.com/mrss/" url="{{ post.featured_image | absolute_url | xml_escape }}" />
+    {%- endif %}
+  </entry>
+  {%- endfor %}
+</feed>
