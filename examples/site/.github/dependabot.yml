@@ -5,8 +5,10 @@ updates:
   # Bumps `uses: Adam-S-Daniel/cms-platform/...@<tag>` in the workflow callers.
   - package-ecosystem: github-actions
     directory: "/"
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly
   # Bumps the cms-platform-theme gem.
   - package-ecosystem: bundler
     directory: "/"
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly

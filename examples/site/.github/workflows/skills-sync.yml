@@ -1,7 +1,8 @@
 # Thin caller — weekly skills sync from the platform. Pin platform_ref to a tag.
 name: Skills sync
 on:
-  schedule: [{ cron: "0 6 * * 1" }]   # Mondays 06:00 UTC
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
 permissions:
   contents: write

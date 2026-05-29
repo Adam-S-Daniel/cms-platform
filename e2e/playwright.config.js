@@ -35,6 +35,11 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // basenames; the regex below matches them anywhere under the testDir.
 const CONSUMER = !!process.env.SITE_ROOT;
 const PLATFORM_META_SPECS = [
+  // Platform-internal: admin-JS augmentation + the deploy-preview workflow-shape
+  // assertion; and the exclude-plugin's synthetic-build test. Validated in the
+  // platform's own self-CI (against the platform tree), not a consumer site.
+  "cms-posts-list-enhance.spec.js",
+  "e2e-posts-public-exclusion.test.js",
   "admin-bundle-parity.spec.js",
   "admin-css-banned-patterns.test.js",
   "admin-pin-invariant.test.js",
