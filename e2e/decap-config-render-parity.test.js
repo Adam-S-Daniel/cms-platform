@@ -27,6 +27,18 @@ test.describe("Decap-config render parity (deploy script vs theme-gem hook)", ()
   const scriptSrc = fs.readFileSync(SCRIPT, "utf8");
   const hookSrc = fs.readFileSync(HOOK, "utf8");
 
+  test("neither render path guards injection on a BARE window.CMS_REPO occurrence (that matches USES — commit-pill, reviews dashboards — and wrongly skips injecting the definition they depend on)", () => {
+    for (const [name, src] of [
+      ["render-decap-config.rb", scriptSrc],
+      ["decap_config_hook.rb", hookSrc],
+    ]) {
+      expect(
+        src,
+        `${name}: the idempotency guard must match an ASSIGNMENT (window.CMS_REPO=...), not any occurrence`,
+      ).not.toMatch(/include\?\(\s*['"]window\.CMS_REPO['"]\s*\)/);
+    }
+  });
+
   test("both inject the SAME set of window.CMS_* globals", () => {
     const s = injectedGlobals(scriptSrc);
     const h = injectedGlobals(hookSrc);

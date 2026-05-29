@@ -43,7 +43,11 @@ module CmsPlatformTheme
       shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html"))
       shells.each do |h|
         s = File.read(h)
-        next if s.include?("window.CMS_REPO")
+        # Skip only if the file already DEFINES the identity (a prior render,
+        # or a self-defining shell) — NOT if it merely USES window.CMS_REPO
+        # (the commit-pill + reviews dashboards read it; matching a use here
+        # would wrongly skip injecting the definition they depend on).
+        next if s =~ /window\.CMS_REPO\s*=\s*["']/
         File.write(h, s.sub(/<head>/i, "<head>\n#{js}"))
       end
       Dir.glob(File.join(out, "*.base.yml")).each { |f| File.delete(f) }
