@@ -92,9 +92,11 @@ jobs:
         # `preview-cms-<slug>.<apex>`. Output is empty for non-cms branches;
         # downstream steps gate on `slug != ''`. Teardown calls the SAME script
         # so the two always agree on which `cms-<slug>/` prefix to clean up.
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          SLUG=$(./.cms-platform/scripts/cms-preview-slug.sh '${{ github.event.pull_request.head.ref }}')
+          SLUG=$(./.cms-platform/scripts/cms-preview-slug.sh "$HEAD_REF")
           echo "slug=${SLUG}" >> "$GITHUB_OUTPUT"
           if [[ -n "$SLUG" ]]; then
             echo "Computed CMS slug: ${SLUG}"
@@ -121,9 +123,11 @@ jobs:
       - name: Patch CMS config for preview deployment
         # admin/config.yml ships with production values. See the platform
         # scripts/patch-preview-config.sh for the per-field rationale.
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
-          BRANCH='${{ github.event.pull_request.head.ref }}'
+          BRANCH="$HEAD_REF"
           CONFIG=./_site_preview/admin/config.yml
           PREVIEW_HOST="preview-pr${PR_NUMBER}.${APEX_DOMAIN}"
 
@@ -137,12 +141,14 @@ jobs:
           grep -E "^(site_url|display_url):|^  branch:|preview_path:" "$CONFIG" || true
 
       - name: Write deploy-time commit metadata
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           mkdir -p ./_site_preview/admin
           SHA="${{ github.event.pull_request.head.sha }}"
           ISO=$(git log -1 --format=%cI HEAD)
           cat > ./_site_preview/admin/commit.json <<JSON
-          { "sha": "${SHA}", "iso": "${ISO}", "branch": "${{ github.event.pull_request.head.ref }}" }
+          { "sha": "${SHA}", "iso": "${ISO}", "branch": "${HEAD_REF}" }
           JSON
           cat ./_site_preview/admin/commit.json
 
@@ -324,6 +330,7 @@ jobs:
         env:
           CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
           BOT_MARKER_SLUG: ${{ inputs.bot_marker }}
+          HEAD_REF: ${{ github.head_ref }}
         with:
           script: |
             const pr = context.payload.pull_request.number;
@@ -332,6 +339,7 @@ jobs:
             const bucket = process.env.PREVIEW_BUCKET;
             const region = process.env.AWS_REGION;
             const slug = process.env.CMS_SLUG;
+            const branch = process.env.HEAD_REF;
 
             const url = cfId
               ? `https://preview-pr${pr}.${apex}/`
@@ -366,7 +374,7 @@ jobs:
             }
             rows.push(
               `| **Commit** | \`${{ github.event.pull_request.head.sha }}\` |`,
-              `| **Branch** | \`${{ github.head_ref }}\` |`,
+              `| **Branch** | \`${branch}\` |`,
             );
 
             const body = [
@@ -419,9 +427,11 @@ jobs:
 
       - name: Compute CMS slug (cms/<col>/<entry> → bounded <col>-<entry>)
         id: cms_slug
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          SLUG=$(./.cms-platform/scripts/cms-preview-slug.sh '${{ github.event.pull_request.head.ref }}')
+          SLUG=$(./.cms-platform/scripts/cms-preview-slug.sh "$HEAD_REF")
           echo "slug=${SLUG}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials

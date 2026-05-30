@@ -268,7 +268,7 @@ jobs:
           RUN_ID=$(date -u +%s)
           BRANCH="cms/e2e-fixture/sweep-canary-delete-${RUN_ID}"
 
-          MAIN_SHA=$(gh api /repos/${GH_REPO}/git/ref/heads/main --jq '.object.sha')
+          MAIN_SHA=$(gh api "/repos/${GH_REPO}/git/ref/heads/main" --jq '.object.sha')
 
           BRANCH_CREATED=false
           for path in $files; do
@@ -282,7 +282,7 @@ jobs:
             echo "delete ${path} — ${age_h}h old"
 
             if [ "$BRANCH_CREATED" = "false" ]; then
-              gh api /repos/${GH_REPO}/git/refs \
+              gh api "/repos/${GH_REPO}/git/refs" \
                 -f "ref=refs/heads/${BRANCH}" \
                 -f "sha=${MAIN_SHA}" >/dev/null
               BRANCH_CREATED=true
@@ -348,7 +348,7 @@ jobs:
           RUN_ID=$(date -u +%s)
           BRANCH="cms/e2e-fixture/sweep-prod-loop-${RUN_ID}"
 
-          MAIN_SHA=$(gh api /repos/${GH_REPO}/git/ref/heads/main --jq '.object.sha')
+          MAIN_SHA=$(gh api "/repos/${GH_REPO}/git/ref/heads/main" --jq '.object.sha')
 
           BRANCH_CREATED=false
           for path in $files; do
@@ -362,7 +362,7 @@ jobs:
             echo "delete ${path} — ${age_h}h old"
 
             if [ "$BRANCH_CREATED" = "false" ]; then
-              gh api /repos/${GH_REPO}/git/refs \
+              gh api "/repos/${GH_REPO}/git/refs" \
                 -f "ref=refs/heads/${BRANCH}" \
                 -f "sha=${MAIN_SHA}" >/dev/null
               BRANCH_CREATED=true
@@ -386,4 +386,3 @@ jobs:
               --label "automated" | grep -oE '[0-9]+$')
             echo "::notice::Opened cleanup PR #${PR_NUM} on branch ${BRANCH}"
           fi
-
