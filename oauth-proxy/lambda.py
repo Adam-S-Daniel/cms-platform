@@ -338,7 +338,7 @@ def handler(event: dict, context) -> dict:  # noqa: ANN001
         return handle_callback(params, origin)
 
     # Health check
-    if path in ("", "/", "/health"):
+    if path.endswith("/health") or path in ("", "/"):
         return {
             "statusCode": 200,
             "headers": {"Content-Type": "application/json", **_cors_headers(origin)},

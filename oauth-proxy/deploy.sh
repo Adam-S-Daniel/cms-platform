@@ -118,6 +118,14 @@ for o in outputs:
 ")
 
 # ── Summary ──────────────────────────────────────────────────────────────
+# Display-only: if GITHUB_REPO already contains "owner/repo", print it as-is;
+# otherwise prefix it with GITHUB_ORG. Avoids mangled "org/owner/repo" output.
+if [[ "$GITHUB_REPO" == */* ]]; then
+  REPO_DISPLAY="${GITHUB_REPO}"
+else
+  REPO_DISPLAY="${GITHUB_ORG}/${GITHUB_REPO}"
+fi
+
 echo ""
 success "Deployment complete!"
 echo ""
@@ -132,7 +140,7 @@ echo "  │  2. Update admin/config.yml in your repo:                       │"
 echo "  │                                                                 │"
 echo "  │     backend:                                                    │"
 echo "  │       name: github                                              │"
-echo -e "  │       repo: ${YELLOW}${GITHUB_ORG}/${GITHUB_REPO}${NC}"
+echo -e "  │       repo: ${YELLOW}${REPO_DISPLAY}${NC}"
 echo "  │       branch: main                                              │"
 echo -e "  │       base_url: ${YELLOW}${API_URL}${NC}"
 echo "  │       auth_endpoint: prod/auth                                  │"

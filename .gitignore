@@ -29,3 +29,9 @@ e2e/fixture-site/Gemfile.lock
 # at build — generated, never source.
 e2e/fixture-site/admin/config.yml
 e2e/fixture-site/admin/config-local.yml
+
+# AWS SAM build output (oauth-proxy deploy)
+oauth-proxy/.aws-sam/
+
+# Claude Code session worktrees / state
+.claude/

@@ -155,6 +155,22 @@ jobs:
         if: vars.PROD_PLAYGROUND_MODE != 'true'
         run: echo "::notice::PROD_PLAYGROUND_MODE is not 'true'; skipping prod mutation."
 
+      # Self-heal: BEFORE the spec injects a fresh `e2e-publish-loop:`
+      # marker, reset any canary still carrying an orphaned marker from a
+      # PRIOR interrupted run back to its canonical baseline (via the same
+      # labelled-PR + auto-merge path the spec's own setup-reset uses).
+      # An interrupted run leaves the marker on main, which wedges the
+      # byte-lock invariant (e2e/canary-content.test.js) on a path-filtered
+      # required check (adamdaniel.ai#1861). Idempotent + FAIL-OPEN: a
+      # clean repo / missing PAT / API hiccup is a no-op and never breaks
+      # the loop. Runs only when the loop will actually mutate (playground
+      # on), mirroring the run step's gate.
+      - name: Self-heal orphaned canary markers
+        if: vars.PROD_PLAYGROUND_MODE == 'true'
+        env:
+          CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
+        run: ./.cms-platform/scripts/reset-orphaned-canary.sh
+
       - name: Run prod mutation playground spec
         if: vars.PROD_PLAYGROUND_MODE == 'true'
         working-directory: .cms-platform/e2e

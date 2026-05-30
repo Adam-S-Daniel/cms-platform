@@ -220,6 +220,11 @@ jobs:
 
       - name: Commit and push if changes
         if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        env:
+          # Route the untrusted PR head ref through an env var rather than
+          # interpolating it directly into the inline script (actionlint
+          # script-injection guard).
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         # No-op when the script left the tree clean. When it did
         # rewrite something, commit as Dependabot and push back
         # to the PR branch. The commit becomes part of the same
@@ -242,5 +247,5 @@ jobs:
           Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
           EOF
           )"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          git push origin "HEAD:${HEAD_REF}"
 # Intentionally inert line (no functional effect).

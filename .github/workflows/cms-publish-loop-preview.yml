@@ -121,6 +121,23 @@ jobs:
             core.setOutput("head_ref", pr.head.ref);
             core.notice(`Resolved PR #${prNumber} → head_ref=${pr.head.ref}`);
 
+      # Self-heal: BEFORE the spec injects a fresh `e2e-publish-loop:`
+      # marker, reset any canary still carrying an orphaned marker from a
+      # PRIOR interrupted run on THIS PR head branch back to its canonical
+      # baseline. The preview loop targets the PR head feature branch (not
+      # main), so the reset is a direct Contents-API PUT on that branch —
+      # the same write path cms-publish-loop-preview.spec.js uses — keyed
+      # by CANARY_RESET_BRANCH. A leftover marker here has no required-
+      # check blast radius (the branch dies with the PR), but clearing it
+      # keeps the next run's forward leg from tripping on stale body
+      # content. Idempotent + FAIL-OPEN: a clean branch / missing PAT /
+      # API hiccup is a no-op and never breaks the loop.
+      - name: Self-heal orphaned canary markers
+        env:
+          CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
+          CANARY_RESET_BRANCH: ${{ steps.pr.outputs.head_ref }}
+        run: ./.cms-platform/scripts/reset-orphaned-canary.sh
+
       - name: Run preview-env publish-loop spec
         working-directory: .cms-platform/e2e
         env:

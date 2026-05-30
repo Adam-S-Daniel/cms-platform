@@ -40,6 +40,14 @@ class TestHealthCheck(unittest.TestCase):
         body = json.loads(resp["body"])
         self.assertEqual(body["status"], "ok")
 
+    def test_health_stage_prefixed(self):
+        # API Gateway includes the stage in the path (e.g. "/prod/health"),
+        # so the health route must match the suffix, not the exact path.
+        resp = handler_module.handler(_event("/prod/health"), None)
+        self.assertEqual(resp["statusCode"], 200)
+        body = json.loads(resp["body"])
+        self.assertEqual(body["status"], "ok")
+
     def test_root(self):
         resp = handler_module.handler(_event("/"), None)
         self.assertEqual(resp["statusCode"], 200)
