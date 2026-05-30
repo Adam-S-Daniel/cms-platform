@@ -74,8 +74,24 @@ Parameters:
       Set to 'false' if a GitHub OIDC provider already exists in this account
       (e.g., created by another stack). Only one provider per URL is allowed.
 
+  CreateApexDnsRecords:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Whether to create the apex + www Route53 A-alias records that point the
+      live domain at the production CloudFront distribution. This is the
+      GO-LIVE cutover: leave 'false' to stand up all infra (buckets, both
+      distributions, certs, preview DNS) WITHOUT repointing the live apex —
+      so a site already served elsewhere (e.g. email-host web hosting) keeps
+      serving. Flip to 'true' when ready to cut the apex over to CloudFront.
+      (Defaults false so `aws cloudformation deploy` is safe pre-go-live; the
+      apex/www A-records would otherwise collide with existing records or
+      silently repoint a live domain.)
+
 Conditions:
   ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+  ShouldCreateApexDnsRecords: !Equals [!Ref CreateApexDnsRecords, "true"]
 
 Resources:
 
@@ -477,9 +493,12 @@ Resources:
             ResponsePagePath: /404.html
             ErrorCachingMinTTL: 300
 
-  # ── Route53 alias records for <apex> ────────────────────────────────────
+  # ── Route53 alias records for <apex> (GO-LIVE cutover — gated) ───────────
+  # Gated on CreateApexDnsRecords so infra can be stood up before go-live
+  # without repointing (or colliding with) the live apex/www records.
   ProductionDnsRecord:
     Type: AWS::Route53::RecordSet
+    Condition: ShouldCreateApexDnsRecords
     Properties:
       HostedZoneId: !Ref HostedZoneId
       Name: !Ref ProductionDomainName
@@ -490,6 +509,7 @@ Resources:
 
   ProductionWwwDnsRecord:
     Type: AWS::Route53::RecordSet
+    Condition: ShouldCreateApexDnsRecords
     Properties:
       HostedZoneId: !Ref HostedZoneId
       Name: !Sub "www.${ProductionDomainName}"
