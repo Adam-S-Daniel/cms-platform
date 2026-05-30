@@ -170,6 +170,20 @@ jobs:
         with:
           prod-url: ${{ vars.CMS_PROD_URL }}
 
+      # Self-heal: BEFORE the spec injects a fresh `e2e-publish-loop:`
+      # marker, reset any canary still carrying an orphaned marker from a
+      # PRIOR interrupted run back to its canonical baseline (via the same
+      # labelled-PR + auto-merge path the spec's own step-0 setup-reset
+      # uses). An interrupted run leaves the marker on main, which wedges
+      # the byte-lock invariant (e2e/canary-content.test.js) on a
+      # path-filtered required check (adamdaniel.ai#1861). Idempotent +
+      # FAIL-OPEN: a clean repo / missing PAT (forks, Dependabot) / API
+      # hiccup is a no-op and never breaks the loop.
+      - name: Self-heal orphaned canary markers
+        env:
+          CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
+        run: ./.cms-platform/scripts/reset-orphaned-canary.sh
+
       - name: Run host-repo publish loop + delete-published specs
         working-directory: .cms-platform/e2e
         env:
