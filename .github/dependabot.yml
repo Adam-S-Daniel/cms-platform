@@ -1,0 +1,25 @@
+# Dependabot for cms-platform (the machinery repo itself).
+#
+# Down-sync to consuming SITES is separate: Dependabot in each site bumps
+# the uses:@<tag> platform pins + the cms-platform-theme gem (see
+# docs/SYNC.md). THIS config keeps the platform's OWN deps current:
+#   - github-actions: the third-party actions pinned by full SHA across
+#     .github/workflows/*.yml (actions/checkout, setup-node, setup-ruby,
+#     aws-actions/*, dependabot/fetch-metadata, …).
+#   - npm: the e2e harness toolchain (Playwright + helpers) under /e2e.
+# Bundler is intentionally omitted — theme/ ships a bare .gemspec with no
+# Gemfile.lock to resolve, so there is nothing for the bundler ecosystem
+# to pin here.
+#
+# Opened PRs auto-merge once the required self-ci checks pass — see
+# self-dependabot-auto-merge.yml + .github/rulesets/main.json.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: "/e2e"
+    schedule:
+      interval: weekly

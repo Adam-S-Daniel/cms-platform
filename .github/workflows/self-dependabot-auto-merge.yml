@@ -1,0 +1,22 @@
+# Self-caller: dogfood the dependabot-auto-merge reusable on cms-platform's
+# OWN Dependabot PRs. The reusable (dependabot-auto-merge.yml) is otherwise
+# consumed by sites via a thin caller; here the platform calls it LOCALLY
+# (./.github/workflows/…), so the gate always matches the code on the PR's
+# branch. It enables GitHub native auto-merge once the required self-ci
+# checks pass — requires the `main` ruleset (.github/rulesets/main.json)
+# and the repo's "Allow auto-merge" setting. The reusable's own
+# `if: github.actor == 'dependabot[bot]'` makes this a no-op on human PRs.
+name: Dependabot auto-merge
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    uses: ./.github/workflows/dependabot-auto-merge.yml
