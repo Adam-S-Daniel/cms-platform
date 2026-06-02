@@ -10,6 +10,14 @@ on:
         description: 'Min PR age in hours before sweeping'
         type: number
         default: 6
+    secrets:
+      CMS_E2E_PAT:
+        description: >-
+          PAT with repo + pull-requests scope. The job authenticates gh with
+          it (GH_TOKEN); every gh pr/branch call fails without it. Consuming
+          callers map it explicitly via their secrets: block, matching the
+          other reusable callers in this repo (e.g. cms-automerge-nudge).
+        required: true
 permissions:
   contents: write
   pull-requests: write
