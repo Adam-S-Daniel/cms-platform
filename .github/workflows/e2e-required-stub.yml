@@ -1,0 +1,40 @@
+# Reusable "required-check stub" for the e2e gate.
+#
+# WHY THIS EXISTS
+# `e2e-tests.yml` (the heavy Playwright lane) carries a `paths-ignore`, so a
+# docs-/infra-/tooling-only PR doesn't trigger it — and the REQUIRED
+# `e2e / e2e` status check then never reports, so branch protection blocks the
+# PR forever ("Expected — Waiting for status to be reported"). That is the
+# "missing-check trap": the pre-platform repo solved it with a
+# `required-check-stubs.yml`, which #1858 removed (its old per-shard contexts
+# — select/unit/e2e (1)/e2e-admin/finalize — collapsed into the single
+# `e2e / e2e`, so the old stub's contexts no longer existed). This reusable is
+# the one-context replacement for the new topology.
+#
+# HOW IT'S WIRED
+# A consuming site calls this from a thin `e2e-stub.yml` whose `pull_request`
+# `paths:` is the byte-for-byte MIRROR of `e2e-tests.yml`'s `paths-ignore`
+# (lint-locked by e2e/required-check-stub-paths.test.js). On a docs-only PR
+# only the stub fires and emits a synthetic `e2e / e2e` success; on a mixed
+# (docs + code) PR BOTH fire and the REAL e2e still gates — required status
+# checks key on the context NAME, and the real run's pass/fail is the one that
+# matters. The caller's job MUST be named `e2e` so the surfaced context is
+# exactly `e2e / e2e` (caller-job `e2e` -> this reusable's job `e2e`).
+name: E2E required-check stub (reusable)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Synthetic pass (docs-only PR)
+        run: |
+          echo "Docs-/infra-/tooling-only PR: the heavy e2e-tests.yml lane is"
+          echo "path-skipped here, so this stub reports a synthetic 'e2e / e2e'"
+          echo "success to satisfy the required check and unblock the merge."
+          echo "Mixed PRs also run the REAL e2e lane, which is what actually gates."

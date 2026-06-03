@@ -1,0 +1,37 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/e2e-stub.yml`. Companion to `e2e-tests.yml`: it emits a
+# synthetic `e2e / e2e` success on the docs-/infra-/tooling-only PRs that the
+# heavy e2e lane skips (its `paths-ignore`), so the REQUIRED `e2e / e2e`
+# context still reports and branch protection doesn't hang ("Waiting for
+# status to be reported").
+#
+# The `paths:` list below MUST be the byte-for-byte mirror of
+# `e2e-tests.yml`'s `paths-ignore` — if they drift, a PR can either hang (in
+# neither) or needlessly run both. The mirror is lint-locked by the platform's
+# e2e/required-check-stub-paths.test.js. The job MUST stay named `e2e` so the
+# surfaced context is exactly `e2e / e2e` (matching e2e-tests.yml's caller job).
+# Keep the `@<sha>` pin in lockstep with the other platform `uses:` pins.
+name: E2E (docs-only stub)
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    branches:
+      - main
+    # MIRROR of e2e-tests.yml's `paths-ignore` (keep in lockstep).
+    paths:
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'docs/**'
+      - 'infrastructure/**'
+      - 'oauth-proxy/**'
+      - 'LICENSE'
+      - '.gitignore'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/e2e-required-stub.yml@v0.1.0
