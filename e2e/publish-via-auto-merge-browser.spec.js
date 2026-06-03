@@ -20,7 +20,7 @@ const path = require("node:path");
 const { test, expect } = require("./base");
 
 const SHIM_SRC = fs.readFileSync(
-  path.resolve(__dirname, "../admin/publish-via-auto-merge.js"),
+  path.resolve(__dirname, "../theme/admin/publish-via-auto-merge.js"),
   "utf8",
 );
 

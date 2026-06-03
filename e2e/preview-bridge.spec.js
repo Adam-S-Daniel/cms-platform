@@ -10,7 +10,7 @@ const { captureStep } = require("./manual-capture");
 // under a second and is immune to Decap DOM churn. The companion
 // admin-cms-preview.spec.js exercises the real editor integration.
 
-const BRIDGE_PATH = path.join(__dirname, "..", "admin", "preview-bridge.js");
+const BRIDGE_PATH = path.join(__dirname, "..", "theme", "admin", "preview-bridge.js");
 
 async function loadBridgeHarness(page) {
   const bridgeSrc = fs.readFileSync(BRIDGE_PATH, "utf8");

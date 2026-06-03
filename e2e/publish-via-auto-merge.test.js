@@ -17,7 +17,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test, expect } = require("./base");
 
-const SHIM_PATH = path.resolve(__dirname, "../admin/publish-via-auto-merge.js");
+const SHIM_PATH = path.resolve(__dirname, "../theme/admin/publish-via-auto-merge.js");
 const SHIM_SOURCE = fs.readFileSync(SHIM_PATH, "utf8");
 
 // The shim builds its recovery API base from `window.CMS_REPO` — the

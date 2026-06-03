@@ -1,8 +1,13 @@
 # Reusable up-sync guard. Runs on a site PR: platform-owned files that live in
-# the site (admin/, .claude/skills/) must byte-match the platform at the site's
-# pinned ref. A PR that changes one fails the check with guidance to make the
-# change in cms-platform instead — that's the site→platform route. Site-owned
-# seams (collections.site.yml) and generated configs are exempt.
+# the site (.claude/skills/) must byte-match the platform at the site's pinned
+# ref. A PR that changes one fails the check with guidance to make the change
+# in cms-platform instead — that's the site→platform route.
+#
+# As of v0.1.4 the admin/ machinery ships INSIDE the cms-platform-theme gem
+# (theme/admin) rather than being vendored into each site, so it is no longer
+# byte-match-guarded here — a gem bump (Dependabot) is the sync path. The only
+# admin/ file a site still owns is the seam (admin/collections.site.yml), which
+# was always exempt anyway. This guard now covers skills only.
 name: Platform drift guard (reusable)
 
 on:
@@ -10,8 +15,8 @@ on:
     inputs:
       platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
       platform_ref:  { type: string, default: main }
-      paths:         { type: string, default: "admin .claude/skills" }
-      ignore:        { type: string, default: "admin/collections.site.yml admin/config.yml admin/config-local.yml" }
+      paths:         { type: string, default: ".claude/skills" }
+      ignore:        { type: string, default: "" }
 
 permissions:
   contents: read
@@ -59,7 +64,7 @@ jobs:
           done
           rm -rf .cms-platform
           if [ "$drift" = 1 ]; then
-            echo "Platform-owned files were edited in the site. Site-owned seams (e.g. admin/collections.site.yml) are exempt."
+            echo "Platform-owned skills were edited in the site. Make the change in cms-platform (skills/) instead. (admin/ machinery ships via the theme gem and is no longer guarded here.)"
             exit 1
           fi
           echo "No platform drift."

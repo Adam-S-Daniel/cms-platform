@@ -13,11 +13,20 @@
 #       oauth_base_url: https://abc123.execute-api.us-east-1.amazonaws.com
 #       # logo_url: optional; defaults to <url>/assets/images/logo.svg
 #
+# As of v0.1.4 the admin/ machinery ships INSIDE the cms-platform-theme gem
+# (theme/admin), so a consuming site no longer vendors it. This CLI mirrors
+# theme/lib/cms-platform-theme/decap_config_hook.rb (kept in lockstep by
+# e2e/decap-config-render-parity.test.js): it resolves the machinery INPUTS
+# from the loaded gem (falling back to a vendored <site_root>/admin), copies
+# the gem-resident machinery into <build>/admin, renders the config, and reads
+# the SITE-OWNED seam (collections.site.yml) from <site_root>/admin.
+#
 # Usage: render-decap-config.rb <site_root> <build_dir>
-#   site_root : dir with _config.yml + admin/*.base.yml   (default ".")
+#   site_root : dir with _config.yml (+ optional vendored admin/)   (default ".")
 #   build_dir : Jekyll output dir whose admin/ is finalized (default "<site_root>/_site")
 require 'yaml'
 require 'uri'
+require 'fileutils'
 
 site_root = ARGV[0] || '.'
 build     = ARGV[1] || File.join(site_root, '_site')
@@ -36,15 +45,47 @@ tokens = {
   'CMS_DISPLAY_URL' => url, 'CMS_LOGO_URL' => logo,
 }
 
-admin_src = File.join(site_root, 'admin')
-admin_out = File.join(build, 'admin')
-abort "render-decap-config: #{admin_out} not found (run after the site build)" unless Dir.exist?(admin_out)
+# Inputs come from the gem when it's loaded (the canonical source); fall back
+# to a vendored <site_root>/admin during migration / when run without the gem.
+gem_admin =
+  if Gem.loaded_specs.key?('cms-platform-theme')
+    File.join(Gem.loaded_specs['cms-platform-theme'].full_gem_path, 'admin')
+  end
+site_admin = File.join(site_root, 'admin')
+from_gem   = gem_admin && Dir.exist?(gem_admin) && File.exist?(File.join(gem_admin, 'config.base.yml'))
+admin_src  = from_gem ? gem_admin : site_admin
+admin_out  = File.join(build, 'admin')
+FileUtils.mkdir_p(admin_out)
+
+# When the machinery comes from the gem, the site tree didn't supply it — copy
+# it into <build>/admin (skip base templates, the site-owned seam, and docs).
+# NB: copies depth-1 files + the reviews/ subdir only. If you add another
+# subdirectory under theme/admin, extend this copy AND its parity sibling
+# theme/lib/cms-platform-theme/decap_config_hook.rb (locked by decap-config-render-parity.test.js).
+if from_gem
+  skip = ['collections.site.yml', 'collections.site.yml.example', 'README.md']
+  Dir.glob(File.join(admin_src, '*')).each do |f|
+    next if File.directory?(f)
+    bn = File.basename(f)
+    next if bn.end_with?('.base.yml') || skip.include?(bn)
+    FileUtils.cp(f, File.join(admin_out, bn))
+  end
+  rev = File.join(admin_src, 'reviews')
+  if Dir.exist?(rev)
+    FileUtils.mkdir_p(File.join(admin_out, 'reviews'))
+    Dir.glob(File.join(rev, '*')).each do |f|
+      FileUtils.cp(f, File.join(admin_out, 'reviews', File.basename(f))) unless File.directory?(f)
+    end
+  end
+end
 
 # 1. base config(s) -> live config(s); text gsub preserves the rich comments.
+#    The collections seam is ALWAYS site-owned — read it from <site_root>/admin,
+#    never the gem.
 render = lambda do |base, out|
   txt = File.read(base)
   tokens.each { |k, v| txt = txt.gsub("{{#{k}}}", v) }
-  site_cols = File.join(admin_src, 'collections.site.yml')
+  site_cols = File.join(site_admin, 'collections.site.yml')
   inject = File.exist?(site_cols) ? File.read(site_cols) : ''
   txt = txt.sub(/^  # __SITE_COLLECTIONS__.*$/, inject)
   File.write(out, txt)

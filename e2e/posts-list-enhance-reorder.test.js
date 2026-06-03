@@ -28,7 +28,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test, expect } = require("./base");
 
-const SRC = fs.readFileSync(path.resolve(__dirname, "../admin/posts-list-enhance.js"), "utf8");
+const SRC = fs.readFileSync(path.resolve(__dirname, "../theme/admin/posts-list-enhance.js"), "utf8");
 
 // ── Minimal DOM ─────────────────────────────────────────────────────
 function makeDom() {

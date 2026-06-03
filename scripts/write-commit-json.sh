@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 #
-# Write admin/commit.json (and `_site/admin/commit.json` if `_site/`
-# exists) so the admin shell's top-right commit pill renders locally.
-# CI's deploy workflows do this automatically; this script is for
-# developers who want the pill while running `jekyll serve` or
-# `npx serve _site`.
+# Write `_site/admin/commit.json` so the admin shell's top-right commit pill
+# renders locally (e.g. while running `npx serve _site` after a Jekyll build).
+# CI's deploy workflows do this automatically; this is for local dev.
+#
+# As of v0.1.4 the admin machinery is SERVED from `_site/admin` (the render
+# hook copies it there from the gem), so the pill's relative
+# `fetch('commit.json')` resolves under `_site/admin/` — there is no longer a
+# vendored repo-root `admin/` to write to.
 #
 # Usage:
 #   bash scripts/write-commit-json.sh
-
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,14 +20,7 @@ BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
 
 JSON="{ \"sha\": \"${SHA}\", \"iso\": \"${ISO}\", \"branch\": \"${BRANCH}\" }"
 
-write() {
-  local target="$1"
-  mkdir -p "$(dirname "$target")"
-  printf '%s\n' "$JSON" >"$target"
-  echo "Wrote $target"
-}
-
-write "${REPO_ROOT}/admin/commit.json"
-if [ -d "${REPO_ROOT}/_site/admin" ]; then
-  write "${REPO_ROOT}/_site/admin/commit.json"
-fi
+TARGET="${REPO_ROOT}/_site/admin/commit.json"
+mkdir -p "$(dirname "$TARGET")"
+printf '%s\n' "$JSON" >"$TARGET"
+echo "Wrote $TARGET"

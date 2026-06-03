@@ -78,7 +78,7 @@ test.describe("visual-regression: content-only PRs are non-salient", () => {
     // Sanity check: a newly-added collection's folder must NOT be salient,
     // or content edits to it would wrongly trigger regression review.
     const cfg = YAML.parse(
-      fs.readFileSync(path.join(__dirname, "..", "admin", "config.base.yml"), "utf8"),
+      fs.readFileSync(path.join(__dirname, "..", "theme", "admin", "config.base.yml"), "utf8"),
     );
     const folders = ((cfg && cfg.collections) || [])
       .map((c) => c && c.folder)
