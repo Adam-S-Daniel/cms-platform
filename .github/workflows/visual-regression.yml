@@ -9,7 +9,9 @@
 # the generate job checks the platform out into `.cms-platform/` and runs
 # the pipeline from there. The LOCAL `bundle exec jekyll build` builds the
 # CONSUMING site (checked out at the workspace root); the screenshots the
-# spec produces land under `.cms-platform/e2e/screenshots/`.
+# spec produces land under `.cms-platform/screenshots/` (regression-video.spec.js
+# writes to `<e2e>/../screenshots/regression`, i.e. the platform-checkout root —
+# the compute / S3 / artifact steps below must read that SAME path).
 #
 # PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main)
 # ---------------------------------------------------
@@ -221,17 +223,17 @@ jobs:
           set -euo pipefail
           node .cms-platform/e2e/compute-visual-diffs.js \
             /tmp/page-changes.json \
-            .cms-platform/e2e/screenshots/regression/pr \
-            .cms-platform/e2e/screenshots/regression/prod \
-            .cms-platform/e2e/screenshots/regression/diffs.json
-          cat .cms-platform/e2e/screenshots/regression/diffs.json || true
+            .cms-platform/screenshots/regression/pr \
+            .cms-platform/screenshots/regression/prod \
+            .cms-platform/screenshots/regression/diffs.json
+          cat .cms-platform/screenshots/regression/diffs.json || true
           # Robust read of the visuallyDifferent total. A MISSING/EMPTY
           # diffs.json is tolerated as 0; a PRESENT-but-malformed one
           # fails LOUD with an actionable message instead of a cryptic
           # SyntaxError.
           VD=$(node -e '
             const fs = require("fs");
-            const p = ".cms-platform/e2e/screenshots/regression/diffs.json";
+            const p = ".cms-platform/screenshots/regression/diffs.json";
             if (!fs.existsSync(p)) {
               console.error("[visreg] " + p + " not written — treating as 0 visually-different.");
               process.stdout.write("0");
@@ -256,7 +258,7 @@ jobs:
           echo "visually-different=$VD" >> "$GITHUB_OUTPUT"
 
       - name: Generate comparison video
-        run: bash .cms-platform/e2e/generate-video.sh /tmp/page-changes.json .cms-platform/e2e/screenshots/regression/diffs.json
+        run: bash .cms-platform/e2e/generate-video.sh /tmp/page-changes.json .cms-platform/screenshots/regression/diffs.json
 
       # AWS / S3 / CloudFront / PR-comment steps are skipped for
       # Dependabot PRs (no OIDC role access) and no-op when the AWS
@@ -271,11 +273,11 @@ jobs:
       - name: Upload video and diffs JSON to S3
         if: github.actor != 'dependabot[bot]' && env.PREVIEW_BUCKET != ''
         run: |
-          aws s3 cp .cms-platform/e2e/screenshots/regression/comparison.mp4 \
+          aws s3 cp .cms-platform/screenshots/regression/comparison.mp4 \
             "s3://${PREVIEW_BUCKET}/pr-${PR_NUMBER}/regression.mp4" \
             --cache-control "no-cache, must-revalidate" \
             --content-type "video/mp4"
-          aws s3 cp .cms-platform/e2e/screenshots/regression/diffs.json \
+          aws s3 cp .cms-platform/screenshots/regression/diffs.json \
             "s3://${PREVIEW_BUCKET}/pr-${PR_NUMBER}/regression.json" \
             --cache-control "no-cache, must-revalidate" \
             --content-type "application/json"
@@ -308,7 +310,7 @@ jobs:
               }
             };
             const changes = readJsonOrNull('/tmp/page-changes.json');
-            const diffs = readJsonOrNull('.cms-platform/e2e/screenshots/regression/diffs.json');
+            const diffs = readJsonOrNull('.cms-platform/screenshots/regression/diffs.json');
             if (!changes || !diffs) {
               console.warn('[visreg] regression inputs unavailable — not posting/updating the comment this run.');
               return;
@@ -386,8 +388,8 @@ jobs:
         with:
           name: regression-video
           path: |
-            .cms-platform/e2e/screenshots/regression/comparison.mp4
-            .cms-platform/e2e/screenshots/regression/diffs.json
+            .cms-platform/screenshots/regression/comparison.mp4
+            .cms-platform/screenshots/regression/diffs.json
           retention-days: 14
 
   approve-regression:
