@@ -1,6 +1,4 @@
 // @lane: local — exercises the locally-served /preview/ bridge between admin + Jekyll
-const fs = require("node:fs");
-const path = require("node:path");
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
 
@@ -10,10 +8,20 @@ const { captureStep } = require("./manual-capture");
 // under a second and is immune to Decap DOM churn. The companion
 // admin-cms-preview.spec.js exercises the real editor integration.
 
-const BRIDGE_PATH = path.join(__dirname, "..", "theme", "admin", "preview-bridge.js");
-
 async function loadBridgeHarness(page) {
-  const bridgeSrc = fs.readFileSync(BRIDGE_PATH, "utf8");
+  // The bridge ships in the cms-platform-theme gem (theme/admin) and is
+  // rendered into the served _site/admin/ at build time — a consuming SITE has
+  // NO theme/admin source tree (admin is gem-delivered since v0.1.4). So read
+  // the bytes Decap actually serves over the same origin, not a platform-tree
+  // source file. Resolves identically in the platform fixture canary and in
+  // any consumer SITE.
+  const resp = await page.request.get("/admin/preview-bridge.js");
+  if (!resp.ok()) {
+    throw new Error(
+      `/admin/preview-bridge.js not served (HTTP ${resp.status()}) — the local-lane build should emit _site/admin/preview-bridge.js`,
+    );
+  }
+  const bridgeSrc = await resp.text();
   // Serve a minimal HTML page over the Jekyll webserver's origin so
   // BroadcastChannel scoping lines up with what preview.html expects.
   await page.goto("/preview/"); // same-origin landing page
