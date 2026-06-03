@@ -94,6 +94,18 @@ while IFS=$'\t' read -r PAGE_PATH CHANGE_TYPE VISUAL_STATUS; do
   # apostrophes. Order matters — backslashes first.
   PAGE_LABEL=$(printf '%s' "$PAGE_PATH" | sed -e 's/\\/\\\\/g' -e 's/:/\\:/g' -e "s/'/\\\\'/g")
 
+  # Full prod URL for the page (APEX_DOMAIN is the consuming site's apex,
+  # e.g. adamdaniel.ai), shown as a second line under the page path so a
+  # reviewer can read/open the exact URL. `set -u` is on, so default the
+  # var. Escaped for drawtext the same way as PAGE_LABEL.
+  _apex="${APEX_DOMAIN:-}"
+  if [ -n "$_apex" ]; then
+    FULL_URL="https://${_apex}${PAGE_PATH}"
+  else
+    FULL_URL="${PAGE_PATH}"
+  fi
+  FULL_URL_LABEL=$(printf '%s' "$FULL_URL" | sed -e 's/\\/\\\\/g' -e 's/:/\\:/g' -e "s/'/\\\\'/g")
+
   # Side panels scaled with letterboxing, hstacked, padded into the full
   # frame so the top 80px is reserved for the indicator bar.
   # -nostdin: this loop reads pages.tsv on stdin; ffmpeg must not swallow it.
@@ -108,10 +120,11 @@ while IFS=$'\t' read -r PAGE_PATH CHANGE_TYPE VISUAL_STATUS; do
       [padded]
         drawbox=x=0:y=0:w=${WIDTH}:h=${TOP_BAR_H}:color=${INDICATOR_BG}:t=fill,
         drawtext=text='${INDICATOR_TEXT}':fontsize=42:fontcolor=${INDICATOR_FG}:x=(w-text_w)/2:y=(${TOP_BAR_H}-text_h)/2:fontfile=${FONT},
-        drawtext=text='PRODUCTION':fontsize=20:fontcolor=#d8e4ff:x=40:y=${TOP_BAR_H}+15:fontfile=${FONT},
-        drawtext=text='PR \#${PR_NUMBER}':fontsize=20:fontcolor=#d8e4ff:x=w-tw-40:y=${TOP_BAR_H}+15:fontfile=${FONT},
-        drawtext=text='${CHANGE_TYPE} in changeset':fontsize=16:fontcolor=#8ab0e8:x=(w-text_w)/2:y=h-50:fontfile=${FONT_REGULAR},
-        drawtext=text='${PAGE_LABEL}':fontsize=18:fontcolor=#d8e4ff:x=(w-text_w)/2:y=h-26:fontfile=${FONT_REGULAR}
+        drawtext=text='PRODUCTION':fontsize=20:fontcolor=#d8e4ff:box=1:boxcolor=#04060f:boxborderw=8:x=40:y=${TOP_BAR_H}+15:fontfile=${FONT},
+        drawtext=text='PR \#${PR_NUMBER}':fontsize=20:fontcolor=#d8e4ff:box=1:boxcolor=#04060f:boxborderw=8:x=w-tw-40:y=${TOP_BAR_H}+15:fontfile=${FONT},
+        drawtext=text='${CHANGE_TYPE} in changeset':fontsize=16:fontcolor=#8ab0e8:box=1:boxcolor=#04060f:boxborderw=6:x=(w-text_w)/2:y=h-96:fontfile=${FONT_REGULAR},
+        drawtext=text='${PAGE_LABEL}':fontsize=18:fontcolor=#d8e4ff:box=1:boxcolor=#04060f:boxborderw=6:x=(w-text_w)/2:y=h-62:fontfile=${FONT_REGULAR},
+        drawtext=text='${FULL_URL_LABEL}':fontsize=16:fontcolor=#8ab0e8:box=1:boxcolor=#04060f:boxborderw=6:x=(w-text_w)/2:y=h-28:fontfile=${FONT_REGULAR}
     " \
     -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -r 2 "$SEGMENT_FILE"
 
