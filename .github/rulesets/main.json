@@ -1,0 +1,41 @@
+{
+  "name": "main",
+  "_comment": "Branch ruleset for cms-platform `main`, checked in as the source of truth (mirrors the adamdaniel.ai convention). GitHub does NOT auto-apply ruleset files from a repo — apply it ONCE with the command below, then it gets a numeric id. APPLY (create):  gh api -X POST repos/Adam-S-Daniel/cms-platform/rulesets --input .github/rulesets/main.json   — or Settings -> Rules -> Rulesets -> New ruleset -> Import a ruleset -> pick this file. RE-APPLY edits later:  gh api -X PUT repos/Adam-S-Daniel/cms-platform/rulesets/<id> --input .github/rulesets/main.json . Required contexts are the three HARD-FAIL jobs of self-ci.yml. self-ci.yml is a DIRECT (non-reusable) workflow, so each context is the bare job id with NO `caller / reusable` prefix: actionlint, ruby-theme-specs, node-unit-lints. cfn-lint is intentionally omitted (continue-on-error / advisory). Every other workflow in this repo is `on: workflow_call` and never runs on the platform's own PRs, so none surfaces a check here. This gate is what makes Dependabot auto-merge SAFE: GitHub native auto-merge holds the PR until these three pass. Targets refs/heads/main ONLY, so release TAGS (v0.1.x) are unaffected and cutting a release is never blocked. To allow the owner to push directly to main (bypassing the PR requirement), add a repository_role/Team/Integration entry to bypass_actors (e.g. {\"actor_id\":5,\"actor_type\":\"RepositoryRole\",\"bypass_mode\":\"always\"} for repo admins).",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": ["refs/heads/main"]
+    }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "allowed_merge_methods": ["merge", "squash", "rebase"]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": true,
+        "required_status_checks": [
+          { "context": "actionlint" },
+          { "context": "ruby-theme-specs" },
+          { "context": "node-unit-lints" }
+        ]
+      }
+    }
+  ],
+  "bypass_actors": []
+}
