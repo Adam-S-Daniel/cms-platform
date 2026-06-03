@@ -2,120 +2,111 @@ const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
-const { parseYaml } = require("./workflow-yaml-utils");
+const { isSalient } = require("./visual-regression-salient");
 
-// Locks in the "content-only PRs do not trigger visual regression"
-// invariant of .github/workflows/visual-regression.yml.
+// Locks the "content-only PRs do not trigger the visual-regression build /
+// review" invariant.
 //
-// The CMS's editorial workflow opens a PR for every Save. Those PRs
-// touch only the CMS-managed content paths (the collections defined in
-// admin/config.yml: _posts, _tags, _projects, pages, _e2e) plus media
-// uploads (assets/images/uploads/). Running visual regression on
-// content-only PRs is pure noise — pixel diffs are the *intent* of the
-// edit, not a regression to flag. The workflow should fire only when
-// the diff can introduce *unintentional* visual drift (templates,
-// layouts, styling, the admin shell, pipeline tooling).
+// The CMS's editorial workflow opens a PR for every Save. Those PRs touch
+// only CMS-managed content paths (the collections in admin/config.base.yml:
+// _posts, _tags, _projects, pages, _e2e) plus media uploads
+// (assets/images/uploads/). Running visual regression on content-only PRs is
+// pure noise — pixel diffs are the *intent* of the edit, not a regression.
+// The pipeline must fire only when the diff can introduce *unintentional*
+// visual drift (templates, layouts, styling, the admin shell, pipeline
+// tooling).
 //
-// If a future change re-adds any of the CMS-content paths to the
-// workflow's `paths:` list, this test fails and the PR has to either
-// (a) explicitly remove the path again or (b) document why the
-// invariant changed by editing this test.
-//
-// PLATFORM PORT NOTE: visual-regression.yml became a `workflow_call`
-// reusable, so the `on.pull_request` trigger + its content-skip `paths:`
-// list now live on the THIN CALLER a site copies in
-// (examples/site/.github/workflows/visual-regression.yml). The reusable
-// has no `paths:` of its own; this lint reads the canonical caller, which
-// is the file that actually carries the trigger.
+// HISTORY: this invariant used to live as the caller's
+// `on.pull_request.paths` filter. It moved into
+// e2e/visual-regression-salient.js so the workflow can ALWAYS trigger and the
+// required `approve-regression` check always reports a status (a
+// path-filtered workflow that never fires would deadlock a required check).
+// The reusable's `detect` job pipes the PR's changed files through that
+// module. If a future change makes a CMS-content path salient (or drops a
+// template path), a test here fails and the change must either revert it or
+// document why the invariant moved (by editing this file).
 
-const WORKFLOW = path.join(
-  __dirname,
-  "..",
-  "examples",
-  "site",
-  ".github",
-  "workflows",
-  "visual-regression.yml",
-);
-
-// CMS-managed content paths. These MUST NOT appear in the workflow's
-// `paths:` list. Mirror admin/config.yml's collection folders.
-const FORBIDDEN_PATHS = [
-  "_posts/**",
-  "_tags/**",
-  "_projects/**",
-  "pages/**",
-  "_e2e/**",
-  "assets/images/uploads/**",
-  "assets/**", // bare wildcard — would re-introduce uploads/**
+// A representative changed file under each CMS-managed content folder.
+const CONTENT_FILES = [
+  "_posts/2026-01-01-x.md",
+  "_tags/x.md",
+  "_projects/x.md",
+  "pages/x.md",
+  "_e2e/x.md",
+  "assets/images/uploads/x.png",
 ];
 
-// Templates / styling / tooling paths. At least these MUST be present
-// so the workflow still fires on the changes it's supposed to catch.
-// (If the workflow is deleted entirely, this also fails — which is the
-// right answer: "removed without replacement" should not pass silently.)
-const REQUIRED_PATHS = [
-  "_layouts/**",
-  "_includes/**",
-  "admin/**",
+// Representative template / styling / admin / tooling files that MUST stay
+// salient so the pipeline still fires on the drift it's meant to catch.
+const SALIENT_FILES = [
+  "_layouts/post.html",
+  "_includes/head.html",
+  "admin/config.base.yml",
   "_config.yml",
+  "assets/css/main.css",
   ".github/workflows/visual-regression.yml",
 ];
 
-function readPathsList() {
-  // The workflow's `on.pull_request.paths` list, straight off the parsed
-  // tree — the parser handles quoting, inline comments, and any anchors.
-  const on = parseYaml(fs.readFileSync(WORKFLOW, "utf8")).on;
-  const paths = on && on.pull_request && on.pull_request.paths;
-  if (!Array.isArray(paths)) {
-    throw new Error("could not locate the `on.pull_request.paths` list in visual-regression.yml");
-  }
-  return paths.map(String);
-}
-
-test.describe("visual-regression workflow: content-only PRs are skipped", () => {
-  test("no CMS-managed content path appears in the trigger list", () => {
-    const paths = readPathsList();
-    for (const forbidden of FORBIDDEN_PATHS) {
+test.describe("visual-regression: content-only PRs are non-salient", () => {
+  test("each CMS content folder is non-salient on its own", () => {
+    for (const f of CONTENT_FILES) {
       expect(
-        paths,
-        `forbidden path "${forbidden}" is present in visual-regression.yml's paths: list — content-only PRs would re-trigger the regression video`,
-      ).not.toContain(forbidden);
+        isSalient([f]),
+        `"${f}" must be NON-salient — content pixel diffs are intentional, not a regression`,
+      ).toBe(false);
     }
   });
 
-  test("template/styling paths are still in the trigger list", () => {
-    const paths = readPathsList();
-    for (const required of REQUIRED_PATHS) {
+  test("a content-only diff (all content files together) is non-salient", () => {
+    expect(isSalient(CONTENT_FILES)).toBe(false);
+  });
+
+  test("template / styling / admin / tooling files are salient", () => {
+    for (const f of SALIENT_FILES) {
       expect(
-        paths,
-        `required path "${required}" is missing from visual-regression.yml's paths: list — the workflow would no longer fire on template/styling changes`,
-      ).toContain(required);
+        isSalient([f]),
+        `"${f}" must be salient — it can shift rendered output and must trigger the regression build`,
+      ).toBe(true);
     }
   });
 
-  test("CMS collection folders match the forbidden list", () => {
-    // Sanity check: if a new collection is added to admin/config.yml,
-    // its folder should also be added to FORBIDDEN_PATHS above.
+  test("a mixed diff (content + one template) is salient", () => {
+    expect(isSalient([...CONTENT_FILES, "_layouts/post.html"])).toBe(true);
+  });
+
+  test("every CMS collection folder in admin/config.base.yml is non-salient", () => {
+    // Sanity check: a newly-added collection's folder must NOT be salient,
+    // or content edits to it would wrongly trigger regression review.
     const cfg = YAML.parse(
-      // Platform ships the Decap config as admin/config.base.yml; the
-      // rendered admin/config.yml is build-output only and absent from the
-      // source tree, so read the base config here.
       fs.readFileSync(path.join(__dirname, "..", "admin", "config.base.yml"), "utf8"),
     );
     const folders = ((cfg && cfg.collections) || [])
       .map((c) => c && c.folder)
       .filter(Boolean)
       .map(String);
-    expect(folders.length, "admin/config.yml has at least one collection folder").toBeGreaterThan(
-      0,
-    );
+    expect(
+      folders.length,
+      "admin/config.base.yml has at least one collection folder",
+    ).toBeGreaterThan(0);
     for (const folder of folders) {
-      const expected = `${folder}/**`;
       expect(
-        FORBIDDEN_PATHS,
-        `admin/config.yml has a collection at "${folder}" but FORBIDDEN_PATHS does not include "${expected}" — update this test alongside the workflow filter`,
-      ).toContain(expected);
+        isSalient([`${folder}/entry.md`]),
+        `admin/config.base.yml has a collection at "${folder}" but visual-regression-salient.js ` +
+          `treats it as salient — content edits there would wrongly trigger regression review`,
+      ).toBe(false);
     }
+  });
+
+  test("the reusable detect job wires in the salience module", () => {
+    // Guard against the workflow regressing to a path-filtered trigger or
+    // dropping the salience helper — either would break "always report".
+    const wf = fs.readFileSync(
+      path.join(__dirname, "..", ".github", "workflows", "visual-regression.yml"),
+      "utf8",
+    );
+    expect(
+      wf,
+      "visual-regression.yml's detect job must invoke e2e/visual-regression-salient.js",
+    ).toMatch(/visual-regression-salient\.js/);
   });
 });

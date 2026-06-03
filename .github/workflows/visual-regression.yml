@@ -81,10 +81,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── salience gate ────────────────────────────────────────────────────
+  # Runs on EVERY PR (the caller no longer path-filters the trigger) so the
+  # required `approve-regression` check ALWAYS reports a status — a
+  # path-filtered workflow that never fires would deadlock a required check.
+  # Decides whether the diff can shift RENDERED output: content-only PRs
+  # (CMS collections + media uploads) are non-salient — their pixel diffs
+  # are the intent of the edit, not a regression — and only a salient diff
+  # (templates / layouts / styling / the admin shell / pipeline tooling)
+  # spins up the heavy build below. The decision lives in
+  # e2e/visual-regression-salient.js (the single source of truth, locked by
+  # e2e/visual-regression-content-skip.test.js) — it replaces what used to
+  # be the caller's `paths:` filter.
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      salient: ${{ steps.salience.outputs.salient }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          fetch-depth: 0
+      - name: Checkout platform (salience helper)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+      - name: Fetch base ref
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+      - name: Decide salience
+        id: salience
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          echo "Changed files vs origin/${BASE}:"
+          git diff --name-only "origin/${BASE}...HEAD" | sed 's/^/  /'
+          salient=$(git diff --name-only "origin/${BASE}...HEAD" \
+            | node .cms-platform/e2e/visual-regression-salient.js)
+          echo "salient=${salient}"
+          echo "salient=${salient}" >> "$GITHUB_OUTPUT"
+
   generate:
-    # Skip on Dependabot PRs whose ecosystem can't change rendered
-    # output. Bundler bumps DO affect rendering, so they still run.
-    if: github.actor != 'dependabot[bot]' || startsWith(github.head_ref, 'dependabot/bundler/')
+    needs: detect
+    # Build + screenshot only when the diff can shift rendered output
+    # (detect.salient) AND the actor can produce a meaningful diff. Bundler
+    # (gem) Dependabot bumps affect rendering so they run; other Dependabot
+    # ecosystems can't, so they skip the heavy build (approve-regression
+    # still reports success for them via its always() gate below).
+    if: >-
+      needs.detect.outputs.salient == 'true' &&
+      (github.actor != 'dependabot[bot]' || startsWith(github.head_ref, 'dependabot/bundler/'))
     runs-on: ubuntu-latest
     outputs:
       visually-different: ${{ steps.compute.outputs.visually-different }}
@@ -343,18 +391,23 @@ jobs:
           retention-days: 14
 
   approve-regression:
-    needs: generate
+    needs: [detect, generate]
+    # ALWAYS runs so this (required) check always reports a status — even
+    # when `generate` was skipped (a non-salient PR, or a non-bundler
+    # Dependabot bump). It enters the manual `regression-review` environment
+    # ONLY when generate actually ran AND found a real visual regression
+    # (visually-different != '0'); otherwise it auto-passes. An empty-string
+    # environment means "no environment" — the job runs immediately and
+    # reports success. (Locked by e2e/visual-regression-skip-review.test.js.)
+    if: always()
     runs-on: ubuntu-latest
-    # When `visually-different == 0`, enter no environment — the job runs
-    # immediately and reports its required status check as success. Any
-    # non-zero count routes through the `regression-review` environment
-    # (required reviewers configured in repo Settings → Environments on
-    # the consuming deployment).
-    environment: ${{ needs.generate.outputs.visually-different != '0' && 'regression-review' || '' }}
+    environment: ${{ (needs.generate.result == 'success' && needs.generate.outputs.visually-different != '0') && 'regression-review' || '' }}
     steps:
       - name: Approval confirmed
         run: |
-          if [ "${{ needs.generate.outputs.visually-different }}" = "0" ]; then
+          if [ "${{ needs.generate.result }}" != "success" ]; then
+            echo "Auto-approved: no salient render change to review (generate: ${{ needs.generate.result }})."
+          elif [ "${{ needs.generate.outputs.visually-different }}" = "0" ]; then
             echo "Auto-approved: 0 pages visually different from production."
           else
             echo "Visual regression approved by reviewer (${{ needs.generate.outputs.visually-different }} page(s) visually different)."

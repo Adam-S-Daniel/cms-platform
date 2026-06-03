@@ -1,7 +1,8 @@
 # Thin caller — copied into a site repo as
 # `.github/workflows/visual-regression.yml`. Owns the pull_request trigger
-# + content-skip `paths:` filter + run-name; delegates the visual-regression
-# video pipeline to the platform's reusable workflow. The pipeline
+# (no paths filter — fires on every PR) + run-name; delegates the
+# visual-regression video pipeline to the platform's reusable workflow,
+# which decides salience internally. The pipeline
 # (detect-changed-pages.js, compute-visual-diffs.js, generate-video.sh,
 # regression-video.spec.js, playwright.regression.config.js) lives in the
 # platform repo's e2e/. Keep `platform_ref` equal to the `@vX.Y.Z` pin on
@@ -18,35 +19,14 @@ on:
     types: [opened, synchronize, reopened]
     branches:
       - main
-    # Positive path list — only run when the diff can shift rendered
-    # output OR change a tool the regression pipeline uses. Content-only
-    # PRs (CMS collections + media uploads) are intentionally absent:
-    # pixel diffs there are by design. (Locked by
-    # e2e/visual-regression-content-skip.test.js.)
-    paths:
-      - '_layouts/**'
-      - '_includes/**'
-      - '_plugins/**'
-      - '_data/**'
-      - 'admin/**'
-      - '_config.yml'
-      - 'Gemfile'
-      - 'Gemfile.lock'
-      - 'index.html'
-      - '404.html'
-      - 'robots.txt'
-      - 'preview.md'
-      - 'assets/css/**'
-      - 'assets/js/**'
-      - 'assets/images/logo.svg'
-      # Tools the regression pipeline itself depends on (in the platform's
-      # e2e/, but listed so a vendored/site-local copy also triggers).
-      - '.github/workflows/visual-regression.yml'
-      - 'e2e/detect-changed-pages.js'
-      - 'e2e/compute-visual-diffs.js'
-      - 'e2e/generate-video.sh'
-      - 'e2e/regression-video.spec.js'
-      - 'e2e/playwright.regression.config.js'
+    # NO `paths:` filter — this workflow fires on EVERY PR so the required
+    # `approve-regression` check always reports a status (a path-filtered
+    # workflow that never triggers would deadlock a required check). The
+    # "is this diff salient?" decision — content-only PRs (CMS collections +
+    # media uploads) are skipped; templates / styling / the admin shell /
+    # pipeline tooling build — now lives in the reusable's `detect` job,
+    # sourced from e2e/visual-regression-salient.js and locked by
+    # e2e/visual-regression-content-skip.test.js.
 
 permissions:
   contents: read

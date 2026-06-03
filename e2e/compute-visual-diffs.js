@@ -99,9 +99,21 @@ function computeAll({ changesPath, prDir, prodDir, outPath }) {
     const prImg = readPNG(prFile);
     const prodImg = readPNG(prodFile);
 
-    if (!prImg || !prodImg) {
-      // Screenshot missing — be conservative and call it different so
-      // the reviewer takes a look rather than silently passing it.
+    if (!prodImg) {
+      // No PRODUCTION baseline for a page flagged changed/unchanged: either
+      // it's new to prod or the prod screenshot was unavailable this run (a
+      // transient capture gap — the class that left #1858 stuck). We cannot
+      // diff, so we must NOT score it as a regression: doing so would force
+      // the manual `regression-review` gate and deadlock a REQUIRED check on
+      // something that isn't a confirmed visual change. Treated like "new":
+      // recorded, but excluded from the visually-different count.
+      pages.push({ path: p, status: "no-baseline", diffRatio: null });
+      continue;
+    }
+
+    if (!prImg) {
+      // PR-side screenshot missing for a page that DOES exist in prod — a
+      // real signal the PR may have broken the page; flag it for review.
       pages.push({ path: p, status: "different", diffRatio: null });
       different++;
       continue;
