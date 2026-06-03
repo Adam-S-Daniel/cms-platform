@@ -18,7 +18,7 @@ const readline = require("readline");
 
 const PLATFORM_ROOT = path.resolve(__dirname, "..");
 const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
-const PLATFORM_VERSION = "v0.1.1";
+const PLATFORM_VERSION = "v0.1.4";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -92,7 +92,15 @@ async function main() {
   fs.mkdirSync(target, { recursive: true });
 
   copyTree(path.join(PLATFORM_ROOT, "examples/site/.github"), path.join(target, ".github"), sub);
-  copyTree(path.join(PLATFORM_ROOT, "admin"), path.join(target, "admin"));
+  // admin/ machinery ships via the cms-platform-theme gem (theme/admin) — sites
+  // no longer vendor it. Seed only the seam reference (collections.site.yml.example)
+  // so the site knows where its optional custom collections go.
+  fs.mkdirSync(path.join(target, "admin"), { recursive: true });
+  write(
+    target,
+    "admin/collections.site.yml.example",
+    fs.readFileSync(path.join(PLATFORM_ROOT, "theme/admin/collections.site.yml.example"), "utf8"),
+  );
   copyTree(path.join(PLATFORM_ROOT, "skills"), path.join(target, ".claude/skills"));
 
   write(target, "_config.yml", configYml({ title, domain, author, owner, repo }));
@@ -183,7 +191,6 @@ exclude:
   - e2e
   - .cms-platform
   - platform.lock
-  - admin/README.md
   - admin/collections.site.yml.example
 `;
 }

@@ -145,7 +145,7 @@ test.describe(
     test("prod and preview admin bundles are byte-identical to the working tree", async ({
       request,
     }) => {
-      const adminDir = path.join(__dirname, "..", "admin");
+      const adminDir = path.join(__dirname, "..", "theme", "admin");
       const allFiles = listAdminFiles(adminDir);
       const files = allFiles.filter((p) => !isExcluded(p));
 

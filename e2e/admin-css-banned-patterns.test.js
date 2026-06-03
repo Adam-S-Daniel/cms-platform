@@ -28,7 +28,7 @@ const path = require("node:path");
 const { test, expect } = require("./base");
 
 const REPO_ROOT = path.join(__dirname, "..");
-const ADMIN_DIR = path.join(REPO_ROOT, "admin");
+const ADMIN_DIR = path.join(REPO_ROOT, "theme", "admin");
 
 function stripCssComments(css) {
   // Remove /* ... */ blocks so commented-out examples don't false-positive.

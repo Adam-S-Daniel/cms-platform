@@ -1,9 +1,11 @@
 name: Platform drift guard
 on:
   pull_request:
-    paths: ['admin/**', '.claude/skills/**']
+    # admin/ ships via the theme gem since v0.1.4 (no longer byte-guarded);
+    # only the skills are guarded against drift.
+    paths: ['.claude/skills/**']
 jobs:
   guard:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-drift-guard.yml@v0.1.1
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-drift-guard.yml@v0.1.4
     with:
-      platform_ref: v0.1.1
+      platform_ref: v0.1.4

@@ -19,8 +19,8 @@ structural scaffolding (collection types) is opt-in via `admin/collections.site.
 | `.github/workflows/*.yml` | reusable `workflow_call` workflows (deploy, skills-sync, drift-guard, platform-bump) |
 | `scripts/` | platform-owned helper scripts (preview slug, preview-config patch, Decap render) |
 | `infrastructure/`, `oauth-proxy/` | parameterized CloudFormation + deploy scripts |
-| `admin/` | Decap base config (`*.base.yml`) + admin JS/HTML (reads `window.CMS_*`) |
-| `theme/` | the `cms-platform-theme` Jekyll gem (layouts/includes/assets/plugins + Decap render hook) |
+| `theme/admin/` | Decap base config (`*.base.yml`) + admin JS/HTML (reads `window.CMS_*`). Ships INSIDE the gem (since v0.1.4); the render hook copies it into `_site/admin` + renders `config.yml`. Sites own only the seam `admin/collections.site.yml`. |
+| `theme/` | the `cms-platform-theme` Jekyll gem (layouts/includes/assets/plugins + Decap render hook + `admin/` UI) |
 | `skills/` | canonical Claude Code skills |
 | `examples/site/` | copyable thin-shell callers a site consumes |
 | `scaffold/` | `create-site.js` — the `npx` site generator |

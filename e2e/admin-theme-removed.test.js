@@ -27,8 +27,8 @@ const { test, expect } = require("./base");
  */
 
 const REPO_ROOT = path.resolve(__dirname, "..");
-const ADMIN_INDEX = path.join(REPO_ROOT, "admin", "index.html");
-const ADMIN_CSS = path.join(REPO_ROOT, "admin", "custom.css");
+const ADMIN_INDEX = path.join(REPO_ROOT, "theme", "admin", "index.html");
+const ADMIN_CSS = path.join(REPO_ROOT, "theme", "admin", "custom.css");
 
 test.describe("admin theme — removal invariants", () => {
   test("admin/custom.css does NOT exist (theme intentionally removed in #81)", () => {

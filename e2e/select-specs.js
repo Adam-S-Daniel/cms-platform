@@ -262,14 +262,14 @@ const FANOUT_PATTERNS = [...RENDER_FANOUT_PATTERNS, ...TEST_INFRA_FANOUT_PATTERN
 // matches one of these patterns, include this spec." A spec NOT named
 // here is included only via fanout (or because its own file changed).
 const SPEC_RULES = {
-  "e2e/admin-reviews-auth.spec.js": [/^admin\/reviews\//, /^oauth-proxy\//],
+  "e2e/admin-reviews-auth.spec.js": [/^(theme\/)?admin\/reviews\//, /^oauth-proxy\//],
   // Live byte-parity probe: fetches every admin/ file from prod and
   // from the latest open PR's preview, compares ETag/sha256. Triggers
   // on any admin/ change so a CMS-shaped diff verifies it survives
   // the deploy round-trip without drift.
-  "e2e/admin-bundle-parity.spec.js": [/^admin\//],
+  "e2e/admin-bundle-parity.spec.js": [/^(theme\/)?admin\//],
   "e2e/admin-reviews-stats.spec.js": [
-    /^admin\/reviews\//,
+    /^(theme\/)?admin\/reviews\//,
     /^e2e\/compute-visual-diffs\.js$/,
     /^e2e\/generate-video\.sh$/,
     /^\.github\/workflows\/visual-regression\.yml$/,
@@ -277,25 +277,25 @@ const SPEC_RULES = {
   // Pure-node invariants on admin/index.html + admin/custom.css. Runs
   // any time admin/ changes — guards the cobalt theme + ?notheme
   // kill-switch contract documented in AGENTS.md.
-  "e2e/admin-theme-removed.test.js": [/^admin\/(index\.html|custom\.css)$/],
+  "e2e/admin-theme-removed.test.js": [/^(theme\/)?admin\/(index\.html|custom\.css)$/],
   // Responsive-layout invariants for admin/admin-mobile.css (iPhone 16).
   // Runs on any admin/ change: the stylesheet, the shells that link it,
   // or a Decap version bump in index*.html could each regress the
   // mobile overlay. Drives the test-repo backend on the admin lane.
-  "e2e/cms-mobile-layout.spec.js": [/^admin\//],
+  "e2e/cms-mobile-layout.spec.js": [/^(theme\/)?admin\//],
   // Cross-resolution occlusion guard for every admin screen (controls
   // not clipped off-screen or covered by another element). Runs on any
   // admin/ change and when the shared visibility helper changes.
-  "e2e/admin-no-occlusion.spec.js": [/^admin\//, /^e2e\/ui-visibility\.js$/],
+  "e2e/admin-no-occlusion.spec.js": [/^(theme\/)?admin\//, /^e2e\/ui-visibility\.js$/],
   "e2e/detect-changed-pages.test.js": [/^e2e\/detect-changed-pages\.js$/],
-  "e2e/cms-smoke.spec.js": [/^admin\//, /^_posts\//, /^_tags\//, /^_projects\//, /^pages\//],
-  "e2e/cms-editorial-workflow.spec.js": [/^admin\//, /^_posts\//],
+  "e2e/cms-smoke.spec.js": [/^(theme\/)?admin\//, /^_posts\//, /^_tags\//, /^_projects\//, /^pages\//],
+  "e2e/cms-editorial-workflow.spec.js": [/^(theme\/)?admin\//, /^_posts\//],
   // Canary content invariants — fast, no browser. Cross-checks the
   // _e2e/ collection wiring stays consistent across _config.yml,
   // admin/config.yml, and the canary source files.
   "e2e/canary-content.test.js": [
     /^_e2e\//,
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_config\.yml$/,
     /^_layouts\/canary\.html$/,
   ],
@@ -308,7 +308,7 @@ const SPEC_RULES = {
   // Runs on any admin/ change, canary _posts marker edits, and the
   // deploy-preview workflow whose commit status it locks.
   "e2e/cms-posts-list-enhance.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_posts\//,
     /^\.github\/workflows\/deploy-preview\.yml$/,
   ],
@@ -316,11 +316,11 @@ const SPEC_RULES = {
   // reorderFixturesLast fixed point — guards the ≥2-fixture infinite reorder
   // loop that wedged the admin main thread (worst at the 3K viewport). Selects
   // on any change to the script it exercises.
-  "e2e/posts-list-enhance-reorder.test.js": [/^admin\/posts-list-enhance\.js$/],
+  "e2e/posts-list-enhance-reorder.test.js": [/^(theme\/)?admin\/posts-list-enhance\.js$/],
   // Real-network publish-loop specs. Heavy and slow; run only when
   // something contributor-relevant changed.
   "e2e/cms-publish-loop.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_layouts\/(post|page|project|canary|default)\.html$/,
     /^_layouts\/preview\.html$/,
     /^_e2e\//,
@@ -337,14 +337,14 @@ const SPEC_RULES = {
   // or the editorial-workflow / deploy infra trigger a coverage
   // refresh.
   "e2e/cms-delete-published.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_e2e\//,
     /^_layouts\/canary\.html$/,
     /^\.github\/workflows\/(cms-editorial-workflow|deploy-production|cms-publish-loop-host)\.yml$/,
     /^e2e\/(decap-pat|github-actions-poll|canary-content|cms-fixture-pr|cms-host)\.js$/,
   ],
   "e2e/cms-publish-loop-preview.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_layouts\/(post|page|project|canary|default)\.html$/,
     /^_e2e\//,
     /^scripts\/patch-preview-config\.sh$/,
@@ -361,7 +361,7 @@ const SPEC_RULES = {
   // shared run-cms-loop spine, or its imported helpers trigger a
   // coverage refresh.
   "e2e/cms-delete-published-preview.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_layouts\/canary\.html$/,
     /^_e2e\//,
     /^scripts\/patch-preview-config\.sh$/,
@@ -386,7 +386,7 @@ const SPEC_RULES = {
   // exercising the skip path so a regression in the gating doesn't
   // ride to prod silently.
   "e2e/cms-publish-loop-prod-mutate.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_layouts\/(post|default)\.html$/,
     // #1771 step 4: the persistent `_posts/2099-01-01-e2e-mutation-canary.md`
     // fixture was retired for an EPHEMERAL born-published per-run post; the
@@ -408,7 +408,7 @@ const SPEC_RULES = {
   // PR-time coverage of the gating/skip path. Run end-to-end only by
   // .github/workflows/cms-preview-loops.yml.
   "e2e/cms-publish-loop-prod-mutate-preview.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_layouts\/(post|default)\.html$/,
     // #1771 step 4 retired the persistent `_posts/2099-01-01-e2e-mutation-canary.md`
     // fixture this preview twin mirrored; with no committed fixture the spec
@@ -421,7 +421,7 @@ const SPEC_RULES = {
     /^e2e\/(decap-pat|github-actions-poll|cms-fixture-pr|cms-host)\.js$/,
   ],
   "e2e/cms-unpublish-republish-preview.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_layouts\/(post|default)\.html$/,
     /^_posts\/2024-01-02-e2e-unpublish-canary\.md$/,
     /^scripts\/patch-preview-config\.sh$/,
@@ -431,7 +431,7 @@ const SPEC_RULES = {
     /^e2e\/(decap-pat|github-actions-poll|cms-fixture-pr|cms-host)\.js$/,
   ],
   "e2e/cms-tags-lifecycle-preview.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_tags\//,
     /^_layouts\/tag\.html$/,
     /^_plugins\/auto_tag_pages\.rb$/,
@@ -448,14 +448,14 @@ const SPEC_RULES = {
   // workflow is what makes it a required check.
   "e2e/preview-media-resolves.spec.js": [
     /^assets\/images\/uploads\//,
-    /^admin\/config(-local)?\.yml$/,
+    /^(theme\/)?admin\/config(-local)?\.yml$/,
     /^_config\.yml$/,
     /^_layouts\/(post|canary)\.html$/,
     /^scripts\/patch-preview-config\.sh$/,
     /^e2e\/cms-host\.js$/,
   ],
   "e2e/cms-publish-flow.spec.js": [
-    /^admin\//,
+    /^(theme\/)?admin\//,
     /^_posts\//,
     /^_layouts\/(post|default)\.html$/,
     /^_includes\//,
@@ -464,7 +464,7 @@ const SPEC_RULES = {
   ],
   // Pure-node unit test for the sitemap-prune cleanup helper.
   "e2e/sitemap-prune.test.js": [/^e2e\/sitemap-prune\.js$/],
-  "e2e/cms-preview-url.spec.js": [/^admin\//, /^_posts\//],
+  "e2e/cms-preview-url.spec.js": [/^(theme\/)?admin\//, /^_posts\//],
   "e2e/blog-post.spec.js": [/^_posts\//, /^blog\//],
   "e2e/tags.spec.js": [/^_tags\//, /^tags\//],
   "e2e/not-found.spec.js": [/^404\.html$/],
@@ -528,28 +528,28 @@ const SPEC_RULES = {
     // CSS-only spec; otherwise idle. Picks up via fanout.
   ],
   "e2e/preview-bridge.spec.js": [
-    /^admin\/preview-bridge\.js$/,
+    /^(theme\/)?admin\/preview-bridge\.js$/,
     /^_layouts\/preview\.html$/,
     /^preview\.md$/,
   ],
   "e2e/preview-shell.spec.js": [
     /^_layouts\/preview\.html$/,
-    /^admin\/preview-bridge\.js$/,
+    /^(theme\/)?admin\/preview-bridge\.js$/,
     /^preview\.md$/,
   ],
   "e2e/preview-config-patch.spec.js": [
     /^scripts\/patch-preview-config\.sh$/,
-    /^admin\/(config\.yml|config-local\.yml)$/,
+    /^(theme\/)?admin\/(config\.yml|config-local\.yml)$/,
   ],
   "e2e/cloudfront-preview-router.spec.js": [/^infrastructure\//],
   "e2e/cloudfront-preview-location-fixer.spec.js": [/^infrastructure\//],
   // publish-via-auto-merge shim: pure-node matcher tests + browser-
   // context route-mocked tests. Trigger on any change to the shim
   // itself or the admin shell that loads it.
-  "e2e/publish-via-auto-merge.test.js": [/^admin\/publish-via-auto-merge\.js$/],
+  "e2e/publish-via-auto-merge.test.js": [/^(theme\/)?admin\/publish-via-auto-merge\.js$/],
   "e2e/publish-via-auto-merge-browser.spec.js": [
-    /^admin\/publish-via-auto-merge\.js$/,
-    /^admin\/index\.html$/,
+    /^(theme\/)?admin\/publish-via-auto-merge\.js$/,
+    /^(theme\/)?admin\/index\.html$/,
   ],
   "e2e/visual-regression.spec.js": [
     // Master visual gate — always include when *anything* visual could

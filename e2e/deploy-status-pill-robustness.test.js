@@ -22,7 +22,7 @@ const { test, expect } = require("./base");
 // captureStep) — this lightweight unit test catches structural
 // regressions without spinning up a browser.
 
-const SCRIPT = path.join(__dirname, "..", "admin", "deploy-status-pill.js");
+const SCRIPT = path.join(__dirname, "..", "theme", "admin", "deploy-status-pill.js");
 
 function readScript() {
   return fs.readFileSync(SCRIPT, "utf8");

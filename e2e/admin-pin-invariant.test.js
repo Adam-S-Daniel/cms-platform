@@ -20,7 +20,7 @@ const { test, expect } = require("./base");
 // Pure node test — no browser, no webServer dependency.
 
 const REPO_ROOT = path.join(__dirname, "..");
-const ADMIN_DIR = path.join(REPO_ROOT, "admin");
+const ADMIN_DIR = path.join(REPO_ROOT, "theme", "admin");
 
 function adminHtmlFiles() {
   return fs

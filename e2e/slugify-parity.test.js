@@ -31,8 +31,8 @@ const { test, expect } = require("./base");
 const { slugify: nodeSlugify } = require("./public-content");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
-const LIVE_URL_DERIVE_PATH = path.join(REPO_ROOT, "admin/live-url-derive.js");
-const POSTS_LIST_ENHANCE_PATH = path.join(REPO_ROOT, "admin/posts-list-enhance.js");
+const LIVE_URL_DERIVE_PATH = path.join(REPO_ROOT, "theme", "admin/live-url-derive.js");
+const POSTS_LIST_ENHANCE_PATH = path.join(REPO_ROOT, "theme", "admin/posts-list-enhance.js");
 
 // Execute the browser IIFE in a sandbox to get the REAL exported slugify
 // (not a regex-extracted copy). live-url-derive.js only touches
