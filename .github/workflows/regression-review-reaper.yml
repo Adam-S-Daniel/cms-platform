@@ -1,0 +1,131 @@
+# Reusable "regression-review reaper".
+#
+# WHY THIS EXISTS
+# visual-regression.yml puts approve-regression behind the `regression-review`
+# GitHub Environment whenever a PR has visually-different pages — a human gate.
+# Its concurrency group cancels the IN-PROGRESS generate job on a new push
+# (cancel-in-progress: true), BUT a run that has already reached the manual
+# gate is no longer "in progress" — it sits in the `waiting` state holding a
+# PENDING DEPLOYMENT. The run-cancel API and cancel-in-progress do NOT clear a
+# waiting deployment; it lingers forever as an orphaned "Waiting" entry (and,
+# because each waiting run still occupies the environment, stacks up across
+# pushes). The ONLY thing that clears it is an environment REVIEW decision —
+# and GITHUB_TOKEN cannot review (reject) its own run's pending deployment, so
+# this needs a reviewer PAT (CMS_E2E_PAT).
+#
+# HOW IT'S WIRED
+# A consuming site calls this from a thin `regression-review-reaper.yml` on
+# `pull_request: [synchronize, closed]`. On SYNCHRONIZE (a new push) every
+# waiting visual-regression run whose head_sha != the just-pushed sha is
+# superseded, so its `regression-review` pending deployment is rejected — the
+# fresh run re-enters the gate on the new sha. On CLOSED (incl. merged) EVERY
+# waiting run for the branch is reaped. Rejecting an obsolete-sha run's gate
+# does not block the PR: branch protection evaluates approve-regression on the
+# PR head sha, which the live run owns.
+name: Regression review reaper (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: "Filename of the visual-regression caller whose stale waiting deployments to reap."
+        required: false
+        type: string
+        default: visual-regression.yml
+      environment:
+        description: "Environment name whose superseded pending deployments are rejected."
+        required: false
+        type: string
+        default: regression-review
+    secrets:
+      CMS_E2E_PAT:
+        description: >-
+          PAT belonging to a reviewer of the `regression-review` environment.
+          GITHUB_TOKEN cannot reject its own run's pending deployment, so
+          clearing a superseded waiting gate needs a reviewer PAT. Consuming
+          callers map it explicitly via their secrets: block, matching the
+          other reusable callers in this repo (e.g. sweep-stale-cms-prs).
+        required: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reject superseded regression-review deployments
+        env:
+          # `gh` authenticates as the reviewer PAT — GITHUB_TOKEN can't
+          # self-reject. No checkout step: this is a pure API job, so GH_REPO
+          # is set explicitly (same pattern as sweep-stale-cms-prs.yml).
+          GH_TOKEN: ${{ secrets.CMS_E2E_PAT }}
+          GH_REPO: ${{ github.repository }}
+          WF: ${{ inputs.workflow }}
+          ENVNAME: ${{ inputs.environment }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          # On synchronize, the just-pushed sha owns the LIVE run and must NOT
+          # be reaped. On close, empty so EVERY waiting run for the branch is
+          # reaped regardless of sha.
+          KEEP_SHA: ${{ github.event.action == 'closed' && '' || github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Secrets (the reviewer PAT) are NOT passed to a pull_request run from
+          # a FORK, and a site may simply not have CMS_E2E_PAT set. Either way
+          # GH_TOKEN is empty and the first `gh api` call would auth-fail —
+          # under `set -e` that aborts the job into a red X on a path where
+          # there is nothing to reap anyway. Fail OPEN with a clean no-op
+          # instead (same pattern as cms-publish-loop-host.yml's missing-PAT
+          # guard). The thin caller also gates the whole job on same-repo PRs;
+          # this is the defense-in-depth backstop for the PAT-unset case.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::No reviewer PAT available (fork PR or CMS_E2E_PAT unset) — nothing to reap."
+            exit 0
+          fi
+          echo "::notice::Reap stale '${ENVNAME}' deployments for PR #${PR_NUMBER} [${HEAD_REF}] (action=${ACTION}, keep_sha=${KEEP_SHA:-<none>})"
+
+          # Waiting runs of the visual-regression caller on this PR's head
+          # branch. `status=waiting` is exactly the orphaned-gate state; the
+          # path endswith match scopes it to the regression caller (the run's
+          # `path` is `.github/workflows/<WF>`).
+          runs=$(gh api --paginate \
+            "repos/${GH_REPO}/actions/runs?branch=${HEAD_REF}&status=waiting&per_page=100" \
+            --jq ".workflow_runs[] | select(.path | endswith(\"/${WF}\")) | {id, head_sha} | @base64")
+
+          if [ -z "$runs" ]; then
+            echo "No waiting ${WF} runs on ${HEAD_REF} — nothing to reap."
+            exit 0
+          fi
+
+          for row in $runs; do
+            run=$(echo "$row" | base64 -d)
+            run_id=$(echo "$run" | jq -r '.id')
+            head_sha=$(echo "$run" | jq -r '.head_sha')
+
+            if [ -n "$KEEP_SHA" ] && [ "$head_sha" = "$KEEP_SHA" ]; then
+              echo "keep run ${run_id} — live sha ${head_sha}"
+              continue
+            fi
+
+            # Pending deployments to the gate environment for this run.
+            env_ids=$(gh api "repos/${GH_REPO}/actions/runs/${run_id}/pending_deployments" \
+              --jq ".[] | select(.environment.name == \"${ENVNAME}\") | .environment.id")
+            if [ -z "$env_ids" ]; then
+              echo "skip run ${run_id} [${head_sha}] — no pending ${ENVNAME} deployment"
+              continue
+            fi
+
+            for env_id in $env_ids; do
+              echo "reject run ${run_id} [${head_sha}] — env ${ENVNAME} (${env_id})"
+              gh api -X POST "repos/${GH_REPO}/actions/runs/${run_id}/pending_deployments" \
+                -F "environment_ids[]=${env_id}" \
+                -f state=rejected \
+                -f comment="Superseded — reaped by regression-review-reaper (PR #${PR_NUMBER} ${ACTION}). A newer commit or the PR close obsoleted this review gate." \
+                >/dev/null || echo "::warning::failed to reject run ${run_id} env ${env_id} (already resolved?)"
+            done
+          done
+          echo "::notice::Reap complete."
