@@ -1,0 +1,35 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/regression-review-reaper.yml`. Companion to
+# `visual-regression.yml`: when a PR has visually-different pages,
+# approve-regression sits behind the `regression-review` Environment (a human
+# gate). A new push or a PR close obsoletes that gate, but the superseded run
+# stays in the `waiting` state holding an orphaned pending deployment that
+# neither cancel-in-progress nor the run-cancel API clears. This reaper rejects
+# those superseded deployments (only an environment REVIEW clears them, and
+# GITHUB_TOKEN can't self-reject — hence the reviewer PAT).
+#
+# CMS_E2E_PAT must belong to a configured reviewer of the `regression-review`
+# environment. Keep the `@<tag>` pin in lockstep with the other platform
+# `uses:` pins.
+name: Regression review reaper
+run-name: "${{ format('reap PR #{0} ({1})', github.event.pull_request.number, github.event.action) }}"
+
+on:
+  pull_request:
+    types: [synchronize, closed]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  reap:
+    # Secrets (the reviewer PAT) aren't passed to a pull_request run from a
+    # FORK, so the reaper couldn't authenticate there — skip cleanly on fork
+    # PRs instead of surfacing a red X. Same-repo branches (the normal
+    # Decap/editorial flow, the only PRs that reach the regression-review gate)
+    # run. The reusable also no-ops on an empty PAT as a backstop.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/regression-review-reaper.yml@v0.1.3
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
