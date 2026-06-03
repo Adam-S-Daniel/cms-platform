@@ -36,6 +36,9 @@ module CmsPlatformTheme
       # When the machinery comes from the gem, Jekyll didn't copy it into
       # _site/admin (it isn't in the site tree) — copy it now. Skip the base
       # templates (rendered below), the site-owned seam, and docs.
+      # NB: copies depth-1 files + the reviews/ subdir only. If you add another
+      # subdirectory under theme/admin, extend this copy AND its parity sibling
+      # scripts/render-decap-config.rb (locked by decap-config-render-parity.test.js).
       if from_gem
         skip = ["collections.site.yml", "collections.site.yml.example", "README.md"]
         Dir.glob(File.join(src, "*")).each do |f|

@@ -59,6 +59,9 @@ FileUtils.mkdir_p(admin_out)
 
 # When the machinery comes from the gem, the site tree didn't supply it — copy
 # it into <build>/admin (skip base templates, the site-owned seam, and docs).
+# NB: copies depth-1 files + the reviews/ subdir only. If you add another
+# subdirectory under theme/admin, extend this copy AND its parity sibling
+# theme/lib/cms-platform-theme/decap_config_hook.rb (locked by decap-config-render-parity.test.js).
 if from_gem
   skip = ['collections.site.yml', 'collections.site.yml.example', 'README.md']
   Dir.glob(File.join(admin_src, '*')).each do |f|
