@@ -54,6 +54,29 @@ they keep only the seam. See "Admin delivery" below.
   site. Locked by `theme/spec/neutral_logo_test.rb` (gem asset is wordless +
   carries the override comment) and `e2e/scaffold-seeds-neutral-logo.test.js`
   (scaffold output). Don't reintroduce a brand into the gem asset.
+- **The scaffolder seeds `preview.md` + `404.html` (issue #23).** A consuming
+  site MUST expose `/preview/` (the admin "Live Preview" target) and a graceful
+  `404.html`, or the admin button dead-ends on a raw S3 404 and unknown URLs 404
+  ungracefully. The gem ships `theme/_layouts/preview.html` (the preview SHELL,
+  with the hidden post/page/project variants the admin `preview-bridge` streams
+  into) + the admin scripts, but the consuming site must provide the `/preview/`
+  PAGE. `scaffold/create-site.js` seeds both (`SEED_PREVIEW` / `SEED_404`):
+  `preview.md` is **front-matter only** (`layout: preview`, `permalink: /preview/`,
+  `sitemap: false`) and carries **no front-matter `robots`** — the gem preview
+  layout HARDCODES `<meta name="robots" content="noindex, nofollow">`, so a
+  front-matter one would duplicate it (mirrors `adamdaniel.ai/preview.md`).
+  `404.html` rides the gem `default` layout (which DOES render `page.robots`), so
+  it carries `robots: "noindex,nofollow"` + `sitemap: false` + a home/blog link;
+  copy is generic (no site identity). The `e2e/fixture-site` carries both (it
+  represents a scaffolded site) and the platform lint
+  `e2e/scaffold-preview-and-404.test.js` asserts the contract: (a) scaffold
+  output, (b) fixture parity, (c) optional post-build proof that
+  `_site/preview/index.html` renders the `data-preview-root` shell +
+  `_site/404.html` exists (skips when no Jekyll toolchain — pure-fs self-CI
+  lanes). **Single-page-site caveat:** per-item *live* preview is limited for a
+  single-page bio (jodidaniel.com — no per-section route to drive the bridge);
+  the seeded `preview.md` still gives a working `/preview/` shell + the seeded
+  `404.html` a friendly not-found page.
 - **Branch + PR, never push to `main`** (the auto-mode classifier enforces this).
 - **SHA-pin every workflow `uses:`** with a `# vX.Y.Z (date)` comment; 7-day
   cooling-off before bumping (mirrors adamdaniel.ai policy).
