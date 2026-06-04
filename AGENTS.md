@@ -5,22 +5,34 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
+**Current release: `v0.1.8`** — `v0.1.0`–`v0.1.8` are all tagged GitHub
+releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
+Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
+prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
+per-section collections, `base_collections: []`, gated coming-soon). See
+"Admin delivery (gem-shipped, v0.1.4+)", "Version history", and "Roadmap /
+open issues" below.
+
 ## The model
 
 Two repos. **This repo owns all machinery** (versioned, semver tags). A **site
 repo** holds only content + identity (`_config.yml`) + thin consumers. Site
 content/branding/docs **never** sync; platform/infra/CI/tooling/skills do;
-structural scaffolding (collection types) is opt-in via `admin/collections.site.yml`.
+structural scaffolding (collection types) is opt-in via the SITE-owned seam
+`admin/collections.site.yml`. The Decap admin UI itself ships **inside the
+theme gem** (since v0.1.4) — consumers no longer vendor a byte-copy of `admin/`;
+they keep only the seam. See "Admin delivery" below.
 
 ## Layout
 
 | Path | Layer |
 |---|---|
 | `.github/workflows/*.yml` | reusable `workflow_call` workflows (deploy, skills-sync, drift-guard, platform-bump) |
-| `scripts/` | platform-owned helper scripts (preview slug, preview-config patch, Decap render) |
+| `scripts/` | platform-owned helper scripts (preview slug, preview-config patch, Decap render, `audit-editorial-labels.js`, `write-commit-json.sh`) |
 | `infrastructure/`, `oauth-proxy/` | parameterized CloudFormation + deploy scripts |
-| `theme/admin/` | Decap base config (`*.base.yml`) + admin JS/HTML (reads `window.CMS_*`). Ships INSIDE the gem (since v0.1.4); the render hook copies it into `_site/admin` + renders `config.yml`. Sites own only the seam `admin/collections.site.yml`. |
-| `theme/` | the `cms-platform-theme` Jekyll gem (layouts/includes/assets/plugins + Decap render hook + `admin/` UI) |
+| `theme/` | the `cms-platform-theme` Jekyll **gem** (gemspec at `theme/`, so the gem root is `theme/`): layouts/includes/assets/plugins + the Decap render hook (`lib/cms-platform-theme/decap_config_hook.rb`) + the `admin/` UI |
+| `theme/admin/` | Decap base config (`*.base.yml`) + admin JS/HTML/CSS (read `window.CMS_*`) + `reviews/` dashboards. Ships INSIDE the gem (since v0.1.4 — it had to move under `theme/` to be packaged); the render hook copies it into `_site/admin` and renders `config.yml`. Sites own only the seam `admin/collections.site.yml` (the gem ships no `collections.site.yml`). |
+| `theme/spec/` | plain-ruby theme unit tests (`ruby theme/spec/<name>_test.rb`; no rspec/minitest dep beyond the stdlib `minitest/autorun` used by some); excluded from the gemspec `spec.files` glob |
 | `skills/` | canonical Claude Code skills |
 | `examples/site/` | copyable thin-shell callers a site consumes |
 | `scaffold/` | `create-site.js` — the `npx` site generator |
@@ -57,6 +69,138 @@ structural scaffolding (collection types) is opt-in via `admin/collections.site.
 - **`e2e/` deps install via `cd e2e && npm ci`** (`e2e/package-lock.json` is tracked —
   consumers need it). The CloudFront-Function specs simulate `Fn::Sub` by substituting
   a synthetic `example.test` apex, so platform specs stay site-agnostic.
+
+## Admin delivery (gem-shipped, v0.1.4+) — the render hook, the seam, base_collections
+
+The Decap admin (`/admin`) is the ~400-line invariant-heavy CMS config plus a
+set of JS/HTML/CSS shells and the `reviews/` dashboards. Two facts drive the
+whole design:
+
+1. **The gem root is `theme/`** (the gemspec lives there). For the gem to ship
+   the admin machinery, `admin/` had to live **under** the gem root, so it was
+   relocated from the repo root to `theme/admin/` in **v0.1.4**. (RubyGems drops
+   `..` paths and won't follow symlinks, so a sibling `admin/` couldn't be
+   packaged.) The gemspec packages `admin/**/*` **minus** the site-owned seam and
+   the build-generated files (`collections.site.yml`, `config.yml`,
+   `config-local.yml`, `commit.json`) — via `Dir[] - Dir[]` array subtraction,
+   because `Dir[]` has no `!` negation.
+
+2. **Consumers stop vendoring `admin/`.** A consuming site deletes its vendored
+   `admin/` and keeps **only** the seam `admin/collections.site.yml` (+
+   `.example`). The down-sync path is a gem bump (Dependabot `bundler`).
+   `platform-drift-guard` is now **skills-only** (admin is no longer
+   byte-guarded).
+
+**The render hook** (`theme/lib/cms-platform-theme/decap_config_hook.rb`, a
+`:site, :post_write` Jekyll hook) does, at the end of every build:
+
+- **Resolve machinery inputs from the gem** (`site.theme.root/admin`), falling
+  back to a vendored `site.source/admin` (migration window + the platform's own
+  e2e fixture). No-op if neither has a `config.base.yml`.
+- **Copy the gem-resident machinery into `_site/admin`** — Jekyll won't, since
+  the site tree no longer contains `admin/`. It copies depth-1 files + the
+  `reviews/` subdir only (skipping `*.base.yml`, the seam, `README.md`). **If you
+  add another subdirectory under `theme/admin/`, extend this copy AND its parity
+  sibling `scripts/render-decap-config.rb`.**
+- **Render `config.yml` from `config.base.yml`** by token-substituting the
+  `window.CMS_*` identity (`{{CMS_REPO}}`, `{{CMS_OAUTH_BASE_URL}}`,
+  `{{CMS_SITE_URL}}`, `{{CMS_DISPLAY_URL}}`, `{{CMS_LOGO_URL}}`) and **splicing
+  the SITE-OWNED seam** `admin/collections.site.yml` at the `# __SITE_COLLECTIONS__`
+  marker. The seam is read from the **SITE source**, never the gem.
+- **Inject `window.CMS_*` globals** into the admin shells (`index*.html`) AND the
+  reviews dashboards (`reviews/*.html`) — skipping a file only if it already
+  *defines* the identity, not merely uses it.
+- **Delete `*.base.yml`** from the output (the templates aren't published).
+
+`scripts/render-decap-config.rb` is the **deploy-time CLI mirror** of the hook
+(same copy + render + inject + cleanup; resolves the gem via
+`Gem.loaded_specs['cms-platform-theme']`). The two are **parity-locked** by
+`e2e/decap-config-render-parity.test.js` — keep the injected globals and the
+`index*` / `reviews/*` globs **identical** in both, or the lint fails.
+
+**`write-commit-json.sh`** writes `_site/admin/commit.json` (the commit pill's
+`fetch('commit.json')` resolves under `_site/admin/` now that admin is served
+from there; CI deploys do this automatically — the script is for local dev).
+
+### base_collections opt-out (v0.1.7)
+
+`_config.yml` `cms.base_collections` is a **KEEP-LIST** of the platform's
+built-in collections (`posts tags projects pages e2e`):
+
+- **UNSET** → keep all (default, back-compat).
+- `[]` → hide them all, so `/admin` shows ONLY the site's own collections.
+- a subset → keep only those.
+
+The renderers delete each unwanted top-level collection block by regex —
+matched at **2-space indent**, through to the next top-level `- name:` or EOF;
+nested fields are deeper-indented so they survive. **Spec-locked** by
+`theme/spec/base_collections_filter_test.rb` (asserts nil keeps all, `[]` hides
+all base collections but keeps site collections, partial keep works, survivors'
+nested fields and a field literally named like a base collection are untouched,
+output stays valid YAML). Used by single-page sites (jodidaniel.com).
+
+## Consumer-context spec rule (v0.1.5)
+
+The e2e harness is **reused by consumers**. `e2e/playwright.config.js` runs in
+CONSUMER mode when `process.env.SITE_ROOT` is set (the consuming site is built +
+served from `SITE_ROOT`); the `PLATFORM_META_SPECS` list is then `testIgnore`'d
+(those specs assert the platform's OWN source tree).
+
+**A spec that RUNS in consumer mode MUST NOT read admin from the platform
+SOURCE tree (`theme/admin`)** — consumers have no `theme/admin`, only the
+gem-RENDERED `_site/admin`. Read the **served bytes** instead:
+`await (await page.request.get('/admin/<file>')).text()`, or read
+`path.join(SITE_ROOT, '_site', 'admin', '<file>')` (pattern in
+`cms-config.spec.js`). `preview-bridge.spec.js` regressed exactly this in v0.1.5
+(it `readFileSync`'d `theme/admin/preview-bridge.js`, passing platform self-CI
+but ENOENT'ing in every consumer run). **Guarded** by
+`e2e/admin-spec-source-read-lint.test.js`: a non-meta `.spec.js` that reads
+`theme/admin` or legacy `../admin` fails the lint; a genuinely platform-only
+spec goes into `PLATFORM_META_SPECS` in `playwright.config.js` (the lint parses
+that list out of the config so the two stay in lockstep).
+
+## Editorial-workflow label audit (v0.1.6)
+
+Decap re-runs its editorial-workflow label migration on **every** `/admin` load
+(the persistent "Decap CMS is adding labels to N of your Editorial Workflow
+entries" dialog) when an open editorial PR (a `cms/*` branch) is **missing** its
+`decap-cms/<draft|pending_review|pending_publish>` label — repo-wide, so it
+shows on prod AND every preview deploy. Guards:
+
+- `e2e/cms-editorial-label-migration.spec.js` — drives the in-browser test-repo
+  backend; asserts the dialog is ABSENT, or gone after dismiss + 30s + reload
+  (never survives that cycle).
+- `scripts/audit-editorial-labels.js` — flags open `cms/*` PRs missing exactly
+  one `decap-cms/<status>` label; exits non-zero with `::error::` annotations.
+- `.github/workflows/editorial-label-audit.yml` — reusable; consumers wire a
+  daily-cron caller (sparse-checks out just the audit script from the platform).
+
+## E2E decap-server readiness (v0.1.8)
+
+`e2e/playwright.config.js`'s decap-server `webServer` uses
+`url: "http://localhost:8081/"` (HTTP readiness — decap-server 404s unknown
+routes, which counts as ready) **not** `port: 8081` (TCP-only). The TCP-only
+form raced: decap-server accepts the socket a beat before it can serve the
+local-backend API, so the admin shell occasionally mounted against a not-ready
+proxy and a collection editor failed to render (`cms-link-crawler` flaked ~30%).
+
+## Self-CI lanes
+
+`.github/workflows/self-ci.yml` is the machinery repo's own merge gate (every
+other workflow here is an `on: workflow_call` reusable, so a plain PR would
+otherwise run zero checks). It runs four FAST lanes on `pull_request` + `push`
+to `main`:
+
+1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail).
+2. **ruby-theme-specs** — `theme/spec/*_test.rb` (hard-fail).
+3. **node-unit-lints** — the pure-fs `e2e/*.test.js` lints, selected by an
+   exclusion DENY list (build-/repo-dependent specs are denied; a new pure-fs
+   lint is picked up automatically). Run with `TARGET=prod` +
+   `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so no Jekyll/browser bring-up (hard-fail).
+4. **cfn-lint** over the CloudFormation templates (advisory, `continue-on-error`).
+
+The heavy browser matrix + `@admin-write` write-path specs run in **CONSUMER**
+e2e (dogfood / consuming-site CI), NOT in platform self-CI.
 
 ## Adding / porting a workflow
 
@@ -177,6 +321,57 @@ Still open:
   snapshots (`npx playwright test --update-snapshots`).
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
+
+## Version history (v0.1.0 → v0.1.8)
+
+All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+- **v0.1.0** — initial extraction; dogfooded on adamdaniel.ai (prod green, pixel-identical).
+- **v0.1.1** — org-portability hardening (de-identified secrets-scan / identity).
+- **v0.1.2** — fixes pass.
+- **v0.1.3** — interim.
+- **v0.1.4** — **admin consolidation (Option 1A, issue #5 GOAL 1):** `admin/`
+  relocated to `theme/admin/` so the gem ships it; the render hook copies the
+  gem-resident machinery into `_site/admin` + renders `config.yml`; consumers
+  delete their vendored `admin/` and keep only the seam; drift-guard becomes
+  skills-only. (See "Admin delivery".)
+- **v0.1.5** — **consumer-context spec rule:** specs that run in CONSUMER mode
+  must read the SERVED admin bytes, not `theme/admin`. Fixed `preview-bridge.spec.js`;
+  added `e2e/admin-spec-source-read-lint.test.js`.
+- **v0.1.6** — **editorial-label audit:** dialog regression guard +
+  `audit-editorial-labels.js` + reusable `editorial-label-audit.yml`.
+- **v0.1.7** — **base_collections opt-out** (`cms.base_collections` keep-list;
+  `theme/spec/base_collections_filter_test.rb`).
+- **v0.1.8** — **e2e flake fix:** decap-server `webServer` waits on HTTP
+  readiness (`url:`) not the open port.
+
+## Consumers
+
+- **adamdaniel.ai** — consumer #1, user-owned, the dogfood. Migrated to
+  gem-delivered admin (PR #1883); live prod `/admin` verified. Daily
+  editorial-label-audit adopted. (A loop co-arrival fix #1892 narrowed the host
+  publish-loop's push trigger to its own canary surfaces so it stops evicting
+  prod-mutate in the shared `prod-mutating-loop` concurrency lane — see agent
+  memory `cms-prod-loops-no-concurrent-runs`.)
+- **jodidaniel.com** — consumer #2, org-owned, a SINGLE-PAGE bio. `/admin`
+  restructured into 9 per-section collections (5 folder collections ordered by a
+  numeric `weight`, declared `output:false`; 4 file collections reading
+  `_data/*.yml`). `cms.base_collections: []` hides the generic collections. A
+  live-gate in `_data/settings.yml` `site_live` (default `false`) keeps prod
+  coming-soon with zero bio leak. Go-live is tracked in jodidaniel issue #26.
+
+## Roadmap / open issues
+
+- **issue #5 GOAL 1 — admin consolidation: DONE** in v0.1.4 (this is the
+  gem-delivery model documented above).
+- **issue #5 GOAL 2 — `field_library` (OPEN):** per-site custom collections via a
+  build-time YAML **deep-merge** of a shared `field_library`, replacing the render
+  hook's text-splice of the seam. High-risk re: preserving the config's rich
+  comments + invariants through a structural merge; deferred.
+- **issue #21 (OPEN):** a prod-mutate canary URL doesn't reflect the new content
+  despite a successful deploy — likely a deploy-build future-handling problem.
+- **issue #22 (OPEN):** publish loops leave orphaned `cms/*` canary branches —
+  add a prune step.
 
 ## Environment gotchas (this machine / web)
 

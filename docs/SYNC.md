@@ -24,7 +24,9 @@ The **admin machinery** (`admin/` except the seam) is shipped via the `cms-platf
 gem (`theme/admin`) as of v0.1.4 — sites no longer vendor byte-copies, so it isn't
 byte-match-guarded; a gem bump (Dependabot `bundler`) is its down-sync path. Site-owned
 seams (`admin/collections.site.yml`) and generated configs (`admin/config.yml`,
-`admin/config-local.yml`) are never platform-owned.
+`admin/config-local.yml`) are never platform-owned. A site can also opt out of the
+platform's built-in collections via `_config.yml: cms.base_collections` (a keep-list;
+v0.1.7) without forking any admin file.
 
 So an improvement made while working on any site is routed here as a PR → merge →
 tag → it flows back down to all sites. Site **content/branding/docs never sync** — only machinery.

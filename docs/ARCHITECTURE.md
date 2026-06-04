@@ -29,9 +29,10 @@ only option delivering low-conflict bidirectional sync with clean identity isola
 
 - **`cms-platform`** (this repo) — owns all machinery, semver-tagged.
 - **per-site repo** — content (`_posts/ _tags/ projects/ pages/`), `_config.yml` (the
-  single source of truth for identity), site-only `admin/` overrides, a `Gemfile`
-  pinning the theme gem, thin workflow callers, `infrastructure/site-params.json`, and
-  a `platform.lock`.
+  single source of truth for identity), the SITE-owned admin seam
+  `admin/collections.site.yml` (the only `admin/` file a site keeps since v0.1.4 —
+  the admin UI ships in the gem), a `Gemfile` pinning the theme gem, thin workflow
+  callers, `infrastructure/site-params.json`, and a `platform.lock`.
 
 ## Per-layer reuse + sync mechanism
 
@@ -39,7 +40,7 @@ only option delivering low-conflict bidirectional sync with clean identity isola
 |---|---|---|---|---|
 | **GitHub Actions** | `.github/workflows/*.yml` as `workflow_call` reusable workflows + `actions/*` composites | per-site `.github/workflows/*.yml` are ~10-line callers: `uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-preview.yml@<sha>` | **Dependabot** (`github-actions` ecosystem) bumps the pinned SHA | PR to this repo |
 | **Jekyll theme** (`_layouts _includes assets _plugins/auto_tag_pages`) | theme **gem** (gem, not `remote_theme` — `remote_theme` can't run the custom plugin reliably) | site `Gemfile` + `_config.yml: theme:`; branding becomes Liquid reading `site.*` | **Dependabot** (`bundler`) | PR to this repo |
-| **Decap CMS** (~400-line `admin/config.yml` + `admin/*.js`) | platform owns `admin/config.base.yml` (machinery + default collections + mandatory e2e canary) | **build-time render** injects the ~4 site values from `_config.yml`; extends the existing `scripts/patch-preview-config.sh` pattern. Site may add `admin/collections.site.yml` (opt-in structure) merged at build | via gem bump | PR to this repo |
+| **Decap CMS** (~400-line config + admin `*.js`/`*.html` + `reviews/` dashboards) | platform owns `theme/admin/` (`config.base.yml` machinery + default collections + mandatory e2e canary) — **shipped inside the theme gem since v0.1.4** (GOAL 1, below); consumers no longer vendor it | **build-time render hook** (`theme/lib/cms-platform-theme/decap_config_hook.rb`, mirrored by `scripts/render-decap-config.rb`) copies the gem-resident machinery into `_site/admin`, injects the site identity from `_config.yml`, and splices the SITE-owned seam `admin/collections.site.yml` (opt-in structure) | via gem bump (Dependabot `bundler`) | PR to this repo |
 | **AWS infra** (bootstrap / rum / oauth-proxy) | `infrastructure/*` templates; CloudFront Function regex templated via `Fn::Sub` over an `ApexDomain` param | templates published to the shared artifact bucket as `cfn/<version>/*.yaml`; site stack references the version + `site-params.json` | thin custom `platform-bump` workflow advances the `cfn/<version>` pointer | PR to this repo |
 | **`.claude/skills`** | `skills/` canonical copy | a new `skills-sync.yml` reusable workflow pulls skills at the pinned tag. NOTE: adamdaniel.ai's existing `skills-mirror.yml` is a *local structural verifier*, **not** a transport — do not overload it | via the same SHA pin | PR to this repo |
 
@@ -50,16 +51,25 @@ only option delivering low-conflict bidirectional sync with clean identity isola
   gates the merge. Only the CFN template-version pointer needs the small custom
   `platform-bump` workflow.
 - **Up (site → platform):** a `platform-drift-guard` reusable workflow hashes
-  platform-owned paths against the pinned gem/tag. A site PR that edits a platform-owned
-  file **fails** the check and emits a ready-to-run command to open the equivalent PR
-  here. Merge → new tag → Dependabot fans the fix back out.
+  platform-owned paths that physically live in the site (`.claude/skills/`) against
+  the pinned gem/tag. A site PR that edits a platform-owned file **fails** the check
+  and emits a ready-to-run command to open the equivalent PR here. Merge → new tag →
+  Dependabot fans the fix back out. (Since v0.1.4 the admin machinery ships in the gem,
+  so it is no longer byte-copied into sites and the guard is **skills-only** — the gem
+  bump is admin's down-sync path.)
 
 This satisfies "opt-in structure": the e2e canary collection + editorial-workflow
 invariants stay platform-owned and non-optional (they are *test infra*, not content
-structure); `admin/collections.site.yml` is the opt-in seam for a site to add/override
-content collection types.
+structure); the SITE-owned seam `admin/collections.site.yml` is the opt-in seam for a
+site to add/override content collection types, spliced into the rendered config at the
+`# __SITE_COLLECTIONS__` marker. A site may additionally trim the platform's built-in
+collections via `_config.yml: cms.base_collections` (a keep-list; v0.1.7).
 
 ## Parameterization pass (source-of-truth, paths relative to the adamdaniel.ai source)
+
+> The `admin/*` paths below are the **original adamdaniel.ai source locations**
+> from the extraction plan; in this repo the admin machinery now lives under
+> `theme/admin/` and is rendered by the hook (see GOAL 1 status at the bottom).
 
 | File:line | Hardcoded today | → Source of truth |
 |---|---|---|
@@ -117,3 +127,32 @@ endpoint valid until build-time config render is proven.
   fails the PR and the emitted command opens a `cms-platform` PR; merge → new tag → bump
   fans back out.
 - Decommission the throwaway site/stack after green.
+
+## Admin-machinery roadmap status (as of v0.1.8)
+
+The Decap admin layer was the one row in the per-layer table whose final reuse
+mechanism was still open at extraction time. Issue **#5** split it into two goals:
+
+- **GOAL 1 — ship `admin/` via the theme gem (Option 1A): DONE in v0.1.4.**
+  `admin/` was relocated from the repo root to `theme/admin/` (the gem root is
+  `theme/`, so it had to move under it to be packaged). The render hook
+  (`theme/lib/cms-platform-theme/decap_config_hook.rb`, mirrored by
+  `scripts/render-decap-config.rb`, parity-locked by
+  `e2e/decap-config-render-parity.test.js`) copies the gem-resident machinery into
+  `_site/admin`, token-substitutes the `window.CMS_*` identity, and splices the
+  SITE-owned seam `admin/collections.site.yml` at `# __SITE_COLLECTIONS__`.
+  Consumers delete their vendored `admin/` and keep only the seam; the gem bump
+  (Dependabot `bundler`) is the down-sync path; `platform-drift-guard` became
+  skills-only. The `cms.base_collections` keep-list (v0.1.7) lets a site trim the
+  built-in collections. See `AGENTS.md` "Admin delivery" for the full mechanics.
+
+- **GOAL 2 — `field_library`: OPEN (deferred roadmap).** Per-site custom
+  collections assembled via a build-time YAML **deep-merge** of a shared
+  `field_library`, replacing the render hook's text-splice of the seam. High-risk
+  re: preserving the config's rich comments + invariants through a structural
+  merge — hence deferred.
+
+Other open platform issues: **#21** (a prod-mutate canary URL doesn't reflect new
+content despite a successful deploy — likely a deploy-build future-handling issue)
+and **#22** (publish loops leave orphaned `cms/*` canary branches — add a prune
+step).
