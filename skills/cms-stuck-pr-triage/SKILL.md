@@ -115,7 +115,7 @@ The new run opens a fresh `cms/<col>/<slug>` PR on top of current main; with the
 
 `cms-delete-published-preview.yml`'s delete spec clicks the Decap UI's "Delete published entry" menuitem. Decap renders that menuitem ONLY when the entry's collection has `delete: true` in `admin/config.yml`. If the collection is `delete: false` the status menu opens but renders an empty list, the menuitem never appears, and `getByRole("menuitem", { name: /delete (published )?entry/i }).click()` times out at the action-timeout.
 
-When triaging a stuck delete-spec, before chasing infrastructure: `grep -A1 "name: e2e\|name: posts\|name: <collection>" admin/config.yml` and check the `delete:` flag for the relevant collection.
+When triaging a stuck delete-spec, before chasing infrastructure, check the `delete:` flag for the relevant collection: `grep -A1 "name: e2e\|name: posts\|name: <collection>" admin/config.yml`. NOTE (v0.1.4+): the live `config.yml` is **rendered** by the theme gem at build time — there is no hand-authored source `admin/config.yml` in a consuming site. Grep the **rendered** output `_site/admin/config.yml` (or fetch the served `/admin/config.yml`), or the platform's template `theme/admin/config.base.yml`.
 
 ### 7. Empty status-menu pattern (Published button opens, nothing inside)
 

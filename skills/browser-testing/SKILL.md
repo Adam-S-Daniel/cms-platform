@@ -173,7 +173,7 @@ Heavy CMS specs are restricted to `chromium-desktop` — the assertion is about 
 
 ### Decap config gotcha
 
-Folder collections need **explicit** `create: true` AND `delete: true` in `admin/config*.yml`. Decap defaults both to true, but the explicit form keeps editor capabilities visible in the YAML and survives major-version default changes. `files:` collections never expose create/delete in the UI — convert to `folder:` if editors need to add or remove entries. `cms-config.spec.js` locks this in structurally.
+Folder collections need **explicit** `create: true` AND `delete: true` in `admin/config*.yml`. Decap defaults both to true, but the explicit form keeps editor capabilities visible in the YAML and survives major-version default changes. `files:` collections never expose create/delete in the UI — convert to `folder:` if editors need to add or remove entries. `cms-config.spec.js` locks this in structurally. NOTE (v0.1.4+): the live config is **rendered** from `theme/admin/config.base.yml` by the theme gem (no source `admin/config.yml` in a consumer); edit the `.base.yml` template, and in a consumer-mode spec read the **served** bytes (`/admin/config.yml`) or `_site/admin/config.yml`, never `theme/admin` — see `e2e/admin-spec-source-read-lint.test.js`.
 
 If a UI-driven delete spec on a collection ever stops "doing anything" silently, check the collection's `delete:` flag first — Decap renders the delete menuitem only when `delete: true`. (This bit `cms-delete-published.spec.js` until PR #302 flipped the e2e collection's flag.)
 
