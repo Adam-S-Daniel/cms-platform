@@ -22,11 +22,34 @@
 //       someone deletes a guard but leaves the registry entry, this goes RED.
 //
 //   (3) NO SILENT DRIFT — every CONSUMER-RUNNING spec (target:local, NOT in
-//       playwright.config.js PLATFORM_META_SPECS) that drives
-//       /admin/index-local.html and navigates a base collection (route hash OR
-//       sidebar-link wait) is EITHER registered OR in the explicit NON_GUARDED
-//       allowlist (with a documented reason). A NEW unguarded generic-collection
-//       spec turns this RED — the guard set cannot silently drift.
+//       playwright.config.js PLATFORM_META_SPECS) that DEPENDS ON A BASE
+//       COLLECTION EXISTING is EITHER guarded (registry guard OR a direct inline
+//       hasAdminCollection/keepsBaseCollection skip) OR in the explicit
+//       NON_GUARDED allowlist (with a documented reason). A NEW unguarded
+//       base-collection-dependent spec turns this RED — the guard set cannot
+//       silently drift.
+//
+//       The detector is COMPREHENSIVE — it covers EVERY class of base-collection
+//       dependence a consumer-running spec can carry, not just index-local
+//       navigation (the original blind spot that let cms-preview-url.spec.js +
+//       cms-form-clarity.spec.js slip through unguarded):
+//
+//         CLASS A  index-local route — page.goto(...index-local.html#/collections/<base>)
+//         CLASS B  index-local sidebar wait — getByRole("link",{name:/^<base>$/i})
+//                  in a file that loads index-local.html but NOT index-test.html
+//         CLASS C  rendered-config per-base-collection read — reads the rendered
+//                  _site/admin/config.yml (RENDERED_CONFIG / hasAdminCollection /
+//                  adminCollections) AND makes a per-base-collection assertion
+//                  against it: preview_path, a field-hint snapshot (hintFor /
+//                  PROD_HINTS / hint:), findCollection(cfg,'<base>'), or
+//                  hasAdminCollection(siteRoot,'<base>') for a named base.
+//
+//       A spec whose admin shell is index-test.html (config-test.yml is FIXED —
+//       NOT subject to the base_collections keep-list deletion) is NOT flagged by
+//       CLASS A/B; those specs must NOT be guarded. The base-CONTENT readers
+//       (_posts/_e2e/sitemap/feeds/tags served-site specs) are covered by their
+//       own site-capabilities self-skips + the build-and-run meta proof and are
+//       allowlisted here when they surface a rendered-config signal.
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
@@ -36,20 +59,26 @@ const cap = require("./site-capabilities");
 const HARNESS = __dirname;
 const FULL = path.join(HARNESS, "fixture-site");
 const SINGLEPAGE = path.join(HARNESS, "fixture-site-singlepage");
-const BASE = ["posts", "tags", "projects", "pages"];
+// Nav classes (A/B) only ever wait on / route to the four editable base
+// collections; the rendered-config class (C) can also touch `e2e`.
+const NAV_BASE = ["posts", "tags", "projects", "pages"];
+const ALL_BASE = ["posts", "tags", "projects", "pages", "e2e"];
 
-// Consumer-running specs that drive index-local.html and navigate a base
-// collection but DON'T need a base_collections guard, each with WHY. The
-// drift lint allows exactly these; anything else must be registered.
-const NON_GUARDED = {
-  // Crawls _site/sitemap.xml URLs (incl. the admin dev shells) only to audit
-  // <img> alt — it never navigates a collection route nor waits for a base
-  // sidebar link; on a single-page consumer it just audits fewer pages.
-  "image-alt-text.spec.js": "sitemap <img> audit — no collection navigation; degrades gracefully",
-  // Pure-fs assertions on the THREE rendered admin shells' bytes; it lists
-  // index-local.html as a candidate file path but does no page.goto.
-  "cms-permalink-contract.spec.js": "pure-fs shell-bytes lint — no collection navigation",
-};
+// Consumer-running specs the COMPREHENSIVE detector flags (they touch a base
+// collection by one of CLASS A/B/C) but that DON'T apply any recognized guard
+// AND genuinely don't need one, each with WHY. The drift lint allows exactly
+// these; anything else flagged-but-unguarded goes RED.
+//
+// EMPTY by design: every spec the comprehensive detector flags is covered
+// either by a registry guard (group-2 index-local specs) or a direct inline
+// cap.hasAdminCollection / cap.keepsBaseCollection self-skip (the rendered-
+// config readers: cms-config, cms-permalink-contract, cms-post-list-summary,
+// cms-preview-url, cms-form-clarity). If you add a flagged spec that truly
+// needs NO guard (e.g. it asserts ABSENCE, which stays correct/empty on an
+// opted-out consumer), add it here with a reason — the stale-entry test below
+// will require it to be genuinely flagged-but-unguarded so the allowlist can't
+// rot into a dumping ground.
+const NON_GUARDED = {};
 
 // Re-read the canonical PLATFORM_META_SPECS list from playwright.config.js (the
 // single source of truth for "not consumer-running"), so this lint and the
@@ -61,28 +90,89 @@ function platformMetaSpecs() {
   return new Set([...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]));
 }
 
-// Does a spec SOURCE drive /admin/index-local.html and navigate a base
-// collection — via the route hash (index-local.html#/collections/<base>) OR by
-// waiting/clicking a base sidebar link in a file whose admin shell is
-// index-local (no index-test.html page.goto)? This is the drift signal: the
-// shape that breaks on a base_collections:[] consumer.
-function drivesIndexLocalBaseCollection(src) {
-  const routeHash = BASE.some((c) =>
-    new RegExp(`index-local\\.html#/collections/${c}\\b`).test(src),
-  );
-  if (routeHash) return true;
-  // Sidebar-link signal — only count it when the file actually loads
+// ── The COMPREHENSIVE detector ───────────────────────────────────────────
+//
+// Return the list of base-collection-dependence CLASSES a consumer-running
+// spec SOURCE carries (empty ⇒ the spec doesn't depend on a base collection
+// existing, so it needs no guard). EVERY class that breaks on a
+// base_collections:[] consumer is covered — not just index-local navigation
+// (the original blind spot). See the file header for the class catalogue.
+function baseCollectionClasses(src) {
+  const classes = [];
+
+  // CLASS A — index-local route hash to a base collection.
+  if (
+    NAV_BASE.some((c) => new RegExp(`index-local\\.html#/collections/${c}\\b`).test(src))
+  ) {
+    classes.push("index-local-route");
+  }
+
+  // CLASS B — base-collection sidebar-link wait, but ONLY when the file loads
   // index-local AND never loads index-test (index-test → config-test.yml is
   // FIXED, not opted-out, so those specs must NOT be guarded).
   const loadsIndexLocal = /page\.goto\(\s*["']\/admin\/index-local\.html/.test(src);
   const loadsIndexTest = /page\.goto\(\s*["']\/admin\/index-test\.html/.test(src);
   if (loadsIndexLocal && !loadsIndexTest) {
-    const sidebarWait = BASE.some((c) =>
+    const sidebarWait = NAV_BASE.some((c) =>
       new RegExp(`getByRole\\(\\s*["']link["']\\s*,\\s*\\{\\s*name:\\s*/\\^${c}\\$/i`).test(src),
     );
-    if (sidebarWait) return true;
+    if (sidebarWait) classes.push("index-local-sidebar");
   }
-  return false;
+
+  // CLASS C — reads the RENDERED admin config AND makes a per-base-collection
+  // assertion against it. This is the class that caught cms-preview-url +
+  // cms-form-clarity: on a base_collections:[] consumer the posts/tags/projects/
+  // pages block is STRIPPED from the rendered config, so a preview_path
+  // toContain / field-hint snapshot / findCollection('<base>') reads
+  // null/absent and the spec FAILS. We require BOTH the rendered-config read
+  // AND a per-base assertion so a spec that merely reads the rendered config
+  // for a config-AGNOSTIC top-level key (media_folder, site_url, publish_mode,
+  // backend.branch — e.g. cms-config-preview-delta) is NOT falsely flagged.
+  const readsRenderedConfig =
+    /RENDERED_CONFIG\b/.test(src) ||
+    // `_site/admin/config.yml` written as a path (slashes or path.join parts).
+    /_site["',\s/]+admin["',\s/]+config\.yml/.test(src) ||
+    /renderedAdminConfigPath\(|adminCollections\(/.test(src);
+  if (readsRenderedConfig) {
+    const perBase =
+      /preview_path/.test(src) ||
+      /hintFor\(|PROD_HINTS|LOCAL_HINTS|TEST_HINTS/.test(src) ||
+      ALL_BASE.some((c) =>
+        new RegExp(`findCollection\\([^)]*["']${c}["']`).test(src),
+      ) ||
+      ALL_BASE.some((c) =>
+        new RegExp(`hasAdminCollection\\([^)]*["']${c}["']`).test(src),
+      );
+    if (perBase) classes.push(`rendered-config-per-collection`);
+  }
+
+  return classes;
+}
+
+// Back-compat alias — the original narrow predicate is now CLASS A∪B of the
+// comprehensive detector. Kept so any external reference still resolves.
+function drivesIndexLocalBaseCollection(src) {
+  return baseCollectionClasses(src).some(
+    (c) => c === "index-local-route" || c === "index-local-sidebar",
+  );
+}
+
+// Does a spec SOURCE apply a RECOGNIZED base_collections guard — EITHER the
+// registry guard (imports base-collections-guards + calls guard()/shouldSkip())
+// OR a direct inline self-skip keyed on a site-capability predicate
+// (cap.hasAdminCollection / cap.keepsBaseCollection inside a test.skip)? Both
+// styles are legitimate: the index-local group-2 specs use the registry; the
+// rendered-config readers (cms-config, cms-permalink-contract, cms-preview-url,
+// cms-form-clarity, …) self-skip directly on hasAdminCollection. A flagged spec
+// applying EITHER is covered — it can't red-fail a base_collections:[] consumer.
+function appliesBaseCollectionGuard(src) {
+  const registryGuard =
+    /require\(["']\.\/base-collections-guards["']\)/.test(src) &&
+    /\b(guard|shouldSkip)\s*\(/.test(src);
+  const directGuard =
+    /test\.skip\(/.test(src) &&
+    /\b(hasAdminCollection|keepsBaseCollection|isSinglePageConsumer)\s*\(/.test(src);
+  return registryGuard || directGuard;
 }
 
 test.describe("#33 base_collections guard registry — predicate proof", () => {
@@ -148,40 +238,92 @@ test.describe("#33 base_collections guard registry — guard presence", () => {
   }
 });
 
+// The set of consumer-running specs the comprehensive detector flags, with
+// their classes — computed once, reused by the drift assertions below.
+function flaggedConsumerSpecs() {
+  const meta = platformMetaSpecs();
+  const out = [];
+  for (const f of fs.readdirSync(HARNESS)) {
+    if (!f.endsWith(".spec.js")) continue;
+    if (meta.has(f)) continue; // not consumer-running
+    if (f === "regression-video.spec.js") continue; // always-ignored generator
+    const src = fs.readFileSync(path.join(HARNESS, f), "utf8");
+    const classes = baseCollectionClasses(src);
+    if (classes.length) out.push({ name: f, classes, src });
+  }
+  return out;
+}
+
 test.describe("#33 base_collections guard registry — no silent drift", () => {
-  // (3) Every consumer-running index-local generic-collection spec is registered
-  // or explicitly allowlisted. A new unguarded one fails here.
-  test("every index-local generic-collection consumer spec is registered or allowlisted", () => {
-    const meta = platformMetaSpecs();
+  // (3) THE COMPREHENSIVE drift gate. Every consumer-running spec that DEPENDS
+  // ON A BASE COLLECTION EXISTING (by ANY class A/B/C — index-local route,
+  // sidebar wait, OR a per-base-collection read of the rendered config) is
+  // EITHER guarded (registry guard OR a direct inline hasAdminCollection /
+  // keepsBaseCollection self-skip) OR explicitly allowlisted in NON_GUARDED.
+  // A NEW unguarded base-collection-dependent spec — including a rendered-config
+  // reader, the class the original detector missed — fails here.
+  test("every base-collection-dependent consumer spec is guarded or allowlisted", () => {
     const registered = new Set(reg.GUARDED_SPEC_NAMES);
     const allow = new Set(Object.keys(NON_GUARDED));
     const offenders = [];
-    for (const f of fs.readdirSync(HARNESS)) {
-      if (!f.endsWith(".spec.js")) continue;
-      if (meta.has(f)) continue; // not consumer-running
-      const src = fs.readFileSync(path.join(HARNESS, f), "utf8");
-      if (!drivesIndexLocalBaseCollection(src)) continue;
-      if (registered.has(f) || allow.has(f)) continue;
-      offenders.push(f);
+    for (const { name, classes, src } of flaggedConsumerSpecs()) {
+      if (registered.has(name)) continue; // group-2 registry guard
+      if (allow.has(name)) continue; // documented exception
+      if (appliesBaseCollectionGuard(src)) continue; // direct inline self-skip
+      offenders.push({ name, classes });
     }
     expect(
-      offenders,
-      `these consumer-running specs drive /admin/index-local.html + navigate a base ` +
-        `collection but are NEITHER registered in base-collections-guards.js NOR in ` +
-        `the NON_GUARDED allowlist — a base_collections:[] consumer would red-fail them. ` +
-        `Register each (with its inline guard) or allowlist it with a reason:\n` +
-        offenders.map((o) => `  • ${o}`).join("\n"),
+      offenders.map((o) => `${o.name} [${o.classes.join(", ")}]`),
+      `these consumer-running specs DEPEND on a base collection existing but apply ` +
+        `NO recognized base_collections guard (neither a registry guard() nor a direct ` +
+        `inline cap.hasAdminCollection / cap.keepsBaseCollection self-skip) and are NOT ` +
+        `in the NON_GUARDED allowlist — a base_collections:[] consumer would red-fail ` +
+        `them. Guard each (register it + its inline guard, OR add a direct inline ` +
+        `cap.hasAdminCollection self-skip mirroring cms-config.spec.js), or allowlist ` +
+        `it with a reason.`,
     ).toEqual([]);
   });
 
-  // The allowlist must not rot: every NON_GUARDED entry must still exist and
-  // still be a consumer-running index-local spec (else delete the entry).
+  // The detector must STAY comprehensive — it must keep flagging the
+  // rendered-config-per-collection class (CLASS C) that the original
+  // index-local-only detector MISSED. Anchor on the two specs that exposed the
+  // blind spot: if the detector ever regresses so it no longer flags them, this
+  // goes RED (and they'd silently lose drift protection).
+  test("detector flags the rendered-config-per-collection class (the closed blind spot)", () => {
+    for (const f of ["cms-preview-url.spec.js", "cms-form-clarity.spec.js"]) {
+      const src = fs.readFileSync(path.join(HARNESS, f), "utf8");
+      expect(
+        baseCollectionClasses(src),
+        `${f} reads the rendered admin config per base collection — the detector MUST ` +
+          `flag it (rendered-config-per-collection) so the drift gate covers this class`,
+      ).toContain("rendered-config-per-collection");
+    }
+  });
+
+  // The allowlist must not rot: every NON_GUARDED entry must still EXIST, still
+  // be consumer-running, still be FLAGGED by the detector (else it's not an
+  // exception to anything), and still be UNGUARDED (else it belongs to the
+  // guarded set, not the allowlist).
   test("NON_GUARDED allowlist has no stale entries", () => {
     const meta = platformMetaSpecs();
     for (const f of Object.keys(NON_GUARDED)) {
       const p = path.join(HARNESS, f);
       expect(fs.existsSync(p), `NON_GUARDED lists missing spec ${f}`).toBe(true);
-      expect(meta.has(f), `${f} is a PLATFORM_META_SPEC — not consumer-running; drop it from NON_GUARDED`).toBe(false);
+      expect(
+        meta.has(f),
+        `${f} is a PLATFORM_META_SPEC — not consumer-running; drop it from NON_GUARDED`,
+      ).toBe(false);
+      const src = fs.readFileSync(p, "utf8");
+      expect(
+        baseCollectionClasses(src).length > 0,
+        `${f} is in NON_GUARDED but the detector does NOT flag it as base-collection-` +
+          `dependent — it's not an exception to anything; drop it`,
+      ).toBe(true);
+      expect(
+        appliesBaseCollectionGuard(src),
+        `${f} is in NON_GUARDED but it DOES apply a base_collections guard — remove the ` +
+          `allowlist entry (it's already covered) or the guard`,
+      ).toBe(false);
     }
   });
 

@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const cap = require("./site-capabilities");
 
 // SITE_ROOT-aware resolution. The Posts preview_path is read from the
 // RENDERED Decap config the gem's render hook emits to
@@ -87,6 +88,18 @@ test.describe("CMS preview URL round-trip", () => {
     test.skip(
       !fs.existsSync(RENDERED_CONFIG),
       `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config preview_path check only runs in the local lane`,
+    );
+    // #33 — a single-page consumer that opts out of the "posts" collection via
+    // cms.base_collections (v0.1.7) has the posts block STRIPPED from the
+    // rendered config (the gem's decap_config_hook applies the keep-list
+    // deletion). The posts block is the sole carrier of POSTS_PREVIEW_PATH, so
+    // `toContain` would FAIL on a built single-page consumer. Guard PRECISELY on
+    // the rendered admin config (the ground truth the assertion reads) — never
+    // weakened on a full consumer, where posts is present and the assertion runs
+    // unchanged. Mirrors cms-config.spec.js's hasAdminCollection pattern.
+    test.skip(
+      !cap.hasAdminCollection(SITE_ROOT, "posts"),
+      'consumer opts out of the "posts" collection via cms.base_collections — the posts block (sole carrier of the Posts preview_path) is stripped from the rendered config (#33)',
     );
     const rendered = fs.readFileSync(RENDERED_CONFIG, "utf8");
     expect(rendered).toContain(POSTS_PREVIEW_PATH);

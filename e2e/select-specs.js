@@ -412,6 +412,15 @@ const SPEC_RULES = {
     /^_config\.yml$/,
     /^e2e\/site-capabilities\.js$/,
   ],
+  // #33 — the rendered-config form-hint drift lock; its per-collection
+  // base_collections opt-out skips are keyed on site-capabilities.js (so an
+  // edit to the helper re-selects it). admin/ + _config.yml cover the hint
+  // source itself.
+  "e2e/cms-form-clarity.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_config\.yml$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
   // #33 — the global Atom-feed shape test self-skips when the consumer opts
   // out of posts; keyed on site-capabilities.js. (Other inputs hit the
   // feed.xml / config / posts render-fanout.)
@@ -584,7 +593,14 @@ const SPEC_RULES = {
   ],
   // Pure-node unit test for the sitemap-prune cleanup helper.
   "e2e/sitemap-prune.test.js": [/^e2e\/sitemap-prune\.js$/],
-  "e2e/cms-preview-url.spec.js": [/^(theme\/)?admin\//, /^_posts\//],
+  // #33 — the Posts preview_path assertion self-skips when the consumer opts
+  // out of posts (keyed on site-capabilities.js); the admin/ + _posts/ rules
+  // cover its other inputs.
+  "e2e/cms-preview-url.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+  ],
   "e2e/blog-post.spec.js": [/^_posts\//, /^blog\//],
   "e2e/tags.spec.js": [/^_tags\//, /^tags\//, /^e2e\/site-capabilities\.js$/],
   "e2e/not-found.spec.js": [/^404\.html$/],

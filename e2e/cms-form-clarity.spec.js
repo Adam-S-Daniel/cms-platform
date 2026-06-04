@@ -20,6 +20,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
+const cap = require("./site-capabilities");
 
 // SITE_ROOT-aware resolution. The field hints are read from the RENDERED
 // Decap config the gem's render hook emits to `<site>/_site/admin/config.yml`
@@ -139,8 +140,25 @@ test.describe(
     for (const { file, label, expected } of FIXTURES) {
       test(`${label}: every locked hint matches its expected literal`, () => {
         const cfg = parseConfig(file);
+        // #33 — every key in PROD_HINTS is a base collection
+        // (posts/tags/projects/pages). A single-page consumer that opts out via
+        // cms.base_collections has those blocks STRIPPED from the rendered
+        // config, so findCollection() returns null and every hint reads as
+        // null → the literals would all mismatch and the test would FAIL. Assert
+        // the hint contract only for the base collections this consumer actually
+        // KEEPS (the rendered config is the ground truth, mirroring
+        // cms-config.spec.js); skip ENTIRELY when it kept none. Never weakens the
+        // check on a full consumer — all four present → all four asserted.
+        const present = Object.keys(expected).filter((name) =>
+          cap.hasAdminCollection(SITE_ROOT, name),
+        );
+        test.skip(
+          present.length === 0,
+          "consumer opts out of ALL base collections via cms.base_collections — no base-collection form hints to lock (#33)",
+        );
         const mismatches = [];
-        for (const [collection, fields] of Object.entries(expected)) {
+        for (const collection of present) {
+          const fields = expected[collection];
           for (const [field, expectedHint] of Object.entries(fields)) {
             const actual = hintFor(cfg, collection, field);
             if (actual !== expectedHint) {

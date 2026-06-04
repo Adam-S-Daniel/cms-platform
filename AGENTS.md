@@ -222,14 +222,29 @@ stay correct (empty) on an opted-out site and are intentionally NOT guarded.
 **Guarded specs — group 1 (read-only / config / served-content):**
 `canary-content.test.js`, `canary-ondemand-noindex.test.js`,
 `cms-config.spec.js` (per-collection), `cms-post-list-summary.spec.js`,
-`cms-permalink-contract.spec.js` (per-collection), `sitemap.spec.js` ("every
-published `_posts` appears"), `tags.spec.js` ("Tags index page"),
-`feeds-and-share.spec.js` (global Atom-feed shape), `console-clean.spec.js`
-(`/blog/` + `/tags/` crawl URLs). Several of the content-reading specs were also
-made **SITE_ROOT-aware** (read `_posts/`, `_e2e/`, `_site/` under `SITE_ROOT`,
-not `__dirname/..`) so they resolve the CONSUMING site's content; the two are
+`cms-permalink-contract.spec.js` (per-collection), `cms-preview-url.spec.js`
+(per-collection — the Posts `preview_path` block is stripped on opt-out),
+`cms-form-clarity.spec.js` (per-collection — every PROD_HINTS key is a base
+collection), `sitemap.spec.js` ("every published `_posts` appears"),
+`tags.spec.js` ("Tags index page"), `feeds-and-share.spec.js` (global Atom-feed
+shape), `console-clean.spec.js` (`/blog/` + `/tags/` crawl URLs). These read the
+RENDERED `_site/admin/config.yml` per base collection and self-skip inline on
+`cap.hasAdminCollection(SITE_ROOT, "<name>")` (the rendered ground truth) — NOT
+the registry `guard()`; the served-content specs self-skip on
+`cap.keepsBaseCollection` (they also run the preview/prod `@parity` lanes where
+`_site` isn't built). Several content-reading specs were also made
+**SITE_ROOT-aware** (read `_posts/`, `_e2e/`, `_site/` under `SITE_ROOT`, not
+`__dirname/..`) so they resolve the CONSUMING site's content; the two are
 identical in a real consumer (harness at site root) but differ when the
 meta-test points `SITE_ROOT` at a fixture.
+
+> **The closed blind spot (#34):** `cms-preview-url.spec.js` +
+> `cms-form-clarity.spec.js` READ the rendered admin config per base collection
+> but DON'T navigate index-local, so the original guard-registry detector (which
+> only matched index-local route-hashes + sidebar-link waits) MISSED them — they
+> red-failed a built single-page consumer despite the registry being green. The
+> detector is now **comprehensive** (CLASS A/B/C below) so this whole class can't
+> be missed again.
 
 **Guarded specs — group 2 (CONSUMER-RUNNING admin-write/read/screenshots that
 drive `/admin/index-local.html`):** these navigate
@@ -277,22 +292,46 @@ jodidaniel's shape). **Spec-locked** by THREE tests:
    list (self-ci.yml) + `PLATFORM_META_SPECS`, so **no platform PR lane runs it**.
 3. `e2e/base-collections-guard-registry.test.js` — the **pure-fs PR GATE**
    (CONCERN B). Runs in `node-unit-lints` (it's a hermetic `*.test.js`). It is
-   the real protection on the group-2 admin-write guards: (a) **predicate proof**
-   — for every registered spec, `shouldSkip(singlepage)===true` &
-   `shouldSkip(full)===false` against the fixtures' `_config.yml` (no build);
-   (b) **guard presence** — each registered spec actually imports the registry +
-   calls `guard()/shouldSkip()` with its own basename; (c) **no silent drift** —
-   every consumer-running index-local generic-collection spec is either in the
-   registry or the lint's `NON_GUARDED` allowlist, so a NEW unguarded one goes
-   RED. Because (2) never runs on a platform PR, (3) is what actually keeps the
-   admin-write guard set from regressing.
+   the real protection on the admin-write + rendered-config guards: (a)
+   **predicate proof** — for every registered spec, `shouldSkip(singlepage)===
+   true` & `shouldSkip(full)===false` against the fixtures' `_config.yml` (no
+   build); (b) **guard presence** — each registered spec actually imports the
+   registry + calls `guard()/shouldSkip()` with its own basename; (c) **no silent
+   drift (COMPREHENSIVE)** — its detector flags EVERY consumer-running spec that
+   depends on a base collection existing, by ANY of three classes, and each
+   flagged spec must be guarded (registry guard OR a direct inline
+   `cap.hasAdminCollection`/`cap.keepsBaseCollection` self-skip) or in the
+   `NON_GUARDED` allowlist, else RED:
+
+   | class | signal | breaks on opt-out because |
+   | --- | --- | --- |
+   | **A** index-local route | `page.goto(…index-local.html#/collections/<base>)` | route never renders (collection stripped from `config-local.yml`) |
+   | **B** index-local sidebar | `getByRole("link",{name:/^<base>$/i})` in a file that loads `index-local` but NOT `index-test` | sidebar link never appears |
+   | **C** rendered-config per-collection | reads the rendered `_site/admin/config.yml` (`RENDERED_CONFIG`/`hasAdminCollection`/`adminCollections`) AND a per-base assertion: `preview_path`, a hint snapshot (`hintFor`/`PROD_HINTS`), `findCollection(cfg,'<base>')`, or `hasAdminCollection(…, '<base>')` | the `posts/tags/projects/pages/e2e` block is stripped → null/absent |
+
+   It also has a **detector-stays-comprehensive** test anchored on
+   `cms-preview-url` + `cms-form-clarity`: if the detector regresses to the old
+   index-local-only blind spot, that goes RED. A spec whose admin shell is
+   `index-test.html` (`config-test.yml` is FIXED — not opt-out-deleted) is NOT
+   flagged by A/B and must NOT be guarded. Because (2) never runs on a platform
+   PR, (3) is what actually keeps the guard set from regressing. `NON_GUARDED` is
+   **empty by design** (every flagged spec is guarded) and the stale-entry test
+   requires any future entry to be genuinely flagged-but-unguarded.
 
 **Adding a NEW generic-content spec:**
 - **Read-only / served / fs spec** (reads a base collection / canary / posts /
   `/blog/` / `/tags/`): guard on the matching `site-capabilities` predicate
   (rendered for local-only fs specs, `keepsBaseCollection` for served specs that
   also run `@parity`), and add `/^e2e\/site-capabilities\.js$/` to its
-  `SPEC_RULES` entry in `select-specs.js`.
+  `SPEC_RULES` entry in `select-specs.js`. **If it reads the rendered
+  `_site/admin/config.yml` per base collection** (CLASS C — `preview_path`, a
+  hint snapshot, `findCollection(cfg,'<base>')`, …), the guard-registry detector
+  will flag it; you MUST apply a direct inline `cap.hasAdminCollection(SITE_ROOT,
+  "<name>")` self-skip (mirror `cms-config.spec.js` — gate the per-collection
+  assertion, not the whole file, where a spec mixes collection-specific +
+  agnostic checks) or the drift gate goes RED. No registry entry is needed for
+  CLASS C — the inline `hasAdminCollection`/`keepsBaseCollection` self-skip is
+  what the detector recognizes as coverage.
 - **CONSUMER-RUNNING spec that drives `/admin/index-local.html`** and navigates a
   base collection (route `#/collections/<base>` OR a base-sidebar-link wait):
   you MUST (1) add an entry to `ADMIN_WRITE_GUARDS` in
