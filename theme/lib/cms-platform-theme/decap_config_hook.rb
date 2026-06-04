@@ -71,10 +71,26 @@ module CmsPlatformTheme
       # source, never the gem (the gem ships no collections.site.yml).
       site_collections = File.join(site_admin, "collections.site.yml")
 
+      # Optional base-collection opt-out. `cms.base_collections` is a KEEP-LIST
+      # of the platform's built-in collection names; UNSET keeps them all
+      # (default, back-compat). A single-page site can set it to a subset, or
+      # to [] to hide them all so /admin shows ONLY the site's own collections.
+      # Each unwanted top-level collection block is deleted from the rendered
+      # config (matched at 2-space indent, through to the next top-level
+      # `- name:` or EOF — nested fields are deeper-indented, so untouched).
+      base_names = %w[posts tags projects pages e2e]
+      base_keep  = cms["base_collections"]
+
       render = lambda do |b, o|
         t = File.read(b)
         tokens.each { |k, v| t = t.gsub("{{#{k}}}", v) }
         t = t.sub(/^  # __SITE_COLLECTIONS__.*$/, File.exist?(site_collections) ? File.read(site_collections) : "")
+        unless base_keep.nil?
+          keepset = Array(base_keep).map(&:to_s)
+          (base_names - keepset).each do |n|
+            t = t.sub(/^  - name: #{Regexp.escape(n)}\n.*?(?=^  - name: |\z)/m, "")
+          end
+        end
         File.write(o, t)
       end
       render.call(base, File.join(out, "config.yml"))
