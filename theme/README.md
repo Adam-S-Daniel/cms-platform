@@ -30,8 +30,14 @@ cms:
 ## What it ships
 
 - `_layouts/`, `_includes/` — merged in by Jekyll's theme support.
-- `assets/` — `css/main.css`, `js/marked.min.js`, a placeholder `images/logo.svg`
-  (override per site), plus the `images/uploads` + `widgets` dirs.
+- `assets/` — `css/main.css`, `js/marked.min.js`, a **neutral, wordless
+  placeholder** `images/logo.svg`, plus the `images/uploads` + `widgets` dirs.
+  The logo is **site-owned**: the gem ships only a generic placeholder (never a
+  specific site's brand), and the Decap render defaults `cms.logo_url` to
+  `<url>/assets/images/logo.svg`. A site brands its `/admin` by shipping its own
+  `assets/images/logo.svg` (Jekyll **shadows** the gem asset with the site's
+  file) or by setting `cms.logo_url` in `_config.yml`. The `npx` scaffolder seeds
+  a "replace me" copy of the placeholder into every new site.
 - `lib/cms-platform-theme/` — the plugins (`auto_tag_pages`, `cachebust_filter`,
   `exclude_e2e_posts`, `normalize_empty_slug`, `tag_feeds`) and
   `decap_config_hook` (a `post_write` hook that runs the Decap render — see
