@@ -44,6 +44,16 @@ they keep only the seam. See "Admin delivery" below.
 - **Never hardcode `adamdaniel` identity.** Site values come from `_config.yml`
   (`cms.*`, `url`), workflow inputs, CFN params (`ResourcePrefix`,
   `ProductionDomainName`), `github.repository`, or injected `window.CMS_*`.
+- **The /admin logo is SITE-OWNED; the gem ships only a NEUTRAL placeholder**
+  (issue #25). `theme/assets/images/logo.svg` is a wordless, brand-free generic
+  glyph — NEVER a specific site's mark (no "AD"/initials/wordmark). The render
+  hooks default `cms.logo_url` to `<url>/assets/images/logo.svg`, and a site
+  brands `/admin` by **shadowing** that gem asset with its own
+  `assets/images/logo.svg` (Jekyll site files win over same-path gem files) or by
+  setting `cms.logo_url`. The scaffolder seeds a "replace me" copy into every new
+  site. Locked by `theme/spec/neutral_logo_test.rb` (gem asset is wordless +
+  carries the override comment) and `e2e/scaffold-seeds-neutral-logo.test.js`
+  (scaffold output). Don't reintroduce a brand into the gem asset.
 - **Branch + PR, never push to `main`** (the auto-mode classifier enforces this).
 - **SHA-pin every workflow `uses:`** with a `# vX.Y.Z (date)` comment; 7-day
   cooling-off before bumping (mirrors adamdaniel.ai policy).

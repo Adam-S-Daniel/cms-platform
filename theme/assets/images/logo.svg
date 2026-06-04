@@ -1,5 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40" fill="none">
-  <text x="0" y="28" font-family="Helvetica Neue, Arial, sans-serif"
-        font-size="18" font-weight="200" letter-spacing="4"
-        fill="#d8e4ff">AD</text>
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Neutral placeholder logo shipped by cms-platform. It carries NO site brand on
+  purpose. Your site SHOULD override it: ship your own assets/images/logo.svg
+  (it shadows this gem asset) or set cms.logo_url in _config.yml. Until then,
+  /admin shows this generic document mark.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40" fill="none" role="img" aria-label="Site logo placeholder">
+  <g stroke="#d8e4ff" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" opacity="0.7">
+    <!-- a simple, wordless "document" glyph with a folded top-right corner -->
+    <path d="M48 7 H66 L74 15 V33 H48 Z" />
+    <path d="M66 7 V15 H74" />
+    <line x1="54" y1="21" x2="68" y2="21" />
+    <line x1="54" y1="26" x2="68" y2="26" />
+  </g>
 </svg>

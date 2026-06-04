@@ -14,6 +14,13 @@ cms:
   # logo_url: optional, defaults to <url>/assets/images/logo.svg
 ```
 
+**The /admin logo is SITE-OWNED.** The gem ships only a NEUTRAL, wordless
+placeholder at `assets/images/logo.svg` (never a specific site's brand). The
+render below defaults `logo_url` to `<url>/assets/images/logo.svg`, so a site
+that ships nothing shows that generic mark. To brand your `/admin`, ship your
+own `assets/images/logo.svg` (it **shadows** the gem asset — `npx` scaffolds a
+"replace me" placeholder there for you) or set `cms.logo_url` in `_config.yml`.
+
 ## Render
 
 `scripts/render-decap-config.rb <site_root> <build_dir>` runs **after** the

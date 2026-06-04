@@ -126,6 +126,13 @@ async function main() {
 
   write(target, "_posts/" + seedDate() + "-hello-world.md", SEED_POST(title));
   write(target, "pages/about.md", SEED_ABOUT(title));
+  // Seed a NEUTRAL "replace me" placeholder logo. The gem ships only a neutral
+  // placeholder (never a site's brand — issue #25); the render hooks default
+  // cms.logo_url to <url>/assets/images/logo.svg, and this site-owned copy
+  // SHADOWS the gem asset. The owner replaces it with their real logo (or sets
+  // cms.logo_url). Reuse the gem placeholder so the two never drift; prepend a
+  // "replace me" note for the new owner.
+  write(target, "assets/images/logo.svg", seedLogo());
   write(target, "_e2e/canary-post.md", SEED_CANARY);
   write(target, "index.html", SEED_INDEX);
   write(target, ".gitignore", SITE_GITIGNORE);
@@ -203,6 +210,28 @@ group :jekyll_plugins do
   gem "cms-platform-theme", git: "https://github.com/Adam-S-Daniel/cms-platform", glob: "theme/*.gemspec"
 end
 `;
+
+// The site-owned placeholder logo seeded into assets/images/logo.svg. It's the
+// gem's NEUTRAL placeholder (read from theme/assets/images/logo.svg so the two
+// can't drift) with a leading "replace me" note for the new owner. The owner
+// drops in their real logo here (it shadows the gem asset) or sets cms.logo_url.
+function seedLogo() {
+  const gemLogo = fs.readFileSync(
+    path.join(PLATFORM_ROOT, "theme/assets/images/logo.svg"),
+    "utf8",
+  );
+  const note =
+    "<!--\n" +
+    "  REPLACE ME. This is a neutral placeholder logo for your new site's /admin.\n" +
+    "  Drop in your own logo at this path (assets/images/logo.svg) or set\n" +
+    "  cms.logo_url in _config.yml. This file shadows the cms-platform-theme gem's\n" +
+    "  placeholder; until you replace it, /admin shows the generic mark below.\n" +
+    "-->\n";
+  // Keep the gem's own <svg> + override comment; just prepend the owner note
+  // (after any XML declaration, so the decl stays first).
+  const m = gemLogo.match(/^(<\?xml[^>]*\?>\s*)/);
+  return m ? m[1] + note + gemLogo.slice(m[1].length) : note + gemLogo;
+}
 
 const seedDate = () => new Date().toISOString().slice(0, 10);
 const SEED_POST = (t) => `---
