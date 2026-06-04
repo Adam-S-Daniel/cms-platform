@@ -3,24 +3,42 @@ const { test, expect } = require("./base");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const {
+  MANIFEST_FILE,
+  compareVersions,
+  previewVsLocalVerdict,
+  prodVsLocalVerdict,
+  describeVersion,
+} = require("./admin-bundle-parity");
 
-// G2 — Admin bundle byte-parity probe.
+// G2 — Admin bundle byte-parity probe (BUMP-AWARE, fix #14).
 //
-// Walks the local `admin/` working tree and GETs each shipped file
+// Walks the local `theme/admin/` source tree and GETs each shipped file
 // against:
 //
 //   1. https://adamdaniel.ai/admin/<path>                  — production
 //   2. https://preview-pr<N>.adamdaniel.ai/admin/<path>    — latest open PR
 //
-// Compares ETag first (CloudFront/S3 hands it out cheap) and falls
-// back to sha256 of the body bytes when ETags are absent or don't
-// agree (CloudFront and S3 sometimes serve different ETag formats —
-// weak vs. strong, mid-edge transformations, etc.). The body is read
-// in the same response either way; the choice between ETag and
-// sha256 is just which artefact we compare. Fails on the first real
-// divergence — the spec catches the failure mode where prod drifted
-// vs. what's checked in (e.g. someone hand-edited a file via the
-// prod admin's editor pane, or a deploy partially failed).
+// Compares sha256 of the body bytes per file. Two gates, with different
+// strictness, so a legitimate gem bump (prod still serving the OLD bundle
+// until the bump merges + deploys) doesn't red the REQUIRED check while
+// real prod drift still hard-fails:
+//
+//   REQUIRED (hard gate) — the PR's OWN preview bundle byte-matches the
+//     local/source tree. This catches the real PER-PR risk: a BROKEN
+//     PREVIEW BUILD (preview deployed bytes that don't match the PR). No
+//     bump excuse applies — it's the PR's own output.
+//
+//   PROD (bump-aware) — compare prod's served bundle VERSION to the PR's
+//     source version (the version marker = the served `index.html`
+//     manifest sha; see admin-bundle-parity.js). If they DIFFER a bump is
+//     in progress and prod legitimately lags → any prod-vs-source byte
+//     mismatch is INFORMATIONAL (logged, not failed). If they MATCH yet
+//     bytes differ → REAL prod drift (hand-edited prod / partial deploy at
+//     the SAME version) → HARD FAIL. This preserves the original
+//     prod-drift intent (confirmed on adamdaniel #1913, where the ONLY
+//     prod-vs-PR diff was the intended #26 oauth-detector <script> — a
+//     bump, not drift).
 //
 // Tagged @parity (G3): the spec is read-only — no writes, no admin
 // session, no decap-server. Safe to run on every PR against live
@@ -45,8 +63,8 @@ const PROD_BASE = "https://adamdaniel.ai";
 const ADMIN_PREFIX = "admin";
 
 // 404 is acceptable for files added on a not-yet-merged PR or just
-// removed on the working tree — the deploy-lag handler downgrades
-// such mismatches to console warnings.
+// removed on the working tree — the bump-aware handlers downgrade such
+// mismatches to a fail/info verdict per the version comparison.
 const ACCEPTABLE_STATUSES_MISSING = new Set([404]);
 
 function listAdminFiles(adminDir) {
@@ -142,127 +160,136 @@ test.describe(
 
     test.beforeEach(() => {});
 
-    test("prod and preview admin bundles are byte-identical to the working tree", async ({
-      request,
-    }) => {
+    // Read every shipped admin source file once (sha + the index.html
+    // manifest used as the version marker). Shared by both gates below.
+    function localBundle() {
       const adminDir = path.join(__dirname, "..", "theme", "admin");
       const allFiles = listAdminFiles(adminDir);
       const files = allFiles.filter((p) => !isExcluded(p));
+      const shaByRel = {};
+      for (const rel of files) {
+        try {
+          shaByRel[rel] = crypto
+            .createHash("sha256")
+            .update(fs.readFileSync(path.join(adminDir, rel)))
+            .digest("hex");
+        } catch (_) {
+          shaByRel[rel] = null;
+        }
+      }
+      let indexHtml = null;
+      try {
+        indexHtml = fs.readFileSync(path.join(adminDir, MANIFEST_FILE), "utf8");
+      } catch (_) {
+        /* index.html missing locally → version marker indeterminate */
+      }
+      return { files, shaByRel, indexHtml };
+    }
 
+    // REQUIRED hard gate (fix #14): the PR's OWN preview bundle must
+    // byte-match the local/source tree. A preview deploy whose bytes don't
+    // match the PR is a broken preview build — the real per-PR risk, always
+    // a hard fail (no bump excuse: it's the PR's own output). Skips cleanly
+    // when there's no open PR / preview env.
+    test("REQUIRED: the PR's preview bundle byte-matches the local source", async ({
+      request,
+    }) => {
+      const { files, shaByRel } = localBundle();
       expect(files.length, "Expected at least one admin/ file after exclusions").toBeGreaterThan(0);
 
       const previewPr = await findLatestOpenPrNumber(request);
       const previewBase =
         previewPr !== null ? `https://preview-pr${previewPr}.adamdaniel.ai` : null;
-      if (previewBase) {
-        console.log(`[admin-bundle-parity] comparing prod vs. preview-pr${previewPr}`);
-      } else {
-        console.log(`[admin-bundle-parity] no open PR — running prod-side parity only`);
-      }
+      test.skip(
+        !previewBase,
+        "no open PR / preview env — nothing to gate (the bump-aware prod check still runs)",
+      );
+      console.log(`[admin-bundle-parity] REQUIRED gate: preview-pr${previewPr} vs. local source`);
 
       const failures = [];
-      const lagWarnings = [];
-
       for (const rel of files) {
         const urlPath = `/${ADMIN_PREFIX}/${rel.split(path.sep).join("/")}`;
-        const prodUrl = `${PROD_BASE}${urlPath}`;
+        const preview = await fetchBodyHash(request, `${previewBase}${urlPath}`);
+        const verdict = previewVsLocalVerdict(rel, preview, { sha: shaByRel[rel] });
+        if (verdict.kind === "fail") failures.push(verdict.reason);
+      }
 
-        const prod = await fetchBodyHash(request, prodUrl);
+      expect(
+        failures,
+        `Preview bundle does not match the PR source (${failures.length}) — a BROKEN ` +
+          `PREVIEW BUILD. This is the PR's own deployed output; fix the preview deploy ` +
+          `(it must serve exactly what's in theme/admin on this branch):\n  ${failures.join("\n  ")}`,
+      ).toEqual([]);
+    });
 
-        if (!previewBase) {
-          // No preview — skip the cross-host comparison but still
-          // surface obviously-broken prod responses (anything other
-          // than 200 or 404; 404 is acceptable for files added in a
-          // not-yet-merged PR).
-          if (prod.status !== 200 && !ACCEPTABLE_STATUSES_MISSING.has(prod.status)) {
-            failures.push(`${rel}: prod returned ${prod.status} (expected 200 or 404)`);
-          }
-          continue;
-        }
+    // BUMP-AWARE prod check (fix #14): compare prod's served bundle version
+    // (the index.html manifest sha) to the PR's source version. Different
+    // version ⇒ a bump is in progress and prod legitimately lags → any
+    // prod-vs-source byte mismatch is INFORMATIONAL. Same version ⇒ a byte
+    // mismatch is REAL prod drift → HARD FAIL (preserves the original
+    // prod-drift intent). Runs whether or not a PR is open.
+    test("BUMP-AWARE: prod matches source, OR a same-version drift hard-fails", async ({
+      request,
+    }) => {
+      const { files, shaByRel, indexHtml: localIndexHtml } = localBundle();
+      expect(files.length, "Expected at least one admin/ file after exclusions").toBeGreaterThan(0);
 
-        const previewUrl = `${previewBase}${urlPath}`;
-        const preview = await fetchBodyHash(request, previewUrl);
+      // Fetch prod's index.html (the version marker) first.
+      const prodIndex = await fetchBodyHash(
+        request,
+        `${PROD_BASE}/${ADMIN_PREFIX}/${MANIFEST_FILE}`,
+      );
+      // Re-fetch the prod index BODY as text for the manifest extraction. The
+      // fetchBodyHash only kept the sha; do a tiny second GET to get the bytes
+      // (one extra request; the marker file is small). 200 → text; else null.
+      let prodIndexHtml = null;
+      if (prodIndex.status === 200) {
+        const r = await request.fetch(`${PROD_BASE}/${ADMIN_PREFIX}/${MANIFEST_FILE}`);
+        if (r.ok()) prodIndexHtml = await r.text();
+      }
 
-        // Both 404 → consistent absence (file was just deleted on
-        // both branches, or the admin/ tree is ahead of both deploys).
-        // Both 200 → continue to the byte-parity check.
-        if (prod.status === 404 && preview.status === 404) {
-          continue;
-        }
-
-        // One 404, the other 200 → expected deploy-lag window. Warn,
-        // don't fail. (Could be: file just added on the PR's branch,
-        // not yet merged → preview has it, prod doesn't. Or file just
-        // merged → prod has it but the PR's preview pre-dates the
-        // merge.) Either way the gap closes once both deploys settle.
-        if (prod.status === 404 || preview.status === 404) {
-          lagWarnings.push(
-            `${rel}: prod=${prod.status}, preview=${preview.status} (deploy lag — expected during merge windows)`,
-          );
-          continue;
-        }
-
-        // Both not-404 and not-200 (e.g. 500, 403): real breakage.
-        if (prod.status !== 200 || preview.status !== 200) {
-          failures.push(
-            `${rel}: prod=${prod.status}, preview=${preview.status} (expected 200/200)`,
-          );
-          continue;
-        }
-
-        // Both 200 → byte parity. Prefer ETag when both sides offer
-        // one and they're non-empty; fall back to sha256 of body.
-        const haveBothEtags = prod.etag && preview.etag;
-        if (haveBothEtags && prod.etag === preview.etag) continue;
-        if (prod.sha && preview.sha && prod.sha === preview.sha) continue;
-
-        // Bytes differ between prod and preview. Three cases:
-        //   - working-tree matches preview → preview is "ahead" of prod
-        //     because this branch (or a recently-merged one) changed the
-        //     file, and prod hasn't redeployed/cache-invalidated yet.
-        //     Deploy lag, not drift. Warn instead of failing.
-        //   - working-tree matches prod → preview is "ahead" of working
-        //     tree (preview wasn't built from this branch?), unusual but
-        //     not a drift signal. Warn.
-        //   - neither matches → real cross-environment drift. Fail.
-        let localSha = null;
-        try {
-          const buf = fs.readFileSync(path.join(adminDir, rel));
-          localSha = crypto.createHash("sha256").update(buf).digest("hex");
-        } catch (_) {
-          /* file missing locally — fall through to failure */
-        }
-        if (localSha && preview.sha === localSha) {
-          lagWarnings.push(
-            `${rel}: prod sha=${prod.sha?.slice(0, 12)}, preview sha=${preview.sha?.slice(0, 12)} (deploy lag — branch change hasn't reached prod yet)`,
-          );
-          continue;
-        }
-        if (localSha && prod.sha === localSha) {
-          lagWarnings.push(
-            `${rel}: prod sha=${prod.sha?.slice(0, 12)}, preview sha=${preview.sha?.slice(0, 12)} (preview ahead of working tree — likely stale preview build)`,
-          );
-          continue;
-        }
-
-        failures.push(
-          `${rel}: byte mismatch\n` +
-            `      prod    etag=${prod.etag || "(none)"} sha=${prod.sha}\n` +
-            `      preview etag=${preview.etag || "(none)"} sha=${preview.sha}\n` +
-            `      local   sha=${localSha || "(unreadable)"}`,
+      const versions = compareVersions(prodIndexHtml, localIndexHtml);
+      if (!versions.determinable) {
+        console.log(
+          `[admin-bundle-parity] version marker indeterminate (prod index ${prodIndex.status}, ` +
+            `local index ${localIndexHtml ? "present" : "missing"}) → prod-vs-source mismatches ` +
+            `treated as INFORMATIONAL; prod-drift at an unknown version is caught by canary-prod.`,
+        );
+      } else if (versions.sameVersion) {
+        console.log(
+          `[admin-bundle-parity] prod is at the SAME bundle version as this PR ` +
+            `(${describeVersion(versions.local)}); any prod-vs-source byte mismatch is REAL DRIFT.`,
+        );
+      } else {
+        console.log(
+          `[admin-bundle-parity] BUMP IN PROGRESS: prod lags ${describeVersion(versions.prod)} -> ` +
+            `${describeVersion(versions.local)}; prod-vs-source mismatches are INFORMATIONAL ` +
+            `(will reconcile on deploy).`,
         );
       }
 
-      if (lagWarnings.length) {
+      const failures = [];
+      const infos = [];
+      for (const rel of files) {
+        const urlPath = `/${ADMIN_PREFIX}/${rel.split(path.sep).join("/")}`;
+        const prod = await fetchBodyHash(request, `${PROD_BASE}${urlPath}`);
+        const verdict = prodVsLocalVerdict(rel, prod, { sha: shaByRel[rel] }, versions);
+        if (verdict.kind === "fail") failures.push(verdict.reason);
+        else if (verdict.kind === "info") infos.push(verdict.reason);
+      }
+
+      if (infos.length) {
         console.log(
-          `[admin-bundle-parity] deploy-lag warnings (${lagWarnings.length}):\n  ` +
-            lagWarnings.join("\n  "),
+          `[admin-bundle-parity] informational prod-lag notes (${infos.length}):\n  ` +
+            infos.join("\n  "),
         );
       }
 
       expect(
         failures,
-        `Admin bundle parity failures (${failures.length}):\n  ${failures.join("\n  ")}`,
+        `Prod admin bundle DRIFT at the SAME version (${failures.length}) — prod's served ` +
+          `bundle differs from source while its index.html manifest matches, so this is NOT a ` +
+          `bump lag (someone hand-edited prod, or a deploy partially failed):\n  ${failures.join("\n  ")}`,
       ).toEqual([]);
     });
   },

@@ -446,6 +446,44 @@ but ENOENT'ing in every consumer run). **Guarded** by
 spec goes into `PLATFORM_META_SPECS` in `playwright.config.js` (the lint parses
 that list out of the config so the two stay in lockstep).
 
+### PLATFORM_META_SPECS registration is MANDATORY for platform-internal specs (#16)
+
+A **platform-internal** spec validates the platform's OWN machinery, not a
+consuming SITE's content/admin behavior. Concretely, its code (comments
+stripped) reads at least one of: the platform `scripts/**` tree, `scaffold/**`,
+the platform's OWN reusable **workflow DEFINITIONS** (via `workflow-yaml-utils` /
+`readWorkflow()`, or an fs path into `../.github/workflows` or the
+`examples/site/.github` templates), the `theme/**` SOURCE tree, or the platform
+**fixtures** as a literal path (`fixture-site` / `fixture-site-singlepage`, not
+via `SITE_ROOT`). **Every** such spec MUST be in `PLATFORM_META_SPECS` —
+otherwise it RUNS on a `CONSUMER=true` e2e lane (where that source doesn't
+exist) and red-fails. This bit the adamdaniel.ai v0.1.10 reconciliation: five
+unregistered meta-specs (`workflow-loop-branch-cleanup`, `preflight-oauth`,
+`check-platform-pin-consistency`, the two `scaffold-*`) ran+failed on the
+consumer. The platform's own self-CI runs e2e with `TARGET=prod` (never the
+`CONSUMER=true` lane), so an unregistered meta-spec ships GREEN on the platform
+and only detonates on the next consumer.
+
+Keep genuine **SITE** specs OUT of the list (sitemap/tags/feeds/console-clean/
+cms-config/permalink/post-summary, the canary content invariants, the manual
+walkthroughs, the real publish-loop round-trips). Those resolve their root
+through `SITE_ROOT` and read the consumer's own built `_site/**` / content tree
+(or self-gate on `site-capabilities`), so they MUST run on a consumer.
+
+**Recurrence guard — `e2e/platform-meta-spec-registry.test.js`** (runs in
+self-CI `node-unit-lints`). It statically classifies every spec by the
+platform-internal signals above and FAILS if any platform-internal spec is NOT
+in `PLATFORM_META_SPECS`. The detector is **path-name-agnostic** — it keys off
+the `scripts/` / `scaffold/` / `theme/` / `.github/workflows` SUBPATH literal no
+matter how the prefix var is spelled (`REPO_ROOT`, `__dirname`, …), because
+`cms-config-preview-delta.spec.js` execs `path.join(REPO_ROOT, "scripts/…")`
+which a naive `../scripts`-only matcher missed. This makes "I forgot to register
+a meta-spec" impossible to ship — mirrors the `base_collections` guard registry.
+When you add a platform-internal spec, register it; when the guard goes RED, add
+the named spec to `PLATFORM_META_SPECS` (or, if it only LOOKED internal because
+it read `${SITE_ROOT}/_site/**`, make it read via `SITE_ROOT` — not a `../scripts`
+/ `../scaffold` / `../theme` / `../.github/workflows` source path).
+
 ## Editorial-workflow label audit (v0.1.6)
 
 Decap re-runs its editorial-workflow label migration on **every** `/admin` load
@@ -470,6 +508,39 @@ routes, which counts as ready) **not** `port: 8081` (TCP-only). The TCP-only
 form raced: decap-server accepts the socket a beat before it can serve the
 local-backend API, so the admin shell occasionally mounted against a not-ready
 proxy and a collection editor failed to render (`cms-link-crawler` flaked ~30%).
+
+## Admin-bundle parity is bump-aware (#14)
+
+`e2e/admin-bundle-parity.spec.js` byte-compares the SERVED admin bundle (prod +
+the open PR's preview) against the local/source `theme/admin` tree. A **gem
+bump** that changes the admin bundle (e.g. v0.1.x adds a `<script>` to
+`theme/admin/index.html` — the #26 oauth-detector, confirmed on adamdaniel
+#1913) makes PROD legitimately LAG: it keeps serving the OLD bundle until the
+bump PR merges + deploys. A naive REQUIRED prod-vs-source check then fails
+pre-merge (chicken-and-egg: prod can't match until the very PR that updates it
+merges). The spec is therefore split into two gates:
+
+- **REQUIRED (hard gate)** — the PR's OWN **preview** bundle byte-matches the
+  local/source tree. Catches the real per-PR risk: a **broken preview build**
+  (preview deployed bytes ≠ the PR). No bump excuse — it's the PR's own output.
+- **PROD (bump-aware)** — compare prod's served bundle **VERSION** to the PR's
+  source version. **Version marker = the served `index.html` manifest sha**:
+  `index.html` lists every admin module as a `<script src>`, so any bundle
+  add/remove/rename changes its bytes (and a `decap-cms@X.Y.Z` pin bump shows up
+  too). If versions **DIFFER** (bump in progress, prod lags) → any prod-vs-source
+  byte mismatch is **INFORMATIONAL** (logged `prod lags vX -> vY; reconciles on
+  deploy`, not failed). If versions **MATCH** yet bytes differ → **REAL prod
+  drift** (hand-edited prod / partial deploy at the same version) → **HARD
+  FAIL** (preserves the original probe intent). When the marker is indeterminate
+  (prod `index.html` 404/unreadable, or local missing) it fails SAFE to
+  informational on the prod side; prod-drift at an unknown version is then caught
+  by the scheduled `canary-prod` lane.
+
+The decision logic is the pure, network-free `e2e/admin-bundle-parity.js`
+(unit-tested by `e2e/admin-bundle-parity.test.js` with fixture bundles — the
+spec only does the fetches). Outcome contract: on a gem-bump PR (prod older
+version) parity PASSES via preview-vs-local; on a same-version prod byte-drift it
+FAILS.
 
 ## Self-CI lanes
 

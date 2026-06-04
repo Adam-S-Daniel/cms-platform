@@ -43,6 +43,10 @@ const PLATFORM_META_SPECS = [
   "admin-bundle-parity.spec.js",
   "admin-css-banned-patterns.test.js",
   "admin-pin-invariant.test.js",
+  // #16 — the admin-source-read lint reads the platform's playwright.config.js +
+  // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
+  // self-test, meaningless (and ENOENT-prone) on a consumer.
+  "admin-spec-source-read-lint.test.js",
   "admin-theme-removed.test.js",
   "analytics-cloudwatch-rum.test.js",
   "auto-merge-uses-queue.test.js",
@@ -58,6 +62,20 @@ const PLATFORM_META_SPECS = [
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
   "base-collections-guard-registry.test.js",
   "blog-slug-literal-lint.test.js",
+  // #16 — these PLATFORM-INTERNAL specs (surfaced by the adamdaniel.ai v0.1.10
+  // reconciliation, where they ran+FAILED on the consumer e2e lane) validate
+  // the platform's OWN machinery against trees a consumer's thin-caller/site
+  // doesn't ship: the loop reusables' branch-cleanup steps (workflow-yaml-utils
+  // / readWorkflow of the platform reusable DEFINITIONS), the OAuth go-live
+  // preflight CLI + the pin-consistency checker under scripts/, the
+  // patch-preview-config.sh delta lock (a platform deploy artifact under
+  // scripts/), the e2e required-check stub mirror (reads examples/site/.github
+  // templates), and the scaffolder output (scaffold/create-site.js + the
+  // platform fixture). They run ONLY in the platform's own self-CI (TARGET=prod),
+  // never on a consumer. The platform-meta-spec-registry.test.js recurrence guard
+  // FAILS in self-CI if any platform-internal spec is left off this list.
+  "check-platform-pin-consistency.test.js",
+  "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   "cms-editor-ui.test.js",
   "cms-host.test.js",
@@ -82,8 +100,15 @@ const PLATFORM_META_SPECS = [
   "oauth-app-restriction-detector.spec.js",
   "oauth-app-restriction-detector.test.js",
   "parity-tag-lint.test.js",
+  // #16 — the recurrence guard itself: it reads playwright.config.js + lints the
+  // harness spec sources for unregistered platform-internal specs. A harness
+  // self-test; ENOENT/no-op on a consumer (no platform tree to police).
+  "platform-meta-spec-registry.test.js",
   "playwright-image-drift.test.js",
   "posts-list-enhance-reorder.test.js",
+  // #16 — pure-Node unit tests for scripts/preflight-oauth.js (the org-owner
+  // go-live OAuth-restriction preflight CLI). Reads the platform scripts/ tree.
+  "preflight-oauth.test.js",
   "preview-bot-comment.test.js",
   "preview-config-patch.spec.js",
   "preview-deploy-superset.test.js",
@@ -92,7 +117,15 @@ const PLATFORM_META_SPECS = [
   "publish-via-auto-merge.test.js",
   "publish-via-auto-merge-browser.spec.js",
   "regression-video.spec.js",
+  // #16 — locks the e2e required-check stub's `paths:` to e2e-tests.yml's
+  // `paths-ignore` by reading the platform examples/site/.github templates.
+  "required-check-stub-paths.test.js",
   "run-cms-loop.test.js",
+  // #16 — scaffolder-output invariants: they run scaffold/create-site.js (and
+  // read the platform fixture) to assert the seeded /preview/ + 404 + neutral
+  // logo. A consumer ships no scaffold/ tree.
+  "scaffold-preview-and-404.test.js",
+  "scaffold-seeds-neutral-logo.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   "silent-catch-lint.test.js",
@@ -104,6 +137,10 @@ const PLATFORM_META_SPECS = [
   "visual-regression-skip-review.test.js",
   "workflow-github-sha-lint.test.js",
   "workflow-graph.test.js",
+  // #16 — lints the prod-loop reusables' if:always() branch-cleanup steps by
+  // parsing the platform's OWN workflow DEFINITIONS (readWorkflow). Platform-
+  // internal: a consumer doesn't ship those reusable definitions.
+  "workflow-loop-branch-cleanup.test.js",
   "workflow-prod-loop-serialized.test.js",
   "workflow-run-name.test.js",
   "workflow-shell-glob-lint.test.js",
