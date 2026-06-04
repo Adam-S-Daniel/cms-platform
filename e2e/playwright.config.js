@@ -214,7 +214,12 @@ module.exports = defineConfig({
           // was missing — a latent bug that only worked because the harness
           // lived at the site root) or saves land in the wrong tree.
           command: `cd ${SITE_ROOT} && "${DECAP_SERVER_BIN}"`,
-          port: 8081,
+          // Wait for an HTTP RESPONSE, not just the open TCP port: decap-server
+          // accepts the socket a beat before it can serve the local-backend API,
+          // so the admin shell occasionally mounted against a not-ready proxy and
+          // a collection editor failed to render (cms-link-crawler flaked ~30%).
+          // It 404s unknown routes; any 2xx/3xx/4xx counts as ready.
+          url: "http://localhost:8081/",
           reuseExistingServer: !process.env.CI,
         },
       ]
