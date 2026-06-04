@@ -244,3 +244,59 @@ jobs:
           mode: resolve
           marker: host-loop-failure-summary
           title: host-loop
+
+      # #22: delete this loop's EPHEMERAL canary branches on completion AND
+      # on cancel/failure. The host-repo loop specs push ephemeral
+      # cms/e2e/canary-* (Decap canary-collection drafts) and
+      # cms/e2e-fixture/* (seed/cleanup) branches; a cycle that
+      # cancels/fails mid-flight orphans them (~35 piled up on adamdaniel).
+      # Pattern-delete every branch on this loop's OWN prefixes that has NO
+      # open PR (a live cycle's branch always carries its in-flight cms/*
+      # PR). Idempotent + FAIL-OPEN: every delete is `|| echo`-guarded and
+      # the step is continue-on-error, so a cleanup hiccup (API blip,
+      # missing PAT on a fork) NEVER fails the loop. Uses CMS_E2E_PAT
+      # (contents r/w) since the workflow only grants contents:read. Locked
+      # by e2e/workflow-loop-branch-cleanup.test.js.
+      - name: Clean up ephemeral host-loop canary branches
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CMS_E2E_PAT }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::no CMS_E2E_PAT — skipping ephemeral branch cleanup (fail-open)"
+            exit 0
+          fi
+          # This loop's OWN ephemeral branch prefixes.
+          PREFIXES=(
+            'cms/e2e/canary-'
+            'cms/e2e-fixture/'
+          )
+          for prefix in "${PREFIXES[@]}"; do
+            echo "::notice::Cleanup — deleting orphaned ${prefix}* branches with no open PR"
+            gh api --paginate "repos/${GH_REPO}/branches?per_page=100" \
+              --jq ".[] | select(.name | startswith(\"${prefix}\")) | .name" \
+              2>/dev/null | while read -r branch; do
+              [ -z "$branch" ] && continue
+              # Belt-and-braces prefix re-verify against this loop's set.
+              ok=false
+              for p in "${PREFIXES[@]}"; do
+                case "$branch" in "${p}"*) ok=true; break;; esac
+              done
+              if [ "$ok" != "true" ]; then
+                echo "skip ${branch} — prefix mismatch"
+                continue
+              fi
+              open_count=$(gh pr list --state open --search "head:${branch}" --limit 1 --json number --jq 'length' 2>/dev/null || echo "1")
+              if [ "$open_count" != "0" ]; then
+                echo "skip ${branch} — has open PR(s) (live cycle)"
+                continue
+              fi
+              echo "delete ${branch}"
+              gh api -X DELETE "repos/${GH_REPO}/git/refs/heads/${branch}" \
+                || echo "::warning::failed to delete ${branch} (already gone?) — ignoring (fail-open)"
+            done
+          done
+          echo "::notice::Cleanup complete (fail-open)"

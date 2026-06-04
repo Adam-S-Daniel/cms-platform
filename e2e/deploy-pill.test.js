@@ -217,3 +217,70 @@ test.describe("makeDeployQueueExtender lane activity (#1723 Cat 1, refined)", ()
     expect(await ext({ extensionCount: 0 })).toBe(120_000);
   });
 });
+
+// ── #21: the timeout message self-reports the true failure leg ─────────
+//
+// When the URL never reflects, the extender's `verdict` tells
+// waitForChangeReflected WHICH leg failed; the thrown message must say so
+// — this is the high-value outcome that makes the next live run
+// self-diagnosing instead of mis-blaming a quiescent lane.
+test.describe("waitForChangeReflected self-reports the failure leg (#21)", () => {
+  // An extender whose `verdict` getter returns a fixed verdict after it
+  // runs — mirrors makeDeployQueueExtender's `extender.verdict` contract.
+  function extenderWithVerdict(verdict) {
+    const fn = async () => {
+      fn.verdict = verdict;
+      return 0; // give up immediately so we hit the timeout message
+    };
+    fn.verdict = null;
+    return fn;
+  }
+
+  test("deploy completed but URL not served ⇒ S3 sync / CloudFront message (NOT chain-never-fired)", async () => {
+    const onBudgetExhausted = extenderWithVerdict({
+      kind: "deploy-completed-url-missing",
+      realMiss: false,
+    });
+    let threw;
+    try {
+      await waitForChangeReflected({
+        page: makeFakePage(),
+        pillId: "x",
+        urlCheck: async () => false,
+        urlTimeoutMs: 20,
+        urlPollMs: 8,
+        onBudgetExhausted,
+      });
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeTruthy();
+    // Must self-report the deploy-DID-complete / URL-not-served leg ...
+    expect(threw.message).toMatch(/deploy.*(did )?complete/i);
+    expect(threw.message).toMatch(/S3 sync|CloudFront|cache/i);
+    expect(threw.message).toMatch(/URL never served|never served the marker|not served/i);
+    // ... and must NOT mis-blame the chain / a quiescent lane.
+    expect(threw.message).not.toMatch(/never fired the chain|lane was idle/i);
+  });
+
+  test("no deploy fired for the merge ⇒ trigger-problem (chain-never-fired) message", async () => {
+    const onBudgetExhausted = extenderWithVerdict({ kind: "no-deploy-fired", realMiss: true });
+    let threw;
+    try {
+      await waitForChangeReflected({
+        page: makeFakePage(),
+        pillId: "x",
+        urlCheck: async () => false,
+        urlTimeoutMs: 20,
+        urlPollMs: 8,
+        onBudgetExhausted,
+      });
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeTruthy();
+    expect(threw.message).toMatch(/NO deploy.*fired|never fired the chain|trigger/i);
+    // The trigger-problem leg must NOT claim the deploy completed.
+    expect(threw.message).not.toMatch(/S3 sync \/ CloudFront/i);
+  });
+});
