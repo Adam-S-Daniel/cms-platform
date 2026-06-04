@@ -135,6 +135,16 @@ async function main() {
   write(target, "assets/images/logo.svg", seedLogo());
   write(target, "_e2e/canary-post.md", SEED_CANARY);
   write(target, "index.html", SEED_INDEX);
+  // Seed the consuming-site half of the live-preview + graceful-404 contract
+  // (issue #23). The gem ships theme/_layouts/preview.html + the admin
+  // preview-bridge / native-preview-href scripts, but the admin "Live Preview"
+  // link dead-ends on a raw S3 404 unless THIS site exposes the /preview/ PAGE;
+  // likewise an unknown URL 404s ungracefully without a site 404.html. preview.md
+  // is front-matter ONLY (the gem layout IS the shell); 404.html is a friendly
+  // not-found page on the gem `default` layout. Locked by
+  // e2e/scaffold-preview-and-404.test.js.
+  write(target, "preview.md", SEED_PREVIEW);
+  write(target, "404.html", SEED_404);
   write(target, ".gitignore", SITE_GITIGNORE);
   // The secrets-scan reusable runs the gitleaks binary with --config
   // .gitleaks.toml when present; ship the platform's fixture allowlist so a
@@ -269,6 +279,48 @@ title: Home
 <ul>
 {% for post in site.posts %}<li><a href="{{ post.url | relative_url }}">{{ post.title }}</a></li>{% endfor %}
 </ul>
+`;
+// The admin "Live Preview" surface (issue #23). Front-matter ONLY — the gem
+// theme/_layouts/preview.html IS the shell (it hosts the hidden post/page/
+// project variants the admin preview-bridge streams draft content into). It
+// HARDCODES `<meta name="robots" content="noindex, nofollow">`, so we DON'T
+// add a front-matter robots here (a second one would duplicate the meta) —
+// mirrors adamdaniel.ai/preview.md.
+const SEED_PREVIEW = `---
+layout: preview
+permalink: /preview/
+sitemap: false
+title: "Live Preview"
+description: "Internal CMS preview surface — not a real post."
+---
+`;
+// A friendly not-found page on the gem \`default\` layout (issue #23). Generic +
+// site-agnostic; links back to home and the blog. The default layout renders
+// \`page.robots\` from front-matter, so this carries a real noindex,nofollow.
+const SEED_404 = `---
+layout: default
+permalink: /404.html
+sitemap: false
+robots: "noindex,nofollow"
+title: Page Not Found
+description: The page you were looking for does not exist.
+---
+<div class="container">
+  <div class="page-header page-not-found">
+    <p class="page-not-found__code" aria-hidden="true">404</p>
+    <h1>Page not found</h1>
+    <p class="page-not-found__message">
+      The page you were looking for doesn't exist, or it may have moved.
+    </p>
+  </div>
+  <div class="page-content page-not-found__actions">
+    <p>
+      <a href="{{ '/' | relative_url }}">Return to the homepage</a>
+      or browse the
+      <a href="{{ '/blog/' | relative_url }}">blog</a>.
+    </p>
+  </div>
+</div>
 `;
 const SITE_GITIGNORE = `_site/
 .jekyll-cache/
