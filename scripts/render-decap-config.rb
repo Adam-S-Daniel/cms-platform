@@ -82,12 +82,24 @@ end
 # 1. base config(s) -> live config(s); text gsub preserves the rich comments.
 #    The collections seam is ALWAYS site-owned — read it from <site_root>/admin,
 #    never the gem.
+# Optional base-collection opt-out (mirrors decap_config_hook.rb). `cms.base_collections`
+# is a KEEP-LIST of the platform's built-in collection names; UNSET keeps all
+# (default). [] hides them all so /admin shows ONLY the site's own collections.
+base_names = %w[posts tags projects pages e2e]
+base_keep  = cms['base_collections']
+
 render = lambda do |base, out|
   txt = File.read(base)
   tokens.each { |k, v| txt = txt.gsub("{{#{k}}}", v) }
   site_cols = File.join(site_admin, 'collections.site.yml')
   inject = File.exist?(site_cols) ? File.read(site_cols) : ''
   txt = txt.sub(/^  # __SITE_COLLECTIONS__.*$/, inject)
+  unless base_keep.nil?
+    keepset = Array(base_keep).map(&:to_s)
+    (base_names - keepset).each do |n|
+      txt = txt.sub(/^  - name: #{Regexp.escape(n)}\n.*?(?=^  - name: |\z)/m, '')
+    end
+  end
   File.write(out, txt)
 end
 render.call(File.join(admin_src, 'config.base.yml'), File.join(admin_out, 'config.yml'))
