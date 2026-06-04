@@ -216,12 +216,18 @@ module.exports = defineConfig({
           // was missing — a latent bug that only worked because the harness
           // lived at the site root) or saves land in the wrong tree.
           command: `cd ${SITE_ROOT} && "${DECAP_SERVER_BIN}"`,
-          // Wait for an HTTP RESPONSE, not just the open TCP port: decap-server
-          // accepts the socket a beat before it can serve the local-backend API,
-          // so the admin shell occasionally mounted against a not-ready proxy and
-          // a collection editor failed to render (cms-link-crawler flaked ~30%).
-          // It 404s unknown routes; any 2xx/3xx/4xx counts as ready.
-          url: "http://localhost:8081/",
+          // Readiness = the open TCP port. A prior change used
+          // `url: "http://localhost:8081/"` to wait for an HTTP response, but
+          // Playwright's webServer readiness only accepts HTTP 200-403, and
+          // decap-server returns 404 for EVERY GET route (/, /api/v1, /health —
+          // empirically verified) and 422 only for POST /api/v1. So no `url:`
+          // probe can ever go ready, and that silently broke the entire
+          // `target:local` lane (60s webServer timeout) for every consumer
+          // (cms-platform Self CI runs TARGET=prod, so it never caught it).
+          // The TCP `port` check is the only mechanism that works here; the
+          // original socket-open-before-API-ready flake belongs in a harness
+          // readiness poll, which the webServer `url` cannot express.
+          port: 8081,
           reuseExistingServer: !process.env.CI,
         },
       ]
