@@ -1,0 +1,46 @@
+# Editorial-workflow label audit (reusable).
+#
+# Detects the condition behind Decap's persistent "Decap CMS is adding labels to
+# N of your Editorial Workflow entries" dialog: an open editorial-workflow PR
+# (a `cms/*` branch) missing its `decap-cms/<status>` label. Decap re-runs the
+# label migration on EVERY /admin load until that PR is labeled or closed — so
+# the dialog never clears, on production AND on every preview-* deploy (the
+# editorial state is repo-wide). A consumer wires this to a daily schedule via
+# examples/site; the job fails loud (::error:: annotations) when it finds one.
+name: Editorial label audit (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
+      platform_ref:  { type: string, default: main }
+      branch_prefix: { type: string, default: "cms/" }
+      label_prefix:  { type: string, default: "decap-cms" }
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch the audit script from the platform
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          sparse-checkout: scripts/audit-editorial-labels.js
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
+        with:
+          node-version: "20"
+      - name: Audit editorial-workflow label consistency
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .cms-platform/scripts/audit-editorial-labels.js \
+            --branch-prefix "${{ inputs.branch_prefix }}" \
+            --label-prefix "${{ inputs.label_prefix }}"
