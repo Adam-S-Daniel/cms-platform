@@ -172,6 +172,42 @@ all base collections but keeps site collections, partial keep works, survivors'
 nested fields and a field literally named like a base collection are untouched,
 output stays valid YAML). Used by single-page sites (jodidaniel.com).
 
+### Org OAuth App approval — the "can log in but can't save" trap (#26)
+
+On an **org-owned** consumer, if the org has **OAuth App access restrictions**
+enabled and the CMS OAuth App isn't approved for the org, Decap authenticates +
+reads but every **persist fails** with `OAuth App access restrictions`. An org
+owner approving the app fixes it (jodidaniel#27, resolved). **Spike result —
+trust it:** there is **no public GitHub API** to ask "is OAuth App `<client_id>`
+approved for org `<org>`?" (org OAuth-App authorizations aren't exposed like
+GitHub App installations), and a **PAT write-probe FALSE-GREENS** (the
+restriction targets the OAuth App's user-token flow, not a PAT). So **do NOT add
+an API approval-check or a PAT probe.** The shipped, practicable subset:
+
+- `theme/admin/oauth-app-restriction-detector.js` — admin shim that **observes
+  Decap's notification DOM** (MutationObserver) for the restriction text and
+  shows a **dismissible** banner pointing the org owner at *Settings →
+  Third-party access → OAuth App policy*. It **must not** wrap `window.fetch`
+  (publish-via-auto-merge.js already does — a second wrap risks the Safari
+  loadEntries hang). It exposes pure helpers on
+  `window.OAuthAppRestrictionDetector` (`isOAuthAppRestrictionError`,
+  `orgFromRepo`, `orgOAuthPolicyUrl`) and is **requireable in Node** (DOM
+  wiring guarded by `typeof window/document`). **Loaded PROD-ONLY** (in
+  `theme/admin/index.html`, after `posts-list-enhance.js`) — only the real
+  github backend can produce the error; it's inert elsewhere. It's
+  **order-independent** of the `live-url-derive → banner → native-preview-href →
+  posts-list-enhance` chain the load-order spec locks (`cms-posts-list-enhance.spec.js`).
+- `scripts/preflight-oauth.js --repo OWNER/REPO` — org-owner go-live CLI;
+  detects owner type via `gh`, prints org-approval guidance (org) or "no
+  approval needed" (user); resilient when gh is absent. Pure helpers
+  (`parseRepo`, `messageFor`) exported for tests.
+- `scaffold/create-site.js` nextSteps carries a conditional org-OAuth reminder.
+
+Tests: `e2e/oauth-app-restriction-detector.test.js` (pure helpers, Node) +
+`e2e/oauth-app-restriction-detector.spec.js` (`@admin-read` runtime banner,
+simulates the Decap error toast — no backend needed) +
+`e2e/preflight-oauth.test.js`.
+
 ## Consumer-context spec rule (v0.1.5)
 
 The e2e harness is **reused by consumers**. `e2e/playwright.config.js` runs in

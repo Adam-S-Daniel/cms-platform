@@ -368,6 +368,10 @@ Next:
      (+ optional CMS_PLATFORM_PAT for sync PRs).
   6. Set _config.yml cms.oauth_base_url to the oauth-proxy ApiUrl output.
   7. Point ${domain} + *.${domain} DNS at the CloudFront distributions.
+  8. If ${owner} is a GitHub ORG with OAuth App access restrictions enabled, an
+     org owner must approve the CMS OAuth App before editors can save (login
+     works, but saves fail until then — see jodidaniel#27). Check with:
+       node <cms-platform>/scripts/preflight-oauth.js --repo ${owner}/${repo}
 
 Resource prefix: ${prefix}   Buckets: ${prefix}-{cfn-artifacts,previews,production}
 `;
