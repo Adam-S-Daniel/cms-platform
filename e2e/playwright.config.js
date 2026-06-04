@@ -68,6 +68,8 @@ const PLATFORM_META_SPECS = [
   "github-actions-poll.test.js",
   "live-failures-reporter.test.js",
   "matchmedia-skip-lint.test.js",
+  "oauth-app-restriction-detector.spec.js",
+  "oauth-app-restriction-detector.test.js",
   "parity-tag-lint.test.js",
   "playwright-image-drift.test.js",
   "posts-list-enhance-reorder.test.js",

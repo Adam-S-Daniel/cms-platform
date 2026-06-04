@@ -171,6 +171,22 @@
   <script src="posts-list-enhance.js" defer></script>
 
   <!--
+    OAuth-App-restriction detector (#26). PROD-ONLY: only the real GitHub
+    backend can produce the "OAuth App access restrictions" persist error
+    that hits org-owned consumers (jodidaniel#27), so it's loaded here in
+    the prod shell, not the local/test shells. It's inert until that exact
+    error text appears in Decap's notification surface — at which point it
+    shows a dismissible banner pointing the ORG OWNER at Settings →
+    Third-party access → OAuth App policy to approve the app. It does NOT
+    block editing and does NOT wrap window.fetch (it observes the toast DOM
+    so it can't interfere with publish-via-auto-merge.js's fetch wrap).
+    Order-independent: it touches none of the live-url-derive → banner →
+    native-preview-href → posts-list-enhance chain the load-order spec
+    locks. NO-OPs harmlessly if it ever runs in a non-github backend.
+  -->
+  <script src="oauth-app-restriction-detector.js" defer></script>
+
+  <!--
     Production deploy status pill — shows "Publishing…" with a spinner
     while deploy-production.yml's GitHub Deployment is `in_progress` /
     `queued`, transitions to a hidden state on `success` (the commit

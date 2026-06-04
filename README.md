@@ -36,3 +36,35 @@ new tag → Dependabot fans the bump out to every site**; a `platform-drift-guar
 catches site edits to platform-owned files and routes them back here.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete plan.
+
+## Organization-owned consumers: OAuth App approval
+
+On an **org-owned** consumer (the repo owner is a GitHub organization), if the
+org has **OAuth App access restrictions** enabled and this site's CMS OAuth App
+hasn't been approved for the org, Decap CMS **authenticates and reads fine but
+every save/publish fails** with an `OAuth App access restrictions` API error —
+the "can log in but can't save" trap. An **org owner** approving the app fixes
+it. (First/only org-owned consumer to hit this: `jodidaniel.com` —
+[jodidaniel#27](https://github.com/jodidaniel/jodidaniel.com/issues/27),
+resolved by approval.)
+
+There is **no public GitHub API** to query whether an OAuth App is approved for
+an org, and a PAT write-probe gives a **false green** (the restriction targets
+the OAuth App's user-token flow, not a PAT). So the platform ships the
+practicable, non-probing subset:
+
+- **Runtime admin banner** — `theme/admin/oauth-app-restriction-detector.js`
+  (loaded in the prod admin shell). It observes Decap's notification surface
+  and, when the `OAuth App access restrictions` persist error appears, shows a
+  **dismissible** banner telling the org owner to approve the app at *Settings →
+  Third-party access → OAuth App policy*. It never blocks editing and never
+  wraps `window.fetch`; it re-shows on the next failed save.
+- **Org-owner preflight** — `node scripts/preflight-oauth.js --repo OWNER/REPO`
+  detects the owner type via `gh`; for an org it prints the exact approval step
+  + the settings deep-link, and for a user it confirms no approval is needed.
+  Run it as a go-live step for any org-owned consumer.
+- **Scaffold nudge** — `scaffold/create-site.js` adds a conditional reminder to
+  its next-steps output pointing at the preflight script.
+
+There is intentionally **no automated approval-check or PAT probe** (both are
+infeasible / misleading per the above).
