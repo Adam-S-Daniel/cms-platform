@@ -46,6 +46,13 @@ const PLATFORM_META_SPECS = [
   "admin-theme-removed.test.js",
   "analytics-cloudwatch-rum.test.js",
   "auto-merge-uses-queue.test.js",
+  // #33 — platform-internal: the base_collections capability helper's unit
+  // test (drives the platform's TWO fixtures) + the build-and-run meta proof
+  // (builds both fixtures, subprocess-runs the guarded specs against each).
+  // Both read the platform's own fixture trees / harness internals — they make
+  // sense only in the platform self-CI, never in a consumer.
+  "site-capabilities.test.js",
+  "base-collections-skip-meta.test.js",
   "blog-slug-literal-lint.test.js",
   "cms-automerge-nudge.test.js",
   "cms-editor-ui.test.js",

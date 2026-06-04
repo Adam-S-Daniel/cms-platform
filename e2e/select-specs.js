@@ -298,7 +298,33 @@ const SPEC_RULES = {
     /^(theme\/)?admin\//,
     /^_config\.yml$/,
     /^_layouts\/canary\.html$/,
+    // #33 base_collections opt-out skip is keyed on this capability helper.
+    /^e2e\/site-capabilities\.js$/,
   ],
+  // #33 — the on-demand canary noindex/no-advertise contract; its
+  // base_collections opt-out skip is keyed on site-capabilities.js. (Its
+  // content inputs — _e2e/, the canary layout, _config.yml — already hit the
+  // config/layout render-fanout, so this rule adds only the helper dep.)
+  "e2e/canary-ondemand-noindex.test.js": [/^e2e\/site-capabilities\.js$/],
+  // #33 — the rendered Decap config invariants; their per-collection
+  // base_collections opt-out skips are keyed on site-capabilities.js. The
+  // config render-fanout (`_config.yml`, admin/) covers most inputs; this rule
+  // keeps the helper edit selecting them too.
+  "e2e/cms-config.spec.js": [/^(theme\/)?admin\//, /^_config\.yml$/, /^e2e\/site-capabilities\.js$/],
+  "e2e/cms-post-list-summary.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_config\.yml$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
+  "e2e/cms-permalink-contract.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_config\.yml$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
+  // #33 — the global Atom-feed shape test self-skips when the consumer opts
+  // out of posts; keyed on site-capabilities.js. (Other inputs hit the
+  // feed.xml / config / posts render-fanout.)
+  "e2e/feeds-and-share.spec.js": [/^_posts\//, /^_tags\//, /^e2e\/site-capabilities\.js$/],
   // Issue #1042 admin posts-UI invariants — fast, pure-fs, no browser.
   // Locks the restored live-URL banner wiring + posts-list-enhance.js
   // augment/hide contract + the INVALID-DATE / Automated-tests /
@@ -466,7 +492,7 @@ const SPEC_RULES = {
   "e2e/sitemap-prune.test.js": [/^e2e\/sitemap-prune\.js$/],
   "e2e/cms-preview-url.spec.js": [/^(theme\/)?admin\//, /^_posts\//],
   "e2e/blog-post.spec.js": [/^_posts\//, /^blog\//],
-  "e2e/tags.spec.js": [/^_tags\//, /^tags\//],
+  "e2e/tags.spec.js": [/^_tags\//, /^tags\//, /^e2e\/site-capabilities\.js$/],
   "e2e/not-found.spec.js": [/^404\.html$/],
   // @parity specs that hit Jekyll output through the deployed preview
   // surface. Path-rules cover the inputs that can shift what's served.
@@ -489,6 +515,9 @@ const SPEC_RULES = {
     /^_layouts\//,
     /^_plugins\//,
     /^e2e\/public-content\.js$/,
+    // #33 base_collections opt-out skip (the "every published _posts appears"
+    // test) is keyed on this capability helper.
+    /^e2e\/site-capabilities\.js$/,
   ],
   "e2e/console-clean.spec.js": [
     /^_posts\//,
@@ -501,6 +530,9 @@ const SPEC_RULES = {
     /^assets\/css\//,
     /^assets\/js\//,
     /^e2e\/public-content\.js$/,
+    // #33 — `/blog/` & `/tags/` crawl URLs are gated on the base_collections
+    // keep-list via this capability helper.
+    /^e2e\/site-capabilities\.js$/,
   ],
   "e2e/draft-isolation.spec.js": [
     /^_posts\//,

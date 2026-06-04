@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
+const cap = require("./site-capabilities");
 
 // Locks the posts-collection list summary template across all three Decap
 // configs. The summary is what editors see in the Posts list view — the
@@ -92,6 +93,15 @@ test.describe(
       test.skip(
         !fs.existsSync(RENDERED_CONFIG),
         `${RENDERED_CONFIG} not built (run the local Jekyll build + render-decap-config.rb) — rendered-config summary check only runs in the local lane`,
+      );
+      // #33 — this whole describe is about the POSTS-list summary; a
+      // single-page consumer that opts out of the posts collection via
+      // cms.base_collections (v0.1.7) has no Posts list to label. Skip
+      // precisely (keyed on the rendered config) when posts is absent;
+      // unchanged on a full consumer (the fixture-site + adamdaniel.ai).
+      test.skip(
+        !cap.hasAdminCollection(SITE_ROOT, "posts"),
+        'consumer opts out of the "posts" collection via cms.base_collections — skipping the Posts-list summary template (#33)',
       );
     });
 

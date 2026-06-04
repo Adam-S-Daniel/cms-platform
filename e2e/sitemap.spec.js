@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
 const { isTestFixturePost, slugify } = require("./public-content");
+const cap = require("./site-capabilities");
 
 // Plan unit B3 — sitemap structural contract.
 //
@@ -22,7 +23,12 @@ const { isTestFixturePost, slugify } = require("./public-content");
 // lands, this spec stays read-only and runs identically against local,
 // preview, and prod.
 
-const REPO_ROOT = path.join(__dirname, "..");
+// SITE_ROOT-aware: `_posts/`, `_e2e/`, and the built `_site/sitemap.xml` all
+// belong to the CONSUMING site. In a consumer the harness sits at the site
+// root so `__dirname/..` IS the site; SITE_ROOT (exported by the e2e reusable,
+// or pointed at a fixture by the #33 meta-test) is the explicit, portable form.
+// They agree in the platform self-CI (SITE_ROOT unset → `__dirname/..`).
+const REPO_ROOT = process.env.SITE_ROOT || path.join(__dirname, "..");
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 const E2E_DIR = path.join(REPO_ROOT, "_e2e");
 const SITEMAP_PATH = path.join(REPO_ROOT, "_site", "sitemap.xml");
@@ -165,6 +171,19 @@ test.describe("sitemap structure @parity", () => {
   });
 
   test("every published _posts/*.md appears as a <loc> entry @parity", () => {
+    // #33 — a single-page consumer that opts out of the posts collection via
+    // cms.base_collections (v0.1.7) ships no `_posts/`, so "every published
+    // post is advertised" has nothing to assert. Skip PRECISELY (keyed on the
+    // actual presence of `_posts/*.md` under SITE_ROOT) when genuinely absent;
+    // the full fixture-site + adamdaniel.ai have posts, so this runs unchanged
+    // there (and still demands posts.length > 0 — a full consumer that lost
+    // its posts is a real failure, not a skip). The sibling "no draft leaks" /
+    // "no _e2e canary leaks" tests assert ABSENCE and stay correct (empty) on
+    // an opted-out site, so they are intentionally NOT guarded.
+    test.skip(
+      !cap.hasSourcePosts(REPO_ROOT),
+      "consumer opts out of the posts collection via cms.base_collections — no _posts/ to advertise in the sitemap (#33)",
+    );
     const locs = readSitemapLocs();
     const posts = listMarkdownFiles(POSTS_DIR);
     expect(posts.length, "expected at least one post in _posts/").toBeGreaterThan(0);

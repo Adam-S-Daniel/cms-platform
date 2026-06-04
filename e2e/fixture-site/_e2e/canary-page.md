@@ -1,12 +1,12 @@
 ---
 layout: canary
-title: E2E Canary Post
-permalink: /e2e/canary-post/
-canary_id: post
+title: E2E Canary Page
+permalink: /e2e/canary-page/
+canary_id: page
 sitemap: false
 robots: noindex,nofollow
 ---
-Adam Daniel — E2E canary post (do not edit by hand).
+Adam Daniel — E2E canary page (do not edit by hand).
 
 This URL exists so the automated end-to-end publish-loop tests have a stable
 target to assert against on both preview-pr<N>.adamdaniel.ai and

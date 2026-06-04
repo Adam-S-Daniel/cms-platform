@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
 const { slugify, parseFrontMatter, isPublished, isTestFixturePost } = require("./public-content");
+const cap = require("./site-capabilities");
 
 // B4. Console-clean content pages — @parity
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +44,10 @@ const { slugify, parseFrontMatter, isPublished, isTestFixturePost } = require(".
 // posts carry neither `test_fixture: true` nor `sitemap: false` (the
 // posts collection has no widget for them).
 
-const REPO_ROOT = path.join(__dirname, "..");
+// SITE_ROOT-aware (consistent with the other content-crawl specs): in a
+// consumer the harness sits at the site root so `__dirname/..` IS the site;
+// SITE_ROOT is the explicit, portable form. They agree in self-CI.
+const REPO_ROOT = process.env.SITE_ROOT || path.join(__dirname, "..");
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 const TAGS_DIR = path.join(REPO_ROOT, "_tags");
 const PAGES_DIR = path.join(REPO_ROOT, "pages");
@@ -59,9 +63,16 @@ function buildContentUrls() {
   // Static pages every reader can hit from the homepage nav.
   // /projects/ is excluded on purpose: pages/../projects/index.html has
   // `published: false`. If it's flipped on later, this list should grow.
+  //
+  // #33 — `/blog/` and `/tags/` only exist when the consumer keeps the posts /
+  // tags base collections (a single-page opt-out via cms.base_collections
+  // renders neither, so asserting a 200 there would red-fail). The homepage
+  // `/` is always present. Keyed on the SOURCE `_config.yml` base_collections
+  // (build-independent) so it's correct in the preview/prod @parity lanes too.
+  // The full fixture-site + adamdaniel.ai keep both → both are crawled there.
   urls.add("/");
-  urls.add("/blog/");
-  urls.add("/tags/");
+  if (cap.keepsBaseCollection(REPO_ROOT, "posts")) urls.add("/blog/");
+  if (cap.keepsBaseCollection(REPO_ROOT, "tags")) urls.add("/tags/");
 
   // _posts/ — derive /blog/<slug>/ via the same rule cms-preview-url.spec.js
   // uses (explicit `slug:` wins; otherwise slugify the title). Mirror

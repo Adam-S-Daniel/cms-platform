@@ -19,9 +19,11 @@
 # NOT RUN HERE (needs a browser / a built Jekyll site / AWS — covered by the
 # e2e reusable + dogfood/consumer CI, not by a unit-speed PR gate):
 #   - the Playwright browser matrix (`*.spec.js`)
-#   - the ~5 build-dependent harness lints (canary-content / canary-ondemand-
+#   - the build-dependent harness lints (canary-content / canary-ondemand-
 #     noindex / e2e-posts-public-exclusion / prod-mutate-fixture — they read a
-#     `bundle exec jekyll build` `_site` or the `_e2e/` content fixtures) and
+#     `bundle exec jekyll build` `_site` or the `_e2e/` content fixtures;
+#     base-collections-skip-meta — it BUILDS both fixture-site variants and
+#     subprocess-runs the #33-guarded specs against each) and
 #     `playwright-image-drift` (reads a root package-lock.json + ci-runner
 #     Dockerfile this machinery repo intentionally doesn't ship — see AGENTS.md
 #     "playwright-image-drift real-repo subtest caveat").
@@ -161,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          deny='canary-content.test.js|canary-ondemand-noindex.test.js|e2e-posts-public-exclusion.test.js|playwright-image-drift.test.js|prod-mutate-fixture.test.js'
+          deny='canary-content.test.js|canary-ondemand-noindex.test.js|e2e-posts-public-exclusion.test.js|playwright-image-drift.test.js|prod-mutate-fixture.test.js|base-collections-skip-meta.test.js'
           specs=()
           for f in ./*.test.js; do
             base=${f#./}

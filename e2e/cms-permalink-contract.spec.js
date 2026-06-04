@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
+const cap = require("./site-capabilities");
 
 // E2 — Permalink contract cross-check.
 //
@@ -166,6 +167,16 @@ test.describe("CMS permalink contract — Decap two-pass vs Jekyll", () => {
 
   for (const { name, jekyllKey } of COLLECTIONS) {
     test(`${name} — Decap preview URL matches Jekyll URL (or override is loaded)`, () => {
+      // #33 — a single-page consumer opts out of this base collection via
+      // cms.base_collections (v0.1.7), so it's absent from the rendered admin
+      // config and has no "View on Live Site" contract to assert. Skip
+      // precisely (keyed on the rendered config) when genuinely absent; the
+      // full fixture-site + adamdaniel.ai keep every collection, so each runs
+      // unchanged there.
+      test.skip(
+        !cap.hasAdminCollection(SITE_ROOT, name),
+        `consumer opts out of the "${name}" collection via cms.base_collections — skipping its permalink contract (#33)`,
+      );
       const adminCfg = YAML.parse(readText(ADMIN_CONFIG));
       const jekyllCfg = YAML.parse(readText(JEKYLL_CONFIG));
       const coll = findCollection(adminCfg, name);

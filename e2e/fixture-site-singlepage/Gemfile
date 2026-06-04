@@ -1,0 +1,11 @@
+source "https://rubygems.org"
+gem "jekyll", "~> 4.3"
+gem "webrick"
+
+group :jekyll_plugins do
+  # Pin the theme to the WORKING-TREE copy by local path (NOT the published
+  # git gem) so this fixture self-tests the platform theme + plugins + Decap
+  # render hook as they are RIGHT NOW in this checkout. Path is relative to
+  # this Gemfile: e2e/fixture-site-singlepage/ → ../../theme.
+  gem "cms-platform-theme", path: "../../theme"
+end

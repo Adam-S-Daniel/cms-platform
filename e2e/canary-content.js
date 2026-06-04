@@ -34,7 +34,12 @@
 const path = require("node:path");
 const fs = require("node:fs");
 
-const REPO_ROOT = path.resolve(__dirname, "..");
+// SITE_ROOT-aware: the checked-in `_e2e/canary-*.md` fixtures live at the
+// CONSUMING site's root. In a consumer the harness sits at the site root so
+// `__dirname/..` IS the site; SITE_ROOT (exported by the e2e reusable, or
+// pointed at a fixture by the #33 meta-test) is the explicit, portable form.
+// They agree in the platform self-CI (SITE_ROOT unset → `__dirname/..`).
+const REPO_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 function buildBaselineBody(baselineTitle) {
   return (

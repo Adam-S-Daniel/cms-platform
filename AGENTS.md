@@ -172,6 +172,80 @@ all base collections but keeps site collections, partial keep works, survivors'
 nested fields and a field literally named like a base collection are untouched,
 output stays valid YAML). Used by single-page sites (jodidaniel.com).
 
+### base_collections-aware spec skips for single-page consumers (#33, v0.1.9+)
+
+Many e2e specs assume the generic collections (`posts/tags/projects/pages/e2e`)
++ adamdaniel-shaped content (`_posts/`, `_e2e/canary-*.md`, the rendered
+`posts`/`tags`/… admin collections, `/blog/`, `/tags/`, `_site/e2e/canary-*/`).
+A `base_collections: []` single-page consumer (jodidaniel.com) has **none** of
+those, so those specs used to be **permanently RED** on every branch. The fix:
+each generic-collection/content-dependent spec **self-skips PRECISELY** when the
+consumer genuinely lacks that collection/content, and **runs fully** where it
+exists (the platform `e2e/fixture-site` + adamdaniel.ai).
+
+**The helper: `e2e/site-capabilities.js`** — the single source of truth for
+"does THIS consuming site have X?". All predicates take an explicit `siteRoot`
+(defaulting to `process.env.SITE_ROOT || <harness>/..`, the same root the rest
+of the harness uses). Parses YAML with the real `yaml` lib.
+
+- `keepsBaseCollection(siteRoot, name)` — **SOURCE** signal off `_config.yml`
+  `cms.base_collections` (build-INDEPENDENT). Use this for **served-site**
+  specs (they also run in the preview/prod `@parity` lanes, where `_site` is
+  NOT built — a rendered-config check would wrongly skip a full consumer there).
+- `hasAdminCollection(siteRoot, name)` / `adminCollections(siteRoot)` —
+  **RENDERED** signal off `_site/admin/config.yml` (the ground truth Decap
+  loads). Use this for **fs specs that already only run in the local lane**
+  (they read `_site`, so the build is guaranteed present).
+- `hasE2ECanaries(siteRoot)` / `hasRenderedCanary(siteRoot, slug)` /
+  `hasSourcePosts(siteRoot)` / `isSinglePageConsumer(siteRoot)` — canary +
+  posts presence.
+
+**The skip pattern** — a precise `test.skip()` (or `beforeEach` skip) keyed on
+the helper, with a message that names the collection + `cms.base_collections` +
+`(#33)`:
+
+```js
+const cap = require("./site-capabilities");
+test.skip(
+  !cap.hasAdminCollection(SITE_ROOT, "posts"),  // fs/local-lane spec
+  'consumer opts out of the "posts" collection via cms.base_collections — skipping <X> (#33)',
+);
+// served-site spec (also runs preview/prod @parity) → use keepsBaseCollection:
+test.skip(!cap.keepsBaseCollection(SITE_ROOT, "tags"), "…opts out of tags… (#33)");
+```
+
+**Never weaken assertions for full consumers** — guard with a skip, don't relax
+an `expect`. A full consumer that LOST its posts is a real failure, not a skip.
+Specs that assert ABSENCE (e.g. sitemap "no draft / no `_e2e` canary leaks")
+stay correct (empty) on an opted-out site and are intentionally NOT guarded.
+
+**Guarded specs (the #33 set):** `canary-content.test.js`,
+`canary-ondemand-noindex.test.js`, `cms-config.spec.js` (per-collection),
+`cms-post-list-summary.spec.js`, `cms-permalink-contract.spec.js` (per-
+collection), `sitemap.spec.js` ("every published `_posts` appears"),
+`tags.spec.js` ("Tags index page"), `feeds-and-share.spec.js` (global Atom-feed
+shape), `console-clean.spec.js` (`/blog/` + `/tags/` crawl URLs). Several of the
+content-reading specs were also made **SITE_ROOT-aware** (read `_posts/`,
+`_e2e/`, `_site/` under `SITE_ROOT`, not `__dirname/..`) so they resolve the
+CONSUMING site's content; the two are identical in a real consumer (harness at
+site root) but differ when the meta-test points `SITE_ROOT` at a fixture.
+
+**The two fixtures (the platform's own both-paths proof):**
+`e2e/fixture-site` keeps every base collection + the 3 canonical canaries (the
+FULL consumer); `e2e/fixture-site-singlepage` sets `cms.base_collections: []` +
+one custom `notes` collection, NO `_posts`/`_e2e` (the OPTED-OUT consumer,
+jodidaniel's shape). **Spec-locked** by `e2e/site-capabilities.test.js` (the
+predicates against both shapes) and `e2e/base-collections-skip-meta.test.js`
+(builds BOTH fixtures, subprocess-runs the fs-guarded specs against each, and
+asserts: opted-out → SKIPS, full → RUNS). The meta-test is build-dependent →
+in `node-unit-lints`' DENY list (self-ci.yml) + `PLATFORM_META_SPECS`.
+
+**Adding a NEW generic-content spec:** if it reads a base collection / canary /
+posts / `/blog/` / `/tags/`, guard it on the matching `site-capabilities`
+predicate (rendered for local-only fs specs, `keepsBaseCollection` for served
+specs that also run `@parity`), and add `/^e2e\/site-capabilities\.js$/` to its
+`SPEC_RULES` entry in `select-specs.js` so a helper edit re-selects it.
+
 ### Org OAuth App approval — the "can log in but can't save" trap (#26)
 
 On an **org-owned** consumer, if the org has **OAuth App access restrictions**
