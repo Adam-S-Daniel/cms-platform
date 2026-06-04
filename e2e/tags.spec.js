@@ -1,6 +1,13 @@
 // @lane: local — exercises the locally-rendered tag pages; @parity-eligible via TARGET=
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { discoverTags } = require("./content-fixtures");
+const cap = require("./site-capabilities");
+
+// SITE_ROOT for the capability gate (same root the harness sits at in a
+// consumer; the e2e reusable exports it; the #33 meta-test points it at a
+// fixture). Unset → the harness's parent (platform/site root).
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 // Acceptance for issue #27 — make tags functional end-to-end.
 //
@@ -16,6 +23,25 @@ const { discoverTags } = require("./content-fixtures");
 // the per-tag tests self-skip with a clear reason rather than failing.
 
 test.describe("Tags index page", () => {
+  // #33 — a single-page consumer that opts out of the tags collection via
+  // cms.base_collections (v0.1.7) renders no `/tags/` index (the auto_tag_pages
+  // generator only produces it for the tags collection / tagged posts). The
+  // "Tag archive pages" + "Homepage tag cloud" describes below already
+  // self-skip / handle the no-tags case via discoverTags; only this index
+  // describe asserts `/tags/` exists, so guard it precisely. The full
+  // fixture-site + adamdaniel.ai keep the tags collection → this runs
+  // unchanged there.
+  // Keyed on the SOURCE `_config.yml` base_collections (build-INDEPENDENT) so
+  // the gate is correct in EVERY lane — including the preview/prod @parity
+  // crawls that hit deployed surfaces and never build `_site` (a rendered-
+  // config check would wrongly skip a full consumer there).
+  test.beforeEach(() => {
+    test.skip(
+      !cap.keepsBaseCollection(SITE_ROOT, "tags"),
+      "consumer opts out of the tags collection via cms.base_collections — no /tags/ index to assert (#33)",
+    );
+  });
+
   test("/tags/ exists and renders without errors", async ({ page }) => {
     const response = await page.goto("/tags/");
     expect(response.status()).toBe(200);

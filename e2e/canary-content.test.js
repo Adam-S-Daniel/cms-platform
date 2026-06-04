@@ -11,19 +11,40 @@ const { test, expect } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
 const { CANARIES, readCanarySource } = require("./canary-content");
+const cap = require("./site-capabilities");
 
 // SITE_ROOT-aware resolution of the RENDERED Decap config. The gem's render
 // hook (scripts/render-decap-config.rb) emits the live config to
 // `<site>/_site/admin/config.yml` during the local-lane build — the source
 // `admin/config.yml` doesn't exist (the platform ships only the
 // `config.base.yml` template). The checked-in `_e2e/*.md` canary files this
-// spec byte-locks are REAL content fixtures (read via canary-content.js) and
-// stay at the site root; only the config.yml read is re-rooted here.
+// spec byte-locks are REAL content fixtures and stay at the site root; both
+// the config.yml read and the `_config.yml` / `_e2e` source reads are
+// SITE_ROOT-rooted (so they resolve to the CONSUMING site — the same root the
+// harness sits at in a consumer, and the meta-test points at a fixture).
 const SITE_ROOT = process.env.SITE_ROOT || path.join(__dirname, "..");
 const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
 
+// #33 — a single-page consumer that opts out of the `e2e` collection via
+// cms.base_collections (v0.1.7) ships NO `_e2e/` canary fixtures and renders no
+// `e2e` collection. These invariants byte-lock the canaries + their admin
+// wiring, so they only apply where the canaries exist. Skip PRECISELY (keyed
+// on the actual presence of `_e2e/canary-*.md` under SITE_ROOT) when genuinely
+// absent; the full fixture-site + adamdaniel.ai have them, so this runs
+// unchanged there. NB: keep this distinct from the existing "rendered config
+// not built" self-skip below — that one is about lane (preview/prod don't
+// build `_site`), this one is about the consumer opting out of the collection.
+const HAS_CANARIES = cap.hasE2ECanaries(SITE_ROOT);
+
 test.describe("Canary content invariants", () => {
   test.describe.configure({ mode: "serial" });
+
+  test.beforeEach(() => {
+    test.skip(
+      !HAS_CANARIES,
+      "consumer opts out of the e2e canary collection via cms.base_collections — no _e2e/canary-*.md to byte-lock (#33)",
+    );
+  });
 
   test("every canary descriptor matches a checked-in source file", () => {
     for (const c of CANARIES) {
@@ -124,7 +145,7 @@ test.describe("Canary content invariants", () => {
   });
 
   test("_config.yml registers the e2e collection with the right permalink", () => {
-    const cfg = fs.readFileSync(path.join(__dirname, "..", "_config.yml"), "utf8");
+    const cfg = fs.readFileSync(path.join(SITE_ROOT, "_config.yml"), "utf8");
     // Without `output: true` Jekyll won't render an HTML file; the
     // publish-loop's "assert it shows up at the public URL" step would
     // never satisfy.

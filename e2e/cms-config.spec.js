@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
+const cap = require("./site-capabilities");
 
 // Locks in the editor-experience invariants of the Decap CMS configs.
 // These properties together close the gaps documented in the content-workflow
@@ -48,6 +49,20 @@ function findCollection(cfg, name) {
 // A field object by name within a collection (`fields:` is a YAML list).
 function findField(collection, fieldName) {
   return ((collection && collection.fields) || []).find((f) => f && f.name === fieldName) || null;
+}
+
+// #33 — a single-page consumer that opts out of a base collection via
+// `cms.base_collections` (v0.1.7) won't have it in the RENDERED admin config.
+// These invariants assert the EDITOR EXPERIENCE of a collection, so they only
+// make sense where the collection actually exists. Skip PRECISELY (keyed on
+// the rendered config the gem emits) when it's genuinely absent — never on a
+// full consumer (the platform fixture-site + adamdaniel.ai have every base
+// collection, so these run unchanged there).
+function skipUnlessCollection(name) {
+  test.skip(
+    !cap.hasAdminCollection(SITE_ROOT, name),
+    `consumer opts out of the "${name}" collection via cms.base_collections — skipping its editor-experience invariants (#33)`,
+  );
 }
 
 test.describe("Decap CMS config invariants", () => {
@@ -112,6 +127,7 @@ test.describe("Decap CMS config invariants", () => {
     });
 
     test(`${label}: posts collection has no editor-facing reading_time field`, () => {
+      skipUnlessCollection("posts");
       const posts = findCollection(parseConfig(configPath), "posts");
       expect(posts, "posts collection must exist").not.toBeNull();
       // reading_time is auto-calculated at build time; surfacing it in the
@@ -120,6 +136,7 @@ test.describe("Decap CMS config invariants", () => {
     });
 
     test(`${label}: posts.tags widget allows inline creation`, () => {
+      skipUnlessCollection("posts");
       const posts = findCollection(parseConfig(configPath), "posts");
       const tags = findField(posts, "tags");
       expect(tags, "posts.tags field must exist").not.toBeNull();
@@ -132,6 +149,7 @@ test.describe("Decap CMS config invariants", () => {
     });
 
     test(`${label}: posts.published hint clarifies precedence over publish_date`, () => {
+      skipUnlessCollection("posts");
       const posts = findCollection(parseConfig(configPath), "posts");
       const published = findField(posts, "published");
       expect(published, "posts.published field must exist").not.toBeNull();
@@ -142,6 +160,7 @@ test.describe("Decap CMS config invariants", () => {
     });
 
     test(`${label}: posts.body hint surfaces the real-layout /preview/ URL`, () => {
+      skipUnlessCollection("posts");
       const posts = findCollection(parseConfig(configPath), "posts");
       const body = findField(posts, "body");
       expect(body, "posts.body field must exist").not.toBeNull();
@@ -184,7 +203,20 @@ test.describe("Decap CMS config invariants", () => {
       // CRUD affordances in the Decap UI. Spelling them out keeps the
       // intent visible in the YAML — defaults can shift between major
       // versions.
-      for (const name of ["posts", "tags", "projects", "pages"]) {
+      //
+      // #33 — a single-page consumer opts out of some/all base collections
+      // via cms.base_collections. Assert the CRUD affordances only for the
+      // base collections this consumer actually KEEPS (the rendered config
+      // is the ground truth); skip entirely when it kept none. Never weakens
+      // the check on a full consumer (all four present → all four asserted).
+      const present = ["posts", "tags", "projects", "pages"].filter((name) =>
+        cap.hasAdminCollection(SITE_ROOT, name),
+      );
+      test.skip(
+        present.length === 0,
+        "consumer opts out of ALL base collections via cms.base_collections — no base CRUD affordances to assert (#33)",
+      );
+      for (const name of present) {
         const chunk = findCollection(cfg, name);
         expect(chunk, `${name} collection must exist`).not.toBeNull();
         expect(chunk.folder, `${name} must be a folder collection`).toBeTruthy();
@@ -194,6 +226,7 @@ test.describe("Decap CMS config invariants", () => {
     });
 
     test(`${label}: posts collection exposes title, date, body, tags, featured_image`, () => {
+      skipUnlessCollection("posts");
       const posts = findCollection(parseConfig(configPath), "posts");
       for (const f of ["title", "date", "body", "tags", "featured_image", "published"]) {
         expect(findField(posts, f), `posts.${f} field must exist`).not.toBeNull();
@@ -203,6 +236,7 @@ test.describe("Decap CMS config invariants", () => {
     });
 
     test(`${label}: projects collection exposes a multi-image gallery`, () => {
+      skipUnlessCollection("projects");
       const projects = findCollection(parseConfig(configPath), "projects");
       const images = findField(projects, "images");
       expect(images, "projects.images field must exist").not.toBeNull();
@@ -219,12 +253,14 @@ test.describe("Decap CMS config invariants", () => {
     });
 
     test(`${label}: tags collection exposes name + description`, () => {
+      skipUnlessCollection("tags");
       const tags = findCollection(parseConfig(configPath), "tags");
       expect(findField(tags, "name"), "tags.name must exist").not.toBeNull();
       expect(findField(tags, "description"), "tags.description must exist").not.toBeNull();
     });
 
     test(`${label}: pages collection exposes title, body, permalink, published`, () => {
+      skipUnlessCollection("pages");
       const pages = findCollection(parseConfig(configPath), "pages");
       for (const f of ["title", "body", "permalink", "published"]) {
         expect(findField(pages, f), `pages.${f} must exist`).not.toBeNull();
@@ -284,6 +320,7 @@ test.describe("Decap CMS config invariants", () => {
   // properly in `e2e/cms-permalink-contract.spec.js`.
 
   test("pages.preview_path matches the permalink default editors are nudged toward", () => {
+    skipUnlessCollection("pages");
     // Pages don't have a Jekyll-side global permalink template — each
     // page's front matter sets its own. The contract here is that
     // admin/config.yml's `pages.permalink.default` produces a path of

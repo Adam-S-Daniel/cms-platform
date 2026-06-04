@@ -3,6 +3,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
+const { guard } = require("./base-collections-guards");
+
+// SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source
+// signal — see base-collections-guards.js). Same root the harness resolves
+// against everywhere else.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 // End-to-end smoke test for the Decap CMS bundle wired up against a
 // real `local_backend: true` (decap-server proxy on port 8081, started
@@ -32,6 +38,11 @@ test.describe(
   // Runs on chromium-desktop-3k only. See playwright.config.js.
   { tag: ["@admin-write"] },
   () => {
+    // #33 — a base_collections:[] single-page consumer renders config-local.yml
+    // with the Posts/Tags/Projects/Pages blocks stripped, so this spec's
+    // hard-asserted sidebar links never render. Skip unless ALL of them are kept.
+    test.skip(...guard(SITE_ROOT, "cms-smoke.spec.js"));
+
     // The local backend mutates the working tree. Run on a single project
     // and serially to avoid two browsers racing to write/delete the same
     // file at the same time.

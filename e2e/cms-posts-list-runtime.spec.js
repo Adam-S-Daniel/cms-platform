@@ -3,6 +3,10 @@
 // script in a real browser (Chromium + WebKit iPhone 16) — the pure-fs
 // lock in cms-posts-list-enhance.spec.js can't catch behavioural bugs.
 const { test, expect } = require("./base");
+const path = require("node:path");
+const { guard } = require("./base-collections-guards");
+// SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source signal).
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 test.describe(
   "/admin/ posts-list dashboard: runtime interactivity",
@@ -13,6 +17,11 @@ test.describe(
   // checkbox / Refresh button untappable on iOS Safari).
   { tag: ["@admin-read"] },
   () => {
+    // #33 — a base_collections:[] consumer strips the Posts block from
+    // config-local.yml, so the dashboard's wait for the Posts sidebar link
+    // would time out. Skip unless posts is kept.
+    test.skip(...guard(SITE_ROOT, "cms-posts-list-runtime.spec.js"));
+
     // The bar must NOT churn. A regression where ensureBar() rewrites
     // bar.innerHTML on every MutationObserver-triggered augment()
     // turned the bar into a ~60 Hz re-parse loop, detaching the

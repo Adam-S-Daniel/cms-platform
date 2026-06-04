@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect, TARGET } = require("./base");
+const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
 
 // C1 — Manual-driven walkthrough for the contributor manual.
@@ -26,6 +27,7 @@ const { captureStep } = require("./manual-capture");
 // for cross-target runs against local / preview-pr* / prod.
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");  // #33 base_collections guard root
 const MANUAL_PATH = path.join(REPO_ROOT, "docs", "CONTRIBUTOR_MANUAL.md");
 const REGEN_WORKFLOW = ".github/workflows/regenerate-manual.yml";
 
@@ -262,6 +264,11 @@ test.describe(
   // race + last-write-wins). See playwright.config.js.
   { tag: ["@admin-screenshots"] },
   () => {
+    // #33 — the contributor walkthrough hard-asserts the full
+    // Posts/Tags/Projects/Pages sidebar; a base_collections:[] consumer strips
+    // those blocks from config-local.yml, so the walkthrough would time out.
+    test.skip(...guard(SITE_ROOT, "manual-walkthrough-contributor.spec.js"));
+
     test.describe.configure({ mode: "serial", timeout: 300_000 });
 
     test.beforeEach(({ page }, info) => {

@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect, TARGET } = require("./base");
+const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
 
 // Plan unit C2: every documented affordance in `docs/CONTENT_GUIDE.md` should
@@ -32,6 +33,7 @@ const { captureStep } = require("./manual-capture");
 // probes up automatically.
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");  // #33 base_collections guard root
 const GUIDE_PATH = path.join(REPO_ROOT, "docs", "CONTENT_GUIDE.md");
 
 // Parse `^## ` headings out of the guide. Returns an array of
@@ -270,6 +272,10 @@ test.describe(
   // for the rationale). See playwright.config.js.
   { tag: ["@admin-screenshots"] },
   () => {
+    // #33 — the content-guide walkthrough drives the index-local Posts editor; a base_collections:[] consumer strips those blocks
+    // from config-local.yml, so the walkthrough would time out.
+    test.skip(...guard(SITE_ROOT, "manual-walkthrough-content-guide.spec.js"));
+
     test.describe.configure({ mode: "serial", timeout: 180_000 });
 
     test.beforeEach(({ page }) => {

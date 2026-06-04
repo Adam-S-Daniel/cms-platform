@@ -288,7 +288,98 @@ const SPEC_RULES = {
   // admin/ change and when the shared visibility helper changes.
   "e2e/admin-no-occlusion.spec.js": [/^(theme\/)?admin\//, /^e2e\/ui-visibility\.js$/],
   "e2e/detect-changed-pages.test.js": [/^e2e\/detect-changed-pages\.js$/],
-  "e2e/cms-smoke.spec.js": [/^(theme\/)?admin\//, /^_posts\//, /^_tags\//, /^_projects\//, /^pages\//],
+  // #33 — cms-smoke hard-asserts the full base sidebar; its base_collections
+  // skip-guard is keyed on the capability helper + the guard registry, so an
+  // edit to either must re-select it.
+  "e2e/cms-smoke.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^_tags\//,
+    /^_projects\//,
+    /^pages\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  // #33 — the @admin-write/@admin-read/@admin-screenshots specs that drive
+  // /admin/index-local.html base-collection routes. Each carries a
+  // base_collections skip-guard keyed on site-capabilities.js +
+  // base-collections-guards.js (the registry), so an edit to either helper
+  // must re-select every guarded spec. (admin/ + the collection's source dir
+  // are the other natural inputs.) The pure-fs guard-registry lint
+  // (base-collections-guard-registry.test.js) is the PR gate that keeps this
+  // set honest.
+  "e2e/cms-page-crud.spec.js": [
+    /^(theme\/)?admin\//,
+    /^pages\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-project-crud.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_projects\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-project-gallery.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_projects\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-featured-image-lifecycle.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-html-embed.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-image-upload.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-inline-image.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-link-crawler.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-posts-list-runtime.spec.js": [
+    /^(theme\/)?admin\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/manual-walkthrough-contributor.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^_tags\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/manual-walkthrough-content-guide.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/manual-walkthrough-first-post.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
   "e2e/cms-editorial-workflow.spec.js": [/^(theme\/)?admin\//, /^_posts\//],
   // Canary content invariants — fast, no browser. Cross-checks the
   // _e2e/ collection wiring stays consistent across _config.yml,
@@ -298,7 +389,42 @@ const SPEC_RULES = {
     /^(theme\/)?admin\//,
     /^_config\.yml$/,
     /^_layouts\/canary\.html$/,
+    // #33 base_collections opt-out skip is keyed on this capability helper.
+    /^e2e\/site-capabilities\.js$/,
   ],
+  // #33 — the on-demand canary noindex/no-advertise contract; its
+  // base_collections opt-out skip is keyed on site-capabilities.js. (Its
+  // content inputs — _e2e/, the canary layout, _config.yml — already hit the
+  // config/layout render-fanout, so this rule adds only the helper dep.)
+  "e2e/canary-ondemand-noindex.test.js": [/^e2e\/site-capabilities\.js$/],
+  // #33 — the rendered Decap config invariants; their per-collection
+  // base_collections opt-out skips are keyed on site-capabilities.js. The
+  // config render-fanout (`_config.yml`, admin/) covers most inputs; this rule
+  // keeps the helper edit selecting them too.
+  "e2e/cms-config.spec.js": [/^(theme\/)?admin\//, /^_config\.yml$/, /^e2e\/site-capabilities\.js$/],
+  "e2e/cms-post-list-summary.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_config\.yml$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
+  "e2e/cms-permalink-contract.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_config\.yml$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
+  // #33 — the rendered-config form-hint drift lock; its per-collection
+  // base_collections opt-out skips are keyed on site-capabilities.js (so an
+  // edit to the helper re-selects it). admin/ + _config.yml cover the hint
+  // source itself.
+  "e2e/cms-form-clarity.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_config\.yml$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
+  // #33 — the global Atom-feed shape test self-skips when the consumer opts
+  // out of posts; keyed on site-capabilities.js. (Other inputs hit the
+  // feed.xml / config / posts render-fanout.)
+  "e2e/feeds-and-share.spec.js": [/^_posts\//, /^_tags\//, /^e2e\/site-capabilities\.js$/],
   // Issue #1042 admin posts-UI invariants — fast, pure-fs, no browser.
   // Locks the restored live-URL banner wiring + posts-list-enhance.js
   // augment/hide contract + the INVALID-DATE / Automated-tests /
@@ -461,12 +587,22 @@ const SPEC_RULES = {
     /^_includes\//,
     // Cleanup helper that prunes the smoke post's orphaned sitemap URLs.
     /^e2e\/sitemap-prune\.js$/,
+    // #33 base_collections skip-guard helpers.
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
   ],
   // Pure-node unit test for the sitemap-prune cleanup helper.
   "e2e/sitemap-prune.test.js": [/^e2e\/sitemap-prune\.js$/],
-  "e2e/cms-preview-url.spec.js": [/^(theme\/)?admin\//, /^_posts\//],
+  // #33 — the Posts preview_path assertion self-skips when the consumer opts
+  // out of posts (keyed on site-capabilities.js); the admin/ + _posts/ rules
+  // cover its other inputs.
+  "e2e/cms-preview-url.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+  ],
   "e2e/blog-post.spec.js": [/^_posts\//, /^blog\//],
-  "e2e/tags.spec.js": [/^_tags\//, /^tags\//],
+  "e2e/tags.spec.js": [/^_tags\//, /^tags\//, /^e2e\/site-capabilities\.js$/],
   "e2e/not-found.spec.js": [/^404\.html$/],
   // @parity specs that hit Jekyll output through the deployed preview
   // surface. Path-rules cover the inputs that can shift what's served.
@@ -489,6 +625,9 @@ const SPEC_RULES = {
     /^_layouts\//,
     /^_plugins\//,
     /^e2e\/public-content\.js$/,
+    // #33 base_collections opt-out skip (the "every published _posts appears"
+    // test) is keyed on this capability helper.
+    /^e2e\/site-capabilities\.js$/,
   ],
   "e2e/console-clean.spec.js": [
     /^_posts\//,
@@ -501,6 +640,9 @@ const SPEC_RULES = {
     /^assets\/css\//,
     /^assets\/js\//,
     /^e2e\/public-content\.js$/,
+    // #33 — `/blog/` & `/tags/` crawl URLs are gated on the base_collections
+    // keep-list via this capability helper.
+    /^e2e\/site-capabilities\.js$/,
   ],
   "e2e/draft-isolation.spec.js": [
     /^_posts\//,

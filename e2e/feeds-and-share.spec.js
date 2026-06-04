@@ -1,6 +1,12 @@
 // @lane: local — exercises the locally-served Atom/RSS feeds + per-post share row
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { discoverTags, discoverPost } = require("./content-fixtures");
+const cap = require("./site-capabilities");
+
+// SITE_ROOT for the #33 capability gate (build-INDEPENDENT, so it's correct in
+// the preview/prod @parity lanes too). Unset → the harness's parent.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 // Acceptance for the RSS/Atom feeds + per-post share row.
 //
@@ -26,7 +32,19 @@ async function fetchText(page, url) {
 }
 
 test.describe("Atom feeds", () => {
+  // #33 — a single-page consumer that opts out of the posts collection via
+  // cms.base_collections (v0.1.7) has no blog, so the all-posts Atom feed
+  // contract doesn't apply (jekyll-feed still emits a `/feed.xml`, but it's an
+  // empty, postless feed — and its title is the SITE author, not necessarily
+  // this spec's expected one). Skip the feed-shape/metadata test precisely
+  // when posts is opted out; the sibling per-tag / feed-content / share-row
+  // tests already self-skip via discoverTags/discoverPost. The full
+  // fixture-site + adamdaniel.ai keep posts → this runs unchanged there.
   test("/feed.xml exists, is Atom, and contains the right metadata", async ({ page }) => {
+    test.skip(
+      !cap.keepsBaseCollection(SITE_ROOT, "posts"),
+      "consumer opts out of the posts collection via cms.base_collections — no blog Atom feed contract to assert (#33)",
+    );
     const { response, body } = await fetchText(page, "/feed.xml");
     const ct = (response.headers()["content-type"] || "").toLowerCase();
     expect(ct).toMatch(/xml/);

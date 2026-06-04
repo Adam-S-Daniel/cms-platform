@@ -4,6 +4,7 @@ const path = require("node:path");
 const http = require("node:http");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { guard } = require("./base-collections-guards");
 
 // Verifies the contributor capability "Build a multi-image project gallery":
 // the Projects collection's `images:` field is a `widget: list` with an
@@ -30,6 +31,7 @@ const { test, expect } = require("./base");
 //      cms-project-crud.spec.js.
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, ".."); // #33 base_collections guard root
 const PROJECTS_DIR = path.join(REPO_ROOT, "_projects");
 const UPLOADS_ROOT = path.join(REPO_ROOT, "assets", "images", "uploads");
 const FIXTURES = [
@@ -94,6 +96,10 @@ test.describe(
   // Runs on chromium-desktop-3k only. See playwright.config.js.
   { tag: ["@admin-write"] },
   () => {
+    // #33 — a base_collections:[] consumer strips the Projects block from config-local.yml,
+    // so this spec's admin/index-local.html collection routes never render.
+    test.skip(...guard(SITE_ROOT, "cms-project-gallery.spec.js"));
+
     test.describe.configure({ mode: "serial", timeout: 240_000 });
 
     test.beforeAll(() => {
