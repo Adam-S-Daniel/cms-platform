@@ -6,7 +6,7 @@
 // asserts nothing about wall-clock backoff except the value passed to the
 // injected sleep (for the Retry-After case).
 const { test, expect } = require("./base");
-const { gh } = require("./github-actions-poll");
+const { gh, makeDeployQueueExtender, deployLaneActivity } = require("./github-actions-poll");
 
 // Minimal fetch Response stand-in. `headers.get(name)` is case-insensitive
 // to match the real Headers contract gh() relies on for Retry-After.
@@ -176,5 +176,162 @@ test.describe("gh() bounded transient-retry (#1771 step 1)", () => {
     expect(result).toEqual({ ok: true });
     expect(calls.count).toBe(1);
     expect(slept).toBe(false);
+  });
+});
+
+// ── #21: the deploy-lane extender judged against the SPEC'S OWN deploy ──
+//
+// The pre-#21 extender judged the deploy lane on a sliding ~5-min wall-
+// clock window anchored to "now" (recentWindowMs). When the spec's
+// URL-reflect budget elapsed >5min AFTER the spec's own deploy completed,
+// the lane read "quiescent" and the extender declared a REAL MISS
+// ("lane is QUIESCENT") even though the deploy DID fire + complete — a
+// FALSE NEGATIVE that mis-diagnosed the true failure (URL never served).
+//
+// #21 anchors the judgment on the create PR's `mergedAt`: count
+// deploy-production runs with `run.created_at >= mergedAt`. A completed
+// such run is CONCLUSIVE — the deploy fired + finished, so the chain is
+// healthy and the failure is URL-not-served (S3/CloudFront). "No run
+// created_at>=mergedAt AND lane idle" is the genuine real-miss.
+test.describe("makeDeployQueueExtender anchored on the spec's own merge (#21)", () => {
+  const MIN = 60 * 1000;
+  // Build a deployLaneActivity stand-in from an explicit verdict object so
+  // these tests don't depend on the wall-clock-window internals.
+  const laneActivity = ({ inFlight = 0, recent = 0, deployCompletedSinceMerge = false, runsSinceMerge = 0 } = {}) =>
+    async () => ({ inFlight, recent, deployCompletedSinceMerge, runsSinceMerge });
+
+  test("(a) a deploy-production run created_at>=mergedAt that COMPLETED is conclusive (not a real miss) even >5min after merge", async () => {
+    // mergedAt = T0; a deploy ran + completed for it; the URL-reflect
+    // budget elapsed at T0+20min (>> the old 5-min recent window). The
+    // pre-#21 logic would call the lane QUIESCENT → real miss; #21 must
+    // instead recognise the spec's deploy fired + finished and stop
+    // extending with a verdict that this is URL-not-served, NOT a miss.
+    const ext = makeDeployQueueExtender({
+      mergedAt: 0,
+      activity: laneActivity({ inFlight: 0, recent: 0, deployCompletedSinceMerge: true, runsSinceMerge: 1 }),
+    });
+    const grant = await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(grant, "a completed deploy for THIS merge ⇒ stop extending (no point waiting longer)").toBe(0);
+    // The verdict must be the high-value self-diagnosis: the deploy
+    // completed but the URL never served — an S3/CloudFront problem — NOT
+    // a chain-never-fired miss.
+    expect(ext.verdict, "extender must expose a verdict for the diagnostic message").toBeTruthy();
+    expect(ext.verdict.kind).toBe("deploy-completed-url-missing");
+    expect(ext.verdict.realMiss, "a completed deploy is NOT a real miss").toBe(false);
+  });
+
+  test("(b) no deploy run created_at>=mergedAt AND idle lane ⇒ genuine real-miss", async () => {
+    const ext = makeDeployQueueExtender({
+      mergedAt: 0,
+      activity: laneActivity({ inFlight: 0, recent: 0, deployCompletedSinceMerge: false, runsSinceMerge: 0 }),
+    });
+    const grant = await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(grant, "no deploy for the merge + idle lane ⇒ give up (real miss)").toBe(0);
+    expect(ext.verdict.kind).toBe("no-deploy-fired");
+    expect(ext.verdict.realMiss, "the chain never fired ⇒ a real miss").toBe(true);
+  });
+
+  test("(c) a deploy run created_at<mergedAt (a PRIOR unrelated deploy) does NOT count", async () => {
+    // The lane shows recent activity, but none of it is FOR this merge
+    // (runsSinceMerge 0, nothing completed since the merge). With the lane
+    // otherwise idle (0 in flight), that prior deploy must not rescue the
+    // judgment into "deploy completed" — it's still a no-deploy-fired miss.
+    const ext = makeDeployQueueExtender({
+      mergedAt: 0,
+      activity: laneActivity({ inFlight: 0, recent: 0, deployCompletedSinceMerge: false, runsSinceMerge: 0 }),
+    });
+    const grant = await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(grant).toBe(0);
+    expect(ext.verdict.kind).toBe("no-deploy-fired");
+    expect(ext.verdict.realMiss).toBe(true);
+  });
+
+  test("an in-flight/queued deploy for the merge still EXTENDS (backlog draining)", async () => {
+    const ext = makeDeployQueueExtender({
+      mergedAt: 0,
+      perDeployMs: 60_000,
+      minExtendMs: 180_000,
+      maxTotalExtendMs: 1_000_000,
+      activity: laneActivity({ inFlight: 1, recent: 1, deployCompletedSinceMerge: false, runsSinceMerge: 1 }),
+    });
+    const grant = await ext({ elapsedMs: 5 * MIN, extensionCount: 0 });
+    expect(grant, "deploy queued/in-flight for the merge ⇒ keep waiting").toBeGreaterThan(0);
+  });
+
+  test("back-compat: with no mergedAt the wall-clock-window heuristic still drives the verdict", async () => {
+    // No mergedAt supplied ⇒ fall back to the legacy inFlight/recent logic
+    // (a recently-active lane extends; a quiescent one gives up). This
+    // keeps the existing deploy-pill.test.js cases passing.
+    const idle = makeDeployQueueExtender({ activity: async () => ({ inFlight: 0, recent: 0 }) });
+    expect(await idle({ elapsedMs: 1000, extensionCount: 0 })).toBe(0);
+    const active = makeDeployQueueExtender({
+      activity: async () => ({ inFlight: 0, recent: 2 }),
+      perDeployMs: 60_000,
+      minExtendMs: 180_000,
+      maxTotalExtendMs: 1_000_000,
+    });
+    expect(await active({})).toBe(180_000);
+  });
+});
+
+// ── #21: deployLaneActivity counts runs against mergedAt ───────────────
+test.describe("deployLaneActivity anchored on mergedAt (#21)", () => {
+  let originalFetch;
+  test.beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  test.afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  // Make global.fetch return a fixed deploy-production runs page for the
+  // per_page list call, and 0 for the in_progress/queued count calls.
+  function stubRuns(runs) {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      let workflow_runs = [];
+      if (u.includes("status=in_progress") || u.includes("status=queued")) {
+        workflow_runs = [];
+      } else {
+        workflow_runs = runs;
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => null },
+        text: async () => JSON.stringify({ workflow_runs }),
+        json: async () => ({ workflow_runs }),
+      };
+    };
+  }
+
+  test("counts only runs created_at>=mergedAt and flags a completed one", async () => {
+    const mergedAt = Date.parse("2026-06-04T02:44:59Z");
+    stubRuns([
+      // FOR this merge: created after merge, completed success.
+      { created_at: "2026-06-04T02:45:02Z", status: "completed", conclusion: "success" },
+      // PRIOR unrelated deploy: created BEFORE the merge — must not count.
+      { created_at: "2026-06-04T02:30:00Z", status: "completed", conclusion: "success" },
+    ]);
+    const act = await deployLaneActivity({ mergedAt });
+    expect(act.runsSinceMerge, "only the post-merge run counts").toBe(1);
+    expect(act.deployCompletedSinceMerge, "the post-merge run completed").toBe(true);
+  });
+
+  test("a prior-only deploy page yields runsSinceMerge 0, not completed", async () => {
+    const mergedAt = Date.parse("2026-06-04T02:44:59Z");
+    stubRuns([{ created_at: "2026-06-04T02:30:00Z", status: "completed", conclusion: "success" }]);
+    const act = await deployLaneActivity({ mergedAt });
+    expect(act.runsSinceMerge).toBe(0);
+    expect(act.deployCompletedSinceMerge).toBe(false);
+  });
+
+  test("a post-merge run still in_progress is counted but not 'completed'", async () => {
+    const mergedAt = Date.parse("2026-06-04T02:44:59Z");
+    stubRuns([{ created_at: "2026-06-04T02:45:02Z", status: "in_progress", conclusion: null }]);
+    const act = await deployLaneActivity({ mergedAt });
+    expect(act.runsSinceMerge).toBe(1);
+    expect(act.deployCompletedSinceMerge).toBe(false);
   });
 });

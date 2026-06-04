@@ -163,8 +163,33 @@ async function waitForChangeReflected({
 
   if (!urlReflected) {
     const elapsedS = Math.round((Date.now() - startedAt) / 1000);
+    // #21: the extender records WHICH leg failed in `onBudgetExhausted.verdict`
+    // (makeDeployQueueExtender exposes it). Prefer that self-diagnosis over
+    // the coarse extension/idle heuristics below — the next live run then
+    // says exactly which leg broke.
+    const verdict =
+      typeof onBudgetExhausted === "function" && onBudgetExhausted.verdict
+        ? onBudgetExhausted.verdict
+        : null;
     let detail;
-    if (extensionCount > 0) {
+    if (verdict && verdict.kind === "deploy-completed-url-missing") {
+      // The CONCLUSIVE #21 self-diagnosis: a deploy-production run for THIS
+      // merge fired AND completed, but the live URL never served the
+      // marker. The chain is healthy — this is an S3 sync / CloudFront /
+      // cache problem in the serve layer, NOT a trigger miss.
+      detail =
+        `Waited ${elapsedS}s. Your deploy-production run for this merge DID complete, but the ` +
+        `URL never served the marker — this is an S3 sync / CloudFront / cache problem in the ` +
+        `serve layer, NOT a deploy-trigger miss (the publish→merge→deploy chain fired fine).`;
+    } else if (verdict && verdict.kind === "no-deploy-fired") {
+      // The other #21 leg: NO deploy-production run fired for this merge —
+      // a trigger problem (auto-merge / editorial-workflow / deploy
+      // dispatch miss), the chain never fired.
+      detail =
+        `Waited ${elapsedS}s and NO deploy-production run fired for your merge — the chain never ` +
+        `fired (auto-merge / editorial-workflow / deploy-trigger problem), rather than the ` +
+        `change simply being slow to deploy.`;
+    } else if (extensionCount > 0) {
       // We extended for a real backlog and STILL never saw the change —
       // genuinely stuck/overlong past the queue, not a mis-sized budget.
       detail =

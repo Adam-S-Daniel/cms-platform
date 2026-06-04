@@ -431,38 +431,84 @@ async function countActiveDeployRuns({
 //   recent   = runs created/updated within `recentWindowMs` (a deploy
 //              that just completed ⇒ the lane is cycling, not quiescent)
 // "Genuinely idle" = inFlight 0 AND recent 0.
+//
+// #21: the `recent` window is anchored to "now", so once the per-spec
+// URL-reflect budget elapses >recentWindowMs AFTER the spec's OWN deploy
+// completed, the lane reads quiescent and the extender mis-diagnoses a
+// real URL-not-served failure as "chain never fired" (false negative —
+// adamdaniel.ai run 26926552300). To judge against the spec's OWN deploy
+// instead, pass `mergedAt` (epoch ms or ISO string = the create PR's
+// merged_at): the result then also carries
+//   runsSinceMerge            = deploy-production runs with created_at >= mergedAt
+//   deployCompletedSinceMerge = at least one of those has COMPLETED
+// A completed run for THIS merge is conclusive (the deploy fired +
+// finished — the failure is URL-not-served, an S3/CloudFront problem),
+// regardless of how long ago "now" minus recentWindowMs is.
 async function deployLaneActivity({
   repo = HOST_REPO,
   workflow = "deploy-production.yml",
   recentWindowMs = 5 * 60 * 1000,
+  mergedAt,
 } = {}) {
   const inFlight = await countActiveDeployRuns({ repo, workflow });
   const since = Date.now() - recentWindowMs;
   const data = await gh(
     `/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/runs?per_page=20`,
   );
-  const recent = (data.workflow_runs || []).filter((r) => {
+  const runs = data.workflow_runs || [];
+  const recent = runs.filter((r) => {
     const t = Date.parse(r.updated_at || r.created_at || "");
     return Number.isFinite(t) && t >= since;
   }).length;
-  return { inFlight, recent };
+
+  // Anchor on the spec's own deploy when mergedAt is supplied. A
+  // numeric epoch-ms or an ISO string are both accepted; an unparseable
+  // value falls back to the legacy window-only signal (runsSinceMerge 0).
+  let runsSinceMerge = 0;
+  let deployCompletedSinceMerge = false;
+  const mergedAtMs = typeof mergedAt === "number" ? mergedAt : Date.parse(mergedAt || "");
+  if (Number.isFinite(mergedAtMs)) {
+    for (const r of runs) {
+      const created = Date.parse(r.created_at || "");
+      if (!Number.isFinite(created) || created < mergedAtMs) continue;
+      runsSinceMerge += 1;
+      if (r.status === "completed") deployCompletedSinceMerge = true;
+    }
+  }
+  return { inFlight, recent, runsSinceMerge, deployCompletedSinceMerge };
 }
 
 // Build an `onBudgetExhausted` callback for deploy-pill.js's
-// waitForChangeReflected (#1723 Cat 1). When the per-spec URL-reflect
-// budget elapses, this probes the deploy lane's ACTIVITY:
-//   - lane in-flight OR recently-active → return a proportional extension
-//     (the spec's own deploy is queued behind a backlog, or the lane is
-//     cycling and its deploy is imminent/just-landed; waiting longer is
-//     correct, not flaky).
-//   - lane genuinely quiescent (0 in flight AND 0 recent) → return 0
-//     (give up): nothing is deploying or has deployed lately, so the
-//     change's chain never fired — surface it as a REAL miss, fast.
+// waitForChangeReflected (#1723 Cat 1 + #21). When the per-spec
+// URL-reflect budget elapses, this probes the deploy lane's ACTIVITY and
+// decides whether to extend (backlog draining) or give up (real failure).
+//
+// #21 — judge against the SPEC'S OWN deploy, not a sliding wall-clock
+// window. Pass `mergedAt` (the create PR's merged_at — epoch ms or ISO
+// string) or `getMergedAt` (an async getter, used when the merge lands
+// DURING the reflect wait so the timestamp isn't known up front). The
+// extender then resolves the verdict in priority order:
+//   1. a deploy-production run created_at>=mergedAt that COMPLETED
+//      → CONCLUSIVE: the deploy fired + finished, so the chain is healthy
+//        and the failure is URL-not-served (S3 sync / CloudFront). Stop
+//        extending and record verdict { kind: 'deploy-completed-url-
+//        missing', realMiss: false }. (The pre-#21 false negative: this
+//        used to read "lane QUIESCENT" once >recentWindowMs had elapsed
+//        and wrongly declared a real miss.)
+//   2. a deploy for this merge still in-flight/queued (or, without a
+//      mergedAt, a lane that's in-flight OR recently-active) → return a
+//      proportional extension: the backlog is draining / the deploy is
+//      imminent; waiting longer is correct, not flaky.
+//   3. NO deploy run created_at>=mergedAt AND the lane idle → genuine
+//      real miss: the chain never fired. Stop extending and record
+//      verdict { kind: 'no-deploy-fired', realMiss: true }.
 //   - probe error → grant ONE conservative extension rather than
 //     false-failing on a transient API blip.
-// Bounded by `maxTotalExtendMs` (and by waitForChangeReflected's own
-// `maxExtensions` round cap) so a genuinely stuck lane can't wait
-// forever. `activity` is injectable for unit tests.
+// The latest verdict is exposed on the returned function as
+// `extender.verdict` so deploy-pill.js's timeout message can self-report
+// the true failure leg. Bounded by `maxTotalExtendMs` (and by
+// waitForChangeReflected's own `maxExtensions` round cap). `activity` is
+// injectable for unit tests.
 function makeDeployQueueExtender({
   repo = HOST_REPO,
   workflow = "deploy-production.yml",
@@ -470,21 +516,37 @@ function makeDeployQueueExtender({
   minExtendMs = 3 * 60 * 1000,
   maxTotalExtendMs = 30 * 60 * 1000,
   recentWindowMs = 5 * 60 * 1000,
+  mergedAt,
+  getMergedAt,
   activity,
 } = {}) {
-  const probeActivity = activity || (() => deployLaneActivity({ repo, workflow, recentWindowMs }));
   let extendedTotal = 0;
-  return async ({ elapsedMs = 0, extensionCount = 0 } = {}) => {
+  const resolveMergedAt = async () => {
+    if (mergedAt != null && mergedAt !== "") return mergedAt;
+    if (typeof getMergedAt === "function") {
+      try {
+        return await getMergedAt();
+      } catch (_) {
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+  const extender = async ({ elapsedMs = 0, extensionCount = 0 } = {}) => {
     const remaining = maxTotalExtendMs - extendedTotal;
     if (remaining <= 0) {
       console.warn(
         `[deploy-queue] hit the ${Math.round(maxTotalExtendMs / 1000)}s extension ceiling for the ${workflow} lane; failing as a real miss.`,
       );
+      // Preserve any deploy-completed verdict already recorded; otherwise
+      // a stuck lane that never fired is a real miss.
+      if (!extender.verdict) extender.verdict = { kind: "no-deploy-fired", realMiss: true };
       return 0;
     }
+    const ma = await resolveMergedAt();
     let act;
     try {
-      act = await probeActivity();
+      act = activity ? await activity() : await deployLaneActivity({ repo, workflow, recentWindowMs, mergedAt: ma });
     } catch (e) {
       const grant = Math.min(minExtendMs, remaining);
       extendedTotal += grant;
@@ -495,22 +557,57 @@ function makeDeployQueueExtender({
     }
     const inFlight = (act && Number.isFinite(act.inFlight) && act.inFlight) || 0;
     const recent = (act && Number.isFinite(act.recent) && act.recent) || 0;
-    if (inFlight <= 0 && recent <= 0) {
+    const runsSinceMerge = (act && Number.isFinite(act.runsSinceMerge) && act.runsSinceMerge) || 0;
+    const deployCompletedSinceMerge = Boolean(act && act.deployCompletedSinceMerge);
+    const anchored = ma != null && ma !== "";
+
+    // (1) CONCLUSIVE — the spec's own deploy fired + finished. The failure
+    // is URL-not-served, NOT a chain miss. This is the #21 self-diagnosis.
+    if (anchored && deployCompletedSinceMerge) {
+      extender.verdict = {
+        kind: "deploy-completed-url-missing",
+        realMiss: false,
+        runsSinceMerge,
+      };
       console.warn(
-        `[deploy-queue] URL still not reflected after ${Math.round(elapsedMs / 1000)}s and the ${workflow} lane is QUIESCENT (0 in flight, 0 in the last ${Math.round(recentWindowMs / 1000)}s) — not a backlog; failing as a real miss.`,
+        `[deploy-queue] URL still not reflected after ${Math.round(elapsedMs / 1000)}s, but a ${workflow} run created after the merge has COMPLETED — the deploy fired + finished; this is URL-not-served (S3 sync / CloudFront), NOT a chain miss. Failing fast with the right diagnosis (#21).`,
       );
       return 0;
     }
-    // Active or recently-cycling: scale the extension by what's in flight
-    // (at least one deploy's worth when only recent activity is seen).
-    const units = Math.max(inFlight, 1);
+
+    // (3) Genuine real miss — nothing deploying. When anchored, "nothing
+    // for THIS merge" is the precise signal (a PRIOR unrelated deploy in
+    // the window does not count); unanchored, fall back to the legacy
+    // inFlight/recent quiescence test.
+    const idleForMerge = anchored
+      ? inFlight <= 0 && runsSinceMerge <= 0
+      : inFlight <= 0 && recent <= 0;
+    if (idleForMerge) {
+      extender.verdict = { kind: "no-deploy-fired", realMiss: true };
+      console.warn(
+        `[deploy-queue] URL still not reflected after ${Math.round(elapsedMs / 1000)}s and ${
+          anchored
+            ? `NO ${workflow} run fired for this merge`
+            : `the ${workflow} lane is QUIESCENT (0 in flight, 0 in the last ${Math.round(recentWindowMs / 1000)}s)`
+        } — the deploy-triggering chain never fired; failing as a real miss.`,
+      );
+      return 0;
+    }
+
+    // (2) Active or recently-cycling / deploy queued for the merge: extend.
+    extender.verdict = { kind: "deploy-in-flight", realMiss: false, runsSinceMerge };
+    const units = Math.max(inFlight, anchored ? runsSinceMerge : 0, 1);
     const grant = Math.min(Math.max(perDeployMs * units, minExtendMs), remaining);
     extendedTotal += grant;
     console.warn(
-      `[deploy-queue] URL not yet reflected after ${Math.round(elapsedMs / 1000)}s, but the ${workflow} lane is active (${inFlight} in flight, ${recent} in the last ${Math.round(recentWindowMs / 1000)}s) — extending ${Math.round(grant / 1000)}s (ext #${extensionCount + 1}, ${Math.round(extendedTotal / 1000)}s total).`,
+      `[deploy-queue] URL not yet reflected after ${Math.round(elapsedMs / 1000)}s, but the ${workflow} lane is active (${inFlight} in flight, ${recent} recent, ${runsSinceMerge} for this merge) — extending ${Math.round(grant / 1000)}s (ext #${extensionCount + 1}, ${Math.round(extendedTotal / 1000)}s total).`,
     );
     return grant;
   };
+  // The latest verdict the extender reached — consumed by deploy-pill.js
+  // to self-report the true failure leg. null until the extender runs.
+  extender.verdict = null;
+  return extender;
 }
 
 module.exports = {

@@ -369,6 +369,71 @@ every load-bearing invariant. `visual-regression` still needs the consuming repo
 to ship a buildable Jekyll site + Gemfile, AWS OIDC/S3/CloudFront, and a
 `regression-review` Environment; baselines regenerate per-site.
 
+### Prod-loop deploy-lane diagnostic — judge on the spec's OWN deploy (#21)
+
+The prod-mutate / media-roundtrip loops watch the chain
+**Decap → cms PR → auto-merge → deploy-production → URL reflects**. When the
+URL never reflects, `e2e/deploy-pill.js#waitForChangeReflected` asks the
+`makeDeployQueueExtender` callback (`e2e/github-actions-poll.js`) whether to keep
+waiting (backlog draining) or give up (real miss).
+
+**The #21 finding (triple-verified — trust it):** the 2099 e2e canary's OWN
+`/blog/<slug>/` page **builds correctly** and is correctly excluded from public
+aggregations — the `exclude_e2e_posts` theme plugin only stamps
+`sitemap:false`/`feed_exclude:true`, it NEVER suppresses the page. So #21 ("URL
+never reflects") is **NOT a theme/build defect** — do not touch
+`exclude_e2e_posts`. The failure is in the deploy → serve → poll chain (S3 sync /
+CloudFront / cache), and the **diagnostic itself mis-reported it**: the extender
+judged the lane on a sliding ~5-min wall-clock window anchored to "now"
+(`recentWindowMs`), so once the per-spec URL-reflect budget elapsed >5 min after
+the spec's own deploy completed, the lane read "quiescent" and the extender
+declared a REAL MISS ("deploy-production lane is QUIESCENT") even though the
+deploy DID fire + complete — a **false negative**.
+
+**The fix (shipped):** `deployLaneActivity` + `makeDeployQueueExtender` now anchor
+on the create PR's `merged_at` (threaded from the specs via
+`getMergedAt: () => getPullRequest(...).merged_at`, since the merge lands DURING
+the reflect wait). They count `deploy-production` runs with
+`run.created_at >= mergedAt`. A **completed** such run is CONCLUSIVE — the deploy
+fired + finished, so the chain is healthy and the failure is **URL-not-served**;
+the extender stops with `verdict.kind = 'deploy-completed-url-missing'`
+(`realMiss:false`). **No** run `created_at>=mergedAt` + an idle lane is the
+genuine miss (`verdict.kind = 'no-deploy-fired'`, `realMiss:true`). A prior
+unrelated deploy (`created_at<mergedAt`) does NOT count. `deploy-pill.js` reads
+`onBudgetExhausted.verdict` and self-reports the true leg: *"your deploy run DID
+complete but the URL never served the marker (S3 sync / CloudFront / cache)"* vs
+*"NO deploy-production run fired for your merge (trigger problem)"*. Without a
+`mergedAt` the legacy wall-clock heuristic still drives the verdict (back-compat).
+This makes the loop **self-diagnosing**; the actual URL-reflection fix is
+downstream and needs a live run with the new output. Locked by
+`e2e/github-actions-poll.test.js` (mergedAt-anchored cases) +
+`e2e/deploy-pill.test.js` (the two self-reporting messages).
+
+### Ephemeral canary branch hygiene (#22)
+
+The prod loops force-push EPHEMERAL per-run branches that orphan when a cycle
+cancels/fails (~35 piled up on adamdaniel): `cms/posts/2099-12-31-e2e-prod-mutate-<runId>`,
+`cms/posts/2099-12-31-e2e-media-roundtrip-<runId>` (Decap, runId = `Date.now()`),
+and the host loop's `cms/e2e/canary-*` + `cms/e2e-fixture/*`. Two defences:
+
+- **Per-loop `if: always()` cleanup step** in each loop reusable
+  (`cms-publish-loop-prod.yml`, `cms-media-roundtrip.yml`,
+  `cms-publish-loop-host.yml`): runs on success/failure/cancel,
+  `continue-on-error: true` + every delete `|| echo`-guarded (**FAIL-OPEN** — a
+  cleanup hiccup never fails the loop). Since runId is `Date.now()`, it
+  **pattern-deletes** every branch on the loop's OWN prefix that has **no open
+  PR** (a live cycle's branch always carries its in-flight cms/* PR). Auth via
+  `CMS_E2E_PAT` (the workflow grants only `contents:read`).
+- **`sweep-stale-cms-prs.yml`** extends `TEST_ONLY_PATTERNS` with the two
+  `cms/posts/2099-12-31-e2e-{prod-mutate,media-roundtrip}-` prefixes so the daily
+  age-gated, no-open-PR, `[sweep-keep]`-opt-out Tier 1 close + Tier 3 branch prune
+  now reaps those orphans too. Safe to safelist because the 2099 + `e2e-` loop
+  signature is NEVER human-authored (unlike a bare `cms/posts/<slug>` draft).
+
+Locked by `e2e/workflow-loop-branch-cleanup.test.js` (parses with the `yaml`
+lib). If you add a new ephemeral loop branch prefix, add its cleanup step AND
+extend that lint + the sweep safelist.
+
 ## Remaining work
 
 Ported as reusable `workflow_call` + thin callers: deploy (prod+preview),

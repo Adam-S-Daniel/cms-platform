@@ -104,6 +104,7 @@ const { closeStaleDecapPrOnBranch, removeFixtureViaPr } = require("./cms-fixture
 const {
   addLabel,
   gh,
+  getPullRequest,
   waitForCmsPullRequest,
   waitForMerge,
   makeDeployQueueExtender,
@@ -331,7 +332,19 @@ test(
           return (await res.text()).includes(marker);
         },
         urlTimeoutMs: 15 * 60 * 1000,
-        onBudgetExhausted: makeDeployQueueExtender(),
+        // #21: anchor the deploy-lane judgment on THIS run's own deploy.
+        // `getMergedAt` lazily fetches the create PR's merged_at (the merge
+        // lands DURING this wait via auto-merge, so it isn't known up
+        // front); the extender then counts deploy-production runs created
+        // at/after the merge. A completed such run ⇒ the deploy fired +
+        // finished and the failure is URL-not-served (S3/CloudFront), NOT a
+        // chain miss — the error message self-reports which leg broke.
+        onBudgetExhausted: makeDeployQueueExtender({
+          getMergedAt: async () => {
+            const pr = await getPullRequest({ prNumber: createPrNumber });
+            return pr && pr.merged_at;
+          },
+        }),
       });
     });
 
