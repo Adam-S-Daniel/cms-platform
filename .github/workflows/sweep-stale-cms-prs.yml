@@ -178,10 +178,11 @@ jobs:
           # only handle branches that still have an OPEN PR — anything
           # else falls through to here.
           #
-          # Same prefix safelist as Tier 1 (`cms/e2e/`,
-          # `cms/e2e-fixture/`) — DO NOT broaden. Other `cms/<col>/`
-          # prefixes can host real editor drafts and `claude/...` is
-          # used by human + agent authors.
+          # Same TEST_ONLY_PATTERNS safelist as Tier 1 (`cms/e2e/`,
+          # `cms/e2e-fixture/`, and the ephemeral prod-loop post branches
+          # `cms/posts/2099-12-31-e2e-{prod-mutate,media-roundtrip}-`) — DO
+          # NOT broaden further. Other `cms/<col>/` prefixes can host real
+          # editor drafts and `claude/...` is used by human + agent authors.
           #
           # Per-branch opt-out: because Tier 3 by definition operates
           # on branches with NO open PR, the `keep` LABEL doesn't

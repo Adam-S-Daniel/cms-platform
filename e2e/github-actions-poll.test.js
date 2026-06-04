@@ -276,6 +276,9 @@ test.describe("makeDeployQueueExtender anchored on the spec's own merge (#21)", 
 
 // ── #21: deployLaneActivity counts runs against mergedAt ───────────────
 test.describe("deployLaneActivity anchored on mergedAt (#21)", () => {
+  // Mutates globalThis.fetch in beforeEach/afterEach — run serial so the
+  // global swap can't race sibling fetch-using tests under fullyParallel.
+  test.describe.configure({ mode: "serial" });
   let originalFetch;
   test.beforeEach(() => {
     originalFetch = globalThis.fetch;

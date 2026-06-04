@@ -169,7 +169,15 @@ test.describe("sweep-stale-cms-prs prunes orphaned canary BRANCHES (#22)", () =>
       step,
       `${SWEEP} must have an orphan-branch prune step (deletes git/refs/heads/<branch>)`,
     ).toBeTruthy();
-    const run = String(step.run);
+    // Match against FUNCTIONAL lines only — strip full-line and inline `#`
+    // comments so an explanatory comment that merely mentions a prefix can't
+    // satisfy the assertion while the actual TEST_ONLY_PATTERNS array entry is
+    // missing (de-tautologized per the #22 adversarial review).
+    const run = String(step.run)
+      .split("\n")
+      .map((l) => l.replace(/\s#.*$/, ""))
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
     expect(
       run,
       `${SWEEP}: the orphan-branch prune must include cms/posts/2099-*-e2e-prod-mutate-* (#22)`,
