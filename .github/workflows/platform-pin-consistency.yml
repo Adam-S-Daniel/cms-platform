@@ -1,0 +1,73 @@
+# Reusable ANTI-SKEW guard (issue #29) — single platform-version pin.
+#
+# A consuming repo references the cms-platform version in MANY places (every
+# reusable-workflow `uses:@<tag>`, every SHA-pinned composite action's trailing
+# `# vX.Y.Z` comment, the Gemfile gem `tag:`, the Gemfile.lock git-source
+# `tag:`, and platform.lock `platform_ref`). Dependabot + platform-bump land
+# bumps PIECEMEAL, so a consumer drifts (observed live: adamdaniel.ai pinned
+# @v0.1.0 loop/deploy callers, gem @v0.1.5, others @v0.1.3/@v0.1.6 at once).
+#
+# This guard mirrors platform-drift-guard.yml's shape — checkout the CONSUMER,
+# checkout cms-platform at the consumer's platform_ref into `.cms-platform/`
+# (a dot-dir Jekyll ignores), then run a PLATFORM-OWNED script against the
+# consumer tree — but it guards VERSION CONSISTENCY (every reference == the
+# platform.lock platform_ref) rather than file CONTENT (drift-guard's job). A
+# mismatch fails the job with a precise per-file diff. Complements
+# platform-drift-guard.yml; see docs/SYNC.md.
+#
+# A consumer wires the thin caller in examples/site (pull_request). Pin
+# `platform_ref` to the same tag/sha the caller pins this workflow to.
+name: Platform pin consistency (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo:
+        description: "owner/name of the platform repo (also the slug whose uses:@ refs are checked)."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the checker script from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  pin-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout consumer
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.2 (2026-01-09)
+
+      - name: Fetch the consistency checker from the platform
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          # Sparse: just the checker script — it has no platform-internal deps
+          # beyond the `yaml` parser, which we install below.
+          sparse-checkout: scripts/check-platform-pin-consistency.js
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
+        with:
+          node-version: "20"
+
+      - name: Install the YAML parser
+        # The checker parses workflows with the `yaml` lib (anchors resolved) —
+        # NOT regex. Install it into the consumer workspace's node_modules so the
+        # script (run from the consumer root) resolves it (its loadYaml() checks
+        # cwd/node_modules). Pinned to the version the platform's e2e harness uses.
+        run: npm install --no-save --no-package-lock yaml@2.9.0
+
+      - name: Check single-version pin consistency
+        # Owner/repo + canonical-source default from the consumer's platform.lock
+        # (platform_repo / platform_ref). Aggregates ALL violations, names each
+        # offending file + found/expected value, exits non-zero on any mismatch.
+        run: node .cms-platform/scripts/check-platform-pin-consistency.js

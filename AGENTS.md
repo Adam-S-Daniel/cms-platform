@@ -208,6 +208,49 @@ Tests: `e2e/oauth-app-restriction-detector.test.js` (pure helpers, Node) +
 simulates the Decap error toast — no backend needed) +
 `e2e/preflight-oauth.test.js`.
 
+## Single-version pin consistency guard (anti-skew, #29)
+
+A consumer references the platform version in MANY places (every reusable
+`uses: …/.github/workflows/<n>.yml@<ref>`, every SHA-pinned composite
+`uses: …/.github/actions/<n>@<sha>  # vX.Y.Z` COMMENT, the `Gemfile`/`Gemfile.lock`
+`tag:`, and `platform.lock` `platform_ref`). Dependabot + `platform-bump` land
+bumps PIECEMEAL, so consumers drift (observed live: adamdaniel.ai pinned `@v0.1.0`
+loop/deploy callers, gem `@v0.1.5`, others `@v0.1.3`/`@v0.1.6` at once — a `v0.1.0`
+reusable against a `v0.1.5` gem is a latent bug source).
+
+`scripts/check-platform-pin-consistency.js` (platform-owned, Node, needs only the
+repo's `yaml` lib) makes them all agree:
+
+- **Canonical version = `platform.lock` `platform_ref`** (source of truth; missing/
+  unparseable → hard fail with a clear message).
+- Parses every `.github/workflows/**/*.yml` with the **`yaml` parser** (anchors
+  resolved — NOT regex); collects `uses:@` refs targeting the platform owner/repo
+  (configurable via `--owner/--repo`, defaulting from `platform.lock`
+  `platform_repo`). Reusable refs `.../workflows/*.yml@<ref>`: the `<ref>` must ==
+  `platform_ref`. Composite refs `.../actions/*@<sha>`: SHA-pinned, so the gate is
+  the trailing `# vX.Y.Z` COMMENT == `platform_ref`. **The comment is read by a
+  LINE-AWARE pass** because the YAML parser drops comments — the one justified
+  regex/line exception (same rationale as `scripts/sync-action-pin-comments.sh`,
+  documented in the script header).
+- Reads `Gemfile` (`gem "cms-platform-theme", …, tag:`) + `Gemfile.lock` (the
+  cms-platform GIT-source `tag:`); both must == `platform_ref`. Tolerates a
+  consumer with NO Gemfile; ignores non-cms-platform `uses:`.
+- **Aggregates ALL** violations (doesn't stop at first); prints a precise per-file
+  report (file + found + expected) + `::error file=` annotations under
+  `GITHUB_ACTIONS`. Exit non-zero iff any mismatch; exit 0 + OK summary otherwise.
+
+Reusable + thin caller: `.github/workflows/platform-pin-consistency.yml`
+(`workflow_call`; mirrors `platform-drift-guard`'s checkout-consumer +
+checkout-platform-at-`platform_ref`-into-`.cms-platform/` + run-platform-script
+shape; the reusable `npm install --no-save yaml` before running, since the script
+resolves `yaml` from cwd/node_modules) + `examples/site/.github/workflows/...`
+(`pull_request`, NO `paths:` filter — any pin-bearing file can skew). Self-test:
+`e2e/check-platform-pin-consistency.test.js` (`@lane local`, runs in
+node-unit-lints) — consistent fixture → 0; skewed fixture → non-zero, each
+offending file/value named. **Complements** `platform-drift-guard` (that guards
+file CONTENT byte-match; this guards VERSION CONSISTENCY). See `docs/SYNC.md`
+"Single-version pin invariant".
+
 ## Consumer-context spec rule (v0.1.5)
 
 The e2e harness is **reused by consumers**. `e2e/playwright.config.js` runs in
@@ -444,6 +487,11 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
 
 ## Environment gotchas (this machine / web)
 
+- **The local checkout can be STALE/detached** — before any analysis or work,
+  `git fetch && git checkout main` (or compare against `origin/main`), then branch
+  off `origin/main`. An old checkout may not reflect landed migrations (e.g. the
+  `admin/` → `theme/admin` move, the gem-delivered admin model) and you'll reason
+  about machinery that no longer exists. Verify HEAD == `origin/main` first.
 - The **web** GitHub MCP connector can't create repos (403); `/teleport` to local
   and use `gh` (authed as Adam-S-Daniel, scopes incl. `repo`,`workflow`).
 - Background sessions: editing a non-cwd repo checkout trips a worktree-isolation
