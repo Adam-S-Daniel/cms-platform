@@ -1,0 +1,29 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/platform-pin-consistency.yml`. Owns the pull_request
+# trigger + run-name; delegates the single-version anti-skew gate (issue #29)
+# to the platform's reusable workflow.
+#
+# NO `paths:` filter on purpose: a version skew can be introduced by editing ANY
+# of the many pin-bearing files (every workflow `uses:@`, the Gemfile,
+# Gemfile.lock, or platform.lock), so this gate runs on every PR — it's a fast,
+# pure-fs check. (If this is ever made a REQUIRED check, the absence of a
+# `paths:` filter also avoids the missing-required-check trap.)
+#
+# Keep `platform_ref` pinned to the SAME release as the `uses:@<tag>` below —
+# this guard's whole point is that they (and every other platform pin) agree.
+name: Platform pin consistency
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pin-consistency:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-pin-consistency.yml@v0.1.8
+    with:
+      platform_ref: v0.1.8
