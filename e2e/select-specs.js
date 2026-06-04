@@ -288,7 +288,98 @@ const SPEC_RULES = {
   // admin/ change and when the shared visibility helper changes.
   "e2e/admin-no-occlusion.spec.js": [/^(theme\/)?admin\//, /^e2e\/ui-visibility\.js$/],
   "e2e/detect-changed-pages.test.js": [/^e2e\/detect-changed-pages\.js$/],
-  "e2e/cms-smoke.spec.js": [/^(theme\/)?admin\//, /^_posts\//, /^_tags\//, /^_projects\//, /^pages\//],
+  // #33 — cms-smoke hard-asserts the full base sidebar; its base_collections
+  // skip-guard is keyed on the capability helper + the guard registry, so an
+  // edit to either must re-select it.
+  "e2e/cms-smoke.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^_tags\//,
+    /^_projects\//,
+    /^pages\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  // #33 — the @admin-write/@admin-read/@admin-screenshots specs that drive
+  // /admin/index-local.html base-collection routes. Each carries a
+  // base_collections skip-guard keyed on site-capabilities.js +
+  // base-collections-guards.js (the registry), so an edit to either helper
+  // must re-select every guarded spec. (admin/ + the collection's source dir
+  // are the other natural inputs.) The pure-fs guard-registry lint
+  // (base-collections-guard-registry.test.js) is the PR gate that keeps this
+  // set honest.
+  "e2e/cms-page-crud.spec.js": [
+    /^(theme\/)?admin\//,
+    /^pages\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-project-crud.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_projects\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-project-gallery.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_projects\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-featured-image-lifecycle.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-html-embed.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-image-upload.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-inline-image.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-link-crawler.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/cms-posts-list-runtime.spec.js": [
+    /^(theme\/)?admin\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/manual-walkthrough-contributor.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^_tags\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/manual-walkthrough-content-guide.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  "e2e/manual-walkthrough-first-post.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_posts\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
   "e2e/cms-editorial-workflow.spec.js": [/^(theme\/)?admin\//, /^_posts\//],
   // Canary content invariants — fast, no browser. Cross-checks the
   // _e2e/ collection wiring stays consistent across _config.yml,
@@ -487,6 +578,9 @@ const SPEC_RULES = {
     /^_includes\//,
     // Cleanup helper that prunes the smoke post's orphaned sitemap URLs.
     /^e2e\/sitemap-prune\.js$/,
+    // #33 base_collections skip-guard helpers.
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
   ],
   // Pure-node unit test for the sitemap-prune cleanup helper.
   "e2e/sitemap-prune.test.js": [/^e2e\/sitemap-prune\.js$/],

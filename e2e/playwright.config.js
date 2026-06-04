@@ -53,6 +53,10 @@ const PLATFORM_META_SPECS = [
   // sense only in the platform self-CI, never in a consumer.
   "site-capabilities.test.js",
   "base-collections-skip-meta.test.js",
+  // #33 CONCERN B — the pure-fs guard-registry lint: reads the platform's TWO
+  // fixtures' _config.yml + the harness spec sources + playwright.config.js's
+  // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
+  "base-collections-guard-registry.test.js",
   "blog-slug-literal-lint.test.js",
   "cms-automerge-nudge.test.js",
   "cms-editor-ui.test.js",

@@ -30,6 +30,17 @@
 // node-unit-lints self-CI lane this test SKIPS (mirrors
 // scaffold-preview-and-404.test.js's "(c) built fixture" gate). It runs fully
 // in any environment that can build (dogfood / local dev / the e2e reusable).
+//
+// SCOPE: this build-and-run proof drives the FS-based guarded specs (rendered
+// config / built-_site reads). The CONSUMER-RUNNING @admin-write/@admin-read/
+// @admin-screenshots specs that drive /admin/index-local.html (#33 CONCERN A)
+// can't be subprocess-run here (they need a browser + decap-server), so their
+// both-directions skip contract is locked PURE-FS by
+// base-collections-guard-registry.test.js — which DOES run in the node-unit-
+// lints PR gate (this build-and-run test is DENY-listed there). The two are
+// complementary: this one proves the FS guards end-to-end through a real build;
+// the registry lint proves the admin-write guard SET (predicate + presence +
+// no-drift) without a build.
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");

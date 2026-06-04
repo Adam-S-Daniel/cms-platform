@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { guard } = require("./base-collections-guards");
 
 // HTML Embed end-to-end render test.
 //
@@ -33,6 +34,7 @@ const { test, expect } = require("./base");
 // pageerror on those existing specs.
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");  // #33 base_collections guard root
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 
 const SMOKE_TITLE = "E2E HTML Embed";
@@ -63,6 +65,10 @@ function cleanup() {
 }
 
 test.describe("HTML Embed renders as HTML on the live post", () => {
+  // #33 — a base_collections:[] consumer strips the Posts block from
+  // config-local.yml, so the index-local Posts editor route never renders.
+  test.skip(...guard(SITE_ROOT, "cms-html-embed.spec.js"));
+
   test.describe.configure({ mode: "serial", timeout: 240_000 });
 
   test.beforeAll(() => cleanup());

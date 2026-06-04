@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
 const { pruneSitemapUrls } = require("./sitemap-prune");
 
@@ -47,6 +48,7 @@ const { pruneSitemapUrls } = require("./sitemap-prune");
 //   that test when the Pages collection's public route ships.
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, ".."); // #33 base_collections guard root
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 
 const SMOKE_TITLE = "E2E Publish Flow Smoke";
@@ -108,6 +110,10 @@ test.describe(
   // Runs on chromium-desktop-3k only. See playwright.config.js.
   { tag: ["@admin-write"] },
   () => {
+    // #33 — a base_collections:[] consumer strips the Posts block from config-local.yml,
+    // so this spec's admin/index-local.html collection routes never render.
+    test.skip(...guard(SITE_ROOT, "cms-publish-flow.spec.js"));
+
     test.describe.configure({ mode: "serial", timeout: 240_000 });
 
     test.beforeAll(() => {

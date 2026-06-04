@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { guard } = require("./base-collections-guards");
 
 // Verifies the contributor capability "Create / edit / delete a Project":
 // the Projects collection is configured in admin/config.yml with title,
@@ -16,6 +17,7 @@ const { test, expect } = require("./base");
 // cms-publish-flow.spec.js.
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, ".."); // #33 base_collections guard root
 const PROJECTS_DIR = path.join(REPO_ROOT, "_projects");
 
 const SMOKE_TITLE = "Decap Project CRUD Smoke";
@@ -32,6 +34,10 @@ test.describe(
   // Runs on chromium-desktop-3k only. See playwright.config.js.
   { tag: ["@admin-write"] },
   () => {
+    // #33 — a base_collections:[] consumer strips the Projects block from config-local.yml,
+    // so this spec's admin/index-local.html collection routes never render.
+    test.skip(...guard(SITE_ROOT, "cms-project-crud.spec.js"));
+
     test.describe.configure({ mode: "serial", timeout: 240_000 });
 
     test.beforeAll(() => {

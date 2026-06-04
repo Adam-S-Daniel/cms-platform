@@ -45,9 +45,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");  // #33 base_collections guard root
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 const UPLOADS_ROOT = path.join(REPO_ROOT, "assets", "images", "uploads");
 const FIXTURE_PNG = path.join(__dirname, "fixtures", "tiny-pixel.png");
@@ -169,6 +171,11 @@ test.describe(
   // separate @admin-write tag needed.) See playwright.config.js.
   { tag: ["@admin-screenshots"] },
   () => {
+    // #33 — a base_collections:[] consumer strips the Posts block from
+    // config-local.yml, so the first-post walkthrough's index-local Posts
+    // editor route never renders. Skip unless posts is kept.
+    test.skip(...guard(SITE_ROOT, "manual-walkthrough-first-post.spec.js"));
+
     // 10-minute envelope — full publish loop with explicit Jekyll rebuild
     // and on-disk polls is slower than a single-leg spec; 600s gives the
     // whole thing room without inviting a runaway.

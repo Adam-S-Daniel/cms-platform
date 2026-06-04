@@ -219,32 +219,94 @@ an `expect`. A full consumer that LOST its posts is a real failure, not a skip.
 Specs that assert ABSENCE (e.g. sitemap "no draft / no `_e2e` canary leaks")
 stay correct (empty) on an opted-out site and are intentionally NOT guarded.
 
-**Guarded specs (the #33 set):** `canary-content.test.js`,
-`canary-ondemand-noindex.test.js`, `cms-config.spec.js` (per-collection),
-`cms-post-list-summary.spec.js`, `cms-permalink-contract.spec.js` (per-
-collection), `sitemap.spec.js` ("every published `_posts` appears"),
-`tags.spec.js` ("Tags index page"), `feeds-and-share.spec.js` (global Atom-feed
-shape), `console-clean.spec.js` (`/blog/` + `/tags/` crawl URLs). Several of the
-content-reading specs were also made **SITE_ROOT-aware** (read `_posts/`,
-`_e2e/`, `_site/` under `SITE_ROOT`, not `__dirname/..`) so they resolve the
-CONSUMING site's content; the two are identical in a real consumer (harness at
-site root) but differ when the meta-test points `SITE_ROOT` at a fixture.
+**Guarded specs — group 1 (read-only / config / served-content):**
+`canary-content.test.js`, `canary-ondemand-noindex.test.js`,
+`cms-config.spec.js` (per-collection), `cms-post-list-summary.spec.js`,
+`cms-permalink-contract.spec.js` (per-collection), `sitemap.spec.js` ("every
+published `_posts` appears"), `tags.spec.js` ("Tags index page"),
+`feeds-and-share.spec.js` (global Atom-feed shape), `console-clean.spec.js`
+(`/blog/` + `/tags/` crawl URLs). Several of the content-reading specs were also
+made **SITE_ROOT-aware** (read `_posts/`, `_e2e/`, `_site/` under `SITE_ROOT`,
+not `__dirname/..`) so they resolve the CONSUMING site's content; the two are
+identical in a real consumer (harness at site root) but differ when the
+meta-test points `SITE_ROOT` at a fixture.
+
+**Guarded specs — group 2 (CONSUMER-RUNNING admin-write/read/screenshots that
+drive `/admin/index-local.html`):** these navigate
+`#/collections/{posts,projects,pages,tags}/...` or wait for a base-collection
+sidebar link, so on a `base_collections: []` consumer they would time out (the
+local admin shows NO collections — see the config-local nuance below). They are
+guarded via the **registry** `e2e/base-collections-guards.js` (single source of
+truth, build-INDEPENDENT `keepsBaseCollection`), applied inline as
+`test.skip(...guard(SITE_ROOT, "<basename>"))` at the top of each describe:
+
+| spec | guarded on |
+| --- | --- |
+| `cms-smoke.spec.js` | **all** of posts/tags/projects/pages (hard-asserts the full sidebar) |
+| `manual-walkthrough-contributor.spec.js` | **all** of posts/tags/projects/pages (asserts the full sidebar) |
+| `cms-page-crud.spec.js` | `pages` |
+| `cms-project-crud.spec.js`, `cms-project-gallery.spec.js` | `projects` |
+| `cms-featured-image-lifecycle.spec.js`, `cms-html-embed.spec.js`, `cms-image-upload.spec.js`, `cms-inline-image.spec.js`, `cms-link-crawler.spec.js`, `cms-publish-flow.spec.js`, `cms-posts-list-runtime.spec.js`, `manual-walkthrough-content-guide.spec.js`, `manual-walkthrough-first-post.spec.js` | `posts` |
+
+Specs that drive `/admin/index-test.html` (`config-test.yml` is FIXED, NOT
+opted-out — `admin-no-occlusion`, `cms-mobile-layout`, `cms-editorial-workflow`,
+`cms-field-targeting`, `cms-native-view-live`, …) must **NOT** be guarded. The
+drift lint distinguishes them by the index-local route / sidebar-wait signal.
+
+**The config-local single-page limitation (known):** the gem's
+`decap_config_hook.rb` applies the `base_collections` keep-list deletion to BOTH
+`config.yml` AND `config-local.yml`, but `config-local.base.yml` has **no
+`__SITE_COLLECTIONS__` marker**, so a single-page consumer's **LOCAL-dev**
+`/admin` (decap-server) shows **NO collections at all** — not even its own custom
+ones (which DO appear in the prod `config.yml` via the marker). jodidaniel uses
+the **prod github backend**, so this is local-dev-only; the #33 skips handle the
+e2e impact. If a single-page consumer ever needs local-dev admin editing of its
+custom collections, add a `__SITE_COLLECTIONS__` marker to `config-local.base.yml`
+(follow-up — not done here).
 
 **The two fixtures (the platform's own both-paths proof):**
 `e2e/fixture-site` keeps every base collection + the 3 canonical canaries (the
 FULL consumer); `e2e/fixture-site-singlepage` sets `cms.base_collections: []` +
 one custom `notes` collection, NO `_posts`/`_e2e` (the OPTED-OUT consumer,
-jodidaniel's shape). **Spec-locked** by `e2e/site-capabilities.test.js` (the
-predicates against both shapes) and `e2e/base-collections-skip-meta.test.js`
-(builds BOTH fixtures, subprocess-runs the fs-guarded specs against each, and
-asserts: opted-out → SKIPS, full → RUNS). The meta-test is build-dependent →
-in `node-unit-lints`' DENY list (self-ci.yml) + `PLATFORM_META_SPECS`.
+jodidaniel's shape). **Spec-locked** by THREE tests:
 
-**Adding a NEW generic-content spec:** if it reads a base collection / canary /
-posts / `/blog/` / `/tags/`, guard it on the matching `site-capabilities`
-predicate (rendered for local-only fs specs, `keepsBaseCollection` for served
-specs that also run `@parity`), and add `/^e2e\/site-capabilities\.js$/` to its
-`SPEC_RULES` entry in `select-specs.js` so a helper edit re-selects it.
+1. `e2e/site-capabilities.test.js` — the predicates against both fixture shapes.
+2. `e2e/base-collections-skip-meta.test.js` — **build-and-run** proof: builds
+   BOTH fixtures, subprocess-runs the **fs-guarded** specs against each, asserts
+   opted-out → SKIPS, full → RUNS. Build-dependent → in `node-unit-lints`' DENY
+   list (self-ci.yml) + `PLATFORM_META_SPECS`, so **no platform PR lane runs it**.
+3. `e2e/base-collections-guard-registry.test.js` — the **pure-fs PR GATE**
+   (CONCERN B). Runs in `node-unit-lints` (it's a hermetic `*.test.js`). It is
+   the real protection on the group-2 admin-write guards: (a) **predicate proof**
+   — for every registered spec, `shouldSkip(singlepage)===true` &
+   `shouldSkip(full)===false` against the fixtures' `_config.yml` (no build);
+   (b) **guard presence** — each registered spec actually imports the registry +
+   calls `guard()/shouldSkip()` with its own basename; (c) **no silent drift** —
+   every consumer-running index-local generic-collection spec is either in the
+   registry or the lint's `NON_GUARDED` allowlist, so a NEW unguarded one goes
+   RED. Because (2) never runs on a platform PR, (3) is what actually keeps the
+   admin-write guard set from regressing.
+
+**Adding a NEW generic-content spec:**
+- **Read-only / served / fs spec** (reads a base collection / canary / posts /
+  `/blog/` / `/tags/`): guard on the matching `site-capabilities` predicate
+  (rendered for local-only fs specs, `keepsBaseCollection` for served specs that
+  also run `@parity`), and add `/^e2e\/site-capabilities\.js$/` to its
+  `SPEC_RULES` entry in `select-specs.js`.
+- **CONSUMER-RUNNING spec that drives `/admin/index-local.html`** and navigates a
+  base collection (route `#/collections/<base>` OR a base-sidebar-link wait):
+  you MUST (1) add an entry to `ADMIN_WRITE_GUARDS` in
+  `e2e/base-collections-guards.js` (its collection(s) + `mode: "all"|"any"` +
+  a `(#33)` reason), (2) apply the inline guard
+  `test.skip(...guard(SITE_ROOT, "<basename>"))` at the top of the describe
+  (`const { guard } = require("./base-collections-guards")`,
+  `const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..")`),
+  and (3) add `/^e2e\/site-capabilities\.js$/` + `/^e2e\/base-collections-guards\.js$/`
+  to its `SPEC_RULES` entry. If you DON'T want a guard (the spec drives
+  `index-test.html`, or does no collection nav), the drift lint will go RED until
+  you either register it or add it to the lint's `NON_GUARDED` allowlist with a
+  reason. **`base-collections-guard-registry.test.js` enforces all of this** — you
+  can't merge an unguarded generic index-local spec.
 
 ### Org OAuth App approval — the "can log in but can't save" trap (#26)
 

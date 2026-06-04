@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { guard } = require("./base-collections-guards");
 
 // Verifies the contributor capability "Create / edit / delete a Page"
 // (with permalink) — Pages collection in admin/config.yml has
@@ -14,6 +15,7 @@ const { test, expect } = require("./base");
 // so the live-URL check is meaningful here.
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, ".."); // #33 base_collections guard root
 const PAGES_DIR = path.join(REPO_ROOT, "pages");
 
 const SMOKE_TITLE = "Decap Page CRUD Smoke";
@@ -36,6 +38,10 @@ test.describe(
   // Runs on chromium-desktop-3k only. See playwright.config.js.
   { tag: ["@admin-write"] },
   () => {
+    // #33 — a base_collections:[] consumer strips the Pages block from config-local.yml,
+    // so this spec's admin/index-local.html collection routes never render.
+    test.skip(...guard(SITE_ROOT, "cms-page-crud.spec.js"));
+
     test.describe.configure({ mode: "serial", timeout: 240_000 });
 
     test.beforeAll(() => removeSmokeFile());

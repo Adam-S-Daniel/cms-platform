@@ -1,5 +1,9 @@
 // @lane: local — crawls the local /admin shell; @parity-eligible via TARGET=
 const { test, expect, TARGET } = require("./base");
+const path = require("node:path");
+const { guard } = require("./base-collections-guards");
+// SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source signal).
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 // E1 — Admin link crawler.
 //
@@ -128,6 +132,11 @@ test.describe(
   // webkit-iphone16. See playwright.config.js.
   { tag: ["@admin-read"] },
   () => {
+    // #33 — a base_collections:[] consumer strips the Posts block from
+    // config-local.yml, so the crawler's wait for the Posts sidebar link
+    // would time out. Skip unless posts is kept.
+    test.skip(...guard(SITE_ROOT, "cms-link-crawler.spec.js"));
+
     test.describe.configure({ timeout: 240_000 });
 
     test.beforeEach(({ page }) => {

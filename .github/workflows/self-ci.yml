@@ -23,7 +23,9 @@
 #     noindex / e2e-posts-public-exclusion / prod-mutate-fixture — they read a
 #     `bundle exec jekyll build` `_site` or the `_e2e/` content fixtures;
 #     base-collections-skip-meta — it BUILDS both fixture-site variants and
-#     subprocess-runs the #33-guarded specs against each) and
+#     subprocess-runs the #33-guarded specs against each; its build-FREE
+#     counterpart base-collections-guard-registry.test.js DOES run here and is
+#     the real PR gate on the #33 admin-write skip-guards) and
 #     `playwright-image-drift` (reads a root package-lock.json + ci-runner
 #     Dockerfile this machinery repo intentionally doesn't ship — see AGENTS.md
 #     "playwright-image-drift real-repo subtest caveat").
