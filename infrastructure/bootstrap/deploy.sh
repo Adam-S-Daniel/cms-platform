@@ -90,6 +90,7 @@ aws cloudformation deploy \
   "ProductionBucketName=${PRODUCTION_BUCKET}" \
   "ProductionDomainName=${APEX_DOMAIN}" \
   "CreateOIDCProvider=${CREATE_OIDC_PROVIDER}" \
+  "CreateApexDnsRecords=${CREATE_APEX_DNS_RECORDS:-false}" \
   "HostedZoneId=${HOSTED_ZONE_ID}" \
   "PreviewDomainName=${PREVIEW_DOMAIN}"
 
