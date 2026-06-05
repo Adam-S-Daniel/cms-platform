@@ -37,6 +37,18 @@ catches site edits to platform-owned files and routes them back here.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete plan.
 
+## Required GitHub secrets (per consumer site)
+
+Each consumer repo needs two hand-made PATs plus three AWS values. The **canonical,
+versioned spec — with the exact fine-grained permissions for each — lives in the
+`cms-platform-secrets` skill** (`skills/cms-platform-secrets/SKILL.md`), which
+`skills-sync` copies into every consumer's `.claude/skills/`, so it travels with the
+platform. At a glance:
+
+- **`CMS_E2E_PAT`** (CMS automation + canary loops) — fine-grained, this repo: **Contents R/W, Pull requests R/W, Actions Read** (classic: `repo`). Must be a PAT, not `GITHUB_TOKEN`, so canary-PR events fire downstream workflows.
+- **`CMS_PLATFORM_PAT`** (the `platform-bump` auto-bump) — the same **plus Workflows R/W** (classic: `repo` + **`workflow`**), because the bump rewrites `.github/workflows/*` pins. Missing this is issue #13.
+- **`AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID`** — from the bootstrap stack outputs (see the `aws-bootstrap` skill).
+
 ## Organization-owned consumers: OAuth App approval
 
 On an **org-owned** consumer (the repo owner is a GitHub organization), if the
