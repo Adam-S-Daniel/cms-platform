@@ -35,13 +35,16 @@ permissions**:
 |---|---|---|
 | **Contents** | **Read and write** | create/delete branch refs — the publish-via-auto-merge **delete-recovery** branch, loop canary branches — and `sweep-stale-cms-prs --delete-branch` |
 | **Pull requests** | **Read and write** | open / label `cms/ready` / comment / close PRs and **enable auto-merge** (nudge, sweep, auto-resolve, the loops, the delete shim) |
-| **Actions** | **Read** | the loops poll `deploy-production` run status (`GET /repos/…/actions/workflows/…/runs`) to detect when a change deployed |
+| **Actions** | **Read and write** | **read:** the loops poll `deploy-production` run status (`GET /repos/…/actions/workflows/…/runs`). **write:** `regression-review-reaper` rejects superseded review gates via `POST /repos/…/actions/runs/{id}/pending_deployments` (`state=rejected`) |
 | **Metadata** | **Read** | mandatory — auto-selected for every fine-grained PAT |
 
 **Not needed:** *Workflows* — `CMS_E2E_PAT` never edits `.github/workflows/*`.
 **Classic-PAT equivalent:** the `repo` scope.
-**Also required (repo setting, not a token permission):** Settings → General →
-**Allow auto-merge** must be ON, or the nudge can't enable auto-merge.
+**Also required (settings / role, not token permissions):**
+- Settings → General → **Allow auto-merge** = ON (else the nudge can't enable auto-merge).
+- The PAT's user must be a **configured reviewer of the `regression-review` environment**
+  (Settings → Environments → required reviewers), or `regression-review-reaper` can't
+  reject its pending deployments even with `Actions: write`.
 
 ## `CMS_PLATFORM_PAT` — platform-version auto-bump
 
@@ -49,8 +52,9 @@ Consumed by: `platform-bump` (opens the single-version bump PR that moves
 `platform_ref` + the gem tag + every reusable `uses: …@<ref>` pin to a new
 release in one PR).
 
-Same as `CMS_E2E_PAT` **plus `Workflows`**, because the bump PR rewrites the
-`uses: …@<ref>` pins under `.github/workflows/*`. **Repository permissions**:
+It needs **Workflows** (the bump PR rewrites the `uses: …@<ref>` pins under
+`.github/workflows/*`) but — unlike `CMS_E2E_PAT` — does **not** need **Actions**
+(it neither polls runs nor reviews deployments). **Repository permissions**:
 
 | Permission | Access | Why it's needed |
 |---|---|---|
@@ -76,7 +80,7 @@ see the `aws-bootstrap` skill for how to read them.
 
 ## Quick checklist for a new consumer
 
-- [ ] `CMS_E2E_PAT` — fine-grained, this repo, Contents R/W + Pull requests R/W + Actions R
+- [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Actions R/W** (+ be a reviewer of the `regression-review` environment)
 - [ ] `CMS_PLATFORM_PAT` — same **plus Workflows R/W** (or classic `repo` + `workflow`)
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
 - [ ] Settings → General → **Allow auto-merge** = ON
