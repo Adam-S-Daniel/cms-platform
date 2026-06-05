@@ -2,13 +2,14 @@
 const { test, expect } = require("./base");
 const fs = require("fs");
 const path = require("path");
-const crypto = require("crypto");
 const {
   MANIFEST_FILE,
   compareVersions,
   previewVsLocalVerdict,
   prodVsLocalVerdict,
   describeVersion,
+  parityShaForFile,
+  normalizeInjectedIdentity,
 } = require("./admin-bundle-parity");
 
 // G2 — Admin bundle byte-parity probe (BUMP-AWARE, fix #14).
@@ -96,17 +97,22 @@ function isExcluded(relPath) {
   return false;
 }
 
-// Fetch the body and compute sha256. Uses Playwright's
-// APIRequestContext (the `request` fixture) so the network stack
-// matches the rest of the suite.
-async function fetchBodyHash(request, url) {
+// Fetch the body and compute the PARITY sha256 for `rel`. Uses Playwright's
+// APIRequestContext (the `request` fixture) so the network stack matches the
+// rest of the suite. The sha is `parityShaForFile(rel, body)` — which, for the
+// INJECTED admin shells (admin/index*.html + admin/reviews/*.html), normalizes
+// the per-env `window.CMS_*` identity injection before hashing (fix #17) so the
+// served preview/prod shell and the local source compare on MACHINERY, not on
+// the injected identity. Every other file is hashed RAW (strict). `rel` MUST be
+// the admin-relative path (the same key `localBundle()` uses), forward-slashed.
+async function fetchBodyHash(request, url, rel) {
   const response = await request.fetch(url, { method: "GET" });
   const status = response.status();
   if (!response.ok()) {
     return { status, etag: null, sha: null };
   }
   const buf = await response.body();
-  const sha = crypto.createHash("sha256").update(buf).digest("hex");
+  const sha = parityShaForFile(rel, buf);
   // ETag header (CloudFront forwards S3's ETag verbatim for un-edge-
   // cached responses); strip the surrounding quotes for clean compares.
   const etag = (response.headers().etag || "").replace(/^"|"$/g, "");
@@ -169,10 +175,12 @@ test.describe(
       const shaByRel = {};
       for (const rel of files) {
         try {
-          shaByRel[rel] = crypto
-            .createHash("sha256")
-            .update(fs.readFileSync(path.join(adminDir, rel)))
-            .digest("hex");
+          // Use the forward-slashed rel as the parity key so isInjectedShell()
+          // classifies `reviews/health.html` correctly on every platform; the
+          // injected shells get their per-env window.CMS_* identity normalized
+          // before hashing (fix #17), every other file is hashed RAW (strict).
+          const relKey = rel.split(path.sep).join("/");
+          shaByRel[rel] = parityShaForFile(relKey, fs.readFileSync(path.join(adminDir, rel)));
         } catch (_) {
           shaByRel[rel] = null;
         }
@@ -208,8 +216,9 @@ test.describe(
 
       const failures = [];
       for (const rel of files) {
-        const urlPath = `/${ADMIN_PREFIX}/${rel.split(path.sep).join("/")}`;
-        const preview = await fetchBodyHash(request, `${previewBase}${urlPath}`);
+        const relUrl = rel.split(path.sep).join("/");
+        const urlPath = `/${ADMIN_PREFIX}/${relUrl}`;
+        const preview = await fetchBodyHash(request, `${previewBase}${urlPath}`, relUrl);
         const verdict = previewVsLocalVerdict(rel, preview, { sha: shaByRel[rel] });
         if (verdict.kind === "fail") failures.push(verdict.reason);
       }
@@ -234,10 +243,13 @@ test.describe(
       const { files, shaByRel, indexHtml: localIndexHtml } = localBundle();
       expect(files.length, "Expected at least one admin/ file after exclusions").toBeGreaterThan(0);
 
-      // Fetch prod's index.html (the version marker) first.
+      // Fetch prod's index.html (the version marker) first. Only its .status is
+      // consumed here (the version comparison uses the RAW index.html text,
+      // re-fetched below) — the parity sha is computed for completeness.
       const prodIndex = await fetchBodyHash(
         request,
         `${PROD_BASE}/${ADMIN_PREFIX}/${MANIFEST_FILE}`,
+        MANIFEST_FILE,
       );
       // Re-fetch the prod index BODY as text for the manifest extraction. The
       // fetchBodyHash only kept the sha; do a tiny second GET to get the bytes
@@ -248,7 +260,18 @@ test.describe(
         if (r.ok()) prodIndexHtml = await r.text();
       }
 
-      const versions = compareVersions(prodIndexHtml, localIndexHtml);
+      // The version marker (index.html) is itself an INJECTED shell, so the
+      // served prod index carries the per-env window.CMS_* identity block while
+      // the raw local source has none. Normalize BOTH before comparing versions
+      // (fix #17), so "same bundle version" reflects the MACHINERY/manifest —
+      // not the per-env identity (otherwise prod-served-with-block vs
+      // local-source-without-block would ALWAYS read as a bump, defeating the
+      // #14 same-version prod-drift HARD FAIL). The #14 fixtures carry no
+      // injected block, so this normalization is a no-op for them.
+      const versions = compareVersions(
+        normalizeInjectedIdentity(prodIndexHtml),
+        normalizeInjectedIdentity(localIndexHtml),
+      );
       if (!versions.determinable) {
         console.log(
           `[admin-bundle-parity] version marker indeterminate (prod index ${prodIndex.status}, ` +
@@ -271,8 +294,9 @@ test.describe(
       const failures = [];
       const infos = [];
       for (const rel of files) {
-        const urlPath = `/${ADMIN_PREFIX}/${rel.split(path.sep).join("/")}`;
-        const prod = await fetchBodyHash(request, `${PROD_BASE}${urlPath}`);
+        const relUrl = rel.split(path.sep).join("/");
+        const urlPath = `/${ADMIN_PREFIX}/${relUrl}`;
+        const prod = await fetchBodyHash(request, `${PROD_BASE}${urlPath}`, relUrl);
         const verdict = prodVsLocalVerdict(rel, prod, { sha: shaByRel[rel] }, versions);
         if (verdict.kind === "fail") failures.push(verdict.reason);
         else if (verdict.kind === "info") infos.push(verdict.reason);
