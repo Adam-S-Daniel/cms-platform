@@ -80,6 +80,10 @@ const PLATFORM_META_SPECS = [
   // never on a consumer. The platform-meta-spec-registry.test.js recurrence guard
   // FAILS in self-CI if any platform-internal spec is left off this list.
   "check-platform-pin-consistency.test.js",
+  // The parity-preview SITE_ROOT guard reads the PLATFORM reusable
+  // workflow DEFINITION (.github/workflows/parity-preview.yml); a consumer
+  // ships only a thin wrapper, so it is platform-internal (self-CI only).
+  "parity-preview-site-root.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN
