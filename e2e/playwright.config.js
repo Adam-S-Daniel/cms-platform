@@ -149,6 +149,10 @@ const PLATFORM_META_SPECS = [
   "scaffold-seeds-neutral-logo.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
+  // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +
+  // infrastructure/site-params.example.env (all platform-only source) to lock the
+  // consumer repo-variable derivations + scaffolder wiring. Self-CI only.
+  "set-repo-variables.test.js",
   "silent-catch-lint.test.js",
   "sitemap-prune.test.js",
   "slugify-parity.test.js",
