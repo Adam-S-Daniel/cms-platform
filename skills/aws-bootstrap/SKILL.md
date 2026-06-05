@@ -35,6 +35,29 @@ Unlike an earlier single-site setup, the bootstrap stack now manages the
 preview AND production buckets and distributions directly — nothing is
 created out-of-band.
 
+## CloudFront does NOT negative-cache 404s (`ErrorCachingMinTTL: 0`)
+
+Both distributions set `CustomErrorResponses → ErrorCachingMinTTL: 0` for 403
+and 404 (template, v0.1.13 / cms#39). This is load-bearing for the prod-canary
+loops: a loop polls `/blog/<future-dated-slug>/` BEFORE the canary deploys, so
+S3 returns 404; with the old `ErrorCachingMinTTL: 300` CloudFront would
+**negative-cache** that 404 for 5 min (re-cached on each poll), so after the
+page landed on S3 + the `/*` invalidation the reflect-poll still read the stale
+cached 404 → "URL never reflected" (cms#21 / adamdaniel#1815). The
+`CachingOptimized` policy ignores query strings, so e2e-side cache-busting can't
+help — the fix has to be in the template. New sites inherit it automatically.
+
+**Applying the fix to a LIVE distribution requires a stack redeploy** (the
+template change alone does nothing until deployed): `bash
+infrastructure/bootstrap/deploy.sh` for that site. Direct live-distribution
+mutation is denied by the auto-mode classifier — go via the template + stack
+deploy. Verify:
+
+```bash
+aws cloudfront get-distribution-config --id <ProductionDistributionId>   --query 'DistributionConfig.CustomErrorResponses.Items[].{code:ErrorCode,ttl:ErrorCachingMinTTL}'
+# → both 403 and 404 must show ttl: 0
+```
+
 ## Deployment
 
 The deploy script reads its site identity from environment variables (the
