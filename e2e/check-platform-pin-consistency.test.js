@@ -232,12 +232,14 @@ test.describe("check-platform-pin-consistency.js — SKEWED fixture (#29)", () =
 test.describe("check-platform-pin-consistency.js — workflow-set parity", () => {
   const V = "v0.1.20";
 
-  // A temp "canonical" dir holding the platform-dictated basenames (content is
-  // irrelevant — the check compares the SET of *.yml basenames).
+  // A temp "canonical" dir holding the platform-dictated basenames. Content is
+  // the SAME reusableCaller shape the consumer uses, so the companion
+  // CONTENT-parity check (call-interface) is satisfied for shared files and
+  // these SET-parity assertions stay isolated to the set comparison.
   function mkCanonical(names) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-canon-"));
     for (const n of names) {
-      fs.writeFileSync(path.join(dir, n), "name: x\non: { pull_request: {} }\njobs: {}\n");
+      fs.writeFileSync(path.join(dir, n), reusableCaller(n.replace(/\.ya?ml$/, ""), V));
     }
     return dir;
   }
@@ -287,5 +289,95 @@ test.describe("check-platform-pin-consistency.js — workflow-set parity", () =>
     const res = run(consumerWith(["deploy-production.yml"])); // no --canonical-workflows, no .cms-platform
     expect(res.status).toBe(0);
     expect(`${res.stdout}${res.stderr}`).toMatch(/workflow-set parity skipped/);
+  });
+});
+
+// ── Workflow-CONTENT (call-interface) parity: a consumer's thin caller must
+// match the canonical template's uses target + with KEYS + secrets map +
+// permissions — modulo version refs, site-specific with VALUES, and site-tuned
+// on: triggers. Catches the sweep `startup_failure` class (dropped required
+// secret) WITHOUT false-positiving on legit site differences.
+test.describe("check-platform-pin-consistency.js — workflow-content (call-interface) parity", () => {
+  const V = "v0.1.24";
+  // A sweep-style caller. `secrets` / `withKeys` / `apex` / `cron` / `paths`
+  // are configurable so a test can drift exactly one facet.
+  function sweepCaller({
+    ref = V,
+    secrets = true,
+    withKeys = ["dry_run", "threshold_hours"],
+    apex = "example.com",
+    cron = "0 4 * * *",
+    paths = ["admin/**"],
+  } = {}) {
+    const lines = [
+      "name: Sweep",
+      "on:",
+      "  schedule:",
+      `    - cron: '${cron}'`,
+      "  push:",
+      "    paths:",
+      ...paths.map((p) => `      - ${p}`),
+      "permissions:",
+      "  contents: write",
+      "  pull-requests: write",
+      "jobs:",
+      "  sweep:",
+      `    uses: ${SLUG}/.github/workflows/sweep-stale-cms-prs.yml@${ref}`,
+    ];
+    if (secrets) {
+      lines.push("    secrets:", "      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}");
+    }
+    lines.push("    with:");
+    if (withKeys.includes("dry_run")) lines.push("      dry_run: false");
+    if (withKeys.includes("threshold_hours")) lines.push("      threshold_hours: 6");
+    if (withKeys.includes("apex")) lines.push(`      apex: ${apex}`);
+    lines.push(`      platform_ref: ${ref}`);
+    return lines.join("\n") + "\n";
+  }
+  function mkCanonicalDir(content) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-canon-"));
+    fs.writeFileSync(path.join(dir, "sweep-stale-cms-prs.yml"), content);
+    return dir;
+  }
+  function consumer(callerContent) {
+    const root = mkConsumer();
+    write(root, "platform.lock", platformLock(V));
+    write(root, ".github/workflows/sweep-stale-cms-prs.yml", callerContent);
+    return root;
+  }
+  function runC(root, canonicalDir) {
+    return spawnSync(
+      process.execPath,
+      [SCRIPT, "--root", root, "--owner", OWNER, "--repo", REPO, "--canonical-workflows", canonicalDir],
+      { encoding: "utf8" },
+    );
+  }
+
+  test("exits 0 when the call interface matches (despite site-tuned on: + with VALUES)", () => {
+    const canon = mkCanonicalDir(sweepCaller({ apex: "example.com", cron: "0 4 * * *", paths: ["admin/**"] }));
+    // Same uses/with-keys/secrets, but a DIFFERENT schedule, push paths, and apex value.
+    const root = consumer(sweepCaller({ apex: "jodidaniel.com", cron: "0 7 * * *", paths: ["_layouts/**"] }));
+    const res = runC(root, canon);
+    expect(`${res.stdout}${res.stderr}`).not.toMatch(/workflow-content/);
+    expect(res.status).toBe(0);
+  });
+
+  test("FAILS when the caller drops the required secrets: map (the sweep startup_failure)", () => {
+    const canon = mkCanonicalDir(sweepCaller({ secrets: true }));
+    const root = consumer(sweepCaller({ secrets: false }));
+    const res = runC(root, canon);
+    expect(res.status).not.toBe(0);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toMatch(/workflow-content: DRIFT/);
+    expect(out).toMatch(/sweep-stale-cms-prs\.yml/);
+    expect(out).toMatch(/secrets: map/);
+  });
+
+  test("FAILS when a required with: key is missing", () => {
+    const canon = mkCanonicalDir(sweepCaller({ withKeys: ["dry_run", "threshold_hours"] }));
+    const root = consumer(sweepCaller({ withKeys: ["dry_run"] })); // dropped threshold_hours
+    const res = runC(root, canon);
+    expect(res.status).not.toBe(0);
+    expect(`${res.stdout}${res.stderr}`).toMatch(/with: keys/);
   });
 });

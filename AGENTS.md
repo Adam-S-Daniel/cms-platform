@@ -605,6 +605,20 @@ offending file/value named. **Complements** `platform-drift-guard` (that guards
 file CONTENT byte-match; this guards VERSION CONSISTENCY). See `docs/SYNC.md`
 "Single-version pin invariant".
 
+The same guard also enforces **workflow-content (call-interface) parity**
+(companion to the workflow-SET parity): a consumer's thin caller must match the
+canonical `examples/site` template's CALL INTERFACE — each job's `uses` target +
+`with` KEY-set + `secrets:` map + permissions — modulo version refs, site-specific
+`with` VALUES, and deliberately site-tuned `on:` triggers (all
+normalized/masked/excluded). The version-pin checks compare only the `@ref`
+STRINGS, so they were BLIND to a caller whose BODY drifted — e.g. jodidaniel's
+sweep caller silently dropped the now-required `secrets: CMS_E2E_PAT:` map and
+`startup_failure`'d the reusable for weeks. `checkWorkflowContentParity()` parses
+both callers (comments/formatting drop out), compares the call interface, and
+flags the exact drifting facet. It does NOT fight a legit site difference (e.g.
+adamdaniel TRIMS the host-loop push `paths:` to dodge prod-loop co-arrival
+eviction #1892 — an `on:` change, excluded).
+
 ## Consumer-context spec rule (v0.1.5)
 
 The e2e harness is **reused by consumers**. `e2e/playwright.config.js` runs in

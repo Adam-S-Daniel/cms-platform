@@ -394,14 +394,18 @@ function listYamlBasenames(dir) {
     .map((e) => e.name);
 }
 
-function checkWorkflowSetParity() {
-  const canonicalDir = path.resolve(
+function resolveCanonicalDir() {
+  return path.resolve(
     argOf(
       "canonical-workflows",
       "PIN_CANONICAL_WORKFLOWS",
       path.join(ROOT, ".cms-platform", "examples", "site", ".github", "workflows"),
     ),
   );
+}
+
+function checkWorkflowSetParity() {
+  const canonicalDir = resolveCanonicalDir();
   if (!fs.existsSync(canonicalDir)) {
     process.stdout.write(
       "platform-pin-consistency: (workflow-set parity skipped — canonical set not found at " +
@@ -438,9 +442,136 @@ function checkWorkflowSetParity() {
   }
 }
 
+// Deterministic stringify (recursively key-sorted) so two structurally-equal
+// objects compare equal regardless of source key order / formatting.
+function stableStringify(v) {
+  if (Array.isArray(v)) return "[" + v.map(stableStringify).join(",") + "]";
+  if (v && typeof v === "object") {
+    return (
+      "{" +
+      Object.keys(v)
+        .sort()
+        .map((k) => JSON.stringify(k) + ":" + stableStringify(v[k]))
+        .join(",") +
+      "}"
+    );
+  }
+  return JSON.stringify(v);
+}
+
+// The CALL INTERFACE of a thin caller — the part that is strictly
+// template-dictated (how it INVOKES the reusable): top-level `permissions`, and
+// per job its `uses` target (version-normalized), its `with` KEY-set, its
+// `secrets` map, and its job-level `permissions`. We DELIBERATELY exclude `on:`
+// triggers, `name`, `run-name`, `concurrency`, `defaults` and `with` VALUES:
+// those are legitimately site-operational (e.g. adamdaniel TRIMS the host-loop's
+// push `paths:` to dodge prod-loop co-arrival eviction #1892; `apex:` is a site
+// value; schedules can differ). What remains is the contract with the reusable —
+// a drift here means the reusable is called WRONG (the sweep startup_failure:
+// the caller dropped the now-required `secrets: CMS_E2E_PAT:` map). Comments +
+// formatting drop out via the YAML parse.
+function structuralShape(text) {
+  const YAML = loadYaml();
+  const normalized = text.replace(/@v\d+\.\d+\.\d+/g, "@vREF").replace(/\b[0-9a-f]{40}\b/g, "SHA40");
+  const obj = YAML.parse(normalized) || {};
+  const jobs = obj.jobs || {};
+  const shape = { permissions: obj.permissions || null, jobs: {} };
+  for (const [jn, job] of Object.entries(jobs)) {
+    const j = job || {};
+    shape.jobs[jn] = {
+      uses: j.uses || null,
+      withKeys: Object.keys((j.with && typeof j.with === "object" && j.with) || {}).sort(),
+      secrets: j.secrets || null,
+      permissions: j.permissions || null,
+    };
+  }
+  return shape;
+}
+
+// Human-readable facets that differ (so a DRIFT is actionable, not just "differs").
+function shapeFacetDiff(canon, cons) {
+  const out = [];
+  if (stableStringify(canon.permissions) !== stableStringify(cons.permissions)) {
+    out.push("top-level `permissions`");
+  }
+  const cj = Object.keys(canon.jobs || {});
+  const sj = Object.keys(cons.jobs || {});
+  if (stableStringify([...cj].sort()) !== stableStringify([...sj].sort())) {
+    out.push(`job set (canonical [${cj}] vs consumer [${sj}])`);
+  }
+  for (const jn of cj) {
+    const a = (canon.jobs && canon.jobs[jn]) || {};
+    const b = (cons.jobs && cons.jobs[jn]) || {};
+    if (stableStringify(a.uses) !== stableStringify(b.uses)) {
+      out.push(`job \`${jn}\` uses: target (canonical ${JSON.stringify(a.uses)} vs ${JSON.stringify(b.uses)})`);
+    }
+    if (stableStringify(a.withKeys) !== stableStringify(b.withKeys)) {
+      out.push(`job \`${jn}\` with: keys (canonical [${a.withKeys}] vs [${b.withKeys}])`);
+    }
+    if (stableStringify(a.secrets) !== stableStringify(b.secrets)) {
+      out.push(
+        `job \`${jn}\` secrets: map (canonical ${JSON.stringify(a.secrets)} vs ${JSON.stringify(b.secrets)})`,
+      );
+    }
+    if (stableStringify(a.permissions) !== stableStringify(b.permissions)) out.push(`job \`${jn}\` permissions`);
+  }
+  return out;
+}
+
+// CONTENT parity (companion to the SET parity above). A consumer's thin caller
+// must match the canonical examples/site template's CALL INTERFACE — same `uses`
+// target, same `with` KEYS, same `secrets` map, same permissions — modulo
+// version refs and site-specific `with` VALUES. The version-pin checks above
+// only compare the `@ref`/`tag` STRINGS; they are blind to a caller whose BODY
+// drifted — e.g. jodidaniel's sweep caller, which dropped the now-required
+// `secrets: CMS_E2E_PAT:` map and `startup_failure`s the reusable. This catches
+// that class (and any missing/extra `with` key, wrong `uses` target, drifted
+// permissions) WITHOUT false-positiving on a legit site value, a stale comment,
+// or a deliberately site-tuned `on:` trigger (excluded — see structuralShape).
+function checkWorkflowContentParity() {
+  const canonicalDir = resolveCanonicalDir();
+  if (!fs.existsSync(canonicalDir)) return; // set-parity already emitted the skip notice
+  const consumerDir = path.join(ROOT, ".github", "workflows");
+  for (const name of listYamlBasenames(canonicalDir).sort()) {
+    const consumerFile = path.join(consumerDir, name);
+    if (!fs.existsSync(consumerFile)) continue; // MISSING — already flagged by set-parity
+    checked += 1;
+    let canon;
+    let cons;
+    try {
+      canon = structuralShape(fs.readFileSync(path.join(canonicalDir, name), "utf8"));
+      cons = structuralShape(fs.readFileSync(consumerFile, "utf8"));
+    } catch (e) {
+      violations.push({
+        file: `.github/workflows/${name}`,
+        kind: "workflow-content: UNPARSEABLE",
+        found: String(e.message || e),
+        expected: "valid YAML matching the canonical caller",
+        detail: "the caller (or canonical) failed to parse",
+      });
+      continue;
+    }
+    if (stableStringify(canon) === stableStringify(cons)) continue;
+    const facets = shapeFacetDiff(canon, cons);
+    violations.push({
+      file: `.github/workflows/${name}`,
+      kind: "workflow-content: DRIFT (thin caller structurally differs from canonical examples/site)",
+      found: `consumer differs in: ${facets.join("; ") || "(structure)"}`,
+      expected: `match canonical examples/site/.github/workflows/${name}`,
+      detail:
+        `re-copy the thin caller's call interface from examples/site/ (keep your own @ref pins, ` +
+        `site-specific with: VALUES, and any deliberately site-tuned on: triggers — those are ` +
+        `normalized/masked/excluded before compare; this flags a CALL-INTERFACE drift: a changed ` +
+        `uses target, a missing/extra with: key, a drifted secrets: map (the sweep ` +
+        `startup_failure class), or changed permissions).`,
+    });
+  }
+}
+
 checkGemfile();
 checkGemfileLock();
 checkWorkflowSetParity();
+checkWorkflowContentParity();
 
 // ── Report ────────────────────────────────────────────────────────────────────
 if (violations.length === 0) {
