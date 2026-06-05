@@ -84,6 +84,11 @@ const PLATFORM_META_SPECS = [
   // workflow DEFINITION (.github/workflows/parity-preview.yml); a consumer
   // ships only a thin wrapper, so it is platform-internal (self-CI only).
   "parity-preview-site-root.test.js",
+  // The GENERAL SITE_ROOT backstop: reads EVERY PLATFORM reusable workflow
+  // DEFINITION and asserts any `.cms-platform/e2e` harness run exports
+  // SITE_ROOT (the realized #1815 host-loop gap). Consumers ship only thin
+  // wrappers, so it is platform-internal (self-CI only).
+  "loop-site-root-lint.test.js",
   // Reads the editorial-label-audit reusable workflow DEFINITION (consumer
   // ships only a wrapper) — platform-internal, self-CI only.
   "editorial-label-audit-repo.test.js",

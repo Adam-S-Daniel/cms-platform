@@ -214,6 +214,14 @@ jobs:
         continue-on-error: true
         working-directory: .cms-platform/e2e
         env:
+          # SITE_ROOT — the CONSUMING site's checkout (github.workspace). Uniform
+          # harness rule: any spec run from .cms-platform/e2e sets SITE_ROOT to the
+          # CONSUMER root so any base_collections / single-page guard reads the
+          # consumer's _config.yml, not the PLATFORM's (__dirname/.. fallback).
+          # regression-video.spec.js doesn't read it today, but the rule is uniform
+          # and future-proofs a later guard. Locked by
+          # e2e/loop-site-root-lint.test.js.
+          SITE_ROOT: ${{ github.workspace }}
           PAGE_CHANGES_PATH: /tmp/page-changes.json
         run: npx playwright test --config=playwright.regression.config.js
 

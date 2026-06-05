@@ -94,6 +94,15 @@ jobs:
         id: probe
         working-directory: .cms-platform/e2e
         env:
+          # SITE_ROOT — the CONSUMING site's checkout (github.workspace). The e2e
+          # harness runs from .cms-platform/e2e here, so a base_collections /
+          # single-page guard's default (resolve __dirname/.. → the PLATFORM)
+          # reads the wrong _config.yml; set it so the guards read the CONSUMER's
+          # config and a single-page bio (base_collections:[], no e2e canaries)
+          # correctly SKIPS the @canary-readonly probe instead of timing out on a
+          # canary collection it never renders. Locked by
+          # e2e/loop-site-root-lint.test.js.
+          SITE_ROOT: ${{ github.workspace }}
           PROD_CANARY: '1'
           TARGET: prod
         run: |

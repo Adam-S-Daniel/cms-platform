@@ -187,6 +187,13 @@ jobs:
       - name: Run host-repo publish loop + delete-published specs
         working-directory: .cms-platform/e2e
         env:
+          # SITE_ROOT — the CONSUMING site's checkout (github.workspace). The e2e
+          # harness runs from .cms-platform/e2e here, so the base_collections guards'
+          # default (resolve __dirname/..) would point at the PLATFORM, not the
+          # consumer; set it so keepsBaseCollection() reads the consumer's _config.yml
+          # and a single-page bio (base_collections:[]) correctly SKIPS the collection
+          # specs instead of timing out on a Posts sidebar link that never renders.
+          SITE_ROOT: ${{ github.workspace }}
           # Fine-grained PAT scoped to the host repo (contents r/w +
           # pull_requests r/w + metadata r).
           CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

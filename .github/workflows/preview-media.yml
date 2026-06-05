@@ -201,6 +201,14 @@ jobs:
         if: ${{ steps.salient.outputs.salient == 'true' && steps.preview.outputs.reachable == 'true' }}
         working-directory: .cms-platform/e2e
         env:
+          # SITE_ROOT — the CONSUMING site's checkout (github.workspace). Uniform
+          # harness rule: any spec run from .cms-platform/e2e sets SITE_ROOT to the
+          # CONSUMER root so any base_collections / single-page guard reads the
+          # consumer's _config.yml, not the PLATFORM's (__dirname/.. fallback).
+          # preview-media-resolves.spec.js doesn't read it today, but the rule is
+          # uniform and future-proofs a later guard. Locked by
+          # e2e/loop-site-root-lint.test.js.
+          SITE_ROOT: ${{ github.workspace }}
           # TARGET=prod skips the local Jekyll webServer — the spec hits
           # the deployed preview directly.
           TARGET: prod
