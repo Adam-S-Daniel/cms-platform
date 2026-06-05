@@ -197,6 +197,16 @@ jobs:
           TARGET: preview
           PR_NUMBER: ${{ inputs.pr_number }}
           GITHUB_TOKEN: ${{ secrets.CMS_E2E_PAT || secrets.GITHUB_TOKEN }}
+          # The crawl specs (console-clean, sitemap) build their content-URL
+          # list from the CONSUMER's SOURCE tree and resolve it as
+          # `SITE_ROOT || __dirname/..`. The harness is checked out into
+          # `.cms-platform/`, so without SITE_ROOT they'd read the PLATFORM
+          # fixture _config.yml (keeps all base collections) and crawl
+          # /blog/ + /tags/ — which a `base_collections: []` single-page
+          # consumer 404s (jodidaniel.com #35). Point SITE_ROOT at the site
+          # checkout (the FIRST, default-path checkout) so the #33 single-page
+          # opt-out (cap.keepsBaseCollection) reads the right config.
+          SITE_ROOT: ${{ github.workspace }}
         run: |
           set -o pipefail
           # The @parity specs span the public lane (chromium-desktop-1080)
