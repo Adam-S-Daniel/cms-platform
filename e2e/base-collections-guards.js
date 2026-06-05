@@ -159,6 +159,66 @@ const ADMIN_WRITE_GUARDS = {
     reason:
       "consumer opts out of the base collections via cms.base_collections — the contributor walkthrough asserts the full Posts/Tags/Projects/Pages sidebar (#33)",
   },
+
+  // ── prod host-loop specs (cms-publish-loop-host, RUN_HOST_REPO_PUBLISH_LOOP) ──
+  // These drive the LIVE /admin/ (the consumer's RENDERED config, where opted-out
+  // base collections ARE stripped) and wait on the Posts sidebar link + drive the
+  // e2e/posts/tags collection routes — none of which a `base_collections:[]` bio
+  // renders. They evaded the index-local-scoped detector (CLASS A/B) until the
+  // prod-host-loop class (E) was added; guarded so they SKIP green on a single-page
+  // bio and RUN in full on a content consumer. (Root-caused: jodidaniel host loop
+  // failed deterministically on `Load production admin` waiting for /^Posts$/.)
+  "cms-delete-published.spec.js": {
+    collections: ["posts", "e2e"],
+    mode: "all",
+    reason:
+      "consumer opts out of the base collections via cms.base_collections — the prod delete-published host-loop waits for the Posts sidebar link and drives the e2e canary (#/collections/e2e/new), neither of which a base_collections:[] bio renders (#33) (#21)",
+  },
+  "cms-unpublish-republish.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — the prod unpublish/republish host-loop waits for the Posts sidebar link and round-trips a #/collections/posts/entries/ post (#33) (#21)',
+  },
+  "cms-tags-lifecycle.spec.js": {
+    collections: ["posts", "tags"],
+    mode: "all",
+    reason:
+      "consumer opts out of the base collections via cms.base_collections — the prod tags-lifecycle host-loop waits for the Posts sidebar link and drives the Tags editor (#/collections/tags/new), absent on a base_collections:[] bio (#33) (#21)",
+  },
+  // The PREVIEW + prod-mutate variants of the same live-admin loops — surfaced by
+  // the CLASS E (live-admin) detector. Same base-collection dependence; guarded so
+  // they skip green on a single-page bio and run in full on a content consumer.
+  "cms-delete-published-preview.spec.js": {
+    collections: ["e2e"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "e2e" collection via cms.base_collections — the preview delete-published loop drives the e2e canary (#/collections/e2e), absent on a base_collections:[] bio (#33) (#21)',
+  },
+  "cms-unpublish-republish-preview.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — the preview unpublish/republish loop waits for the Posts sidebar link and round-trips a posts entry (#33) (#21)',
+  },
+  "cms-tags-lifecycle-preview.spec.js": {
+    collections: ["posts", "tags"],
+    mode: "all",
+    reason:
+      "consumer opts out of the base collections via cms.base_collections — the preview tags-lifecycle loop waits for the Posts sidebar link and drives the Tags editor, absent on a base_collections:[] bio (#33) (#21)",
+  },
+  "cms-publish-loop-prod-mutate.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — the prod-mutation playground loop waits for the Posts sidebar link and publishes a post, absent on a base_collections:[] bio (#33) (#21)',
+  },
+  "cms-publish-loop-prod-mutate-preview.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — the preview prod-mutation parity loop waits for the Posts sidebar link and publishes a post, absent on a base_collections:[] bio (#33) (#21)',
+  },
 };
 
 // ── CAPABILITY_GUARDS (#21, v0.1.13+) ────────────────────────────────────────

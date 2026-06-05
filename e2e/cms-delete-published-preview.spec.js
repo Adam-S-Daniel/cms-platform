@@ -49,6 +49,10 @@
  *   - PR_HEAD_REF must be set (resolved from the PR via the API).
  *   - Runs once on chromium-desktop-3k only.
  */
+const path = require("node:path");
+const { guard } = require("./base-collections-guards");
+// #33/#21 — resolved like the other registered specs so the drift lint matches it.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { getPat, HOST_REPO } = require("./decap-pat");
 const { addLabel, gh } = require("./github-actions-poll");
@@ -143,6 +147,8 @@ test(
   { tag: ["@admin-write"] },
   async ({ page }) => {
     test.skip(!getPat(), "CMS_E2E_PAT not set — preview delete-published spec disabled.");
+    // #33/#21 — a base_collections:[] bio renders none of the base collections; skip green there.
+    test.skip(...guard(SITE_ROOT, "cms-delete-published-preview.spec.js"));
     test.skip(
       !PR_NUMBER || !PR_HEAD_REF,
       "PR_NUMBER / PR_HEAD_REF not set — this spec only runs in the dedicated preview workflow.",

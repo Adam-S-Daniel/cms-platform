@@ -42,6 +42,10 @@
 // touching layouts or post fixtures. Slug is run-unique
 // (`e2e-tags-canary-<runId>`) so concurrent runs don't race.
 
+const path = require("node:path");
+const { guard } = require("./base-collections-guards");
+// #33/#21 — resolved like the other registered specs so the drift lint matches it.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { gh, makeDeployQueueExtender } = require("./github-actions-poll");
@@ -186,6 +190,9 @@ test(
       process.env.RUN_HOST_REPO_PUBLISH_LOOP !== "1",
       "RUN_HOST_REPO_PUBLISH_LOOP not set — host-repo tags-lifecycle is opt-in (avoids cms/* PR self-recursion in PR-time CI).",
     );
+    // #33/#21 — a base_collections:[] bio renders no Posts sidebar / Tags editor;
+    // skip green there, run in full where posts+tags are kept.
+    test.skip(...guard(SITE_ROOT, "cms-tags-lifecycle.spec.js"));
 
     // ── 0. Close any stale Decap PR on this run's branch ──────────────
     // Slug is run-unique here, so collisions are impossible — but this
