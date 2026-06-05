@@ -83,12 +83,19 @@ parity/e2e are non-required.
 - **Keep BOTH consumers on the same version.** A platform-infra-only release
   (e.g. a test-harness fix) is still worth bumping both, so they never skew —
   the pin-consistency guard is per-repo, but lockstep across repos is the design.
-- **`platform-bump.yml`** automates step 2 on a schedule, but it rewrites
-  `.github/workflows/*` and pushes — so its token (`CMS_PLATFORM_PAT`) MUST
-  carry **`workflow` scope** or GitHub rejects the push
+- **`platform-bump.yml`** automates step 2 on a schedule/dispatch and is now an
+  **atomic single-version bump** (issue #13 **resolved**, v0.1.23): it rewrites
+  EVERY version ref in one PR — `platform_ref:` + `platform.lock`, the `uses:@`
+  pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:` (it resolves the
+  release commit sha itself), and any composite `@<sha>` pin — so its PR passes
+  `pin-consistency` alone. It checks out with the caller PAT (`secrets.gh_token`
+  = `CMS_PLATFORM_PAT`, which MUST carry **Workflows: write** / `workflow` scope)
+  so the workflow-file push is authorised — otherwise GitHub rejects it
   (`refusing to allow ... to update workflow ... without 'workflows' permission`).
-  That is the live half of issue #13. Dependabot bumps the `uses:@`/gem pins
-  piecemeal and breaks the single-version guard until `platform-bump` reconciles.
+  Locked by `e2e/platform-bump-atomic.test.js`. **Caveat:** a consumer only gets
+  the atomic bump once its `platform-bump` thin caller pins a release that
+  CONTAINS this fix (≥ v0.1.23); to bump a consumer still on an older caller,
+  do step 2 manually (above). Dependabot remains wired as an independent net.
 - **Co-arrival cancels loops:** a push touching `.github/workflows/**` is
   salient to every prod-mutating loop and cancels in-flight ones (shared
   `prod-mutating-loop` concurrency lane). Do consumer bumps, THEN let the loops

@@ -129,6 +129,10 @@ const PLATFORM_META_SPECS = [
   "oauth-app-restriction-detector.spec.js",
   "oauth-app-restriction-detector.test.js",
   "parity-tag-lint.test.js",
+  // Locks the platform-bump reusable: it must check out with the caller PAT
+  // (workflow-file push auth) and bump EVERY pinned ref atomically (#13). Reads
+  // the platform's OWN .github/workflows/platform-bump.yml definition — self-CI only.
+  "platform-bump-atomic.test.js",
   // #16 — the recurrence guard itself: it reads playwright.config.js + lints the
   // harness spec sources for unregistered platform-internal specs. A harness
   // self-test; ENOENT/no-op on a consumer (no platform tree to police).
