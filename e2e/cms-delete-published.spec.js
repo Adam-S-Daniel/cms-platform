@@ -48,12 +48,18 @@
  * `cms/e2e-fixture/remove-…` PR if the throw-away fixture is still
  * on main.
  */
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { gh, makeDeployQueueExtender } = require("./github-actions-poll");
 const { removeFixtureViaPr } = require("./cms-fixture-pr");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
+const { guard } = require("./base-collections-guards");
+
+// #33/#21 — resolved the same way the registered specs do so the guard reads
+// identically and the drift lint can match it.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 // Fixed-prod loop, resolved through the shared cms-host resolver
 // (byte-identical to the old literals) so prod/preview can't drift.
@@ -139,6 +145,11 @@ test(
       process.env.RUN_HOST_REPO_PUBLISH_LOOP !== "1",
       "RUN_HOST_REPO_PUBLISH_LOOP not set — delete-published spec is opt-in.",
     );
+    // #33/#21 — a base_collections:[] consumer (single-page bio) renders no Posts
+    // sidebar link / e2e canary collection, so "Load production admin" would wait
+    // 60s for a /^Posts$/ link that never appears. Skip green on such a consumer;
+    // run in full where the e2e+posts collections are kept.
+    test.skip(...guard(SITE_ROOT, "cms-delete-published.spec.js"));
 
     // Title shape is chosen so Decap's title→slug derivation matches the
     // slug we predict client-side. Lowercase + spaces only — Decap's

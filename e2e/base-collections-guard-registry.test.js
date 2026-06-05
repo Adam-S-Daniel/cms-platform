@@ -206,6 +206,27 @@ function baseCollectionClasses(src) {
     /["'`]_posts["'`]/.test(src) && /\/blog\//.test(src) && /writeFileSync|writeDraft/.test(src);
   if (writesPostsDraft) classes.push("posts-draft-write");
 
+  // CLASS E — LIVE-admin base-collection dependence (prod + preview host loops).
+  // The cms-publish-loop-host / -preview specs drive the LIVE admin (prodTarget /
+  // previewTarget → the consumer's RENDERED config, where opted-out base
+  // collections ARE stripped), so a base-collection sidebar-link wait /
+  // #/collections/<base> route breaks on a base_collections:[] consumer exactly as
+  // the index-local class (A/B) does — but the index-local.html gating never sees
+  // them (they goto the live admin). This was the jodidaniel host-loop blind spot:
+  // cms-delete-published waited 60s for /^Posts$/ on a bio admin. Gate on the
+  // live-admin target (the structural signal — robust vs a comment match) AND a
+  // base sidebar wait OR collection route.
+  const loadsLiveAdmin = /\b(prodTarget|previewTarget)\b/.test(src);
+  if (loadsLiveAdmin) {
+    const liveSidebarWait = NAV_BASE.some((c) =>
+      new RegExp(`getByRole\\(\\s*["']link["']\\s*,\\s*\\{\\s*name:\\s*/\\^${c}\\$/i`).test(src),
+    );
+    const liveCollectionRoute = ALL_BASE.some((c) =>
+      new RegExp(`#/collections/${c}\\b`).test(src),
+    );
+    if (liveSidebarWait || liveCollectionRoute) classes.push("live-admin-base-collection");
+  }
+
   return classes;
 }
 

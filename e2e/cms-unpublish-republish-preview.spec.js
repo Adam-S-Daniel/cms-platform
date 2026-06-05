@@ -66,6 +66,10 @@
  *
  * Gating: CMS_E2E_PAT + PR_NUMBER + PR_HEAD_REF; chromium-desktop-3k only.
  */
+const path = require("node:path");
+const { guard } = require("./base-collections-guards");
+// #33/#21 — resolved like the other registered specs so the drift lint matches it.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
@@ -170,6 +174,8 @@ test(
   { tag: ["@admin-write"] },
   async ({ page }) => {
     test.skip(!getPat(), "CMS_E2E_PAT not set — preview unpublish/re-publish disabled.");
+    // #33/#21 — a base_collections:[] bio renders none of the base collections; skip green there.
+    test.skip(...guard(SITE_ROOT, "cms-unpublish-republish-preview.spec.js"));
     test.skip(
       !PR_NUMBER || !PR_HEAD_REF,
       "PR_NUMBER / PR_HEAD_REF not set — this spec only runs in the cms-preview-loops workflow.",

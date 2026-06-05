@@ -98,6 +98,10 @@
  * IMPORTANT: do NOT run this spec locally against prod. It mutates the
  * real production tree. The workflow runs it on a schedule/post-merge.
  */
+const path = require("node:path");
+const { guard } = require("./base-collections-guards");
+// #33/#21 — resolved like the other registered specs so the drift lint matches it.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { closeStaleDecapPrOnBranch, removeFixtureViaPr } = require("./cms-fixture-pr");
@@ -179,6 +183,8 @@ test(
       process.env.RUN_PROD_MUTATE_PLAYGROUND !== "1",
       "RUN_PROD_MUTATE_PLAYGROUND not set — only the cms-publish-loop-prod workflow runs this spec.",
     );
+    // #33/#21 — a base_collections:[] bio renders no Posts collection to publish into; skip green there.
+    test.skip(...guard(SITE_ROOT, "cms-publish-loop-prod-mutate.spec.js"));
 
     // Decap's "Delete published entry" flow uses a native window.confirm.
     // Register the handler BEFORE any interaction so it's never too late.

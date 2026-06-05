@@ -63,6 +63,10 @@ const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { gh, makeDeployQueueExtender } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
+const { guard } = require("./base-collections-guards");
+
+// #33/#21 — resolved like the other registered specs so the drift lint matches it.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { readPublishedFlag, forcePublishedFalse } = require("./fixture-baseline");
 const { setPublished, expectPublished, saveEntry, publishViaUi } = require("./cms-editor-ui");
 
@@ -144,6 +148,9 @@ test(
       process.env.RUN_HOST_REPO_PUBLISH_LOOP !== "1",
       "RUN_HOST_REPO_PUBLISH_LOOP not set — opt-in via the cms-publish-loop-host workflow.",
     );
+    // #33/#21 — a base_collections:[] bio renders no Posts collection, so the
+    // unpublish/republish round-trip has nothing to act on; skip green there.
+    test.skip(...guard(SITE_ROOT, "cms-unpublish-republish.spec.js"));
 
     // Persistent dialog handler — Decap uses native window.confirm()
     // for the publish-now confirmation in some flows; without this
