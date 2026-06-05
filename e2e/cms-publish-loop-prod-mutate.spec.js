@@ -115,6 +115,7 @@ const {
   saveEntry,
   publishViaUi,
   clickEditorDelete,
+  confirmEditorDelete,
   reopenForPublishedDelete,
 } = require("./cms-editor-ui");
 const { prodTarget } = require("./cms-host");
@@ -400,20 +401,17 @@ test(
     });
 
     await test.step("Click the editor's Delete button → opens delete-from-main cms/... PR", async () => {
-      await clickEditorDelete(page);
-      // The persistent page.on("dialog") accepts the native confirm. If
-      // Decap uses an in-page modal instead, click its confirm button.
-      await page
-        .getByRole("button", { name: /^(delete|confirm|yes|ok)$/i })
-        .first()
-        .click({ timeout: 5_000 })
-        .catch((e) => {
-          // The in-page confirm button is optional: when Decap uses a
-          // native confirm(), the persistent page.on("dialog") listener
-          // already accepted it, so the button never appears. Log the
-          // skip rather than swallowing it silently (silent-catch-lint).
-          console.debug(`[cleanup] optional delete-confirm click skipped: ${e.message}`);
-        });
+      // confirmEditorDelete arms a POST /git/trees watcher BEFORE the click
+      // and AWAITS it as positive proof Decap dispatched the delete — a
+      // silent no-op now throws HERE (the real fault site) instead of 900s
+      // later in the URL-404 wait (#1815 delete-phase, run 26996121665).
+      // confirmEditorDelete arms a POST /git/trees watcher BEFORE the click
+      // and AWAITS it as positive proof Decap dispatched the delete — a
+      // silent no-op now throws HERE (the real fault site) instead of 900s
+      // later in the URL-404 wait (#1815 delete-phase, run 26996121665). It
+      // also installs the native-confirm auto-accept + the forward-compat
+      // in-app modal-confirm fallback, so no inline confirm click is needed.
+      await confirmEditorDelete(page, () => clickEditorDelete(page));
     });
 
     // ── 7. Label the delete PR cms/ready (if Decap opened one) ───────

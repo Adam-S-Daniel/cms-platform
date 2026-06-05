@@ -166,6 +166,86 @@ async function clickEditorDelete(page, { visibleTimeout = 15_000, clickTimeout =
   await btn.click({ timeout: clickTimeout });
 }
 
+// ReDoS-safe flat-alternation selector for a hypothetical in-app DOM
+// confirm modal. Decap 3.12.2's "Delete published entry" actually uses a
+// NATIVE window.confirm (decap-cms-core@3.9.0 Editor.js handleDeleteEntry:
+// !window.confirm(t('editor.editor.onDeletePublishedEntry'))), so this DOM
+// button never renders in prod; kept as a forward-compatible fallback for a
+// future Decap that migrates delete to an in-app <Confirm> modal. Flat
+// alternation (no nested quantifiers) so it passes the same ReDoS lint as
+// editorDeleteButton.
+const DELETE_CONFIRM_BUTTON_RE = /^(delete|confirm|yes|ok)$/i;
+function deleteConfirmButton(page) {
+  return page.getByRole("button", { name: DELETE_CONFIRM_BUTTON_RE }).first();
+}
+
+// Install the persistent native-confirm auto-accept handler exactly ONCE
+// per page (idempotent across repeat deletes — media-roundtrip deletes both
+// the post AND the asset — or a spec that already registered its own
+// page.on("dialog")). Playwright AUTO-DISMISSES dialogs with no listener,
+// which Decap reads as "cancel" and aborts the delete, so this must be live
+// before the click. PERSISTENT (page.on, not page.once).
+const _dialogHandlerInstalled = new WeakSet();
+function ensureNativeConfirmAutoAccept(page) {
+  if (_dialogHandlerInstalled.has(page)) return;
+  _dialogHandlerInstalled.add(page);
+  page.on("dialog", (d) => d.accept());
+}
+
+// Confirm + DISPATCH the editor Delete and VERIFY it actually dispatched.
+//
+// #1815 delete-phase (runs 26996121665 / 26994473112): the old call-site
+// pattern clicked Delete, accepted the native window.confirm via a
+// persistent page.on("dialog"), then did an OPTIONAL in-page confirm-button
+// click whose 5s timeout was swallowed — with NO proof Decap had issued the
+// delete. clickEditorDelete()'s `await btn.click()` resolves the instant the
+// synchronous window.confirm returns, so the test marched on while onDelete
+// silently no-op'd: no POST /git/trees, no cms/* delete PR, no direct
+// commit, no deploy; the file stayed on main until the harness safety-net
+// PR. The silent no-op surfaced 900s later as "URL never 404s".
+//
+// The fix: ARM a wait for Decap's first delete-dispatch network call —
+// POST <repo>/git/trees (decap-cms-backend-github@3.5.0 API.deleteFiles:
+// getDefaultBranch → updateTree(POST /git/trees, sha:null) → commit →
+// patchRef) — BEFORE running the caller's click thunk, then AWAIT it as
+// positive proof the delete fired. If it never fires, throw HERE (the real
+// fault site) instead of failing 900s later in the URL-404 wait. A
+// best-effort in-app confirm-button click (deleteConfirmButton) is folded in
+// for forward-compat and is harmless: under 3.12.2's native confirm the
+// button never renders and proof comes from the awaited request, not the
+// button. Both prod-loop specs call this instead of a bare clickEditorDelete.
+async function confirmEditorDelete(page, doClick, { dispatchTimeout = 60_000 } = {}) {
+  ensureNativeConfirmAutoAccept(page);
+  const treesRequest = page
+    .waitForRequest(
+      (req) => req.method() === "POST" && req.url().includes("/git/trees"),
+      { timeout: dispatchTimeout },
+    )
+    .then(() => true)
+    .catch(() => false);
+  await doClick();
+  // Forward-compat: if a future Decap swaps the native confirm for an in-app
+  // modal, click its confirm button. No-op under 3.12.2's native confirm (the
+  // button never renders); proof of the delete is the awaited request below,
+  // never this click — so a miss is logged, not fatal (silent-catch-lint).
+  await deleteConfirmButton(page)
+    .click({ timeout: 5_000 })
+    .catch((e) => {
+      console.debug(`[cleanup] optional in-app delete-confirm click skipped: ${e.message}`);
+    });
+  if (!(await treesRequest)) {
+    throw new Error(
+      "Delete was clicked and confirmed, but Decap never dispatched the git-data-API delete " +
+        "(no POST .../git/trees within " +
+        Math.round(dispatchTimeout / 1000) +
+        "s) — the delete silently no-op'd at the confirm/dispatch boundary (#1815 delete-phase, " +
+        "runs 26996121665 / 26994473112). Verify the editor was in the PUBLISHED state (Delete " +
+        "published entry, no Status chip) at click time and that the native confirm was accepted, " +
+        "not dismissed.",
+    );
+  }
+}
+
 // The "Delete published entry" affordance — the ONLY delete that removes
 // the file from `main`. Matches that one label exclusively (a `\b`-style
 // anchor: not "Delete UNpublished entry", not "Delete published CHANGES").
@@ -439,6 +519,8 @@ module.exports = {
   publishViaUi,
   editorDeleteButton,
   clickEditorDelete,
+  deleteConfirmButton,
+  confirmEditorDelete,
   publishedDeleteButton,
   editorialStatusChip,
   reopenForPublishedDelete,

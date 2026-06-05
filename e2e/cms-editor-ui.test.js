@@ -72,8 +72,61 @@ test.describe("cms-editor-ui shared helper — anti-drift lint (#1723)", () => {
       "openMediaLibrary",
       "mediaLibraryTop",
       "mediaLibraryButton",
+      "confirmEditorDelete",
+      "deleteConfirmButton",
     ]) {
       expect(typeof m[fn], `cms-editor-ui must export ${fn}()`).toBe("function");
+    }
+  });
+
+  // ── #1815 delete-phase: prove the editor delete actually DISPATCHED ───
+  // Prod runs 26996121665 / 26994473112 failed because the delete leg
+  // clicked "Delete published entry", accepted the native window.confirm,
+  // then SWALLOWED the optional in-page confirm-button miss — with NO proof
+  // Decap had issued the git-data-API delete. onDelete silently no-op'd (no
+  // POST /git/trees, no cms/* PR, no deploy) and the failure only surfaced
+  // 900s later as "URL never 404s". confirmEditorDelete() now arms a
+  // waitForRequest on POST /git/trees BEFORE the click and throws if it
+  // never fires. These pure-fs assertions lock that proof-of-dispatch in.
+  test("confirmEditorDelete arms a POST /git/trees dispatch proof (#1815)", () => {
+    const src = read(HELPER);
+    // KEYSTONE: the helper must await Decap's first delete-dispatch network
+    // call. Goes red the moment confirmEditorDelete reverts to a
+    // fire-and-forget click with no awaited proof — the exact regression.
+    expect(
+      /waitForRequest/.test(src),
+      "confirmEditorDelete must waitForRequest on the delete dispatch (#1815)",
+    ).toBe(true);
+    expect(
+      /git\/trees/.test(src),
+      "confirmEditorDelete must match Decap's POST /git/trees delete write (#1815)",
+    ).toBe(true);
+  });
+
+  test("the in-app delete-confirm selector is a ReDoS-safe flat alternation", () => {
+    const src = read(HELPER);
+    expect(
+      /DELETE_CONFIRM_BUTTON_RE\s*=\s*\/\^\(delete\|confirm\|yes\|ok\)\$\/i/.test(src),
+      "cms-editor-ui.js must define DELETE_CONFIRM_BUTTON_RE = /^(delete|confirm|yes|ok)$/i",
+    ).toBe(true);
+    // No nested quantifier (a `+`/`*`/`{…}` applied to a parenthesised group
+    // that itself contains a quantifier) — the editorDeleteButton ReDoS rule.
+    expect(
+      /\([^)]*[+*][^)]*\)[+*]/.test(src),
+      "the delete-confirm/selectors must not nest quantifiers (ReDoS lint)",
+    ).toBe(false);
+  });
+
+  test("both prod-loop specs route the delete click through confirmEditorDelete", () => {
+    for (const f of [
+      "cms-publish-loop-prod-mutate.spec.js",
+      "cms-media-roundtrip.spec.js",
+    ]) {
+      const src = read(f);
+      expect(
+        /confirmEditorDelete\(/.test(src),
+        `${f} must dispatch-verify its delete via confirmEditorDelete (#1815)`,
+      ).toBe(true);
     }
   });
 
