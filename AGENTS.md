@@ -365,15 +365,55 @@ jodidaniel's shape). **Spec-locked** by THREE tests:
    | **A** index-local route | `page.goto(…index-local.html#/collections/<base>)` | route never renders (collection stripped from `config-local.yml`) |
    | **B** index-local sidebar | `getByRole("link",{name:/^<base>$/i})` in a file that loads `index-local` but NOT `index-test` | sidebar link never appears |
    | **C** rendered-config per-collection | reads the rendered `_site/admin/config.yml` (`RENDERED_CONFIG`/`hasAdminCollection`/`adminCollections`) AND a per-base assertion: `preview_path`, a hint snapshot (`hintFor`/`PROD_HINTS`), `findCollection(cfg,'<base>')`, or `hasAdminCollection(…, '<base>')` | the `posts/tags/projects/pages/e2e` block is stripped → null/absent |
+   | **D** single-page SURFACE (#21) | **D1** `page.goto(/admin/reviews…)` + a review-DATA read (`.health-card`/`.stat-grid`/`WORKFLOW_FILES`/`regression.json`); **D2** `page.goto(/preview/?collection=pages\|projects)` or a `data-preview-layout="pages\|projects"` expect; **D3** the `@canary-readonly` tag or `canary-content` import + `.publicPath`; **D4** writes a `_posts/*.md` draft + asserts `/blog/` | the consumer ships none of: a CMS review subject (reviews), preview.md + per-collection content (preview shell), `_e2e/canary-*` (canary probe), or a posts/`/blog/` surface (draft isolation) |
 
-   It also has a **detector-stays-comprehensive** test anchored on
-   `cms-preview-url` + `cms-form-clarity`: if the detector regresses to the old
-   index-local-only blind spot, that goes RED. A spec whose admin shell is
-   `index-test.html` (`config-test.yml` is FIXED — not opt-out-deleted) is NOT
-   flagged by A/B and must NOT be guarded. Because (2) never runs on a platform
-   PR, (3) is what actually keeps the guard set from regressing. `NON_GUARDED` is
-   **empty by design** (every flagged spec is guarded) and the stale-entry test
-   requires any future entry to be genuinely flagged-but-unguarded.
+   It also has **detector-stays-comprehensive** tests anchored on
+   `cms-preview-url` + `cms-form-clarity` (CLASS C) and the CLASS D set
+   (`admin-reviews-{health,stats}`, `preview-shell`, `cms-publish-loop{,-preview}`,
+   `cms-preview-pr-self-contained`, `draft-isolation`): if the detector regresses
+   so it stops flagging any of these, that goes RED. A **precision-boundary** test
+   asserts the detector does NOT flag the single-page-COMPATIBLE lookalikes —
+   `glow-banding` (samples the THEME background on `/`; runs fine on a single-page
+   bio), `admin-reviews-auth` (drives `/admin/reviews/` but only the site-AGNOSTIC
+   OAuth handshake, no review data), `preview-bridge` (only regex-matches the URL
+   its builder helper returns, never navigates a variant). A spec whose admin
+   shell is `index-test.html` (`config-test.yml` is FIXED — not opt-out-deleted)
+   is NOT flagged by A/B and must NOT be guarded. Because (2) never runs on a
+   platform PR, (3) is what actually keeps the guard set from regressing.
+   `NON_GUARDED` is **empty by design** (every flagged spec is guarded) and the
+   stale-entry test requires any future entry to be genuinely
+   flagged-but-unguarded.
+
+#### The two guard registries in `e2e/base-collections-guards.js` (#33 + #21)
+
+`shouldSkip(siteRoot, basename)` dispatches on the entry shape:
+
+- **`ADMIN_WRITE_GUARDS`** (#33) — per-collection keep-list guards keyed on
+  `keepsBaseCollection(siteRoot, name)` with `mode: "all"|"any"`. The CLASS A/B
+  index-local navigators + **`draft-isolation.spec.js`** (posts: it writes a
+  `_posts/*.md` draft + asserts `/blog/`, machinery a `base_collections:[]`
+  consumer ships none of).
+- **`CAPABILITY_GUARDS`** (#21) — coarse single-page guards keyed on a named
+  capability predicate (`CAPABILITY_PREDICATES`): `isSinglePage` (→
+  `isSinglePageConsumer`) or `hasE2ECanaries` (→ `!hasE2ECanaries`). Members:
+  **`preview-shell`** + **`admin-reviews-health`** + **`admin-reviews-stats`**
+  (`isSinglePage` — a static bio ships no preview.md / has no review subject),
+  **`cms-publish-loop`** (its `@canary-readonly` probe) + **`cms-publish-loop-preview`**
+  + **`cms-preview-pr-self-contained`** (`hasE2ECanaries` — no `_e2e/canary-*` to
+  drive). Apply inline as `test.skip(...guard(SITE_ROOT, "<basename>"))`.
+
+The two registries are **disjoint** (a spec is guarded by exactly one). The
+guard-registry lint proves the both-directions predicate (`shouldSkip(single)===
+true & shouldSkip(full)===false`) + guard presence for BOTH. **The reviews
+dashboards were also de-identified**: they read `window.CMS_REPO`/`CMS_APEX`, so
+the mocked GitHub-API + `regression.json` routes match ANY owner/repo/apex (not a
+hardcoded `adamdaniel.ai`); `preview-shell` reads the expected `.site-logo` from
+`_config.yml` `title`, not a literal "Adam Daniel". This is what lets the FULL
+fixture (and every consumer) RUN+PASS them, while the single-page fixture SKIPS.
+**glow-banding is intentionally NOT guarded** — investigation showed it samples
+only the theme background gradient on `/`, which renders identically on a
+single-page bio (it passes on both fixtures); guarding it would skip a real
+glow/theme regression on a single-page consumer.
 
 **Adding a NEW generic-content spec:**
 - **Read-only / served / fs spec** (reads a base collection / canary / posts /
@@ -743,6 +783,26 @@ This makes the loop **self-diagnosing**; the actual URL-reflection fix is
 downstream and needs a live run with the new output. Locked by
 `e2e/github-actions-poll.test.js` (mergedAt-anchored cases) +
 `e2e/deploy-pill.test.js` (the two self-reporting messages).
+
+**The #1815 budget alignment (media-roundtrip):** the diagnosis above is only
+trustworthy if the per-leg URL-REFLECT budget is WIDE enough to span the real
+auto-merge latency BEFORE the extender's idle/give-up logic can fire. A live
+media-roundtrip run failed at ~907s/15min reporting *"NO deploy-production run
+fired"* while the canary auto-merge was simply SLOW — the merge hadn't landed
+yet, so `getMergedAt` returned null (unanchored), the lane was legitimately
+quiescent (nothing can deploy before the merge), and the extender mis-called it a
+real miss. The prod-mutate twin failed the SAME way on its delete leg (run
+26989348549). **The fix:** `cms-media-roundtrip.spec.js` raises each
+`waitForChangeReflected` leg's `urlTimeoutMs` from 15 → **30 min**
+(`REFLECT_TIMEOUT_MS`), matching its `waitForMerge` 30-min budget
+(`MERGE_TIMEOUT_MS`), so the INITIAL reflect window alone spans the ~30-min
+auto-merge latency; `TEST_TIMEOUT_MS` 100 → **130 min** and the
+`cms-media-roundtrip.yml` job `timeout-minutes` 110 → **150** to fit. **Do NOT
+shrink these back under the auto-merge latency** — `e2e/cms-loop-budget-alignment.test.js`
+(a PLATFORM_META_SPEC pure-fs lint) locks: media's MIN reflect leg `>=`
+prod-mutate's AND `>=` the 30-min floor, media's `waitForMerge` `>=` prod-mutate's,
+media's `TEST_TIMEOUT_MS` `>=` prod-mutate's, and the spec timeout fits the job
+`timeout-minutes`. The publish mechanism + canaries are unchanged — only budgets.
 
 ### Ephemeral canary branch hygiene (#22)
 

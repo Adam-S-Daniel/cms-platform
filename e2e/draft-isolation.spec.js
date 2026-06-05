@@ -3,6 +3,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { guard } = require("./base-collections-guards");
+
+// SITE_ROOT — the consuming site's repo root (the same value the rest of the
+// harness resolves). In a real consumer it equals `__dirname/..`; the #33
+// build-and-run meta-test overrides it to point at a fixture.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 // Plan unit B6 — draft isolation contract.
 //
@@ -82,6 +88,13 @@ test.describe(
   // Runs on chromium-desktop-3k only. See playwright.config.js.
   { tag: ["@admin-write"] },
   () => {
+    // #21/#33 — a single-page consumer (cms.base_collections:[]) ships no posts
+    // collection / `/blog/` surface: writing a `_posts/*.md` draft + asserting
+    // the posts draft-isolation contract is testing machinery it opted out of.
+    // Guarded via the shared registry on the build-INDEPENDENT keep-list signal
+    // (works in the @parity preview/prod lanes too). Full consumer → RUNS.
+    test.skip(...guard(SITE_ROOT, "draft-isolation.spec.js"));
+
     test.describe.configure({ mode: "serial", timeout: 240_000 });
 
     test.beforeAll(() => {

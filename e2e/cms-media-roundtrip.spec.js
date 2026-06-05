@@ -127,15 +127,30 @@ const UPLOADS_DIR = "assets/images/uploads";
 // safety net consults this so the probe never tries to write to main.
 const PROD_CANARY = process.env.PROD_CANARY === "1";
 
+// #1815 — the URL-reflect budget per deploy leg. RAISED 15 → 30 min so the
+// INITIAL wait alone spans the full real-prod auto-merge latency BEFORE the
+// deploy-queue extender can mistake "merge still pending, nothing deploying
+// yet" for "chain never fired". LIVE EVIDENCE: a real media-roundtrip run
+// timed out at ~907s/15min reporting "NO deploy-production run fired" while
+// the canary auto-merge was simply slow (it DID merge + deploy ~minutes
+// later). Now matches the 30-min waitForMerge budget below, so the reflect
+// window can absorb the same ~30-min auto-merge latency waitForMerge tolerates.
+// Mirrors the cms-publish-loop-prod-mutate.spec.js reflect/merge budgets
+// (locked >= by cms-loop-budget-alignment.test.js).
+const REFLECT_TIMEOUT_MS = 30 * 60 * 1000;
+// The create PR's real-prod auto-merge regularly takes 15–30 min under runner
+// contention / when the CMS-affecting-paths e2e suite re-runs (#1815).
+const MERGE_TIMEOUT_MS = 30 * 60 * 1000;
+
 // One full real-prod loop: create+attach → live, delete post → 404,
-// delete image → 404. Three deploy waits at 15 min each + the enlarged
+// delete image → 404. Three deploy waits at 30 min each (#1815) + the enlarged
 // 25-min reopenForPublishedDelete resync budget + the 30-min waitForMerge
-// budget (#1815) + setup. Bumped 80 → 100 min so the worst-case sum fits
-// without truncating a leg; typical happy path is still ~25-30 min.
-// Comfortably inside the 110-min job timeout (cms-media-roundtrip.yml).
-// Retries disabled — mutates real prod; a retry re-runs the same broken
-// chain.
-const TEST_TIMEOUT_MS = 100 * 60 * 1000;
+// budget (#1815) + setup. Bumped 100 → 130 min so the worst-case sum fits
+// without truncating a leg now each reflect leg can span the full auto-merge
+// latency; typical happy path is still ~25-30 min. Inside the 150-min job
+// timeout (cms-media-roundtrip.yml). Retries disabled — mutates real prod; a
+// retry re-runs the same broken chain.
+const TEST_TIMEOUT_MS = 130 * 60 * 1000;
 
 test.describe.configure({
   mode: "serial",
@@ -344,7 +359,7 @@ test(
           if (res.status() !== 200) return false;
           return (await res.text()).includes(imagePublicUrl);
         },
-        urlTimeoutMs: 15 * 60 * 1000,
+        urlTimeoutMs: REFLECT_TIMEOUT_MS,
         // #21: anchor the deploy-lane judgment on THIS run's own deploy.
         // `getMergedAt` lazily fetches the create PR's merged_at (the merge
         // lands DURING this wait via auto-merge); a completed
@@ -411,7 +426,7 @@ test(
       // object can still lag flipping `merged:true`; this absorbs that
       // without failing a healthy run.
       expect(createPrNumber, "create PR number captured for merge wait").toBeTruthy();
-      await waitForMerge({ prNumber: createPrNumber, timeoutMs: 30 * 60 * 1000 });
+      await waitForMerge({ prNumber: createPrNumber, timeoutMs: MERGE_TIMEOUT_MS });
     });
 
     await test.step("Re-open the post in PUBLISHED state for the delete leg", async () => {
@@ -493,7 +508,7 @@ test(
           const s = res.status();
           return s >= 400 && s < 500;
         },
-        urlTimeoutMs: 15 * 60 * 1000,
+        urlTimeoutMs: REFLECT_TIMEOUT_MS,
         onBudgetExhausted: makeDeployQueueExtender(),
       });
     });
@@ -605,7 +620,7 @@ test(
           const res = await page.request.get(imageUrlAbs, { failOnStatusCode: false });
           return res.status() === 404;
         },
-        urlTimeoutMs: 15 * 60 * 1000,
+        urlTimeoutMs: REFLECT_TIMEOUT_MS,
         onBudgetExhausted: makeDeployQueueExtender(),
       });
     });

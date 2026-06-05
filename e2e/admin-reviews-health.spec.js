@@ -1,6 +1,12 @@
 // @lane: local — mocks every GitHub API request via page.route; runs hermetically
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
+const { guard } = require("./base-collections-guards");
+
+// SITE_ROOT — the consuming site's repo root; the #21 guard-registry meta-proof
+// overrides it to point at a fixture.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 // Verifies the /admin/reviews/health.html QA dashboard:
 //   - renders one widget per known workflow,
@@ -17,7 +23,6 @@ const { captureStep } = require("./manual-capture");
 // dashboard would otherwise burn through anonymous rate limits.
 
 const FAKE_TOKEN = "ghp_fake_token_for_health_test";
-const REPO = "Adam-S-Daniel/adamdaniel.ai";
 
 const WORKFLOW_FILES = [
   "e2e-tests.yml",
@@ -68,8 +73,10 @@ async function installMocks(
       });
     }
 
-    // /repos/<owner>/<repo>/actions/workflows/<file>/runs
-    const m = path.match(new RegExp(`^/repos/${REPO}/actions/workflows/([^/]+)/runs$`));
+    // /repos/<owner>/<repo>/actions/workflows/<file>/runs — site-AGNOSTIC: the
+    // dashboard builds <owner>/<repo> from window.CMS_REPO (the consuming site's
+    // _config.yml cms.repository), so match ANY owner/repo, not a hardcoded one.
+    const m = path.match(new RegExp(`^/repos/[^/]+/[^/]+/actions/workflows/([^/]+)/runs$`));
     if (m) {
       const file = m[1];
       const override = overrides[file];
@@ -130,6 +137,13 @@ test.describe(
   // webkit-iphone16. See playwright.config.js.
   { tag: ["@admin-read"] },
   () => {
+    // #21 — a single-page consumer (cms.base_collections:[]) runs no CMS
+    // publish-loop / canary / deploy review workflows for this QA dashboard to
+    // surface (a static bio has no review subject matter). Guard via the shared
+    // registry on the build-INDEPENDENT isSinglePage signal. Full consumer →
+    // RUNS (the dashboard is site-agnostic — it reads window.CMS_REPO).
+    test.skip(...guard(SITE_ROOT, "admin-reviews-health.spec.js"));
+
     test("renders one widget per known workflow with success indicator", async ({ page }) => {
       await setupHealthPage(page);
       await installMocks(page);

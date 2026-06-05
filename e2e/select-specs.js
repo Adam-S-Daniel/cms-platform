@@ -273,6 +273,18 @@ const SPEC_RULES = {
     /^e2e\/compute-visual-diffs\.js$/,
     /^e2e\/generate-video\.sh$/,
     /^\.github\/workflows\/visual-regression\.yml$/,
+    // #21 — its isSinglePage skip-guard is keyed on the capability helper + the
+    // guard registry; re-select on a helper edit.
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  // #21 — the /admin/reviews/health.html QA dashboard spec. Its isSinglePage
+  // skip-guard is keyed on the capability helper + the guard registry; admin/
+  // reviews/ is its DOM-under-test.
+  "e2e/admin-reviews-health.spec.js": [
+    /^(theme\/)?admin\/reviews\//,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
   ],
   // Pure-node invariants on admin/index.html + admin/custom.css. Runs
   // any time admin/ changes — guards the cobalt theme + ?notheme
@@ -455,6 +467,10 @@ const SPEC_RULES = {
     /^\.github\/workflows\/deploy-production\.yml$/,
     /^\.github\/workflows\/deploy-preview\.yml$/,
     /^e2e\/(decap-pat|github-actions-poll|canary-content|cms-fixture-pr|cms-host)\.js$/,
+    // #21 — the @canary-readonly probe's hasE2ECanaries skip-guard is keyed on
+    // the capability helper + the guard registry; re-select on a helper edit.
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
   ],
   // Delete-published-entry flow. Same shape as the publish-loop spec
   // — both opt into RUN_HOST_REPO_PUBLISH_LOOP and run exclusively
@@ -477,6 +493,10 @@ const SPEC_RULES = {
     /^\.github\/workflows\/cms-editorial-workflow\.yml$/,
     /^\.github\/workflows\/deploy-preview\.yml$/,
     /^e2e\/(decap-pat|github-actions-poll|canary-content|cms-host)\.js$/,
+    // #21 — its hasE2ECanaries skip-guard is keyed on the capability helper +
+    // the guard registry; re-select on a helper edit.
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
   ],
   // Preview-side delete-published-entry flow. Same opt-in shape as the
   // prod delete spec but targets a per-PR preview env (head ref,
@@ -650,6 +670,23 @@ const SPEC_RULES = {
     /^_config\.yml$/,
     /^_layouts\//,
     /^_includes\//,
+    // #21 — its posts skip-guard is keyed on the capability helper + the guard
+    // registry; re-select on a helper edit.
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
+  ],
+  // #21 — the preview-PR-mimicry harness (real-loop, RUN_HOST_REPO_PUBLISH_LOOP-
+  // gated). Its hasE2ECanaries skip-guard is keyed on the capability helper +
+  // the guard registry; admin/, the canary collection/layout, and the editorial/
+  // deploy infra are its other inputs.
+  "e2e/cms-preview-pr-self-contained.spec.js": [
+    /^(theme\/)?admin\//,
+    /^_e2e\//,
+    /^_layouts\/canary\.html$/,
+    /^\.github\/workflows\/(cms-editorial-workflow|deploy-production)\.yml$/,
+    /^e2e\/(decap-pat|github-actions-poll|canary-content|cms-fixture-pr|cms-host)\.js$/,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
   ],
   "e2e/image-alt-text.spec.js": [
     /^_posts\//,
@@ -678,6 +715,10 @@ const SPEC_RULES = {
     /^_layouts\/preview\.html$/,
     /^(theme\/)?admin\/preview-bridge\.js$/,
     /^preview\.md$/,
+    // #21 — its isSinglePage skip-guard is keyed on the capability helper + the
+    // guard registry; re-select on a helper edit.
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
   ],
   "e2e/preview-config-patch.spec.js": [
     /^scripts\/patch-preview-config\.sh$/,
