@@ -364,7 +364,12 @@ Next:
        set -a; source infrastructure/site-params.env; set +a
        bash <cms-platform>/infrastructure/bootstrap/deploy.sh
        bash <cms-platform>/oauth-proxy/deploy.sh
-  5. Add GitHub secrets: AWS_ROLE_ARN, PREVIEW_CLOUDFRONT_ID, PRODUCTION_CLOUDFRONT_ID
+  5. Add GitHub secrets (exact fine-grained PAT permissions: see
+     .claude/skills/cms-platform-secrets/SKILL.md):
+       - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions Read (classic: repo)
+       - CMS_PLATFORM_PAT same + Workflows R/W (classic: repo + workflow) -- for platform-bump
+       - AWS_ROLE_ARN, PREVIEW_CLOUDFRONT_ID, PRODUCTION_CLOUDFRONT_ID (bootstrap stack outputs)
+     Also enable Settings -> General -> Allow auto-merge.
      (+ optional CMS_PLATFORM_PAT for sync PRs).
   6. Set _config.yml cms.oauth_base_url to the oauth-proxy ApiUrl output.
   7. Point ${domain} + *.${domain} DNS at the CloudFront distributions.
