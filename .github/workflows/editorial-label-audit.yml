@@ -41,6 +41,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Pass the caller's repo explicitly: the reusable only SPARSE-checks-out
+          # the audit script (no consumer checkout), so github.workspace is not a
+          # git repo and a bare `gh pr list` would fail "not a git repository".
           node .cms-platform/scripts/audit-editorial-labels.js \
+            --repo "${{ github.repository }}" \
             --branch-prefix "${{ inputs.branch_prefix }}" \
             --label-prefix "${{ inputs.label_prefix }}"

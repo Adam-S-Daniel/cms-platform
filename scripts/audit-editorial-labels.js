@@ -29,7 +29,10 @@ function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : def;
 }
-const REPO = arg("repo", "");
+// Resolve the target repo: explicit --repo wins; otherwise fall back to
+// GITHUB_REPOSITORY (always set in Actions = the caller's repo) so the
+// script never depends on a local git checkout the reusable does not make.
+const REPO = arg("repo", "") || process.env.GITHUB_REPOSITORY || "";
 const BRANCH_PREFIX = arg("branch-prefix", "cms/");
 const LABEL_PREFIX = arg("label-prefix", "decap-cms");
 const STATUSES = ["draft", "pending_review", "pending_publish"];

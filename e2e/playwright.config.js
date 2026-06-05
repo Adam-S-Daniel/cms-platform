@@ -84,6 +84,9 @@ const PLATFORM_META_SPECS = [
   // workflow DEFINITION (.github/workflows/parity-preview.yml); a consumer
   // ships only a thin wrapper, so it is platform-internal (self-CI only).
   "parity-preview-site-root.test.js",
+  // Reads the editorial-label-audit reusable workflow DEFINITION (consumer
+  // ships only a wrapper) — platform-internal, self-CI only.
+  "editorial-label-audit-repo.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN
