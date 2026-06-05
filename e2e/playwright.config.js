@@ -77,6 +77,10 @@ const PLATFORM_META_SPECS = [
   "check-platform-pin-consistency.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
+  // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN
+  // cms-media-roundtrip + cms-publish-loop-prod-mutate spec sources + the media
+  // workflow's timeout-minutes; platform-internal, self-CI only.
+  "cms-loop-budget-alignment.test.js",
   "cms-editor-ui.test.js",
   "cms-host.test.js",
   "cms-label-contract.spec.js",

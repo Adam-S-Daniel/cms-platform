@@ -116,7 +116,12 @@ jobs:
       CMS_REPO: ${{ github.repository }}
     # Recursion guard delegated to the `recursion-gate` job above.
     if: ${{ needs.recursion-gate.outputs.run == 'true' }}
-    timeout-minutes: 110
+    # 150 min — accommodates the spec's 130-min TEST_TIMEOUT_MS (#1815: each of
+    # the three URL-reflect legs now spans the full 30-min auto-merge latency)
+    # plus checkout / npm ci / Playwright-install setup. The prod-mutating-loop
+    # concurrency lane means a stuck run holds the lane up to this bound, so it
+    # stays finite and far cheaper than a deploy-lane collision.
+    timeout-minutes: 150
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.2 (2026-01-09)

@@ -117,6 +117,12 @@ const ADMIN_WRITE_GUARDS = {
     reason:
       'consumer opts out of the "posts" collection via cms.base_collections — the first-post walkthrough drives the Posts editor (#33)',
   },
+  "draft-isolation.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — the draft-isolation contract writes a `_posts/*.md` draft + asserts the `/blog/<slug>/` posts surface, machinery a base_collections:[] consumer ships none of (#33) (#21)',
+  },
 
   // ── pages-only ───────────────────────────────────────────────────────────
   "cms-page-crud.spec.js": {
@@ -155,11 +161,96 @@ const ADMIN_WRITE_GUARDS = {
   },
 };
 
-// Decide whether `siteRoot` should SKIP the registered spec. Uses the
-// build-INDEPENDENT keep-list source signal. mode "all" ⇒ skip when ANY listed
-// collection is dropped; mode "any" ⇒ skip when the (single) collection is
-// dropped. An unknown spec name is a programmer error — throw loudly.
+// ── CAPABILITY_GUARDS (#21, v0.1.13+) ────────────────────────────────────────
+//
+// The second group of guarded CONSUMER-RUNNING specs: ones whose single-page
+// incompatibility is NOT a per-collection admin-sidebar/route assumption (the
+// ADMIN_WRITE_GUARDS class) but a coarser "this whole surface only exists / is
+// only meaningful on a content-publishing consumer" gap. Each is keyed on a
+// named site-capabilities predicate (build-INDEPENDENT SOURCE signal), NOT the
+// per-collection keep-list, so the skip resolves correctly in the preview/prod
+// @parity lanes too (no `_site` build):
+//
+//   predicate "isSinglePage"   → skip when cap.isSinglePageConsumer(siteRoot)
+//                                (the consumer opted out of ALL base collections
+//                                via cms.base_collections:[] — no blog/posts/
+//                                projects/pages content for the surface to act
+//                                on). Used by the /preview/ shell (a single-page
+//                                bio ships no preview.md + has no per-collection
+//                                variants to stream) and the /admin/reviews/
+//                                QA dashboards (no visual-regression review /
+//                                publish-loop subject matter on a static bio).
+//   predicate "hasE2ECanaries" → skip when !cap.hasE2ECanaries(siteRoot)
+//                                (no `_e2e/canary-*.md` source ⇒ no rendered
+//                                `/e2e/canary-*/` URLs). Used by the canary-prod
+//                                @canary-readonly probe, which GETs each canary
+//                                publicPath and expects 200 + baseline.
+//
+// Same drift-lock discipline as ADMIN_WRITE_GUARDS: registry entry + inline
+// guard()/shouldSkip() call + the no-silent-drift detector class, all enforced
+// by base-collections-guard-registry.test.js. Both-directions predicate proof
+// holds against the two fixtures: isSinglePage ⇒ singlepage true / full false;
+// hasE2ECanaries ⇒ singlepage true (no canaries) / full false (canaries present).
+const CAPABILITY_GUARDS = {
+  "preview-shell.spec.js": {
+    predicate: "isSinglePage",
+    reason:
+      "single-page consumer (cms.base_collections:[]) ships no preview.md and has no per-collection posts/pages/projects content for the /preview/ shell to stream — the shell 404s + the collection-variant assertions don't apply (#21)",
+  },
+  "admin-reviews-health.spec.js": {
+    predicate: "isSinglePage",
+    reason:
+      "single-page consumer (cms.base_collections:[]) runs no CMS publish-loop / canary / deploy review workflows for the /admin/reviews/health.html QA dashboard to surface — a static bio has no review subject matter (#21)",
+  },
+  "admin-reviews-stats.spec.js": {
+    predicate: "isSinglePage",
+    reason:
+      "single-page consumer (cms.base_collections:[]) has no posts/projects content + no visual-regression review for the /admin/reviews/ stats dashboard to summarise (#21)",
+  },
+  "cms-publish-loop.spec.js": {
+    predicate: "hasE2ECanaries",
+    reason:
+      "single-page consumer ships no `_e2e/canary-*.md`, so the rendered `/e2e/canary-*/` URLs the @canary-readonly probe GETs return 404, not the expected 200 + baseline (#21)",
+  },
+  "cms-publish-loop-preview.spec.js": {
+    predicate: "hasE2ECanaries",
+    reason:
+      "single-page consumer ships no `_e2e/canary-*.md` canary to drive the preview-env publish loop against (the spec edits + reflects a `/e2e/canary-*/` URL that never renders) (#21)",
+  },
+  "cms-preview-pr-self-contained.spec.js": {
+    predicate: "hasE2ECanaries",
+    reason:
+      "single-page consumer ships no `_e2e/canary-*.md` canary for the preview-PR-mimicry harness to round-trip through its cms/<slug> branch lifecycle (#21)",
+  },
+};
+
+// The named capability predicates a CAPABILITY_GUARDS entry can reference. Each
+// maps to "should this siteRoot SKIP" — true when the consumer GENUINELY lacks
+// the surface/data the spec exercises (and so must NEVER be true for a full
+// consumer like adamdaniel.ai / the full fixture-site).
+const CAPABILITY_PREDICATES = {
+  isSinglePage: (siteRoot) => cap.isSinglePageConsumer(siteRoot),
+  hasE2ECanaries: (siteRoot) => !cap.hasE2ECanaries(siteRoot),
+};
+
+// Decide whether `siteRoot` should SKIP the registered spec. Dispatches on the
+// entry shape:
+//   - CAPABILITY_GUARDS entry (has `predicate`) → the named capability predicate.
+//   - ADMIN_WRITE_GUARDS entry (has `collections`+`mode`) → the build-INDEPENDENT
+//     keep-list source signal. mode "all" ⇒ skip when ANY listed collection is
+//     dropped; mode "any" ⇒ skip when the (single) collection is dropped.
+// An unknown spec name is a programmer error — throw loudly.
 function shouldSkip(siteRoot, specBasename) {
+  const capEntry = CAPABILITY_GUARDS[specBasename];
+  if (capEntry) {
+    const pred = CAPABILITY_PREDICATES[capEntry.predicate];
+    if (!pred) {
+      throw new Error(
+        `base-collections-guards: "${specBasename}" references unknown capability predicate "${capEntry.predicate}".`,
+      );
+    }
+    return pred(siteRoot);
+  }
   const entry = ADMIN_WRITE_GUARDS[specBasename];
   if (!entry) {
     throw new Error(
@@ -177,7 +268,7 @@ function shouldSkip(siteRoot, specBasename) {
 
 // The skip message for a registered spec.
 function guardReason(specBasename) {
-  const entry = ADMIN_WRITE_GUARDS[specBasename];
+  const entry = CAPABILITY_GUARDS[specBasename] || ADMIN_WRITE_GUARDS[specBasename];
   if (!entry) {
     throw new Error(`base-collections-guards: no registry entry for "${specBasename}".`);
   }
@@ -193,7 +284,12 @@ function guard(siteRoot, specBasename) {
 
 module.exports = {
   ADMIN_WRITE_GUARDS,
-  GUARDED_SPEC_NAMES: Object.keys(ADMIN_WRITE_GUARDS),
+  CAPABILITY_GUARDS,
+  CAPABILITY_PREDICATES,
+  // Every guarded spec — both the per-collection keep-list group and the
+  // capability-predicate group. The registry lint iterates this for its
+  // predicate-proof + guard-presence assertions.
+  GUARDED_SPEC_NAMES: [...Object.keys(ADMIN_WRITE_GUARDS), ...Object.keys(CAPABILITY_GUARDS)],
   shouldSkip,
   guardReason,
   guard,

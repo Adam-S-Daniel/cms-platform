@@ -1,6 +1,19 @@
 // @lane: local — mocks GitHub API + regression.json fetches via page.route; no auth
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
+const { guard } = require("./base-collections-guards");
+
+// SITE_ROOT — the consuming site's repo root; the #21 guard-registry meta-proof
+// overrides it to point at a fixture.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
+
+// The dashboard builds the preview-deploy hostname from window.CMS_APEX (the
+// consuming site's _config.yml url host), so the regression.json route must
+// match ANY apex, not a hardcoded one (AGENTS.md: never hardcode adamdaniel
+// identity). `preview-pr<N>.<apex>/regression.json` for any <apex>.
+const REGRESSION_JSON_RE = (prNumber) =>
+  new RegExp(`^https://preview-pr${prNumber}\\.[^/]+/regression\\.json$`);
 
 // Verifies that the /admin/reviews/ dashboard renders the visual-diff
 // stats (visuallyDifferent vs potentiallyAffected, plus the per-page
@@ -35,6 +48,13 @@ test.describe(
   // webkit-iphone16. See playwright.config.js.
   { tag: ["@admin-read"] },
   () => {
+    // #21 — a single-page consumer (cms.base_collections:[]) has no posts/
+    // projects content + no visual-regression review for this stats dashboard
+    // to summarise. Guard via the shared registry on the build-INDEPENDENT
+    // isSinglePage signal. Full consumer → RUNS (the dashboard is site-agnostic
+    // — it reads window.CMS_APEX).
+    test.skip(...guard(SITE_ROOT, "admin-reviews-stats.spec.js"));
+
     test("renders stat grid and per-page list from regression.json", async ({ page }) => {
       // Pre-seed the auth token so the dashboard skips the sign-in screen.
       await page.addInitScript((token) => {
@@ -94,14 +114,12 @@ test.describe(
       });
 
       // Mock the regression.json fetch the dashboard makes per card.
-      await page.route(
-        `https://preview-pr${PR_NUMBER}.adamdaniel.ai/regression.json`,
-        async (route) =>
-          route.fulfill({
-            status: 200,
-            contentType: "application/json",
-            body: JSON.stringify(REGRESSION_JSON),
-          }),
+      await page.route(REGRESSION_JSON_RE(PR_NUMBER), async (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(REGRESSION_JSON),
+        }),
       );
 
       await page.goto("/admin/reviews/");
@@ -193,9 +211,8 @@ test.describe(
         return route.fulfill({ status: 404, body: "{}" });
       });
 
-      await page.route(
-        `https://preview-pr${PR_NUMBER}.adamdaniel.ai/regression.json`,
-        async (route) => route.fulfill({ status: 404, body: "" }),
+      await page.route(REGRESSION_JSON_RE(PR_NUMBER), async (route) =>
+        route.fulfill({ status: 404, body: "" }),
       );
 
       await page.goto("/admin/reviews/");

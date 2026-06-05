@@ -32,6 +32,7 @@
  * canary state has zero blast radius — when the parent PR merges (or
  * closes), the branch is deleted and the canary edit dies with it.
  */
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { findCanary, makeMarker } = require("./canary-content");
@@ -39,6 +40,11 @@ const { closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
 const { addLabel, fetchPublicUrl, gh, waitForCmsPullRequest } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { previewTarget } = require("./cms-host");
+const { guard } = require("./base-collections-guards");
+
+// SITE_ROOT — the consuming site's repo root; the #21 guard-registry meta-proof
+// overrides it to point at a fixture.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 const CANARY = findCanary("page");
 // No GITHUB_HEAD_REF fallback — see cms-delete-published-preview.spec.js
@@ -109,6 +115,10 @@ test(
       !PR_NUMBER || !PR_HEAD_REF,
       "PR_NUMBER / PR_HEAD_REF not set — this spec only runs in PR CI.",
     );
+    // #21 — a single-page consumer ships no `_e2e/canary-*.md` to drive the
+    // preview-env publish loop against. Guarded via the shared registry on the
+    // build-INDEPENDENT hasE2ECanaries signal. Full consumer → RUNS.
+    test.skip(...guard(SITE_ROOT, "cms-publish-loop-preview.spec.js"));
 
     const runId = Date.now();
     const marker = makeMarker(`preview-${CANARY.id}`, runId);

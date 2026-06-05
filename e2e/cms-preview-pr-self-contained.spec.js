@@ -69,6 +69,7 @@
  *     real-network real-GitHub spec, not a per-browser invariant.
  *   - PROD_CANARY=1 (read-only daily probe) skips this — no mutation.
  */
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { findCanary, makeMarker } = require("./canary-content");
@@ -81,6 +82,11 @@ const {
   waitForWorkflowRun,
 } = require("./github-actions-poll");
 const { seedFixtureViaPr } = require("./cms-fixture-pr");
+const { guard } = require("./base-collections-guards");
+
+// SITE_ROOT — the consuming site's repo root; the #21 guard-registry meta-proof
+// overrides it to point at a fixture.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 const CANARY = findCanary("post");
 const PROD_HOST = "https://adamdaniel.ai";
@@ -142,6 +148,10 @@ test(
       process.env.RUN_HOST_REPO_PUBLISH_LOOP !== "1",
       "RUN_HOST_REPO_PUBLISH_LOOP not set — spike harness is opt-in (avoids cms/* PR self-recursion in PR-time CI).",
     );
+    // #21 — a single-page consumer ships no `_e2e/canary-*.md` canary for this
+    // preview-PR-mimicry harness to round-trip. Guarded via the shared registry
+    // on the build-INDEPENDENT hasE2ECanaries signal. Full consumer → RUNS.
+    test.skip(...guard(SITE_ROOT, "cms-preview-pr-self-contained.spec.js"));
 
     const runId = Date.now();
     const marker = makeMarker(`spike-${CANARY.id}`, runId);

@@ -146,6 +146,66 @@ function baseCollectionClasses(src) {
     if (perBase) classes.push(`rendered-config-per-collection`);
   }
 
+  // CLASS D — single-page-SURFACE dependence (#21). A consumer-running spec that
+  // drives a surface / data that a `base_collections:[]` single-page bio
+  // GENUINELY lacks — NOT an index-local route (A/B) or a per-collection
+  // rendered-config read (C), but one of:
+  //
+  //   D1 reviews-dashboard — page.goto(.../admin/reviews[/...]). The /admin/
+  //      reviews/ + reviews/health.html QA dashboards summarise the CMS publish-
+  //      loop / visual-regression review of CONTENT a single-page bio has none of.
+  //   D2 preview-collection-variants — drives /preview/ AND asserts a
+  //      per-collection variant (?collection=pages|projects OR
+  //      data-preview-layout="pages"|"projects"). A single-page consumer ships no
+  //      preview.md (the shell 404s) + has no per-collection content to stream.
+  //   D3 canary-readonly — the @canary-readonly probe GETs the rendered
+  //      `/e2e/canary-*/` URLs (CANARIES[].publicPath); a consumer with no
+  //      `_e2e/canary-*.md` source renders none, so they 404.
+  //   D4 posts-draft-write — writes a `_posts/*.md` draft + asserts the
+  //      `/blog/<slug>/` posts surface (draft-isolation); a base_collections:[]
+  //      consumer ships no posts collection / `/blog/`.
+  //
+  // Each pattern is PRECISE — it requires the surface-driving signal itself, so
+  // a spec that merely navigates "/" (glow-banding, console-clean) or reads a
+  // config-agnostic key is NOT flagged. These specs carry a coarse capability
+  // guard (CAPABILITY_GUARDS' isSinglePage / hasE2ECanaries, recognized by
+  // appliesBaseCollectionGuard) rather than a per-collection one.
+  // D1 — drives /admin/reviews AND asserts the review-DATA surface (the health
+  // workflow tiles / the visual-diff stat grid / regression.json). REQUIRING the
+  // data signal excludes admin-reviews-auth.spec.js, which navigates the same
+  // dashboard but only exercises the site-AGNOSTIC OAuth handshake (#auth-screen)
+  // — it has no review subject matter to depend on, so it must NOT be guarded.
+  const drivesReviews = /page\.goto\(\s*["']\/admin\/reviews(\/|["'])/.test(src);
+  if (drivesReviews) {
+    const readsReviewData =
+      /\.health-card\b/.test(src) ||
+      /\.stat-grid\b|\.review-card\b|stat-pages/.test(src) ||
+      /WORKFLOW_FILES\b|regression\.json/.test(src);
+    if (readsReviewData) classes.push("reviews-dashboard");
+  }
+
+  // D2 — actually NAVIGATES /preview/ to a per-collection variant (or asserts the
+  // pages/projects variant DOM renders). REQUIRING the navigation excludes
+  // preview-bridge.spec.js, which only regex-matches the URL its builder helper
+  // returns (`adamdaniel_cms_preview_url("pages")` → …?collection=pages) without
+  // navigating to or rendering that variant — site-agnostic, must NOT be guarded.
+  const navigatesPreviewVariant =
+    /page\.goto\(\s*["']\/preview\/\?collection=(pages|projects)\b/.test(src) ||
+    /expect\([^)]*data-preview-layout="(pages|projects)"/.test(src);
+  if (navigatesPreviewVariant) classes.push("preview-collection-variants");
+
+  const probesCanary =
+    /@canary-readonly/.test(src) ||
+    (/require\(["']\.\/canary-content["']\)/.test(src) && /\.publicPath\b/.test(src));
+  if (probesCanary) classes.push("canary-readonly");
+
+  // D4 — writes a `_posts/*.md` source draft AND asserts the `/blog/` posts
+  // surface. The `_posts` write distinguishes draft-isolation (which mutates the
+  // posts collection) from absence-only readers like sitemap.spec.
+  const writesPostsDraft =
+    /["'`]_posts["'`]/.test(src) && /\/blog\//.test(src) && /writeFileSync|writeDraft/.test(src);
+  if (writesPostsDraft) classes.push("posts-draft-write");
+
   return classes;
 }
 
@@ -204,6 +264,29 @@ test.describe("#33 base_collections guard registry — predicate proof", () => {
       expect(["all", "any"], `${specName} has an invalid mode`).toContain(entry.mode);
       expect(entry.reason, `${specName} skip reason must cite (#33)`).toContain("(#33)");
     }
+  });
+
+  // Every CAPABILITY_GUARDS entry (#21) must reference a KNOWN capability
+  // predicate and carry a reason that cites the issue, so the coarse single-
+  // page guards stay as machine-checked as the per-collection ones.
+  test("every capability guard references a known predicate and cites (#21)", () => {
+    for (const [specName, entry] of Object.entries(reg.CAPABILITY_GUARDS)) {
+      expect(
+        Object.keys(reg.CAPABILITY_PREDICATES),
+        `${specName} references unknown capability predicate "${entry.predicate}"`,
+      ).toContain(entry.predicate);
+      expect(entry.reason, `${specName} skip reason must cite (#21)`).toContain("(#21)");
+    }
+  });
+
+  // A spec is guarded by EXACTLY ONE registry (a per-collection keep-list guard
+  // OR a coarse capability guard) — never both, so shouldSkip()'s dispatch is
+  // unambiguous.
+  test("ADMIN_WRITE_GUARDS and CAPABILITY_GUARDS are disjoint", () => {
+    const both = Object.keys(reg.ADMIN_WRITE_GUARDS).filter((n) =>
+      Object.keys(reg.CAPABILITY_GUARDS).includes(n),
+    );
+    expect(both, "specs registered in BOTH ADMIN_WRITE_GUARDS and CAPABILITY_GUARDS").toEqual([]);
   });
 });
 
@@ -297,6 +380,54 @@ test.describe("#33 base_collections guard registry — no silent drift", () => {
         `${f} reads the rendered admin config per base collection — the detector MUST ` +
           `flag it (rendered-config-per-collection) so the drift gate covers this class`,
       ).toContain("rendered-config-per-collection");
+    }
+  });
+
+  // The detector must STAY comprehensive for the CLASS D single-page-SURFACE
+  // group (#21) too — each anchor spec must keep getting flagged by its class,
+  // so a future unguarded reviews-dashboard / preview-variant / canary-readonly
+  // / posts-draft spec can't silently ship. If the detector regresses, this RED.
+  test("detector flags the CLASS D single-page-surface specs (#21)", () => {
+    const D = {
+      "admin-reviews-health.spec.js": "reviews-dashboard",
+      "admin-reviews-stats.spec.js": "reviews-dashboard",
+      "preview-shell.spec.js": "preview-collection-variants",
+      "cms-publish-loop.spec.js": "canary-readonly",
+      "cms-publish-loop-preview.spec.js": "canary-readonly",
+      "cms-preview-pr-self-contained.spec.js": "canary-readonly",
+      "draft-isolation.spec.js": "posts-draft-write",
+    };
+    for (const [f, klass] of Object.entries(D)) {
+      const src = fs.readFileSync(path.join(HARNESS, f), "utf8");
+      expect(
+        baseCollectionClasses(src),
+        `${f} drives a single-page-incompatible surface — the detector MUST flag it ` +
+          `(${klass}) so the #21 drift gate covers this class`,
+      ).toContain(klass);
+    }
+  });
+
+  // The CLASS D detector must be PRECISE — these specs touch the same surfaces
+  // but are site-AGNOSTIC (single-page-compatible), so they must NOT be flagged.
+  // A false flag would force a needless skip that masks a real regression on a
+  // single-page consumer:
+  //   - glow-banding         — samples the THEME background gradient on "/".
+  //   - admin-reviews-auth   — navigates /admin/reviews/ but only drives the
+  //                            OAuth handshake (#auth-screen), no review DATA.
+  //   - preview-bridge       — only regex-matches the URL its builder helper
+  //                            returns; never navigates to / renders a variant.
+  test("detector does NOT flag the single-page-COMPATIBLE specs (precision boundary)", () => {
+    for (const f of [
+      "glow-banding.spec.js",
+      "admin-reviews-auth.spec.js",
+      "preview-bridge.spec.js",
+    ]) {
+      const src = fs.readFileSync(path.join(HARNESS, f), "utf8");
+      expect(
+        baseCollectionClasses(src),
+        `${f} is single-page-COMPATIBLE — the detector must NOT flag it (guarding it ` +
+          `would skip a real test on a single-page consumer)`,
+      ).toEqual([]);
     }
   });
 

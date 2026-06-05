@@ -1,6 +1,28 @@
 // @lane: local — drives the local /preview/ shell rendered by Jekyll
+const fs = require("node:fs");
+const path = require("node:path");
+const YAML = require("yaml");
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
+const { guard } = require("./base-collections-guards");
+
+// SITE_ROOT — the consuming site's repo root (the same value the rest of the
+// harness resolves). In a real consumer it equals `__dirname/..`; the #21
+// guard-registry meta-proof overrides it to point at a fixture.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
+
+// The expected `.site-logo` text is the consuming site's `_config.yml` `title`
+// — NEVER a hardcoded identity (AGENTS.md: "Never hardcode adamdaniel identity").
+// Read it from SOURCE so the assertion is correct on adamdaniel.ai AND on the
+// fixture-site ("Fixture Site") alike.
+function siteTitle() {
+  try {
+    const cfg = YAML.parse(fs.readFileSync(path.join(SITE_ROOT, "_config.yml"), "utf8")) || {};
+    return cfg.title || "";
+  } catch (_) {
+    return "";
+  }
+}
 
 // The /preview/ page is the live-preview surface driven by the CMS. It
 // renders with the real Jekyll layouts so its styling is always identical
@@ -18,6 +40,13 @@ test.describe(
   // webkit-iphone16. See playwright.config.js.
   { tag: ["@admin-read"] },
   () => {
+    // #21 — a single-page consumer (cms.base_collections:[]) ships no preview.md
+    // (so /preview/ 404s) and has no per-collection posts/pages/projects content
+    // for the shell to stream. Guard the whole describe via the shared registry
+    // on the build-INDEPENDENT isSinglePage capability signal. Full consumer →
+    // RUNS (the gem ships the preview layout's posts/pages/projects variants).
+    test.skip(...guard(SITE_ROOT, "preview-shell.spec.js"));
+
     test.beforeEach(async () => {});
 
     test("serves 200 with the site chrome and preview root", async ({ page }) => {
@@ -27,7 +56,9 @@ test.describe(
       // layout and would match `.site-header`/`.site-footer`) can't satisfy
       // this test.
       await expect(page.locator("[data-preview-root]")).toBeAttached();
-      await expect(page.locator(".site-header .site-logo")).toHaveText("Adam Daniel");
+      // Site-agnostic: the logo is `site.title` from the consuming site's
+      // _config.yml, not a hardcoded identity.
+      await expect(page.locator(".site-header .site-logo")).toHaveText(siteTitle());
       await expect(page.locator(".site-footer")).toBeVisible();
     });
 

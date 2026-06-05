@@ -51,6 +51,7 @@
  *     scripts/patch-preview-config.sh, .github/workflows/cms-*,
  *     .github/workflows/deploy-*, e2e/cms-*, _plugins/**).
  */
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
@@ -64,6 +65,11 @@ const {
 const { seedFixtureViaPr, closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
+const { guard } = require("./base-collections-guards");
+
+// SITE_ROOT — the consuming site's repo root; the #21 guard-registry meta-proof
+// overrides it to point at a fixture.
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 const CANARY = findCanary("post");
 // Host triplet now resolves through the shared cms-host resolver so the
@@ -636,6 +642,11 @@ test("@canary-readonly production canary URLs serve their baselines", async ({ p
     !PROD_CANARY,
     "PROD_CANARY=1 not set — canary-readonly probe is gated to the daily workflow.",
   );
+  // #21 — a single-page consumer ships no `_e2e/canary-*.md`, so the rendered
+  // `/e2e/canary-*/` URLs this probe GETs return 404 (not the expected 200 +
+  // baseline). Guard via the shared registry on the build-INDEPENDENT
+  // hasE2ECanaries signal. Full consumer (has canaries) → RUNS.
+  test.skip(...guard(SITE_ROOT, "cms-publish-loop.spec.js"));
 
   // Hard guard: never expose the test runner to a CMS_E2E_PAT in this
   // mode. The PROD_CANARY workflow does NOT set the secret, but a local
