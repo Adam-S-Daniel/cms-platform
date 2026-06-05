@@ -1,6 +1,13 @@
-# Reusable down-sync helper. Complements Dependabot (which bumps the `uses:@tag`
-# pins + the theme gem): this keeps the `platform_ref:` workflow inputs and a
-# `platform.lock` record in step with the latest cms-platform release.
+# Reusable ATOMIC down-sync helper. Bumps EVERY cms-platform reference a
+# consumer pins — `platform_ref:` inputs + `platform.lock`, the reusable-workflow
+# `uses:@<tag>` pins, the `cms-platform-theme` Gemfile `tag:`, and `Gemfile.lock`
+# (`tag:` + git `revision:`), plus any composite-action `@<sha>` pins — to the
+# latest cms-platform release, in ONE PR. So the single-version pin-consistency
+# guard (#29) passes on this PR alone.
+#
+# (Previously this bumped ONLY `platform_ref:` and left the `uses:@` pins + the
+# theme gem to Dependabot's piecemeal PRs — which breaks the single-version
+# guard until every one lands. Closing that gap is issue #13.)
 name: Platform bump (reusable)
 
 on:
@@ -18,8 +25,17 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
+      # The bump rewrites .github/workflows/* (the `uses:@` pins + `platform_ref:`
+      # inputs), so the PUSH needs `workflows` permission. The default Actions
+      # GITHUB_TOKEN's GitHub App lacks it — git rejects the push with "refusing
+      # to allow a GitHub App to create or update workflow ... without 'workflows'
+      # permission". Check out with the caller's PAT (CMS_PLATFORM_PAT —
+      # fine-grained Contents + PR + Workflows: write) so THAT token is what git
+      # persists as the push credential. (the live half of #13)
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.2 (2026-01-09)
-      - name: Bump platform_ref + platform.lock to latest release
+        with:
+          token: ${{ secrets.gh_token || github.token }}
+      - name: Bump every cms-platform reference to the latest release (atomic)
         env:
           GH_TOKEN: ${{ secrets.gh_token || github.token }}
           PLATFORM: ${{ inputs.platform_repo }}
@@ -29,14 +45,40 @@ jobs:
           [ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
           CUR=$(sed -n -E 's/^platform_ref:[[:space:]]*//p' platform.lock 2>/dev/null || echo "")
           [ "$LATEST" = "$CUR" ] && { echo "already on $LATEST"; exit 0; }
-          if [ -f platform.lock ]; then
-            sed -i -E "s|^(platform_ref:[[:space:]]*).*|\1$LATEST|" platform.lock
-          else
+
+          # Resolve the release tag -> its COMMIT sha (deref an annotated tag) for
+          # the Gemfile.lock git `revision:` and any composite-action `@<sha>` pin.
+          NEW_SHA=$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.sha')
+          if [ "$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.type')" = "tag" ]; then
+            NEW_SHA=$(gh api "repos/$PLATFORM/git/tags/$NEW_SHA" --jq '.object.sha')
+          fi
+          OLD_SHA=$(sed -n -E 's/^[[:space:]]*revision:[[:space:]]*//p' Gemfile.lock 2>/dev/null | head -1 || echo "")
+
+          # The pin-bearing files (everything pin-consistency checks). By the
+          # single-version invariant the CURRENT version string appears ONLY as a
+          # current pin, so a literal CUR->LATEST replace is safe; OLD_SHA->NEW_SHA
+          # moves the gem revision + any SHA-pinned composite. A composite-action
+          # SHA pin equals the release commit SHA, so the same OLD->NEW covers it.
+          TARGETS=()
+          [ -f platform.lock ]  && TARGETS+=("platform.lock")
+          [ -f Gemfile ]        && TARGETS+=("Gemfile")
+          [ -f Gemfile.lock ]   && TARGETS+=("Gemfile.lock")
+          while IFS= read -r -d '' f; do TARGETS+=("$f"); done \
+            < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 2>/dev/null || true)
+
+          for f in "${TARGETS[@]}"; do
+            [ -f "$f" ] || continue
+            CUR="$CUR" LATEST="$LATEST" perl -i -pe 's/\Q$ENV{CUR}\E/$ENV{LATEST}/g if length $ENV{CUR};' "$f"
+            if [ -n "$OLD_SHA" ]; then
+              OLD_SHA="$OLD_SHA" NEW_SHA="$NEW_SHA" perl -i -pe 's/\Q$ENV{OLD_SHA}\E/$ENV{NEW_SHA}/g;' "$f"
+            fi
+          done
+
+          # First-adoption fallback: a repo with no platform.lock yet.
+          if [ ! -f platform.lock ]; then
             printf 'platform_repo: %s\nplatform_ref: %s\n' "$PLATFORM" "$LATEST" > platform.lock
           fi
-          for f in $(grep -rl 'platform_ref:' .github/workflows/ 2>/dev/null || true); do
-            sed -i -E "s/(platform_ref:[[:space:]]*).*/\1$LATEST/" "$f"
-          done
+
           git diff --quiet && { echo "no changes"; exit 0; }
           BRANCH="platform/bump-$LATEST"
           git config user.name  cms-platform-bot
@@ -47,5 +89,5 @@ jobs:
           git push -f origin "$BRANCH"
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
             --title "Bump cms-platform to $LATEST" \
-            --body "Updates \`platform.lock\` + \`platform_ref:\` inputs. Dependabot bumps the \`uses:@\` pins and the theme gem separately." \
+            --body "Atomic single-version bump of every cms-platform reference (\`platform_ref:\` + \`platform.lock\`, the \`uses:@\` reusable-workflow pins, the \`cms-platform-theme\` Gemfile \`tag:\`, and \`Gemfile.lock\` \`tag:\` + \`revision:\`) to $LATEST. The pin-consistency guard (#29) passes on this PR alone." \
           || gh pr edit "$BRANCH" --body "Bump cms-platform to $LATEST."

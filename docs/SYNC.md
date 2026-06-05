@@ -8,11 +8,20 @@ How platform changes reach sites, and how site-side improvements get back.
 |---|---|
 | Reusable workflow `uses:@<tag>` pins | **Dependabot** `github-actions` ecosystem (`examples/site/.github/dependabot.yml`) |
 | `cms-platform-theme` gem (layouts/includes/assets/plugins + Decap render hook + **admin UI** `theme/admin`) | **Dependabot** `bundler` ecosystem |
-| `platform_ref:` workflow inputs + `platform.lock` | **`platform-bump`** reusable workflow (Dependabot doesn't touch `with:` inputs) |
+| **EVERY** version ref in ONE PR — `platform_ref:` inputs + `platform.lock`, the `uses:@<tag>` pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:`, and any composite `@<sha>` pin | **`platform-bump`** reusable workflow — an **atomic single-version bump** (#13). Checks out with the caller PAT so the workflow-file push is authorised |
 | Skills (`.claude/skills`) | **`skills-sync`** reusable workflow (rsync + PR, platform-authoritative) |
 | AWS infra templates | re-run `infrastructure/*/deploy.sh` with the new templates |
 
 Tag a release on `cms-platform` → the bump PRs fan out to every site; site CI gates the merge.
+
+`platform-bump` now moves **all** of the version references at once (rows 9–11
+above), so its PR is single-version-consistent on its own (#13) — Dependabot's
+`github-actions` / `bundler` ecosystems remain wired as an independent safety net
+(and for non-cms-platform deps), but they're no longer the *only* path for the
+`uses:@`/gem pins, so a consumer no longer sits skewed waiting for them to catch
+up. NOTE: a consumer only gets the atomic bump once its `platform-bump` thin
+caller pins a platform release that **contains** this fix; until then bump it
+manually (see the `platform-release-and-bump` skill).
 
 ## Up (site → platform)
 
