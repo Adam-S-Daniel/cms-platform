@@ -295,6 +295,22 @@ the registry `guard()`; the served-content specs self-skip on
 identical in a real consumer (harness at site root) but differ when the
 meta-test points `SITE_ROOT` at a fixture.
 
+> **The `@parity-preview` lane MUST export `SITE_ROOT` (#42, v0.1.15).** The
+> served-content specs key their single-page skip on
+> `cap.keepsBaseCollection(SITE_ROOT, …)`, which reads the CONSUMER's
+> `_config.yml`. In the `parity-preview.yml` reusable the harness is checked out
+> into `.cms-platform/`, so `SITE_ROOT || __dirname/..` resolves to the
+> **platform** checkout (whose fixture `_config.yml` keeps all five base
+> collections) unless the spec-run step sets `SITE_ROOT: ${{ github.workspace }}`
+> (the first, default-path SITE checkout). Without it, a single-page consumer's
+> parity lane crawls `/blog/` + `/tags/` and 404s (jodidaniel.com #35). The
+> `e2e-tests.yml` lane already sets `SITE_ROOT` for `target==local`; the
+> parity-preview lane now sets it too. **Latent gap to watch:** `e2e-tests.yml`
+> leaves `SITE_ROOT=''` for `target` preview/prod, so if those targets ever run
+> the content-crawl specs against a single-page consumer they'll hit the same
+> bug — set `SITE_ROOT` there too if/when that lane is enabled. Locked by
+> `e2e/parity-preview-site-root.test.js`.
+
 > **The closed blind spot (#34):** `cms-preview-url.spec.js` +
 > `cms-form-clarity.spec.js` READ the rendered admin config per base collection
 > but DON'T navigate index-local, so the original guard-registry detector (which
@@ -633,6 +649,23 @@ merges). The spec is therefore split into two gates:
   informational on the prod side; prod-drift at an unknown version is then caught
   by the scheduled `canary-prod` lane.
 
+> **The walk EXCLUDES files the deploy never serves (#41, v0.1.14).** The
+> version marker (`index.html` `<script>` manifest) is BLIND to non-script
+> sidecar files. v0.1.13 added `collections.site.yml.example` (#5) + `README.md`
+> to `theme/admin/` — SOURCE/DOC files the deploy COPY hook
+> (`theme/lib/cms-platform-theme/decap_config_hook.rb`) and its deploy-time mirror
+> (`scripts/render-decap-config.rb`) **explicitly SKIP** from `_site/admin`
+> (`next if bn.end_with?('.base.yml') || skip.include?(bn)`). They 404 on prod
+> AND preview, but the marker stayed byte-identical → the gate misread prod's
+> legitimate 404 as same-version **drift** and red-failed every consumer bump.
+> Fix: the walk filter is the testable `isExcludedAdminPath()` in
+> `admin-bundle-parity.js`, mirroring the hook skip list (`*.base.yml`,
+> `collections.site.yml[.example]`, `README.md`) on top of the per-deploy
+> (`commit.json`) / preview-mutated (`config*.yml`) / dev-only
+> (`index-{local,test}.html`) exclusions. A drift-guard test parses the Ruby
+> `skip = […]` arrays so the JS predicate can never diverge from what the deploy
+> actually serves. The same-version CONTENT-drift HARD FAIL is unchanged.
+
 The decision logic is the pure, network-free `e2e/admin-bundle-parity.js`
 (unit-tested by `e2e/admin-bundle-parity.test.js` with fixture bundles — the
 spec only does the fetches). Outcome contract: on a gem-bump PR (prod older
@@ -894,7 +927,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.8)
+## Version history (v0.1.0 → v0.1.15)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -916,6 +949,28 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   `theme/spec/base_collections_filter_test.rb`).
 - **v0.1.8** — **e2e flake fix:** decap-server `webServer` waits on HTTP
   readiness (`url:`) not the open port.
+- **v0.1.9–v0.1.12** — **issue sweep** (2026-06-04): #25 neutral gem logo, #23
+  scaffold seeds `preview.md` + `404.html`, #26 OAuth-restriction admin banner,
+  #29 single-version pin-consistency guard (`scripts/check-platform-pin-consistency.js`),
+  #21 self-diagnosing deploy-lane diagnostic, #22 ephemeral canary-branch
+  cleanup, #5 GOAL 2 `field_library` + `$ref`, #33 base_collections single-page
+  e2e skips; plus #14 bump-aware admin parity + #17 injected-shell identity
+  normalization + #16 PLATFORM_META_SPECS recurrence guard. Both consumers
+  reconciled to single-version lockstep.
+- **v0.1.13** (2026-06-05) — **#39 CloudFront `ErrorCachingMinTTL 300→0`** in the
+  bootstrap template (root cause of the #21/#1815 canary-URL non-reflection:
+  CloudFront negative-cached the pre-create 404) + `deploy.sh`
+  `CreateApexDnsRecords` env passthrough; **#40** broader single-page e2e skips
+  (reviews/preview-shell/draft-isolation/canary-prod) + media-roundtrip budget
+  alignment.
+- **v0.1.14** (2026-06-05) — **#41 admin-parity walk excludes deploy-skipped
+  source/doc files** (`isExcludedAdminPath()` mirrors the copy-hook skip list +
+  a Ruby-skip-list drift guard); fixes false same-version "drift" on
+  `README.md`/`collections.site.yml.example` during a bump.
+- **v0.1.15** (2026-06-05) — **#42 parity-preview exports `SITE_ROOT`** so a
+  single-page consumer's `@parity` crawl reads the CONSUMER `_config.yml`
+  (base_collections opt-out) instead of the platform fixture — stops the lane
+  crawling `/blog//tags` on jodidaniel.com.
 
 ## Consumers
 
