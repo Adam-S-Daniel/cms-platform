@@ -1,6 +1,6 @@
 ---
 name: cms-platform-secrets
-description: The exact GitHub Actions repository secrets AND variables a cms-platform consumer site must set — the precise fine-grained PAT permissions for each secret, plus the repo variables the reusable workflows read via vars.* and the scripts/set-repo-variables.sh setter that derives them. Use when setting up a new consumer, when a workflow fails with "GH_TOKEN env var is required" / "Input required and not supplied: github-token" / a startup_failure on a required secret, when auto-merge/nudge/sweep/auto-resolve don't run, when a loop probes the wrong URL/bucket, or when platform-bump fails "refusing to allow ... to update workflow ... without 'workflows' permission". Canonical, platform-versioned, synced to every consumer via skills-sync. Trigger on "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "required secrets", "PAT permissions", "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables", "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
+description: The exact GitHub Actions repository secrets AND variables a cms-platform consumer site must set — the precise fine-grained PAT permissions for each secret, plus the repo variables the reusable workflows read via vars.* and the scripts/set-repo-variables.sh setter that derives them. Use when setting up a new consumer, when a workflow fails with "GH_TOKEN env var is required" / "Input required and not supplied: github-token" / a startup_failure on a required secret, when auto-merge/nudge/sweep/auto-resolve don't run, when a loop probes the wrong URL/bucket, or when platform-bump fails "refusing to allow ... to update workflow ... without 'workflows' permission". Canonical, platform-versioned, synced to every consumer via skills-sync. Trigger on "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "WORKFLOW_SHA_COMMENT_PAT", "dependabot-comment-sync", "required secrets", "PAT permissions", "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables", "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
 ---
 
 # Required GitHub secrets and variables for a cms-platform consumer
@@ -11,6 +11,11 @@ Personal Access Tokens you create by hand; the three AWS values are emitted by
 the bootstrap stack (see the `aws-bootstrap` skill). This file is the single
 source of truth — it ships from cms-platform and syncs into every consumer's
 `.claude/skills/` via `skills-sync`.
+
+> **Policy: fine-grained PATs only — never classic PATs.** Every token below is
+> a [fine-grained personal access token](https://github.com/settings/personal-access-tokens)
+> scoped to the single consumer repo with the minimal permissions in its table.
+> Classic PATs (org-wide `repo`/`workflow` scopes) are not used here.
 
 ## Why a PAT and not the built-in `GITHUB_TOKEN`
 
@@ -39,21 +44,27 @@ permissions**:
 | **Metadata** | **Read** | mandatory — auto-selected for every fine-grained PAT |
 
 **Not needed:** *Workflows* — `CMS_E2E_PAT` never edits `.github/workflows/*`.
-**Classic-PAT equivalent:** the `repo` scope.
 **Also required (settings / role, not token permissions):**
 - Settings → General → **Allow auto-merge** = ON (else the nudge can't enable auto-merge).
 - The PAT's user must be a **configured reviewer of the `regression-review` environment**
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
   reject its pending deployments even with `Actions: write`.
 
-## `CMS_PLATFORM_PAT` — platform-version auto-bump
+## `CMS_PLATFORM_PAT` — anything that edits `.github/workflows/*` (bump + comment-sync)
 
-Consumed by: `platform-bump` (opens the single-version bump PR that moves
-`platform_ref` + the gem tag + every reusable `uses: …@<ref>` pin to a new
-release in one PR).
+Consumed by:
+- `platform-bump` — opens the single-version bump PR that moves `platform_ref` +
+  the gem tag + every reusable `uses: …@<ref>` pin to a new release in one PR.
+- `dependabot-comment-sync` — after Dependabot bumps a pinned `uses: …@<sha>`,
+  pushes the refreshed `# vX.Y.Z (date)` pin comment back into the workflow file.
 
-It needs **Workflows** (the bump PR rewrites the `uses: …@<ref>` pins under
-`.github/workflows/*`) but — unlike `CMS_E2E_PAT` — does **not** need **Actions**
+**Both edit `.github/workflows/*`, so both need `Workflows: write`** — the one
+permission `CMS_E2E_PAT` deliberately lacks. That shared requirement is why they
+**consolidate onto this single `repo`+`workflow` PAT** rather than a third
+secret. (comment-sync exercises only Contents + Workflows of it; the wider scope
+below is platform-bump's.)
+
+It needs **Workflows** but — unlike `CMS_E2E_PAT` — does **not** need **Actions**
 (it neither polls runs nor reviews deployments). **Repository permissions**:
 
 | Permission | Access | Why it's needed |
@@ -63,13 +74,18 @@ It needs **Workflows** (the bump PR rewrites the `uses: …@<ref>` pins under
 | **Workflows** | **Read and write** | the bump edits `.github/workflows/*` — GitHub **rejects** the push without this (`refusing to allow … to update workflow … without 'workflows' permission`) |
 | **Metadata** | **Read** | mandatory |
 
-**Classic-PAT equivalent:** `repo` + **`workflow`**. Without the Workflows
-permission, `platform-bump` fails and version bumps must be done manually
-(issue cms-platform#13). This is the single most-missed permission.
+Without the **Workflows** permission, `platform-bump` fails and version bumps
+must be done manually (issue cms-platform#13). This is the single most-missed
+permission.
 
 > A fine-grained PAT can't span two owners; if cms-platform and the consumer
 > have different owners, `CMS_PLATFORM_PAT` must be authorized for the consumer
 > repo's owner (where it pushes). It does not need access to cms-platform.
+
+> **Comment-sync is optional but loud:** if `CMS_PLATFORM_PAT` is absent the
+> `dependabot-comment-sync` reusable **skips cleanly with a notice** — the
+> workflow stays green, Dependabot's pin comments just aren't auto-refreshed.
+> (`platform-bump`, by contrast, hard-needs the PAT — issue cms-platform#13.)
 
 ## AWS deploy secrets (from the bootstrap stack outputs)
 
@@ -112,7 +128,7 @@ it's explicitly set.
 ## Quick checklist for a new consumer
 
 - [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Actions R/W** (+ be a reviewer of the `regression-review` environment)
-- [ ] `CMS_PLATFORM_PAT` — same **plus Workflows R/W** (or classic `repo` + `workflow`)
+- [ ] `CMS_PLATFORM_PAT` — same **plus Workflows R/W**; powers **both** platform-bump and dependabot-comment-sync
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
 - [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` opt-in)
 - [ ] Settings → General → **Allow auto-merge** = ON

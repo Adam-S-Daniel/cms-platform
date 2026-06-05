@@ -50,7 +50,11 @@ jobs:
       # Pin to the SAME ref as the `uses:` pin above so the script matches.
       platform_ref: v0.1.1
     secrets:
-      # Fine-grained PAT with `workflows: write` so the follow-up commit can
-      # push the refreshed workflow files. Drop this line if the site hasn't
+      # Consolidated by permissions onto the platform-standard CMS_PLATFORM_PAT
+      # (fine-grained: Contents + Workflows: write): comment-sync pushes refreshed
+      # files INTO .github/workflows/, so it needs Workflows: write — the same
+      # permission platform-bump already requires. (It can't reuse CMS_E2E_PAT,
+      # which has no Workflows permission.) Exact permissions: see
+      # .claude/skills/cms-platform-secrets. Drop this line if the site hasn't
       # configured the PAT — the reusable then skips cleanly with a notice.
-      workflow_sha_comment_pat: ${{ secrets.WORKFLOW_SHA_COMMENT_PAT }}
+      workflow_sha_comment_pat: ${{ secrets.CMS_PLATFORM_PAT }}

@@ -101,6 +101,9 @@ const PLATFORM_META_SPECS = [
   "cloudfront-preview-location-fixer.spec.js",
   "cloudfront-preview-router.spec.js",
   "compute-visual-diffs.test.js",
+  // Reads examples/site/.github/workflows (platform templates) to lock the
+  // consumer-PAT consolidation (only CMS_E2E_PAT / CMS_PLATFORM_PAT). Self-CI only.
+  "consumer-pat-secrets-lint.test.js",
   "decap-config-render-parity.test.js",
   // #5 GOAL 2 — drives scripts/render-decap-config.rb + reads theme/admin
   // (config.base.yml + field_library.yml) to render a $ref fixture and assert
