@@ -377,8 +377,70 @@ function checkGemfileLock() {
   }
 }
 
+// ── Workflow-set parity (consumer must carry EXACTLY the platform-dictated set) ─
+// Beyond keeping every platform-version REFERENCE in lockstep, the platform also
+// dictates the consumer workflow SET via examples/site/.github/workflows/. A
+// consumer's .github/workflows/*.yml basenames must EQUAL that canonical set at
+// the pinned ref — no MISSING (a platform-dictated workflow absent) and no EXTRA
+// (a non-dictated workflow lingering). The canonical set is read from the platform
+// checkout the reusable places at .cms-platform/ (so it reflects platform_ref).
+// Skipped with a notice when the canonical dir is absent (a local run without the
+// platform checkout) so this stays a no-op off-CI while the pin checks still run.
+function listYamlBasenames(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.ya?ml$/i.test(e.name))
+    .map((e) => e.name);
+}
+
+function checkWorkflowSetParity() {
+  const canonicalDir = path.resolve(
+    argOf(
+      "canonical-workflows",
+      "PIN_CANONICAL_WORKFLOWS",
+      path.join(ROOT, ".cms-platform", "examples", "site", ".github", "workflows"),
+    ),
+  );
+  if (!fs.existsSync(canonicalDir)) {
+    process.stdout.write(
+      "platform-pin-consistency: (workflow-set parity skipped — canonical set not found at " +
+        `${rel(canonicalDir) || canonicalDir}; pass --canonical-workflows, or run via the ` +
+        "platform-pin-consistency reusable which checks out examples/site).\n",
+    );
+    return;
+  }
+  const canonical = new Set(listYamlBasenames(canonicalDir));
+  const consumer = new Set(listYamlBasenames(path.join(ROOT, ".github", "workflows")));
+  checked += 1;
+  for (const name of [...canonical].sort()) {
+    if (!consumer.has(name)) {
+      violations.push({
+        file: `.github/workflows/${name}`,
+        kind: "workflow-set: MISSING (platform-dictated)",
+        found: "absent",
+        expected: `present (canonical @${platformRef})`,
+        detail: `copy the thin caller examples/site/.github/workflows/${name} from the platform`,
+      });
+    }
+  }
+  for (const name of [...consumer].sort()) {
+    if (!canonical.has(name)) {
+      violations.push({
+        file: `.github/workflows/${name}`,
+        kind: "workflow-set: EXTRA (not platform-dictated)",
+        found: "present",
+        expected: "absent (not in the canonical set)",
+        detail:
+          "remove it, or promote it to the platform's examples/site/.github/workflows/ so every consumer carries it",
+      });
+    }
+  }
+}
+
 checkGemfile();
 checkGemfileLock();
+checkWorkflowSetParity();
 
 // ── Report ────────────────────────────────────────────────────────────────────
 if (violations.length === 0) {

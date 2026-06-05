@@ -224,3 +224,68 @@ test.describe("check-platform-pin-consistency.js — SKEWED fixture (#29)", () =
     expect(out).toMatch(/platform_ref/);
   });
 });
+
+// ── Workflow-set parity: consumer's .github/workflows SET must EQUAL the
+// platform's canonical examples/site set (the platform-dictated set) at the
+// pinned ref — no MISSING, no EXTRA. The canonical set is supplied via
+// --canonical-workflows (the reusable points it at the .cms-platform checkout).
+test.describe("check-platform-pin-consistency.js — workflow-set parity", () => {
+  const V = "v0.1.20";
+
+  // A temp "canonical" dir holding the platform-dictated basenames (content is
+  // irrelevant — the check compares the SET of *.yml basenames).
+  function mkCanonical(names) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-canon-"));
+    for (const n of names) {
+      fs.writeFileSync(path.join(dir, n), "name: x\non: { pull_request: {} }\njobs: {}\n");
+    }
+    return dir;
+  }
+  // A version-consistent consumer carrying exactly `names` workflow callers.
+  function consumerWith(names) {
+    const root = mkConsumer();
+    write(root, "platform.lock", platformLock(V));
+    for (const n of names) write(root, `.github/workflows/${n}`, reusableCaller(n.replace(/\.ya?ml$/, ""), V));
+    return root;
+  }
+  function runWithCanonical(root, canonicalDir) {
+    return spawnSync(
+      process.execPath,
+      [SCRIPT, "--root", root, "--owner", OWNER, "--repo", REPO, "--canonical-workflows", canonicalDir],
+      { encoding: "utf8" },
+    );
+  }
+
+  test("exits 0 when the consumer set EQUALS the canonical set", () => {
+    const names = ["deploy-production.yml", "e2e-tests.yml", "secrets-scan.yml"];
+    const res = runWithCanonical(consumerWith(names), mkCanonical(names));
+    expect(`${res.stdout}${res.stderr}`).not.toMatch(/workflow-set/);
+    expect(res.status).toBe(0);
+  });
+
+  test("FAILS with MISSING when a platform-dictated workflow is absent", () => {
+    const root = consumerWith(["deploy-production.yml", "e2e-tests.yml"]);
+    const canon = mkCanonical(["deploy-production.yml", "e2e-tests.yml", "regression-review-reaper.yml"]);
+    const res = runWithCanonical(root, canon);
+    expect(res.status).not.toBe(0);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toMatch(/workflow-set: MISSING/);
+    expect(out).toMatch(/regression-review-reaper\.yml/);
+  });
+
+  test("FAILS with EXTRA when the consumer carries a non-dictated workflow", () => {
+    const root = consumerWith(["deploy-production.yml", "e2e-tests.yml", "regenerate-manual.yml"]);
+    const canon = mkCanonical(["deploy-production.yml", "e2e-tests.yml"]);
+    const res = runWithCanonical(root, canon);
+    expect(res.status).not.toBe(0);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toMatch(/workflow-set: EXTRA/);
+    expect(out).toMatch(/regenerate-manual\.yml/);
+  });
+
+  test("skips parity (still exits 0) when no canonical set is available", () => {
+    const res = run(consumerWith(["deploy-production.yml"])); // no --canonical-workflows, no .cms-platform
+    expect(res.status).toBe(0);
+    expect(`${res.stdout}${res.stderr}`).toMatch(/workflow-set parity skipped/);
+  });
+});
