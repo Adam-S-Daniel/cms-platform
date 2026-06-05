@@ -23,7 +23,10 @@ const {
   isInjectedShell,
   normalizeInjectedIdentity,
   parityShaForFile,
+  isExcludedAdminPath,
 } = require("./admin-bundle-parity");
+const fs = require("node:fs");
+const path = require("node:path");
 
 // ── Fixture admin shells (the version marker = index.html bytes) ──────────
 // OLD prod shell: no oauth-detector script (pre-#26).
@@ -605,5 +608,105 @@ test.describe("#17 version marker normalizes the injected identity for sameVersi
     const v = compareVersions(normalizeInjectedIdentity(null), normalizeInjectedIdentity(sourceShellHtml()));
     expect(v.determinable).toBe(false);
     expect(v.bumpInProgress).toBe(true); // fail-safe
+  });
+});
+
+
+// ── Served-file exclusion: the parity walk must skip files the deploy COPY
+//    hook never publishes to _site/admin (fix: false same-version "drift" on a
+//    bump that ADDS source-only files). ─────────────────────────────────────
+//
+// ROOT CAUSE (adamdaniel #1922 / v0.1.13 bump): the BUMP-AWARE prod gate keys
+// "same version" on the served index.html manifest sha. v0.1.13 added
+// theme/admin/collections.site.yml.example + README.md — SOURCE/DOC files the
+// deploy copy hook (theme/lib/cms-platform-theme/decap_config_hook.rb) and its
+// deploy-time mirror (scripts/render-decap-config.rb) EXPLICITLY SKIP from
+// _site/admin (`next if bn.end_with?(".base.yml") || skip.include?(bn)`). They
+// 404 on prod AND preview — never served. But index.html (the version marker)
+// is a <script src> manifest, blind to these non-script sidecars, so it stayed
+// byte-identical → the gate read "same version" and flagged prod's legitimate
+// 404 as drift. The walk must EXCLUDE exactly what the hook skips.
+test.describe("served-file exclusion mirrors the deploy copy hook", () => {
+  test("source/doc files the hook SKIPS are excluded (never served → not walked)", () => {
+    for (const rel of [
+      "README.md",
+      "collections.site.yml",
+      "collections.site.yml.example",
+    ]) {
+      expect(isExcludedAdminPath(rel), `${rel} must be excluded`).toBe(true);
+    }
+  });
+
+  test("base templates (*.base.yml) are excluded — the hook renders, never copies them", () => {
+    expect(isExcludedAdminPath("config.base.yml")).toBe(true);
+    expect(isExcludedAdminPath("config-local.base.yml")).toBe(true);
+  });
+
+  test("per-deploy + preview-mutated + dev/test-only files stay excluded (unchanged contract)", () => {
+    for (const rel of [
+      "commit.json",
+      "config.yml",
+      "config-local.yml",
+      "config-test.yml",
+      "index-local.html",
+      "index-test.html",
+    ]) {
+      expect(isExcludedAdminPath(rel), `${rel} must be excluded`).toBe(true);
+    }
+  });
+
+  test("genuinely-served bundle files are NOT excluded (still parity-checked)", () => {
+    for (const rel of [
+      "index.html",
+      "field_library.yml",
+      "posts-list-enhance.js",
+      "admin-mobile.css",
+      "oauth-app-restriction-detector.js",
+      "reviews/health.html",
+    ]) {
+      expect(isExcludedAdminPath(rel), `${rel} must be served/walked`).toBe(false);
+    }
+  });
+
+  test("path separators normalize (Windows rel) — reviews\\\\x.html is still served", () => {
+    expect(isExcludedAdminPath("reviews\\health.html")).toBe(false);
+  });
+
+  test("non-string input is not excluded (defensive)", () => {
+    expect(isExcludedAdminPath(null)).toBe(false);
+    expect(isExcludedAdminPath(undefined)).toBe(false);
+  });
+
+  // DRIFT GUARD: parse the Ruby skip list out of BOTH the build-time hook and
+  // its deploy-time mirror and assert the JS predicate excludes every basename
+  // they skip. If someone adds a 4th source-only file to the Ruby skip arrays
+  // (or the `.base.yml` suffix rule), this fails until the JS walk matches —
+  // the two can never silently diverge.
+  test("JS exclusion stays in lockstep with the Ruby copy-hook skip list", () => {
+    const rubyFiles = [
+      path.join(__dirname, "..", "theme", "lib", "cms-platform-theme", "decap_config_hook.rb"),
+      path.join(__dirname, "..", "scripts", "render-decap-config.rb"),
+    ];
+    let checkedAnySkip = false;
+    let checkedAnyBase = false;
+    for (const f of rubyFiles) {
+      const src = fs.readFileSync(f, "utf8");
+      // skip = ['a', 'b', "c"]  (single or double quotes)
+      const m = src.match(/skip\s*=\s*\[([^\]]*)\]/);
+      expect(m, `${path.basename(f)} must declare a skip = [...] array`).toBeTruthy();
+      const names = [...m[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]);
+      expect(names.length, `${path.basename(f)} skip list must be non-empty`).toBeGreaterThan(0);
+      for (const bn of names) {
+        checkedAnySkip = true;
+        expect(isExcludedAdminPath(bn), `${path.basename(f)} skips ${bn} → JS must exclude it`).toBe(true);
+      }
+      // the `.base.yml` suffix rule must also be honored by the JS predicate
+      if (/end_with\?\(['"]\.base\.yml['"]\)/.test(src)) {
+        checkedAnyBase = true;
+        expect(isExcludedAdminPath("anything.base.yml")).toBe(true);
+      }
+    }
+    expect(checkedAnySkip, "parsed at least one Ruby skip basename").toBe(true);
+    expect(checkedAnyBase, "parsed the .base.yml suffix rule").toBe(true);
   });
 });

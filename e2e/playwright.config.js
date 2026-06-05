@@ -41,6 +41,11 @@ const PLATFORM_META_SPECS = [
   "cms-posts-list-enhance.spec.js",
   "e2e-posts-public-exclusion.test.js",
   "admin-bundle-parity.spec.js",
+  // Its pure-logic unit sibling: the bump-window verdicts + the served-file
+  // exclusion lock. The drift guard reads theme/lib/.../decap_config_hook.rb
+  // + scripts/render-decap-config.rb (platform source absent on a consumer),
+  // so it is platform-internal and must be testIgnored on a CONSUMER lane.
+  "admin-bundle-parity.test.js",
   "admin-css-banned-patterns.test.js",
   "admin-pin-invariant.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +

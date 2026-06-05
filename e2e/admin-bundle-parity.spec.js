@@ -10,6 +10,7 @@ const {
   describeVersion,
   parityShaForFile,
   normalizeInjectedIdentity,
+  isExcludedAdminPath,
 } = require("./admin-bundle-parity");
 
 // G2 — Admin bundle byte-parity probe (BUMP-AWARE, fix #14).
@@ -59,6 +60,14 @@ const {
 //     _site`, but deploy-{production,preview}.yml drop them from
 //     the S3 sync (`--exclude`) — they wire up localhost-only
 //     backends and have no business being on the CDN.
+//   - admin/*.base.yml, admin/collections.site.yml[.example],
+//     admin/README.md — source/doc-only files the deploy COPY hook
+//     (decap_config_hook.rb) + its mirror (render-decap-config.rb)
+//     SKIP from _site/admin, so they 404 on prod AND preview. Walking
+//     one would false-fail the bump-aware prod gate as "drift" when a
+//     bump adds it (adamdaniel #1922 / v0.1.13). The exclusion is
+//     centralized in admin-bundle-parity.js's isExcludedAdminPath()
+//     and lock-tested against the Ruby skip arrays.
 
 const PROD_BASE = "https://adamdaniel.ai";
 const ADMIN_PREFIX = "admin";
@@ -85,16 +94,16 @@ function listAdminFiles(adminDir) {
 }
 
 function isExcluded(relPath) {
-  // Don't compare the per-deploy commit.json or any config*.yml —
-  // they're mutated by the preview pipeline.
-  if (relPath === "commit.json") return true;
-  if (/^config[^/]*\.ya?ml$/.test(relPath)) return true;
-  // Local-dev / test admin entry points are deliberately omitted from
-  // both deploy syncs — they only need to exist in the local-served
-  // `_site/`. Don't expect them on prod or preview URLs.
-  if (relPath === "index-local.html") return true;
-  if (relPath === "index-test.html") return true;
-  return false;
+  // Delegate to the testable predicate (admin-bundle-parity.js): a file is
+  // excluded from the walk iff the deploy never serves it — the per-deploy
+  // commit.json, the preview-mutated/dev-only config*.yml + *-local/*-test
+  // shells, AND the source/doc-only files the deploy COPY hook skips from
+  // _site/admin (*.base.yml, collections.site.yml[.example], README.md). The
+  // hook (decap_config_hook.rb) is the authority; admin-bundle-parity.test.js
+  // locks this predicate to its skip list so they can't diverge. Walking a
+  // never-served file would false-fail the BUMP-AWARE prod gate as drift when
+  // a bump adds one (adamdaniel #1922 / v0.1.13: README.md + .example).
+  return isExcludedAdminPath(relPath);
 }
 
 // Fetch the body and compute the PARITY sha256 for `rel`. Uses Playwright's
