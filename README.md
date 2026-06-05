@@ -45,8 +45,8 @@ versioned spec — with the exact fine-grained permissions for each — lives in
 `skills-sync` copies into every consumer's `.claude/skills/`, so it travels with the
 platform. At a glance:
 
-- **`CMS_E2E_PAT`** (CMS automation + canary loops) — fine-grained, this repo: **Contents R/W, Pull requests R/W, Actions Read *and write*** (classic: `repo`). Actions *write* is for `regression-review-reaper` (rejecting superseded review-gate deployments); the PAT user must also be a reviewer of the `regression-review` environment. Must be a PAT, not `GITHUB_TOKEN`, so canary-PR events fire downstream workflows.
-- **`CMS_PLATFORM_PAT`** (the `platform-bump` auto-bump) — the same **plus Workflows R/W** (classic: `repo` + **`workflow`**), because the bump rewrites `.github/workflows/*` pins. Missing this is issue #13.
+- **`CMS_E2E_PAT`** (CMS automation + canary loops) — fine-grained, this repo: **Contents R/W, Pull requests R/W, Actions Read *and write***. Actions *write* is for `regression-review-reaper` (rejecting superseded review-gate deployments); the PAT user must also be a reviewer of the `regression-review` environment. Must be a PAT, not `GITHUB_TOKEN`, so canary-PR events fire downstream workflows.
+- **`CMS_PLATFORM_PAT`** (the `platform-bump` auto-bump) — the same **plus Workflows R/W**, because the bump rewrites `.github/workflows/*` pins. Missing this is issue #13.
 - **`AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID`** — from the bootstrap stack outputs (see the `aws-bootstrap` skill).
 
 ## Organization-owned consumers: OAuth App approval

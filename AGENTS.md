@@ -954,12 +954,11 @@ Still open:
   reusable; a consuming site authors its own):
   - `required-check-stubs` — encodes the repo's specific required-check /
     path-filter topology; each site authors its own.
-  - `code-quality` — platform-self-CI (lints the machinery itself), not a site
-    reusable. Being addressed via a **self-test fixture** (a buildable site so
-    `cd e2e && npm ci && npx playwright test` runs the harness standalone), then
-    adapting `code-quality` to lint cms-platform. Until then, ~12 build-dependent
-    e2e specs only go green in a consuming-site context (dogfood / fixture).
-  - `regenerate-manual` — site-specific docs (Contributor Manual) generation.
+  - `code-quality` — platform-self-CI (lints the machinery itself); kept
+    **platform-internal and NOT shipped to consumers**. The self-test fixtures
+    (`e2e/fixture-site`, `e2e/fixture-site-singlepage`) let
+    `cd e2e && npm ci && npx playwright test` run the harness standalone, so the
+    build-dependent e2e specs go green in self-CI (not only a consuming site).
   - `ci-runner-image` — adamdaniel-only GHCR image; already dropped in the e2e
     port (inline deps used instead).
 - **`playwright-image-drift` real-repo subtest caveat**: the guard's
