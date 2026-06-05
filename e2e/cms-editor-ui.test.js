@@ -117,6 +117,33 @@ test.describe("cms-editor-ui shared helper — anti-drift lint (#1723)", () => {
     ).toBe(false);
   });
 
+  test("the delete helper does NOT register its own dialog handler (#1815 double-accept regr)", () => {
+    // Loop run 27013147945 crashed `dialog.accept: Cannot accept dialog which is
+    // already handled!`: cms-editor-ui.js registered a 2nd persistent
+    // page.on("dialog", accept) on top of the spec's own. Playwright fires ALL
+    // dialog listeners, so the 2nd accept() on a handled dialog rejects. The
+    // helper must own NO dialog handler — the CALLER (each spec, at test start)
+    // is the single accepter.
+    // strip line + block comments so prose mentioning page.on("dialog") in the
+    // helper's own docs doesn't false-trip the "no handler in code" check.
+    const stripComments = (s) =>
+      s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    const helper = stripComments(read(HELPER));
+    expect(
+      /page\.on\(\s*["']dialog["']/.test(helper),
+      "cms-editor-ui.js must NOT register a page.on(\"dialog\") in code — the spec owns it (#1815)",
+    ).toBe(false);
+    // ...and each prod-loop spec MUST own exactly that persistent accepter, so
+    // the native confirm is accepted (Playwright auto-DISMISSES = cancel).
+    for (const f of ["cms-publish-loop-prod-mutate.spec.js", "cms-media-roundtrip.spec.js"]) {
+      const src = read(f);
+      expect(
+        /page\.on\(\s*["']dialog["']\s*,\s*\(?\s*d\s*\)?\s*=>\s*d\.accept\(\)/.test(src),
+        `${f} must register a persistent page.on("dialog", d => d.accept()) (#1815)`,
+      ).toBe(true);
+    }
+  });
+
   test("both prod-loop specs route the delete click through confirmEditorDelete", () => {
     for (const f of [
       "cms-publish-loop-prod-mutate.spec.js",

@@ -179,18 +179,6 @@ function deleteConfirmButton(page) {
   return page.getByRole("button", { name: DELETE_CONFIRM_BUTTON_RE }).first();
 }
 
-// Install the persistent native-confirm auto-accept handler exactly ONCE
-// per page (idempotent across repeat deletes — media-roundtrip deletes both
-// the post AND the asset — or a spec that already registered its own
-// page.on("dialog")). Playwright AUTO-DISMISSES dialogs with no listener,
-// which Decap reads as "cancel" and aborts the delete, so this must be live
-// before the click. PERSISTENT (page.on, not page.once).
-const _dialogHandlerInstalled = new WeakSet();
-function ensureNativeConfirmAutoAccept(page) {
-  if (_dialogHandlerInstalled.has(page)) return;
-  _dialogHandlerInstalled.add(page);
-  page.on("dialog", (d) => d.accept());
-}
 
 // Confirm + DISPATCH the editor Delete and VERIFY it actually dispatched.
 //
@@ -215,7 +203,11 @@ function ensureNativeConfirmAutoAccept(page) {
 // button never renders and proof comes from the awaited request, not the
 // button. Both prod-loop specs call this instead of a bare clickEditorDelete.
 async function confirmEditorDelete(page, doClick, { dispatchTimeout = 60_000 } = {}) {
-  ensureNativeConfirmAutoAccept(page);
+  // The CALLER must have a persistent `page.on("dialog", d => d.accept())`
+  // registered before this (the documented pattern — both prod-loop specs do
+  // at test start). This helper does NOT register its own: a SECOND accepter
+  // makes Playwright's per-dialog fan-out double-accept and throw "Cannot
+  // accept dialog which is already handled!" (regression on loop 27013147945).
   const treesRequest = page
     .waitForRequest(
       (req) => req.method() === "POST" && req.url().includes("/git/trees"),

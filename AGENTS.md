@@ -747,6 +747,34 @@ node scaffold/create-site.js /tmp/x --yes --domain d --repo d --owner o   # scaf
 # drift-guard + workflows: python3 -c 'import yaml,...' parse + bash -n the run: blocks
 ```
 
+## Definition of done (non-trivial changes)
+
+A merged PR with green unit-lints is **NOT** "done" for any non-trivial change
+to this platform or a consumer. Green unit lints routinely ship a LIVE
+regression (Decap UI drift, deploy-chain, dialog handling — e.g. the
+double-`dialog.accept()` crash on loop run 27013147945 that NO unit lint or
+adversarial code-review lens caught). "Done" additionally requires:
+
+1. **Drive the prod-mutate validation loop to GREEN.** Dispatch
+   `cms-publish-loop-prod.yml` (and `cms-media-roundtrip.yml` where the change
+   can affect it) on the affected site and ITERATE until a run actually
+   succeeds end-to-end (create → reflect → delete → 404) — not "the fix looks
+   right" or "the dispatch-proof passed." The live loop is the real acceptance
+   test for these CMS repos.
+2. **Audit + drive every workflow green.** Every workflow in the affected
+   repo(s) must have a run AFTER the last non-workflow / non-generated change,
+   and its most-recent run must SUCCEED — iterate (re-dispatch stale/scheduled
+   ones) until that holds. ("Generated" = loop-canary/cleanup PRs + auto-docs
+   regen; those don't reset the bar.)
+3. **No OPTIONAL / non-required check may fail either.** Drive `UNSTABLE` →
+   clean, not just `BLOCKED` → mergeable. A merged PR with a red non-required
+   check is not done — chase it to green, OR, if it is genuinely a
+   user-credential / go-live blocker (jodidaniel `CMS_E2E_PAT`, the excluded
+   jodidaniel #26), surface it explicitly rather than leaving it silently red.
+
+This gate is part of the `platform-release-and-bump` flow — apply it after the
+consumer bump, not before.
+
 ## E2E workflow matrix (ported)
 
 The full e2e/Playwright matrix is ported. Two shapes:
