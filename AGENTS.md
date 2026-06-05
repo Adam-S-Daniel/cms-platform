@@ -102,6 +102,23 @@ they keep only the seam. See "Admin delivery" below.
 - **`e2e/` deps install via `cd e2e && npm ci`** (`e2e/package-lock.json` is tracked —
   consumers need it). The CloudFront-Function specs simulate `Fn::Sub` by substituting
   a synthetic `example.test` apex, so platform specs stay site-agnostic.
+- **AST always, never regex, for code-shape lints (Adam's standing rule).** A lint
+  that reasons about CODE STRUCTURE — which `test()` blocks exist, whether a
+  `guard(SITE_ROOT, …)` sits inside a given test's scope, which collection a
+  `page.goto` navigates — MUST parse a real AST, never regex-scan the source.
+  Regex on source is brittle: it false-matches tokens in comments/strings,
+  mis-reads across line breaks, and is BLIND to interpolation — a regex couldn't
+  see `page.goto(\`…#/collections/${CANARY.cmsCollection}\`)` (a *variable*
+  collection), which let the jodidaniel host-loop guard gap ship. Parse with
+  `e2e/spec-ast.js` (acorn + acorn-walk): `analyzeSpec(src)` returns a fact bag
+  (string VALUES with `${…}` placeholders, call names+args, identifiers, requires,
+  Program-level `test()` blocks); the detector matches those facts, not raw text.
+  This mirrors `e2e/workflow-yaml-utils.js`, which parses workflow YAML with the
+  `yaml` parser for the same reason. The guard-registry detector
+  (`base-collections-guard-registry.test.js`) + `platformMetaSpecs()` are AST-based;
+  any NEW code-shape lint must be too. (Regex stays fine for genuinely lexical
+  concerns — a version string, a leaf token's content — never for code structure.)
+  Adding the parser deps respected the 7-day dependency cooling-off (above).
 
 ## Admin delivery (gem-shipped, v0.1.4+) — the render hook, the seam, base_collections
 

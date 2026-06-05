@@ -55,6 +55,8 @@ const path = require("node:path");
 const { test, expect } = require("./base");
 const reg = require("./base-collections-guards");
 const cap = require("./site-capabilities");
+const walk = require("acorn-walk");
+const { analyzeSpec, subtreeHasCall, parse, stringValue } = require("./spec-ast");
 
 const HARNESS = __dirname;
 const FULL = path.join(HARNESS, "fixture-site");
@@ -84,10 +86,25 @@ const NON_GUARDED = {};
 // single source of truth for "not consumer-running"), so this lint and the
 // runner agree without a second copy.
 function platformMetaSpecs() {
+  // AST, not regex: find the `PLATFORM_META_SPECS = [ ... ]` declarator in
+  // playwright.config.js and read its array's string elements structurally.
   const cfg = fs.readFileSync(path.join(HARNESS, "playwright.config.js"), "utf8");
-  const m = cfg.match(/PLATFORM_META_SPECS\s*=\s*\[([\s\S]*?)\];/);
-  if (!m) throw new Error("could not locate PLATFORM_META_SPECS in playwright.config.js");
-  return new Set([...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]));
+  const ast = parse(cfg);
+  const out = new Set();
+  let found = false;
+  walk.simple(ast, {
+    VariableDeclarator(node) {
+      if (node.id && node.id.name === "PLATFORM_META_SPECS" && node.init && node.init.type === "ArrayExpression") {
+        found = true;
+        for (const el of node.init.elements) {
+          const s = stringValue(el);
+          if (s != null) out.add(s);
+        }
+      }
+    },
+  });
+  if (!found) throw new Error("could not locate PLATFORM_META_SPECS in playwright.config.js");
+  return out;
 }
 
 // ── The COMPREHENSIVE detector ───────────────────────────────────────────
@@ -98,25 +115,38 @@ function platformMetaSpecs() {
 // base_collections:[] consumer is covered — not just index-local navigation
 // (the original blind spot). See the file header for the class catalogue.
 function baseCollectionClasses(src) {
+  const f = analyzeSpec(src);
   const classes = [];
 
+  // Leaf matchers over EXTRACTED facts (string VALUES, regex SOURCES, call
+  // names) — never the raw source. This is the AST discipline: structure comes
+  // from the parse; only the leaf token content is pattern-matched, so a token
+  // inside a comment or a differently-formatted call can't false-match/miss, and
+  // a `${…}`-interpolated collection is visible structurally.
+  const strHas = (re) => f.strings.some((s) => re.test(s));
+  const gotoHas = (re) => f.gotoArgs.some((s) => re.test(s));
+  const callTail = (...names) => f.calls.some((c) => names.includes(c.tail));
+  const sidebarWaitsFor = (c) => f.getByRoleLinkNames.includes(`^${c}$`);
+  // A call `fn(…, "<base>", …)` where one literal arg is a base-collection name.
+  const callWithBaseArg = (tail, bases) =>
+    f.calls.some(
+      (c) =>
+        c.tail === tail &&
+        c.args.some((a) => a.type === "Literal" && bases.includes(a.value)),
+    );
+
   // CLASS A — index-local route hash to a base collection.
-  if (
-    NAV_BASE.some((c) => new RegExp(`index-local\\.html#/collections/${c}\\b`).test(src))
-  ) {
+  if (NAV_BASE.some((c) => strHas(new RegExp(`index-local\\.html#/collections/${c}\\b`)))) {
     classes.push("index-local-route");
   }
 
   // CLASS B — base-collection sidebar-link wait, but ONLY when the file loads
   // index-local AND never loads index-test (index-test → config-test.yml is
   // FIXED, not opted-out, so those specs must NOT be guarded).
-  const loadsIndexLocal = /page\.goto\(\s*["']\/admin\/index-local\.html/.test(src);
-  const loadsIndexTest = /page\.goto\(\s*["']\/admin\/index-test\.html/.test(src);
+  const loadsIndexLocal = gotoHas(/\/admin\/index-local\.html/);
+  const loadsIndexTest = gotoHas(/\/admin\/index-test\.html/);
   if (loadsIndexLocal && !loadsIndexTest) {
-    const sidebarWait = NAV_BASE.some((c) =>
-      new RegExp(`getByRole\\(\\s*["']link["']\\s*,\\s*\\{\\s*name:\\s*/\\^${c}\\$/i`).test(src),
-    );
-    if (sidebarWait) classes.push("index-local-sidebar");
+    if (NAV_BASE.some((c) => sidebarWaitsFor(c))) classes.push("index-local-sidebar");
   }
 
   // CLASS C — reads the RENDERED admin config AND makes a per-base-collection
@@ -129,20 +159,22 @@ function baseCollectionClasses(src) {
   // for a config-AGNOSTIC top-level key (media_folder, site_url, publish_mode,
   // backend.branch — e.g. cms-config-preview-delta) is NOT falsely flagged.
   const readsRenderedConfig =
-    /RENDERED_CONFIG\b/.test(src) ||
-    // `_site/admin/config.yml` written as a path (slashes or path.join parts).
-    /_site["',\s/]+admin["',\s/]+config\.yml/.test(src) ||
-    /renderedAdminConfigPath\(|adminCollections\(/.test(src);
+    f.identifiers.has("RENDERED_CONFIG") ||
+    // `_site/admin/config.yml` as a single string OR built via path parts.
+    strHas(/_site[/\\]+admin[/\\]+config\.yml/) ||
+    (f.strings.includes("_site") && f.strings.includes("admin") && f.strings.includes("config.yml")) ||
+    callTail("renderedAdminConfigPath", "adminCollections");
   if (readsRenderedConfig) {
     const perBase =
-      /preview_path/.test(src) ||
-      /hintFor\(|PROD_HINTS|LOCAL_HINTS|TEST_HINTS/.test(src) ||
-      ALL_BASE.some((c) =>
-        new RegExp(`findCollection\\([^)]*["']${c}["']`).test(src),
-      ) ||
-      ALL_BASE.some((c) =>
-        new RegExp(`hasAdminCollection\\([^)]*["']${c}["']`).test(src),
-      );
+      f.strings.includes("preview_path") ||
+      f.identifiers.has("preview_path") ||
+      f.memberProps.has("preview_path") ||
+      f.identifiers.has("PROD_HINTS") ||
+      f.identifiers.has("LOCAL_HINTS") ||
+      f.identifiers.has("TEST_HINTS") ||
+      callTail("hintFor") ||
+      callWithBaseArg("findCollection", ALL_BASE) ||
+      callWithBaseArg("hasAdminCollection", ALL_BASE);
     if (perBase) classes.push(`rendered-config-per-collection`);
   }
 
@@ -175,12 +207,13 @@ function baseCollectionClasses(src) {
   // data signal excludes admin-reviews-auth.spec.js, which navigates the same
   // dashboard but only exercises the site-AGNOSTIC OAuth handshake (#auth-screen)
   // — it has no review subject matter to depend on, so it must NOT be guarded.
-  const drivesReviews = /page\.goto\(\s*["']\/admin\/reviews(\/|["'])/.test(src);
+  const drivesReviews = gotoHas(/\/admin\/reviews($|\/)/);
   if (drivesReviews) {
     const readsReviewData =
-      /\.health-card\b/.test(src) ||
-      /\.stat-grid\b|\.review-card\b|stat-pages/.test(src) ||
-      /WORKFLOW_FILES\b|regression\.json/.test(src);
+      strHas(/\.health-card\b/) ||
+      strHas(/\.stat-grid\b|\.review-card\b|stat-pages/) ||
+      f.identifiers.has("WORKFLOW_FILES") ||
+      strHas(/regression\.json/);
     if (readsReviewData) classes.push("reviews-dashboard");
   }
 
@@ -190,20 +223,22 @@ function baseCollectionClasses(src) {
   // returns (`adamdaniel_cms_preview_url("pages")` → …?collection=pages) without
   // navigating to or rendering that variant — site-agnostic, must NOT be guarded.
   const navigatesPreviewVariant =
-    /page\.goto\(\s*["']\/preview\/\?collection=(pages|projects)\b/.test(src) ||
-    /expect\([^)]*data-preview-layout="(pages|projects)"/.test(src);
+    gotoHas(/^\/preview\/\?collection=(pages|projects)\b/) ||
+    strHas(/data-preview-layout="(pages|projects)"/);
   if (navigatesPreviewVariant) classes.push("preview-collection-variants");
 
   const probesCanary =
-    /@canary-readonly/.test(src) ||
-    (/require\(["']\.\/canary-content["']\)/.test(src) && /\.publicPath\b/.test(src));
+    f.strings.some((s) => s.includes("@canary-readonly")) ||
+    (f.requires.has("./canary-content") && f.memberProps.has("publicPath"));
   if (probesCanary) classes.push("canary-readonly");
 
   // D4 — writes a `_posts/*.md` source draft AND asserts the `/blog/` posts
   // surface. The `_posts` write distinguishes draft-isolation (which mutates the
   // posts collection) from absence-only readers like sitemap.spec.
   const writesPostsDraft =
-    /["'`]_posts["'`]/.test(src) && /\/blog\//.test(src) && /writeFileSync|writeDraft/.test(src);
+    f.strings.some((s) => s === "_posts" || /(^|[/\\])_posts([/\\]|$)/.test(s)) &&
+    strHas(/\/blog\//) &&
+    callTail("writeFileSync", "writeDraft");
   if (writesPostsDraft) classes.push("posts-draft-write");
 
   // CLASS E — LIVE-admin base-collection dependence (prod + preview host loops).
@@ -216,13 +251,11 @@ function baseCollectionClasses(src) {
   // cms-delete-published waited 60s for /^Posts$/ on a bio admin. Gate on the
   // live-admin target (the structural signal — robust vs a comment match) AND a
   // base sidebar wait OR collection route.
-  const loadsLiveAdmin = /\b(prodTarget|previewTarget)\b/.test(src);
+  const loadsLiveAdmin = f.identifiers.has("prodTarget") || f.identifiers.has("previewTarget");
   if (loadsLiveAdmin) {
-    const liveSidebarWait = NAV_BASE.some((c) =>
-      new RegExp(`getByRole\\(\\s*["']link["']\\s*,\\s*\\{\\s*name:\\s*/\\^${c}\\$/i`).test(src),
-    );
+    const liveSidebarWait = NAV_BASE.some((c) => sidebarWaitsFor(c));
     const liveCollectionRoute = ALL_BASE.some((c) =>
-      new RegExp(`#/collections/${c}\\b`).test(src),
+      strHas(new RegExp(`#/collections/${c}\\b`)),
     );
     if (liveSidebarWait || liveCollectionRoute) classes.push("live-admin-base-collection");
   }
@@ -247,12 +280,15 @@ function drivesIndexLocalBaseCollection(src) {
 // cms-form-clarity, …) self-skip directly on hasAdminCollection. A flagged spec
 // applying EITHER is covered — it can't red-fail a base_collections:[] consumer.
 function appliesBaseCollectionGuard(src) {
+  const f = analyzeSpec(src);
   const registryGuard =
-    /require\(["']\.\/base-collections-guards["']\)/.test(src) &&
-    /\b(guard|shouldSkip)\s*\(/.test(src);
+    f.requires.has("./base-collections-guards") &&
+    f.calls.some((c) => c.tail === "guard" || c.tail === "shouldSkip");
   const directGuard =
-    /test\.skip\(/.test(src) &&
-    /\b(hasAdminCollection|keepsBaseCollection|isSinglePageConsumer)\s*\(/.test(src);
+    f.calls.some((c) => c.name === "test.skip") &&
+    f.calls.some((c) =>
+      ["hasAdminCollection", "keepsBaseCollection", "isSinglePageConsumer"].includes(c.tail),
+    );
   return registryGuard || directGuard;
 }
 
@@ -319,23 +355,26 @@ test.describe("#33 base_collections guard registry — guard presence", () => {
     test(`${specName} applies its inline base_collections guard`, () => {
       const file = path.join(HARNESS, specName);
       expect(fs.existsSync(file), `${specName} is registered but does not exist`).toBe(true);
-      const src = fs.readFileSync(file, "utf8");
+      const f = analyzeSpec(fs.readFileSync(file, "utf8"));
       expect(
-        /require\(["']\.\/base-collections-guards["']\)/.test(src),
+        f.requires.has("./base-collections-guards"),
         `${specName} must require ./base-collections-guards`,
       ).toBe(true);
-      // It must call guard()/shouldSkip() referencing its OWN basename, so the
-      // guard can't be wired to the wrong spec's predicate.
-      const callsGuard = new RegExp(
-        `(guard|shouldSkip)\\([^)]*["']${specName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`,
-      ).test(src);
+      // It must call guard()/shouldSkip() referencing its OWN basename (a literal
+      // arg equal to the basename), so the guard can't be wired to the wrong
+      // spec's predicate.
+      const callsGuard = f.calls.some(
+        (c) =>
+          (c.tail === "guard" || c.tail === "shouldSkip") &&
+          c.args.some((a) => a.type === "Literal" && a.value === specName),
+      );
       expect(
         callsGuard,
         `${specName} must call guard()/shouldSkip() with its own basename "${specName}"`,
       ).toBe(true);
-      // And it must self-skip on the result (test.skip referencing the guard).
+      // And it must self-skip on the result (a test.skip(...) call exists).
       expect(
-        /test\.skip\(/.test(src),
+        f.calls.some((c) => c.name === "test.skip"),
         `${specName} must test.skip() on the guard result`,
       ).toBe(true);
     });
@@ -358,17 +397,22 @@ test.describe("#33 base_collections guard registry — guard presence", () => {
     for (const specName of reg.GUARDED_SPEC_NAMES) {
       const file = path.join(HARNESS, specName);
       if (!fs.existsSync(file)) continue;
-      const src = fs.readFileSync(file, "utf8");
-      const starts = [...src.matchAll(/^test(?:\.skip|\.only)?\(/gm)].map((m) => m.index);
-      if (!starts.length) continue; // describe()-nested — file-level check covers it
-      const esc = specName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const guardRe = new RegExp(`(guard|shouldSkip)\\(\\s*SITE_ROOT\\s*,\\s*["']${esc}["']`);
-      for (let i = 0; i < starts.length; i++) {
-        const body = src.slice(starts[i], i + 1 < starts.length ? starts[i + 1] : src.length);
-        if (!guardRe.test(body)) {
-          const title = (body.match(/["'`]([^"'`]+)/) || [])[1] || "(unnamed)";
-          offenders.push(`${specName} › ${title.slice(0, 60)}`);
-        }
+      const f = analyzeSpec(fs.readFileSync(file, "utf8"));
+      // Program-level test()/test.skip()/test.only() blocks, found STRUCTURALLY
+      // (not a `^test(` regex). describe()-nested tests aren't Program-level, so
+      // they're skipped here and covered by the file-level guard-presence check.
+      for (const t of f.topLevelTests) {
+        const hasGuard = subtreeHasCall(
+          t.node,
+          (c) =>
+            (c.tail === "guard" || c.tail === "shouldSkip") &&
+            c.args.length >= 2 &&
+            c.args[0].type === "Identifier" &&
+            c.args[0].name === "SITE_ROOT" &&
+            c.args[1].type === "Literal" &&
+            c.args[1].value === specName,
+        );
+        if (!hasGuard) offenders.push(`${specName} › ${t.title.slice(0, 60)}`);
       }
     }
     expect(
