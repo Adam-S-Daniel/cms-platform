@@ -37,6 +37,14 @@ branch prefix (default `cms/`). It is HEALTHY iff it carries exactly one
   Sparse-checks out just the audit script from the platform and runs it. A
   consumer wires a **daily-cron caller** under `examples/site/.github/workflows/`
   (inputs: `platform_repo`, `platform_ref`, `branch_prefix`, `label_prefix`).
+
+  > **MUST pass `--repo ${{ github.repository }}` (v0.1.16, cms#44).** The
+  > reusable SPARSE-checks-out only the audit script into `.cms-platform/` and
+  > never checks out the consumer repo, so `github.workspace` is NOT a git repo.
+  > A bare `gh pr list` then fails `fatal: not a git repository → failed to list
+  > PRs → exit 2`. The reusable passes the caller's repo explicitly; the script
+  > also falls back to `process.env.GITHUB_REPOSITORY`. Locked by
+  > `e2e/editorial-label-audit-repo.test.js`.
 - **`e2e/cms-editorial-label-migration.spec.js`** — regression guard. Drives the
   in-browser test-repo backend and asserts the dialog is ABSENT — or, if shown,
   gone after dismiss + 30s + reload. The dialog must never survive that cycle.
@@ -54,6 +62,19 @@ When the audit flags a PR (or an editor reports the dialog):
      should stay in the editorial queue, or
    - merge/unblock it so Decap can commit the label itself.
 3. Reload `/admin`; the dialog should not reappear.
+
+## Transient red from the prod loops' ephemeral cleanup PRs
+
+The audit scans EVERY open `cms/*` PR, so it also (correctly) flags the prod
+loops' **ephemeral fixture-cleanup PRs** — `cms/e2e-fixture/remove-*` /
+`cms/e2e-fixture/seed-*` branches that carry `cms/draft`/`cms/ready` labels but
+no `decap-cms/<status>` (they're script-created, not Decap editorial entries).
+These have auto-merge enabled and self-clear within a loop run, so a daily audit
+that happens to fire while one is mid-flight goes transiently red, then green on
+the next run. Do NOT add a fixture-branch exclusion to the audit — it would blind
+it to a fixture that genuinely gets stuck. The real reduction is fixing the loop
+DELETE leg so it stops opening these fallback cleanup PRs (cms#45 dispatch-proof;
+see `cms-stuck-pr-triage`).
 
 Related: stuck `cms/*` PRs that won't auto-merge are the upstream cause — see the
 `cms-stuck-pr-triage` skill for diagnosing the auto-merge failure itself.

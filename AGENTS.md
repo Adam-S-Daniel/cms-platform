@@ -504,7 +504,10 @@ A consumer references the platform version in MANY places (every reusable
 `tag:`, and `platform.lock` `platform_ref`). Dependabot + `platform-bump` land
 bumps PIECEMEAL, so consumers drift (observed live: adamdaniel.ai pinned `@v0.1.0`
 loop/deploy callers, gem `@v0.1.5`, others `@v0.1.3`/`@v0.1.6` at once — a `v0.1.0`
-reusable against a `v0.1.5` gem is a latent bug source).
+reusable against a `v0.1.5` gem is a latent bug source). **`platform-bump.yml`
+rewrites `.github/workflows/*` and pushes, so its token (`CMS_PLATFORM_PAT`)
+MUST carry `workflow` scope** or GitHub rejects the push (`refusing to allow …
+to update workflow … without 'workflows' permission`) — the live half of #13.
 
 `scripts/check-platform-pin-consistency.js` (platform-owned, Node, needs only the
 repo's `yaml` lib) makes them all agree:
@@ -611,7 +614,12 @@ shows on prod AND every preview deploy. Guards:
 - `scripts/audit-editorial-labels.js` — flags open `cms/*` PRs missing exactly
   one `decap-cms/<status>` label; exits non-zero with `::error::` annotations.
 - `.github/workflows/editorial-label-audit.yml` — reusable; consumers wire a
-  daily-cron caller (sparse-checks out just the audit script from the platform).
+  daily-cron caller (sparse-checks out just the audit script from the platform). It
+  MUST pass `--repo ${{ github.repository }}` (v0.1.16): the sparse checkout
+  leaves no git repo in `github.workspace`, so a bare `gh pr list` fails
+  `not a git repository`. The ephemeral `cms/e2e-fixture/remove-*` loop-cleanup
+  PRs (no `decap-cms/<status>` label) transiently red the audit until they
+  auto-merge — expected churn, not a bug; see the `editorial-label-audit` skill.
 
 ## E2E decap-server readiness (v0.1.8)
 
@@ -785,6 +793,15 @@ URL never reflects, `e2e/deploy-pill.js#waitForChangeReflected` asks the
 `makeDeployQueueExtender` callback (`e2e/github-actions-poll.js`) whether to keep
 waiting (backlog draining) or give up (real miss).
 
+**The DELETE leg (v0.1.17, #45):** the loops also DELETE the canary via the
+editor and wait for `/blog/<slug>/` to 404. A "Delete published entry" commits
+DIRECT to main via the git data API (`POST …/git/trees`), but the old call site
+had no proof the dispatch fired, so a silent no-op surfaced 900s later as the
+SAME "no deploy fired" symptom as a reflect miss. `confirmEditorDelete`
+(`e2e/cms-editor-ui.js`) now arms + awaits that `POST /git/trees` as
+dispatch-proof. Distinguish the two: a CREATE/reflect miss vs a DELETE no-op —
+see the `browser-testing` skill ("Native window.confirm()" → dispatch proof).
+
 **The #21 finding (triple-verified — trust it):** the 2099 e2e canary's OWN
 `/blog/<slug>/` page **builds correctly** and is correctly excluded from public
 aggregations — the `exclude_e2e_posts` theme plugin only stamps
@@ -927,7 +944,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.15)
+## Version history (v0.1.0 → v0.1.17)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -971,6 +988,15 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   single-page consumer's `@parity` crawl reads the CONSUMER `_config.yml`
   (base_collections opt-out) instead of the platform fixture — stops the lane
   crawling `/blog//tags` on jodidaniel.com.
+- **v0.1.16** (2026-06-05) — **#44 editorial-label-audit passes `--repo`** so the
+  daily audit stops failing `fatal: not a git repository` (the reusable
+  sparse-checks-out only the script, so `gh pr list` had no repo context;
+  script also falls back to `GITHUB_REPOSITORY`).
+- **v0.1.17** (2026-06-05) — **#45 delete-leg dispatch proof**: the prod-mutate /
+  media loops' `confirmEditorDelete` now arms `waitForRequest(POST …/git/trees)`
+  BEFORE the editor Delete click and awaits it, so a silent delete no-op throws
+  at the real fault site instead of timing out 900s later in the URL-404 wait
+  (#1815 delete-phase). See the `browser-testing` skill.
 
 ## Consumers
 
@@ -985,7 +1011,11 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   numeric `weight`, declared `output:false`; 4 file collections reading
   `_data/*.yml`). `cms.base_collections: []` hides the generic collections. A
   live-gate in `_data/settings.yml` `site_live` (default `false`) keeps prod
-  coming-soon with zero bio leak. Go-live is tracked in jodidaniel issue #26.
+  coming-soon with zero bio leak. Go-live is tracked in jodidaniel issue #26. Its
+  token-driven CMS automation (cms-automerge-nudge, auto-resolve-newline-conflict,
+  sweep-stale-cms-prs) requires a **`CMS_E2E_PAT` repo secret** which is not yet
+  provisioned — those scheduled workflows fail until it's added (the sweep
+  reusable marks it `required: true`, so its absence is a `startup_failure`).
 
 ## Roadmap / open issues
 
@@ -1000,10 +1030,15 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   (backward-compat proven). **Still deferred:** the full base-collection-override
   **deep-merge** (override/reorder a base collection's fields) — the seam remains
   append-only; `$ref` delivers shared-field REUSE only.
-- **issue #21 (OPEN):** a prod-mutate canary URL doesn't reflect the new content
-  despite a successful deploy — likely a deploy-build future-handling problem.
-- **issue #22 (OPEN):** publish loops leave orphaned `cms/*` canary branches —
-  add a prune step.
+- **issue #21 — DONE (v0.1.13, #39):** the prod-mutate canary URL not reflecting
+  was CloudFront NEGATIVE-CACHING the pre-create 404 (`ErrorCachingMinTTL: 300`);
+  fixed to `0` in the bootstrap template + verified live (both prod
+  distributions). Empirically confirmed: a canary deployed and its `/blog/<slug>/`
+  served 200. See the `aws-bootstrap` skill. (The loops' DELETE leg was a separate
+  follow-up — #45 / adamdaniel#1815 delete-phase.)
+- **issue #22 — DONE:** publish loops now prune their own orphaned `cms/e2e*` /
+  `cms/posts/2099-*` canary branches (scoped, only branches with no open PR;
+  locked by `e2e/workflow-loop-branch-cleanup.test.js`).
 
 ## Environment gotchas (this machine / web)
 
