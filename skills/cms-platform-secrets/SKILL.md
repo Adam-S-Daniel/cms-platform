@@ -1,9 +1,9 @@
 ---
 name: cms-platform-secrets
-description: The exact GitHub Actions repository secrets a cms-platform consumer site must set, and the precise fine-grained PAT permissions for each. Use when setting up a new consumer, when a workflow fails with "GH_TOKEN env var is required" / "Input required and not supplied: github-token" / a startup_failure on a required secret, when auto-merge/nudge/sweep/auto-resolve don't run, or when platform-bump fails "refusing to allow ... to update workflow ... without 'workflows' permission". Canonical, platform-versioned, synced to every consumer via skills-sync. Trigger on "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "required secrets", "PAT permissions", "platform-bump workflow scope", or "AWS_ROLE_ARN".
+description: The exact GitHub Actions repository secrets AND variables a cms-platform consumer site must set — the precise fine-grained PAT permissions for each secret, plus the repo variables the reusable workflows read via vars.* and the scripts/set-repo-variables.sh setter that derives them. Use when setting up a new consumer, when a workflow fails with "GH_TOKEN env var is required" / "Input required and not supplied: github-token" / a startup_failure on a required secret, when auto-merge/nudge/sweep/auto-resolve don't run, when a loop probes the wrong URL/bucket, or when platform-bump fails "refusing to allow ... to update workflow ... without 'workflows' permission". Canonical, platform-versioned, synced to every consumer via skills-sync. Trigger on "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "required secrets", "PAT permissions", "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables", "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
 ---
 
-# Required GitHub secrets for a cms-platform consumer
+# Required GitHub secrets and variables for a cms-platform consumer
 
 Set these as **Actions repository secrets** on the consumer repo
 (Settings → Secrets and variables → Actions → New repository secret). Two are
@@ -78,9 +78,41 @@ permission, `platform-bump` fails and version bumps must be done manually
 These are CloudFormation **stack outputs** from `infrastructure/bootstrap/deploy.sh`;
 see the `aws-bootstrap` skill for how to read them.
 
+## Repository **variables** (not secrets) — site identity the workflows read via `vars.*`
+
+Separate from the secrets above, the reusable workflows read non-secret config
+from the consumer's **Actions repository _variables_** (Settings → Secrets and
+variables → Actions → **Variables** tab). Don't set these by hand — run the
+platform setter, which derives every value from `APEX_DOMAIN` in
+`infrastructure/site-params.env` so nothing is typed twice:
+
+```bash
+set -a; source infrastructure/site-params.env; set +a
+bash <cms-platform>/scripts/set-repo-variables.sh        # add --dry-run to preview
+```
+
+| Variable | Derived from | Read by (reusable) |
+|---|---|---|
+| `CMS_APEX` | `APEX_DOMAIN` | `cms-publish-loop-prod` / `-host`, `cms-media-roundtrip`, `visual-regression` |
+| `CMS_PROD_URL` | `https://$APEX_DOMAIN` | `cms-publish-loop-prod` / `-host`, `cms-media-roundtrip` |
+| `PREVIEW_BUCKET` | `<prefix>-previews` (apex, dots→hyphens) | `visual-regression` (S3 steps no-op if unset) |
+| `AWS_REGION` | `${AWS_REGION:-us-east-1}` | `visual-regression` |
+| `PROD_PLAYGROUND_MODE` | **opt-in** (`site-params.env`) | `cms-publish-loop-prod`, `cms-media-roundtrip` |
+
+**`PROD_PLAYGROUND_MODE` is the one policy call:** it gates whether the
+prod-mutate loop actually creates+deletes a live canary. Leave it **unset** on a
+real production site (the loop then runs green in report-only mode without
+touching prod); set `PROD_PLAYGROUND_MODE=true` in `site-params.env` only for a
+throwaway sandbox you want the loop to mutate. The setter only pushes it when
+it's explicitly set.
+
+> A fine-grained PAT can't write repo variables for you — the setter uses your
+> `gh` auth, which needs admin/maintain on the consumer repo.
+
 ## Quick checklist for a new consumer
 
 - [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Actions R/W** (+ be a reviewer of the `regression-review` environment)
 - [ ] `CMS_PLATFORM_PAT` — same **plus Workflows R/W** (or classic `repo` + `workflow`)
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
+- [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` opt-in)
 - [ ] Settings → General → **Allow auto-merge** = ON

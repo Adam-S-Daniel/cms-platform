@@ -370,10 +370,17 @@ Next:
        - CMS_PLATFORM_PAT same + Workflows R/W (classic: repo + workflow) -- for platform-bump
        - AWS_ROLE_ARN, PREVIEW_CLOUDFRONT_ID, PRODUCTION_CLOUDFRONT_ID (bootstrap stack outputs)
      Also enable Settings -> General -> Allow auto-merge.
-     (+ optional CMS_PLATFORM_PAT for sync PRs).
-  6. Set _config.yml cms.oauth_base_url to the oauth-proxy ApiUrl output.
-  7. Point ${domain} + *.${domain} DNS at the CloudFront distributions.
-  8. If ${owner} is a GitHub ORG with OAuth App access restrictions enabled, an
+  6. Set the repo VARIABLES the reusable workflows read via vars.* (CMS_APEX,
+     CMS_PROD_URL, PREVIEW_BUCKET, AWS_REGION) — all DERIVED from APEX_DOMAIN in
+     infrastructure/site-params.env, so nothing is retyped:
+       set -a; source infrastructure/site-params.env; set +a
+       bash <cms-platform>/scripts/set-repo-variables.sh        # add --dry-run to preview
+     (Leave PROD_PLAYGROUND_MODE unset on a real prod site so the prod-mutate
+     loop stays report-only; set PROD_PLAYGROUND_MODE=true in site-params.env
+     only for a throwaway sandbox you want the loop to actually mutate.)
+  7. Set _config.yml cms.oauth_base_url to the oauth-proxy ApiUrl output.
+  8. Point ${domain} + *.${domain} DNS at the CloudFront distributions.
+  9. If ${owner} is a GitHub ORG with OAuth App access restrictions enabled, an
      org owner must approve the CMS OAuth App before editors can save (login
      works, but saves fail until then — see jodidaniel#27). Check with:
        node <cms-platform>/scripts/preflight-oauth.js --repo ${owner}/${repo}
