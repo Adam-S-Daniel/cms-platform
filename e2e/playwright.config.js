@@ -86,6 +86,11 @@ const PLATFORM_META_SPECS = [
   "cloudfront-preview-router.spec.js",
   "compute-visual-diffs.test.js",
   "decap-config-render-parity.test.js",
+  // #5 GOAL 2 — drives scripts/render-decap-config.rb + reads theme/admin
+  // (config.base.yml + field_library.yml) to render a $ref fixture and assert
+  // the resolved output. Platform-internal (reads scripts/ + theme/ source);
+  // self-CI only.
+  "field-library-ref-render.test.js",
   "dependabot-skip.test.js",
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",

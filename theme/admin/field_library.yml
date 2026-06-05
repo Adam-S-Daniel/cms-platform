@@ -1,0 +1,90 @@
+# ============================================================
+# Platform field_library — shared, reusable Decap field/widget defs
+# ============================================================
+#
+# PLATFORM-OWNED. Ships inside the cms-platform-theme gem (theme/admin), next
+# to config.base.yml, and is resolved at RENDER time by BOTH render paths
+# (scripts/render-decap-config.rb + theme/lib/cms-platform-theme/decap_config_hook.rb,
+# kept byte-in-lockstep by e2e/decap-config-render-parity.test.js).
+#
+# A site's SITE-OWNED seam admin/collections.site.yml may REUSE these defs
+# instead of re-authoring them, by writing a `$ref` where a field (or fields)
+# would go:
+#
+#     fields:
+#       - $ref: "#/field_library/body_markdown"      # → ONE field
+#       - $ref: "#/field_library/published_pair"     # → TWO fields (spliced)
+#       - { name: title, label: Title, widget: string }   # inline still works
+#
+# The render resolves every `$ref` to a DEEP COPY of the def below BEFORE
+# splicing the fragment at the `# __SITE_COLLECTIONS__` marker in config.base.yml.
+# Decap NEVER sees a `$ref` — it only ever loads fully-resolved field defs.
+#
+# A ref resolves to EITHER a single field (a mapping → spliced as one list item)
+# OR a list of fields (a sequence → spliced in place, preserving 2-space list
+# indentation). `$ref`s are OPTIONAL and fully backward-compatible: a seam with
+# only inline fields renders byte-identically to before this library existed.
+#
+# CONTRACT NOTE: the datetime `format:` token below ("YYYY-MM-DD HH:mm:ss ZZ")
+# is copied VERBATIM from config.base.yml's posts.date / posts.publish_date
+# fields. It is the cross-engine-safe stored form (see the dayjs/INVALID-DATE
+# rationale in config.base.yml + cms-post-list-summary.spec.js). Keep these in
+# lockstep with the base — if the base's token ever changes, change it here too.
+
+field_library:
+
+  # The markdown body widget (rich_text + raw modes), the same shape used by
+  # posts.body / pages.body in config.base.yml. Single field.
+  body_markdown:
+    name: body
+    label: Body
+    widget: markdown
+    required: true
+    hint: "Full content. Supports Markdown, images, code blocks, and HTML embeds. Switches between rich-text and raw modes."
+    modes:
+      - rich_text
+      - raw
+
+  # A standalone datetime widget carrying the cross-engine format contract.
+  # Single field. (Override `name`/`label` inline by re-authoring if a site
+  # needs a different label — this is the canonical "date" shape.)
+  date_widget:
+    name: date
+    label: Date
+    widget: datetime
+    required: true
+    date_format: "YYYY-MM-DD"
+    time_format: "HH:mm"
+    format: "YYYY-MM-DD HH:mm:ss ZZ"
+    default: "{{now}}"
+
+  # An image widget honouring the flat public_folder contract (Decap appends
+  # only the basename to public_folder; see the media_folder/public_folder
+  # invariant in config.base.yml). Single field.
+  image_widget:
+    name: image
+    label: Image
+    widget: image
+    required: false
+    hint: "Upload or pick an image. Stored under the flat media path so the on-disk file and the URL written into content resolve to the same place."
+    media_library:
+      config:
+        multiple: false
+
+  # The published toggle + publish_date pair — a LIST of TWO fields. A `$ref`
+  # to this name splices BOTH fields into the surrounding `fields:` list. The
+  # datetime `format:` token matches posts.publish_date in config.base.yml.
+  published_pair:
+    - name: published
+      label: Published
+      widget: boolean
+      default: false
+      hint: "ON = goes live on the next deploy. Leave OFF to schedule a future publish via the Publish Date below."
+    - name: publish_date
+      label: Publish Date
+      widget: datetime
+      required: false
+      date_format: "YYYY-MM-DD"
+      time_format: "HH:mm"
+      format: "YYYY-MM-DD HH:mm:ss ZZ"
+      hint: "Optional. Future date/time to auto-publish. Only honoured when Published above is OFF — if Published is ON, it goes live immediately and this is ignored."

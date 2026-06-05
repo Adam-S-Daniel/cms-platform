@@ -16,6 +16,10 @@
 # No-op for sites with neither a gem-shipped nor a vendored admin/config.base.yml.
 require "uri"
 require "fileutils"
+# Shared field_library $ref resolver — the SINGLE source of truth, also
+# required by scripts/render-decap-config.rb, so the two render paths expand
+# $refs byte-identically (parity-locked by e2e/decap-config-render-parity.test.js).
+require_relative "field_library"
 
 module CmsPlatformTheme
   module DecapConfig
@@ -81,10 +85,19 @@ module CmsPlatformTheme
       base_names = %w[posts tags projects pages e2e]
       base_keep  = cms["base_collections"]
 
+      # The platform field_library (reusable field/widget defs the seam may
+      # $ref) is PLATFORM-owned — it ships with the base machinery, so resolve
+      # it next to config.base.yml (src), never the site source.
+      field_library_path = File.join(src, "field_library.yml")
+
       render = lambda do |b, o|
         t = File.read(b)
         tokens.each { |k, v| t = t.gsub("{{#{k}}}", v) }
-        t = t.sub(/^  # __SITE_COLLECTIONS__.*$/, File.exist?(site_collections) ? File.read(site_collections) : "")
+        raw = File.exist?(site_collections) ? File.read(site_collections) : ""
+        # Expand any `$ref: "#/field_library/<name>"` in the seam BEFORE
+        # splicing. No-op (byte-identical to the legacy splice) when no $ref.
+        inject = CmsPlatformTheme::FieldLibrary.expand_seam_text(raw, field_library_path)
+        t = t.sub(/^  # __SITE_COLLECTIONS__.*$/, inject)
         unless base_keep.nil?
           keepset = Array(base_keep).map(&:to_s)
           (base_names - keepset).each do |n|
