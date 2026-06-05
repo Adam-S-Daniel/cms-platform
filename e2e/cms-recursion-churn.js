@@ -79,17 +79,49 @@ function isSelfChurn(loop, p) {
   return res.some((re) => re.test(p));
 }
 
-// RUN (true) iff ANY changed path falls OUTSIDE the loop's self-churn
-// set. `changedPaths` MUST be a non-empty array of repo-relative paths:
-// the composite handles the branch-create / unreachable-before /
-// diff-error / empty-set cases by failing OPEN (run) *before* calling
-// this, so this function stays pure and total for its contract.
+// A single repo-relative path that a PLATFORM-VERSION BUMP touches: the
+// canonical pin (platform.lock), the gem tag (Gemfile / Gemfile.lock), or a
+// reusable `uses:@<ref>` / composite-SHA pin under .github/workflows/. (The
+// bump-only gate below additionally requires platform.lock to be present, so
+// this set is deliberately broad — a workflow-LOGIC edit alone, with no
+// platform.lock, won't trip the gate.)
+function isBumpArtifact(p) {
+  return (
+    p === "platform.lock" ||
+    p === "Gemfile" ||
+    p === "Gemfile.lock" ||
+    /^\.github\/workflows\/.+\.ya?ml$/.test(p)
+  );
+}
+
+// Is this push a PLATFORM-VERSION BUMP and nothing else? A bump always rewrites
+// platform.lock and touches only the version pins (workflows @ref + gem tag).
+// Requiring platform.lock to be present distinguishes a real bump from an
+// unrelated workflow-logic edit (which would NOT touch platform.lock and so
+// must still RUN the loop).
+function isBumpOnlyPush(changedPaths) {
+  return changedPaths.includes("platform.lock") && changedPaths.every(isBumpArtifact);
+}
+
+// RUN (true) iff the push carries a real machinery change. SKIP (false) when
+// either (a) every changed file ∈ the loop's self-churn set (the loop fed
+// itself), OR (b) the push is a platform-version-bump-only change. Case (b)
+// exists because a bump touches the loop's OWN workflow file (its @ref pin),
+// which would otherwise re-fire the loop on the bump push — and its canary
+// deploy then RACES the bump's own deploy-production (the jodidaniel host-loop
+// reflect-timeout). The bump is already validated by its PR's e2e + deploy, so
+// the loop adds only a racing canary; skip it. Loop-independent (a bump is a
+// bump for host / prod / media alike) → keeps the two consumers consistent.
+// `changedPaths` MUST be a non-empty array of repo-relative paths: the composite
+// handles the branch-create / unreachable-before / diff-error / empty-set cases
+// by failing OPEN (run) *before* calling this, so this function stays pure.
 function shouldRunLoop(loop, changedPaths) {
   if (!COMPILED[loop]) throw new Error(`Unknown loop: ${loop}`);
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
     throw new Error("shouldRunLoop: changedPaths must be a non-empty array");
   }
-  return changedPaths.some((p) => !isSelfChurn(loop, p));
+  if (isBumpOnlyPush(changedPaths)) return false; // (b) platform-version bump only
+  return changedPaths.some((p) => !isSelfChurn(loop, p)); // (a) self-churn skip
 }
 
-module.exports = { SELF_CHURN, shouldRunLoop, isSelfChurn };
+module.exports = { SELF_CHURN, shouldRunLoop, isSelfChurn, isBumpArtifact, isBumpOnlyPush };
