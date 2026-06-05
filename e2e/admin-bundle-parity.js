@@ -64,6 +64,117 @@ function sha256(buf) {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
+// ── Per-env window.CMS_* injection normalization (fix #17) ────────────────
+// REGRESSION the #14 REQUIRED preview-vs-local gate introduced: it byte-
+// compares the SERVED preview shell against the LOCAL source shell. But the
+// render hook (theme/lib/cms-platform-theme/decap_config_hook.rb) and its
+// deploy-time mirror (scripts/render-decap-config.rb) splice a PER-ENVIRONMENT
+// identity block into the admin shells:
+//
+//   <script>window.CMS_REPO="…";window.CMS_SITE_ORIGIN="…";window.CMS_APEX="…";
+//           window.CMS_OAUTH_BASE_URL="…";window.CMS_SITE_TITLE="…";</script>
+//
+// So the SERVED preview shell carries the preview-origin identity while the
+// "local source" computation carries either the RAW {{CMS_*}} tokens (the
+// un-rendered template in theme/admin/*.html) or a DIFFERENT injected identity
+// (e.g. prod apex). The machinery is byte-identical; only the injected
+// IDENTITY differs — yet a raw-byte sha compares unequal, so the REQUIRED gate
+// FALSE-FAILS "PREVIEW BUNDLE != PR SOURCE" on the three injected shells
+// (admin/index.html + admin/reviews/*.html) of EVERY admin PR (adamdaniel #1913).
+//
+// HOW the injection looks in the SERVED shell vs the LOCAL source — THE key
+// asymmetry. The render hook (and its deploy-script mirror) splice an ENTIRE
+// identity <script> block in after <head>:
+//
+//   <head>
+//   <script>window.CMS_REPO="…";window.CMS_SITE_ORIGIN="…";window.CMS_APEX="…";window.CMS_OAUTH_BASE_URL="…";window.CMS_SITE_TITLE="…";</script>
+//     <meta charset="utf-8" />               ← real machinery follows
+//
+// The LOCAL source (theme/admin/index.html, reviews/*.html) carries NO such
+// block — it only READS window.CMS_* at runtime (`document.title =
+// window.CMS_SITE_TITLE`). So the served shell has an ADDED block the source
+// lacks: the difference is the WHOLE injected identity <script> (its presence,
+// not merely its values).
+//
+// THE FIX: before byte-comparing an INJECTED shell, normalize the per-env
+// injection in BOTH the preview AND the local bytes by (1) STRIPPING the
+// injected identity <script> block entirely (the block whose body is ONLY
+// `window.CMS_<KEY>=…;` assignments — the hook's output), and (2) as a
+// belt-and-suspenders fallback for any shell that carries the identity inline,
+// replacing any remaining `window.CMS_<KEY>=<value>` value or `{{CMS_<KEY>}}`
+// token with a per-key placeholder. The comparison then runs on the MACHINERY
+// (the real <script src> tags, the structure), not on the injected identity:
+//   • served shell (block present, preview-origin values) and
+//   • local source (block absent, runtime READS only) and
+//   • a prod-rendered shell (block present, apex values)
+// all normalize to the SAME bytes. A genuine machinery change — an added/
+// removed/renamed <script src>, a structural edit — survives normalization and
+// still HARD-FAILS (a real <script> with a `src`/non-identity body is NOT an
+// identity block, so it is never stripped). Non-injected files (the enhancer
+// .js, CSS) are never normalized: a `// foo` vs `// bar` diff still fails strict.
+
+// Fixed placeholder the normalizer collapses inline identity values to. Keyed
+// PER KEY so a DROPPED/RENAMED inline key (a machinery change) still differs.
+const CMS_IDENTITY_PLACEHOLDER = "__CMS_IDENTITY__";
+
+// A `<script>` (with NO `src` and NO non-identity attributes) whose body is
+// EXCLUSIVELY `window.CMS_<KEY> = <value>;` assignments (+ whitespace). This is
+// exactly the hook's injected block — and ONLY that. A real module script
+// (`<script src="…">`) or an inline script with any other statement does not
+// match, so it survives.
+const INJECTED_IDENTITY_BLOCK =
+  /<script>\s*(?:window\.CMS_[A-Z0-9_]+\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^;]*?)\s*;\s*)+<\/script>\n?/gi;
+
+// Normalize the per-env window.CMS_* injection in an admin-shell STRING so the
+// served shell and the local source compare on machinery only. Returns the
+// normalized string; a non-string input is returned unchanged.
+function normalizeInjectedIdentity(text) {
+  if (typeof text !== "string") return text;
+  return (
+    text
+      // (1) Strip the injected identity <script> block wholesale (the hook's
+      //     output), including the trailing newline the hook adds after it.
+      .replace(INJECTED_IDENTITY_BLOCK, "")
+      // (2) Fallback: any window.CMS_<KEY>=<value> still present inline (a shell
+      //     that self-defines identity rather than relying on the hook) → keep
+      //     the LHS + key, normalize only the assigned value. The placeholder
+      //     embeds the KEY so a renamed/dropped inline key still differs.
+      .replace(
+        /(window\.CMS_([A-Z0-9_]+)\s*=\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^;\n]*)/g,
+        (_m, lhs, key) => `${lhs}"${CMS_IDENTITY_PLACEHOLDER}:${key}"`,
+      )
+      // (3) Any leftover raw template token {{CMS_FOO}} (un-rendered source).
+      .replace(/\{\{\s*CMS_([A-Z0-9_]+)\s*\}\}/g, (_m, key) => `${CMS_IDENTITY_PLACEHOLDER}:${key}`)
+  );
+}
+
+// Does this admin-relative path name an INJECTED shell — one the render hook
+// splices window.CMS_* into? Mirrors the hook's globs EXACTLY:
+//   Dir.glob("index*.html") + Dir.glob("reviews/*.html")
+// i.e. an `index*.html` at the admin ROOT, or any `*.html` directly under
+// `reviews/`. Path separators are normalized to "/" so a Windows rel works.
+function isInjectedShell(rel) {
+  if (typeof rel !== "string") return false;
+  const p = rel.split("\\").join("/");
+  if (/^index[^/]*\.html$/.test(p)) return true;
+  if (/^reviews\/[^/]+\.html$/.test(p)) return true;
+  return false;
+}
+
+// The sha used by the parity gates for a file's BYTES. For an INJECTED shell we
+// normalize the per-env window.CMS_* identity first (so preview-injected vs
+// local-token/prod-injected compare on machinery only); every other file is
+// hashed RAW (strict). `buf` is a Buffer/Uint8Array/string. Returns a hex sha,
+// or null for nullish input (an unreadable/absent file).
+function parityShaForFile(rel, buf) {
+  if (buf == null) return null;
+  if (isInjectedShell(rel)) {
+    const text = Buffer.isBuffer(buf) ? buf.toString("utf8") : String(buf);
+    return sha256(Buffer.from(normalizeInjectedIdentity(text), "utf8"));
+  }
+  return sha256(Buffer.isBuffer(buf) ? buf : Buffer.from(buf));
+}
+
 // Extract the pinned decap-cms X.Y.Z from an index.html string (or null).
 function decapPin(html) {
   if (typeof html !== "string") return null;
@@ -251,6 +362,7 @@ module.exports = {
   ADMIN_PREFIX,
   MANIFEST_FILE,
   ACCEPTABLE_MISSING,
+  CMS_IDENTITY_PLACEHOLDER,
   sha256,
   decapPin,
   scriptManifest,
@@ -259,4 +371,7 @@ module.exports = {
   previewVsLocalVerdict,
   prodVsLocalVerdict,
   describeVersion,
+  isInjectedShell,
+  normalizeInjectedIdentity,
+  parityShaForFile,
 };

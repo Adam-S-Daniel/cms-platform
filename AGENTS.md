@@ -599,6 +599,38 @@ spec only does the fetches). Outcome contract: on a gem-bump PR (prod older
 version) parity PASSES via preview-vs-local; on a same-version prod byte-drift it
 FAILS.
 
+### The injected shells are identity-NORMALIZED before the byte compare (#17)
+
+The parity byte-compare must NOT trip over the **per-environment `window.CMS_*`
+injection** the render hook (and its deploy mirror) splices into the admin
+shells. Three shells carry it — `admin/index.html` + `admin/reviews/index.html`
++ `admin/reviews/health.html` (the hook's `index*.html` + `reviews/*.html`
+globs). The SERVED shell has an injected identity `<script>` block
+(`window.CMS_REPO/CMS_SITE_ORIGIN/CMS_APEX/CMS_OAUTH_BASE_URL/CMS_SITE_TITLE`)
+keyed to the *served* origin; the LOCAL source has **no such block at all** (it
+only READS those globals at runtime). So a raw-byte compare of an injected shell
+ALWAYS mismatched — the served block is present + per-env while source has none.
+That false-failed the REQUIRED preview-vs-local gate (`PREVIEW BUNDLE != PR
+SOURCE`) on **every** admin PR (regression from #14; confirmed adamdaniel #1913,
+where the preview served valid complete pages and ONLY those 3 injected shells
+mismatched).
+
+The fix (`parityShaForFile` / `normalizeInjectedIdentity` in
+`admin-bundle-parity.js`): an injected shell — classified by `isInjectedShell()`
+mirroring the hook's globs **exactly** — is normalized in BOTH the served bytes
+AND the local bytes before hashing: (1) the injected identity `<script>` block
+(a `<script>` whose body is ONLY `window.CMS_<KEY>=…;` assignments) is STRIPPED
+wholesale; (2) any inline `window.CMS_<KEY>=value` / `{{CMS_<KEY>}}` token is
+collapsed to a per-key placeholder. The compare then runs on the MACHINERY (real
+`<script src>` tags, structure) — preview-injected, prod-injected, and block-less
+source all normalize-equal. A genuine machinery diff (added/removed/renamed
+`<script src>`, structural edit) survives normalization and STILL hard-fails;
+non-injected files (enhancer `.js`, CSS) are NEVER normalized (strict). The
+injected key SET stays owned by `decap-config-render-parity.test.js` — the parity
+probe deliberately does not assert on the block's internal composition. **If you
+add another window.CMS_* identity shell, or change the hook's inject globs,
+update `isInjectedShell()` in lockstep.**
+
 ## Self-CI lanes
 
 `.github/workflows/self-ci.yml` is the machinery repo's own merge gate (every
