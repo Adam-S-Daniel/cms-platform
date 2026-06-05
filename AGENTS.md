@@ -492,6 +492,20 @@ glow/theme regression on a single-page consumer.
   reason. **`base-collections-guard-registry.test.js` enforces all of this** — you
   can't merge an unguarded generic index-local spec.
 
+> **Guard EVERY `test()` in a multi-test guarded spec, not just one (v0.1.23).**
+> The guard-presence check is satisfied by the inline guard appearing ANYWHERE in
+> the file — which let `cms-publish-loop.spec.js` ship its `@canary-readonly` test
+> guarded while the MAIN `@admin-write` host-loop `test()` (it drives the canary
+> through the live admin) carried NO guard. On jodidaniel.com (no `_e2e/canary-*`
+> → `hasE2ECanaries` false) the unguarded test RAN and timed out 60s on "Confirm
+> baseline is live" waiting for `/e2e/canary-post/` (404 on a bio) — red even
+> AFTER the SITE_ROOT fix (#58), because that test's canary nav uses a VARIABLE
+> collection (`#/collections/${CANARY.cmsCollection}`) the per-file detector
+> never pattern-matched. **Rule:** every top-level (column-0) `test()` block in a
+> guarded spec MUST carry its own `test.skip(...guard(SITE_ROOT, "<basename>"))`.
+> Locked by the per-block assertion in `base-collections-guard-registry.test.js`
+> ("every top-level test() block in a guarded spec carries the inline guard").
+
 ### Org OAuth App approval — the "can log in but can't save" trap (#26)
 
 On an **org-owned** consumer, if the org has **OAuth App access restrictions**

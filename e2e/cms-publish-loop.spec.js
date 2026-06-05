@@ -169,6 +169,18 @@ async function writeCanaryViaPr({ runId, bodyText, message, prTitle, prBody, ski
 }
 
 test("CMS publish loop — host repo, target main", { tag: ["@admin-write"] }, async ({ page }) => {
+  // Capability guard (hasE2ECanaries) — MUST mirror the @canary-readonly test
+  // below. A consumer with no `_e2e/canary-*.md` fixtures (a single-page bio
+  // like jodidaniel.com, base_collections:[] — the `e2e` collection is stripped
+  // from the rendered admin and nothing is served at /e2e/canary-post/) cannot
+  // drive this host publish loop: it would time out 60s+ on "Confirm baseline is
+  // live" waiting for a canary URL that 404s. Without this the host loop ran
+  // unguarded on jodidaniel and red-failed even after the SITE_ROOT fix (#58) —
+  // that fix made the base_collections-guarded delete/unpublish/tags specs skip,
+  // but THIS test had no capability guard at all (the file's only guard was on
+  // the @canary-readonly test). SITE_ROOT resolves the CONSUMER root (set by the
+  // loop reusables; #58).
+  test.skip(...guard(SITE_ROOT, "cms-publish-loop.spec.js"));
   test.skip(
     PROD_CANARY,
     "PROD_CANARY=1 — daily canary probe runs the read-only @canary-readonly test instead.",
