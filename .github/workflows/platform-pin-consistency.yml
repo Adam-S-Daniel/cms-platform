@@ -48,9 +48,13 @@ jobs:
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
-          # Sparse: just the checker script — it has no platform-internal deps
-          # beyond the `yaml` parser, which we install below.
-          sparse-checkout: scripts/check-platform-pin-consistency.js
+          # Sparse: the checker script + the canonical consumer workflow SET
+          # (examples/site/.github/workflows) the script diffs the consumer's set
+          # against for the workflow-set parity check. No other platform-internal
+          # deps beyond the `yaml` parser, installed below.
+          sparse-checkout: |
+            scripts/check-platform-pin-consistency.js
+            examples/site/.github/workflows
           sparse-checkout-cone-mode: false
           path: .cms-platform
 
