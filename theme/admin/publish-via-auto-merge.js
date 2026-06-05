@@ -23,15 +23,28 @@
  * decap-cms.js, so the wrap is in place before Decap captures any
  * reference to window.fetch.
  *
- * Note: a previous version of this shim also intercepted DELETE
- * /contents and dispatched a `delete-via-pr.yml` workflow as a
- * recovery path for "Delete published entry". That intercept never
- * fired in production — Decap's delete UI uses the git data API
- * directly (POST /git/trees → POST /git/commits → PATCH
- * /git/refs/heads/main) rather than DELETE /contents, so the 422
- * the shim watches for never came back. The workflow had zero runs
- * across its lifetime; it was removed alongside the DELETE matcher
- * here.
+ * "Delete published entry" on a published post → PATCH
+ *     /git/refs/heads/<default-branch>. Decap's delete UI does NOT use
+ *     DELETE /contents; it uses the git data API directly
+ *     (GET /branches/<b> → POST /git/trees with sha:null → POST
+ *     /git/commits → PATCH /git/refs/heads/<b>). Steps 1-3 succeed
+ *     (dangling tree/commit objects are not ruleset-gated); the final
+ *     PATCH that moves the branch ref returns 422 "Repository rule
+ *     violations found" because direct writes to the protected branch
+ *     are blocked. main is never updated, no PR is opened, no deploy
+ *     fires. We recover by reading the deletion commit sha straight
+ *     out of the PATCH request body, creating a `cms/` branch ref at
+ *     that commit, opening a PR (base=<default-branch>), and adding
+ *     the `cms/ready` label so the SAME auto-merge-when-ready job
+ *     lands the delete PR (whose diff removes the file) once the
+ *     required checks pass. Decap gets a synthetic merged:true.
+ *
+ * Note: a previous version of this shim instead intercepted DELETE
+ * /contents and dispatched a `delete-via-pr.yml` workflow. That
+ * intercept never fired in production — for the reason above (git
+ * data API, not DELETE /contents) — and the workflow had zero runs;
+ * it was removed and replaced by the PATCH /git/refs delete-ref
+ * recovery matcher below.
  */
 (function () {
   "use strict";
@@ -86,6 +99,101 @@
             sha: "pending-auto-merge",
             merged: true,
             message: "Pull Request enqueued for auto-merge via cms/ready label",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    },
+    {
+      // "Delete published entry": Decap's github backend commits the
+      // delete straight to the protected branch via the git data API
+      // and the final PATCH /git/refs/heads/<branch> (the ref move) is
+      // the call the ruleset 422s. Steps before it (POST /git/trees,
+      // POST /git/commits) succeed, so by the time we see this PATCH the
+      // deletion commit already exists — its sha is right here in the
+      // PATCH request body. We turn that orphan commit into a labelled
+      // delete PR instead of a blocked direct push.
+      kind: "delete-ref",
+      test: function (url, method) {
+        if (method !== "PATCH") return null;
+        var m = url.match(
+          /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/git\/refs\/heads\/([^/?#]+)$/,
+        );
+        return m ? { branch: decodeURIComponent(m[1]) } : null;
+      },
+      recover: async function (ctx, init, originalRes) {
+        // The deletion commit sha is the `sha` Decap is trying to fast-
+        // forward the branch to — it's in the PATCH body. Reuse it; do
+        // NOT build a new tree/commit (Decap already did, steps 2-3).
+        var commitSha = null;
+        try {
+          var reqBody = typeof init.body === "string" ? JSON.parse(init.body) : init.body;
+          commitSha = reqBody && reqBody.sha;
+        } catch {
+          /* unparseable body — fall through to the guard below */
+        }
+        if (!commitSha) return originalRes;
+
+        var auth = extractAuth(init.headers);
+        // Unique `cms/`-prefixed branch so the editorial-workflow
+        // cms/draft labeller, sweep-stale-cms-prs, the editorial-label
+        // audit, and the prod-mutate spec's "label the delete cms/... PR"
+        // detect-loop (head.ref.startsWith('cms/') + file removed) all
+        // recognise it. Short-sha + timestamp keeps retries collision-free.
+        var deleteBranch =
+          "cms/posts/delete-" + String(commitSha).slice(0, 8) + "-" + Date.now();
+
+        var refRes = await origFetch(API + "/git/refs", {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ ref: "refs/heads/" + deleteBranch, sha: commitSha }),
+        });
+        // 201 = created; 422 = ref already exists (a retry) — both are
+        // recoverable. Anything else: hand back the original 422.
+        if (!refRes.ok && refRes.status !== 422) return originalRes;
+
+        var prRes = await origFetch(API + "/pulls", {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({
+            title: "delete: published entry via Decap (auto-merge)",
+            head: deleteBranch,
+            base: ctx.branch,
+            body:
+              "Recovered delete-published commit " +
+              commitSha +
+              " — the direct " +
+              "PATCH /git/refs/heads/" +
+              ctx.branch +
+              " was blocked by branch protection. " +
+              "Auto-merges via the `cms/ready` label.",
+          }),
+        });
+        if (!prRes.ok) return originalRes;
+        var pr = await prRes.json();
+        if (!pr || !pr.number) return originalRes;
+
+        var labelRes = await origFetch(API + "/issues/" + pr.number + "/labels", {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ labels: ["cms/ready"] }),
+        });
+        if (!labelRes.ok && labelRes.status !== 422) return originalRes;
+
+        toast(
+          "Removing in the background — auto-merge will land this delete when " +
+            "the required CI checks finish (~5–15 min). You can close this " +
+            "tab; the entry comes down automatically.",
+        );
+        // Synthetic success so Decap's UI proceeds as if the ref moved.
+        // The labelled delete PR lands the removal for real once checks pass.
+        return new Response(
+          JSON.stringify({
+            sha: "pending-auto-merge-delete",
+            ref: "refs/heads/" + ctx.branch,
+            object: { sha: commitSha },
+            merged: true,
+            message: "Delete enqueued for auto-merge via cms/ready label (PR #" + pr.number + ")",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -208,6 +316,8 @@
   window.__publishViaAutoMerge = {
     installed: true,
     origFetch: origFetch,
+    // ['merge','delete-ref'] — exposed so specs can assert both the
+    // create-leg and delete-leg recovery matchers are installed.
     matchers: matchers.map(function (m) {
       return m.kind;
     }),

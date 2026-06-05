@@ -414,13 +414,17 @@ test(
       await confirmEditorDelete(page, () => clickEditorDelete(page));
     });
 
-    // ── 7. Label the delete PR cms/ready (if Decap opened one) ───────
-    // Decap's GitHub backend may commit the delete directly to main via
-    // the git data API OR open a cms/* PR (version-dependent). Mirror
-    // cms-media-roundtrip's delete handling: if a cms/* PR appears whose
-    // diff removes this file, label it cms/ready so auto-merge fires;
-    // otherwise the direct commit already triggered deploy-production.
-    // Either way the ground truth is the URL going 404.
+    // ── 7. Label the delete PR cms/ready (the shim opens one) ────────
+    // Decap 3.12.2's "Delete published entry" commits the delete straight
+    // to main via the git data API; the terminal PATCH /git/refs/heads/main
+    // is 422'd by branch protection. admin/publish-via-auto-merge.js's
+    // delete-ref matcher recovers that 422 by opening a `cms/posts/delete-*`
+    // PR off the deletion commit and labelling it cms/ready. This loop
+    // discovers that recovered PR (head.ref.startsWith('cms/') + diff
+    // removes filePath) and re-labels it cms/ready (idempotent — the shim
+    // already labelled it) so auto-merge-when-ready lands + deploys the
+    // delete. The labelled delete PR auto-merging is the load-bearing path
+    // for the 404 below; not finding one means the shim recovery regressed.
     await test.step("Label the delete cms/... PR cms/ready if Decap opened one", async () => {
       const deadline = Date.now() + 90_000;
       while (Date.now() < deadline) {

@@ -80,7 +80,82 @@ test.describe("publish-via-auto-merge.js — browser context", () => {
       installed: !!window.__publishViaAutoMergeInstalled,
       kinds: window.__publishViaAutoMerge && window.__publishViaAutoMerge.matchers,
     }));
-    expect(status).toEqual({ installed: true, kinds: ["merge"] });
+    expect(status).toEqual({ installed: true, kinds: ["merge", "delete-ref"] });
+  });
+
+  test("PATCH /git/refs/heads/main → 422 rule violation → create cms/ branch + open PR + cms/ready label → synthetic merged: true", async ({
+    page,
+  }) => {
+    let refBody = null;
+    let prBody = null;
+    let labelBody = null;
+    let labelHeaders = null;
+
+    await page.route(/\/git\/refs\/heads\/main$/, async (route) => {
+      // Only the PATCH (ref move) 422s; a GET would pass through.
+      if (route.request().method() !== "PATCH") return route.fallback();
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "Repository rule violations found", status: "422" }),
+      });
+    });
+    await page.route(/\/git\/refs$/, async (route) => {
+      refBody = JSON.parse(route.request().postData());
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ ref: refBody.ref, object: { sha: refBody.sha } }),
+      });
+    });
+    await page.route(/\/pulls$/, async (route) => {
+      prBody = JSON.parse(route.request().postData());
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ number: 909, head: { ref: prBody.head } }),
+      });
+    });
+    await page.route(/\/issues\/\d+\/labels$/, async (route) => {
+      labelBody = JSON.parse(route.request().postData());
+      labelHeaders = route.request().headers();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{ id: 1, name: "cms/ready" }]),
+      });
+    });
+
+    await page.setContent(FIXTURE_HTML);
+    const result = await page.evaluate(async () => {
+      const res = await fetch(
+        "https://api.github.com/repos/Adam-S-Daniel/adamdaniel.ai/git/refs/heads/main",
+        {
+          method: "PATCH",
+          headers: new Headers({
+            Authorization: "Bearer fake-token",
+            "X-GitHub-Api-Version": "2022-11-28",
+          }),
+          body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+        },
+      );
+      const text = await res.text();
+      return { status: res.status, body: text ? JSON.parse(text) : null };
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.merged).toBe(true);
+    expect(result.body.sha).toBe("pending-auto-merge-delete");
+    // Branch ref created at the deletion commit sha from the PATCH body.
+    expect(refBody.sha).toBe("deadbeefcafef00d");
+    expect(refBody.ref).toMatch(/^refs\/heads\/cms\/posts\/delete-/);
+    // PR opened base=main, head=the new cms/ branch.
+    expect(prBody.base).toBe("main");
+    expect(prBody.head).toMatch(/^cms\/posts\/delete-/);
+    // cms/ready label applied with the forwarded auth header.
+    expect(labelBody).toEqual({ labels: ["cms/ready"] });
+    expect(labelHeaders.authorization).toBe("Bearer fake-token");
+    expect(labelHeaders["x-github-api-version"]).toBe("2022-11-28");
   });
 
   test("PUT /pulls/N/merge → 422 rule violation → cms/ready label POST → synthetic merged: true", async ({
