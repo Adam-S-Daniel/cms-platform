@@ -4,6 +4,15 @@
 # tags, projects, pages, and the mandatory e2e canary — always stay).
 #
 # Indentation must match the base collections list (2 spaces for `- name:`).
+#
+# $ref REUSE (OPTIONAL — inline fields still work, fully backward-compatible):
+# a field entry may be `$ref: "#/field_library/<name>"` to REUSE a platform
+# field/widget def from theme/admin/field_library.yml instead of re-authoring
+# it. A $ref resolves to a SINGLE field (e.g. body_markdown, date_widget,
+# image_widget) or a LIST of fields (e.g. published_pair → published +
+# publish_date) — both splice in place at build time. Decap never sees a $ref;
+# it's resolved to full field defs before the config is written. Mix $ref and
+# inline fields freely.
   - name: notes
     label: Notes
     label_singular: Note
@@ -12,5 +21,9 @@
     delete: true
     slug: "{{slug}}"
     fields:
+      # Inline fields (the status quo — still fully supported):
       - { name: title, label: Title, widget: string, required: true }
-      - { name: body,  label: Body,  widget: markdown, required: true }
+      # …or REUSE a platform field def by $ref:
+      - $ref: "#/field_library/body_markdown"      # → one markdown body field
+      - $ref: "#/field_library/image_widget"       # → one image field
+      - $ref: "#/field_library/published_pair"     # → TWO fields: published + publish_date

@@ -27,6 +27,11 @@
 require 'yaml'
 require 'uri'
 require 'fileutils'
+# Shared field_library $ref resolver — the SINGLE source of truth, also
+# required by theme/lib/cms-platform-theme/decap_config_hook.rb, so the two
+# render paths expand $refs byte-identically (parity-locked by
+# e2e/decap-config-render-parity.test.js).
+require_relative '../theme/lib/cms-platform-theme/field_library'
 
 site_root = ARGV[0] || '.'
 build     = ARGV[1] || File.join(site_root, '_site')
@@ -88,11 +93,19 @@ end
 base_names = %w[posts tags projects pages e2e]
 base_keep  = cms['base_collections']
 
+# The platform field_library (reusable field/widget defs the seam may $ref) is
+# PLATFORM-owned — it ships with the base machinery, so resolve it next to
+# config.base.yml (admin_src), never the site source.
+field_library_path = File.join(admin_src, 'field_library.yml')
+
 render = lambda do |base, out|
   txt = File.read(base)
   tokens.each { |k, v| txt = txt.gsub("{{#{k}}}", v) }
   site_cols = File.join(site_admin, 'collections.site.yml')
-  inject = File.exist?(site_cols) ? File.read(site_cols) : ''
+  raw = File.exist?(site_cols) ? File.read(site_cols) : ''
+  # Expand any `$ref: "#/field_library/<name>"` in the seam BEFORE splicing.
+  # No-op (byte-identical to the legacy splice) when the seam has no $ref.
+  inject = CmsPlatformTheme::FieldLibrary.expand_seam_text(raw, field_library_path)
   txt = txt.sub(/^  # __SITE_COLLECTIONS__.*$/, inject)
   unless base_keep.nil?
     keepset = Array(base_keep).map(&:to_s)

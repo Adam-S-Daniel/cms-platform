@@ -139,7 +139,10 @@ whole design:
   `window.CMS_*` identity (`{{CMS_REPO}}`, `{{CMS_OAUTH_BASE_URL}}`,
   `{{CMS_SITE_URL}}`, `{{CMS_DISPLAY_URL}}`, `{{CMS_LOGO_URL}}`) and **splicing
   the SITE-OWNED seam** `admin/collections.site.yml` at the `# __SITE_COLLECTIONS__`
-  marker. The seam is read from the **SITE source**, never the gem.
+  marker. The seam is read from the **SITE source**, never the gem. Before the
+  splice, the seam's `$ref`s are expanded against the platform `field_library`
+  (see "field_library + `$ref` reuse" below) — the base config itself stays
+  TEXT and is spliced byte-for-byte as today.
 - **Inject `window.CMS_*` globals** into the admin shells (`index*.html`) AND the
   reviews dashboards (`reviews/*.html`) — skipping a file only if it already
   *defines* the identity, not merely uses it.
@@ -171,6 +174,60 @@ nested fields are deeper-indented so they survive. **Spec-locked** by
 all base collections but keeps site collections, partial keep works, survivors'
 nested fields and a field literally named like a base collection are untouched,
 output stays valid YAML). Used by single-page sites (jodidaniel.com).
+
+### field_library + `$ref` reuse (#5 GOAL 2)
+
+A site's seam `admin/collections.site.yml` can **reuse** platform-defined
+field/widget defs instead of re-authoring them, by writing a `$ref` where a
+field (or fields) would go:
+
+```yaml
+  - name: articles
+    folder: _articles
+    fields:
+      - { name: title, label: Title, widget: string }   # inline still works
+      - $ref: "#/field_library/body_markdown"            # → ONE field
+      - $ref: "#/field_library/image_widget"             # → ONE field
+      - $ref: "#/field_library/published_pair"           # → TWO fields (spliced)
+```
+
+- **The platform OWNS the library:** `theme/admin/field_library.yml` (ships in
+  the gem next to `config.base.yml`, packaged by the `admin/**/*` glob). It
+  defines `body_markdown` (markdown body, modes rich_text+raw), `published_pair`
+  (the published + publish_date pair — a **list** of 2 fields), `date_widget`,
+  `image_widget` (flat-public_folder contract). The datetime `format:` token
+  (`"YYYY-MM-DD HH:mm:ss ZZ"`) is copied **verbatim** from `config.base.yml`
+  (the dayjs/INVALID-DATE cross-engine contract) — keep them in lockstep.
+- **Resolved at RENDER time, in BOTH paths.** The shared resolver
+  `theme/lib/cms-platform-theme/field_library.rb`
+  (`CmsPlatformTheme::FieldLibrary`) is `require`d by **both** render paths and
+  invoked identically — `expand_seam_text(raw, field_library_path)` — so they
+  stay byte-in-lockstep. It parses the seam, replaces each
+  `{"$ref" => "#/field_library/<name>"}` with a **deep copy** of the lib entry
+  (single field → one item; list → spliced in place, 2-space list indent
+  preserved), then re-emits YAML and splices at the marker. **Decap never sees a
+  `$ref`** — it loads only fully-resolved field defs. An unknown / malformed
+  `$ref` **fails HARD** (the render aborts; a `$ref` must never leak).
+- **The base config stays TEXT.** This is a LOW-RISK increment: only the
+  **seam** is YAML-round-tripped (and only when it actually contains a `$ref`).
+  `config.base.yml` is byte-unchanged and still spliced verbatim, so every
+  load-bearing comment + verbatim-asserted base line (posts.summary, the format
+  token, media_folder/public_folder, preview_context) is preserved.
+- **Backward-compatible.** A seam with **no** `$ref` (inline fields — the status
+  quo, e.g. adamdaniel's notes, jodidaniel's collections) is returned UNCHANGED
+  by `expand_seam_text` and spliced exactly as before — **byte-identical**
+  renders. Proven by diffing the new vs origin/main render of jodidaniel's real
+  inline `collections.site.yml`.
+- **Spec-locked** by `theme/spec/field_library_resolution_test.rb` (the resolver:
+  single + multi-field refs, deep-copy isolation, hard-fail on unknown/malformed)
+  + `e2e/field-library-ref-render.test.js` (drives `render-decap-config.rb` on a
+  `$ref` fixture → resolved output, no `$ref` leak, base unchanged, hard-fail,
+  no-ref backward-compat). The `$ref`-render spec reads platform `scripts/` +
+  `theme/` source, so it's registered in `PLATFORM_META_SPECS` (playwright.config.js).
+- **OUT OF SCOPE / future work:** the full base-collection-override **deep-merge**
+  (a site overriding/reordering a base collection's fields) is deferred. Today
+  the seam is still **append-only** (collections are spliced after the base);
+  `$ref` only delivers shared-field REUSE, not base override.
 
 ### base_collections-aware spec skips for single-page consumers (#33, v0.1.9+)
 
@@ -787,10 +844,15 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
 
 - **issue #5 GOAL 1 — admin consolidation: DONE** in v0.1.4 (this is the
   gem-delivery model documented above).
-- **issue #5 GOAL 2 — `field_library` (OPEN):** per-site custom collections via a
-  build-time YAML **deep-merge** of a shared `field_library`, replacing the render
-  hook's text-splice of the seam. High-risk re: preserving the config's rich
-  comments + invariants through a structural merge; deferred.
+- **issue #5 GOAL 2 — `field_library` + `$ref` reuse: DONE (LOW-RISK increment).**
+  A site's seam `collections.site.yml` can `$ref` platform field defs from
+  `theme/admin/field_library.yml`, resolved at render-time in BOTH paths via the
+  shared `CmsPlatformTheme::FieldLibrary` resolver (see "field_library + `$ref`
+  reuse" above). The base config stays TEXT (spliced byte-for-byte; all
+  verbatim-locked lines preserved); no-`$ref` seams render byte-identically
+  (backward-compat proven). **Still deferred:** the full base-collection-override
+  **deep-merge** (override/reorder a base collection's fields) — the seam remains
+  append-only; `$ref` delivers shared-field REUSE only.
 - **issue #21 (OPEN):** a prod-mutate canary URL doesn't reflect the new content
   despite a successful deploy — likely a deploy-build future-handling problem.
 - **issue #22 (OPEN):** publish loops leave orphaned `cms/*` canary branches —
