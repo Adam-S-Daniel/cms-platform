@@ -824,11 +824,36 @@ adversarial code-review lens caught). "Done" additionally requires:
    succeeds end-to-end (create → reflect → delete → 404) — not "the fix looks
    right" or "the dispatch-proof passed." The live loop is the real acceptance
    test for these CMS repos.
-2. **Audit + drive every workflow green.** Every workflow in the affected
-   repo(s) must have a run AFTER the last non-workflow / non-generated change,
-   and its most-recent run must SUCCEED — iterate (re-dispatch stale/scheduled
-   ones) until that holds. ("Generated" = loop-canary/cleanup PRs + auto-docs
-   regen; those don't reset the bar.)
+2. **Survey + drive every workflow green, in ALL THREE repos.** A platform
+   change cascades, so the audit spans `cms-platform` AND **both** consumers
+   (`adamdaniel.ai`, `jodidaniel.com`) — not just "the repo you edited". For
+   EVERY workflow: it must have a run AFTER the last non-CI-generated push, and
+   its most-recent run must SUCCEED. Iterate — re-dispatch stale / scheduled /
+   manual ones — until that holds. ("CI-generated / non-real" = loop-canary
+   churn + cleanup/auto-merge bot PRs + the automated `platform-bump` PR +
+   auto-docs regen; those don't reset the bar — the reference point is the last
+   *substantive* (human / code / content) change.)
+
+   Survey method + nuances (2026-06-05 — `gh api repos/<r>/actions/workflows`
+   → per-workflow latest run on `main`; compare its `head_sha`/`created_at` to
+   HEAD / the last non-bot commit):
+   - **In `cms-platform` itself, most workflows are `workflow_call`-only
+     reusables** — they CANNOT run standalone (they show "no main run"); they're
+     exercised when a consumer's thin caller invokes them, plus the harness
+     lints run in **Self CI**. So the platform's own bar = **Self CI green on
+     HEAD** (+ Cut release / Dependabot). Don't chase "no main run" on a reusable.
+   - **A bump-skip-SKIPPED loop run is GREEN but is NOT a real validation.** The
+     `recursion-gate` skips the prod loops on a bump-only push, so their
+     post-bump run "succeeds" by skipping — that satisfies #2's "latest run
+     succeeded" but NOT #1. Drive a REAL prod-mutate cycle by `workflow_dispatch`
+     (it bypasses the bump-skip), confirming the heavy job actually ran.
+   - **PR-triggered workflows** (`parity`, `preview-media`, `e2e`,
+     `visual-regression`, the preview-env loops) last ran on the PR head, not
+     `main` — a green run on the last real PR satisfies the bar; their
+     "no main run" / stale-main-sha is expected.
+   - **`startup_failure` or an old failed manual dispatch still counts as a RED
+     latest run** — re-dispatch on current HEAD (the preview-env loops need a
+     live `preview-pr<N>` target) until the latest run is green.
 3. **No OPTIONAL / non-required check may fail either.** Drive `UNSTABLE` →
    clean, not just `BLOCKED` → mergeable. A merged PR with a red non-required
    check is not done — chase it to green, OR, if it is genuinely a
