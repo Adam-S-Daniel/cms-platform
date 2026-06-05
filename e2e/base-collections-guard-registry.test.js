@@ -340,6 +340,44 @@ test.describe("#33 base_collections guard registry — guard presence", () => {
       ).toBe(true);
     });
   }
+
+  // (2b) PER-TEST-BLOCK coverage. The file-level check above is satisfied by a
+  // guard ANYWHERE in the file — which is how cms-publish-loop.spec.js shipped
+  // its @canary-readonly test guarded while the MAIN @admin-write host-loop test
+  // (it drives the canary through the LIVE admin) had NO guard, so it RAN +
+  // red-failed on a no-canary consumer (jodidaniel) even AFTER the SITE_ROOT fix
+  // (#58). The host-loop test's canary nav uses a VARIABLE collection name
+  // (`#/collections/${CANARY.cmsCollection}`) so the per-file detector never
+  // flagged that block specifically. So: EVERY top-level (column-0) `test()`
+  // block in a guarded spec must carry its OWN inline `guard(SITE_ROOT,
+  // "<basename>")` skip. (describe()-nested tests are guarded at
+  // describe/beforeEach level — no column-0 `test()` — and stay covered by the
+  // file-level check above.)
+  test("every top-level test() block in a guarded spec carries the inline guard", () => {
+    const offenders = [];
+    for (const specName of reg.GUARDED_SPEC_NAMES) {
+      const file = path.join(HARNESS, specName);
+      if (!fs.existsSync(file)) continue;
+      const src = fs.readFileSync(file, "utf8");
+      const starts = [...src.matchAll(/^test(?:\.skip|\.only)?\(/gm)].map((m) => m.index);
+      if (!starts.length) continue; // describe()-nested — file-level check covers it
+      const esc = specName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const guardRe = new RegExp(`(guard|shouldSkip)\\(\\s*SITE_ROOT\\s*,\\s*["']${esc}["']`);
+      for (let i = 0; i < starts.length; i++) {
+        const body = src.slice(starts[i], i + 1 < starts.length ? starts[i + 1] : src.length);
+        if (!guardRe.test(body)) {
+          const title = (body.match(/["'`]([^"'`]+)/) || [])[1] || "(unnamed)";
+          offenders.push(`${specName} › ${title.slice(0, 60)}`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      "these top-level test() blocks live in a guarded spec but apply NO inline " +
+        "guard(SITE_ROOT, ...) of their own — a multi-test spec must guard EVERY test, " +
+        "not just one (the cms-publish-loop host-loop regression that ran red on jodidaniel)",
+    ).toEqual([]);
+  });
 });
 
 // The set of consumer-running specs the comprehensive detector flags, with
