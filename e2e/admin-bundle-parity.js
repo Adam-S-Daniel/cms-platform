@@ -232,6 +232,47 @@ function compareVersions(prodHtml, localHtml) {
 // Acceptable "file absent" statuses during a deploy/merge window.
 const ACCEPTABLE_MISSING = new Set([404]);
 
+// ── Served-file exclusion (the parity WALK filter) ───────────────────────
+// The parity probe walks the gem's theme/admin source tree and expects each
+// file to be served at /admin/<rel> on prod + preview. But several files in
+// that tree are NEVER published to _site/admin, so they 404 on BOTH surfaces
+// and must be excluded from the walk — otherwise a bump that ADDS such a
+// source-only file trips the BUMP-AWARE prod gate as false "same-version
+// drift" (the index.html <script> manifest — the version marker — is blind to
+// non-script sidecars, so it can't signal the bump). The deploy COPY hook
+// (theme/lib/cms-platform-theme/decap_config_hook.rb) and its deploy-time
+// mirror (scripts/render-decap-config.rb) are the AUTHORITY on what is served:
+//
+//   skip = ['collections.site.yml', 'collections.site.yml.example', 'README.md']
+//   ...
+//   next if bn.end_with?('.base.yml') || skip.include?(bn)
+//
+// so *.base.yml (rendered, never copied), the site-owned seam + its example,
+// and the directory README are source/doc-only. On TOP of the hook skip, the
+// deploy S3 sync --excludes the dev/test-only shells (index-local/index-test,
+// config-local/config-test) and commit.json is regenerated per deploy. This
+// predicate unions all three so the walk only includes genuinely-served files.
+// admin-bundle-parity.test.js locks the basename list to the Ruby skip arrays
+// (a drift guard) so the two can never silently diverge.
+const HOOK_SKIP_BASENAMES = ["collections.site.yml", "collections.site.yml.example", "README.md"];
+
+function isExcludedAdminPath(rel) {
+  if (typeof rel !== "string") return false;
+  const bn = rel.split("\\").join("/").split("/").pop();
+  // Per-deploy artifact — regenerated every deploy, never byte-stable.
+  if (bn === "commit.json") return true;
+  // Preview pipeline mutates config*.yml (site_url/display_url/backend.branch);
+  // the *-local/*-test variants are S3-excluded outright. Owned by sibling
+  // specs / never byte-identical by design.
+  if (/^config[^/]*\.ya?ml$/.test(bn)) return true;
+  if (bn === "index-local.html" || bn === "index-test.html") return true;
+  // The deploy copy hook SKIPS these from _site/admin (see header) — 404 on
+  // prod AND preview, never served. Mirror it exactly.
+  if (bn.endsWith(".base.yml")) return true;
+  if (HOOK_SKIP_BASENAMES.includes(bn)) return true;
+  return false;
+}
+
 // ── Per-file verdicts ────────────────────────────────────────────────────
 // REQUIRED preview-vs-local gate. `preview`/`local` are { status, sha } (status
 // optional for local — a local read either yields a sha or null). Returns a
@@ -374,4 +415,6 @@ module.exports = {
   isInjectedShell,
   normalizeInjectedIdentity,
   parityShaForFile,
+  isExcludedAdminPath,
+  HOOK_SKIP_BASENAMES,
 };
