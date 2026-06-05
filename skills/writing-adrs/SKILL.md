@@ -92,7 +92,7 @@ If `docs/decisions/` doesn't exist, set it up in the same change as the first AD
 1. Create `docs/decisions/README.md` with the format spec, the when-to-write rules, the template, and an empty index. Use [the one in this repo](../../docs/decisions/README.md) as a starting point — it's tuned for the repo style.
 2. Write the first ADR (`0001-…`).
 3. Add the index row for the first ADR.
-4. Add a pointer paragraph in `AGENTS.md` (or `README.md` if there's no AGENTS.md) under a new `### Architecture Decision Records` heading, immediately above or below the "Contributor Manual" / "Project docs" section. The pointer is one or two sentences and a link.
+4. Add a pointer paragraph in `AGENTS.md` (or `README.md` if there's no AGENTS.md) under a new `### Architecture Decision Records` heading, immediately above or below the project docs / README index. The pointer is one or two sentences and a link.
 5. Commit everything as a single `docs(decisions): start ADR folder; first ADR is …` commit. Same PR as the change the ADR is justifying — don't ship the ADR scaffolding in isolation, it'll feel like overhead.
 
 ## Common mistakes to avoid

@@ -360,10 +360,6 @@ jobs:
             const BOT_MARKER = `<!-- ${process.env.BOT_MARKER_SLUG} -->`;
             const existing = comments.find(c => c.body.includes(BOT_MARKER));
 
-            const walkthroughUrl =
-              `https://github.com/${context.repo.owner}/${context.repo.repo}` +
-              `/blob/main/docs/CONTRIBUTOR_MANUAL.md`;
-
             const rows = [
               `| **Preview URL** | [${url}](${url}) |`,
             ];

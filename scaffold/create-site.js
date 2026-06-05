@@ -366,8 +366,8 @@ Next:
        bash <cms-platform>/oauth-proxy/deploy.sh
   5. Add GitHub secrets (exact fine-grained PAT permissions: see
      .claude/skills/cms-platform-secrets/SKILL.md):
-       - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W (classic: repo); PAT user = reviewer of the regression-review env
-       - CMS_PLATFORM_PAT same + Workflows R/W (classic: repo + workflow) -- for platform-bump
+       - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W; PAT user = reviewer of the regression-review env
+       - CMS_PLATFORM_PAT same + Workflows R/W -- for platform-bump
        - AWS_ROLE_ARN, PREVIEW_CLOUDFRONT_ID, PRODUCTION_CLOUDFRONT_ID (bootstrap stack outputs)
      Also enable Settings -> General -> Allow auto-merge.
   6. Set the repo VARIABLES the reusable workflows read via vars.* (CMS_APEX,
