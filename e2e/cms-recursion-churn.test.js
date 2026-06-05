@@ -14,7 +14,13 @@
  * at CI time instead of regressing silently in a workflow edit.
  */
 const { test, expect } = require("./base");
-const { SELF_CHURN, shouldRunLoop, isSelfChurn } = require("./cms-recursion-churn");
+const {
+  SELF_CHURN,
+  shouldRunLoop,
+  isSelfChurn,
+  isBumpArtifact,
+  isBumpOnlyPush,
+} = require("./cms-recursion-churn");
 const { CANARIES } = require("./canary-content");
 
 // The literal each loop spec churns to `main`. Kept here (not imported
@@ -95,6 +101,51 @@ test.describe("cms-recursion-churn decision logic", () => {
     expect(isSelfChurn("media", "assets/images/uploads/nested/x-9.png")).toBe(false);
     // A host fixture is not a media/prod fixture (sets are disjoint).
     expect(isSelfChurn("prod", "_posts/2024-01-02-e2e-unpublish-canary.md")).toBe(false);
+  });
+
+  // ── platform-version bump-only skip (the jodidaniel host-loop reflect-race) ──
+  test("a platform-version-bump-only push is SKIPPED for every loop", () => {
+    // A bump rewrites platform.lock + the @ref pins (workflows) + the gem tag.
+    const bump = [
+      "platform.lock",
+      ".github/workflows/cms-publish-loop-host.yml",
+      ".github/workflows/deploy-production.yml",
+      "Gemfile",
+      "Gemfile.lock",
+    ];
+    expect(isBumpOnlyPush(bump), "platform.lock + only bump artifacts ⇒ bump-only").toBe(true);
+    for (const loop of Object.keys(SELF_CHURN)) {
+      expect(shouldRunLoop(loop, bump), `${loop}: a version-bump-only push must SKIP`).toBe(false);
+    }
+  });
+
+  test("a bump mixed with a real machinery change still RUNS", () => {
+    const mixed = ["platform.lock", "Gemfile.lock", "admin/config.yml"];
+    expect(isBumpOnlyPush(mixed)).toBe(false);
+    for (const loop of Object.keys(SELF_CHURN)) {
+      expect(shouldRunLoop(loop, mixed), `${loop}: bump + admin change must RUN`).toBe(true);
+    }
+  });
+
+  test("a workflow-LOGIC edit (no platform.lock) is NOT treated as a bump — RUNS", () => {
+    // No platform.lock ⇒ not a bump; a real change to a loop's own workflow must
+    // still run so its behaviour is validated.
+    const logicEdit = [".github/workflows/cms-publish-loop-host.yml"];
+    expect(isBumpOnlyPush(logicEdit)).toBe(false);
+    for (const loop of Object.keys(SELF_CHURN)) {
+      expect(shouldRunLoop(loop, logicEdit), `${loop}: workflow-logic edit must RUN`).toBe(true);
+    }
+    // Gemfile alone (no platform.lock) is likewise not a bump.
+    expect(isBumpOnlyPush(["Gemfile"])).toBe(false);
+  });
+
+  test("isBumpArtifact classifies pins vs content", () => {
+    for (const p of ["platform.lock", "Gemfile", "Gemfile.lock", ".github/workflows/x.yml", ".github/workflows/x.yaml"]) {
+      expect(isBumpArtifact(p), `${p} is a bump artifact`).toBe(true);
+    }
+    for (const p of ["admin/config.yml", "_config.yml", "_layouts/post.html", ".github/actions/x/action.yml", "README.md"]) {
+      expect(isBumpArtifact(p), `${p} is NOT a bump artifact`).toBe(false);
+    }
   });
 
   test("guards: unknown loop and empty/invalid changed set throw", () => {
