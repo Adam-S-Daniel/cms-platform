@@ -207,6 +207,32 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(calls).toHaveLength(2); // PATCH + failed ref create, then bail
   });
 
+  // OVER-MATCH GUARDS (#1815 close-out audit): the delete-ref matcher must
+  // recover ONLY the published-delete's ref move (PATCH /git/refs/heads/<single-
+  // segment>), never an editorial DRAFT branch teardown or a non-PATCH verb.
+  test("delete-ref does NOT recover a MULTI-segment editorial draft ref (PATCH /git/refs/heads/cms/posts/<x> 422)", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    const res = await fetch(`${API_BASE}/git/refs/heads/cms/posts/some-draft-slug`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer t" },
+      body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+    });
+    expect(res.status).toBe(422); // original 422, untouched
+    expect(calls).toHaveLength(1); // only the PATCH; NO ref-create/PR/label recovery
+  });
+
+  test("delete-ref does NOT match a non-PATCH verb on /git/refs/heads/main (e.g. DELETE)", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    const res = await fetch(`${API_BASE}/git/refs/heads/main`, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer t" },
+    });
+    expect(res.status).toBe(422); // original, untouched
+    expect(calls).toHaveLength(1); // only the DELETE; NO recovery
+  });
+
   test("re-invocation is a no-op (idempotent install)", () => {
     const ctx = bootShim();
     const fetchAfterFirst = ctx.sandbox.window.fetch;
