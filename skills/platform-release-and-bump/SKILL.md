@@ -95,3 +95,22 @@ parity/e2e are non-required.
   settle before dispatching a validation loop.
 - **Release cadence example (this is normal):** one session shipped
   v0.1.13→v0.1.17, bumping both consumers after each — that's five cascades.
+
+## Definition of done — do NOT stop at "merged + bumped"
+
+A release + consumer bump is not complete until you've also (this is Adam's
+explicit bar — green unit lints routinely ship a live regression):
+
+1. **Driven the prod-mutate validation loop to GREEN** — dispatch
+   `cms-publish-loop-prod.yml` (and `cms-media-roundtrip.yml` if relevant) on
+   the affected site and iterate until a run succeeds end-to-end
+   (create → reflect → delete → 404). The live loop catches what unit lints and
+   even an adversarial multi-agent review miss (e.g. the double-`dialog.accept()`
+   crash on loop 27013147945).
+2. **Audited + driven every workflow green** — each workflow re-ran after the
+   last real (non-generated) change and its latest run SUCCEEDED.
+3. **Cleared OPTIONAL checks too** — drive `UNSTABLE` → clean, not just
+   `BLOCKED` → mergeable; a red non-required check still isn't done (unless it's
+   a known user-credential / go-live blocker, which you surface explicitly).
+
+See cms-platform AGENTS.md "Definition of done (non-trivial changes)".
