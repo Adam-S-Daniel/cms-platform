@@ -128,7 +128,83 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     const { sandbox } = bootShim();
     expect(sandbox.window.__publishViaAutoMergeInstalled).toBe(true);
     expect(sandbox.window.__publishViaAutoMerge.installed).toBe(true);
-    expect(sandbox.window.__publishViaAutoMerge.matchers).toEqual(["merge"]);
+    expect(sandbox.window.__publishViaAutoMerge.matchers).toEqual(["merge", "delete-ref"]);
+  });
+
+  test("PATCH /git/refs/heads/main 200 passes through (no recovery)", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    queueResponse({ ref: "refs/heads/main", object: { sha: "new" } }, { status: 200 });
+    const res = await fetch(`${API_BASE}/git/refs/heads/main`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer t" },
+      body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("delete PATCH /git/refs/heads/main 422 rule-violation → create branch + open PR + cms/ready label + synthetic merged", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    // 1) the PATCH itself → 422 rule violations
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    // 2) POST /git/refs (create the cms/ delete branch) → 201
+    queueResponse({ ref: "refs/heads/cms/posts/delete-deadbeef-1" }, { status: 201 });
+    // 3) POST /pulls (open the delete PR) → 201 with a number
+    queueResponse({ number: 777 }, { status: 201 });
+    // 4) POST /issues/777/labels → 200
+    queueResponse([{ name: "cms/ready" }], { status: 200 });
+
+    const res = await fetch(`${API_BASE}/git/refs/heads/main`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer t" },
+      body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.merged).toBe(true);
+    expect(body.sha).toBe("pending-auto-merge-delete");
+
+    expect(calls).toHaveLength(4);
+    // create branch ref at the deletion commit sha read from the PATCH body
+    expect(calls[1].method).toBe("POST");
+    expect(calls[1].url).toBe(`${API_BASE}/git/refs`);
+    const refBody = JSON.parse(calls[1].body);
+    expect(refBody.sha).toBe("deadbeefcafef00d");
+    expect(refBody.ref).toMatch(/^refs\/heads\/cms\/posts\/delete-deadbeef-/);
+    // open the PR, base=main
+    expect(calls[2].method).toBe("POST");
+    expect(calls[2].url).toBe(`${API_BASE}/pulls`);
+    expect(JSON.parse(calls[2].body).base).toBe("main");
+    // label the delete PR cms/ready
+    expect(calls[3].method).toBe("POST");
+    expect(calls[3].url).toBe(`${API_BASE}/issues/777/labels`);
+    expect(JSON.parse(calls[3].body)).toEqual({ labels: ["cms/ready"] });
+    expect(calls[3].headers.Authorization).toBe("Bearer t");
+  });
+
+  test("delete PATCH 422 with non-ruleset message does NOT recover", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    queueResponse({ message: "Update is not a fast forward" }, { status: 422 });
+    const res = await fetch(`${API_BASE}/git/refs/heads/main`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer t" },
+      body: JSON.stringify({ sha: "abc", force: false }),
+    });
+    expect(res.status).toBe(422);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("delete PATCH 422 but branch-ref create fails → original 422 propagates", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    queueResponse({ message: "Bad credentials" }, { status: 401 }); // POST /git/refs fails
+    const res = await fetch(`${API_BASE}/git/refs/heads/main`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer t" },
+      body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+    });
+    expect(res.status).toBe(422);
+    expect(calls).toHaveLength(2); // PATCH + failed ref create, then bail
   });
 
   test("re-invocation is a no-op (idempotent install)", () => {
