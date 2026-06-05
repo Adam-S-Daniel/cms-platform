@@ -184,10 +184,18 @@ jobs:
           # specs. Falls back to the job GITHUB_TOKEN when no PAT is set.
           CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
           GITHUB_TOKEN: ${{ secrets.CMS_E2E_PAT || secrets.GITHUB_TOKEN }}
-          # Local lane: tell playwright.config.js's webServer which tree to
-          # build + serve + run decap-server against. Empty (and ignored) for
-          # preview/prod, which hit deployed surfaces with no local build.
-          SITE_ROOT: ${{ inputs.target == 'local' && github.workspace || '' }}
+          # SITE_ROOT — the CONSUMING site's checkout (github.workspace), in BOTH
+          # lanes. Local lane: tells playwright.config.js's webServer which tree to
+          # build + serve + run decap-server against (harness placed at <site>/e2e,
+          # so github.workspace == that site). Preview/prod lane: the harness runs
+          # from .cms-platform/e2e, so WITHOUT this the base_collections / single-
+          # page guards' `__dirname/..` fallback resolves to the PLATFORM checkout
+          # and a single-page consumer's guarded specs never skip (they read the
+          # platform's five collections). github.workspace is the consumer root in
+          # both lanes, so one unconditional value is correct. (It was previously
+          # `|| ''` for non-local — a latent gap mirroring the loop reusables /
+          # parity-preview #35.) Locked by e2e/loop-site-root-lint.test.js.
+          SITE_ROOT: ${{ github.workspace }}
         run: |
           set -o pipefail
           npx playwright test --reporter=list 2>&1 | tee /tmp/playwright-output.log

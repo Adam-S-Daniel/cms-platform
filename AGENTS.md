@@ -305,11 +305,43 @@ meta-test points `SITE_ROOT` at a fixture.
 > (the first, default-path SITE checkout). Without it, a single-page consumer's
 > parity lane crawls `/blog/` + `/tags/` and 404s (jodidaniel.com #35). The
 > `e2e-tests.yml` lane already sets `SITE_ROOT` for `target==local`; the
-> parity-preview lane now sets it too. **Latent gap to watch:** `e2e-tests.yml`
-> leaves `SITE_ROOT=''` for `target` preview/prod, so if those targets ever run
-> the content-crawl specs against a single-page consumer they'll hit the same
-> bug — set `SITE_ROOT` there too if/when that lane is enabled. Locked by
-> `e2e/parity-preview-site-root.test.js`.
+> parity-preview lane now sets it too. **(Resolved — was a "latent gap to watch":
+> `e2e-tests.yml` used to leave `SITE_ROOT=''` for `target` preview/prod; it now
+> sets `${{ github.workspace }}` unconditionally, and the WHOLE `.cms-platform/e2e`
+> harness family is covered — see the UNIVERSAL RULE note below.)** Locked by
+> `e2e/parity-preview-site-root.test.js` (this lane) +
+> `e2e/loop-site-root-lint.test.js` (the whole family).
+
+> **THE UNIVERSAL RULE — every `.cms-platform/e2e` harness run MUST export
+> `SITE_ROOT: ${{ github.workspace }}` (#1815, v0.1.22) — the realized "latent
+> gap" above.** When a reusable checks the platform out into `.cms-platform/` and
+> runs `npx playwright test` from `.cms-platform/e2e`, a base_collections /
+> single-page guard's `SITE_ROOT || __dirname/..` fallback resolves to the
+> **platform** checkout (which keeps all five collections) → the guard never
+> fires. On jodidaniel.com (`base_collections:[]`) this made the host loop run
+> `cms-delete-published.spec.js` and time out 60s on the `/^Posts$/` sidebar link
+> the bio admin never renders. **Why `github.workspace` is always correct:** it is
+> the site-under-test (default-path) checkout in EVERY lane — a no-op on the
+> platform's own self-CI (where `github.workspace` and `.cms-platform` are the
+> same tree) and on a full consumer (which keeps every collection); it only
+> changes behaviour on a single-page consumer, where it makes the guards fire
+> CORRECTLY. There is never a reason to resolve site config from the
+> `.cms-platform` harness checkout, so an empty (`|| ''`) or platform-pointing
+> value is always a bug.
+>
+> The rule is now enforced on the WHOLE family, not just the loops: the five loop
+> reusables (`cms-publish-loop-host` / `-prod` / `-preview`, `cms-media-roundtrip`,
+> `cms-preview-loops`), plus `canary-prod`, `cms-delete-published-preview`,
+> `preview-media`, `visual-regression`, `e2e-tests` (its non-local lane used to
+> emit `SITE_ROOT=''` — the realized latent gap, now `${{ github.workspace }}`
+> unconditionally), and `parity-preview`. **Locked AS EARLY AS POSSIBLE by
+> `e2e/loop-site-root-lint.test.js`** — a pure-fs lint in self-CI's
+> `node-unit-lints` lane (no build / no browser, hard-fail), so a missing
+> SITE_ROOT is caught at PR static-analysis time, *before* any loop ever runs
+> against a live site. The lint scans every workflow and auto-covers ANY new
+> reusable that grows a `.cms-platform/e2e` harness run — add the reusable, the
+> lint demands its SITE_ROOT. (`preview-media` / `visual-regression` specs don't
+> read SITE_ROOT today, but the rule is uniform and future-proofs a later guard.)
 
 > **The closed blind spot (#34):** `cms-preview-url.spec.js` +
 > `cms-form-clarity.spec.js` READ the rendered admin config per base collection
