@@ -10,7 +10,7 @@
 const { test, expect } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
-const { CANARIES, readCanarySource } = require("./canary-content");
+const { CANARIES, readCanarySource, stripInFlightMarker, makeMarker, buildBaselineBody } = require("./canary-content");
 const cap = require("./site-capabilities");
 
 // SITE_ROOT-aware resolution of the RENDERED Decap config. The gem's render
@@ -67,9 +67,20 @@ test.describe("Canary content invariants", () => {
         .slice(fmEnd + 5)
         .replace(/^\n+/, "")
         .replace(/\n+$/, "");
+      // The host publish-loop opens a canary PR whose body carries ONE
+      // transient `e2e-publish-loop:<id>:<runId>` marker (it injects the marker,
+      // drives publish, and resets to baseline in cleanup). That canary PR runs
+      // THIS byte-lock as a required e2e check, so a strict `=== baselineBody`
+      // here rejected the loop's OWN in-flight PR → it could never auto-merge and
+      // the host publish-loop was never green (#1815 host leg; the loop's heavy
+      // job had been failing 40+ runs straight). Strip AT MOST ONE marker, then
+      // require the remainder to equal the baseline byte-for-byte: real drift
+      // (Decap newline-doubling — the #882 class — content rot) and the
+      // multi-marker orphan pathology (#1861) still fail loud; a lone orphan left
+      // on main is reset by the loop's self-heal (scripts/reset-orphaned-canary.sh).
       expect(
-        fileBody,
-        `${c.path} body must match the canonical buildBaselineBody() output verbatim — newline drift (often from a Decap markdown-widget round-trip) breaks the publish-loop cleanup contract`,
+        stripInFlightMarker(fileBody),
+        `${c.path} body must match the canonical buildBaselineBody() output verbatim (modulo at most one in-flight e2e-publish-loop marker) — drift (Decap newline-doubling / content rot / a multi-marker orphan) breaks the publish-loop cleanup contract`,
       ).toBe(c.baselineBody);
       expect(src).toContain(`canary_id: ${c.id}`);
       expect(src).toContain(`permalink: ${c.publicPath}`);
@@ -156,5 +167,35 @@ test.describe("Canary content invariants", () => {
     // who clones a canary doesn't accidentally publish it to search.
     expect(cfg).toMatch(/sitemap:\s*false/);
     expect(cfg).toMatch(/robots:\s*"noindex,nofollow"/);
+  });
+});
+
+// Marker tolerance logic for the byte-lock above (#1815 host leg). Pure-logic
+// (synthetic bodies) so it runs regardless of whether the consumer ships the
+// _e2e canaries — it guards the contract between the host publish-loop's
+// in-flight marker append and the byte-lock that runs on the loop's own PR.
+test.describe("canary body byte-lock tolerates exactly one in-flight marker (#1815 host leg)", () => {
+  const base = buildBaselineBody("Demo — E2E canary post (do not edit by hand).");
+  const marker = makeMarker("post", 1780753215222);
+
+  test("baseline with no marker is unchanged", () => {
+    expect(stripInFlightMarker(base)).toBe(base);
+  });
+  test("a marker spliced mid-body (the editor End-key lands mid-line) is stripped", () => {
+    // The spec types `\n\n${marker}\n` at end-of-LINE, so it lands wrapped.
+    const mid = base.replace("innocuous content\n", `innocuous content\n\n${marker}\n\n`);
+    expect(mid).not.toBe(base);
+    expect(stripInFlightMarker(mid)).toBe(base);
+  });
+  test("a marker appended at the very end is stripped", () => {
+    expect(stripInFlightMarker(`${base}\n\n${marker}`)).toBe(base);
+  });
+  test("TWO markers (multi-orphan pathology #1861) are NOT reduced to baseline → byte-lock fails loud", () => {
+    const two = base.replace("innocuous content\n", `innocuous content\n\n${marker}\n\n`) + `\n\n${makeMarker("post", 999)}`;
+    expect(stripInFlightMarker(two)).not.toBe(base);
+  });
+  test("genuine newline drift (the #882 doubling class) is NOT tolerated → byte-lock fails loud", () => {
+    const drifted = base.replace("\n\n", "\n\n\n");
+    expect(stripInFlightMarker(drifted)).not.toBe(base);
   });
 });
