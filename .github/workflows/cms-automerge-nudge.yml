@@ -38,9 +38,13 @@
 # all-green data.
 #
 # A no-op re-call of `enablePullRequestAutoMerge` re-triggers GitHub's
-# merge-state evaluation against the now-correct check state. The caller
-# runs that re-call every 5 minutes against any `automated-test`-labelled
-# PR that matches the stuck pattern.
+# merge-state evaluation, but has been OBSERVED NOT to land these (#1965
+# stayed open 6+ h after a re-enable). So the recovery is now an EXPLICIT
+# `pulls.merge` (SQUASH) — a synchronous merge that forces GitHub to
+# re-evaluate mergeability fresh, dislodging the stale BLOCKED snapshot.
+# Branch protection still enforces the required checks at merge time, so
+# this can only land a genuinely-green PR. The re-enable is kept as a
+# fallback when the explicit merge momentarily 405s.
 #
 # Scope — DELIBERATELY narrow
 # ────────────────────────────
@@ -52,12 +56,23 @@
 #      a human-authored PR will never carry it. Guarantees we never
 #      touch a real editor's draft or a code PR.
 #   2. PR.autoMergeRequest is already populated — i.e. auto-merge is
-#      already enabled. If a human disabled it, we never re-enable.
-#   3. PR.mergeStateStatus === 'BLOCKED'.
-#   4. Every required-status-check (the contexts the site passes in via
-#      `required_contexts`) has latest=SUCCESS / NEUTRAL / SKIPPED.
+#      already enabled. If a human disabled it, we never act.
+#   3. Every required-status-check (the contexts the site passes in via
+#      `required_contexts`) is green BOTH in the bulk rollup AND on a
+#      FRESH per-PR re-query of the head sha's check-runs, where green =
+#      every run for that context is COMPLETED with conclusion
+#      SUCCESS/NEUTRAL/SKIPPED and NONE is queued/in-progress (so a real
+#      check still running behind a docs-only stub-green can never trick
+#      us into an early merge — the adamdaniel-automerge-fires-on-stub
+#      hazard).
 #
-# The intersection of 1-4 is exactly the #1812 stuck pattern. With the
+#   We do NOT gate on mergeStateStatus: the bulk query returns UNKNOWN for
+#   PRs GitHub hasn't recently re-evaluated, and the old `!== 'BLOCKED' →
+#   skip` dropped every UNKNOWN PR — the exact reason stuck-green canaries
+#   (#1812/#1815) were never recovered. The authoritative signal is the
+#   fresh check state, not the cached merge snapshot.
+#
+# The intersection above is exactly the #1812/#1815 stuck pattern. With the
 # caller's 5-min cron, worst-case time-to-merge drops from "until the
 # daily sweep closes it" to ~5 min.
 #
@@ -66,7 +81,7 @@
 #   - Does NOT change the editorial workflow's auto-merge enable path.
 #     The original mutations are unchanged; this is a recovery mechanism
 #     that fires only when they happen to land in the racy state.
-#   - Does NOT enable auto-merge where it wasn't already. A PR with
+#   - Does NOT act where auto-merge wasn't already armed. A PR with
 #     `autoMergeRequest: null` is left alone.
 #   - Does NOT touch non-CMS PRs (the `automated-test` label gate).
 #
@@ -160,6 +175,7 @@ jobs:
                       commits(last:1) {
                         nodes {
                           commit {
+                            oid
                             statusCheckRollup {
                               contexts(first:100) {
                                 nodes {
@@ -177,73 +193,152 @@ jobs:
                 }
               }`, { owner: context.repo.owner, repo: context.repo.repo });
 
+            const GREEN = (c) => c === 'SUCCESS' || c === 'NEUTRAL' || c === 'SKIPPED';
+
+            // FRESH per-PR authority gate (the bulk rollup can lag, and we must
+            // never merge on a stale/stub snapshot — see the
+            // adamdaniel-automerge-fires-on-stub-checks hazard). Re-query the
+            // HEAD sha's check-runs + legacy statuses directly and require EVERY
+            // required context to be COMPLETED + green AND that NO required
+            // context has a queued/in-progress run hiding behind a green one
+            // (the real e2e still running behind a docs-only stub).
+            async function headIsTrulyGreen(sha) {
+              const checkRuns = await github.paginate(
+                github.rest.checks.listForRef,
+                { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 },
+              );
+              // Group every check-run by name; a required context is green only
+              // if it has ≥1 run, ALL its runs are completed, and the latest
+              // (by started_at) concluded green.
+              const byName = new Map();
+              for (const r of checkRuns) {
+                if (!byName.has(r.name)) byName.set(r.name, []);
+                byName.get(r.name).push(r);
+              }
+              const legacy = new Map();
+              try {
+                const { data } = await github.rest.repos.getCombinedStatusForRef({
+                  owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100,
+                });
+                for (const s of data.statuses || []) legacy.set(s.context, s.state.toUpperCase());
+              } catch (_) { /* no legacy statuses */ }
+
+              for (const name of REQUIRED) {
+                const runs = byName.get(name);
+                if (runs && runs.length) {
+                  if (runs.some((r) => r.status !== 'completed')) {
+                    return { ok: false, why: `${name} still ${runs.find((r) => r.status !== 'completed').status}` };
+                  }
+                  const latestRun = runs
+                    .slice()
+                    .sort((a, b) => new Date(a.started_at || 0) - new Date(b.started_at || 0))
+                    .pop();
+                  if (!GREEN((latestRun.conclusion || '').toUpperCase())) {
+                    return { ok: false, why: `${name}=${latestRun.conclusion}` };
+                  }
+                  continue;
+                }
+                // Fall back to a legacy commit status of the same context name.
+                const st = legacy.get(name);
+                if (st === undefined) return { ok: false, why: `${name} missing on head sha` };
+                if (!GREEN(st)) return { ok: false, why: `${name}=${st}` };
+              }
+              return { ok: true };
+            }
+
             const prs = repository.pullRequests.nodes;
             core.info(`Found ${prs.length} open automated-test PR(s)`);
+            let merged = 0;
             let nudged = 0;
 
             for (const pr of prs) {
-              if (pr.mergeStateStatus !== 'BLOCKED') continue;
-              if (!pr.autoMergeRequest) continue;
+              if (!pr.autoMergeRequest) continue; // not armed → owner intends manual
               if (!pr.commits.nodes.length) continue;
 
-              const rollup = pr.commits.nodes[0].commit.statusCheckRollup;
+              // NOTE: we deliberately do NOT gate on mergeStateStatus. The bulk
+              // query returns UNKNOWN for any PR GitHub hasn't recently
+              // re-evaluated, and the old `!== 'BLOCKED' → continue` skipped
+              // every UNKNOWN PR — the exact reason stuck-green canaries (the
+              // #1812/#1815 stale-snapshot) were never recovered. We act on the
+              // authoritative signal instead: all required checks green.
+              const commit = pr.commits.nodes[0].commit;
+              const rollup = commit.statusCheckRollup;
               if (!rollup) continue;
 
-              // Build latest-per-context map. CheckRun is the modern API
-              // (Actions); StatusContext is legacy commit statuses. Both
-              // can appear in the rollup; we take the latest entry per
-              // name (the rollup is ordered, so a forward sweep with
-              // overwrite gives us the latest).
+              // Quick bulk pre-filter (cheap) before the per-PR REST re-query.
               const latest = new Map();
               for (const c of rollup.contexts.nodes) {
-                if (c.__typename === 'CheckRun') {
-                  latest.set(c.name, c.conclusion);
-                } else if (c.__typename === 'StatusContext') {
-                  // Legacy status — state is 'SUCCESS' / 'FAILURE' / etc.
-                  // Map to CheckRun conclusion semantics.
-                  latest.set(c.context, c.state);
-                }
+                if (c.__typename === 'CheckRun') latest.set(c.name, c.conclusion);
+                else if (c.__typename === 'StatusContext') latest.set(c.context, c.state);
               }
-
-              const allGreen = [...REQUIRED].every((name) => {
-                const c = latest.get(name);
-                return c === 'SUCCESS' || c === 'NEUTRAL' || c === 'SKIPPED';
-              });
-              if (!allGreen) {
-                const missing = [...REQUIRED].filter((n) => {
-                  const c = latest.get(n);
-                  return !(c === 'SUCCESS' || c === 'NEUTRAL' || c === 'SKIPPED');
-                });
+              const bulkGreen = [...REQUIRED].every((name) => GREEN(latest.get(name)));
+              if (!bulkGreen) {
+                const missing = [...REQUIRED].filter((n) => !GREEN(latest.get(n)));
                 core.debug(
-                  `PR #${pr.number}: BLOCKED but required checks not all green ` +
+                  `PR #${pr.number}: required not all green per bulk rollup ` +
                     `(non-green: ${missing.join(', ')}); leaving alone`,
                 );
                 continue;
               }
 
+              // Authoritative fresh re-query — never merge on a stale/stub snapshot.
+              const fresh = await headIsTrulyGreen(commit.oid);
+              if (!fresh.ok) {
+                core.info(
+                  `PR #${pr.number}: bulk-green but fresh head check not clean (${fresh.why}); ` +
+                    `skipping (avoids merging on a stale/stub snapshot).`,
+                );
+                continue;
+              }
+
               core.info(
-                `PR #${pr.number}: all required SUCCESS but BLOCKED + auto-merge enabled — nudging`,
+                `PR #${pr.number}: all required checks green on head ${commit.oid.slice(0, 8)} ` +
+                  `(mergeStateStatus=${pr.mergeStateStatus}) — explicit recovery merge`,
               );
 
+              // STRONG recovery: an explicit merge forces GitHub to re-evaluate
+              // mergeability fresh, dislodging the stale BLOCKED snapshot that a
+              // no-op re-enable of auto-merge does NOT clear. Branch protection
+              // still enforces the required checks at merge time, so this can
+              // only land a genuinely-green PR. SQUASH + the CMS_E2E_PAT identity
+              // so deploy-production.yml fires (the documented non-bot reason).
               try {
-                await github.graphql(`
-                  mutation($pullRequestId: ID!) {
-                    enablePullRequestAutoMerge(input: {
-                      pullRequestId: $pullRequestId,
-                      mergeMethod: SQUASH
-                    }) {
-                      pullRequest { autoMergeRequest { enabledAt } }
-                    }
-                  }`, { pullRequestId: pr.id });
-                nudged += 1;
+                await github.rest.pulls.merge({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  merge_method: 'squash',
+                });
+                core.info(`PR #${pr.number}: recovery merge succeeded.`);
+                merged += 1;
               } catch (err) {
                 const msg = String((err && err.message) || err);
-                if (/pull request is already merged/i.test(msg)) {
-                  core.info(`PR #${pr.number} merged between query and mutation; nothing to do.`);
+                if (/already merged/i.test(msg)) {
+                  core.info(`PR #${pr.number} already merged; nothing to do.`);
                   continue;
                 }
-                core.warning(`nudge failed for PR #${pr.number}: ${msg}`);
+                // GitHub momentarily still disagrees (snapshot catching up, or a
+                // transient 405 "not mergeable"). Fall back to re-arming
+                // auto-merge so the next evaluation lands it, and let the next
+                // cron retry the explicit merge.
+                core.warning(
+                  `PR #${pr.number}: explicit merge failed (${msg}); re-arming auto-merge as fallback.`,
+                );
+                try {
+                  await github.graphql(`
+                    mutation($pullRequestId: ID!) {
+                      enablePullRequestAutoMerge(input: {
+                        pullRequestId: $pullRequestId,
+                        mergeMethod: SQUASH
+                      }) {
+                        pullRequest { autoMergeRequest { enabledAt } }
+                      }
+                    }`, { pullRequestId: pr.id });
+                  nudged += 1;
+                } catch (err2) {
+                  core.warning(`PR #${pr.number}: re-arm fallback also failed: ${String((err2 && err2.message) || err2)}`);
+                }
               }
             }
 
-            core.info(`Nudged ${nudged} stuck PR(s).`);
+            core.info(`Recovered ${merged} stuck PR(s) by explicit merge; re-armed ${nudged} as fallback.`);
