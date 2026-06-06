@@ -17,7 +17,7 @@
 # it built the filename in the first place. Non-empty slugs (authors
 # setting a custom URL) are left alone.
 #
-# Unit tests: _plugins_test/normalize_empty_slug_test.rb
+# Unit tests: spec/normalize_empty_slug_test.rb
 
 module Jekyll
   module NormalizeEmptySlug
