@@ -73,7 +73,12 @@ if from_gem
     next if File.directory?(f)
     bn = File.basename(f)
     next if bn.end_with?('.base.yml') || skip.include?(bn)
-    FileUtils.cp(f, File.join(admin_out, bn))
+    # Atomic copy (parity with decap_config_hook.rb): temp + rename so a reader
+    # never sees a partial admin asset during an in-test rebuild (#1815-flake).
+    dst = File.join(admin_out, bn)
+    tmp = "#{dst}.tmp.#{Process.pid}"
+    FileUtils.cp(f, tmp)
+    File.rename(tmp, dst)
   end
   rev = File.join(admin_src, 'reviews')
   if Dir.exist?(rev)

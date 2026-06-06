@@ -49,7 +49,12 @@ module CmsPlatformTheme
           next if File.directory?(f)
           bn = File.basename(f)
           next if bn.end_with?(".base.yml") || skip.include?(bn)
-          FileUtils.cp(f, File.join(out, bn))
+          # Atomic copy: write a temp then rename, so a concurrent reader during
+          # an in-test rebuild never sees a truncated/partial admin asset (#1815-flake).
+          dst = File.join(out, bn)
+          tmp = "#{dst}.tmp.#{Process.pid}"
+          FileUtils.cp(f, tmp)
+          File.rename(tmp, dst)
         end
         rev = File.join(src, "reviews")
         if Dir.exist?(rev)
