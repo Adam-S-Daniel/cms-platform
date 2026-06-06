@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.8`** — `v0.1.0`–`v0.1.8` are all tagged GitHub
+**Current release: `v0.1.26`** — `v0.1.0`–`v0.1.26` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1087,7 +1087,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.17)
+## Version history (v0.1.0 → v0.1.26)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1142,6 +1142,41 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   BEFORE the editor Delete click and awaits it, so a silent delete no-op throws
   at the real fault site instead of timing out 900s later in the URL-404 wait
   (#1815 delete-phase). See the `browser-testing` skill.
+- **v0.1.18** (2026-06-05) — **#47 delete helper must not register a 2nd dialog
+  handler** (the double-`dialog.accept()` regression invisible to unit lints);
+  + the "Definition of done" section captured here.
+- **v0.1.19** (2026-06-05) — **#48 recover a Decap published-delete into an
+  auto-merged PR on protected `main`** (the `admin/publish-via-auto-merge.js`
+  shim path; #1815 delete-phase).
+- **v0.1.20** (2026-06-05) — **workflow-SET parity + PAT consolidation epic**:
+  #54 pin-consistency now asserts the consumer's `.github/workflows/` basename
+  set == the platform-dictated canonical set; #53 comment-sync PAT consolidated
+  onto `CMS_PLATFORM_PAT` (fine-grained only); #52 repo-variable setter
+  centralization; the contributor manual eliminated.
+- **v0.1.21** (2026-06-05) — **#57 recursion-gate skips the prod-mutating loops
+  on a platform-version-bump push** (the bump touches the loop's own workflow
+  file, which would otherwise re-fire it and race the bump deploy); + #55
+  doc-fix sweep, #56 prod/preview host-loop guards for `base_collections:[]`.
+- **v0.1.22** (2026-06-05) — **#58 export `SITE_ROOT` on EVERY `.cms-platform/e2e`
+  harness invocation** (5 loop reusables + canary-prod + delete-preview +
+  preview-media + visual-regression + e2e-tests), enforced by
+  `e2e/loop-site-root-lint.test.js` (#1815 host-loop gap).
+- **v0.1.23** (2026-06-05) — **#59 (#13) `platform-bump.yml` is atomic** (bumps
+  every pinned ref in one pin-consistent PR + checks out with the caller PAT for
+  workflow-file push auth); + #60 the MAIN host-loop `test()` guard + a
+  per-test-block guard-registry lint.
+- **v0.1.24** (2026-06-05) — **#61 full regex→AST rewrite of the guard-registry
+  detectors** (`e2e/spec-ast.js`, acorn 8.16.0 + acorn-walk 8.3.5, exact-pinned
+  past the 7-day cooling-off). "AST always, never regex for code structure."
+- **v0.1.25** (2026-06-05) — **#63 pin-consistency catches thin-caller CONTENT
+  drift**, not just version refs (a consumer caller whose body diverged from the
+  platform template at the pinned ref).
+- **v0.1.26** (2026-06-06) — **#64 crash-resilient :4000 webServer + recover
+  stuck-green canaries** (#1815). `e2e/static-serve.js` replaces bare `serve`
+  (which crashed the shared :4000 process on a racy ReadStream ENOENT, an
+  85-failure `@admin` cascade); `cms-automerge-nudge.yml` now recovers
+  UNKNOWN-state stuck-green canaries via a fresh-re-queried, stub-safe explicit
+  `pulls.merge`. See "E2E local webServer".
 
 ## Consumers
 
