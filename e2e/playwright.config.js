@@ -157,6 +157,7 @@ const PLATFORM_META_SPECS = [
   // #16 — scaffolder-output invariants: they run scaffold/create-site.js (and
   // read the platform fixture) to assert the seeded /preview/ + 404 + neutral
   // logo. A consumer ships no scaffold/ tree.
+  "admin-keep-files.test.js",
   "scaffold-preview-and-404.test.js",
   "scaffold-seeds-neutral-logo.test.js",
   "scaffold-deploy-delegators.test.js",

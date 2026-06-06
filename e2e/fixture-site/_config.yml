@@ -46,6 +46,15 @@ plugins:
 # `_site`) if Jekyll rendered them. adamdaniel.ai@main excludes `e2e` for
 # the same reason. The dot-prefixed `.cms-platform` is ignored by Jekyll by
 # default, but listing it is explicit + future-proof.
+# Gem-shipped admin assets land in _site/admin via the post_write render hook,
+# NOT by Jekyll generation — so Jekyll's `cleanup` phase (which runs BEFORE the
+# hook) would DELETE them every build, incl. the in-test `jekyll build`s that
+# @admin-write specs run against the live _site. The :4000 crawler HEADs into
+# that delete→recopy window → transient 404 on /admin/live-url-derive.js etc.
+# keep_files spares _site/admin from cleanup, eliminating the race (#1815-flake).
+keep_files:
+  - admin
+
 exclude:
   - Gemfile
   - Gemfile.lock
