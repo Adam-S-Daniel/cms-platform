@@ -208,13 +208,15 @@ const TEST_IGNORE = CONSUMER
   : /regression-video\.spec\.js/;
 
 // Absolute path to the harness's own node_modules/.bin. The local webServer
-// commands `cd ${SITE_ROOT}` first (so `serve`/`decap-server` resolve site
-// files + write into the SITE tree), but the SITE has no node_modules, so
-// referencing the binaries by absolute path keeps them resolvable from the
-// harness regardless of CWD. (`jekyll` is a Ruby gem run via the site's
-// `bundle exec`, so it isn't here.)
+// commands `cd ${SITE_ROOT}` first (so `decap-server` resolves site files +
+// writes into the SITE tree), but the SITE has no node_modules, so referencing
+// the binary by absolute path keeps it resolvable from the harness regardless
+// of CWD. (`jekyll` is a Ruby gem run via the site's `bundle exec`, so it isn't
+// here.) The :4000 static server is the harness-local `static-serve.js` — a
+// crash-RESILIENT drop-in for `serve` that survives a racy post-open read error
+// instead of killing the shared webServer (see that file's header / #1815).
 const HARNESS_BIN = path.join(__dirname, "node_modules", ".bin");
-const SERVE_BIN = path.join(HARNESS_BIN, "serve");
+const STATIC_SERVE = path.join(__dirname, "static-serve.js");
 const DECAP_SERVER_BIN = path.join(HARNESS_BIN, "decap-server");
 
 const DESKTOP = { width: 1920, height: 1080 };
@@ -292,7 +294,14 @@ module.exports = defineConfig({
           // see the SITE_ROOT note at the top of this file. `cd ${SITE_ROOT}`
           // makes both `bundle exec jekyll build` (reads the site's Gemfile +
           // _config.yml) and the served `_site` resolve to the consuming site.
-          command: `cd ${SITE_ROOT} && bundle exec jekyll build --quiet && "${SERVE_BIN}" ${SITE_ROOT}/_site -l 4000 --no-clipboard`,
+          // The static server is `static-serve.js` (run via the harness `node`,
+          // not the SITE's — the SITE has no node_modules), a crash-resilient
+          // serve-handler wrapper: a racy post-open ENOENT on a `_site/admin/*`
+          // asset under the write-heavy admin lane would crash bare `serve` and
+          // ERR_CONNECTION_REFUSED every later @admin spec (#1815); this one
+          // logs-and-survives. Same engine + config as `serve@14`, so URL
+          // resolution (clean URLs, dir index, 404.html) is unchanged.
+          command: `cd ${SITE_ROOT} && bundle exec jekyll build --quiet && node "${STATIC_SERVE}" ${SITE_ROOT}/_site 4000`,
           port: 4000,
           reuseExistingServer: !process.env.CI,
         },

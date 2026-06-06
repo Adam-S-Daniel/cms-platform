@@ -698,14 +698,28 @@ shows on prod AND every preview deploy. Guards:
   PRs (no `decap-cms/<status>` label) transiently red the audit until they
   auto-merge — expected churn, not a bug; see the `editorial-label-audit` skill.
 
-## E2E decap-server readiness (v0.1.8)
+## E2E local webServer: decap readiness + :4000 crash resilience
 
-`e2e/playwright.config.js`'s decap-server `webServer` uses
-`url: "http://localhost:8081/"` (HTTP readiness — decap-server 404s unknown
-routes, which counts as ready) **not** `port: 8081` (TCP-only). The TCP-only
-form raced: decap-server accepts the socket a beat before it can serve the
-local-backend API, so the admin shell occasionally mounted against a not-ready
-proxy and a collection editor failed to render (`cms-link-crawler` flaked ~30%).
+`e2e/playwright.config.js`'s local lane (`TARGET=local`) starts two webServers;
+both are lint-locked by `e2e/webserver-readiness.test.js` (AST, not regex).
+
+- **decap-server (:8081) waits on `port: 8081` (TCP), NOT a `url:` probe.** A
+  `url: "http://localhost:8081/"` probe can never go ready — decap-server
+  returns 404 for every GET route (/, /api/v1, /health) and Playwright's
+  webServer readiness only accepts HTTP 200-403, so the whole local lane times
+  out at the 60s webServer budget. (An earlier note here claimed the opposite;
+  the `url:` form was tried and reverted — TCP is the only mechanism that works.)
+- **The :4000 static server is `e2e/static-serve.js`, NOT bare `serve` (#1815).**
+  Bare `serve@14`/`serve-handler` pipes the file ReadStream to the response with
+  no `'error'` listener, so a racy post-open ENOENT (a TOCTOU on a `_site/admin/*`
+  gem asset under the write-heavy admin lane) emits an UNHANDLED `'error'`,
+  crashes the single shared :4000 process, and ERR_CONNECTION_REFUSED-es every
+  later `@admin` spec — an 85-failure cascade that fails the canary cms/* PR's
+  required `e2e / e2e`, blocks auto-merge, and wedges the prod loops. `static-
+  serve.js` uses the SAME engine (serve-handler) + serve@14 config but overrides
+  `createReadStream` to attach an `'error'` listener (so a post-open read error
+  is handled, not fatal) plus an `uncaughtException` backstop. Never reintroduce
+  bare `serve … -l 4000`.
 
 ## Admin-bundle parity is bump-aware (#14)
 
@@ -1093,8 +1107,10 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   `audit-editorial-labels.js` + reusable `editorial-label-audit.yml`.
 - **v0.1.7** — **base_collections opt-out** (`cms.base_collections` keep-list;
   `theme/spec/base_collections_filter_test.rb`).
-- **v0.1.8** — **e2e flake fix:** decap-server `webServer` waits on HTTP
-  readiness (`url:`) not the open port.
+- **v0.1.8** — **e2e flake fix:** decap-server `webServer` waits on the open TCP
+  `port: 8081`, not a `url:` HTTP probe (decap 404s every GET route, which
+  Playwright's readiness rejects — the `url:` form timed out the whole local
+  lane). See "E2E local webServer".
 - **v0.1.9–v0.1.12** — **issue sweep** (2026-06-04): #25 neutral gem logo, #23
   scaffold seeds `preview.md` + `404.html`, #26 OAuth-restriction admin banner,
   #29 single-version pin-consistency guard (`scripts/check-platform-pin-consistency.js`),
