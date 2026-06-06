@@ -226,15 +226,28 @@ jobs:
               for (const name of REQUIRED) {
                 const runs = byName.get(name);
                 if (runs && runs.length) {
-                  if (runs.some((r) => r.status !== 'completed')) {
-                    return { ok: false, why: `${name} still ${runs.find((r) => r.status !== 'completed').status}` };
-                  }
-                  const latestRun = runs
-                    .slice()
+                  // Pending guard (stub hazard): never merge while a required
+                  // run is still queued/in-progress (the real check running
+                  // behind a docs-only stub-green).
+                  const pending = runs.find((r) => r.status !== 'completed');
+                  if (pending) return { ok: false, why: `${name} still ${pending.status}` };
+                  // Ignore CANCELLED runs: the editorial workflow fires several
+                  // runs on the same head sha (label flips), and a same-sha
+                  // re-run cancellation leaves a cancelled `validate-content`
+                  // check beside the real success. The cancelled is superseded,
+                  // not an authoritative verdict — decide on the latest
+                  // NON-cancelled run (mirrors waitForWorkflowRun's "cancelled
+                  // is transient"). Without this the nudge skipped genuinely
+                  // green PRs (#1815). NB: the editorial-workflow fix removes
+                  // these cancelled runs at the source; this keeps the nudge
+                  // correct for any residual cancelled required check.
+                  const decisive = runs
+                    .filter((r) => (r.conclusion || '').toLowerCase() !== 'cancelled')
                     .sort((a, b) => new Date(a.started_at || 0) - new Date(b.started_at || 0))
                     .pop();
-                  if (!GREEN((latestRun.conclusion || '').toUpperCase())) {
-                    return { ok: false, why: `${name}=${latestRun.conclusion}` };
+                  if (!decisive) return { ok: false, why: `${name}: all runs cancelled` };
+                  if (!GREEN((decisive.conclusion || '').toUpperCase())) {
+                    return { ok: false, why: `${name}=${decisive.conclusion}` };
                   }
                   continue;
                 }
