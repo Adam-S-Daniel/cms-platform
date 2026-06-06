@@ -18,9 +18,10 @@ run-name: >-
 
 on:
   schedule:
-    # 12:00 UTC daily. All real-prod loops serialize through the shared
-    # `prod-mutating-loop` concurrency group declared on each loop's
-    # heavy job, so mutual exclusion is structural, not time-based.
+    # 12:00 UTC daily. All real-prod loops serialize via the
+    # `cms-loop-lane-gate` step (run-id ordered) on each loop's heavy job;
+    # per-loop concurrency groups keep a co-arriving sibling from being
+    # cancel-evicted (#70). Mutual exclusion is structural, not time-based.
     - cron: '0 12 * * *'
   workflow_dispatch:
   push:

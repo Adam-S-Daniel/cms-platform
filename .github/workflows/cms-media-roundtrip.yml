@@ -18,7 +18,8 @@
 # PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main): same shape as
 # cms-publish-loop-prod.yml — site identity via repo VARS, GHCR ci-runner
 # image + build-image job + container: block DROPPED in favour of inline
-# deps, stuck-PR diagnostic DROPPED. The shared prod-mutating-loop lane,
+# deps, stuck-PR diagnostic DROPPED. The per-loop prod-mutating-loop-<key>
+# lane + the cms-loop-lane-gate cross-loop serialization step (#70),
 # await-prod-deploy gate, recursion-gate job, and the PROD_PLAYGROUND_MODE
 # sunset gate are preserved.
 #
@@ -86,27 +87,24 @@ jobs:
     needs: [recursion-gate]
     runs-on: ubuntu-latest
     concurrency:
-      # SHARED lane for ALL real-prod-mutating loop workflows
-      # (cms-publish-loop-prod / cms-media-roundtrip / cms-publish-loop-host).
-      # Declared on the HEAVY LOOP JOB, not the workflow: the cheap
-      # recursion-gate job has no concurrency, so it runs OUTSIDE this lane
-      # — its skip decision is computed immediately even while a real loop
-      # holds the lane, and a recursion-skipped loop is `if:`-skipped before
-      # it ever enters the lane (zero lane occupancy for recursion). GHA
-      # keys concurrency groups by string ACROSS workflows, so one constant
-      # group on these three loop jobs keeps them mutually exclusive: only
-      # one real-prod loop runs at a time, whatever the trigger (push /
-      # workflow_dispatch / host's daily cron all converge here). They each
-      # mutate prod through Decap → cms-PR → auto-merge → deploy-production
-      # and a parallel pair races deploy-production's `group: production`,
-      # blowing each other's URL-reflect budgets. cancel-in-progress:false
-      # queues rather than killing an in-flight loop (cancelling mid-flow
-      # can leave the canary dirty); a stuck run holds the lane up to its
-      # timeout-minutes, which is bounded and far cheaper than the collision.
-      # This block MUST stay byte-identical across all three workflows AND
-      # remain on the loop job (NOT the workflow) — enforced by
+      # PER-LOOP lane (#70). Each real-prod loop has its OWN concurrency
+      # group, so a co-arriving SIBLING loop is NEVER evicted: a single push
+      # salient to two loops used to land them both in one SHARED group where
+      # GitHub keeps the running + latest-pending run and CANCELS the other
+      # pending sibling (the cancel-in-progress:false mechanic behind #70 /
+      # #1815). With a per-loop group GitHub keeps the LATEST run per group,
+      # so a loop's most-recent run is never a spurious cancelled one.
+      # cancel-in-progress:false still protects an in-flight SAME-loop run
+      # (a kill mid-flow can leave the canary dirty); a duplicate same-loop
+      # push just queues as the single pending run. Declared on the HEAVY
+      # LOOP JOB, not the workflow, so the cheap recursion-gate job runs
+      # OUTSIDE the lane (instant skip decision). Cross-loop MUTUAL EXCLUSION
+      # is now enforced by the `cms-loop-lane-gate` step below (run-id
+      # ordered, queue-not-evict). The group line differs across the three by
+      # design (-prod / -media / -host); the SHARED invariant is the lane-gate
+      # step, which IS drift-locked byte-identical — see
       # e2e/workflow-prod-loop-serialized.test.js.
-      group: prod-mutating-loop
+      group: prod-mutating-loop-media
       cancel-in-progress: false
     env:
       # Site identity for the parameterized e2e helpers — supplied by
@@ -118,9 +116,10 @@ jobs:
     if: ${{ needs.recursion-gate.outputs.run == 'true' }}
     # 150 min — accommodates the spec's 130-min TEST_TIMEOUT_MS (#1815: each of
     # the three URL-reflect legs now spans the full 30-min auto-merge latency)
-    # plus checkout / npm ci / Playwright-install setup. The prod-mutating-loop
-    # concurrency lane means a stuck run holds the lane up to this bound, so it
-    # stays finite and far cheaper than a deploy-lane collision.
+    # plus checkout / npm ci / Playwright-install setup. The per-loop
+    # concurrency lane + the cms-loop-lane-gate mean a stuck run blocks its
+    # siblings (via the gate) only up to this bound, so the wait stays finite
+    # and far cheaper than a deploy-lane collision.
     timeout-minutes: 150
     steps:
       - name: Checkout
@@ -132,6 +131,15 @@ jobs:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
+
+      # Cross-loop serialization WITHOUT eviction (#70): wait for any
+      # real-prod loop run that STARTED BEFORE this one (lower run id) to
+      # finish before driving prod. Run-id ordering is a total order, so
+      # co-arriving siblings queue in order instead of cancelling each
+      # other. Fail-open + bounded. MUST stay byte-identical across the
+      # three loops (drift-locked by workflow-prod-loop-serialized.test.js).
+      - name: Loop lane gate — serialize real-prod loops without eviction (#70)
+        uses: ./.cms-platform/.github/actions/cms-loop-lane-gate
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
