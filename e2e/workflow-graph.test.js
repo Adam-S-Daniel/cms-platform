@@ -63,3 +63,23 @@ test("validate-content has no pull_request paths filter (required check must alw
     "cms-editorial-workflow.yml must NOT gate `validate-content` by paths — see comment block in the workflow.",
   ).toBe(false);
 });
+
+test("validate-content does NOT cancel-in-progress (a cancelled required check non-deterministically blocks the merge — #1815)", () => {
+  // The canary PRs fire several editorial-workflow runs on the SAME head sha
+  // (same-second opened+labeled, then each label flip). With cancel-in-progress
+  // those leave a CANCELLED `validate-content` check-run beside the later
+  // SUCCESS, and GitHub branch protection evaluates the required context
+  // non-deterministically — sometimes blocking the merge HARD ("Required status
+  // check 'editorial / validate-content' is cancelled", 405), which no merge
+  // mechanism can override. cancel-in-progress:false queues same-sha re-runs to
+  // success so the context is unambiguously green. Parse the YAML (not regex).
+  const job = parseYaml(readWorkflow("cms-editorial-workflow.yml")).jobs["validate-content"];
+  expect(job, "validate-content job not found").toBeTruthy();
+  expect(job.concurrency, "validate-content must declare per-job concurrency").toBeTruthy();
+  expect(
+    job.concurrency["cancel-in-progress"],
+    "validate-content.concurrency.cancel-in-progress must be FALSE — a cancelled " +
+      "validate-content check-run shadows the success and GitHub blocks the merge " +
+      "non-deterministically (405), wedging the prod loops (#1815).",
+  ).toBe(false);
+});

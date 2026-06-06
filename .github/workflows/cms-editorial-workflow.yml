@@ -21,20 +21,35 @@ permissions:
 # was never enabled, the PR sat for 12 minutes, and the spec timed
 # out in waitForMerge.
 #
-# Splitting concurrency into per-job groups keeps the per-keystroke
-# cancel optimization on validate-content (cheap re-run cost on
-# Decap's rapid saves) while ensuring auto-merge-when-ready always
-# runs to completion when its labeled event fires.
+# Splitting concurrency into per-job groups ensures auto-merge-when-ready
+# always runs to completion when its labeled event fires.
+#
+# validate-content uses cancel-in-progress: FALSE (#1815). It used to cancel
+# (a "per-keystroke" optimization), but the canary PRs fire several
+# editorial-workflow runs on the SAME head sha (a same-second `opened` +
+# `labeled` pair, then each cms/draft→cms/ready→decap-cms/* label flip — none
+# of which changes the sha), so cancel-in-progress left a CANCELLED
+# `validate-content` check-run alongside the later SUCCESS on that sha. GitHub
+# branch protection then evaluates the required `editorial / validate-content`
+# context NON-DETERMINISTICALLY when both a cancelled and a success run exist:
+# sometimes the success wins (the PR merges — e.g. create PR #1984), sometimes
+# the cancelled wins and the merge is HARD-BLOCKED ("Required status check
+# 'editorial / validate-content' is cancelled", HTTP 405 — e.g. delete PR
+# #1986). No merge mechanism — native auto-merge, an explicit pulls.merge, or
+# the nudge — can land a PR while the cancelled run shadows it, which is THE
+# cause of the wedged prod loops. With cancel-in-progress:false the queued
+# runs all complete success → no cancelled run → the context is unambiguously
+# green. Cost: a few extra ~30s runs per PR — cheap, and correctness wins.
 
 jobs:
   validate-content:
-    # Cancel previous validation runs when the CMS pushes another
-    # commit to the same draft PR (Decap pushes per-keystroke during
-    # editing). Each new commit invalidates the prior run's verdict,
-    # so cancelling the in-flight one saves ~30s of CI per keystroke.
+    # cancel-in-progress: FALSE — never leave a cancelled `validate-content`
+    # check-run; it non-deterministically blocks the required-context merge
+    # gate (see the header comment / #1815). Same-sha re-runs queue and all
+    # complete success instead.
     concurrency:
       group: cms-editorial-validate-content-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
