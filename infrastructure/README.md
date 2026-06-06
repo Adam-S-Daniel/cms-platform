@@ -37,3 +37,31 @@ bash infrastructure/rum/deploy.sh            # optional analytics
 
 Copy the stack outputs (`RoleArn` → `AWS_ROLE_ARN` secret; CloudFront ids;
 RUM `AppMonitorId`/`IdentityPoolId` → `_config.yml`) as printed by each script.
+
+## Consumer sites delegate (they don't vendor templates)
+
+A scaffolded site (`npx github:Adam-S-Daniel/cms-platform`) does **not** copy the
+CloudFormation templates or the OAuth-proxy `lambda.py`/`template.yaml`. Instead it
+commits two thin **delegating wrappers** (emitted from
+`infrastructure/bootstrap/deploy.sh.delegating` and
+`oauth-proxy/deploy.sh.delegating`, locked by
+`e2e/scaffold-deploy-delegators.test.js`):
+
+```
+infrastructure/bootstrap/deploy.sh   # delegating wrapper
+oauth-proxy/deploy.sh                # delegating wrapper
+```
+
+Each wrapper reads `platform_repo` / `platform_ref` from `platform.lock`, checks
+the platform out at that ref into `.cms-platform/` (a gitignored dot-dir, the same
+pattern the reusable-workflow callers use), sources
+`infrastructure/site-params.env` for the site identity + secrets, then `exec`s the
+platform's real `deploy.sh` — so the parameterized template + lambda are the single
+source of truth and a platform fix flows to every consumer on the next
+`platform_ref` bump (no fork to keep in sync). The site runs them exactly as above
+(`bash oauth-proxy/deploy.sh`), no platform checkout needed.
+
+The OAuth wrapper adopts the platform default scope **`repo,user,workflow`**.
+⚠️ If a redeploy **widens** the scope your live GitHub OAuth App was authorized
+with, the OAuth App owner must **manually re-consent** (re-authorize the app)
+once — GitHub requires that human step; it can't be automated.

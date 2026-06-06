@@ -153,6 +153,17 @@ async function main() {
   write(target, ".gitleaks.toml", fs.readFileSync(path.join(PLATFORM_ROOT, ".gitleaks.toml"), "utf8"));
   write(target, "README.md", siteReadme({ title, domain, owner, repo }));
 
+  // OAuth proxy + bootstrap DELEGATING deploy wrappers (#69). The site commits
+  // ONLY these thin wrappers — never the OAuth proxy lambda.py/template.yaml or
+  // the bootstrap CloudFormation template — and each checks the platform out at
+  // platform_ref into .cms-platform/ and deploys the platform's stack under THIS
+  // site's identity (from infrastructure/site-params.env). Keeps consumers from
+  // forking the proxy/infra. Locked by e2e/scaffold-deploy-delegators.test.js.
+  for (const rel of ["oauth-proxy/deploy.sh", "infrastructure/bootstrap/deploy.sh"]) {
+    write(target, rel, fs.readFileSync(path.join(PLATFORM_ROOT, rel + ".delegating"), "utf8"));
+    fs.chmodSync(path.join(target, rel), 0o755);
+  }
+
   console.log(nextSteps({ target, domain, owner, repo, prefix }));
 }
 
@@ -362,8 +373,8 @@ Next:
   3. Edit infrastructure/site-params.env (GitHub OAuth app id/secret, etc.).
   4. Deploy infra (one-time, shared AWS account):
        set -a; source infrastructure/site-params.env; set +a
-       bash <cms-platform>/infrastructure/bootstrap/deploy.sh
-       bash <cms-platform>/oauth-proxy/deploy.sh
+       bash infrastructure/bootstrap/deploy.sh   # committed delegating wrapper
+       bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,user,workflow)
   5. Add GitHub secrets (exact fine-grained PAT permissions: see
      .claude/skills/cms-platform-secrets/SKILL.md):
        - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W; PAT user = reviewer of the regression-review env

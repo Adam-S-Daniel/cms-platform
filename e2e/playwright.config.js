@@ -159,6 +159,7 @@ const PLATFORM_META_SPECS = [
   // logo. A consumer ships no scaffold/ tree.
   "scaffold-preview-and-404.test.js",
   "scaffold-seeds-neutral-logo.test.js",
+  "scaffold-deploy-delegators.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +
