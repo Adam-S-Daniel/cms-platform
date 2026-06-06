@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# =============================================================================
+# deploy.sh — Bootstrap AWS account for a cms-platform site (DELEGATING WRAPPER)
+# =============================================================================
+#
+# This is the file the scaffolder (scaffold/create-site.js) emits into a NEW
+# consuming site as `infrastructure/bootstrap/deploy.sh`. The site does NOT
+# vendor the bootstrap CloudFormation template — it is the single source of
+# truth in cms-platform, so a fix made there (e.g. CloudFront
+# ErrorCachingMinTTL=0) flows to every consumer on the next platform_ref bump.
+#
+# How it works (mirrors the repo-wide ".cms-platform/ checkout-at-platform_ref"
+# pattern the reusable-workflow callers use):
+#   1. Read platform_repo + platform_ref from platform.lock.
+#   2. Check the platform out at that ref into .cms-platform/ (gitignored).
+#   3. Source infrastructure/site-params.env for the site identity, then
+#      delegate to .cms-platform/infrastructure/bootstrap/deploy.sh.
+#
+# NOTE for a LIVE apex: the platform template gates the apex/www A-records on
+# CreateApexDnsRecords (DEFAULT false, safe for pre-go-live sites). Once your
+# site is live at its apex, export CREATE_APEX_DNS_RECORDS=true (here or in
+# site-params.env) so a redeploy never deletes the production apex/www records.
+#
+# Prerequisites: AWS CLI v2, git, AWS credentials.
+# Usage:  bash infrastructure/bootstrap/deploy.sh   (idempotent)
+# =============================================================================
+
+set -euo pipefail
+
+BLUE='\033[0;34m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+info() { echo -e "${BLUE}[INFO]${NC}  $*"; }
+success() { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+
+command -v aws >/dev/null 2>&1 || error "AWS CLI not found."
+command -v git >/dev/null 2>&1 || error "git not found — needed to check out the cms-platform bootstrap template."
+
+# ── Locate repo root + platform.lock (bootstrap/ is TWO levels below root) ───
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOCK_FILE="$REPO_ROOT/platform.lock"
+[[ -f "$LOCK_FILE" ]] || error "platform.lock not found at $LOCK_FILE"
+
+read_lock() {
+  # shellcheck disable=SC2016  # awk field refs ($1/$2), not shell expansion.
+  awk -v k="$1" '$1==k":" {print $2; exit}' "$LOCK_FILE"
+}
+PLATFORM_REPO="${PLATFORM_REPO:-$(read_lock platform_repo)}"
+PLATFORM_REF="${PLATFORM_REF:-$(read_lock platform_ref)}"
+[[ -n "$PLATFORM_REPO" ]] || error "platform_repo not found in $LOCK_FILE"
+[[ -n "$PLATFORM_REF" ]] || error "platform_ref not found in $LOCK_FILE"
+
+# ── Load site parameters (GITHUB_REPO, APEX_DOMAIN, …) ──────────────────────
+PARAMS_FILE="$REPO_ROOT/infrastructure/site-params.env"
+if [[ -f "$PARAMS_FILE" ]]; then
+  info "Sourcing $PARAMS_FILE"
+  set -a; # shellcheck disable=SC1090
+  source "$PARAMS_FILE"; set +a
+else
+  warn "infrastructure/site-params.env not found — relying on already-exported env / platform defaults."
+fi
+
+# ── Check the platform out at platform_ref into .cms-platform/ ──────────────
+PLATFORM_DIR="$REPO_ROOT/.cms-platform"
+PLATFORM_URL="${PLATFORM_URL:-https://github.com/${PLATFORM_REPO}.git}"
+info "Platform: ${PLATFORM_REPO}@${PLATFORM_REF}"
+info "Checking platform out into .cms-platform/ …"
+rm -rf "$PLATFORM_DIR"
+git clone --quiet --depth 1 --branch "$PLATFORM_REF" "$PLATFORM_URL" "$PLATFORM_DIR" \
+  || error "Failed to check out ${PLATFORM_REPO}@${PLATFORM_REF} into .cms-platform/"
+
+PLATFORM_DEPLOY="$PLATFORM_DIR/infrastructure/bootstrap/deploy.sh"
+PLATFORM_TEMPLATE="$PLATFORM_DIR/infrastructure/bootstrap/template.yaml"
+[[ -f "$PLATFORM_TEMPLATE" ]] || error "Platform bootstrap template missing: $PLATFORM_TEMPLATE"
+[[ -f "$PLATFORM_DEPLOY" ]] || error "Platform bootstrap deploy script missing: $PLATFORM_DEPLOY"
+success "Platform checked out — deploying from $PLATFORM_TEMPLATE"
+
+# ── Delegate to the platform's bootstrap deploy.sh ─────────────────────────
+exec bash "$PLATFORM_DEPLOY"
