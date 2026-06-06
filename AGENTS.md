@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.30`** — `v0.1.0`–`v0.1.30` are all tagged GitHub
+**Current release: `v0.1.31`** — `v0.1.0`–`v0.1.31` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.30)
+## Version history (v0.1.0 → v0.1.31)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1265,6 +1265,16 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   so cleanup never deletes `_site/admin`, + atomic gem-asset copy (temp+rename)
   in both parity-locked render paths. Locked by `e2e/admin-keep-files.test.js`.
   Consumers add `keep_files: [admin]` to `_config.yml` on bump.
+- **v0.1.31** (2026-06-06) — **#78 host-loop SITE_ROOT read fix (#1815 host
+  leg, next layer).** The v0.1.29 byte-lock fix let the host loop get PAST its
+  create leg, exposing the next layer: `cms-unpublish-republish.spec.js` read
+  its `_posts/` canary via `path.join(__dirname, "..", FIXTURE_PATH)` = the
+  `.cms-platform/` harness checkout on a consumer → ENOENT → the host loop died
+  on spec #4 (live run 27069585769). Both reads now use `SITE_ROOT` (the #1815
+  v0.1.22 universal rule, applied to these two content reads the workflow-level
+  lint couldn't see). New AST lint `e2e/spec-site-root-reads.test.js` flags any
+  @lane:real spec reading SITE content (_posts/_e2e/_tags/_drafts/assets) via
+  the platform checkout (platform SOURCE reads like theme/admin are allowed).
 
 ## Consumers
 
