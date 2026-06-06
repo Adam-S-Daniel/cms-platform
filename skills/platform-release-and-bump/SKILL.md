@@ -96,10 +96,13 @@ parity/e2e are non-required.
   the atomic bump once its `platform-bump` thin caller pins a release that
   CONTAINS this fix (≥ v0.1.23); to bump a consumer still on an older caller,
   do step 2 manually (above). Dependabot remains wired as an independent net.
-- **Co-arrival cancels loops:** a push touching `.github/workflows/**` is
-  salient to every prod-mutating loop and cancels in-flight ones (shared
-  `prod-mutating-loop` concurrency lane). Do consumer bumps, THEN let the loops
-  settle before dispatching a validation loop.
+- **Co-arrival QUEUES loops (since #70):** a push salient to two loops fires
+  both; each has its OWN `prod-mutating-loop-<key>` concurrency group, so the
+  co-arriving sibling is NEVER cancel-evicted (GitHub keeps the latest run per
+  group), and the `cms-loop-lane-gate` step serializes them by run id (the
+  earlier-id run goes first; the rest queue). Before #70 a shared group
+  cancel-evicted the co-arriving sibling. Consumer bumps still settle cleanly;
+  a validation loop dispatched during another loop just waits its turn.
 - **Release cadence example (this is normal):** one session shipped
   v0.1.13→v0.1.17, bumping both consumers after each — that's five cascades.
 

@@ -101,11 +101,39 @@ function makeMarker(canaryId, runId = Date.now()) {
   return `e2e-publish-loop:${canaryId}:${runId}`;
 }
 
+// A single in-flight publish-loop marker line, e.g. `e2e-publish-loop:post:1780…`.
+// Lexical (anchored to a whole line) — the body byte-lock + self-heal both key
+// off this ONE pattern so they can never drift apart.
+const MARKER_LINE_RE = /e2e-publish-loop:[a-z][a-z-]*:\d+/;
+
+// Remove AT MOST ONE in-flight marker (and the blank lines the publish-loop
+// wraps it in) from a canary body, returning the underlying baseline body.
+// The host loop appends `\n\n${makeMarker(id,runId)}\n` typed at a line end,
+// so the marker lands either mid-body (wrapped `\n\n<marker>\n\n`) or
+// trailing (`\n\n<marker>`); strip exactly one such occurrence. A SECOND
+// marker (the multi-orphan pathology, #1861) or any other drift survives, so
+// the caller's strict baseline compare still fails loud on real corruption.
+// Input/output are leading/trailing-newline-trimmed.
+function stripInFlightMarker(body) {
+  // Tolerate EXACTLY ONE marker. Zero → already baseline; two or more → the
+  // multi-orphan pathology (#1861), which must fail the caller's compare, so
+  // leave the body untouched.
+  const found = body.match(/e2e-publish-loop:[a-z][a-z-]*:\d+/g) || [];
+  if (found.length !== 1) return body;
+  return body
+    .replace(/\n\ne2e-publish-loop:[a-z][a-z-]*:\d+\n\n/, "\n") // mid-body splice → rejoin
+    .replace(/\n\ne2e-publish-loop:[a-z][a-z-]*:\d+$/, "") //        trailing append → drop
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "");
+}
+
 module.exports = {
   CANARIES,
   REPO_ROOT,
   findCanary,
   makeMarker,
+  MARKER_LINE_RE,
+  stripInFlightMarker,
   readCanarySource,
   buildBaselineBody,
 };

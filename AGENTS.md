@@ -936,9 +936,10 @@ The full e2e/Playwright matrix is ported. Two shapes:
   lints, run in the platform's dogfooding context, reference composites by local
   `./.github/actions/`): the three real-prod loops `cms-publish-loop-prod` /
   `cms-media-roundtrip` / `cms-publish-loop-host` (lint:
-  `e2e/workflow-prod-loop-serialized.test.js` — shared `prod-mutating-loop`
-  concurrency lane on each loop job, byte-identical; `recursion-gate` job +
-  `await-prod-deploy` gate) and `visual-regression` (lints:
+  `e2e/workflow-prod-loop-serialized.test.js` — a PER-LOOP `prod-mutating-loop-<key>`
+  concurrency group on each loop job + the byte-identical `cms-loop-lane-gate`
+  run-id-ordered cross-loop serialization step (#70, replaced the shared lane
+  that co-arrival-evicted siblings); `recursion-gate` job + `await-prod-deploy` gate) and `visual-regression` (lints:
   `e2e/visual-regression-content-skip.test.js` + `-skip-review.test.js` — the
   `paths:` content-skip list, the `visually-different` output, the conditional
   `regression-review` environment).
@@ -1229,8 +1230,9 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   gem-delivered admin (PR #1883); live prod `/admin` verified. Daily
   editorial-label-audit adopted. (A loop co-arrival fix #1892 narrowed the host
   publish-loop's push trigger to its own canary surfaces so it stops evicting
-  prod-mutate in the shared `prod-mutating-loop` concurrency lane — see agent
-  memory `cms-prod-loops-no-concurrent-runs`.)
+  prod-mutate in the shared concurrency lane — later superseded by per-loop
+  lanes + the `cms-loop-lane-gate` (#70), which make co-arrival QUEUE rather
+  than cancel-evict — see agent memory `cms-prod-loops-no-concurrent-runs`.)
 - **jodidaniel.com** — consumer #2, org-owned, a SINGLE-PAGE bio. `/admin`
   restructured into 9 per-section collections (5 folder collections ordered by a
   numeric `weight`, declared `output:false`; 4 file collections reading
