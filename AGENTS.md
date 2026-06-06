@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.26`** — `v0.1.0`–`v0.1.26` are all tagged GitHub
+**Current release: `v0.1.27`** — `v0.1.0`–`v0.1.27` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -721,6 +721,31 @@ both are lint-locked by `e2e/webserver-readiness.test.js` (AST, not regex).
   is handled, not fatal) plus an `uncaughtException` backstop. Never reintroduce
   bare `serve … -l 4000`.
 
+## A cancelled required check blocks the merge (#1815)
+
+If a canary cms/* PR shows every required check green + auto-merge armed yet sits
+`mergeStateStatus: BLOCKED` and never lands — and an explicit
+`gh api -X PUT repos/<r>/pulls/<n>/merge` returns
+`405: Required status check "<ctx>" is cancelled` — the cause is a **cancelled
+check-run for a required context shadowing the success on the same head sha**. No
+merge mechanism (native auto-merge, explicit `pulls.merge`, or the nudge) can
+override a cancelled required check, and GitHub picks **non-deterministically**
+between a cancelled and a success run for the same context+sha (so the loop is
+flaky, not consistently broken).
+
+The source on these repos is a workflow with `concurrency.cancel-in-progress:
+true` that fires **multiple runs on the SAME head sha** — the canary loop flips
+labels (`cms/draft`→`cms/ready`→`decap-cms/*`) without changing the sha, so an
+`on: [..., labeled]` workflow re-runs and cancels its own in-flight run, leaving a
+cancelled check-run. The fix is `cancel-in-progress: false` on the required-check
+JOB (same-sha re-runs queue + all complete success). `cms-editorial-workflow.yml`'s
+`validate-content` was the offender (v0.1.27). **Rule:** any job that produces a
+REQUIRED status context AND can be triggered more than once on the same sha
+(label/multi-event triggers) must NOT `cancel-in-progress` — a cancelled required
+run is a hard merge block. (Workflows triggered only by `push`/`synchronize` —
+each a new sha — are safe to cancel; `secrets-scan` + `visual-regression` keep
+`cancel-in-progress: true` for that reason.) Locked by `workflow-graph.test.js`.
+
 ## Admin-bundle parity is bump-aware (#14)
 
 `e2e/admin-bundle-parity.spec.js` byte-compares the SERVED admin bundle (prod +
@@ -1087,7 +1112,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.26)
+## Version history (v0.1.0 → v0.1.27)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1177,6 +1202,14 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   85-failure `@admin` cascade); `cms-automerge-nudge.yml` now recovers
   UNKNOWN-state stuck-green canaries via a fresh-re-queried, stub-safe explicit
   `pulls.merge`. See "E2E local webServer".
+- **v0.1.27** (2026-06-06) — **#66 `validate-content` cancel-in-progress:false**
+  (#1815, THE decisive prod-loop fix). The editorial workflow fired several runs
+  on the same canary head sha (label flips), and the cancelled `validate-content`
+  check-run shadowed the success — GitHub branch protection then blocked the
+  merge non-deterministically (live 405). Cancelling is removed so same-sha
+  re-runs queue to success; locked by `workflow-graph.test.js`. Nudge
+  `headIsTrulyGreen` also made cancelled-aware. See "A cancelled required check
+  blocks the merge".
 
 ## Consumers
 
