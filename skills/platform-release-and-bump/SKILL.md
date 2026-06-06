@@ -96,13 +96,17 @@ parity/e2e are non-required.
   the atomic bump once its `platform-bump` thin caller pins a release that
   CONTAINS this fix (≥ v0.1.23); to bump a consumer still on an older caller,
   do step 2 manually (above). Dependabot remains wired as an independent net.
-- **Co-arrival QUEUES loops (since #70):** a push salient to two loops fires
-  both; each has its OWN `prod-mutating-loop-<key>` concurrency group, so the
-  co-arriving sibling is NEVER cancel-evicted (GitHub keeps the latest run per
-  group), and the `cms-loop-lane-gate` step serializes them by run id (the
-  earlier-id run goes first; the rest queue). Before #70 a shared group
-  cancel-evicted the co-arriving sibling. Consumer bumps still settle cleanly;
-  a validation loop dispatched during another loop just waits its turn.
+- **Loop triggers are pairwise-disjoint (#70); the shared lane serializes
+  time-overlap.** Each real-prod loop's heavy job shares the
+  `prod-mutating-loop` concurrency group (HARD mutual exclusion — never two
+  loops mutating prod at once), but a push used to fire MULTIPLE loops at once
+  (shared salient paths) and GitHub then cancel-EVICTED the co-arriving sibling
+  (1 running + only the latest pending kept). Fixed by making the three loops'
+  push paths disjoint: prod OWNS the shared infra paths on push; media/host
+  cover them via their daily cron. So a consumer bump (a `.github/workflows/**`
+  push) now fires at most one loop, and the shared group queues any remaining
+  cron/dispatch time-overlap rather than evicting it. Still: do consumer bumps,
+  THEN let the loops settle before dispatching a validation loop.
 - **Release cadence example (this is normal):** one session shipped
   v0.1.13→v0.1.17, bumping both consumers after each — that's five cascades.
 

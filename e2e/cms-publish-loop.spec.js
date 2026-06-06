@@ -55,7 +55,7 @@ const path = require("node:path");
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { CANARIES, findCanary, makeMarker } = require("./canary-content");
+const { CANARIES, findCanary, makeMarker, MARKER_ANY_RE } = require("./canary-content");
 const {
   fetchPublicUrl,
   gh,
@@ -598,7 +598,11 @@ test.afterAll(async ({}, testInfo) => {
           .replace(/^\n+/, "")
           .replace(/\n+$/, "");
   const expectedBody = CanaryFile.baselineBody;
-  const hasMarker = /e2e-publish-loop:[a-z]+:\d+/.test(decoded);
+  // Shared marker pattern (canary-content.js MARKER_ANY_RE) — the old inline
+  // /[a-z]+:/ class failed to match a dash-joined id like `preview-page` (#70
+  // byte-lock hardening); use the single source so the three marker checks
+  // (byte-lock, this orphan check, reset-orphaned-canary.sh) never drift.
+  const hasMarker = MARKER_ANY_RE.test(decoded);
   const bodyDrift = fileBody !== expectedBody;
   if (!hasMarker && !bodyDrift) {
     console.log(

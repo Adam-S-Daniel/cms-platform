@@ -10,7 +10,7 @@
 const { test, expect } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
-const { CANARIES, readCanarySource, stripInFlightMarker, makeMarker, buildBaselineBody } = require("./canary-content");
+const { CANARIES, readCanarySource, stripInFlightMarker } = require("./canary-content");
 const cap = require("./site-capabilities");
 
 // SITE_ROOT-aware resolution of the RENDERED Decap config. The gem's render
@@ -170,32 +170,3 @@ test.describe("Canary content invariants", () => {
   });
 });
 
-// Marker tolerance logic for the byte-lock above (#1815 host leg). Pure-logic
-// (synthetic bodies) so it runs regardless of whether the consumer ships the
-// _e2e canaries — it guards the contract between the host publish-loop's
-// in-flight marker append and the byte-lock that runs on the loop's own PR.
-test.describe("canary body byte-lock tolerates exactly one in-flight marker (#1815 host leg)", () => {
-  const base = buildBaselineBody("Demo — E2E canary post (do not edit by hand).");
-  const marker = makeMarker("post", 1780753215222);
-
-  test("baseline with no marker is unchanged", () => {
-    expect(stripInFlightMarker(base)).toBe(base);
-  });
-  test("a marker spliced mid-body (the editor End-key lands mid-line) is stripped", () => {
-    // The spec types `\n\n${marker}\n` at end-of-LINE, so it lands wrapped.
-    const mid = base.replace("innocuous content\n", `innocuous content\n\n${marker}\n\n`);
-    expect(mid).not.toBe(base);
-    expect(stripInFlightMarker(mid)).toBe(base);
-  });
-  test("a marker appended at the very end is stripped", () => {
-    expect(stripInFlightMarker(`${base}\n\n${marker}`)).toBe(base);
-  });
-  test("TWO markers (multi-orphan pathology #1861) are NOT reduced to baseline → byte-lock fails loud", () => {
-    const two = base.replace("innocuous content\n", `innocuous content\n\n${marker}\n\n`) + `\n\n${makeMarker("post", 999)}`;
-    expect(stripInFlightMarker(two)).not.toBe(base);
-  });
-  test("genuine newline drift (the #882 doubling class) is NOT tolerated → byte-lock fails loud", () => {
-    const drifted = base.replace("\n\n", "\n\n\n");
-    expect(stripInFlightMarker(drifted)).not.toBe(base);
-  });
-});

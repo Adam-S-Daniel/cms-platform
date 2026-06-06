@@ -101,30 +101,39 @@ function makeMarker(canaryId, runId = Date.now()) {
   return `e2e-publish-loop:${canaryId}:${runId}`;
 }
 
-// A single in-flight publish-loop marker line, e.g. `e2e-publish-loop:post:1780…`.
-// Lexical (anchored to a whole line) — the body byte-lock + self-heal both key
-// off this ONE pattern so they can never drift apart.
-const MARKER_LINE_RE = /e2e-publish-loop:[a-z][a-z-]*:\d+/;
+// The in-flight publish-loop marker, e.g. `e2e-publish-loop:post:1780…` or
+// `e2e-publish-loop:preview-pr12:1780…`. ONE pattern is the single source of
+// truth for the body byte-lock (below), the publish-loop spec's afterAll
+// orphan check, and scripts/reset-orphaned-canary.sh — so they can never drift
+// apart (a divergence once let a `preview-<id>` marker pass one check and not
+// another). The id segment is dash-joined lowercase words with NO leading or
+// trailing dash (`post`, `page`, `project`, `preview-pr12`).
+const MARKER_ID = "[a-z]+(?:-[a-z]+)*";
+const MARKER_SRC = `e2e-publish-loop:${MARKER_ID}:\\d+`;
+const MARKER_LINE_RE = new RegExp(`^${MARKER_SRC}$`); // a whole marker line
+const MARKER_ANY_RE = new RegExp(MARKER_SRC); //         a marker anywhere
 
 // Remove AT MOST ONE in-flight marker (and the blank lines the publish-loop
 // wraps it in) from a canary body, returning the underlying baseline body.
-// The host loop appends `\n\n${makeMarker(id,runId)}\n` typed at a line end,
-// so the marker lands either mid-body (wrapped `\n\n<marker>\n\n`) or
-// trailing (`\n\n<marker>`); strip exactly one such occurrence. A SECOND
-// marker (the multi-orphan pathology, #1861) or any other drift survives, so
-// the caller's strict baseline compare still fails loud on real corruption.
-// Input/output are leading/trailing-newline-trimmed.
+// SELF-CONTAINED: trims leading/trailing newlines itself (callers need not).
+// The host loop types `\n\n${makeMarker(id,runId)}\n` at the editor cursor's
+// end-of-LINE, so the marker lands wrapped — between two lines that were one
+// newline apart (`\n\n<marker>\n\n`), at the very end (`\n\n<marker>` after
+// trim), or (defensively) as the first paragraph (`<marker>\n\n`). Strip
+// exactly one such occurrence. A SECOND marker (the multi-orphan pathology,
+// #1861) or any other drift survives, so the caller's strict baseline compare
+// still fails loud on real corruption.
 function stripInFlightMarker(body) {
-  // Tolerate EXACTLY ONE marker. Zero → already baseline; two or more → the
-  // multi-orphan pathology (#1861), which must fail the caller's compare, so
-  // leave the body untouched.
-  const found = body.match(/e2e-publish-loop:[a-z][a-z-]*:\d+/g) || [];
-  if (found.length !== 1) return body;
-  return body
-    .replace(/\n\ne2e-publish-loop:[a-z][a-z-]*:\d+\n\n/, "\n") // mid-body splice → rejoin
-    .replace(/\n\ne2e-publish-loop:[a-z][a-z-]*:\d+$/, "") //        trailing append → drop
-    .replace(/^\n+/, "")
-    .replace(/\n+$/, "");
+  const trimmed = String(body).replace(/^\n+/, "").replace(/\n+$/, "");
+  // Tolerate EXACTLY ONE marker. Zero → already baseline; two or more → leave
+  // untouched so the caller's compare fails (the #1861 multi-orphan pathology).
+  const found = trimmed.match(new RegExp(MARKER_SRC, "g")) || [];
+  if (found.length !== 1) return trimmed;
+  const demarked = trimmed
+    .replace(new RegExp(`\\n\\n${MARKER_SRC}\\n\\n`), "\n") // mid-body splice → rejoin
+    .replace(new RegExp(`\\n\\n${MARKER_SRC}$`), "") //            trailing append → drop
+    .replace(new RegExp(`^${MARKER_SRC}\\n\\n`), ""); //          leading paragraph → drop
+  return demarked.replace(/^\n+/, "").replace(/\n+$/, "");
 }
 
 module.exports = {
@@ -132,7 +141,10 @@ module.exports = {
   REPO_ROOT,
   findCanary,
   makeMarker,
+  MARKER_ID,
+  MARKER_SRC,
   MARKER_LINE_RE,
+  MARKER_ANY_RE,
   stripInFlightMarker,
   readCanarySource,
   buildBaselineBody,

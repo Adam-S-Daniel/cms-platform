@@ -18,24 +18,24 @@ run-name: >-
 
 on:
   schedule:
-    # 12:00 UTC daily. All real-prod loops serialize via the
-    # `cms-loop-lane-gate` step (run-id ordered) on each loop's heavy job;
-    # per-loop concurrency groups keep a co-arriving sibling from being
-    # cancel-evicted (#70). Mutual exclusion is structural, not time-based.
+    # 12:00 UTC daily. This loop covers shared-infra changes (admin/**,
+    # playwright.config.js, package*.json, _config.yml) via this daily cron;
+    # on PUSH it triggers ONLY on its OWN surfaces (this caller + the canary
+    # collection fixtures/layouts), NOT the shared infra paths — those fire
+    # cms-publish-loop-prod ALONE on push (prod owns the infra-change canary).
+    # DISJOINT push paths across the three loops = no co-arrival eviction in
+    # the shared `prod-mutating-loop` lane (#70). The shared concurrency group
+    # still serializes any cron/dispatch/push TIME-overlap (queues, never two
+    # loops mutating prod at once).
     - cron: '0 12 * * *'
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - .github/workflows/cms-publish-loop-host.yml
-      - admin/**
       - _e2e/canary-post.md
       - _e2e/canary-page.md
       - _e2e/canary-project.md
-      - playwright.config.js
-      - package.json
-      - package-lock.json
-      - _config.yml
       - _layouts/canary.html
       - _layouts/default.html
 
