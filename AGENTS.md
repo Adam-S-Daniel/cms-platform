@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.28`** — `v0.1.0`–`v0.1.28` are all tagged GitHub
+**Current release: `v0.1.29`** — `v0.1.0`–`v0.1.29` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.28)
+## Version history (v0.1.0 → v0.1.29)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1229,6 +1229,32 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   with 2 cancelled + 2 success; #1996 blocked with the same). With NO concurrency
   every same-sha run completes success → no cancelled shadow → deterministic
   merge. Lint updated to assert no concurrency block.
+- **v0.1.29** (2026-06-06) — **loop reliability + OAuth delivery + a spec migration**:
+  - **#70 co-arrival eviction → disjoint push triggers (#73).** Keep the shared
+    `prod-mutating-loop` group (HARD mutual exclusion) but make the three loops'
+    PUSH triggers PAIRWISE-DISJOINT — prod OWNS the shared infra paths on push,
+    media/host cover them via their daily cron — so a single push can't fire two
+    loops and co-arrival-evict one. (Superseded an initial run-id lane-gate that
+    an adversarial review showed downgraded hard exclusion to fail-open
+    best-effort — re-run queue-jumping + media's 150min run >> a 45min gate
+    timeout.) New lint asserts disjoint push paths + prod-owns-infra.
+  - **#1815 host leg — byte-lock tolerates one in-flight marker (#73).** The host
+    publish-loop's create PR appends an `e2e-publish-loop:` marker to the
+    persistent `_e2e/canary-post.md`; the strict byte-lock had rejected the
+    loop's OWN PR (its heavy job had been red 40+ runs — only the ephemeral-post
+    prod/media loops were ever green). `stripInFlightMarker` (self-contained; ONE
+    marker pattern shared across the byte-lock, the spec afterAll, and
+    reset-orphaned-canary.sh; LF-enforced via .gitattributes) tolerates exactly
+    one marker while real drift + the multi-marker orphan (#1861) still fail loud.
+  - **#69 deliver OAuth-proxy + bootstrap as delegating wrappers (#72).** The
+    scaffolder emits committed thin `oauth-proxy/deploy.sh` +
+    `infrastructure/bootstrap/deploy.sh` that read platform.lock, check the
+    platform out at `platform_ref`, and `exec` the platform's real deploy.sh
+    (default OAuth scope `repo,user,workflow`) — consumers vendor no
+    `lambda.py`/`template.yaml`/bootstrap template. A scope-widening redeploy
+    needs a MANUAL OAuth-App re-consent. Locked by scaffold-deploy-delegators.test.js.
+  - **adamdaniel#2007-P3 — migrate `normalize_empty_slug_test.rb` to the gem
+    theme/spec (#74)** (the consumer test required a now-absent `_plugins/` path).
 
 ## Consumers
 
