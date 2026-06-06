@@ -24,32 +24,34 @@ permissions:
 # Splitting concurrency into per-job groups ensures auto-merge-when-ready
 # always runs to completion when its labeled event fires.
 #
-# validate-content uses cancel-in-progress: FALSE (#1815). It used to cancel
-# (a "per-keystroke" optimization), but the canary PRs fire several
-# editorial-workflow runs on the SAME head sha (a same-second `opened` +
-# `labeled` pair, then each cms/draft→cms/ready→decap-cms/* label flip — none
-# of which changes the sha), so cancel-in-progress left a CANCELLED
-# `validate-content` check-run alongside the later SUCCESS on that sha. GitHub
-# branch protection then evaluates the required `editorial / validate-content`
-# context NON-DETERMINISTICALLY when both a cancelled and a success run exist:
-# sometimes the success wins (the PR merges — e.g. create PR #1984), sometimes
-# the cancelled wins and the merge is HARD-BLOCKED ("Required status check
-# 'editorial / validate-content' is cancelled", HTTP 405 — e.g. delete PR
-# #1986). No merge mechanism — native auto-merge, an explicit pulls.merge, or
-# the nudge — can land a PR while the cancelled run shadows it, which is THE
-# cause of the wedged prod loops. With cancel-in-progress:false the queued
-# runs all complete success → no cancelled run → the context is unambiguously
-# green. Cost: a few extra ~30s runs per PR — cheap, and correctness wins.
+# validate-content has NO `concurrency` block at all (#1815). The canary PRs
+# fire several editorial-workflow runs on the SAME head sha (a same-second
+# `opened` + `synchronize` + `labeled` burst, then each cms/draft→cms/ready→
+# decap-cms/* label flip — none of which changes the sha). ANY concurrency
+# group on this job leaves a CANCELLED `validate-content` check-run on that sha:
+# with `cancel-in-progress: true` the in-flight run is cancelled; and — the
+# subtle one that defeated the first fix — with `cancel-in-progress: FALSE`
+# GitHub still keeps only the running run + the LATEST pending run and CANCELS
+# the other pending dups in the group (GitHub's documented behaviour), so a
+# 4-run burst still leaves ~2 cancelled. GitHub branch protection then evaluates
+# the required `editorial / validate-content` context NON-DETERMINISTICALLY when
+# both a cancelled and a success run exist on the sha: sometimes success wins
+# (the PR merges — e.g. #1984/#1990/#1993), sometimes the cancelled wins and the
+# merge is HARD-BLOCKED ("Required status check 'editorial / validate-content'
+# is cancelled", HTTP 405 — e.g. #1986/#1996), which no merge mechanism (native
+# auto-merge, explicit pulls.merge, or the nudge) can override — THE cause of
+# the wedged loops. With NO concurrency the same-sha runs all run independently
+# to SUCCESS → never a cancelled run → the context is unambiguously green. Cost:
+# a few extra ~30s runs per PR (each on its own — GitHub's repo-level limit
+# still queues them); cheap, and correctness wins.
 
 jobs:
   validate-content:
-    # cancel-in-progress: FALSE — never leave a cancelled `validate-content`
-    # check-run; it non-deterministically blocks the required-context merge
-    # gate (see the header comment / #1815). Same-sha re-runs queue and all
-    # complete success instead.
-    concurrency:
-      group: cms-editorial-validate-content-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
+    # NO `concurrency:` block — see the header comment (#1815). Any concurrency
+    # group (even cancel-in-progress:false) leaves a cancelled `validate-content`
+    # check-run on a same-sha burst, which non-deterministically blocks the
+    # required-context merge gate. Independent same-sha runs all complete
+    # success instead.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

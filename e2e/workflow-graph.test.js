@@ -64,22 +64,25 @@ test("validate-content has no pull_request paths filter (required check must alw
   ).toBe(false);
 });
 
-test("validate-content does NOT cancel-in-progress (a cancelled required check non-deterministically blocks the merge — #1815)", () => {
+test("validate-content has NO concurrency block (any group leaves a cancelled required check that blocks the merge — #1815)", () => {
   // The canary PRs fire several editorial-workflow runs on the SAME head sha
-  // (same-second opened+labeled, then each label flip). With cancel-in-progress
-  // those leave a CANCELLED `validate-content` check-run beside the later
-  // SUCCESS, and GitHub branch protection evaluates the required context
-  // non-deterministically — sometimes blocking the merge HARD ("Required status
-  // check 'editorial / validate-content' is cancelled", 405), which no merge
-  // mechanism can override. cancel-in-progress:false queues same-sha re-runs to
-  // success so the context is unambiguously green. Parse the YAML (not regex).
+  // (same-second opened+synchronize+labeled, then each label flip). ANY
+  // concurrency group on validate-content leaves a CANCELLED `validate-content`
+  // check-run on that sha: cancel-in-progress:true cancels the in-flight run,
+  // and — the subtle one — cancel-in-progress:FALSE still keeps only the running
+  // + latest-pending run and CANCELS the other pending dups (GitHub's documented
+  // behaviour). A cancelled run beside a success makes GitHub evaluate the
+  // required context NON-DETERMINISTICALLY and HARD-BLOCK the merge ("Required
+  // status check 'editorial / validate-content' is cancelled", 405) — which no
+  // merge mechanism can override. With NO concurrency the same-sha runs all
+  // complete success. Parse the YAML (not regex).
   const job = parseYaml(readWorkflow("cms-editorial-workflow.yml")).jobs["validate-content"];
   expect(job, "validate-content job not found").toBeTruthy();
-  expect(job.concurrency, "validate-content must declare per-job concurrency").toBeTruthy();
   expect(
-    job.concurrency["cancel-in-progress"],
-    "validate-content.concurrency.cancel-in-progress must be FALSE — a cancelled " +
-      "validate-content check-run shadows the success and GitHub blocks the merge " +
-      "non-deterministically (405), wedging the prod loops (#1815).",
-  ).toBe(false);
+    job.concurrency,
+    "validate-content must declare NO `concurrency:` block — any group (even " +
+      "cancel-in-progress:false) leaves a cancelled validate-content check-run on a " +
+      "same-sha burst, which non-deterministically blocks the required-context merge " +
+      "gate (405), wedging the prod loops (#1815).",
+  ).toBeUndefined();
 });
