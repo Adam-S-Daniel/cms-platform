@@ -166,7 +166,7 @@ test(
     // baseline would corrupt the next run. UI-driven assertion below
     // confirms the editor agrees.
     await test.step("Confirm fixture file's baseline is published: false on main", async () => {
-      const text = fs.readFileSync(path.join(__dirname, "..", FIXTURE_PATH), "utf8");
+      const text = fs.readFileSync(path.join(SITE_ROOT, FIXTURE_PATH), "utf8");
       if (!/^published:\s*false\s*$/m.test(text)) {
         throw new Error(
           `${FIXTURE_PATH} on main is not at baseline (published: false). Reset before running this spec.`,
@@ -329,7 +329,7 @@ test.afterAll(async () => {
   // forcePublishedFalse approach makes future fixture-frontmatter
   // edits flow through automatically.
   const baselineFileText = forcePublishedFalse(
-    fs.readFileSync(path.join(__dirname, "..", FIXTURE_PATH), "utf8"),
+    fs.readFileSync(path.join(SITE_ROOT, FIXTURE_PATH), "utf8"),
     FIXTURE_PATH,
   );
   await writeFixtureOnMain({
