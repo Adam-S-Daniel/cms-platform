@@ -15,6 +15,12 @@ run-name: >-
    || format('manual — @{0}', github.actor) }}
 
 on:
+  # Prod OWNS the shared-infra-change canary on PUSH: it is the ONE loop that
+  # triggers on admin/** + playwright.config.js + package*.json + _config.yml +
+  # _layouts/post.html, so a single infra push fires this loop ALONE. The media
+  # + host loops drop those paths from their push triggers (they cover infra via
+  # their daily crons) — DISJOINT push paths = no co-arrival eviction in the
+  # shared `prod-mutating-loop` lane (#70).
   push:
     branches: [main]
     paths:

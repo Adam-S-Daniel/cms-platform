@@ -96,7 +96,11 @@ E2E_DIR="${E2E_DIR}" node -e '
   // Set → heal that feature branch via a direct Contents-API PUT.
   const branch = (process.env.CANARY_RESET_BRANCH || "").trim();
   const ref = branch || "main";
-  const MARKER_RE = /e2e-publish-loop:[a-z-]+:\d+/;
+  // MUST match e2e/canary-content.js MARKER_SRC (single source of truth for
+  // the marker shape across the byte-lock, the publish-loop afterAll orphan
+  // check, and this self-heal). Dash-joined lowercase id, no leading/trailing
+  // dash (post / preview-page / spike-project).
+  const MARKER_RE = /e2e-publish-loop:[a-z]+(?:-[a-z]+)*:\d+/;
 
   function toBase64(text) {
     return Buffer.from(text, "utf8").toString("base64");

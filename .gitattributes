@@ -1,0 +1,6 @@
+# Canary markdown is byte-locked (e2e/canary-content.test.js) and round-tripped
+# through Decap; force LF so a CRLF commit can never wedge the byte-lock
+# independently of the in-flight marker logic (#70 byte-lock hardening).
+_e2e/*.md text eol=lf
+e2e/fixture-site/_e2e/*.md text eol=lf
+e2e/fixture-site-singlepage/**/*.md text eol=lf

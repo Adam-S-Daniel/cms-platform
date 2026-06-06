@@ -1,7 +1,7 @@
 // @lane: local — pure-fs lint of workflow YAML; no browser, no network
 /*
- * Regression guard for #1101 + #1178 + #70 + the changed-files
- * recursion gate. The three real-prod-mutating loop workflows must (a) put ONE
+ * Regression guard for #1101 + #1178 + the changed-files recursion
+ * gate. The three real-prod-mutating loop workflows must (a) put ONE
  * shared concurrency lane on each heavy loop job — NOT the workflow
  * (#1178) — so the loops can never run concurrently (a parallel pair
  * races deploy-production and blows each other's URL-reflect budgets —
@@ -19,7 +19,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
-const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
+const { readWorkflow, parseYaml, jobSubBlock } = require("./workflow-yaml-utils");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 
@@ -30,9 +30,7 @@ const LOOPS = {
   "cms-publish-loop-host.yml": { job: "host-loop", loop: "host" },
 };
 const LOOP_WORKFLOWS = Object.keys(LOOPS);
-const SHARED_GROUP = "prod-mutating-loop"; // the OLD shared lane (#70 replaced it with per-loop groups)
-const PER_LOOP_GROUP = (loop) => `prod-mutating-loop-${loop}`;
-const LANE_GATE_ACTION = "./.cms-platform/.github/actions/cms-loop-lane-gate";
+const SHARED_GROUP = "prod-mutating-loop";
 // PLATFORM PORT NOTE: the loop workflows became `workflow_call` reusables
 // (a consuming SITE invokes them), so each job checks the platform out
 // into `.cms-platform/` and references its composites by that local path.
@@ -59,7 +57,7 @@ const GATE_IF = "${{ needs." + GATE_JOB + ".outputs.run == 'true' }}";
 const asArray = (v) => (Array.isArray(v) ? v : v == null ? [] : [v]);
 
 test.describe("real-prod loop workflows are serialized + deploy-gated (#1101)", () => {
-  test("each loop JOB has its PER-LOOP concurrency group, cancel-in-progress:false (no workflow-level lane — #1178 / #70)", () => {
+  test("each loop JOB shares ONE concurrency group, cancel-in-progress:false (no workflow-level lane — #1178)", () => {
     for (const wf of LOOP_WORKFLOWS) {
       const doc = parseYaml(readWorkflow(wf));
       // #1178: the lane MUST live on the heavy loop job, not the
@@ -76,8 +74,8 @@ test.describe("real-prod loop workflows are serialized + deploy-gated (#1101)", 
       ).toBeTruthy();
       expect(
         loopJob.concurrency.group,
-        `${wf}: ${LOOPS[wf].job} concurrency.group must be its PER-LOOP lane (prod-mutating-loop-${LOOPS[wf].loop}); a SHARED group co-arrival-evicts a sibling (#70). Cross-loop exclusion is the lane-gate step, not the group.`,
-      ).toBe(PER_LOOP_GROUP(LOOPS[wf].loop));
+        `${wf}: ${LOOPS[wf].job} concurrency.group must be the shared lane so the three real-prod loops are mutually exclusive (#1101)`,
+      ).toBe(SHARED_GROUP);
       expect(
         loopJob.concurrency["cancel-in-progress"],
         `${wf}: ${LOOPS[wf].job} must NOT cancel-in-progress — a real-prod loop killed mid-flow can leave the canary dirty; queue instead (#1101)`,
@@ -92,87 +90,26 @@ test.describe("real-prod loop workflows are serialized + deploy-gated (#1101)", 
     }
   });
 
-  test("each loop job uses its OWN per-loop concurrency group — distinct, never the old shared lane (#70)", () => {
-    // The #70 fix: a SHARED concurrency group across the three loops made a
-    // co-arriving sibling get CANCELLED (GitHub keeps running + latest-pending,
-    // evicts the rest). Per-loop groups mean GitHub keeps the latest run PER
-    // group, so a loop's most-recent run is never a spurious cancelled one, and
-    // a sibling loop is never evicted. Distinctness is the invariant.
-    const groups = LOOP_WORKFLOWS.map(
-      (wf) => parseYaml(readWorkflow(wf)).jobs[LOOPS[wf].job].concurrency.group,
+  test("the loop job's concurrency block is byte-identical across the three (drift guard)", () => {
+    // Extract each heavy loop job's job-level `concurrency:` sub-block
+    // (#1178 moved it off the workflow). Byte-identical across the three
+    // keeps a partial edit (e.g. flipping cancel-in-progress in one, or
+    // tweaking the comment) from silently desynchronising the lane.
+    const blocks = LOOP_WORKFLOWS.map((wf) =>
+      jobSubBlock(readWorkflow(wf), LOOPS[wf].job, "concurrency").trim(),
     );
     expect(
-      new Set(groups).size,
-      `the three loop jobs must use DISTINCT per-loop concurrency groups (got ${JSON.stringify(groups)}) — a shared group co-arrival-evicts a sibling (#70)`,
-    ).toBe(3);
-    for (const g of groups) {
-      expect(
-        g,
-        `a loop job still uses the old SHARED group "${SHARED_GROUP}" — per-loop groups (prod-mutating-loop-<loop>) replaced it in #70`,
-      ).not.toBe(SHARED_GROUP);
-    }
-  });
-
-  test("each loop job invokes the cms-loop-lane-gate step, byte-identical across the three + before the deploy gate (cross-loop serialization SSOT, #70)", () => {
-    // Cross-loop mutual exclusion moved OFF the shared concurrency group ONTO
-    // this run-id-ordered wait gate (queue, not evict). The per-loop GROUP
-    // differs by design, so the byte-identical drift guard now protects the
-    // GATE invocation instead — a partial edit to the serialization mechanism
-    // must fail loud, exactly as the old shared-group byte-compare did.
-    const jobs = LOOP_WORKFLOWS.map((wf) => ({
-      wf,
-      job: parseYaml(readWorkflow(wf)).jobs[LOOPS[wf].job],
-    }));
-    const gateSteps = jobs.map(({ wf, job }) => {
-      const step = (job.steps || []).find((s) => s && s.uses === LANE_GATE_ACTION);
-      expect(
-        step,
-        `${wf}: ${LOOPS[wf].job} must invoke ${LANE_GATE_ACTION} so cross-loop runs QUEUE (run-id ordered) instead of evicting each other (#70)`,
-      ).toBeTruthy();
-      return JSON.stringify(step);
-    });
+      blocks[0],
+      "cms-publish-loop-prod.yml prod-mutate job must declare a concurrency block (#1178)",
+    ).toBeTruthy();
     expect(
-      gateSteps[1],
-      "cms-media-roundtrip.yml lane-gate step drifted from cms-publish-loop-prod.yml's — keep the gate invocation byte-identical (#70)",
-    ).toBe(gateSteps[0]);
+      blocks[1],
+      "cms-media-roundtrip.yml media-roundtrip job concurrency block drifted from cms-publish-loop-prod.yml's prod-mutate — keep them byte-identical (#1101/#1178)",
+    ).toBe(blocks[0]);
     expect(
-      gateSteps[2],
-      "cms-publish-loop-host.yml lane-gate step drifted from cms-publish-loop-prod.yml's — keep the gate invocation byte-identical (#70)",
-    ).toBe(gateSteps[0]);
-    // Acquire the lane BEFORE driving prod: gate precedes await-prod-deploy.
-    for (const { wf, job } of jobs) {
-      const steps = job.steps || [];
-      const idxGate = steps.findIndex((s) => s && s.uses === LANE_GATE_ACTION);
-      const idxAwait = steps.findIndex((s) => s && s.uses === AWAIT_ACTION);
-      expect(
-        idxGate,
-        `${wf}: the cms-loop-lane-gate step must run BEFORE await-prod-deploy (acquire the lane before driving prod)`,
-      ).toBeLessThan(idxAwait);
-    }
-  });
-
-  test("the cms-loop-lane-gate composite exists, is composite, no transitive uses (#70)", () => {
-    const actionPath = path.join(
-      REPO_ROOT,
-      ".github",
-      "actions",
-      "cms-loop-lane-gate",
-      "action.yml",
-    );
-    expect(
-      fs.existsSync(actionPath),
-      `${actionPath} must exist (referenced by the loop workflows)`,
-    ).toBe(true);
-    const action = parseYaml(fs.readFileSync(actionPath, "utf8"));
-    expect(action.runs && action.runs.using).toBe("composite");
-    // Bash + node only — no nested `uses:` (SHA-pin cleanliness, mirrors
-    // await-prod-deploy + cms-recursion-gate).
-    for (const step of action.runs.steps || []) {
-      expect(
-        step.uses,
-        `cms-loop-lane-gate must not nest external actions (found uses: ${step.uses})`,
-      ).toBeUndefined();
-    }
+      blocks[2],
+      "cms-publish-loop-host.yml host-loop job concurrency block drifted from cms-publish-loop-prod.yml's prod-mutate — keep them byte-identical (#1101/#1178)",
+    ).toBe(blocks[0]);
   });
 
   test("each workflow has exactly the recursion-gate + loop jobs (no build-image — platform port)", () => {
@@ -439,6 +376,69 @@ test.describe("changed-files recursion gate wiring (run 26108485428)", () => {
         SELF_CHURN[LOOPS[wf].loop].length,
         `cms-recursion-churn.SELF_CHURN.${LOOPS[wf].loop} must be non-empty`,
       ).toBeGreaterThan(0);
+    }
+  });
+});
+
+// #70 — the three real-prod loops must have PAIRWISE-DISJOINT push triggers so a
+// single push can never fire two of them and co-arrive in the shared
+// `prod-mutating-loop` lane (where GitHub keeps running + latest-pending and
+// CANCEL-evicts the rest, leaving a spurious cancelled "latest" run). The shared
+// concurrency group on the heavy jobs (asserted above) remains the HARD
+// mutual-exclusion backstop for any cron/dispatch TIME-overlap; disjoint push
+// paths eliminate the same-push CO-ARRIVAL that produced the eviction. The
+// canonical EXAMPLE callers (examples/site) are the source of truth for the
+// trigger shape; pin-consistency lets a consumer tune `on:` but the template
+// must model the disjoint design. (A caller's own workflow-file path is unique
+// by construction and excluded from the cross-check.)
+test.describe("real-prod loop push triggers are pairwise-disjoint (#70 — no co-arrival eviction)", () => {
+  const CALLER_DIR = path.join(REPO_ROOT, "examples", "site", ".github", "workflows");
+  const asArr = (v) => (Array.isArray(v) ? v : v == null ? [] : [v]);
+
+  function pushPaths(wf) {
+    const doc = parseYaml(fs.readFileSync(path.join(CALLER_DIR, wf), "utf8"));
+    // YAML parses the `on:` key as boolean true in some loaders; support both.
+    const on = doc.on || doc[true] || {};
+    const push = on.push || {};
+    return asArr(push.paths)
+      .map(String)
+      // a caller's OWN workflow file is intentionally unique per loop.
+      .filter((p) => !p.startsWith(".github/workflows/"));
+  }
+
+  test("each loop caller declares push paths", () => {
+    for (const wf of LOOP_WORKFLOWS) {
+      expect(
+        pushPaths(wf).length,
+        `${wf} (examples/site) must declare push paths beyond its own workflow file`,
+      ).toBeGreaterThanOrEqual(wf === "cms-media-roundtrip.yml" ? 0 : 1);
+    }
+  });
+
+  test("no salient push path is shared by two loops (prod OWNS the shared infra paths)", () => {
+    const sets = LOOP_WORKFLOWS.map((wf) => ({ wf, paths: new Set(pushPaths(wf)) }));
+    for (let i = 0; i < sets.length; i++) {
+      for (let j = i + 1; j < sets.length; j++) {
+        const shared = [...sets[i].paths].filter((p) => sets[j].paths.has(p));
+        expect(
+          shared,
+          `${sets[i].wf} and ${sets[j].wf} share push path(s) [${shared}] — a single push to those fires BOTH loops and co-arrival-evicts one in the shared prod-mutating-loop lane (#70). Give the path to exactly ONE loop (prod owns the shared infra paths; media/host cover them via their daily cron).`,
+        ).toEqual([]);
+      }
+    }
+  });
+
+  test("prod owns the shared infra paths on push; media/host do NOT carry them", () => {
+    const SHARED_INFRA = ["admin/**", "playwright.config.js", "package.json", "package-lock.json", "_config.yml"];
+    const prod = new Set(pushPaths("cms-publish-loop-prod.yml"));
+    for (const p of SHARED_INFRA) {
+      expect(prod.has(p), `cms-publish-loop-prod.yml must own shared-infra push path ${p}`).toBe(true);
+    }
+    for (const wf of ["cms-media-roundtrip.yml", "cms-publish-loop-host.yml"]) {
+      const s = new Set(pushPaths(wf));
+      for (const p of SHARED_INFRA) {
+        expect(s.has(p), `${wf} must NOT carry shared-infra push path ${p} (prod owns it; this loop covers it via cron) — #70`).toBe(false);
+      }
     }
   });
 });

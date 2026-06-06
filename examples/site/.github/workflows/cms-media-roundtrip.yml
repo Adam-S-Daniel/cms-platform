@@ -18,18 +18,21 @@ run-name: >-
 
 on:
   schedule:
+    # 15:00 UTC daily. This loop covers shared-infra changes (admin/**,
+    # playwright.config.js, package*.json, _config.yml, _layouts/post.html) via
+    # this daily cron; on PUSH it triggers ONLY on its own caller file so a
+    # single infra push fires cms-publish-loop-prod ALONE (prod OWNS the
+    # infra-change canary on push). DISJOINT push paths across the three loops
+    # = no co-arrival eviction in the shared `prod-mutating-loop` lane (#70;
+    # mirrors the host caller's trim). The shared concurrency group still
+    # serializes any cron/dispatch/push TIME-overlap (queues, 1 running + 1
+    # pending).
     - cron: '0 15 * * *'
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - .github/workflows/cms-media-roundtrip.yml
-      - admin/**
-      - playwright.config.js
-      - package.json
-      - package-lock.json
-      - _config.yml
-      - _layouts/post.html
 
 permissions:
   contents: read
