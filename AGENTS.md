@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.31`** — `v0.1.0`–`v0.1.31` are all tagged GitHub
+**Current release: `v0.1.32`** — `v0.1.0`–`v0.1.32` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.31)
+## Version history (v0.1.0 → v0.1.32)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1275,6 +1275,18 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   lint couldn't see). New AST lint `e2e/spec-site-root-reads.test.js` flags any
   @lane:real spec reading SITE content (_posts/_e2e/_tags/_drafts/assets) via
   the platform checkout (platform SOURCE reads like theme/admin are allowed).
+- **v0.1.32** (2026-06-06) — **#81 host-loop layer #4 (#1815 host leg, tracked in
+  #80).** `cms-unpublish-republish.spec.js` reset its canary via a DIRECT PUT to
+  `main` (`writeFixtureOnMain`) — which 409s on a consumer whose `main` ruleset
+  has `bypass_actors:[]` ("Changes must be made through a pull request"). A failed
+  run therefore couldn't restore baseline and left the canary `published:true`,
+  SERVING the test fixture publicly at `/blog/e2e-unpublish-canary/`. Switched to
+  `seedFixtureViaPr` (a `cms/ready`-labelled auto-merge PR, fire-and-forget) —
+  the same path `cms-publish-loop.spec.js`'s afterAll already uses (its helper's
+  comment literally explains a direct PUT 409s). The host loop now passes specs
+  1–3 live (byte-lock v0.1.29 + keep_files v0.1.30 + SITE_ROOT v0.1.31); the
+  remaining spec-#4 failure (a `locator.click` timeout in the unpublish Save/
+  Publish leg) is tracked in #80 ("keep peeling to 4/4").
 
 ## Consumers
 

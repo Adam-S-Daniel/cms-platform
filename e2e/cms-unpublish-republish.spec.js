@@ -69,6 +69,7 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { readPublishedFlag, forcePublishedFalse } = require("./fixture-baseline");
 const { setPublished, expectPublished, saveEntry, publishViaUi } = require("./cms-editor-ui");
+const { seedFixtureViaPr } = require("./cms-fixture-pr");
 
 // Prod host triplet resolved through the shared cms-host SSOT (byte-identical
 // to the old hardcoded literals) so prod/preview surfaces can't drift.
@@ -77,10 +78,6 @@ const FIXTURE_PATH = "_posts/2024-01-02-e2e-unpublish-canary.md";
 const FIXTURE_SLUG = "e2e-unpublish-canary";
 const PUBLIC_URL = `${PROD_HOST}/blog/${FIXTURE_SLUG}/`;
 const PROD_CANARY = process.env.PROD_CANARY === "1";
-
-function toContentBase64(text) {
-  return Buffer.from(text, "utf8").toString("base64");
-}
 
 async function fetchFixtureFromMain() {
   return gh(`/repos/${HOST_REPO}/contents/${FIXTURE_PATH}?ref=main`);
@@ -91,25 +88,6 @@ async function fetchFixtureFromMain() {
 // values — a strict superset of this spec's old `(true|false)`-only
 // copy; the fixture and the afterAll harness only ever write unquoted
 // values, so behaviour for this spec's inputs is unchanged.
-
-// Used by the afterAll harness to restore baseline (`published: false`)
-// when the UI cleanup leg failed and left the fixture mutated on main.
-// Direct PUT /contents on main is allowed by the ruleset for files
-// outside the publish-flow guard; the helper mirrors prod-mutate's
-// writeFixtureOnMain.
-async function writeFixtureOnMain({ fileText, message }) {
-  const current = await fetchFixtureFromMain();
-  return gh(`/repos/${HOST_REPO}/contents/${FIXTURE_PATH}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message,
-      content: toContentBase64(fileText),
-      sha: current.sha,
-      branch: "main",
-    }),
-  });
-}
 
 // Two full publish chains run serially:
 //   - chain 1: publish (URL 4xx → 200)
@@ -332,9 +310,19 @@ test.afterAll(async () => {
     fs.readFileSync(path.join(SITE_ROOT, FIXTURE_PATH), "utf8"),
     FIXTURE_PATH,
   );
-  await writeFixtureOnMain({
-    fileText: baselineFileText,
+  // Fire-and-forget: open a `cms/ready`-labelled PR (auto-merges in the
+  // background) instead of a direct PUT to main. adamdaniel's main ruleset has
+  // bypass_actors:[] so a direct PUT 409s ("Changes must be made through a pull
+  // request"), which silently left the canary mutated + served PUBLICLY at
+  // /blog/e2e-unpublish-canary/ (#1815 host leg). Mirrors cms-publish-loop's
+  // afterAll safety-net; the daily sweep cleans up any orphan PR.
+  await seedFixtureViaPr({
+    slug: FIXTURE_SLUG,
+    runId: `harness-cleanup-${Date.now()}`,
+    filePath: FIXTURE_PATH,
+    bodyText: baselineFileText,
     message:
       "test(unpublish): harness safety-net reset to published: false (UI cleanup left mutation)",
+    skipWaitForMerge: true,
   });
 });
