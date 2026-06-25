@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.34`** — `v0.1.0`–`v0.1.34` are all tagged GitHub
+**Current release: `v0.1.35`** — `v0.1.0`–`v0.1.35` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.34)
+## Version history (v0.1.0 → v0.1.35)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1316,6 +1316,18 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   PR-vs-production diffs and gates merges via the required `regression-review`
   environment; the structural checks are net-additive (all public projects,
   content-only PRs). Adversarially reviewed (4 lenses): 0 confirmed blockers.
+- **v0.1.35** (2026-06-25) — **#100 reaper chokes on Decap smart-quote branch
+  names.** `regression-review-reaper.yml` interpolated the PR head branch
+  straight into the runs-list URL (`?branch=${HEAD_REF}`). A Decap content-PR
+  branch carries the post title verbatim (spaces + smart-quotes), so
+  adamdaniel #2057 (`…safety-“somewhat-less-robust”`) produced an UN-encoded
+  URL → GitHub returned an HTML error page → `--jq` failed ("invalid character
+  '<'") → the job went red under `set -euo pipefail` on every branch sync.
+  Fix: build the query with `gh api -X GET -f branch=… -f status=… -f
+  per_page=…` (URL-encodes the fields; `-X GET` is required because gh defaults
+  to POST once any `-f` is present), and fail OPEN (`|| true`) on the runs-list
+  + pending-deployments lookups. Verified live against #2057's exact branch:
+  old call → "invalid character '<'", new call → clean total_count.
 
 ## Consumers
 
