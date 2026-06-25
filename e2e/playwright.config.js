@@ -174,7 +174,6 @@ const PLATFORM_META_SPECS = [
   // Unit test for the AST fact extractor (e2e/spec-ast.js) the guard-registry
   // lint is built on. A harness-internal self-test — platform self-CI only.
   "spec-ast.test.js",
-  "visual-change-guard.spec.js",
   "visual-regression-content-skip.test.js",
   "visual-regression-skip-review.test.js",
   "workflow-github-sha-lint.test.js",

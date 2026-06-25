@@ -291,7 +291,7 @@ The full matrix is 8 projects × ~25 specs. A content-only edit shouldn't pay fo
 - **`subset`** — match each changed file against `SPEC_RULES` and run only the resulting list, plus the always-run baseline.
 - **`skip`** — only docs (`README.md`, `AGENTS.md`, `docs/`, `.agents/skills/`) changed. Run the baseline only as a smoke check.
 
-Always-run baseline (cheap, no browser): `compute-visual-diffs.test.js`, `cms-config.spec.js`, `visual-change-guard.spec.js`, plus the spec's own changed file.
+Always-run baseline (cheap, no browser): `compute-visual-diffs.test.js`, `cms-config.spec.js`, plus the spec's own changed file.
 
 Push to main bypasses the selector and runs the full matrix, since "the diff" for a merge commit covers everything anyway.
 
