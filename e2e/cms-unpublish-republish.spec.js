@@ -77,6 +77,9 @@ const { host: PROD_HOST, adminUrl: PROD_ADMIN, pillId: PILL_PROD } = prodTarget(
 const FIXTURE_PATH = "_posts/2024-01-02-e2e-unpublish-canary.md";
 const FIXTURE_SLUG = "e2e-unpublish-canary";
 const PUBLIC_URL = `${PROD_HOST}/blog/${FIXTURE_SLUG}/`;
+// Hash-route to the canary entry editor — the SSOT both the initial
+// navigation and the unpublish-leg re-open use (so the path cannot drift).
+const ENTRY_EDIT_URL = `${PROD_ADMIN}#/collections/posts/entries/2024-01-02-${FIXTURE_SLUG}`;
 const PROD_CANARY = process.env.PROD_CANARY === "1";
 
 async function fetchFixtureFromMain() {
@@ -177,7 +180,7 @@ test(
       // (forcing a fresh asset fetch) and try once more. 60s per
       // leg, so worst-case ~120s before this step fails.
       const titleLocator = page.getByRole("textbox", { name: /^Title$/i });
-      const targetUrl = `${PROD_ADMIN}#/collections/posts/entries/2024-01-02-${FIXTURE_SLUG}`;
+      const targetUrl = ENTRY_EDIT_URL;
       let lastErr;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
@@ -231,6 +234,24 @@ test(
     });
 
     // ── 3. Unpublish leg: toggle OFF, Save, drive workflow → URL 404 ──
+    // Symmetric to the step-1 "reads OFF (baseline)" gate: after "Publish
+    // now" Decap reloads the entry in place, and the Published switch
+    // briefly shows its default (OFF) before re-hydrating the now-persisted
+    // published: true. The idempotent setPublished(false) below must NOT
+    // race into that window — it would read OFF, skip the click, and leave
+    // the form un-dirtied, so the Save button stays `disabled` and the save
+    // click times out (the host-loop "layer-5" failure, #80; the on-prod
+    // failure log showed `<button disabled ...SaveButton...>Save</button>`).
+    // Re-open the entry fresh (forcing a re-fetch from main, which is now
+    // published: true) and wait for the switch to read ON before toggling.
+    await test.step("Re-open entry and confirm Published reads ON before unpublishing", async () => {
+      await page.goto(ENTRY_EDIT_URL, { waitUntil: "domcontentloaded" });
+      await expect(page.getByRole("textbox", { name: /^Title$/i })).toBeVisible({
+        timeout: 60_000,
+      });
+      await expectPublished(page, true, { timeout: 30_000 });
+    });
+
     await test.step("Toggle Published → OFF via UI", async () => {
       await setPublished(page, false);
     });
