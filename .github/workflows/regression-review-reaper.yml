@@ -92,9 +92,19 @@ jobs:
           # branch. `status=waiting` is exactly the orphaned-gate state; the
           # path endswith match scopes it to the regression caller (the run's
           # `path` is `.github/workflows/<WF>`).
-          runs=$(gh api --paginate \
-            "repos/${GH_REPO}/actions/runs?branch=${HEAD_REF}&status=waiting&per_page=100" \
-            --jq ".workflow_runs[] | select(.path | endswith(\"/${WF}\")) | {id, head_sha} | @base64")
+          # URL-encode the branch via -f query fields: a Decap content PR
+          # branch can carry spaces / smart-quotes from the post title, which an
+          # interpolated ?branch=${HEAD_REF} would NOT encode → a malformed URL
+          # that 404s and, under set -e, reds this job (the #2057 smart-quote
+          # title hit exactly this). Fail OPEN on any transient API error —
+          # "nothing to reap" is the safe default.
+          # -X GET is REQUIRED: gh api defaults to POST as soon as any -f field
+          # is present, so without it these query params would POST.
+          runs=$(gh api --paginate -X GET \
+            "repos/${GH_REPO}/actions/runs" \
+            -f "branch=${HEAD_REF}" -f status=waiting -f per_page=100 \
+            --jq ".workflow_runs[] | select(.path | endswith(\"/${WF}\")) | {id, head_sha} | @base64" \
+            || true)
 
           if [ -z "$runs" ]; then
             echo "No waiting ${WF} runs on ${HEAD_REF} — nothing to reap."
@@ -113,7 +123,8 @@ jobs:
 
             # Pending deployments to the gate environment for this run.
             env_ids=$(gh api "repos/${GH_REPO}/actions/runs/${run_id}/pending_deployments" \
-              --jq ".[] | select(.environment.name == \"${ENVNAME}\") | .environment.id")
+              --jq ".[] | select(.environment.name == \"${ENVNAME}\") | .environment.id" \
+              || true)
             if [ -z "$env_ids" ]; then
               echo "skip run ${run_id} [${head_sha}] — no pending ${ENVNAME} deployment"
               continue
