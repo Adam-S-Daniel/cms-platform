@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.32`** — `v0.1.0`–`v0.1.32` are all tagged GitHub
+**Current release: `v0.1.33`** — `v0.1.0`–`v0.1.33` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.32)
+## Version history (v0.1.0 → v0.1.33)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1287,6 +1287,20 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   1–3 live (byte-lock v0.1.29 + keep_files v0.1.30 + SITE_ROOT v0.1.31); the
   remaining spec-#4 failure (a `locator.click` timeout in the unpublish Save/
   Publish leg) is tracked in #80 ("keep peeling to 4/4").
+- **v0.1.33** (2026-06-25) — **#96 host-loop layer #5 (#1815 host leg, #80).**
+  The v0.1.32 host-loop verification run passed specs 1-3 live but spec #4
+  (`cms-unpublish-republish`) still failed: the *second* (unpublish) `saveEntry`
+  timed out clicking Save, which the on-prod log resolved to a `<button
+  disabled ...SaveButton...>` — the form was never dirtied. After the re-publish
+  leg's "Publish now" merges the editorial-workflow PR, Decap reloads the entry
+  in place and the Published switch transiently reads its default (OFF) before
+  re-hydrating the persisted `published: true`; the idempotent
+  `setPublished(false)` raced into that window, saw OFF, skipped the click, and
+  left Save disabled. Fix: a symmetric pre-toggle gate (mirroring the step-1
+  "reads OFF (baseline)" wait) that re-opens the entry fresh and waits for the
+  switch to read ON before toggling OFF, plus an `ENTRY_EDIT_URL` SSOT for the
+  canary edit hash-route. Real-prod 4/4 confirmation = a host-loop re-dispatch
+  after the consumer bumps land.
 
 ## Consumers
 
