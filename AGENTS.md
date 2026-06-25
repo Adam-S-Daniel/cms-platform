@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.33`** — `v0.1.0`–`v0.1.33` are all tagged GitHub
+**Current release: `v0.1.34`** — `v0.1.0`–`v0.1.34` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.33)
+## Version history (v0.1.0 → v0.1.34)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1301,6 +1301,21 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   switch to read ON before toggling OFF, plus an `ENTRY_EDIT_URL` SSOT for the
   canary edit hash-route. Real-prod 4/4 confirmation = a host-loop re-dispatch
   after the consumer bumps land.
+- **v0.1.34** (2026-06-25) — **#86 retire the dead committed-PNG visual suite.**
+  `e2e/visual-regression.spec.js`'s `toHaveScreenshot` tests had no baselines
+  (all 32 committed PNGs were deleted 2026-05-06 and never regenerated), so the
+  suite only stayed green by skipping — until the first curated prod tag
+  ("quotes", adamdaniel #2057) un-skipped the tag tests and hard-failed
+  "snapshot doesn't exist", blocking a content PR. Replaced the 4 pixel tests
+  with structural "renders" smoke checks (non-error status + visible heading)
+  that KEEP the original content-discovery skip-guards (so they still skip on a
+  `base_collections:[]` bio — the #33 contract) and run on a full site; deleted
+  `e2e/visual-change-guard.spec.js` (it only bounded the now-gone PNGs) + its 5
+  refs. Pixel visual-regression is owned by the prod-diffing video pipeline
+  (`visual-regression.yml` + `compute-visual-diffs.js`), which machine-classifies
+  PR-vs-production diffs and gates merges via the required `regression-review`
+  environment; the structural checks are net-additive (all public projects,
+  content-only PRs). Adversarially reviewed (4 lenses): 0 confirmed blockers.
 
 ## Consumers
 
