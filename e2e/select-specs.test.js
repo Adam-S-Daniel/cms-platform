@@ -511,7 +511,6 @@ test.describe("pickShardCount", () => {
         "e2e/compute-visual-diffs.test.js",
         "e2e/canary-content.test.js",
         "e2e/cms-config.spec.js",
-        "e2e/visual-change-guard.spec.js",
       ]),
     ).toBe(1);
   });

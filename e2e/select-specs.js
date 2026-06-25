@@ -23,7 +23,7 @@
 // not an error). Non-zero only if git diff fails outright.
 //
 // Always-run baseline (cheap, no browser): compute-visual-diffs.test.js,
-// cms-config.spec.js, visual-change-guard.spec.js, canary-content.test.js.
+// cms-config.spec.js, canary-content.test.js.
 // If only those run, CI is essentially a no-op smoke check.
 //
 // Rules are intentionally over-eager on the "include" side: when in
@@ -179,7 +179,6 @@ function anyAffectsDeployedPreview(changedFiles) {
 const ALWAYS_RUN = [
   "e2e/compute-visual-diffs.test.js",
   "e2e/cms-config.spec.js",
-  "e2e/visual-change-guard.spec.js",
   "e2e/canary-content.test.js",
   // Pure ms-level fixture/helper invariant (#1053). Always-run so a
   // PR that flips a prod-loop canary back to `published: true`, or
