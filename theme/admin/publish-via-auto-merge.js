@@ -285,6 +285,27 @@
     if (!matcher) return origFetch.call(this, input, init);
 
     return origFetch.call(this, input, init).then(function (res) {
+      // The `merge` matcher recovers on BOTH the ruleset rejection (422
+      // "rule violations") AND a not-yet-mergeable response (405/409):
+      // Decap's "Publish Now" PUT /merge returns 405 when the required
+      // checks have not recomputed yet — e.g. an unpublish / re-edit issued
+      // right after the base moved — which previously dead-ended with no
+      // arm, no deploy (#85 / #80 layer 8). Arming `cms/ready` is the
+      // correct, idempotent action there too. The `delete-ref` matcher
+      // stays strictly on the 422 ruleset path.
+      var notYetMergeable =
+        matcher.kind === "merge" && (res.status === 405 || res.status === 409);
+      if (notYetMergeable) {
+        console.info(
+          "[publish-via-auto-merge] merge PUT " +
+            res.status +
+            " (not mergeable yet) \u2014 arming cms/ready",
+        );
+        return matcher.recover(match, init || {}, res).catch(function (err) {
+          console.error("[publish-via-auto-merge] recover threw:", err);
+          return res;
+        });
+      }
       if (res.status !== 422) return res;
       var clone;
       try {
