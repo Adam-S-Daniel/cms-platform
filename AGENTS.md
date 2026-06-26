@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.36`** — `v0.1.0`–`v0.1.36` are all tagged GitHub
+**Current release: `v0.1.37`** — `v0.1.0`–`v0.1.37` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.36)
+## Version history (v0.1.0 → v0.1.37)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1342,6 +1342,22 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   `disabled` == no unsaved changes). Safe across all 5 callers (each makes a
   guaranteed-real edit; consecutive saves are page.goto-separated → no
   false-pass). Diagnosed from the downloaded test-failed screenshot.
+- **v0.1.37** (2026-06-26) — **#85 / #80 layer 8 — Publish-Now 405 dead-end.**
+  Multi-agent investigation root-caused the "Publish-Now silently doesn't take
+  effect" defect (#85) = the host-loop unpublish leg's "chain never fired": an
+  editorial PR auto-merges only on a fresh `decap-cms/pending_publish`/`cms/ready`
+  `labeled` event. On an unpublish/re-edit, Decap's "Publish Now" `PUT /merge`
+  returns **405** "not mergeable" (checks not recomputed; base just moved), but
+  the admin shim `theme/admin/publish-via-auto-merge.js` only recovered on **422**
+  "rule violations" → the 405 dead-ended (no `cms/ready`, no auto-merge, no
+  deploy). A fresh post works because it opens as a Draft (the Draft→Ready click
+  arms auto-merge regardless of the 405). Fix: broaden the **merge** matcher to
+  recover on 405/409 too (arm `cms/ready` — correct/idempotent; PR merges via
+  auto-merge-when-ready once checks pass); **delete-ref** stays on 422; +3 unit
+  tests + a `console.info` to confirm the recovery on the next run. Since the
+  host-loop test drives the REAL prod `/admin` shim, this fixes #85 for editors
+  AND host-loop spec-4. Evidence: run 28211841171 trace `PUT /pulls/2283/merge
+  → 405`, zero `cms/ready` POSTs, deploy queue empty.
 
 ## Consumers
 
