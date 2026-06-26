@@ -305,6 +305,54 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(calls[1].headers.Authorization).toBe("Bearer t");
   });
 
+  test("PR merge 405 (not mergeable yet) triggers cms/ready label add + synthetic merged response (#85)", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    // Decap "Publish Now" PUT /merge returns 405 when the required checks
+    // have not recomputed yet (an unpublish/re-edit right after the base
+    // moved). The shim must arm cms/ready the SAME way as the 422 ruleset
+    // case, else the editorial PR never merges (#85 / #80 layer 8).
+    queueResponse({ message: "Pull Request is not mergeable" }, { status: 405 });
+    queueResponse({ id: 1 }, { status: 200 }); // labels response
+    const res = await fetch(`${API_BASE}/pulls/42/merge`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer t" },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.merged).toBe(true);
+    expect(body.sha).toBe("pending-auto-merge");
+    expect(calls).toHaveLength(2);
+    expect(calls[0].method).toBe("PUT");
+    expect(calls[1].method).toBe("POST");
+    expect(calls[1].url).toBe(`${API_BASE}/issues/42/labels`);
+    expect(JSON.parse(calls[1].body)).toEqual({ labels: ["cms/ready"] });
+  });
+
+  test("PR merge 409 (head moved) also recovers via cms/ready", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    queueResponse({ message: "Head branch was modified. Review and try the merge again." }, { status: 409 });
+    queueResponse({ id: 1 }, { status: 200 });
+    const res = await fetch(`${API_BASE}/pulls/42/merge`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer t" },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).merged).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].url).toBe(`${API_BASE}/issues/42/labels`);
+  });
+
+  test("delete-ref PATCH 405 does NOT recover (405/409 widening is merge-only)", async () => {
+    const { fetch, queueResponse, calls } = bootShim();
+    queueResponse({ message: "Method Not Allowed" }, { status: 405 });
+    const res = await fetch(`${API_BASE}/git/refs/heads/main`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer t" },
+    });
+    expect(res.status).toBe(405); // untouched — only the merge matcher widens
+    expect(calls).toHaveLength(1); // no recovery POST
+  });
+
   test("PR merge 422 with non-ruleset message does NOT recover", async () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ message: "Pull request is in unstable state" }, { status: 422 });
