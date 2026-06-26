@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.35`** — `v0.1.0`–`v0.1.35` are all tagged GitHub
+**Current release: `v0.1.36`** — `v0.1.0`–`v0.1.36` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.35)
+## Version history (v0.1.0 → v0.1.36)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1328,6 +1328,20 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   to POST once any `-f` is present), and fail OPEN (`|| true`) on the runs-list
   + pending-deployments lookups. Verified live against #2057's exact branch:
   old call → "invalid character '<'", new call → clean total_count.
+- **v0.1.36** (2026-06-26) — **#80 host-loop layers 6 & 7 — `saveEntry` vs the
+  editorial auto-save.** The v0.1.33 layer-5 fix worked (the unpublish toggle
+  now flips ON→OFF), exposing layer 6: after the re-publish leg's Publish-Now
+  the entry is in the editorial `Status: Ready` state, where toggling Published
+  AUTO-PERSISTS into the open PR — Save goes `disabled` and the transient
+  "Changes saved" toast fires/fades in the toggle step. The old `Save.click()`
+  30s-timed-out on the disabled button → publishViaUi never ran → unpublish
+  never merged. An adversarial review caught layer 7 pre-flight: tolerating the
+  disabled Save but still gating on the toast would ALSO fail (toast already
+  faded). Fix: `saveEntry` clicks Save only while actionable (4s window) and
+  confirms the write via EITHER the toast OR the PERSISTENT saved state (Save
+  `disabled` == no unsaved changes). Safe across all 5 callers (each makes a
+  guaranteed-real edit; consecutive saves are page.goto-separated → no
+  false-pass). Diagnosed from the downloaded test-failed screenshot.
 
 ## Consumers
 
