@@ -58,8 +58,29 @@ async function expectPublished(page, on, { timeout = 5_000 } = {}) {
 // editorial_workflow mode Save stays disabled afterwards (the toolbar
 // swaps to a status control), so we gate on the text, not toBeEnabled.
 async function saveEntry(page, { timeout = 60_000 } = {}) {
-  await page.getByRole("button", { name: /^Save$/i }).click();
-  await expect(page.getByText(/Changes saved/i).first()).toBeVisible({ timeout });
+  const save = page.getByRole("button", { name: /^Save$/i });
+  await expect(save).toBeVisible({ timeout });
+  // Click Save if it engages within a short window (the normal dirty-Draft
+  // path). In the editorial-workflow "Status: Ready" state a field edit
+  // AUTO-PERSISTS into the open PR, so Save stays `disabled` (nothing to
+  // click) and the transient "Changes saved" toast already fired — and may
+  // have faded — back in the toggle step (the host-loop unpublish leg, #80
+  // layers 6/7). So confirm the write via EITHER signal: the toast (normal
+  // click path, caught immediately) OR the PERSISTENT saved state — Save
+  // `disabled` == no unsaved changes. Every caller makes a guaranteed-real
+  // field mutation before saving (setPublished asserts the opposite state
+  // first, or a body/image edit), so a disabled Save here can only mean
+  // "saved", never "nothing changed".
+  await save.click({ timeout: 4_000 }).catch(() => {});
+  await expect(async () => {
+    const toast = await page
+      .getByText(/Changes saved/i)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    const disabled = await save.isDisabled().catch(() => false);
+    expect(toast || disabled, "expected the 'Changes saved' toast or a disabled Save").toBe(true);
+  }).toPass({ timeout });
 }
 
 // Publish the entry's pending changes through the editor — STATE-ROBUST
