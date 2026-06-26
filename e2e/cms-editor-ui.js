@@ -71,7 +71,12 @@ async function saveEntry(page, { timeout = 60_000 } = {}) {
   // field mutation before saving (setPublished asserts the opposite state
   // first, or a body/image edit), so a disabled Save here can only mean
   // "saved", never "nothing changed".
-  await save.click({ timeout: 4_000 }).catch(() => {});
+  await save.click({ timeout: 4_000 }).catch((e) => {
+    // Not an error: in the editorial Ready state Save never becomes
+    // actionable (the edit auto-saved). Log loudly (no silent catch) and
+    // fall through to the persisted-state assertion below.
+    console.warn(`[saveEntry] Save not actionable, treating as auto-saved: ${e.message}`);
+  });
   await expect(async () => {
     const toast = await page
       .getByText(/Changes saved/i)
