@@ -41,3 +41,15 @@ test("enablePullRequestAutoMerge GraphQL mutation IS used", () => {
     /enablePullRequestAutoMerge\b/,
   );
 });
+
+test("clean-status fallback lands an already-mergeable PR with a conditional direct squash merge (#80 layer 9 / #85)", () => {
+  // When enablePullRequestAutoMerge fails with "Pull request is in clean
+  // status" — every required check already passed, so there is nothing to
+  // enqueue — the job must land the PR directly (a squash merge, gated on
+  // that error string) instead of throwing. Branch protection still enforces
+  // the required checks at merge time, so this can only land a green PR.
+  const code = scripts(readWorkflow("cms-editorial-workflow.yml"));
+  expect(code).toMatch(/clean status/i);
+  expect(code).toMatch(/pulls\.merge/);
+  expect(code).toMatch(/merge_method:\s*['"]squash['"]/);
+});

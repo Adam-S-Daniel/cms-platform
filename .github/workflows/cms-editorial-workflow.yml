@@ -266,6 +266,42 @@ jobs:
                 core.info(`PR #${context.payload.pull_request.number} is already merged; nothing to do.`);
                 return;
               }
+              // "Pull request is in clean status" — every required check has
+              // ALREADY passed, so auto-merge cannot be *enabled* (there is
+              // nothing left to wait for). GitHub's own error is the
+              // authoritative "mergeable right now" signal (do NOT key this off
+              // the webhook payload's stale, async-computed `mergeable` flag —
+              // it can read true while checks are still pending). Land it
+              // directly with a squash merge, as the SAME CMS_E2E_PAT identity
+              // so the merge push fires deploy-production. Branch protection
+              // still enforces the required checks at merge time, so this can
+              // only ever land a genuinely-green PR. Without this fallback a PR
+              // whose checks went green before this job ran would throw here,
+              // fail the run, and never merge — the very stall the host loop
+              // (#80) and #85 chase. Mirrors the cms-automerge-nudge recovery.
+              if (/clean status/i.test(msg)) {
+                try {
+                  await github.rest.pulls.merge({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.payload.pull_request.number,
+                    merge_method: 'squash',
+                  });
+                  core.info(`PR #${context.payload.pull_request.number} was clean; merged directly.`);
+                  return;
+                } catch (mErr) {
+                  const mMsg = String((mErr && mErr.message) || mErr);
+                  // Idempotent: a racing run (the two label events share a
+                  // serialised per-PR concurrency lane) may have already landed
+                  // it, or the PR may have closed — either way the desired end
+                  // state holds, so don't fail the run.
+                  if (/already merged|not mergeable|not found|closed/i.test(mMsg)) {
+                    core.info(`direct merge no-op for PR #${context.payload.pull_request.number}: ${mMsg}`);
+                    return;
+                  }
+                  throw mErr;
+                }
+              }
               throw err;
             }
 
