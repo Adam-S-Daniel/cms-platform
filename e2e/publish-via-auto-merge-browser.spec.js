@@ -158,7 +158,7 @@ test.describe("publish-via-auto-merge.js — browser context", () => {
     expect(labelHeaders["x-github-api-version"]).toBe("2022-11-28");
   });
 
-  test("PUT /pulls/N/merge → 422 rule violation → cms/ready label POST → synthetic merged: true", async ({
+  test("PUT /pulls/N/merge → 422 rule violation → cms/ready label POST → synthetic NON-2xx (no merged:true, #80 layer 9)", async ({
     page,
   }) => {
     let labelPostBody = null;
@@ -188,9 +188,13 @@ test.describe("publish-via-auto-merge.js — browser context", () => {
     await page.setContent(FIXTURE_HTML);
     const result = await page.evaluate(() => window.__callMerge(42));
 
-    expect(result.status).toBe(200);
-    expect(result.body.merged).toBe(true);
-    expect(result.body.sha).toBe("pending-auto-merge");
+    // A 2xx would make Decap's backend run its unconditional deleteBranch
+    // and auto-close the unmerged PR (#80 layer 9). The shim arms cms/ready
+    // then returns a synthetic 422 so Decap's mergePR re-throws (and never
+    // forceMergePRs — that path is gated on exactly 405).
+    expect(result.status).toBe(422);
+    expect(result.body.merged).toBeUndefined();
+    expect(result.body.sha).toBeUndefined();
     expect(labelPostBody).toEqual({ labels: ["cms/ready"] });
     // Auth header from the original Decap call is forwarded to the
     // recovery POST verbatim — the OAuth-proxy token is the only

@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.37`** — `v0.1.0`–`v0.1.37` are all tagged GitHub
+**Current release: `v0.1.38`** — `v0.1.0`–`v0.1.38` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.37)
+## Version history (v0.1.0 → v0.1.38)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1358,6 +1358,33 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   host-loop test drives the REAL prod `/admin` shim, this fixes #85 for editors
   AND host-loop spec-4. Evidence: run 28211841171 trace `PUT /pulls/2283/merge
   → 405`, zero `cms/ready` POSTs, deploy queue empty.
+- **v0.1.38** (2026-06-28) — **#80 host-loop layer 9 + #85 — the armed PR was
+  CLOSED before auto-merge could run.** The v0.1.37 arm-on-405 fix worked (live
+  run 28240375064: `PUT /pulls/2295/merge → 405` then `POST /issues/2295/labels`
+  arming `cms/ready`), but the freshly-armed, MERGEABLE editorial PR was CLOSED
+  ~2s later, before `auto-merge-when-ready` ran, so `enablePullRequestAutoMerge`
+  errored "Pull request is closed" → never merged, never deployed. Root cause
+  (multi-agent audit + adversarial verification of the Decap 3.12.2 source): the
+  shim handed Decap a **synthetic HTTP 200 `{merged:true}`** on its 405/422
+  recovery. Decap's `publishUnpublishedEntry` is `await mergePR(pr); await
+  deleteBranch(branch)` — `deleteBranch` is UNCONDITIONAL and the merge body's
+  `merged` flag is DISCARDED, so any 2xx makes Decap DELETE the editorial head
+  ref, which auto-closes the still-open, unmerged PR (PR #2295 timeline:
+  `head_ref_deleted` + `closed`, mergedAt:null, by the Decap OAuth user — NOT a
+  workflow). Fix (theme/admin/publish-via-auto-merge.js): the **merge** matcher
+  still arms `cms/ready` but now returns a **synthetic 422** (deliberately NOT a
+  2xx, and NOT 405 — Decap routes exactly 405 to `forceMergePR`, a direct
+  default-branch commit), so Decap's `mergePR` re-throws and SKIPS `deleteBranch`
+  → the PR stays open + armed → auto-merge-when-ready lands it when the checks
+  pass. The **delete-ref** matcher keeps its synthetic `merged:true` (its branch
+  is shim-created, not Decap-managed). Also: `console.info`→`console.warn` (the
+  host-loop trace only captures error/warn); and `cms-editorial-workflow.yml`'s
+  `auto-merge-when-ready` now falls back to a conditional direct squash
+  `pulls.merge` when `enablePullRequestAutoMerge` reports "clean status" (every
+  required check already green → nothing to enqueue → it would otherwise throw),
+  swallowing already-merged/closed idempotently (branch protection still
+  enforces the checks at merge time). Updated the shim unit + browser specs and
+  added a `clean-status` fallback regression lint.
 
 ## Consumers
 

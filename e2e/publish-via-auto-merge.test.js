@@ -284,7 +284,7 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("PR merge 422 with rule-violations triggers cms/ready label add + synthetic merged response", async () => {
+  test("PR merge 422 with rule-violations arms cms/ready and returns a synthetic NON-2xx (no merged:true)", async () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ message: "Repository rule violations found" }, { status: 422 });
     queueResponse({ id: 1 }, { status: 200 }); // labels response
@@ -292,10 +292,19 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
       method: "PUT",
       headers: { Authorization: "Bearer t" },
     });
-    expect(res.status).toBe(200);
+    // MUST be a non-2xx so Decap's mergePR re-throws and SKIPS its
+    // unconditional deleteBranch (which would auto-close the PR — #80 layer 9).
+    // MUST NOT be 405: Decap routes exactly 405 to forceMergePR (a direct
+    // commit to the default branch).
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(422);
+    expect(res.status).not.toBe(405);
     const body = await res.json();
-    expect(body.merged).toBe(true);
-    expect(body.sha).toBe("pending-auto-merge");
+    // No synthetic merged:true — that white lie was the bug.
+    expect(body.merged).toBeUndefined();
+    expect(body.sha).toBeUndefined();
+    expect(typeof body.message).toBe("string");
+    // …but cms/ready WAS still armed (the PR merges via auto-merge-when-ready).
     expect(calls).toHaveLength(2);
     expect(calls[0].method).toBe("PUT");
     expect(calls[1].method).toBe("POST");
@@ -305,22 +314,27 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(calls[1].headers.Authorization).toBe("Bearer t");
   });
 
-  test("PR merge 405 (not mergeable yet) triggers cms/ready label add + synthetic merged response (#85)", async () => {
+  test("PR merge 405 (not mergeable yet) arms cms/ready and recovers to a synthetic NON-405 NON-2xx (#85, #80 layer 9)", async () => {
     const { fetch, queueResponse, calls } = bootShim();
     // Decap "Publish Now" PUT /merge returns 405 when the required checks
     // have not recomputed yet (an unpublish/re-edit right after the base
-    // moved). The shim must arm cms/ready the SAME way as the 422 ruleset
-    // case, else the editorial PR never merges (#85 / #80 layer 8).
+    // moved). The shim arms cms/ready the SAME way as the 422 ruleset case,
+    // else the editorial PR never merges (#85 / #80 layer 8).
     queueResponse({ message: "Pull Request is not mergeable" }, { status: 405 });
     queueResponse({ id: 1 }, { status: 200 }); // labels response
     const res = await fetch(`${API_BASE}/pulls/42/merge`, {
       method: "PUT",
       headers: { Authorization: "Bearer t" },
     });
-    expect(res.status).toBe(200);
+    // The recovered response is REWRITTEN away from 405 → 422. Returning the
+    // raw 405 would make Decap call forceMergePR (direct default-branch
+    // commit + PATCH /git/refs/heads/<base>) — the #80 layer-9 landmine.
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(422);
+    expect(res.status).not.toBe(405);
     const body = await res.json();
-    expect(body.merged).toBe(true);
-    expect(body.sha).toBe("pending-auto-merge");
+    expect(body.merged).toBeUndefined();
+    expect(body.sha).toBeUndefined();
     expect(calls).toHaveLength(2);
     expect(calls[0].method).toBe("PUT");
     expect(calls[1].method).toBe("POST");
@@ -328,7 +342,7 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(JSON.parse(calls[1].body)).toEqual({ labels: ["cms/ready"] });
   });
 
-  test("PR merge 409 (head moved) also recovers via cms/ready", async () => {
+  test("PR merge 409 (head moved) also recovers via cms/ready (non-2xx return)", async () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ message: "Head branch was modified. Review and try the merge again." }, { status: 409 });
     queueResponse({ id: 1 }, { status: 200 });
@@ -336,8 +350,9 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
       method: "PUT",
       headers: { Authorization: "Bearer t" },
     });
-    expect(res.status).toBe(200);
-    expect((await res.json()).merged).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(422);
+    expect((await res.json()).merged).toBeUndefined();
     expect(calls).toHaveLength(2);
     expect(calls[1].url).toBe(`${API_BASE}/issues/42/labels`);
   });

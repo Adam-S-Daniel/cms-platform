@@ -10,14 +10,24 @@
  *     cms-editorial-workflow.yml's `auto-merge-when-ready` job enable
  *     auto-merge — the PR then merges itself when the checks land.
  *
- * The shim only kicks in on a 422 with a "rule violations" message —
- * any other failure passes through untouched. On a successful 2xx
- * response the shim is a no-op.
+ * The merge matcher kicks in on a 422 "rule violations" (the ruleset
+ * blocked a synchronous merge) OR a 405/409 "not mergeable yet" (checks
+ * not recomputed after the base moved); the delete-ref matcher kicks in
+ * on a 422 "rule violations" only. Any other response passes through
+ * untouched, and a successful 2xx is a no-op.
  *
- * The synthetic 2xx response we hand back to Decap is a white lie:
- * the merge hasn't actually landed, it's queued. Decap's UI proceeds
- * as if it had, but a toast warns the operator that the change goes
- * live in 5–15 minutes when the auto-merge wakes up.
+ * We hand Decap back a synthetic 422 (deliberately NOT a 2xx). A 2xx
+ * would make Decap's github backend treat the merge as done and then
+ * run an UNCONDITIONAL deleteBranch(headBranch) — publishUnpublishedEntry
+ * is `await mergePR(pr); await deleteBranch(branch)` and the merge body's
+ * `merged` flag is discarded — which deletes the editorial head ref and
+ * auto-CLOSES the still-open, unmerged PR before auto-merge lands it
+ * (#80 layer 9; PR #2295). The 422 makes Decap's mergePR re-throw (it
+ * routes ONLY 405 to forceMergePR, never 422), so deleteBranch is never
+ * reached and the PR survives, armed with cms/ready, to merge+deploy for
+ * real when the checks pass. A toast warns the operator the change goes
+ * live in 5–15 min; Decap also flashes its own publish error, which the
+ * toast pre-empts.
  *
  * Loaded via a non-deferred <script> tag in admin/index.html *before*
  * decap-cms.js, so the wrap is in place before Decap captures any
@@ -88,19 +98,31 @@
         toast(
           "Publishing in the background — auto-merge will land this when " +
             "the required CI checks finish (~5–15 min). You can close this " +
-            "tab; the entry goes live automatically.",
+            "tab; the entry goes live automatically. Decap may flash a " +
+            "publish error here — it is safe to ignore.",
         );
-        // Synthetic merge response. Decap reads `merged: true` and
-        // shows its own success toast; the editor's "published" UI
-        // state is technically a few minutes ahead of reality, which
-        // the toast above explains.
+        // Return a synthetic NON-2xx (422), NOT a success. A 2xx makes
+        // Decap's publishUnpublishedEntry fall through to its UNCONDITIONAL
+        // deleteBranch(headBranch) (the merge body's `merged` flag is
+        // discarded), which deletes the editorial head ref and auto-closes
+        // the still-open, unmerged PR BEFORE auto-merge-when-ready arms
+        // native auto-merge (#80 layer 9). We have already POSTed the
+        // `cms/ready` label, so the PR merges + deploys via
+        // auto-merge-when-ready once the required checks pass — keeping the
+        // branch alive is exactly what lets that happen. The status MUST NOT
+        // be 405: Decap catches precisely 405 and routes to forceMergePR (a
+        // direct commit to the default branch + PATCH /git/refs/heads/<base>,
+        // which both 422s on the ruleset AND collides with this shim's own
+        // delete-ref matcher). 422 re-throws cleanly out of mergePR.
         return new Response(
           JSON.stringify({
-            sha: "pending-auto-merge",
-            merged: true,
-            message: "Pull Request enqueued for auto-merge via cms/ready label",
+            message:
+              "Queued for auto-merge via the cms/ready label — this entry " +
+              "publishes automatically when the required CI checks pass " +
+              "(~5–15 min). Decap shows this as an error, but the publish is " +
+              "already in progress; you can close this tab.",
           }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
+          { status: 422, headers: { "Content-Type": "application/json" } },
         );
       },
     },
@@ -252,7 +274,7 @@
       /* DOM not ready — log only */
     }
     // Always log; useful for the playwright spec to assert via console.
-    console.info("[publish-via-auto-merge]", msg);
+    console.warn("[publish-via-auto-merge]", msg);
   }
 
   window.fetch = function (input, init) {
@@ -296,7 +318,7 @@
       var notYetMergeable =
         matcher.kind === "merge" && (res.status === 405 || res.status === 409);
       if (notYetMergeable) {
-        console.info(
+        console.warn(
           "[publish-via-auto-merge] merge PUT " +
             res.status +
             " (not mergeable yet) \u2014 arming cms/ready",
