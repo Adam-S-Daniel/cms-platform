@@ -63,7 +63,12 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
-const { addLabel, gh, waitForCmsPullRequest } = require("./github-actions-poll");
+const {
+  addLabel,
+  gh,
+  makePreviewCanaryRecoverer,
+  waitForCmsPullRequest,
+} = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { previewTarget } = require("./cms-host");
 
@@ -170,6 +175,12 @@ test(
       "PR_NUMBER / PR_HEAD_REF not set — this spec only runs in the cms-preview-loops workflow.",
     );
 
+    // FIX 1 (#82): hoisted so the CREATE leg's waitForChangeReflected
+    // recoverer can read the matched cms/tags/<slug> canary PR. The DELETE
+    // leg has no canary PR (Decap commits the deletion directly via the
+    // admin shim), so only the CREATE leg's URL-wait is wired.
+    let pr;
+
     // ── 0. Close any stale Decap PR on this run's branch ────────────
     // Slug is run-unique, so collisions are impossible — cheap guard,
     // matches the prod spec's pattern.
@@ -217,7 +228,7 @@ test(
       // New-file diff is all `+` lines including `+name: <TAG_NAME>`;
       // TAG_NAME carries the run-unique RUN_ID so it can't match any
       // other open cms PR's patch.
-      const pr = await waitForCmsPullRequest({
+      pr = await waitForCmsPullRequest({
         base: PR_HEAD_REF,
         filePath: TAG_FILE_PATH,
         canaryMarker: TAG_NAME,
@@ -243,6 +254,11 @@ test(
           return res.status() === 200;
         },
         urlTimeoutMs: 15 * 60 * 1000,
+        // FIX 1 (#82): recover the green-but-stuck-BLOCKED create canary PR.
+        onBudgetExhausted: makePreviewCanaryRecoverer({
+          base: PR_HEAD_REF,
+          getPrNumber: () => pr && pr.number,
+        }),
       });
     });
 

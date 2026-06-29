@@ -96,6 +96,10 @@ function defaultExpect() {
  * @param {number}  [opts.pillTerminalTimeoutMs]
  * @param {string}  [opts.prNumber] — informational parent-PR number
  *   (preview specs); surfaced in step labels + `ctx`.
+ * @param {(ctx: {pr: object|null}) => Function} [opts.makeOnBudgetExhausted]
+ *   — factory invoked with the spine-matched `{ pr }` to build the
+ *   `onBudgetExhausted` recoverer forwarded to `waitForChangeReflected`
+ *   (FIX 1 / #82). Omitted ⇒ no recoverer (current behaviour preserved).
  * @param {object}  [deps] — collaborator overrides for unit testing.
  * @returns {Promise<{ pr: object|null }>} the matched PR (or null
  *   when the PR wait was skipped).
@@ -119,6 +123,7 @@ async function runCmsLoop(
     urlTimeoutMs = 10 * 60 * 1000,
     pillTerminalTimeoutMs,
     prNumber,
+    makeOnBudgetExhausted,
   } = {},
   deps = {},
 ) {
@@ -242,12 +247,19 @@ async function runCmsLoop(
   }
 
   await step(`runCmsLoop: wait for change reflected (pill + URL)${tag}`, async () => {
+    // FIX 1 (#82): opt-in callers supply a per-leg onBudgetExhausted
+    // recoverer built from the spine-matched canary PR (e.g.
+    // makePreviewCanaryRecoverer). `pr` is the matched PR (or null when the
+    // PR wait was skipped); the factory decides what to do with it.
+    const onBudgetExhausted =
+      typeof makeOnBudgetExhausted === "function" ? makeOnBudgetExhausted({ pr }) : undefined;
     await waitForChangeReflected({
       page,
       pillId: target.pillId,
       urlCheck: assertReflected,
       urlTimeoutMs,
       ...(pillTerminalTimeoutMs ? { pillTerminalTimeoutMs } : {}),
+      ...(onBudgetExhausted ? { onBudgetExhausted } : {}),
     });
   });
 

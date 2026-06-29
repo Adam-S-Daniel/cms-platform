@@ -75,7 +75,8 @@ const {
   publishViaUi,
   reopenForPublishedDelete,
 } = require("./cms-editor-ui");
-const { seedFixtureViaPr } = require("./cms-fixture-pr");
+const { seedFixtureViaPr, closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
+const { computeBaselineHeal } = require("./canary-baseline-heal");
 
 // Prod host triplet resolved through the shared cms-host SSOT (byte-identical
 // to the old hardcoded literals) so prod/preview surfaces can't drift.
@@ -87,6 +88,10 @@ const PUBLIC_URL = `${PROD_HOST}/blog/${FIXTURE_SLUG}/`;
 // navigation and the unpublish-leg re-open use (so the path cannot drift).
 const ENTRY_EDIT_URL = `${PROD_ADMIN}#/collections/posts/entries/2024-01-02-${FIXTURE_SLUG}`;
 const PROD_CANARY = process.env.PROD_CANARY === "1";
+// FIX 2 — the fixed Decap editorial branch for this canary entry
+// (cms/posts/<slug>). The self-heal closes any lingering PR on it so the
+// unpublish leg later opens a FRESH cms/posts/<slug> PR.
+const CANARY_BRANCH = `cms/posts/${path.basename(FIXTURE_PATH, ".md")}`;
 
 async function fetchFixtureFromMain() {
   return gh(`/repos/${HOST_REPO}/contents/${FIXTURE_PATH}?ref=main`);
@@ -155,11 +160,83 @@ test(
     // cleanup, and a spec body that started against a different
     // baseline would corrupt the next run. UI-driven assertion below
     // confirms the editor agrees.
-    await test.step("Confirm fixture file's baseline is published: false on main", async () => {
-      const text = fs.readFileSync(path.join(SITE_ROOT, FIXTURE_PATH), "utf8");
-      if (!/^published:\s*false\s*$/m.test(text)) {
+    // FIX 2 — self-heal the canary baseline on main (replaces the old hard
+    // throw). A prior FAILED run (or the afterAll's fire-and-forget reset
+    // that never landed) can leave main dirty: published:true, a lingering
+    // cms/posts/<slug> PR, and/or the URL still serving 200. The old step
+    // threw and dead-ended the whole loop. Instead, DETECT the three dirty
+    // signals, then HEAL to baseline (close the stale PR, seed
+    // published:false WAITING for the merge, wait for the URL to hide),
+    // logging loudly. An un-healable state still fails at the post-heal gate.
+    const owner = HOST_REPO.split("/")[0];
+    let heal;
+    await test.step("Detect canary baseline drift on main (self-heal)", async () => {
+      const file = await fetchFixtureFromMain();
+      const mainPublished =
+        readPublishedFlag(Buffer.from(file.content, "base64").toString("utf8")) === true;
+      let lingeringPR = false;
+      try {
+        const prs = await gh(
+          `/repos/${HOST_REPO}/pulls?head=${owner}:${encodeURIComponent(CANARY_BRANCH)}&state=open`,
+        );
+        lingeringPR = Array.isArray(prs) && prs.length > 0;
+      } catch (e) {
+        // Probe failure → treat as no PR; the unconditional close below still
+        // runs. Log so a persistent API issue is visible.
+        console.warn(`[self-heal] could not list PRs on ${CANARY_BRANCH}: ${e && e.message}`);
+      }
+      const urlServes = await urlServesPost(page);
+      heal = computeBaselineHeal({ mainPublished, lingeringPR, urlServes });
+      if (!heal.atBaseline) {
+        console.warn(
+          `[self-heal] canary DIRTY (mainPublished=${mainPublished}, lingeringPR=${lingeringPR}, urlServes=${urlServes}) — resetting to baseline before the run.`,
+        );
+      }
+    });
+
+    if (heal && !heal.atBaseline) {
+      await test.step("Self-heal: reset canary to baseline if dirty", async () => {
+        // 1. Always clear any stale Decap PR + editorial branch (dirty states
+        //    3+4) so the unpublish leg later opens a FRESH cms/posts/<slug> PR.
+        await closeStaleDecapPrOnBranch({ branch: CANARY_BRANCH });
+        // 2. Flip main back to published:false — WAITING for the merge (the
+        //    key fix vs the afterAll's fire-and-forget). Skipped when main is
+        //    already false.
+        if (heal.needSeed) {
+          const baselineFileText = forcePublishedFalse(
+            fs.readFileSync(path.join(SITE_ROOT, FIXTURE_PATH), "utf8"),
+            FIXTURE_PATH,
+          );
+          await seedFixtureViaPr({
+            slug: FIXTURE_SLUG,
+            runId: `selfheal-${Date.now()}`,
+            filePath: FIXTURE_PATH,
+            bodyText: baselineFileText,
+            message: "test(unpublish): self-heal reset canary to published: false before run",
+            timeoutMs: 18 * 60 * 1000, // < helper's 25-min default → fits the job ceiling
+          });
+        }
+        // 3. Confirm the deploy hid the URL (dirty state 2).
+        if (heal.needUrlWait) {
+          await waitForChangeReflected({
+            page,
+            pillId: PILL_PROD,
+            urlCheck: async () => url404s(page),
+            urlTimeoutMs: 10 * 60 * 1000,
+            onBudgetExhausted: makeDeployQueueExtender(),
+          });
+        }
+      });
+    }
+
+    // Post-heal assertion (replaces the throw's role): main MUST be at
+    // baseline now. An un-healable state fails loudly here.
+    await test.step("Confirm fixture baseline is published: false on main (post-heal)", async () => {
+      const file = await fetchFixtureFromMain();
+      const published = readPublishedFlag(Buffer.from(file.content, "base64").toString("utf8"));
+      if (published !== false) {
         throw new Error(
-          `${FIXTURE_PATH} on main is not at baseline (published: false). Reset before running this spec.`,
+          `${FIXTURE_PATH} on main is still not at baseline (published=${published}) after self-heal — un-healable; failing loudly.`,
         );
       }
     });

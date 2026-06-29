@@ -55,7 +55,7 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { getPat, HOST_REPO } = require("./decap-pat");
-const { addLabel, gh } = require("./github-actions-poll");
+const { addLabel, gh, makePreviewCanaryRecoverer } = require("./github-actions-poll");
 const { previewTarget } = require("./cms-host");
 const { runCmsLoop } = require("./run-cms-loop");
 
@@ -269,6 +269,12 @@ test(
         return (await res.text()).includes(bodyMarker);
       },
       urlTimeoutMs: 12 * 60 * 1000,
+      // FIX 1 (#82): recover a green-but-stuck-BLOCKED seed canary PR by
+      // merging it into the PR head branch (its own base) when the
+      // URL-reflect budget elapses. `pr` is the spine-matched cms/e2e/<slug>
+      // canary (auto-labelled `automated-test` by waitForCmsPullRequest).
+      makeOnBudgetExhausted: ({ pr }) =>
+        makePreviewCanaryRecoverer({ base: PR_HEAD_REF, getPrNumber: () => pr && pr.number }),
     });
 
     // ── 2. DELETE leg — UI-delete the entry, assert the URL 404s ───
