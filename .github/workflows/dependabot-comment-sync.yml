@@ -172,7 +172,7 @@ jobs:
         # from the platform repo (see next step), so this checkout
         # is the mutation target only — never a source of code run.
         if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.2 (2026-01-09)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -189,7 +189,7 @@ jobs:
         # pinned platform ref into a dot-dir, NOT taken from the PR head
         # tree. This is the hardening property the original lacked.
         if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.2 (2026-01-09)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
