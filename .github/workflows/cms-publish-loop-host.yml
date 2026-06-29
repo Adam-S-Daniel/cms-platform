@@ -132,7 +132,7 @@ jobs:
       CMS_PROD_URL: ${{ vars.CMS_PROD_URL }}
       CMS_APEX: ${{ vars.CMS_APEX }}
       CMS_REPO: ${{ github.repository }}
-    timeout-minutes: 105
+    timeout-minutes: 150
     # Recursion guard delegated to the `recursion-gate` job above.
     if: ${{ needs.recursion-gate.outputs.run == 'true' }}
     steps:
