@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.38`** — `v0.1.0`–`v0.1.38` are all tagged GitHub
+**Current release: `v0.1.39`** — `v0.1.0`–`v0.1.39` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.38)
+## Version history (v0.1.0 → v0.1.39)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1385,6 +1385,31 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   swallowing already-merged/closed idempotently (branch protection still
   enforces the checks at merge time). Updated the shim unit + browser specs and
   added a `clean-status` fallback regression lint.
+- **v0.1.39** (2026-06-28) — **#80 host-loop layer 10 — editorial-limbo delete
+  leg.** The v0.1.38 422 shim fixed layer 9 (live-verified: editorial PR #2309
+  stayed open + armed + auto-merged), but the 422 makes Decap's "Publish Now"
+  report an error, so Decap leaves the entry in editorial `Status: Ready` limbo
+  (UNPUBLISHED_ENTRY_PUBLISH_FAILURE keeps the entity; the editor shows "Delete
+  **un**published entry"). The host-loop delete specs hand-rolled a "Delete
+  published entry" click that 30s-timed-out on the wrong affordance
+  (cms-delete-published.spec.js:368; run 28340095169). Fix: bring the delete
+  specs up to the **proven-green** `cms-publish-loop-prod-mutate.spec.js`
+  pattern — after Publish-Now, capture the create PR + `waitForMerge`, then
+  `reopenForPublishedDelete` (poll-reloads until Decap drops the now-merged
+  editorial entry and shows the PUBLISHED file — a full reload is required;
+  Decap's PR-based editorial list only re-derives on CONFIG_SUCCESS), then
+  `confirmEditorDelete(() => clickEditorDelete())` (arms a POST /git/trees
+  watcher as positive proof the delete dispatched), then label the recovered
+  delete PR `cms/ready`. Applied to `cms-delete-published.spec.js` +
+  `cms-tags-lifecycle.spec.js` (titleName `/^Name$/i`; canaryMarker = the runId,
+  which lands in the file CONTENT — the hyphenated slug is only the filename);
+  `cms-publish-loop.spec.js` cleanup leg now uses the limbo-tolerant
+  `saveEntry`+`publishViaUi` helpers. `cms-publish-loop-host.yml`
+  `timeout-minutes` 105→150 (the delete legs now waitForMerge+reopen). Shim and
+  `cms-unpublish-republish.spec.js` unchanged. Decided via multi-agent audit of
+  the Decap 3.12.2 editorial-state lifecycle (Option A kept; Option B — 2xx +
+  no-op Decap's branch-delete — rejected: re-introduces layer 9 and the no-op is
+  indistinguishable from a legit discard).
 
 ## Consumers
 

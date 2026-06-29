@@ -51,8 +51,20 @@
 const path = require("node:path");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { gh, makeDeployQueueExtender } = require("./github-actions-poll");
+const {
+  gh,
+  addLabel,
+  getPullRequest,
+  waitForCmsPullRequest,
+  waitForMerge,
+  makeDeployQueueExtender,
+} = require("./github-actions-poll");
 const { removeFixtureViaPr } = require("./cms-fixture-pr");
+const {
+  reopenForPublishedDelete,
+  confirmEditorDelete,
+  clickEditorDelete,
+} = require("./cms-editor-ui");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
 const { guard } = require("./base-collections-guards");
@@ -77,13 +89,18 @@ const { host: PROD_HOST, adminUrl: PROD_ADMIN, pillId: PILL_PROD } = prodTarget(
 // Each is roughly the same shape (validate-content + auto-merge +
 // deploy-production + CloudFront propagation), capping out around
 // 12-15 min. Plus the in-browser drive of two full publish chains.
-// 40 min envelope accommodates concurrent CI on busy days where the
+// 80 min envelope (bumped from 40): the delete leg now waits for the
+// create PR to actually MERGE (waitForMerge, 30-min budget) and reopens
+// the entry in the PUBLISHED state (reopenForPublishedDelete, up to a
+// 25-min resync) before deleting -- mirroring
+// cms-publish-loop-prod-mutate.spec.js -- which lengthens the serial
+// runtime. Also accommodates concurrent CI on busy days where the
 // required-check matrix queues up.
 //
 // Retries stay disabled — this test mutates real state, so a retry
 // just re-runs the same broken chain after wasting another 30 min.
 // Failures here are almost never transient.
-const TEST_TIMEOUT_MS = 40 * 60 * 1000;
+const TEST_TIMEOUT_MS = 80 * 60 * 1000;
 
 test.describe.configure({
   mode: "serial",
@@ -293,6 +310,28 @@ test(
         .click({ timeout: 30_000 });
     });
 
+    // -- 1b. Find the create cms/... PR Decap opened; label cms/ready.
+    // Capturing the create PR number lets the delete leg wait for its REAL
+    // merge before reopening the entry for the published-delete path
+    // (mirrors cms-publish-loop-prod-mutate.spec.js). addLabel is
+    // belt-and-braces; the Publish-Now shim already labels cms/ready.
+    let createPrNumber = null;
+    await test.step("Wait for Decap to open the create cms/... PR, label cms/ready", async () => {
+      const pr = await waitForCmsPullRequest({
+        base: "main",
+        filePath,
+        // The marker must appear in the file's DIFF CONTENT (waitForCmsPullRequest
+        // checks f.patch.includes), not the path. This spec drives Decap's UI
+        // (no composePost), so the hyphenated `slug` lands only in the FILENAME,
+        // never the frontmatter; the runId IS in the title + body. Use it.
+        canaryMarker: String(runId),
+        timeoutMs: 5 * 60 * 1000,
+      });
+      expect(pr.number, "Decap create PR number").toBeGreaterThan(0);
+      createPrNumber = pr.number;
+      await addLabel({ prNumber: pr.number, label: "cms/ready" });
+    });
+
     // ── 2. Wait for the canary URL to land on the public site ──────
     //
     // The cms/e2e/<slug> PR auto-merges, deploy-production runs, and
@@ -320,71 +359,88 @@ test(
       });
     });
 
+    // -- 2b. Wait for the create PR to actually merge (not just the
+    // synthetic Publish-Now ack). The delete leg must not reopen the entry
+    // until the create PR's cms/* branch is truly gone, else Decap reloads
+    // it as an OPEN editorial draft ("Delete unpublished entry", drops only
+    // the draft branch, never main) and the URL never 404s. Mirrors
+    // cms-publish-loop-prod-mutate.spec.js.
+    await test.step("Wait for the create PR to actually merge (not just the synthetic Publish-Now ack)", async () => {
+      expect(createPrNumber, "create PR number captured for merge wait").toBeTruthy();
+      await waitForMerge({ prNumber: createPrNumber, timeoutMs: 30 * 60 * 1000 });
+    });
+
     // ── 3. Re-open the canary entry editor for the delete leg ──────
     //
-    // After Publish-Now, Decap may unmount the editor or land us on
-    // the cms PR's view; navigate explicitly to the entry's editor URL
-    // so the delete menu is on a known DOM. The slug-bearing URL is
-    // deterministic since the slug template at the collection level
-    // (`slug: "{{slug}}"`) derives from the title we set.
-    await test.step("Navigate to the throw-away canary entry", async () => {
-      await page.goto(`${PROD_ADMIN}#/collections/e2e/entries/${slug}`, {
-        waitUntil: "domcontentloaded",
-      });
-      await expect(page.getByRole("textbox", { name: /^Title$/i })).toBeVisible({
-        timeout: 30_000,
+    // CRITICAL (mirrors cms-publish-loop-prod-mutate.spec.js): after the
+    // Publish-Now shim's synthetic merged:true, the create PR's cms/*
+    // branch lingers until the REAL auto-merge lands. Re-navigating during
+    // that window reloads the entry as an OPEN editorial draft ("Delete
+    // unpublished entry" -> drops only the draft branch, never main) and
+    // the URL never 404s. reopenForPublishedDelete poll-reloads until Decap
+    // drops the (now-merged) editorial entry and shows the PUBLISHED file
+    // ("Delete published entry", no Status chip), and only THEN returns.
+    await test.step("Re-open the throw-away canary entry in PUBLISHED state for the delete leg", async () => {
+      await reopenForPublishedDelete(page, `${PROD_ADMIN}#/collections/e2e/entries/${slug}`, {
+        crossCheck: () => fileExistsOnMain(filePath),
+        adminUrl: PROD_ADMIN,
       });
     });
 
     // ── 4. Click "Delete published entry" (hits the shim) ──────────
-    await test.step("Click Delete published entry → shim dispatches workflow", async () => {
-      // Decap renders this as a button in the entry-status menu (or a
-      // top-level "Delete" depending on entry state). Try the menu
-      // path first; fall back to a direct button match. Either click
-      // ultimately lands on the same fetch that the shim catches.
-      //
-      // The status-button label DEPENDS on the entry's editorial
-      // workflow state. Run #25473784039 hung for 40 min on the
-      // fallback path because the seeded canary is published already
-      // — the toolbar shows a single button labelled `Published`,
-      // NOT `Status: …`. Without an explicit click timeout the
-      // missing-element wait pegged the runner until the
-      // outer test timeout fired. Match either label and pin a
-      // timeout on every action so a UI shape change next time fails
-      // in 30 s instead of 40 min.
-      const trigger = page.getByRole("button", { name: /delete (published )?entry/i }).first();
-      if (await trigger.isVisible({ timeout: 5_000 }).catch(() => false)) {
-        await trigger.click({ timeout: 30_000 });
-      } else {
-        await page
-          .getByRole("button", {
-            name: /^(Status:|Published$|In Review$|Ready$|Draft$)/i,
-          })
-          .first()
-          .click({ timeout: 30_000 });
-        await page
-          .getByRole("menuitem", { name: /delete (published )?entry/i })
-          .first()
-          .click({ timeout: 30_000 });
+    await test.step("Click the editor's Delete button -> opens delete-from-main cms/... PR", async () => {
+      // confirmEditorDelete arms a POST /git/trees watcher BEFORE the click
+      // and AWAITS it as positive proof Decap dispatched the delete -- a
+      // silent no-op throws HERE (the real fault site) instead of 900s later
+      // in the URL-404 wait (#1815 delete-phase). It also installs the
+      // native-confirm auto-accept + forward-compat in-app modal-confirm, so
+      // no inline confirm click is needed. The persistent page.on("dialog")
+      // accepter set at the top of the test accepts the native confirm().
+      // Mirrors cms-publish-loop-prod-mutate.spec.js.
+      await confirmEditorDelete(page, () => clickEditorDelete(page));
+    });
+
+    // -- 4b. Label the delete cms/... PR cms/ready if Decap opened one.
+    // Decap's "Delete published entry" commits the delete via the git data
+    // API; the terminal ref update is 422'd by branch protection and
+    // admin/publish-via-auto-merge.js recovers it by opening a cms/* delete
+    // PR labelled cms/ready. Re-label it (idempotent) so auto-merge lands +
+    // deploys the delete. Mirrors cms-publish-loop-prod-mutate.spec.js.
+    await test.step("Label the delete cms/... PR cms/ready if Decap opened one", async () => {
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        let prs = [];
+        try {
+          prs = await gh(`/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=50`);
+        } catch (_) {
+          /* transient -- retry */
+        }
+        const cmsPrs = (prs || []).filter(
+          (pr) => pr.head && typeof pr.head.ref === "string" && pr.head.ref.startsWith("cms/"),
+        );
+        let labelled = false;
+        for (const pr of cmsPrs) {
+          let files;
+          try {
+            files = await gh(`/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`);
+          } catch (_) {
+            continue;
+          }
+          const removesPost = files.some((f) => f.filename === filePath && f.status === "removed");
+          if (removesPost) {
+            try {
+              await addLabel({ prNumber: pr.number, label: "cms/ready" });
+            } catch (e) {
+              console.warn(`[delete-published] could not label PR #${pr.number}: ${e && e.message}`);
+            }
+            labelled = true;
+            break;
+          }
+        }
+        if (labelled) break;
+        await new Promise((r) => setTimeout(r, 6000));
       }
-      // The persistent `page.on("dialog", ...)` set up at the top of
-      // the test will accept any native confirm() dialog the delete
-      // flow raises. If Decap uses an in-page modal instead, look for
-      // its confirm button (Yes / OK / Delete / Confirm) and click it
-      // within a generous window. page.locator is loose-match by
-      // default; narrow with role="button" + an anchored regex.
-      const confirmInPageModal = page.getByRole("button", {
-        name: /^(delete|confirm|yes|ok)$/i,
-      });
-      await confirmInPageModal
-        .first()
-        .click({ timeout: 5_000 })
-        .catch((err) => {
-          console.debug(
-            "[cms-delete-published] no in-page confirm button (Decap likely used native confirm() — handled by persistent dialog listener):",
-            err && err.message,
-          );
-        });
+      // Not finding a PR is fine -- Decap committed the delete straight to main.
     });
 
     // ── 5. Wait for the URL to 404 (and pill terminal-hidden) ──────

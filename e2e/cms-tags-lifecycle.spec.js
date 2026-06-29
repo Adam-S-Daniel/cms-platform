@@ -48,7 +48,14 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { gh, makeDeployQueueExtender } = require("./github-actions-poll");
+const {
+  gh,
+  addLabel,
+  getPullRequest,
+  waitForCmsPullRequest,
+  waitForMerge,
+  makeDeployQueueExtender,
+} = require("./github-actions-poll");
 const {
   createBranchFromMain,
   deleteFileOnBranch,
@@ -57,6 +64,11 @@ const {
   closeStaleDecapPrOnBranch,
   fixtureBranchName,
 } = require("./cms-fixture-pr");
+const {
+  reopenForPublishedDelete,
+  confirmEditorDelete,
+  clickEditorDelete,
+} = require("./cms-editor-ui");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
 
@@ -73,16 +85,34 @@ const TAG_NAME = `E2E Tags Canary ${RUN_ID}`;
 const TAG_FILE_PATH = `_tags/${TAG_SLUG}.md`;
 const ARCHIVE_PUBLIC_URL = `${PROD_HOST}/tags/${TAG_SLUG}/`;
 
-// 40 min covers two full chain cycles (create + delete) at a 15-min
-// URL-wait cap each plus admin login, UI clicks, and afterAll
-// safety-net. Matches cms-unpublish-republish.spec.js's budget.
-const TEST_TIMEOUT_MS = 40 * 60 * 1000;
+// 80 min (bumped from 40) covers two full chain cycles (create + delete)
+// where the delete leg now waits for the create PR to actually MERGE
+// (waitForMerge, 30-min budget) and reopens the entry in the PUBLISHED
+// state (reopenForPublishedDelete, up to a 25-min resync) before deleting
+// -- mirroring cms-publish-loop-prod-mutate.spec.js -- plus the 15-min
+// URL-wait cap on each leg, admin login, UI clicks, and afterAll
+// safety-net.
+const TEST_TIMEOUT_MS = 80 * 60 * 1000;
 
 test.describe.configure({
   mode: "serial",
   timeout: TEST_TIMEOUT_MS,
   retries: 0,
 });
+
+// Contents-API existence probe on main -- used by reopenForPublishedDelete's
+// crossCheck so a reopen timeout can distinguish "Decap is slow" from "the
+// create PR's merge never landed" (#1815). Mirrors the helper in
+// cms-publish-loop-prod-mutate.spec.js / cms-delete-published.spec.js.
+async function fileExistsOnMain(filePath) {
+  try {
+    await gh(`/repos/${HOST_REPO}/contents/${filePath}?ref=main`);
+    return true;
+  } catch (e) {
+    if (/\b404\b/.test(String(e.message))) return false;
+    throw e;
+  }
+}
 
 // Persistent dialog handler — Decap uses native window.confirm() on
 // delete. Without this listener Playwright auto-dismisses and Decap
@@ -264,6 +294,26 @@ test(
         .click();
     });
 
+    // -- 2b. Find the create cms/tags/... PR Decap opened; label cms/ready.
+    // Capturing the create PR number lets the delete leg wait for its REAL
+    // merge before reopening the entry for the published-delete path
+    // (mirrors cms-publish-loop-prod-mutate.spec.js).
+    let createPrNumber = null;
+    await test.step("Wait for Decap to open the create cms/tags/... PR, label cms/ready", async () => {
+      const pr = await waitForCmsPullRequest({
+        base: "main",
+        filePath: TAG_FILE_PATH,
+        // Marker must be in the file's DIFF CONTENT (f.patch), not the path.
+        // TAG_SLUG (hyphenated) is only the filename; TAG_NAME (spaced) is the
+        // `title`/name frontmatter Decap writes, and RUN_ID is inside it. Use it.
+        canaryMarker: String(RUN_ID),
+        timeoutMs: 5 * 60 * 1000,
+      });
+      expect(pr.number, "Decap create PR number").toBeGreaterThan(0);
+      createPrNumber = pr.number;
+      await addLabel({ prNumber: pr.number, label: "cms/ready" });
+    });
+
     // ── 3. Wait for the chain to publish /tags/<slug>/ (chain complete)
     await test.step("Wait for /tags/<slug>/ to be served (status 200, chain complete)", async () => {
       await waitForChangeReflected({
@@ -289,24 +339,86 @@ test(
       });
     });
 
+    // -- 3b. Wait for the create PR to actually merge (not just the
+    // synthetic Publish-Now ack). The delete leg must not reopen the entry
+    // until the create PR's cms/tags/<slug> branch is truly gone, else Decap
+    // reloads it as an OPEN editorial draft ("Delete unpublished entry",
+    // drops only the draft branch, never main) and /tags/<slug>/ never 404s.
+    // Mirrors cms-publish-loop-prod-mutate.spec.js.
+    await test.step("Wait for the create PR to actually merge (not just the synthetic Publish-Now ack)", async () => {
+      expect(createPrNumber, "create PR number captured for merge wait").toBeTruthy();
+      await waitForMerge({ prNumber: createPrNumber, timeoutMs: 30 * 60 * 1000 });
+    });
+
     // ── 4. CYCLE 2: delete the Tags entry via Decap UI ───────────────
-    await test.step("Navigate back to the Tags entry editor", async () => {
-      await page.goto(`${PROD_ADMIN}#/collections/tags/entries/${TAG_SLUG}`, {
-        waitUntil: "domcontentloaded",
-      });
-      await expect(page.getByRole("textbox", { name: /^Name$/i })).toBeVisible({
-        timeout: 30_000,
+    await test.step("Re-open the Tags entry in PUBLISHED state for the delete leg", async () => {
+      // Mirrors cms-publish-loop-prod-mutate.spec.js: after Publish-Now's
+      // synthetic merged:true the create PR's cms/tags/<slug> branch lingers
+      // until the REAL auto-merge lands; reopening during that window reloads
+      // an OPEN editorial draft ("Delete unpublished entry", drops only the
+      // draft branch). reopenForPublishedDelete poll-reloads until Decap shows
+      // the PUBLISHED file ("Delete published entry"). The Tags editor's title
+      // field is "Name", not "Title", so pass titleName accordingly.
+      await reopenForPublishedDelete(page, `${PROD_ADMIN}#/collections/tags/entries/${TAG_SLUG}`, {
+        titleName: /^Name$/i,
+        crossCheck: () => fileExistsOnMain(TAG_FILE_PATH),
+        adminUrl: PROD_ADMIN,
       });
     });
 
-    await test.step("Click Delete published entry — confirms via dialog handler", async () => {
-      // Prod backend is editorial-workflow mode, but the Delete button
-      // is still exposed directly on a published entry. Persistent
-      // dialog handler from beforeEach accepts the confirm().
-      await page
-        .getByRole("button", { name: /^delete (entry|published entry)$/i })
-        .first()
-        .click({ timeout: 30_000 });
+    await test.step("Click the editor's Delete button -> opens delete-from-main cms/... PR", async () => {
+      // confirmEditorDelete arms a POST /git/trees watcher BEFORE the click
+      // and AWAITS it as positive proof Decap dispatched the delete -- a
+      // silent no-op throws HERE (the real fault site) instead of 900s later
+      // in the URL-404 wait (#1815 delete-phase). The persistent dialog
+      // handler from beforeEach accepts the native confirm(). Mirrors
+      // cms-publish-loop-prod-mutate.spec.js.
+      await confirmEditorDelete(page, () => clickEditorDelete(page));
+    });
+
+    // -- 4b. Label the delete cms/... PR cms/ready if Decap opened one.
+    // Decap's "Delete published entry" commits via the git data API; the
+    // terminal ref update is 422'd by branch protection and
+    // admin/publish-via-auto-merge.js recovers it by opening a cms/* delete
+    // PR labelled cms/ready. Re-label it (idempotent) so auto-merge lands +
+    // deploys the delete. Mirrors cms-publish-loop-prod-mutate.spec.js.
+    await test.step("Label the delete cms/... PR cms/ready if Decap opened one", async () => {
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        let prs = [];
+        try {
+          prs = await gh(`/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=50`);
+        } catch (_) {
+          /* transient -- retry */
+        }
+        const cmsPrs = (prs || []).filter(
+          (pr) => pr.head && typeof pr.head.ref === "string" && pr.head.ref.startsWith("cms/"),
+        );
+        let labelled = false;
+        for (const pr of cmsPrs) {
+          let files;
+          try {
+            files = await gh(`/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`);
+          } catch (_) {
+            continue;
+          }
+          const removesTag = files.some(
+            (f) => f.filename === TAG_FILE_PATH && f.status === "removed",
+          );
+          if (removesTag) {
+            try {
+              await addLabel({ prNumber: pr.number, label: "cms/ready" });
+            } catch (e) {
+              console.warn(`[tags-lifecycle] could not label PR #${pr.number}: ${e && e.message}`);
+            }
+            labelled = true;
+            break;
+          }
+        }
+        if (labelled) break;
+        await new Promise((r) => setTimeout(r, 6000));
+      }
+      // Not finding a PR is fine -- Decap committed the delete straight to main.
     });
 
     // ── 5. Wait for the chain to remove /tags/<slug>/ (chain complete)

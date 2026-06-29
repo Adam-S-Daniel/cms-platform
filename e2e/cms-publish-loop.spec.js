@@ -66,6 +66,7 @@ const { seedFixtureViaPr, closeStaleDecapPrOnBranch } = require("./cms-fixture-p
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
 const { guard } = require("./base-collections-guards");
+const { saveEntry, publishViaUi } = require("./cms-editor-ui");
 
 // SITE_ROOT — the consuming site's repo root; the #21 guard-registry meta-proof
 // overrides it to point at a fixture.
@@ -468,22 +469,12 @@ test("CMS publish loop — host repo, target main", { tag: ["@admin-write"] }, a
     await page.keyboard.press("Backspace");
     await body.pressSequentially(`${baselineFullBody}\n`);
 
-    await page.getByRole("button", { name: /^Save$/i }).click();
-    await expect(page.getByText(/Changes saved/i).first()).toBeVisible({
-      timeout: 60_000,
-    });
-
-    await page.getByRole("button", { name: /^Status:\s*Draft$/i }).click();
-    await page.getByRole("menuitem", { name: /^Ready$/i }).click();
-    await expect(page.getByRole("button", { name: /^Status:\s*Ready$/i })).toBeVisible({
-      timeout: 30_000,
-    });
-
-    await page.getByRole("button", { name: /^Publish$/i }).click();
-    await page
-      .getByRole("menuitem", { name: /publish now/i })
-      .first()
-      .click();
+    // saveEntry + publishViaUi tolerate the editorial-Ready auto-save /
+    // limbo state the Publish-Now 422 shim leaves the editor in (a field
+    // edit auto-persists into the open PR, so Save stays disabled, and the
+    // re-edit path surfaces Publish directly without a Status:Ready chip).
+    await saveEntry(page);
+    await publishViaUi(page);
 
     // Wait for the URL to serve baseline (no marker). Reuse
     // waitForChangeReflected with an inverted urlCheck — URL fetched,
