@@ -68,7 +68,13 @@ const { guard } = require("./base-collections-guards");
 // #33/#21 — resolved like the other registered specs so the drift lint matches it.
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { readPublishedFlag, forcePublishedFalse } = require("./fixture-baseline");
-const { setPublished, expectPublished, saveEntry, publishViaUi } = require("./cms-editor-ui");
+const {
+  setPublished,
+  expectPublished,
+  saveEntry,
+  publishViaUi,
+  reopenForPublishedDelete,
+} = require("./cms-editor-ui");
 const { seedFixtureViaPr } = require("./cms-fixture-pr");
 
 // Prod host triplet resolved through the shared cms-host SSOT (byte-identical
@@ -99,9 +105,12 @@ async function fetchFixtureFromMain() {
 // (validate-content + auto-merge + deploy-production). With each
 // URL-wait capped at 15 min (matching the prod-mutate spec's
 // budget after commit 880a34d) plus admin login + UI clicks +
-// cleanup, ~40 min total covers worst-case runner contention.
-// Retries disabled — real-state mutation.
-const TEST_TIMEOUT_MS = 40 * 60 * 1000;
+// the leg-2 clean-published remount (reopenForPublishedDelete,
+// bounded to 6 min here because the re-publish PR has already
+// merged by then) + cleanup, ~50 min covers worst-case runner
+// contention. Still well inside the 90-min job timeout
+// (cms-publish-loop-prod.yml). Retries disabled — real-state mutation.
+const TEST_TIMEOUT_MS = 50 * 60 * 1000;
 
 test.describe.configure({
   mode: "serial",
@@ -244,26 +253,54 @@ test(
     // failure log showed `<button disabled ...SaveButton...>Save</button>`).
     // Re-open the entry fresh (forcing a re-fetch from main, which is now
     // published: true) and wait for the switch to read ON before toggling.
-    await test.step("Re-open entry (FULL reload) and confirm Published reads ON before unpublishing", async () => {
-      // A FULL page.reload() -- not just the hash-route goto -- is required.
-      // The re-publish leg's "Publish Now" returns the shim's synthetic 422, so
-      // Decap reports a publish error and KEEPS the entry in its in-memory
-      // editorial draft (UNPUBLISHED_ENTRY_PUBLISH_FAILURE never clears the
-      // entity). A hash-only navigation re-reads that stale draft; Decap only
-      // re-derives editorial state from the backend on a fresh app boot
-      // (CONFIG_SUCCESS). By now the re-publish PR has merged (the URL served
-      // 200 above) and delete_branch_on_merge has removed its
-      // cms/posts/2024-01-02-e2e-unpublish-canary branch, so the reload makes
-      // Decap re-fetch the entry as a PUBLISHED file. The unpublish edit below
-      // then opens a FRESH editorial PR. Without the reload the edit auto-saves
-      // into the stale draft on the (now-gone) branch, no new PR opens, no
-      // deploy fires, and the URL-404 wait times out (#80 layer 11, run
-      // 28342322662 -- screenshot showed Status:Ready + "Not yet published").
-      await page.goto(ENTRY_EDIT_URL, { waitUntil: "domcontentloaded" });
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await expect(page.getByRole("textbox", { name: /^Title$/i })).toBeVisible({
-        timeout: 60_000,
+    await test.step("Re-open entry as a CLEAN published file before unpublishing", async () => {
+      // #80 layer 11b. The re-publish leg's "Publish Now" returns the shim's
+      // synthetic 422, so Decap reports a publish error and KEEPS the entry in
+      // its in-memory editorial draft (UNPUBLISHED_ENTRY_PUBLISH_FAILURE never
+      // clears the entity). The layer-11a fix — a bare
+      // goto(ENTRY_EDIT_URL)+page.reload() on the deep hash route — proved
+      // INSUFFICIENT on prod: a single deep-route reload re-derives that stale
+      // editorial draft (run 28342322662 showed Status:Ready + "Not yet
+      // published" AFTER the reload). Toggling OFF then dirties that limbo
+      // entity and Save silently NO-OPS — no toast, "UNSAVED CHANGES" persists,
+      // Save stays enabled — so no fresh PR opens, no deploy fires, and the
+      // URL-404 wait times out (#80 layer 11). NB: this is NOT a boolean-vs-body
+      // problem — leg-1 above and the green preview spec both Save a boolean-only
+      // toggle fine; the broken variable is the post-422 client state, not the
+      // field type.
+      //
+      // Fix: use the SAME remount the (green) delete legs rely on —
+      // reopenForPublishedDelete. It bounces through the admin ROOT so Decap
+      // re-runs its login routing / CONFIG_SUCCESS and rebuilds editorial state
+      // from the backend, then poll-reloads the entry until Decap has DROPPED
+      // the limbo draft and re-loaded it as a CLEAN PUBLISHED FILE (editorial
+      // "Status:" chip ABSENT + "Delete published entry" present). That
+      // published-file state is exactly what makes the unpublish Save take
+      // Decap's `!unpublished` createBranchAndPullRequest path and open a FRESH
+      // cms/posts/<slug> PR — preserving the layer-11a benefit — instead of
+      // auto-saving into the now-merged+deleted editorial branch. By now the
+      // re-publish PR has merged (URL served 200 above) and
+      // delete_branch_on_merge removed its cms/posts/2024-01-02-e2e-unpublish-
+      // canary branch, so the helper's branch-gone published-file signal is
+      // reachable quickly (6-min budget — the long wait is the merge, already
+      // done). The poll loop's bounded per-attempt waits also let Decap's async
+      // field re-validation settle before we ever click Save, closing the
+      // persistEntry fieldsErrors-guard race a same-instant reload+toggle+Save
+      // can hit.
+      await reopenForPublishedDelete(page, ENTRY_EDIT_URL, {
+        adminUrl: PROD_ADMIN,
+        totalTimeoutMs: 6 * 60 * 1000,
+        // Disambiguate "Decap is slow to catch up" from "the re-publish PR
+        // never merged" in the failure message: is the canary published on main?
+        crossCheck: async () => {
+          const file = await fetchFixtureFromMain();
+          const decoded = Buffer.from(file.content, "base64").toString("utf8");
+          return readPublishedFlag(decoded) === true;
+        },
       });
+      // The clean published file reads published: true; assert the switch agrees
+      // so the OFF flip below is a real state transition, not a no-op on a
+      // stale/limbo view.
       await expectPublished(page, true, { timeout: 30_000 });
     });
 
