@@ -244,8 +244,23 @@ test(
     // failure log showed `<button disabled ...SaveButton...>Save</button>`).
     // Re-open the entry fresh (forcing a re-fetch from main, which is now
     // published: true) and wait for the switch to read ON before toggling.
-    await test.step("Re-open entry and confirm Published reads ON before unpublishing", async () => {
+    await test.step("Re-open entry (FULL reload) and confirm Published reads ON before unpublishing", async () => {
+      // A FULL page.reload() -- not just the hash-route goto -- is required.
+      // The re-publish leg's "Publish Now" returns the shim's synthetic 422, so
+      // Decap reports a publish error and KEEPS the entry in its in-memory
+      // editorial draft (UNPUBLISHED_ENTRY_PUBLISH_FAILURE never clears the
+      // entity). A hash-only navigation re-reads that stale draft; Decap only
+      // re-derives editorial state from the backend on a fresh app boot
+      // (CONFIG_SUCCESS). By now the re-publish PR has merged (the URL served
+      // 200 above) and delete_branch_on_merge has removed its
+      // cms/posts/2024-01-02-e2e-unpublish-canary branch, so the reload makes
+      // Decap re-fetch the entry as a PUBLISHED file. The unpublish edit below
+      // then opens a FRESH editorial PR. Without the reload the edit auto-saves
+      // into the stale draft on the (now-gone) branch, no new PR opens, no
+      // deploy fires, and the URL-404 wait times out (#80 layer 11, run
+      // 28342322662 -- screenshot showed Status:Ready + "Not yet published").
       await page.goto(ENTRY_EDIT_URL, { waitUntil: "domcontentloaded" });
+      await page.reload({ waitUntil: "domcontentloaded" });
       await expect(page.getByRole("textbox", { name: /^Title$/i })).toBeVisible({
         timeout: 60_000,
       });

@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.39`** — `v0.1.0`–`v0.1.39` are all tagged GitHub
+**Current release: `v0.1.40`** — `v0.1.0`–`v0.1.40` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.39)
+## Version history (v0.1.0 → v0.1.40)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1410,6 +1410,29 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   the Decap 3.12.2 editorial-state lifecycle (Option A kept; Option B — 2xx +
   no-op Decap's branch-delete — rejected: re-introduces layer 9 and the no-op is
   indistinguishable from a legit discard).
+
+- **v0.1.40** (2026-06-29) — **#80 host-loop layer 11 — unpublish leg's stale
+  editorial draft + reused branch.** v0.1.39 took the loop to 3/4 (both delete
+  specs green); cms-unpublish-republish still failed at the UNPUBLISH leg's
+  URL-404 wait ("chain never fired", run 28342322662). Root cause: the spec
+  reuses a FIXED slug (`2024-01-02-e2e-unpublish-canary`), and (a) the re-open
+  step did a hash-route `goto` WITHOUT a full reload, so Decap re-read its
+  in-memory editorial draft from the re-publish leg's 422 (Decap re-derives
+  editorial state only on a fresh boot / CONFIG_SUCCESS) — the screenshot showed
+  Status:Ready + "Not yet published" with Published OFF; and (b) the re-publish
+  leg's merged `cms/posts/<slug>` branch LINGERED (`delete_branch_on_merge=false`
+  on the consumers), so even a fresh edit couldn't open a new editorial PR
+  (createBranch 422s on the existing ref). Fix: (1) the unpublish re-open now does
+  an explicit `page.reload()` so Decap re-fetches the entry as the now-published
+  file; (2) **enabled `delete_branch_on_merge=true` on both consumers** so a
+  merged editorial branch is removed and the next leg/edit opens a fresh PR.
+  NOTE: the consumers had drifted to `delete_branch_on_merge=false` (no recorded
+  reason; possibly an old fix) — the platform was DESIGNED for it ON
+  (cleanup-stale-fixture-branches header). Re-enabled per owner direction with a
+  regression watch; revert to false + an in-spec branch-delete is the fallback if
+  it regresses elsewhere. cms-delete-published / cms-tags-lifecycle / cms-publish-loop
+  unchanged from v0.1.39; the 3-of-4 that passed at `delete_branch_on_merge=false`
+  must be re-confirmed green at `true`.
 
 ## Consumers
 
