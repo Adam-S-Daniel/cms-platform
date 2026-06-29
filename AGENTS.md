@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.40`** — `v0.1.0`–`v0.1.40` are all tagged GitHub
+**Current release: `v0.1.41`** — `v0.1.0`–`v0.1.41` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.40)
+## Version history (v0.1.0 → v0.1.41)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1434,6 +1434,31 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   unchanged from v0.1.39; the 3-of-4 that passed at `delete_branch_on_merge=false`
   must be re-confirmed green at `true`.
 
+- **v0.1.41** (2026-06-29) — **#80 host-loop layer 11b — unpublish Save no-op on a
+  deep-route-reloaded entry.** v0.1.40 (layer 11a) took the loop to 3/4 but
+  cms-unpublish-republish leg-2 still failed: a bare `goto(ENTRY_EDIT_URL)+page.reload()`
+  on the deep hash route re-derived the post-422 editorial-limbo draft (run
+  28372038163 showed status "Published" + "UNSAVED CHANGES" but the toggle-OFF
+  Save NO-OP'd — no toast, no branch, no PR, "UNSAVED CHANGES" persisted). Root
+  cause (Decap 3.12.2 source audit): the Editor's Save → `actions/entries.ts
+  persistEntry`; if `fieldsErrors` is non-empty at click time it `return
+  Promise.reject()` with NO toast (only a presence-error shows one), and a bare
+  deep-route reload re-boots the app so the toggle+Save can race async field
+  re-validation (and the entries route never hydrates the editorialWorkflow
+  slice). NOT a boolean-vs-body issue — leg-1 and the green *preview* variant both
+  Save a boolean-only toggle fine. Fix: replace the bare reload with the
+  PROVEN-green `reopenForPublishedDelete` remount (used by 4 green specs) — it
+  bounces through the admin ROOT (fresh CONFIG_SUCCESS / re-login / editorial
+  re-hydrate) and poll-reloads until Decap shows a CLEAN PUBLISHED FILE
+  (editorial chip absent + "Delete published entry" present), whose settle
+  windows let field re-validation finish before Save. From that clean state the
+  unpublish Save takes Decap's `!unpublished` createBranchAndPullRequest path →
+  a FRESH cms PR opens (layer-11a benefit preserved) → merges → URL 4xxs.
+  `saveEntry` unchanged (it correctly fails on a real no-op); `TEST_TIMEOUT_MS`
+  40→50 min for the remount budget. Spec-only; shim + delete_branch_on_merge
+  unchanged. Also filed #109 (manage repo settings as code).
+
+## Consumers
 ## Consumers
 
 - **adamdaniel.ai** — consumer #1, user-owned, the dogfood. Migrated to
