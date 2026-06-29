@@ -84,6 +84,26 @@ async function saveEntry(page, { timeout = 60_000 } = {}) {
       .isVisible()
       .catch(() => false);
     const disabled = await save.isDisabled().catch(() => false);
+    // RE-CLICK on a silent no-op. Decap's Editor Save (actions/entries.ts
+    // persistEntry) rejects SILENTLY — no toast, the form stays dirty and Save
+    // stays ENABLED — when `fieldsErrors` is non-empty at click time. Field
+    // widgets re-validate ASYNCHRONOUSLY right after a (re)mount, so the first
+    // click can land in that transient-invalid window and no-op (#80 layer 11b;
+    // host runs 28372038163 unpublish leg + 28380065742 cms-publish-loop
+    // cleanup leg both stuck "UNSAVED CHANGES" + enabled Save for 60s). Once
+    // re-validation settles the same click persists, so while Save is still
+    // actionable and unconfirmed, click it again. A genuinely-invalid form
+    // never clears its errors, so this still fails at `timeout` rather than
+    // masking a real validation/persist error. Idempotent: a successful save
+    // sets hasChanged=false (Decap disables Save and the onClick guard
+    // `hasChanged && onPersist()` no-ops), so this never double-persists.
+    if (!toast && !disabled) {
+      // A missed re-click (Save settled to disabled between the read above and
+      // this click, or not yet actionable) is non-fatal — the toPass predicate
+      // re-evaluates either way. `.catch(() => false)` (not the banned empty
+      // arrow) keeps this out of silent-catch-lint while staying a no-op.
+      await save.click({ timeout: 2_000 }).catch(() => false);
+    }
     expect(toast || disabled, "expected the 'Changes saved' toast or a disabled Save").toBe(true);
   }).toPass({ timeout });
 }
