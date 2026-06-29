@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.41`** — `v0.1.0`–`v0.1.41` are all tagged GitHub
+**Current release: `v0.1.42`** — `v0.1.0`–`v0.1.42` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.41)
+## Version history (v0.1.0 → v0.1.42)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1458,6 +1458,25 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   40→50 min for the remount budget. Spec-only; shim + delete_branch_on_merge
   unchanged. Also filed #109 (manage repo settings as code).
 
+- **v0.1.42** (2026-06-29) — **#80 host-loop — `saveEntry` re-validation-race no-op
+  (shared-helper hardening).** With the layer-11b remount in place, the loop's
+  Save-no-op symptom proved to be a GENERAL intermittent flake, not unique to the
+  unpublish leg: on run 28380065742 it hit **cms-publish-loop's cleanup** Save
+  (byte-identical to the v0.1.40 run that passed → a flake, not a regression).
+  Root (Decap 3.12.2 `actions/entries.ts persistEntry`): if `fieldsErrors` is
+  non-empty at click time the Save `Promise.reject()`s SILENTLY (only a presence
+  error toasts), and field widgets re-validate ASYNC right after a (re)mount, so a
+  single Save click can land in the transient-invalid window and no-op — the form
+  stays "UNSAVED CHANGES" with Save enabled until the 60s confirm times out. Fix:
+  `saveEntry` (shared helper, all 6 callers) now RE-CLICKS Save inside its
+  toast-or-disabled `toPass` loop whenever Save is still actionable + unconfirmed;
+  once re-validation settles the click persists. Idempotent (a successful save sets
+  hasChanged=false → Decap disables Save + the onClick guard no-ops, so it never
+  double-persists), and a genuinely-invalid form still fails at `timeout` rather
+  than masking a real error. Stacks on the v0.1.41 reopenForPublishedDelete remount.
+  Spec-helper only.
+
+## Consumers
 ## Consumers
 ## Consumers
 
