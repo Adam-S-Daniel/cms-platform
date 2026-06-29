@@ -84,7 +84,12 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
-const { addLabel, gh, waitForCmsPullRequest } = require("./github-actions-poll");
+const {
+  addLabel,
+  gh,
+  makePreviewCanaryRecoverer,
+  waitForCmsPullRequest,
+} = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { previewTarget } = require("./cms-host");
 const { readPublishedFlag, sanitizeToBaseline } = require("./fixture-baseline");
@@ -379,6 +384,11 @@ test(
           return (await res.text()).includes(marker);
         },
         urlTimeoutMs: 15 * 60 * 1000,
+        // FIX 1 (#82): recover the green-but-stuck-BLOCKED forward canary PR.
+        onBudgetExhausted: makePreviewCanaryRecoverer({
+          base: PR_HEAD_REF,
+          getPrNumber: () => pr.number,
+        }),
       });
     });
 
@@ -442,6 +452,11 @@ test(
           return s >= 400 && s < 500;
         },
         urlTimeoutMs: 15 * 60 * 1000,
+        // FIX 1 (#82): recover the green-but-stuck-BLOCKED cleanup canary PR.
+        onBudgetExhausted: makePreviewCanaryRecoverer({
+          base: PR_HEAD_REF,
+          getPrNumber: () => cleanupPr.number,
+        }),
       });
     });
   },

@@ -73,7 +73,12 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
-const { addLabel, gh, waitForCmsPullRequest } = require("./github-actions-poll");
+const {
+  addLabel,
+  gh,
+  makePreviewCanaryRecoverer,
+  waitForCmsPullRequest,
+} = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { previewTarget } = require("./cms-host");
 const { readPublishedFlag, forcePublishedFalse } = require("./fixture-baseline");
@@ -186,6 +191,12 @@ test(
     // Playwright auto-dismisses and Decap reads it as "cancelled".
     page.on("dialog", (d) => d.accept());
 
+    // FIX 1 (#82): hoisted to the test body so each leg's
+    // waitForChangeReflected recoverer reads the most-recently-matched
+    // canary PR. The re-publish leg assigns it first, the unpublish leg
+    // reassigns it — both run serially, so `pr` is always the current leg's.
+    let pr;
+
     // ── 0a. Close any stale Decap PR on the post's fixed branch ─────
     await test.step("Close any stale Decap PR on the cms/posts/<slug> branch", async () => {
       await closeStaleDecapPrOnBranch({
@@ -292,7 +303,7 @@ test(
       // the first) can't collide; waitForCmsPullRequest only
       // considers state=open cms/* PRs, so the marker just has to
       // appear in this PR's patch.
-      const pr = await waitForCmsPullRequest({
+      pr = await waitForCmsPullRequest({
         base: PR_HEAD_REF,
         filePath: FIXTURE_PATH,
         canaryMarker: "published: true",
@@ -307,6 +318,11 @@ test(
         pillId: PILL_PREVIEW,
         urlCheck: async () => urlServesPost(page),
         urlTimeoutMs: 15 * 60 * 1000,
+        // FIX 1 (#82): recover the green-but-stuck-BLOCKED re-publish canary PR.
+        onBudgetExhausted: makePreviewCanaryRecoverer({
+          base: PR_HEAD_REF,
+          getPrNumber: () => pr && pr.number,
+        }),
       });
     });
 
@@ -347,7 +363,7 @@ test(
       // resolves once it landed on the head branch and deploy-preview
       // ran), so waitForCmsPullRequest's state=open filter excludes
       // it. This leg's diff adds `+published: false`.
-      const pr = await waitForCmsPullRequest({
+      pr = await waitForCmsPullRequest({
         base: PR_HEAD_REF,
         filePath: FIXTURE_PATH,
         canaryMarker: "published: false",
@@ -362,6 +378,11 @@ test(
         pillId: PILL_PREVIEW,
         urlCheck: async () => url4xxs(page),
         urlTimeoutMs: 15 * 60 * 1000,
+        // FIX 1 (#82): recover the green-but-stuck-BLOCKED unpublish canary PR.
+        onBudgetExhausted: makePreviewCanaryRecoverer({
+          base: PR_HEAD_REF,
+          getPrNumber: () => pr && pr.number,
+        }),
       });
     });
   },

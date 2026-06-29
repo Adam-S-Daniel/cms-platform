@@ -610,6 +610,198 @@ function makeDeployQueueExtender({
   return extender;
 }
 
+// Port of cms-automerge-nudge.yml's headIsTrulyGreen (:205-260) as a pure
+// JS helper, using the raw gh() fetch wrapper. Returns { ok, why? }.
+// `requiredContexts` is the FEATURE-BRANCH ruleset's required check set
+// (the cms-feature-branches ruleset stores it as the BARE name
+// 'validate-content') — deliberately a strict subset/different list from
+// main.json; callers must NOT pass the larger cron-nudge/main list
+// (e2e-admin, preview-media, finalize…), which the feature-branch ruleset
+// never enforces and which would never appear on a cms/* sub-PR head sha →
+// permanent "missing on head sha".
+//
+// CORRECTION #1 — suffix-tolerant context matching. The ruleset stores the
+// required check as the bare context `validate-content`, but the actual
+// check-RUN posted on a cms/* PR head sha is named `editorial /
+// validate-content` (workflow / job). An EXACT name match would find
+// nothing → "missing on head sha" → recovery never fires. So a required
+// context `ctx` matches a check-run (or legacy status) whose name EITHER
+// === ctx OR whose last ` / `-separated segment === ctx (e.g.
+// 'editorial / validate-content'.split(' / ').pop().trim() ===
+// 'validate-content'). requiredContexts stays the bare ['validate-content']
+// (aligns with the stored context); the tolerant match finds the prefixed
+// check-run.
+async function headChecksTrulyGreen({ repo = HOST_REPO, sha, requiredContexts, _gh = gh } = {}) {
+  const required = (requiredContexts || []).filter(Boolean);
+  if (!sha) return { ok: false, why: "no head sha" };
+  if (required.length === 0) throw new Error("headChecksTrulyGreen needs a non-empty requiredContexts.");
+  const GREEN = (c) => c === "SUCCESS" || c === "NEUTRAL" || c === "SKIPPED";
+  // A required context matches a check-run/status name exactly, OR matches
+  // its last ` / `-separated segment (so the bare ruleset context
+  // `validate-content` matches the `editorial / validate-content`
+  // check-run). See CORRECTION #1 above.
+  const matchesCtx = (name, ctx) =>
+    name === ctx || String(name).split(" / ").pop().trim() === ctx;
+
+  const byName = new Map();
+  for (let page = 1; ; page++) {
+    const data = await _gh(
+      `/repos/${repo}/commits/${encodeURIComponent(sha)}/check-runs?per_page=100&page=${page}`,
+    );
+    const runs = data.check_runs || [];
+    for (const r of runs) {
+      if (!byName.has(r.name)) byName.set(r.name, []);
+      byName.get(r.name).push(r);
+    }
+    if (runs.length < 100) break;
+  }
+  const legacy = new Map();
+  try {
+    const data = await _gh(`/repos/${repo}/commits/${encodeURIComponent(sha)}/status`);
+    for (const s of data.statuses || []) legacy.set(s.context, (s.state || "").toUpperCase());
+  } catch (_) { /* no legacy statuses */ }
+
+  for (const ctx of required) {
+    // Gather every check-run whose name matches this required context
+    // (tolerant of the `workflow / job` prefix — CORRECTION #1).
+    const runs = [];
+    for (const [name, list] of byName) {
+      if (matchesCtx(name, ctx)) runs.push(...list);
+    }
+    if (runs.length) {
+      // (A) STUB HAZARD: never merge while a required run is queued/in-progress.
+      const pending = runs.find((r) => r.status !== "completed");
+      if (pending) return { ok: false, why: `${ctx} still ${pending.status}` };
+      // Ignore CANCELLED (same-sha label-burst residue); decide on latest non-cancelled.
+      const decisive = runs
+        .filter((r) => (r.conclusion || "").toLowerCase() !== "cancelled")
+        .sort((a, b) => new Date(a.started_at || 0) - new Date(b.started_at || 0))
+        .pop();
+      if (!decisive) return { ok: false, why: `${ctx}: all runs cancelled` };
+      if (!GREEN((decisive.conclusion || "").toUpperCase())) return { ok: false, why: `${ctx}=${decisive.conclusion}` };
+      continue;
+    }
+    // No check-run matched — fall back to the legacy commit-status API,
+    // also tolerant of the prefixed context name.
+    let st;
+    for (const [context, state] of legacy) {
+      if (matchesCtx(context, ctx)) {
+        st = state;
+        break;
+      }
+    }
+    if (st === undefined) return { ok: false, why: `${ctx} missing on head sha` };
+    if (!GREEN(st)) return { ok: false, why: `${ctx}=${st}` };
+  }
+  return { ok: true };
+}
+
+// onBudgetExhausted recoverer for the PREVIEW loops (#82). When the URL
+// hasn't reflected and the budget elapsed, fresh-requery the loop's OWN
+// canary sub-PR and, if it's green-but-stuck-BLOCKED, force a synchronous
+// SQUASH merge into the preview branch (its own base) — the proven nudge
+// recovery for the #1812/#1815 stale snapshot. Mirrors makeDeployQueueExtender's
+// (ctx)=>Promise<number> contract + .verdict self-report.
+function makePreviewCanaryRecoverer({
+  repo = HOST_REPO,
+  base, // PR_HEAD_REF — the preview branch (for the D guard)
+  requiredContexts = ["validate-content"],
+  getPrNumber, // number | () => number | Promise<number>
+  perDeployMs = 5 * 60 * 1000,
+  minExtendMs = 3 * 60 * 1000,
+  maxTotalExtendMs = 30 * 60 * 1000,
+  _gh = gh,
+  _headChecksTrulyGreen = headChecksTrulyGreen,
+} = {}) {
+  if (!base) throw new Error("makePreviewCanaryRecoverer requires base (the preview head branch).");
+  if (getPrNumber == null) throw new Error("makePreviewCanaryRecoverer requires getPrNumber.");
+  let extendedTotal = 0;
+  const resolvePr = async () => (typeof getPrNumber === "function" ? await getPrNumber() : getPrNumber);
+  const recoverer = async () => {
+    const remaining = maxTotalExtendMs - extendedTotal;
+    if (remaining <= 0) {
+      recoverer.verdict = { kind: "no-deploy-fired", realMiss: true };
+      return 0;
+    }
+    const grant = (ms) => {
+      const g = Math.min(Math.max(ms, minExtendMs), remaining);
+      extendedTotal += g;
+      return g;
+    };
+
+    let prNumber;
+    try {
+      prNumber = await resolvePr();
+    } catch (_) {
+      prNumber = null;
+    }
+    if (!prNumber) {
+      recoverer.verdict = { kind: "no-pr-yet", realMiss: false };
+      return grant(minExtendMs);
+    }
+
+    let pr;
+    try {
+      pr = await _gh(`/repos/${repo}/pulls/${prNumber}`);
+    } catch (_) {
+      recoverer.verdict = { kind: "probe-error", realMiss: false };
+      return grant(minExtendMs);
+    }
+
+    // (B) idempotency — already landed: ride out deploy-preview + CDN, never re-merge.
+    if (pr.merged || pr.merged_at) {
+      recoverer.verdict = { kind: "merged-awaiting-deploy", realMiss: false };
+      return grant(perDeployMs);
+    }
+    if (pr.state === "closed") {
+      recoverer.verdict = { kind: "canary-closed", realMiss: true };
+      return 0;
+    }
+
+    // (D) OUR canary only: cms/* head, base === preview branch, automated-test label.
+    const head = (pr.head && pr.head.ref) || "";
+    const baseRef = (pr.base && pr.base.ref) || "";
+    const isAutomated =
+      Array.isArray(pr.labels) && pr.labels.some((l) => (l && (l.name || l)) === "automated-test");
+    if (!head.startsWith("cms/") || baseRef !== base || !isAutomated) {
+      recoverer.verdict = { kind: "not-our-canary", realMiss: false };
+      return grant(minExtendMs);
+    }
+
+    // (A) fresh authority gate — every required preview context COMPLETED+green, none pending.
+    let fresh;
+    try {
+      fresh = await _headChecksTrulyGreen({ repo, sha: pr.head && pr.head.sha, requiredContexts });
+    } catch (_) {
+      recoverer.verdict = { kind: "probe-error", realMiss: false };
+      return grant(minExtendMs);
+    }
+    if (!fresh.ok) {
+      recoverer.verdict = { kind: "checks-not-green", why: fresh.why, realMiss: false };
+      return grant(perDeployMs);
+    }
+
+    // Green-but-open ⇒ the #82 stuck-BLOCKED canary. Explicit SQUASH merge
+    // into its own base (the preview branch) re-evaluates mergeability fresh.
+    try {
+      await _gh(`/repos/${repo}/pulls/${prNumber}/merge`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merge_method: "squash" }),
+        retries: 3,
+      });
+      recoverer.verdict = { kind: "recovery-merged", realMiss: false };
+    } catch (err) {
+      const msg = String((err && err.message) || err);
+      if (/already merged/i.test(msg)) recoverer.verdict = { kind: "merged-awaiting-deploy", realMiss: false };
+      else recoverer.verdict = { kind: "merge-retry", why: msg, realMiss: false }; // transient 405/409 → next round retries
+    }
+    return grant(perDeployMs); // await deploy-preview + URL reflect
+  };
+  recoverer.verdict = null;
+  return recoverer;
+}
+
 module.exports = {
   addLabel,
   countActiveDeployRuns,
@@ -618,7 +810,9 @@ module.exports = {
   getDefaultBranchHeadSha,
   getPullRequest,
   gh,
+  headChecksTrulyGreen,
   makeDeployQueueExtender,
+  makePreviewCanaryRecoverer,
   waitForAutoMergeEnabled,
   waitForCmsPullRequest,
   waitForMerge,

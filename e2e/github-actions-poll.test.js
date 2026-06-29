@@ -6,7 +6,13 @@
 // asserts nothing about wall-clock backoff except the value passed to the
 // injected sleep (for the Retry-After case).
 const { test, expect } = require("./base");
-const { gh, makeDeployQueueExtender, deployLaneActivity } = require("./github-actions-poll");
+const {
+  gh,
+  makeDeployQueueExtender,
+  deployLaneActivity,
+  headChecksTrulyGreen,
+  makePreviewCanaryRecoverer,
+} = require("./github-actions-poll");
 
 // Minimal fetch Response stand-in. `headers.get(name)` is case-insensitive
 // to match the real Headers contract gh() relies on for Retry-After.
@@ -336,5 +342,287 @@ test.describe("deployLaneActivity anchored on mergedAt (#21)", () => {
     const act = await deployLaneActivity({ mergedAt });
     expect(act.runsSinceMerge).toBe(1);
     expect(act.deployCompletedSinceMerge).toBe(false);
+  });
+});
+
+
+// ── FIX 1 (#82): headChecksTrulyGreen + makePreviewCanaryRecoverer ──────
+//
+// Pure-injection unit tests (inject `_gh` / `_headChecksTrulyGreen`); no
+// network, no globalThis.fetch swap. headChecksTrulyGreen is the
+// feature-branch port of the nudge's headIsTrulyGreen; the recoverer is the
+// in-spec preview canary recovery wired onto deploy-pill's onBudgetExhausted
+// seam.
+
+// Scripted gh() double for headChecksTrulyGreen: returns the queued
+// check_runs page for any `/check-runs` path and statuses for `/status`.
+function checksGhDouble({ checkRuns = [], statuses = [] } = {}) {
+  const calls = [];
+  const fn = async (pathname) => {
+    calls.push(pathname);
+    if (pathname.includes("/check-runs")) return { check_runs: checkRuns };
+    if (pathname.endsWith("/status")) return { statuses };
+    throw new Error(`unexpected gh path ${pathname}`);
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test.describe("headChecksTrulyGreen (#82 feature-branch port)", () => {
+  test("(a) all required green ⇒ ok", async () => {
+    const _gh = checksGhDouble({
+      checkRuns: [
+        { name: "validate-content", status: "completed", conclusion: "success", started_at: "2026-01-01T00:00:00Z" },
+      ],
+    });
+    const res = await headChecksTrulyGreen({ sha: "abc", requiredContexts: ["validate-content"], _gh });
+    expect(res.ok).toBe(true);
+  });
+
+  test("CORRECTION #1: a prefixed `editorial / validate-content` run satisfies the bare context", async () => {
+    const _gh = checksGhDouble({
+      checkRuns: [
+        { name: "editorial / validate-content", status: "completed", conclusion: "success", started_at: "2026-01-01T00:00:00Z" },
+      ],
+    });
+    const res = await headChecksTrulyGreen({ sha: "abc", requiredContexts: ["validate-content"], _gh });
+    expect(res.ok, "the suffix-tolerant match must find the workflow/job-prefixed check-run").toBe(true);
+  });
+
+  test("CORRECTION #1: tolerant match also applies to a legacy commit status context", async () => {
+    const _gh = checksGhDouble({
+      checkRuns: [],
+      statuses: [{ context: "editorial / validate-content", state: "success" }],
+    });
+    const res = await headChecksTrulyGreen({ sha: "abc", requiredContexts: ["validate-content"], _gh });
+    expect(res.ok).toBe(true);
+  });
+
+  test("(b) a required run still in_progress ⇒ not ok (stub hazard)", async () => {
+    const _gh = checksGhDouble({
+      checkRuns: [{ name: "validate-content", status: "in_progress", conclusion: null }],
+    });
+    const res = await headChecksTrulyGreen({ sha: "abc", requiredContexts: ["validate-content"], _gh });
+    expect(res.ok).toBe(false);
+    expect(res.why).toMatch(/still in_progress/);
+  });
+
+  test("(c) a cancelled run + a later success (same name) ⇒ ok (decisive = success)", async () => {
+    const _gh = checksGhDouble({
+      checkRuns: [
+        { name: "validate-content", status: "completed", conclusion: "cancelled", started_at: "2026-01-01T00:00:00Z" },
+        { name: "validate-content", status: "completed", conclusion: "success", started_at: "2026-01-01T00:05:00Z" },
+      ],
+    });
+    const res = await headChecksTrulyGreen({ sha: "abc", requiredContexts: ["validate-content"], _gh });
+    expect(res.ok).toBe(true);
+  });
+
+  test("(d) all runs cancelled ⇒ not ok", async () => {
+    const _gh = checksGhDouble({
+      checkRuns: [{ name: "validate-content", status: "completed", conclusion: "cancelled", started_at: "2026-01-01T00:00:00Z" }],
+    });
+    const res = await headChecksTrulyGreen({ sha: "abc", requiredContexts: ["validate-content"], _gh });
+    expect(res.ok).toBe(false);
+    expect(res.why).toMatch(/all runs cancelled/);
+  });
+
+  test("(e) missing context (no run, no status) ⇒ not ok", async () => {
+    const _gh = checksGhDouble({
+      checkRuns: [{ name: "some-unrelated-check", status: "completed", conclusion: "success", started_at: "2026-01-01T00:00:00Z" }],
+      statuses: [],
+    });
+    const res = await headChecksTrulyGreen({ sha: "abc", requiredContexts: ["validate-content"], _gh });
+    expect(res.ok).toBe(false);
+    expect(res.why).toMatch(/missing on head sha/);
+  });
+
+  test("(f) a red required run ⇒ not ok", async () => {
+    const _gh = checksGhDouble({
+      checkRuns: [{ name: "validate-content", status: "completed", conclusion: "failure", started_at: "2026-01-01T00:00:00Z" }],
+    });
+    const res = await headChecksTrulyGreen({ sha: "abc", requiredContexts: ["validate-content"], _gh });
+    expect(res.ok).toBe(false);
+    expect(res.why).toMatch(/validate-content=failure/);
+  });
+
+  test("an empty requiredContexts throws (guards against an all-pass no-op)", async () => {
+    const _gh = checksGhDouble({ checkRuns: [] });
+    let thrown;
+    try {
+      await headChecksTrulyGreen({ sha: "abc", requiredContexts: [], _gh });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeTruthy();
+  });
+});
+
+// Scripted gh() double for the recoverer: GET `/pulls/{n}` returns `pr`,
+// PUT `/pulls/{n}/merge` runs mergeImpl (default success). Records call
+// counts + the merge init so the test can assert the squash PUT shape.
+function recovererGhDouble({ pr, mergeImpl } = {}) {
+  const calls = { get: 0, merge: 0, mergeInits: [] };
+  const fn = async (pathname, init) => {
+    if (/\/merge$/.test(pathname)) {
+      calls.merge += 1;
+      calls.mergeInits.push(init);
+      if (typeof mergeImpl === "function") return mergeImpl();
+      return { merged: true };
+    }
+    calls.get += 1;
+    return pr;
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+const OUR_CANARY = (overrides = {}) => ({
+  state: "open",
+  head: { ref: "cms/posts/x", sha: "sha-1" },
+  base: { ref: "feat/preview-branch" },
+  labels: [{ name: "automated-test" }],
+  ...overrides,
+});
+
+test.describe("makePreviewCanaryRecoverer (#82 in-spec recovery)", () => {
+  const greenChecks = async () => ({ ok: true });
+
+  test("(a) an already-merged PR ⇒ extends (>0), never issues a merge PUT", async () => {
+    const _gh = recovererGhDouble({ pr: { merged: true } });
+    const rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => 7,
+      _gh,
+      _headChecksTrulyGreen: greenChecks,
+    });
+    const grant = await rec();
+    expect(grant).toBeGreaterThan(0);
+    expect(_gh.calls.merge).toBe(0);
+    expect(rec.verdict.kind).toBe("merged-awaiting-deploy");
+  });
+
+  test("(b) a closed (unmerged) canary ⇒ gives up (0), verdict canary-closed", async () => {
+    const _gh = recovererGhDouble({ pr: { state: "closed" } });
+    const rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => 7,
+      _gh,
+      _headChecksTrulyGreen: greenChecks,
+    });
+    const grant = await rec();
+    expect(grant).toBe(0);
+    expect(_gh.calls.merge).toBe(0);
+    expect(rec.verdict.kind).toBe("canary-closed");
+  });
+
+  test("(c) base mismatch / missing label / non-cms head ⇒ no merge PUT, verdict not-our-canary", async () => {
+    // base mismatch
+    let _gh = recovererGhDouble({ pr: OUR_CANARY({ base: { ref: "main" } }) });
+    let rec = makePreviewCanaryRecoverer({ base: "feat/preview-branch", getPrNumber: () => 7, _gh, _headChecksTrulyGreen: greenChecks });
+    await rec();
+    expect(_gh.calls.merge, "base mismatch must not merge").toBe(0);
+    expect(rec.verdict.kind).toBe("not-our-canary");
+
+    // missing automated-test label
+    _gh = recovererGhDouble({ pr: OUR_CANARY({ labels: [] }) });
+    rec = makePreviewCanaryRecoverer({ base: "feat/preview-branch", getPrNumber: () => 7, _gh, _headChecksTrulyGreen: greenChecks });
+    await rec();
+    expect(_gh.calls.merge, "missing label must not merge").toBe(0);
+    expect(rec.verdict.kind).toBe("not-our-canary");
+
+    // non-cms/ head ref
+    _gh = recovererGhDouble({ pr: OUR_CANARY({ head: { ref: "feature/foo", sha: "s" } }) });
+    rec = makePreviewCanaryRecoverer({ base: "feat/preview-branch", getPrNumber: () => 7, _gh, _headChecksTrulyGreen: greenChecks });
+    await rec();
+    expect(_gh.calls.merge, "non-cms head must not merge").toBe(0);
+    expect(rec.verdict.kind).toBe("not-our-canary");
+  });
+
+  test("(d) checks not green ⇒ no merge PUT, extends (>0)", async () => {
+    const _gh = recovererGhDouble({ pr: OUR_CANARY() });
+    const rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => 7,
+      _gh,
+      _headChecksTrulyGreen: async () => ({ ok: false, why: "validate-content=failure" }),
+    });
+    const grant = await rec();
+    expect(grant).toBeGreaterThan(0);
+    expect(_gh.calls.merge).toBe(0);
+    expect(rec.verdict.kind).toBe("checks-not-green");
+  });
+
+  test("(e) green + open + our canary ⇒ exactly one squash merge PUT, verdict recovery-merged", async () => {
+    const _gh = recovererGhDouble({ pr: OUR_CANARY() });
+    const rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => 7,
+      _gh,
+      _headChecksTrulyGreen: greenChecks,
+    });
+    const grant = await rec();
+    expect(grant).toBeGreaterThan(0);
+    expect(_gh.calls.merge).toBe(1);
+    expect(_gh.calls.mergeInits[0].method).toBe("PUT");
+    expect(JSON.parse(_gh.calls.mergeInits[0].body)).toEqual({ merge_method: "squash" });
+    expect(rec.verdict.kind).toBe("recovery-merged");
+  });
+
+  test("(f) merge throws 'already merged' ⇒ verdict merged-awaiting-deploy, extends (>0)", async () => {
+    const _gh = recovererGhDouble({
+      pr: OUR_CANARY(),
+      mergeImpl: () => {
+        throw new Error("GitHub API 405 Method Not Allowed: Pull Request is already merged");
+      },
+    });
+    const rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => 7,
+      _gh,
+      _headChecksTrulyGreen: greenChecks,
+    });
+    const grant = await rec();
+    expect(grant).toBeGreaterThan(0);
+    expect(_gh.calls.merge).toBe(1);
+    expect(rec.verdict.kind).toBe("merged-awaiting-deploy");
+  });
+
+  test("(g) the maxTotalExtendMs ceiling is enforced ⇒ eventually returns 0 (no-deploy-fired)", async () => {
+    const _gh = recovererGhDouble({ pr: OUR_CANARY() });
+    const rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => 7,
+      perDeployMs: 5 * 60 * 1000,
+      minExtendMs: 3 * 60 * 1000,
+      maxTotalExtendMs: 6 * 60 * 1000,
+      _gh,
+      _headChecksTrulyGreen: greenChecks,
+    });
+    let last;
+    for (let i = 0; i < 5; i++) last = await rec();
+    expect(last, "once the extension budget is spent the recoverer gives up").toBe(0);
+    expect(rec.verdict.kind).toBe("no-deploy-fired");
+    expect(rec.verdict.realMiss).toBe(true);
+  });
+
+  test("no PR yet (getPrNumber resolves null) ⇒ no merge PUT, extends (>0)", async () => {
+    const _gh = recovererGhDouble({ pr: OUR_CANARY() });
+    const rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => null,
+      _gh,
+      _headChecksTrulyGreen: greenChecks,
+    });
+    const grant = await rec();
+    expect(grant).toBeGreaterThan(0);
+    expect(_gh.calls.get, "no PR ⇒ never even fetch the PR").toBe(0);
+    expect(_gh.calls.merge).toBe(0);
+    expect(rec.verdict.kind).toBe("no-pr-yet");
+  });
+
+  test("constructor guards: missing base or getPrNumber throw", () => {
+    expect(() => makePreviewCanaryRecoverer({ getPrNumber: () => 1 })).toThrow(/requires base/);
+    expect(() => makePreviewCanaryRecoverer({ base: "feat/x" })).toThrow(/requires getPrNumber/);
   });
 });

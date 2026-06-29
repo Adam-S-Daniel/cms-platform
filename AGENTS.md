@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.42`** — `v0.1.0`–`v0.1.42` are all tagged GitHub
+**Current release: `v0.1.43`** — `v0.1.0`–`v0.1.43` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.42)
+## Version history (v0.1.0 → v0.1.43)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1476,6 +1476,37 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   than masking a real error. Stacks on the v0.1.41 reopenForPublishedDelete remount.
   Spec-helper only.
 
+- **v0.1.43** (2026-06-29) — **#82 preview-loop in-spec stale-snapshot recovery +
+  cms-unpublish-republish setup self-heal.**
+  - **#82:** the preview CMS loops timed out at the deploy-chain wait because the
+    canary sub-PR (head `cms/*`, BASE = the parent preview-PR HEAD branch, NOT
+    main) goes all-required-green + auto-merge-armed but `mergeStateStatus=BLOCKED`
+    (the #1812 stale-snapshot), and the cron `cms-automerge-nudge` can't cover it
+    (5-min cadence > the ~720s loop budget; it targets main.json checks + merges
+    into main). ROOT GAP found by audit: **none of the 5 preview specs passed
+    `onBudgetExhausted`** (every prod spec does) — so their `waitForChangeReflected`
+    wait had NO recovery. Fix: new shared `makePreviewCanaryRecoverer`
+    (github-actions-poll.js, sibling of `makeDeployQueueExtender`) + `headChecksTrulyGreen`
+    (port of the nudge's fresh-requery: stub-hazard pending-guard, ignore CANCELLED) —
+    wired into every preview loop's `onBudgetExhausted`; on a green-but-BLOCKED OWN
+    canary (triple guard: `cms/` head + base===preview branch + `automated-test`
+    label) it forces a synchronous SQUASH `pulls.merge` into the preview branch to
+    dislodge the stale snapshot. Suffix-tolerant context match (`validate-content`
+    ruleset context ↔ `editorial / validate-content` check-run name). Only the legs
+    with a real canary sub-PR are wired (the tags-delete leg + delete-preview DELETE
+    commit directly via the shim — no sub-PR to recover).
+  - **Self-heal:** a prior FAILED cms-unpublish-republish run (or the afterAll's
+    fire-and-forget reset that never landed) could leave the canary `published:true`
+    on main / a lingering branch / the URL serving — and the old setup THREW,
+    bricking the next run (hit twice this session). Replaced the throw with
+    detect-then-heal: `computeBaselineHeal` (new pure module) drives close-stale-PR +
+    reset-published:false-**waiting-for-merge** + URL-404 wait, then a post-heal
+    assertion that only throws if un-healable. Reuses existing helpers; logs loudly;
+    only ever touches the known throw-away canary fixture.
+  Spec/helper-only (no theme change). +unit tests (github-actions-poll.test.js,
+  canary-baseline-heal.test.js).
+
+## Consumers
 ## Consumers
 ## Consumers
 ## Consumers
