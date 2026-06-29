@@ -55,7 +55,18 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { getPat, HOST_REPO } = require("./decap-pat");
-const { addLabel, gh, makePreviewCanaryRecoverer } = require("./github-actions-poll");
+const {
+  addLabel,
+  gh,
+  makePreviewCanaryRecoverer,
+  waitForMerge,
+  makeDeployQueueExtender,
+} = require("./github-actions-poll");
+const {
+  reopenForPublishedDelete,
+  clickEditorDelete,
+  confirmEditorDelete,
+} = require("./cms-editor-ui");
 const { previewTarget } = require("./cms-host");
 const { runCmsLoop } = require("./run-cms-loop");
 
@@ -88,13 +99,14 @@ const PR_HEAD_REF = process.env.PR_HEAD_REF || "";
 const PILL_MOUNT_SLUG = "canary-page";
 
 // Two editorial-workflow auto-merge cycles end to end (seed publish +
-// delete) plus two deploy-preview waits and the in-browser drive of
-// both. deploy-preview is lighter than deploy-production but the
-// editorial-workflow + required-check matrix on the head branch is the
-// same shape; 30 min covers a busy-runner day. Retries disabled — this
-// mutates real PR-branch state, so a retry just re-walks the same
-// broken chain (matches every sibling loop spec).
-const TEST_TIMEOUT_MS = 30 * 60 * 1000;
+// delete) plus two deploy-preview waits and the in-browser drive of both.
+// Seed publish + waitForMerge (<=25m) + reopenForPublishedDelete (<=25m) +
+// the delete auto-merge/deploy wait no longer fit a 30-min budget; the
+// prod sibling runs at 80 min for the same shape, so 70 min covers a busy
+// preview runner while staying under the workflow job timeout. Retries
+// disabled -- this mutates real PR-branch state, so a retry just re-walks
+// the same broken chain (matches every sibling loop spec).
+const TEST_TIMEOUT_MS = 70 * 60 * 1000;
 
 test.describe.configure({
   mode: "serial",
@@ -219,7 +231,7 @@ test(
     // auto-merges into the head branch, exactly like
     // cms-publish-loop-preview.spec.js) → deploy-preview → URL 200s
     // with the body marker.
-    await runCmsLoop(page, {
+    const { pr: seedPr } = await runCmsLoop(page, {
       target: { adminUrl: PREVIEW_ADMIN, pillId: PILL_PREVIEW },
       prNumber: PR_NUMBER,
       seedAuth: true,
@@ -277,6 +289,23 @@ test(
         makePreviewCanaryRecoverer({ base: PR_HEAD_REF, getPrNumber: () => pr && pr.number }),
     });
 
+    // ── 1b. Wait for the seed create PR to ACTUALLY merge ──────────
+    // Load-bearing precondition (mirrors cms-delete-published.spec.js
+    // step 2b): until the seed cms/e2e/<slug> editorial branch is gone,
+    // Decap's loadUnpublishedEntry re-hydrates the entry as an OPEN
+    // editorial draft, and the delete click then hits
+    // onDeleteUnpublishedChanges — dropping only the draft branch, never
+    // the head branch. The preview URL would never 404 and the leg would
+    // time out at the 12-min URL gate. This is the #1815 / #1771 failure
+    // mode the prod spec fixed.
+    await test.step("Wait for the seed create PR to merge before reopening for delete", async () => {
+      expect(
+        seedPr && seedPr.number,
+        "seed create PR number captured for merge wait",
+      ).toBeTruthy();
+      await waitForMerge({ prNumber: seedPr.number, timeoutMs: 25 * 60 * 1000 });
+    });
+
     // ── 2. DELETE leg — UI-delete the entry, assert the URL 404s ───
     // Shared spine with `save:false` (the delete click IS the
     // mutation) and `ready:'none'` (Decap commits the delete ref
@@ -290,54 +319,32 @@ test(
       prNumber: PR_NUMBER,
       seedAuth: false,
       openEntry: async (p) => {
-        await p.goto(`${PREVIEW_ADMIN}#/collections/e2e/entries/${slug}`, {
-          waitUntil: "domcontentloaded",
-        });
-        await expect(p.getByRole("textbox", { name: /^Title$/i })).toBeVisible({
-          timeout: 30_000,
-        });
+        // Poll-reload (bouncing through the admin root each attempt)
+        // until the editorial Status chip is GONE and "Delete published
+        // entry" is present — i.e. Decap sees the entry as PUBLISHED, not
+        // as an open draft. crossCheck adapts the prod spec's
+        // fileExistsOnMain to the preview head branch via fileShaOnBranch,
+        // so the error message can distinguish "Decap is slow" from "the
+        // seed merge never landed". (cms-editor-ui.js:336)
+        await reopenForPublishedDelete(
+          p,
+          `${PREVIEW_ADMIN}#/collections/e2e/entries/${slug}`,
+          {
+            crossCheck: async () => (await fileShaOnBranch(filePath, PR_HEAD_REF)) != null,
+            adminUrl: PREVIEW_ADMIN,
+          },
+        );
       },
       mutate: async (p) => {
-        // Decap renders delete either as a top-level button or behind
-        // the entry-status menu, depending on editorial state. Try the
-        // direct button, fall back to the status menu. Pin a timeout on
-        // every action so a UI-shape change fails in ~30s, not at the
-        // outer test timeout. Mirrors cms-delete-published.spec.js
-        // step 4 exactly.
-        const trigger = p.getByRole("button", { name: /delete (published )?entry/i }).first();
-        if (await trigger.isVisible({ timeout: 5_000 }).catch(() => false)) {
-          await trigger.click({ timeout: 30_000 });
-        } else {
-          await p
-            .getByRole("button", {
-              name: /^(Status:|Published$|In Review$|Ready$|Draft$)/i,
-            })
-            .first()
-            .click({ timeout: 30_000 });
-          await p
-            .getByRole("menuitem", {
-              name: /delete (published )?entry/i,
-            })
-            .first()
-            .click({ timeout: 30_000 });
-        }
-        // Native confirm() is handled by the persistent dialog
-        // listener registered at the top of the test. If Decap used
-        // an in-page modal instead, click its confirm button.
-        const confirmInPageModal = p.getByRole("button", {
-          name: /^(delete|confirm|yes|ok)$/i,
-        });
-        await confirmInPageModal
-          .first()
-          .click({ timeout: 5_000 })
-          .catch((err) => {
-            console.debug(
-              "[cms-delete-published-preview] no in-page confirm button " +
-                "(Decap likely used native confirm() — handled by the " +
-                "persistent dialog listener):",
-              err && err.message,
-            );
-          });
+        // confirmEditorDelete arms a waitForRequest(POST /git/trees)
+        // BEFORE the click and awaits it as positive proof Decap
+        // dispatched the git-data-API published-delete (throws at the
+        // real fault site in 60s if no dispatch — instead of surfacing a
+        // silent no-op 720s later in the URL-404 wait). clickEditorDelete
+        // finds the top-level toolbar Delete button. The native confirm()
+        // is accepted by the persistent page.on("dialog", d => d.accept())
+        // registered at line 162 — do NOT add a second accepter.
+        await confirmEditorDelete(p, () => clickEditorDelete(p));
       },
       save: false,
       ready: "none",
@@ -424,6 +431,10 @@ test(
         return status >= 400 && status < 500;
       },
       urlTimeoutMs: 12 * 60 * 1000,
+      // Mirror prod step 5 (cms-delete-published.spec.js:477): extend the
+      // deploy budget through queue contention. NOT makePreviewCanaryRecoverer —
+      // see the recoverer-wiring rationale below.
+      makeOnBudgetExhausted: () => makeDeployQueueExtender(),
     });
 
     // ── 3. Final ground-truth assertion ────────────────────────────

@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.43`** — `v0.1.0`–`v0.1.43` are all tagged GitHub
+**Current release: `v0.1.44`** — `v0.1.0`–`v0.1.44` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.43)
+## Version history (v0.1.0 → v0.1.44)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1506,6 +1506,30 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   Spec/helper-only (no theme change). +unit tests (github-actions-poll.test.js,
   canary-baseline-heal.test.js).
 
+- **v0.1.44** (2026-06-29) — **cms-delete-published-preview delete-leg
+  editorial-limbo migration (surfaced verifying #82).** While verifying #82 on a
+  PROTECTED preview branch, the delete-preview DELETE leg timed out at
+  `getByRole('menuitem', /delete (published )?entry/i)` — the SAME hand-rolled
+  editorial-limbo delete-click bug fixed for the prod delete specs in v0.1.39
+  (layer 10), never migrated to the preview variant. Fix (PART 1, spec-only):
+  migrate the delete leg to the proven `reopenForPublishedDelete` (reopen in the
+  PUBLISHED state on the preview admin) + `confirmEditorDelete(() =>
+  clickEditorDelete())` (dispatch-proof via a POST /git/trees watcher), after a
+  `waitForMerge` on the captured seed PR; delete-leg budget via
+  `makeDeployQueueExtender`; TEST_TIMEOUT 30->70 min + the workflow timeout
+  35->75. The delete then LANDS on the protected multi-segment preview branch
+  via the EXISTING shim delete-ref recovery — Decap PATCHes
+  `git/refs/heads/${encodeURIComponent(backend.branch)}`, so a multi-segment
+  preview branch arrives percent-encoded (`heads/cms%2F...`) as one raw segment
+  that the shim's single-segment regex already matches (verified). DEFERRED
+  (PART 2, follow-up issue): scope the shim delete-ref recovery to the configured
+  backend branch (read from commit.json) so it never over-recovers a stray
+  multi-segment PATCH — a safety hardening that touches the proven prod shim, so
+  it is tracked separately rather than bundled here. #82's deploy-chain
+  stale-snapshot recovery (cms-preview-loops, the publish/unpublish/tags legs)
+  was verified green at v0.1.43; this closes the delete-preview gap.
+
+## Consumers
 ## Consumers
 ## Consumers
 ## Consumers
