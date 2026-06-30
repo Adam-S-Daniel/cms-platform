@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.44`** — `v0.1.0`–`v0.1.44` are all tagged GitHub
+**Current release: `v0.1.45`** — `v0.1.0`–`v0.1.45` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.44)
+## Version history (v0.1.0 → v0.1.45)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1528,6 +1528,22 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   it is tracked separately rather than bundled here. #82's deploy-chain
   stale-snapshot recovery (cms-preview-loops, the publish/unpublish/tags legs)
   was verified green at v0.1.43; this closes the delete-preview gap.
+
+- **v0.1.45** (2026-06-29) — **`skills-sync.yml` is now a no-op for a no-skills
+  consumer (issue #83; the precondition for adamdaniel#2007-P7).** The reusable
+  unconditionally `mkdir -p "$DEST"` + `rsync -a --delete`'d the platform skills
+  into the consumer and opened a "Sync skills" PR — so a consumer that keeps NO
+  local skills mirror (jodidaniel ships `skills-sync.yml` with no `.claude/skills`)
+  got one force-created + weekly PR noise, and adamdaniel#2007-P7 could not drop
+  its mirror durably (the next sync would re-create it). Fix: gate the sync on
+  destination presence — `if [ ! -e "$DEST" ] && [ ! -L "$DEST" ]` (nothing at
+  DEST: not a dir, file, or even a symlink) → echo + clean `exit 0`. Opt-IN by
+  DEST presence; the platform never forces a mirror into existence. Preserves
+  workflow-set parity (the canonical workflow stays present on EVERY consumer —
+  only its behavior is data-driven; option (b) "drop it from the canonical set"
+  rejected as it forks the workflow set + the parity check). Gate unit-tested
+  across absent / real-dir / symlink->dir / dangling-symlink / empty-dir (skips
+  ONLY on fully-absent). Workflow-only; no theme/gem change.
 
 ## Consumers
 ## Consumers
