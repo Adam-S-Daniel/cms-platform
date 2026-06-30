@@ -2,6 +2,13 @@
 # A site calls this on a schedule (or dispatch); it opens a PR when the site's
 # skills drift from the platform at the pinned ref. Platform-authoritative:
 # the destination is rsync --delete'd to match the platform exactly.
+# Opt-in by destination presence (issue #83): a consumer that keeps no local
+# skills mirror (no entry at `dest`) opts out — this is a no-op for it and we
+# never force a mirror into existence. The canonical workflow stays present on
+# every consumer (workflow-set parity); only its BEHAVIOR is data-driven.
+# To OPT IN, a new consumer commits a tracked entry under `dest` first (e.g.
+# `.claude/skills/.gitkeep`) — git doesn't track empty dirs, so an unseeded
+# `dest` reads as absent and the sync stays a no-op until it is seeded.
 name: Skills sync (reusable)
 
 on:
@@ -45,6 +52,16 @@ jobs:
           PLATFORM: ${{ inputs.platform_repo }}
         run: |
           set -euo pipefail
+          # Opt-out by absence: if the consumer keeps no skills mirror (nothing
+          # at DEST — not a dir, file, or even a symlink), do NOT create one.
+          # Skip cleanly so a no-skills consumer (e.g. jodidaniel) stops getting
+          # a force-created `.claude/skills` + a noise "Sync skills" PR, and so
+          # adamdaniel#2007-P7 can drop its mirror durably. (issue #83)
+          if [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; then
+            echo "consumer keeps no '$DEST' mirror — skills-sync is a no-op here (issue #83)"
+            rm -rf .cms-platform
+            exit 0
+          fi
           mkdir -p "$DEST"
           rsync -a --delete .cms-platform/skills/ "$DEST"/
           rm -rf .cms-platform
