@@ -114,6 +114,10 @@ const PLATFORM_META_SPECS = [
   // files must stay in lockstep. Reads .github/workflows + scripts + scaffold
   // (platform source), so platform-internal / self-CI only.
   "dev-hooks-sync.test.js",
+  // #123 — locks the visual-regression PROD baseline origin: PROD_BASE in
+  // regression-video.spec.js must derive from APEX_DOMAIN (the consumer apex),
+  // never a hardcoded site. Reads the platform e2e source; self-CI only.
+  "regression-prod-base.test.js",
   "decap-config-render-parity.test.js",
   // #5 GOAL 2 — drives scripts/render-decap-config.rb + reads theme/admin
   // (config.base.yml + field_library.yml) to render a $ref fixture and assert

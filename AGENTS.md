@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.46`** — `v0.1.0`–`v0.1.46` are all tagged GitHub
+**Current release: `v0.1.47`** — `v0.1.0`–`v0.1.47` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.46)
+## Version history (v0.1.0 → v0.1.47)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1563,6 +1563,20 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   on new sites. New `e2e/dev-hooks-sync.test.js` locks the reusable FILES list ⟷
   scaffolder seed list ⟷ canonical files in lockstep (+ asserts the chain no
   longer carries the P7-removed skills-mirror guard). No theme/gem change.
+
+- **v0.1.47** (2026-06-29) — **visual-regression PROD baseline was hardcoded to
+  adamdaniel.ai (issue #123).** `e2e/regression-video.spec.js` set
+  `const PROD_BASE = "https://adamdaniel.ai"`, so the regression video pipeline
+  captured every changed page's PRODUCTION screenshot from Adam's site — meaning
+  EVERY non-adamdaniel consumer (jodidaniel + all future sites) diffed its PR
+  against a different site and always scored "visually different" (long
+  misattributed to "no committed baselines"); adamdaniel worked only by
+  coincidence. Fix: derive `PROD_BASE` from the consumer apex —
+  `process.env.PROD_BASE_URL || (APEX_DOMAIN ? https://$APEX_DOMAIN : adamdaniel.ai)`.
+  `visual-regression.yml` already exports `APEX_DOMAIN: vars.CMS_APEX` at JOB
+  level, so the regression-spec step already inherits it — no workflow change.
+  New `e2e/regression-prod-base.test.js` locks PROD_BASE to the apex env (never a
+  bare hardcoded site). Harness-only; no theme/gem change.
 
 ## Consumers
 ## Consumers

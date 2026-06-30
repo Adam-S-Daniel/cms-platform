@@ -13,7 +13,15 @@ try {
 }
 
 const allPages = [...(changes.changed || []), ...(changes.new || []), ...(changes.unchanged || [])];
-const PROD_BASE = "https://adamdaniel.ai";
+// Production baseline origin for the per-page diff. Derived from the CONSUMING
+// site's apex (CMS_APEX, exported as APEX_DOMAIN by visual-regression.yml's
+// job-level env) so every consumer compares its PR against ITS OWN production.
+// A hardcoded "https://adamdaniel.ai" here made every non-adamdaniel consumer
+// diff against Adam's site → always "visually different" (issue #123). The
+// adamdaniel.ai literal remains only as a last-resort fallback.
+const PROD_BASE =
+  process.env.PROD_BASE_URL ||
+  (process.env.APEX_DOMAIN ? `https://${process.env.APEX_DOMAIN}` : "https://adamdaniel.ai");
 const OUTPUT_DIR = path.join(__dirname, "..", "screenshots", "regression");
 
 fs.mkdirSync(path.join(OUTPUT_DIR, "pr"), { recursive: true });
