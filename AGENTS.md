@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.45`** — `v0.1.0`–`v0.1.45` are all tagged GitHub
+**Current release: `v0.1.46`** — `v0.1.0`–`v0.1.46` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1124,7 +1124,7 @@ Still open:
 - Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
   pins don't resolve until a release exists).
 
-## Version history (v0.1.0 → v0.1.45)
+## Version history (v0.1.0 → v0.1.46)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1544,6 +1544,25 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   rejected as it forks the workflow set + the parity check). Gate unit-tested
   across absent / real-dir / symlink->dir / dangling-symlink / empty-dir (skips
   ONLY on fully-absent). Workflow-only; no theme/gem change.
+
+- **v0.1.46** (2026-06-29) — **centralize the secrets-scan + lint-staged
+  pre-commit guards (dev-hooks-sync, issue #116; also unblocks adamdaniel#2007-P7).**
+  The local pre-commit guards were vendored only on adamdaniel (tangled into the
+  skills-mirror `bootstrap.sh`); jodidaniel had none (CI-only). The platform
+  already owned canonical copies. New reusable **`dev-hooks-sync.yml`** (a
+  `skills-sync` twin) down-syncs the canonical guard files —
+  `scripts/{secrets-scan,lint-staged,setup-hooks}.sh`, `.githooks/pre-commit`,
+  `.gitconfig-fragment` — to a consumer (PR on drift). New
+  **`scripts/setup-hooks.sh`** is the slim, idempotent git-config wiring
+  (`include.path`/`core.hooksPath`, NO skills) — the section-3 logic extracted
+  from the old consumer bootstrap — run from a consumer `.claude/settings.json`
+  SessionStart so guards are active locally. The **`dev-hooks-sync` caller** is
+  added to `examples/site/.github/workflows/` → carried by the canonical-set
+  parity check (auto-required on every consumer) AND seeded by the scaffolder;
+  `scaffold/create-site.js` now seeds the guard files + the SessionStart wiring
+  on new sites. New `e2e/dev-hooks-sync.test.js` locks the reusable FILES list ⟷
+  scaffolder seed list ⟷ canonical files in lockstep (+ asserts the chain no
+  longer carries the P7-removed skills-mirror guard). No theme/gem change.
 
 ## Consumers
 ## Consumers
