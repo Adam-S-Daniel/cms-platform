@@ -103,6 +103,24 @@ async function main() {
   );
   copyTree(path.join(PLATFORM_ROOT, "skills"), path.join(target, ".claude/skills"));
 
+  // Pre-commit guards (secrets-scan + lint-staged) — platform-authoritative,
+  // kept current by .github/workflows/dev-hooks-sync.yml. Seed the canonical
+  // files + a SessionStart that wires them locally, so the guards are active on
+  // the first clone (not only after the first sync PR lands). (issue #116)
+  for (const f of [
+    "scripts/secrets-scan.sh",
+    "scripts/lint-staged.sh",
+    "scripts/setup-hooks.sh",
+    ".githooks/pre-commit",
+    ".gitconfig-fragment",
+  ]) {
+    const dst = path.join(target, f);
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(path.join(PLATFORM_ROOT, f), dst);
+    if (/\.sh$|pre-commit$/.test(f)) fs.chmodSync(dst, 0o755);
+  }
+  write(target, ".claude/settings.json", DEV_HOOKS_SETTINGS_JSON);
+
   write(target, "_config.yml", configYml({ title, domain, author, owner, repo }));
   write(target, "Gemfile", GEMFILE);
   write(
@@ -229,6 +247,31 @@ exclude:
   - admin/collections.site.yml.example
 `;
 }
+
+// SessionStart wiring for the platform-delivered pre-commit guards. Runs the
+// (sync-managed) setup-hooks.sh idempotently each session so secrets-scan +
+// lint-staged are wired into git config on every clone. (issue #116)
+const DEV_HOOKS_SETTINGS_JSON =
+  JSON.stringify(
+    {
+      hooks: {
+        SessionStart: [
+          {
+            matcher: "startup|resume",
+            hooks: [
+              {
+                type: "command",
+                command: 'bash "$CLAUDE_PROJECT_DIR/scripts/setup-hooks.sh"',
+                timeout: 30,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    null,
+    2,
+  ) + "\n";
 
 const GEMFILE = `source "https://rubygems.org"
 gem "jekyll", "~> 4.3"

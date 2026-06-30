@@ -1,0 +1,78 @@
+# Reusable down-sync of the platform's canonical pre-commit guard files into a
+# consuming site. A site calls this on a schedule (or dispatch); it opens a PR
+# when the site's guard files drift from the platform at the pinned ref.
+# Platform-authoritative: each listed file is overwritten to match the platform
+# exactly. Centralizes the secrets-scan + lint-staged pre-commit guards so every
+# consumer (and every future scaffolded site) carries the same checks (issue #116).
+name: Dev-hooks sync (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo:
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        type: string
+        default: main
+    secrets:
+      gh_token:
+        description: "Optional PAT so the sync PR can trigger CI; falls back to GITHUB_TOKEN."
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+      - name: Fetch platform guard files
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+      - name: Sync guard files and open a PR if changed
+        env:
+          GH_TOKEN: ${{ secrets.gh_token || github.token }}
+          REF: ${{ inputs.platform_ref }}
+          PLATFORM: ${{ inputs.platform_repo }}
+        run: |
+          set -euo pipefail
+          # Canonical pre-commit guard files (platform-authoritative). Keep this
+          # list in lockstep with scaffold/create-site.js + .gitconfig-fragment.
+          FILES=(
+            scripts/secrets-scan.sh
+            scripts/lint-staged.sh
+            scripts/setup-hooks.sh
+            .githooks/pre-commit
+            .gitconfig-fragment
+          )
+          for f in "${FILES[@]}"; do
+            src=".cms-platform/$f"
+            if [[ ! -f "$src" ]]; then
+              echo "::error::canonical $f missing in ${PLATFORM}@${REF}"; exit 1
+            fi
+            mkdir -p "$(dirname "$f")"
+            cp "$src" "$f"
+          done
+          chmod +x scripts/secrets-scan.sh scripts/lint-staged.sh scripts/setup-hooks.sh .githooks/pre-commit
+          rm -rf .cms-platform
+          if git diff --quiet -- "${FILES[@]}"; then
+            echo "dev-hooks already in sync with ${PLATFORM}@${REF}"; exit 0
+          fi
+          BRANCH="platform/dev-hooks-sync"
+          git config user.name  "cms-platform-bot"
+          git config user.email "cms-platform-bot@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "${FILES[@]}"
+          git commit -m "chore: sync pre-commit guard files from ${PLATFORM}@${REF}"
+          git push -f origin "$BRANCH"
+          gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
+            --title "Sync pre-commit guards from ${PLATFORM}@${REF}" \
+            --body "Automated dev-hooks sync from \`${PLATFORM}@${REF}\`. Platform-authoritative: secrets-scan + lint-staged + the local-wiring setup-hooks.sh." \
+          || gh pr edit "$BRANCH" --title "Sync pre-commit guards from ${PLATFORM}@${REF}" \
+            --body "Automated dev-hooks sync from \`${PLATFORM}@${REF}\`."
