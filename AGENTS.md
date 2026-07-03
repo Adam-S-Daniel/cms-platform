@@ -1615,6 +1615,16 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
 
 ## Consumers
 
+**Release fan-out (standing rule, 2026-07-03):** every platform release is
+adopted by **ALL consumers below — adamdaniel.ai AND jodidaniel.com — and
+driven all the way to production for each** (bump PR merged, deploy-production
+green), not just the site that motivated the release. A consumer left on an
+old tag re-inherits every bug the release fixed and drifts from the lockstep
+pins. A bump = workflows `uses:@<tag>` + `platform_ref` inputs + `platform.lock`
++ the Gemfile `cms-platform-theme` `tag:` (+ `bundle lock`), in ONE commit per
+site (see docs/SYNC.md). jodidaniel's missing `CMS_E2E_PAT` scheduled failures
+are pre-existing, not a bump regression.
+
 - **adamdaniel.ai** — consumer #1, user-owned, the dogfood. Migrated to
   gem-delivered admin (PR #1883); live prod `/admin` verified. Daily
   editorial-label-audit adopted. (A loop co-arrival fix #1892 narrowed the host
