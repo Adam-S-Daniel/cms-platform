@@ -677,7 +677,7 @@ the named spec to `PLATFORM_META_SPECS` (or, if it only LOOKED internal because
 it read `${SITE_ROOT}/_site/**`, make it read via `SITE_ROOT` — not a `../scripts`
 / `../scaffold` / `../theme` / `../.github/workflows` source path).
 
-## Editorial-workflow label audit (v0.1.6)
+## Editorial-workflow label audit (v0.1.6; self-heal + label-at-creation v0.1.48)
 
 Decap re-runs its editorial-workflow label migration on **every** `/admin` load
 (the persistent "Decap CMS is adding labels to N of your Editorial Workflow
@@ -688,15 +688,31 @@ shows on prod AND every preview deploy. Guards:
 - `e2e/cms-editorial-label-migration.spec.js` — drives the in-browser test-repo
   backend; asserts the dialog is ABSENT, or gone after dismiss + 30s + reload
   (never survives that cycle).
-- `scripts/audit-editorial-labels.js` — flags open `cms/*` PRs missing exactly
-  one `decap-cms/<status>` label; exits non-zero with `::error::` annotations.
+- `scripts/audit-editorial-labels.js` — flags open `cms/*` PRs missing a
+  `decap-cms/<status>` label; exits non-zero with `::error::` annotations.
+  With `--fix` (the reusable's default since v0.1.48) it SELF-HEALS instead:
+  applies `decap-cms/pending_publish` when the PR carries `cms/ready` (it is
+  literally queued to publish), else `decap-cms/draft`, and only exits
+  non-zero when a fix didn't stick — a red audit now means "needs a human".
+  Motivation: the flag-only audit went red daily for a week (PR #2387,
+  2026-07) while the "adding labels…" dialog sat on prod — scheduled-run
+  failures are invisible, so detect-only was the wrong contract.
 - `.github/workflows/editorial-label-audit.yml` — reusable; consumers wire a
   daily-cron caller (sparse-checks out just the audit script from the platform). It
   MUST pass `--repo ${{ github.repository }}` (v0.1.16): the sparse checkout
   leaves no git repo in `github.workspace`, so a bare `gh pr list` fails
-  `not a git repository`. The ephemeral `cms/e2e-fixture/remove-*` loop-cleanup
-  PRs (no `decap-cms/<status>` label) transiently red the audit until they
-  auto-merge — expected churn, not a bug; see the `editorial-label-audit` skill.
+  `not a git repository`. Self-heal needs `pull-requests: write` from the
+  CALLER (reusable permissions are capped by the caller's grant); with only
+  `read` the fix 403s and falls back to failing loud. Lint-locked by
+  `e2e/editorial-label-audit-repo.test.js`.
+- **Label at creation (v0.1.48):** every non-Decap writer that opens a `cms/*`
+  PR applies `decap-cms/pending_publish` alongside `cms/ready` so the
+  migration never has a target in the first place — the publish-via-auto-merge
+  shim's delete-recovery PRs, `cms-fixture-pr.js` seed/remove fixture PRs, and
+  `sweep-stale-cms-prs.yml`'s two cleanup PRs. (Decap-created editorial PRs
+  label themselves.) The pre-v0.1.48 "`cms/e2e-fixture/remove-*` PRs
+  transiently red the audit — expected churn" caveat is obsolete: those PRs
+  are labelled at creation now, and the audit heals any stragglers.
 
 ## E2E local webServer: decap readiness + :4000 crash resilience
 
@@ -1578,10 +1594,25 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   New `e2e/regression-prod-base.test.js` locks PROD_BASE to the apex env (never a
   bare hardcoded site). Harness-only; no theme/gem change.
 
-## Consumers
-## Consumers
-## Consumers
-## Consumers
+- **v0.1.48** (2026-07-03) — **kill the persistent Decap "adding labels to N of
+  your Editorial Workflow entries" dialog at the source.** Root cause: every
+  NON-Decap writer that opens a `cms/*` PR (publish-via-auto-merge shim
+  delete-recovery, `cms-fixture-pr.js` seed/remove, `sweep-stale-cms-prs.yml`
+  cleanup PRs) labelled it `cms/ready` only — no `decap-cms/<status>` — so
+  Decap's github backend ran its label migration on every `/admin` load for as
+  long as the PR was open, and for these PRs the migration always no-ops
+  ("Skipped migrating": no legacy `refs/meta/_decap_cms` metadata), so the
+  dialog never cleared. Bit hard when adamdaniel #2387 (a delete-recovery PR
+  with a flaky-red `e2e` check) sat open for 3 days: dialog on every prod
+  `/admin` load while the flag-only daily audit went red, unnoticed, all week.
+  Fix, two layers: (1) all four non-Decap `cms/*` PR writers now apply
+  `decap-cms/pending_publish` at creation; (2) `audit-editorial-labels.js`
+  gains `--fix` (reusable default `fix: true`, needs caller
+  `pull-requests: write`) — the daily audit HEALS stragglers instead of only
+  flagging them, and red now means "fix didn't stick", not "needs a label".
+  Lint-locked by `e2e/editorial-label-audit-repo.test.js`; shim behaviour by
+  `e2e/publish-via-auto-merge{.test.js,-browser.spec.js}`.
+
 ## Consumers
 
 - **adamdaniel.ai** — consumer #1, user-owned, the dogfood. Migrated to

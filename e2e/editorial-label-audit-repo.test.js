@@ -17,4 +17,16 @@ test.describe("editorial-label-audit passes the repo to the audit script", () =>
     // caller's repo in a reusable) — not rely on a git checkout that isn't there.
     expect(raw).toMatch(/--repo\s+"?\$\{\{\s*github\.repository\s*\}\}"?/);
   });
+
+  test("self-heal wiring: fix input (default true) → --fix flag + pull-requests: write", () => {
+    // The audit SELF-HEALS by default: an unlabelled editorial PR gets its
+    // decap-cms/<status> label applied by the audit itself instead of only
+    // failing loud for days (the "adding labels…" dialog stayed up on prod
+    // while the daily red run went unnoticed — PR #2387, 2026-07). All three
+    // pieces must stay wired together: the input, the flag pass-through, and
+    // the write permission the label POST needs.
+    expect(raw).toMatch(/fix:\s*\{\s*type:\s*boolean,\s*default:\s*true\s*\}/);
+    expect(raw).toMatch(/\$\{\{\s*inputs\.fix\s*&&\s*'--fix'\s*\|\|\s*''\s*\}\}/);
+    expect(raw).toMatch(/pull-requests:\s*write/);
+  });
 });

@@ -6,7 +6,14 @@
 # label migration on EVERY /admin load until that PR is labeled or closed — so
 # the dialog never clears, on production AND on every preview-* deploy (the
 # editorial state is repo-wide). A consumer wires this to a daily schedule via
-# examples/site; the job fails loud (::error:: annotations) when it finds one.
+# examples/site. With `fix: true` (the default) the audit SELF-HEALS: it
+# applies the missing `decap-cms/<status>` label itself (`pending_publish`
+# when the PR carries `cms/ready`, else `draft`) and only fails when a fix
+# didn't stick — a red run therefore means "needs a human", not "needs a
+# label". `fix: false` restores the old flag-only behaviour. Self-healing
+# needs `pull-requests: write` from the CALLER (reusable-workflow permissions
+# are capped by the caller's grant); with only `read` the fix attempt 403s
+# and the job falls back to failing loud with a grant-the-permission hint.
 name: Editorial label audit (reusable)
 
 on:
@@ -16,10 +23,11 @@ on:
       platform_ref:  { type: string, default: main }
       branch_prefix: { type: string, default: "cms/" }
       label_prefix:  { type: string, default: "decap-cms" }
+      fix:           { type: boolean, default: true }
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   audit:
@@ -47,4 +55,5 @@ jobs:
           node .cms-platform/scripts/audit-editorial-labels.js \
             --repo "${{ github.repository }}" \
             --branch-prefix "${{ inputs.branch_prefix }}" \
-            --label-prefix "${{ inputs.label_prefix }}"
+            --label-prefix "${{ inputs.label_prefix }}" \
+            ${{ inputs.fix && '--fix' || '' }}

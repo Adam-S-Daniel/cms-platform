@@ -48,6 +48,12 @@
  *     the `cms/ready` label so the SAME auto-merge-when-ready job
  *     lands the delete PR (whose diff removes the file) once the
  *     required checks pass. Decap gets a synthetic merged:true.
+ *     The PR is also labelled `decap-cms/pending_publish` at creation:
+ *     an open `cms/*` PR with NO `decap-cms/*` label makes Decap run
+ *     its label migration on every /admin load — the persistent
+ *     "adding labels to N of your Editorial Workflow entries" dialog —
+ *     and for these PRs the migration never completes (no legacy
+ *     metadata to migrate), so the dialog never clears on its own.
  *
  * Note: a previous version of this shim instead intercepted DELETE
  * /contents and dispatched a `delete-via-pr.yml` workflow. That
@@ -195,10 +201,22 @@
         var pr = await prRes.json();
         if (!pr || !pr.number) return originalRes;
 
+        // `cms/ready` arms auto-merge-when-ready. `decap-cms/pending_publish`
+        // marks the PR as a healthy labelled editorial entry: Decap's github
+        // backend runs a label MIGRATION over every open `cms/*` PR that has
+        // no `decap-cms/*` label (listUnpublishedBranches → withoutCmsLabel),
+        // alerting "Decap CMS is adding labels to N of your Editorial
+        // Workflow entries…" on EVERY /admin load. For shim-created PRs the
+        // migration then no-ops (no legacy refs/meta/_decap_cms metadata →
+        // "Skipped migrating"), so nothing ever gets labelled and the dialog
+        // persists for as long as the PR is open. Labelling at creation
+        // prevents the dialog entirely; `pending_publish` is truthful (the
+        // PR is queued to publish via auto-merge) and worst case surfaces
+        // the PR briefly in the Workflow tab's Ready column.
         var labelRes = await origFetch(API + "/issues/" + pr.number + "/labels", {
           method: "POST",
           headers: auth,
-          body: JSON.stringify({ labels: ["cms/ready"] }),
+          body: JSON.stringify({ labels: ["cms/ready", "decap-cms/pending_publish"] }),
         });
         if (!labelRes.ok && labelRes.status !== 422) return originalRes;
 
