@@ -259,7 +259,10 @@ jobs:
         # should be created and removed within a single test run. A
         # crashed run leaves them on main. Sweep any older than the
         # same threshold via a `cms/e2e-fixture/sweep-…` PR labelled
-        # cms/ready. (No label gate here — these files are NEVER
+        # cms/ready + decap-cms/pending_publish (a `cms/*` PR with no
+        # `decap-cms/*` label makes Decap re-run its label migration on
+        # every /admin load — the persistent "adding labels…" dialog).
+        # (No label gate here — these files are NEVER
         # human-authored; the canary collection's
         # `[E2E TEST FIXTURES — DO NOT EDIT]` label is the
         # convention.)
@@ -325,6 +328,7 @@ jobs:
               --head "${BRANCH}" \
               --base main \
               --label "cms/ready" \
+              --label "decap-cms/pending_publish" \
               --label "automated" | grep -oE '[0-9]+$')
             echo "::notice::Opened cleanup PR #${PR_NUM} on branch ${BRANCH}"
           fi
@@ -340,8 +344,10 @@ jobs:
         # corrupt shared baseline. This tier mirrors the `_e2e/canary-delete-*`
         # sweep above: list the orphans older than the same threshold and
         # route them through a single `cms/e2e-fixture/sweep-…` PR labelled
-        # `cms/ready` + `automated`, which auto-merges via the
-        # editorial-workflow. (No label gate — these names are NEVER
+        # `cms/ready` + `decap-cms/pending_publish` + `automated`, which
+        # auto-merges via the editorial-workflow (the decap-cms label keeps
+        # Decap's "adding labels…" migration dialog off /admin while the PR
+        # is open). (No label gate — these names are NEVER
         # human-authored; `test_fixture: true` + the unique prefixes are the
         # convention.) Same `!inputs.dry_run` boolean-comparison guard as the
         # canary-delete sweep (run #25500298081's false-positive lesson).
@@ -405,6 +411,7 @@ jobs:
               --head "${BRANCH}" \
               --base main \
               --label "cms/ready" \
+              --label "decap-cms/pending_publish" \
               --label "automated" | grep -oE '[0-9]+$')
             echo "::notice::Opened cleanup PR #${PR_NUM} on branch ${BRANCH}"
           fi

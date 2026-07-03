@@ -13,7 +13,9 @@
  *   1. POST /git/refs    — create a branch off the current main HEAD
  *   2. PUT /contents     — commit the fixture on that branch
  *   3. POST /pulls       — open a PR with base=main
- *   4. POST /labels      — apply `cms/ready`
+ *   4. POST /labels      — apply `cms/ready` + `decap-cms/pending_publish`
+ *                          (the latter keeps Decap's "adding labels…"
+ *                          label-migration dialog off /admin while open)
  *   5. cms-editorial-workflow.yml fires `auto-merge-when-ready`, which
  *      enables auto-merge; once `validate-content` + the e2e/test
  *      checks finish, the PR squash-merges itself
@@ -129,10 +131,16 @@ async function openPr({ repo, branch, title, body }) {
 }
 
 async function addReadyLabel({ repo, prNumber }) {
+  // `decap-cms/pending_publish` rides along with `cms/ready`: a `cms/*` PR
+  // with NO `decap-cms/*` label makes Decap re-run its label migration on
+  // every /admin load (the persistent "adding labels to N of your Editorial
+  // Workflow entries" dialog on prod + previews) for as long as the PR is
+  // open — and it reds the daily editorial-label audit. Labelling at
+  // creation keeps fixture PRs invisible to the migration.
   return gh(`/repos/${repo}/issues/${prNumber}/labels`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ labels: ["cms/ready"] }),
+    body: JSON.stringify({ labels: ["cms/ready", "decap-cms/pending_publish"] }),
   });
 }
 

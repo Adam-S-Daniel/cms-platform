@@ -152,8 +152,10 @@ test.describe("publish-via-auto-merge.js — browser context", () => {
     // PR opened base=main, head=the new cms/ branch.
     expect(prBody.base).toBe("main");
     expect(prBody.head).toMatch(/^cms\/posts\/delete-/);
-    // cms/ready label applied with the forwarded auth header.
-    expect(labelBody).toEqual({ labels: ["cms/ready"] });
+    // cms/ready (auto-merge arm) + decap-cms/pending_publish (keeps Decap's
+    // label-migration dialog from targeting the PR) applied with the
+    // forwarded auth header.
+    expect(labelBody).toEqual({ labels: ["cms/ready", "decap-cms/pending_publish"] });
     expect(labelHeaders.authorization).toBe("Bearer fake-token");
     expect(labelHeaders["x-github-api-version"]).toBe("2022-11-28");
   });

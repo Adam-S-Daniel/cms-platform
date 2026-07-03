@@ -152,7 +152,7 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     // 3) POST /pulls (open the delete PR) → 201 with a number
     queueResponse({ number: 777 }, { status: 201 });
     // 4) POST /issues/777/labels → 200
-    queueResponse([{ name: "cms/ready" }], { status: 200 });
+    queueResponse([{ name: "cms/ready" }, { name: "decap-cms/pending_publish" }], { status: 200 });
 
     const res = await fetch(`${API_BASE}/git/refs/heads/main`, {
       method: "PATCH",
@@ -175,10 +175,13 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(calls[2].method).toBe("POST");
     expect(calls[2].url).toBe(`${API_BASE}/pulls`);
     expect(JSON.parse(calls[2].body).base).toBe("main");
-    // label the delete PR cms/ready
+    // label the delete PR cms/ready + decap-cms/pending_publish (the latter
+    // keeps Decap's "adding labels…" migration dialog from ever seeing it)
     expect(calls[3].method).toBe("POST");
     expect(calls[3].url).toBe(`${API_BASE}/issues/777/labels`);
-    expect(JSON.parse(calls[3].body)).toEqual({ labels: ["cms/ready"] });
+    expect(JSON.parse(calls[3].body)).toEqual({
+      labels: ["cms/ready", "decap-cms/pending_publish"],
+    });
     expect(calls[3].headers.Authorization).toBe("Bearer t");
   });
 
