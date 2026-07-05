@@ -358,4 +358,6 @@ module.exports = {
   createBranchFromMain,
   putFileOnBranch,
   deleteFileOnBranch,
+  openPr,
+  addReadyLabel,
 };
