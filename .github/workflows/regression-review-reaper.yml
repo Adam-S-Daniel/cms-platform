@@ -104,7 +104,7 @@ jobs:
             "repos/${GH_REPO}/actions/runs" \
             -f "branch=${HEAD_REF}" -f status=waiting -f per_page=100 \
             --jq ".workflow_runs[] | select(.path | endswith(\"/${WF}\")) | {id, head_sha} | @base64" \
-            || true)
+            2>/dev/null) || runs=""
 
           if [ -z "$runs" ]; then
             echo "No waiting ${WF} runs on ${HEAD_REF} — nothing to reap."
@@ -124,7 +124,7 @@ jobs:
             # Pending deployments to the gate environment for this run.
             env_ids=$(gh api "repos/${GH_REPO}/actions/runs/${run_id}/pending_deployments" \
               --jq ".[] | select(.environment.name == \"${ENVNAME}\") | .environment.id" \
-              || true)
+              2>/dev/null) || env_ids=""
             if [ -z "$env_ids" ]; then
               echo "skip run ${run_id} [${head_sha}] — no pending ${ENVNAME} deployment"
               continue
