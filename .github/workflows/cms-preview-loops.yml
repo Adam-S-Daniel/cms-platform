@@ -56,6 +56,27 @@ defaults:
 jobs:
   preview-loops:
     runs-on: ubuntu-latest
+    concurrency:
+      # SHARED lane across ALL THREE preview-env workflows
+      # (cms-publish-loop-preview / cms-preview-loops /
+      # cms-delete-published-preview) — they all mutate the SAME per-PR
+      # preview environment (preview-pr<N>.<apex>). Within one workflow the
+      # specs already serialize via `--workers=1`, but there was no
+      # CROSS-workflow guard: a consumer dispatching two or three of these
+      # simultaneously against the same PR queued deploy-previews multiple
+      # deep and blew each spec's URL-reflect wait budget — the root cause
+      # of every June 2026 failure of these workflows in adamdaniel.ai
+      # (solo dispatches always passed). GHA keys concurrency groups by
+      # string ACROSS workflows, so one constant group (parameterized by
+      # repo + PR number) on the loop job of each workflow keeps them
+      # mutually exclusive per PR. cancel-in-progress:false queues rather
+      # than killing an in-flight run (cancelling mid-flow can leave the
+      # preview env / canary dirty); a stuck run holds the lane up to its
+      # timeout-minutes, which is bounded and far cheaper than the
+      # collision. This group key MUST stay identical across all three
+      # workflows.
+      group: preview-env-${{ github.repository }}-pr${{ inputs.pr_number }}
+      cancel-in-progress: false
     env:
       CMS_APEX: ${{ inputs.apex }}
       CMS_REPO: ${{ github.repository }}

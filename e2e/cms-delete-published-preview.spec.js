@@ -66,6 +66,7 @@ const {
   reopenForPublishedDelete,
   clickEditorDelete,
   confirmEditorDelete,
+  editorDeleteButton,
 } = require("./cms-editor-ui");
 const { previewTarget } = require("./cms-host");
 const { runCmsLoop } = require("./run-cms-loop");
@@ -344,6 +345,32 @@ test(
         // finds the top-level toolbar Delete button. The native confirm()
         // is accepted by the persistent page.on("dialog", d => d.accept())
         // registered at line 162 — do NOT add a second accepter.
+        //
+        // Hardening (run 28404502248, 2026-06-29): a low-frequency Decap
+        // hydration flake left the Delete button un-rendered even though
+        // openEntry's reopenForPublishedDelete had already confirmed the
+        // PUBLISHED state, timing out clickEditorDelete's click. Probe for
+        // the button with a short bound first; on a miss, re-run
+        // reopenForPublishedDelete once (same poll-reload openEntry uses
+        // above) to force Decap to re-hydrate the toolbar, then retry —
+        // letting clickEditorDelete's own error surface if it still fails.
+        const deleteVisible = await editorDeleteButton(p)
+          .isVisible({ timeout: 10_000 })
+          .catch(() => false);
+        if (!deleteVisible) {
+          console.warn(
+            "[cms-delete-published-preview] Delete button not visible after " +
+              "10s — reopening the entry and retrying once before failing.",
+          );
+          await reopenForPublishedDelete(
+            p,
+            `${PREVIEW_ADMIN}#/collections/e2e/entries/${slug}`,
+            {
+              crossCheck: async () => (await fileShaOnBranch(filePath, PR_HEAD_REF)) != null,
+              adminUrl: PREVIEW_ADMIN,
+            },
+          );
+        }
         await confirmEditorDelete(p, () => clickEditorDelete(p));
       },
       save: false,
