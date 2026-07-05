@@ -86,9 +86,15 @@ jobs:
     env:
       CMS_APEX: ${{ inputs.apex }}
       CMS_REPO: ${{ github.repository }}
-    # Single spec, ~10 min happy path; 20 min ceiling matches the spec's
-    # TEST_TIMEOUT_MS plus headroom for runner bring-up.
-    timeout-minutes: 20
+    # #1723 Cat 1 port (2026-07): the spec's TEST_TIMEOUT_MS was raised
+    # from 12 to 90 min — see the spec file for the run evidence (adamdaniel
+    # runs 28755547169 / 28757192011, both timed out at exactly 720,000ms)
+    # and the per-leg budget math (baseline confirm + PR-open wait + the
+    # new merge-aware wait + URL-reflect wait, x2 legs). 100 min gives the
+    # same ~10-min runner-bring-up headroom as the prod sibling
+    # (cms-publish-loop-prod.yml: timeout-minutes 90 vs spec TEST_TIMEOUT_MS
+    # 80 min).
+    timeout-minutes: 100
     steps:
       - name: Checkout site
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)

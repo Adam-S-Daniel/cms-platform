@@ -43,6 +43,7 @@ const {
   gh,
   makePreviewCanaryRecoverer,
   waitForCmsPullRequest,
+  waitForMerge,
 } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { previewTarget } = require("./cms-host");
@@ -72,16 +73,33 @@ const {
 } = previewTarget();
 const PREVIEW_PUBLIC_URL = `${PREVIEW_HOST}${CANARY.publicPath}`;
 
-const TEST_TIMEOUT_MS = 12 * 60 * 1000;
+// #1723 Cat 1 (preview-loop port, 2026-07): the old 12-min (720,000ms)
+// budget was structurally too small for the REAL chain this spec drives —
+// Decap save -> cms/<col>/<slug> PR -> auto-merge nudge (5-min cron) ->
+// merge -> deploy-preview (~2 min) -> CloudFront. Two real adamdaniel.ai
+// dispatches (runs 28755547169 and 28757192011) both died with the exact
+// "Test timeout of 720000ms exceeded" message at the marker-live wait,
+// even though the chain itself was healthy: PR #2457 opened 21:32:00,
+// merged 21:42:10 (~10m), deploy-preview success 21:43:55 (~2m later) —
+// 13m55s total — while this test's own budget was only 12m. PR #2459
+// showed the same shape (merged 22:45:24, deploy success 22:45:30, test
+// died 22:47:03). Sized like the prod-mutate/delete-preview siblings:
+// baseline confirm (8m) + PR-open wait (5m) + the NEW merge wait (25m,
+// below) + URL-reflect wait (10m) per leg, TWO legs (forward + cleanup)
+// ~= 88m worst-case sum; 90m leaves a little slack for the in-browser UI
+// steps without inflating past what the workflow's timeout-minutes
+// (bumped alongside this) can hold.
+const TEST_TIMEOUT_MS = 90 * 60 * 1000;
 
 test.describe.configure({
   mode: "serial",
   timeout: TEST_TIMEOUT_MS,
   // Real-state mutation; a Playwright retry just re-walks the same
-  // broken chain after wasting another 12 min — and on the
-  // cms-publish-loop-preview workflow with timeout-minutes: 20,
-  // a retry consistently runs out of GHA budget and gets cancelled
-  // mid-attempt (run #25468569663 hit exactly this on 2026-05-07).
+  // broken chain after wasting another ~90 min — and on the
+  // cms-publish-loop-preview workflow's (now enlarged) timeout-minutes,
+  // a retry would still risk running out of GHA budget and getting
+  // cancelled mid-attempt (run #25468569663 hit exactly this shape on
+  // 2026-05-07, at the old smaller budget).
   retries: 0,
 });
 
@@ -227,6 +245,24 @@ test(
       await addLabel({ prNumber: pr.number, label: "cms/ready" });
     });
 
+    // ── #1723 Cat 1 port: explicit merge-aware wait ──────────────────
+    // Ports the prod-mutate / delete-preview pattern (they wait on
+    // waitForMerge BEFORE polling the public URL) instead of relying
+    // solely on a post-hoc budget-exhaustion probe. This makes a real
+    // auto-merge/editorial-workflow miss fail HERE, with a clear "PR
+    // never merged" message, rather than surfacing 900s later as an
+    // ambiguous "URL never reflected the change." `pr` is whichever open
+    // cms/... PR waitForCmsPullRequest matched — its "opened OR updated"
+    // contract (see its docstring) already covers a Save landing in an
+    // ALREADY-OPEN PR for this entry (Decap force-pushes the same
+    // cms/<collection>/<slug> branch on every Save), so no separate
+    // lookup-by-branch is needed here. 25-min budget mirrors
+    // cms-delete-published-preview.spec.js's seed-leg waitForMerge (same
+    // preview auto-merge chain, same observed latency profile).
+    await test.step("Wait for the create PR to actually merge before polling the preview URL", async () => {
+      await waitForMerge({ prNumber: pr.number, timeoutMs: 25 * 60 * 1000 });
+    });
+
     // ── Wait for the preview deploy-status pill spinner→settled ──
     //
     // The pill is the editor-facing signal for "your change is live
@@ -262,6 +298,18 @@ test(
         },
         urlTimeoutMs: 10 * 60 * 1000,
         // FIX 1 (#82): recover the green-but-stuck-BLOCKED forward canary PR.
+        // Kept over the generic makeDeployQueueExtender: this recoverer
+        // already grants queue/backlog-aware extensions (merged-awaiting-
+        // deploy / checks-not-green => perDeployMs) AND can actively force
+        // a stuck-BLOCKED PR's merge — strictly more capable for OUR OWN
+        // labelled cms/* canary than a plain deploy-lane-activity probe,
+        // and (unlike makeDeployQueueExtender's `deploy-production.yml`
+        // default) it never needs a preview-vs-prod lane parameter at
+        // all, since it reasons about the PR/branch-protection state
+        // directly rather than GHA workflow-run activity. The NEW
+        // explicit waitForMerge above already confirms the merge landed
+        // before this wait even starts, so this recoverer is now mostly
+        // defense-in-depth for the deploy-preview + CDN leg.
         onBudgetExhausted: makePreviewCanaryRecoverer({
           base: PR_HEAD_REF,
           getPrNumber: () => pr.number,
@@ -338,6 +386,17 @@ test(
       });
       await addLabel({ prNumber: cleanupPr.number, label: "cms/ready" });
 
+      // #1723 Cat 1 port (same rationale as the forward leg above): wait
+      // for the cleanup PR to actually merge before polling the public
+      // URL, so a real auto-merge miss fails here with an unambiguous
+      // message instead of showing up as "URL never reverted to
+      // baseline" minutes later. waitForCmsPullRequest already resolved
+      // whichever open cms/... PR carries this leg's marker (new-or-
+      // updated), so cleanupPr.number is the right target.
+      await test.step("Wait for the cleanup PR to actually merge before polling the preview URL", async () => {
+        await waitForMerge({ prNumber: cleanupPr.number, timeoutMs: 25 * 60 * 1000 });
+      });
+
       // Wait for the URL to revert to baseline (no marker).
       await waitForChangeReflected({
         page,
@@ -351,7 +410,11 @@ test(
           return !text.includes(marker) && text.includes(baselineBody);
         },
         urlTimeoutMs: 10 * 60 * 1000,
-        // FIX 1 (#82): recover the green-but-stuck-BLOCKED cleanup canary PR.
+        // FIX 1 (#82): recover the green-but-stuck-BLOCKED cleanup canary
+        // PR. Kept over makeDeployQueueExtender for the same reason as the
+        // forward leg above (PR/branch-protection-state recovery, no
+        // deploy-workflow lane parameter needed); the explicit waitForMerge
+        // above already confirms the merge before this wait starts.
         onBudgetExhausted: makePreviewCanaryRecoverer({
           base: PR_HEAD_REF,
           getPrNumber: () => cleanupPr.number,
