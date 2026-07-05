@@ -1,4 +1,4 @@
-name: Sweep stale automated-test PRs
+name: Sweep stale automated-test PRs (reusable)
 on:
   workflow_call:
     inputs:
@@ -283,7 +283,8 @@ jobs:
           THRESHOLD_TS=$(date -u -d "${THRESHOLD_HOURS} hours ago" +%s)
 
           files=$(gh api "/repos/${GH_REPO}/contents/_e2e?ref=main" --jq \
-            '.[] | select(.name | startswith("canary-delete-")) | .path')
+            '.[] | select(.name | startswith("canary-delete-")) | .path' \
+            2>/dev/null || true)
 
           if [ -z "$files" ]; then
             echo "::notice::No stale canary-delete-* fixtures on main."
@@ -362,10 +363,12 @@ jobs:
 
           # Ephemeral prod-loop posts: both per-run prefixes under _posts/.
           post_files=$(gh api "/repos/${GH_REPO}/contents/_posts?ref=main" --jq \
-            '.[] | select(.name | startswith("2099-12-31-e2e-prod-mutate-") or startswith("2099-12-31-e2e-media-roundtrip-")) | .path')
+            '.[] | select(.name | startswith("2099-12-31-e2e-prod-mutate-") or startswith("2099-12-31-e2e-media-roundtrip-")) | .path' \
+            2>/dev/null || true)
           # Per-run media uploads from the media round-trip spec.
           upload_files=$(gh api "/repos/${GH_REPO}/contents/assets/images/uploads?ref=main" --jq \
-            '.[] | select(.name | startswith("e2e-media-roundtrip-") and endswith(".png")) | .path')
+            '.[] | select(.name | startswith("e2e-media-roundtrip-") and endswith(".png")) | .path' \
+            2>/dev/null || true)
           files=$(printf '%s\n%s\n' "$post_files" "$upload_files" | grep -v '^$' || true)
 
           if [ -z "$files" ]; then
