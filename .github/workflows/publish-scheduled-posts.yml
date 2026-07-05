@@ -1,4 +1,4 @@
-name: Publish Scheduled Posts
+name: Publish Scheduled Posts (reusable)
 on:
   workflow_call:
     inputs:

@@ -1,4 +1,4 @@
-name: CMS Editorial Workflow
+name: CMS Editorial Workflow (reusable)
 on:
   workflow_call:
     secrets:
