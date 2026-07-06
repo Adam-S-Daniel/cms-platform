@@ -206,6 +206,7 @@ jobs:
     # validate-content was redundant *and* coupled it to the same
     # cancel-in-progress mechanic that caused the original bug.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       pull-requests: write
@@ -301,6 +302,98 @@ jobs:
                   }
                   throw mErr;
                 }
+              }
+              // "Pull request is in unstable status" — sibling of "clean status"
+              // above, same root cause: a PR whose base isn't `main` (labelled
+              // `cms/preview-only` by validate-content's "Apply draft label on new
+              // PR" step) has NO required-status-check protection rules on that
+              // base branch, so GitHub's auto-merge "wait for checks" mechanism
+              // has nothing well-defined to wait FOR and refuses to arm at all.
+              // "clean status" means every check already finished (nothing left
+              // to wait for); "unstable status" means checks are still in flight
+              // but there's no protected-branch ruleset telling GitHub what "done"
+              // looks like on this base — either way `enablePullRequestAutoMerge`
+              // can never succeed for these PRs. Empirical: PR #2466 (base
+              // `audit/preview-exercise`, all content checks already green) hit
+              // exactly this in run 28758624761 — `enablePullRequestAutoMerge`
+              // returned `UNPROCESSABLE: Pull request is in unstable status`.
+              //
+              // This job fires ONLY on the `labeled` event for one of the three
+              // ready-labels (see the job's `if:` above) — nothing re-triggers it
+              // when validate-content finishes afterward. So a bounded in-job poll
+              // is the PRIMARY recovery mechanism here, not a nice-to-have:
+              // without it, this run throws, the PR's rollup goes UNSTABLE, and
+              // the PR sits waiting only on cms-automerge-nudge.yml's `*/5` cron
+              // (throttled to ~45-90 min in practice) or the eventual e2e spec's
+              // last-ditch recoverer. PR #2466 sat 26+ minutes green-but-unmerged
+              // this way.
+              if (/unstable status/i.test(msg)) {
+                const POLL_INTERVAL_MS = 30_000;
+                const POLL_BUDGET_MS = 10 * 60 * 1000;
+                const deadline = Date.now() + POLL_BUDGET_MS;
+                core.info(
+                  `PR #${context.payload.pull_request.number} is unstable (unprotected ` +
+                    `base — cms/preview-only); polling its own computed mergeable ` +
+                    `state for up to ${POLL_BUDGET_MS / 60000} min.`,
+                );
+                while (Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+                  let pr;
+                  try {
+                    // Trust GitHub's OWN computed `mergeable`/`mergeable_state` on
+                    // a fresh GET — same reasoning as the "clean status" branch
+                    // above: never key this off the stale, async-computed webhook
+                    // payload (it can read `mergeable: true` while checks are
+                    // still pending).
+                    ({ data: pr } = await github.rest.pulls.get({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: context.payload.pull_request.number,
+                    }));
+                  } catch (getErr) {
+                    core.warning(
+                      `poll: pulls.get failed transiently (${String((getErr && getErr.message) || getErr)}); retrying.`,
+                    );
+                    continue;
+                  }
+                  if (pr.state !== 'open') {
+                    core.info(`PR #${context.payload.pull_request.number} is no longer open (${pr.state}); nothing to do.`);
+                    return;
+                  }
+                  if (pr.mergeable === true && pr.mergeable_state === 'clean') {
+                    try {
+                      await github.rest.pulls.merge({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        pull_number: context.payload.pull_request.number,
+                        merge_method: 'squash',
+                      });
+                      core.info(`PR #${context.payload.pull_request.number} went clean while polling; merged directly.`);
+                      return;
+                    } catch (mErr) {
+                      const mMsg = String((mErr && mErr.message) || mErr);
+                      // Idempotent, same handling as the clean-status branch above.
+                      if (/already merged|not mergeable|not found|closed/i.test(mMsg)) {
+                        core.info(`direct merge no-op for PR #${context.payload.pull_request.number}: ${mMsg}`);
+                        return;
+                      }
+                      throw mErr;
+                    }
+                  }
+                }
+                // Budget exhausted without landing. Do NOT throw / setFailed
+                // here: a job failure poisons the PR's rollup (mergeStateStatus
+                // UNSTABLE), which is the very problem this fallback exists to
+                // avoid. Exit success and let cms-automerge-nudge.yml's cron
+                // backstop it — that job now also covers preview-only
+                // (base!=main) PRs (see its own comments) for exactly this
+                // "checks took longer than our budget" case.
+                core.info(
+                  `PR #${context.payload.pull_request.number}: gave up polling after ` +
+                    `${POLL_BUDGET_MS / 60000} min without reaching clean/mergeable; ` +
+                    `leaving it to cms-automerge-nudge.yml's cron backstop.`,
+                );
+                return;
               }
               throw err;
             }

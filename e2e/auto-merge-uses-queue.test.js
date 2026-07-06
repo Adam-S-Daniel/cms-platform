@@ -53,3 +53,23 @@ test("clean-status fallback lands an already-mergeable PR with a conditional dir
   expect(code).toMatch(/pulls\.merge/);
   expect(code).toMatch(/merge_method:\s*['"]squash['"]/);
 });
+
+test("unstable-status fallback polls the PR's own computed mergeable state and lands it with a squash merge (PR #2466 / run 28758624761)", () => {
+  // "Pull request is in unstable status" is the SIBLING error to "clean
+  // status" above — both stem from the same root cause: a PR whose base
+  // isn't `main` (cms/preview-only) has no required-status-check
+  // protection rules on that base, so GitHub's auto-merge "wait for
+  // checks" has nothing well-defined to arm against and
+  // enablePullRequestAutoMerge always errors. Empirical: PR #2466 (base
+  // `audit/preview-exercise`, all content checks already green) hit this
+  // exact error in run 28758624761. Because this job fires ONLY on the
+  // `labeled` event and nothing re-triggers it afterward, the fallback
+  // must poll the PR's own computed mergeable state (never the stale
+  // webhook payload) and land it with a squash merge once clean.
+  const code = scripts(readWorkflow("cms-editorial-workflow.yml"));
+  expect(code).toMatch(/unstable status/i);
+  expect(code).toMatch(/pulls\.get/);
+  expect(code).toMatch(/mergeable_state/);
+  expect(code).toMatch(/pulls\.merge/);
+  expect(code).toMatch(/merge_method:\s*['"]squash['"]/);
+});

@@ -56,7 +56,20 @@
 #      a human-authored PR will never carry it. Guarantees we never
 #      touch a real editor's draft or a code PR.
 #   2. PR.autoMergeRequest is already populated — i.e. auto-merge is
-#      already enabled. If a human disabled it, we never act.
+#      already enabled. If a human disabled it, we never act. CARVE-OUT:
+#      this only holds for a main-based PR. A `cms/preview-only` PR (base
+#      != main) can NEVER get `enablePullRequestAutoMerge` to succeed — its
+#      base branch has no required-status-check protection rules for
+#      GitHub's auto-merge to wait on, so the mutation always errors
+#      (observed: PR #2466 / run 28758624761, base `audit/preview-exercise`,
+#      "Pull request is in unstable status" despite all checks green).
+#      `pr.autoMergeRequest` is therefore permanently null for these PRs, so
+#      we additionally evaluate any PR where `baseRefName !== 'main'`
+#      (`basePreviewOnly`) even with auto-merge unarmed. This is the
+#      defense-in-depth backstop for cms-editorial-workflow.yml's own inline
+#      bounded poll (auto-merge-when-ready's ~10-min budget) — the nudge
+#      remains the backstop for the rarer case where checks take longer
+#      than that budget.
 #   3. Every required-status-check (the contexts the site passes in via
 #      `required_contexts`) is green BOTH in the bulk rollup AND on a
 #      FRESH per-PR re-query of the head sha's check-runs, where green =
@@ -171,6 +184,7 @@ jobs:
                       number
                       id
                       mergeStateStatus
+                      baseRefName
                       autoMergeRequest { enabledAt }
                       commits(last:1) {
                         nodes {
@@ -265,7 +279,25 @@ jobs:
             let nudged = 0;
 
             for (const pr of prs) {
-              if (!pr.autoMergeRequest) continue; // not armed → owner intends manual
+              // A PR whose auto-merge was never armed usually means a human
+              // disabled it (item 2 above) — but that inference only holds when
+              // the base IS `main`. A `cms/preview-only` PR (base != main, see
+              // cms-editorial-workflow.yml's "Apply draft label on new PR" step)
+              // can NEVER get `enablePullRequestAutoMerge` to succeed — the base
+              // branch has no required-status-check protection rules for
+              // GitHub's auto-merge "wait for checks" to key off, so the
+              // mutation always errors ("Pull request is in clean status" or
+              // "...unstable status", e.g. PR #2466 / run 28758624761 — base
+              // `audit/preview-exercise`, all checks green, "unstable status").
+              // For these PRs `pr.autoMergeRequest` is permanently null, so
+              // `!pr.autoMergeRequest` alone would skip them forever — this is
+              // the defense-in-depth backstop for cms-editorial-workflow.yml's
+              // own inline bounded poll (its ~10-min budget); the rest of this
+              // loop (bulk pre-filter, fresh re-query, explicit squash merge,
+              // idempotent-catch) is UNCHANGED and applies identically once a
+              // PR passes this gate.
+              const basePreviewOnly = pr.baseRefName && pr.baseRefName !== 'main';
+              if (!pr.autoMergeRequest && !basePreviewOnly) continue;
               if (!pr.commits.nodes.length) continue;
 
               // NOTE: we deliberately do NOT gate on mergeStateStatus. The bulk
