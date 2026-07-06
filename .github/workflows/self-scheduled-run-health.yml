@@ -1,0 +1,45 @@
+# Self-caller: dogfood the scheduled-run-health reusable on cms-platform's
+# OWN scheduled runs (self-dependabot-rearm daily, self-secrets-scan weekly).
+# The reusable scans the last 48h of `event=schedule` runs for
+# failure / startup_failure / timed_out and opens-or-updates a single
+# `ci`-labelled tracking issue — see scheduled-run-health.yml's header for
+# the full silent-failure postmortem and the 48h-window rationale.
+name: Scheduled-run health audit
+
+# Dynamic per-run title (issue #1776 grammar; enforced by
+# e2e/workflow-run-name.test.js). Two events, so the run-name branches on
+# `github.event_name`.
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+     || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # Daily, off-peak offset minute (house precedent: 17 8). GitHub throttles
+    # crons here (daily crons measured 4-5h late) — precision doesn't matter
+    # because the reusable's 48h scan window overlaps; lag can't skip failures.
+    - cron: '47 8 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report findings without opening/updating/closing the tracking issue (true/false)'
+        # workflow_dispatch hands typed (boolean) inputs to a reusable's
+        # `with:` as STRINGS, and the reusable's `boolean`-typed input
+        # rejects them — the dispatch run startup-fails before any job runs.
+        # Declared `string` here and fromJSON-coerced below (same pattern as
+        # self-dependabot-rearm.yml). The scheduled cron is unaffected — the
+        # `&&` short-circuits before fromJSON ever runs.
+        type: string
+        default: 'false'
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  audit:
+    uses: ./.github/workflows/scheduled-run-health.yml
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}
