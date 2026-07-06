@@ -181,33 +181,76 @@ test.describe("cms-automerge-nudge reusable — shape lint (#1815)", () => {
     ).toBe(true);
   });
 
-  test("reusable only acts on PRs that already have auto-merge (never enables from scratch) [AST]", () => {
-    // Guard: `if (!pr.autoMergeRequest) continue;` — an IfStatement whose test is
-    // a logical-NOT of a `*.autoMergeRequest` member, with a ContinueStatement
-    // consequent. If dropped, the nudge could act on a PR a human disabled.
+  test("reusable only acts on PRs that already have auto-merge, OR a preview-only base that can never arm it [AST]", () => {
+    // Guard: `if (!pr.autoMergeRequest && !basePreviewOnly) continue;` — an
+    // IfStatement whose test is a `&&` of two negations: one negates a
+    // `*.autoMergeRequest` member (never touch a main-based PR whose auto-merge
+    // a human left/disabled — the original guard), the other negates the
+    // `basePreviewOnly` identifier (still evaluate a preview-only PR, which can
+    // NEVER get auto-merge armed in the first place — see
+    // cms-editorial-workflow.yml's "clean status" / "unstable status" errors,
+    // e.g. PR #2466 / run 28758624761, base `audit/preview-exercise`). Only
+    // when BOTH negations hold (not armed AND not preview-only) does the nudge
+    // skip the PR.
     let found = false;
     walk.full(nudgeAst(), (n) => {
       if (n.type !== "IfStatement") return;
       const t = n.test;
-      const negatesAutoMerge =
-        t &&
-        t.type === "UnaryExpression" &&
-        t.operator === "!" &&
-        t.argument &&
-        t.argument.type === "MemberExpression" &&
-        t.argument.property &&
-        t.argument.property.name === "autoMergeRequest";
+      if (!t || t.type !== "LogicalExpression" || t.operator !== "&&") return;
+      const sides = [t.left, t.right];
+      const negatesAutoMerge = sides.some(
+        (s) =>
+          s.type === "UnaryExpression" &&
+          s.operator === "!" &&
+          s.argument &&
+          s.argument.type === "MemberExpression" &&
+          s.argument.property &&
+          s.argument.property.name === "autoMergeRequest",
+      );
+      const negatesBasePreviewOnly = sides.some(
+        (s) =>
+          s.type === "UnaryExpression" &&
+          s.operator === "!" &&
+          s.argument &&
+          s.argument.type === "Identifier" &&
+          s.argument.name === "basePreviewOnly",
+      );
       const continues =
         (n.consequent && n.consequent.type === "ContinueStatement") ||
         (n.consequent &&
           n.consequent.type === "BlockStatement" &&
           n.consequent.body.some((s) => s.type === "ContinueStatement"));
-      if (negatesAutoMerge && continues) found = true;
+      if (negatesAutoMerge && negatesBasePreviewOnly && continues) found = true;
     });
     expect(
       found,
-      "the nudge must early-`continue` on `!pr.autoMergeRequest` (never act on a " +
-        "PR whose auto-merge a human left/disabled)",
+      "the nudge must early-`continue` only when BOTH `!pr.autoMergeRequest` " +
+        "AND `!basePreviewOnly` hold (never skip a preview-only PR just because " +
+        "its auto-merge could never be armed in the first place)",
+    ).toBe(true);
+  });
+
+  test("derives basePreviewOnly from baseRefName !== 'main', and the query fetches baseRefName [AST]", () => {
+    // basePreviewOnly must be computed by comparing the PR's baseRefName to
+    // the literal 'main' — reuse the same hasComparison helper used elsewhere
+    // in this file for `mergeStateStatus !== 'BLOCKED'`.
+    expect(
+      hasComparison(nudgeAst(), {
+        idTail: "baseRefName",
+        operator: "!==",
+        literal: "main",
+      }),
+      "basePreviewOnly must be derived by comparing `baseRefName !== 'main'`",
+    ).toBe(true);
+    expect(
+      nudgeFacts().memberProps.has("baseRefName"),
+      "the script must reference `.baseRefName` on the PR node",
+    ).toBe(true);
+    expect(
+      nudgeFacts().strings.some((s) => s.includes("baseRefName")),
+      "the GraphQL query string itself must request the `baseRefName` field " +
+        "(not just reference it elsewhere in the script) so a reviewer can see " +
+        "the field was actually added to the query",
     ).toBe(true);
   });
 });
