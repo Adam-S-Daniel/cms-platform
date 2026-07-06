@@ -92,12 +92,24 @@ function filterAlertRuns(runs, since) {
   );
 }
 
-// Map<workflowName, runs[]> — runs newest-first within each workflow, and
-// workflows sorted by their newest failure (most recent breakage on top).
+// The stable identity of the failing WORKFLOW: the workflow file's basename.
+// NOT `run.name` — the runs API's `name` is the run's DISPLAY TITLE, which
+// for this repo family is the evaluated dynamic `run-name:` (observed live:
+// grouping by name produced a "scheduled — 0 12 * * *" header that never
+// said WHICH workflow failed — the one thing the alert must say).
+function workflowKey(r) {
+  const base = String((r && r.path) || "")
+    .split("/")
+    .pop();
+  return base || (r && r.name) || "(unknown workflow)";
+}
+
+// Map<workflowFileBasename, runs[]> — runs newest-first within each workflow,
+// and workflows sorted by their newest failure (most recent breakage on top).
 function groupByWorkflow(runs) {
   const byName = new Map();
   for (const r of runs || []) {
-    const key = r.name || r.path || "(unknown workflow)";
+    const key = workflowKey(r);
     if (!byName.has(key)) byName.set(key, []);
     byName.get(key).push(r);
   }
@@ -392,6 +404,7 @@ module.exports = {
   sinceIso,
   isAlertRun,
   filterAlertRuns,
+  workflowKey,
   groupByWorkflow,
   extractReportedRunIds,
   hiddenRunIdsBlock,
