@@ -59,3 +59,30 @@ test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
     expect(runStep.run).toMatch(/gh pr create/);
   });
 });
+
+test.describe("platform-bump reusable — seeds newly-dictated workflow callers", () => {
+  test("fetches the platform-dictated set from examples/site AT THE NEW ref", () => {
+    expect(runStep.run).toMatch(/examples\/site\/\.github\/workflows/);
+    expect(runStep.run).toMatch(/ref=\$LATEST/);
+  });
+
+  test("only seeds a caller that's wholly MISSING — never touches one that already exists", () => {
+    expect(runStep.run, "must skip seeding when the destination file already exists").toMatch(
+      /\[ -f "\$dest" \] && continue/,
+    );
+  });
+
+  test("stamps the seeded file's platform-ref pin to $LATEST (not the example's own, possibly stale, pin)", () => {
+    expect(runStep.run).toMatch(/ENV\{LATEST\}/);
+  });
+
+  test("logs which workflows were seeded", () => {
+    expect(runStep.run).toMatch(/seeded.*newly platform-dictated workflow/i);
+  });
+
+  test("detects an add-only diff (untracked seeded file), not just a modified-file diff", () => {
+    expect(runStep.run, "git diff --quiet alone misses brand-new untracked files").toMatch(
+      /git status --porcelain/,
+    );
+  });
+});

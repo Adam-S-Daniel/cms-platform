@@ -571,6 +571,12 @@ reusable against a `v0.1.5` gem is a latent bug source). **`platform-bump.yml`
 rewrites `.github/workflows/*` and pushes, so its token (`CMS_PLATFORM_PAT`)
 MUST carry `workflow` scope** or GitHub rejects the push (`refusing to allow …
 to update workflow … without 'workflows' permission`) — the live half of #13.
+It also seeds any workflow caller the release newly made platform-dictated —
+copying the missing caller from `examples/site/.github/workflows/` at the new
+ref, re-pinned to it — so the workflow-set-parity check (introduced v0.1.20,
+#54) also passes on the bump PR alone. Observed live: v0.1.54 added
+`dependabot-rearm-sweep.yml` and both consumers' bump PRs failed pin-consistency
+with `workflow-set: MISSING (platform-dictated)` until hand-fixed.
 
 `scripts/check-platform-pin-consistency.js` (platform-owned, Node, needs only the
 repo's `yaml` lib) makes them all agree:
