@@ -77,7 +77,17 @@
 #      SUCCESS/NEUTRAL/SKIPPED and NONE is queued/in-progress (so a real
 #      check still running behind a docs-only stub-green can never trick
 #      us into an early merge — the adamdaniel-automerge-fires-on-stub
-#      hazard).
+#      hazard). BASE-AWARE EXCEPTION: a `basePreviewOnly` PR (base !=
+#      main) is judged by the SELF-CONSISTENT predicate instead — all
+#      check runs PRESENT on its fresh head completed green (excluding
+#      auto-merge-when-ready job-class runs), combined status OK, fresh
+#      pulls.get open/head-unchanged/mergeable — because the site's
+#      required_contexts mirror its MAIN ruleset and most of those
+#      workflows never run on a feature-base PR, so the REQUIRED gate is
+#      structurally unsatisfiable there (PR #2484: fully green with
+#      cms/ready + cms/preview-only, yet the 04:42:33 nudge run
+#      28768313594 dropped it — "Found 1 … Recovered 0"). Mirrors
+#      cms-editorial-workflow.yml's unstable-status fallback predicate.
 #
 #   We do NOT gate on mergeStateStatus: the bulk query returns UNKNOWN for
 #   PRs GitHub hasn't recently re-evaluated, and the old `!== 'BLOCKED' →
@@ -279,6 +289,93 @@ jobs:
               return { ok: true };
             }
 
+            // Base-aware readiness for PREVIEW-ONLY PRs (base != main) — the
+            // LOCKSTEP TWIN of cms-editorial-workflow.yml's unstable-status
+            // fallback predicate (#135); keep the two in sync.
+            //
+            // Why headIsTrulyGreen can't be used here (PR #2484 / nudge run
+            // 28768313594, 04:42:33): `required_contexts` mirrors the SITE's
+            // main-branch ruleset (adamdaniel's six: editorial /
+            // validate-content, scan / scan, parity / parity, preview-media /
+            // preview-media, e2e / e2e, visual-regression /
+            // approve-regression), and most of those workflows only run on
+            // PRs targeting main — they can NEVER all report on a
+            // feature-base PR. So while #2484's prior head b64dde2b sat fully
+            // green with cms/ready + cms/preview-only, the bulk pre-filter
+            // (same REQUIRED keys) silently dropped it ("Found 1 … Recovered
+            // 0", the non-green detail only at core.debug), and had it
+            // passed, headIsTrulyGreen would have rejected it as "<context>
+            // missing on head sha". The v0.1.52 basePreviewOnly carve-out got
+            // these PRs INTO evaluation, but the REQUIRED-contexts gate then
+            // rejected every one, always. Judge them by SELF-consistency
+            // instead: every check run that IS present on the fresh head
+            // must be completed green.
+            //
+            //   1. Check runs on the head sha (paginated), MINUS every
+            //      `auto-merge-when-ready` run (matched by name — the job-
+            //      class exclusion from the editorial fallback; an in-flight
+            //      sibling poll on this PR must not read as "pending"), must
+            //      all be completed success/neutral/skipped. Cancelled runs
+            //      are superseded-not-authoritative, same as headIsTrulyGreen
+            //      above: decide on the latest NON-cancelled run per name.
+            //   2. Legacy commit statuses must be green IF any exist —
+            //      deploy-preview.yml posts a real `deploy/preview` commit
+            //      status on PR head shas. An EMPTY status set reads
+            //      state:"pending" on GitHub's side (total_count 0), so
+            //      emptiness must count as OK, not pending.
+            // (The caller-loop below adds the third leg — a fresh pulls.get
+            // guard for open/head-unchanged/mergeable — before merging.)
+            const AUTO_MERGE_JOB_CLASS = /auto-merge-when-ready/;
+            async function headIsSelfConsistentGreen(sha) {
+              const checkRuns = await github.paginate(
+                github.rest.checks.listForRef,
+                { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 },
+              );
+              const others = checkRuns.filter((c) => !AUTO_MERGE_JOB_CLASS.test(c.name || ''));
+              // Anchor: require at least ONE non-self check run. Zero runs is
+              // NOT vacuous green — right after a force-push GitHub may not
+              // have CREATED the head's check runs yet (webhook lag), and a
+              // cron tick landing in that window must not merge a head no
+              // check ever vetted. cms PRs on these consumers always get at
+              // least `editorial / validate-content`, so a genuinely green
+              // head always has ≥1 run and nothing real is stranded by this.
+              if (others.length === 0) {
+                return { ok: false, why: 'no non-self check runs on head yet' };
+              }
+              const pendingRun = others.find((r) => r.status !== 'completed');
+              if (pendingRun) {
+                return { ok: false, why: `${pendingRun.name} still ${pendingRun.status}` };
+              }
+              const byName = new Map();
+              for (const r of others) {
+                if (!byName.has(r.name)) byName.set(r.name, []);
+                byName.get(r.name).push(r);
+              }
+              for (const [name, runs] of byName) {
+                const decisive = runs
+                  .filter((r) => (r.conclusion || '').toLowerCase() !== 'cancelled')
+                  .sort((a, b) => new Date(a.started_at || 0) - new Date(b.started_at || 0))
+                  .pop();
+                if (!decisive) return { ok: false, why: `${name}: all runs cancelled` };
+                if (!GREEN((decisive.conclusion || '').toUpperCase())) {
+                  return { ok: false, why: `${name}=${decisive.conclusion}` };
+                }
+              }
+              try {
+                const { data } = await github.rest.repos.getCombinedStatusForRef({
+                  owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100,
+                });
+                if ((data.total_count || 0) > 0 && data.state !== 'success') {
+                  return { ok: false, why: `combined status ${data.state}` };
+                }
+              } catch (e) {
+                // Can't verify the legacy statuses — fail CLOSED (skip this
+                // tick; the next cron retries) rather than merge unvetted.
+                return { ok: false, why: `combined status unreadable (${String((e && e.message) || e).slice(0, 80)})` };
+              }
+              return { ok: true };
+            }
+
             const prs = repository.pullRequests.nodes;
             core.info(`Found ${prs.length} open automated-test PR(s)`);
             let merged = 0;
@@ -313,33 +410,89 @@ jobs:
               // #1812/#1815 stale-snapshot) were never recovered. We act on the
               // authoritative signal instead: all required checks green.
               const commit = pr.commits.nodes[0].commit;
-              const rollup = commit.statusCheckRollup;
-              if (!rollup) continue;
 
-              // Quick bulk pre-filter (cheap) before the per-PR REST re-query.
-              const latest = new Map();
-              for (const c of rollup.contexts.nodes) {
-                if (c.__typename === 'CheckRun') latest.set(c.name, c.conclusion);
-                else if (c.__typename === 'StatusContext') latest.set(c.context, c.state);
-              }
-              const bulkGreen = [...REQUIRED].every((name) => GREEN(latest.get(name)));
-              if (!bulkGreen) {
-                const missing = [...REQUIRED].filter((n) => !GREEN(latest.get(n)));
-                core.debug(
-                  `PR #${pr.number}: required not all green per bulk rollup ` +
-                    `(non-green: ${missing.join(', ')}); leaving alone`,
-                );
-                continue;
-              }
+              if (basePreviewOnly) {
+                // PREVIEW-ONLY readiness (PR #2484 / nudge run 28768313594):
+                // the REQUIRED-contexts machinery below is structurally
+                // unsatisfiable on a feature-base PR (most required workflows
+                // only run on PRs to main), so BOTH the bulk pre-filter and
+                // headIsTrulyGreen reject every preview-only PR forever. Use
+                // the base-aware self-consistent predicate instead — and skip
+                // the bulk rollup pre-filter entirely (it is the same
+                // REQUIRED-keyed gate in cheaper clothing). Cost: a couple of
+                // REST reads per preview PR per cron tick; there are at most
+                // a handful of these PRs open at once.
+                const fresh = await headIsSelfConsistentGreen(commit.oid);
+                if (!fresh.ok) {
+                  core.info(
+                    `PR #${pr.number} (preview-only): head not self-consistent green ` +
+                      `(${fresh.why}); skipping this tick.`,
+                  );
+                  continue;
+                }
+                // Third leg of the predicate (mirrors the editorial
+                // fallback): a fresh pulls.get — still open, head UNCHANGED
+                // since the bulk query (never merge a head the predicate
+                // didn't just vet; Decap force-pushes re-saves), and no
+                // computed conflict (mergeable false). mergeable null =
+                // still computing — the merge call adjudicates that itself.
+                let freshPr;
+                try {
+                  ({ data: freshPr } = await github.rest.pulls.get({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: pr.number,
+                  }));
+                } catch (e) {
+                  core.warning(
+                    `PR #${pr.number} (preview-only): pulls.get failed (${String((e && e.message) || e)}); next cron retries.`,
+                  );
+                  continue;
+                }
+                if (freshPr.state !== 'open') {
+                  core.info(`PR #${pr.number} (preview-only) no longer open; nothing to do.`);
+                  continue;
+                }
+                if (freshPr.head.sha !== commit.oid) {
+                  core.info(
+                    `PR #${pr.number} (preview-only): head moved (${commit.oid.slice(0, 8)} → ` +
+                      `${freshPr.head.sha.slice(0, 8)}) since the bulk query; next cron re-evaluates.`,
+                  );
+                  continue;
+                }
+                if (freshPr.mergeable === false) {
+                  core.info(`PR #${pr.number} (preview-only): computed merge conflict; skipping.`);
+                  continue;
+                }
+              } else {
+                const rollup = commit.statusCheckRollup;
+                if (!rollup) continue;
 
-              // Authoritative fresh re-query — never merge on a stale/stub snapshot.
-              const fresh = await headIsTrulyGreen(commit.oid);
-              if (!fresh.ok) {
-                core.info(
-                  `PR #${pr.number}: bulk-green but fresh head check not clean (${fresh.why}); ` +
-                    `skipping (avoids merging on a stale/stub snapshot).`,
-                );
-                continue;
+                // Quick bulk pre-filter (cheap) before the per-PR REST re-query.
+                const latest = new Map();
+                for (const c of rollup.contexts.nodes) {
+                  if (c.__typename === 'CheckRun') latest.set(c.name, c.conclusion);
+                  else if (c.__typename === 'StatusContext') latest.set(c.context, c.state);
+                }
+                const bulkGreen = [...REQUIRED].every((name) => GREEN(latest.get(name)));
+                if (!bulkGreen) {
+                  const missing = [...REQUIRED].filter((n) => !GREEN(latest.get(n)));
+                  core.debug(
+                    `PR #${pr.number}: required not all green per bulk rollup ` +
+                      `(non-green: ${missing.join(', ')}); leaving alone`,
+                  );
+                  continue;
+                }
+
+                // Authoritative fresh re-query — never merge on a stale/stub snapshot.
+                const fresh = await headIsTrulyGreen(commit.oid);
+                if (!fresh.ok) {
+                  core.info(
+                    `PR #${pr.number}: bulk-green but fresh head check not clean (${fresh.why}); ` +
+                      `skipping (avoids merging on a stale/stub snapshot).`,
+                  );
+                  continue;
+                }
               }
 
               core.info(
@@ -366,6 +519,19 @@ jobs:
                 const msg = String((err && err.message) || err);
                 if (/already merged/i.test(msg)) {
                   core.info(`PR #${pr.number} already merged; nothing to do.`);
+                  continue;
+                }
+                // A preview-only base can NEVER arm native auto-merge (the
+                // enablePullRequestAutoMerge mutation always errors "clean
+                // status"/"unstable status" on an unprotected base — PR #2466
+                // / run 28758624761), so the re-arm fallback below would just
+                // add a guaranteed-failure warning on top. Let the next cron
+                // tick retry the explicit merge instead.
+                if (basePreviewOnly) {
+                  core.warning(
+                    `PR #${pr.number} (preview-only): explicit merge failed (${msg}); ` +
+                      `re-arm is impossible on an unprotected base — next cron retries.`,
+                  );
                   continue;
                 }
                 // GitHub momentarily still disagrees (snapshot catching up, or a
