@@ -8,7 +8,7 @@ How platform changes reach sites, and how site-side improvements get back.
 |---|---|
 | Reusable workflow `uses:@<tag>` pins | **Dependabot** `github-actions` ecosystem (`examples/site/.github/dependabot.yml`) |
 | `cms-platform-theme` gem (layouts/includes/assets/plugins + Decap render hook + **admin UI** `theme/admin`) | **Dependabot** `bundler` ecosystem |
-| **EVERY** version ref in ONE PR — `platform_ref:` inputs + `platform.lock`, the `uses:@<tag>` pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:`, and any composite `@<sha>` pin | **`platform-bump`** reusable workflow — an **atomic single-version bump** (#13). Checks out with the caller PAT so the workflow-file push is authorised |
+| **EVERY** version ref in ONE PR — `platform_ref:` inputs + `platform.lock`, the `uses:@<tag>` pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:`, and any composite `@<sha>` pin — plus seeding any workflow caller the release newly made platform-dictated | **`platform-bump`** reusable workflow — an **atomic single-version bump** (#13) that also seeds newly-dictated workflow callers so workflow-SET parity (#54) passes too. Checks out with the caller PAT so the workflow-file push is authorised |
 | Skills (`.claude/skills`) | **`skills-sync`** reusable workflow (rsync + PR, platform-authoritative) |
 | AWS infra templates | re-run `infrastructure/*/deploy.sh` with the new templates |
 
@@ -21,7 +21,11 @@ above), so its PR is single-version-consistent on its own (#13) — Dependabot's
 `uses:@`/gem pins, so a consumer no longer sits skewed waiting for them to catch
 up. NOTE: a consumer only gets the atomic bump once its `platform-bump` thin
 caller pins a platform release that **contains** this fix; until then bump it
-manually (see the `platform-release-and-bump` skill).
+manually (see the `platform-release-and-bump` skill). `platform-bump` also
+seeds any workflow caller a release newly made platform-dictated — a file
+`examples/site/.github/workflows/` gained since the consumer's last bump — so
+a bump PR passes workflow-SET parity (#54) on its own too, not just
+version-pin-consistency (#29).
 
 ## Up (site → platform)
 

@@ -65,6 +65,13 @@ explicitly to the new release SHA since its files carry no SHA strings),
 `.github/workflows/*` (`uses:@` pins + `platform_ref:` with-inputs + the
 composite `@<SHA> # vX.Y.Z` pins).
 
+**This manual path does NOT seed newly-dictated workflow callers** — unlike
+`platform-bump.yml` (below), it only rewrites pins in files the consumer
+already has. If `check-platform-pin-consistency.js` reports `workflow-set:
+MISSING (platform-dictated)` after a manual bump, either copy the missing file
+from `examples/site/.github/workflows/<name>.yml` by hand and re-pin it, or
+just use the automated `platform-bump.yml` reusable instead.
+
 ## 3. Verify, then commit + PR + merge
 
 ```bash
@@ -92,10 +99,14 @@ parity/e2e are non-required.
   = `CMS_PLATFORM_PAT`, which MUST carry **Workflows: write** / `workflow` scope)
   so the workflow-file push is authorised — otherwise GitHub rejects it
   (`refusing to allow ... to update workflow ... without 'workflows' permission`).
-  Locked by `e2e/platform-bump-atomic.test.js`. **Caveat:** a consumer only gets
-  the atomic bump once its `platform-bump` thin caller pins a release that
-  CONTAINS this fix (≥ v0.1.23); to bump a consumer still on an older caller,
-  do step 2 manually (above). Dependabot remains wired as an independent net.
+  Locked by `e2e/platform-bump-atomic.test.js`. It also seeds any workflow
+  caller the release newly made platform-dictated (a file
+  `examples/site/.github/workflows/` gained since the consumer's last bump),
+  so the bump PR passes the workflow-set-parity check too, not just
+  pin-consistency. **Caveat:** a consumer only gets the atomic bump once its
+  `platform-bump` thin caller pins a release that CONTAINS this fix (≥
+  v0.1.23); to bump a consumer still on an older caller, do step 2 manually
+  (above). Dependabot remains wired as an independent net.
 - **Loop triggers are pairwise-disjoint (#70); the shared lane serializes
   time-overlap.** Each real-prod loop's heavy job shares the
   `prod-mutating-loop` concurrency group (HARD mutual exclusion — never two

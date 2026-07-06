@@ -1,9 +1,25 @@
 # Reusable ATOMIC down-sync helper. Bumps EVERY cms-platform reference a
 # consumer pins — `platform_ref:` inputs + `platform.lock`, the reusable-workflow
 # `uses:@<tag>` pins, the `cms-platform-theme` Gemfile `tag:`, and `Gemfile.lock`
-# (`tag:` + git `revision:`), plus any composite-action `@<sha>` pins — to the
+# (`tag:` + git `revision:`), plus any composite-action `@<sha>` pin — to the
 # latest cms-platform release, in ONE PR. So the single-version pin-consistency
 # guard (#29) passes on this PR alone.
+#
+# It ALSO seeds any workflow caller that release newly made platform-dictated:
+# if examples/site/.github/workflows/ gained a file at the new ref that the
+# consumer doesn't yet carry, it's copied in (re-pinned to the new ref) so the
+# workflow-SET-parity half of the same guard (#54) also passes on this PR
+# alone. Previously a newly-dictated caller had to be hand-added AFTER the bump
+# PR's pin-consistency check failed with `workflow-set: MISSING
+# (platform-dictated)` — observed live when v0.1.54 added
+# dependabot-rearm-sweep.yml: both adamdaniel.ai's and jodidaniel.com's bump
+# PRs failed and needed a manual follow-up commit to unblock. A consumer that
+# once deliberately DELETED a dictated caller gets it re-seeded too — the
+# checker has no such opt-out (it fails MISSING unconditionally), so seeding
+# is always the correct move, never a false-positive graft-back. This only
+# ever ADDS a wholly-absent caller; a file that exists but has drifted CONTENT
+# is untouched (that's dev-hooks-sync / the CUR->LATEST rewrite's job — #63
+# content parity catches that class separately).
 #
 # (Previously this bumped ONLY `platform_ref:` and left the `uses:@` pins + the
 # theme gem to Dependabot's piecemeal PRs — which breaks the single-version
@@ -79,7 +95,59 @@ jobs:
             printf 'platform_repo: %s\nplatform_ref: %s\n' "$PLATFORM" "$LATEST" > platform.lock
           fi
 
-          git diff --quiet && { echo "no changes"; exit 0; }
+          # Seed any workflow caller this release newly made platform-dictated
+          # (issue: v0.1.54 added dependabot-rearm-sweep.yml and every consumer's
+          # bump PR failed pin-consistency's workflow-set-parity check until it
+          # was hand-added). The canonical dictated set lives at
+          # examples/site/.github/workflows/ in the platform repo, read AT THE
+          # NEW ref so it reflects exactly what pin-consistency will check for
+          # once this PR's platform.lock lands.
+          mapfile -t DICTATED < <(
+            gh api "repos/$PLATFORM/contents/examples/site/.github/workflows?ref=$LATEST" \
+              --jq '.[] | select(.type=="file") | .name' 2>/dev/null | grep -E '\.ya?ml$' || true
+          )
+          SEEDED=()
+          for name in "${DICTATED[@]}"; do
+            dest=".github/workflows/$name"
+            # Only a wholly-MISSING caller is seeded. A file that already exists
+            # is left alone even if its content has drifted from the canonical
+            # template — that's dev-hooks-sync / content-parity (#63) territory,
+            # not this bump's job. This also covers a consumer that deliberately
+            # deleted a dictated caller: the pin-consistency guard has no
+            # opt-out for that (it fails workflow-set: MISSING unconditionally),
+            # so re-seeding here can never be wrong.
+            [ -f "$dest" ] && continue
+            mkdir -p .github/workflows
+            gh api "repos/$PLATFORM/contents/examples/site/.github/workflows/$name?ref=$LATEST" \
+              --jq '.content' | base64 -d > "$dest"
+            # Stamp the seeded file's platform-ref pin(s) to $LATEST. Can't reuse
+            # the CUR->LATEST replace above: CUR is the CONSUMER's old ref, but
+            # the example's own embedded pin can lag well behind the release
+            # being bumped to (examples/site is only re-pinned when THAT file's
+            # content changes, not on every tag — this repo's own examples span
+            # v0.1.1..v0.1.52 today), so stamp unconditionally to whatever
+            # version is actually there. Covers both ref shapes the
+            # pin-consistency checker recognizes: a reusable `uses:@vX.Y.Z` and
+            # a composite action's trailing `# vX.Y.Z` comment (defensive; no
+            # example currently uses the latter).
+            LATEST="$LATEST" perl -i -pe '
+              s{(\Q$ENV{PLATFORM}\E/\.github/(?:workflows|actions)/[^@[:space:]]+\@)v[0-9]+(?:\.[0-9]+){0,3}}{$1$ENV{LATEST}}g;
+              s{(\Q$ENV{PLATFORM}\E/\.github/actions/[^[:space:]]+\s+#\s*)v[0-9]+(?:\.[0-9]+){0,3}}{$1$ENV{LATEST}}g;
+            ' "$dest"
+            SEEDED+=("$name")
+          done
+          if [ "${#SEEDED[@]}" -gt 0 ]; then
+            printf 'seeded %d newly platform-dictated workflow(s): %s\n' "${#SEEDED[@]}" "${SEEDED[*]}"
+          fi
+
+          # git diff --quiet alone is blind to a brand-new UNTRACKED file (a
+          # seeded caller, or a first-adoption platform.lock) — it only compares
+          # tracked content. Fold in `git status --porcelain` so an add-only
+          # change still trips the "there IS something to bump" path.
+          if git diff --quiet && [ -z "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "no changes"
+            exit 0
+          fi
           BRANCH="platform/bump-$LATEST"
           git config user.name  cms-platform-bot
           git config user.email cms-platform-bot@users.noreply.github.com
@@ -87,7 +155,11 @@ jobs:
           git add -A
           git commit -m "chore: bump cms-platform to $LATEST"
           git push -f origin "$BRANCH"
+          SEED_NOTE=""
+          if [ "${#SEEDED[@]}" -gt 0 ]; then
+            SEED_NOTE=" Seeded newly platform-dictated workflow caller(s): ${SEEDED[*]}."
+          fi
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
             --title "Bump cms-platform to $LATEST" \
-            --body "Atomic single-version bump of every cms-platform reference (\`platform_ref:\` + \`platform.lock\`, the \`uses:@\` reusable-workflow pins, the \`cms-platform-theme\` Gemfile \`tag:\`, and \`Gemfile.lock\` \`tag:\` + \`revision:\`) to $LATEST. The pin-consistency guard (#29) passes on this PR alone." \
-          || gh pr edit "$BRANCH" --body "Bump cms-platform to $LATEST."
+            --body "Atomic single-version bump of every cms-platform reference (\`platform_ref:\` + \`platform.lock\`, the \`uses:@\` reusable-workflow pins, the \`cms-platform-theme\` Gemfile \`tag:\`, and \`Gemfile.lock\` \`tag:\` + \`revision:\`) to $LATEST. The pin-consistency guard (#29) passes on this PR alone.${SEED_NOTE}" \
+          || gh pr edit "$BRANCH" --body "Bump cms-platform to $LATEST.${SEED_NOTE}"
