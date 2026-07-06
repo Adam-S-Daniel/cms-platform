@@ -26,9 +26,10 @@ test.describe("scaffolder seeds a neutral placeholder logo (#25)", () => {
     target = fs.mkdtempSync(path.join(os.tmpdir(), "cms25-scaffold-"));
     // Empty-dir guard in create-site.js rejects a non-empty target; mkdtemp gives
     // a fresh empty dir, so run the scaffolder straight into it.
+    // --platform-ref pins the version so this test never hits the network.
     execFileSync(
       "node",
-      [SCAFFOLDER, target, "--yes", "--domain", "test.local", "--repo", "test", "--owner", "test-owner"],
+      [SCAFFOLDER, target, "--yes", "--domain", "test.local", "--repo", "test", "--owner", "test-owner", "--platform-ref", "v0.1.52"],
       { stdio: "pipe" },
     );
     const logoPath = path.join(target, "assets", "images", "logo.svg");

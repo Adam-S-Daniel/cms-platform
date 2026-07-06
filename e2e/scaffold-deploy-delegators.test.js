@@ -20,9 +20,10 @@ test.describe("scaffolder delivers OAuth-proxy + bootstrap as delegating wrapper
   let target;
   test.beforeAll(() => {
     target = fs.mkdtempSync(path.join(os.tmpdir(), "cms69-scaffold-"));
+    // --platform-ref pins the version so this test never hits the network.
     execFileSync(
       "node",
-      [SCAFFOLDER, target, "--yes", "--domain", "test.local", "--repo", "test", "--owner", "test-owner"],
+      [SCAFFOLDER, target, "--yes", "--domain", "test.local", "--repo", "test", "--owner", "test-owner", "--platform-ref", "v0.1.52"],
       { stdio: "pipe" },
     );
   });

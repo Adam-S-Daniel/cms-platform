@@ -78,9 +78,10 @@ test.describe("scaffolder + fixture expose /preview/ and a 404 page (#23)", () =
 
   test.beforeAll(() => {
     target = fs.mkdtempSync(path.join(os.tmpdir(), "cms23-scaffold-"));
+    // --platform-ref pins the version so this test never hits the network.
     execFileSync(
       "node",
-      [SCAFFOLDER, target, "--yes", "--domain", "test.local", "--repo", "test", "--owner", "test-owner"],
+      [SCAFFOLDER, target, "--yes", "--domain", "test.local", "--repo", "test", "--owner", "test-owner", "--platform-ref", "v0.1.52"],
       { stdio: "pipe" },
     );
     const previewPath = path.join(target, "preview.md");
