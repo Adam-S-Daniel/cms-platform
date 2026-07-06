@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.52`** — `v0.1.0`–`v0.1.52` are all tagged GitHub
+**Current release: `v0.1.57`** — `v0.1.0`–`v0.1.57` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -763,6 +763,49 @@ per-PR checkout):
   batch-strand exposure applies to every consumer that calls
   `dependabot-auto-merge.yml`.
 
+## Scheduled-run health audit (silent-failure alerting, v0.1.57)
+
+Scheduled workflows fail SILENTLY — an `event=schedule` failure has no PR to
+go red on and fires no notification. Observed live (the 2026-07 audit that
+motivated this): adamdaniel.ai's daily editorial-label-audit was red 24/30
+days for three weeks unnoticed; jodidaniel.com's sweep-stale-cms-prs
+startup-failed 30/30 for a month (a dropped `secrets:` map). The alerting
+layer:
+
+- **`.github/workflows/scheduled-run-health.yml`** (reusable) — daily scan of
+  the CALLER repo's last `window_hours` (default **48h**) of schedule-event
+  runs for `failure` / `startup_failure` / `timed_out` (NOT `cancelled` — the
+  loops cancel superseded runs by design). Findings land on **one** tracking
+  issue (label `ci`, found via a hidden `<!-- scheduled-run-health-audit -->`
+  marker): opened on first failure (the issue notification IS the alert),
+  NEW runs commented with run-id dedupe (a hidden `<!-- run-ids: … -->`
+  block keeps the dedupe exact past the 5-links-per-workflow display cap),
+  auto-closed once a full window passes clean. Zero changes to the existing
+  scheduled callers — it watches them all from the outside. Logic lives in
+  `scripts/audit-scheduled-runs.js` (requireable; pure helpers exported),
+  sparse-checked-out by the reusable, which passes
+  `--repo ${{ github.repository }}` explicitly (no git repo in the workspace
+  — the editorial-label-audit v0.1.16 trap).
+- **Why 48h for a daily audit:** GitHub throttles crons on these repos
+  (measured: `*/5` fires every 45-90 min; daily crons run 4-5h late), so two
+  consecutive daily audit runs can be ~29h apart — a 24-25h window would
+  leave a blind gap. The overlap can't double-report thanks to the run-id
+  dedupe.
+- **Exit-code contract:** the audit run stays GREEN when it successfully
+  files/updates the alert (the issue is the channel); red means the audit
+  ITSELF is broken (API/permission failure) — same "red needs a human"
+  contract as `audit-editorial-labels.js --fix`. The audit is itself a
+  scheduled workflow, so its own failed run is reported by the NEXT day's run.
+- **Callers:** `self-scheduled-run-health.yml` dogfoods it on cms-platform
+  (cron `47 8 * * *` + dispatch); consumers get
+  `examples/site/.github/workflows/scheduled-run-health.yml` (auto-seeded by
+  `platform-bump` since v0.1.55). Callers must grant `actions: read` +
+  `issues: write`, and declare the dispatch `dry_run` as `type: string` +
+  `fromJSON`-coerced (typed booleans startup-fail the handoff — the exact
+  failure class this audit exists to catch). Lint-locked by
+  `e2e/scheduled-run-health.test.js` (workflow shapes + the script's pure
+  helpers; registered in `PLATFORM_META_SPECS`).
+
 ## E2E local webServer: decap readiness + :4000 crash resilience
 
 `e2e/playwright.config.js`'s local lane (`TARGET=local`) starts two webServers;
@@ -1211,7 +1254,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.52)
+## Version history (v0.1.0 → v0.1.57)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1732,6 +1775,21 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   `basePreviewOnly` (`baseRefName !== 'main'`) carve-out so its cron backstop
   also evaluates these PRs, whose `autoMergeRequest` can never populate in the
   first place.
+
+- **v0.1.53–v0.1.56** (2026-07-05/06) — shipped without history entries here:
+  #133 stale-docs sweep, #134 scaffolder latest-release pins, #135 preview-only
+  merge unwedging, #136 dependabot re-arm sweep (see its section), #137
+  platform-bump seeds newly-dictated callers, #138 base-aware nudge readiness.
+
+- **v0.1.57** (2026-07-06) — **scheduled-run failure alerting (the silent-red
+  problem).** New `scheduled-run-health.yml` reusable +
+  `self-scheduled-run-health.yml` dogfood caller + `examples/site` thin caller:
+  daily scan of the caller repo's last 48h of `event=schedule` runs for
+  `failure`/`startup_failure`/`timed_out`, filed on a single `ci`-labelled
+  tracking issue (open on first failure, run-id-deduped comments for new ones,
+  auto-close after a clean window). Motivated by the 2026-07 audit: adamdaniel's
+  editorial-label-audit red 24/30 days and jodidaniel's sweep-stale-cms-prs red
+  30/30 for a month, all unnoticed. See "Scheduled-run health audit" section.
 
 ## Consumers
 
