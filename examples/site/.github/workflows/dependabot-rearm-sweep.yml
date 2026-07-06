@@ -1,0 +1,30 @@
+name: Dependabot re-arm sweep
+# Re-arms/merges Dependabot PRs GitHub auto-disabled after a sibling PR in
+# the same batch merged first (see the platform's dependabot-rearm-sweep.yml
+# reusable for the #118-#122 postmortem). Companion to dependabot-auto-merge.yml,
+# which arms auto-merge per-PR on `pull_request` but has no way to re-fire
+# once GitHub disables it and no further PR event ever arrives.
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+     || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    - cron: '17 8 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List sweep candidates without merging or re-arming (true/false)'
+        type: string
+        default: 'false'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  rearm:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/dependabot-rearm-sweep.yml@v0.1.52
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}
