@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.47`** — `v0.1.0`–`v0.1.47` are all tagged GitHub
+**Current release: `v0.1.52`** — `v0.1.0`–`v0.1.52` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -852,9 +852,10 @@ update `isInjectedShell()` in lockstep.**
 ## Self-CI lanes
 
 `.github/workflows/self-ci.yml` is the machinery repo's own merge gate (every
-other workflow here is an `on: workflow_call` reusable, so a plain PR would
-otherwise run zero checks). It runs four FAST lanes on `pull_request` + `push`
-to `main`:
+other workflow here is an `on: workflow_call` reusable; `self-ci.yml` plus its
+sibling `self-secrets-scan.yml` — which dogfoods the `secrets-scan.yml`
+reusable on this repo's own history — are the only two that run directly on a
+plain PR). It runs four FAST lanes on `pull_request` + `push` to `main`:
 
 1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail).
 2. **ruby-theme-specs** — `theme/spec/*_test.rb` (hard-fail).
@@ -863,6 +864,11 @@ to `main`:
    lint is picked up automatically). Run with `TARGET=prod` +
    `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so no Jekyll/browser bring-up (hard-fail).
 4. **cfn-lint** over the CloudFormation templates (advisory, `continue-on-error`).
+
+`self-secrets-scan.yml` (#126) runs alongside it as its own workflow,
+gitleaks-scanning the platform repo's diff on `pull_request`, incrementally on
+`push` to `main`, and full-history weekly — the same posture the consumer
+caller gets from `secrets-scan.yml`, applied to the machinery repo itself.
 
 The heavy browser matrix + `@admin-write` write-path specs run in **CONSUMER**
 e2e (dogfood / consuming-site CI), NOT in platform self-CI.
@@ -973,10 +979,12 @@ derives from a `prod-url` input; no hardcoded site URL), `.github/actions/cms-re
 **Deliberately NOT ported / simplified** (adamdaniel-only infra — see each
 workflow's "PLATFORM PORT NOTES" header): the GHCR `ci-runner-image` prebaked
 Jekyll/Ruby image + the `build-image` jobs + `container:` blocks (deps install
-inline instead); the stuck-PR diagnostic steps (depend on un-ported
-`scripts/diagnose-stuck-pr.js` + `auto-resolve-newline-conflict.js`); the
-preview-loop `if: ${{ false }}` operational disable (an adamdaniel dispatcher
-incident, not a platform invariant). The prod-loop serialization lint was
+inline instead); the preview-loop `if: ${{ false }}` operational disable (an
+adamdaniel dispatcher incident, not a platform invariant). (The stuck-PR
+diagnostic and the newline auto-resolver ARE both shipped — see "Remaining
+work" below: `scripts/diagnose-stuck-pr.js`, wired via
+`e2e/with-stuck-pr-diagnostic.js`, and `scripts/auto-resolve-newline-conflict.js`;
+also see the `cms-stuck-pr-triage` skill.) The prod-loop serialization lint was
 updated to expect the two-job (no build-image) inline-deps shape while keeping
 every load-bearing invariant. `visual-regression` still needs the consuming repo
 to ship a buildable Jekyll site + Gemfile, AWS OIDC/S3/CloudFront, and a
@@ -1118,11 +1126,20 @@ didn't ship — un-scrubbed PR output was a secret-leak), local pre-commit hygie
 as the single allowlist shared with `secrets-scan.yml`), and `e2e/package-lock.json`.
 Stale identity-bound tests were re-parameterized to the env/`window.CMS_*` model.
 
+**`e2e-required-stub.yml` — the required-check-stub IS ported (reusable).**
+A docs-/infra-only PR is `paths-ignore`d out of `e2e-tests.yml`, so the
+REQUIRED `e2e / e2e` status check would otherwise never report and branch
+protection blocks the PR forever (the "missing-check trap"). The platform
+ships `.github/workflows/e2e-required-stub.yml` (a generic one-context
+`e2e / e2e` synthetic-pass stub), an example caller
+(`examples/site/.github/workflows/e2e-stub.yml`), and a lint
+(`e2e/required-check-stub-paths.test.js`) that enforces the caller's
+`paths:` mirrors `e2e-tests.yml`'s `paths-ignore` in lockstep. This replaces
+the old per-shard `required-check-stubs.yml` that #1858 removed.
+
 Still open:
 - **Deliberate skips — NOT ported** (each is repo-/site-specific machinery, not a
   reusable; a consuming site authors its own):
-  - `required-check-stubs` — encodes the repo's specific required-check /
-    path-filter topology; each site authors its own.
   - `code-quality` — platform-self-CI (lints the machinery itself); kept
     **platform-internal and NOT shipped to consumers**. The self-test fixtures
     (`e2e/fixture-site`, `e2e/fixture-site-singlepage`) let
@@ -1135,12 +1152,17 @@ Still open:
   `.github/ci-runner/Dockerfile`, neither of which the machinery repo ships
   (no installable lockfile here); it exercises fully against the synthetic
   `scaffold()` fixtures and runs green in a consuming site that has both.
-- **Visual-regression baselines are site-specific** — a new site regenerates
-  snapshots (`npx playwright test --update-snapshots`).
-- Dogfood adamdaniel.ai as consumer #1, then tag `v0.1.0` (the example `@v0.1.0`
-  pins don't resolve until a release exists).
+- **Pixel-level visual-regression baselines were retired in v0.1.34** (see
+  "#86 retire the dead committed-PNG visual suite" below) — replaced by
+  structural "renders" smoke checks + a prod-diffing VIDEO pipeline
+  (`visual-regression.yml` + `compute-visual-diffs.js`) that needs no
+  committed baselines at all. The only committed snapshots a new site might
+  need to regenerate are the ARIA-contract YAML snapshots under
+  `e2e/cms-editor-aria-contract.spec.js-snapshots/*.aria.yml`
+  (`npx playwright test --update-snapshots` still applies to those
+  specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.47)
+## Version history (v0.1.0 → v0.1.52)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1499,7 +1521,9 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
     main) goes all-required-green + auto-merge-armed but `mergeStateStatus=BLOCKED`
     (the #1812 stale-snapshot), and the cron `cms-automerge-nudge` can't cover it
     (5-min cadence > the ~720s loop budget; it targets main.json checks + merges
-    into main). ROOT GAP found by audit: **none of the 5 preview specs passed
+    into main) (since superseded in part — see v0.1.52, which extended
+    `cms-automerge-nudge.yml`'s own cron backstop to cover base!=main PRs
+    directly). ROOT GAP found by audit: **none of the 5 preview specs passed
     `onBudgetExhausted`** (every prod spec does) — so their `waitForChangeReflected`
     wait had NO recovery. Fix: new shared `makePreviewCanaryRecoverer`
     (github-actions-poll.js, sibling of `makeDeployQueueExtender`) + `headChecksTrulyGreen`
@@ -1613,6 +1637,53 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   Lint-locked by `e2e/editorial-label-audit-repo.test.js`; shim behaviour by
   `e2e/publish-via-auto-merge{.test.js,-browser.spec.js}`.
 
+- **v0.1.49** (2026-07-05) — **sweep robustness + fixture-pr exports + preview-env
+  concurrency + self-secrets-scan, bundled.** #127: `sweep-stale-cms-prs.yml`
+  tolerates a consumer missing `_e2e/`/`_posts/`/`assets/images/uploads`
+  directories (GitHub's Contents API 404s a missing-directory listing, which
+  `set -euo pipefail` turned into a hard crash — jodidaniel.com's daily sweep
+  had failed 30/30 times since 2026-06-06); also renamed to "... (reusable)".
+  #128: `e2e/cms-fixture-pr.js` now exports `openPr`/`addReadyLabel` (their
+  absence crashed `cms-tags-lifecycle.spec.js`'s cleanup safety-net with
+  "openPr is not a function"). #129: job-level `concurrency` on each preview-env
+  reusable's mutating job (`cms-publish-loop-preview`, `cms-preview-loops`,
+  `cms-delete-published-preview`) so simultaneous dispatches against the same
+  PR's preview environment stop queuing deploys N-deep past the URL-reflect
+  budget; + a bounded retry on the "Delete published entry" click. #126: new
+  `self-secrets-scan.yml` — the platform repo now runs `secrets-scan.yml` on
+  itself (mirroring the consumer caller's PR/push/weekly-schedule triggers);
+  + a consistent `(reusable)` suffix on every `workflow_call` workflow's
+  display name.
+- **v0.1.50** (2026-07-05) — **#130 discard `gh api` error-body stdout on
+  failed listings.** Follow-up to #127 (insufficient): `gh api ... 2>/dev/null
+  || true` swallows the exit code, but `gh api` still relays the HTTP error
+  body to STDOUT, so a 404 captured `{"message":"Not Found",...}` into the
+  variable — on jodidaniel.com (no `_e2e/`) the sweep then tried to delete a
+  "file" literally named `{"message":"Not`. Fixed in `sweep-stale-cms-prs.yml`
+  (the three directory listings + the Tier-3 branch-json fetch) and the
+  same-class bug in `regression-review-reaper.yml`'s run/deployment listings,
+  by moving the fallback OUTSIDE the command substitution
+  (`files=$(gh api … 2>/dev/null) || files=""`).
+- **v0.1.51** (2026-07-05) — **#131 `cms-publish-loop-preview` merge-aware wait
+  + queue-aware 90-min budget** (port of #1723 Cat 1 hardening from the
+  prod-mutate spec). The spec's `TEST_TIMEOUT_MS` (12min) was structurally too
+  small for the real Decap → PR → nudge → merge → deploy-preview → CloudFront
+  chain (confirmed-healthy real runs took 10.5-13 min and the spec still died
+  at "Test timeout of 720000ms exceeded"); raised to 90min with per-leg budget
+  math, mirroring the prod/delete-preview pattern.
+- **v0.1.52** (2026-07-05) — **#132 preview-only PR merge fallback + nudge
+  carve-out.** `cms-editorial-workflow.yml`'s `auto-merge-when-ready` now
+  recovers the "Pull request is in unstable status" GraphQL error the same way
+  it already handles "clean status" (a bounded ~10-min poll of the PR's own
+  computed mergeable state, falling back to an explicit squash merge) — a
+  `cms/preview-only` PR (base != `main`) has no required-status-check
+  protection on its base branch, so `enablePullRequestAutoMerge` can never
+  succeed and nothing else re-triggers this event-driven job once checks
+  finish (PR #2466 sat unmerged 26+ min). `cms-automerge-nudge.yml` gains a
+  `basePreviewOnly` (`baseRefName !== 'main'`) carve-out so its cron backstop
+  also evaluates these PRs, whose `autoMergeRequest` can never populate in the
+  first place.
+
 ## Consumers
 
 - **adamdaniel.ai** — consumer #1, user-owned, the dogfood. Migrated to
@@ -1628,9 +1699,10 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   live-gate in `_data/settings.yml` `site_live` (default `false`) keeps prod
   coming-soon with zero bio leak. Go-live is tracked in jodidaniel issue #26. Its
   token-driven CMS automation (cms-automerge-nudge, auto-resolve-newline-conflict,
-  sweep-stale-cms-prs) requires a **`CMS_E2E_PAT` repo secret** which is not yet
-  provisioned — those scheduled workflows fail until it's added (the sweep
-  reusable marks it `required: true`, so its absence is a `startup_failure`).
+  sweep-stale-cms-prs) runs on a provisioned **`CMS_E2E_PAT` repo secret**; the
+  scheduled-workflow failures observed through mid-2026-07 were actually the
+  sweep/reaper bugs fixed in v0.1.49-v0.1.51 (missing-directory-listing crash
+  #127, `gh api` error-stdout capture #130), not a missing secret.
 
 ## Roadmap / open issues
 

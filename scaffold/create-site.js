@@ -7,8 +7,9 @@
  *       --owner Adam-S-Daniel --repo example.com --domain example.com --title "Example"
  *
  * Flags may be omitted; you'll be prompted. Copies the platform-owned files
- * (admin/, skills, thin workflow callers, dependabot) from this repo and
- * generates the site identity (_config.yml, Gemfile, site-params.env). Content,
+ * (the admin/collections.site.yml.example seam reference, skills, thin
+ * workflow callers, dependabot) from this repo and generates the site
+ * identity (_config.yml, Gemfile, site-params.env). Content,
  * branding, and AWS values stay in the new site; platform machinery flows in
  * via the gem + reusable workflows (see docs/SYNC.md).
  */

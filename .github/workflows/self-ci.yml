@@ -1,10 +1,12 @@
 # Self-CI — the platform lints ITSELF.
 #
 # WHY THIS EXISTS
-# Every other workflow in this repo is an `on: workflow_call` reusable, so a
-# pull_request against cms-platform runs ZERO checks of its own (the v0.1.1 PR
-# had none — a workflow YAML typo, a broken theme filter, or a regressed
-# harness lint could merge unnoticed). This workflow runs the platform's own
+# Every other workflow in this repo is an `on: workflow_call` reusable except
+# this workflow's sibling `self-secrets-scan.yml` (which dogfoods the
+# secrets-scan reusable on this repo's own history) — without these two, a
+# pull_request against cms-platform would run ZERO checks of its own (the
+# v0.1.1 PR had none — a workflow YAML typo, a broken theme filter, or a
+# regressed harness lint could merge unnoticed). This workflow runs the platform's own
 # LIGHT, high-value self-checks directly on `pull_request` + `push` to main so
 # the machinery repo has a real merge gate without standing up a full
 # Playwright browser matrix or any AWS credentials.

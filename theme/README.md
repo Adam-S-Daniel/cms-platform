@@ -31,7 +31,9 @@ cms:
 
 - `_layouts/`, `_includes/` — merged in by Jekyll's theme support.
 - `assets/` — `css/main.css`, `js/marked.min.js`, a **neutral, wordless
-  placeholder** `images/logo.svg`, plus the `images/uploads` + `widgets` dirs.
+  placeholder** `images/logo.svg`, plus an empty `widgets/` directory (reserved
+  for future Decap custom-widget assets; unused today). Site-uploaded media
+  (Decap's `media_folder`) lives in the consuming SITE, not the gem.
   The logo is **site-owned**: the gem ships only a generic placeholder (never a
   specific site's brand), and the Decap render defaults `cms.logo_url` to
   `<url>/assets/images/logo.svg`. A site brands its `/admin` by shipping its own

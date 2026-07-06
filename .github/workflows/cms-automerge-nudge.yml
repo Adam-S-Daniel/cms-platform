@@ -85,17 +85,23 @@
 #   (#1812/#1815) were never recovered. The authoritative signal is the
 #   fresh check state, not the cached merge snapshot.
 #
-# The intersection above is exactly the #1812/#1815 stuck pattern. With the
-# caller's 5-min cron, worst-case time-to-merge drops from "until the
-# daily sweep closes it" to ~5 min.
+# The intersection above is exactly the #1812/#1815 stuck pattern. The
+# caller declares a `*/5` cron, but GitHub throttles scheduled workflows
+# under load — in practice this fires roughly every 45-90 min, not every 5
+# (the same empirical throttle cms-editorial-workflow.yml's inline poll
+# comment documents), so worst-case time-to-merge drops from "until the
+# daily sweep closes it" to that ~45-90 min window.
 #
 # Out of scope:
 #
 #   - Does NOT change the editorial workflow's auto-merge enable path.
 #     The original mutations are unchanged; this is a recovery mechanism
 #     that fires only when they happen to land in the racy state.
-#   - Does NOT act where auto-merge wasn't already armed. A PR with
-#     `autoMergeRequest: null` is left alone.
+#   - Does NOT act where auto-merge wasn't already armed, UNLESS the PR's
+#     base isn't `main` (see the CARVE-OUT under item 2 above) — a PR with
+#     `autoMergeRequest: null` on a main-based PR is left alone; a
+#     `cms/preview-only` PR (base != main) is evaluated regardless, since
+#     its autoMergeRequest can never populate in the first place.
 #   - Does NOT touch non-CMS PRs (the `automated-test` label gate).
 #
 # PLATFORM PORT NOTES (vs adamdaniel.ai@origin/main): became a
