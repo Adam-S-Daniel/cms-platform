@@ -4,10 +4,13 @@ Reusable CMS machinery — **Jekyll + Decap CMS + AWS** (S3 / CloudFront / Lambd
 for spinning up new sites like [adamdaniel.ai](https://adamdaniel.ai) and keeping
 platform improvements flowing **both ways** after a site is created.
 
-> **Status:** early scaffolding. The full design, parameterization map, creation
-> path, sequencing, and verification plan live in
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Machinery is being extracted from
-> `adamdaniel.ai` one layer at a time.
+> **Status:** mature and in production. Two live consumer sites (adamdaniel.ai,
+> jodidaniel.com) run on this platform at `v0.1.52`, with a full Playwright e2e
+> matrix (publish loops, canary probes, parity, visual regression) validating
+> every release against real production deploys. The full design,
+> parameterization map, and history live in
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and this repo's `AGENTS.md`
+> version history.
 
 ## The model
 

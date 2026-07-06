@@ -3,7 +3,7 @@
 # workflow_dispatch triggers + run-name + concurrency lane; delegates the
 # stuck-PR recovery to the platform's reusable workflow.
 #
-# Re-enables auto-merge every 5 minutes on any open CMS canary PR whose
+# Re-enables auto-merge on any open CMS canary PR whose
 # required checks are all green but whose mergeStateStatus is still
 # BLOCKED (issue #1815 Blocker 1 — see the reusable's header for the
 # full #1812 differential).
@@ -20,9 +20,12 @@ run-name: >-
 
 on:
   schedule:
-    # Every 5 minutes — well under the 6h sweep threshold so a stuck PR
-    # is recovered long before it would be closed. Cron load is ~288
-    # runs/day, each <1 min, one GraphQL query + 0-N tiny mutations.
+    # Declared every 5 minutes, well under the 6h sweep threshold — but
+    # GitHub throttles scheduled-workflow cadence under load, so this fires
+    # roughly every 45-90 min in practice (see the reusable's header), not
+    # literally every 5. Still recovers a stuck PR long before the daily
+    # sweep would close it. Cron load is bounded regardless: each run is
+    # <1 min, one GraphQL query + 0-N tiny mutations.
     - cron: "*/5 * * * *"
   workflow_dispatch:
 

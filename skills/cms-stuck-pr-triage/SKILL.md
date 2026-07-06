@@ -20,11 +20,11 @@ Most user-facing symptoms ("stuck for 30 min", "cancelled and restarted three ti
 - A workflow run was just cancelled and a new one was kicked off — before suggesting any workflow changes, finish this triage.
 - After landing changes that affect e2e spec selection (lane filtering, the spec set itself), proactively audit open `cms/*` PRs whose CI ran against the pre-fix tree.
 
-## This is a manual / agent procedure — there is no diagnostic script
+## A diagnostic script exists, but the procedure below is still manual
 
-The platform deliberately ships **no** `scripts/diagnose-stuck-pr.js` (and no `Diagnose stuck PRs` workflow step). Earlier prose described an auto-generated `*-stuck-pr-diagnostic` PR comment produced by that script; that machinery is **not** part of the platform. Do not look for it. Run the `gh`-CLI procedure below by hand (or have an agent run it).
+The platform *does* ship `scripts/diagnose-stuck-pr.js` — a read-only diagnostic that enumerates the suspect PRs, classifies each (`BLOCKED` by failing checks, `DIRTY` with a real conflict, `DIRTY` with a newline-only conflict the auto-resolver will fix, a queued `deploy-production` run holding the lane), and prints a Markdown report. It is wired up two ways: (1) `e2e/with-stuck-pr-diagnostic.js` is the in-spec wrapper (Layer 1) — when a wait helper (`waitForMerge`, `waitForCmsPullRequest`, etc.) is about to throw a `Timed out waiting for …` error, the wrapper spawns the script and appends its Markdown output to that error's message; (2) `cms-publish-loop-host.yml` references it in a comment for the same failure class. There is no separate standalone `Diagnose stuck PRs` workflow step, and no auto-generated PR *comment* from the script itself — the diagnostic output lands in the spec's own error message / test-failure output, which is what `post-failure-comment` then surfaces as a PR comment (markers `host-loop-failure-summary`, `prod-mutate-failure-summary`, `preview-loop-failure-summary`).
 
-The platform *does* ship a smaller helper, `e2e/with-stuck-pr-diagnostic.js`, which the wait-helper uses to **append an inline diagnostic to its own error message** when it times out. So when a publish-loop spec times out, the scrubbed failure block surfaced by `post-failure-comment` (markers `host-loop-failure-summary`, `prod-mutate-failure-summary`, `preview-loop-failure-summary`) often already contains the offending PR number and its merge state. Read that comment first — but the enumeration / classification / remediation below is all manual.
+So when a publish-loop spec times out, that failure-summary comment often already contains the offending PR number, its merge state, and the diagnostic's classification. Read that comment first — but the script only diagnoses the one PR's context around a specific timeout; it doesn't run the fleet-wide enumeration below. The enumeration / classification / remediation procedure below is still manual.
 
 ## Procedure
 
@@ -61,9 +61,9 @@ gh pr view <N> --json mergeStateStatus,autoMergeRequest,statusCheckRollup \
          non_green: [.statusCheckRollup[] | select(.conclusion=="FAILURE" or .conclusion=="CANCELLED" or .status=="IN_PROGRESS") | .name]}'
 ```
 
-If `cms-automerge-nudge.yml` has been ported into the platform, it handles this automatically: it runs every 5 minutes and re-calls `enablePullRequestAutoMerge` (a no-op that re-triggers GitHub's merge-state evaluation) against any `automated-test`-labelled PR matching exactly this pattern, dropping worst-case time-to-merge from "until the sweep closes it" to ~5 min. It only touches PRs that (1) carry `automated-test`, (2) already have auto-merge enabled, (3) are BLOCKED, and (4) have all required checks green — so it never re-enables auto-merge a human disabled and never touches a real editor's draft.
+`cms-automerge-nudge.yml` handles this automatically. It declares a `*/5` cron, but GitHub throttles scheduled workflows under load — in practice it fires roughly every 45-90 min, not every 5, so worst-case time-to-merge drops from "until the sweep closes it" to that ~45-90 min window. Its recovery mechanism is an explicit synchronous `pulls.merge` (SQUASH) against any `automated-test`-labelled PR matching exactly this pattern — a real merge forces GitHub to re-evaluate mergeability fresh, dislodging the stale BLOCKED snapshot that a no-op `enablePullRequestAutoMerge` re-call was observed NOT to reliably dislodge. Re-enabling auto-merge is kept only as a **fallback**, tried when the explicit merge momentarily 405s. It only touches PRs that (1) carry `automated-test`, (2) already have auto-merge enabled OR have a non-`main` base (`basePreviewOnly` — since v0.1.52: a `cms/preview-only` PR can never get `autoMergeRequest` populated in the first place, since its base branch has no required-status-check protection for GitHub's auto-merge to key off, so the null-`autoMergeRequest` check alone would skip it forever), (3) are BLOCKED-or-unevaluated, and (4) have all required checks green — so it never re-enables auto-merge a human disabled on a main-based PR and never touches a real editor's draft.
 
-If that workflow is **not** yet present (or you don't want to wait for its cron), nudge the stuck PR by hand — re-enabling auto-merge re-evaluates the merge state:
+As a manual fallback (or if you don't want to wait for the next cron pass), nudge the stuck PR by hand — re-enabling auto-merge re-evaluates the merge state:
 
 ```bash
 gh pr merge <N> --auto --merge   # no-op re-enable; re-triggers GitHub's merge-state eval
@@ -149,7 +149,7 @@ The sweep has three tiers: branch-prefix safelist (closes + deletes), `automated
 
 ## Reference
 
-- Triage workflows the platform ships: `.github/workflows/sweep-stale-cms-prs.yml` (nightly cleanup), `.github/workflows/auto-resolve-newline-conflict.yml` (re-resolves newline-only `cms/*` conflicts), `.github/workflows/cms-automerge-nudge.yml` (re-evaluates green-but-BLOCKED CMS PRs every 5 min — *once ported*).
+- Triage workflows the platform ships: `.github/workflows/sweep-stale-cms-prs.yml` (nightly cleanup), `.github/workflows/auto-resolve-newline-conflict.yml` (re-resolves newline-only `cms/*` conflicts), `.github/workflows/cms-automerge-nudge.yml` (recovers green-but-BLOCKED CMS PRs via an explicit merge; its `*/5` cron is throttled to roughly 45-90 min in practice).
 - Loop workflows: `.github/workflows/cms-publish-loop-host.yml`, `cms-publish-loop-prod.yml`, `canary-prod.yml`, `cms-preview-loops.yml`.
 - Failure surfacing: `post-failure-comment` composite action (markers `host-loop-failure-summary`, `prod-mutate-failure-summary`, `preview-loop-failure-summary`); inline error augmentation by `e2e/with-stuck-pr-diagnostic.js`.
 - Spec-helper that owns the timeout: `e2e/github-actions-poll.js` (the `Timed out waiting for PR #N to merge` error originates in its `waitForMerge`).

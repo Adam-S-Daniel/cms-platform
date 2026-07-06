@@ -11,10 +11,13 @@ node scaffold/create-site.js <target-dir>
 
 Generates `_config.yml` (identity + `cms:` block + `theme:`), `Gemfile` (pins the
 theme gem in `:jekyll_plugins`), the thin workflow callers + `dependabot.yml`
-(placeholders filled from your domain), copies the platform-owned `admin/` base
-and `.claude/skills`, seeds minimal content (a post, an about page, the e2e
-canary, an index), writes `infrastructure/site-params.env` and `platform.lock`,
-and prints the bootstrap + DNS next steps.
+(placeholders filled from your domain), seeds the site-owned seam reference
+`admin/collections.site.yml.example` (the admin machinery itself ships inside the
+`cms-platform-theme` gem — see `theme/admin/README.md` — so nothing else under
+`admin/` is vendored per-site) and copies `.claude/skills`, seeds minimal content
+(a post, an about page, the e2e canary, an index), writes
+`infrastructure/site-params.env` and `platform.lock`, and prints the bootstrap +
+DNS next steps.
 
 ## Seeded `preview.md` + `404.html` (issue #23)
 

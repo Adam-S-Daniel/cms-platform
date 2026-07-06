@@ -42,7 +42,7 @@ only option delivering low-conflict bidirectional sync with clean identity isola
 | **Jekyll theme** (`_layouts _includes assets _plugins/auto_tag_pages`) | theme **gem** (gem, not `remote_theme` — `remote_theme` can't run the custom plugin reliably) | site `Gemfile` + `_config.yml: theme:`; branding becomes Liquid reading `site.*` | **Dependabot** (`bundler`) | PR to this repo |
 | **Decap CMS** (~400-line config + admin `*.js`/`*.html` + `reviews/` dashboards) | platform owns `theme/admin/` (`config.base.yml` machinery + default collections + mandatory e2e canary) — **shipped inside the theme gem since v0.1.4** (GOAL 1, below); consumers no longer vendor it | **build-time render hook** (`theme/lib/cms-platform-theme/decap_config_hook.rb`, mirrored by `scripts/render-decap-config.rb`) copies the gem-resident machinery into `_site/admin`, injects the site identity from `_config.yml`, and splices the SITE-owned seam `admin/collections.site.yml` (opt-in structure) | via gem bump (Dependabot `bundler`) | PR to this repo |
 | **AWS infra** (bootstrap / rum / oauth-proxy) | `infrastructure/*` + `oauth-proxy/*` parameterized templates; CloudFront Function regex templated via `Fn::Sub` over an `ApexDomain` param | a consumer commits ONLY thin **delegating `deploy.sh` wrappers** (scaffolder-emitted from `*.delegating`) that check the platform out at `platform_ref` into `.cms-platform/` and `exec` the platform deploy.sh under the site identity — never the vendored template/lambda (#69) | platform fix flows on the next `platform_ref` bump | PR to this repo |
-| **`.claude/skills`** | `skills/` canonical copy | a new `skills-sync.yml` reusable workflow pulls skills at the pinned tag. NOTE: adamdaniel.ai's existing `skills-mirror.yml` is a *local structural verifier*, **not** a transport — do not overload it | via the same SHA pin | PR to this repo |
+| **`.claude/skills`** | `skills/` canonical copy | a new `skills-sync.yml` reusable workflow pulls skills at the pinned tag. NOTE: adamdaniel.ai's old `skills-mirror.yml` (a *local structural verifier*, not a transport) has since been REMOVED (P7, v0.1.46), superseded by the platform's centralized `dev-hooks-sync.yml` guard — no risk of confusing it with `skills-sync.yml` anymore | via the same SHA pin | PR to this repo |
 
 ### How bidirectional sync works
 
@@ -92,11 +92,12 @@ references are already portable.
 
 ## Creation path
 
-**`npx create-adamdaniel-site` scaffolder** (Node is already present via Playwright).
-A bare template repo can't deterministically prompt for and write `_config.yml` /
-`site-params.json` / `platform.lock`; cookiecutter adds a Python dependency to a
-JS/Ruby stack. The scaffolder prompts for domain / title / repo, writes the thin shell,
-pins the current `cms-platform` tag, and prints the AWS bootstrap + DNS steps.
+**`npx github:Adam-S-Daniel/cms-platform` scaffolder** (bin name `create-cms-site`;
+Node is already present via Playwright). A bare template repo can't deterministically
+prompt for and write `_config.yml` / `site-params.json` / `platform.lock`; cookiecutter
+adds a Python dependency to a JS/Ruby stack. The scaffolder prompts for domain / title /
+repo, writes the thin shell, pins the current `cms-platform` tag, and prints the AWS
+bootstrap + DNS steps.
 
 ## Sequencing (adamdaniel.ai stays green at every step)
 
@@ -128,7 +129,7 @@ endpoint valid until build-time config render is proven.
   fans back out.
 - Decommission the throwaway site/stack after green.
 
-## Admin-machinery roadmap status (as of v0.1.8)
+## Admin-machinery roadmap status (historical — as of v0.1.8; see AGENTS.md for current status)
 
 The Decap admin layer was the one row in the per-layer table whose final reuse
 mechanism was still open at extraction time. Issue **#5** split it into two goals:
@@ -146,13 +147,22 @@ mechanism was still open at extraction time. Issue **#5** split it into two goal
   skills-only. The `cms.base_collections` keep-list (v0.1.7) lets a site trim the
   built-in collections. See `AGENTS.md` "Admin delivery" for the full mechanics.
 
-- **GOAL 2 — `field_library`: OPEN (deferred roadmap).** Per-site custom
-  collections assembled via a build-time YAML **deep-merge** of a shared
-  `field_library`, replacing the render hook's text-splice of the seam. High-risk
-  re: preserving the config's rich comments + invariants through a structural
-  merge — hence deferred.
+- **GOAL 2 — `field_library` + `$ref` reuse: DONE (LOW-RISK increment).** A
+  site's seam `collections.site.yml` can `$ref` platform-defined field/widget
+  defs from `theme/admin/field_library.yml`, resolved at render time in both
+  paths via the shared `CmsPlatformTheme::FieldLibrary` resolver. The base
+  config stays TEXT (spliced byte-for-byte; all verbatim-locked lines
+  preserved); no-`$ref` seams render byte-identically (backward-compat
+  proven). **Still deferred:** the full base-collection-override
+  **deep-merge** (override/reorder a base collection's fields) — the seam
+  remains append-only; `$ref` delivers shared-field reuse only, not base
+  override.
 
-Other open platform issues: **#21** (a prod-mutate canary URL doesn't reflect new
-content despite a successful deploy — likely a deploy-build future-handling issue)
-and **#22** (publish loops leave orphaned `cms/*` canary branches — add a prune
-step).
+Other platform issues, now resolved: **#21** (a prod-mutate canary URL not
+reflecting new content — **DONE**, v0.1.13/#39: CloudFront was
+NEGATIVE-CACHING the pre-create 404 via `ErrorCachingMinTTL: 300`, fixed to
+`0`) and **#22** (publish loops leaving orphaned `cms/*` canary branches —
+**DONE**: loops now prune their own orphaned branches, scoped to branches with
+no open PR, locked by `e2e/workflow-loop-branch-cleanup.test.js`). See
+AGENTS.md's "Roadmap / open issues" section for the authoritative current
+status.
