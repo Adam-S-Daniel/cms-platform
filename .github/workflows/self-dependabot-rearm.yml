@@ -1,0 +1,42 @@
+# Self-caller: dogfood the dependabot-rearm-sweep reusable on cms-platform's
+# OWN Dependabot PRs. Companion to self-dependabot-auto-merge.yml — that one
+# arms auto-merge per-PR the moment Dependabot opens it (`pull_request`); this
+# one runs on a schedule to re-arm/merge PRs GitHub auto-disabled after a
+# sibling PR in the same Dependabot batch merged first (see
+# dependabot-rearm-sweep.yml's header for the full #118-#122 postmortem).
+name: Dependabot re-arm sweep
+
+# Dynamic per-run title (issue #1776 grammar; enforced by
+# e2e/workflow-run-name.test.js). Two events, so the run-name branches on
+# `github.event_name`.
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+     || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    - cron: '17 8 * * *'   # daily — batch-strand can happen whenever Dependabot opens a multi-PR batch
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List sweep candidates without merging or re-arming (true/false)'
+        # workflow_dispatch hands typed (boolean) inputs to a reusable's
+        # `with:` as STRINGS, and the reusable's `boolean`-typed input
+        # rejects them — the dispatch run startup-fails before any job runs.
+        # Declared `string` here and fromJSON-coerced below (same pattern as
+        # examples/site/.github/workflows/sweep-stale-cms-prs.yml). The
+        # scheduled cron is unaffected — the `&&` short-circuits before
+        # fromJSON ever runs.
+        type: string
+        default: 'false'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  rearm:
+    uses: ./.github/workflows/dependabot-rearm-sweep.yml
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}

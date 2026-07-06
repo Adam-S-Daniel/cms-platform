@@ -1,0 +1,142 @@
+# Reusable: scheduled re-arm sweep for Dependabot PRs stranded by GitHub's
+# batch auto-merge disable.
+#
+# THE PROBLEM (observed live — cms-platform #118-#122, 2026-06-30)
+# dependabot-auto-merge.yml (via self-dependabot-auto-merge.yml) only fires on
+# `pull_request`, so it arms native GitHub auto-merge (`gh pr merge --auto
+# --squash`) exactly once, the moment Dependabot opens a PR. That's enough for
+# a single PR, but Dependabot often opens a BATCH of PRs against the same
+# base in one run. The first PR(s) in the batch merge and advance `main`;
+# GitHub then AUTO-DISABLES auto-merge on every remaining PR in the batch
+# (PR #121's timeline: `auto_merge_disabled` performed by `github-actions[bot]`
+# at 19:06:03, 46 seconds after `auto_merge_enabled` fired). Nothing re-arms
+# them: no further `pull_request` event ever arrives for a PR nobody pushes to
+# again, so a green, conflict-free PR strands indefinitely — #121 and #122
+# sat `mergeStateStatus: CLEAN` for 6 days until merged by hand.
+#
+# THE FIX
+# A thin caller (self-dependabot-rearm.yml here; examples/site/.github/
+# workflows/dependabot-rearm-sweep.yml for consumers) schedules this reusable.
+# It lists every OPEN dependabot[bot] PR and, for each with ALL checks green
+# and no merge conflict, re-validates the SAME manifest-path allowlist
+# dependabot-auto-merge.yml enforces (scripts/check-dependabot-manifest-paths.sh
+# — the single shared source; see that script's header) and then:
+#   - merges DIRECTLY (`gh pr merge --squash`, no `--auto`) when GitHub
+#     already reports `mergeStateStatus == CLEAN` — this avoids re-entering
+#     the exact same auto-disable race a fresh `--auto` enable could hit if
+#     another PR in the batch merges first;
+#   - otherwise RE-ARMS auto-merge (`--auto --squash`) so GitHub finishes the
+#     job once its own required-check bookkeeping catches up.
+# Dependabot branches live in this repo (never a fork), so the default
+# GITHUB_TOKEN is sufficient — no PAT needed.
+name: Dependabot re-arm sweep (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "List sweep candidates and the action that would be taken, without merging or re-arming anything."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  rearm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+        with:
+          fetch-depth: 0
+
+      - name: Sweep stranded Dependabot PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          echo "::notice::Dependabot re-arm sweep starting (DRY_RUN=${DRY_RUN})."
+
+          mapfile -t PR_NUMBERS < <(gh pr list --state open --author "app/dependabot" \
+            --json number --jq '.[].number')
+
+          if [ "${#PR_NUMBERS[@]}" -eq 0 ]; then
+            echo "::notice::No open Dependabot PRs — nothing to sweep."
+            exit 0
+          fi
+
+          echo "Open Dependabot PR(s): ${PR_NUMBERS[*]}"
+          REARMED=0
+          MERGED=0
+          SKIPPED=0
+
+          for num in "${PR_NUMBERS[@]}"; do
+            pr_json=$(gh pr view "$num" --json number,baseRefName,mergeable,mergeStateStatus,statusCheckRollup)
+
+            mergeable=$(jq -r '.mergeable' <<<"$pr_json")
+            merge_state=$(jq -r '.mergeStateStatus' <<<"$pr_json")
+            base=$(jq -r '.baseRefName' <<<"$pr_json")
+
+            if [ "$mergeable" != "MERGEABLE" ]; then
+              echo "skip #${num} — mergeable=${mergeable} (conflict, or GitHub still computing)"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            checks_ok=$(jq -r '
+              (.statusCheckRollup | length) > 0 and
+              (all(.statusCheckRollup[]?; ((.conclusion // .state) as $c | $c == "SUCCESS" or $c == "NEUTRAL" or $c == "SKIPPED")))
+            ' <<<"$pr_json")
+            if [ "$checks_ok" != "true" ]; then
+              echo "skip #${num} — checks not all green yet (mergeStateStatus=${merge_state})"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            if ! git fetch --force origin \
+              "refs/heads/${base}:refs/remotes/origin/${base}" \
+              "refs/pull/${num}/head:refs/remotes/dependabot-sweep/pr-${num}" \
+              >/dev/null 2>&1; then
+              echo "::warning::skip #${num} — could not fetch refs for the manifest re-check"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            if ! bash scripts/check-dependabot-manifest-paths.sh \
+              "origin/${base}" "dependabot-sweep/pr-${num}"; then
+              echo "::warning::skip #${num} — diff touches a non-manifest path on re-check; leaving for human review"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            if [ "$merge_state" = "CLEAN" ]; then
+              echo "merge #${num} — mergeStateStatus=CLEAN; merging directly (squash) to avoid re-stranding"
+              if [ "$DRY_RUN" != "true" ]; then
+                if gh pr merge --squash "$num"; then
+                  MERGED=$((MERGED + 1))
+                else
+                  echo "::warning::direct merge failed for #${num}"
+                fi
+              else
+                MERGED=$((MERGED + 1))
+              fi
+            else
+              echo "re-arm #${num} — mergeStateStatus=${merge_state}; re-enabling auto-merge (squash)"
+              if [ "$DRY_RUN" != "true" ]; then
+                if gh pr merge --auto --squash "$num"; then
+                  REARMED=$((REARMED + 1))
+                else
+                  echo "::warning::failed to re-enable auto-merge for #${num}"
+                fi
+              else
+                REARMED=$((REARMED + 1))
+              fi
+            fi
+          done
+
+          echo "::notice::Sweep complete — merged=${MERGED} re-armed=${REARMED} skipped=${SKIPPED} (DRY_RUN=${DRY_RUN})"

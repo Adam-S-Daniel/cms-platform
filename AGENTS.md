@@ -714,6 +714,49 @@ shows on prod AND every preview deploy. Guards:
   transiently red the audit — expected churn" caveat is obsolete: those PRs
   are labelled at creation now, and the audit heals any stragglers.
 
+## Dependabot batch-strand re-arm sweep (#118-122 postmortem)
+
+`self-dependabot-auto-merge.yml` (→ the reusable `dependabot-auto-merge.yml`)
+only fires on `pull_request`, so it arms native GitHub auto-merge
+(`gh pr merge --auto --squash`) exactly once per PR, the moment Dependabot
+opens it. That is enough for a SINGLE Dependabot PR, but not for a BATCH: when
+Dependabot opens several PRs against the same base in one run (observed live,
+2026-06-30: cms-platform #118-#122), the first PR(s) merge and advance `main`,
+and GitHub responds by AUTO-DISABLING auto-merge on every remaining PR in the
+batch (PR #121's timeline: `auto_merge_disabled` by `github-actions[bot]` at
+19:06:03, 46 seconds after `auto_merge_enabled` fired). Nothing re-arms
+them — no further `pull_request` event ever arrives for a PR nobody pushes to
+again — so a green, conflict-free, fully-mergeable PR strands indefinitely.
+#121 and #122 sat `CLEAN` for 6 days until merged by hand.
+
+**Fix — a scheduled re-arm sweep**, mirroring the `sweep-stale-cms-prs.yml` /
+`regression-review-reaper.yml` shape (pure-`gh`-API scheduled job, no
+per-PR checkout):
+
+- **`dependabot-rearm-sweep.yml`** (reusable, `workflow_call`) lists every OPEN
+  `dependabot[bot]` PR (`gh pr list --author app/dependabot`); for each with
+  ALL checks green (`statusCheckRollup` non-empty, no non-SUCCESS/NEUTRAL/
+  SKIPPED entry) and `mergeable == MERGEABLE`, it re-validates the SAME
+  manifest-path allowlist `dependabot-auto-merge.yml` enforces, then merges:
+  **directly** (`gh pr merge --squash`, no `--auto`) when GitHub already
+  reports `mergeStateStatus == CLEAN` — avoids re-entering the same
+  auto-disable race — otherwise **re-arms** auto-merge (`--auto --squash`) so
+  GitHub finishes the job once its own bookkeeping catches up. Same-repo only
+  (Dependabot branches are never forks), so the default `GITHUB_TOKEN`
+  suffices — no PAT.
+- **The manifest-path allowlist is factored into `scripts/check-dependabot-
+  manifest-paths.sh`**, the single source both `dependabot-auto-merge.yml`
+  (the per-PR `pull_request` gate) and `dependabot-rearm-sweep.yml` (the
+  sweep) call — keep the two call sites in lockstep; a change to the
+  allowlist changes behaviour identically for both.
+- **`self-dependabot-rearm.yml`** dogfoods the sweep on cms-platform's own
+  Dependabot PRs (daily cron + `workflow_dispatch`), same pattern as
+  `self-secrets-scan.yml` / `self-dependabot-auto-merge.yml`. A consuming site
+  adopts it via the thin caller
+  `examples/site/.github/workflows/dependabot-rearm-sweep.yml` — the same
+  batch-strand exposure applies to every consumer that calls
+  `dependabot-auto-merge.yml`.
+
 ## E2E local webServer: decap readiness + :4000 crash resilience
 
 `e2e/playwright.config.js`'s local lane (`TARGET=local`) starts two webServers;
