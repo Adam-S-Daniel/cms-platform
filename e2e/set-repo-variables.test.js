@@ -106,9 +106,10 @@ test.describe("scripts/set-repo-variables.sh", () => {
   test("(e) scaffolder nextSteps points operators at set-repo-variables.sh", () => {
     const target = fs.mkdtempSync(path.join(os.tmpdir(), "setvars-scaffold-"));
     try {
+      // --platform-ref pins the version so this test never hits the network.
       const out = execFileSync(
         "node",
-        [SCAFFOLDER, target, "--yes", "--domain", "test.local", "--repo", "test", "--owner", "test-owner"],
+        [SCAFFOLDER, target, "--yes", "--domain", "test.local", "--repo", "test", "--owner", "test-owner", "--platform-ref", "v0.1.52"],
         { encoding: "utf8" },
       );
       expect(out, "nextSteps must reference scripts/set-repo-variables.sh").toMatch(

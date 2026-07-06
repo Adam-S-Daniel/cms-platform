@@ -9,6 +9,14 @@ npx github:Adam-S-Daniel/cms-platform <target-dir> \
 node scaffold/create-site.js <target-dir>
 ```
 
+The scaffolder pins the new site to the **latest cms-platform release**,
+resolved at scaffold time via `gh api repos/Adam-S-Daniel/cms-platform/releases/latest`
+(if `gh` is installed and authenticated), else the GitHub REST API, else a
+baked-in fallback constant (currently `v0.1.52` — refreshed on each platform
+release). Pass `--platform-ref <tag>` or set `CMS_PLATFORM_REF` to override the
+resolved version explicitly (e.g. to pin an older release, or to keep a test
+hermetic and offline).
+
 Generates `_config.yml` (identity + `cms:` block + `theme:`), `Gemfile` (pins the
 theme gem in `:jekyll_plugins`), the thin workflow callers + `dependabot.yml`
 (placeholders filled from your domain), seeds the site-owned seam reference

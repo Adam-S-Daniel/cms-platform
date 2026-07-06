@@ -170,6 +170,7 @@ const PLATFORM_META_SPECS = [
   "scaffold-preview-and-404.test.js",
   "scaffold-seeds-neutral-logo.test.js",
   "scaffold-deploy-delegators.test.js",
+  "scaffold-platform-version.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +

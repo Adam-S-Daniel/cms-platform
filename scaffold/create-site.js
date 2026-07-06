@@ -16,10 +16,13 @@
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
+const { execFileSync } = require("child_process");
 
 const PLATFORM_ROOT = path.resolve(__dirname, "..");
 const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
-const PLATFORM_VERSION = "v0.1.4";
+// Documented offline FALLBACK only — used when resolvePlatformVersion() below
+// can't reach GitHub. Refresh this on each platform release.
+const PLATFORM_VERSION = "v0.1.52";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -31,6 +34,60 @@ function parseArgs(argv) {
     } else out._.push(a);
   }
   return out;
+}
+
+// Resolve the platform release to pin this new site to. Precedence:
+//   1. Explicit override: --platform-ref flag or CMS_PLATFORM_REF env var.
+//   2. `gh api repos/<PLATFORM_REPO>/releases/latest --jq .tag_name` (if `gh`
+//      is installed and authenticated).
+//   3. GitHub REST API via global fetch (Node 18+), same endpoint.
+//   4. Fallback to the baked-in PLATFORM_VERSION constant above.
+async function resolvePlatformVersion(args) {
+  const explicit = (args && args["platform-ref"]) || process.env.CMS_PLATFORM_REF;
+  if (typeof explicit === "string" && explicit.trim()) {
+    const ref = explicit.trim();
+    console.log(`platform release: ${ref} (explicit override)`);
+    return ref;
+  }
+
+  try {
+    const out = execFileSync(
+      "gh",
+      ["api", `repos/${PLATFORM_REPO}/releases/latest`, "--jq", ".tag_name"],
+      { stdio: ["ignore", "pipe", "pipe"], timeout: 10000 },
+    )
+      .toString()
+      .trim();
+    if (/^v\d+\.\d+\.\d+$/.test(out)) {
+      console.log(`platform release: ${out} (via gh)`);
+      return out;
+    }
+  } catch (_) {
+    /* swallow: gh absent, unauthenticated, network down, etc. */
+  }
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    const res = await fetch(`https://api.github.com/repos/${PLATFORM_REPO}/releases/latest`, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const json = await res.json();
+      const tag = json && json.tag_name;
+      if (typeof tag === "string" && /^v\d+\.\d+\.\d+$/.test(tag)) {
+        console.log(`platform release: ${tag} (via GitHub API)`);
+        return tag;
+      }
+    }
+  } catch (_) {
+    /* swallow: network down, non-2xx, malformed JSON, etc. */
+  }
+
+  console.log(`platform release: ${PLATFORM_VERSION} (fallback constant — could not reach GitHub)`);
+  return PLATFORM_VERSION;
 }
 
 function ask(rl, q, dflt) {
@@ -66,6 +123,7 @@ function write(dest, rel, content) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const platformVersion = await resolvePlatformVersion(args);
   const rl = args.yes
     ? null
     : readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -85,8 +143,8 @@ async function main() {
     s
       .replace(/example-com/g, prefix)
       .replace(/example\.com/g, domain)
-      .replace(/platform_ref:\s*v\d+\.\d+\.\d+/g, `platform_ref: ${PLATFORM_VERSION}`)
-      .replace(/@v\d+\.\d+\.\d+/g, `@${PLATFORM_VERSION}`);
+      .replace(/platform_ref:\s*v\d+\.\d+\.\d+/g, `platform_ref: ${platformVersion}`)
+      .replace(/@v\d+\.\d+\.\d+/g, `@${platformVersion}`);
 
   if (fs.existsSync(target) && fs.readdirSync(target).length)
     throw new Error(`target ${target} is not empty`);
@@ -140,7 +198,7 @@ async function main() {
       `# Bumped by the platform-bump workflow; Dependabot bumps the uses:@ pins\n` +
       `# and the theme gem in lockstep. See the platform's docs/SYNC.md.\n` +
       `platform_repo: ${PLATFORM_REPO}\n` +
-      `platform_ref: ${PLATFORM_VERSION}\n`
+      `platform_ref: ${platformVersion}\n`
   );
 
   write(target, "_posts/" + seedDate() + "-hello-world.md", SEED_POST(title));
@@ -170,7 +228,7 @@ async function main() {
   // fresh site scans clean. (gitleaks-action is license-gated for org repos,
   // so the reusable uses the binary — see .github/workflows/secrets-scan.yml.)
   write(target, ".gitleaks.toml", fs.readFileSync(path.join(PLATFORM_ROOT, ".gitleaks.toml"), "utf8"));
-  write(target, "README.md", siteReadme({ title, domain, owner, repo }));
+  write(target, "README.md", siteReadme({ title, domain, owner, repo, platformVersion }));
 
   // OAuth proxy + bootstrap DELEGATING deploy wrappers (#69). The site commits
   // ONLY these thin wrappers — never the OAuth proxy lambda.py/template.yaml or
@@ -394,7 +452,7 @@ admin/config.yml
 admin/config-local.yml
 `;
 
-function siteReadme({ title, domain, owner, repo }) {
+function siteReadme({ title, domain, owner, repo, platformVersion }) {
   return `# ${title}
 
 A [cms-platform](https://github.com/${PLATFORM_REPO}) site. Machinery (theme,
@@ -403,7 +461,7 @@ content + identity.
 
 - Production: https://${domain}
 - Repo: ${owner}/${repo}
-- Platform: \`${PLATFORM_REPO}@${PLATFORM_VERSION}\` (see \`platform.lock\`)
+- Platform: \`${PLATFORM_REPO}@${platformVersion}\` (see \`platform.lock\`)
 
 ## Local dev
 
@@ -451,7 +509,11 @@ Resource prefix: ${prefix}   Buckets: ${prefix}-{cfn-artifacts,previews,producti
 `;
 }
 
-main().catch((e) => {
-  console.error("create-site:", e.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((e) => {
+    console.error("create-site:", e.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { resolvePlatformVersion, PLATFORM_VERSION };
