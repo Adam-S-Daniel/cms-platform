@@ -5,7 +5,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.57`** — `v0.1.0`–`v0.1.57` are all tagged GitHub
+**Current release: `v0.1.58`** — `v0.1.0`–`v0.1.58` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1254,7 +1254,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.57)
+## Version history (v0.1.0 → v0.1.58)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1790,6 +1790,17 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   auto-close after a clean window). Motivated by the 2026-07 audit: adamdaniel's
   editorial-label-audit red 24/30 days and jodidaniel's sweep-stale-cms-prs red
   30/30 for a month, all unnoticed. See "Scheduled-run health audit" section.
+
+- **v0.1.58** (2026-07-06) — **the health-audit alert names the workflow FILE,
+  not the run title.** The runs API's `name` is the run's DISPLAY TITLE — for
+  this repo family the evaluated dynamic `run-name:` — so grouping by it
+  produced alert headers like "scheduled — 0 12 * * *" that never said WHICH
+  workflow failed (observed in the v0.1.57 dry-run against adamdaniel's real
+  30-day history). `audit-scheduled-runs.js` now groups findings by
+  `workflowKey()` = the workflow file's basename from `run.path`
+  (`cms-publish-loop-host.yml`, …), with `name` only as a fallback when the
+  API omits `path`. Lock: the groupByWorkflow unit test feeds run-name-shaped
+  `name` values and asserts basename grouping.
 
 ## Consumers
 

@@ -174,15 +174,21 @@ test.describe("audit-scheduled-runs.js — pure helpers", () => {
     expect(filterAlertRuns(runs, "2026-07-04T10:00:00Z").map((r) => r.id)).toEqual([1]);
   });
 
-  test("groupByWorkflow groups by name, newest run first", () => {
-    const { groupByWorkflow } = loadScript();
+  test("groupByWorkflow groups by workflow FILE basename (never run.name), newest run first", () => {
+    // run.name is the run's DISPLAY TITLE — for this repo family the evaluated
+    // dynamic `run-name:` (e.g. "scheduled — 0 12 * * *"), which never says
+    // WHICH workflow failed. The workflow file basename is the stable identity.
+    const { groupByWorkflow, workflowKey } = loadScript();
     const grouped = groupByWorkflow([
-      run({ id: 1, name: "A", run_started_at: "2026-07-05T01:00:00Z" }),
-      run({ id: 2, name: "B", run_started_at: "2026-07-05T03:00:00Z" }),
-      run({ id: 3, name: "A", run_started_at: "2026-07-05T02:00:00Z" }),
+      run({ id: 1, name: "scheduled — 0 12 * * *", path: ".github/workflows/a.yml", run_started_at: "2026-07-05T01:00:00Z" }),
+      run({ id: 2, name: "scheduled — 0 13 * * *", path: ".github/workflows/b.yml", run_started_at: "2026-07-05T03:00:00Z" }),
+      run({ id: 3, name: "manual — @someone", path: ".github/workflows/a.yml", run_started_at: "2026-07-05T02:00:00Z" }),
     ]);
-    expect([...grouped.keys()]).toEqual(["B", "A"]); // most recent breakage first
-    expect(grouped.get("A").map((r) => r.id)).toEqual([3, 1]);
+    expect([...grouped.keys()]).toEqual(["b.yml", "a.yml"]); // most recent breakage first
+    expect(grouped.get("a.yml").map((r) => r.id)).toEqual([3, 1]);
+    // Fallback when the API omits path entirely.
+    expect(workflowKey({ name: "X" })).toBe("X");
+    expect(workflowKey({})).toBe("(unknown workflow)");
   });
 
   test("run-id dedupe roundtrip: every reported run id is recoverable, even past the visible cap", () => {
