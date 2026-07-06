@@ -331,24 +331,68 @@ jobs:
                 const POLL_INTERVAL_MS = 30_000;
                 const POLL_BUDGET_MS = 10 * 60 * 1000;
                 const deadline = Date.now() + POLL_BUDGET_MS;
+                // ── Readiness test: per-check + SELF-EXCLUDING, NOT mergeable_state ──
+                //
+                // The first version of this poll (v0.1.52) gated on
+                // `pr.mergeable_state` reaching `'clean'`, which SELF-DEADLOCKS: this very
+                // job is a check run on the PR's head sha, and it stays in_progress
+                // for the entire poll, so the rollup can never leave "unstable"
+                // while we're the ones watching it. Empirical (PR #2469 / run
+                // 28761800674): every other check run on head 46bc047 completed by
+                // 01:19:35, yet the poll ran its full 10 minutes and logged "gave
+                // up polling after 10 min without reaching clean/mergeable" at
+                // 01:29:36 — the ONLY pending check run that whole time was this
+                // job's own (completed 01:29:38, two seconds after the give-up).
+                // The PR was then left to cms-automerge-nudge.yml's cron (~45-90
+                // min effective cadence), which is what actually blew the preview
+                // spec's 25-min waitForMerge budget.
+                //
+                // So judge readiness per-check, excluding ourselves:
+                //   1. Check runs on the head sha (paginated), MINUS every
+                //      `auto-merge-when-ready` run, must all be completed with
+                //      success/neutral/skipped. Exclusion is by job NAME plus
+                //      own-run-id (details_url carries /actions/runs/<run_id>/);
+                //      the name match is load-bearing, not belt-and-braces: a
+                //      SIBLING auto-merge-when-ready run (a second ready-label
+                //      event, e.g. Decap's decap-cms/pending_publish after the
+                //      shim's cms/ready) sits QUEUED in this job's per-PR
+                //      concurrency group (cancel-in-progress:false) and can never
+                //      even start — let alone complete — while we hold the lane;
+                //      counting it would be the same deadlock through a side door.
+                //   2. Legacy commit statuses (combined status API) must be green
+                //      IF any exist — deploy-preview.yml posts a real
+                //      `deploy/preview` commit status on PR head shas, so statuses
+                //      are live on these repos and can't be skipped. GitHub reports
+                //      state:"pending" for an EMPTY status set (total_count 0), so
+                //      emptiness must count as OK, not pending.
+                //   3. pulls.get must show `mergeable !== false` (false = computed
+                //      conflict; null = still computing, which the merge attempt
+                //      itself adjudicates — see the transient-retry in its catch).
+                // No protection is weakened: the explicit squash merge below is the
+                // same call the clean-status branch already makes, and these
+                // preview-only bases have no required-check ruleset to bypass.
+                const prNumber = context.payload.pull_request.number;
+                const OK_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
+                const isOwnJobClass = (c) =>
+                  /auto-merge-when-ready/.test(c.name || '') ||
+                  String(c.details_url || '').includes(`/actions/runs/${context.runId}`) ||
+                  String(c.html_url || '').includes(`/actions/runs/${context.runId}`);
                 core.info(
-                  `PR #${context.payload.pull_request.number} is unstable (unprotected ` +
-                    `base — cms/preview-only); polling its own computed mergeable ` +
-                    `state for up to ${POLL_BUDGET_MS / 60000} min.`,
+                  `PR #${prNumber} is unstable (unprotected base — cms/preview-only); ` +
+                    `polling per-check readiness (self-excluding) for up to ` +
+                    `${POLL_BUDGET_MS / 60000} min.`,
                 );
                 while (Date.now() < deadline) {
                   await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
                   let pr;
                   try {
-                    // Trust GitHub's OWN computed `mergeable`/`mergeable_state` on
-                    // a fresh GET — same reasoning as the "clean status" branch
-                    // above: never key this off the stale, async-computed webhook
-                    // payload (it can read `mergeable: true` while checks are
-                    // still pending).
+                    // Fresh GET every tick — Decap force-pushes the same cms/*
+                    // branch on re-saves, so the head sha we inspect must be
+                    // re-read, never cached from the stale webhook payload.
                     ({ data: pr } = await github.rest.pulls.get({
                       owner: context.repo.owner,
                       repo: context.repo.repo,
-                      pull_number: context.payload.pull_request.number,
+                      pull_number: prNumber,
                     }));
                   } catch (getErr) {
                     core.warning(
@@ -357,28 +401,90 @@ jobs:
                     continue;
                   }
                   if (pr.state !== 'open') {
-                    core.info(`PR #${context.payload.pull_request.number} is no longer open (${pr.state}); nothing to do.`);
+                    core.info(`PR #${prNumber} is no longer open (${pr.state}); nothing to do.`);
                     return;
                   }
-                  if (pr.mergeable === true && pr.mergeable_state === 'clean') {
-                    try {
-                      await github.rest.pulls.merge({
-                        owner: context.repo.owner,
-                        repo: context.repo.repo,
-                        pull_number: context.payload.pull_request.number,
-                        merge_method: 'squash',
-                      });
-                      core.info(`PR #${context.payload.pull_request.number} went clean while polling; merged directly.`);
+                  if (pr.mergeable === false) {
+                    // Computed conflict. Keep polling — a base update or the
+                    // newline-conflict auto-resolver can clear it within the
+                    // budget; if not, the nudge inherits it.
+                    core.info(`poll: PR #${prNumber} has a merge conflict (mergeable:false); waiting.`);
+                    continue;
+                  }
+                  let checkRuns;
+                  try {
+                    checkRuns = await github.paginate(github.rest.checks.listForRef, {
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      ref: pr.head.sha,
+                      per_page: 100,
+                    });
+                  } catch (cErr) {
+                    core.warning(
+                      `poll: checks.listForRef failed transiently (${String((cErr && cErr.message) || cErr)}); retrying.`,
+                    );
+                    continue;
+                  }
+                  const others = checkRuns.filter((c) => !isOwnJobClass(c));
+                  const pending = others.filter((c) => c.status !== 'completed');
+                  const red = others.filter(
+                    (c) => c.status === 'completed' && !OK_CONCLUSIONS.has(c.conclusion),
+                  );
+                  let combined;
+                  try {
+                    ({ data: combined } = await github.rest.repos.getCombinedStatusForRef({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      ref: pr.head.sha,
+                    }));
+                  } catch (sErr) {
+                    core.warning(
+                      `poll: combined-status read failed transiently (${String((sErr && sErr.message) || sErr)}); retrying.`,
+                    );
+                    continue;
+                  }
+                  const statusesOk = combined.total_count === 0 || combined.state === 'success';
+                  if (pending.length > 0 || red.length > 0 || !statusesOk) {
+                    core.info(
+                      `poll: PR #${prNumber} not ready — ${pending.length} pending / ` +
+                        `${red.length} red check run(s) (self excluded), combined status ` +
+                        `${combined.total_count === 0 ? 'empty' : combined.state}` +
+                        (pending.length
+                          ? `; pending: ${pending.slice(0, 3).map((c) => c.name).join(', ')}`
+                          : '') +
+                        (red.length
+                          ? `; red: ${red.slice(0, 3).map((c) => `${c.name}=${c.conclusion}`).join(', ')}`
+                          : ''),
+                    );
+                    continue;
+                  }
+                  try {
+                    await github.rest.pulls.merge({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: prNumber,
+                      merge_method: 'squash',
+                    });
+                    core.info(
+                      `PR #${prNumber}: all non-self check runs green + statuses ok; merged directly.`,
+                    );
+                    return;
+                  } catch (mErr) {
+                    const mMsg = String((mErr && mErr.message) || mErr);
+                    // Terminal no-ops, same handling as the clean-status branch.
+                    if (/already merged|not found|closed/i.test(mMsg)) {
+                      core.info(`direct merge no-op for PR #${prNumber}: ${mMsg}`);
                       return;
-                    } catch (mErr) {
-                      const mMsg = String((mErr && mErr.message) || mErr);
-                      // Idempotent, same handling as the clean-status branch above.
-                      if (/already merged|not mergeable|not found|closed/i.test(mMsg)) {
-                        core.info(`direct merge no-op for PR #${context.payload.pull_request.number}: ${mMsg}`);
-                        return;
-                      }
-                      throw mErr;
                     }
+                    // "not mergeable" here is TRANSIENT, not terminal: the
+                    // readiness test saw mergeable !== false (possibly null =
+                    // still computing), so let GitHub finish computing and try
+                    // again next tick instead of abandoning the PR to the cron.
+                    if (/not mergeable/i.test(mMsg)) {
+                      core.info(`poll: merge not accepted yet for PR #${prNumber} (${mMsg}); retrying.`);
+                      continue;
+                    }
+                    throw mErr;
                   }
                 }
                 // Budget exhausted without landing. Do NOT throw / setFailed
@@ -387,10 +493,12 @@ jobs:
                 // avoid. Exit success and let cms-automerge-nudge.yml's cron
                 // backstop it — that job now also covers preview-only
                 // (base!=main) PRs (see its own comments) for exactly this
-                // "checks took longer than our budget" case.
+                // "checks took longer than our budget" case. With the self-
+                // excluding readiness test this branch should now only be
+                // reached when a NON-self check genuinely ran long or red.
                 core.info(
-                  `PR #${context.payload.pull_request.number}: gave up polling after ` +
-                    `${POLL_BUDGET_MS / 60000} min without reaching clean/mergeable; ` +
+                  `PR #${prNumber}: gave up polling after ` +
+                    `${POLL_BUDGET_MS / 60000} min without all non-self checks settling green; ` +
                     `leaving it to cms-automerge-nudge.yml's cron backstop.`,
                 );
                 return;
