@@ -306,6 +306,118 @@ test.describe("cms-automerge-nudge reusable — recovery behavior (#1815) [AST]"
     ).toBe(true);
   });
 
+  test("preview-only PRs are judged by the base-aware self-consistent predicate, not required_contexts (PR #2484 / run 28768313594)", () => {
+    // The site's `required_contexts` mirror its MAIN-branch ruleset; most of
+    // those workflows never run on a feature-base PR, so both the bulk
+    // rollup pre-filter and headIsTrulyGreen are structurally unsatisfiable
+    // for a `basePreviewOnly` PR — the v0.1.52 carve-out got these PRs INTO
+    // the loop, but the REQUIRED-keyed gates then rejected every one,
+    // forever (adamdaniel PR #2484 sat fully green with cms/ready +
+    // cms/preview-only while the 04:42:33 nudge run 28768313594 logged
+    // "Found 1 … Recovered 0"). The reusable must therefore carry a second,
+    // SELF-consistent readiness predicate — the lockstep twin of
+    // cms-editorial-workflow.yml's unstable-status fallback — and route
+    // preview-only PRs through it.
+    const ast = nudgeAst();
+    const facts = nudgeFacts();
+
+    // (a) The predicate exists as a named function AND is actually invoked.
+    let declared = false;
+    walk.full(ast, (n) => {
+      if (n.type === "FunctionDeclaration" && n.id && n.id.name === "headIsSelfConsistentGreen") {
+        declared = true;
+      }
+    });
+    expect(
+      declared,
+      "the nudge must declare headIsSelfConsistentGreen — the base-aware " +
+        "readiness predicate for preview-only PRs",
+    ).toBe(true);
+    expect(
+      findCall(ast, "headIsSelfConsistentGreen"),
+      "headIsSelfConsistentGreen must actually be called (a declared-but-dead " +
+        "predicate means preview-only PRs are still gated on required_contexts)",
+    ).toBeTruthy();
+
+    // (b) auto-merge-when-ready job-class runs are excluded via a regex
+    // literal — an in-flight sibling editorial poll on the same PR must not
+    // read as "pending" (the #135 self-deadlock class).
+    let excludesJobClass = false;
+    walk.full(ast, (n) => {
+      if (
+        n.type === "Literal" &&
+        n.regex &&
+        n.regex.pattern.includes("auto-merge-when-ready")
+      ) {
+        excludesJobClass = true;
+      }
+    });
+    expect(
+      excludesJobClass,
+      "the predicate must exclude auto-merge-when-ready job-class check runs " +
+        "(regex literal) — counting an in-flight editorial poll as pending " +
+        "re-creates the #135 self-deadlock through the nudge",
+    ).toBe(true);
+
+    // (c) Legacy combined status consulted, with empty-set-OK semantics
+    // (GitHub reports total_count 0 as state:"pending").
+    expect(
+      facts.memberProps.has("getCombinedStatusForRef"),
+      "the predicate must consult the combined commit status (deploy-preview.yml " +
+        "posts a real deploy/preview status on PR heads)",
+    ).toBe(true);
+    expect(
+      facts.memberProps.has("total_count"),
+      "the combined-status check must special-case total_count (an EMPTY status " +
+        "set reads state:\"pending\" and must count as OK)",
+    ).toBe(true);
+
+    // (c2) Zero-run anchor: right after a force-push GitHub may not have
+    // CREATED the head's check runs yet, and zero present runs must read
+    // as NOT-ready (never vacuous green) — the predicate's own "no runs"
+    // reason string is the AST fact we lock (facts.strings).
+    expect(
+      facts.strings.some((s) => /no non-self check runs/.test(s)),
+      "the predicate must treat ZERO non-self check runs as not-ready (a " +
+        "just-force-pushed head with no runs created yet must never merge)",
+    ).toBe(true);
+
+    // (d) Conflict guard reads GitHub's COMPUTED mergeable flag off a fresh
+    // pulls.get: a `… .mergeable === false` comparison must exist.
+    let mergeableGuard = false;
+    walk.full(ast, (n) => {
+      if (n.type !== "BinaryExpression" || n.operator !== "===") return;
+      const sides = [n.left, n.right];
+      const refsMergeable = sides.some(
+        (s) => s.type === "MemberExpression" && s.property && s.property.name === "mergeable",
+      );
+      const litFalse = sides.some((s) => s.type === "Literal" && s.value === false);
+      if (refsMergeable && litFalse) mergeableGuard = true;
+    });
+    expect(
+      mergeableGuard,
+      "the preview-only path must skip on a computed conflict " +
+        "(`freshPr.mergeable === false` from a fresh pulls.get)",
+    ).toBe(true);
+
+    // (e) Head-moved guard: the vetted head (commit.oid) must be compared
+    // against the fresh head (freshPr.head.sha) so a Decap re-save force-push
+    // between the bulk query and the merge can never land an unvetted head.
+    let headMovedGuard = false;
+    walk.full(ast, (n) => {
+      if (n.type !== "BinaryExpression" || n.operator !== "!==") return;
+      const tails = [n.left, n.right].map(
+        (s) => (s.type === "MemberExpression" && s.property && s.property.name) || null,
+      );
+      if (tails.includes("sha") && tails.includes("oid")) headMovedGuard = true;
+    });
+    expect(
+      headMovedGuard,
+      "the preview-only path must re-check the head is UNCHANGED " +
+        "(`freshPr.head.sha !== commit.oid`) before merging",
+    ).toBe(true);
+  });
+
   test("recovery is an EXPLICIT squash merge, not just a no-op re-enable", () => {
     // The strong recovery: an explicit `pulls.merge` forces GitHub to
     // re-evaluate mergeability fresh, dislodging the stale BLOCKED snapshot a

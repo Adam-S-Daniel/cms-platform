@@ -241,6 +241,16 @@ test(
     // enables auto-merge; validate-content + the PR's required
     // checks then land the PR into PR_HEAD_REF and trigger
     // deploy-preview.
+    //
+    // NB: when this Save landed in an ALREADY-OPEN, already-cms/ready
+    // PR (Decap force-pushes the same cms/* branch on re-saves),
+    // addLabel's default refireIfPresent removes + re-adds the label so
+    // a FRESH `labeled` event fires for the NEW head — without it the
+    // POST is a silent no-op event-wise and auto-merge-when-ready
+    // (labeled-only trigger) never evaluates the new head. Empirical:
+    // adamdaniel PR #2484 — cms/ready labeled 04:29:39, re-save
+    // head_ref_force_pushed 05:16:08 with NO subsequent labeled event,
+    // waitForMerge timed out 05:42.
     await test.step("Label PR cms/ready", async () => {
       await addLabel({ prNumber: pr.number, label: "cms/ready" });
     });

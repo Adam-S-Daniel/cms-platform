@@ -188,6 +188,13 @@ async function waitForCmsPullRequest({
               repo,
               prNumber: pr.number,
               label: "automated-test",
+              // Marker semantics, not event semantics: `automated-test` is a
+              // sweep-safety flag no workflow `on: labeled`-triggers off, and
+              // this helper routinely re-matches an ALREADY-labelled PR
+              // (Decap reuses the same cms/<collection>/<slug> branch across
+              // runs). A remove+re-add here would only burn extra editorial-
+              // workflow runs for nothing.
+              refireIfPresent: false,
             });
           } catch (e) {
             console.warn(
@@ -231,6 +238,19 @@ async function addLabel({
   // waitForMerge timeout.
   verifyRetries = 3,
   verifyDelayMs = 2_000,
+  // Event re-fire (adamdaniel PR #2484): POSTing a label that is ALREADY on
+  // the issue emits NO `labeled` webhook — and cms-editorial-workflow.yml's
+  // auto-merge-when-ready job triggers ONLY on `labeled`. Decap re-saves
+  // force-push a NEW head into the already-open, already-cms/ready PR
+  // (#2484's timeline: `cms/ready` labeled 04:29:39, `head_ref_force_pushed`
+  // 05:16:08 with NO subsequent labeled event), so the new head got no
+  // auto-merge evaluation at all and waitForMerge timed out at 05:42. Every
+  // caller of this helper labels precisely to TRIGGER that label-driven
+  // automation for the PR's CURRENT head, so the default contract is now
+  // "guarantee a fresh labeled event": if `label` is already present, remove
+  // it and re-add it. Callers that want pure marker semantics (the
+  // `automated-test` sweep flag) opt out via refireIfPresent:false.
+  refireIfPresent = true,
   _gh = gh,
 } = {}) {
   // Mutating POST — opt into the bounded transient-retry (#1771 step 1).
@@ -243,6 +263,39 @@ async function addLabel({
       body: JSON.stringify({ labels: [label] }),
       retries: 5,
     });
+
+  if (refireIfPresent) {
+    let names = [];
+    try {
+      const issue = await _gh(`/repos/${repo}/issues/${prNumber}`);
+      names = Array.isArray(issue.labels) ? issue.labels.map((l) => (l && l.name) || l) : [];
+    } catch (e) {
+      // Pre-read is best-effort: if it fails, fall through to the plain
+      // POST — worst case we reproduce the old no-event behaviour once,
+      // and the verify loop below still guarantees the label itself.
+      console.warn(
+        `[addLabel] pre-read of #${prNumber} labels failed (${e && e.message}); POSTing without re-fire check.`,
+      );
+    }
+    if (names.includes(label)) {
+      console.warn(
+        `[addLabel] "${label}" already on #${prNumber} — removing and re-adding so a ` +
+          `fresh labeled event fires for the current head (PR #2484 class: a re-save ` +
+          `force-push emits no labeled event when the label is already present).`,
+      );
+      try {
+        await _gh(`/repos/${repo}/issues/${prNumber}/labels/${encodeURIComponent(label)}`, {
+          method: "DELETE",
+          retries: 5,
+        });
+      } catch (e) {
+        // 404 = someone removed it between our read and this DELETE — the
+        // POST below then fires a fresh labeled event anyway, which is the
+        // end state we want. Anything else is a real failure.
+        if (!e || e.status !== 404) throw e;
+      }
+    }
+  }
 
   const result = await post();
   for (let attempt = 1; attempt <= verifyRetries; attempt++) {
