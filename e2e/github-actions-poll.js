@@ -211,16 +211,57 @@ async function waitForCmsPullRequest({
   );
 }
 
-async function addLabel({ repo = HOST_REPO, prNumber, label }) {
+async function addLabel({
+  repo = HOST_REPO,
+  prNumber,
+  label,
+  // Verify-and-retry (run 28761772021 / PR #2469 investigation): every
+  // label writer in this repo — this POST, the shim in
+  // theme/admin/publish-via-auto-merge.js, cms-editorial-workflow.yml's
+  // "Apply draft label" step — is additive, and a repo-wide grep finds
+  // zero unlabel/setLabels/replace calls, so a genuine clobber of
+  // `cms/ready` has never been observed. What #2469's investigation DID
+  // turn up was a diagnostic (scripts/diagnose-stuck-pr.js) that claimed
+  // the label was missing without ever checking (fixed alongside this).
+  // Close the loop here too: don't just trust the POST's 2xx — re-read
+  // the issue and confirm `label` actually stuck before returning, so a
+  // genuine application failure (a future racing writer, or a GitHub read
+  // replica that's slow to catch up) surfaces here immediately with a
+  // clear error, instead of silently, 25 minutes later, as a mystifying
+  // waitForMerge timeout.
+  verifyRetries = 3,
+  verifyDelayMs = 2_000,
+  _gh = gh,
+} = {}) {
   // Mutating POST — opt into the bounded transient-retry (#1771 step 1).
   // The read-pollers keep the default retries:0 because they already
   // loop on their own deadlines.
-  return gh(`/repos/${repo}/issues/${prNumber}/labels`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ labels: [label] }),
-    retries: 5,
-  });
+  const post = () =>
+    _gh(`/repos/${repo}/issues/${prNumber}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ labels: [label] }),
+      retries: 5,
+    });
+
+  const result = await post();
+  for (let attempt = 1; attempt <= verifyRetries; attempt++) {
+    const issue = await _gh(`/repos/${repo}/issues/${prNumber}`);
+    const names = Array.isArray(issue.labels) ? issue.labels.map((l) => (l && l.name) || l) : [];
+    if (names.includes(label)) return result;
+    if (attempt === verifyRetries) break;
+    console.warn(
+      `[addLabel] "${label}" not yet visible on #${prNumber} after POST ` +
+        `(attempt ${attempt}/${verifyRetries}); re-POSTing and retrying.`,
+    );
+    await sleep(verifyDelayMs);
+    await post();
+  }
+  throw new Error(
+    `addLabel: POST for "${label}" on #${prNumber} returned success ${verifyRetries} ` +
+      `time(s) but the label never became visible on a re-read afterward — a genuine ` +
+      `application failure, not a read-after-write lag.`,
+  );
 }
 
 async function getPullRequest({ repo = HOST_REPO, prNumber }) {

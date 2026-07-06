@@ -59,6 +59,9 @@ const RATE_LIMIT_FLOOR = 50;
 const MAX_PRS = 20;
 const MAX_CHECKS_SHOWN = 5;
 const MAX_DEPLOY_RUNS_SHOWN = 5;
+// Kept in sync with cms-editorial-workflow.yml's `auto-merge-when-ready`
+// job `if:` — the three label names that arm auto-merge for a CMS PR.
+const READY_LABELS = ["cms/ready", "decap-cms/ready", "decap-cms/pending_publish"];
 
 class RateLimitedError extends Error {
   constructor(remaining, resetAt) {
@@ -190,9 +193,38 @@ async function classifyPr(repo, pr, deadline) {
       `  - auto-merge enabled by @${pr.auto_merge.enabled_by.login}; merging when checks pass`,
     );
   } else if (pr.mergeable_state === "clean") {
-    out.push(
-      `  - clean: no merge conflict, but no \`cms/ready\`-class label or auto-merge intent (label-race candidate)`,
+    // Run 28761772021 / PR #2469: this branch used to assert "no
+    // cms/ready-class label" WITHOUT ever looking at pr.labels — a false
+    // claim ("label-race candidate") that sent an entire investigation
+    // chasing a label race that never existed. Ground truth for #2469:
+    // `cms/ready` was applied ONCE at PR creation and never removed (every
+    // label writer in this repo — theme/admin/publish-via-auto-merge.js,
+    // cms-editorial-workflow.yml, the e2e helpers — POSTs additively; a
+    // repo-wide grep finds zero unlabel/setLabels/replace calls). The real
+    // story was auto-merge-when-ready's 10-minute "unstable status" poll
+    // (unprotected preview-only base, see that job's own comments) running
+    // out before the PR's checks settled, deferring to cms-automerge-
+    // nudge.yml's cron backstop (~45-90 min in practice) — outside the
+    // spec's 25-min waitForMerge budget. Check labels for real instead of
+    // assuming, so this report says what's actually true.
+    const readyLabel = READY_LABELS.find(
+      (name) => Array.isArray(pr.labels) && pr.labels.some((l) => (l && l.name) === name),
     );
+    if (readyLabel) {
+      out.push(
+        `  - clean: \`${readyLabel}\` IS present but auto-merge never armed — NOT a ` +
+          `label race. Likely auto-merge-when-ready's unprotected-base "unstable ` +
+          `status" poll exhausted its 10-min budget before checks settled; check ` +
+          `cms-automerge-nudge.yml's cron backstop (throttled ~45-90 min) or whether ` +
+          `\`${pr.base && pr.base.ref}\` has branch protection at all.`,
+      );
+    } else {
+      out.push(
+        `  - clean: no merge conflict, and genuinely no \`cms/ready\`-class label ` +
+          `(checked ${READY_LABELS.map((n) => `\`${n}\``).join(", ")}) or auto-merge ` +
+          `intent — add one of those labels to arm auto-merge-when-ready.`,
+      );
+    }
   } else if (pr.mergeable_state === "unknown") {
     out.push(
       `  - unknown: GitHub still computing mergeability; this run started too soon after a push`,
