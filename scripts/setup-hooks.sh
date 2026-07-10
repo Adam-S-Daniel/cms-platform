@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Wire this repo's pre-commit guard chain (secrets-scan + lint-staged) into the
-# local git config. Idempotent; safe to run from a Claude Code SessionStart hook
-# on every session. Platform-authoritative + kept in sync by dev-hooks-sync.yml.
+# local git config, and prepare web-session shells (UTF-8 locale). Idempotent;
+# safe to run from a Claude Code SessionStart hook on every session.
+# Platform-authoritative + kept in sync by dev-hooks-sync.yml.
 #
 # Git >= 2.54 registers each guard individually via .gitconfig-fragment
 # (`git hook list pre-commit` then shows them); older git uses core.hooksPath.
@@ -10,6 +11,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
+
+# Claude Code web sessions start shells with no locale (LANG/LC_ALL unset →
+# US-ASCII), which crashes `bundle exec jekyll build`: the theme gem's Decap
+# render hook reads UTF-8 site files and Ruby raises "invalid byte sequence
+# in US-ASCII". CI exports a UTF-8 locale; do the same for every shell in a
+# web session by appending to CLAUDE_ENV_FILE — set only on the web, so this
+# is a no-op in local/CLI sessions. Guarded + idempotent (one export line,
+# ever). Lives HERE, not in a per-site hook, so every consumer inherits it
+# via dev-hooks-sync — supersedes adamdaniel.ai#2542's site-local version.
+if [[ -n "${CLAUDE_ENV_FILE:-}" ]] && ! grep -qs '^export LANG=' "$CLAUDE_ENV_FILE"; then
+  echo 'export LANG="${LANG:-C.UTF-8}"' >>"$CLAUDE_ENV_FILE"
+  echo "setup-hooks: exported LANG=C.UTF-8 for web-session shells"
+fi
 
 GITCONFIG_FRAGMENT=".gitconfig-fragment"
 HOOKS_DIR=".githooks"

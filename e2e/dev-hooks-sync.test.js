@@ -60,6 +60,26 @@ test.describe("dev-hooks centralization (#116)", () => {
     expect(text).toMatch(/\.claude\/settings\.json/);
   });
 
+  test("setup-hooks.sh prepares web-session shells: UTF-8 locale via CLAUDE_ENV_FILE", () => {
+    // Claude Code web sessions start with no locale (US-ASCII), which crashes
+    // `bundle exec jekyll build` in the theme gem's Decap render hook on UTF-8
+    // site files. setup-hooks.sh already runs from every consumer's
+    // SessionStart hook, so the guarded LANG append lives there and flows to
+    // consumers via dev-hooks-sync (supersedes adamdaniel.ai#2542's
+    // site-local hook). A refactor that drops the block would silently
+    // re-break every consumer's web-session Jekyll builds.
+    const text = fs.readFileSync(path.join(ROOT, "scripts", "setup-hooks.sh"), "utf8");
+    expect(text, "must append to CLAUDE_ENV_FILE only when set (web-only)").toContain(
+      "CLAUDE_ENV_FILE:-",
+    );
+    expect(text, "must export a UTF-8 LANG, preserving any pre-set value").toContain(
+      'export LANG="${LANG:-C.UTF-8}"',
+    );
+    expect(text, "must be idempotent — guard on an existing export line").toContain(
+      "grep -qs '^export LANG='",
+    );
+  });
+
   test("the canonical caller exists, calls the reusable, and rides CMS_PLATFORM_PAT", () => {
     const text = fs.readFileSync(CALLER, "utf8");
     expect(text).toMatch(/uses:\s*Adam-S-Daniel\/cms-platform\/\.github\/workflows\/dev-hooks-sync\.yml@/);
