@@ -27,6 +27,30 @@ const OUTPUT_DIR = path.join(__dirname, "..", "screenshots", "regression");
 fs.mkdirSync(path.join(OUTPUT_DIR, "pr"), { recursive: true });
 fs.mkdirSync(path.join(OUTPUT_DIR, "prod"), { recursive: true });
 
+// Deployment-metadata exclusion for the text dumps — two layers, both
+// load-bearing:
+//   - [data-visreg-ignore]: the extensible marker carried by the PAGE
+//     markup (#151; the admin commit/deploy pills set it).
+//   - The known metadata element IDs, excluded UNCONDITIONALLY: the prod
+//     side of the diff serves the PREVIOUS release's markup, so a marker
+//     added to a pre-existing element doesn't exist on prod until prod
+//     itself ships it. Attribute-only exclusion therefore leaked the
+//     commit pill's "<sha> <time>" into prod's dump and flagged /admin/
+//     on the very bump PR that shipped the marker (adamdaniel.ai#2560) —
+//     and would repeat on every consumer's first bump past that release.
+//     This spec runs at the PR's pin on BOTH sides, so an id list here
+//     covers both regardless of page version. A brand-NEW metadata
+//     element needs only the attribute (element + this spec ship in the
+//     same release); only a marker RETROFITTED onto a pre-existing
+//     element needs its id added here. Ids drift-locked to the theme
+//     sources by e2e/visreg-ignore-lint.test.js.
+const VISREG_IGNORE_SELECTOR = [
+  "[data-visreg-ignore]",
+  "#cms-commit-pill",
+  "#cms-prod-status-pill",
+  "#cms-preview-build-pill",
+].join(", ");
+
 function safeFileName(pagePath) {
   const name = pagePath.replace(/\//g, "_").replace(/^_/, "").replace(/_$/, "");
   return name || "index";
@@ -58,20 +82,17 @@ async function waitForAdminBootIfApplicable(page, pagePath) {
 async function writeVisibleText(page, side, safeName) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      // [data-visreg-ignore] marks deployment metadata (the admin shell's
-      // deployed-commit / deploy-status pills): sha + deploy time differ
-      // between prod and a CI build BY DEFINITION, and must not trip the
-      // text gate. visibility:hidden excludes a node from innerText;
-      // restore afterwards so the (already-taken or later) screenshot and
-      // live page are untouched.
-      const text = await page.evaluate(() => {
-        const ignored = Array.from(document.querySelectorAll("[data-visreg-ignore]"));
+      // visibility:hidden excludes a node from innerText; restore afterwards
+      // so the (already-taken or later) screenshot and live page are
+      // untouched. See VISREG_IGNORE_SELECTOR above for what's excluded and why.
+      const text = await page.evaluate((sel) => {
+        const ignored = Array.from(document.querySelectorAll(sel));
         const saved = ignored.map((el) => el.style.visibility);
         ignored.forEach((el) => (el.style.visibility = "hidden"));
         const t = (document.body && document.body.innerText) || "";
         ignored.forEach((el, i) => (el.style.visibility = saved[i]));
         return t;
-      });
+      }, VISREG_IGNORE_SELECTOR);
       fs.writeFileSync(path.join(OUTPUT_DIR, side, `${safeName}.txt`), text);
       return;
     } catch (e) {
