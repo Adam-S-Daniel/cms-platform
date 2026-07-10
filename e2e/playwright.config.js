@@ -122,6 +122,10 @@ const PLATFORM_META_SPECS = [
   // regression-video.spec.js must derive from APEX_DOMAIN (the consumer apex),
   // never a hardcoded site. Reads the platform e2e source; self-CI only.
   "regression-prod-base.test.js",
+  // Locks the reviews dashboard's pending-run discovery to the workflow
+  // path (run-name filtering matches nothing on consumers with dynamic
+  // run-name:). Reads PLATFORM theme files — self-CI only.
+  "reviews-dashboard-lint.test.js",
   // Locks the release→bump chaining (dispatch fan-out + bump auto-merge,
   // both fail-open). Reads the PLATFORM workflow files — platform self-CI
   // only.
