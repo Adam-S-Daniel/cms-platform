@@ -86,3 +86,46 @@ test.describe("platform-bump reusable — seeds newly-dictated workflow callers"
     );
   });
 });
+
+test.describe("platform-bump reusable — closes superseded platform/bump-* PRs", () => {
+  // Each bump PR is an ATOMIC absolute rewrite (see #13 above), so it fully
+  // supersedes whatever an older `platform/bump-*` PR proposed. Without a
+  // closure step these pile up every time a release is cut before a
+  // consumer merges the previous bump PR (observed live: a consumer accrued
+  // 4 open bump PRs at once). These lints lock the closure step in place
+  // and its fail-open shape — this is cosmetic cleanup, never worth failing
+  // the bump over.
+  test("closes other open PRs, scoped to the platform/bump- prefix", () => {
+    const run = runStep.run;
+    expect(run, "must list open PRs to find other bump PRs").toMatch(/gh pr list --state open/);
+    expect(run, "must filter the enumeration to the platform/bump- prefix").toMatch(
+      /startswith\(\\"platform\/bump-\\"\)/,
+    );
+    expect(run, "must close the matched PRs").toMatch(/gh pr close/);
+  });
+
+  test("excludes the current $BRANCH from the closure candidates", () => {
+    expect(runStep.run, "must select .headRefName != the current bump's own $BRANCH").toMatch(
+      /select\(\.headRefName\s*!=\s*\\"\$\{BRANCH\}\\"\)/,
+    );
+  });
+
+  test("the closure step is fail-open under set -euo pipefail", () => {
+    const run = runStep.run;
+    expect(run, "the run block must be strict (set -euo pipefail)").toMatch(
+      /set -euo pipefail/,
+    );
+    // Under `set -euo pipefail` a bare `gh pr close` would fail the whole
+    // job on the first stale PR it can't close. It must be guarded inline —
+    // `|| echo "::warning::..."` — exactly like the `gh pr merge --auto`
+    // line it follows, never a bare unguarded call.
+    expect(run, "gh pr close must degrade to a warning, not fail the job").toMatch(
+      /gh pr close[\s\S]{0,300}\|\|\s*echo "::warning::/,
+    );
+    // The enumeration itself (gh pr list piped through mapfile) must also
+    // be guarded — a transient `gh pr list` failure must not abort the bump.
+    expect(run, "the gh pr list enumeration must also be fail-open").toMatch(
+      /2>\/dev\/null \|\| true/,
+    );
+  });
+});

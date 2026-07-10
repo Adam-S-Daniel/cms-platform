@@ -171,3 +171,35 @@ jobs:
           # pre-chaining behavior for every bump PR.
           gh pr merge --auto --squash "$BRANCH" \
             || echo "::warning::could not enable auto-merge on the bump PR for $LATEST — merge it manually (is 'Allow auto-merge' enabled on this repo?)"
+
+          # Close superseded `platform/bump-*` PRs. Every bump PR is an
+          # ATOMIC absolute rewrite of every pinned reference (see the file
+          # header) — it fully supersedes whatever an OLDER bump PR proposed,
+          # so once THIS run's PR is open (or updated) above, any OTHER open
+          # `platform/bump-*` PR is stale noise, not a stack to reconcile.
+          # Left alone, these pile up every time a release is cut before a
+          # consumer merges the previous bump PR (observed live: a consumer
+          # accrued 4 open bump PRs at once). FAIL-OPEN, same rationale as
+          # the auto-merge line just above: a stale PR left open by mistake
+          # is a cosmetic nuisance, never worth failing the bump. Runs on
+          # the same caller PAT (GH_TOKEN, already set for this step) as
+          # every other `gh` call here — no new token introduced.
+          NEW_PR=$(gh pr view "$BRANCH" --json number --jq .number 2>/dev/null || echo "")
+          if [ -n "$NEW_PR" ]; then
+            mapfile -t OLD_BUMP_PRS < <(
+              gh pr list --state open --json number,headRefName \
+                --jq ".[] | select(.headRefName | startswith(\"platform/bump-\")) | select(.headRefName != \"${BRANCH}\") | .number" \
+              2>/dev/null || true
+            )
+            for old_num in "${OLD_BUMP_PRS[@]}"; do
+              [ -z "$old_num" ] && continue
+              # --delete-branch is safe here: the jq filter above only ever
+              # matches `platform/bump-*` branches, and those branches are
+              # produced exclusively by this bump step, never hand-authored.
+              gh pr close "$old_num" --delete-branch --comment \
+                "Superseded by the bump to $LATEST (#${NEW_PR}) — this older bump PR is a stale absolute-rewrite and is safe to drop." \
+                || echo "::warning::could not close superseded bump PR #${old_num} — close it manually"
+            done
+          else
+            echo "::warning::could not resolve the PR number for $BRANCH — skipping superseded bump-PR cleanup"
+          fi
