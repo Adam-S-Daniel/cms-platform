@@ -17,8 +17,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)
 ISO=$(git -C "$REPO_ROOT" log -1 --format=%cI HEAD)
 BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
+# Same platform_repo/platform_ref read as the deploy workflows (deploy-
+# production.yml / deploy-preview.yml) — tolerant of a missing platform.lock
+# or missing keys (local dev off a fresh checkout), never failing this
+# script; the pill just omits itself when either is empty.
+PLATFORM_REPO=$(grep -m1 '^platform_repo:' "$REPO_ROOT/platform.lock" 2>/dev/null | sed -E 's/^[^:]+:[[:space:]]*//;s/[[:space:]]+$//') || true
+PLATFORM_REF=$(grep -m1 '^platform_ref:' "$REPO_ROOT/platform.lock" 2>/dev/null | sed -E 's/^[^:]+:[[:space:]]*//;s/[[:space:]]+$//') || true
 
-JSON="{ \"sha\": \"${SHA}\", \"iso\": \"${ISO}\", \"branch\": \"${BRANCH}\" }"
+JSON="{ \"sha\": \"${SHA}\", \"iso\": \"${ISO}\", \"branch\": \"${BRANCH}\", \"platform_repo\": \"${PLATFORM_REPO}\", \"platform_ref\": \"${PLATFORM_REF}\" }"
 
 TARGET="${REPO_ROOT}/_site/admin/commit.json"
 mkdir -p "$(dirname "$TARGET")"

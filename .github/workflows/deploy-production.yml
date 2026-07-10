@@ -122,14 +122,21 @@ jobs:
 
       - name: Write deploy-time commit metadata
         # Surfaces the deployed commit in the admin's top-right corner via
-        # admin/index.html. Use HEAD rather than github.sha to sidestep
+        # admin/index.html, plus (below it) the cms-platform release pill —
+        # sourced from this site's platform.lock, the cms-platform version
+        # it's pinned to. Use HEAD rather than github.sha to sidestep
         # shallow-clone issues; on push events they're identical.
         run: |
           mkdir -p ./_site/admin
           SHA=$(git rev-parse HEAD)
           ISO=$(git log -1 --format=%cI HEAD)
+          # Tolerant: platform.lock is expected (every consumer site ships
+          # one — see the platform-bump workflow), but a missing file or
+          # missing key must never fail this step, just omit that pill.
+          PLATFORM_REPO=$(grep -m1 '^platform_repo:' platform.lock 2>/dev/null | sed -E 's/^[^:]+:[[:space:]]*//;s/[[:space:]]+$//') || true
+          PLATFORM_REF=$(grep -m1 '^platform_ref:' platform.lock 2>/dev/null | sed -E 's/^[^:]+:[[:space:]]*//;s/[[:space:]]+$//') || true
           cat > ./_site/admin/commit.json <<JSON
-          { "sha": "${SHA}", "iso": "${ISO}", "branch": "main" }
+          { "sha": "${SHA}", "iso": "${ISO}", "branch": "main", "platform_repo": "${PLATFORM_REPO}", "platform_ref": "${PLATFORM_REF}" }
           JSON
           cat ./_site/admin/commit.json
 

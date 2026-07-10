@@ -52,9 +52,11 @@
       height: 16px;
       fill: currentColor;
     }
-    /* Stack Live Preview above Reviews so the more frequent action is on top. */
-    #live-preview-link { bottom: 5rem; }
-    #reviews-link      { bottom: 1.5rem; }
+    /* Stack Live Preview above Reviews, leaving room below for the
+     * commit + platform-release pill stack (bottom-right corner; see
+     * the pill script's positioning comments near the end of <body>). */
+    #live-preview-link { bottom: 6rem; }
+    #reviews-link      { bottom: 3.25rem; }
   </style>
 
   <!-- This admin shell is intentionally minimal: the cobalt theme was
@@ -211,12 +213,17 @@
   <script src="deploy-status-pill.js" defer></script>
 
   <!--
-    Deployed-build commit indicator. Pinned to the top-right corner
-    under Decap's user/host menu so editors can tell which version of
-    the admin they're looking at. The deploy workflows (deploy-prod and
-    deploy-preview) write `commit.json` next to this file before the S3
-    sync; if it's absent (local dev, or someone served the repo root
-    without running the writer) the pill stays hidden.
+    Deployed-build commit indicator, plus (below it) the cms-platform
+    release pill. Pinned to the bottom-right corner, tucked above the
+    floating Live Preview / Reviews links, so editors can tell which
+    commit — and which platform release — the admin they're looking at
+    was built from. The deploy workflows (deploy-prod and deploy-preview)
+    write `commit.json` next to this file before the S3 sync; if it's
+    absent (local dev, or someone served the repo root without running
+    the writer) both pills stay hidden. The platform pill additionally
+    needs `platform_repo`/`platform_ref` in commit.json (sourced from the
+    site's `platform.lock`) — an older commit.json without them hides
+    just that pill, not the commit one.
   -->
   <script>
     (function () {
@@ -256,17 +263,21 @@
             '<span>' + escapeHTML(c.sha.slice(0, 7)) +
             (dateLabel ? '  ' + escapeHTML(dateLabel) : '') + '</span>';
           // Bottom-right corner, tucked above the floating Live Preview
-          // / Reviews links. Was at top:60px right:12px and overlapped
-          // Decap's editor toolbar on narrow viewports / when Decap
-          // surfaces an extra notification banner. Bottom-right
-          // doesn't conflict with form fields and leaves the
-          // attention-grabbing top of the page alone. PREVIEW-branch
-          // pills keep their amber accent (and stay opaque so the
-          // branch name is unmistakable); main-branch pills go more
-          // subdued — they're informational, not actionable.
+          // / Reviews links (their `bottom` offsets were bumped up in the
+          // <style> block above to make room for this pill stack). Was
+          // at top:60px right:12px and overlapped Decap's editor toolbar
+          // on narrow viewports / when Decap surfaces an extra
+          // notification banner. Bottom-right doesn't conflict with form
+          // fields and leaves the attention-grabbing top of the page
+          // alone. `bottom:1.75rem` (rather than the very corner) leaves
+          // room for the platform-release pill directly below it.
+          // PREVIEW-branch pills keep their amber accent (and stay
+          // opaque so the branch name is unmistakable); main-branch
+          // pills go more subdued — they're informational, not
+          // actionable.
           a.style.cssText = [
             'position:fixed',
-            'bottom:0.25rem',
+            'bottom:1.75rem',
             'right:0.25rem',
             'z-index:10000',
             'padding:0.15rem 0.45rem',
@@ -292,6 +303,54 @@
             a.style.opacity = isPreview ? '1' : '0.7';
           };
           document.body.appendChild(a);
+
+          // Platform-version pill — which cms-platform release (tag) this
+          // site's admin was built from, sourced from the site's own
+          // platform.lock via commit.json's platform_repo/platform_ref
+          // (scripts/write-commit-json.sh and the deploy workflows write
+          // them; both empty when platform.lock is absent or the fields
+          // are missing — treat empty as "not present", same as no pill).
+          // Stacked directly below the commit pill, same right offset,
+          // at the corner's bottom:0.25rem — the slot the commit pill
+          // used to occupy before it moved up to make room.
+          if (c.platform_repo && c.platform_ref) {
+            var p = document.createElement('a');
+            p.id = 'cms-platform-pill';
+            p.setAttribute('data-visreg-ignore', '');
+            p.href = 'https://github.com/' + c.platform_repo + '/releases/tag/' + c.platform_ref;
+            p.target = '_blank';
+            p.rel = 'noopener';
+            p.title = 'cms-platform release — opens on GitHub';
+            p.innerHTML = '<span>platform ' + escapeHTML(c.platform_ref) + '</span>';
+            p.style.cssText = [
+              'position:fixed',
+              'bottom:0.25rem',
+              'right:0.25rem',
+              'z-index:10000',
+              'padding:0.15rem 0.45rem',
+              'background:rgba(255,255,255,0.75)',
+              'border:1px solid rgba(208,215,222,0.6)',
+              'border-radius:3px',
+              'color:#8c959f',
+              'font-family:ui-monospace,SFMono-Regular,Menlo,monospace',
+              'font-size:0.65rem',
+              'letter-spacing:0.03em',
+              'text-decoration:none',
+              'opacity:0.7',
+              'transition:opacity 0.15s,border-color 0.15s,color 0.15s'
+            ].join(';') + ';';
+            p.onmouseenter = function () {
+              p.style.borderColor = '#0969da';
+              p.style.color = '#24292f';
+              p.style.opacity = '1';
+            };
+            p.onmouseleave = function () {
+              p.style.borderColor = 'rgba(208,215,222,0.6)';
+              p.style.color = '#8c959f';
+              p.style.opacity = '0.7';
+            };
+            document.body.appendChild(p);
+          }
         })
         .catch(function () { /* offline / 404 — leave hidden */ });
 
