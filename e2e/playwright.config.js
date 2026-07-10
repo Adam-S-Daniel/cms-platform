@@ -92,6 +92,10 @@ const PLATFORM_META_SPECS = [
   // Reads the editorial-label-audit reusable workflow DEFINITION (consumer
   // ships only a wrapper) — platform-internal, self-CI only.
   "editorial-label-audit-repo.test.js",
+  // Reads scripts/content-pr-guard.js and the cms-editorial-workflow.yml
+  // reusable DEFINITION (via readWorkflow) plus the examples/site caller —
+  // platform-internal, self-CI only.
+  "content-pr-guard.test.js",
   // Reads the scheduled-run-health reusable + caller DEFINITIONS and the
   // scripts/audit-scheduled-runs.js helpers (consumer ships only a thin
   // wrapper) — platform-internal, self-CI only.
