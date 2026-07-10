@@ -15,15 +15,30 @@
 //   {
 //     "totals": {
 //       "identical": 8, "different": 2, "new": 1,
-//       "visuallyDifferent": 3,        // different + new
+//       "visuallyDifferent": 3,        // different + new (incl. text-escalated)
+//       "textChanged": 1,              // pages whose visible text changed
 //       "potentiallyAffected": 10      // == page-changes.json.changed.length
 //     },
 //     "pages": [
 //       { "path": "/", "status": "identical", "diffRatio": 0 },
 //       { "path": "/blog/foo/", "status": "different", "diffRatio": 0.183 },
+//       { "path": "/pages/x/", "status": "different", "diffRatio": 0.0001,
+//         "textChanged": true, "textDiff": { "prod": "…", "pr": "…" } },
 //       { "path": "/projects/bar/", "status": "new", "diffRatio": null }
 //     ]
 //   }
+//
+// Besides the PNGs, the spec drops a `<safe>.txt` visible-text dump per
+// side and a `prod-missing.json` list of pages prod answered 404/410 for.
+// Text is compared whitespace-normalized; a text change on a real page
+// ESCALATES an "identical" pixel status to "different" — a text delta is
+// human-meaningful no matter how few pixels it moves (the sub-threshold
+// nav-link case), and unlike the viewport screenshot it also covers
+// below-the-fold content. A missing text dump on either side skips the
+// text check (same tolerance rationale as "no-baseline" below).
+// `prod-missing.json` pages score as "new" (→ review gate): an HTTP 404
+// is prod CONFIRMING absence, unlike a missing PNG which may just be a
+// transient capture gap.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -75,22 +90,66 @@ function readPNG(file) {
   return PNG.sync.read(fs.readFileSync(file));
 }
 
+function normalizeText(s) {
+  return String(s || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Short excerpt around the first divergence of two normalized text dumps,
+// for the PR comment — enough to see WHAT changed without dumping pages.
+function firstTextDivergence(prodText, prText, context = 60) {
+  let i = 0;
+  const max = Math.min(prodText.length, prText.length);
+  while (i < max && prodText[i] === prText[i]) i++;
+  const start = Math.max(0, i - Math.floor(context / 3));
+  const clip = (s) => {
+    const seg = s.slice(start, i + context);
+    return `${start > 0 ? "…" : ""}${seg}${i + context < s.length ? "…" : ""}`;
+  };
+  return { prod: clip(prodText), pr: clip(prText) };
+}
+
+// Compares the two sides' visible-text dumps for a page. Returns null when
+// either dump is absent (placeholder sides, capture gaps — tolerated) or
+// the normalized text matches; otherwise { prod, pr } excerpts.
+function textDiffFor(prDir, prodDir, safe) {
+  const prFile = path.join(prDir, `${safe}.txt`);
+  const prodFile = path.join(prodDir, `${safe}.txt`);
+  if (!fs.existsSync(prFile) || !fs.existsSync(prodFile)) return null;
+  const prod = normalizeText(fs.readFileSync(prodFile, "utf8"));
+  const pr = normalizeText(fs.readFileSync(prFile, "utf8"));
+  if (prod === pr) return null;
+  return firstTextDivergence(prod, pr);
+}
+
 function computeAll({ changesPath, prDir, prodDir, outPath }) {
   const changes = JSON.parse(fs.readFileSync(changesPath, "utf8"));
   const newSet = new Set(changes.new || []);
   const all = [...(changes.changed || []), ...(changes.new || []), ...(changes.unchanged || [])];
 
+  // Pages prod answered 404/410 for at capture time (written by
+  // regression-video.spec.js next to the pr/ and prod/ dirs). These are
+  // CONFIRMED-new regardless of what the changed-file mapper knew.
+  let prodMissing = new Set();
+  try {
+    prodMissing = new Set(JSON.parse(fs.readFileSync(path.resolve(prDir, "..", "prod-missing.json"), "utf8")));
+  } catch {
+    prodMissing = new Set();
+  }
+
   const pages = [];
   let identical = 0;
   let different = 0;
   let neu = 0;
+  let textChangedCount = 0;
 
   for (const p of all) {
     const safe = safeFileName(p);
     const prFile = path.join(prDir, `${safe}.png`);
     const prodFile = path.join(prodDir, `${safe}.png`);
 
-    if (newSet.has(p)) {
+    if (newSet.has(p) || prodMissing.has(p)) {
       pages.push({ path: p, status: "new", diffRatio: null });
       neu++;
       continue;
@@ -120,12 +179,21 @@ function computeAll({ changesPath, prDir, prodDir, outPath }) {
     }
 
     const ratio = pixelDiffRatio(prImg, prodImg);
-    const status = classifyDiff(ratio);
+    let status = classifyDiff(ratio);
+
+    // Text check: a visible-text delta escalates a pixel-"identical" page —
+    // it's human-meaningful however few pixels it moves, and covers
+    // below-the-fold content the viewport screenshot can't see.
+    const textDiff = textDiffFor(prDir, prodDir, safe);
+    if (textDiff && status === "identical") status = "different";
+
     pages.push({
       path: p,
       status,
       diffRatio: Number.isFinite(ratio) ? Number(ratio.toFixed(6)) : null,
+      ...(textDiff ? { textChanged: true, textDiff } : {}),
     });
+    if (textDiff) textChangedCount++;
     if (status === "different") different++;
     else identical++;
   }
@@ -136,6 +204,7 @@ function computeAll({ changesPath, prDir, prodDir, outPath }) {
       different,
       new: neu,
       visuallyDifferent: different + neu,
+      textChanged: textChangedCount,
       potentiallyAffected: (changes.changed || []).length,
     },
     pages,
@@ -153,6 +222,8 @@ module.exports = {
   classifyDiff,
   computeAll,
   safeFileName,
+  normalizeText,
+  firstTextDivergence,
   PER_CHANNEL_TOLERANCE,
   RATIO_THRESHOLD,
 };

@@ -199,16 +199,22 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
+      - name: Build Jekyll site
+        # The consuming repo must provide a buildable Jekyll site +
+        # Gemfile; the platform itself is a theme gem (see header).
+        # MUST run BEFORE "Detect changed pages": the detector's canonical
+        # page universe is a scan of the built _site (which discovers
+        # site-owned collections its hardcoded fallback has never heard
+        # of — the /tools/ pages on adamdaniel.ai were invisible to the
+        # regression gate when this ran the other way around). Locked by
+        # e2e/visual-regression-step-order.test.js.
+        run: bundle exec jekyll build --quiet
+
       - name: Detect changed pages
         run: node .cms-platform/e2e/detect-changed-pages.js > /tmp/page-changes.json
 
       - name: Show page changes
         run: cat /tmp/page-changes.json
-
-      - name: Build Jekyll site
-        # The consuming repo must provide a buildable Jekyll site +
-        # Gemfile; the platform itself is a theme gem (see header).
-        run: bundle exec jekyll build --quiet
 
       - name: Run regression video screenshots
         continue-on-error: true
@@ -349,6 +355,23 @@ jobs:
               .map(p => `\`${p.path}\``)
               .join(', ');
 
+            // Visible-text regression (compute-visual-diffs.js escalates
+            // text-changed pages into the visually-different totals; this
+            // surfaces WHICH pages and WHAT changed). Tolerates diffs.json
+            // written by an older pipeline without text fields.
+            const textChangedPages = diffs.pages.filter(p => p.textChanged);
+            const textChangedList = textChangedPages.map(p => `\`${p.path}\``).join(', ');
+            const textNotes = textChangedPages.length
+              ? [
+                  '',
+                  '**Text changes** (first divergence, whitespace-normalized):',
+                  ...textChangedPages.map(p => {
+                    const d = p.textDiff || {};
+                    return `- \`${p.path}\`\n  - prod: “${d.prod || ''}”\n  - PR: “${d.pr || ''}”`;
+                  }),
+                ]
+              : [];
+
             // No visually-different pages → approve-regression skips the
             // human-review environment and auto-passes the required check.
             const reviewLine = t.visuallyDifferent === 0
@@ -368,8 +391,10 @@ jobs:
               `| **Potentially affected by changes** | ${t.potentiallyAffected} page(s) |`,
               `| **New** | ${t.new} page(s) |`,
               `| **Visually identical** | ${t.identical} page(s) |`,
+              `| **Text changed** | ${t.textChanged || 0} page(s)${textChangedList ? ` — ${textChangedList}` : ''} |`,
               '',
               reviewLine,
+              ...textNotes,
               '',
               '*Video regenerates automatically on every push to this PR.*',
             ].join('\n');

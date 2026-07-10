@@ -152,6 +152,94 @@ test.describe("compute-visual-diffs", () => {
     expect(summary.totals.visuallyDifferent).toBe(0); // auto-pass: no manual gate
   });
 
+  test("computeAll: visible-text change escalates a pixel-identical page to different", async () => {
+    // The sub-threshold nav-link case: pixels within tolerance, but the
+    // page's visible text changed — human-meaningful, must hit the gate.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "regdiff-txt-"));
+    const prDir = path.join(tmp, "pr");
+    const prodDir = path.join(tmp, "prod");
+
+    const changes = { changed: ["/", "/pages/about/"], new: [], unchanged: [] };
+
+    for (const p of changes.changed) {
+      writePNG(makePNG(8, 8, [0, 0, 0, 255]), prDir, `${safeFileName(p)}.png`);
+      writePNG(makePNG(8, 8, [0, 0, 0, 255]), prodDir, `${safeFileName(p)}.png`);
+    }
+    // "/": text changed (a nav link appeared). Whitespace differences
+    // alone must NOT count — about page differs only in whitespace.
+    fs.writeFileSync(path.join(prodDir, `${safeFileName("/")}.txt`), "Home Blog About");
+    fs.writeFileSync(path.join(prDir, `${safeFileName("/")}.txt`), "Home Blog Tools About");
+    fs.writeFileSync(path.join(prodDir, `${safeFileName("/pages/about/")}.txt`), "About  me\n");
+    fs.writeFileSync(path.join(prDir, `${safeFileName("/pages/about/")}.txt`), "About me");
+
+    const summary = computeAll({
+      changesPath: writeJSON(tmp, "changes.json", changes),
+      prDir,
+      prodDir,
+      outPath: path.join(tmp, "diffs.json"),
+    });
+
+    const home = summary.pages.find((p) => p.path === "/");
+    expect(home.status).toBe("different");
+    expect(home.textChanged).toBe(true);
+    expect(home.textDiff.pr).toContain("Tools");
+    const about = summary.pages.find((p) => p.path === "/pages/about/");
+    expect(about.status).toBe("identical");
+    expect(about.textChanged).toBeUndefined();
+    expect(summary.totals.textChanged).toBe(1);
+    expect(summary.totals.visuallyDifferent).toBe(1); // escalation feeds the gate
+  });
+
+  test("computeAll: missing text dump on either side skips the text check", async () => {
+    // Placeholder prod sides and capture gaps write no .txt — tolerated,
+    // same rationale as no-baseline.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "regdiff-notxt-"));
+    const prDir = path.join(tmp, "pr");
+    const prodDir = path.join(tmp, "prod");
+
+    const changes = { changed: ["/"], new: [], unchanged: [] };
+    writePNG(makePNG(8, 8, [0, 0, 0, 255]), prDir, `${safeFileName("/")}.png`);
+    writePNG(makePNG(8, 8, [0, 0, 0, 255]), prodDir, `${safeFileName("/")}.png`);
+    fs.writeFileSync(path.join(prDir, `${safeFileName("/")}.txt`), "Home Blog Tools");
+
+    const summary = computeAll({
+      changesPath: writeJSON(tmp, "changes.json", changes),
+      prDir,
+      prodDir,
+      outPath: path.join(tmp, "diffs.json"),
+    });
+
+    expect(summary.pages.find((p) => p.path === "/").status).toBe("identical");
+    expect(summary.totals.textChanged).toBe(0);
+    expect(summary.totals.visuallyDifferent).toBe(0);
+  });
+
+  test("computeAll: prod-missing.json (HTTP 404 at capture) scores the page as new", async () => {
+    // Capture-time new-page detection: prod CONFIRMED the page absent, so
+    // it must count toward the review gate even though the changed-file
+    // mapper never classified it — unlike a missing prod PNG (transient
+    // capture gap), which stays tolerated as no-baseline.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "regdiff-pm-"));
+    const prDir = path.join(tmp, "pr");
+    const prodDir = path.join(tmp, "prod");
+
+    const changes = { changed: ["/tools/widget/"], new: [], unchanged: [] };
+    writePNG(makePNG(8, 8, [0, 0, 0, 255]), prDir, `${safeFileName("/tools/widget/")}.png`);
+    writePNG(makePNG(8, 8, [10, 10, 10, 255]), prodDir, `${safeFileName("/tools/widget/")}.png`);
+    fs.writeFileSync(path.join(tmp, "prod-missing.json"), JSON.stringify(["/tools/widget/"]));
+
+    const summary = computeAll({
+      changesPath: writeJSON(tmp, "changes.json", changes),
+      prDir,
+      prodDir,
+      outPath: path.join(tmp, "diffs.json"),
+    });
+
+    expect(summary.pages.find((p) => p.path === "/tools/widget/").status).toBe("new");
+    expect(summary.totals.new).toBe(1);
+    expect(summary.totals.visuallyDifferent).toBe(1);
+  });
+
   test("computeAll: missing PR screenshot while prod exists → different (flag for review)", async () => {
     // The inverse: prod HAS the page but the PR failed to render it — a real
     // signal the PR may have broken the page, so it should be reviewed.

@@ -194,6 +194,10 @@ const PLATFORM_META_SPECS = [
   "spec-ast.test.js",
   "visual-regression-content-skip.test.js",
   "visual-regression-skip-review.test.js",
+  // Locks the reusable's build-before-detect step order (the _site scan is
+  // the canonical page universe). Reads the PLATFORM workflow file —
+  // platform self-CI only.
+  "visual-regression-step-order.test.js",
   "workflow-github-sha-lint.test.js",
   "workflow-graph.test.js",
   // #16 — lints the prod-loop reusables' if:always() branch-cleanup steps by
