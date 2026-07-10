@@ -488,14 +488,19 @@
     var deploy =
       (memCache && memCache.siteDeploy) ||
       (readCache() && readCache().data && readCache().data.siteDeploy);
+    // The state word itself ("deployed" / "failure" / …) carries the link to
+    // the Actions run — no separate "· run ↗" suffix.
+    var deployStateWord = deploy
+      ? deploy.state === "success"
+        ? "deployed"
+        : esc(deploy.state)
+      : "";
+    if (deploy && deploy.url) {
+      deployStateWord =
+        '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">' + deployStateWord + "</a>";
+    }
     var deployHtml = deploy
-      ? "site " +
-        (deploy.state === "success" ? "deployed" : esc(deploy.state)) +
-        " " +
-        esc(timeAgo(deploy.at)) +
-        (deploy.url
-          ? ' · <a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">run ↗</a>'
-          : "")
+      ? "site " + deployStateWord + " " + esc(timeAgo(deploy.at))
       : '<span style="color:#8c959f">sign in for deploy / PR data</span>';
     var nextHTML =
       '<strong style="color:#24292f">Posts</strong>' +
