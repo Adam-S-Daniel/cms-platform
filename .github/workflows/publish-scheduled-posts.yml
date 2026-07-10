@@ -1,3 +1,70 @@
+# Reusable: publish due scheduled posts via the platform's own PR +
+# auto-merge path.
+#
+# A consuming site calls this from a thin daily-cron caller (see
+# examples/site/.github/workflows/publish-scheduled-posts.yml). The
+# platform-owned scripts/publish_scheduled_posts.py flips
+# `published: false → true` on every `_posts/*.md` whose `publish_date`
+# has arrived; this workflow lands those flips on the default branch.
+#
+# WHY A PR + AUTO-MERGE, NOT `git push origin main` (read before
+# "simplifying" this back to the push it used to be):
+#
+#   1. Ruleset rejection. Consumer repos protect `main` with a ruleset
+#      (`pull_request` rule + required status checks, NO bypass actors),
+#      so a direct push to main is rejected outright — for ANY token.
+#      The old push shape therefore failed the FIRST time a post ever
+#      came due, in a schedule-event run nobody watches; scheduled
+#      publishing was silently broken from day one (no auto-publish
+#      commit has ever landed on a consumer's history).
+#   2. Token suppression. Even where a push could land, a push made with
+#      the default GITHUB_TOKEN does not trigger downstream workflows
+#      (GitHub's anti-recursion policy — the exact trap documented on
+#      cms-editorial-workflow.yml's auto-merge-when-ready job), so
+#      deploy-production would never fire and prod would keep serving
+#      the pre-flip build even after a "successful" push.
+#
+# THE FLOW (rides the same machinery every other non-Decap content
+# writer already uses — the delete-recovery PRs in
+# theme/admin/publish-via-auto-merge.js and the labelled fixture PRs in
+# e2e/cms-fixture-pr.js):
+#
+#   1. Run the publish script; it flips due posts in the working tree
+#      and emits `changed` / `count` step outputs (and prints the
+#      flipped file names to the run log).
+#   2. When posts flipped: commit them to a per-run branch
+#      `cms/posts/scheduled-publish-<run_id>` and push it, authenticated
+#      as CMS_E2E_PAT. The `cms/` first segment keeps the branch
+#      Decap-shaped, so label-non-decap-prs.yml and the content-PR
+#      guards classify it with the rest of the CMS content PRs.
+#   3. Open a PR and label it `cms/draft` + `cms/ready` (plus
+#      `decap-cms/pending_publish` — the label-at-creation convention
+#      that keeps Decap's "adding labels…" migration dialog off /admin
+#      and the editorial-label audit green while the PR is open). The
+#      `labeled` event fires cms-editorial-workflow.yml's
+#      auto-merge-when-ready job, which enables native auto-merge as the
+#      PAT user; GitHub squash-merges once the required checks pass, and
+#      that merge — pushed by a real user, not github-actions[bot] —
+#      fires deploy-production like any other content merge.
+#
+# CALLERS MUST PASS `secrets: CMS_E2E_PAT` — there is deliberately NO
+# degraded mode. A PR created with the default GITHUB_TOKEN cannot
+# trigger the `pull_request` workflows that produce the required status
+# checks (the same anti-recursion policy as above), so such a PR would
+# sit BLOCKED forever with nothing to auto-merge on. When posts are due
+# and the secret is absent, the run fails LOUD naming the secret instead
+# of silently half-publishing.
+#
+# STACKING GUARD: if an OPEN `cms/posts/scheduled-publish-*` PR already
+# exists (yesterday's flip may still be waiting on checks/auto-merge),
+# the run logs a notice and exits success WITHOUT opening another — a
+# second PR flipping the same posts would only conflict with the first,
+# and the pending PR already carries every currently-due flip once it
+# merges (the next scheduled run picks up any stragglers).
+#
+# The end-to-end chain is validated live by
+# e2e/cms-scheduled-publish-loop.spec.js (the cms-scheduled-publish-loop
+# reusable) and statically by e2e/publish-scheduled-posts-flow.test.js.
 name: Publish Scheduled Posts (reusable)
 on:
   workflow_call:
@@ -8,8 +75,17 @@ on:
       platform_ref:
         type: string
         default: main
+    secrets:
+      CMS_E2E_PAT:
+        required: false
+
+# GITHUB_TOKEN needs nothing beyond reading the repo for the two
+# checkouts: the branch push rides the CMS_E2E_PAT the site checkout
+# persists, and the PR/label writes go through github-script with the
+# same PAT. (The retired push-to-main shape needed `contents: write`;
+# the PR flow deliberately does not.)
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   publish:
@@ -18,9 +94,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
         with:
-          # Use the default GITHUB_TOKEN; the push below will trigger
-          # deploy-production.yml via the standard push event.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # CMS_E2E_PAT when available so the branch push below is
+          # PAT-authenticated (checkout persists this token for git
+          # pushes). The github.token fallback only serves the no-op
+          # path (nothing due, nothing pushed) on a caller that hasn't
+          # wired the secret yet — the guard step below fails loud
+          # before any write is attempted.
+          token: ${{ secrets.CMS_E2E_PAT || github.token }}
 
       - name: Checkout platform scripts
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
@@ -33,12 +113,137 @@ jobs:
         id: check
         run: python3 .cms-platform/scripts/publish_scheduled_posts.py
 
-      - name: Commit and push
+      - name: Fail loud when CMS_E2E_PAT is missing (no degraded mode)
         if: steps.check.outputs.changed == 'true'
+        env:
+          # `secrets.*` is not readable inside a step-level `if:` in a
+          # reusable workflow — surface presence through env and branch
+          # in the script instead.
+          HAS_CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT != '' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        with:
+          script: |
+            if (process.env.HAS_CMS_E2E_PAT !== 'true') {
+              core.setFailed(
+                'Scheduled post(s) are due but the CMS_E2E_PAT secret was not provided. ' +
+                'This workflow publishes via a PR + auto-merge — the default branch is ' +
+                'ruleset-protected against direct pushes, and a PR created with the ' +
+                'default GITHUB_TOKEN cannot trigger the required status checks (see ' +
+                'this workflow\'s header comment) — so there is no degraded mode worth ' +
+                'having: wire a `secrets: CMS_E2E_PAT:` map in the thin caller ' +
+                '(see examples/site/.github/workflows/publish-scheduled-posts.yml) and re-run.'
+              );
+            }
+
+      - name: Stacking guard — skip when a scheduled-publish PR is already open
+        id: stack
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        with:
+          github-token: ${{ secrets.CMS_E2E_PAT }}
+          script: |
+            // Yesterday's flip may still be waiting on its required
+            // checks / auto-merge. A second PR flipping the same posts
+            // would only conflict with the first, so keep at most ONE
+            // scheduled-publish PR in flight; the next scheduled run
+            // picks up any posts still due after it lands.
+            const prefix = 'cms/posts/scheduled-publish-';
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              base: 'main',
+              per_page: 100,
+            });
+            const open = prs.find((pr) => ((pr.head && pr.head.ref) || '').startsWith(prefix));
+            if (open) {
+              core.notice(
+                `Open scheduled-publish PR already exists (#${open.number}, ` +
+                `head ${open.head.ref}) — not opening another; the due flips ` +
+                `land when it merges.`
+              );
+              core.setOutput('skip', 'true');
+            } else {
+              core.setOutput('skip', 'false');
+            }
+
+      - name: Commit the flips to a scheduled-publish branch and push
+        if: steps.check.outputs.changed == 'true' && steps.stack.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "cms/posts/scheduled-publish-${{ github.run_id }}"
           git add _posts/
           git commit -m "chore: auto-publish ${{ steps.check.outputs.count }} scheduled post(s)"
-          git push origin main
+          git push origin "cms/posts/scheduled-publish-${{ github.run_id }}"
 
+      - name: Open the auto-publish PR and label it for auto-merge
+        if: steps.check.outputs.changed == 'true' && steps.stack.outputs.skip != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        env:
+          COUNT: ${{ steps.check.outputs.count }}
+          BRANCH: cms/posts/scheduled-publish-${{ github.run_id }}
+        with:
+          github-token: ${{ secrets.CMS_E2E_PAT }}
+          script: |
+            const count = process.env.COUNT;
+            const branch = process.env.BRANCH;
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Auto-publish ${count} scheduled post(s)`,
+              head: branch,
+              base: 'main',
+              body: [
+                `Flips \`published: false → true\` on ${count} scheduled post(s) whose`,
+                '`publish_date` has arrived. The flipped file names are printed in this',
+                `run's log (the "Check and publish due posts" step).`,
+                '',
+                'This PR auto-merges via the `cms/ready` label once the required status',
+                "checks pass (the editorial workflow's auto-merge-when-ready job), and",
+                'the resulting merge triggers the production deploy. A direct push to',
+                'the default branch is not used because the branch ruleset rejects it',
+                '(pull_request rule + required checks, no bypass actors) and a push made',
+                'with the default GITHUB_TOKEN would not trigger the deploy workflow.',
+              ].join('\n'),
+            });
+
+            // Ensure the labels exist before applying them (idempotent —
+            // the same createLabel try/catch pattern as
+            // cms-editorial-workflow.yml).
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                name:  'cms/draft',
+                color: '1a2a5e',
+                description: 'Content draft — not ready for publish',
+              });
+            } catch (_) {}
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                name:  'cms/ready',
+                color: '22c27a',
+                description: 'Content approved and ready to publish',
+              });
+            } catch (_) {}
+
+            // `cms/ready` engages auto-merge-when-ready (the `labeled`
+            // event, sent as the PAT user, so the eventual merge push
+            // fires deploy-production). `decap-cms/pending_publish` rides
+            // along per the label-at-creation convention: a `cms/*` PR
+            // with no `decap-cms/*` label re-triggers Decap's label
+            // migration dialog on every /admin load and reds the daily
+            // editorial-label audit for as long as it is open.
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: ['cms/draft', 'cms/ready', 'decap-cms/pending_publish'],
+            });
+            core.notice(
+              `Opened auto-publish PR #${pr.number} (${count} post(s), head ${branch}); ` +
+              'auto-merge lands it once the required checks pass.'
+            );

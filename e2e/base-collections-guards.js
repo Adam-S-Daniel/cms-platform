@@ -219,6 +219,12 @@ const ADMIN_WRITE_GUARDS = {
     reason:
       'consumer opts out of the "posts" collection via cms.base_collections — the preview prod-mutation parity loop waits for the Posts sidebar link and publishes a post, absent on a base_collections:[] bio (#33) (#21)',
   },
+  "cms-scheduled-publish-loop.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — the scheduled-publish loop seeds a _posts/ draft and asserts the /blog/ surface, absent on a base_collections:[] bio (#33) (#21)',
+  },
 };
 
 // ── CAPABILITY_GUARDS (#21, v0.1.13+) ────────────────────────────────────────

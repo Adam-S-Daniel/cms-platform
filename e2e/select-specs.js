@@ -199,6 +199,10 @@ const HEAVY = new Set([
   "e2e/cms-publish-loop.spec.js",
   "e2e/cms-publish-loop-preview.spec.js",
   "e2e/cms-publish-loop-prod-mutate.spec.js",
+  // Scheduled-publish PR-flow loop — gated to RUN_SCHEDULED_PUBLISH_LOOP
+  // (only cms-scheduled-publish-loop.yml sets it), so a PR-matrix pick
+  // is a no-op skip; don't let it inflate the shard budget.
+  "e2e/cms-scheduled-publish-loop.spec.js",
   "e2e/cms-delete-published.spec.js",
   "e2e/cms-delete-published-preview.spec.js",
   // Issue #999 preview-parity loops — heavy, self-skip on PR runs
@@ -542,6 +546,22 @@ const SPEC_RULES = {
     /^\.github\/workflows\/deploy-production\.yml$/,
     /^\.github\/workflows\/cms-publish-loop-prod\.yml$/,
     /^e2e\/(decap-pat|github-actions-poll|cms-fixture-pr|cms-host)\.js$/,
+  ],
+  // Scheduled-publish PR-flow loop. Self-skips on PR runs (gated on
+  // RUN_SCHEDULED_PUBLISH_LOOP, set only by cms-scheduled-publish-loop.yml);
+  // selected here so a change to the scheduler workflow it dispatches, the
+  // editorial/deploy chain it rides, its own loop workflow, or the shared
+  // helpers (incl. the base_collections guard registry its skip is keyed on)
+  // refreshes PR-time coverage of the gating/skip path.
+  "e2e/cms-scheduled-publish-loop.spec.js": [
+    /^\.github\/workflows\/publish-scheduled-posts\.yml$/,
+    /^\.github\/workflows\/cms-scheduled-publish-loop\.yml$/,
+    /^\.github\/workflows\/cms-editorial-workflow\.yml$/,
+    /^\.github\/workflows\/deploy-production\.yml$/,
+    /^scripts\/publish_scheduled_posts\.py$/,
+    /^e2e\/(decap-pat|github-actions-poll|cms-fixture-pr|cms-host|prod-mutate-fixture)\.js$/,
+    /^e2e\/site-capabilities\.js$/,
+    /^e2e\/base-collections-guards\.js$/,
   ],
   // Issue #999 preview-parity loops. Each is the preview-env
   // counterpart of a prod-only real-backend loop, driving the same
