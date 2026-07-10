@@ -57,7 +57,8 @@
   <link rel="stylesheet" href="admin-mobile.css" />
 </head>
 <body>
-  <!-- Live Preview link — see admin/index.html for rationale. -->
+  <!-- Live Preview link — see admin/index.html for rationale; hidden
+       outside the entry editor (same gating as the sync script there). -->
   <a id="live-preview-link" class="floating-link" href="/preview/" target="_blank" rel="noopener"
      title="Opens a new tab. Hit Save in the editor for the preview to fill in.">
     <svg viewBox="0 0 24 24"><path d="M12 5c-7 0-10 7-10 7s3 7 10 7 10-7 10-7-3-7-10-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
@@ -67,8 +68,15 @@
     (function () {
       var link = document.getElementById('live-preview-link');
       function updateHref() {
-        var m = /#\/collections\/([^\/]+)/.exec(location.hash || '');
-        link.href = '/preview/' + (m ? '?collection=' + encodeURIComponent(m[1]) : '');
+        var h = location.hash || '';
+        var m = /#\/collections\/([^\/]+)/.exec(h);
+        var col = m ? m[1] : '';
+        link.href = '/preview/' + (col ? '?collection=' + encodeURIComponent(col) : '');
+        // Shown only in the entry editor — see admin/index.html's sync
+        // script for the full rationale (/preview/ fills only from the
+        // editor's Save broadcasts; the anchor stays in the DOM).
+        var editing = /^#\/collections\/[^\/]+\/(entries\/|new(\?|$))/.test(h);
+        link.style.display = editing ? '' : 'none';
       }
       window.addEventListener('hashchange', updateHref);
       updateHref();
