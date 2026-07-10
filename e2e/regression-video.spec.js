@@ -66,7 +66,9 @@ async function writeVisibleText(page, side, safeName) {
         console.warn(`[visreg] text capture skipped for ${side} ${safeName}: ${e.message}`);
         return;
       }
-      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      await page
+        .waitForLoadState("domcontentloaded")
+        .catch((e) => console.warn(`[visreg] settle wait failed (retrying anyway): ${e.message}`));
       await page.waitForTimeout(1000);
     }
   }
@@ -172,7 +174,9 @@ test.describe("Regression video screenshots", () => {
           // Chromium's net-error page auto-retrying — and setContent
           // throws "context destroyed" mid-flight. about:blank cancels
           // any pending navigation deterministically.
-          await page.goto("about:blank").catch(() => {});
+          await page
+            .goto("about:blank")
+            .catch((e) => console.warn(`[visreg] about:blank cancel failed: ${e.message}`));
           await page.setContent(`
             <html><body style="margin:0;background:#1a1a2e;color:#8ab0e8;
               display:flex;align-items:center;justify-content:center;
