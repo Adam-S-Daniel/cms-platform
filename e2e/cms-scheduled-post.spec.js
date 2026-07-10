@@ -128,16 +128,19 @@ Body.
       }
     });
 
-    test("workflow YAML wires up the publish script and writes back to repo", () => {
-      // Light yaml-parse — no need to exec the workflow, just confirm the
-      // wiring an editor would expect: the cron entry exists, the script
-      // is invoked, and a commit-and-push step lands the change so the
-      // normal deploy fires.
+    test("workflow YAML wires up the publish script and lands the flips via a PR", () => {
+      // Light text probe — no need to exec the workflow, just confirm the
+      // wiring an editor would expect: the script is invoked and the
+      // flips land through the PR + auto-merge flow, never a direct push
+      // to main (the ruleset rejects it, and a GITHUB_TOKEN push would
+      // not fire the deploy — see the workflow's header). The daily cron
+      // lives on the thin caller, not this reusable. The full structural
+      // lock is e2e/publish-scheduled-posts-flow.test.js.
       const yaml = fs.readFileSync(WORKFLOW_FILE, "utf8");
-      expect(yaml).toMatch(/cron:\s*['"]0 14 \* \* \*['"]/);
       expect(yaml).toContain("scripts/publish_scheduled_posts.py");
-      expect(yaml).toMatch(/git push/);
       expect(yaml).toMatch(/git add _posts\//);
+      expect(yaml).toContain("cms/posts/scheduled-publish-");
+      expect(yaml).not.toMatch(/git push origin main\b/);
     });
   },
 );

@@ -1,0 +1,44 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/cms-scheduled-publish-loop.yml`. Owns the schedule /
+# workflow_dispatch triggers + run-name; delegates the scheduled-publish
+# validation loop to the platform's reusable workflow. The e2e harness +
+# the post-failure-comment composite live in the platform repo. Keep
+# `platform_ref` equal to the `@vX.Y.Z` pin on the `uses:` line.
+#
+# Site identity (CMS_PROD_URL / CMS_APEX) + the PROD_PLAYGROUND_MODE
+# sunset gate are read from THIS repo's VARS by the reusable workflow.
+#
+# Schedule + dispatch ONLY — deliberately NO push trigger: the reusable
+# drops the recursion-gate job the push-triggered prod loops carry, so a
+# push trigger must not be added here without porting that gate back
+# (see the reusable's SHAPE NOTES). The loop joins the shared
+# `prod-mutating-loop` concurrency lane, so a cron overlap with the
+# other prod loops queues rather than colliding.
+name: CMS Scheduled Publish Loop — Prod
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # 05:00 UTC daily — a free slot in the consumer's daily cron map
+    # (04 sweep, 07 platform-bump, 08 rearm/health, 11 cleanup,
+    # 12 canary + host loop, 13 label audit, 14 scheduled posts,
+    # 15 media loop), well clear of the other prod-mutating loop crons
+    # so the shared lane rarely queues. Tune per site.
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scheduled-publish-loop:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cms-scheduled-publish-loop.yml@v0.1.59
+    with:
+      # Pin to the SAME ref as the `uses:` pin above so the harness matches.
+      platform_ref: v0.1.59
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

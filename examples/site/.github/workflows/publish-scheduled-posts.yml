@@ -1,3 +1,14 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/publish-scheduled-posts.yml`. Owns the daily cron +
+# dispatch trigger + run-name; delegates the scheduled-post publish to
+# the platform's reusable workflow. Keep `platform_ref` equal to the
+# `@vX.Y.Z` pin on the `uses:` line.
+#
+# `secrets: CMS_E2E_PAT` is REQUIRED whenever a post is actually due:
+# the reusable publishes via a PR + auto-merge (main is ruleset-protected
+# against direct pushes, and a GITHUB_TOKEN-created PR cannot trigger the
+# required status checks), and it fails loud rather than degrade when the
+# secret is missing. See the reusable's header for the full rationale.
 name: Publish Scheduled Posts
 run-name: >-
   ${{ github.event_name == 'schedule'
@@ -7,10 +18,15 @@ on:
   schedule:
     - cron: '0 14 * * *'
   workflow_dispatch:
+# The reusable only reads the repo with GITHUB_TOKEN — every write (the
+# branch push, the PR, the labels) goes through CMS_E2E_PAT. The old
+# `contents: write` grant belonged to the retired push-to-main shape.
 permissions:
-  contents: write
+  contents: read
 jobs:
   publish:
     uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-scheduled-posts.yml@v0.1.1
     with:
       platform_ref: v0.1.1
+    secrets:
+      CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

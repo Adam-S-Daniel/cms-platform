@@ -164,6 +164,12 @@ const PLATFORM_META_SPECS = [
   "preview-deploy-superset.test.js",
   "prod-mutate-fixture.test.js",
   "public-content.test.js",
+  // Locks the scheduled-publish PR flow: publish-scheduled-posts.yml must
+  // publish via a cms/posts/scheduled-publish-* PR + auto-merge (never a
+  // ruleset-rejected main push) and the cms-scheduled-publish-loop wiring
+  // must stay budget-aligned. Reads the PLATFORM workflow DEFINITIONS +
+  // the examples/site caller template — platform self-CI only.
+  "publish-scheduled-posts-flow.test.js",
   "publish-via-auto-merge.test.js",
   "publish-via-auto-merge-browser.spec.js",
   "regression-video.spec.js",

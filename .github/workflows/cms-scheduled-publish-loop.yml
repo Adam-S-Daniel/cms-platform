@@ -1,0 +1,232 @@
+# Reusable scheduled-publish validation loop for platform sites.
+#
+# A consuming site calls this from a thin daily-cron wrapper (see
+# examples/site/.github/workflows/cms-scheduled-publish-loop.yml). The e2e
+# harness and the post-failure-comment composite live in the PLATFORM
+# repo, so the job checks the platform out into `.cms-platform/` and runs
+# the suite from there. Site identity (CMS_PROD_URL / CMS_APEX) + the
+# PROD_PLAYGROUND_MODE sunset gate resolve to the CALLER's repo VARS under
+# workflow_call.
+#
+# Runs ONLY e2e/cms-scheduled-publish-loop.spec.js: seed a
+# `published: false` draft with a near-future `publish_date` (labelled
+# fixture PR), prove the consumer's publish-scheduled-posts.yml is a
+# no-op BEFORE the deadline, cross the deadline, prove it opens the
+# `cms/posts/scheduled-publish-*` PR that auto-merges + deploys, then
+# delete the post (resting state is absence). See the spec header for the
+# full rationale — the pre-fix scheduler pushed straight to the
+# ruleset-protected main and had ZERO successful publishes, ever; this
+# loop is the live guard that the PR + auto-merge rework keeps working.
+#
+# SHAPE NOTES (vs the cms-publish-loop-prod.yml sibling this mirrors):
+#   - NO recursion-gate job. That gate exists to stop a PUSH-triggered
+#     loop from re-firing on its own canary auto-merge landing on main
+#     (it diffs the push's changed files against the loop's self-churn
+#     set; on schedule/workflow_dispatch it unconditionally emits
+#     run=true — see .github/actions/cms-recursion-gate). This loop's
+#     caller triggers ONLY on schedule + workflow_dispatch, so there is
+#     no push event to gate and the job would be constant-true dead
+#     weight. If a push trigger is ever added to the caller, port the
+#     recursion-gate job (and a self-churn set) back in first.
+#   - NO await-prod-deploy step, for the same reason: the gate only runs
+#     on push events ("do not drive prod until THIS commit is live"),
+#     and this workflow never fires on push.
+#   - The spec is API+HTTP only (no Decap admin drive), so it runs on the
+#     public-lane chromium project; the browser install is kept so the
+#     harness globalSetup (install-browsers-on-miss) stays a no-op.
+#
+# Sunset path: the actual mutation is gated on the repo variable
+# `PROD_PLAYGROUND_MODE`, exactly like the sibling prod loops. While prod
+# is a "full mutation playground", set it to `true`; when prod stops
+# being a playground, set it to `false` (or unset it) — the workflow
+# keeps reporting success without mutating anything.
+name: CMS Scheduled Publish Loop — Prod (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo:
+        description: "owner/name of the platform repo holding the e2e harness + composite actions."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the harness from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+    secrets:
+      CMS_E2E_PAT:
+        required: false
+
+permissions:
+  # The spec does every read/write (PR polling, workflow dispatch, the
+  # fixture PRs) through CMS_E2E_PAT; the workflow itself only needs
+  # contents:read for the two checkouts. `pull-requests: write` is for
+  # the post-failure-comment composite.
+  contents: read
+  pull-requests: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  scheduled-publish-loop:
+    runs-on: ubuntu-latest
+    concurrency:
+      # SAME shared lane as the three real-prod-mutating loops
+      # (cms-publish-loop-prod / cms-media-roundtrip /
+      # cms-publish-loop-host): this loop also mutates prod through
+      # labelled cms/* PRs → auto-merge → deploy-production, so running
+      # it beside another prod loop races deploy-production's
+      # `group: production` lane and blows both loops' URL-reflect
+      # budgets. GHA keys concurrency groups by string ACROSS workflows,
+      # so declaring the same constant group here makes this a fourth
+      # member of the mutual-exclusion lane; cancel-in-progress:false
+      # queues rather than killing an in-flight loop (a mid-flow cancel
+      # can leave the canary dirty). The canonical rationale comment
+      # lives on cms-publish-loop-prod.yml's prod-mutate job; the three
+      # original loops' blocks are byte-locked by
+      # e2e/workflow-prod-loop-serialized.test.js, and this member is
+      # locked by e2e/publish-scheduled-posts-flow.test.js.
+      group: prod-mutating-loop
+      cancel-in-progress: false
+    env:
+      # Site identity for the parameterized e2e helpers — supplied by
+      # repo VARS so a consuming deployment passes its own deployed URLs.
+      CMS_PROD_URL: ${{ vars.CMS_PROD_URL }}
+      CMS_APEX: ${{ vars.CMS_APEX }}
+      CMS_REPO: ${{ github.repository }}
+    # The spec's TEST_TIMEOUT_MS is 150 min (the deadline window + two
+    # scheduler runs + two auto-merge waits + two deploy reflects — see
+    # the budget block in e2e/cms-scheduled-publish-loop.spec.js); 165
+    # leaves bring-up headroom so the job cap can never truncate a leg.
+    # Alignment locked by e2e/publish-scheduled-posts-flow.test.js.
+    timeout-minutes: 165
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+
+      - name: Checkout platform (e2e harness + composite actions)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 (2026-04-20)
+        with:
+          node-version: "20"
+
+      - name: Install harness deps
+        working-directory: .cms-platform/e2e
+        run: npm ci
+
+      - name: Install Playwright browser + system deps
+        working-directory: .cms-platform/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Skip — playground mode disabled
+        if: vars.PROD_PLAYGROUND_MODE != 'true'
+        run: echo "::notice::PROD_PLAYGROUND_MODE is not 'true'; skipping the scheduled-publish loop."
+
+      - name: Run scheduled-publish loop spec
+        if: vars.PROD_PLAYGROUND_MODE == 'true'
+        working-directory: .cms-platform/e2e
+        env:
+          # SITE_ROOT — the CONSUMING site's checkout (github.workspace). The e2e
+          # harness runs from .cms-platform/e2e here, so the base_collections guards'
+          # default (resolve __dirname/..) would point at the PLATFORM, not the
+          # consumer; set it so keepsBaseCollection() reads the consumer's _config.yml
+          # and a single-page bio (base_collections:[]) correctly SKIPS this posts
+          # loop instead of failing on a /blog/ surface it never renders. Locked by
+          # e2e/loop-site-root-lint.test.js.
+          SITE_ROOT: ${{ github.workspace }}
+          CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
+          TARGET: prod
+          RUN_SCHEDULED_PUBLISH_LOOP: "1"
+        run: |
+          set -o pipefail
+          npx playwright test \
+            cms-scheduled-publish-loop.spec.js \
+            --project=chromium-desktop-1080 \
+            --reporter=list \
+            --max-failures=1 \
+            --workers=1 \
+            2>&1 | tee /tmp/scheduled-publish-loop.log
+
+      - name: Upload test results on failure
+        if: ${{ (failure() || cancelled()) && vars.PROD_PLAYGROUND_MODE == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 (2026-04-10)
+        with:
+          name: scheduled-publish-loop-results
+          path: |
+            .cms-platform/e2e/test-results/
+            /tmp/scheduled-publish-loop.log
+          retention-days: 14
+
+      - name: Post failure summary
+        if: ${{ failure() && vars.PROD_PLAYGROUND_MODE == 'true' }}
+        uses: ./.cms-platform/.github/actions/post-failure-comment
+        with:
+          mode: post
+          log-file: /tmp/scheduled-publish-loop.log
+          marker: scheduled-publish-loop-failure-summary
+          title: scheduled-publish-loop
+
+      - name: Resolve failure summary on success
+        if: ${{ success() && vars.PROD_PLAYGROUND_MODE == 'true' }}
+        uses: ./.cms-platform/.github/actions/post-failure-comment
+        with:
+          mode: resolve
+          marker: scheduled-publish-loop-failure-summary
+          title: scheduled-publish-loop
+
+      # #22 (mirrors the sibling loops): prune this flow's EPHEMERAL
+      # branches on completion AND on cancel/failure. Every
+      # publish-scheduled-posts run that flips posts pushes a per-run
+      # cms/posts/scheduled-publish-<run_id> branch; once its PR merges
+      # (or a killed run orphans it) the branch lingers on origin — one
+      # per loop day. Pattern-delete every branch on this flow's OWN
+      # prefix that has NO open PR (an in-flight publish PR always keeps
+      # its branch). Idempotent + FAIL-OPEN: every delete is
+      # `|| echo`-guarded and the step is continue-on-error, so a cleanup
+      # hiccup (API blip, missing PAT) NEVER fails the loop. Uses
+      # CMS_E2E_PAT (contents r/w) since the workflow only grants
+      # contents:read.
+      - name: Clean up ephemeral scheduled-publish branches
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CMS_E2E_PAT }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH_PREFIX: cms/posts/scheduled-publish-
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::no CMS_E2E_PAT — skipping ephemeral branch cleanup (fail-open)"
+            exit 0
+          fi
+          echo "::notice::Cleanup — deleting orphaned ${BRANCH_PREFIX}* branches with no open PR"
+          gh api --paginate "repos/${GH_REPO}/branches?per_page=100" \
+            --jq ".[] | select(.name | startswith(\"${BRANCH_PREFIX}\")) | .name" \
+            2>/dev/null | while read -r branch; do
+            [ -z "$branch" ] && continue
+            # Belt-and-braces prefix re-verify: never touch a branch outside
+            # this flow's own ephemeral prefix.
+            case "$branch" in
+              "${BRANCH_PREFIX}"*) : ;;
+              *) echo "skip ${branch} — prefix mismatch"; continue ;;
+            esac
+            open_count=$(gh pr list --state open --search "head:${branch}" --limit 1 --json number --jq 'length' 2>/dev/null || echo "1")
+            if [ "$open_count" != "0" ]; then
+              echo "skip ${branch} — has open PR(s) (in-flight publish)"
+              continue
+            fi
+            echo "delete ${branch}"
+            gh api -X DELETE "repos/${GH_REPO}/git/refs/heads/${branch}" \
+              || echo "::warning::failed to delete ${branch} (already gone?) — ignoring (fail-open)"
+          done
+          echo "::notice::Cleanup complete (fail-open)"
