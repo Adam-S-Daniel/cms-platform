@@ -161,8 +161,17 @@ mechanism was still open at extraction time. Issue **#5** split it into two goal
 Other platform issues, now resolved: **#21** (a prod-mutate canary URL not
 reflecting new content — **DONE**, v0.1.13/#39: CloudFront was
 NEGATIVE-CACHING the pre-create 404 via `ErrorCachingMinTTL: 300`, fixed to
-`0`) and **#22** (publish loops leaving orphaned `cms/*` canary branches —
+`0`), **#22** (publish loops leaving orphaned `cms/*` canary branches —
 **DONE**: loops now prune their own orphaned branches, scoped to branches with
-no open PR, locked by `e2e/workflow-loop-branch-cleanup.test.js`). See
-AGENTS.md's "Roadmap / open issues" section for the authoritative current
-status.
+no open PR, locked by `e2e/workflow-loop-branch-cleanup.test.js`), and the
+visual-regression pipeline's page-discovery gap (site-owned collections like
+adamdaniel.ai's `/tools/` were invisible to the gate under the old hardcoded
+per-collection page list — **DONE**: `detect-changed-pages.js` now discovers
+its canonical page universe from a scan of the BUILT `_site`, which the
+reusable workflow's `generate` job builds BEFORE running detection;
+`regression-video.spec.js` also dumps visible text per page and
+`compute-visual-diffs.js` escalates a pixel-identical page to "different" on
+a text delta, and synced tool-vendor bumps under `assets/tools/` /
+`_data/tool_sources/` are carved out of salience so they auto-pass — that
+delta is already reviewed in the tool's own source repo). See AGENTS.md's
+"Roadmap / open issues" section for the authoritative current status.

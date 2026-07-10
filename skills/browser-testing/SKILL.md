@@ -127,24 +127,14 @@ Every test captures a screenshot (`screenshot: "on"`) and video is retained on f
 
 ## Visual regression
 
-`e2e/visual-regression.spec.js` captures golden-image baselines for key pages (homepage, blog post) using `toHaveScreenshot()`. Baselines are stored per-project in `e2e/visual-regression.spec.js-snapshots/` and committed to the repo.
+`e2e/visual-regression.spec.js` is a **structural** smoke suite, not pixel snapshots. The `toHaveScreenshot()` golden-image baselines it used to hold were retired (#86): the committed PNGs were deleted 2026-05-06 and never regenerated, so the suite only stayed green by skipping — until the first real curated tag un-skipped the tag pages and hard-failed on a baseline that had never been committed. It now just asserts each representative public surface (homepage, a blog post, `/tags/`, a tag archive) returns a non-error status and renders a visible heading — catching a 500/blank render, nothing pixel-level.
 
-**How it works:**
-1. Animations are frozen for deterministic screenshots
-2. `toHaveScreenshot("name.png")` compares against the committed baseline
-3. If the diff exceeds 1% pixel ratio, the test fails
-4. CI uploads an HTML report with visual diffs as an artifact
+**Pixel (and text) visual regression is a separate, prod-diffing VIDEO pipeline** — there are no committed baselines to `--update-snapshots`:
 
-**Update baselines after intentional changes:**
-```bash
-# Regenerate all baselines
-npx playwright test e2e/visual-regression.spec.js --update-snapshots
-
-# Single project
-npx playwright test e2e/visual-regression.spec.js --update-snapshots --project chromium-desktop
-```
-
-**First run for a new browser project:** baselines don't exist yet and the test fails. Run `--update-snapshots` to generate them, then commit.
+- `.github/workflows/visual-regression.yml` (reusable) — a `detect` job decides SALIENCE (`e2e/visual-regression-salient.js`: templates/layouts/styling/the admin shell/the pipeline's own tooling are salient; CMS content and media uploads are not). Synced tool-vendor bumps under `assets/tools/` + `_data/tool_sources/` are carved OUT of salience even though `_data/` is otherwise salient — that delta is already reviewed in the tool's own source repo, so the site-side gate auto-passes it by design. Only a salient PR builds Jekyll and screenshots.
+- `e2e/detect-changed-pages.js` discovers the page universe from a scan of the just-built `_site` (the `generate` job now builds Jekyll BEFORE detecting; locked by `visual-regression-step-order.test.js`) — this is what makes site-owned collections (e.g. adamdaniel.ai's `/tools/`) visible to the gate with zero per-collection mapping. `*/e2e/*` output is excluded so canary churn can't flake the required check.
+- `e2e/regression-video.spec.js` screenshots each page PR-side and prod-side, dumps whitespace-normalized visible text per side (`<safe>.txt`), and records a prod 404/410 in `prod-missing.json` so a brand-new page is caught by HTTP status at capture time, not mapper knowledge.
+- `e2e/compute-visual-diffs.js` classifies each page identical/different/new and ESCALATES a pixel-identical page to "different" when its visible text changed (below-the-fold or sub-pixel-threshold edits a viewport screenshot alone would miss). The required `approve-regression` check only opens the manual `regression-review` gate when something actually came back different.
 
 **Pixel-level analysis:** `glow-banding.spec.js` uses a different approach — direct pixel sampling with `pngjs` for quantitative gradient smoothness checks, independent of golden images.
 
