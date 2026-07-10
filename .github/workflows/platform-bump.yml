@@ -163,3 +163,11 @@ jobs:
             --title "Bump cms-platform to $LATEST" \
             --body "Atomic single-version bump of every cms-platform reference (\`platform_ref:\` + \`platform.lock\`, the \`uses:@\` reusable-workflow pins, the \`cms-platform-theme\` Gemfile \`tag:\`, and \`Gemfile.lock\` \`tag:\` + \`revision:\`) to $LATEST. The pin-consistency guard (#29) passes on this PR alone.${SEED_NOTE}" \
           || gh pr edit "$BRANCH" --body "Bump cms-platform to $LATEST.${SEED_NOTE}"
+          # Unattended landing: the bump is mechanical and CI-gated, so enable
+          # auto-merge and let the site's required checks decide. Runs on the
+          # caller's PAT (gh_token) — a GITHUB_TOKEN-created PR wouldn't even
+          # trigger CI. FAIL-OPEN: if the repo hasn't enabled auto-merge (or a
+          # ruleset forbids it), the PR simply stays open for a human — the
+          # pre-chaining behavior for every bump PR.
+          gh pr merge --auto --squash "$BRANCH" \
+            || echo "::warning::could not enable auto-merge on the bump PR for $LATEST — merge it manually (is 'Allow auto-merge' enabled on this repo?)"
