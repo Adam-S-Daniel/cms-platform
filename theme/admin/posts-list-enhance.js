@@ -579,7 +579,21 @@
       bits.push('<span class="cms-ple-fixture-tag">automated test</span>');
     }
     var pub = publicUrl(card.slug);
-    if (pub && card.state.live) {
+    // `card.state.live` alone is NOT "is it live on prod": a post can carry
+    // `published: true` while its edit still sits in an unmerged editorial
+    // PR (never reached `main`), the same summary-state-vs-reality mismatch
+    // live-url-banner.js's preview-vs-prod origin fix addresses (see that
+    // file's "Preview-aware origin" header) and the "accurate is-it-live
+    // test" comment below on `publishedPr`. `le` — this file's entry in
+    // remote.lastEdited — is the on-main confirmation: it only exists once
+    // GraphQL's `history` finds a commit for this path on `main`. With no
+    // remote data yet (signed out, or the batched fetch hasn't landed) we
+    // can't compute `le` at all, so fall back to the summary-only signal
+    // (the pre-existing degraded view) rather than treating every card as
+    // unconfirmed.
+    var le = remote && remote.lastEdited && remote.lastEdited[card.filePath];
+    var confirmedOnMain = !remote || le;
+    if (pub && card.state.live && confirmedOnMain) {
       bits.push(
         '<a href="' +
           esc(pub) +
@@ -593,7 +607,6 @@
           "</span>",
       );
     }
-    var le = remote && remote.lastEdited && remote.lastEdited[card.filePath];
     if (le && le.date) {
       bits.push(
         '<span title="Last commit to ' +
@@ -643,18 +656,36 @@
       remote.prBySlug &&
       (remote.prBySlug[card.slug] || remote.prBySlug[urlSlug(card.slug)]);
     if (pr) {
-      bits.push(
-        '<a href="https://preview-pr' +
-          esc(pr.number) +
-          "." +
-          window.CMS_APEX +
-          "/blog/" +
-          esc(urlSlug(card.slug)) +
-          '/" target="_blank" rel="noopener" title="Per-PR preview ' +
-          "environment for the unmerged draft (open PR #" +
-          esc(pr.number) +
-          ')">preview draft ↗</a>',
-      );
+      // The per-PR preview build mirrors production's publish semantics
+      // (see this file's header + e2e/cms-unpublish-republish-preview.spec.js):
+      // a `published: false` entry is built at NEITHER prod NOR the preview
+      // env. `card.state.live` is exactly "published: true" for THIS PR's
+      // content (the summary is rendered from the entry as Decap has it
+      // open), so it's the correct gate for whether preview-pr<N> actually
+      // serves this slug — unlike the "published ↗" gate above (which needs
+      // the separate on-main confirmation), there's no unmerged-PR ambiguity
+      // here: `pr` IS that PR.
+      if (card.state.live) {
+        bits.push(
+          '<a href="https://preview-pr' +
+            esc(pr.number) +
+            "." +
+            window.CMS_APEX +
+            "/blog/" +
+            esc(urlSlug(card.slug)) +
+            '/" target="_blank" rel="noopener" title="Per-PR preview ' +
+            "environment for the unmerged draft (open PR #" +
+            esc(pr.number) +
+            ')">preview draft ↗</a>',
+        );
+      } else {
+        bits.push(
+          '<span style="color:#8c959f" title="Set Published to ON to ' +
+            "render this draft at the per-PR preview URL — the preview " +
+            "env mirrors production's publish semantics, so a " +
+            'Published-OFF entry is built nowhere">draft — Published OFF</span>',
+        );
+      }
       bits.push(
         '<a href="' +
           esc(pr.url) +
