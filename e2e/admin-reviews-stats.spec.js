@@ -83,6 +83,10 @@ test.describe(
                 {
                   id: 9999,
                   name: "Visual Regression",
+                  // The dashboard keys run discovery on the workflow PATH,
+                  // not the (consumer-dynamic) run name — mirror the real
+                  // API shape or the mocked run is filtered out (#151).
+                  path: ".github/workflows/visual-regression.yml",
                   head_sha: "abcdef1234567890",
                   pull_requests: [{ number: PR_NUMBER }],
                 },
@@ -184,6 +188,7 @@ test.describe(
                 {
                   id: 8888,
                   name: "Visual Regression",
+                  path: ".github/workflows/visual-regression.yml",
                   head_sha: "0123456789abcdef",
                   pull_requests: [{ number: PR_NUMBER }],
                 },
