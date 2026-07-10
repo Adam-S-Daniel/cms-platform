@@ -12,7 +12,17 @@ How platform changes reach sites, and how site-side improvements get back.
 | Skills (`.claude/skills`) | **`skills-sync`** reusable workflow (rsync + PR, platform-authoritative) |
 | AWS infra templates | re-run `infrastructure/*/deploy.sh` with the new templates |
 
-Tag a release on `cms-platform` → the bump PRs fan out to every site; site CI gates the merge.
+Cut a release on `cms-platform` (Actions → **Cut release**, `workflow_dispatch`
+with a `vX.Y.Z` input) → the release job **immediately dispatches each
+consumer's `platform-bump` workflow** (fail-open: a missing/expired
+`BUMP_DISPATCH_<CONSUMER>` secret or a failed dispatch just leaves that site to
+its weekly Monday-07:00-UTC cron, the pre-chaining behavior) → each bump PR
+enables **auto-merge** and lands as soon as the site's required checks go
+green → deploy-production takes it live. The release cut stays a deliberate
+human decision; everything after it is mechanical. (Both the dispatch fan-out
+and the bump PR's auto-merge ship in the release that contains them — a
+consumer picks them up one release AFTER adopting, since its caller runs the
+previously-pinned reusable.)
 
 `platform-bump` now moves **all** of the version references at once (rows 9–11
 above), so its PR is single-version-consistent on its own (#13) — Dependabot's

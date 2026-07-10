@@ -58,3 +58,36 @@ jobs:
             --title "$VERSION" \
             --generate-notes
           echo "::notice::Cut ${VERSION} at ${TARGET}. platform-bump + Dependabot will fan it out to consuming sites."
+
+      # Chained down-sync: dispatch each consumer's platform-bump the moment
+      # the release exists, instead of waiting for its weekly cron (Mondays
+      # 07:00 UTC — up to six days of latency between "decided" and "bump PR
+      # exists"). Reuses the cron's exact entry point (`workflow_dispatch` on
+      # the consumer's platform-bump.yml caller), so consumers need no changes.
+      #
+      # FAIL-OPEN by design: a missing/expired token or a failed dispatch
+      # degrades to exactly the pre-chaining behavior (the cron picks the
+      # release up) — warnings, never a job failure. Fine-grained PATs are
+      # minted per RESOURCE OWNER, so each consumer owner supplies its own
+      # secret: Actions read+write on that one repo, nothing else.
+      - name: Fan out bump dispatches to consumers
+        env:
+          VERSION: ${{ inputs.version }}
+          TOKEN_ADAMDANIEL_AI: ${{ secrets.BUMP_DISPATCH_ADAMDANIEL_AI }}
+          TOKEN_JODIDANIEL_COM: ${{ secrets.BUMP_DISPATCH_JODIDANIEL_COM }}
+        run: |
+          set -euo pipefail
+          dispatch() {
+            repo="$1" token="$2"
+            if [ -z "$token" ]; then
+              echo "::warning::no bump-dispatch token for ${repo} — its weekly platform-bump cron will pick up ${VERSION}."
+              return 0
+            fi
+            if GH_TOKEN="$token" gh workflow run platform-bump.yml -R "$repo"; then
+              echo "::notice::dispatched platform-bump in ${repo} for ${VERSION}."
+            else
+              echo "::warning::platform-bump dispatch failed for ${repo} — its weekly cron will pick up ${VERSION}."
+            fi
+          }
+          dispatch "Adam-S-Daniel/adamdaniel.ai"   "$TOKEN_ADAMDANIEL_AI"
+          dispatch "jodidaniel/jodidaniel.com"     "$TOKEN_JODIDANIEL_COM"
