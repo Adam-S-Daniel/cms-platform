@@ -4,6 +4,23 @@ on:
     secrets:
       CMS_E2E_PAT:
         required: false
+    inputs:
+      # Where the content-pr-guard step's validate-content sub-step fetches
+      # the Decap branch convention (e2e/cms-fixture-pr.js) and the guard
+      # module (scripts/content-pr-guard.js) from. Pin `platform_ref` to the
+      # same ref as the caller's `uses:` pin (same convention as
+      # label-non-decap-prs.yml) so the two never disagree about what
+      # "Decap-shaped" means.
+      platform_repo:
+        description: "owner/name of the platform repo holding e2e/cms-fixture-pr.js and scripts/content-pr-guard.js."
+        type: string
+        required: false
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the module from (pin to the same ref as the caller's uses: pin)."
+        type: string
+        required: false
+        default: main
 permissions:
   contents: read
   pull-requests: write
@@ -44,6 +61,18 @@ permissions:
 # to SUCCESS → never a cancelled run → the context is unambiguously green. Cost:
 # a few extra ~30s runs per PR (each on its own — GitHub's repo-level limit
 # still queues them); cheap, and correctness wins.
+#
+# validate-content ALSO runs the content PR conformance guard (the "Content PR
+# conformance guard" step below): PRs that touch CMS-managed content but were
+# NOT opened by Decap fail this same check, with a PR comment explaining the
+# restriction and its escape hatch (a maintainer applies the override label —
+# see scripts/content-pr-guard.js's OVERRIDE_LABEL, deliberately not re-typed
+# here so the two can't drift; the resulting `labeled` event re-runs this job
+# and it then passes). No new required check and no ruleset change — it rides
+# the existing required `editorial / validate-content` context. Callers
+# should pin this workflow's `platform_ref` input to the same tag/sha as
+# their `uses:` pin (see `on.workflow_call.inputs` above) so the guard's
+# notion of "Decap-shaped" never drifts from the reusable's own version.
 
 jobs:
   validate-content:
@@ -58,6 +87,156 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Checkout platform module
+        # The Decap branch-prefix constant (e2e/cms-fixture-pr.js's
+        # FIXTURE_BRANCH_PREFIX) and the content-pr-guard module
+        # (scripts/content-pr-guard.js) both live in the platform, not the
+        # site repo. Fetch them from the pinned ref so the guard stays in
+        # lockstep with the labeller (label-non-decap-prs.yml) and the
+        # fixture harness on what "Decap-shaped" means.
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Content PR conformance guard
+        # FAIL FAST, before Ruby/Jekyll: PRs that touch CMS-managed content
+        # (posts, tags, projects, pages, e2e fixtures, uploaded media — see
+        # scripts/content-pr-guard.js's BASE_CONTENT_DIRS + this site's
+        # admin/collections.site.yml) must have been opened BY Decap CMS,
+        # not by hand. A non-Decap edit to those paths skips the entry's
+        # draft/review/ready status, its stable preview alias, and publish/
+        # schedule semantics — and can collide with Decap's own on-repo
+        # state. This step fails the already-required `validate-content`
+        # check (no new required check, no ruleset change) and leaves a
+        # comment explaining the restriction and the escape hatch: a
+        # maintainer can apply the override label (OVERRIDE_LABEL, sourced
+        # from scripts/content-pr-guard.js below — not re-typed here) for
+        # deliberate maintenance (fixture repair, bulk migration) — the
+        # `labeled` event re-runs this check and it then passes.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        with:
+          script: |
+            const path = require('path');
+            const fs = require('fs');
+
+            // Source the Decap branch convention from the platform module so
+            // this guard stays in lockstep with label-non-decap-prs.yml and
+            // the fixture harness (same pattern as that workflow).
+            const { FIXTURE_BRANCH_PREFIX } = require(
+              path.join(process.env.GITHUB_WORKSPACE, '.cms-platform', 'e2e', 'cms-fixture-pr.js'),
+            );
+            const DECAP_BRANCH_PREFIX = `${FIXTURE_BRANCH_PREFIX.split('/')[0]}/`;
+
+            const { evaluateContentGuard, COMMENT_MARKER, OVERRIDE_LABEL } = require(
+              path.join(process.env.GITHUB_WORKSPACE, '.cms-platform', 'scripts', 'content-pr-guard.js'),
+            );
+
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const changedFiles = files.map((f) => f.filename);
+
+            // The site's site-specific collections (if any) — folded into
+            // BASE_CONTENT_DIRS by evaluateContentGuard. Absent on a
+            // single-collection site, so a missing file is not an error.
+            let seamYamlText = null;
+            try {
+              seamYamlText = fs.readFileSync('admin/collections.site.yml', 'utf8');
+            } catch (_) {
+              seamYamlText = null;
+            }
+
+            // Derive the site's /admin URL from its own _config.yml so this
+            // guard never hardcodes a site's identity. Falls back to the
+            // bare path if `url:` isn't found.
+            let adminUrl = '/admin/';
+            try {
+              const configText = fs.readFileSync('_config.yml', 'utf8');
+              const head = configText.split('\n').slice(0, 50).join('\n');
+              const match = head.match(/^url:\s*(.+?)\s*$/m);
+              if (match) {
+                const url = match[1].replace(/^["']|["']$/g, '').trim().replace(/\/+$/, '');
+                if (url) adminUrl = `${url}/admin/`;
+              }
+            } catch (_) {
+              /* fall back to the bare path */
+            }
+
+            const result = evaluateContentGuard({
+              pr,
+              changedFiles,
+              seamYamlText,
+              decapBranchPrefix: DECAP_BRANCH_PREFIX,
+              adminUrl,
+            });
+
+            // All comment/label API work is wrapped so a GitHub API hiccup
+            // here can never flip the verdict computed above.
+            try {
+              // Ensure the override label exists so a maintainer can apply
+              // it from the PR UI (same createLabel-in-try/catch pattern as
+              // the cms/draft + cms/ready labels below in this file).
+              try {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: OVERRIDE_LABEL,
+                  color: '5319e7',
+                  description: 'Maintainer override: allow non-Decap content changes in this PR',
+                });
+              } catch (_) {}
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pr.number,
+                per_page: 100,
+              });
+              const existing = comments.find((c) => (c.body || '').includes(COMMENT_MARKER));
+
+              if (result.verdict === 'fail') {
+                if (existing) {
+                  await github.rest.issues.updateComment({
+                    owner,
+                    repo,
+                    comment_id: existing.id,
+                    body: result.commentBody,
+                  });
+                } else {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: pr.number,
+                    body: result.commentBody,
+                  });
+                }
+              } else if (existing) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                  body: `${COMMENT_MARKER}\n✅ Content guard passed at ${pr.head.sha} (${result.reason}).`,
+                });
+              }
+            } catch (err) {
+              core.warning(`content-pr-guard: comment/label upsert failed (${err.message}); verdict unaffected.`);
+            }
+
+            if (result.verdict === 'fail') {
+              core.info(`content-pr-guard: non-Decap content change — offending file(s):\n${result.contentFiles.join('\n')}`);
+              core.setFailed(
+                `Non-Decap PR touches ${result.contentFiles.length} CMS-managed content file(s) — see the PR comment for why, and the ${OVERRIDE_LABEL} escape hatch.`,
+              );
+            }
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@0dafeac902942906541bc140009cdbf32665b601  # v1.310.0 (2026-05-20)
