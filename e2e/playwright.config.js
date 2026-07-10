@@ -198,6 +198,9 @@ const PLATFORM_META_SPECS = [
   // the canonical page universe). Reads the PLATFORM workflow file —
   // platform self-CI only.
   "visual-regression-step-order.test.js",
+  // Locks the deploy-metadata [data-visreg-ignore] exclusion (admin pills ↔
+  // the text capture). Reads PLATFORM theme/e2e files — self-CI only.
+  "visreg-ignore-lint.test.js",
   "workflow-github-sha-lint.test.js",
   "workflow-graph.test.js",
   // #16 — lints the prod-loop reusables' if:always() branch-cleanup steps by

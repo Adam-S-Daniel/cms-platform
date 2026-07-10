@@ -348,6 +348,9 @@
   function buildPill(id) {
     var a = document.createElement("a");
     a.id = id;
+    // Deployment metadata, not content — excluded from the visual-regression
+    // text diff (a run racing a deploy must not flag transient pill states).
+    a.setAttribute("data-visreg-ignore", "");
     a.target = "_blank";
     a.rel = "noopener";
     // Inline-block so it sits in the toolbar's natural row. We
