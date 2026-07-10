@@ -27,6 +27,12 @@
 // a template edit) is still salient via the template file, and that run
 // will then also surface the tool page's delta — desired, since a human
 // is reviewing that PR anyway.
+//
+// The carve-out is for UPDATES to an existing tool only. A brand-NEW tool
+// can't ride it into production unreviewed: its required `_tools/<slug>.md`
+// collection entry is salient (below), so the first PR that adds a tool
+// page always runs the regression build — where the _site scan + prod-404
+// detection score the new page "new" and route it through manual review.
 const NON_SALIENT_OVERRIDES = [/^_data\/tool_sources\//, /^assets\/tools\//];
 
 // Files whose changes CAN shift rendered output, plus the regression
@@ -37,6 +43,12 @@ const SALIENT_PATTERNS = [
   /^_includes\//,
   /^_plugins\//,
   /^_data\//,
+  // Tools collection entries (site-owned on consumers that have one; inert
+  // elsewhere). Salient — unlike CMS content — because adding/editing an
+  // entry creates or rewrites a public /tools/ page, and it's the one path
+  // a NEW tool must touch that a tool-sync update never does (see
+  // NON_SALIENT_OVERRIDES above).
+  /^_tools\//,
   /^admin\//,
   /^assets\/css\//,
   /^assets\/js\//,

@@ -90,6 +90,22 @@ test.describe("visual-regression: content-only PRs are non-salient", () => {
     ).toBe(false);
   });
 
+  test("the auto-pass is for UPDATES only — a new tool's collection entry is salient", () => {
+    // A brand-new tool must add `_tools/<slug>.md`; a sync update never
+    // touches it. Keeping that path salient is what stops a new tool from
+    // riding the sync carve-out into production with zero regression review
+    // (the run's _site scan + prod-404 detection then flag the new page for
+    // the manual gate).
+    expect(isSalient(["_tools/my-new-tool.md"])).toBe(true);
+    expect(
+      isSalient([
+        "_tools/my-new-tool.md",
+        "assets/tools/my-new-tool/index.html",
+        "_data/tool_sources/my-new-tool.yml",
+      ]),
+    ).toBe(true);
+  });
+
   test("the tool_sources carve-out does not swallow the rest of _data/", () => {
     expect(isSalient(["_data/navigation.yml"])).toBe(true);
   });
