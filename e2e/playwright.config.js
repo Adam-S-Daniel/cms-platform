@@ -159,6 +159,10 @@ const PLATFORM_META_SPECS = [
   // self-test; ENOENT/no-op on a consumer (no platform tree to police).
   "platform-meta-spec-registry.test.js",
   "playwright-image-drift.test.js",
+  // Reads the platform's SOURCE config templates (theme/admin/config*.yml)
+  // + posts-list-enhance.js — meaningless on a consumer, which only ships
+  // the rendered config.
+  "posts-list-date-lint.test.js",
   "posts-list-enhance-reorder.test.js",
   // #16 — pure-Node unit tests for scripts/preflight-oauth.js (the org-owner
   // go-live OAuth-restriction preflight CLI). Reads the platform scripts/ tree.

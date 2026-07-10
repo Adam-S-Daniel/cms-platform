@@ -14,6 +14,9 @@
  *
  *   - a status pill (Published / Draft / Scheduled), derived from the
  *     summary text the `summary:` template already encodes;
+ *   - the post's date, parsed from its file name's `YYYY-MM-DD-` prefix
+ *     (the summary template can no longer safely carry it on WebKit —
+ *     see config.base.yml's summary comment);
  *   - a one-click "published ↗" link to the live post URL (computed
  *     from the slug, mirroring admin/live-url-derive.js's math);
  *   - "edited <ago>" — the last commit that touched the post's file
@@ -159,8 +162,10 @@
   }
 
   // The summary template is
-  //   "{{title}} ({{year}}-{{month}}-{{day}}){{… — DRAFT}}{{… — Scheduled}}"
-  // so the rendered card text already encodes the state.
+  //   "{{title}}{{… — DRAFT}}{{… — Scheduled}}"
+  // (no date — see config.base.yml's summary comment) so the rendered
+  // card text still encodes the DRAFT/Scheduled state; the date comes
+  // from the slug prefix instead (collectCards's postDate).
   function stateFromSummary(text) {
     var t = String(text || "");
     var scheduled = /—\s*Scheduled\b/.test(t);
@@ -202,8 +207,16 @@
       var li = a.closest("li") || a.parentElement;
       var h2 = a.querySelector("h2");
       var summaryText = (h2 ? h2.textContent : a.textContent || "").trim();
-      var title = summaryText.replace(/\s*\(.*$/, "").trim() || slug;
+      // Title is only used for fixture detection (leading-anchored), so
+      // stripping the trailing status suffix is enough — there's no
+      // parenthesized date to strip anymore.
+      var title = summaryText.replace(/\s*—\s*(DRAFT|Scheduled)\b.*$/, "").trim() || slug;
       var isFixture = FIXTURE_SLUG_RE.test(slug) || FIXTURE_TITLE_RE.test(title);
+      // The on-disk slug's YYYY-MM-DD- prefix is the engine-proof date
+      // source (see config.base.yml's summary comment for why the
+      // summary template itself can't carry it on WebKit); Jekyll's
+      // _posts/ naming contract guarantees the prefix is there.
+      var dm = /^(\d{4}-\d{2}-\d{2})-/.exec(slug);
       cards.push({
         a: a,
         li: li,
@@ -213,6 +226,7 @@
         summaryText: summaryText,
         state: stateFromSummary(summaryText),
         isFixture: isFixture,
+        postDate: dm ? dm[1] : null,
       });
     }
     return cards;
@@ -553,6 +567,9 @@
         esc(card.state.label) +
         "</span>",
     );
+    if (card.postDate) {
+      bits.push('<span title="Post date (from the post\'s file name)">' + esc(card.postDate) + "</span>");
+    }
     if (card.isFixture) {
       bits.push('<span class="cms-ple-fixture-tag">automated test</span>');
     }

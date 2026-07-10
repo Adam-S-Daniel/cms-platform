@@ -28,8 +28,8 @@ const cap = require("./site-capabilities");
 //      (pre-existing; flags posts the scheduled-publish workflow will
 //      flip on at a future date).
 //
-// `published: true` with no `publish_date` renders bare ("title (date)")
-// — the steady-state published case.
+// `published: true` with no `publish_date` renders bare (just the
+// title) — the steady-state published case.
 
 // SITE_ROOT-aware resolution. The summary template is asserted against the
 // RENDERED Decap config the gem's render hook emits to
@@ -44,17 +44,25 @@ const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
 const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
 const CONFIGS = [RENDERED_CONFIG];
 
-// The date is rendered with Decap's parsed-date tokens
-// {{year}}-{{month}}-{{day}} rather than `{{date | date('MMM D, YYYY')}}`.
-// The `date(...)` summary filter runs bundled dayjs on the RAW stored
-// string ("YYYY-MM-DD HH:mm:ss ZZ"); that space+offset form isn't
-// ISO-8601, so dayjs falls back to native `new Date()` — Invalid on
-// strict engines (WebKit/Safari/iOS), so every post rendered
-// "INVALID DATE" there (issue #1042). {{year}}/{{month}}/{{day}} use the
-// same parsed-date machinery as the `slug:` template (proven correct
-// cross-engine; locked by cms-permalink-contract.spec.js).
+// NO date token/filter — Decap's `summaryFormatter` (decap-cms-core
+// formatters.js) computes the date via `parseDateFromEntry`, which runs
+// PLAIN `dayjs(rawStoredString)` against our stored
+// "YYYY-MM-DD HH:mm:ss ZZ" format; that space+offset form isn't
+// ISO-8601, so dayjs falls back to native `new Date(string)` — Invalid
+// on strict engines (WebKit/Safari/iOS). On parse failure `date` is
+// `null`, and `compileStringTemplate` (decap-cms-lib-widgets
+// stringTemplate.js) treats `date === null` as "date processing off":
+// every {{year}}/{{month}}/{{day}} token silently compiles to '' instead
+// of throwing (its SLUG_MISSING_REQUIRED_DATE throw is gated on
+// `date !== null`) — every post rendered "Title (--)" on WebKit (issue
+// #1042 lineage; its fix changed the failure mode from "INVALID DATE" to
+// "(--)"). The `slug:` template survives the SAME parse failure only
+// because `slugFormatter` falls back to `new Date(Date.now())` instead
+// of `null` — same parser, different fallback. The date is rendered
+// instead by admin/posts-list-enhance.js from the file slug's
+// `YYYY-MM-DD-` prefix.
 const EXPECTED_SUMMARY =
-  "{{title}} ({{year}}-{{month}}-{{day}})" +
+  "{{title}}" +
   "{{published | ternary('', ' — DRAFT')}}" +
   "{{publish_date | ternary(' — Scheduled', '')}}";
 
@@ -118,6 +126,10 @@ test.describe(
         // lock is dropped in consumer mode — config-local.yml / config-test.yml
         // are platform-only test scaffolding.)
         expect(summary).toBe(EXPECTED_SUMMARY);
+        // Date tokens/filters silently render '' / INVALID DATE on
+        // WebKit (see the EXPECTED_SUMMARY comment) — guard against a
+        // future edit re-adding either.
+        expect(summary).not.toMatch(/\{\{\s*(year|month|day)\s*\}\}|\|\s*date\(/);
       });
 
       test(`${label}: posts.summary surfaces both DRAFT and Scheduled states`, () => {
