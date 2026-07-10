@@ -2,9 +2,10 @@
   "name": "cms-platform-e2e",
   "version": "0.0.0",
   "private": true,
-  "description": "Playwright e2e harness for cms-platform sites. Self-contained: a consuming site checks the platform out into .cms-platform/ and runs `cd .cms-platform/e2e && npm ci && npx playwright test` against its deployed URLs (passed via CMS_BASE_URL / CMS_PROD_URL / CMS_APEX / CMS_REPO / TARGET env vars).",
+  "description": "Playwright e2e harness for cms-platform sites. Self-contained: a consuming site checks the platform out into .cms-platform/ and runs `cd .cms-platform/e2e && npm ci && npx playwright test` against its deployed URLs (passed via CMS_BASE_URL / CMS_PROD_URL / CMS_APEX / CMS_REPO / TARGET env vars). For platform development on a bare checkout (no consuming site), `npm run test:unit` runs just the pure-Node *.test.js unit/lint suite — no webServer, no browsers, no env vars needed.",
   "scripts": {
     "test": "playwright test",
+    "test:unit": "playwright test --config=playwright.unit.config.js",
     "test:regression-video": "playwright test --config=playwright.regression.config.js"
   },
   "license": "ISC",
