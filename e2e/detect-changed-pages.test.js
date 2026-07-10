@@ -1,6 +1,6 @@
 // @lane: local — pure-Node unit tests for the changed-page classifier
 const { test, expect } = require("./base");
-const { classifyPages, mapFileToUrls, runDetect } = require("./detect-changed-pages");
+const { classifyPages, discoverAllPages, mapFileToUrls, runDetect } = require("./detect-changed-pages");
 
 // Pure-function unit tests for the page-change classifier. No browser,
 // no git — just verify each rule fires correctly.
@@ -192,5 +192,55 @@ test.describe("runDetect (CLI integration)", () => {
         runFileExists: () => true,
       }),
     ).toThrow();
+  });
+});
+
+test.describe("discoverAllPages (_site scan)", () => {
+  // The built _site is the CANONICAL page universe: it must discover pages
+  // from SITE-OWNED collections the hardcoded fallback has never heard of.
+  // The /tools/ pages on adamdaniel.ai were invisible to the regression
+  // gate precisely because the fallback ran in CI (detect used to run
+  // before the build) and only knew posts/projects/tags/pages.
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+
+  function makeSite(tree) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "detect-site-"));
+    for (const rel of tree) {
+      const f = path.join(root, "_site", rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, "<html></html>");
+    }
+    return root;
+  }
+
+  test("discovers site-owned collection pages (e.g. /tools/) from the build output", () => {
+    const root = makeSite([
+      "index.html",
+      "blog/index.html",
+      "blog/hello/index.html",
+      "tools/index.html",
+      "tools/claude-memory-map/index.html",
+    ]);
+    const pages = discoverAllPages(root);
+    expect(pages.has("/tools/")).toBe(true);
+    expect(pages.has("/tools/claude-memory-map/")).toBe(true);
+    expect(pages.has("/blog/hello/")).toBe(true);
+    expect(pages.has("/")).toBe(true);
+  });
+
+  test("excludes e2e canary fixtures (publish-loop churn must not flake the gate)", () => {
+    const root = makeSite(["index.html", "e2e/canary-post/index.html"]);
+    const pages = discoverAllPages(root);
+    expect(pages.has("/e2e/canary-post/")).toBe(false);
+  });
+
+  test("excludes admin/preview output but keeps the always-included admin URLs", () => {
+    const root = makeSite(["index.html", "admin/index.html", "preview/index.html"]);
+    const pages = discoverAllPages(root);
+    expect(pages.has("/admin/")).toBe(true); // via ALWAYS_INCLUDED_ADMIN_PAGES
+    expect(pages.has("/admin/reviews/")).toBe(true);
+    expect(pages.has("/preview/")).toBe(false);
   });
 });

@@ -55,15 +55,29 @@ const ALWAYS_INCLUDED_ADMIN_PAGES = [
   "/admin/reviews/", // visual-regression review dashboard, unauth state
 ];
 
-function discoverAllPages() {
+// The _site scan is the CANONICAL page universe: it discovers every page
+// the build actually produced — including site-owned collections the
+// hardcoded fallback below has never heard of (the /tools/ pages on
+// adamdaniel.ai were invisible to the regression gate for exactly this
+// reason). The reusable workflow therefore runs `jekyll build` BEFORE this
+// script (locked by visual-regression-step-order.test.js); the fallback
+// only serves local/harness runs without a build.
+//
+// `*/e2e/*` is excluded alongside admin/preview: the e2e canary fixtures
+// are mutated by the publish-loop workflows between baseline resets, so a
+// regression run racing a loop would flag a "different" canary and force
+// the manual gate on a REQUIRED check for test-fixture churn.
+//
+// `rootDir` is injectable so tests can point the scan at a fixture tree.
+function discoverAllPages(rootDir = ROOT) {
   const pages = new Set(["/"]);
   for (const p of ALWAYS_INCLUDED_ADMIN_PAGES) pages.add(p);
-  const siteDir = path.join(ROOT, "_site");
+  const siteDir = path.join(rootDir, "_site");
   const useSiteScan = fs.existsSync(siteDir);
 
   if (useSiteScan) {
     const htmlFiles = execSync(
-      `find ${siteDir} -name 'index.html' -not -path '*/admin/*' -not -path '*/preview/*'`,
+      `find ${siteDir} -name 'index.html' -not -path '*/admin/*' -not -path '*/preview/*' -not -path '*/e2e/*'`,
       { encoding: "utf-8" },
     )
       .trim()
@@ -79,7 +93,7 @@ function discoverAllPages() {
 
   pages.add("/blog/");
 
-  const postsDir = path.join(ROOT, "_posts");
+  const postsDir = path.join(rootDir, "_posts");
   if (fs.existsSync(postsDir)) {
     for (const f of fs.readdirSync(postsDir)) {
       if (!f.endsWith(".md")) continue;
@@ -90,7 +104,7 @@ function discoverAllPages() {
     }
   }
 
-  const projectsDir = path.join(ROOT, "_projects");
+  const projectsDir = path.join(rootDir, "_projects");
   if (fs.existsSync(projectsDir)) {
     for (const f of fs.readdirSync(projectsDir)) {
       if (!f.endsWith(".md")) continue;
@@ -99,7 +113,7 @@ function discoverAllPages() {
     }
   }
 
-  const tagsDir = path.join(ROOT, "_tags");
+  const tagsDir = path.join(rootDir, "_tags");
   if (fs.existsSync(tagsDir)) {
     for (const f of fs.readdirSync(tagsDir)) {
       if (!f.endsWith(".md")) continue;
@@ -108,7 +122,7 @@ function discoverAllPages() {
     }
   }
 
-  const pagesDir = path.join(ROOT, "pages");
+  const pagesDir = path.join(rootDir, "pages");
   if (fs.existsSync(pagesDir)) {
     for (const f of fs.readdirSync(pagesDir)) {
       if (!f.endsWith(".md")) continue;

@@ -35,3 +35,4 @@ oauth-proxy/.aws-sam/
 
 # Claude Code session worktrees / state
 .claude/
+screenshots/
