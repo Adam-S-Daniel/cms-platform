@@ -75,7 +75,8 @@
     is updated on every URL hash change so it always points at the
     collection of the entry currently open. Tip text is intentional:
     /preview/ only updates after a Save, so editors don't sit there
-    waiting for it to fill.
+    waiting for it to fill. Hidden outside the entry editor (see the
+    sync script below).
   -->
   <a id="live-preview-link" class="floating-link"
      href="/preview/"
@@ -92,15 +93,26 @@
 
   <script>
     // Keep the Live Preview link's `?collection=…` in sync with the
-    // collection the editor is currently inside. Decap uses hash routing,
-    // so we listen on hashchange (also fired once on initial load via
-    // the dispatch below).
+    // collection the editor is currently inside, and only SHOW the link
+    // while an entry editor is open. Decap uses hash routing, so we
+    // listen on hashchange (and call updateHref once directly for the
+    // initial load).
     (function () {
       var link = document.getElementById('live-preview-link');
       function updateHref() {
-        var m = /#\/collections\/([^\/]+)/.exec(location.hash || '');
+        var h = location.hash || '';
+        var m = /#\/collections\/([^\/]+)/.exec(h);
         var col = m ? m[1] : '';
         link.href = '/preview/' + (col ? '?collection=' + encodeURIComponent(col) : '');
+        // Only useful while EDITING: /preview/ fills from the editor's
+        // Save broadcasts (preview-bridge.js), so on the list / login /
+        // workflow routes the button opened a canvas that can never
+        // fill. Editor routes: #/collections/<c>/entries/<slug> and
+        // #/collections/<c>/new. display:'' restores the stylesheet's
+        // flex; the anchor stays in the DOM (link crawler + native-view
+        // -live specs address it by id/href, not visibility).
+        var editing = /^#\/collections\/[^\/]+\/(entries\/|new(\?|$))/.test(h);
+        link.style.display = editing ? '' : 'none';
       }
       window.addEventListener('hashchange', updateHref);
       updateHref();

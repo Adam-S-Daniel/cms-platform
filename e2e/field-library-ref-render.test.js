@@ -161,7 +161,7 @@ test.describe("field_library $ref render (issue #5 GOAL 2)", () => {
     // Verbatim-asserted base lines (locked by cms-post-list-summary /
     // cms-config / cms-permalink-contract specs) must appear byte-for-byte.
     expect(rendered).toContain(
-      'summary: "{{title}} ({{year}}-{{month}}-{{day}})' +
+      'summary: "{{title}}' +
         "{{published | ternary('', ' — DRAFT')}}" +
         "{{publish_date | ternary(' — Scheduled', '')}}\"",
     );

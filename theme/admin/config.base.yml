@@ -95,19 +95,34 @@ collections:
     # between this template and Jekyll's `permalink: /blog/:slug/` is moot.
     slug: "{{year}}-{{month}}-{{day}}-{{slug}}"
     preview_path: "/blog/{{slug}}/"
-    # Date is rendered with the parsed-date tokens {{year}}-{{month}}-{{day}}
-    # rather than `{{date | date('MMM D, YYYY')}}`. Decap's `date(...)`
-    # summary filter runs bundled dayjs on the RAW stored string
-    # ("YYYY-MM-DD HH:mm:ss ZZ", e.g. `2026-05-13 08:51:00 -0400`); that
-    # space+offset form is not ISO-8601, so dayjs falls back to native
-    # `new Date()`, which is Invalid on strict engines (WebKit / Safari /
-    # iOS) — every post then rendered "INVALID DATE" there (issue #1042).
-    # {{year}}/{{month}}/{{day}} use the SAME parsed-date machinery as the
-    # `slug:` template above (which already produces correct YYYY-MM-DD
-    # filenames on every engine — locked by cms-permalink-contract.spec.js),
-    # so they are cross-engine safe. The richer per-row date + columns are
-    # rendered by admin/posts-list-enhance.js; this is the no-JS fallback.
-    summary: "{{title}} ({{year}}-{{month}}-{{day}}){{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}"
+    # NO date token/filter in the summary. Decap's `summaryFormatter`
+    # (decap-cms-core formatters.js) computes the date via
+    # `parseDateFromEntry`, which runs PLAIN `dayjs(rawStoredString)` (no
+    # format string) against our stored "YYYY-MM-DD HH:mm:ss ZZ" format
+    # (e.g. `2026-05-13 08:51:00 -0400`). That space+offset form isn't
+    # ISO-8601, so dayjs falls back to native `new Date(string)` — valid
+    # on V8/Chrome, Invalid Date on strict engines (WebKit/Safari/iOS).
+    # On parse failure `date` is `null`, and `compileStringTemplate`
+    # (decap-cms-lib-widgets stringTemplate.js) treats `date === null` as
+    # "date processing off": every {{year}}/{{month}}/{{day}} token
+    # silently compiles to '' instead of throwing (its
+    # SLUG_MISSING_REQUIRED_DATE throw is gated on `date !== null`, so it
+    # never fires) — every post rendered "Title (--)" on WebKit (issue
+    # #1042 lineage; its fix changed the failure mode from "INVALID DATE"
+    # to "(--)"; observed live on Safari, 2026-07-10). The `slug:`
+    # template above survives the SAME parse failure only because
+    # `slugFormatter` falls back to `new Date(Date.now())` instead of
+    # `null` — same parser, different fallback, which is why filenames
+    # stay correct everywhere while list summaries broke on WebKit.
+    # Fix: render the date from the file slug's `YYYY-MM-DD-` prefix
+    # instead (Jekyll's `_posts/` naming contract + the `slug:` template
+    # above guarantee it) — pure string ops, engine-proof — in
+    # admin/posts-list-enhance.js; this line is the no-JS fallback (no
+    # date shown without JS, but no "(--)" garbage either). Asserted
+    # verbatim across all three configs by
+    # e2e/posts-list-date-lint.test.js, and against the rendered config
+    # by e2e/cms-post-list-summary.spec.js.
+    summary: "{{title}}{{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}"
     sortable_fields:
       - date
       - title

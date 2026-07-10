@@ -44,12 +44,15 @@ collections:
     delete: true
     slug: "{{year}}-{{month}}-{{day}}-{{slug}}"
     preview_path: "/blog/{{slug}}/"
-    # See admin/config.yml for the {{year}}-{{month}}-{{day}} rationale
-    # (the dayjs `date(...)` filter renders "INVALID DATE" on WebKit for
-    # the stored space+offset date format — issue #1042). Kept in
-    # lockstep; cms-post-list-summary.spec.js asserts this line verbatim
-    # across all three configs.
-    summary: "{{title}} ({{year}}-{{month}}-{{day}}){{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}"
+    # See admin/config.yml for the WebKit "(--)" rationale: Decap's
+    # summaryFormatter parses the stored space+offset date with plain
+    # dayjs, which falls back to native new Date() (Invalid on WebKit),
+    # so the parsed date is null and {{year}}/{{month}}/{{day}} silently
+    # compile to '' (issue #1042 lineage). Kept in lockstep;
+    # e2e/posts-list-date-lint.test.js asserts this line verbatim across
+    # all three configs, e2e/cms-post-list-summary.spec.js against the
+    # rendered config.
+    summary: "{{title}}{{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}"
     sortable_fields:
       - date
       - title

@@ -190,7 +190,12 @@ test.describe("Issue #1042 — admin posts UI", () => {
       expect(yml, `${rel} must not reintroduce the date(...) summary filter`).not.toMatch(
         /summary:.*date\(/,
       );
-      expect(yml).toMatch(/summary:\s*"\{\{title\}\} \(\{\{year\}\}-\{\{month\}\}-\{\{day\}\}\)/);
+      expect(
+        yml,
+        "no {{year}}/{{month}}/{{day}} in the summary — they compile to '' on WebKit " +
+          "(date=null fallback); the date is rendered by posts-list-enhance.js from the filename",
+      ).not.toMatch(/summary:.*\{\{year\}\}/);
+      expect(yml).toMatch(/summary:\s*"\{\{title\}\}\{\{published \| ternary\(/);
       // `Automated tests` view_filter keyed off test_fixture.
       expect(yml).toMatch(/-\s*label:\s*Automated tests/);
       expect(yml).toMatch(/field:\s*test_fixture/);
