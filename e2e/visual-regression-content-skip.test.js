@@ -74,6 +74,32 @@ test.describe("visual-regression: content-only PRs are non-salient", () => {
     expect(isSalient([...CONTENT_FILES, "_layouts/post.html"])).toBe(true);
   });
 
+  test("synced tool vendor bumps are non-salient (auto-pass by design)", () => {
+    // A tool-sync PR (see the site AGENTS.md "Vendored-tool sync") touches
+    // exactly the vendored asset + its provenance record. Its delta is the
+    // INTENT of the change, already reviewed in the tool's source repo —
+    // the site-side gate must not re-review it. The provenance path is a
+    // carve-out from the broad `_data/` salience rule.
+    expect(isSalient(["assets/tools/claude-memory-map/index.html"])).toBe(false);
+    expect(isSalient(["_data/tool_sources/claude-memory-map.yml"])).toBe(false);
+    expect(
+      isSalient([
+        "assets/tools/claude-memory-map/index.html",
+        "_data/tool_sources/claude-memory-map.yml",
+      ]),
+    ).toBe(false);
+  });
+
+  test("the tool_sources carve-out does not swallow the rest of _data/", () => {
+    expect(isSalient(["_data/navigation.yml"])).toBe(true);
+  });
+
+  test("a mixed diff (tool bump + one template) is still salient", () => {
+    expect(
+      isSalient(["assets/tools/claude-memory-map/index.html", "_layouts/post.html"]),
+    ).toBe(true);
+  });
+
   test("every CMS collection folder in admin/config.base.yml is non-salient", () => {
     // Sanity check: a newly-added collection's folder must NOT be salient,
     // or content edits to it would wrongly trigger regression review.

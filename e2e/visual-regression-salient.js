@@ -17,6 +17,18 @@
 // `approve-regression` check always reports a status (a path-filtered
 // workflow that never fires would deadlock a required check).
 
+// Carve-outs that stay NON-salient even where a broad salient pattern
+// (e.g. `_data/`) would otherwise match. Synced tool vendor bumps are
+// CMS-content-like: the pixel/text delta IS the intent of the change,
+// already reviewed in the tool's source repo (its PR + the site preview
+// mirror), so the site-side gate must not re-review them. A tool-sync PR
+// touches exactly `assets/tools/<slug>/` + its provenance record under
+// `_data/tool_sources/` — both listed here. A MIXED diff (tool bump +
+// a template edit) is still salient via the template file, and that run
+// will then also surface the tool page's delta — desired, since a human
+// is reviewing that PR anyway.
+const NON_SALIENT_OVERRIDES = [/^_data\/tool_sources\//, /^assets\/tools\//];
+
 // Files whose changes CAN shift rendered output, plus the regression
 // pipeline's own tooling. Anything NOT matched here (CMS content, media
 // uploads, docs, infra, other tooling) is non-salient.
@@ -49,10 +61,14 @@ const SALIENT_PATTERNS = [
 // True when ANY changed file can shift rendered output. An empty list (no
 // changed files / could not diff) is non-salient — nothing to compare.
 function isSalient(files) {
-  return (files || []).some((f) => SALIENT_PATTERNS.some((re) => re.test(String(f).trim())));
+  return (files || []).some((f) => {
+    const p = String(f).trim();
+    if (NON_SALIENT_OVERRIDES.some((re) => re.test(p))) return false;
+    return SALIENT_PATTERNS.some((re) => re.test(p));
+  });
 }
 
-module.exports = { SALIENT_PATTERNS, isSalient };
+module.exports = { NON_SALIENT_OVERRIDES, SALIENT_PATTERNS, isSalient };
 
 // CLI: read newline-delimited changed paths from stdin, print "true"/"false".
 // Used by the reusable workflow's `detect` job:
