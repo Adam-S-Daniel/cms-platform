@@ -58,7 +58,20 @@ async function waitForAdminBootIfApplicable(page, pagePath) {
 async function writeVisibleText(page, side, safeName) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const text = await page.evaluate(() => (document.body && document.body.innerText) || "");
+      // [data-visreg-ignore] marks deployment metadata (the admin shell's
+      // deployed-commit / deploy-status pills): sha + deploy time differ
+      // between prod and a CI build BY DEFINITION, and must not trip the
+      // text gate. visibility:hidden excludes a node from innerText;
+      // restore afterwards so the (already-taken or later) screenshot and
+      // live page are untouched.
+      const text = await page.evaluate(() => {
+        const ignored = Array.from(document.querySelectorAll("[data-visreg-ignore]"));
+        const saved = ignored.map((el) => el.style.visibility);
+        ignored.forEach((el) => (el.style.visibility = "hidden"));
+        const t = (document.body && document.body.innerText) || "";
+        ignored.forEach((el, i) => (el.style.visibility = saved[i]));
+        return t;
+      });
       fs.writeFileSync(path.join(OUTPUT_DIR, side, `${safeName}.txt`), text);
       return;
     } catch (e) {

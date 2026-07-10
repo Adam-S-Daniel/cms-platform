@@ -126,6 +126,11 @@
           var isPreview = c.branch && c.branch !== 'main';
           var a = document.createElement('a');
           a.id = 'cms-commit-pill';
+          // Deployment metadata, not content: the visual-regression text
+          // check strips [data-visreg-ignore] nodes before diffing (the
+          // deployed sha/date differs between prod and a CI build by
+          // definition, and must not force the manual review gate).
+          a.setAttribute('data-visreg-ignore', '');
           a.href = REPO_URL + '/commit/' + c.sha;
           a.target = '_blank';
           a.rel = 'noopener';

@@ -393,8 +393,13 @@
           `/repos/${REPO_OWNER}/${REPO_NAME}/actions/runs?status=waiting&per_page=20`
         );
         const runsData = await runsRes.json();
+        // Key on the workflow PATH, not the run's name: consumers set a
+        // dynamic `run-name:` on the thin caller (per-PR titles), and the
+        // API returns THAT as `name` — a name filter silently drops every
+        // run, so the dashboard showed "No pending reviews" while a run
+        // sat waiting (observed live on adamdaniel.ai#2554).
         const runs = (runsData.workflow_runs || []).filter(r =>
-          r.name === 'Visual Regression'
+          r.path === '.github/workflows/visual-regression.yml'
         );
 
         if (runs.length === 0) {

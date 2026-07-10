@@ -122,6 +122,10 @@ const PLATFORM_META_SPECS = [
   // regression-video.spec.js must derive from APEX_DOMAIN (the consumer apex),
   // never a hardcoded site. Reads the platform e2e source; self-CI only.
   "regression-prod-base.test.js",
+  // Locks the reviews dashboard's pending-run discovery to the workflow
+  // path (run-name filtering matches nothing on consumers with dynamic
+  // run-name:). Reads PLATFORM theme files — self-CI only.
+  "reviews-dashboard-lint.test.js",
   // Locks the release→bump chaining (dispatch fan-out + bump auto-merge,
   // both fail-open). Reads the PLATFORM workflow files — platform self-CI
   // only.
@@ -198,6 +202,9 @@ const PLATFORM_META_SPECS = [
   // the canonical page universe). Reads the PLATFORM workflow file —
   // platform self-CI only.
   "visual-regression-step-order.test.js",
+  // Locks the deploy-metadata [data-visreg-ignore] exclusion (admin pills ↔
+  // the text capture). Reads PLATFORM theme/e2e files — self-CI only.
+  "visreg-ignore-lint.test.js",
   "workflow-github-sha-lint.test.js",
   "workflow-graph.test.js",
   // #16 — lints the prod-loop reusables' if:always() branch-cleanup steps by
