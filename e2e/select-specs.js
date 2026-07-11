@@ -777,6 +777,15 @@ const SPEC_RULES = {
     /^\.github\/workflows\/cms-publish-loop-host\.yml$/,
     /^\.github\/actions\/await-prod-deploy\//,
   ],
+  // #84 — the preview-media probe sentinel lint. Re-select on a scaffolder
+  // change, either fixture's sentinel/media-uploads path, or an edit to the
+  // canonical bytes it's compared against.
+  "e2e/scaffold-seeds-media-probe.test.js": [
+    /^scaffold\/create-site\.js$/,
+    /^e2e\/fixture-site\/assets\/images\/uploads\//,
+    /^e2e\/fixture-site-singlepage\/assets\/images\/uploads\//,
+    /^e2e\/fixtures\/tiny-pixel\.png$/,
+  ],
 };
 
 function getChangedFiles(baseRef) {

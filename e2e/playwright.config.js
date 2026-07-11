@@ -200,6 +200,11 @@ const PLATFORM_META_SPECS = [
   "scaffold-seeds-neutral-logo.test.js",
   "scaffold-deploy-delegators.test.js",
   "scaffold-platform-version.test.js",
+  // #84 — scaffolder-output + fixture invariant: the preview-media probe
+  // sentinel (assets/images/uploads/e2e-preview-media-probe.png). Runs
+  // scaffold/create-site.js and reads the platform's own fixture trees
+  // (fixture-site + fixture-site-singlepage) as literal paths.
+  "scaffold-seeds-media-probe.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +

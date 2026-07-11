@@ -222,6 +222,21 @@ async function main() {
   // e2e/scaffold-preview-and-404.test.js.
   write(target, "preview.md", SEED_PREVIEW);
   write(target, "404.html", SEED_404);
+  // Seed the preview-media probe sentinel (issue #84). preview-media.yml's
+  // salient-change gate fetches this exact path on the deployed preview to
+  // prove the flat `media_folder` resolves; without it a fresh consumer only
+  // "passes" preview-media by never triggering it, then 404s the first
+  // media-salient change (bit jodidaniel.com on the v0.1.30 bump). Canonical
+  // 1x1 PNG, byte-identical to the platform's own e2e/fixtures/tiny-pixel.png
+  // (git blob sha 62a5f8f47fec02344e5bf9061888262f677cf5d6) and to what
+  // adamdaniel.ai / jodidaniel.com already carry. Embedded as base64 (not read
+  // from e2e/ at scaffold time) so scaffold output stays hermetic. Locked by
+  // e2e/scaffold-seeds-media-probe.test.js.
+  write(
+    target,
+    "assets/images/uploads/e2e-preview-media-probe.png",
+    Buffer.from(PROBE_PNG_BASE64, "base64"),
+  );
   write(target, ".gitignore", SITE_GITIGNORE);
   // The secrets-scan reusable runs the gitleaks binary with --config
   // .gitleaks.toml when present; ship the platform's fixture allowlist so a
@@ -442,6 +457,12 @@ description: The page you were looking for does not exist.
   </div>
 </div>
 `;
+// The preview-media probe sentinel (issue #84) — a canonical 1x1 PNG, 69 bytes.
+// Byte-identical to e2e/fixtures/tiny-pixel.png (git blob sha
+// 62a5f8f47fec02344e5bf9061888262f677cf5d6); embedded here (rather than read
+// from the e2e/ tree at scaffold time) so scaffold output stays hermetic.
+const PROBE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 const SITE_GITIGNORE = `_site/
 .jekyll-cache/
 Gemfile.lock
