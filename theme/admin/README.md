@@ -60,3 +60,18 @@ hook, so no per-site or per-workflow step is needed.
 | `CMS_SITE_TITLE` | the site's `_config.yml` `title` | admin shell `document.title` (index.html, index-local.html), reviews dashboards `document.title` |
 
 `config-test.yml` is domain-agnostic (local/test backend) and ships as-is.
+
+## Runtime override globals (test seams)
+
+These are NOT injected by the render hook — they are optional `window.*`
+overrides a shim reads at runtime (default when unset). They exist so the e2e
+suite can exercise a slow real-time behaviour without waiting on the clock.
+
+| Global | Read by | Default | Purpose |
+|---|---|---|---|
+| `__AUTOSAVE_IDLE_MS` | `autosave-on-hide.js` | `120000` (2 min) | Idle threshold (ms) after which a dirty entry autosaves. The `@admin-write` e2e spec sets it low via `addInitScript` to drive the idle path. |
+
+The confirm-wrap (`confirm-wrap-local-backup.js`) + autosave
+(`autosave-on-hide.js`) shims (#161) also expose read-only test surfaces —
+`window.__confirmWrapLocalBackup` and `window.__autosaveOnHide` — for specs to
+assert install / trigger the save-click.

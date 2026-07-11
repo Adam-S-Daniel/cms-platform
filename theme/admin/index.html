@@ -133,6 +133,17 @@
   <script src="publish-via-auto-merge.js"></script>
 
   <!--
+    confirm-wrap-local-backup shim (#161). Same non-deferred / before-decap
+    idiom as publish-via-auto-merge.js above: it captures window.confirm and
+    replaces it BEFORE Decap loads, so Decap's misleading "restore local
+    backup?" dialog (an unguarded core race that silently drops the restored
+    work — decaporg/decap-cms#6989) is suppressed. Returning false for that
+    one prompt drives Decap's own deleteBackup() to clear the stale backup;
+    every other confirm (delete etc.) passes through to the native dialog.
+  -->
+  <script src="confirm-wrap-local-backup.js"></script>
+
+  <!--
     Decap CMS — pinned to an exact version. Editorial workflow + the
     GitHub backend with our custom OAuth proxy (`base_url` +
     `auth_endpoint` in admin/config.yml) drive the cms/<branch> →
@@ -183,6 +194,18 @@
        default, and drops the "E2E Canary" Quick-add item. Self-
        contained; degrades to local-only columns without a token. -->
   <script src="posts-list-enhance.js" defer></script>
+
+  <!--
+    Autosave-on-hide shim (#161). Deferred (post-load behaviour): it clicks
+    the toolbar Save button on tab-hide (visibilitychange→hidden / pagehide)
+    and after ~2min idle while the entry is dirty, so work persists reliably
+    now that the misleading local-backup restore is disabled (see
+    confirm-wrap-local-backup.js). Inherits Save's exact semantics — under
+    editorial_workflow it commits to the entry's cms/<collection>/<slug> PR
+    branch, nothing goes live until Publish. Wraps nothing (no fetch, no
+    confirm); a click on a clean entry is a no-op via Decap's own onClick
+    guard. Idle threshold is overridable via window.__AUTOSAVE_IDLE_MS. -->
+  <script src="autosave-on-hide.js" defer></script>
 
   <!--
     OAuth-App-restriction detector (#26). PROD-ONLY: only the real GitHub

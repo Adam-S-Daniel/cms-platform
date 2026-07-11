@@ -87,6 +87,14 @@
   <link rel="cms-config-url" type="text/yaml" href="config-local.yml">
 
   <!--
+    confirm-wrap-local-backup shim (#161) — see admin/index.html. Non-deferred
+    + BEFORE decap-cms.js so window.confirm is wrapped before Decap loads,
+    suppressing the misleading "restore local backup?" dialog. (No
+    publish-via-auto-merge.js in this local shell — the local backend never
+    hits the ruleset — so this is the shell's only pre-decap wrap.) -->
+  <script src="confirm-wrap-local-backup.js"></script>
+
+  <!--
     Decap CMS — same pinned exact version as admin/index.html. The local
     config sets `local_backend: true` so saves go through the
     decap-server proxy (port 8081) into the working tree instead of
@@ -113,6 +121,12 @@
 
   <!-- Posts list dashboard — see admin/index.html (#1042). -->
   <script src="posts-list-enhance.js" defer></script>
+
+  <!-- Autosave-on-hide shim (#161) — see admin/index.html. Deferred, after
+       decap-cms.js. Inert on this local shell's simple-mode backend (no
+       "Save" toolbar button — Publish only), loaded for parity across all
+       three shells. -->
+  <script src="autosave-on-hide.js" defer></script>
 
   <!-- Commit indicator — see admin/index.html for the full rationale.
        Locally, run scripts/write-commit-json.sh to populate commit.json

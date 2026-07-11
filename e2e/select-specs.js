@@ -753,6 +753,19 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/publish-via-auto-merge\.js$/,
     /^(theme\/)?admin\/index\.html$/,
   ],
+  // #161 confirm-wrap + autosave shims. The load-order lint reads all three
+  // shells + the confirm-wrap source; the confirm-wrap unit sandbox reads its
+  // shim; the @admin-write e2e drives the real editorial toolbar (index-test).
+  // Trigger on a change to either shim or any admin shell that loads them.
+  "e2e/admin-shim-load-order.test.js": [
+    /^(theme\/)?admin\/(confirm-wrap-local-backup|autosave-on-hide)\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+  ],
+  "e2e/confirm-wrap-local-backup.test.js": [/^(theme\/)?admin\/confirm-wrap-local-backup\.js$/],
+  "e2e/cms-autosave.spec.js": [
+    /^(theme\/)?admin\/(confirm-wrap-local-backup|autosave-on-hide)\.js$/,
+    /^(theme\/)?admin\/index-test\.html$/,
+  ],
   "e2e/visual-regression.spec.js": [
     // Master visual gate — always include when *anything* visual could
     // have shifted. Our fanout patterns cover that.
