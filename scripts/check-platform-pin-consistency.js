@@ -46,6 +46,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 // ── Resolve the `yaml` parser robustly ───────────────────────────────────────
 // This script ships in the platform and is run by consumers from a
@@ -568,10 +569,64 @@ function checkWorkflowContentParity() {
   }
 }
 
+// ── Preview-media probe sentinel (issue #84) ─────────────────────────────────
+// `e2e/preview-media-resolves.spec.js`'s PROBE_PATH points at a committed
+// `assets/images/uploads/e2e-preview-media-probe.png` — the `preview-media`
+// gate fetches it on the deployed preview to prove the flat `media_folder`
+// resolves. A consumer missing it only "passes" preview-media by never
+// tripping the gate's media-salient-change detector, then 404s the first time
+// it does (bit jodidaniel.com on the v0.1.30 bump). This is a pure
+// delivery-artifact check — file existence + byte/sha match, not a code-shape
+// lint (no AST needed). The 92-char base64 constant is embedded here (rather
+// than read from the platform checkout) so this check works under the
+// reusable's sparse checkout, which brings in only this script +
+// examples/site/.github/workflows.
+const PROBE_MEDIA_REL = "assets/images/uploads/e2e-preview-media-probe.png";
+const PROBE_MEDIA_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+const PROBE_MEDIA_SHA1 = "62a5f8f47fec02344e5bf9061888262f677cf5d6";
+
+function gitBlobSha1(buf) {
+  const header = Buffer.from(`blob ${buf.length}\0`);
+  return crypto.createHash("sha1").update(Buffer.concat([header, buf])).digest("hex");
+}
+
+function checkMediaProbeSentinel() {
+  const probePath = path.join(ROOT, PROBE_MEDIA_REL);
+  checked += 1;
+  if (!fs.existsSync(probePath)) {
+    violations.push({
+      file: PROBE_MEDIA_REL,
+      kind: "preview-media sentinel: MISSING",
+      found: "absent",
+      expected: `present, git-blob sha1 ${PROBE_MEDIA_SHA1}`,
+      detail:
+        `preview-media.yml's salient-change gate fetches this exact path on the deployed ` +
+        `preview (see e2e/preview-media-resolves.spec.js PROBE_PATH, issue #84); seed it with ` +
+        `the canonical 1x1 PNG (base64 ${PROBE_MEDIA_PNG_BASE64}).`,
+    });
+    return;
+  }
+  const bytes = fs.readFileSync(probePath);
+  const foundSha1 = gitBlobSha1(bytes);
+  if (foundSha1 !== PROBE_MEDIA_SHA1) {
+    violations.push({
+      file: PROBE_MEDIA_REL,
+      kind: "preview-media sentinel: WRONG-BYTES",
+      found: `git-blob sha1 ${foundSha1} (${bytes.length} bytes)`,
+      expected: `git-blob sha1 ${PROBE_MEDIA_SHA1} (69 bytes)`,
+      detail:
+        `must be byte-identical to the canonical sentinel (see ` +
+        `e2e/preview-media-resolves.spec.js PROBE_PATH, issue #84).`,
+    });
+  }
+}
+
 checkGemfile();
 checkGemfileLock();
 checkWorkflowSetParity();
 checkWorkflowContentParity();
+checkMediaProbeSentinel();
 
 // ── Report ────────────────────────────────────────────────────────────────────
 if (violations.length === 0) {

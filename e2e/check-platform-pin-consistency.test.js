@@ -34,6 +34,17 @@ const SLUG = `${OWNER}/${REPO}`;
 // trailing version COMMENT, not on resolving the SHA).
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
+// The preview-media probe sentinel (#84) — checkMediaProbeSentinel() now
+// asserts every consumer carries this, so every fixture below that expects
+// exit 0 must include it (a missing sentinel is its own dedicated test group
+// further down).
+const SENTINEL_REL = "assets/images/uploads/e2e-preview-media-probe.png";
+const SENTINEL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+function writeSentinel(root) {
+  write(root, SENTINEL_REL, Buffer.from(SENTINEL_PNG_BASE64, "base64"));
+}
+
 function run(root) {
   return spawnSync(
     process.execPath,
@@ -125,6 +136,7 @@ test.describe("check-platform-pin-consistency.js — CONSISTENT fixture (#29)", 
     write(root, ".github/workflows/code-quality.yml", compositeCaller("code-quality", V));
     write(root, "Gemfile", gemfile(V));
     write(root, "Gemfile.lock", gemfileLock(V));
+    writeSentinel(root);
 
     const res = run(root);
     expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
@@ -139,6 +151,7 @@ test.describe("check-platform-pin-consistency.js — CONSISTENT fixture (#29)", 
     const V = "v0.1.7";
     write(root, "platform.lock", platformLock(V));
     write(root, ".github/workflows/deploy.yml", reusableCaller("deploy", V));
+    writeSentinel(root);
     // No Gemfile / Gemfile.lock at all.
     const res = run(root);
     expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
@@ -148,6 +161,7 @@ test.describe("check-platform-pin-consistency.js — CONSISTENT fixture (#29)", 
     const root = mkConsumer();
     const V = "v0.1.7";
     write(root, "platform.lock", platformLock(V));
+    writeSentinel(root);
     write(
       root,
       ".github/workflows/x.yml",
@@ -225,6 +239,46 @@ test.describe("check-platform-pin-consistency.js — SKEWED fixture (#29)", () =
   });
 });
 
+// ── Preview-media probe sentinel (#84): a consumer must carry
+// assets/images/uploads/e2e-preview-media-probe.png byte-identical to the
+// canonical 1x1 PNG (git-blob sha1 62a5f8f47fec02344e5bf9061888262f677cf5d6).
+// preview-media.yml's salient-change gate fetches this exact path on the
+// deployed preview (e2e/preview-media-resolves.spec.js PROBE_PATH); a
+// missing/wrong sentinel must fail HERE at PR time, not intermittently on a
+// later media-salient change.
+test.describe("check-platform-pin-consistency.js — preview-media sentinel (#84)", () => {
+  function baseConsumer() {
+    const root = mkConsumer();
+    write(root, "platform.lock", platformLock("v0.1.7"));
+    return root;
+  }
+
+  test("FAILS with MISSING when the sentinel is absent", () => {
+    const root = baseConsumer(); // no sentinel written
+    const res = run(root);
+    expect(res.status).not.toBe(0);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toMatch(/preview-media sentinel: MISSING/);
+    expect(out).toMatch(/assets\/images\/uploads\/e2e-preview-media-probe\.png/);
+  });
+
+  test("FAILS with WRONG-BYTES when the sentinel doesn't match the canonical bytes", () => {
+    const root = baseConsumer();
+    write(root, SENTINEL_REL, "not the right bytes");
+    const res = run(root);
+    expect(res.status).not.toBe(0);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toMatch(/preview-media sentinel: WRONG-BYTES/);
+  });
+
+  test("exits 0 when the sentinel is byte-identical to the canonical PNG", () => {
+    const root = baseConsumer();
+    writeSentinel(root);
+    const res = run(root);
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
+  });
+});
+
 // ── Workflow-set parity: consumer's .github/workflows SET must EQUAL the
 // platform's canonical examples/site set (the platform-dictated set) at the
 // pinned ref — no MISSING, no EXTRA. The canonical set is supplied via
@@ -248,6 +302,7 @@ test.describe("check-platform-pin-consistency.js — workflow-set parity", () =>
     const root = mkConsumer();
     write(root, "platform.lock", platformLock(V));
     for (const n of names) write(root, `.github/workflows/${n}`, reusableCaller(n.replace(/\.ya?ml$/, ""), V));
+    writeSentinel(root);
     return root;
   }
   function runWithCanonical(root, canonicalDir) {
@@ -343,6 +398,7 @@ test.describe("check-platform-pin-consistency.js — workflow-content (call-inte
     const root = mkConsumer();
     write(root, "platform.lock", platformLock(V));
     write(root, ".github/workflows/sweep-stale-cms-prs.yml", callerContent);
+    writeSentinel(root);
     return root;
   }
   function runC(root, canonicalDir) {
