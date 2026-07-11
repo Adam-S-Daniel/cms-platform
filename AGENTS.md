@@ -141,6 +141,11 @@ they keep only the seam. See "Admin delivery" below.
   the seeded `preview.md` still gives a working `/preview/` shell + the seeded
   `404.html` a friendly not-found page.
 - **Branch + PR, never push to `main`** (the auto-mode classifier enforces this).
+- **Repo settings/rulesets change ONLY via a `repo-settings.yml` PR followed by
+  a human `node scripts/audit-repo-settings.js --fix --yes`.** Emergency live
+  flips must be ratified (PR the value in with a `# why:`) or reverted the same
+  day — the daily `repo-settings-audit` workflow files a `ci` tracking issue on
+  any drift.
 - **SHA-pin every workflow `uses:`** with a `# vX.Y.Z (date)` comment; 7-day
   cooling-off before bumping (mirrors adamdaniel.ai policy).
 - **Verify before claiming done** — run the render, drift-guard, scaffolder
