@@ -56,12 +56,22 @@ function branchesIncludeMain(onValue) {
   return list.map(String).includes("main");
 }
 
-const GATE_ACTION_RE = /event\.action\s*!=\s*'edited'/;
-const GATE_CHANGES_BASE_RE = /event\.changes\.base/;
+// A valid gate is the DISJUNCTION
+//   github.event.action != 'edited' || github.event.changes.base.ref.from != ''
+// matched as ONE unit — NOT two independent substring tests. Testing the two
+// fragments independently accepted semantically inverted gates that stay green
+// on exactly the regressions this lint exists to catch:
+//   - the AND form `… != 'edited' && … .ref.from != ''` evaluates FALSE on every
+//     opened/synchronize event (changes.base is empty there), skipping the caller
+//     job on EVERY normal PR so its required contexts never report;
+//   - the `== ''` form re-runs the suite on title edits while SKIPPING base
+//     retargets — silently re-introducing the exact #145 hole.
+// Substring-based (unanchored) so a caller may AND the gate onto a pre-existing
+// condition as `existing && (gate)` per the W4 compound-if provision.
+const BASE_CHANGE_GATE_RE =
+  /github\.event\.action\s*!=\s*'edited'\s*\|\|\s*github\.event\.changes\.base\.ref\.from\s*!=\s*''/;
 function hasBaseChangeGate(ifExpr) {
-  return (
-    typeof ifExpr === "string" && GATE_ACTION_RE.test(ifExpr) && GATE_CHANGES_BASE_RE.test(ifExpr)
-  );
+  return typeof ifExpr === "string" && BASE_CHANGE_GATE_RE.test(ifExpr);
 }
 
 const REPO_ROOT = path.join(__dirname, "..");
@@ -101,3 +111,29 @@ for (const file of candidateWorkflowPaths()) {
     });
   });
 }
+
+// The gate detector must reject the two semantically inverted forms that a
+// botched future edit could ship — this lint is the ONLY guard on the invariant.
+test.describe("#145 base-change gate — hasBaseChangeGate detector", () => {
+  const GATE = "github.event.action != 'edited' || github.event.changes.base.ref.from != ''";
+
+  test("accepts the canonical disjunction gate", () => {
+    expect(hasBaseChangeGate(GATE)).toBe(true);
+  });
+
+  test("accepts the gate AND-ed onto a pre-existing condition (compound-if)", () => {
+    expect(hasBaseChangeGate(`github.actor != 'dependabot[bot]' && (${GATE})`)).toBe(true);
+  });
+
+  test("REJECTS the AND form (would skip the job on every opened/synchronize event)", () => {
+    expect(
+      hasBaseChangeGate("github.event.action != 'edited' && github.event.changes.base.ref.from != ''"),
+    ).toBe(false);
+  });
+
+  test("REJECTS the == '' form (would re-run on title edits, skip base retargets — the #145 hole)", () => {
+    expect(
+      hasBaseChangeGate("github.event.action != 'edited' || github.event.changes.base.ref.from == ''"),
+    ).toBe(false);
+  });
+});
