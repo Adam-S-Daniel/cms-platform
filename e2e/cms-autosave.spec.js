@@ -37,8 +37,9 @@ const { test, expect } = require("./base");
 
 const SEED_POST_SLUG = "2026-04-25-replacement-test-post-1";
 const SEED_POST_TITLE = "Replacement test post 1";
-// The test-repo backend keys unpublished (editorial) entries by collection/slug
-// with the DATE PREFIX stripped from the slug (mirrors cms-editorial-workflow).
+// The test-repo backend keys unpublished (editorial) entries by
+// `${collection}/${slug}`, where slug is the FULL date-prefixed filename stem —
+// NO date stripping (mirrors cms-editorial-workflow.spec.js).
 const UNPUBLISHED_KEY = "posts/2026-04-25-replacement-test-post-1";
 
 const SEED_POST_CONTENT = `---
