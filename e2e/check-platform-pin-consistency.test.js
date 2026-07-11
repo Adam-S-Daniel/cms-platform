@@ -39,10 +39,17 @@ const SHA = "0123456789abcdef0123456789abcdef01234567";
 // exit 0 must include it (a missing sentinel is its own dedicated test group
 // further down).
 const SENTINEL_REL = "assets/images/uploads/e2e-preview-media-probe.png";
-const SENTINEL_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+// Seed the CANONICAL bytes straight from e2e/fixtures/tiny-pixel.png rather than
+// a re-embedded base64 copy: this makes every "exits 0 when byte-identical" case
+// a proof that the SCRIPT's embedded PROBE_MEDIA_PNG_BASE64/PROBE_MEDIA_SHA1 still
+// accept the canonical PNG — so a future sentinel-byte update that changes the
+// fixture but misses the script constant turns these exit-0 cases RED, instead of
+// only surfacing on a consumer's next platform_ref bump (#84). The script keeps
+// its constant embedded (sparse-checkout), but this self-test always runs in the
+// full platform tree, so it can read the fixture directly.
+const CANONICAL_SENTINEL_PNG = path.join(__dirname, "fixtures", "tiny-pixel.png");
 function writeSentinel(root) {
-  write(root, SENTINEL_REL, Buffer.from(SENTINEL_PNG_BASE64, "base64"));
+  write(root, SENTINEL_REL, fs.readFileSync(CANONICAL_SENTINEL_PNG));
 }
 
 function run(root) {
