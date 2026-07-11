@@ -247,7 +247,7 @@ test.describe("Issue #1042 — admin posts UI", () => {
 //   - deploy-preview.yml publishes a `deploy/preview` commit status
 //     and admin/config*.yml pin `backend.preview_context` to it —
 //     together the actual fix for the editor's perpetual
-//     "Check for Preview" (decap-cms 3.12.2's github backend reads a
+//     "Check for Preview" (decap-cms 3.14.1's github backend reads a
 //     commit status, never the GitHub Deployment we already register).
 test.describe("Admin preview/PR links + Check-for-Preview fix", () => {
   const PLE = path.join(ADMIN, "posts-list-enhance.js");

@@ -31,7 +31,7 @@
  * `e2e/cms-publish-loop-preview.spec.js` (preview env, target PR head)
  * and `e2e/cms-delete-published.spec.js`.
  */
-// Live key as of Decap CMS 3.12.2. If a future major bump renames it
+// Live key as of Decap CMS 3.14.1. If a future major bump renames it
 // again, the cms-publish-loop specs will get stuck on Decap's login
 // screen — re-run e2e/debug-decap-auth.spec.js (or grep the bundle:
 // `curl -s https://unpkg.com/decap-cms@<v>/dist/decap-cms.js |
