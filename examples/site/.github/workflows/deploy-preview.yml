@@ -10,7 +10,7 @@ run-name: >-
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, closed, edited]
     branches: [main]
     # Customize per site (mirror deploy-production's list for what can't change
     # the built site).
@@ -32,7 +32,9 @@ permissions:
   statuses: write
 
 jobs:
+  # edited fires only for base retargets (changes.base present) — title/body edits stay no-ops (#145)
   preview:
+    if: github.event.action != 'edited' || github.event.changes.base.ref.from != ''
     uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-preview.yml@v0.1.1
     with:
       apex_domain: example.com

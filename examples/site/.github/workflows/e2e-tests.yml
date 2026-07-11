@@ -10,6 +10,7 @@ run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, githu
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches:
       - main
     # Skip when nothing the e2e suite can observe has changed. The suite
@@ -31,7 +32,9 @@ permissions:
   pull-requests: write
 
 jobs:
+  # edited fires only for base retargets (changes.base present) — title/body edits stay no-ops (#145)
   e2e:
+    if: github.event.action != 'edited' || github.event.changes.base.ref.from != ''
     uses: Adam-S-Daniel/cms-platform/.github/workflows/e2e-tests.yml@v0.1.1
     with:
       # The HEAVY lane: target `local` builds + serves THIS site (real

@@ -229,6 +229,11 @@ const PLATFORM_META_SPECS = [
   // internal: a consumer doesn't ship those reusable definitions.
   "workflow-loop-branch-cleanup.test.js",
   "workflow-prod-loop-serialized.test.js",
+  // #145 — reads the canonical examples/site thin-caller DEFINITIONS + the
+  // platform's own self-dependabot-auto-merge.yml / self-secrets-scan.yml to
+  // lock the base-retarget `edited` trigger + caller-job gate. Platform-
+  // internal: a consumer ships only its own copies of these callers.
+  "workflow-retarget-edited.test.js",
   "workflow-run-name.test.js",
   "workflow-shell-glob-lint.test.js",
   "workflow-triggers.test.js",

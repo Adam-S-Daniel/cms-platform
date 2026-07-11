@@ -777,6 +777,26 @@ const SPEC_RULES = {
     /^\.github\/workflows\/cms-publish-loop-host\.yml$/,
     /^\.github\/actions\/await-prod-deploy\//,
   ],
+  // #145 — pure-fs lint (no browser/network), but it MUST run whenever any
+  // branches:[main]-filtered canonical caller (or the two platform self-*
+  // callers) or the shared YAML helper changes — that's exactly when the
+  // retarget-`edited` trigger + base-change gate could regress. Without this
+  // rule a caller-only tweak selects no workflow-*.test.js (they otherwise
+  // only run on fanout or their own change).
+  "e2e/workflow-retarget-edited.test.js": [
+    /^examples\/site\/\.github\/workflows\/dependabot-auto-merge\.yml$/,
+    /^examples\/site\/\.github\/workflows\/deploy-preview\.yml$/,
+    /^examples\/site\/\.github\/workflows\/e2e-stub\.yml$/,
+    /^examples\/site\/\.github\/workflows\/e2e-tests\.yml$/,
+    /^examples\/site\/\.github\/workflows\/parity-preview\.yml$/,
+    /^examples\/site\/\.github\/workflows\/platform-pin-consistency\.yml$/,
+    /^examples\/site\/\.github\/workflows\/preview-media\.yml$/,
+    /^examples\/site\/\.github\/workflows\/secrets-scan\.yml$/,
+    /^examples\/site\/\.github\/workflows\/visual-regression\.yml$/,
+    /^\.github\/workflows\/self-dependabot-auto-merge\.yml$/,
+    /^\.github\/workflows\/self-secrets-scan\.yml$/,
+    /^e2e\/workflow-yaml-utils\.js$/,
+  ],
 };
 
 function getChangedFiles(baseRef) {
