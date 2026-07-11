@@ -23,6 +23,7 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
 
 const SCRIPT_PATH = path.resolve(__dirname, "../scripts/audit-repo-settings.js");
@@ -322,5 +323,21 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(script.extractReportedFingerprints([comment]).has(script.fingerprint(findings))).toBe(true);
     // A hand-edited comment without a block never poisons the dedupe.
     expect(script.extractReportedFingerprints(["no block here", null]).size).toBe(0);
+  });
+
+  test("CLI refuses --issue + --repo (a clean subset must never auto-close the global alert)", () => {
+    // runIssueLifecycle treats findings.length===0 as a GLOBALLY-clean scan and
+    // closes the tracking issue; scoping the scan with --repo would let a clean
+    // subset retire the alert while another managed repo is still drifted. The
+    // guard fires on args alone — before any manifest load / gh call — so this
+    // asserts exit!=0 + the precise message with no network.
+    const res = spawnSync(
+      process.execPath,
+      [SCRIPT_PATH, "--issue", "--repo", "Adam-S-Daniel/cms-platform"],
+      { encoding: "utf8" },
+    );
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).not.toBe(0);
+    expect(res.stderr).toMatch(/--issue audits ALL managed repos/);
+    expect(res.stderr).toMatch(/drop --repo/);
   });
 });

@@ -933,7 +933,22 @@ function main() {
   const yes = flag("yes");
   const dryRun = flag("dry-run");
   const label = arg("label", "ci");
+  const filter = argAll("repo");
   const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  // --issue drives the tracking-issue lifecycle, whose auto-close treats a
+  // findings-empty scan as GLOBALLY clean (comments + PATCHes the issue to
+  // state=closed). Scoping the scan with --repo would let a clean SUBSET close
+  // the alert while another (unscanned) managed repo is still drifted. The
+  // shipped daily workflow always scans ALL repos with no --repo; this refuses
+  // the unsafe manual combination.
+  if (issueMode && filter.length) {
+    console.error(
+      "repo-settings-audit: --issue audits ALL managed repos (its auto-close treats a clean " +
+        "scan as globally clean); drop --repo, or run the scoped scan without --issue.",
+    );
+    return 1;
+  }
 
   let manifest;
   try {
@@ -944,7 +959,6 @@ function main() {
   }
 
   const allRepos = Object.keys(manifest.repos);
-  const filter = argAll("repo");
   const repos = filter.length ? allRepos.filter((r) => filter.includes(r)) : allRepos;
   if (filter.length && repos.length !== filter.length) {
     const unknown = filter.filter((r) => !allRepos.includes(r));
