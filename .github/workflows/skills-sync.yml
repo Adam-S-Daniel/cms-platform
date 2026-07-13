@@ -1,7 +1,11 @@
 # Reusable down-sync of the platform's canonical skills into a consuming site.
 # A site calls this on a schedule (or dispatch); it opens a PR when the site's
 # skills drift from the platform at the pinned ref. Platform-authoritative:
-# the destination is rsync --delete'd to match the platform exactly.
+# the destination is rsync --delete'd to match the platform exactly, EXCEPT for
+# repo-local skills — a skill directory the site owns and marks with a
+# `.repo-local` file is never overwritten or deleted (see skills/README.md).
+# This keeps platform deletions propagating (what --delete buys) while letting a
+# site keep its own skills; a plain "merge" would silently lose the former.
 # Opt-in by destination presence (issue #83): a consumer that keeps no local
 # skills mirror (no entry at `dest`) opts out — this is a no-op for it and we
 # never force a mirror into existence. The canonical workflow stays present on
@@ -63,7 +67,21 @@ jobs:
             exit 0
           fi
           mkdir -p "$DEST"
-          rsync -a --delete .cms-platform/skills/ "$DEST"/
+          # Repo-local carve-out: a site owns a skill by dropping a `.repo-local`
+          # marker file in that skill's directory. Such a skill is excluded from
+          # the transfer (never overwritten) AND from --delete (never removed) —
+          # rsync's --exclude protects matching paths from deletion unless
+          # --delete-excluded is given, which it is NOT. Everything unmarked stays
+          # platform-authoritative, so a skill removed from the platform is still
+          # deleted here. Excludes are anchored at the skills-dir root ("/name/")
+          # since skills are flat, one directory per skill.
+          excludes=()
+          while IFS= read -r -d '' marker; do
+            name="$(basename "$(dirname "$marker")")"
+            excludes+=( "--exclude=/${name}/" )
+            echo "repo-local skill preserved: ${name}"
+          done < <(find "$DEST" -mindepth 2 -maxdepth 2 -name .repo-local -print0)
+          rsync -a --delete ${excludes[@]+"${excludes[@]}"} .cms-platform/skills/ "$DEST"/
           rm -rf .cms-platform
           if git diff --quiet -- "$DEST"; then
             echo "skills already in sync with ${PLATFORM}@${REF}"; exit 0
@@ -77,6 +95,6 @@ jobs:
           git push -f origin "$BRANCH"
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
             --title "Sync skills from ${PLATFORM}@${REF}" \
-            --body "Automated skills sync from \`${PLATFORM}@${REF}\`. Platform-authoritative (rsync --delete)." \
+            --body "Automated skills sync from \`${PLATFORM}@${REF}\`. Platform-authoritative (rsync --delete); skills marked \`.repo-local\` are preserved." \
           || gh pr edit "$BRANCH" --title "Sync skills from ${PLATFORM}@${REF}" \
             --body "Automated skills sync from \`${PLATFORM}@${REF}\`."

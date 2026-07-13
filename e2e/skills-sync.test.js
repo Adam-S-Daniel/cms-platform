@@ -1,0 +1,53 @@
+// @lane: local — pure-fs lint of the skills-sync repo-local carve-out.
+// Platform-internal (reads the reusable workflow DEFINITION + skills/README.md),
+// so it's registered in playwright.config.js PLATFORM_META_SPECS and
+// testIgnore'd on consumer lanes.
+//
+// Locks the repo-local opt-out contract: the down-sync is platform-authoritative
+// (rsync --delete, so a skill removed from the platform is removed from the
+// site), but a site-owned skill marked with a `.repo-local` file must be
+// preserved — excluded from BOTH the transfer and the --delete sweep. Without
+// this, an unconditional `rsync --delete` clobbers repo-specific skills like
+// adamdaniel.ai's `embeddable-tool-pages` on every sync.
+const fs = require("node:fs");
+const path = require("node:path");
+const { test, expect } = require("./base");
+
+const ROOT = path.join(__dirname, "..");
+const REUSABLE = path.join(ROOT, ".github", "workflows", "skills-sync.yml");
+const README = path.join(ROOT, "skills", "README.md");
+
+test.describe("skills-sync repo-local carve-out", () => {
+  test("the reusable still --delete's (platform-authoritative removals preserved)", () => {
+    const text = fs.readFileSync(REUSABLE, "utf8");
+    expect(text, "must keep rsync --delete so platform removals propagate").toMatch(
+      /rsync\s+-a\s+--delete\b/,
+    );
+  });
+
+  test("the reusable discovers `.repo-local` markers and excludes them", () => {
+    const text = fs.readFileSync(REUSABLE, "utf8");
+    // Discovers the marker one level into the skills dir…
+    expect(text, "must find `.repo-local` marker files under DEST").toMatch(
+      /find\s+"\$DEST".*-name\s+\.repo-local/,
+    );
+    // …and turns each into an anchored rsync exclude of that skill dir.
+    expect(text, "must build an anchored --exclude=/<name>/ per marked skill").toMatch(
+      /--exclude=\/\$\{name\}\//,
+    );
+    // The excludes must actually reach the rsync invocation.
+    expect(text, "the rsync call must consume the built excludes array").toMatch(
+      /rsync\s+-a\s+--delete\s+\$\{excludes\[@\]\+"\$\{excludes\[@\]\}"\}/,
+    );
+    // …and must NOT pass --delete-excluded, which would defeat the protection.
+    expect(text, "--delete-excluded would delete the protected skills").not.toContain(
+      "--delete-excluded",
+    );
+  });
+
+  test("the canonical README documents the `.repo-local` opt-out", () => {
+    const text = fs.readFileSync(README, "utf8");
+    expect(text).toContain(".repo-local");
+    expect(text.toLowerCase()).toContain("repo-local skills");
+  });
+});
