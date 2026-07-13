@@ -122,6 +122,11 @@ const PLATFORM_META_SPECS = [
   // files must stay in lockstep. Reads .github/workflows + scripts + scaffold
   // (platform source), so platform-internal / self-CI only.
   "dev-hooks-sync.test.js",
+  // Locks the skills-sync repo-local carve-out: the reusable must keep
+  // rsync --delete yet exclude `.repo-local`-marked skills from transfer AND
+  // deletion. Reads the PLATFORM reusable workflow + skills/README.md source;
+  // platform-internal, self-CI only.
+  "skills-sync.test.js",
   // #123 — locks the visual-regression PROD baseline origin: PROD_BASE in
   // regression-video.spec.js must derive from APEX_DOMAIN (the consumer apex),
   // never a hardcoded site. Reads the platform e2e source; self-CI only.

@@ -1317,7 +1317,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.58)
+## Version history (v0.1.0 → v0.1.63)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1864,6 +1864,21 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   (`cms-publish-loop-host.yml`, …), with `name` only as a fallback when the
   API omits `path`. Lock: the groupByWorkflow unit test feeds run-name-shaped
   `name` values and asserts basename grouping.
+- **v0.1.63** (2026-07-13) — **`skills-sync` no longer clobbers repo-local
+  skills.** The down-sync `rsync -a --delete .cms-platform/skills/ <dest>/` made
+  the site match the platform EXACTLY, so any skill a site owned but the platform
+  didn't ship — adamdaniel.ai's `embeddable-tool-pages` — was deleted on every
+  sync (observed as adamdaniel.ai#2593, which deleted it). The reusable now
+  scans `<dest>` for skill dirs carrying a `.repo-local` marker file and
+  `--exclude`s each from the rsync, protecting them from BOTH overwrite and
+  `--delete` (no `--delete-excluded`). Deliberately NOT a plain "merge": unmarked
+  skills stay platform-authoritative, so a skill REMOVED from the platform is
+  still removed from the site — the marker is what distinguishes "site owns this"
+  from "platform dropped this." The up-sync drift-guard already ignored site-only
+  skills, so no guard change was needed. Lock: `e2e/skills-sync.test.js` asserts
+  the reusable keeps `--delete`, discovers `.repo-local`, builds anchored
+  excludes, and never passes `--delete-excluded`. Consumers opt a skill in by
+  committing `.claude/skills/<name>/.repo-local` (see `skills/README.md`).
 
 ## Consumers
 
