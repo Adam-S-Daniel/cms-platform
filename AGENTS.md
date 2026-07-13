@@ -1317,7 +1317,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.63)
+## Version history (v0.1.0 → v0.1.64)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1879,6 +1879,18 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   the reusable keeps `--delete`, discovers `.repo-local`, builds anchored
   excludes, and never passes `--delete-excluded`. Consumers opt a skill in by
   committing `.claude/skills/<name>/.repo-local` (see `skills/README.md`).
+- **v0.1.64** (2026-07-13) — **`skills-sync` additive drift is no longer
+  silently dropped.** The "did anything change?" gate used `git diff --quiet`,
+  which is BLIND to untracked files. rsync brings NEW platform skills in as
+  untracked dirs, so a purely-additive sync reported "already in sync" and
+  exited without ever committing them — a latent bug the v0.1.63 repo-local fix
+  unmasked (before it, `rsync --delete` always removed the *tracked* repo-local
+  skill, forcing a diff that swept the additions along; adamdaniel.ai#2593 was
+  exactly that). Discovered when a post-v0.1.63 sync of adamdaniel.ai correctly
+  preserved `embeddable-tool-pages` but then added ZERO of the platform's 16
+  canonical skills. The gate now tests `git status --porcelain -- "$DEST"`
+  (untracked-aware). Lock: `e2e/skills-sync.test.js` asserts the drift gate uses
+  `git status --porcelain` and never `git diff --quiet`.
 
 ## Consumers
 
