@@ -29,6 +29,8 @@ jobs:
         include:
           - owner: Adam-S-Daniel
             repo: Adam-S-Daniel/cms-platform
+          - owner: Adam-S-Daniel
+            repo: Adam-S-Daniel/adamdaniel.ai
           - owner: jodidaniel
             repo: jodidaniel/jodidaniel.com
     name: verify ${{ matrix.owner }} PAT
