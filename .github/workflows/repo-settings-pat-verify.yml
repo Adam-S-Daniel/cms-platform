@@ -59,12 +59,16 @@ jobs:
           fail=0
           echo "== Verifying read-only PAT for $OWNER against $REPO =="
 
-          # Positive 1: Administration:Read -> delete_branch_on_merge is non-null.
-          dbm=$(gh api "repos/$REPO" --jq '.delete_branch_on_merge // "null"' 2>/tmp/e1) || true
-          if [ "$dbm" = "true" ] || [ "$dbm" = "false" ]; then
-            echo "PASS  positive read (repo settings): delete_branch_on_merge=$dbm"
+          # Positive 1: Administration:Read -> GET actions/permissions returns 200.
+          # NOTE: do NOT probe delete_branch_on_merge here — it is Contents-gated
+          # (needs contents:read+write to be visible), so it is absent for a
+          # correctly read-only fine-grained PAT even WITH Administration:Read.
+          # actions/permissions requires Administration:Read and has no public
+          # exemption, so it is the reliable positive proof (200 = has it).
+          if gh api "repos/$REPO/actions/permissions" >/dev/null 2>/tmp/e1; then
+            echo "PASS  positive: actions/permissions readable (Administration:Read present + repo in scope)"
           else
-            echo "::error::positive read failed: delete_branch_on_merge='$dbm' (PAT needs Administration:Read)"
+            echo "::error::positive failed: actions/permissions not readable — PAT lacks Administration:Read, or repo not in the token's scope / owner / pending org approval"
             sed 's/^/    /' /tmp/e1 2>/dev/null || true
             fail=1
           fi
