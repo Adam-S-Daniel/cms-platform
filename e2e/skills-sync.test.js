@@ -49,6 +49,34 @@ test.describe("skills-sync repo-local carve-out", () => {
     );
   });
 
+  test("drift detection is untracked-aware (git status --porcelain, not git diff --quiet)", () => {
+    // rsync brings NEW platform skills in as UNTRACKED files. `git diff --quiet`
+    // ignores untracked paths, so an additive-only sync (the common case now
+    // that repo-local skills aren't deleted to force a tracked change) would be
+    // silently dropped. The "already in sync" gate must therefore test
+    // `git status --porcelain`, which sees untracked files too.
+    const lines = fs.readFileSync(REUSABLE, "utf8").split("\n");
+    const exitIdx = lines.findIndex((l) => /already in sync/.test(l));
+    expect(exitIdx, "the sync must have an 'already in sync' early-exit").toBeGreaterThan(-1);
+    // The gate is the nearest preceding `if` line — isolate it so a mention of
+    // either command in a nearby comment doesn't skew the assertions.
+    let gate = "";
+    for (let i = exitIdx; i >= 0; i--) {
+      if (/^\s*if\b/.test(lines[i])) {
+        gate = lines[i];
+        break;
+      }
+    }
+    // The gate must consult untracked-aware `git status --porcelain`…
+    expect(gate, "drift gate must use untracked-aware git status --porcelain").toContain(
+      "git status --porcelain",
+    );
+    // …and must NOT gate on `git diff --quiet`, which is blind to untracked adds.
+    expect(gate, "drift gate must not rely on untracked-blind git diff --quiet").not.toContain(
+      "git diff --quiet",
+    );
+  });
+
   test("the canonical README documents the `.repo-local` opt-out", () => {
     const text = fs.readFileSync(README, "utf8");
     expect(text).toContain(".repo-local");

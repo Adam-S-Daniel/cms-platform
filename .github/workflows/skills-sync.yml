@@ -83,7 +83,14 @@ jobs:
           done < <(find "$DEST" -mindepth 2 -maxdepth 2 -name .repo-local -print0)
           rsync -a --delete ${excludes[@]+"${excludes[@]}"} .cms-platform/skills/ "$DEST"/
           rm -rf .cms-platform
-          if git diff --quiet -- "$DEST"; then
+          # Detect drift with `git status --porcelain`, NOT `git diff --quiet`:
+          # rsync brings NEW platform skills in as UNTRACKED files, and
+          # `git diff` ignores untracked paths — so an additive-only sync (the
+          # common case now that repo-local skills are no longer deleted to
+          # force a tracked change) would be silently dropped and a site would
+          # never receive new platform skills. --porcelain reports untracked,
+          # modified, and deleted paths alike.
+          if [ -z "$(git status --porcelain -- "$DEST")" ]; then
             echo "skills already in sync with ${PLATFORM}@${REF}"; exit 0
           fi
           BRANCH="platform/skills-sync"
