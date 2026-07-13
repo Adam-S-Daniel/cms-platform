@@ -1,0 +1,86 @@
+# Repo settings drift audit (#109) — platform-only; NOT a reusable, NOT
+# copied to examples/site (the manifest governs all three repos from here).
+#
+# THE PROBLEM: GitHub repo settings + rulesets live only in the API/UI — a
+# live flip leaves no commit/PR/review trail (the v0.1.40
+# delete_branch_on_merge incident had no record anywhere), and the two
+# consumers' rulesets skewed with no guard analogous to
+# platform-pin-consistency.
+#
+# THE FIX: repo-settings.yml (repo root) declares the desired state; this
+# daily audit re-reads the live values of all three repos with per-owner
+# READ-ONLY fine-grained PATs and runs scripts/audit-repo-settings.js
+# --issue: drift lands on a single `ci`-labelled tracking issue
+# (fingerprint-deduped comments, auto-close on clean). There is NO write
+# credential in CI — applying the manifest is a human running
+# `node scripts/audit-repo-settings.js --fix --yes` with their own gh auth.
+#
+# The audit run stays GREEN when it files/updates the alert (the issue is
+# the channel); red means the AUDIT itself broke (missing/expired
+# REPO_SETTINGS_READ_* PAT, API failure) — "red needs a human", the
+# audit-scheduled-runs.js contract. This workflow is itself scheduled, so
+# self-scheduled-run-health (cron 47 8 * * *) watches its silent failures.
+name: Repo settings drift audit
+# run-name grammar per e2e/workflow-run-name.test.js: 3 events => branch on
+# github.event_name; only the `github` + `inputs` contexts are available.
+run-name: >-
+  ${{ github.event_name == 'schedule' && format('scheduled — {0}', github.event.schedule)
+     || github.event_name == 'push' && format('manifest change — {0}', github.sha)
+     || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # Daily, off-peak house minute-17 (existing self-crons: 0 7 * * 0,
+    # 17 8, 47 8 — this slot is unused). GitHub throttles crons here
+    # (daily crons measured 4-5h late); the compare is STATELESS, so cron
+    # lag delays a report but can never lose one.
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report drift without opening/updating/closing the tracking issue (true/false)'
+        # Declared string + fromJSON-coerced below — the
+        # self-scheduled-run-health.yml dispatch-typing trap (typed booleans
+        # startup-fail; the schedule/push events short-circuit before
+        # fromJSON ever runs).
+        type: string
+        default: 'false'
+  push:
+    branches: [main]
+    paths: [repo-settings.yml, scripts/audit-repo-settings.js]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: repo-settings-audit
+  cancel-in-progress: false # serialized; never a cancelled half-run (v0.1.27 lesson)
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6.0.2 (2026-01-09)
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0 (2026-04-20)
+        with:
+          node-version: '20'
+      - name: Install harness deps (for the yaml parser; no browsers)
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci
+      - name: Audit repo settings vs manifest
+        env:
+          GH_TOKEN: ${{ github.token }} # issue open/comment/close on THIS repo only
+          # Per-owner READ-ONLY fine-grained PATs (Administration: Read-only) —
+          # a fine-grained PAT can't span two owners, so one secret per owner.
+          # Minting/verification: skills/cms-platform-secrets/SKILL.md
+          # "Platform-repo secrets". A missing/expired one turns this run RED
+          # with a distinct "read path broken" error — by design.
+          REPO_SETTINGS_READ_ADAM_S_DANIEL: ${{ secrets.REPO_SETTINGS_READ_ADAM_S_DANIEL }}
+          REPO_SETTINGS_READ_JODIDANIEL: ${{ secrets.REPO_SETTINGS_READ_JODIDANIEL }}
+        run: |
+          node scripts/audit-repo-settings.js --issue --label ci \
+            ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) && '--dry-run' || '' }}
