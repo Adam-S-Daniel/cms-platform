@@ -39,8 +39,12 @@ test.describe("skills-sync repo-local carve-out", () => {
     expect(text, "the rsync call must consume the built excludes array").toMatch(
       /rsync\s+-a\s+--delete\s+\$\{excludes\[@\]\+"\$\{excludes\[@\]\}"\}/,
     );
-    // …and must NOT pass --delete-excluded, which would defeat the protection.
-    expect(text, "--delete-excluded would delete the protected skills").not.toContain(
+    // …and the rsync COMMAND must NOT pass --delete-excluded, which would defeat
+    // the protection. Scope to the invocation line so a mention in a nearby
+    // comment doesn't trip this.
+    const rsyncCmd = text.split("\n").find((l) => /^\s*rsync\s/.test(l)) || "";
+    expect(rsyncCmd, "found an rsync invocation to check").toMatch(/rsync\s/);
+    expect(rsyncCmd, "--delete-excluded would delete the protected skills").not.toContain(
       "--delete-excluded",
     );
   });
