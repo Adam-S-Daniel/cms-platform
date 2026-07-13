@@ -107,6 +107,64 @@ test.describe("repo-settings.yml — manifest shape (#109)", () => {
     }
   });
 
+  test("every actions_permissions key is a MANAGED_ACTIONS_PERMISSION_KEY (the --fix PUT SSOT)", () => {
+    const { MANAGED_ACTIONS_PERMISSION_KEYS } = loadScript();
+    for (const key of Object.keys(data.actions_permissions_defaults || {})) {
+      expect(
+        MANAGED_ACTIONS_PERMISSION_KEYS,
+        `actions_permissions_defaults.${key} is not in MANAGED_ACTIONS_PERMISSION_KEYS (scripts/audit-repo-settings.js)`,
+      ).toContain(key);
+    }
+    for (const [repo, entry] of Object.entries(data.repos)) {
+      for (const key of Object.keys((entry && entry.actions_permissions) || {})) {
+        expect(
+          MANAGED_ACTIONS_PERMISSION_KEYS,
+          `repos.${repo}.actions_permissions.${key} is not in MANAGED_ACTIONS_PERMISSION_KEYS`,
+        ).toContain(key);
+      }
+    }
+  });
+
+  test("actions_permissions: SHA pinning required + the SHORT fork-approval form on all three", () => {
+    // Locks the desired baseline (#109 Actions-permissions extension): the two
+    // leaves the audit enforces, and specifically the SHORT
+    // `all_external_contributors` value the live API returns for "all outside
+    // collaborators" — NOT the long require_approval_for_all_outside_
+    // collaborators form (the value the task explicitly flagged as wrong).
+    const { effectiveActionsPermissions, loadManifest } = loadScript();
+    const manifest = loadManifest(MANIFEST_PATH);
+    for (const repo of CANONICAL_REPOS) {
+      const ap = effectiveActionsPermissions(manifest, repo);
+      expect(ap.sha_pinning_required, `${repo} must require workflow SHA pinning`).toBe(true);
+      expect(
+        ap.approval_policy,
+        `${repo} fork-PR approval must be the short all_external_contributors form`,
+      ).toBe("all_external_contributors");
+      expect(ap.approval_policy).not.toBe("require_approval_for_all_outside_collaborators");
+    }
+  });
+
+  test("every actions_permissions leaf carries a `# why:` comment", () => {
+    const defaults = doc.get("actions_permissions_defaults", true);
+    expect(mapPairs(defaults).length).toBeGreaterThan(0);
+    mapPairs(defaults).forEach((pair, i) => {
+      expect(
+        pairCommentText(pair, defaults, i),
+        `actions_permissions_defaults.${pair.key} has no \`# why:\` comment`,
+      ).toMatch(/why:/);
+    });
+    const repos = doc.get("repos", true);
+    for (const repoPair of mapPairs(repos)) {
+      const ap = repoPair.value && repoPair.value.get && repoPair.value.get("actions_permissions", true);
+      mapPairs(ap).forEach((pair, i) => {
+        expect(
+          pairCommentText(pair, ap, i),
+          `repos.${repoPair.key}.actions_permissions.${pair.key} has no \`# why:\` comment`,
+        ).toMatch(/why:/);
+      });
+    }
+  });
+
   test("every settings leaf carries a `# why:` comment (the captured rationale)", () => {
     const defaults = doc.get("settings_defaults", true);
     mapPairs(defaults).forEach((pair, i) => {

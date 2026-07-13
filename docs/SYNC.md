@@ -119,6 +119,26 @@ skewed with no guard analogous to `platform-pin-consistency`.
   `e2e/repo-settings-manifest.test.js`, which also locks every settings key
   to the script's `MANAGED_REPO_KEYS` (the SSOT of what `--fix` may PATCH)
   and cross-locks the `release.yml` fan-out consumers to the managed set.
+- **Actions permissions** are a THIRD managed surface —
+  `actions_permissions_defaults` (+ optional per-repo `actions_permissions`
+  overrides), keyed to `MANAGED_ACTIONS_PERMISSION_KEYS`. These are NOT part
+  of `repos/{owner}/{repo}`; each is its own GET/PUT endpoint:
+  - `sha_pinning_required` (`true`) →
+    `repos/{owner}/{repo}/actions/permissions` — require every workflow
+    `uses:` to be pinned to a full-length commit SHA. The `--fix` PUT **echoes
+    the live `enabled` + `allowed_actions`** back alongside it, so enforcing
+    the pin can never disable Actions or narrow the allowed-actions policy.
+  - `approval_policy` (`all_external_contributors` — the SHORT form the live
+    API returns for "all outside collaborators", **not**
+    `require_approval_for_all_outside_collaborators`) →
+    `repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval` —
+    require approval before any outside collaborator's fork PR runs workflows.
+    **This endpoint returns HTTP 422 on a private repo** ("not allowed for
+    private repositories"); the audit treats that as an operational **skip**
+    (informational, never drift). All three repos are public today, so the
+    value applies. As-found 2026-07-13 the consumers already require SHA
+    pinning; cms-platform did not, and all three sat at
+    `first_time_contributors` — the drift the next `--fix` corrects.
 - `scripts/audit-repo-settings.js` — read-only drift audit (exit 2 on
   drift), `--issue` tracking-issue lifecycle (single `ci`-labelled issue
   found via a hidden marker, fingerprint-deduped comments, auto-close on a
@@ -155,4 +175,6 @@ silent.
 
 Actions **variables/secrets stay out of scope** here — they are owned by
 `scripts/set-repo-variables.sh` + the `cms-platform-secrets` skill (which
-cross-reference back to `repo-settings.yml` for settings).
+cross-reference back to `repo-settings.yml` for settings). Actions
+**permissions** (SHA pinning, fork-PR approval) are settings, not
+variables/secrets, and ARE managed here (see above).

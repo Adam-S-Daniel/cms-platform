@@ -18,7 +18,13 @@
  *   - repo-settings.yml (repo root) declares the desired state, every leaf
  *     with a `# why:` comment. Effective flags per repo = shallow
  *     merge(settings_defaults, repos.<r>.settings); ruleset bodies mirror
- *     the REST ruleset PUT payload and live in a shared ruleset_library.
+ *     the REST ruleset PUT payload and live in a shared ruleset_library;
+ *     Actions-permissions (sha_pinning_required + fork-PR approval_policy) are
+ *     a THIRD surface — their own GET/PUT endpoints (NOT repos/{owner}/{repo}),
+ *     shallow merge(actions_permissions_defaults, repos.<r>.actions_permissions),
+ *     keyed to MANAGED_ACTIONS_PERMISSION_KEYS. The sha_pinning PUT echoes the
+ *     live enabled/allowed_actions; the fork-PR endpoint 422s on a PRIVATE repo
+ *     and is treated as an operational SKIP (informational, never drift).
  *   - default mode: READ-ONLY drift scan. Exit 0 clean / 2 drift / 1
  *     operational failure. Drift is a finding, not a breakage.
  *   - --issue: the audit-scheduled-runs.js tracking-issue lifecycle on the
@@ -108,6 +114,26 @@ const MANAGED_REPO_KEYS = [
 // default-branch change is a human-paced migration, never an automated
 // revert. Drift on one prints "manual-only key" and stays a finding.
 const FIX_FORBIDDEN_KEYS = ["default_branch"];
+
+// The SSOT of Actions-permissions keys the manifest may declare and --fix may
+// PUT. These are NOT part of repos/{owner}/{repo} — each is its OWN GET/PUT
+// endpoint, so they are a surface SEPARATE from MANAGED_REPO_KEYS (audited via
+// diffActionsPermissions, applied via actionsPuts, never mixed into the
+// flag-PATCH body). loadManifest() hard-fails on any other actions key.
+//   - sha_pinning_required -> GET/PUT ACTIONS_PERMISSIONS_ENDPOINT. The PUT
+//     ECHOES the live `enabled` + `allowed_actions` back alongside the desired
+//     sha_pinning_required, so enforcing it can never disable Actions or narrow
+//     the allowed-actions policy as a side effect.
+//   - approval_policy -> GET/PUT FORK_PR_APPROVAL_ENDPOINT. This endpoint
+//     returns HTTP 422 ("not allowed for private repositories") on a PRIVATE
+//     repo; fetchLive marks it {skipped:true} and diffActionsPermissions turns
+//     that into an operational SKIP (informational, never drift) — matching the
+//     read/exit contract. The correct value for "all outside collaborators" is
+//     the SHORT form `all_external_contributors` (verified against the live
+//     API — NOT `require_approval_for_all_outside_collaborators`).
+const MANAGED_ACTIONS_PERMISSION_KEYS = ["sha_pinning_required", "approval_policy"];
+const ACTIONS_PERMISSIONS_ENDPOINT = "actions/permissions";
+const FORK_PR_APPROVAL_ENDPOINT = "actions/permissions/fork-pr-contributor-approval";
 
 // GitHub's branch/tag ruleset rule types (REST "rules" enum) — the manifest
 // lint rejects a typo'd rule type before it ever reaches a PUT.
@@ -237,6 +263,17 @@ function deepEqual(a, b) {
 function effectiveSettings(manifest, repo) {
   const entry = (manifest.repos || {})[repo] || {};
   return { ...(manifest.settings_defaults || {}), ...(entry.settings || {}) };
+}
+
+// Effective Actions-permissions for a repo: shallow merge of the shared
+// defaults and the repo's own overrides — only MANAGED_ACTIONS_PERMISSION_KEYS
+// are ever compared or PUT.
+function effectiveActionsPermissions(manifest, repo) {
+  const entry = (manifest.repos || {})[repo] || {};
+  return {
+    ...(manifest.actions_permissions_defaults || {}),
+    ...(entry.actions_permissions || {}),
+  };
 }
 
 // Desired rulesets for a repo: { liveName -> library body } (the map key is
@@ -440,6 +477,56 @@ function diffRepo({ repo, desiredSettings, desiredRulesets: desired, liveRepo, l
   return { findings, informational };
 }
 
+// Actions-permissions diff — a surface SEPARATE from the repo-flag keys (two
+// standalone GET/PUT endpoints, not repos/{owner}/{repo}). Only the
+// MANAGED_ACTIONS_PERMISSION_KEYS the manifest declares are compared.
+//   - sha_pinning_required (ACTIONS_PERMISSIONS_ENDPOINT): plain scalar compare.
+//   - approval_policy (FORK_PR_APPROVAL_ENDPOINT): when fetchLive marked the
+//     endpoint {skipped:true} (HTTP 422 on a PRIVATE repo), this is an
+//     operational SKIP — an informational line, NEVER a drift finding.
+// `live` is fetchLive's { permissions, forkApproval } bundle.
+function diffActionsPermissions(repo, desired, live, findings, informational) {
+  const perms = (live && live.permissions) || {};
+  const fork = (live && live.forkApproval) || {};
+  if ("sha_pinning_required" in (desired || {})) {
+    const liveVal = perms.sha_pinning_required;
+    if (!deepEqual(liveVal, desired.sha_pinning_required)) {
+      findings.push({
+        repo,
+        kind: "actions-permission-drift",
+        key: "sha_pinning_required",
+        endpoint: ACTIONS_PERMISSIONS_ENDPOINT,
+        live: liveVal === undefined ? null : liveVal,
+        desired: desired.sha_pinning_required,
+      });
+    }
+  }
+  if ("approval_policy" in (desired || {})) {
+    if (fork.skipped) {
+      informational.push({
+        repo,
+        kind: "actions-permission-skipped",
+        key: "approval_policy",
+        endpoint: FORK_PR_APPROVAL_ENDPOINT,
+        reason: fork.reason || "endpoint unavailable",
+        fixSkip: true,
+      });
+    } else {
+      const liveVal = fork.approval_policy;
+      if (!deepEqual(liveVal, desired.approval_policy)) {
+        findings.push({
+          repo,
+          kind: "actions-permission-drift",
+          key: "approval_policy",
+          endpoint: FORK_PR_APPROVAL_ENDPOINT,
+          live: liveVal === undefined ? null : liveVal,
+          desired: desired.approval_policy,
+        });
+      }
+    }
+  }
+}
+
 // Order-stable drift fingerprint: sha256 over the SORTED canonical findings.
 // Stored in the tracking issue so persistent, unchanged drift is commented
 // exactly once (the run-ids dedupe analog).
@@ -470,6 +557,12 @@ function describeFinding(f) {
       `\`${JSON.stringify(f.desired)}\`${f.manualOnly ? " (manual-only key — --fix will not touch it)" : ""}`
     );
   }
+  if (f.kind === "actions-permission-drift") {
+    return (
+      `actions permission \`${f.key}\` (${f.endpoint}): live ` +
+      `\`${JSON.stringify(f.live)}\` -> manifest \`${JSON.stringify(f.desired)}\``
+    );
+  }
   if (f.kind === "ruleset-missing") return `ruleset \`${f.ruleset}\`: declared in the manifest, absent live`;
   if (f.kind === "ruleset-unmanaged") {
     return `ruleset \`${f.ruleset}\`: live but NOT in the manifest (unmanaged — declare it or delete it by hand; --fix never deletes)`;
@@ -482,6 +575,12 @@ function describeFinding(f) {
 }
 
 function describeInformational(f) {
+  if (f.kind === "actions-permission-skipped") {
+    return (
+      `actions permission \`${f.key}\` (${f.endpoint}): SKIPPED — ${f.reason} ` +
+      `(operational skip on a private repo, not drift; --fix leaves it untouched)`
+    );
+  }
   if (f.kind === "ruleset-unknown-field") {
     return (
       `ruleset \`${f.ruleset}\`: live body carries unknown field \`${f.key}\` ` +
@@ -570,6 +669,13 @@ function loadManifest(manifestPath) {
         throw new Error(`${manifestPath}: repos.${repo}.settings.${key} is not a MANAGED_REPO_KEY`);
       }
     }
+    for (const key of Object.keys((entry && entry.actions_permissions) || {})) {
+      if (!MANAGED_ACTIONS_PERMISSION_KEYS.includes(key)) {
+        throw new Error(
+          `${manifestPath}: repos.${repo}.actions_permissions.${key} is not a MANAGED_ACTIONS_PERMISSION_KEY`,
+        );
+      }
+    }
     for (const [name, libName] of Object.entries((entry && entry.rulesets) || {})) {
       if (!lib[libName]) {
         throw new Error(`${manifestPath}: repos.${repo}.rulesets.${name} references unknown ruleset_library entry "${libName}"`);
@@ -579,6 +685,13 @@ function loadManifest(manifestPath) {
   for (const key of Object.keys(doc.settings_defaults || {})) {
     if (!MANAGED_REPO_KEYS.includes(key)) {
       throw new Error(`${manifestPath}: settings_defaults.${key} is not a MANAGED_REPO_KEY`);
+    }
+  }
+  for (const key of Object.keys(doc.actions_permissions_defaults || {})) {
+    if (!MANAGED_ACTIONS_PERMISSION_KEYS.includes(key)) {
+      throw new Error(
+        `${manifestPath}: actions_permissions_defaults.${key} is not a MANAGED_ACTIONS_PERMISSION_KEY`,
+      );
     }
   }
   return doc;
@@ -630,7 +743,40 @@ function fetchLive(repo, token) {
     if (r.source_type && r.source_type !== "Repository") continue;
     liveRulesets.push(JSON.parse(ghApi(`repos/${repo}/rulesets/${r.id}`, { token })));
   }
-  return { liveRepo, liveRulesets };
+  return { liveRepo, liveRulesets, liveActionsPermissions: fetchActionsPermissions(repo, token) };
+}
+
+// The Actions-permissions surface (two standalone endpoints). Fails LOUD like
+// fetchLive: a response to actions/permissions missing the admin-visible
+// `enabled` boolean means the token lacks the Actions/Administration read
+// surface (an OPERATIONAL failure, exit 1 — never silent drift against
+// undefined). The fork-pr-contributor-approval endpoint returns HTTP 422 on a
+// PRIVATE repo ("not allowed for private repositories"); that ONE case is an
+// operational SKIP ({skipped:true}), distinguished from any other error which
+// re-throws as an operational failure.
+function fetchActionsPermissions(repo, token) {
+  const permissions = JSON.parse(ghApi(`repos/${repo}/${ACTIONS_PERMISSIONS_ENDPOINT}`, { token }));
+  if (typeof permissions.enabled !== "boolean") {
+    throw new Error(
+      `repos/${repo}/${ACTIONS_PERMISSIONS_ENDPOINT} response has no 'enabled' boolean — ` +
+        `the token lacks "Administration: Read" (Actions permissions) on ${repo}`,
+    );
+  }
+  let forkApproval;
+  try {
+    forkApproval = JSON.parse(ghApi(`repos/${repo}/${FORK_PR_APPROVAL_ENDPOINT}`, { token }));
+  } catch (e) {
+    const text = `${(e && e.stderr) || ""}${(e && e.message) || ""}`;
+    if (/HTTP 422|not allowed for private repositor/i.test(text)) {
+      forkApproval = {
+        skipped: true,
+        reason: "fork-pr-contributor-approval endpoint returns HTTP 422 on a private repo",
+      };
+    } else {
+      throw e;
+    }
+  }
+  return { permissions, forkApproval };
 }
 
 function findTrackingIssue(label) {
@@ -700,6 +846,15 @@ function scanRepos(manifest, repos, fixMode) {
       liveRepo: live.liveRepo,
       liveRulesets: live.liveRulesets,
     });
+    // The Actions-permissions surface is diffed SEPARATELY (own endpoints) and
+    // its findings/informational merged into the same result buckets.
+    diffActionsPermissions(
+      repo,
+      effectiveActionsPermissions(manifest, repo),
+      live.liveActionsPermissions,
+      diff.findings,
+      diff.informational,
+    );
     results.push({ repo, ...diff, ...live });
   }
   return results;
@@ -708,11 +863,16 @@ function scanRepos(manifest, repos, fixMode) {
 function printReport(results) {
   for (const r of results) {
     const flags = r.findings.filter((f) => f.kind === "flag-drift");
-    const rulesets = r.findings.filter((f) => f.kind !== "flag-drift");
+    const actions = r.findings.filter((f) => f.kind === "actions-permission-drift");
+    const rulesets = r.findings.filter(
+      (f) => f.kind !== "flag-drift" && f.kind !== "actions-permission-drift",
+    );
     if (r.findings.length === 0) {
-      console.log(`== ${r.repo}: OK (flags + ${r.liveRulesets.length} ruleset(s) match)`);
+      console.log(`== ${r.repo}: OK (flags + ${r.liveRulesets.length} ruleset(s) + actions permissions match)`);
     } else {
-      console.log(`== ${r.repo}: DRIFT — ${flags.length} flag(s), ${rulesets.length} ruleset finding(s)`);
+      console.log(
+        `== ${r.repo}: DRIFT — ${flags.length} flag(s), ${actions.length} actions-permission(s), ${rulesets.length} ruleset finding(s)`,
+      );
       for (const f of r.findings) console.log(`::error title=repo-settings drift::${r.repo}: ${describeFinding(f)}`);
     }
     for (const f of r.informational) console.log(`::notice title=repo-settings::${r.repo}: ${describeInformational(f)}`);
@@ -843,15 +1003,42 @@ function buildFixPlan(manifest, results) {
       .filter((f) => f.kind === "ruleset-missing")
       .map((f) => ({ name: f.ruleset, body: { name: f.ruleset, ...desired[f.ruleset] } }));
     const unmanaged = r.findings.filter((f) => f.kind === "ruleset-unmanaged").map((f) => f.ruleset);
+    // Actions-permissions PUTs — a surface SEPARATE from the flag PATCH body.
+    // sha_pinning_required ECHOES the live enabled/allowed_actions so the PUT
+    // can never disable Actions or narrow the allowed-actions policy;
+    // approval_policy PUTs only its own field.
+    const livePerms = (r.liveActionsPermissions && r.liveActionsPermissions.permissions) || {};
+    const actionsPuts = [];
+    for (const f of r.findings) {
+      if (f.kind !== "actions-permission-drift") continue;
+      if (f.key === "sha_pinning_required") {
+        actionsPuts.push({
+          endpoint: `repos/${r.repo}/${ACTIONS_PERMISSIONS_ENDPOINT}`,
+          key: f.key,
+          body: {
+            enabled: livePerms.enabled,
+            allowed_actions: livePerms.allowed_actions,
+            sha_pinning_required: f.desired,
+          },
+        });
+      } else if (f.key === "approval_policy") {
+        actionsPuts.push({
+          endpoint: `repos/${r.repo}/${FORK_PR_APPROVAL_ENDPOINT}`,
+          key: f.key,
+          body: { approval_policy: f.desired },
+        });
+      }
+    }
     if (
       Object.keys(patchBody).length ||
       manualOnly.length ||
       puts.length ||
       posts.length ||
       skipped.length ||
-      unmanaged.length
+      unmanaged.length ||
+      actionsPuts.length
     ) {
-      plan.push({ repo: r.repo, patchBody, manualOnly, puts, posts, skipped, unmanaged });
+      plan.push({ repo: r.repo, patchBody, manualOnly, puts, posts, skipped, unmanaged, actionsPuts });
     }
   }
   return plan;
@@ -874,6 +1061,12 @@ function printFixPlan(plan) {
     for (const put of p.puts) {
       console.log(`   PUT repos/${p.repo}/rulesets/${put.id} ("${put.name}") with the manifest body:`);
       console.log(`     ${JSON.stringify(sortRuleset(put.body))}`);
+    }
+    for (const put of p.actionsPuts || []) {
+      console.log(
+        `   PUT ${put.endpoint}  ${put.key} -> ${JSON.stringify(put.body[put.key])}` +
+          ` (full body: ${JSON.stringify(put.body)})`,
+      );
     }
     for (const post of p.posts) {
       console.log(`   POST repos/${p.repo}/rulesets ("${post.name}") — declared but absent live:`);
@@ -901,6 +1094,9 @@ function applyFixPlan(plan) {
     }
     for (const post of p.posts) {
       applyWrite(`repos/${p.repo}/rulesets`, "POST", post.body);
+    }
+    for (const put of p.actionsPuts || []) {
+      applyWrite(put.endpoint, "PUT", put.body);
     }
   }
 }
@@ -1034,6 +1230,9 @@ module.exports = {
   ISSUE_REPO,
   MANAGED_REPO_KEYS,
   FIX_FORBIDDEN_KEYS,
+  MANAGED_ACTIONS_PERMISSION_KEYS,
+  ACTIONS_PERMISSIONS_ENDPOINT,
+  FORK_PR_APPROVAL_ENDPOINT,
   KNOWN_RULE_TYPES,
   RULESET_SERVER_KEYS,
   RULESET_BODY_KEYS,
@@ -1045,11 +1244,13 @@ module.exports = {
   deepEqual,
   loadManifest,
   effectiveSettings,
+  effectiveActionsPermissions,
   desiredRulesets,
   sortRuleset,
   normalizeRuleset,
   diffRuleset,
   diffRepo,
+  diffActionsPermissions,
   fingerprint,
   fingerprintBlock,
   extractReportedFingerprints,

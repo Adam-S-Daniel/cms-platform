@@ -27,6 +27,17 @@
 # payload (target/enforcement/conditions/rules/bypass_actors) so --fix needs
 # no translation; `repos.<repo>.rulesets` maps the LIVE ruleset name to a
 # `ruleset_library` entry.
+#
+# ACTIONS PERMISSIONS (settings, NOT the variables/secrets above) are a THIRD
+# managed surface: effective per repo = shallow merge(actions_permissions_
+# defaults, repos.<repo>.actions_permissions), every key in the script's
+# MANAGED_ACTIONS_PERMISSION_KEYS. Unlike the repo flags these do NOT live on
+# `repos/{owner}/{repo}` — each is its own GET/PUT endpoint:
+#   - sha_pinning_required -> repos/{owner}/{repo}/actions/permissions (the PUT
+#     echoes the live `enabled` + `allowed_actions`, never a bare partial PUT).
+#   - approval_policy -> repos/{owner}/{repo}/actions/permissions/
+#     fork-pr-contributor-approval (HTTP 422 on a PRIVATE repo -> the audit
+#     SKIPS it as an operational skip, never drift).
 version: 1
 
 settings_defaults:
@@ -81,6 +92,33 @@ settings_defaults:
   # why: bots commit via the API (Decap, the loops, platform-bump) — a
   # signoff requirement would break every automated write path.
   web_commit_signoff_required: false
+
+# Actions-permissions defaults (the THIRD managed surface — own GET/PUT
+# endpoints, keyed to MANAGED_ACTIONS_PERMISSION_KEYS; see the header). Both
+# leaves are enforced identically on all three repos, so they live only here.
+actions_permissions_defaults:
+  # why: require every workflow `uses:` to be pinned to a full-length commit
+  # SHA — the repo-level enforcement of AGENTS.md's "SHA-pin every workflow
+  # uses:" policy (and the pin-actions-to-sha skill); a tag/branch ref can be
+  # silently re-pointed at malicious code. Managed on GET/PUT
+  # repos/{owner}/{repo}/actions/permissions; --fix's PUT echoes the live
+  # `enabled` + `allowed_actions` so enforcing this can never disable Actions or
+  # narrow the allowed-actions policy as a side effect. As-found 2026-07-13:
+  # adamdaniel.ai + jodidaniel.com already true; cms-platform false — the drift
+  # this leaf corrects on the next `--fix`.
+  sha_pinning_required: true
+  # why: require approval before ANY outside collaborator's fork PR runs
+  # workflows (not just first-time contributors) — closes the fork-PR
+  # pwn-request / secrets-exfil window. Managed on GET/PUT
+  # repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval. The
+  # SHORT form `all_external_contributors` is the value the live API returns for
+  # "all outside collaborators" (verified 2026-07-13 — NOT the long
+  # `require_approval_for_all_outside_collaborators` form). GUARD: this endpoint
+  # returns HTTP 422 on a PRIVATE repo ("not allowed for private repositories")
+  # — the audit treats that as an operational SKIP, never drift; all three repos
+  # are currently public so the value applies. As-found 2026-07-13 on all three:
+  # first_time_contributors — the drift this leaf corrects on the next `--fix`.
+  approval_policy: all_external_contributors
 
 ruleset_library:
   # why: = live cms-platform ruleset 17169281 as-found 2026-07-10 — protects

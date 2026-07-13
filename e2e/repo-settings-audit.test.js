@@ -55,6 +55,34 @@ const LIVE = {
   },
 };
 
+// repo -> its captured live Actions-permissions fixtures (GET
+// actions/permissions + GET .../fork-pr-contributor-approval, 2026-07-13).
+const LIVE_ACTIONS = {
+  "Adam-S-Daniel/cms-platform": {
+    permissions: "cms-platform.actions-permissions.json",
+    fork: "cms-platform.fork-pr-approval.json",
+  },
+  "Adam-S-Daniel/adamdaniel.ai": {
+    permissions: "adamdaniel.actions-permissions.json",
+    fork: "adamdaniel.fork-pr-approval.json",
+  },
+  "jodidaniel/jodidaniel.com": {
+    permissions: "jodidaniel.actions-permissions.json",
+    fork: "jodidaniel.fork-pr-approval.json",
+  },
+};
+
+// Build the fetchLive-shaped { permissions, forkApproval } bundle from the
+// captures; `mutate.permissions` / `mutate.forkApproval` override for the
+// negative cases (e.g. a {skipped:true} private-repo fork endpoint).
+function liveActions(repo, mutate = {}) {
+  const m = LIVE_ACTIONS[repo];
+  return {
+    permissions: { ...fixture(m.permissions), ...(mutate.permissions || {}) },
+    forkApproval: mutate.forkApproval || fixture(m.fork),
+  };
+}
+
 function diffAgainstFixtures(script, manifest, repo, mutate = {}) {
   const live = LIVE[repo];
   const liveRepo = { ...fixture(live.repo), ...(mutate.repo || {}) };
@@ -339,5 +367,163 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).not.toBe(0);
     expect(res.stderr).toMatch(/--issue audits ALL managed repos/);
     expect(res.stderr).toMatch(/drop --repo/);
+  });
+
+  // ── Actions-permissions surface (#109 extension) ──────────────────────────
+  // A THIRD managed surface (two standalone GET/PUT endpoints, NOT
+  // repos/{owner}/{repo}) — sha_pinning_required + fork-PR approval_policy.
+  // Unlike the flags/rulesets ANCHOR, the desired baseline INTENTIONALLY
+  // differs from the 2026-07-13 captures: enforcing it is the whole point, so
+  // these tests lock the EXACT as-found drift a `--fix` will correct.
+  test("(i) actions permissions drift EXACTLY to the desired baseline on every repo", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    // cms-platform: sha_pinning false->true AND fork first_time->all_external.
+    // consumers: sha already true, only the fork policy drifts.
+    const expectByRepo = {
+      "Adam-S-Daniel/cms-platform": ["approval_policy", "sha_pinning_required"],
+      "Adam-S-Daniel/adamdaniel.ai": ["approval_policy"],
+      "jodidaniel/jodidaniel.com": ["approval_policy"],
+    };
+    for (const repo of Object.keys(LIVE_ACTIONS)) {
+      const findings = [];
+      const informational = [];
+      script.diffActionsPermissions(
+        repo,
+        script.effectiveActionsPermissions(manifest, repo),
+        liveActions(repo),
+        findings,
+        informational,
+      );
+      expect(findings.map((f) => f.key).sort(), `${repo}: ${JSON.stringify(findings)}`).toEqual(
+        expectByRepo[repo],
+      );
+      expect(findings.every((f) => f.kind === "actions-permission-drift")).toBe(true);
+      expect(informational).toEqual([]);
+    }
+  });
+
+  test("(j) sha_pinning_required drift is endpoint-tagged (the actions/permissions surface)", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [];
+    script.diffActionsPermissions(
+      repo,
+      script.effectiveActionsPermissions(manifest, repo),
+      liveActions(repo),
+      findings,
+      [],
+    );
+    expect(findings.find((f) => f.key === "sha_pinning_required")).toEqual({
+      repo,
+      kind: "actions-permission-drift",
+      key: "sha_pinning_required",
+      endpoint: "actions/permissions",
+      live: false,
+      desired: true,
+    });
+    expect(findings.find((f) => f.key === "approval_policy").endpoint).toBe(
+      "actions/permissions/fork-pr-contributor-approval",
+    );
+  });
+
+  test("(k) a private-repo fork-approval 422 is an operational SKIP, never drift", () => {
+    // GUARD: the fork endpoint 422s on a PRIVATE repo. fetchLive marks it
+    // {skipped:true}; the diff must emit an informational line and NO
+    // approval_policy finding, while sha_pinning_required still diffs normally.
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/adamdaniel.ai";
+    const live = liveActions(repo, {
+      permissions: { sha_pinning_required: false }, // force a sha drift too
+      forkApproval: { skipped: true, reason: "private-repo 422" },
+    });
+    const findings = [];
+    const informational = [];
+    script.diffActionsPermissions(
+      repo,
+      script.effectiveActionsPermissions(manifest, repo),
+      live,
+      findings,
+      informational,
+    );
+    expect(findings.map((f) => f.key)).toEqual(["sha_pinning_required"]);
+    expect(informational).toEqual([
+      {
+        repo,
+        kind: "actions-permission-skipped",
+        key: "approval_policy",
+        endpoint: "actions/permissions/fork-pr-contributor-approval",
+        reason: "private-repo 422",
+        fixSkip: true,
+      },
+    ]);
+  });
+
+  test("(l) buildFixPlan: sha PUT ECHOES enabled+allowed_actions; fork PUT sets approval_policy", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const liveAP = liveActions(repo); // sha:false, fork:first_time_contributors
+    const findings = [];
+    const informational = [];
+    script.diffActionsPermissions(
+      repo,
+      script.effectiveActionsPermissions(manifest, repo),
+      liveAP,
+      findings,
+      informational,
+    );
+    const plan = script.buildFixPlan(manifest, [
+      {
+        repo,
+        findings,
+        informational,
+        liveRepo: fixture("cms-platform.repo.json"),
+        liveRulesets: [fixture("cms-platform.ruleset-main.json")],
+        liveActionsPermissions: liveAP,
+      },
+    ]);
+    expect(plan.length).toBe(1);
+    // Actions PUTs never leak into the flag PATCH body (separate surface).
+    expect(plan[0].patchBody).toEqual({});
+    const sha = plan[0].actionsPuts.find((p) => p.key === "sha_pinning_required");
+    expect(sha.endpoint).toBe("repos/Adam-S-Daniel/cms-platform/actions/permissions");
+    // The live enabled + allowed_actions are echoed back so the PUT can't
+    // disable Actions or narrow the allowed-actions policy.
+    expect(sha.body).toEqual({
+      enabled: true,
+      allowed_actions: "all",
+      sha_pinning_required: true,
+    });
+    const fork = plan[0].actionsPuts.find((p) => p.key === "approval_policy");
+    expect(fork.endpoint).toBe(
+      "repos/Adam-S-Daniel/cms-platform/actions/permissions/fork-pr-contributor-approval",
+    );
+    expect(fork.body).toEqual({ approval_policy: "all_external_contributors" });
+  });
+
+  test("(m) a repo already at the desired actions baseline yields NO actions findings", () => {
+    // Prove the diff is genuinely two-sided: feed live values that equal the
+    // manifest and expect zero drift (the anti-false-positive proof).
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/adamdaniel.ai";
+    const live = liveActions(repo, {
+      permissions: { sha_pinning_required: true },
+      forkApproval: { approval_policy: "all_external_contributors" },
+    });
+    const findings = [];
+    const informational = [];
+    script.diffActionsPermissions(
+      repo,
+      script.effectiveActionsPermissions(manifest, repo),
+      live,
+      findings,
+      informational,
+    );
+    expect(findings).toEqual([]);
+    expect(informational).toEqual([]);
   });
 });
