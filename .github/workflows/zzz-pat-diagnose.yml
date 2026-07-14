@@ -1,0 +1,56 @@
+# TEMPORARY experiment: does Contents:Read expose merge-setting fields?
+# Adam-S-Daniel PAT now has Contents:Read (TEST); jodidaniel PAT unchanged (CONTROL).
+# Informational; always exits 0. Deleted after use.
+name: zzz PAT diagnose
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/zzz-pat-diagnose.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - owner: Adam-S-Daniel
+            repo: Adam-S-Daniel/cms-platform
+            role: TEST (Contents:Read added)
+          - owner: Adam-S-Daniel
+            repo: Adam-S-Daniel/adamdaniel.ai
+            role: TEST (Contents:Read added)
+          - owner: jodidaniel
+            repo: jodidaniel/jodidaniel.com
+            role: CONTROL (no Contents)
+    name: diagnose ${{ matrix.repo }}
+    env:
+      TOKEN_ADAM_S_DANIEL: ${{ secrets.REPO_SETTINGS_READ_ADAM_S_DANIEL }}
+      TOKEN_JODIDANIEL: ${{ secrets.REPO_SETTINGS_READ_JODIDANIEL }}
+      OWNER: ${{ matrix.owner }}
+      REPO: ${{ matrix.repo }}
+      ROLE: ${{ matrix.role }}
+    steps:
+      - name: Diagnose ${{ matrix.repo }}
+        run: |
+          set +e
+          case "$OWNER" in
+            Adam-S-Daniel) GH_TOKEN="$TOKEN_ADAM_S_DANIEL" ;;
+            jodidaniel)    GH_TOKEN="$TOKEN_JODIDANIEL" ;;
+          esac
+          export GH_TOKEN
+          gh api "repos/$REPO" >/tmp/repo.json 2>/tmp/e
+          echo "############ $REPO  [$ROLE] ############"
+          echo "repo GET exit=$?  $( [ -s /tmp/e ] && head -c 120 /tmp/e | tr '\n' ' ' )"
+          echo ".permissions           = $(jq -c '.permissions' /tmp/repo.json 2>&1)"
+          echo "has(delete_branch..)   = $(jq '. | has("delete_branch_on_merge")' /tmp/repo.json 2>&1)"
+          echo "delete_branch_on_merge = $(jq '.delete_branch_on_merge' /tmp/repo.json 2>&1)"
+          echo "allow_squash_merge     = $(jq '.allow_squash_merge' /tmp/repo.json 2>&1)"
+          echo "allow_auto_merge       = $(jq '.allow_auto_merge' /tmp/repo.json 2>&1)"
+          echo "########################################"
+          exit 0
