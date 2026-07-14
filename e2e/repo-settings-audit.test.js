@@ -72,6 +72,38 @@ const LIVE_ACTIONS = {
   },
 };
 
+// The repo MERGE-SETTING keys GitHub gates behind the CONTENTS permission
+// (read+write) — ENTIRELY ABSENT from the repo object a correctly read-only
+// Administration:Read PAT returns (verified empirically). The degraded-path
+// tests remove exactly these to simulate a CI read token.
+const CONTENTS_GATED_KEYS = [
+  "delete_branch_on_merge",
+  "allow_squash_merge",
+  "allow_merge_commit",
+  "allow_rebase_merge",
+  "allow_auto_merge",
+  "allow_update_branch",
+  "use_squash_pr_title_as_default",
+  "squash_merge_commit_title",
+  "squash_merge_commit_message",
+  "merge_commit_title",
+  "merge_commit_message",
+];
+
+// A fake `ghApi(endpoint, opts)` for the fetch-PATH tests (fetchLive /
+// fetchActionsPermissions take an injectable `api`, defaulting to the real
+// gh-backed one). `routes` maps an EXACT endpoint string to a JS value
+// (JSON-stringified back, mirroring gh's stdout) or to a function that THROWS
+// an Error whose .message/.stderr mimic a gh 403/422 failure.
+function fakeApi(routes) {
+  return (endpoint) => {
+    if (!(endpoint in routes)) throw new Error(`fakeApi: unrouted endpoint ${endpoint}`);
+    const resp = routes[endpoint];
+    if (typeof resp === "function") return resp(); // negative cases throw here
+    return JSON.stringify(resp);
+  };
+}
+
 // Build the fetchLive-shaped { permissions, forkApproval } bundle from the
 // captures; `mutate.permissions` / `mutate.forkApproval` override for the
 // negative cases (e.g. a {skipped:true} private-repo fork endpoint).
@@ -525,5 +557,156 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     );
     expect(findings).toEqual([]);
     expect(informational).toEqual([]);
+  });
+
+  // ── READ-ONLY DEGRADED path (the Contents-gating fix) ─────────────────────
+  // A read-only Administration:Read CI token gets a repo object with the
+  // merge-setting keys ENTIRELY ABSENT (GitHub gates them behind Contents
+  // read+WRITE). The audit must NOT abort (the removed delete_branch_on_merge
+  // canary), must NOT count the absent keys as drift, and must still diff the
+  // visible flags + rulesets + actions-permissions surface.
+  test("(n) DEGRADED: fetchLive never throws on a read-only token; absent merge flags are flag-not-visible informationals, not drift; visible flags + rulesets + actions still diff", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    // Simulate the read-only capture: the Contents-gated keys are gone.
+    const degradedRepo = { ...fixture("cms-platform.repo.json") };
+    for (const k of CONTENTS_GATED_KEYS) delete degradedRepo[k];
+    const rulesetBody = fixture("cms-platform.ruleset-main.json");
+    const api = fakeApi({
+      [`repos/${repo}`]: degradedRepo,
+      [`repos/${repo}/rulesets?per_page=100`]: [{ id: rulesetBody.id, source_type: "Repository" }],
+      [`repos/${repo}/rulesets/${rulesetBody.id}`]: rulesetBody,
+      // actions/permissions IS readable (Administration:Read) — THE gate passes.
+      [`repos/${repo}/actions/permissions`]: fixture("cms-platform.actions-permissions.json"),
+      // public repo -> the fork endpoint returns a value (no 422 here).
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]: fixture(
+        "cms-platform.fork-pr-approval.json",
+      ),
+    });
+
+    // The removed canary must NOT abort a correctly read-only token.
+    let live;
+    expect(() => {
+      live = script.fetchLive(repo, null, api);
+    }).not.toThrow();
+
+    // Diff exactly as scanRepos does (flags/rulesets, then actions-permissions).
+    const diff = script.diffRepo({
+      repo,
+      desiredSettings: script.effectiveSettings(manifest, repo),
+      desiredRulesets: script.desiredRulesets(manifest, repo),
+      liveRepo: live.liveRepo,
+      liveRulesets: live.liveRulesets,
+    });
+    script.diffActionsPermissions(
+      repo,
+      script.effectiveActionsPermissions(manifest, repo),
+      live.liveActionsPermissions,
+      diff.findings,
+      diff.informational,
+    );
+
+    // Every absent Contents-gated key is INFORMATIONAL flag-not-visible.
+    const notVisible = diff.informational.filter((i) => i.kind === "flag-not-visible");
+    expect(notVisible.map((i) => i.key).sort()).toEqual([...CONTENTS_GATED_KEYS].sort());
+    for (const i of notVisible) {
+      expect(i.repo).toBe(repo);
+      expect(i.fixSkip).toBe(true);
+      expect(i.reason).toMatch(/Contents/);
+    }
+    // NONE of the skipped keys became a flag-drift finding (no bogus drift).
+    expect(diff.findings.filter((f) => f.kind === "flag-drift")).toEqual([]);
+    // The VISIBLE flags (has_*/default_branch) still diffed — and matched.
+    // The ruleset still diffed — and matched (zero ruleset findings).
+    expect(diff.findings.filter((f) => String(f.kind).startsWith("ruleset"))).toEqual([]);
+    // Actions-permissions STILL diffs on the degraded token — the as-found
+    // drift (sha false->true, fork first_time->all_external) is intact.
+    expect(
+      diff.findings.filter((f) => f.kind === "actions-permission-drift").map((f) => f.key).sort(),
+    ).toEqual(["approval_policy", "sha_pinning_required"]);
+
+    // --fix is driven off FINDINGS, so an absent (skipped) key is naturally
+    // excluded from the flag PATCH body — buildFixPlan never PATCHes it.
+    const plan = script.buildFixPlan(manifest, [
+      {
+        repo,
+        findings: diff.findings,
+        informational: diff.informational,
+        liveRepo: live.liveRepo,
+        liveRulesets: live.liveRulesets,
+        liveActionsPermissions: live.liveActionsPermissions,
+      },
+    ]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].patchBody).toEqual({}); // no Contents-gated key PATCHed
+    for (const k of CONTENTS_GATED_KEYS) expect(plan[0].patchBody).not.toHaveProperty(k);
+  });
+
+  test("(o) DEGRADED describe: a flag-not-visible line renders as an informational notice, never a drift finding", () => {
+    // A visible-flag drift on the same degraded read still surfaces as a real
+    // finding — proving flag-not-visible does not mask genuine drift.
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const degradedRepo = { ...fixture("cms-platform.repo.json"), has_wiki: true }; // manifest: false
+    for (const k of CONTENTS_GATED_KEYS) delete degradedRepo[k];
+    const { findings, informational } = script.diffRepo({
+      repo,
+      desiredSettings: script.effectiveSettings(manifest, repo),
+      desiredRulesets: script.desiredRulesets(manifest, repo),
+      liveRepo: degradedRepo,
+      liveRulesets: [fixture("cms-platform.ruleset-main.json")],
+    });
+    // The visible has_wiki flip is a real flag-drift; the absent merge keys are not.
+    expect(findings.filter((f) => f.kind === "flag-drift").map((f) => f.key)).toEqual(["has_wiki"]);
+    expect(informational.filter((i) => i.kind === "flag-not-visible").length).toBe(
+      CONTENTS_GATED_KEYS.length,
+    );
+  });
+
+  test("(p) THE GATE SURVIVES: a token lacking Administration:Read (actions/permissions has no `enabled`, or 403) STILL fails loud — never silent drift", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    // `enabled` missing -> the exact "lacks Administration: Read" operational throw.
+    const apiNoEnabled = fakeApi({
+      [`repos/${repo}/actions/permissions`]: { message: "Not Found" }, // no `enabled`
+    });
+    expect(() => script.fetchActionsPermissions(repo, null, apiNoEnabled)).toThrow(
+      /Administration: Read/,
+    );
+    // A hard 403 from gh propagates as an operational failure (not swallowed).
+    const api403 = fakeApi({
+      [`repos/${repo}/actions/permissions`]: () => {
+        const e = new Error("gh: HTTP 403 Resource not accessible by personal access token");
+        e.stderr = "HTTP 403";
+        throw e;
+      },
+    });
+    expect(() => script.fetchActionsPermissions(repo, null, api403)).toThrow(/403/);
+  });
+
+  test("(q) fetchActionsPermissions maps a fork-approval HTTP 422 to an operational SKIP (private repo), not a throw", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/actions/permissions`]: {
+        enabled: true,
+        allowed_actions: "all",
+        sha_pinning_required: true,
+      },
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]: () => {
+        const e = new Error("gh: HTTP 422 not allowed for private repositories");
+        e.stderr = "not allowed for private repositories (HTTP 422)";
+        throw e;
+      },
+    });
+    let out;
+    expect(() => {
+      out = script.fetchActionsPermissions(repo, null, api);
+    }).not.toThrow();
+    expect(out.permissions.enabled).toBe(true);
+    expect(out.forkApproval.skipped).toBe(true);
+    expect(out.forkApproval.reason).toMatch(/422|private/i);
   });
 });

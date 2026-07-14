@@ -441,8 +441,31 @@ function diffRuleset(repo, name, live, desired, findings, informational) {
 function diffRepo({ repo, desiredSettings, desiredRulesets: desired, liveRepo, liveRulesets }) {
   const findings = [];
   const informational = [];
+  const live = liveRepo || {};
   for (const key of Object.keys(desiredSettings || {})) {
-    const liveVal = (liveRepo || {})[key];
+    // A managed merge-setting key ABSENT from the live repo object is NOT drift.
+    // GitHub gates the merge-setting keys (delete_branch_on_merge, allow_*_merge,
+    // allow_auto_merge, allow_update_branch, use_squash_pr_title_as_default,
+    // squash_merge_commit_*, merge_commit_*) behind the CONTENTS permission
+    // (read+WRITE), so a correct read-only Administration:Read CI token gets a
+    // repo object with those keys ENTIRELY ABSENT. Comparing desired vs.
+    // undefined would manufacture the "17 bogus drifts" this audit used to abort
+    // over. Emit an INFORMATIONAL line (never gates, never drift) instead — the
+    // exact skip pattern the fork-approval 422 case uses. --fix runs under admin
+    // gh auth (which HAS Contents) so it sees every key and reconciles it. Only
+    // keys that ARE present are diffed.
+    if (!(key in live)) {
+      informational.push({
+        repo,
+        kind: "flag-not-visible",
+        key,
+        reason:
+          "not visible to this token — merge-settings need Contents; reconciled via `--fix` with admin gh auth",
+        fixSkip: true,
+      });
+      continue;
+    }
+    const liveVal = live[key];
     if (!deepEqual(liveVal, desiredSettings[key])) {
       findings.push({
         repo,
@@ -575,6 +598,12 @@ function describeFinding(f) {
 }
 
 function describeInformational(f) {
+  if (f.kind === "flag-not-visible") {
+    return (
+      `flag \`${f.key}\`: ${f.reason} ` +
+      `(informational, not drift; the read-only audit cannot see Contents-gated merge settings)`
+    );
+  }
   if (f.kind === "actions-permission-skipped") {
     return (
       `actions permission \`${f.key}\` (${f.endpoint}): SKIPPED — ${f.reason} ` +
@@ -721,41 +750,50 @@ function readToken(owner, fixMode) {
   return process.env[tokenEnvName(owner)] || null;
 }
 
-// Fetch the live repo + FULL ruleset bodies. Fails LOUD-and-DISTINCT: a
-// 403/404, or a response missing the admin-visible settings surface (a token
-// without Administration: Read gets a repo object WITHOUT the merge-flag
-// keys — silently comparing against undefined would report 17 bogus drifts),
-// is an OPERATIONAL failure (exit 1, "the alerting layer is broken"), never
-// drift.
-function fetchLive(repo, token) {
-  const liveRepo = JSON.parse(ghApi(`repos/${repo}`, { token }));
-  if (typeof liveRepo.delete_branch_on_merge !== "boolean") {
-    throw new Error(
-      `repos/${repo} response has no settings surface (delete_branch_on_merge missing) — ` +
-        `the token lacks "Administration: Read" on ${repo}`,
-    );
-  }
-  const list = JSON.parse(ghApi(`repos/${repo}/rulesets?per_page=100`, { token }));
+// Fetch the live repo + FULL ruleset bodies. Fails LOUD-and-DISTINCT on a
+// 403/404 or any unexpected gh error (an OPERATIONAL failure — exit 1, "the
+// alerting layer is broken", never drift).
+//
+// NO merge-flag canary here (removed): GitHub gates the repo MERGE-SETTING keys
+// (delete_branch_on_merge, allow_*_merge, allow_auto_merge, allow_update_branch,
+// use_squash_pr_title_as_default, squash_merge_commit_*, merge_commit_*) behind
+// the CONTENTS permission (read+WRITE), so a CORRECT read-only
+// Administration:Read PAT gets a repo object with those keys ENTIRELY ABSENT.
+// Asserting `delete_branch_on_merge` here false-negatived and aborted every CI
+// run. diffRepo now skips absent managed keys as informational
+// `flag-not-visible` (never drift), and THE reliable Administration:Read gate
+// lives downstream in fetchActionsPermissions — GET actions/permissions has NO
+// public exemption, so a token truly lacking the surface 403s there
+// (operational failure, correctly). fetchLive always calls it, so that gate
+// still runs on every scan.
+//
+// `api` is injectable (defaults to the real gh-backed ghApi) so the fetch path
+// is unit-testable without a network / gh auth.
+function fetchLive(repo, token, api = ghApi) {
+  const liveRepo = JSON.parse(api(`repos/${repo}`, { token }));
+  const list = JSON.parse(api(`repos/${repo}/rulesets?per_page=100`, { token }));
   const liveRulesets = [];
   for (const r of Array.isArray(list) ? list : []) {
     // Org-level rulesets can surface on an org repo's list; they are not this
     // repo's to manage (or PUT) — scope to Repository-sourced ones.
     if (r.source_type && r.source_type !== "Repository") continue;
-    liveRulesets.push(JSON.parse(ghApi(`repos/${repo}/rulesets/${r.id}`, { token })));
+    liveRulesets.push(JSON.parse(api(`repos/${repo}/rulesets/${r.id}`, { token })));
   }
-  return { liveRepo, liveRulesets, liveActionsPermissions: fetchActionsPermissions(repo, token) };
+  return { liveRepo, liveRulesets, liveActionsPermissions: fetchActionsPermissions(repo, token, api) };
 }
 
-// The Actions-permissions surface (two standalone endpoints). Fails LOUD like
-// fetchLive: a response to actions/permissions missing the admin-visible
-// `enabled` boolean means the token lacks the Actions/Administration read
-// surface (an OPERATIONAL failure, exit 1 — never silent drift against
-// undefined). The fork-pr-contributor-approval endpoint returns HTTP 422 on a
-// PRIVATE repo ("not allowed for private repositories"); that ONE case is an
-// operational SKIP ({skipped:true}), distinguished from any other error which
-// re-throws as an operational failure.
-function fetchActionsPermissions(repo, token) {
-  const permissions = JSON.parse(ghApi(`repos/${repo}/${ACTIONS_PERMISSIONS_ENDPOINT}`, { token }));
+// The Actions-permissions surface (two standalone endpoints). This is THE
+// Administration:Read gate for the whole scan (fetchLive always calls it):
+// GET actions/permissions requires Administration:Read with NO public
+// exemption, so a response missing the admin-visible `enabled` boolean means
+// the token lacks that surface — an OPERATIONAL failure (exit 1), never silent
+// drift against undefined. The fork-pr-contributor-approval endpoint returns
+// HTTP 422 on a PRIVATE repo ("not allowed for private repositories"); that ONE
+// case is an operational SKIP ({skipped:true}), distinguished from any other
+// error which re-throws as an operational failure. `api` is injectable
+// (defaults to the real gh-backed ghApi) so the gate is unit-testable.
+function fetchActionsPermissions(repo, token, api = ghApi) {
+  const permissions = JSON.parse(api(`repos/${repo}/${ACTIONS_PERMISSIONS_ENDPOINT}`, { token }));
   if (typeof permissions.enabled !== "boolean") {
     throw new Error(
       `repos/${repo}/${ACTIONS_PERMISSIONS_ENDPOINT} response has no 'enabled' boolean — ` +
@@ -764,7 +802,7 @@ function fetchActionsPermissions(repo, token) {
   }
   let forkApproval;
   try {
-    forkApproval = JSON.parse(ghApi(`repos/${repo}/${FORK_PR_APPROVAL_ENDPOINT}`, { token }));
+    forkApproval = JSON.parse(api(`repos/${repo}/${FORK_PR_APPROVAL_ENDPOINT}`, { token }));
   } catch (e) {
     const text = `${(e && e.stderr) || ""}${(e && e.message) || ""}`;
     if (/HTTP 422|not allowed for private repositor/i.test(text)) {
@@ -1251,6 +1289,8 @@ module.exports = {
   diffRuleset,
   diffRepo,
   diffActionsPermissions,
+  fetchLive,
+  fetchActionsPermissions,
   fingerprint,
   fingerprintBlock,
   extractReportedFingerprints,

@@ -154,10 +154,22 @@ one secret per resource owner:
   much as the positives:
 
   ```bash
-  GH_TOKEN=<pat> gh api repos/<owner>/<repo> --jq .delete_branch_on_merge  # non-null
-  GH_TOKEN=<pat> gh api repos/<owner>/<repo>/rulesets --jq length          # a number
-  GH_TOKEN=<pat> gh api -X PATCH repos/<owner>/<repo> -f has_wiki=false    # MUST fail 403
+  GH_TOKEN=<pat> gh api repos/<owner>/<repo>/actions/permissions --jq .enabled  # true/false = Administration:Read OK
+  GH_TOKEN=<pat> gh api repos/<owner>/<repo>/rulesets --jq length                # a number
+  GH_TOKEN=<pat> gh api -X PATCH repos/<owner>/<repo> -f has_wiki=false          # MUST fail 403
   ```
+
+  > **Do NOT probe `delete_branch_on_merge` (or any `allow_*_merge` /
+  > `*_commit_*` merge-setting) as the positive check.** GitHub gates those
+  > merge-setting keys behind the **Contents** permission (read+write), so they
+  > are **entirely absent** from the repo object these correctly read-only
+  > **Administration: Read** PATs return — the field is missing, not `false`, and
+  > a `--jq .delete_branch_on_merge` probe would read empty even on a healthy
+  > token. `actions/permissions` needs Administration: Read with no public
+  > exemption, so its `.enabled` boolean is the reliable positive proof. Leave
+  > these PATs at **Administration: Read only** — do NOT add Contents (the audit
+  > skips the merge flags as informational; `--fix` reconciles them under the
+  > operator's own admin `gh` auth, which already has Contents).
 
 - **Expiry / rotation:** fine-grained PATs expire (a year at most). An
   expired or missing token turns the daily audit run RED with a distinct
