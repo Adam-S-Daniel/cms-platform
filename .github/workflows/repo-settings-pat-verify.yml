@@ -6,6 +6,9 @@
 # The negative write probe PATCHes has_wiki back to its CURRENT value, so an
 # unexpected success is a no-op rather than a real change.
 name: repo-settings PAT verify
+run-name: >-
+  ${{ github.event_name == 'pull_request' && format('PAT verify — PR #{0}', github.event.number)
+     || format('PAT verify — manual @{0}', github.actor) }}
 
 on:
   workflow_dispatch:
