@@ -5,12 +5,16 @@
 // playwright.config.js PLATFORM_META_SPECS and testIgnore'd on consumer lanes.
 /*
  * REGRESSION GUARD for the repo-settings drift audit (#109). The fixtures
- * under e2e/fixtures/repo-settings/ are the REAL API responses captured
+ * under e2e/fixtures/repo-settings/ are REAL API responses captured
  * 2026-07-10 (gh api repos/<r> and .../rulesets/<id>; ruleset ids 17169281,
- * 13985217, 15756474, 17032014, 17032043) — so the anchor test locks the
- * shipped manifest to "zero drift against the live values as-found", and the
- * normalization tests lock the anti-flap rules that keep a daily audit from
- * crying wolf:
+ * 13985217, 15756474, 17032014, 17032043) — EXCEPT cms-platform.repo.json
+ * (delete_branch_on_merge flipped true) and jodidaniel.ruleset-main.json
+ * (now the phase-2 CONVERGED shape onto consumer-main; the as-found capture
+ * moved to jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json), both
+ * updated 2026-07-22 for #172 phase 2. So the anchor test locks the shipped
+ * manifest to "zero drift against the phase-2 desired-converged fixtures",
+ * and the normalization tests lock the anti-flap rules that keep a daily
+ * audit from crying wolf:
  *   - server-assigned keys / rule order / check order never count as drift;
  *   - jodidaniel's org-repo default dismissal_restriction is stripped (a
  *     NON-default value stays drift);
@@ -149,11 +153,16 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(tokenEnvName("jodidaniel")).toBe("REPO_SETTINGS_READ_JODIDANIEL");
   });
 
-  test("ANCHOR: the shipped manifest is ZERO-drift against the as-found live captures", () => {
-    // The v1 manifest encodes today's live values verbatim (including the
-    // platform's delete_branch_on_merge:false and jodidaniel's DRIFTED main
-    // ruleset) so the mechanism PR changes no behavior. If this fails, either
-    // the manifest or the normalization regressed — NOT the live repos.
+  test("ANCHOR: the shipped manifest is ZERO-drift against the fixtures (2026-07-22 phase-2 desired state)", () => {
+    // As of #172 phase 2 (2026-07-22) the manifest + fixtures encode the
+    // DESIRED CONVERGED state, not a pure as-found capture: the platform's
+    // delete_branch_on_merge is now true (fixture flipped to match) and
+    // jodidaniel's main ruleset fixture is now the consumer-main-shaped
+    // converged body (the as-found DRIFTED capture lives on under
+    // jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json — see test (d)).
+    // If this fails, either the manifest or the fixtures/normalization
+    // regressed — NOT the live repos (this is a fixture-vs-manifest lock,
+    // not a live comparison).
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     for (const repo of Object.keys(LIVE)) {
@@ -205,30 +214,40 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   });
 
   test("(c) a delete_branch_on_merge flip IS detected (the motivating incident)", () => {
+    // Since #172 phase 2 (2026-07-22) the manifest desires true (the fleet
+    // default the platform repo now inherits, having dropped its false
+    // override) — so the flip this test locks is a live regression BACK to
+    // false, not the other direction.
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     const { findings } = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/cms-platform", {
-      repo: { delete_branch_on_merge: true }, // manifest says false (as-found)
+      repo: { delete_branch_on_merge: false }, // manifest says true (phase-2 desired)
     });
     expect(findings).toEqual([
       {
         repo: "Adam-S-Daniel/cms-platform",
         kind: "flag-drift",
         key: "delete_branch_on_merge",
-        live: true,
-        desired: false,
+        live: false,
+        desired: true,
         manualOnly: false,
       },
     ]);
   });
 
   test("(d) jodidaniel main vs consumer-main = EXACTLY the 3 known skew findings", () => {
-    // The live consumer skew #109 complains about: missing
-    // required_status_checks, missing non_fast_forward, admin bypass. This is
-    // what phase 2 will surface when the DRIFTED entry is deleted.
+    // The historical drift corpus locking the 3-skew detection: missing
+    // required_status_checks, missing non_fast_forward, admin bypass. #172
+    // phase 2 (2026-07-22) converged jodidaniel main onto consumer-main and
+    // deleted the DRIFTED library entry, but this test still diffs the
+    // AS-FOUND capture (now DRIFTED-as-found-2026-07-10.json) against the
+    // surviving manifest.ruleset_library["consumer-main"] entry, so the
+    // regression lock stands unchanged.
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
-    const { projected } = script.normalizeRuleset(fixture("jodidaniel.ruleset-main.json"));
+    const { projected } = script.normalizeRuleset(
+      fixture("jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json"),
+    );
     const desired = script.sortRuleset({ name: "main", ...manifest.ruleset_library["consumer-main"] });
     const findings = [];
     const informational = [];
@@ -342,13 +361,15 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/cms-platform", {
-      repo: { delete_branch_on_merge: true, default_branch: "master" },
+      // manifest desires true (phase-2 converged) — mutate live to false so
+      // this still exercises a real delete_branch_on_merge drift.
+      repo: { delete_branch_on_merge: false, default_branch: "master" },
       rulesets: [{ ...fixture("cms-platform.ruleset-main.json"), enforcement: "evaluate" }],
     });
     const plan = script.buildFixPlan(manifest, [scan]);
     expect(plan.length).toBe(1);
     // Only the drifted, non-forbidden key is PATCHed — never the full flag set.
-    expect(plan[0].patchBody).toEqual({ delete_branch_on_merge: false });
+    expect(plan[0].patchBody).toEqual({ delete_branch_on_merge: true });
     // default_branch drift is audited but NEVER PATCHed (FIX_FORBIDDEN_KEYS).
     expect(script.FIX_FORBIDDEN_KEYS).toContain("default_branch");
     expect(plan[0].manualOnly).toEqual(["default_branch"]);
