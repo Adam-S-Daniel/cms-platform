@@ -43,7 +43,21 @@ const DECAP_CMS_USER_KEY = "decap-cms-user";
 // break imports. Will be removed in a follow-up cleanup.
 const NETLIFY_CMS_USER_KEY = DECAP_CMS_USER_KEY;
 
-const HOST_REPO = "Adam-S-Daniel/adamdaniel.ai";
+// The host-repo publish/delete/unpublish/tags-lifecycle specs (and every
+// helper that defaults `repo = HOST_REPO` — cms-fixture-pr.js,
+// github-actions-poll.js, reset-orphaned-canary.sh) target whatever repo
+// the loop is actually running against. The loop workflows all export
+// `CMS_REPO: ${{ github.repository }}` (see cms-publish-loop-host.yml and
+// its siblings) specifically so this constant can resolve per-consumer;
+// GITHUB_REPOSITORY is GitHub Actions' own ambient fallback for the same
+// value. The literal is the local-dev fallback (no env, e.g. running a
+// spec by hand outside CI) — it preserves the historical adamdaniel.ai
+// behavior byte-for-byte. Before this was env-derived, the hardcoded
+// literal cross-wired EVERY OTHER consumer's host loop into
+// Adam-S-Daniel/adamdaniel.ai regardless of which repo the workflow ran
+// in, which is what caused the jodidaniel.com host loop's cross-repo 403s
+// (issue #185).
+const HOST_REPO = process.env.CMS_REPO || process.env.GITHUB_REPOSITORY || "Adam-S-Daniel/adamdaniel.ai";
 
 function getPat() {
   return process.env.CMS_E2E_PAT || "";
