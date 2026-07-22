@@ -213,7 +213,7 @@ async function clickEditorDelete(page, { visibleTimeout = 15_000, clickTimeout =
 }
 
 // ReDoS-safe flat-alternation selector for a hypothetical in-app DOM
-// confirm modal. Decap 3.12.2's "Delete published entry" actually uses a
+// confirm modal. Decap 3.14.1's "Delete published entry" actually uses a
 // NATIVE window.confirm (decap-cms-core@3.9.0 Editor.js handleDeleteEntry:
 // !window.confirm(t('editor.editor.onDeletePublishedEntry'))), so this DOM
 // button never renders in prod; kept as a forward-compatible fallback for a
@@ -245,7 +245,7 @@ function deleteConfirmButton(page) {
 // positive proof the delete fired. If it never fires, throw HERE (the real
 // fault site) instead of failing 900s later in the URL-404 wait. A
 // best-effort in-app confirm-button click (deleteConfirmButton) is folded in
-// for forward-compat and is harmless: under 3.12.2's native confirm the
+// for forward-compat and is harmless: under 3.14.1's native confirm the
 // button never renders and proof comes from the awaited request, not the
 // button. Both prod-loop specs call this instead of a bare clickEditorDelete.
 async function confirmEditorDelete(page, doClick, { dispatchTimeout = 60_000 } = {}) {
@@ -263,7 +263,7 @@ async function confirmEditorDelete(page, doClick, { dispatchTimeout = 60_000 } =
     .catch(() => false);
   await doClick();
   // Forward-compat: if a future Decap swaps the native confirm for an in-app
-  // modal, click its confirm button. No-op under 3.12.2's native confirm (the
+  // modal, click its confirm button. No-op under 3.14.1's native confirm (the
   // button never renders); proof of the delete is the awaited request below,
   // never this click — so a miss is logged, not fatal (silent-catch-lint).
   await deleteConfirmButton(page)
@@ -493,7 +493,7 @@ async function reopenForPublishedDelete(
 
 // Decap's GLOBAL media library is a MODAL opened from the top-nav
 // "Media" button — it is NOT a page route. `page.goto("…/admin/#/media")`
-// renders Decap's NotFound ("Not Found") because Decap 3.12.2 registers
+// renders Decap's NotFound ("Not Found") because Decap 3.14.1 registers
 // no `/media` page route (#1815, runs 26597250490 / 26602619236). The
 // library's header is a container whose class contains "LibraryTop"; it
 // holds the Upload / Copy / Download / Delete-selected controls and sits

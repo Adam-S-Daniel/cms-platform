@@ -3,7 +3,7 @@
  * @file e2e/cms-mobile-layout.spec.js
  *
  * Locks the responsive behaviour of admin/admin-mobile.css against
- * regression. Decap 3.12.2 is desktop-first: on an iPhone 16 (393 CSS px)
+ * regression. Decap 3.14.1 is desktop-first: on an iPhone 16 (393 CSS px)
  * the shell renders ~800px wide (dead horizontal scroll), the editor is a
  * fixed side-by-side react-split-pane whose preview iframe wastes half the
  * width, the toolbar's Save/Delete controls slide off-screen, and 15px
