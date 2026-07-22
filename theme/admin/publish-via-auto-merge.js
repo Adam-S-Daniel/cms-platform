@@ -150,6 +150,38 @@
         return m ? { branch: decodeURIComponent(m[1]) } : null;
       },
       recover: async function (ctx, init, originalRes) {
+        // Backend-branch scope guard (#114). The test() regex above is
+        // single-RAW-segment, but a MULTI-segment backend branch (the
+        // preview case: `backend.branch` = the PR head ref, e.g.
+        // `cms/preview-only/<x>`) arrives percent-encoded as ONE raw
+        // segment (`heads/cms%2Fpreview-only%2Fx`) — it already matches,
+        // and decodeURIComponent recovered the true name into ctx.branch.
+        // Only proceed for such a ref when it IS the deployed backend
+        // branch: window.CMS_BACKEND_BRANCH, set from commit.json's
+        // `branch` by the index.html commit-pill script ("main" on prod,
+        // the PR head ref on a preview). Otherwise a stray multi-segment
+        // PATCH (e.g. a createBranch force-update to a cms/<col>/<slug>
+        // editorial draft ref) could be over-recovered into a bogus
+        // delete PR. Fail CLOSED when the backend branch is unknown
+        // (commit.json absent leaves the global undefined). The
+        // single-segment ("main") path below is unchanged.
+        if (ctx.branch.indexOf("/") !== -1) {
+          var backendBranch = window.CMS_BACKEND_BRANCH;
+          if (
+            typeof backendBranch !== "string" ||
+            backendBranch === "" ||
+            ctx.branch !== backendBranch
+          ) {
+            console.warn(
+              "[publish-via-auto-merge] delete-ref: NOT recovering multi-segment ref " +
+                JSON.stringify(ctx.branch) +
+                " — it is not the configured backend branch (window.CMS_BACKEND_BRANCH=" +
+                JSON.stringify(backendBranch) +
+                "); failing closed with the original response (#114)",
+            );
+            return originalRes;
+          }
+        }
         // The deletion commit sha is the `sha` Decap is trying to fast-
         // forward the branch to — it's in the PATCH body. Reuse it; do
         // NOT build a new tree/commit (Decap already did, steps 2-3).

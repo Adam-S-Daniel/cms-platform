@@ -125,6 +125,69 @@ it's explicitly set.
 > A fine-grained PAT can't write repo variables for you — the setter uses your
 > `gh` auth, which needs admin/maintain on the consumer repo.
 
+## Platform-repo secrets (set on `Adam-S-Daniel/cms-platform`, NOT on consumers)
+
+The platform repo itself holds a few Actions secrets for its own workflows —
+they are not part of a consumer's setup checklist.
+
+### `REPO_SETTINGS_READ_ADAM_S_DANIEL` / `REPO_SETTINGS_READ_JODIDANIEL` — repo-settings drift audit (#109)
+
+Consumed by `.github/workflows/repo-settings-audit.yml`, the daily READ-ONLY
+drift audit of `repo-settings.yml` (the settings-as-code manifest at the
+platform root — see `docs/SYNC.md` "Repo settings as code") against the live
+repo settings/rulesets. A fine-grained PAT can't span two owners, so there is
+one secret per resource owner:
+
+| Secret | Resource owner | Repository access | Repository permissions |
+|---|---|---|---|
+| `REPO_SETTINGS_READ_ADAM_S_DANIEL` | `Adam-S-Daniel` | `cms-platform` + `adamdaniel.ai` | **Administration: Read-only** (+ implied Metadata: Read) |
+| `REPO_SETTINGS_READ_JODIDANIEL` | org **`jodidaniel`** | `jodidaniel.com` | **Administration: Read-only** (+ implied Metadata: Read) |
+
+- **Read-only by design** — there is NO write credential in CI anywhere in
+  this mechanism; applying the manifest is a human running
+  `node scripts/audit-repo-settings.js --fix --yes` with their own `gh` auth
+  (admin on the target repo). An accidental mutation attempt with these
+  tokens 403s — a designed tripwire.
+- Store: `gh secret set REPO_SETTINGS_READ_ADAM_S_DANIEL -R Adam-S-Daniel/cms-platform`
+  (and the same for `REPO_SETTINGS_READ_JODIDANIEL`).
+- **Verify each PAT after minting/rotation** — the negative proof matters as
+  much as the positives:
+
+  ```bash
+  GH_TOKEN=<pat> gh api repos/<owner>/<repo>/actions/permissions --jq .enabled  # true/false = Administration:Read OK
+  GH_TOKEN=<pat> gh api repos/<owner>/<repo>/rulesets --jq length                # a number
+  GH_TOKEN=<pat> gh api -X PATCH repos/<owner>/<repo> -f has_wiki=false          # MUST fail 403
+  ```
+
+  > **Do NOT probe `delete_branch_on_merge` (or any `allow_*_merge` /
+  > `*_commit_*` merge-setting) as the positive check.** GitHub gates those
+  > merge-setting keys behind the **Contents** permission (read+write), so they
+  > are **entirely absent** from the repo object these correctly read-only
+  > **Administration: Read** PATs return — the field is missing, not `false`, and
+  > a `--jq .delete_branch_on_merge` probe would read empty even on a healthy
+  > token. `actions/permissions` needs Administration: Read with no public
+  > exemption, so its `.enabled` boolean is the reliable positive proof. Leave
+  > these PATs at **Administration: Read only** — do NOT add Contents (the audit
+  > skips the merge flags as informational; `--fix` reconciles them under the
+  > operator's own admin `gh` auth, which already has Contents).
+
+- **Expiry / rotation:** fine-grained PATs expire (a year at most). An
+  expired or missing token turns the daily audit run RED with a distinct
+  "read path is broken" error naming the env var — that red run is the
+  rotation reminder (the audit never mistakes an auth failure for drift).
+  Re-mint with the same permissions and `gh secret set` again.
+
+### `BUMP_DISPATCH_ADAMDANIEL_AI` / `BUMP_DISPATCH_JODIDANIEL_COM` — release fan-out (back-documented)
+
+Consumed by `release.yml`'s "Fan out bump dispatches to consumers" step:
+right after `gh release create`, it dispatches each consumer's
+`platform-bump.yml` (`gh workflow run platform-bump.yml -R <consumer>`) so
+bumps don't wait for the weekly Monday cron. Fine-grained PATs are minted per
+RESOURCE OWNER, so each consumer owner supplies its own secret: **Actions:
+Read and write** on that ONE consumer repo, nothing else. FAIL-OPEN: a
+missing/expired token only degrades that consumer to its weekly
+platform-bump cron (a `::warning`, never a job failure).
+
 ## Quick checklist for a new consumer
 
 - [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Actions R/W** (+ be a reviewer of the `regression-review` environment)

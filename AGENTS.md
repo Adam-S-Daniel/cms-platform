@@ -16,6 +16,16 @@
 - Prefer editing existing files over creating new ones.
 - Never commit secrets, credentials, or .env files.
 
+## Workstation layout
+
+Repo locations are host-specific — match the convention of the machine you're on
+(on Windows, check `$env:COMPUTERNAME`).
+
+- **`ZENDA`** (Windows): local clones live under `D:\repos\<github-owner-or-org>\<repo>`
+  (for example `D:\repos\adam-s-daniel\wsl-automation`). Clone new repos there, and
+  assume existing repos live there rather than under the user profile
+  (`C:\Users\<user>\...`).
+
 ## Code quality
 
 - Follow the idioms and style already established in this repo.
@@ -29,6 +39,59 @@
 - Never construct SQL, shell commands, or HTML by string concatenation with untrusted data.
 - Use parameterized queries, shell arrays, and context-aware escaping respectively.
 - Do not disable TLS verification, authentication, or CSRF protection.
+
+## Data exposure in CI and public repos
+
+Treat CI run logs, job summaries, artifacts, workflow run pages, and git history
+as **public** on a public repo. (Real incident: a workflow printed the owner's
+email addresses and their correspondents' into a public Actions log.)
+
+- **Never print personal or sensitive data to a log** — no emails, contacts,
+  names, IDs, mailbox sizes/counts, tokens, or anything "useful to an attacker or
+  scammer." Deliver sensitive results out-of-band (e.g. email the account itself,
+  write to a private store) and log only a non-identifying status line.
+- **Don't interpolate `${{ inputs.* }}` / `${{ github.event.* }}` into a `run:`
+  block** — the rendered command is echoed to the log. Read inputs from
+  `$GITHUB_EVENT_PATH` inside the script and `::add-mask::` sensitive values
+  before use. `::add-mask::` only scrubs the log *stream*, not other surfaces.
+- **Put sensitive config in secrets, not plaintext inputs or `vars`.** Only
+  secret *values* are masked in logs.
+- **Sanitize error output** — never dump an API/HTTP response body on failure (it
+  can quote personal data); reduce it to a status code + machine error type, and
+  keep the data-bearing serialization/call inside the try/catch.
+- **Least privilege:** set `permissions:` to the minimum (usually
+  `contents: read`) and require approval for outside-collaborator fork PRs.
+- **Test fixtures use reserved `example.com` / `example.net` domains only** —
+  never a real address; fixtures get committed and logged.
+
+### git history & metadata
+- **Sanitize before the first commit.** Fixing the current file does not remove
+  data from history. If sensitive data was committed, rewrite history to drop the
+  commits, delete every ref that points at them (branches, tags, **PRs**), and
+  force-push. GitHub garbage-collects unreachable objects on its own schedule
+  (days to weeks) — until then they remain reachable *by SHA* — and you can ask
+  GitHub Support to expedite for a public repo. (This is the deliberate exception
+  to "don't force-push"; it is a security remediation.)
+- **Commit with the GitHub `…@users.noreply.github.com` identity** on public
+  repos so a real email is not baked into commit author/committer metadata.
+
+## Automation vs branch protection
+
+Fleet repos enforce PR-only default branches via ruleset, managed as code in
+`repo-settings` (see its ADR 0001). Design automation accordingly:
+
+- Never design a bot that pushes to a protected default branch ad hoc — the
+  push is rejected (GH013), even from the repo's own workflows.
+- Generated data (badges, run summaries, reports, dashboards) belongs on a
+  dedicated unprotected results branch (e.g. skills-evals' `eval-results`);
+  consumers read from that branch and treat its content as untrusted.
+- The rare bot that genuinely must write to a default branch needs a ruleset
+  bypass actor declared in repo-settings' `fleet.yml` — never a hand-granted
+  UI bypass (the drift report flags those). The AGENTS.md sync App is the
+  standing example.
+- PR + auto-merge is not a sanctioned bot-write path for fleet repos; the
+  cms-platform-managed repos (outside the fleet ruleset) use it by their own
+  design.
 
 ## Testing
 
@@ -48,9 +111,31 @@
   writing the spec, and review of the subagent's diff before commit.
 - Escalate the model rather than ship a wrong diff when the task is genuinely
   subtle (cross-repo invariants, race conditions).
+- Don't assume the subagent sees this file: general-purpose and custom
+  subagents receive the full memory hierarchy (imports included), but
+  Explore/Plan-type agents and SDK harnesses with `settingSources: []` skip
+  repo guidance entirely. Restate load-bearing constraints (style, test
+  command, invariants) in the delegation prompt, and don't hand
+  guidance-sensitive work to agents that won't see it.
 - Give the subagent a precise spec — files, exact changes, house style, the
   test command to run. Subagent output is gated by the same test/CI proof as
   any other change.
+
+## Skills ecosystem
+
+- The canonical skills registry is `github.com/Adam-S-Daniel/agentskills`,
+  organized as three bundle plugins — `adam` (general-purpose, cloud-safe;
+  default-on), `adam-local` (machine-bound), and `fastmail` — each holding
+  `skills/<skill>/` directories.
+- In Claude Code with the marketplace installed, invoke a skill as
+  `/adam:<skill>` (e.g. `/adam:pin-actions-to-sha`).
+- Local machines get the marketplace plus per-agent symlinks via that repo's
+  `setup.sh`.
+- Cloud sessions currently get **no** plugins from repo-declared settings — a
+  known Claude Code limitation (see agentskills' `docs/decisions/0001`) — so
+  don't assume bundle skills are available there.
+- New reusable skills graduate **into** the registry (sensitive ones into
+  `agentskills-private`) rather than living on in a consumer repo.
 
 ## Git practices
 
@@ -141,6 +226,11 @@ they keep only the seam. See "Admin delivery" below.
   the seeded `preview.md` still gives a working `/preview/` shell + the seeded
   `404.html` a friendly not-found page.
 - **Branch + PR, never push to `main`** (the auto-mode classifier enforces this).
+- **Repo settings/rulesets change ONLY via a `repo-settings.yml` PR followed by
+  a human `node scripts/audit-repo-settings.js --fix --yes`.** Emergency live
+  flips must be ratified (PR the value in with a `# why:`) or reverted the same
+  day — the daily `repo-settings-audit` workflow files a `ci` tracking issue on
+  any drift.
 - **SHA-pin every workflow `uses:`** with a `# vX.Y.Z (date)` comment; 7-day
   cooling-off before bumping (mirrors adamdaniel.ai policy).
 - **Verify before claiming done** — run the render, drift-guard, scaffolder
@@ -1317,7 +1407,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.58)
+## Version history (v0.1.0 → v0.1.64)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1864,6 +1954,33 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   (`cms-publish-loop-host.yml`, …), with `name` only as a fallback when the
   API omits `path`. Lock: the groupByWorkflow unit test feeds run-name-shaped
   `name` values and asserts basename grouping.
+- **v0.1.63** (2026-07-13) — **`skills-sync` no longer clobbers repo-local
+  skills.** The down-sync `rsync -a --delete .cms-platform/skills/ <dest>/` made
+  the site match the platform EXACTLY, so any skill a site owned but the platform
+  didn't ship — adamdaniel.ai's `embeddable-tool-pages` — was deleted on every
+  sync (observed as adamdaniel.ai#2593, which deleted it). The reusable now
+  scans `<dest>` for skill dirs carrying a `.repo-local` marker file and
+  `--exclude`s each from the rsync, protecting them from BOTH overwrite and
+  `--delete` (no `--delete-excluded`). Deliberately NOT a plain "merge": unmarked
+  skills stay platform-authoritative, so a skill REMOVED from the platform is
+  still removed from the site — the marker is what distinguishes "site owns this"
+  from "platform dropped this." The up-sync drift-guard already ignored site-only
+  skills, so no guard change was needed. Lock: `e2e/skills-sync.test.js` asserts
+  the reusable keeps `--delete`, discovers `.repo-local`, builds anchored
+  excludes, and never passes `--delete-excluded`. Consumers opt a skill in by
+  committing `.claude/skills/<name>/.repo-local` (see `skills/README.md`).
+- **v0.1.64** (2026-07-13) — **`skills-sync` additive drift is no longer
+  silently dropped.** The "did anything change?" gate used `git diff --quiet`,
+  which is BLIND to untracked files. rsync brings NEW platform skills in as
+  untracked dirs, so a purely-additive sync reported "already in sync" and
+  exited without ever committing them — a latent bug the v0.1.63 repo-local fix
+  unmasked (before it, `rsync --delete` always removed the *tracked* repo-local
+  skill, forcing a diff that swept the additions along; adamdaniel.ai#2593 was
+  exactly that). Discovered when a post-v0.1.63 sync of adamdaniel.ai correctly
+  preserved `embeddable-tool-pages` but then added ZERO of the platform's 16
+  canonical skills. The gate now tests `git status --porcelain -- "$DEST"`
+  (untracked-aware). Lock: `e2e/skills-sync.test.js` asserts the drift gate uses
+  `git status --porcelain` and never `git diff --quiet`.
 
 ## Consumers
 
