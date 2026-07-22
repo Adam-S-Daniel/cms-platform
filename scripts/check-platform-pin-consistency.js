@@ -46,6 +46,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 // ── Resolve the `yaml` parser robustly ───────────────────────────────────────
 // This script ships in the platform and is run by consumers from a
@@ -568,16 +569,79 @@ function checkWorkflowContentParity() {
   }
 }
 
+// ── Preview-media probe sentinel (issue #84) ─────────────────────────────────
+// `e2e/preview-media-resolves.spec.js`'s PROBE_PATH points at a committed
+// `assets/images/uploads/e2e-preview-media-probe.png` — the `preview-media`
+// gate fetches it on the deployed preview to prove the flat `media_folder`
+// resolves. A consumer missing it only "passes" preview-media by never
+// tripping the gate's media-salient-change detector, then 404s the first time
+// it does (bit jodidaniel.com on the v0.1.30 bump). This is a pure
+// delivery-artifact check — file existence + byte/sha match, not a code-shape
+// lint (no AST needed). The 92-char base64 constant is embedded here (rather
+// than read from the platform checkout) so this check works under the
+// reusable's sparse checkout, which brings in only this script +
+// examples/site/.github/workflows.
+const PROBE_MEDIA_REL = "assets/images/uploads/e2e-preview-media-probe.png";
+const PROBE_MEDIA_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+const PROBE_MEDIA_SHA1 = "62a5f8f47fec02344e5bf9061888262f677cf5d6";
+
+function gitBlobSha1(buf) {
+  const header = Buffer.from(`blob ${buf.length}\0`);
+  return crypto.createHash("sha1").update(Buffer.concat([header, buf])).digest("hex");
+}
+
+function checkMediaProbeSentinel() {
+  const probePath = path.join(ROOT, PROBE_MEDIA_REL);
+  checked += 1;
+  if (!fs.existsSync(probePath)) {
+    violations.push({
+      file: PROBE_MEDIA_REL,
+      kind: "preview-media sentinel: MISSING",
+      found: "absent",
+      expected: `present, git-blob sha1 ${PROBE_MEDIA_SHA1}`,
+      // Own `::error`/report advice: the fix is committing a PNG, not bumping a
+      // pin, so this must NOT inherit the pin-phrased default (issue #84).
+      message:
+        `preview-media sentinel MISSING — commit the canonical 69-byte probe PNG at ` +
+        `${PROBE_MEDIA_REL} (git-blob sha1 ${PROBE_MEDIA_SHA1}; see issue #84)`,
+      detail:
+        `preview-media.yml's salient-change gate fetches this exact path on the deployed ` +
+        `preview (see e2e/preview-media-resolves.spec.js PROBE_PATH, issue #84); seed it with ` +
+        `the canonical 1x1 PNG (base64 ${PROBE_MEDIA_PNG_BASE64}).`,
+    });
+    return;
+  }
+  const bytes = fs.readFileSync(probePath);
+  const foundSha1 = gitBlobSha1(bytes);
+  if (foundSha1 !== PROBE_MEDIA_SHA1) {
+    violations.push({
+      file: PROBE_MEDIA_REL,
+      kind: "preview-media sentinel: WRONG-BYTES",
+      found: `git-blob sha1 ${foundSha1} (${bytes.length} bytes)`,
+      expected: `git-blob sha1 ${PROBE_MEDIA_SHA1} (69 bytes)`,
+      // Own `::error`/report advice (issue #84) — recommit the PNG, not a pin bump.
+      message:
+        `preview-media sentinel WRONG-BYTES — replace ${PROBE_MEDIA_REL} with the canonical ` +
+        `69-byte probe PNG (git-blob sha1 ${PROBE_MEDIA_SHA1}, found ${foundSha1}; see issue #84)`,
+      detail:
+        `must be byte-identical to the canonical sentinel (see ` +
+        `e2e/preview-media-resolves.spec.js PROBE_PATH, issue #84).`,
+    });
+  }
+}
+
 checkGemfile();
 checkGemfileLock();
 checkWorkflowSetParity();
 checkWorkflowContentParity();
+checkMediaProbeSentinel();
 
 // ── Report ────────────────────────────────────────────────────────────────────
 if (violations.length === 0) {
   process.stdout.write(
-    `platform-pin-consistency: OK — all ${checked} platform-version reference(s) ` +
-      `in ${rel(ROOT) || "."} agree on platform_ref ${platformRef} ` +
+    `platform-pin-consistency: OK — all ${checked} platform-consistency check(s) ` +
+      `in ${rel(ROOT) || "."} pass for platform_ref ${platformRef} ` +
       `(canonical, from ${LOCK_REL}). Pins are consistent.\n`,
   );
   process.exit(0);
@@ -585,26 +649,33 @@ if (violations.length === 0) {
 
 const isCI = !!process.env.GITHUB_ACTIONS;
 process.stderr.write(
-  `platform-pin-consistency: FAIL — ${violations.length} reference(s) disagree ` +
-    `with the canonical platform_ref ${platformRef} (from ${LOCK_REL}).\n\n`,
+  `platform-pin-consistency: FAIL — ${violations.length} consistency check(s) failed ` +
+    `against the canonical platform_ref ${platformRef} (from ${LOCK_REL}).\n\n`,
 );
 for (const v of violations) {
   // GitHub annotation (file-scoped) when in Actions; always a human line too.
+  // A violation may carry its OWN `message` (the sentinel does — its fix is
+  // committing a PNG, not bumping a pin); fall back to the pin-phrased default.
   if (isCI) {
-    process.stderr.write(
-      `::error file=${v.file}::${v.kind} pins '${v.found}' but platform.lock platform_ref is '${v.expected}'\n`,
-    );
+    const annotation =
+      v.message || `${v.kind} pins '${v.found}' but platform.lock platform_ref is '${v.expected}'`;
+    process.stderr.write(`::error file=${v.file}::${annotation}\n`);
   }
   process.stderr.write(
     `  ${v.file}\n    ${v.kind}\n      found:    ${v.found}\n      expected: ${v.expected}\n`,
   );
   if (v.detail) process.stderr.write(`      detail:   ${v.detail}\n`);
 }
-process.stderr.write(
-  `\nFix: bring every reference above to ${platformRef} (the platform.lock ` +
-    `platform_ref). Bump the workflow @ref pins + composite # comments, the ` +
-    `Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
-    `(platform-bump bumps platform.lock + with: inputs; Dependabot bumps the ` +
-    `uses:@ pins + gem — they can land out of step, which is what this guard catches.)\n`,
-);
+// The pin-bump epilogue only applies to VERSION-pin violations; a sentinel
+// violation carries its own fix in `message`/`detail` above (commit a PNG, not
+// bump a pin), so only emit it when a pin-class violation (no own message) is present.
+if (violations.some((v) => !v.message)) {
+  process.stderr.write(
+    `\nFix: bring every platform-version reference above to ${platformRef} (the platform.lock ` +
+      `platform_ref). Bump the workflow @ref pins + composite # comments, the ` +
+      `Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
+      `(platform-bump bumps platform.lock + with: inputs; Dependabot bumps the ` +
+      `uses:@ pins + gem — they can land out of step, which is what this guard catches.)\n`,
+  );
+}
 process.exit(1);
