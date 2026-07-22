@@ -10,6 +10,7 @@ run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, githu
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches:
       - main
 
@@ -18,7 +19,9 @@ permissions:
   pull-requests: write
 
 jobs:
+  # edited fires only for base retargets (changes.base present) — title/body edits stay no-ops (#145)
   preview-media:
+    if: github.event.action != 'edited' || github.event.changes.base.ref.from != ''
     uses: Adam-S-Daniel/cms-platform/.github/workflows/preview-media.yml@v0.1.1
     with:
       pr_number: ${{ github.event.pull_request.number }}
