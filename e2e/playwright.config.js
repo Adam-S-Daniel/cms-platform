@@ -48,6 +48,13 @@ const PLATFORM_META_SPECS = [
   "admin-bundle-parity.test.js",
   "admin-css-banned-patterns.test.js",
   "admin-pin-invariant.test.js",
+  // #161 — the confirm-wrap + autosave shim load-order lint (reads the three
+  // theme/admin shells + the confirm-wrap SOURCE) and the confirm-wrap unit
+  // sandbox test (reads theme/admin/confirm-wrap-local-backup.js). Both read
+  // the platform's theme/admin SOURCE tree (absent on a consumer), so they are
+  // platform-internal and testIgnored on a CONSUMER lane.
+  "admin-shim-load-order.test.js",
+  "confirm-wrap-local-backup.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.
@@ -246,6 +253,11 @@ const PLATFORM_META_SPECS = [
   // internal: a consumer doesn't ship those reusable definitions.
   "workflow-loop-branch-cleanup.test.js",
   "workflow-prod-loop-serialized.test.js",
+  // #145 — reads the canonical examples/site thin-caller DEFINITIONS + the
+  // platform's own self-dependabot-auto-merge.yml / self-secrets-scan.yml to
+  // lock the base-retarget `edited` trigger + caller-job gate. Platform-
+  // internal: a consumer ships only its own copies of these callers.
+  "workflow-retarget-edited.test.js",
   "workflow-run-name.test.js",
   "workflow-shell-glob-lint.test.js",
   "workflow-triggers.test.js",

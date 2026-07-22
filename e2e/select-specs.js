@@ -753,6 +753,19 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/publish-via-auto-merge\.js$/,
     /^(theme\/)?admin\/index\.html$/,
   ],
+  // #161 confirm-wrap + autosave shims. The load-order lint reads all three
+  // shells + the confirm-wrap source; the confirm-wrap unit sandbox reads its
+  // shim; the @admin-write e2e drives the real editorial toolbar (index-test).
+  // Trigger on a change to either shim or any admin shell that loads them.
+  "e2e/admin-shim-load-order.test.js": [
+    /^(theme\/)?admin\/(confirm-wrap-local-backup|autosave-on-hide)\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+  ],
+  "e2e/confirm-wrap-local-backup.test.js": [/^(theme\/)?admin\/confirm-wrap-local-backup\.js$/],
+  "e2e/cms-autosave.spec.js": [
+    /^(theme\/)?admin\/(confirm-wrap-local-backup|autosave-on-hide)\.js$/,
+    /^(theme\/)?admin\/index-test\.html$/,
+  ],
   "e2e/visual-regression.spec.js": [
     // Master visual gate — always include when *anything* visual could
     // have shifted. Our fanout patterns cover that.
@@ -785,6 +798,26 @@ const SPEC_RULES = {
     /^e2e\/fixture-site\/assets\/images\/uploads\//,
     /^e2e\/fixture-site-singlepage\/assets\/images\/uploads\//,
     /^e2e\/fixtures\/tiny-pixel\.png$/,
+  ],
+  // #145 — pure-fs lint (no browser/network), but it MUST run whenever any
+  // branches:[main]-filtered canonical caller (or the two platform self-*
+  // callers) or the shared YAML helper changes — that's exactly when the
+  // retarget-`edited` trigger + base-change gate could regress. Without this
+  // rule a caller-only tweak selects no workflow-*.test.js (they otherwise
+  // only run on fanout or their own change).
+  "e2e/workflow-retarget-edited.test.js": [
+    /^examples\/site\/\.github\/workflows\/dependabot-auto-merge\.yml$/,
+    /^examples\/site\/\.github\/workflows\/deploy-preview\.yml$/,
+    /^examples\/site\/\.github\/workflows\/e2e-stub\.yml$/,
+    /^examples\/site\/\.github\/workflows\/e2e-tests\.yml$/,
+    /^examples\/site\/\.github\/workflows\/parity-preview\.yml$/,
+    /^examples\/site\/\.github\/workflows\/platform-pin-consistency\.yml$/,
+    /^examples\/site\/\.github\/workflows\/preview-media\.yml$/,
+    /^examples\/site\/\.github\/workflows\/secrets-scan\.yml$/,
+    /^examples\/site\/\.github\/workflows\/visual-regression\.yml$/,
+    /^\.github\/workflows\/self-dependabot-auto-merge\.yml$/,
+    /^\.github\/workflows\/self-secrets-scan\.yml$/,
+    /^e2e\/workflow-yaml-utils\.js$/,
   ],
   // #109 — repo settings as code. The manifest lint locks repo-settings.yml
   // shape + the MANAGED_REPO_KEYS SSOT + the release.yml fan-out cross-lock;

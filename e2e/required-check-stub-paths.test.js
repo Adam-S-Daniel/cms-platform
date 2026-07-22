@@ -20,6 +20,12 @@ const { parseYaml } = require("./workflow-yaml-utils");
 // copy is linted where it lives by this same spec run from the platform
 // harness against `<site>/.github/workflows` is out of scope here; the mirror
 // invariant is enforced on the template that sites copy.
+//
+// Also locks the two callers' `pull_request.types` lists to be identical
+// (#145): a docs-only PR that gets RETARGETED onto a new base needs its
+// synthetic `e2e / e2e` stub to re-fire too, exactly like the heavy lane — if
+// `edited` (or any other type) drifted between the two, a retargeted
+// docs-only PR could hang with neither caller reporting the required context.
 
 const WF = path.join(__dirname, "..", "examples", "site", ".github", "workflows");
 const E2E = path.join(WF, "e2e-tests.yml");
@@ -59,5 +65,21 @@ test.describe("e2e required-check stub mirrors e2e-tests paths-ignore", () => {
       String(job.uses || ""),
       "the `e2e` job must call the e2e-required-stub reusable",
     ).toMatch(/e2e-required-stub\.yml@/);
+  });
+
+  // #145 — retargeted docs-only PRs need the stub to re-fire too.
+  test("stub `pull_request.types` equals e2e-tests `pull_request.types` (same set)", () => {
+    test.skip(!HAVE_BOTH, "examples/site e2e callers absent (consumed checkout)");
+    const e2eTypes = onOf(E2E).pull_request && onOf(E2E).pull_request.types;
+    const stubTypes = onOf(STUB).pull_request && onOf(STUB).pull_request.types;
+    expect(Array.isArray(e2eTypes), "e2e-tests.yml must declare on.pull_request.types").toBe(true);
+    expect(Array.isArray(stubTypes), "e2e-stub.yml must declare on.pull_request.types").toBe(true);
+    expect(
+      stubTypes.map(String),
+      "e2e-stub.yml's pull_request.types must mirror e2e-tests.yml's — otherwise a " +
+        "retargeted docs-only PR's synthetic e2e / e2e stub won't re-fire on the new " +
+        "base (or the heavy lane fires an event the stub doesn't, double-reporting). " +
+        "Update them together.",
+    ).toEqual(e2eTypes.map(String));
   });
 });
