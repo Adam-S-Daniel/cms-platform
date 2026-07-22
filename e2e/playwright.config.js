@@ -107,6 +107,13 @@ const PLATFORM_META_SPECS = [
   // scripts/audit-scheduled-runs.js helpers (consumer ships only a thin
   // wrapper) — platform-internal, self-CI only.
   "scheduled-run-health.test.js",
+  // #109 — the repo-settings-as-code lints: the manifest lint reads the root
+  // repo-settings.yml + scripts/audit-repo-settings.js (MANAGED_REPO_KEYS
+  // SSOT) + the release.yml DEFINITION; the audit unit test additionally
+  // reads the live-captured e2e/fixtures/repo-settings/*.json by literal
+  // path. Consumers ship none of that — platform-internal, self-CI only.
+  "repo-settings-manifest.test.js",
+  "repo-settings-audit.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN
@@ -129,6 +136,11 @@ const PLATFORM_META_SPECS = [
   // files must stay in lockstep. Reads .github/workflows + scripts + scaffold
   // (platform source), so platform-internal / self-CI only.
   "dev-hooks-sync.test.js",
+  // Locks the skills-sync repo-local carve-out: the reusable must keep
+  // rsync --delete yet exclude `.repo-local`-marked skills from transfer AND
+  // deletion. Reads the PLATFORM reusable workflow + skills/README.md source;
+  // platform-internal, self-CI only.
+  "skills-sync.test.js",
   // #123 — locks the visual-regression PROD baseline origin: PROD_BASE in
   // regression-video.spec.js must derive from APEX_DOMAIN (the consumer apex),
   // never a hardcoded site. Reads the platform e2e source; self-CI only.

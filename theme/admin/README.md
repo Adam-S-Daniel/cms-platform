@@ -58,6 +58,7 @@ hook, so no per-site or per-workflow step is needed.
 | `CMS_APEX` | host of `url` | live-url-banner, posts-list-enhance (preview-host construction), reviews dashboards |
 | `CMS_OAUTH_BASE_URL` | `cms.oauth_base_url` | the Decap config itself (`config.base.yml` backend `base_url`), reviews dashboards (OAuth login flow) |
 | `CMS_SITE_TITLE` | the site's `_config.yml` `title` | admin shell `document.title` (index.html, index-local.html), reviews dashboards `document.title` |
+| `CMS_BACKEND_BRANCH` | `commit.json` `branch` — set at runtime by index.html's commit-pill script, NOT by the render inject (the deploy workflows write commit.json at deploy time: `main` on prod, the PR head ref on a preview) | publish-via-auto-merge (scopes the delete-ref matcher's multi-segment recovery to the deployed backend branch, #114); unset (no/unreadable commit.json) ⇒ multi-segment recovery is disabled (fail closed) |
 
 `config-test.yml` is domain-agnostic (local/test backend) and ships as-is.
 

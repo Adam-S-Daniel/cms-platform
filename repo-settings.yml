@@ -1,0 +1,284 @@
+# repo-settings.yml — the single source of truth for GitHub REPO SETTINGS +
+# RULESETS on the platform repo and both consumers (issue #109).
+#
+# THE CONTRACT (see docs/SYNC.md "Repo settings as code"):
+#   - Settings/rulesets change ONLY via a PR to this file followed by a human
+#     running `node scripts/audit-repo-settings.js --fix --yes` (operator `gh`
+#     auth, admin on the target repo). There is NO write credential in CI —
+#     by design, so an emergency live flip can never be auto-clobbered.
+#   - The daily `repo-settings-audit` workflow re-reads the live values with
+#     per-owner READ-ONLY PATs (`REPO_SETTINGS_READ_*`, see the
+#     cms-platform-secrets skill) and files a `ci`-labelled tracking issue on
+#     any drift. RATIFY (PR the live value in here with a `# why:`) or REVERT
+#     (`--fix --yes`) the same day — never leave live != manifest.
+#   - Every value leaf carries a `# why:` comment (lint-enforced by
+#     e2e/repo-settings-manifest.test.js): the historical "why" lives next to
+#     the value. The motivating incident: the v0.1.40 #80 host-loop work found
+#     `delete_branch_on_merge` silently OFF on both consumers with no record
+#     anywhere of who flipped it or why.
+#   - Actions VARIABLES / SECRETS are OUT OF SCOPE here — they are owned by
+#     scripts/set-repo-variables.sh + skills/cms-platform-secrets/SKILL.md
+#     (which cross-references back to this manifest for settings).
+#
+# SHAPES: effective flags per repo = shallow merge(settings_defaults,
+# repos.<repo>.settings) — plain GET/PATCH `repos/{owner}/{repo}` keys, and
+# every key must be in scripts/audit-repo-settings.js MANAGED_REPO_KEYS (the
+# SSOT of what --fix may PATCH). Ruleset bodies mirror the REST ruleset PUT
+# payload (target/enforcement/conditions/rules/bypass_actors) so --fix needs
+# no translation; `repos.<repo>.rulesets` maps the LIVE ruleset name to a
+# `ruleset_library` entry.
+#
+# ACTIONS PERMISSIONS (settings, NOT the variables/secrets above) are a THIRD
+# managed surface: effective per repo = shallow merge(actions_permissions_
+# defaults, repos.<repo>.actions_permissions), every key in the script's
+# MANAGED_ACTIONS_PERMISSION_KEYS. Unlike the repo flags these do NOT live on
+# `repos/{owner}/{repo}` — each is its own GET/PUT endpoint:
+#   - sha_pinning_required -> repos/{owner}/{repo}/actions/permissions (the PUT
+#     echoes the live `enabled` + `allowed_actions`, never a bare partial PUT).
+#   - approval_policy -> repos/{owner}/{repo}/actions/permissions/
+#     fork-pr-contributor-approval (HTTP 422 on a PRIVATE repo -> the audit
+#     SKIPS it as an operational skip, never drift).
+version: 1
+
+settings_defaults:
+  # why: identity key — audited for drift but --fix refuses to PATCH it
+  # (FIX_FORBIDDEN_KEYS); changing a default branch is a manual, human-paced
+  # migration, never an automated revert.
+  default_branch: main
+  # why: the platform DESIGN assumes merged cms/* editorial branches
+  # auto-delete (cleanup-stale-fixture-branches.yml header calls this the
+  # steady state; Decap re-edits 422 on a lingering merged branch — #80 layer
+  # 11). Both consumers had silently drifted to false with no record; v0.1.40
+  # re-enabled it per owner direction with a regression watch — the incident
+  # that motivated #109 and this manifest.
+  delete_branch_on_merge: true
+  # why: squash is the merge method every bot path arms (auto-merge-when-ready,
+  # cms-automerge-nudge, dependabot-rearm-sweep all use --squash).
+  allow_squash_merge: true
+  # why: as-found on all three repos; the main rulesets' pull_request rule
+  # allows merge/squash/rebase, so the repo-level toggles match.
+  allow_merge_commit: true
+  # why: as-found on all three repos (see allowed_merge_methods in the main
+  # ruleset library entries).
+  allow_rebase_merge: true
+  # why: REQUIRED — the whole CMS publish chain arms NATIVE auto-merge
+  # (Decap canary PRs, the nudge, platform-bump, dependabot-auto-merge); the
+  # cms-platform-secrets skill checklist calls this setting out explicitly.
+  allow_auto_merge: true
+  # why: lets bots/UI refresh a stale PR head against the base — the #1812
+  # stale-merge-snapshot class the nudge/recoverers work around.
+  allow_update_branch: true
+  # why: as-found GitHub default on all three; squash commits title from the
+  # commit (1-commit PR) or the PR title.
+  squash_merge_commit_title: COMMIT_OR_PR_TITLE
+  # why: as-found GitHub default on all three.
+  squash_merge_commit_message: COMMIT_MESSAGES
+  # why: as-found GitHub default on all three.
+  merge_commit_title: MERGE_MESSAGE
+  # why: as-found GitHub default on all three.
+  merge_commit_message: PR_TITLE
+  # why: as-found on all three (GitHub default).
+  use_squash_pr_title_as_default: false
+  # why: the automation FILES tracking issues here (scheduled-run-health,
+  # editorial audits, THIS audit) — issues are the alert channel.
+  has_issues: true
+  # why: docs live in-repo (docs/, AGENTS.md, skills/); a wiki would be an
+  # unguarded, unsynced content surface.
+  has_wiki: false
+  # why: unused; as-found off on all three.
+  has_projects: false
+  # why: unused; as-found off on all three.
+  has_discussions: false
+  # why: bots commit via the API (Decap, the loops, platform-bump) — a
+  # signoff requirement would break every automated write path.
+  web_commit_signoff_required: false
+
+# Actions-permissions defaults (the THIRD managed surface — own GET/PUT
+# endpoints, keyed to MANAGED_ACTIONS_PERMISSION_KEYS; see the header). Both
+# leaves are enforced identically on all three repos, so they live only here.
+actions_permissions_defaults:
+  # why: require every workflow `uses:` to be pinned to a full-length commit
+  # SHA — the repo-level enforcement of AGENTS.md's "SHA-pin every workflow
+  # uses:" policy (and the pin-actions-to-sha skill); a tag/branch ref can be
+  # silently re-pointed at malicious code. Managed on GET/PUT
+  # repos/{owner}/{repo}/actions/permissions; --fix's PUT echoes the live
+  # `enabled` + `allowed_actions` so enforcing this can never disable Actions or
+  # narrow the allowed-actions policy as a side effect. As-found 2026-07-13:
+  # adamdaniel.ai + jodidaniel.com already true; cms-platform false — the drift
+  # this leaf corrects on the next `--fix`.
+  sha_pinning_required: true
+  # why: require approval before ANY outside collaborator's fork PR runs
+  # workflows (not just first-time contributors) — closes the fork-PR
+  # pwn-request / secrets-exfil window. Managed on GET/PUT
+  # repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval. The
+  # SHORT form `all_external_contributors` is the value the live API returns for
+  # "all outside collaborators" (verified 2026-07-13 — NOT the long
+  # `require_approval_for_all_outside_collaborators` form). GUARD: this endpoint
+  # returns HTTP 422 on a PRIVATE repo ("not allowed for private repositories")
+  # — the audit treats that as an operational SKIP, never drift; all three repos
+  # are currently public so the value applies. As-found 2026-07-13 on all three:
+  # first_time_contributors — the drift this leaf corrects on the next `--fix`.
+  approval_policy: all_external_contributors
+
+ruleset_library:
+  # why: = live cms-platform ruleset 17169281 as-found 2026-07-10 — protects
+  # main behind the three self-CI lanes (actionlint / ruby-theme-specs /
+  # node-unit-lints) with PR-only writes and no bypass.
+  platform-main:
+    target: branch
+    enforcement: active
+    conditions:
+      ref_name:
+        include: ["refs/heads/main"]
+        exclude: []
+    rules:
+      - type: deletion
+      - type: non_fast_forward
+      - type: pull_request
+        parameters:
+          required_approving_review_count: 0
+          dismiss_stale_reviews_on_push: false
+          required_reviewers: []
+          require_code_owner_review: false
+          require_last_push_approval: false
+          required_review_thread_resolution: false
+          allowed_merge_methods: [merge, squash, rebase]
+      - type: required_status_checks
+        parameters:
+          strict_required_status_checks_policy: false
+          do_not_enforce_on_create: true
+          required_status_checks:
+            - context: actionlint
+            - context: ruby-theme-specs
+            - context: node-unit-lints
+    bypass_actors: []
+
+  # why: = live adamdaniel.ai ruleset 13985217 as-found 2026-07-10 — the
+  # CANONICAL consumer main protection: PR-only writes gated on the six
+  # consumer check contexts, no bypass (bypass_actors:[] is what forced the
+  # v0.1.32 seedFixtureViaPr fix — direct PUTs to main 409 by design).
+  consumer-main:
+    target: branch
+    enforcement: active
+    conditions:
+      ref_name:
+        include: ["refs/heads/main"]
+        exclude: []
+    rules:
+      - type: deletion
+      - type: non_fast_forward
+      - type: pull_request
+        parameters:
+          required_approving_review_count: 0
+          dismiss_stale_reviews_on_push: false
+          required_reviewers: []
+          require_code_owner_review: false
+          require_last_push_approval: false
+          required_review_thread_resolution: false
+          allowed_merge_methods: [merge, squash, rebase]
+      - type: required_status_checks
+        parameters:
+          strict_required_status_checks_policy: false
+          do_not_enforce_on_create: true
+          required_status_checks:
+            - context: editorial / validate-content
+            - context: scan / scan
+            - context: parity / parity
+            - context: preview-media / preview-media
+            - context: e2e / e2e
+            - context: visual-regression / approve-regression
+    bypass_actors: []
+
+  # why: = live jodidaniel.com ruleset 17032014 as-found 2026-07-10 —
+  # CAPTURED DRIFT, encoded verbatim so the audit lands at zero on day one.
+  # vs consumer-main it is MISSING required_status_checks + non_fast_forward
+  # and grants an always-on admin bypass. Phase 2 (a follow-up PR, needs the
+  # six contexts verified reporting on a live jodidaniel PR first) deletes
+  # this entry and points jodidaniel main at consumer-main — see issue #109.
+  consumer-main-jodidaniel-DRIFTED:
+    target: branch
+    enforcement: active
+    conditions:
+      ref_name:
+        include: ["refs/heads/main"]
+        exclude: []
+    rules:
+      - type: deletion
+      - type: pull_request
+        parameters:
+          required_approving_review_count: 0
+          dismiss_stale_reviews_on_push: false
+          required_reviewers: []
+          require_code_owner_review: false
+          require_last_push_approval: false
+          required_review_thread_resolution: false
+          allowed_merge_methods: [merge, squash, rebase]
+    bypass_actors:
+      - actor_id: 5
+        actor_type: RepositoryRole
+        bypass_mode: always
+
+  # why: = live adamdaniel.ai 15756474 / jodidaniel.com 17032043 as-found
+  # 2026-07-10 (byte-equivalent on both consumers) — every automation branch
+  # prefix must merge via PR gated on `validate-content`. NOTE: that is the
+  # RULESET context string, NOT the check-run name `editorial /
+  # validate-content` (the suffix-tolerant mapping documented in AGENTS.md);
+  # actor_id 5 = RepositoryRole "admin" (repo admins may bypass on feature
+  # branches — main stays bypass-free).
+  cms-feature-branches:
+    target: branch
+    enforcement: active
+    conditions:
+      ref_name:
+        include:
+          - refs/heads/cms/**
+          - refs/heads/claude/**
+          - refs/heads/feat/**
+          - refs/heads/fix/**
+          - refs/heads/chore/**
+          - refs/heads/test/**
+          - refs/heads/ci/**
+          - refs/heads/docs/**
+        exclude: []
+    rules:
+      - type: non_fast_forward
+      - type: pull_request
+        parameters:
+          required_approving_review_count: 0
+          dismiss_stale_reviews_on_push: false
+          required_reviewers: []
+          require_code_owner_review: false
+          require_last_push_approval: false
+          required_review_thread_resolution: false
+          allowed_merge_methods: [squash, merge]
+      - type: required_status_checks
+        parameters:
+          strict_required_status_checks_policy: false
+          do_not_enforce_on_create: true
+          required_status_checks:
+            - context: validate-content
+    bypass_actors:
+      - actor_id: 5
+        actor_type: RepositoryRole
+        bypass_mode: always
+
+repos:
+  Adam-S-Daniel/cms-platform:
+    settings:
+      # why: as-found 2026-07-10 — the platform repo never got the v0.1.40
+      # consumer flip (only merged platform/bump-* and feat/* branches linger
+      # here, no Decap editorial branches), so it still runs the pre-v0.1.40
+      # value. Phase 2 (issue #109) either flips this to true to match the
+      # design (cleanup-stale-fixture-branches.yml header) or ratifies false
+      # with a real reason — either way THIS line records the decision.
+      delete_branch_on_merge: false
+    rulesets:
+      main: platform-main
+  Adam-S-Daniel/adamdaniel.ai:
+    rulesets:
+      main: consumer-main
+      cms-feature-branches: cms-feature-branches
+  jodidaniel/jodidaniel.com:
+    rulesets:
+      main: consumer-main-jodidaniel-DRIFTED
+      cms-feature-branches: cms-feature-branches

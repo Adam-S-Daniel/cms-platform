@@ -1,7 +1,11 @@
 # Reusable down-sync of the platform's canonical skills into a consuming site.
 # A site calls this on a schedule (or dispatch); it opens a PR when the site's
 # skills drift from the platform at the pinned ref. Platform-authoritative:
-# the destination is rsync --delete'd to match the platform exactly.
+# the destination is rsync --delete'd to match the platform exactly, EXCEPT for
+# repo-local skills — a skill directory the site owns and marks with a
+# `.repo-local` file is never overwritten or deleted (see skills/README.md).
+# This keeps platform deletions propagating (what --delete buys) while letting a
+# site keep its own skills; a plain "merge" would silently lose the former.
 # Opt-in by destination presence (issue #83): a consumer that keeps no local
 # skills mirror (no entry at `dest`) opts out — this is a no-op for it and we
 # never force a mirror into existence. The canonical workflow stays present on
@@ -37,9 +41,9 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
       - name: Fetch platform skills
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
@@ -63,9 +67,30 @@ jobs:
             exit 0
           fi
           mkdir -p "$DEST"
-          rsync -a --delete .cms-platform/skills/ "$DEST"/
+          # Repo-local carve-out: a site owns a skill by dropping a `.repo-local`
+          # marker file in that skill's directory. Such a skill is excluded from
+          # the transfer (never overwritten) AND from --delete (never removed) —
+          # rsync's --exclude protects matching paths from deletion unless
+          # --delete-excluded is given, which it is NOT. Everything unmarked stays
+          # platform-authoritative, so a skill removed from the platform is still
+          # deleted here. Excludes are anchored at the skills-dir root ("/name/")
+          # since skills are flat, one directory per skill.
+          excludes=()
+          while IFS= read -r -d '' marker; do
+            name="$(basename "$(dirname "$marker")")"
+            excludes+=( "--exclude=/${name}/" )
+            echo "repo-local skill preserved: ${name}"
+          done < <(find "$DEST" -mindepth 2 -maxdepth 2 -name .repo-local -print0)
+          rsync -a --delete ${excludes[@]+"${excludes[@]}"} .cms-platform/skills/ "$DEST"/
           rm -rf .cms-platform
-          if git diff --quiet -- "$DEST"; then
+          # Detect drift with `git status --porcelain`, NOT `git diff --quiet`:
+          # rsync brings NEW platform skills in as UNTRACKED files, and
+          # `git diff` ignores untracked paths — so an additive-only sync (the
+          # common case now that repo-local skills are no longer deleted to
+          # force a tracked change) would be silently dropped and a site would
+          # never receive new platform skills. --porcelain reports untracked,
+          # modified, and deleted paths alike.
+          if [ -z "$(git status --porcelain -- "$DEST")" ]; then
             echo "skills already in sync with ${PLATFORM}@${REF}"; exit 0
           fi
           BRANCH="platform/skills-sync"
@@ -77,6 +102,6 @@ jobs:
           git push -f origin "$BRANCH"
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
             --title "Sync skills from ${PLATFORM}@${REF}" \
-            --body "Automated skills sync from \`${PLATFORM}@${REF}\`. Platform-authoritative (rsync --delete)." \
+            --body "Automated skills sync from \`${PLATFORM}@${REF}\`. Platform-authoritative (rsync --delete); skills marked \`.repo-local\` are preserved." \
           || gh pr edit "$BRANCH" --title "Sync skills from ${PLATFORM}@${REF}" \
             --body "Automated skills sync from \`${PLATFORM}@${REF}\`."

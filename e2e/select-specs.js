@@ -790,6 +790,21 @@ const SPEC_RULES = {
     /^\.github\/workflows\/cms-publish-loop-host\.yml$/,
     /^\.github\/actions\/await-prod-deploy\//,
   ],
+  // #109 — repo settings as code. The manifest lint locks repo-settings.yml
+  // shape + the MANAGED_REPO_KEYS SSOT + the release.yml fan-out cross-lock;
+  // the audit unit test locks the normalization/diff/fingerprint helpers
+  // against the live-captured fixtures. Re-select each on any edit to the
+  // manifest, the script, or (manifest lint) the fan-out list it cross-locks.
+  "e2e/repo-settings-manifest.test.js": [
+    /^repo-settings\.yml$/,
+    /^scripts\/audit-repo-settings\.js$/,
+    /^\.github\/workflows\/release\.yml$/,
+  ],
+  "e2e/repo-settings-audit.test.js": [
+    /^repo-settings\.yml$/,
+    /^scripts\/audit-repo-settings\.js$/,
+    /^e2e\/fixtures\/repo-settings\//,
+  ],
 };
 
 function getChangedFiles(baseRef) {

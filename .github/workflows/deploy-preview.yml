@@ -73,12 +73,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Checkout platform scripts
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
@@ -105,7 +105,7 @@ jobs:
           fi
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9  # v1.310.0 (2026-05-20)
+        uses: ruby/setup-ruby@6e5d382445ae5590b7449d8b3bc8cb1c2c27f617  # v1.310.0 (2026-05-20)
         with:
           ruby-version: ${{ inputs.ruby_version }}
           bundler-cache: true
@@ -419,7 +419,7 @@ jobs:
       - name: Checkout platform scripts
         # Only the slug script is needed here; pin to the same ref so the
         # teardown computes the identical bounded slug the deploy job used.
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6.0.2 (2026-01-09)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
