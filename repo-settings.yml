@@ -189,34 +189,11 @@ ruleset_library:
             - context: visual-regression / approve-regression
     bypass_actors: []
 
-  # why: = live jodidaniel.com ruleset 17032014 as-found 2026-07-10 —
-  # CAPTURED DRIFT, encoded verbatim so the audit lands at zero on day one.
-  # vs consumer-main it is MISSING required_status_checks + non_fast_forward
-  # and grants an always-on admin bypass. Phase 2 (a follow-up PR, needs the
-  # six contexts verified reporting on a live jodidaniel PR first) deletes
-  # this entry and points jodidaniel main at consumer-main — see issue #109.
-  consumer-main-jodidaniel-DRIFTED:
-    target: branch
-    enforcement: active
-    conditions:
-      ref_name:
-        include: ["refs/heads/main"]
-        exclude: []
-    rules:
-      - type: deletion
-      - type: pull_request
-        parameters:
-          required_approving_review_count: 0
-          dismiss_stale_reviews_on_push: false
-          required_reviewers: []
-          require_code_owner_review: false
-          require_last_push_approval: false
-          required_review_thread_resolution: false
-          allowed_merge_methods: [merge, squash, rebase]
-    bypass_actors:
-      - actor_id: 5
-        actor_type: RepositoryRole
-        bypass_mode: always
+  # consumer-main-jodidaniel-DRIFTED removed 2026-07-22 (phase 2, #172):
+  # jodidaniel main converged to consumer-main below. The as-found drifted
+  # capture (missing required_status_checks + non_fast_forward, always-on
+  # admin bypass) is preserved at
+  # e2e/fixtures/repo-settings/jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json.
 
   # why: = live adamdaniel.ai 15756474 / jodidaniel.com 17032043 as-found
   # 2026-07-10 (byte-equivalent on both consumers) — every automation branch
@@ -264,14 +241,6 @@ ruleset_library:
 
 repos:
   Adam-S-Daniel/cms-platform:
-    settings:
-      # why: as-found 2026-07-10 — the platform repo never got the v0.1.40
-      # consumer flip (only merged platform/bump-* and feat/* branches linger
-      # here, no Decap editorial branches), so it still runs the pre-v0.1.40
-      # value. Phase 2 (issue #109) either flips this to true to match the
-      # design (cleanup-stale-fixture-branches.yml header) or ratifies false
-      # with a real reason — either way THIS line records the decision.
-      delete_branch_on_merge: false
     rulesets:
       main: platform-main
   Adam-S-Daniel/adamdaniel.ai:
@@ -280,5 +249,12 @@ repos:
       cms-feature-branches: cms-feature-branches
   jodidaniel/jodidaniel.com:
     rulesets:
-      main: consumer-main-jodidaniel-DRIFTED
+      # why: converged 2026-07-22 per phase 2 of #109 (issue #172) — jodidaniel
+      # main now points at the shared consumer-main library entry instead of
+      # the captured-drift consumer-main-jodidaniel-DRIFTED entry (deleted,
+      # see ruleset_library above for the tombstone). Precondition verified
+      # before enforcement: all six required contexts reported SUCCESS on
+      # jodidaniel#94 (full v0.1.65 bump suite) and jodidaniel#99 (docs-only
+      # PR, skip-with-success path).
+      main: consumer-main
       cms-feature-branches: cms-feature-branches
