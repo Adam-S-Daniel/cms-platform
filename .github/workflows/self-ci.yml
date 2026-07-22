@@ -103,7 +103,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@6e5d382445ae5590b7449d8b3bc8cb1c2c27f617  # v1.310.0 (2026-05-20)
+        uses: ruby/setup-ruby@a30dfa457ad68707b8b910ac3a244714b61c0626  # v1.310.0 (2026-05-20)
         with:
           # The specs stub the Liquid/Jekyll hooks they need and only use the
           # stdlib (fileutils/tmpdir), so no `bundle install` is required —
