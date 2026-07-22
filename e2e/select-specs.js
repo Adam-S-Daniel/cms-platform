@@ -303,6 +303,9 @@ const SPEC_RULES = {
   // admin/ change and when the shared visibility helper changes.
   "e2e/admin-no-occlusion.spec.js": [/^(theme\/)?admin\//, /^e2e\/ui-visibility\.js$/],
   "e2e/detect-changed-pages.test.js": [/^e2e\/detect-changed-pages\.js$/],
+  // #185 — HOST_REPO must stay env-derived (CMS_REPO / GITHUB_REPOSITORY),
+  // never re-hardcoded to a single consumer's repo.
+  "e2e/decap-pat.test.js": [/^e2e\/decap-pat\.js$/],
   // #33 — cms-smoke hard-asserts the full base sidebar; its base_collections
   // skip-guard is keyed on the capability helper + the guard registry, so an
   // edit to either must re-select it.

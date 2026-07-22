@@ -195,6 +195,15 @@ test.describe("select-specs", () => {
     expect(r.files).toContain("e2e/cms-publish-loop-preview.spec.js");
   });
 
+  // #185 — HOST_REPO must stay env-derived; the local-lane unit test
+  // (e2e/decap-pat.test.js) that locks this is a `local`-lane spec, so it
+  // shows up on the DEFAULT lane, not the `real`-lane view checked above.
+  test("decap-pat helper change → its own HOST_REPO unit test (default lane)", () => {
+    const r = selectSpecs(["e2e/decap-pat.js"]);
+    expect(r.scope).toBe("subset");
+    expect(r.files).toContain("e2e/decap-pat.test.js");
+  });
+
   // ── Preview delete-published spec (issue #1004) ────────────────────
 
   test("cms-delete-published-preview is registered HEAVY (shard-budget neutral)", () => {
