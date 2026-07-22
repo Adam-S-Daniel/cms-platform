@@ -125,6 +125,12 @@
     if (!window.repoFilesUnpublished) window.repoFilesUnpublished = [];
   </script>
 
+  <!--
+    confirm-wrap-local-backup shim (#161) — see admin/index.html. Non-deferred
+    + BEFORE decap-cms.js so window.confirm is wrapped before Decap captures
+    it, suppressing the misleading "restore local backup?" dialog. -->
+  <script src="confirm-wrap-local-backup.js"></script>
+
   <script src="https://unpkg.com/decap-cms@3.14.1/dist/decap-cms.js"></script>
 
   <!-- "HTML Embed" editor component — see admin/index.html for rationale. -->
@@ -144,6 +150,12 @@
 
   <!-- Posts list dashboard — see admin/index.html (#1042). -->
   <script src="posts-list-enhance.js" defer></script>
+
+  <!-- Autosave-on-hide shim (#161) — see admin/index.html. Deferred, after
+       decap-cms.js. This shell runs editorial_workflow (config-test.yml), so
+       the "Save" toolbar button exists here and the autosave Save-click is
+       exercised by e2e/cms-autosave.spec.js. -->
+  <script src="autosave-on-hide.js" defer></script>
 
   <!--
     Status banner updater. Once the user navigates to the seeded

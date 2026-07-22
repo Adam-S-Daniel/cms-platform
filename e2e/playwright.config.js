@@ -48,6 +48,13 @@ const PLATFORM_META_SPECS = [
   "admin-bundle-parity.test.js",
   "admin-css-banned-patterns.test.js",
   "admin-pin-invariant.test.js",
+  // #161 — the confirm-wrap + autosave shim load-order lint (reads the three
+  // theme/admin shells + the confirm-wrap SOURCE) and the confirm-wrap unit
+  // sandbox test (reads theme/admin/confirm-wrap-local-backup.js). Both read
+  // the platform's theme/admin SOURCE tree (absent on a consumer), so they are
+  // platform-internal and testIgnored on a CONSUMER lane.
+  "admin-shim-load-order.test.js",
+  "confirm-wrap-local-backup.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.
