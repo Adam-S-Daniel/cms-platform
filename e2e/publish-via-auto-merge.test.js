@@ -225,6 +225,99 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(calls).toHaveLength(1); // only the PATCH; NO ref-create/PR/label recovery
   });
 
+  // BACKEND-BRANCH SCOPING (#114): Decap PATCHes
+  // git/refs/heads/${encodeURIComponent(backend.branch)}, so a MULTI-segment
+  // backend branch (a preview deploy's PR head ref) arrives percent-encoded
+  // as ONE raw segment — the matcher already matches it and decodeURIComponent
+  // recovers the true name. recover() only proceeds for such a ref when it
+  // EQUALS window.CMS_BACKEND_BRANCH (set from commit.json.branch by the
+  // index.html commit-pill script); unknown/mismatched fails CLOSED.
+  test("ENCODED multi-segment delete PATCH (heads/cms%2Fposts%2Fslug) RECOVERS when it equals window.CMS_BACKEND_BRANCH (#114)", async () => {
+    const { fetch, queueResponse, calls, sandbox } = bootShim();
+    sandbox.window.CMS_BACKEND_BRANCH = "cms/posts/slug";
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    queueResponse({ ref: "refs/heads/cms/posts/delete-deadbeef-1" }, { status: 201 });
+    queueResponse({ number: 888 }, { status: 201 });
+    queueResponse([{ name: "cms/ready" }, { name: "decap-cms/pending_publish" }], { status: 200 });
+
+    const res = await fetch(
+      `${API_BASE}/git/refs/heads/${encodeURIComponent("cms/posts/slug")}`,
+      {
+        method: "PATCH",
+        headers: { Authorization: "Bearer t" },
+        body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+      },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.merged).toBe(true);
+    expect(body.sha).toBe("pending-auto-merge-delete");
+    // The synthetic ref echoes the DECODED multi-segment branch.
+    expect(body.ref).toBe("refs/heads/cms/posts/slug");
+
+    expect(calls).toHaveLength(4);
+    expect(calls[1].url).toBe(`${API_BASE}/git/refs`);
+    expect(JSON.parse(calls[1].body).sha).toBe("deadbeefcafef00d");
+    // The delete PR's base is the decoded multi-segment backend branch.
+    expect(calls[2].url).toBe(`${API_BASE}/pulls`);
+    expect(JSON.parse(calls[2].body).base).toBe("cms/posts/slug");
+    expect(calls[3].url).toBe(`${API_BASE}/issues/888/labels`);
+    expect(JSON.parse(calls[3].body)).toEqual({
+      labels: ["cms/ready", "decap-cms/pending_publish"],
+    });
+  });
+
+  test("ENCODED multi-segment delete PATCH fails CLOSED when window.CMS_BACKEND_BRANCH is unset (the unit-sandbox / no-commit.json case, #114)", async () => {
+    const { fetch, queueResponse, calls, sandbox } = bootShim();
+    // The sandbox never sets it — exactly the fail-closed environment.
+    expect(sandbox.window.CMS_BACKEND_BRANCH).toBe(undefined);
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    const res = await fetch(
+      `${API_BASE}/git/refs/heads/${encodeURIComponent("cms/posts/slug")}`,
+      {
+        method: "PATCH",
+        headers: { Authorization: "Bearer t" },
+        body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+      },
+    );
+    expect(res.status).toBe(422); // original 422 passes through untouched
+    expect(calls).toHaveLength(1); // NO recovery POSTs
+  });
+
+  test("ENCODED multi-segment delete PATCH fails CLOSED on a MISMATCHED window.CMS_BACKEND_BRANCH (prod backend, stray preview-shaped PATCH, #114)", async () => {
+    const { fetch, queueResponse, calls, sandbox } = bootShim();
+    sandbox.window.CMS_BACKEND_BRANCH = "main";
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    const res = await fetch(
+      `${API_BASE}/git/refs/heads/${encodeURIComponent("cms/posts/slug")}`,
+      {
+        method: "PATCH",
+        headers: { Authorization: "Bearer t" },
+        body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+      },
+    );
+    expect(res.status).toBe(422); // original 422 passes through untouched
+    expect(calls).toHaveLength(1); // NO recovery POSTs
+  });
+
+  test("single-segment delete PATCH (heads/main) still recovers with window.CMS_BACKEND_BRANCH unset — the legacy prod path is NOT gated (#114)", async () => {
+    const { fetch, queueResponse, calls, sandbox } = bootShim();
+    expect(sandbox.window.CMS_BACKEND_BRANCH).toBe(undefined);
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    queueResponse({ ref: "refs/heads/cms/posts/delete-deadbeef-1" }, { status: 201 });
+    queueResponse({ number: 999 }, { status: 201 });
+    queueResponse([{ name: "cms/ready" }, { name: "decap-cms/pending_publish" }], { status: 200 });
+    const res = await fetch(`${API_BASE}/git/refs/heads/main`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer t" },
+      body: JSON.stringify({ sha: "deadbeefcafef00d", force: false }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).merged).toBe(true);
+    expect(calls).toHaveLength(4);
+    expect(JSON.parse(calls[2].body).base).toBe("main");
+  });
+
   test("delete-ref does NOT match a non-PATCH verb on /git/refs/heads/main (e.g. DELETE)", async () => {
     const { fetch, queueResponse, calls } = bootShim();
     queueResponse({ message: "Repository rule violations found" }, { status: 422 });

@@ -525,6 +525,10 @@ Next:
      org owner must approve the CMS OAuth App before editors can save (login
      works, but saves fail until then — see jodidaniel#27). Check with:
        node <cms-platform>/scripts/preflight-oauth.js --repo ${owner}/${repo}
+ 10. Add ${owner}/${repo} to cms-platform's repo-settings.yml under \`repos:\`
+     (usually \`main: consumer-main\` + \`cms-feature-branches\`) so the daily
+     repo-settings drift audit governs the new repo's settings/rulesets, then
+     apply them: node <cms-platform>/scripts/audit-repo-settings.js --fix --yes --repo ${owner}/${repo}
 
 Resource prefix: ${prefix}   Buckets: ${prefix}-{cfn-artifacts,previews,production}
 `;

@@ -98,3 +98,83 @@ This **complements `platform-drift-guard`**: drift-guard guards file **content**
 guards **version consistency** (all the version references must agree on one
 release). A consumer adopting the caller reconciles its pins to a single release
 in the same change.
+
+## Repo settings as code (#109)
+
+GitHub repo settings (`delete_branch_on_merge`, merge-method toggles,
+auto-merge enablement) and branch-protection **rulesets** are declared in
+**`repo-settings.yml`** at the platform root — for the platform repo AND both
+consumers. Live-only changes are invisible to git and undiscoverable after
+the fact: the motivating incident was v0.1.40 having to re-enable
+`delete_branch_on_merge` on both consumers with no record anywhere of why it
+had ever been turned off, while the consumers' `main` rulesets had silently
+skewed with no guard analogous to `platform-pin-consistency`.
+
+**The mechanism (audit-first, human apply):**
+
+- `repo-settings.yml` — the manifest. Effective flags per repo =
+  shallow-merge of `settings_defaults` + the repo's `settings:` override;
+  ruleset bodies live in a shared `ruleset_library` and mirror the REST PUT
+  payload. Every value leaf carries a `# why:` comment — lint-enforced by
+  `e2e/repo-settings-manifest.test.js`, which also locks every settings key
+  to the script's `MANAGED_REPO_KEYS` (the SSOT of what `--fix` may PATCH)
+  and cross-locks the `release.yml` fan-out consumers to the managed set.
+- **Actions permissions** are a THIRD managed surface —
+  `actions_permissions_defaults` (+ optional per-repo `actions_permissions`
+  overrides), keyed to `MANAGED_ACTIONS_PERMISSION_KEYS`. These are NOT part
+  of `repos/{owner}/{repo}`; each is its own GET/PUT endpoint:
+  - `sha_pinning_required` (`true`) →
+    `repos/{owner}/{repo}/actions/permissions` — require every workflow
+    `uses:` to be pinned to a full-length commit SHA. The `--fix` PUT **echoes
+    the live `enabled` + `allowed_actions`** back alongside it, so enforcing
+    the pin can never disable Actions or narrow the allowed-actions policy.
+  - `approval_policy` (`all_external_contributors` — the SHORT form the live
+    API returns for "all outside collaborators", **not**
+    `require_approval_for_all_outside_collaborators`) →
+    `repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval` —
+    require approval before any outside collaborator's fork PR runs workflows.
+    **This endpoint returns HTTP 422 on a private repo** ("not allowed for
+    private repositories"); the audit treats that as an operational **skip**
+    (informational, never drift). All three repos are public today, so the
+    value applies. As-found 2026-07-13 the consumers already require SHA
+    pinning; cms-platform did not, and all three sat at
+    `first_time_contributors` — the drift the next `--fix` corrects.
+- `scripts/audit-repo-settings.js` — read-only drift audit (exit 2 on
+  drift), `--issue` tracking-issue lifecycle (single `ci`-labelled issue
+  found via a hidden marker, fingerprint-deduped comments, auto-close on a
+  clean scan — the `audit-scheduled-runs.js` exit contract: a red run means
+  the alerting layer broke), and the human-run `--fix [--yes]` apply (plan
+  printed first; only drifted flag keys PATCHed; rulesets PUT by name with
+  the full library body; live-only rulesets NEVER deleted; `default_branch`
+  audited but manual-only; a live ruleset carrying an unknown
+  non-allowlisted field is fix-SKIPPED — the lossy-PUT guard). Anti-flap
+  normalization is fixture-locked by `e2e/repo-settings-audit.test.js`.
+- `.github/workflows/repo-settings-audit.yml` — daily scheduled audit, plus
+  a push-triggered run on manifest changes. **No write credential in CI** —
+  reads use per-owner fine-grained `REPO_SETTINGS_READ_*` PATs
+  (Administration: **Read-only**; minting/verification in the
+  `cms-platform-secrets` skill), writes are operator-only.
+
+**Ratify-or-revert protocol:** when the audit files drift, the same day
+either RATIFY (PR the live value into `repo-settings.yml` with a `# why:`)
+or REVERT (`node scripts/audit-repo-settings.js --fix --yes --repo
+<owner/repo>`). Emergency live flips are allowed precisely because CI never
+auto-clobbers them — but they must be ratified or reverted, never left
+silent.
+
+**Rejected alternatives (recorded so we don't re-litigate):**
+
+- *safe-settings (GitHub app)* — org-only; `Adam-S-Daniel` is a User account.
+- *Probot settings app* — applies but never DETECTS drift (the motivating
+  incident class), and grants a third party admin on every repo.
+- *Terraform* — viable, but loses at 3-repo scale: a state backend, an
+  Admin-R/W credential in CI, and provider lag on new GitHub fields.
+  Tipping conditions to revisit it: repo count > ~6, org-level
+  settings/teams/webhooks in scope, multi-human plan review, or GitHub
+  settings churn too heavy to hand-normalize.
+
+Actions **variables/secrets stay out of scope** here — they are owned by
+`scripts/set-repo-variables.sh` + the `cms-platform-secrets` skill (which
+cross-reference back to `repo-settings.yml` for settings). Actions
+**permissions** (SHA pinning, fork-PR approval) are settings, not
+variables/secrets, and ARE managed here (see above).

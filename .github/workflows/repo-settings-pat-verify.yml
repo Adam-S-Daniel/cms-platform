@@ -1,0 +1,107 @@
+# Verify the read-only PATs used by repo-settings-audit.yml are correctly scoped:
+# for each owner's PAT, prove it CAN read repo settings + rulesets (positive) and
+# CANNOT write (negative -- the 403 proof matters as much as the reads). Runs on
+# manual dispatch and whenever this file changes (so a PR validates it live).
+#
+# The negative write probe PATCHes has_wiki back to its CURRENT value, so an
+# unexpected success is a no-op rather than a real change.
+name: repo-settings PAT verify
+run-name: >-
+  ${{ github.event_name == 'pull_request' && format('PAT verify — PR #{0}', github.event.number)
+     || format('PAT verify — manual @{0}', github.actor) }}
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/repo-settings-pat-verify.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repo-settings-pat-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - owner: Adam-S-Daniel
+            repo: Adam-S-Daniel/cms-platform
+          - owner: Adam-S-Daniel
+            repo: Adam-S-Daniel/adamdaniel.ai
+          - owner: jodidaniel
+            repo: jodidaniel/jodidaniel.com
+    name: verify ${{ matrix.owner }} PAT
+    env:
+      # Both secrets are exposed to the job; the script selects the one matching
+      # matrix.owner (avoids dynamic secrets[...] indexing).
+      TOKEN_ADAM_S_DANIEL: ${{ secrets.REPO_SETTINGS_READ_ADAM_S_DANIEL }}
+      TOKEN_JODIDANIEL: ${{ secrets.REPO_SETTINGS_READ_JODIDANIEL }}
+      OWNER: ${{ matrix.owner }}
+      REPO: ${{ matrix.repo }}
+    steps:
+      - name: Verify ${{ matrix.owner }} read-only PAT against ${{ matrix.repo }}
+        run: |
+          set -uo pipefail
+          case "$OWNER" in
+            Adam-S-Daniel) GH_TOKEN="$TOKEN_ADAM_S_DANIEL" ;;
+            jodidaniel)    GH_TOKEN="$TOKEN_JODIDANIEL" ;;
+            *) echo "::error::unknown owner '$OWNER'"; exit 1 ;;
+          esac
+          export GH_TOKEN
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::secret for $OWNER is empty/unset — add the REPO_SETTINGS_READ_$OWNER secret"
+            exit 1
+          fi
+
+          fail=0
+          echo "== Verifying read-only PAT for $OWNER against $REPO =="
+
+          # Positive 1: Administration:Read -> GET actions/permissions returns 200.
+          # NOTE: do NOT probe delete_branch_on_merge here — it is Contents-gated
+          # (needs contents:read+write to be visible), so it is absent for a
+          # correctly read-only fine-grained PAT even WITH Administration:Read.
+          # actions/permissions requires Administration:Read and has no public
+          # exemption, so it is the reliable positive proof (200 = has it).
+          if gh api "repos/$REPO/actions/permissions" >/dev/null 2>/tmp/e1; then
+            echo "PASS  positive: actions/permissions readable (Administration:Read present + repo in scope)"
+          else
+            echo "::error::positive failed: actions/permissions not readable — PAT lacks Administration:Read, or repo not in the token's scope / owner / pending org approval"
+            sed 's/^/    /' /tmp/e1 2>/dev/null || true
+            fail=1
+          fi
+
+          # Positive 2: can read rulesets -> length is a number.
+          len=$(gh api "repos/$REPO/rulesets" --jq 'length' 2>/tmp/e2) || true
+          if printf '%s' "$len" | grep -qE '^[0-9]+$'; then
+            echo "PASS  positive read (rulesets): count=$len"
+          else
+            echo "::error::rulesets read failed: got '$len'"
+            sed 's/^/    /' /tmp/e2 2>/dev/null || true
+            fail=1
+          fi
+
+          # Negative proof: a write MUST be denied. PATCH has_wiki to its CURRENT
+          # value so an unexpected success changes nothing; then flag it.
+          cur=$(gh api "repos/$REPO" --jq '.has_wiki' 2>/dev/null || echo "true")
+          if gh api -X PATCH "repos/$REPO" -F "has_wiki=$cur" >/tmp/po 2>/tmp/pe; then
+            echo "::error::negative proof FAILED: PATCH succeeded — this PAT has WRITE access and must be read-only"
+            fail=1
+          elif grep -qi "403" /tmp/pe; then
+            echo "PASS  negative proof: write denied (HTTP 403) — PAT is read-only"
+          else
+            echo "::error::negative proof INCONCLUSIVE: write failed but not with 403:"
+            sed 's/^/    /' /tmp/pe 2>/dev/null || true
+            fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo "== $OWNER PAT verification FAILED =="
+            exit 1
+          fi
+          echo "== $OWNER PAT verification PASSED =="
