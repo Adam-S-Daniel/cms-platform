@@ -234,6 +234,16 @@
       fetch('commit.json', { cache: 'no-cache' })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (c) {
+          // Expose the DEPLOYED backend branch for publish-via-auto-merge's
+          // delete-ref scoping (#114): deploy-production writes
+          // branch:"main", deploy-preview writes the PR head ref (the
+          // preview backend branch). Deliberately NOT part of the Ruby
+          // render-time window.CMS_* injection — the render hooks run at
+          // BUILD time and don't know the deployed branch; commit.json is
+          // written at DEPLOY time. Fail-closed by construction: a missing
+          // / unreadable commit.json leaves this undefined, which disables
+          // the shim's multi-segment delete-ref recovery.
+          if (c && c.branch) window.CMS_BACKEND_BRANCH = c.branch;
           if (!c || !c.sha) return;
           var d = c.iso ? new Date(c.iso) : null;
           var dateLabel = d
