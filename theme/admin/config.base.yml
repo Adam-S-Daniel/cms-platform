@@ -15,7 +15,7 @@ backend:
   # "Set Decap deploy-preview commit status" step publishes exactly
   # `deploy/preview` once the per-PR preview is live. Without this the
   # editor's button is stuck on "Check for Preview" forever (decap-cms
-  # 3.14.1: unset → loose "context includes 'deploy'" match; pinning it
+  # 3.12.2: unset → loose "context includes 'deploy'" match; pinning it
   # is the explicit, auditable half of the contract — see the static
   # lock in e2e/cms-posts-list-enhance.spec.js). patch-preview-config.sh
   # only rewrites site_url/display_url/branch, so this survives the
@@ -127,7 +127,7 @@ collections:
       - date
       - title
     # `Automated tests` matches posts carrying `test_fixture: true` (the
-    # E2E canary fixtures). Decap 3.14.1 has no declarative default-on/off
+    # E2E canary fixtures). Decap 3.12.2 has no declarative default-on/off
     # for view_filters, so admin/posts-list-enhance.js hides fixture rows
     # by DEFAULT (issue #1042: "default to not checked, pre-existing
     # options checked") and renders a toggle to reveal them.

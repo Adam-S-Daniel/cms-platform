@@ -3,7 +3,7 @@
  * list into an at-a-glance dashboard, and hides the E2E-canary noise
  * by default. Issue #1042 ("Improve admin UI related to posts").
  *
- * Decap 3.14.1's list view renders one `<li>` per entry containing a
+ * Decap 3.12.2's list view renders one `<li>` per entry containing a
  * single `<a href="#/collections/posts/entries/<slug>">` whose only
  * child is an `<h2>` holding the `summary:` string. There is no
  * supported `window`/Redux path to the entries' frontmatter, and the
@@ -48,7 +48,7 @@
  * The E2E canary posts (_posts/*-e2e-*.md, `test_fixture: true`) are
  * hidden BY DEFAULT (issue #1042: the new "Automated tests" Filter-by
  * entry "default to not checked, pre-existing options checked").
- * Decap 3.14.1 has no declarative default for `view_filters`, so the
+ * Decap 3.12.2 has no declarative default for `view_filters`, so the
  * default-off behaviour lives here. The hide is NON-DESTRUCTIVE: the
  * fixture `<li>`s are moved to the END of the list and then
  * collapsed, so a spec that clicks `a[href*="…/entries/"]`.first()

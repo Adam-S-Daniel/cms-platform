@@ -1,7 +1,7 @@
 /*
  * admin-mobile.css — responsive layer over the pinned Decap CMS bundle.
  *
- * Decap 3.14.1 is a desktop-first React/Emotion app. On an iPhone 16
+ * Decap 3.12.2 is a desktop-first React/Emotion app. On an iPhone 16
  * (393 CSS px) it renders ~800 px wide, producing three problems a
  * contributor hits immediately:
  *   1. ~407 px of dead horizontal scroll — the app shell carries a
