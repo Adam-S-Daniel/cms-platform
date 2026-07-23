@@ -421,7 +421,7 @@ test(
     });
 
     // ── 7. Label the delete PR cms/ready (the shim opens one) ────────
-    // Decap 3.14.1's "Delete published entry" commits the delete straight
+    // Decap 3.12.2's "Delete published entry" commits the delete straight
     // to main via the git data API; the terminal PATCH /git/refs/heads/main
     // is 422'd by branch protection. admin/publish-via-auto-merge.js's
     // delete-ref matcher recovers that 422 by opening a `cms/posts/delete-*`

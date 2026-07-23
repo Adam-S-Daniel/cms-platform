@@ -515,7 +515,7 @@ test(
       // "Media" button — it is NOT a page route. The earlier
       // `page.goto(`${PROD_ADMIN}#/media`)` rendered Decap's NotFound
       // ("Not Found") every time, because Decap registers no `/media`
-      // route (the standalone media page does not exist in this 3.14.1
+      // route (the standalone media page does not exist in this 3.12.2
       // setup); the library only opens as an overlay (runs 26597250490 /
       // 26602619236, both screenshots: nav present + "Not Found" body).
       //
