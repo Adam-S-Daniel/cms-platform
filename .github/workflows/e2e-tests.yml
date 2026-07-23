@@ -207,10 +207,15 @@ jobs:
           name: playwright-report
           # Local lane reports under <site>/e2e; preview/prod under the
           # platform checkout. Upload both globs; if-no-files-found: ignore
-          # makes the absent one a no-op.
+          # makes the absent one a no-op. test-results/ carries the failure
+          # screenshots/videos/error-context — without it a red run leaves
+          # no visual evidence (the v0.1.66 occlusion failures uploaded
+          # nothing, forcing blind diagnosis).
           path: |
             e2e/playwright-report
+            e2e/test-results
             .cms-platform/e2e/playwright-report
+            .cms-platform/e2e/test-results
           if-no-files-found: ignore
           retention-days: 7
 
