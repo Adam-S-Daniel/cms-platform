@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.70`** — `v0.1.0`–`v0.1.70` are all tagged GitHub
+**Current release: `v0.1.71`** — `v0.1.0`–`v0.1.71` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1564,7 +1564,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.70)
+## Version history (v0.1.0 → v0.1.71)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2242,6 +2242,29 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   routing: never leave a hand-rolled `project.name !== "…"` skip beside one.**
   (That gate also means #202's "it ran on all EIGHT public projects" overstated
   the harm — the gate had held it to one; the tag was still the right fix.)
+
+- **v0.1.71** (2026-08-07) — **one doc file on a bump PR was cancelling a prod
+  loop (#208).** The bump-skip (#57) required EVERY changed path in a push to be a
+  version pin, so the `AGENTS.md` corrections landed on the v0.1.70 bump PR — the
+  natural place for a doc fix that goes with a bump — made `every(isBumpArtifact)`
+  false. The gate said RUN, **all three prod loops fired on the same push**, and
+  because they share the `prod-mutating-loop` group (which holds an in-flight run
+  but DROPS a co-arriving sibling), `cms-media-roundtrip`'s heavy job was
+  **cancelled outright** (adamdaniel.ai run 31185014802) — as was
+  `cms-publish-loop-prod`'s (run 31185015141) — while `cms-publish-loop-host`'s
+  survived. **#70's disjoint-push-triggers fix cannot prevent this**: a bump
+  rewrites the `uses:@<ref>` pin in EVERY loop's own workflow file, which IS each
+  loop's own trigger path, so a bump inherently fires all three and the skip is
+  the only thing between a bump and a cancelled loop. `isBumpOnlyPush` now also
+  tolerates paths that cannot change the built site (`AGENTS.md`, `CLAUDE.md`,
+  `README.md`, `LICENSE`, `docs/**` — exactly the deploy workflows'
+  `paths-ignore` set); a bump carrying `_posts/`, a script, a config or CSS still
+  RUNS. Both directions locked by `e2e/cms-recursion-churn.test.js`. Also: the
+  measured per-lane ceiling analysis in `docs/E2E-PARALLELISM.md` (the long pole
+  is WebKit's TEST speed, and sharding within a project buys ~45 s for double the
+  job count — priced, and declined), the apt-stall frequency (~1 run in 10, two
+  occurrences in one afternoon), and both consumers' AGENTS.md corrected where
+  they still claimed per-project worker counts.
 
 ## Consumers
 
