@@ -224,6 +224,10 @@ const PLATFORM_META_SPECS = [
   // scaffold/create-site.js and reads the platform's own fixture trees
   // (fixture-site + fixture-site-singlepage) as literal paths.
   "scaffold-seeds-media-probe.test.js",
+  // The CI lane split: reads the platform's OWN e2e-tests.yml reusable
+  // definition + playwright.config.js to lock matrix.lane against the derived
+  // lane names. Platform-internal, self-CI only.
+  "lanes.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +
@@ -352,6 +356,17 @@ module.exports = defineConfig({
   // mismatch so specs don't die at launch with "Executable doesn't exist".
   globalSetup: "./install-browsers-on-miss.js",
   fullyParallel: true,
+  // Worker concurrency. Playwright's default is HALF the logical cores, i.e.
+  // 2 workers on a 4-vCPU GitHub-hosted runner — which left the suite running
+  // at ~1.6x the serial time when the box could do far better: these tests
+  // spend most of their wall-clock WAITING (Decap boot, deploy polls, network
+  // to localhost), not saturating CPU. `100%` on CI = one worker per vCPU.
+  // `PW_WORKERS` (wired to the e2e-tests reusable's `workers` input) is the
+  // no-release escape hatch: dial it down if a write-heavy lane ever gets
+  // flaky under load. Local dev keeps Playwright's default (undefined) so an
+  // interactive run leaves headroom for the editor/browser.
+  // See docs/E2E-PARALLELISM.md for the measurements behind this.
+  workers: process.env.PW_WORKERS || (process.env.CI ? "100%" : undefined),
   // Single auto-retry on CI for the decap-server file-write race (and any
   // similar transient flake). Local runs stay at 0 so a regression caught
   // while iterating fails loudly the first time. A test that fails once

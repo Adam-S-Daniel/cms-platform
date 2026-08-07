@@ -8,7 +8,19 @@
 # Jekyll ignores) and runs the suite from there:
 #
 #   cd .cms-platform/e2e && npm ci && npx playwright install --with-deps <browser>
-#   npx playwright test
+#   npx playwright test $(node lanes.js --projects <lane>)
+#
+# PARALLELISM — two levels, one required check:
+#   * LANES: a `lane` matrix runs one job (one 4-vCPU runner) per slice of the
+#     Playwright projects. The slices come from `e2e/lanes.js`, which derives
+#     them from playwright.config.js itself: each admin project is its own lane
+#     (they hold ~65% of the wall-clock) and the public-page projects share one.
+#     Balanced by construction — `--shard` is NOT used because it balances by
+#     test COUNT and this suite's durations are 4 orders of magnitude apart.
+#   * WORKERS: each lane runs `workers: 100%` (one per vCPU) instead of
+#     Playwright's default 50%. Override with the `workers` input.
+#   The `e2e` job at the bottom is the single required status context; the
+#   per-lane contexts are not named by any ruleset. See docs/E2E-PARALLELISM.md.
 #
 # The specs read their site identity from env — the central helpers
 # (e2e/base.js, e2e/cms-host.js) are parameterized on CMS_PROD_URL /
@@ -78,6 +90,11 @@ on:
         required: false
         type: string
         default: ""
+      workers:
+        description: "Playwright workers per lane (e.g. '4', '50%'). Empty = the config default (100% of the runner's vCPUs on CI). The no-release dial-down if a lane gets flaky under load."
+        required: false
+        type: string
+        default: ""
     secrets:
       # Optional PAT for the GitHub API calls e2e/base.js makes when
       # TARGET=preview discovers the latest open PR, and for any real-lane
@@ -94,7 +111,23 @@ permissions:
   pull-requests: write
 
 jobs:
-  e2e:
+  # ── The suite, split across one runner per LANE ───────────────────
+  # Each lane is an independent 4-vCPU runner that builds/serves the site and
+  # runs its own slice of the Playwright projects with `workers: 100%`. Two
+  # levels of parallelism: lanes × workers.
+  #
+  # The lane names below MUST equal `node e2e/lanes.js --list` — that module is
+  # the single source of truth (it derives the split from playwright.config.js's
+  # own projects) and `e2e/lanes.test.js` fails the platform's CI if the two
+  # drift. An unknown lane also fails loudly at run time.
+  #
+  # `fail-fast: false` so one red lane doesn't cancel the others: a cancelled
+  # sibling hides the second bug and reads as infrastructure noise.
+  lane:
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [chromium-desktop-3k, webkit-iphone16, public]
     runs-on: ubuntu-latest
     env:
       # Site identity → the parameterized central helpers (e2e/base.js,
@@ -196,15 +229,26 @@ jobs:
           # `|| ''` for non-local — a latent gap mirroring the loop reusables /
           # parity-preview #35.) Locked by e2e/loop-site-root-lint.test.js.
           SITE_ROOT: ${{ github.workspace }}
+          # This lane's slice of the matrix + its worker count (see the
+          # `workers` input and playwright.config.js).
+          LANE: ${{ matrix.lane }}
+          PW_WORKERS: ${{ inputs.workers }}
         run: |
           set -o pipefail
-          npx playwright test --reporter=list 2>&1 | tee /tmp/playwright-output.log
+          # One `--project=<name>` flag per line, straight from the config —
+          # `mapfile` keeps it out of shell word-splitting. An unknown lane
+          # exits non-zero here, before any test runs.
+          mapfile -t PROJECT_FLAGS < <(node lanes.js --projects "$LANE")
+          echo "lane=$LANE projects: ${PROJECT_FLAGS[*]}"
+          npx playwright test "${PROJECT_FLAGS[@]}" --reporter=list 2>&1 | tee /tmp/playwright-output.log
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 (2026-04-10)
         with:
-          name: playwright-report
+          # Lane-scoped: upload-artifact v4+ errors on a duplicate name, and
+          # three same-named uploads would collide across the matrix.
+          name: playwright-report-${{ matrix.lane }}
           # Local lane reports under <site>/e2e; preview/prod under the
           # platform checkout. Upload both globs; if-no-files-found: ignore
           # makes the absent one a no-op. test-results/ carries the failure
@@ -224,14 +268,18 @@ jobs:
       # the caller-side failure()/success() primitives per the action's
       # v3 design. The composite is checked out under .cms-platform, so
       # reference it by that local path.
+      #
+      # The marker is LANE-SCOPED: markers must be unique or the lanes would
+      # clobber each other's comment, and a marker that names the lane tells a
+      # reader which slice went red before they open a log.
       - name: Post failure summary
         if: ${{ failure() && inputs.pr_number != '' }}
         uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: post
           log-file: /tmp/playwright-output.log
-          marker: e2e-failure-summary
-          title: E2E tests
+          marker: e2e-failure-summary-${{ matrix.lane }}
+          title: E2E tests (${{ matrix.lane }} lane)
           pr-number: ${{ inputs.pr_number }}
 
       - name: Resolve failure summary on success
@@ -239,6 +287,34 @@ jobs:
         uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: resolve
-          marker: e2e-failure-summary
-          title: E2E tests
+          marker: e2e-failure-summary-${{ matrix.lane }}
+          title: E2E tests (${{ matrix.lane }} lane)
           pr-number: ${{ inputs.pr_number }}
+
+  # ── The single required status context ────────────────────────────
+  # Branch protection requires `<caller-job> / e2e` (e.g. `e2e / e2e`). The
+  # matrix above surfaces one context PER LANE, which no ruleset names, so this
+  # job keeps the contract: it is the ONLY thing the ruleset (and the
+  # e2e-required-stub companion, which emits the same `e2e` job name on
+  # docs-only PRs) has to know about. Do NOT rename it.
+  #
+  # `always()` so a red/cancelled lane still reports here instead of leaving the
+  # required check pending forever ("Waiting for status to be reported" — the
+  # missing-check trap). `needs.lane.result` is the matrix's rolled-up result:
+  # `success` only when EVERY lane succeeded.
+  e2e:
+    needs: lane
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on lane results
+        env:
+          LANE_RESULT: ${{ needs.lane.result }}
+        run: |
+          set -euo pipefail
+          echo "e2e lane matrix result: ${LANE_RESULT}"
+          if [ "${LANE_RESULT}" != "success" ]; then
+            echo "::error::At least one e2e lane did not succeed (${LANE_RESULT}) — see the per-lane jobs above."
+            exit 1
+          fi
+          echo "All e2e lanes passed."
