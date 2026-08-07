@@ -158,6 +158,11 @@ jobs:
         uses: ./.cms-platform/.github/actions/install-playwright-browsers
         with:
           browser: chromium
+          # This job's timeout-minutes is 30; keep the composite's worst case
+          # under it so a stalled mirror surfaces as this action's diagnostic
+          # rather than an opaque job timeout, and still leaves room for the
+          # probe itself. (Locked by e2e/playwright-install-bounded.test.js.)
+          final-timeout-seconds: '900'
 
       - name: Wait for the preview surface (bounded)
         if: steps.salient.outputs.salient == 'true'

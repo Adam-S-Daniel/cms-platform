@@ -1013,12 +1013,19 @@ The three findings that shaped it, all measured on adamdaniel.ai:
   delete-recovery PR open 40 min and blew the media-roundtrip loop's 30-minute
   delete-leg budget. **Not rare:** a second run 67 min later did the same on a
   different lane (run 31181957723, `chromium-mobile`, 606 s install / 20 s tests),
-  so expect it on the order of one run in ten. **A bare `timeout-minutes:` is not the fix**: it converts a
-  slow mirror into a RED required check, which blocks a `cms/*` canary PR
-  permanently instead of merging it late; only a retry recovers, because a fresh
-  attempt gets fresh connections to a load-balanced mirror (apt's own
-  `Acquire::*::Timeout` does nothing — the bytes were flowing, just slowly).
-  Locked by **`e2e/playwright-install-bounded.test.js`**.
+  so expect it on the order of one run in ten. **Two wrong designs to avoid.** A bare
+  `timeout-minutes:` converts a slow mirror into a RED required check, which blocks
+  a `cms/*` canary PR permanently instead of merging it late. And a *uniform* retry
+  bound does the same thing whenever the mirror is slow for the WHOLE run — the
+  measured case needed 2340 s, so three 420 s attempts would all hit the bound and
+  exit 1. So the budget **escalates**: short early attempts abandon a stalled
+  connection fast, the LAST attempt gets 1200 s to actually finish, and apt +
+  `playwright install` both resume so attempts accumulate progress (apt's own
+  `Acquire::*::Timeout` does nothing — the bytes were flowing, just slowly). The
+  worst case must also stay under the caller's own `timeout-minutes`, or the job is
+  killed mid-retry and reports an opaque "job timed out" instead of the diagnostic
+  — `canary-prod`'s 10-minute probe passes smaller values for exactly that reason.
+  All three properties locked by **`e2e/playwright-install-bounded.test.js`**.
 - **The reusable sets `DISABLE_PER_TEST_VIDEOS=1`.** `e2e/base.js` captures a
   full-page screenshot on every main-frame navigation of every test, and its only
   consumer (`e2e/generate-test-videos.js`) is invoked by no reusable — the

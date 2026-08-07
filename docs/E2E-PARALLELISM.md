@@ -196,12 +196,22 @@ browsers:
 
 - **Bound:** each attempt runs under `timeout 420` (~7x the normal ~60 s
   install, so a healthy mirror never trips it).
-- **Retry:** up to 3 attempts. A bare `timeout-minutes:` would be *worse* than
-  the stall — it turns "slow mirror" into a RED required check, which blocks the
-  canary PR permanently instead of merging it late. A fresh attempt gets fresh
-  connections to a load-balanced mirror, which is what actually recovers a
-  collapsed transfer. apt's own `Acquire::*::Timeout` does not help here: the
-  bytes were flowing, just slowly.
+- **Retry, with an ESCALATING budget:** up to 3 attempts — the early ones bounded
+  at 420 s to abandon a stalled connection fast, the **last** one at 1200 s so it
+  can actually finish. Two wrong designs to avoid: a bare `timeout-minutes:` turns
+  "slow mirror" into a RED required check, which blocks the canary PR permanently
+  instead of merging it late; and a *uniform* retry bound does the same thing when
+  the mirror is slow for the whole run (the measured case needed 2340 s, so three
+  420 s attempts would all hit the bound and exit 1). apt and `playwright install`
+  both resume — completed `.debs` stay in `/var/cache/apt/archives`, downloaded
+  engines in `~/.cache/ms-playwright` — so the attempts accumulate progress and the
+  final one only has to finish what is left. apt's own `Acquire::*::Timeout` does
+  not help at all here: the bytes were flowing, just slowly.
+- **Bounded by the JOB, too:** the worst case must stay under the caller's
+  `timeout-minutes`, or GitHub kills the job mid-retry and the run reports an
+  opaque "job timed out" instead of the action's diagnostic. `canary-prod`'s
+  10-minute probe job therefore passes smaller values, and `parity-preview` /
+  `preview-media` (30 min) cap the final attempt at 900 s.
 - **Loud:** each retry logs `::warning::` with the attempt number and whether it
   hit the bound (exit 124) or failed for real, so the log says which it was.
 
