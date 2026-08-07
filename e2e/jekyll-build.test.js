@@ -12,7 +12,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { lockDirFor } = require("./jekyll-build");
+const { lockDirFor, creditWaitToTest } = require("./jekyll-build");
 
 const HELPER = path.join(__dirname, "jekyll-build.js");
 
@@ -131,6 +131,18 @@ test("every in-test `jekyll build` goes through the helper", () => {
     offenders,
     "these specs build the site directly — call jekyllBuild() from e2e/jekyll-build.js instead",
   ).toEqual([]);
+});
+
+test("time spent waiting for the lock is credited back to the test's budget", () => {
+  // Otherwise the lock just trades the build race for a timeout race: these
+  // specs run on Playwright's 30 s default and a build is ~4 s.
+  const before = test.info().timeout;
+  creditWaitToTest(7_000);
+  expect(test.info().timeout).toBe(before + 7_000);
+
+  // Sub-second waits are noise, not budget.
+  creditWaitToTest(300);
+  expect(test.info().timeout).toBe(before + 7_000);
 });
 
 test("the helper refuses to build an unspecified site root", () => {
