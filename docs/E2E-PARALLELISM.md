@@ -240,6 +240,31 @@ run the *same* coverage faster, not to run less of it. Selection trades coverage
 for speed and adds a "did the selector miss something?" failure mode; the
 project matrix needs no such trade.
 
+## Rejected: generating the matrix from a setup job
+
+`matrix.project` in `e2e-tests.yml` is a STATIC list, kept honest by
+`e2e/ci-matrix.test.js` (self-CI fails if it drifts from the project list
+`playwright.config.js` actually declares). The obvious "simplification" is to
+delete the lint and have a setup job emit the list via
+`fromJSON(needs.setup.outputs.projects)` — GitHub supports it, and it makes drift
+structurally impossible instead of merely lint-caught.
+
+It is rejected because it puts a **serial job on the critical path of every run**.
+A setup job cannot start the matrix until it finishes, and a job's floor here is
+not its script — it is runner allocation + checkout + Node setup, i.e. most of the
+~42 s fixed cost measured above. Paying ~30-40 s on a ~200 s run, on every PR,
+forever, to avoid a drift the lint already catches at PR time is the wrong trade
+for a change whose entire purpose is wall clock.
+
+The lint is also the stronger guard in the way that matters. A dynamic matrix
+would silently run whatever the config declares — so deleting a project by
+accident would produce a green run with less coverage. The static list plus the
+lint makes removing a project a deliberate, reviewable two-file edit, and a
+one-file mistake goes RED.
+
+Revisit only if the project list starts changing often enough that the two-file
+edit is real friction. It has changed twice in the platform's life.
+
 ## Isolation bugs that parallelism exposed
 
 Running the admin projects wider surfaced genuine pre-existing test bugs. All
@@ -409,6 +434,23 @@ Three things this settles:
    Node, 3 s `npm ci`, 21-25 s `playwright install` (chromium), 5 s Ruby/Bundler,
    ~3 s artifacts + the failure-comment steps. `Resolve this project's browser
    engine` is 0 s.
+
+**Confirmed on a second release, and the gap NARROWED.** The v0.1.71 bump PRs
+(adamdaniel.ai run 31214974952, jodidaniel.com run 31214982451) re-measured the
+same two lanes independently:
+
+| lane | adamdaniel.ai | jodidaniel.com |
+|---|---|---|
+| `webkit-iphone16` | **188 s** (32 s install) | **148 s** (62 s install) |
+| `chromium-desktop-3k` | 177 s (22 s install) | 110 s (25 s install) |
+| wall clock | **204 s** | **162 s** |
+| runner-seconds | 1037 s | 897 s |
+
+Both wall clocks land inside the ranges below, and every install came in at
+21-62 s — so the bounded/retried composite is holding and no lane was stalled.
+The number that matters for the decision below is the **11 s** now separating
+adamdaniel's pole from its runner-up (188 vs 177): the re-check trigger at the
+end of this section moved FURTHER from firing, not closer.
 
 **The next optimization, priced.** Sharding *within* a project is the only lever
 left, and the arithmetic says stop: a 2-way shard of `webkit-iphone16` halves its
