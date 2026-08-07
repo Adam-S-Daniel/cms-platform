@@ -33,6 +33,21 @@ require 'fileutils'
 # e2e/decap-config-render-parity.test.js).
 require_relative '../theme/lib/cms-platform-theme/field_library'
 
+# Ruby takes Encoding.default_external from the ambient locale, so a shell with
+# no LANG resolves it to US-ASCII and File.read tags these files as ASCII —
+# then the first `sub` over config.base.yml's UTF-8 em-dashes raises
+# "invalid byte sequence in US-ASCII" (#213). Every file this script reads and
+# writes is UTF-8 by definition, so pin it rather than inheriting a guess. CI
+# masked this because ubuntu-latest happens to set LANG=C.UTF-8; a deploy-time
+# renderer must not depend on that.
+#
+# Setting it HERE, in the CLI entry point, is deliberate: it also covers the two
+# YAML.load_file calls and the read inside the require_relative'd FieldLibrary,
+# in one place. The parity twin theme/lib/cms-platform-theme/decap_config_hook.rb
+# must NOT do this — it is a library loaded inside Jekyll, which already sets a
+# UTF-8 default, and a library has no business mutating its host's globals.
+Encoding.default_external = Encoding::UTF_8
+
 site_root = ARGV[0] || '.'
 build     = ARGV[1] || File.join(site_root, '_site')
 
