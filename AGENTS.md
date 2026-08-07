@@ -2192,6 +2192,18 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   refusal, `fs-poll-lint.test.js` (AST) fails the build on the read-race shape,
   and the sitemap prune mirrors `cms-publish-flow`'s.
 
+  One more, and it was a REGRESSION from #202's own tagging: `cms-html-embed`
+  carried a hand-rolled `beforeEach` gate skipping unless the project was
+  `chromium-desktop-1080`, so the new `@admin-write` tag (which routes to
+  `chromium-desktop-3k`) made the two conditions mutually exclusive and **the
+  whole file skipped everywhere** — the kramdown render contract silently
+  untested, with nothing red. The gate is gone (the tag expresses that routing),
+  and `admin-tag-lint.test.js` now derives each spec's routed projects from the
+  config's own `grep`/`grepInvert` and fails on an unsatisfiable gate. **A tag is
+  routing: never leave a hand-rolled `project.name !== "…"` skip beside one.**
+  (That gate also means #202's "it ran on all EIGHT public projects" overstated
+  the harm — the gate had held it to one; the tag was still the right fix.)
+
 ## Consumers
 
 - **adamdaniel.ai** — consumer #1, user-owned, the dogfood. Migrated to

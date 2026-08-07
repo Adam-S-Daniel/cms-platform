@@ -280,6 +280,19 @@ whose fixture is shared with another spec, which drives a shared external tool,
 which reads a file another process is still writing, or which forgets the tag
 that routes it, is a latent flake (or a silent 8x) that parallelism turns real.**
 
+
+* **...and so is a tag that contradicts a hand-rolled gate.** Tagging
+  `cms-html-embed` `@admin-write` routed it to `chromium-desktop-3k` — while its
+  own `beforeEach` still skipped unless the project was `chromium-desktop-1080`.
+  Mutually exclusive, so the file skipped **everywhere** and the kramdown render
+  contract stopped being tested, with nothing red to show it. (The same gate also
+  means the original "it ran on all eight public projects" claim overstated the
+  harm: the gate had kept it to one. Tagging was still right — the tag expresses
+  the routing the gate was hand-rolling — but the gate had to go with it.)
+  `e2e/admin-tag-lint.test.js` now computes which projects a spec's tags route it
+  to, from the config's own `grep`/`grepInvert`, and fails if a hand-rolled
+  `project.name !== "…"` gate cannot be satisfied. **A skipped test is invisible
+  in a green run, so this class has to be a lint.**
 * **The build lock's stale break was unreachable, and its release was unowned.**
   Two defects in the lock above, found by reviewing it rather than by a red run.
   (a) `WAIT_TIMEOUT_MS` was 180 s and `STALE_MS` 300 s — but a waiter breaks a

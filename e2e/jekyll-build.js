@@ -4,9 +4,10 @@
  *
  * NINE specs shell out to `jekyll build` against the SAME site tree and the SAME
  * `_site` the :4000 webServer serves, while their project runs several tests at
- * once. (Eight are @admin-write, so they share one runner; draft-isolation is
- * too. cms-html-embed was UNTAGGED and therefore built on all eight public-lane
- * runners as well — see e2e/admin-tag-lint.test.js.) Jekyll cleans `_site` and then regenerates it, and
+ * once. (Nine are @admin-write, so they share one runner; draft-isolation is
+ * too. cms-html-embed was UNTAGGED until v0.1.70 — held to one project only by a
+ * hand-rolled beforeEach gate the @admin-write tag has since replaced; see
+ * e2e/admin-tag-lint.test.js.) Jekyll cleans `_site` and then regenerates it, and
  * shares `.jekyll-cache` / `.jekyll-metadata`, so two builds in flight together
  * fight — and one of them dies:
  *
