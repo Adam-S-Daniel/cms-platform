@@ -1011,7 +1011,9 @@ The three findings that shaped it, all measured on adamdaniel.ai:
   Fanning out to ten lanes means ten INDEPENDENT apt exposures per run, and the
   aggregating `e2e` gate waits for the slowest — so that one lane held a
   delete-recovery PR open 40 min and blew the media-roundtrip loop's 30-minute
-  delete-leg budget. **A bare `timeout-minutes:` is not the fix**: it converts a
+  delete-leg budget. **Not rare:** a second run 67 min later did the same on a
+  different lane (run 31181957723, `chromium-mobile`, 606 s install / 20 s tests),
+  so expect it on the order of one run in ten. **A bare `timeout-minutes:` is not the fix**: it converts a
   slow mirror into a RED required check, which blocks a `cms/*` canary PR
   permanently instead of merging it late; only a retry recovers, because a fresh
   attempt gets fresh connections to a load-balanced mirror (apt's own

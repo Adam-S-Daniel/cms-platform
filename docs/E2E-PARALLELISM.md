@@ -176,6 +176,14 @@ Nothing was broken. `azure.archive.ubuntu.com` served that one runner at
 system packages — and the install had **no upper bound**, so it simply took as
 long as the mirror wanted. The other nine lanes finished in 80-200 s.
 
+**And it is not rare.** A second run 67 minutes later, on a different lane, did
+the same thing — adamdaniel.ai run 31181957723, `chromium-mobile`: **606 s** in
+the install step, **20 s** of tests, while its nine siblings finished in 70-216 s.
+Two hits in the same afternoon, so budget for this happening on the order of one
+run in ten, not once a quarter. With ten lanes per run that is the arithmetic you
+would expect from a ~1% per-lane stall rate — fanning out did not cause the
+stalls, it just gave them ten chances per run to become your critical path.
+
 What made it expensive is what waits on the gate. A `cms/*` canary PR cannot
 merge until `e2e / e2e` reports, so that lane held delete-recovery PR #2953 open
 for 40 min and blew `cms-media-roundtrip.spec.js`'s 30-minute delete-leg budget —
