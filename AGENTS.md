@@ -1041,9 +1041,11 @@ v0.1.68). Keep the pattern in mind when writing @admin-write specs:
   webServer serves; two overlapping builds fight over `_site` and one dies. They
   all go through **`e2e/jekyll-build.js`** now, which serialises them behind an
   atomic mkdir lock (cross-PROCESS — Playwright workers are separate processes)
-  with a stale-holder break and a `finally` release. **Never shell out to
-  `jekyll build` from a spec directly** — `jekyll-build.test.js` fails the build
-  if you do.
+  with a stale-holder break and a `finally` release, and it CREDITS the wait back
+  to the caller's test timeout so the lock can't trade the build race for a
+  timeout race (these specs run on Playwright's 30 s default). **Never shell out
+  to `jekyll build` from a spec directly** — `jekyll-build.test.js` fails the
+  build if you do.
 
 ## E2E local webServer: decap readiness + :4000 crash resilience
 

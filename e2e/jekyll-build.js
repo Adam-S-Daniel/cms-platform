@@ -82,6 +82,24 @@ function acquire(lockDir) {
   }
 }
 
+// Waiting for the lock must not eat the CALLER's test budget. These specs run on
+// Playwright's 30 s default and a build is ~4 s, so a queue three deep would
+// otherwise time the third test out — trading the build race for a timeout race.
+// Give back exactly the time spent waiting.
+function creditWaitToTest(waitedMs) {
+  if (waitedMs < 1000) return;
+  try {
+    // `test.info()` throws outside a Playwright test (the unit test drives this
+    // helper from a bare node process), in which case there is nothing to credit.
+    const info = require("@playwright/test").test.info();
+    info.setTimeout(info.timeout + waitedMs);
+  } catch (e) {
+    if (process.env.DEBUG_JEKYLL_BUILD_LOCK) {
+      console.warn(`[jekyll-build] no test context to credit ${waitedMs}ms of lock wait to`);
+    }
+  }
+}
+
 function release(lockDir) {
   try {
     fs.rmSync(lockDir, { recursive: true, force: true });
@@ -102,7 +120,9 @@ function jekyllBuild({ cwd, future = false } = {}) {
   if (future) args.push("--future");
 
   const lockDir = lockDirFor(cwd);
+  const waitStart = Date.now();
   acquire(lockDir);
+  creditWaitToTest(Date.now() - waitStart);
   try {
     execFileSync("bundle", args, { cwd, stdio: "inherit" });
   } finally {
@@ -110,4 +130,4 @@ function jekyllBuild({ cwd, future = false } = {}) {
   }
 }
 
-module.exports = { jekyllBuild, lockDirFor };
+module.exports = { jekyllBuild, lockDirFor, creditWaitToTest };

@@ -177,8 +177,11 @@ one is literally the race the config's `retries: 1` was added for.
   through `e2e/jekyll-build.js`, which serialises them behind an atomic mkdir
   lock keyed on the site root — cross-process, because Playwright workers are
   separate processes. It costs the write-heavy admin project ~30 s and removes
-  the class; `e2e/jekyll-build.test.js` proves the lock holds, releases on a
-  failed build, breaks a stale one, and that no spec builds directly any more.
+  the class. Waiting for the lock is **credited back to the caller's test
+  timeout** so the fix can't trade the build race for a timeout race (these specs
+  run on Playwright's 30 s default and a build is ~4 s).
+  `e2e/jekyll-build.test.js` proves the lock holds, releases on a failed build,
+  breaks a stale one, credits the wait, and that no spec builds directly.
 
 * **Reading a file another process is writing.** Five specs waited with
   `expect.poll(() => fs.existsSync(file))` and then read — but decap-server
