@@ -39,7 +39,13 @@ const STALE_MS = 120_000;
 // inequality reversed (it was WAIT 180 s / STALE 300 s) a fresh waiter could
 // never reach the break — a killed holder's lock wedged the next build into
 // `timed out waiting for the build lock`, the exact opposite of the guarantee
-// this file documents. Locked by jekyll-build.test.js.
+// this file documents. Locked by jekyll-build.test.js. It may safely exceed a
+// caller's own test timeout (these specs default to 30 s) BECAUSE the wait is
+// credited to that timeout INCREMENTALLY, as it happens, via `acquire`'s
+// `onWait` — see jekyllBuild. Crediting only after the fact would let
+// Playwright kill the test before the wait (or acquire's own timeout
+// diagnostic) ever completed, so the incremental credit is load-bearing, not
+// a nicety.
 const WAIT_TIMEOUT_MS = 300_000;
 const POLL_MS = 150;
 
@@ -73,8 +79,29 @@ function readOwner(lockDir) {
   }
 }
 
-function acquire(lockDir, token) {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
+// `staleMs`/`waitMs`/`pollMs`/`breakLock`/`onWait` are all dep-injectable so
+// jekyll-build.test.js can drive the timeout and stale-lock paths in
+// milliseconds instead of the real 300 s, and prove the deadline is honoured
+// even when a break can never succeed — the same reason e2e/run-cms-loop.js is
+// dep-injected for its own unit tests. `onWait` exists solely so jekyllBuild
+// can credit the wait to the caller's test budget AS IT HAPPENS (see there).
+function acquire(
+  lockDir,
+  token,
+  {
+    staleMs = STALE_MS,
+    waitMs = WAIT_TIMEOUT_MS,
+    pollMs = POLL_MS,
+    breakLock = forceRelease,
+    onWait = () => {},
+  } = {},
+) {
+  const deadline = Date.now() + waitMs;
+  const expired = () =>
+    new Error(
+      `[jekyll-build] timed out after ${waitMs / 1000}s waiting for the build lock ` +
+        `${lockDir}. Another spec's 'jekyll build' is not finishing.`,
+    );
   for (;;) {
     try {
       fs.mkdirSync(lockDir);
@@ -90,27 +117,30 @@ function acquire(lockDir, token) {
       // The holder released it between our mkdir and our stat — just retry.
       age = 0;
     }
-    if (age > STALE_MS) {
+    if (age > staleMs) {
       // Re-read the owner, pause, and re-read: if it changed, the lock legitimately
       // changed hands while we were deciding and is NOT stale, so don't break it.
       const seen = readOwner(lockDir);
-      sleepSync(POLL_MS);
+      sleepSync(pollMs);
+      onWait();
       if (readOwner(lockDir) === seen && fs.existsSync(lockDir)) {
         console.warn(
           `[jekyll-build] breaking a stale build lock (${lockDir}, held ${Math.round(age / 1000)}s ` +
             `by ${seen || "an unknown holder"}) — a worker was probably killed mid-build.`,
         );
-        forceRelease(lockDir);
+        breakLock(lockDir);
       }
+      // This branch used to `continue` straight past the deadline check below,
+      // so an unremovable lock (wrong owner UID, a stuck filesystem — `breakLock`
+      // failed to actually remove it) spun the wait forever: neither returning
+      // nor throwing. A hang is worse than a timeout, so check the deadline here
+      // too.
+      if (Date.now() > deadline) throw expired();
       continue;
     }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `[jekyll-build] timed out after ${WAIT_TIMEOUT_MS / 1000}s waiting for the build lock ` +
-          `${lockDir}. Another spec's 'jekyll build' is not finishing.`,
-      );
-    }
-    sleepSync(POLL_MS);
+    if (Date.now() > deadline) throw expired();
+    sleepSync(pollMs);
+    onWait();
   }
 }
 
@@ -140,15 +170,23 @@ function forceRelease(lockDir) {
   }
 }
 
-// Release ONLY our own lock. If the owner no longer matches, a waiter already
-// broke ours as stale and handed it to someone else — removing it now would free
-// THEIR lock and let a third build start alongside them.
+// Release ONLY our own lock, and ONLY when we can PROVE it: the owner file
+// must read back EXACTLY our token. `readOwner` returns "" on ANY read
+// failure (missing file, transient EIO) as well as on a legitimate hand-off —
+// those are indistinguishable from here, so an unreadable owner is treated
+// the same as "not ours". The cost is a LEAK, never a double build: we walk
+// away from a lock we can't prove is ours, and the next waiter's stale check
+// reclaims it after STALE_MS — a bounded degradation. Deleting a lock we
+// can't verify is unowned would free someone else's lock and let a third
+// build start alongside them.
 function release(lockDir, token) {
   const owner = readOwner(lockDir);
-  if (owner && owner !== token) {
+  if (owner !== token) {
     console.warn(
-      `[jekyll-build] not releasing ${lockDir}: it is held by ${owner}, not us (${token}). ` +
-        `Our lock was broken as stale mid-build.`,
+      `[jekyll-build] not releasing ${lockDir}: owner reads back as ` +
+        `${owner || "unreadable/absent"}, not our token (${token}) — either held by someone ` +
+        `else, or we simply can't prove it's ours. A stale-broken lock's new holder survives; ` +
+        `an abandoned one is reclaimed after ${STALE_MS / 1000}s.`,
     );
     return;
   }
@@ -170,8 +208,21 @@ function jekyllBuild({ cwd, future = false } = {}) {
   // Unique per call, so `release` can prove the lock it is removing is ours.
   const token = `pid${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
   const waitStart = Date.now();
-  acquire(lockDir, token);
-  creditWaitToTest(Date.now() - waitStart);
+  let credited = 0;
+  // Credit the wait to the test's budget AS IT HAPPENS, not after: `acquire`
+  // may wait up to WAIT_TIMEOUT_MS, which is far longer than these specs'
+  // 30 s default, so crediting only at the end meant Playwright killed the
+  // test before `acquire`'s own "the lock is not being released" diagnostic
+  // could ever surface — you got a generic test timeout instead of the cause.
+  const onWait = () => {
+    const pending = Date.now() - waitStart - credited;
+    if (pending >= 1000) {
+      creditWaitToTest(pending);
+      credited += pending;
+    }
+  };
+  acquire(lockDir, token, { onWait });
+  onWait();
   try {
     execFileSync("bundle", args, { cwd, stdio: "inherit" });
   } finally {
@@ -179,4 +230,12 @@ function jekyllBuild({ cwd, future = false } = {}) {
   }
 }
 
-module.exports = { jekyllBuild, lockDirFor, creditWaitToTest, STALE_MS, WAIT_TIMEOUT_MS };
+module.exports = {
+  jekyllBuild,
+  lockDirFor,
+  creditWaitToTest,
+  acquire,
+  release,
+  STALE_MS,
+  WAIT_TIMEOUT_MS,
+};

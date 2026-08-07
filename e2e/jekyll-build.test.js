@@ -12,9 +12,13 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const walk = require("acorn-walk");
+const { parse, stringValue, calleeName, calleeTail } = require("./spec-ast");
 const {
   lockDirFor,
   creditWaitToTest,
+  acquire,
+  release,
   STALE_MS,
   WAIT_TIMEOUT_MS,
 } = require("./jekyll-build");
@@ -36,6 +40,77 @@ const RUNNER =
   "const { jekyllBuild } = require(process.argv[1]);" +
   "jekyllBuild({ cwd: process.argv[2] });" +
   "process.stdout.write('BUILT');";
+
+// AST, not regex, per AGENTS.md: the old lint was
+// `/execFileSync\(\s*["']bundle["']\s*,\s*\[\s*["']exec["']\s*,\s*["']jekyll["']/`,
+// which matches exactly ONE call shape and sidesteps as easily as
+// `execSync("bundle exec jekyll build")`, `spawnSync("bundle", [...])`, or an
+// args array built one line above the call — none of which go through the
+// lock either. This detector matches the code-SHAPE ("a call to an exec/spawn
+// variant whose arguments mention jekyll") instead of one literal call.
+const EXEC_TAILS = new Set(["exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync"]);
+
+// Does `src` shell out to jekyll directly (bypassing e2e/jekyll-build.js)?
+// Resolves ONE hop of local aliasing — `const args = [...]; execFileSync(x, args)`
+// — because that is exactly the shape a hand-rolled build call tends to take.
+function buildsJekyllDirectly(src) {
+  const ast = parse(src);
+
+  // Locals bound anywhere in the file to an array or string literal, so an
+  // args array assembled above the call is still visible at the call site.
+  const aliases = new Map(); // localName -> string[]
+  const stringishValues = (node) => {
+    if (!node) return [];
+    if (node.type === "ArrayExpression") return node.elements.flatMap(stringishValues);
+    if (node.type === "Identifier" && aliases.has(node.name)) return aliases.get(node.name);
+    const s = stringValue(node);
+    return s == null ? [] : [s];
+  };
+  walk.simple(ast, {
+    VariableDeclarator(node) {
+      if (node.id.type !== "Identifier" || !node.init) return;
+      const values = stringishValues(node.init);
+      if (values.length) aliases.set(node.id.name, values);
+    },
+  });
+
+  let flagged = false;
+  walk.simple(ast, {
+    CallExpression(node) {
+      if (flagged) return;
+      const tail = calleeTail(calleeName(node.callee));
+      if (!EXEC_TAILS.has(tail)) return;
+      const mentionsJekyll = node.arguments.some((arg) =>
+        stringishValues(arg).some((v) => v.toLowerCase().includes("jekyll")),
+      );
+      if (mentionsJekyll) flagged = true;
+    },
+  });
+  return flagged;
+}
+
+function offendingBuildSpecs() {
+  const offenders = [];
+  for (const file of fs
+    .readdirSync(__dirname)
+    .filter((f) => f.endsWith(".spec.js"))
+    .sort()) {
+    let src;
+    try {
+      src = fs.readFileSync(path.join(__dirname, file), "utf8");
+    } catch (e) {
+      continue;
+    }
+    try {
+      if (buildsJekyllDirectly(src)) offenders.push(file);
+    } catch (e) {
+      // Unparseable, or an AST shape the detector doesn't expect — not this
+      // lint's problem to diagnose (mirrors fs-poll-lint.test.js).
+      continue;
+    }
+  }
+  return offenders;
+}
 
 test("the lock is per site root and lands in a writable temp dir", () => {
   expect(lockDirFor("/a/site")).not.toBe(lockDirFor("/b/site"));
@@ -159,21 +234,116 @@ test("a build refuses to release a lock that is no longer its own", () => {
   fs.rmSync(lock, { recursive: true, force: true });
 });
 
-test("every in-test `jekyll build` goes through the helper", () => {
-  // A spec that shells out to `bundle exec jekyll build` directly would sidestep
-  // the lock and bring the flake back for everyone.
-  const offenders = fs
-    .readdirSync(__dirname)
-    .filter((f) => f.endsWith(".spec.js"))
-    .filter((f) => {
-      const src = fs.readFileSync(path.join(__dirname, f), "utf8");
-      return /execFileSync\(\s*["']bundle["']\s*,\s*\[\s*["']exec["']\s*,\s*["']jekyll["']/.test(src);
-    });
+test("a build refuses to release a lock whose owner it cannot prove", () => {
+  // `readOwner` returns "" on ANY read failure, not only on a legitimate
+  // hand-off. The old `owner && owner !== token` check treated that "" the
+  // same as "no lock exists" and fell through to delete a lock it could not
+  // prove was ours — reachable whenever the owner file is missing mid-acquire.
+  const site = fs.mkdtempSync(path.join(os.tmpdir(), "site-"));
+  const lock = lockDirFor(site);
+  fs.rmSync(lock, { recursive: true, force: true });
+  acquire(lock, "us");
+  fs.rmSync(path.join(lock, "owner"));
 
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    release(lock, "us");
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  expect(fs.existsSync(lock), "an unprovable owner must LEAK the lock, not free it").toBe(true);
+  expect(warnings.some((w) => w.includes("not releasing"))).toBe(true);
+  fs.rmSync(lock, { recursive: true, force: true });
+});
+
+test("the wait deadline is honoured even when the stale lock cannot be broken", () => {
+  // Regression test for the `continue`-past-the-deadline bug: with a no-op
+  // breakLock (simulating a wrong-owner UID or a stuck filesystem), the old
+  // code never re-checked the deadline in the stale branch and this call
+  // never returned at all — a hang, which is worse than a timeout.
+  const site = fs.mkdtempSync(path.join(os.tmpdir(), "site-"));
+  const lock = lockDirFor(site);
+  fs.rmSync(lock, { recursive: true, force: true });
+  fs.mkdirSync(lock);
+  const old = Date.now() - 1000;
+  fs.utimesSync(lock, old / 1000, old / 1000);
+
+  // A no-op breakLock re-triggers the stale branch's own "breaking a stale
+  // build lock" warning every poll — real, but not what this test is
+  // checking, so silence it rather than spam the report.
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  let start;
+  try {
+    start = Date.now();
+    expect(() =>
+      acquire(lock, "us", { staleMs: 20, waitMs: 300, pollMs: 10, breakLock: () => {} }),
+    ).toThrow(/timed out/);
+  } finally {
+    console.warn = originalWarn;
+  }
   expect(
-    offenders,
+    Date.now() - start,
+    "the old bug spun forever here instead of returning promptly",
+  ).toBeLessThan(5_000);
+
+  fs.rmSync(lock, { recursive: true, force: true });
+});
+
+test("the lock wait is credited to the test budget while it is still waiting", () => {
+  // The credit has to arrive AS THE WAIT HAPPENS, not after: crediting once at
+  // the end would let Playwright kill the test before acquire's own diagnostic
+  // ever surfaces (see jekyllBuild's `onWait`). Deterministic without a real
+  // concurrent build: hold the lock ourselves, so the waiter can never acquire
+  // it and must poll until it gives up.
+  const site = fs.mkdtempSync(path.join(os.tmpdir(), "site-"));
+  const lock = lockDirFor(site);
+  fs.rmSync(lock, { recursive: true, force: true });
+  acquire(lock, "other");
+
+  try {
+    let calls = 0;
+    expect(() =>
+      acquire(lock, "us", {
+        staleMs: 999_999,
+        waitMs: 400,
+        pollMs: 10,
+        onWait: () => calls++,
+      }),
+    ).toThrow(/timed out/);
+    expect(calls, "onWait must fire once per poll, not once at the end").toBeGreaterThan(1);
+  } finally {
+    release(lock, "other");
+  }
+});
+
+test("every in-test `jekyll build` goes through the helper", () => {
+  // A spec that shells out to jekyll directly — via ANY exec/spawn variant,
+  // not just the one literal shape the old regex matched — would sidestep the
+  // lock and bring the flake back for everyone.
+  expect(
+    offendingBuildSpecs(),
     "these specs build the site directly — call jekyllBuild() from e2e/jekyll-build.js instead",
   ).toEqual([]);
+});
+
+test("the detector recognises the shapes it polices", () => {
+  // Guards against the AST walk silently matching nothing after a refactor.
+  expect(buildsJekyllDirectly('execSync("bundle exec jekyll build");')).toBe(true);
+  expect(buildsJekyllDirectly('spawnSync("bundle", ["exec", "jekyll", "build"]);')).toBe(true);
+  expect(
+    buildsJekyllDirectly(
+      'const args = ["exec", "jekyll", "build"]; execFileSync("bundle", args);',
+    ),
+  ).toBe(true);
+  expect(
+    buildsJekyllDirectly(
+      'const { jekyllBuild } = require("./jekyll-build"); jekyllBuild({ cwd: site });',
+    ),
+  ).toBe(false);
 });
 
 test("time spent waiting for the lock is credited back to the test's budget", () => {
