@@ -194,12 +194,29 @@ parallelism converts into a real one.**
 
 ## The result
 
+Measured on both consumers' own v0.1.68 bump PRs — i.e. the released code, not a
+branch:
+
 | | before | after |
 |---|---|---|
 | shape | 1 job, 2 workers, all 10 projects | 10 jobs, 1 project each, `150%` workers |
 | engines installed per job | 3 | 1 |
-| workflow wall clock | ~680 s | ~215 s |
+| **adamdaniel.ai** wall clock | 510–740 s (typ. ~680 s) | **199–256 s** (bump PR: 222 s) |
+| **jodidaniel.com** wall clock | 376–453 s | **148 s** |
+| flaky tests in the final config | — | 0 across the last two runs |
 | required status context | `e2e / e2e` | `e2e / e2e` (unchanged — the matrix sits behind an aggregating gate job) |
+
+**What it costs:** runner-minutes go UP, because ten jobs each pay the fixed
+setup. adamdaniel.ai: ~680 runner-seconds in one job before, ~1050 across eleven
+after — about 1.5x the runner time for ~3x less wall clock. That is the trade
+this design makes deliberately; if runner minutes ever matter more than latency,
+the lever is fewer, bigger jobs (and a cost table to balance them), not fewer
+workers.
+
+**Variance to expect:** the wall clock includes GitHub allocating ten runners.
+Usually they all start within 3–10 s of the run being created; one observed run
+staggered starts over 59 s. So a slow allocation shows up as ~1 minute of extra
+wall clock with every job still fast.
 
 The floor is now the slowest single project (`webkit-iphone16`: ~130 s of tests)
 plus ~60-70 s of fixed cost. Cutting it further means attacking
