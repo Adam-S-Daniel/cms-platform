@@ -55,6 +55,14 @@ inputs:
       binaries from cache and needs just the OS libraries.
     required: false
     default: 'false'
+  apt-lock-timeout-seconds:
+    description: >-
+      How long apt may WAIT for the dpkg frontend lock before giving up. Set as an
+      apt.conf.d drop-in so it also applies to the apt-get inside
+      `playwright install --with-deps`, which this action does not invoke directly.
+      300 s comfortably outlasts a runner's boot-time unattended-upgrades pass.
+    required: false
+    default: '300'
   attempts:
     description: "How many times to try before failing the step."
     required: false
@@ -91,6 +99,41 @@ inputs:
 runs:
   using: composite
   steps:
+    # apt must WAIT for the dpkg lock, not fail on it. A GitHub-hosted runner runs
+    # its own background apt (unattended-upgrades / apt-daily) for the first minute
+    # or so after boot, and `playwright install --with-deps` shells out to apt-get
+    # itself — so it races that holder and dies with exit 100:
+    #
+    #   E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 2967 (apt-get)
+    #
+    # Measured live (adamdaniel.ai job 92892148211): that failed the webkit-iphone16
+    # lane, which failed the aggregating `e2e` gate, which BLOCKED the host loop's
+    # canary PR — and the loop then timed out waiting for a merge that could never
+    # happen. Retrying does NOT help here: the attempts were back-to-back, so all
+    # three landed inside the same lock window.
+    #
+    # apt >= 2.0 (Ubuntu 24.04 ships 2.7) can wait for the lock instead of erroring,
+    # and an apt.conf.d drop-in applies it to apt invocations we do not control —
+    # which is the only way to reach the one inside `playwright install`.
+    # Fail-open: if we cannot write the drop-in we still try the install.
+    - name: Let apt wait for the dpkg lock instead of failing
+      shell: bash
+      env:
+        PW_APT_LOCK_TIMEOUT_S: ${{ inputs.apt-lock-timeout-seconds }}
+      run: |
+        set -uo pipefail
+        conf=/etc/apt/apt.conf.d/99-playwright-install-lock-timeout
+        line="DPkg::Lock::Timeout \"${PW_APT_LOCK_TIMEOUT_S}\";"
+        if [ -w /etc/apt/apt.conf.d ]; then
+          printf '%s\n' "$line" > "$conf" && echo "apt will wait up to ${PW_APT_LOCK_TIMEOUT_S}s for the dpkg lock."
+        elif command -v sudo >/dev/null 2>&1; then
+          printf '%s\n' "$line" | sudo tee "$conf" >/dev/null \
+            && echo "apt will wait up to ${PW_APT_LOCK_TIMEOUT_S}s for the dpkg lock." \
+            || echo "::warning::could not write ${conf}; a dpkg-lock race can still fail the install."
+        else
+          echo "::warning::no write access to /etc/apt/apt.conf.d and no sudo; a dpkg-lock race can still fail the install."
+        fi
+
     - name: Install Playwright browser + system deps (bounded, retried)
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -100,6 +143,7 @@ runs:
         PW_INSTALL_ATTEMPTS: ${{ inputs.attempts }}
         PW_INSTALL_TIMEOUT_S: ${{ inputs.timeout-seconds }}
         PW_INSTALL_FINAL_TIMEOUT_S: ${{ inputs.final-timeout-seconds }}
+        PW_APT_LOCK_TIMEOUT_S: ${{ inputs.apt-lock-timeout-seconds }}
       run: |
         set -uo pipefail
         # Inputs come through env, never interpolated into the command —
@@ -137,16 +181,24 @@ runs:
             exit 0
           fi
           if [ "$attempt" -ge "$PW_INSTALL_ATTEMPTS" ]; then
-            echo "::error::playwright install failed ${PW_INSTALL_ATTEMPTS} time(s) (last exit ${status})." \
-                 "Exit 124 means even the final ${PW_INSTALL_FINAL_TIMEOUT_S}s attempt was too slow to finish —" \
-                 "a genuinely unusable mirror; re-run the job. Any other code is a real install failure."
+            case "$status" in
+              124) why="even the final ${PW_INSTALL_FINAL_TIMEOUT_S}s attempt was too slow to finish — a genuinely unusable mirror; re-run the job." ;;
+              100) why="apt itself failed. If the log says 'Could not get lock /var/lib/dpkg/lock-frontend', the runner's own apt-daily held it longer than the ${PW_APT_LOCK_TIMEOUT_S}s this action tells apt to wait — raise apt-lock-timeout-seconds. Otherwise it is a real package/mirror error." ;;
+              *)   why="a real install failure (not a timeout, not an apt lock)." ;;
+            esac
+            echo "::error::playwright install failed ${PW_INSTALL_ATTEMPTS} time(s) (last exit ${status}): ${why}"
             exit 1
           fi
           # 124 is `timeout`'s "killed at the bound" code; anything else is
           # a genuine failure that a retry may still ride out (a transient
-          # apt lock, a CDN 5xx).
+          # apt/dpkg error, a CDN 5xx). Back off before retrying — an immediate
+          # retry lands inside the same bad window, which is exactly how three
+          # back-to-back attempts all hit one dpkg-lock holder (job 92892148211).
+          backoff=$((attempt * 15))
           echo "::warning::playwright install attempt ${attempt} of ${PW_INSTALL_ATTEMPTS} gave up (exit ${status}" \
                "$([ "$status" = "124" ] && echo "— hit the ${bound}s bound" || echo "— install error"));" \
-               "retrying with fresh connections (apt and playwright both resume, so progress is kept)."
+               "retrying in ${backoff}s with fresh connections (apt and playwright both resume," \
+               "so progress is kept)."
+          sleep "$backoff"
           attempt=$((attempt + 1))
         done
