@@ -4,6 +4,7 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
 const { guard } = require("./base-collections-guards");
+const { uploadFixture } = require("./upload-fixture");
 
 // Verifies the contributor capability "Upload a featured image":
 //
@@ -24,7 +25,15 @@ const REPO_ROOT = path.join(__dirname, "..");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, ".."); // #33 base_collections guard root
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 const UPLOADS_ROOT = path.join(REPO_ROOT, "assets", "images", "uploads");
-const FIXTURE_PNG = path.join(__dirname, "fixtures", "tiny-pixel.png");
+// Spec-unique upload basename. Decap stores the file under the basename it is
+// handed and this spec's cleanup globs the uploads dir for it — sharing
+// `tiny-pixel.png` with cms-featured-image-lifecycle meant this cleanup could
+// delete that spec's in-flight upload. See e2e/upload-fixture.js.
+const UPLOAD_BASENAME = "e2e-upload-smoke.png";
+const FIXTURE_PNG = uploadFixture(
+  path.join(__dirname, "fixtures", "tiny-pixel.png"),
+  UPLOAD_BASENAME,
+);
 
 const SMOKE_TITLE = "E2E Image Upload Smoke";
 const SMOKE_SLUG = "e2e-image-upload-smoke";
@@ -37,7 +46,7 @@ function findSmokePostFile() {
 
 // Walk uploads/ and return any file matching the fixture's basename.
 // Decap may rename the file (e.g. dedupe suffix) so we accept
-// "tiny-pixel*.png".
+// "e2e-upload-smoke*.png".
 function findUploadedFixture() {
   if (!fs.existsSync(UPLOADS_ROOT)) return null;
   const matches = [];
@@ -45,7 +54,7 @@ function findUploadedFixture() {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (/^tiny-pixel.*\.png$/i.test(entry.name)) matches.push(full);
+      else if (/^e2e-upload-smoke.*\.png$/i.test(entry.name)) matches.push(full);
     }
   }
   walk(UPLOADS_ROOT);
@@ -150,7 +159,7 @@ test.describe(
       expect(
         rel,
         "Uploaded file must land directly in assets/images/uploads/ with no subdirectory",
-      ).toMatch(/^tiny-pixel.*\.png$/i);
+      ).toMatch(/^e2e-upload-smoke.*\.png$/i);
 
       // Front matter must reference the upload at the byte-identical
       // public URL: public_folder ("/assets/images/uploads") + "/" + the

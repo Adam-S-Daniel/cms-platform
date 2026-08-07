@@ -7,20 +7,24 @@
 # workflow checks the platform out into `.cms-platform/` (a dot-dir
 # Jekyll ignores) and runs the suite from there:
 #
-#   cd .cms-platform/e2e && npm ci && npx playwright install --with-deps <browser>
-#   npx playwright test $(node lanes.js --projects <lane>)
+#   cd .cms-platform/e2e && npm ci && npx playwright install --with-deps <engine>
+#   npx playwright test --project=<project>
 #
-# PARALLELISM — two levels, one required check:
-#   * LANES: a `lane` matrix runs one job (one 4-vCPU runner) per slice of the
-#     Playwright projects. The slices come from `e2e/lanes.js`, which derives
-#     them from playwright.config.js itself: each admin project is its own lane
-#     (they hold ~65% of the wall-clock) and the public-page projects share one.
-#     Balanced by construction — `--shard` is NOT used because it balances by
-#     test COUNT and this suite's durations are 4 orders of magnitude apart.
-#   * WORKERS: each lane runs `workers: 100%` (one per vCPU) instead of
-#     Playwright's default 50%. Override with the `workers` input.
+# PARALLELISM — one job per Playwright PROJECT, one required check:
+#   * The `project` matrix runs each of playwright.config.js's projects on its
+#     own 4-vCPU runner, so the suite's wall clock is its slowest PROJECT rather
+#     than the sum of all of them. The matrix list, each job's browser engine,
+#     and each job's worker count all come from `e2e/ci-matrix.js`, which
+#     derives them from the config — nothing is hand-tuned here.
+#   * `--shard` is deliberately NOT used: it balances by test COUNT while this
+#     suite's per-test durations span 5 ms → 49 s (a measured 4-way shard put
+#     71% of the work in one shard).
+#   * Worker counts differ by project on purpose: a 4-vCPU runner saturates at
+#     ~2 browser workers, so the CPU-bound public-page projects keep
+#     Playwright's default while the wait-bound admin projects go to one worker
+#     per vCPU. Measurements: docs/E2E-PARALLELISM.md.
 #   The `e2e` job at the bottom is the single required status context; the
-#   per-lane contexts are not named by any ruleset. See docs/E2E-PARALLELISM.md.
+#   per-project contexts are not named by any ruleset.
 #
 # The specs read their site identity from env — the central helpers
 # (e2e/base.js, e2e/cms-host.js) are parameterized on CMS_PROD_URL /
@@ -66,7 +70,7 @@ on:
         type: string
         default: ""
       browser:
-        description: "Playwright browser to install with system deps (chromium | firefox | webkit | all)."
+        description: "Playwright browser to install with system deps (chromium | firefox | webkit | all). `all` = whatever each project job needs, one engine per job."
         required: false
         type: string
         default: chromium
@@ -91,7 +95,7 @@ on:
         type: string
         default: ""
       workers:
-        description: "Playwright workers per lane (e.g. '4', '50%'). Empty = the config default (100% of the runner's vCPUs on CI). The no-release dial-down if a lane gets flaky under load."
+        description: "Override Playwright's worker count for EVERY project job (e.g. '2', '50%'). Empty = the per-project value e2e/ci-matrix.js derives. The no-release dial-down if a project gets flaky under load."
         required: false
         type: string
         default: ""
@@ -111,25 +115,39 @@ permissions:
   pull-requests: write
 
 jobs:
-  # ── The suite, split across one runner per LANE ───────────────────
-  # Each lane is an independent 4-vCPU runner that builds/serves the site and
-  # runs its own slice of the Playwright projects with `workers: 100%`. Two
-  # levels of parallelism: lanes × workers.
+  # ── The suite, one runner per Playwright project ──────────────────
+  # Each job builds/serves the site and runs exactly one project, installing
+  # only that project's browser engine.
   #
-  # The lane names below MUST equal `node e2e/lanes.js --list` — that module is
-  # the single source of truth (it derives the split from playwright.config.js's
-  # own projects) and `e2e/lanes.test.js` fails the platform's CI if the two
-  # drift. An unknown lane also fails loudly at run time.
+  # The list below MUST equal `node e2e/ci-matrix.js --list` — that module is the
+  # single source of truth (it reads playwright.config.js's own projects) and
+  # `e2e/ci-matrix.test.js` fails the platform's CI if the two drift. A project
+  # missing from this list would SILENTLY STOP RUNNING, which is the one way
+  # this design can break; an unknown name here fails loudly at run time.
   #
-  # `fail-fast: false` so one red lane doesn't cancel the others: a cancelled
+  # `fail-fast: false` so one red project doesn't cancel the others: a cancelled
   # sibling hides the second bug and reads as infrastructure noise.
-  lane:
+  project:
     strategy:
       fail-fast: false
       matrix:
-        lane: [chromium-desktop-3k, webkit-iphone16, public]
+        project:
+          - chromium-desktop-3k
+          - webkit-iphone16
+          - chromium-desktop-1080
+          - chromium-laptop
+          - chromium-mobile
+          - firefox-desktop
+          - webkit-tablet
+          - chromium-large-text
+          - chromium-light
+          - chromium-forced-colors
     runs-on: ubuntu-latest
     env:
+      # Read by the install step, the suite step, and (so the browser self-heal
+      # can't re-download the engines this job deliberately skipped)
+      # e2e/install-browsers-on-miss.js.
+      PW_PROJECT: ${{ matrix.project }}
       # Site identity → the parameterized central helpers (e2e/base.js,
       # e2e/cms-host.js). See the workflow header for the env contract.
       TARGET: ${{ inputs.target }}
@@ -170,14 +188,17 @@ jobs:
           PW_BROWSER: ${{ inputs.browser }}
         run: |
           set -euo pipefail
-          # `all` installs every supported engine; otherwise install the
-          # single requested browser. --with-deps pulls the OS libraries
-          # the engine needs on ubuntu-latest.
+          # This job runs ONE project, so it needs ONE engine — installing all
+          # three cost ~58 s (39 s of apt + 19 s of downloads) on every job, on
+          # the critical path. `all` therefore means "whatever this project
+          # needs", derived from the config so it can't drift; an explicit
+          # `browser:` input still pins a single engine for callers that want
+          # one. --with-deps pulls the OS libraries the engine needs.
           if [ "$PW_BROWSER" = "all" ]; then
-            npx playwright install --with-deps
-          else
-            npx playwright install --with-deps "$PW_BROWSER"
+            PW_BROWSER="$(node ci-matrix.js --engine "$PW_PROJECT")"
           fi
+          echo "project=$PW_PROJECT engine=$PW_BROWSER"
+          npx playwright install --with-deps "$PW_BROWSER"
 
       # ── LOCAL lane only: build + serve the SITE and run the FULL matrix ──
       # The local lane (target: local) runs a real `jekyll build` of the
@@ -229,26 +250,23 @@ jobs:
           # `|| ''` for non-local — a latent gap mirroring the loop reusables /
           # parity-preview #35.) Locked by e2e/loop-site-root-lint.test.js.
           SITE_ROOT: ${{ github.workspace }}
-          # This lane's slice of the matrix + its worker count (see the
-          # `workers` input and playwright.config.js).
-          LANE: ${{ matrix.lane }}
-          PW_WORKERS: ${{ inputs.workers }}
+          # A caller-supplied `workers` wins; otherwise take the per-project
+          # value from ci-matrix.js (see its header for the measurements).
+          WORKERS_INPUT: ${{ inputs.workers }}
         run: |
           set -o pipefail
-          # One `--project=<name>` flag per line, straight from the config —
-          # `mapfile` keeps it out of shell word-splitting. An unknown lane
-          # exits non-zero here, before any test runs.
-          mapfile -t PROJECT_FLAGS < <(node lanes.js --projects "$LANE")
-          echo "lane=$LANE projects: ${PROJECT_FLAGS[*]}"
-          npx playwright test "${PROJECT_FLAGS[@]}" --reporter=list 2>&1 | tee /tmp/playwright-output.log
+          PW_WORKERS="${WORKERS_INPUT:-$(node ci-matrix.js --workers "$PW_PROJECT")}"
+          export PW_WORKERS
+          echo "project=$PW_PROJECT workers=${PW_WORKERS:-<playwright default>}"
+          npx playwright test --project="$PW_PROJECT" --reporter=list 2>&1 | tee /tmp/playwright-output.log
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 (2026-04-10)
         with:
-          # Lane-scoped: upload-artifact v4+ errors on a duplicate name, and
-          # three same-named uploads would collide across the matrix.
-          name: playwright-report-${{ matrix.lane }}
+          # Project-scoped: upload-artifact v4+ errors on a duplicate name,
+          # and every matrix job uploads.
+          name: playwright-report-${{ matrix.project }}
           # Local lane reports under <site>/e2e; preview/prod under the
           # platform checkout. Upload both globs; if-no-files-found: ignore
           # makes the absent one a no-op. test-results/ carries the failure
@@ -269,17 +287,17 @@ jobs:
       # v3 design. The composite is checked out under .cms-platform, so
       # reference it by that local path.
       #
-      # The marker is LANE-SCOPED: markers must be unique or the lanes would
-      # clobber each other's comment, and a marker that names the lane tells a
-      # reader which slice went red before they open a log.
+      # The marker is PROJECT-SCOPED: markers must be unique or the matrix jobs
+      # would clobber each other's comment, and a marker that names the project
+      # tells a reader which one went red before they open a log.
       - name: Post failure summary
         if: ${{ failure() && inputs.pr_number != '' }}
         uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: post
           log-file: /tmp/playwright-output.log
-          marker: e2e-failure-summary-${{ matrix.lane }}
-          title: E2E tests (${{ matrix.lane }} lane)
+          marker: e2e-failure-summary-${{ matrix.project }}
+          title: E2E tests (${{ matrix.project }})
           pr-number: ${{ inputs.pr_number }}
 
       - name: Resolve failure summary on success
@@ -287,34 +305,34 @@ jobs:
         uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: resolve
-          marker: e2e-failure-summary-${{ matrix.lane }}
-          title: E2E tests (${{ matrix.lane }} lane)
+          marker: e2e-failure-summary-${{ matrix.project }}
+          title: E2E tests (${{ matrix.project }})
           pr-number: ${{ inputs.pr_number }}
 
   # ── The single required status context ────────────────────────────
   # Branch protection requires `<caller-job> / e2e` (e.g. `e2e / e2e`). The
-  # matrix above surfaces one context PER LANE, which no ruleset names, so this
-  # job keeps the contract: it is the ONLY thing the ruleset (and the
+  # matrix above surfaces one context PER PROJECT, which no ruleset names, so
+  # this job keeps the contract: it is the ONLY thing the ruleset (and the
   # e2e-required-stub companion, which emits the same `e2e` job name on
   # docs-only PRs) has to know about. Do NOT rename it.
   #
-  # `always()` so a red/cancelled lane still reports here instead of leaving the
-  # required check pending forever ("Waiting for status to be reported" — the
-  # missing-check trap). `needs.lane.result` is the matrix's rolled-up result:
-  # `success` only when EVERY lane succeeded.
+  # `always()` so a red/cancelled project still reports here instead of leaving
+  # the required check pending forever ("Waiting for status to be reported" —
+  # the missing-check trap). `needs.project.result` is the matrix's rolled-up
+  # result: `success` only when EVERY project succeeded.
   e2e:
-    needs: lane
+    needs: project
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Gate on lane results
+      - name: Gate on the project matrix
         env:
-          LANE_RESULT: ${{ needs.lane.result }}
+          MATRIX_RESULT: ${{ needs.project.result }}
         run: |
           set -euo pipefail
-          echo "e2e lane matrix result: ${LANE_RESULT}"
-          if [ "${LANE_RESULT}" != "success" ]; then
-            echo "::error::At least one e2e lane did not succeed (${LANE_RESULT}) — see the per-lane jobs above."
+          echo "e2e project matrix result: ${MATRIX_RESULT}"
+          if [ "${MATRIX_RESULT}" != "success" ]; then
+            echo "::error::At least one e2e project job did not succeed (${MATRIX_RESULT}) — see the per-project jobs above."
             exit 1
           fi
-          echo "All e2e lanes passed."
+          echo "Every e2e project passed."

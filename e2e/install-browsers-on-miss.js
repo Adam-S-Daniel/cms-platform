@@ -23,12 +23,32 @@ const fs = require("node:fs");
 const { execSync } = require("node:child_process");
 const { chromium, firefox, webkit } = require("@playwright/test");
 
+// Which engines this run actually needs. The e2e-tests workflow runs one job
+// per Playwright project and installs ONLY that project's engine (see
+// e2e/ci-matrix.js), so a blanket check here would report the other two as
+// "missing" and re-download them — undoing the scoped install on every single
+// job. `PW_PROJECT` is the workflow's per-job project name; without it (a full
+// local run, or another reusable running the whole matrix) every engine is in
+// play and all three are checked, exactly as before.
+function neededEngines() {
+  const project = (process.env.PW_PROJECT || "").trim();
+  if (!project) return new Set(["chromium", "firefox", "webkit"]);
+  try {
+    return new Set([require("./ci-matrix").engineFor(project)]);
+  } catch (e) {
+    // An unknown project is the workflow's problem to report, not this
+    // self-heal's — fall back to checking everything.
+    console.warn(`[install-on-miss] ${e.message} — checking every engine instead.`);
+    return new Set(["chromium", "firefox", "webkit"]);
+  }
+}
+
 module.exports = async () => {
   const browsers = [
     ["chromium", chromium],
     ["firefox", firefox],
     ["webkit", webkit],
-  ];
+  ].filter(([name]) => neededEngines().has(name));
   const missing = [];
   for (const [name, type] of browsers) {
     let exe;
@@ -61,3 +81,8 @@ module.exports = async () => {
     );
   }
 };
+
+// Exported for e2e/ci-matrix.test.js — the scoped-install contract is the one
+// thing here worth locking (a blanket check would re-download the engines the
+// per-project CI job skipped).
+module.exports.neededEngines = neededEngines;

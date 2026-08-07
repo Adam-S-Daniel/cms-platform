@@ -145,6 +145,16 @@ test.describe(
 
       const urls = allUrls.filter((u) => !shouldSkip(u, TARGET));
 
+      // ONE test crawls EVERY sitemap URL, so its budget has to scale with the
+      // site instead of sitting at Playwright's fixed 30 s default. At ~40 URLs
+      // this crawl already used ~21 s of that 30 s, and it tipped over the
+      // moment its project ran with more workers — a `networkidle` goto that
+      // takes 300 ms idle takes seconds when several browsers share the
+      // runner's vCPUs. Same shape as cms-link-crawler.spec.js's explicit
+      // 240 s crawl budget. The 30 s `actionTimeout` still catches a genuine
+      // hang, so a generous test budget hides nothing.
+      test.setTimeout(30_000 + urls.length * 3_000);
+
       // Accumulate every violation across every page rather than failing
       // on the first one — gives the editor a complete picture in CI logs
       // when a content sweep drops alts in multiple places at once.
