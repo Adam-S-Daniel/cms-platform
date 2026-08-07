@@ -333,8 +333,8 @@ branch:
 |---|---|---|
 | shape | 1 job, 2 workers, all 10 projects | 10 jobs, 1 project each, `150%` workers |
 | engines installed per job | 3 | 1 |
-| **adamdaniel.ai** wall clock | 510–740 s (typ. ~680 s) | **199–256 s** (bump PR: 222 s) |
-| **jodidaniel.com** wall clock | 376–453 s | **148 s** |
+| **adamdaniel.ai** wall clock | 510–740 s (typ. ~680 s) | **199–256 s** (v0.1.68 bump 222 s; v0.1.70 bump 202 s slowest lane) |
+| **jodidaniel.com** wall clock | 376–453 s | **148–210 s** (v0.1.68/69 bumps 148/150 s; v0.1.70 bump 210 s) |
 | flaky tests in the final config | — | 0 across the last two runs |
 | required status context | `e2e / e2e` | `e2e / e2e` (unchanged — the matrix sits behind an aggregating gate job) |
 
@@ -345,18 +345,66 @@ this design makes deliberately; if runner minutes ever matter more than latency,
 the lever is fewer, bigger jobs (and a cost table to balance them), not fewer
 workers.
 
+**The spread is real — quote the range, not the best run.** jodidaniel.com
+measured 148 s, 150 s and 210 s on three consecutive bump PRs of the same suite.
+The difference is almost entirely per-lane install variance (its `webkit-iphone16`
+install ranged 29-61 s on those runs) plus runner allocation, not test time. So
+treat "~150-210 s" as the honest figure for a single-page consumer and
+"~200-220 s" for a full one, and don't read a 20% swing between two runs as a
+regression.
+
 **Variance to expect:** the wall clock includes GitHub allocating ten runners.
 Usually they all start within 3–10 s of the run being created; one observed run
 staggered starts over 59 s. So a slow allocation shows up as ~1 minute of extra
 wall clock with every job still fast.
 
-The floor is now the slowest single project (`webkit-iphone16`: ~130 s of tests)
-plus ~60-70 s of fixed cost. Cutting it further means attacking
-`cms-link-crawler`'s ~50-66 s single test, or `--shard`ing *within* that one
-project — both of which buy less than they cost today. The fixed cost is already
-mostly irreducible: ~25 s of runner + checkouts + Node + `npm ci`, ~20-35 s of
-`playwright install --with-deps <engine>`, ~5 s of `jekyll build`, and ~15 s of
-Playwright's own start-up and spec collection.
+## Where the remaining time actually goes (and why to stop here)
+
+Every lane of adamdaniel.ai's v0.1.70 bump PR (run 31184726404), split into the
+two parts that matter:
+
+| lane | total | install | tests |
+|---|---|---|---|
+| `webkit-iphone16` | **202 s** | 39 s | **141 s** |
+| `chromium-desktop-3k` | 156 s | 25 s | 104 s |
+| `webkit-tablet` | 114 s | 51 s | 34 s |
+| `chromium-desktop-1080` | 89 s | 25 s | 34 s |
+| `firefox-desktop` | 86 s | 34 s | 27 s |
+| `chromium-light` | 83 s | 22 s | 38 s |
+| `chromium-large-text` | 78 s | 23 s | 33 s |
+| `chromium-forced-colors` | 77 s | 23 s | 32 s |
+| `chromium-mobile` | 73 s | 23 s | 21 s |
+| `chromium-laptop` | 71 s | 21 s | 29 s |
+
+Three things this settles:
+
+1. **The long pole is WebKit's test speed, not the install.** `webkit-iphone16`
+   spends 141 s running the SAME `@admin-read` specs that `chromium-desktop-3k`
+   gets through in 104 s *while also* running every `@admin-write` round trip.
+   Nothing in the CI design can fix that; it is the engine.
+2. **WebKit's apt half is ~2x Chromium's** (51 s vs 21-25 s on the same run) —
+   worth knowing before blaming a webkit lane's install for being stalled. A
+   *stall* looks like 600 s+, not 51 s.
+3. **The fixed cost is ~42 s and mostly irreducible**: ~3 s of checkouts, 4 s
+   Node, 3 s `npm ci`, 21-25 s `playwright install` (chromium), 5 s Ruby/Bundler,
+   ~3 s artifacts + the failure-comment steps. `Resolve this project's browser
+   engine` is 0 s.
+
+**The next optimization, priced.** Sharding *within* a project is the only lever
+left, and the arithmetic says stop: a 2-way shard of `webkit-iphone16` halves its
+141 s of tests but each shard still pays its own ~39-61 s install and ~42 s fixed
+cost, landing both around ~120 s. That would make `chromium-desktop-3k` (156 s)
+the new long pole, so the whole run improves by **~45 s** — and to get past 156 s
+you would have to shard that lane too, i.e. go to a project x shard matrix of
+**20 jobs** for maybe 60 s. Against ~200 s that is a ~30% cut for double the job
+count, double the fixed cost, a second matrix dimension in every consumer's
+required check, and a `--shard` split whose balance is exactly the thing measured
+to be unreliable above.
+
+Not worth it *today*, and the number to re-check before revisiting is simple: if
+`webkit-iphone16`'s test time ever grows past roughly twice
+`chromium-desktop-3k`'s, sharding it alone starts paying for itself without the
+second dimension.
 
 ## Re-measuring
 
