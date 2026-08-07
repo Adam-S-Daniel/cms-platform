@@ -1002,6 +1002,21 @@ The three findings that shaped it, all measured on adamdaniel.ai:
   canary-prod job 92842548516, cms-platform self-ci job 92855380065.
   **`e2e/engine-scope-lint.test.js` fails if a step's `PW_PROJECT` is missing or
   disagrees with its `--project` flags.**
+- **NEVER shell out to a raw `npx playwright install` from a workflow** — use
+  `.github/actions/install-playwright-browsers`, which bounds each attempt
+  (`timeout 420`) and retries up to 3 times. `--with-deps` apt-installs ~90
+  packages first, and on 2026-08-07 the Ubuntu mirror served one runner at
+  ~35 KB/s for its whole run, so `install --with-deps webkit` took **39 minutes**
+  while the tests it installed for took 41.6 s (adamdaniel.ai job 92862768030).
+  Fanning out to ten lanes means ten INDEPENDENT apt exposures per run, and the
+  aggregating `e2e` gate waits for the slowest — so that one lane held a
+  delete-recovery PR open 40 min and blew the media-roundtrip loop's 30-minute
+  delete-leg budget. **A bare `timeout-minutes:` is not the fix**: it converts a
+  slow mirror into a RED required check, which blocks a `cms/*` canary PR
+  permanently instead of merging it late; only a retry recovers, because a fresh
+  attempt gets fresh connections to a load-balanced mirror (apt's own
+  `Acquire::*::Timeout` does nothing — the bytes were flowing, just slowly).
+  Locked by **`e2e/playwright-install-bounded.test.js`**.
 - **The reusable sets `DISABLE_PER_TEST_VIDEOS=1`.** `e2e/base.js` captures a
   full-page screenshot on every main-frame navigation of every test, and its only
   consumer (`e2e/generate-test-videos.js`) is invoked by no reusable — the

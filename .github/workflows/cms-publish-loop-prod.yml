@@ -139,8 +139,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser + system deps
-        working-directory: .cms-platform/e2e
-        run: npx playwright install --with-deps chromium
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: chromium
 
       # Post-merge only: do NOT drive prod until THIS commit is live.
       # Skipped on workflow_dispatch/schedule and when playground mode is

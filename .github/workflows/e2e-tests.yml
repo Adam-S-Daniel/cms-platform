@@ -7,7 +7,8 @@
 # workflow checks the platform out into `.cms-platform/` (a dot-dir
 # Jekyll ignores) and runs the suite from there:
 #
-#   cd .cms-platform/e2e && npm ci && npx playwright install --with-deps <engine>
+#   cd .cms-platform/e2e && npm ci, then the install-playwright-browsers
+#   composite for this project's <engine> (bounded + retried — see its header)
 #   npx playwright test --project=<project>
 #
 # PARALLELISM — one job per Playwright PROJECT, one required check:
@@ -182,7 +183,8 @@ jobs:
         working-directory: .cms-platform/e2e
         run: npm ci
 
-      - name: Install Playwright browser + system deps
+      - name: Resolve this project's browser engine
+        id: engine
         working-directory: .cms-platform/e2e
         env:
           PW_BROWSER: ${{ inputs.browser }}
@@ -193,12 +195,17 @@ jobs:
           # the critical path. `all` therefore means "whatever this project
           # needs", derived from the config so it can't drift; an explicit
           # `browser:` input still pins a single engine for callers that want
-          # one. --with-deps pulls the OS libraries the engine needs.
+          # one.
           if [ "$PW_BROWSER" = "all" ]; then
             PW_BROWSER="$(node ci-matrix.js --engine "$PW_PROJECT")"
           fi
           echo "project=$PW_PROJECT engine=$PW_BROWSER"
-          npx playwright install --with-deps "$PW_BROWSER"
+          echo "engine=$PW_BROWSER" >> "$GITHUB_OUTPUT"
+
+      - name: Install Playwright browser + system deps
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: ${{ steps.engine.outputs.engine }}
 
       # ── LOCAL lane only: build + serve the SITE and run the FULL matrix ──
       # The local lane (target: local) runs a real `jekyll build` of the
