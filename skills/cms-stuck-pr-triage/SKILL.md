@@ -38,6 +38,44 @@ gh pr list --state open --search "head:cms" --limit 1000 \
 
 A PR with `mergeStateStatus: BLOCKED` is the prime suspect, especially if it's been open for more than an hour. `UNKNOWN` is also worth checking — GitHub sometimes returns that when checks are pending or the cached status is stale.
 
+### 1b. If the BLOCKED PR's only red check is ONE `e2e / project (…)` lane, suspect the install, not the tests
+
+This is the most common cause of a loop timing out, and the loop's own error points
+somewhere else entirely. The signature:
+
+- The loop fails with `Timed out waiting for the URL to reflect the change … NO
+  deploy-production run fired for your merge — the chain never fired`, with
+  `in-flight: 0, queued: 0`.
+- Its canary PR is `BLOCKED`, and the ONLY failures are
+  `e2e / project (<one lane>)` plus the aggregating `e2e / e2e`.
+- That lane's log ends in the install step, not in a test:
+
+```
+E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process NNNN (apt-get)
+Error: Installation process exited with code: 100
+::error::playwright install failed 3 time(s)
+```
+
+**What happened:** a GitHub-hosted runner runs its own apt
+(`unattended-upgrades` / `apt-daily`) for the first minute after boot, and
+`playwright install --with-deps` shells out to apt-get itself, so it races that
+holder. It is almost always a **webkit** lane, because webkit's dep set is the
+biggest (~2x chromium's apt time), giving it the widest window to overlap.
+
+The blast radius is what makes this worth its own step: one lane's install failure
+fails the aggregating gate, a red required check BLOCKS the canary PR, and the loop
+then waits out its whole budget for a merge that can never happen. On 2026-08-07 it
+took out the host loop AND prod-mutate in the same hour (adamdaniel.ai jobs
+92892148211 and 92898220347).
+
+**Fix:** re-run the failed jobs (`gh run rerun <run-id> --failed`) — the lock is
+gone by then, so the canary PR unblocks and auto-merges on its own. Platform
+v0.1.71+ prevents it: the install composite drops `DPkg::Lock::Timeout` into
+`apt.conf.d` so apt WAITS for the lock instead of erroring, and retries back off
+(15 s / 30 s) instead of firing back-to-back into the same window. If you see this
+on v0.1.71 or later, the holder outlasted `apt-lock-timeout-seconds` (300 s) —
+raise it rather than adding more retries.
+
 ### 2. For each BLOCKED PR, find the failing checks and the base it ran against
 
 ```bash
