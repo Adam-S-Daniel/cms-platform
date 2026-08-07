@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { contentOrEmpty } = require("./fs-poll");
 const { guard } = require("./base-collections-guards");
 
 // Verifies the contributor capability "Create / edit / delete a Project":
@@ -82,9 +83,13 @@ test.describe(
         .first()
         .click();
 
-      await expect.poll(() => fs.existsSync(SMOKE_FILE), { timeout: 60_000 }).toBe(true);
+      // Poll the CONTENT, not just existence: decap-server creates the file
+      // and then writes it (see e2e/fs-poll.js).
+      await expect
+        .poll(() => contentOrEmpty(SMOKE_FILE), { timeout: 60_000 })
+        .toContain(`title: ${SMOKE_TITLE}`);
 
-      const saved = fs.readFileSync(SMOKE_FILE, "utf8");
+      const saved = contentOrEmpty(SMOKE_FILE);
       expect(saved).toContain(`title: ${SMOKE_TITLE}`);
       expect(saved).toMatch(/technology:\s*['"]?Rust ·/);
       expect(saved).toMatch(/url_link:\s*['"]?https:\/\/example\.com/);

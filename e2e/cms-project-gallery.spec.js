@@ -2,8 +2,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { contentOrEmpty } = require("./fs-poll");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
 // Verifies the contributor capability "Build a multi-image project gallery":
@@ -189,9 +190,13 @@ test.describe(
         .click();
 
       // ── Assertion 1: file on disk ────────────────────────────────────
-      await expect.poll(() => fs.existsSync(SMOKE_FILE), { timeout: 60_000 }).toBe(true);
+      // Poll the CONTENT, not just existence: decap-server creates the file
+      // and then writes it (see e2e/fs-poll.js).
+      await expect
+        .poll(() => contentOrEmpty(SMOKE_FILE), { timeout: 60_000 })
+        .toContain(`title: ${SMOKE_TITLE}`);
 
-      const saved = fs.readFileSync(SMOKE_FILE, "utf8");
+      const saved = contentOrEmpty(SMOKE_FILE);
       expect(saved).toContain(`title: ${SMOKE_TITLE}`);
       expect(saved).toMatch(/^images:/m);
       // Each list entry is one line `  - /assets/images/uploads/<file>.png`.
@@ -216,10 +221,7 @@ test.describe(
       // (cms-image-upload, cms-featured-image-lifecycle,
       // manual-walkthrough-first-post) does this explicit rebuild; this
       // spec historically masked its absence by tolerating a 404.
-      execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
-        cwd: REPO_ROOT,
-        stdio: "inherit",
-      });
+      jekyllBuild({ cwd: REPO_ROOT });
 
       // ── Assertion 3: public image URLs resolve (strict 200) ──────────
       // Extract the raw URL from each YAML list line and HEAD-fetch it.

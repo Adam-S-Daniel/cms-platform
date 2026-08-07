@@ -1,8 +1,8 @@
 // @lane: local — reads _site/ artefacts produced by the local Jekyll build
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
 // SITE_ROOT — the consuming site's repo root (the same value the rest of the
@@ -54,15 +54,12 @@ This post should never appear on any public surface.
 const TARGET = process.env.TARGET || "local";
 const IS_LOCAL = TARGET === "local";
 
-function jekyllBuild() {
+function rebuildSite() {
   // Quiet build into the same `_site/` the playwright webServer is
   // serving from, so the deletion/non-creation of the draft is
   // picked up without restarting `npx serve`.
   // @parity-lint-allow: only invoked from beforeAll's IS_LOCAL branch (G3).
-  execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-  });
+  jekyllBuild({ cwd: REPO_ROOT });
 }
 
 function writeDraft() {
@@ -107,7 +104,7 @@ test.describe(
       // Defensive cleanup in case a previous failed run left the file.
       removeDraft();
       writeDraft();
-      jekyllBuild();
+      rebuildSite();
     });
 
     test.afterAll(() => {
@@ -115,7 +112,7 @@ test.describe(
       removeDraft();
       // Rebuild so subsequent specs in the same run don't see a half-
       // cleaned `_site/`. Cheap (~1s) and keeps the tree tidy.
-      jekyllBuild();
+      rebuildSite();
     });
 
     test.beforeEach(({ page }) => {

@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { contentOrEmpty } = require("./fs-poll");
 const { captureStep } = require("./manual-capture");
 const { guard } = require("./base-collections-guards");
 
@@ -133,9 +134,13 @@ test.describe(
         .click();
 
       // The file should land in _tags/<slug>.md within a few seconds.
-      await expect.poll(() => fs.existsSync(SMOKE_TAG_FILE), { timeout: 60_000 }).toBe(true);
+      // Poll the CONTENT, not just existence: decap-server creates the file
+      // and then writes it (see e2e/fs-poll.js).
+      await expect
+        .poll(() => contentOrEmpty(SMOKE_TAG_FILE), { timeout: 60_000 })
+        .toContain(`name: ${SMOKE_TAG_NAME}`);
 
-      const saved = fs.readFileSync(SMOKE_TAG_FILE, "utf8");
+      const saved = contentOrEmpty(SMOKE_TAG_FILE);
       expect(saved).toContain(`name: ${SMOKE_TAG_NAME}`);
       await captureStep(page, {
         section: "Verifying on the public site",

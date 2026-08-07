@@ -1,8 +1,9 @@
 // @lane: local — needs decap-server file IO + local Jekyll for the lifecycle
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { contentOrEmpty } = require("./fs-poll");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
 // Verifies the contributor capability "Featured-image lifecycle on a post":
@@ -95,7 +96,7 @@ function cleanup() {
   if (fs.existsSync(site)) fs.rmSync(site, { recursive: true, force: true });
 }
 
-function jekyllBuild() {
+function rebuildSite() {
   // `--future` is mandatory: the fixture post is dated 2099-01-02 so the
   // on-disk filename stays deterministic across runs, but Jekyll's
   // default `future: false` then skips the post and the public URL
@@ -103,10 +104,7 @@ function jekyllBuild() {
   // today's date (Decap's default); B7 can't, because the filename
   // round-trips through `_posts/YYYY-MM-DD-<slug>.md` and the test
   // pins YYYY-MM-DD to keep the path predictable.
-  execFileSync("bundle", ["exec", "jekyll", "build", "--quiet", "--future"], {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-  });
+  jekyllBuild({ cwd: REPO_ROOT, future: true });
 }
 
 async function loginAndOpenNew(page) {
@@ -222,8 +220,12 @@ test.describe(
       await publishNow(page);
 
       // ── On-disk asserts ──────────────────────────────────────────────
-      await expect.poll(() => fs.existsSync(POST_PATH), { timeout: 60_000 }).toBe(true);
-      const written = fs.readFileSync(POST_PATH, "utf8");
+      // Poll the CONTENT, not just existence: decap-server creates the file
+      // and then writes it (see e2e/fs-poll.js).
+      await expect
+        .poll(() => contentOrEmpty(POST_PATH), { timeout: 60_000 })
+        .toContain(`title: ${TITLE}`);
+      const written = contentOrEmpty(POST_PATH);
       expect(written).toContain(`title: ${TITLE}`);
       // media_folder is flat + template-free, so the URL is exactly
       // public_folder + "/" + basename — no subdirectory. The `[^/]*`
@@ -233,7 +235,7 @@ test.describe(
       );
 
       // ── Rendered post asserts ────────────────────────────────────────
-      jekyllBuild();
+      rebuildSite();
       const liveURL = `/blog/${SLUG}/`;
       const resp = await page.goto(liveURL);
       expect(resp.status(), `${liveURL} should be 200`).toBe(200);
@@ -346,7 +348,7 @@ test.describe(
       ).not.toMatch(/^featured_image:\s*\S+/m);
 
       // ── Rendered post must NOT include the featured-image element ───
-      jekyllBuild();
+      rebuildSite();
       const liveURL = `/blog/${SLUG}/`;
       const resp = await page.goto(liveURL);
       expect(resp.status(), `${liveURL} should be 200`).toBe(200);

@@ -43,16 +43,23 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
+const { uploadFixture } = require("./upload-fixture");
 
 const REPO_ROOT = path.join(__dirname, "..");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");  // #33 base_collections guard root
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 const UPLOADS_ROOT = path.join(REPO_ROOT, "assets", "images", "uploads");
-const FIXTURE_PNG = path.join(__dirname, "fixtures", "tiny-pixel.png");
+// Spec-unique upload basename — see e2e/upload-fixture.js for why three specs
+// must not hand Decap the same `tiny-pixel.png`.
+const UPLOAD_BASENAME = "e2e-first-post.png";
+const FIXTURE_PNG = uploadFixture(
+  path.join(__dirname, "fixtures", "tiny-pixel.png"),
+  UPLOAD_BASENAME,
+);
 
 // Unique slug — must not collide with existing fixtures
 // (`e2e-image-upload-smoke`, `e2e-publish-flow-smoke`, `e2e-mutation-canary`).
@@ -92,8 +99,8 @@ function findSmokePostFile() {
 }
 
 // Walk uploads/ for the fixture's basename. Decap may dedupe-suffix the
-// filename (tiny-pixel-1.png on a re-upload), so accept any file whose
-// stem starts with `tiny-pixel`.
+// filename (e2e-first-post-1.png on a re-upload), so accept any file whose
+// stem starts with `e2e-first-post`.
 function findUploadedFixture() {
   if (!fs.existsSync(UPLOADS_ROOT)) return null;
   const matches = [];
@@ -101,22 +108,19 @@ function findUploadedFixture() {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (/^tiny-pixel.*\.png$/i.test(entry.name)) matches.push(full);
+      else if (/^e2e-first-post.*\.png$/i.test(entry.name)) matches.push(full);
     }
   }
   walk(UPLOADS_ROOT);
   return matches[0] || null;
 }
 
-function jekyllBuild() {
+function rebuildSite() {
   // Quiet rebuild into the `_site/` the playwright webServer is
   // serving. The webServer pre-builds once at startup; without this
   // explicit rebuild the new post / upload aren't reachable at the
   // public URL during the test.
-  execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-  });
+  jekyllBuild({ cwd: REPO_ROOT });
 }
 
 function cleanup() {
@@ -189,7 +193,7 @@ test.describe(
       // exercises the same path the cleanup branch uses in production
       // when a real editor deletes a post.
       try {
-        jekyllBuild();
+        rebuildSite();
       } catch (_) {
         // Cleanup-best-effort — don't mask the test result with a
         // post-run rebuild error.
@@ -344,7 +348,7 @@ test.describe(
       // exactly here. The synchronous `bundle exec jekyll build` is the
       // path-of-least-regression — it returns when `_site/` is current.
       await measure("07-jekyll-rebuild", JEKYLL_REBUILD_BUDGET_MS, async () => {
-        jekyllBuild();
+        rebuildSite();
       });
 
       // ── Step 8: Fetch /blog/<slug>/ and assert 200 ─────────────────
@@ -376,7 +380,7 @@ test.describe(
         expect(
           imgSrc,
           "featured-image src must point directly under /assets/images/uploads/ (no subdirectory)",
-        ).toMatch(/\/assets\/images\/uploads\/[^/]*tiny-pixel[^/]*\.png$/i);
+        ).toMatch(/\/assets\/images\/uploads\/[^/]*e2e-first-post[^/]*\.png$/i);
         // Prove the src actually resolves — the flat media_folder means
         // this local run writes the identical path production would, so
         // a 404 here is a real broken-image regression.

@@ -1,8 +1,9 @@
 // @lane: local — needs decap-server file IO + git execs to round-trip page CRUD
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { contentOrEmpty } = require("./fs-poll");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
 // Verifies the contributor capability "Create / edit / delete a Page"
@@ -88,17 +89,18 @@ test.describe(
         .click();
 
       // ── On-disk asserts ──────────────────────────────────────────────
-      await expect.poll(() => fs.existsSync(SMOKE_FILE), { timeout: 60_000 }).toBe(true);
-      const saved = fs.readFileSync(SMOKE_FILE, "utf8");
+      // Poll the CONTENT, not just existence: decap-server creates the file
+      // and then writes it (see e2e/fs-poll.js).
+      await expect
+        .poll(() => contentOrEmpty(SMOKE_FILE), { timeout: 60_000 })
+        .toContain(`title: ${SMOKE_TITLE}`);
+      const saved = contentOrEmpty(SMOKE_FILE);
       expect(saved).toContain(`title: ${SMOKE_TITLE}`);
       expect(saved).toContain(`permalink: ${SMOKE_PERMALINK}`);
       expect(saved).toMatch(/published:\s*true/);
 
       // ── Live URL render ──────────────────────────────────────────────
-      execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
-        cwd: REPO_ROOT,
-        stdio: "inherit",
-      });
+      jekyllBuild({ cwd: REPO_ROOT });
       const resp = await page.goto(SMOKE_PERMALINK);
       expect(resp.status(), `${SMOKE_PERMALINK} should be 200`).toBe(200);
       await expect(page.locator(".page-header h1, h1").first()).toContainText(SMOKE_TITLE);

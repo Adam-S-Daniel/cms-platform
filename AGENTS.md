@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.58`** — `v0.1.0`–`v0.1.58` are all tagged GitHub
+**Current release: `v0.1.68`** — `v0.1.0`–`v0.1.68` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -958,6 +958,92 @@ layer:
   failure class this audit exists to catch). Lint-locked by
   `e2e/scheduled-run-health.test.js` (workflow shapes + the script's pure
   helpers; registered in `PLATFORM_META_SPECS`).
+
+## E2E parallelism — one CI job per Playwright project (v0.1.68)
+
+`e2e-tests.yml` runs the suite as **one job per Playwright project**, each
+installing only its own browser engine, with `workers` raised only for the two
+admin projects. Machinery: **`e2e/ci-matrix.js`** derives the matrix list, each
+job's engine, and each job's worker count from `playwright.config.js`;
+**`e2e/ci-matrix.test.js`** fails self-CI if the workflow's static
+`matrix.project` drifts from the real project list (the one way this design can
+silently stop running a project). Full measurements + the rejected alternatives:
+**`docs/E2E-PARALLELISM.md`** — read it before re-tuning any of this.
+
+The three findings that shaped it, all measured on adamdaniel.ai:
+
+- **Measure the worker count on the job shape you SHIP.** With 8 projects in one
+  job, raising workers to `100%` made the SAME tests report 2.1x longer and the
+  wall clock WORSE (263 s → 284 s) — which read as "a 4-vCPU runner saturates at
+  2 browser workers". With ONE project per job the answer reverses: 6 workers
+  (`150%`) beat 4 on the critical-path project (165 s → 130 s) and beat 2 on
+  almost every public project. So every project job now runs at **`150%`**, one
+  number for all of them (uniform measured no worse than a per-project table,
+  and a table is a thing to maintain). It is deliberately NOT a blanket CI
+  default in `playwright.config.js` — the other reusables run the whole matrix
+  in ONE job, the shape where more workers measured worse.
+- **`--shard` cannot balance this suite.** It balances by test COUNT while
+  per-test durations span 5 ms → 49 s; a real 4-way shard measured
+  80/105/88/**671** s. Hand-grouped lanes failed too (modelled 308/330/307,
+  measured 220/236/**373** s — the 8-project public lane's cost is dominated by
+  test COUNT, not duration). One job per project needs no cost table at all.
+- **The 3-engine `install --with-deps` was 58 s of every job's critical path**
+  (39 s apt + 19 s download). One engine per job removes most of it, needs no
+  cache key, and can't go stale. `install-browsers-on-miss.js` therefore reads
+  `PW_PROJECT` and checks ONLY that engine — a blanket check would re-download
+  the two engines the scoped install just skipped. **If you add a project, give
+  it an explicit `use.browserName`** (`engineFor()` throws otherwise) and add it
+  to the workflow matrix (the lint will tell you).
+- **The reusable sets `DISABLE_PER_TEST_VIDEOS=1`.** `e2e/base.js` captures a
+  full-page screenshot on every main-frame navigation of every test, and its only
+  consumer (`e2e/generate-test-videos.js`) is invoked by no reusable — the
+  adamdaniel-only `finalize` job that assembled the videos was never ported. So
+  CI was paying for frames nothing reads, worst on the link-crawling admin specs.
+  `screenshot: "on"` + `video: "retain-on-failure"` still produce the failure
+  artifacts. If you ever wire the video assembly up, unset it there.
+
+The required status context is **unchanged**: the matrix sits behind an
+aggregating `e2e` gate job (`needs: project`, `if: always()`, fails on any
+non-success matrix result), so rulesets and the `e2e-required-stub` companion
+still name exactly `e2e / e2e`. Per-job artifacts and failure-comment markers
+are project-scoped (`playwright-report-<project>`,
+`e2e-failure-summary-<project>`) — jobs sharing either would clobber each other,
+and a marker that names the project says which one went red before you open a log.
+
+**Escape hatch:** the reusable's `workers` input overrides every job without a
+release (`workers: "2"`), for the day a project turns flaky under load.
+
+### Parallelism turns latent test-isolation bugs into real flakes
+
+Running the admin projects wider exposed four PRE-EXISTING bugs (all fixed in
+v0.1.68). Keep the pattern in mind when writing @admin-write specs:
+
+- **A fixture basename shared between specs is a cross-spec FS race.** Decap
+  names an uploaded asset after the basename it is handed, and three specs then
+  globbed `assets/images/uploads/` for the SAME `tiny-pixel.png` — so
+  `cms-image-upload`'s cleanup deleted `cms-featured-image-lifecycle`'s
+  in-flight upload ("replace with B → A still on disk" saw 0 files). Use
+  **`e2e/upload-fixture.js`** (`uploadFixture(source, basename)`) to hand each
+  spec its OWN stable basename.
+- **A test whose budget doesn't scale with its input will time out under
+  contention.** `image-alt-text.spec.js` crawls EVERY sitemap URL in one test on
+  Playwright's fixed 30 s default — already ~21 s at 2 workers. It now scales
+  its budget with the URL count, like `cms-link-crawler.spec.js`'s explicit
+  240 s crawl budget. The 30 s `actionTimeout` is what catches a genuine hang,
+  so a generous *test* budget hides nothing.
+- **Never `existsSync`-then-read a file another process writes.** decap-server
+  creates an entry file and then fills it, so five specs' `expect.poll(() =>
+  fs.existsSync(file))` could win the race and read `""` — the "decap-server
+  file-write race" `retries: 1` was added for. Poll the CONTENT with
+  `contentOrEmpty()` from **`e2e/fs-poll.js`** instead.
+- **A shared external tool needs a lock.** Nine specs shell out to
+  `bundle exec jekyll build` against the same tree and the same `_site` the
+  webServer serves; two overlapping builds fight over `_site` and one dies. They
+  all go through **`e2e/jekyll-build.js`** now, which serialises them behind an
+  atomic mkdir lock (cross-PROCESS — Playwright workers are separate processes)
+  with a stale-holder break and a `finally` release. **Never shell out to
+  `jekyll build` from a spec directly** — `jekyll-build.test.js` fails the build
+  if you do.
 
 ## E2E local webServer: decap readiness + :4000 crash resilience
 

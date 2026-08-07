@@ -224,6 +224,10 @@ const PLATFORM_META_SPECS = [
   // scaffold/create-site.js and reads the platform's own fixture trees
   // (fixture-site + fixture-site-singlepage) as literal paths.
   "scaffold-seeds-media-probe.test.js",
+  // The CI matrix split: reads the platform's OWN e2e-tests.yml reusable
+  // definition + playwright.config.js to lock `matrix.project` against the
+  // real project list. Platform-internal, self-CI only.
+  "ci-matrix.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +
@@ -343,6 +347,26 @@ const ADMIN_TAGS_READ = /@admin-read\b/;
 const TARGET = (process.env.TARGET || "local").toLowerCase();
 const IS_LOCAL = TARGET === "local";
 
+// Worker concurrency (see the `workers:` key below for the why).
+//
+// Playwright validates this strictly: a NUMBER or a percentage STRING — `"4"`
+// is rejected with "config.workers must be a number or percentage". Env vars
+// are always strings, so `PW_WORKERS=4` has to be coerced or every job dies at
+// config load (it did, on the first CI run of this feature). A malformed value
+// throws rather than silently falling back: someone dialling workers down
+// mid-incident must not have their override quietly ignored.
+function resolveWorkers() {
+  const raw = (process.env.PW_WORKERS || "").trim();
+  if (!raw) return undefined;
+  if (/^\d+%$/.test(raw)) return raw;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n > 0) return n;
+  throw new Error(
+    `PW_WORKERS=${JSON.stringify(raw)} is not a positive integer or a percentage ` +
+      `like "50%" — Playwright rejects anything else. Leave it empty for the default.`,
+  );
+}
+
 module.exports = defineConfig({
   testDir: ".",
   testIgnore: TEST_IGNORE,
@@ -352,6 +376,17 @@ module.exports = defineConfig({
   // mismatch so specs don't die at launch with "Executable doesn't exist".
   globalSetup: "./install-browsers-on-miss.js",
   fullyParallel: true,
+  // Worker concurrency — deliberately left to Playwright (50% of cores, i.e. 2
+  // on a 4-vCPU GitHub runner) unless PW_WORKERS says otherwise. That default
+  // is RIGHT for browser work here: a Playwright browser test burns more than
+  // one core, so 4 workers on a 4-vCPU runner made the same public-page tests
+  // report 2.1x longer and the wall clock slightly WORSE (263 s -> 284 s
+  // measured). Only the wait-bound admin projects profit from going wider, and
+  // e2e-tests.yml raises PW_WORKERS for exactly those (see e2e/ci-matrix.js).
+  // PW_WORKERS is also the no-release escape hatch — the reusable's `workers`
+  // input — if a project ever gets flaky under load.
+  // Measurements: docs/E2E-PARALLELISM.md.
+  workers: resolveWorkers(),
   // Single auto-retry on CI for the decap-server file-write race (and any
   // similar transient flake). Local runs stay at 0 so a regression caught
   // while iterating fails loudly the first time. A test that fails once
