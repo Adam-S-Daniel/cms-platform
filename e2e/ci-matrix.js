@@ -18,29 +18,33 @@
  *     per project   →  166 s | 161 s |  52 s | 39 s | 35 s | 34 s | 31 s |
  *                       24 s | 22 s | 13 s               (no tuning at all)
  *
- * WHY THE WORKER COUNTS DIFFER PER PROJECT (measured, docs/E2E-PARALLELISM.md)
- * A 4-vCPU GitHub runner saturates at ~2 browser workers, because a Playwright
- * browser test burns more than one core (renderer + browser + raster threads).
- * Pushing the public-page projects to 4 workers made the SAME tests report 2.1x
- * longer and the wall clock slightly WORSE (263 s → 284 s). The admin projects
- * behave the opposite way — Decap specs spend their time waiting on the editor
- * to mount and on API polls, not on CPU — so 4 workers cut them 161 s → 128 s
- * and 166 s → 132 s. Hence: admin projects go wide, public projects keep
- * Playwright's own default (50% of cores).
+ * WHY 150% WORKERS (measured — docs/E2E-PARALLELISM.md)
+ * Playwright's default is 50% of cores: 2 workers on a 4-vCPU GitHub runner.
+ * That is too few ONCE each job runs a single project, because a project's tests
+ * are a mix of browser work and pure-fs lints and much of the browser time is
+ * spent WAITING (Decap boot, editor mount, API polls, page loads). Measured per
+ * project: `webkit-iphone16` 165 s at 4 workers → 130 s at 6, and the
+ * public-page projects were no worse at 6 than at 2. 150% of a 4-vCPU runner is
+ * 6 workers, and it scales if the runner ever grows.
+ *
+ * It is deliberately ONE number for every project rather than a per-project
+ * table: uniform measured no worse than tuned, and a table is a thing to
+ * maintain. The reusable's `workers` input still overrides it per run.
  *
  * CLI (used by the workflow)
  *   node ci-matrix.js --list                 # one project name per line
  *   node ci-matrix.js --engine   <project>   # chromium | firefox | webkit
- *   node ci-matrix.js --workers  <project>   # "100%" | "" (= Playwright default)
+ *   node ci-matrix.js --workers              # the CI worker count
  *
  * Exits non-zero on an unknown project, so a typo in the workflow matrix fails
  * before any test runs instead of silently testing nothing.
  */
 const config = require("./playwright.config.js");
 
-// Admin projects are wait-bound (Decap boot, API polls) rather than CPU-bound,
-// so they are the ones that benefit from one worker per vCPU.
-const ADMIN_WORKERS = "100%";
+// Playwright workers per project job. 150% of a 4-vCPU runner = 6; see the
+// header for the measurements. Overridable per run via the reusable's `workers`
+// input (→ PW_WORKERS), which is the no-release dial-down.
+const CI_WORKERS = "150%";
 
 // A project is an ADMIN project iff its `grep` selects the @admin-* tags
 // (playwright.config.js's ADMIN_TAGS_ALL / ADMIN_TAGS_READ). Public-page
@@ -88,24 +92,22 @@ function engineFor(name) {
   return engine;
 }
 
-// "" means "leave it to Playwright" (50% of cores), which is what the
-// CPU-bound public-page projects measured fastest at.
-function workersFor(name) {
-  return isAdminProject(find(name)) ? ADMIN_WORKERS : "";
+function workers() {
+  return CI_WORKERS;
 }
 
-module.exports = { ADMIN_WORKERS, isAdminProject, projectNames, engineFor, workersFor };
+module.exports = { CI_WORKERS, isAdminProject, projectNames, engineFor, workers };
 
 if (require.main === module) {
   const [flag, name] = process.argv.slice(2);
   const actions = {
     "--list": () => projectNames().join("\n"),
     "--engine": () => engineFor(name),
-    "--workers": () => workersFor(name),
+    "--workers": () => workers(),
   };
   try {
     if (!actions[flag]) {
-      throw new Error("usage: ci-matrix.js --list | --engine <project> | --workers <project>");
+      throw new Error("usage: ci-matrix.js --list | --engine <project> | --workers");
     }
     console.log(actions[flag]());
   } catch (e) {

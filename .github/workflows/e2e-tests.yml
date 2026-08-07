@@ -19,10 +19,10 @@
 #   * `--shard` is deliberately NOT used: it balances by test COUNT while this
 #     suite's per-test durations span 5 ms → 49 s (a measured 4-way shard put
 #     71% of the work in one shard).
-#   * Worker counts differ by project on purpose: a 4-vCPU runner saturates at
-#     ~2 browser workers, so the CPU-bound public-page projects keep
-#     Playwright's default while the wait-bound admin projects go to one worker
-#     per vCPU. Measurements: docs/E2E-PARALLELISM.md.
+#   * Workers are raised to 150% of the runner's vCPUs (6 on a 4-vCPU box)
+#     because Playwright's 50% default is too few once a job runs a single
+#     project — much of a project's time is spent WAITING (Decap boot, editor
+#     mount, page loads), not on CPU. Measurements: docs/E2E-PARALLELISM.md.
 #   The `e2e` job at the bottom is the single required status context; the
 #   per-project contexts are not named by any ruleset.
 #
@@ -95,7 +95,7 @@ on:
         type: string
         default: ""
       workers:
-        description: "Override Playwright's worker count for EVERY project job (e.g. '2', '50%'). Empty = the per-project value e2e/ci-matrix.js derives. The no-release dial-down if a project gets flaky under load."
+        description: "Override Playwright's worker count for EVERY project job (e.g. '2', '50%'). Empty = the value e2e/ci-matrix.js sets. The no-release dial-down if a project gets flaky under load."
         required: false
         type: string
         default: ""
@@ -250,12 +250,22 @@ jobs:
           # `|| ''` for non-local — a latent gap mirroring the loop reusables /
           # parity-preview #35.) Locked by e2e/loop-site-root-lint.test.js.
           SITE_ROOT: ${{ github.workspace }}
-          # A caller-supplied `workers` wins; otherwise take the per-project
-          # value from ci-matrix.js (see its header for the measurements).
+          # A caller-supplied `workers` wins; otherwise take the value from
+          # ci-matrix.js (see its header for the measurements).
           WORKERS_INPUT: ${{ inputs.workers }}
+          # Skip e2e/base.js's per-navigation full-page frame capture. Its only
+          # consumer is scripts-side video assembly (e2e/generate-test-videos.js)
+          # that no reusable invokes, so on CI every navigation in every test was
+          # paying for frames nothing reads — worst on the link-crawling admin
+          # specs. Failure evidence is unaffected: `screenshot: "on"` and
+          # `video: "retain-on-failure"` still produce the artifacts a red run is
+          # diagnosed from. Unset it locally to get the frames back.
+          DISABLE_PER_TEST_VIDEOS: "1"
         run: |
-          set -o pipefail
-          PW_WORKERS="${WORKERS_INPUT:-$(node ci-matrix.js --workers "$PW_PROJECT")}"
+          # -e so an unknown project fails HERE with ci-matrix.js's message
+          # rather than as an opaque "project not found" later.
+          set -eo pipefail
+          PW_WORKERS="${WORKERS_INPUT:-$(node ci-matrix.js --workers)}"
           export PW_WORKERS
           echo "project=$PW_PROJECT workers=${PW_WORKERS:-<playwright default>}"
           npx playwright test --project="$PW_PROJECT" --reporter=list 2>&1 | tee /tmp/playwright-output.log

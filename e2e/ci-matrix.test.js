@@ -18,13 +18,7 @@ const { test, expect } = require("@playwright/test");
 const { execFileSync, spawnSync } = require("node:child_process");
 const path = require("node:path");
 const { parseYaml, readWorkflow } = require("./workflow-yaml-utils");
-const {
-  ADMIN_WORKERS,
-  projectNames,
-  engineFor,
-  workersFor,
-  isAdminProject,
-} = require("./ci-matrix");
+const { CI_WORKERS, projectNames, engineFor, workers, isAdminProject } = require("./ci-matrix");
 const config = require("./playwright.config.js");
 
 const WORKFLOW = "e2e-tests.yml";
@@ -51,12 +45,14 @@ test("every project is listed once and declares an engine", () => {
   }
 });
 
-test("only the wait-bound admin projects go wide on workers", () => {
+test("every project job runs at the same measured worker count", () => {
+  // Deliberately uniform: a per-project table measured no better and is a thing
+  // to maintain. Admin projects still sort FIRST so the long poles start early.
+  expect(workers()).toBe(CI_WORKERS);
+  expect(CI_WORKERS, "must be a number or a percentage Playwright accepts").toMatch(/^\d+%?$/);
   const admin = config.projects.filter(isAdminProject).map((p) => p.name);
-  expect(admin.length, "the worker policy assumes at least one admin project").toBeGreaterThan(0);
-  for (const name of projectNames()) {
-    expect(workersFor(name)).toBe(admin.includes(name) ? ADMIN_WORKERS : "");
-  }
+  expect(admin.length, "the matrix ordering assumes at least one admin project").toBeGreaterThan(0);
+  expect(projectNames().slice(0, admin.length).sort()).toEqual([...admin].sort());
 });
 
 test("the matrix does not fail fast (a red project must not cancel its siblings)", () => {
@@ -115,11 +111,11 @@ test("ci-matrix.js CLI: --list/--engine/--workers, and a loud failure on a typo"
   const cli = (...args) => execFileSync("node", [CI_MATRIX_JS, ...args], { encoding: "utf8" });
 
   expect(cli("--list").trim().split("\n")).toEqual(projectNames());
+  expect(cli("--workers").trim()).toBe(CI_WORKERS);
   for (const name of projectNames()) {
     expect(cli("--engine", name).trim()).toBe(engineFor(name));
-    expect(cli("--workers", name).trim()).toBe(workersFor(name));
   }
-  for (const args of [["--engine", "no-such-project"], ["--workers", "nope"], ["--bogus"]]) {
+  for (const args of [["--engine", "no-such-project"], ["--engine"], ["--bogus"]]) {
     expect(() => execFileSync("node", [CI_MATRIX_JS, ...args], { stdio: "pipe" })).toThrow();
   }
 });
@@ -152,12 +148,12 @@ test("the browser self-heal only checks the engine a project job installs", () =
 });
 
 test("CI leaves workers to Playwright unless PW_WORKERS says otherwise", () => {
-  // 4 workers on a 4-vCPU runner measured SLOWER for the CPU-bound public
-  // projects, so there is deliberately no blanket CI override here — only
-  // ci-matrix.js's per-project value, applied by the workflow.
+  // No blanket CI override here: the other reusables (parity-preview,
+  // canary-prod, the loops) run the whole matrix in ONE job, a shape this
+  // worker count was NOT measured on. e2e-tests.yml passes it per job instead.
   expect(loadWorkers({})).toBe(undefined);
   expect(loadWorkers({ CI: "true" })).toBe(undefined);
-  expect(loadWorkers({ CI: "true", PW_WORKERS: ADMIN_WORKERS })).toBe(ADMIN_WORKERS);
+  expect(loadWorkers({ CI: "true", PW_WORKERS: CI_WORKERS })).toBe(CI_WORKERS);
 });
 
 // PW_WORKERS arrives from the workflow as a STRING, and Playwright rejects
