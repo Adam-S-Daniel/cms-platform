@@ -37,10 +37,11 @@ description: >-
 inputs:
   browser:
     description: >-
-      Engine to install — `chromium`, `firefox`, `webkit`, or a
-      space-separated list. Must already be resolved (this action does
-      not read playwright.config.js); e2e-tests.yml derives it from
-      `node ci-matrix.js --engine "$PW_PROJECT"`.
+      ONE engine to install — `chromium`, `firefox` or `webkit`. Not a list:
+      the value is passed to `npx playwright` as a single quoted argument, so
+      "chromium firefox" would be handed over as one bogus engine name. Must
+      already be resolved (this action does not read playwright.config.js);
+      e2e-tests.yml derives it from `node ci-matrix.js --engine "$PW_PROJECT"`.
     required: false
     default: chromium
   working-directory:
@@ -60,10 +61,32 @@ inputs:
     default: '3'
   timeout-seconds:
     description: >-
-      Per-attempt wall-clock bound. Default 420 s is ~7x the normal
-      ~60 s install, so a healthy run never hits it.
+      Bound for every attempt EXCEPT the last. Default 420 s is ~7x the normal
+      ~60 s install, so a healthy run never hits it — it exists to abandon a
+      stalled connection quickly and try a fresh one.
     required: false
     default: '420'
+  final-timeout-seconds:
+    description: >-
+      Bound for the LAST attempt, deliberately much larger.
+
+      WHY THE LAST ATTEMPT IS DIFFERENT. A uniform 420 s bound has a failure mode
+      that is WORSE than the stall it fixes: when the mirror is slow for the whole
+      run — which is exactly what was measured (~35 KB/s sustained, 2340 s to
+      finish) — all three attempts hit the bound and the step exits 1. That turns a
+      slow-but-GREEN run into a RED required check, which blocks a `cms/*` canary
+      PR permanently instead of merging it late; the very outcome the retry was
+      added to avoid. apt and `playwright install` both resume (completed .debs
+      stay in /var/cache/apt/archives, downloaded engines in ~/.cache/ms-playwright),
+      so each attempt makes real progress — the last one just needs room to finish.
+
+      Default 1200 s ⇒ worst case 420 + 420 + 1200 = 34 min. **A caller whose job
+      `timeout-minutes` is smaller than that MUST pass smaller values**, or the job
+      is killed mid-retry and the run reports an opaque "job timed out" instead of
+      this action's diagnostic. Locked by e2e/playwright-install-bounded.test.js,
+      which fails if any caller's worst case exceeds its own job budget.
+    required: false
+    default: '1200'
 
 runs:
   using: composite
@@ -76,6 +99,7 @@ runs:
         PW_INSTALL_DEPS_ONLY: ${{ inputs.deps-only }}
         PW_INSTALL_ATTEMPTS: ${{ inputs.attempts }}
         PW_INSTALL_TIMEOUT_S: ${{ inputs.timeout-seconds }}
+        PW_INSTALL_FINAL_TIMEOUT_S: ${{ inputs.final-timeout-seconds }}
       run: |
         set -uo pipefail
         # Inputs come through env, never interpolated into the command —
@@ -85,7 +109,8 @@ runs:
         else
           set -- install --with-deps "$PW_INSTALL_BROWSER"
         fi
-        echo "playwright $* (attempts=${PW_INSTALL_ATTEMPTS}, bound=${PW_INSTALL_TIMEOUT_S}s each)"
+        echo "playwright $* (attempts=${PW_INSTALL_ATTEMPTS}, bound=${PW_INSTALL_TIMEOUT_S}s," \
+             "final attempt ${PW_INSTALL_FINAL_TIMEOUT_S}s)"
 
         attempt=1
         while :; do
@@ -97,23 +122,31 @@ runs:
           # after a `fi` with no else branch, `$?` is the IF STATEMENT's
           # status (0), not the command's, so the log would report every
           # failure as "exit 0".
+          # The LAST attempt gets the generous bound: early attempts exist to
+          # abandon a stalled connection fast, the final one to actually finish
+          # on a mirror that is simply slow (see final-timeout-seconds).
+          if [ "$attempt" -ge "$PW_INSTALL_ATTEMPTS" ]; then
+            bound="$PW_INSTALL_FINAL_TIMEOUT_S"
+          else
+            bound="$PW_INSTALL_TIMEOUT_S"
+          fi
           status=0
-          timeout "$PW_INSTALL_TIMEOUT_S" npx playwright "$@" || status=$?
+          timeout "$bound" npx playwright "$@" || status=$?
           if [ "$status" -eq 0 ]; then
             echo "playwright install succeeded on attempt ${attempt}."
             exit 0
           fi
           if [ "$attempt" -ge "$PW_INSTALL_ATTEMPTS" ]; then
             echo "::error::playwright install failed ${PW_INSTALL_ATTEMPTS} time(s) (last exit ${status})." \
-                 "Exit 124 means it exceeded the ${PW_INSTALL_TIMEOUT_S}s bound — usually a slow apt mirror," \
-                 "not a broken install; re-run the job. Any other code is a real install failure."
+                 "Exit 124 means even the final ${PW_INSTALL_FINAL_TIMEOUT_S}s attempt was too slow to finish —" \
+                 "a genuinely unusable mirror; re-run the job. Any other code is a real install failure."
             exit 1
           fi
           # 124 is `timeout`'s "killed at the bound" code; anything else is
           # a genuine failure that a retry may still ride out (a transient
           # apt lock, a CDN 5xx).
           echo "::warning::playwright install attempt ${attempt} of ${PW_INSTALL_ATTEMPTS} gave up (exit ${status}" \
-               "$([ "$status" = "124" ] && echo "— hit the ${PW_INSTALL_TIMEOUT_S}s bound" || echo "— install error"));" \
-               "retrying with fresh connections."
+               "$([ "$status" = "124" ] && echo "— hit the ${bound}s bound" || echo "— install error"));" \
+               "retrying with fresh connections (apt and playwright both resume, so progress is kept)."
           attempt=$((attempt + 1))
         done

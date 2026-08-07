@@ -19,8 +19,12 @@
 //
 // A bare `timeout-minutes:` is NOT the fix — it converts "slow mirror" into a
 // RED required check, which blocks the canary PR permanently instead of merging
-// it late. Only a retry recovers, because a fresh attempt gets fresh
-// connections. Hence: one composite, every lane, asserted here.
+// it late. Neither is a UNIFORM retry bound: when the mirror is slow for the
+// whole run (the measured case), every attempt hits the same bound and the step
+// still exits 1. What works is an ESCALATING budget — short early attempts to
+// abandon a stalled connection, then one generous final attempt that can actually
+// finish — kept under each caller's own job timeout so the diagnostic survives.
+// Hence: one composite, every lane, all three properties asserted here.
 //
 // Platform-internal: reads the platform's own workflow definitions.
 const { test, expect } = require("@playwright/test");
@@ -52,12 +56,32 @@ function installSteps() {
         const where = `${path.basename(file)} :: ${jobName} :: ${step.name || "(unnamed)"}`;
         if (typeof step.run === "string" && RAW_INSTALL.test(step.run)) raw.push(where);
         if (typeof step.uses === "string" && step.uses.endsWith(`/${COMPOSITE_REF}`)) {
-          viaComposite.push(where);
+          viaComposite.push({ where, with: step.with || {}, jobTimeoutMin: job["timeout-minutes"] });
         }
       }
     }
   }
   return { raw, viaComposite };
+}
+
+// Defaults declared by the composite, so the budget maths uses the same numbers
+// the action actually applies when a caller passes nothing.
+function compositeDefaults() {
+  const inputs = parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8")).inputs || {};
+  const num = (k, fallback) => Number((inputs[k] || {}).default ?? fallback);
+  return {
+    attempts: num("attempts", 3),
+    timeoutSeconds: num("timeout-seconds", 420),
+    finalTimeoutSeconds: num("final-timeout-seconds", 1200),
+  };
+}
+
+// Worst case the step can take: (attempts-1) short bounds + one final bound.
+function worstCaseSeconds(withBlock, defaults) {
+  const attempts = Number(withBlock.attempts ?? defaults.attempts);
+  const early = Number(withBlock["timeout-seconds"] ?? defaults.timeoutSeconds);
+  const final = Number(withBlock["final-timeout-seconds"] ?? defaults.finalTimeoutSeconds);
+  return (attempts - 1) * early + final;
 }
 
 const { raw, viaComposite } = installSteps();
@@ -70,6 +94,43 @@ test("every browser install goes through the bounded composite", () => {
       `\`uses: ./.cms-platform/.github/actions/${COMPOSITE_REF}\` — pass \`deps-only: "true"\` ` +
       `if the lane restored the browser binaries from cache and needs only the OS libraries.`,
   ).toEqual([]);
+});
+
+test("no caller's install budget can outlive its own job timeout", () => {
+  // The bound is only useful if the step gets to REPORT hitting it. If the
+  // composite's worst case exceeds the job's `timeout-minutes`, GitHub kills the
+  // job mid-retry and the run says "job timed out" — losing the diagnostic that
+  // says WHICH of a slow mirror vs a broken install it was. canary-prod's probe
+  // job (timeout-minutes: 10) sat under a 21-min worst case until this check
+  // existed; it now passes explicit smaller bounds.
+  const defaults = compositeDefaults();
+  const offenders = [];
+  for (const c of viaComposite) {
+    if (c.jobTimeoutMin == null) continue; // no cap declared ⇒ GitHub's 360 min
+    const worst = worstCaseSeconds(c.with, defaults);
+    if (worst >= c.jobTimeoutMin * 60) {
+      offenders.push(`${c.where}: worst case ${Math.round(worst / 60)}min >= job timeout ${c.jobTimeoutMin}min`);
+    }
+  }
+  expect(
+    offenders,
+    "these callers can be killed by their own job timeout while the install is still retrying. " +
+      "Pass smaller `attempts` / `timeout-seconds` / `final-timeout-seconds`, or raise the job's " +
+      "timeout-minutes above the composite's worst case.",
+  ).toEqual([]);
+});
+
+test("the final attempt is more generous than the early ones", () => {
+  // A uniform bound converts a sustained-slow mirror (the measured case: ~35 KB/s
+  // for a whole run, 2340 s to finish) into a RED required check, which blocks a
+  // cms/* canary PR permanently instead of merging it late — worse than the stall.
+  // Early attempts abandon a bad connection fast; the LAST one must be able to
+  // finish. apt and playwright both resume, so the attempts accumulate progress.
+  const d = compositeDefaults();
+  expect(
+    d.finalTimeoutSeconds,
+    "the last attempt must be allowed longer than the early ones, or a slow-but-fine mirror goes RED",
+  ).toBeGreaterThan(d.timeoutSeconds);
 });
 
 test("the lint still sees the install lanes it polices", () => {
@@ -86,7 +147,10 @@ test("the composite bounds each attempt and retries", () => {
   const body = parseYaml(src).runs.steps[0].run;
 
   expect(body, "the attempt must be wrapped in `timeout` or it is unbounded again").toMatch(
-    /\btimeout\s+"\$PW_INSTALL_TIMEOUT_S"/,
+    /\btimeout\s+"\$bound"/,
+  );
+  expect(body, "the last attempt must pick up the generous bound").toMatch(
+    /PW_INSTALL_FINAL_TIMEOUT_S/,
   );
   expect(body, "a bound with no retry turns a slow mirror into a red required check").toMatch(
     /PW_INSTALL_ATTEMPTS/,

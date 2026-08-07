@@ -90,6 +90,14 @@ jobs:
         uses: ./.cms-platform/.github/actions/install-playwright-browsers
         with:
           browser: chromium
+          # This job's timeout-minutes is 10, so the composite's 34-min default
+          # worst case would be killed mid-retry and report an opaque "job timed
+          # out" instead of its own diagnostic. Fail fast instead: a read-only
+          # prod probe is cheap to re-run, and the next cron is 6 h away, not a
+          # blocked merge. (Locked by e2e/playwright-install-bounded.test.js.)
+          attempts: '2'
+          timeout-seconds: '150'
+          final-timeout-seconds: '240'
 
       - name: Run @canary-readonly probe against prod
         id: probe
