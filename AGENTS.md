@@ -2164,12 +2164,14 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   **`e2e/engine-scope-lint.test.js`** — a step whose `PW_PROJECT` is missing or
   disagrees with its `--project` flags fails self-CI, so a new lane can't
   regress it. Steps running a different config (visual-regression, whose config
-  declares no globalSetup) are explicitly exempt. Also: **tag routing is opt-IN,
-  so an untagged admin spec silently runs on all eight public projects** —
-  `cms-html-embed.spec.js` was creating posts through Decap and rebuilding
-  Jekyll on firefox and webkit too, for a server-side kramdown contract. Now
-  `@admin-write`, with **`e2e/admin-tag-lint.test.js`** (AST) failing any spec
-  that navigates the admin shell untagged. Plus four documentation corrections
+  declares no globalSetup) are explicitly exempt. Also: **tag routing is opt-IN, so
+  an untagged admin spec matches every public project's `grepInvert`** —
+  `cms-html-embed.spec.js` drove Decap untagged, held to one project only by a
+  hand-rolled `beforeEach` gate (so the harm was mis-stated at the time as "it ran
+  on all eight"; see the third paragraph, where leaving that gate in place turned
+  out to be the real bug). Now `@admin-write`, with
+  **`e2e/admin-tag-lint.test.js`** (AST) failing any spec that navigates the admin
+  shell untagged. Plus four documentation corrections
   from v0.1.68's per-project → uniform-`150%`-workers pivot (the
   `playwright.config.js` `workers:` comment, an AGENTS.md self-contradiction,
   `docs/E2E-PARALLELISM.md` naming two symbols that don't exist, and
@@ -2191,6 +2193,20 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   `jekyll-build.test.js` asserts the constants' inequality and the ownership
   refusal, `fs-poll-lint.test.js` (AST) fails the build on the read-race shape,
   and the sitemap prune mirrors `cms-publish-flow`'s.
+
+  Also **the browser install is now BOUNDED and RETRIED (#204).** Measured on
+  adamdaniel.ai job 92862768030: `npx playwright install --with-deps webkit` took
+  **39 minutes** while the tests it installed for took 41.6 s — the Ubuntu mirror
+  served that runner at ~35 KB/s for its whole run and the install had no upper
+  bound. Fanning out to ten lanes means ten INDEPENDENT apt exposures per run, and
+  the aggregating `e2e` gate waits for the slowest, so that one lane held a
+  delete-recovery PR open 40 min and blew the media-roundtrip loop's 30-minute
+  delete-leg budget — the loop failed on a green test suite. All 13 call sites now
+  go through `.github/actions/install-playwright-browsers` (`timeout 420` per
+  attempt, 3 attempts), locked by **`e2e/playwright-install-bounded.test.js`**. A
+  bare `timeout-minutes:` would be WORSE — it turns a slow mirror into a RED
+  required check, blocking a `cms/*` canary PR permanently instead of merging it
+  late; only a retry recovers, because a fresh attempt gets fresh connections.
 
   One more, and it was a REGRESSION from #202's own tagging: `cms-html-embed`
   carried a hand-rolled `beforeEach` gate skipping unless the project was
