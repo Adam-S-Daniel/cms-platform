@@ -1,12 +1,12 @@
 # How the e2e suite is parallelised (and the measurements behind it)
 
 `.github/workflows/e2e-tests.yml` runs the Playwright suite as **one CI job per
-Playwright project**, each installing only its own browser engine, with
-`workers` raised only for the two admin projects. This page records what was
-measured, why the obvious alternatives lose, and how to re-measure.
+Playwright project**, each installing only its own browser engine and running at
+150% of the runner's vCPUs. This page records what was measured, why the obvious
+alternatives lose, and how to re-measure.
 
-The machinery: **`e2e/ci-matrix.js`** (derives the matrix list, each job's
-engine, and each job's worker count from `playwright.config.js`) and
+The machinery: **`e2e/ci-matrix.js`** (the matrix list, each job's engine, and
+the worker count — all derived from `playwright.config.js`) and
 **`e2e/ci-matrix.test.js`** (fails the platform's CI if the workflow's static
 `matrix.project` drifts from the real project list — the one way this design can
 silently stop running a project).
@@ -45,30 +45,52 @@ The projects also ran effectively **sequentially** (`chromium-desktop-1080`
 0–39 s, `chromium-laptop` 40–64 s, … `webkit-iphone16` 429–595 s): with 2
 workers both workers drain one project's queue before the next starts.
 
-## Measured: workers do NOT scale on a 4-vCPU runner
+## Measured: workers, and why the first answer was wrong
 
-Same suite, same commit, only `workers` changed (run 31170230762 vs the
-baseline). Wall clock of the tests for each slice:
+The first experiment ran the 8 public-page projects together in ONE job and
+compared worker counts:
 
-| slice | 2 workers (default) | 4 workers (`100%`) | verdict |
+| slice (one job) | 2 workers (default) | 4 workers (`100%`) |
+|---|---|---|
+| `chromium-desktop-3k` (admin) | 161 s | **128 s** |
+| `webkit-iphone16` (admin) | 166 s | **132 s** |
+| 8 public-page projects together | **263 s** | 284 s |
+
+The public-page slice got *worse*, and the reported per-test durations doubled
+(301 s → 641 s; `tags.spec.js` 99.8 s → 233.1 s). The obvious reading — "a
+browser test burns more than one core, so a 4-vCPU runner saturates at 2
+workers" — turned out to be an artifact of that 672-test, 8-project job shape.
+
+Re-measured with **one project per job**, the picture reverses:
+
+| project | 2 workers | 4 workers | 6 workers (`150%`) |
 |---|---|---|---|
-| `chromium-desktop-3k` (admin) | 161 s | **128 s** | 1.26x faster |
-| `webkit-iphone16` (admin) | 166 s | **132 s** | 1.26x faster |
-| 8 public-page projects | **263 s** | 284 s | *slower* |
+| `webkit-iphone16` | — | 165 s | **130 s** |
+| `chromium-desktop-3k` | — | 156 s | 155 s |
+| `chromium-desktop-1080` | 52 s | — | 53 s |
+| `chromium-laptop` | 43 s | — | **28 s** |
+| `chromium-mobile` | 33 s | — | **22 s** |
+| `chromium-large-text` | 56 s | — | **39 s** |
+| `chromium-light` | 54 s | — | **47 s** |
+| `chromium-forced-colors` | 52 s | — | **42 s** |
+| `firefox-desktop` | 31 s | — | 39 s |
+| `webkit-tablet` | 54 s | — | 57 s |
 
-The public-page projects got **worse**, and the reported per-test durations show
-why: the identical tests reported **301 s at 2 workers and 641 s at 4** —
-`tags.spec.js` 99.8 s → 233.1 s, `feeds-and-share` 54.3 s → 117.6 s. A
-Playwright browser test burns more than one core (browser + renderer + raster
-threads), so 4 vCPU is already saturated at ~2 workers and extra workers only
-add contention.
+A single project's tests are a MIX — roughly half of a public project's 91 tests
+are pure-fs lints, and much of the browser half is spent *waiting* (Decap boot,
+editor mount, page loads) rather than on CPU. Six workers is better or level
+almost everywhere, and clearly better on the critical-path project.
 
-The admin projects improve because they are **wait-bound**, not CPU-bound: their
-time goes on Decap booting, editor mounts, and API polls.
+**Therefore:** every project job runs at `150%` of the runner's vCPUs (6 on a
+4-vCPU box), as ONE number rather than a per-project table — uniform measured no
+worse than tuned, and a table is a thing to maintain. It is deliberately NOT a
+blanket CI default in `playwright.config.js`: the other reusables
+(`parity-preview`, `canary-prod`, the loops) run the whole matrix in one job —
+exactly the shape where more workers measured worse.
 
-**Therefore:** `playwright.config.js` leaves `workers` to Playwright, and
-`ci-matrix.js` raises it to `100%` for the admin projects only. Wall clock has
-to come from more *runners*, not more workers.
+**The lesson worth keeping:** measure the worker count on the job shape you
+actually ship. The same tests, same runner, same worker count gave opposite
+answers depending on whether one job ran 1 project or 8.
 
 ## Measured: `--shard` cannot balance this suite
 
@@ -100,6 +122,18 @@ still. Any hand-tuned grouping also needs a cost table someone has to maintain.
 **Therefore:** lane == project. It is the only split that needs no tuning, and
 it makes each job's browser engine derivable — which pays for itself (below).
 
+## Removed: a per-navigation screenshot nothing read
+
+`e2e/base.js` captures a full-page screenshot on **every main-frame navigation
+of every test** into `test-results/per-test-frames/`. Its only consumer is
+`e2e/generate-test-videos.js`, which no reusable invokes (the adamdaniel-only
+`finalize` job that assembled the videos was deliberately not ported). So every
+navigation was paying for frames nothing reads — worst on the link-crawling admin
+specs, which navigate dozens of times inside one test. The reusable now sets
+`DISABLE_PER_TEST_VIDEOS=1`; `screenshot: "on"` and `video: "retain-on-failure"`
+still produce the artifacts a red run is actually diagnosed from. Unset it
+locally to get the frames back.
+
 ## Rejected: caching the browser install
 
 `npx playwright install --with-deps` for all three engines measured **58 s**:
@@ -118,10 +152,10 @@ run the *same* coverage faster, not to run less of it. Selection trades coverage
 for speed and adds a "did the selector miss something?" failure mode; the
 project matrix needs no such trade.
 
-## Two isolation bugs that parallelism exposed
+## Three isolation bugs that parallelism exposed
 
-Running the admin projects at 4 workers surfaced two genuine pre-existing test
-bugs. Both are fixed; both would have bitten eventually at any worker count.
+Running the admin projects wider surfaced three genuine pre-existing test bugs.
+All are fixed; all would have bitten eventually at any worker count.
 
 * **Shared upload basename.** `cms-image-upload`, `manual-walkthrough-first-post`
   and `cms-featured-image-lifecycle` all handed Decap the same
@@ -135,23 +169,36 @@ bugs. Both are fixed; both would have bitten eventually at any worker count.
   project ran wider. Its budget now scales with the URL count, matching
   `cms-link-crawler.spec.js`'s explicit crawl budget.
 
-The lesson worth keeping: **a test whose budget doesn't scale with its input, or
-whose fixture is shared with another spec, is a latent flake that parallelism
-converts into a real one.**
+* **A shared `jekyll build`.** Nine specs shell out to `bundle exec jekyll build`
+  against the same tree and the same `_site` the webServer serves. Jekyll cleans
+  `_site` then regenerates it, so two builds in flight together fight and one
+  dies (`Error: Command failed: bundle exec jekyll build --quiet`). They now go
+  through `e2e/jekyll-build.js`, which serialises them behind an atomic mkdir
+  lock keyed on the site root — cross-process, because Playwright workers are
+  separate processes. It costs the write-heavy admin project ~30 s and removes
+  the class; `e2e/jekyll-build.test.js` proves the lock holds, releases on a
+  failed build, breaks a stale one, and that no spec builds directly any more.
+
+The lesson worth keeping: **a test whose budget doesn't scale with its input,
+whose fixture is shared with another spec, or which drives a shared external
+tool, is a latent flake that parallelism converts into a real one.**
 
 ## The result
 
 | | before | after |
 |---|---|---|
-| shape | 1 job, 2 workers, all 10 projects | 10 jobs, 1 project each; admin at `100%` workers |
+| shape | 1 job, 2 workers, all 10 projects | 10 jobs, 1 project each, `150%` workers |
 | engines installed per job | 3 | 1 |
-| `e2e / e2e` wall clock | ~680 s | ~200 s (bounded by the two admin projects) |
+| workflow wall clock | ~680 s | ~215 s |
 | required status context | `e2e / e2e` | `e2e / e2e` (unchanged — the matrix sits behind an aggregating gate job) |
 
-The floor is now the slowest single project: ~130 s of tests plus ~60 s of
-fixed cost. Cutting it further means attacking `cms-link-crawler`'s ~49 s
-single test or sharding *within* the admin projects — both of which buy less
-than they cost today.
+The floor is now the slowest single project (`webkit-iphone16`: ~130 s of tests)
+plus ~60-70 s of fixed cost. Cutting it further means attacking
+`cms-link-crawler`'s ~50-66 s single test, or `--shard`ing *within* that one
+project — both of which buy less than they cost today. The fixed cost is already
+mostly irreducible: ~25 s of runner + checkouts + Node + `npm ci`, ~20-35 s of
+`playwright install --with-deps <engine>`, ~5 s of `jekyll build`, and ~15 s of
+Playwright's own start-up and spec collection.
 
 ## Re-measuring
 

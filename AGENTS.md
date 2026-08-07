@@ -972,13 +972,16 @@ silently stop running a project). Full measurements + the rejected alternatives:
 
 The three findings that shaped it, all measured on adamdaniel.ai:
 
-- **A 4-vCPU runner saturates at ~2 browser workers.** Pushing the public-page
-  projects to `100%` made the SAME tests report 2.1x longer (301 s → 641 s) and
-  the wall clock WORSE (263 s → 284 s): a Playwright browser test burns more
-  than one core. So `playwright.config.js` leaves `workers` to Playwright
-  (50% of cores) and **only the admin projects** go to `100%` — they are
-  wait-bound (Decap boot, editor mount, API polls) and measured 161 s → 128 s
-  and 166 s → 132 s. **Wall clock comes from more RUNNERS, not more workers.**
+- **Measure the worker count on the job shape you SHIP.** With 8 projects in one
+  job, raising workers to `100%` made the SAME tests report 2.1x longer and the
+  wall clock WORSE (263 s → 284 s) — which read as "a 4-vCPU runner saturates at
+  2 browser workers". With ONE project per job the answer reverses: 6 workers
+  (`150%`) beat 4 on the critical-path project (165 s → 130 s) and beat 2 on
+  almost every public project. So every project job now runs at **`150%`**, one
+  number for all of them (uniform measured no worse than a per-project table,
+  and a table is a thing to maintain). It is deliberately NOT a blanket CI
+  default in `playwright.config.js` — the other reusables run the whole matrix
+  in ONE job, the shape where more workers measured worse.
 - **`--shard` cannot balance this suite.** It balances by test COUNT while
   per-test durations span 5 ms → 49 s; a real 4-way shard measured
   80/105/88/**671** s. Hand-grouped lanes failed too (modelled 308/330/307,
@@ -991,6 +994,13 @@ The three findings that shaped it, all measured on adamdaniel.ai:
   the two engines the scoped install just skipped. **If you add a project, give
   it an explicit `use.browserName`** (`engineFor()` throws otherwise) and add it
   to the workflow matrix (the lint will tell you).
+- **The reusable sets `DISABLE_PER_TEST_VIDEOS=1`.** `e2e/base.js` captures a
+  full-page screenshot on every main-frame navigation of every test, and its only
+  consumer (`e2e/generate-test-videos.js`) is invoked by no reusable — the
+  adamdaniel-only `finalize` job that assembled the videos was never ported. So
+  CI was paying for frames nothing reads, worst on the link-crawling admin specs.
+  `screenshot: "on"` + `video: "retain-on-failure"` still produce the failure
+  artifacts. If you ever wire the video assembly up, unset it there.
 
 The required status context is **unchanged**: the matrix sits behind an
 aggregating `e2e` gate job (`needs: project`, `if: always()`, fails on any
@@ -1005,8 +1015,8 @@ release (`workers: "2"`), for the day a project turns flaky under load.
 
 ### Parallelism turns latent test-isolation bugs into real flakes
 
-Running the admin projects at 4 workers exposed two PRE-EXISTING bugs (both
-fixed in v0.1.68). Keep the pattern in mind when writing @admin-write specs:
+Running the admin projects wider exposed three PRE-EXISTING bugs (all fixed in
+v0.1.68). Keep the pattern in mind when writing @admin-write specs:
 
 - **A fixture basename shared between specs is a cross-spec FS race.** Decap
   names an uploaded asset after the basename it is handed, and three specs then
@@ -1021,6 +1031,14 @@ fixed in v0.1.68). Keep the pattern in mind when writing @admin-write specs:
   its budget with the URL count, like `cms-link-crawler.spec.js`'s explicit
   240 s crawl budget. The 30 s `actionTimeout` is what catches a genuine hang,
   so a generous *test* budget hides nothing.
+- **A shared external tool needs a lock.** Nine specs shell out to
+  `bundle exec jekyll build` against the same tree and the same `_site` the
+  webServer serves; two overlapping builds fight over `_site` and one dies. They
+  all go through **`e2e/jekyll-build.js`** now, which serialises them behind an
+  atomic mkdir lock (cross-PROCESS — Playwright workers are separate processes)
+  with a stale-holder break and a `finally` release. **Never shell out to
+  `jekyll build` from a spec directly** — `jekyll-build.test.js` fails the build
+  if you do.
 
 ## E2E local webServer: decap readiness + :4000 crash resilience
 
