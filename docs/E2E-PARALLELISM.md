@@ -84,9 +84,11 @@ almost everywhere, and clearly better on the critical-path project.
 **Therefore:** every project job runs at `150%` of the runner's vCPUs (6 on a
 4-vCPU box), as ONE number rather than a per-project table — uniform measured no
 worse than tuned, and a table is a thing to maintain. It is deliberately NOT a
-blanket CI default in `playwright.config.js`: the other reusables
-(`parity-preview`, `canary-prod`, the loops) run the whole matrix in one job —
-exactly the shape where more workers measured worse.
+blanket CI default in `playwright.config.js`: the sibling reusables
+(`parity-preview`, `canary-prod`, the loops) each run a handful of specs pinned to
+one or two projects in a single job — a shape this number was never measured on,
+and often a single serial `@admin-write` round trip that more workers cannot
+speed up. The override is opt-IN per lane.
 
 **The lesson worth keeping:** measure the worker count on the job shape you
 actually ship. The same tests, same runner, same worker count gave opposite

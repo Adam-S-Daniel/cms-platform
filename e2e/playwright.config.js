@@ -392,9 +392,12 @@ module.exports = defineConfig({
   globalSetup: "./install-browsers-on-miss.js",
   fullyParallel: true,
   // Worker concurrency — left to Playwright (50% of cores, i.e. 2 on a 4-vCPU
-  // GitHub runner) unless PW_WORKERS says otherwise, because THIS config is also
-  // loaded by the reusables that run every project in ONE job (parity-preview,
-  // canary-prod, the loops) — the shape where more workers measured worse.
+  // GitHub runner) unless PW_WORKERS says otherwise. THIS config is also loaded by
+  // the sibling reusables (parity-preview, canary-prod, the loops), and each of
+  // those runs a HANDFUL of specs pinned to one or two projects in a single job —
+  // a shape the 150% number was never measured on, and one where the whole job is
+  // often a single serial @admin-write round trip that more workers cannot speed
+  // up. So the override is opt-IN per lane rather than a blanket CI default.
   //
   // e2e-tests.yml, which runs ONE PROJECT PER JOB, passes PW_WORKERS=150% (6 on a
   // 4-vCPU runner) for EVERY project job — one number, not a per-project table;

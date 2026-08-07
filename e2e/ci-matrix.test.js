@@ -165,9 +165,11 @@ test("the browser self-heal only checks the engine a project job installs", () =
 });
 
 test("CI leaves workers to Playwright unless PW_WORKERS says otherwise", () => {
-  // No blanket CI override here: the other reusables (parity-preview,
-  // canary-prod, the loops) run the whole matrix in ONE job, a shape this
-  // worker count was NOT measured on. e2e-tests.yml passes it per job instead.
+  // No blanket CI override here: the sibling reusables (parity-preview,
+  // canary-prod, the loops) each run a handful of specs pinned to one or two
+  // projects in a single job — a shape this worker count was NOT measured on,
+  // and often a single serial round trip more workers cannot speed up.
+  // e2e-tests.yml passes it per job instead.
   expect(loadWorkers({})).toBe(undefined);
   expect(loadWorkers({ CI: "true" })).toBe(undefined);
   expect(loadWorkers({ CI: "true", PW_WORKERS: CI_WORKERS })).toBe(CI_WORKERS);

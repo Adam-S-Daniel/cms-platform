@@ -959,7 +959,7 @@ layer:
   `e2e/scheduled-run-health.test.js` (workflow shapes + the script's pure
   helpers; registered in `PLATFORM_META_SPECS`).
 
-## E2E parallelism — one CI job per Playwright project (v0.1.68)
+## E2E parallelism — one CI job per Playwright project (v0.1.68-v0.1.70)
 
 `e2e-tests.yml` runs the suite as **one job per Playwright project**, each
 installing only its own browser engine, each at `150%` workers. Machinery: **`e2e/ci-matrix.js`** derives the matrix list, each
