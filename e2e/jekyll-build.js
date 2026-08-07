@@ -2,9 +2,11 @@
  * Serialised `bundle exec jekyll build` for the specs that rebuild the served
  * site mid-test.
  *
- * NINE @admin-write specs shell out to `jekyll build` against the SAME site
- * tree and the SAME `_site` the :4000 webServer serves, while their project runs
- * several tests at once. Jekyll cleans `_site` and then regenerates it, and
+ * NINE specs shell out to `jekyll build` against the SAME site tree and the SAME
+ * `_site` the :4000 webServer serves, while their project runs several tests at
+ * once. (Eight are @admin-write, so they share one runner; draft-isolation is
+ * too. cms-html-embed was UNTAGGED and therefore built on all eight public-lane
+ * runners as well — see e2e/admin-tag-lint.test.js.) Jekyll cleans `_site` and then regenerates it, and
  * shares `.jekyll-cache` / `.jekyll-metadata`, so two builds in flight together
  * fight — and one of them dies:
  *

@@ -136,6 +136,12 @@ jobs:
         if: vars.PROD_PLAYGROUND_MODE == 'true'
         working-directory: .cms-platform/e2e
         env:
+          # PW_PROJECT — the project(s) this step runs. e2e/install-browsers-on-miss.js
+          # narrows its missing-engine check to these projects' engines; without it the
+          # blanket check reports the engines this job never installed as "missing" and
+          # re-downloads them, while crying wolf about ci-runner image drift.
+          # Locked by e2e/engine-scope-lint.test.js.
+          PW_PROJECT: "chromium-desktop-1080"
           # SITE_ROOT — the CONSUMING site's checkout (github.workspace). The e2e
           # harness runs from .cms-platform/e2e here, so the base_collections guards'
           # default (resolve __dirname/..) would point at the PLATFORM, not the

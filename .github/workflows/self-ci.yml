@@ -142,6 +142,12 @@ jobs:
       # No browser, no built site, no network — the lint specs are pure-fs.
       TARGET: prod
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # …which is exactly why PW_PROJECT matters here: `npm ci` installs no browser
+      # binaries, so e2e/install-browsers-on-miss.js's blanket missing-engine check
+      # reported ALL THREE as missing and downloaded them (~16 s, measured on job
+      # 92855380065) before running lints that never launch a browser. Pin it to the
+      # one project this lane runs. Locked by e2e/engine-scope-lint.test.js.
+      PW_PROJECT: chromium-light
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)

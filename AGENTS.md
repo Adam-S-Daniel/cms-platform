@@ -962,8 +962,7 @@ layer:
 ## E2E parallelism — one CI job per Playwright project (v0.1.68)
 
 `e2e-tests.yml` runs the suite as **one job per Playwright project**, each
-installing only its own browser engine, with `workers` raised only for the two
-admin projects. Machinery: **`e2e/ci-matrix.js`** derives the matrix list, each
+installing only its own browser engine, each at `150%` workers. Machinery: **`e2e/ci-matrix.js`** derives the matrix list, each
 job's engine, and each job's worker count from `playwright.config.js`;
 **`e2e/ci-matrix.test.js`** fails self-CI if the workflow's static
 `matrix.project` drifts from the real project list (the one way this design can
@@ -989,11 +988,20 @@ The three findings that shaped it, all measured on adamdaniel.ai:
   test COUNT, not duration). One job per project needs no cost table at all.
 - **The 3-engine `install --with-deps` was 58 s of every job's critical path**
   (39 s apt + 19 s download). One engine per job removes most of it, needs no
-  cache key, and can't go stale. `install-browsers-on-miss.js` therefore reads
-  `PW_PROJECT` and checks ONLY that engine — a blanket check would re-download
-  the two engines the scoped install just skipped. **If you add a project, give
-  it an explicit `use.browserName`** (`engineFor()` throws otherwise) and add it
-  to the workflow matrix (the lint will tell you).
+  cache key, and can't go stale. **If you add a project, give it an explicit
+  `use.browserName`** (`engineFor()` throws otherwise) and add it to the workflow
+  matrix (the lint will tell you).
+- **EVERY harness-running step must declare `PW_PROJECT`** (one name or a
+  comma-separated list) so `install-browsers-on-miss.js` narrows its
+  missing-engine check to the engines actually in play. Without it the blanket
+  check reports the engines that step never installed as "missing", downloads
+  them for browsers the run never launches, and prints the ci-runner-drift
+  warning — permanently, so a REAL drift is indistinguishable. That had been true
+  of all ten sibling reusables AND the platform's own self-CI lint lane (which
+  installs no browsers at all and was fetching all three): adamdaniel.ai
+  canary-prod job 92842548516, cms-platform self-ci job 92855380065.
+  **`e2e/engine-scope-lint.test.js` fails if a step's `PW_PROJECT` is missing or
+  disagrees with its `--project` flags.**
 - **The reusable sets `DISABLE_PER_TEST_VIDEOS=1`.** `e2e/base.js` captures a
   full-page screenshot on every main-frame navigation of every test, and its only
   consumer (`e2e/generate-test-videos.js`) is invoked by no reusable — the
@@ -1031,6 +1039,12 @@ v0.1.68). Keep the pattern in mind when writing @admin-write specs:
   its budget with the URL count, like `cms-link-crawler.spec.js`'s explicit
   240 s crawl budget. The 30 s `actionTimeout` is what catches a genuine hang,
   so a generous *test* budget hides nothing.
+- **A spec that drives `/admin/index-local.html` MUST carry an `@admin-*` tag.**
+  Tag routing is opt-IN: an untagged test matches every public project's
+  `grepInvert`, so a forgotten tag doesn't fail — it silently runs the Decap admin
+  (and its writes, and its `jekyll build`) on all EIGHT public-lane projects.
+  `cms-html-embed.spec.js` shipped that way. Locked by
+  **`e2e/admin-tag-lint.test.js`**.
 - **Never `existsSync`-then-read a file another process writes.** decap-server
   creates an entry file and then fills it, so five specs' `expect.poll(() =>
   fs.existsSync(file))` could win the race and read `""` — the "decap-server
