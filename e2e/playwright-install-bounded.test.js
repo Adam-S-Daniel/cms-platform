@@ -1,8 +1,8 @@
 // @lane: local — pure-fs workflow lint; no browser, no build, no network.
 //
-// Lint: no workflow may install Playwright browsers with a raw, UNBOUNDED
-// `npx playwright install` — every lane goes through the
-// install-playwright-browsers composite, which bounds each attempt and retries.
+// Lint: no workflow may install Playwright browsers with a raw `npx playwright
+// install` — every lane goes through the install-playwright-browsers composite,
+// which splits the install into two phases and retries each.
 //
 // WHY THIS EXISTS (measured, adamdaniel.ai run 31177527405, job 92862768030)
 // `--with-deps` apt-installs ~90 system packages before downloading the
@@ -19,12 +19,20 @@
 //
 // A bare `timeout-minutes:` is NOT the fix — it converts "slow mirror" into a
 // RED required check, which blocks the canary PR permanently instead of merging
-// it late. Neither is a UNIFORM retry bound: when the mirror is slow for the
+// it late. Neither is a UNIFORM retry bound: when the network is slow for the
 // whole run (the measured case), every attempt hits the same bound and the step
-// still exits 1. What works is an ESCALATING budget — short early attempts to
-// abandon a stalled connection, then one generous final attempt that can actually
-// finish — kept under each caller's own job timeout so the diagnostic survives.
-// Hence: one composite, every lane, all three properties asserted here.
+// still exits 1. What works for the DOWNLOAD is an ESCALATING budget — short
+// early attempts to abandon a stalled connection, then one generous final
+// attempt that can actually finish — kept under each caller's own job timeout so
+// the diagnostic survives.
+//
+// And what does NOT work is bounding the APT phase (#210, job 92989057569).
+// `timeout` signals only the process it launched, and the `apt-get` that matters
+// is a grandchild: the bound killed `npx playwright install` mid-apt, `apt-get`
+// survived holding /var/lib/dpkg/lock-frontend, and attempts 2 and 3 then died
+// on "Could not get lock … held by process 2857 (apt-get)" — our own orphan.
+// So the phases are split and only the download is bounded; the assertions
+// below pin that asymmetry, because it reads like an oversight until you know.
 //
 // Platform-internal: reads the platform's own workflow definitions.
 const { test, expect } = require("@playwright/test");
@@ -56,7 +64,11 @@ function installSteps() {
         const where = `${path.basename(file)} :: ${jobName} :: ${step.name || "(unnamed)"}`;
         if (typeof step.run === "string" && RAW_INSTALL.test(step.run)) raw.push(where);
         if (typeof step.uses === "string" && step.uses.endsWith(`/${COMPOSITE_REF}`)) {
-          viaComposite.push({ where, with: step.with || {}, jobTimeoutMin: job["timeout-minutes"] });
+          viaComposite.push({
+            where,
+            with: step.with || {},
+            jobTimeoutMin: job["timeout-minutes"],
+          });
         }
       }
     }
@@ -76,10 +88,21 @@ function compositeDefaults() {
   };
 }
 
-// Worst case the step can take: (attempts-1) short bounds + one final bound, plus
-// the escalating backoff BETWEEN attempts (15 s, 30 s, …) — leaving the backoff out
-// under-reports the budget, which is the number this lint compares to a job timeout.
-function worstCaseSeconds(withBlock, defaults) {
+// Worst case of the BOUNDED portion — the browser-download phase only:
+// (attempts-1) short bounds + one final bound, plus the escalating backoff
+// BETWEEN attempts (15 s, 30 s, …); leaving the backoff out under-reports the
+// budget, which is the number this lint compares to a job timeout.
+//
+// The APT PHASE IS DELIBERATELY EXCLUDED, because it is unbounded (#210): there
+// is no static number for "how long can apt take", so it cannot appear in a
+// worst case at all. That is not a gap in this lint — the caller's own job
+// `timeout-minutes` is apt's only backstop, and a job timeout there is an
+// accurate report rather than the misleading one a killed apt produced. What
+// this test still guarantees is the original property: the part of the step we
+// DO bound cannot outlive the job, so the action always gets to print its
+// diagnostic instead of being cut off mid-retry.
+function boundedWorstCaseSeconds(withBlock, defaults) {
+  if (String(withBlock["deps-only"]) === "true") return 0; // apt only ⇒ nothing bounded
   const attempts = Number(withBlock.attempts ?? defaults.attempts);
   const early = Number(withBlock["timeout-seconds"] ?? defaults.timeoutSeconds);
   const final = Number(withBlock["final-timeout-seconds"] ?? defaults.finalTimeoutSeconds);
@@ -96,7 +119,10 @@ const { raw, viaComposite } = installSteps();
 function compositeStep(match) {
   const steps = parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8")).runs.steps;
   const found = steps.find((st) => match.test(String(st.run || "")));
-  expect(found, `no composite step matching ${match} — did the action get restructured?`).toBeTruthy();
+  expect(
+    found,
+    `no composite step matching ${match} — did the action get restructured?`,
+  ).toBeTruthy();
   return found;
 }
 
@@ -110,36 +136,38 @@ test("every browser install goes through the bounded composite", () => {
   ).toEqual([]);
 });
 
-test("no caller's install budget can outlive its own job timeout", () => {
+test("no caller's bounded install budget can outlive its own job timeout", () => {
   // The bound is only useful if the step gets to REPORT hitting it. If the
-  // composite's worst case exceeds the job's `timeout-minutes`, GitHub kills the
-  // job mid-retry and the run says "job timed out" — losing the diagnostic that
-  // says WHICH of a slow mirror vs a broken install it was. canary-prod's probe
-  // job (timeout-minutes: 10) sat under a 21-min worst case until this check
-  // existed; it now passes explicit smaller bounds.
+  // composite's bounded worst case exceeds the job's `timeout-minutes`, GitHub
+  // kills the job mid-retry and the run says "job timed out" — losing the
+  // diagnostic that says WHICH of a slow CDN vs a broken install it was.
+  // canary-prod's probe job (timeout-minutes: 10) sat under a 21-min worst case
+  // until this check existed; it now passes explicit smaller bounds.
   const defaults = compositeDefaults();
   const offenders = [];
   for (const c of viaComposite) {
     if (c.jobTimeoutMin == null) continue; // no cap declared ⇒ GitHub's 360 min
-    const worst = worstCaseSeconds(c.with, defaults);
+    const worst = boundedWorstCaseSeconds(c.with, defaults);
     if (worst >= c.jobTimeoutMin * 60) {
-      offenders.push(`${c.where}: worst case ${Math.round(worst / 60)}min >= job timeout ${c.jobTimeoutMin}min`);
+      offenders.push(
+        `${c.where}: bounded worst case ${Math.round(worst / 60)}min >= job timeout ${c.jobTimeoutMin}min`,
+      );
     }
   }
   expect(
     offenders,
-    "these callers can be killed by their own job timeout while the install is still retrying. " +
+    "these callers can be killed by their own job timeout while the download is still retrying. " +
       "Pass smaller `attempts` / `timeout-seconds` / `final-timeout-seconds`, or raise the job's " +
-      "timeout-minutes above the composite's worst case.",
+      "timeout-minutes above the composite's bounded worst case.",
   ).toEqual([]);
 });
 
-test("the final attempt is more generous than the early ones", () => {
-  // A uniform bound converts a sustained-slow mirror (the measured case: ~35 KB/s
+test("the final download attempt is more generous than the early ones", () => {
+  // A uniform bound converts a sustained-slow network (the measured case: ~35 KB/s
   // for a whole run, 2340 s to finish) into a RED required check, which blocks a
   // cms/* canary PR permanently instead of merging it late — worse than the stall.
   // Early attempts abandon a bad connection fast; the LAST one must be able to
-  // finish. apt and playwright both resume, so the attempts accumulate progress.
+  // finish. The download resumes, so the attempts accumulate progress.
   const d = compositeDefaults();
   expect(
     d.finalTimeoutSeconds,
@@ -156,12 +184,57 @@ test("the lint still sees the install lanes it polices", () => {
   ).toBeGreaterThan(10);
 });
 
-test("the composite bounds each attempt and retries", () => {
+test("the apt phase is NOT wrapped in a timeout", () => {
+  // THE #210 REGRESSION GUARD (measured, adamdaniel.ai run 31215846471, job
+  // 92989057569). `timeout` signals only the process it launched, and the
+  // `apt-get` that matters is a GRANDCHILD. A bound on the apt half therefore
+  // does not abandon apt — it orphans it: attempt 1 was killed at its 420 s
+  // bound, `apt-get` kept running and kept /var/lib/dpkg/lock-frontend, and
+  // attempts 2 and 3 died on "Could not get lock … held by process 2857
+  // (apt-get)". The bound starved its own retries, and a `dpkg` interrupted
+  // mid-configure can leave packages half-configured on top of that. A slow apt
+  // that FINISHES is strictly better; the job's `timeout-minutes` is the honest
+  // backstop for one that never does.
   const body = String(compositeStep(/npx playwright/).run);
 
-  expect(body, "the attempt must be wrapped in `timeout` or it is unbounded again").toMatch(
-    /\btimeout\s+"\$bound"/,
-  );
+  const deps = body
+    .split("\n")
+    .filter((l) => /npx playwright install-deps\b/.test(l) && !/^\s*#/.test(l));
+  expect(
+    deps.length,
+    "no `npx playwright install-deps` invocation found — did the two-phase split get undone?",
+  ).toBeGreaterThan(0);
+  for (const line of deps) {
+    expect(
+      line,
+      `the apt phase must run UNBOUNDED — \`${line.trim()}\` puts it under a bound, which ` +
+        `orphans apt-get on the dpkg lock and starves every retry (job 92989057569)`,
+    ).not.toMatch(/\btimeout\b/);
+  }
+});
+
+test("the download phase IS bounded, escalates, and retries", () => {
+  const body = String(compositeStep(/npx playwright/).run);
+
+  const download = body
+    .split("\n")
+    .filter(
+      (l) =>
+        /npx playwright install\b/.test(l) &&
+        !/install-deps/.test(l) &&
+        !/^\s*#/.test(l),
+    );
+  expect(
+    download.length,
+    "no plain `npx playwright install` invocation found — the browser download phase is missing",
+  ).toBeGreaterThan(0);
+  for (const line of download) {
+    expect(
+      line,
+      "the download attempt must be wrapped in `timeout` or it is unbounded again (39 min measured)",
+    ).toMatch(/\btimeout\s+"\$bound"/);
+  }
+
   expect(body, "the last attempt must pick up the generous bound").toMatch(
     /PW_INSTALL_FINAL_TIMEOUT_S/,
   );
@@ -178,6 +251,52 @@ test("the composite bounds each attempt and retries", () => {
   ).toMatch(/\|\|\s*status=\$\?/);
 });
 
+test("both phases exist, and the download does not re-run apt", () => {
+  // One `install --with-deps` cannot be bounded correctly: any bound on it can
+  // land mid-apt, which is exactly the #210 orphan. The split is what makes
+  // "bound the download, never apt" expressible, so `--with-deps` must not come
+  // back — and phase B must not re-expose the dpkg lock phase A left clean.
+  const body = String(compositeStep(/npx playwright/).run);
+  expect(body, "phase A (apt) is missing").toMatch(/npx playwright install-deps "\$PW_INSTALL_BROWSER"/);
+  expect(body, "phase B (browser download) is missing").toMatch(
+    /npx playwright install "\$PW_INSTALL_BROWSER"/,
+  );
+  // Comment lines are stripped first: the script EXPLAINS why `--with-deps` is
+  // gone, and the invariant is about what it RUNS, not what it says.
+  const code = body
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+  expect(
+    code,
+    "`--with-deps` fuses the phases back together, so any download bound can land mid-apt again (job 92989057569)",
+  ).not.toMatch(/--with-deps/);
+});
+
+test("a failure is classified from the captured OUTPUT, not the exit code alone", () => {
+  // `npx playwright install` wraps apt's exit 100 into exit 1, so the outer
+  // status is NOT diagnostic. On job 92989057569 the log said "Could not get
+  // lock /var/lib/dpkg/lock-frontend" while the step exited 1, and the old
+  // message asserted "a real install failure (not a timeout, not an apt lock)" —
+  // it named the one cause it had actually hit as the one thing it was not.
+  const body = String(compositeStep(/npx playwright/).run);
+
+  expect(
+    body,
+    "the attempt's combined output must be captured (`tee` keeps it streaming to the log too) " +
+      "so the failure can be classified from what apt actually printed",
+  ).toMatch(/\|\s*tee\s+"\$out"/);
+  expect(
+    body,
+    "the classification must grep the captured output for the dpkg-lock signature — " +
+      "the outer exit code cannot distinguish an apt lock from a broken package (exit 1 either way)",
+  ).toMatch(/grep\s+-Eq/);
+  expect(
+    body,
+    "the lock signature must include `lock-frontend` / `Could not get lock`, the strings apt prints",
+  ).toMatch(/lock-frontend|Could not get lock/);
+});
+
 test("apt is told to WAIT for the dpkg lock, and retries back off", () => {
   // The most common apt failure on a GitHub-hosted runner is not a slow mirror —
   // it is losing a race for the dpkg lock to the runner's own boot-time apt-daily,
@@ -185,14 +304,17 @@ test("apt is told to WAIT for the dpkg lock, and retries back off", () => {
   // all three land in the same lock window (measured, job 92892148211 — it failed
   // the webkit lane, failed the `e2e` gate, and BLOCKED the host loop's canary PR).
   // Two properties fix it: apt WAITS for the lock (a drop-in, because the apt-get
-  // that matters is inside `playwright install`), and retries BACK OFF.
+  // that matters is inside `playwright install-deps`), and retries BACK OFF.
   const wf = parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8"));
   const steps = wf.runs.steps;
   const lockStep = steps.find((st) => /DPkg::Lock::Timeout/.test(String(st.run || "")));
-  expect(lockStep, "no step configures DPkg::Lock::Timeout — a dpkg-lock race exits 100").toBeTruthy();
+  expect(
+    lockStep,
+    "no step configures DPkg::Lock::Timeout — a dpkg-lock race exits 100",
+  ).toBeTruthy();
   expect(
     String(lockStep.run),
-    "the drop-in must land in apt.conf.d so it reaches the apt inside `playwright install`",
+    "the drop-in must land in apt.conf.d so it reaches the apt inside `playwright install-deps`",
   ).toMatch(/apt\.conf\.d/);
 
   const installStep = steps.find((st) => /npx playwright/.test(String(st.run || "")));
