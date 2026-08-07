@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.69`** — `v0.1.0`–`v0.1.69` are all tagged GitHub
+**Current release: `v0.1.70`** — `v0.1.0`–`v0.1.70` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1509,7 +1509,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.69)
+## Version history (v0.1.0 → v0.1.70)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2115,6 +2115,33 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   v0.1.68 bump PRs (adamdaniel.ai 222 s, jodidaniel.com 148 s) plus what the
   design costs: ~1.5x the runner-minutes for ~3x less wall clock, and the wall
   clock includes GitHub allocating ten runners (3-10 s typical, once 59 s).
+
+- **v0.1.70** (2026-08-07) — **the engine scoping reached only ONE lane, and its
+  fallback was costing every other one — permanently (#202).** v0.1.68 taught
+  `install-browsers-on-miss`'s globalSetup to check only `PW_PROJECT`'s engine,
+  but only `e2e-tests.yml` sets that variable. Every OTHER harness-running lane
+  left it unset and hit the "check all three" fallback — so a lane that installs
+  **chromium only** (all ten sibling reusables) reported firefox + webkit as
+  "missing", downloaded them for browsers it never launches, and printed the
+  ci-runner-image-drift warning on EVERY run, making a real drift
+  indistinguishable from the permanent false one. Self-CI's `node-unit-lints`
+  lane, which installs NO browsers to run pure-fs lints, downloaded all three
+  (~16 s/run). Both REQUIRED per-PR checks (`parity`, `preview-media`) were
+  paying it. Fix: every harness step declares its project(s) via `PW_PROJECT`
+  (`neededEngines()` takes a comma-separated list), locked by
+  **`e2e/engine-scope-lint.test.js`** — a step whose `PW_PROJECT` is missing or
+  disagrees with its `--project` flags fails self-CI, so a new lane can't
+  regress it. Steps running a different config (visual-regression, whose config
+  declares no globalSetup) are explicitly exempt. Also: **tag routing is opt-IN,
+  so an untagged admin spec silently runs on all eight public projects** —
+  `cms-html-embed.spec.js` was creating posts through Decap and rebuilding
+  Jekyll on firefox and webkit too, for a server-side kramdown contract. Now
+  `@admin-write`, with **`e2e/admin-tag-lint.test.js`** (AST) failing any spec
+  that navigates the admin shell untagged. Plus four documentation corrections
+  from v0.1.68's per-project → uniform-`150%`-workers pivot (the
+  `playwright.config.js` `workers:` comment, an AGENTS.md self-contradiction,
+  `docs/E2E-PARALLELISM.md` naming two symbols that don't exist, and
+  `jekyll-build.js` mislabelling its nine callers).
 
 ## Consumers
 
