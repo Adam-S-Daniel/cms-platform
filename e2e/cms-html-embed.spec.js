@@ -64,7 +64,18 @@ function cleanup() {
   if (fs.existsSync(site)) fs.rmSync(site, { recursive: true, force: true });
 }
 
-test.describe("HTML Embed renders as HTML on the live post", () => {
+test.describe(
+  "HTML Embed renders as HTML on the live post",
+  // Tagged @admin-write: this drives /admin/index-local.html to create a post
+  // through Decap and writes via decap-server, so per playwright.config.js it
+  // belongs on chromium-desktop-3k ONLY. It was UNTAGGED — and an untagged test
+  // matches every public project's grepInvert — so this Decap WRITE ran on all
+  // EIGHT public-lane projects, firefox and webkit included. The contract under
+  // test is the kramdown render pipeline (see the header), which is server-side
+  // and engine-independent, so those eight engines bought nothing while
+  // multiplying the concurrent decap-server writers and jekyll builds.
+  { tag: ["@admin-write"] },
+  () => {
   // #33 — a base_collections:[] consumer strips the Posts block from
   // config-local.yml, so the index-local Posts editor route never renders.
   test.skip(...guard(SITE_ROOT, "cms-html-embed.spec.js"));

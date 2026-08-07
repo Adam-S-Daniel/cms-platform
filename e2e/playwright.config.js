@@ -228,6 +228,11 @@ const PLATFORM_META_SPECS = [
   // definition + playwright.config.js to lock `matrix.project` against the
   // real project list. Platform-internal, self-CI only.
   "ci-matrix.test.js",
+  // Reads EVERY platform reusable workflow DEFINITION to assert each
+  // harness-running step declares the PW_PROJECT its --project flags imply (so
+  // the browser self-heal can't re-download engines the step never installed).
+  // Consumers ship only thin wrappers — platform-internal, self-CI only.
+  "engine-scope-lint.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +
@@ -376,16 +381,17 @@ module.exports = defineConfig({
   // mismatch so specs don't die at launch with "Executable doesn't exist".
   globalSetup: "./install-browsers-on-miss.js",
   fullyParallel: true,
-  // Worker concurrency — deliberately left to Playwright (50% of cores, i.e. 2
-  // on a 4-vCPU GitHub runner) unless PW_WORKERS says otherwise. That default
-  // is RIGHT for browser work here: a Playwright browser test burns more than
-  // one core, so 4 workers on a 4-vCPU runner made the same public-page tests
-  // report 2.1x longer and the wall clock slightly WORSE (263 s -> 284 s
-  // measured). Only the wait-bound admin projects profit from going wider, and
-  // e2e-tests.yml raises PW_WORKERS for exactly those (see e2e/ci-matrix.js).
-  // PW_WORKERS is also the no-release escape hatch — the reusable's `workers`
-  // input — if a project ever gets flaky under load.
-  // Measurements: docs/E2E-PARALLELISM.md.
+  // Worker concurrency — left to Playwright (50% of cores, i.e. 2 on a 4-vCPU
+  // GitHub runner) unless PW_WORKERS says otherwise, because THIS config is also
+  // loaded by the reusables that run every project in ONE job (parity-preview,
+  // canary-prod, the loops) — the shape where more workers measured worse.
+  //
+  // e2e-tests.yml, which runs ONE PROJECT PER JOB, passes PW_WORKERS=150% (6 on a
+  // 4-vCPU runner) for EVERY project job — one number, not a per-project table;
+  // see e2e/ci-matrix.js. PW_WORKERS is also the no-release escape hatch (the
+  // reusable's `workers` input) if a project gets flaky under load.
+  // Measurements, including why the same worker count wins on one job shape and
+  // loses on the other: docs/E2E-PARALLELISM.md.
   workers: resolveWorkers(),
   // Single auto-retry on CI for the decap-server file-write race (and any
   // similar transient flake). Local runs stay at 0 so a regression caught

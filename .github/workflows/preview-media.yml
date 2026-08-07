@@ -201,6 +201,12 @@ jobs:
         if: ${{ steps.salient.outputs.salient == 'true' && steps.preview.outputs.reachable == 'true' }}
         working-directory: .cms-platform/e2e
         env:
+          # PW_PROJECT — the project(s) this step runs. e2e/install-browsers-on-miss.js
+          # narrows its missing-engine check to these projects' engines; without it the
+          # blanket check reports the engines this job never installed as "missing" and
+          # re-downloads them, while crying wolf about ci-runner image drift.
+          # Locked by e2e/engine-scope-lint.test.js.
+          PW_PROJECT: "chromium-desktop-1080"
           # SITE_ROOT — the CONSUMING site's checkout (github.workspace). Uniform
           # harness rule: any spec run from .cms-platform/e2e sets SITE_ROOT to the
           # CONSUMER root so any base_collections / single-page guard reads the

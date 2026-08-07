@@ -191,6 +191,12 @@ jobs:
         if: ${{ steps.select.outputs.count != '0' && steps.preview.outputs.reachable == 'true' }}
         working-directory: .cms-platform/e2e
         env:
+          # PW_PROJECT — the project(s) this step runs. e2e/install-browsers-on-miss.js
+          # narrows its missing-engine check to these projects' engines; without it the
+          # blanket check reports the engines this job never installed as "missing" and
+          # re-downloads them, while crying wolf about ci-runner image drift.
+          # Locked by e2e/engine-scope-lint.test.js.
+          PW_PROJECT: "chromium-desktop-1080,chromium-desktop-3k"
           # Routes Playwright baseURL + page.request at
           # https://preview-pr<N>.<apex> (PR_NUMBER short-circuits base.js's
           # gh lookup).

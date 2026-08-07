@@ -141,8 +141,21 @@ locally to get the frames back.
 only remove the 19 s (minus cache-restore time), and cannot touch the apt half.
 Installing **one** engine per job removes most of both, needs no cache key, and
 cannot go stale. `e2e/install-browsers-on-miss.js` reads `PW_PROJECT` so the
-runtime self-heal checks only the engine in play — otherwise it would
-re-download the two engines the scoped install just skipped.
+runtime self-heal checks only the engines in play — otherwise it would
+re-download the ones the scoped install just skipped.
+
+That self-heal turned out to be re-downloading engines on **every other lane
+too**, and had been since those lanes existed: each installs chromium only (and
+self-CI's lint lane installs nothing), while the blanket check reported the rest
+as missing and fetched them — for engines the run never launches, printing the
+"ci-runner image is drifting" warning every time, which made a real drift
+indistinguishable from the permanent false one. Evidence: adamdaniel.ai
+canary-prod job 92842548516 ("missing … firefox, webkit" + two downloads on a
+chromium-only lane) and cms-platform self-ci job 92855380065 (all three
+downloaded, ~16 s, before running pure-fs lints). Every harness-running step now
+declares the projects it runs via `PW_PROJECT`, and
+`e2e/engine-scope-lint.test.js` fails if one forgets — including the two REQUIRED
+per-PR checks, `parity / parity` and `preview-media / preview-media`.
 
 ## Rejected: skipping tests per diff
 
@@ -190,10 +203,19 @@ one is literally the race the config's `retries: 1` was added for.
   poll the CONTENT via `e2e/fs-poll.js`'s `contentOrEmpty()`, which is both the
   correct wait and a better failure message.
 
+* **A missing tag is silent.** `cms-html-embed.spec.js` drives
+  `/admin/index-local.html`, creates a post through Decap and rebuilds Jekyll —
+  but carried NO `@admin-*` tag. An untagged test matches every public project's
+  `grepInvert`, so that Decap write ran on all EIGHT public-lane projects
+  (firefox and webkit included) for a contract that is server-side and
+  engine-independent. Tagging is now `@admin-write`, and
+  `e2e/admin-tag-lint.test.js` fails on any spec that navigates the admin shell
+  without an admin tag.
+
 The lesson worth keeping: **a test whose budget doesn't scale with its input,
 whose fixture is shared with another spec, which drives a shared external tool,
-or which reads a file another process is still writing, is a latent flake that
-parallelism converts into a real one.**
+which reads a file another process is still writing, or which forgets the tag
+that routes it, is a latent flake (or a silent 8x) that parallelism turns real.**
 
 ## The result
 
@@ -245,4 +267,6 @@ gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs | grep -E '✓|✘'
 
 To try a different worker count without cutting a release, pass the reusable's
 `workers` input (it overrides every job): `workers: "2"`. To change the policy
-permanently, edit `ADMIN_WORKERS` / `workersFor()` in `e2e/ci-matrix.js`.
+permanently, edit `CI_WORKERS` in `e2e/ci-matrix.js` (locked by the "every
+project job runs at the same measured worker count" assertion in
+`e2e/ci-matrix.test.js`).

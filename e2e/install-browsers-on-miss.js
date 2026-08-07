@@ -23,18 +23,34 @@ const fs = require("node:fs");
 const { execSync } = require("node:child_process");
 const { chromium, firefox, webkit } = require("@playwright/test");
 
-// Which engines this run actually needs. The e2e-tests workflow runs one job
-// per Playwright project and installs ONLY that project's engine (see
-// e2e/ci-matrix.js), so a blanket check here would report the other two as
-// "missing" and re-download them — undoing the scoped install on every single
-// job. `PW_PROJECT` is the workflow's per-job project name; without it (a full
-// local run, or another reusable running the whole matrix) every engine is in
-// play and all three are checked, exactly as before.
+// Which engines this run actually needs.
+//
+// EVERY workflow that runs this harness installs only the engines its
+// `--project` selection uses — e2e-tests.yml one per matrix job, the other
+// reusables chromium only, self-CI's lint lane none at all. A blanket check here
+// reports the uninstalled engines as "missing", so this self-heal downloads them
+// for engines the run never launches AND prints the ci-runner-drift warning,
+// which then cries wolf on every run and drowns out a real drift. Measured
+// before the fix:
+//
+//   adamdaniel.ai canary-prod job 92842548516  "missing … firefox, webkit" + 2 downloads
+//   cms-platform self-ci node-unit-lints 92855380065  all THREE downloaded, ~16 s,
+//                                                     for pure-fs lints
+//
+// So every such workflow sets `PW_PROJECT` to the project(s) it runs — one name
+// or a comma-separated list — and this narrows to those projects' engines.
+// `e2e/engine-scope-lint.test.js` fails if a workflow forgets. With PW_PROJECT
+// unset (a bare local `npx playwright test`, which installs everything) all three
+// are checked, exactly as before.
 function neededEngines() {
-  const project = (process.env.PW_PROJECT || "").trim();
-  if (!project) return new Set(["chromium", "firefox", "webkit"]);
+  const names = (process.env.PW_PROJECT || "")
+    .split(",")
+    .map((n) => n.trim())
+    .filter(Boolean);
+  if (names.length === 0) return new Set(["chromium", "firefox", "webkit"]);
   try {
-    return new Set([require("./ci-matrix").engineFor(project)]);
+    const { engineFor } = require("./ci-matrix");
+    return new Set(names.map((n) => engineFor(n)));
   } catch (e) {
     // An unknown project is the workflow's problem to report, not this
     // self-heal's — fall back to checking everything.
