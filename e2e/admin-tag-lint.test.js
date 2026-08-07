@@ -22,7 +22,10 @@
 const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
 const path = require("node:path");
+const acorn = require("acorn");
+const walk = require("acorn-walk");
 const { analyzeSpec } = require("./spec-ast");
+const config = require("./playwright.config.js");
 
 // The dev-backend admin shell. A spec that navigates it is driving the CMS, not
 // a public page. (`index-test.html`'s in-browser test backend is the read-only
@@ -81,3 +84,87 @@ test("each declared admin tag is one playwright.config.js actually routes", () =
     }
   }
 });
+
+// ── A hand-rolled project gate must be SATISFIABLE by the spec's tag ──────
+//
+// A spec can pin itself to one project with
+// `test.skip(testInfo.project.name !== "X", …)`. That predates tag routing and
+// still works — but a tag routes the spec to a DIFFERENT set of projects, and if
+// the two disagree the file skips EVERYWHERE and its coverage vanishes silently.
+// That is exactly what tagging cms-html-embed @admin-write did: the tag sent it
+// to chromium-desktop-3k while its beforeEach demanded chromium-desktop-1080, so
+// the kramdown render contract stopped being tested at all and nothing went red.
+// A skipped test is invisible in a green run, so this has to be a lint.
+
+// Which projects would run a spec carrying `tags`? Answers from the config's own
+// grep/grepInvert, so the routing rule lives in exactly one place.
+function projectsForTags(tags) {
+  const text = tags.join(" ");
+  return (config.projects || [])
+    .filter((p) => {
+      const grep = p.grep ? [].concat(p.grep) : null;
+      const invert = p.grepInvert ? [].concat(p.grepInvert) : null;
+      if (grep && !grep.some((re) => re.test(text))) return false;
+      if (invert && invert.some((re) => re.test(text))) return false;
+      return true;
+    })
+    .map((p) => p.name);
+}
+
+// `<something>.project.name !== "X"` — the shape of a hand-rolled pin.
+function projectGates(src) {
+  const gates = [];
+  const ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "script" });
+  walk.simple(ast, {
+    BinaryExpression(node) {
+      if (node.operator !== "!==" && node.operator !== "!=") return;
+      const { left, right } = node;
+      if (right.type !== "Literal" || typeof right.value !== "string") return;
+      if (
+        left.type === "MemberExpression" &&
+        left.property.name === "name" &&
+        left.object.type === "MemberExpression" &&
+        left.object.property.name === "project"
+      ) {
+        gates.push(right.value);
+      }
+    },
+  });
+  return gates;
+}
+
+const GATED = [];
+for (const file of specFiles()) {
+  const src = fs.readFileSync(path.join(__dirname, file), "utf8");
+  let gates;
+  try {
+    gates = projectGates(src);
+  } catch (e) {
+    continue;
+  }
+  if (!gates.length) continue;
+  const strings = (analyzeSpec(src).strings || []).map(String);
+  const tags = [...new Set(strings.filter((t) => /^@/.test(t)))];
+  GATED.push({ file, gates, tags, routed: projectsForTags(tags) });
+}
+
+test("the lint sees the hand-rolled project gates it polices", () => {
+  expect(
+    GATED.length,
+    "no spec pins itself with `project.name !== \"…\"` — did the shape change?",
+  ).toBeGreaterThan(0);
+});
+
+for (const { file, gates, tags, routed } of GATED) {
+  test(`${file} — its project gate is reachable under its own tags`, () => {
+    for (const gate of gates) {
+      expect(
+        routed,
+        `${file} skips unless project === "${gate}", but its tags [${tags.join(", ") || "none"}] ` +
+          `route it to [${routed.join(", ")}] — the two cannot both hold, so the whole file ` +
+          `skips and its coverage disappears from a GREEN run. Drop the hand-rolled gate (the ` +
+          `tag already does the routing) or fix the tag.`,
+      ).toContain(gate);
+    }
+  });
+}

@@ -959,7 +959,7 @@ layer:
   `e2e/scheduled-run-health.test.js` (workflow shapes + the script's pure
   helpers; registered in `PLATFORM_META_SPECS`).
 
-## E2E parallelism — one CI job per Playwright project (v0.1.68)
+## E2E parallelism — one CI job per Playwright project (v0.1.68-v0.1.70)
 
 `e2e-tests.yml` runs the suite as **one job per Playwright project**, each
 installing only its own browser engine, each at `150%` workers. Machinery: **`e2e/ci-matrix.js`** derives the matrix list, each
@@ -1061,10 +1061,18 @@ v0.1.68). Keep the pattern in mind when writing @admin-write specs:
   `cms-html-embed.spec.js` shipped that way. Locked by
   **`e2e/admin-tag-lint.test.js`**.
 - **Never `existsSync`-then-read a file another process writes.** decap-server
-  creates an entry file and then fills it, so five specs' `expect.poll(() =>
-  fs.existsSync(file))` could win the race and read `""` — the "decap-server
+  creates an entry file and then fills it, so `expect.poll(() =>
+  fs.existsSync(file))` can win the race and read `""` — the "decap-server
   file-write race" `retries: 1` was added for. Poll the CONTENT with
-  `contentOrEmpty()` from **`e2e/fs-poll.js`** instead.
+  `contentOrEmpty()` from **`e2e/fs-poll.js`**, or `fileReady(<finder>)` when the
+  path itself is discovered by a readdir helper. **This one bit twice:** v0.1.68
+  converted five specs and left six behind, and two of THOSE feed the read
+  straight into a `writeFileSync` of the same path — so an empty read did not
+  merely fail an assertion, it overwrote the entry with front-matter-less content
+  and left a corrupt page on disk for the retry. All eleven now poll content, and
+  **`e2e/fs-poll-lint.test.js`** (AST) fails the build on the shape, so "the rule
+  is written down" is no longer the only thing enforcing it. An existence poll for
+  a file the spec never READS is fine and is not flagged.
 - **A shared external tool needs a lock.** Nine specs shell out to
   `bundle exec jekyll build` against the same tree and the same `_site` the
   webServer serves; two overlapping builds fight over `_site` and one dies. They
@@ -1074,7 +1082,16 @@ v0.1.68). Keep the pattern in mind when writing @admin-write specs:
   to the caller's test timeout so the lock can't trade the build race for a
   timeout race (these specs run on Playwright's 30 s default). **Never shell out
   to `jekyll build` from a spec directly** — `jekyll-build.test.js` fails the
-  build if you do.
+  build if you do. Two lock defects found by review and fixed in v0.1.70:
+  **(a) `STALE_MS` must stay BELOW `WAIT_TIMEOUT_MS`** — it shipped inverted
+  (300 s vs 180 s), so a fresh waiter ran out its whole budget while the lock was
+  still younger than the stale threshold and threw `timed out waiting for the
+  build lock`: a killed worker wedged the next build, the exact opposite of the
+  documented guarantee. **(b) the break and the release are OWNERSHIP-CHECKED** —
+  an unowned break lets a waiter free a merely-slow holder's lock, start a second
+  build, and then have the original's `finally` delete the NEW holder's lock. The
+  lock dir now carries an `owner` token; `release` refuses to remove a lock that
+  is not ours, and the break re-reads the owner before acting.
 
 ## E2E local webServer: decap readiness + :4000 crash resilience
 
@@ -2147,16 +2164,61 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   **`e2e/engine-scope-lint.test.js`** — a step whose `PW_PROJECT` is missing or
   disagrees with its `--project` flags fails self-CI, so a new lane can't
   regress it. Steps running a different config (visual-regression, whose config
-  declares no globalSetup) are explicitly exempt. Also: **tag routing is opt-IN,
-  so an untagged admin spec silently runs on all eight public projects** —
-  `cms-html-embed.spec.js` was creating posts through Decap and rebuilding
-  Jekyll on firefox and webkit too, for a server-side kramdown contract. Now
-  `@admin-write`, with **`e2e/admin-tag-lint.test.js`** (AST) failing any spec
-  that navigates the admin shell untagged. Plus four documentation corrections
+  declares no globalSetup) are explicitly exempt. Also: **tag routing is opt-IN, so
+  an untagged admin spec matches every public project's `grepInvert`** —
+  `cms-html-embed.spec.js` drove Decap untagged, held to one project only by a
+  hand-rolled `beforeEach` gate (so the harm was mis-stated at the time as "it ran
+  on all eight"; see the third paragraph, where leaving that gate in place turned
+  out to be the real bug). Now `@admin-write`, with
+  **`e2e/admin-tag-lint.test.js`** (AST) failing any spec that navigates the admin
+  shell untagged. Plus four documentation corrections
   from v0.1.68's per-project → uniform-`150%`-workers pivot (the
   `playwright.config.js` `workers:` comment, an AGENTS.md self-contradiction,
   `docs/E2E-PARALLELISM.md` naming two symbols that don't exist, and
   `jekyll-build.js` mislabelling its nine callers).
+
+  Also in v0.1.70, from an adversarial review of the parallelism work's own
+  fixes: **the build lock's stale break was unreachable** (`STALE_MS` 300 s >
+  `WAIT_TIMEOUT_MS` 180 s, so a fresh waiter always timed out before it could
+  break an orphaned lock — a killed worker wedged the next build, the opposite of
+  the documented guarantee) and **breaking/releasing it was not ownership-checked**
+  (a merely-slow holder could have its lock broken, and its `finally` would then
+  delete the NEW holder's lock); **six more specs still polled a file's EXISTENCE
+  and then read it**, and in `cms-html-embed`/`cms-inline-image` that read feeds a
+  `writeFileSync` back to the same path, so an empty read overwrote the entry with
+  front-matter-less content instead of merely failing an assertion; and
+  **`cms-page-crud` left an orphaned `<loc>` in the shared `_site/sitemap.xml`**
+  that `image-alt-text`'s hard 200 assertion crawls (its `/blog/e2e-…` fixture
+  exemption does not cover a `/pages/…` path). Each is now lint- or test-locked:
+  `jekyll-build.test.js` asserts the constants' inequality and the ownership
+  refusal, `fs-poll-lint.test.js` (AST) fails the build on the read-race shape,
+  and the sitemap prune mirrors `cms-publish-flow`'s.
+
+  Also **the browser install is now BOUNDED and RETRIED (#204).** Measured on
+  adamdaniel.ai job 92862768030: `npx playwright install --with-deps webkit` took
+  **39 minutes** while the tests it installed for took 41.6 s — the Ubuntu mirror
+  served that runner at ~35 KB/s for its whole run and the install had no upper
+  bound. Fanning out to ten lanes means ten INDEPENDENT apt exposures per run, and
+  the aggregating `e2e` gate waits for the slowest, so that one lane held a
+  delete-recovery PR open 40 min and blew the media-roundtrip loop's 30-minute
+  delete-leg budget — the loop failed on a green test suite. All 13 call sites now
+  go through `.github/actions/install-playwright-browsers` (`timeout 420` per
+  attempt, 3 attempts), locked by **`e2e/playwright-install-bounded.test.js`**. A
+  bare `timeout-minutes:` would be WORSE — it turns a slow mirror into a RED
+  required check, blocking a `cms/*` canary PR permanently instead of merging it
+  late; only a retry recovers, because a fresh attempt gets fresh connections.
+
+  One more, and it was a REGRESSION from #202's own tagging: `cms-html-embed`
+  carried a hand-rolled `beforeEach` gate skipping unless the project was
+  `chromium-desktop-1080`, so the new `@admin-write` tag (which routes to
+  `chromium-desktop-3k`) made the two conditions mutually exclusive and **the
+  whole file skipped everywhere** — the kramdown render contract silently
+  untested, with nothing red. The gate is gone (the tag expresses that routing),
+  and `admin-tag-lint.test.js` now derives each spec's routed projects from the
+  config's own `grep`/`grepInvert` and fails on an unsatisfiable gate. **A tag is
+  routing: never leave a hand-rolled `project.name !== "…"` skip beside one.**
+  (That gate also means #202's "it ran on all EIGHT public projects" overstated
+  the harm — the gate had held it to one; the tag was still the right fix.)
 
 ## Consumers
 

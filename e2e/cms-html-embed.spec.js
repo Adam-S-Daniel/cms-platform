@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { fileReady } = require("./fs-poll");
 const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
@@ -68,12 +69,13 @@ test.describe(
   "HTML Embed renders as HTML on the live post",
   // Tagged @admin-write: this drives /admin/index-local.html to create a post
   // through Decap and writes via decap-server, so per playwright.config.js it
-  // belongs on chromium-desktop-3k ONLY. It was UNTAGGED — and an untagged test
-  // matches every public project's grepInvert — so this Decap WRITE ran on all
-  // EIGHT public-lane projects, firefox and webkit included. The contract under
-  // test is the kramdown render pipeline (see the header), which is server-side
-  // and engine-independent, so those eight engines bought nothing while
-  // multiplying the concurrent decap-server writers and jekyll builds.
+  // belongs on chromium-desktop-3k ONLY. It was UNTAGGED, and an untagged test
+  // matches every public project's grepInvert — it was kept off the other seven
+  // only by a hand-rolled `project.name !== "chromium-desktop-1080"` skip in
+  // beforeEach, which is exactly the kind of routing the tag exists to express.
+  // The tag REPLACES that gate: leaving both in place made the two conditions
+  // mutually exclusive and the whole file skipped everywhere — see
+  // admin-tag-lint.test.js, which now fails on an unsatisfiable gate.
   { tag: ["@admin-write"] },
   () => {
   // #33 — a base_collections:[] consumer strips the Posts block from
@@ -85,11 +87,7 @@ test.describe(
   test.beforeAll(() => cleanup());
   test.afterAll(() => cleanup());
 
-  test.beforeEach(({ page }, testInfo) => {
-    test.skip(
-      testInfo.project.name !== "chromium-desktop-1080",
-      "Single project — local backend mutates the working tree.",
-    );
+  test.beforeEach(({ page }) => {
     page.on("pageerror", (err) => console.log(`[pageerror] ${err.name}: ${err.message}`));
   });
 
@@ -131,7 +129,7 @@ test.describe(
       .click();
 
     // ── On-disk asserts: patch the body with the sentinel block ──────
-    await expect.poll(() => findSmokePostFile() !== null, { timeout: 60_000 }).toBe(true);
+    await expect.poll(() => fileReady(findSmokePostFile), { timeout: 60_000 }).toBe(true);
     const postPath = findSmokePostFile();
 
     // Surround the embed with markdown prose so the assertions below

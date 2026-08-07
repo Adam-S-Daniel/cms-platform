@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { fileReady } = require("./fs-poll");
 const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
@@ -190,7 +191,7 @@ test.describe(
         .click();
 
       // ── Wait for the file to land in _posts/ ──────────────────────────
-      await expect.poll(() => findSmokePostFile() !== null, { timeout: 60_000 }).toBe(true);
+      await expect.poll(() => fileReady(findSmokePostFile), { timeout: 60_000 }).toBe(true);
       const postPath = findSmokePostFile();
       const written = fs.readFileSync(postPath, "utf8");
       expect(written).toMatch(/^---/);

@@ -4,9 +4,10 @@
  *
  * NINE specs shell out to `jekyll build` against the SAME site tree and the SAME
  * `_site` the :4000 webServer serves, while their project runs several tests at
- * once. (Eight are @admin-write, so they share one runner; draft-isolation is
- * too. cms-html-embed was UNTAGGED and therefore built on all eight public-lane
- * runners as well — see e2e/admin-tag-lint.test.js.) Jekyll cleans `_site` and then regenerates it, and
+ * once. (Nine are @admin-write, so they share one runner; draft-isolation is
+ * too. cms-html-embed was UNTAGGED until v0.1.70 — held to one project only by a
+ * hand-rolled beforeEach gate the @admin-write tag has since replaced; see
+ * e2e/admin-tag-lint.test.js.) Jekyll cleans `_site` and then regenerates it, and
  * shares `.jekyll-cache` / `.jekyll-metadata`, so two builds in flight together
  * fight — and one of them dies:
  *
@@ -29,14 +30,17 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-// How long a build may WAIT for the lock. Comfortably above the worst case
-// (every worker queued behind a ~5-30 s build) and well under the specs' own
-// test timeouts, so a wedged lock surfaces as this error rather than as an
-// opaque test timeout.
-const WAIT_TIMEOUT_MS = 180_000;
-// A holder older than this is presumed dead (its worker was killed before the
-// `finally` ran) and its lock is broken. Longer than any real build.
-const STALE_MS = 300_000;
+// A holder older than this is presumed dead — its worker was killed before the
+// `finally` ran — and its lock is broken. A build is ~5 s, so 120 s is ~24x the
+// real thing while still being FAR less than a waiter's budget.
+const STALE_MS = 120_000;
+// How long a build may WAIT for the lock. MUST stay comfortably ABOVE STALE_MS:
+// a waiter breaks a lock only once it is older than STALE_MS, so with the
+// inequality reversed (it was WAIT 180 s / STALE 300 s) a fresh waiter could
+// never reach the break — a killed holder's lock wedged the next build into
+// `timed out waiting for the build lock`, the exact opposite of the guarantee
+// this file documents. Locked by jekyll-build.test.js.
+const WAIT_TIMEOUT_MS = 300_000;
 const POLL_MS = 150;
 
 function lockDirFor(cwd) {
@@ -50,11 +54,31 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function acquire(lockDir) {
+// Who holds the lock. Written INSIDE the lock dir, so it appears only after the
+// atomic mkdir won — and read back before any destructive act. Without it,
+// breaking a lock is unowned: a build that merely ran long (not dead) keeps
+// going, a waiter breaks its lock and starts a second build, and the original's
+// `finally` then deletes the NEW holder's lock — two concurrent builds and a
+// free-for-all, which is the very thing the lock exists to prevent.
+function ownerFile(lockDir) {
+  return path.join(lockDir, "owner");
+}
+
+function readOwner(lockDir) {
+  try {
+    return fs.readFileSync(ownerFile(lockDir), "utf8");
+  } catch (e) {
+    // No owner file yet (we caught the holder mid-acquire) or the lock is gone.
+    return "";
+  }
+}
+
+function acquire(lockDir, token) {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
   for (;;) {
     try {
       fs.mkdirSync(lockDir);
+      fs.writeFileSync(ownerFile(lockDir), token);
       return;
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
@@ -67,11 +91,17 @@ function acquire(lockDir) {
       age = 0;
     }
     if (age > STALE_MS) {
-      console.warn(
-        `[jekyll-build] breaking a stale build lock (${lockDir}, held ${Math.round(age / 1000)}s) ` +
-          `— a worker was probably killed mid-build.`,
-      );
-      release(lockDir);
+      // Re-read the owner, pause, and re-read: if it changed, the lock legitimately
+      // changed hands while we were deciding and is NOT stale, so don't break it.
+      const seen = readOwner(lockDir);
+      sleepSync(POLL_MS);
+      if (readOwner(lockDir) === seen && fs.existsSync(lockDir)) {
+        console.warn(
+          `[jekyll-build] breaking a stale build lock (${lockDir}, held ${Math.round(age / 1000)}s ` +
+            `by ${seen || "an unknown holder"}) — a worker was probably killed mid-build.`,
+        );
+        forceRelease(lockDir);
+      }
       continue;
     }
     if (Date.now() > deadline) {
@@ -102,12 +132,27 @@ function creditWaitToTest(waitedMs) {
   }
 }
 
-function release(lockDir) {
+function forceRelease(lockDir) {
   try {
     fs.rmSync(lockDir, { recursive: true, force: true });
   } catch (e) {
     console.warn(`[jekyll-build] could not remove the build lock ${lockDir}: ${e && e.message}`);
   }
+}
+
+// Release ONLY our own lock. If the owner no longer matches, a waiter already
+// broke ours as stale and handed it to someone else — removing it now would free
+// THEIR lock and let a third build start alongside them.
+function release(lockDir, token) {
+  const owner = readOwner(lockDir);
+  if (owner && owner !== token) {
+    console.warn(
+      `[jekyll-build] not releasing ${lockDir}: it is held by ${owner}, not us (${token}). ` +
+        `Our lock was broken as stale mid-build.`,
+    );
+    return;
+  }
+  forceRelease(lockDir);
 }
 
 /*
@@ -122,14 +167,16 @@ function jekyllBuild({ cwd, future = false } = {}) {
   if (future) args.push("--future");
 
   const lockDir = lockDirFor(cwd);
+  // Unique per call, so `release` can prove the lock it is removing is ours.
+  const token = `pid${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
   const waitStart = Date.now();
-  acquire(lockDir);
+  acquire(lockDir, token);
   creditWaitToTest(Date.now() - waitStart);
   try {
     execFileSync("bundle", args, { cwd, stdio: "inherit" });
   } finally {
-    release(lockDir);
+    release(lockDir, token);
   }
 }
 
-module.exports = { jekyllBuild, lockDirFor, creditWaitToTest };
+module.exports = { jekyllBuild, lockDirFor, creditWaitToTest, STALE_MS, WAIT_TIMEOUT_MS };
