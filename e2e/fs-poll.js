@@ -16,6 +16,19 @@
  *     await expect.poll(() => contentOrEmpty(FILE), { timeout: 60_000 })
  *       .toContain(`title: ${TITLE}`);
  *     const saved = contentOrEmpty(FILE);
+ *
+ * When the PATH itself is discovered (Decap names the file after the slug AND
+ * the date, so specs locate it with a readdir helper), poll `fileReady` on the
+ * helper instead — it defers to the same content check once a path exists:
+ *
+ *     await expect.poll(() => fileReady(findSmokePostFile), { timeout: 60_000 })
+ *       .toBe(true);
+ *     const postPath = findSmokePostFile();
+ *
+ * This matters most where the read feeds a WRITE back to the same file
+ * (cms-html-embed / cms-inline-image patch the body Decap just saved): an empty
+ * read there does not merely fail an assertion, it overwrites the entry with
+ * front-matter-less content and leaves a corrupt page on disk for the retry.
  */
 const fs = require("node:fs");
 
@@ -30,4 +43,14 @@ function contentOrEmpty(file) {
   }
 }
 
-module.exports = { contentOrEmpty };
+// True once `find` resolves to a path whose content carries `needle`.
+// `needle` defaults to the YAML front-matter delimiter every Decap entry opens
+// with, so the default question is "has decap-server finished writing this?".
+// Accepts a finder function (the readdir helpers) or a fixed path.
+function fileReady(find, needle = "---") {
+  const file = typeof find === "function" ? find() : find;
+  if (!file) return false;
+  return contentOrEmpty(file).includes(needle);
+}
+
+module.exports = { contentOrEmpty, fileReady };

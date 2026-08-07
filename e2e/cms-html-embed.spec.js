@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { fileReady } = require("./fs-poll");
 const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
@@ -131,7 +132,7 @@ test.describe(
       .click();
 
     // ── On-disk asserts: patch the body with the sentinel block ──────
-    await expect.poll(() => findSmokePostFile() !== null, { timeout: 60_000 }).toBe(true);
+    await expect.poll(() => fileReady(findSmokePostFile), { timeout: 60_000 }).toBe(true);
     const postPath = findSmokePostFile();
 
     // Surround the embed with markdown prose so the assertions below

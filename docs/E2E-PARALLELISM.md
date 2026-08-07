@@ -210,11 +210,16 @@ run the *same* coverage faster, not to run less of it. Selection trades coverage
 for speed and adds a "did the selector miss something?" failure mode; the
 project matrix needs no such trade.
 
-## Four isolation bugs that parallelism exposed
+## Isolation bugs that parallelism exposed
 
-Running the admin projects wider surfaced four genuine pre-existing test bugs.
-All are fixed; all would have bitten eventually at any worker count — the last
-one is literally the race the config's `retries: 1` was added for.
+Running the admin projects wider surfaced genuine pre-existing test bugs. All
+are fixed; all would have bitten eventually at any worker count — one is
+literally the race the config's `retries: 1` was added for.
+
+Two rounds of them, which is the more useful lesson: the first round was found by
+CI going red, the second by an adversarial review of the first round's own fixes.
+Widening concurrency does not create these bugs, it just stops hiding them, so
+expect to find them in layers.
 
 * **Shared upload basename.** `cms-image-upload`, `manual-walkthrough-first-post`
   and `cms-featured-image-lifecycle` all handed Decap the same
@@ -241,12 +246,23 @@ one is literally the race the config's `retries: 1` was added for.
   `e2e/jekyll-build.test.js` proves the lock holds, releases on a failed build,
   breaks a stale one, credits the wait, and that no spec builds directly.
 
-* **Reading a file another process is writing.** Five specs waited with
+* **Reading a file another process is writing.** Specs waited with
   `expect.poll(() => fs.existsSync(file))` and then read — but decap-server
   CREATES the entry file and then fills it, so the poll can win and hand the
   spec `""` (`Expected substring: "title: …" / Received string: ""`). They now
-  poll the CONTENT via `e2e/fs-poll.js`'s `contentOrEmpty()`, which is both the
-  correct wait and a better failure message.
+  poll the CONTENT via `e2e/fs-poll.js` — `contentOrEmpty()` for a fixed path,
+  `fileReady(<finder>)` when a readdir helper discovers it.
+
+  **Round 2 caught six more, two of them worse than an assertion failure.**
+  The first pass converted five specs; `cms-html-embed`, `cms-inline-image`,
+  `cms-publish-flow`, `cms-image-upload`, `manual-walkthrough-first-post` and
+  `cms-scheduled-post` kept the old shape. In `cms-html-embed` and
+  `cms-inline-image` the read feeds a `writeFileSync` back to the same path, so an
+  empty read did not fail an assertion — it **overwrote the entry with
+  front-matter-less content** and left a corrupt Jekyll page for the retry's
+  `beforeAll`. `e2e/fs-poll-lint.test.js` (AST) now fails the build on the shape,
+  so the rule is enforced rather than merely documented. An existence poll for a
+  file the spec never READS is legitimate and is not flagged.
 
 * **A missing tag is silent.** `cms-html-embed.spec.js` drives
   `/admin/index-local.html`, creates a post through Decap and rebuilds Jekyll —
@@ -261,6 +277,29 @@ The lesson worth keeping: **a test whose budget doesn't scale with its input,
 whose fixture is shared with another spec, which drives a shared external tool,
 which reads a file another process is still writing, or which forgets the tag
 that routes it, is a latent flake (or a silent 8x) that parallelism turns real.**
+
+* **The build lock's stale break was unreachable, and its release was unowned.**
+  Two defects in the lock above, found by reviewing it rather than by a red run.
+  (a) `WAIT_TIMEOUT_MS` was 180 s and `STALE_MS` 300 s — but a waiter breaks a
+  lock only once it is *older* than `STALE_MS`, so a fresh waiter always died
+  first: a killed worker's lock wedged the next build into `timed out waiting for
+  the build lock`, the precise opposite of the guarantee the file documents. The
+  inequality is now enforced by a test, not by two constants that happened to be
+  in the right order. (b) Breaking a lock was unowned, so a merely-slow holder
+  could have its lock broken, a second build start, and the original's `finally`
+  then delete the NEW holder's lock. The lock dir carries an `owner` token now;
+  `release` refuses to remove a lock that is not ours, and the break re-reads the
+  owner before acting.
+
+* **An orphaned `<loc>` in the shared sitemap.** `cms-page-crud` builds
+  `/pages/decap-page-crud-smoke/` into the shared `_site/sitemap.xml`, then its
+  cleanup deletes the rendered directory without pruning the sitemap — and
+  `image-alt-text.spec.js`, in the same job and the same `_site`, walks every
+  sitemap URL with a hard 200 assertion. The five sibling smoke posts get away
+  with it because they live at `/blog/e2e-…/` and the crawl exempts that fixture
+  slug signature; `blogSlugFromPath` returns null for `/pages/…`, so this one was
+  not exempt. It now prunes, exactly as `cms-publish-flow` already did for its own
+  entries.
 
 ## The result
 

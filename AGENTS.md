@@ -1061,10 +1061,18 @@ v0.1.68). Keep the pattern in mind when writing @admin-write specs:
   `cms-html-embed.spec.js` shipped that way. Locked by
   **`e2e/admin-tag-lint.test.js`**.
 - **Never `existsSync`-then-read a file another process writes.** decap-server
-  creates an entry file and then fills it, so five specs' `expect.poll(() =>
-  fs.existsSync(file))` could win the race and read `""` — the "decap-server
+  creates an entry file and then fills it, so `expect.poll(() =>
+  fs.existsSync(file))` can win the race and read `""` — the "decap-server
   file-write race" `retries: 1` was added for. Poll the CONTENT with
-  `contentOrEmpty()` from **`e2e/fs-poll.js`** instead.
+  `contentOrEmpty()` from **`e2e/fs-poll.js`**, or `fileReady(<finder>)` when the
+  path itself is discovered by a readdir helper. **This one bit twice:** v0.1.68
+  converted five specs and left six behind, and two of THOSE feed the read
+  straight into a `writeFileSync` of the same path — so an empty read did not
+  merely fail an assertion, it overwrote the entry with front-matter-less content
+  and left a corrupt page on disk for the retry. All eleven now poll content, and
+  **`e2e/fs-poll-lint.test.js`** (AST) fails the build on the shape, so "the rule
+  is written down" is no longer the only thing enforcing it. An existence poll for
+  a file the spec never READS is fine and is not flagged.
 - **A shared external tool needs a lock.** Nine specs shell out to
   `bundle exec jekyll build` against the same tree and the same `_site` the
   webServer serves; two overlapping builds fight over `_site` and one dies. They
@@ -1074,7 +1082,16 @@ v0.1.68). Keep the pattern in mind when writing @admin-write specs:
   to the caller's test timeout so the lock can't trade the build race for a
   timeout race (these specs run on Playwright's 30 s default). **Never shell out
   to `jekyll build` from a spec directly** — `jekyll-build.test.js` fails the
-  build if you do.
+  build if you do. Two lock defects found by review and fixed in v0.1.70:
+  **(a) `STALE_MS` must stay BELOW `WAIT_TIMEOUT_MS`** — it shipped inverted
+  (300 s vs 180 s), so a fresh waiter ran out its whole budget while the lock was
+  still younger than the stale threshold and threw `timed out waiting for the
+  build lock`: a killed worker wedged the next build, the exact opposite of the
+  documented guarantee. **(b) the break and the release are OWNERSHIP-CHECKED** —
+  an unowned break lets a waiter free a merely-slow holder's lock, start a second
+  build, and then have the original's `finally` delete the NEW holder's lock. The
+  lock dir now carries an `owner` token; `release` refuses to remove a lock that
+  is not ours, and the break re-reads the owner before acting.
 
 ## E2E local webServer: decap readiness + :4000 crash resilience
 
@@ -2157,6 +2174,23 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   `playwright.config.js` `workers:` comment, an AGENTS.md self-contradiction,
   `docs/E2E-PARALLELISM.md` naming two symbols that don't exist, and
   `jekyll-build.js` mislabelling its nine callers).
+
+  Also in v0.1.70, from an adversarial review of the parallelism work's own
+  fixes: **the build lock's stale break was unreachable** (`STALE_MS` 300 s >
+  `WAIT_TIMEOUT_MS` 180 s, so a fresh waiter always timed out before it could
+  break an orphaned lock — a killed worker wedged the next build, the opposite of
+  the documented guarantee) and **breaking/releasing it was not ownership-checked**
+  (a merely-slow holder could have its lock broken, and its `finally` would then
+  delete the NEW holder's lock); **six more specs still polled a file's EXISTENCE
+  and then read it**, and in `cms-html-embed`/`cms-inline-image` that read feeds a
+  `writeFileSync` back to the same path, so an empty read overwrote the entry with
+  front-matter-less content instead of merely failing an assertion; and
+  **`cms-page-crud` left an orphaned `<loc>` in the shared `_site/sitemap.xml`**
+  that `image-alt-text`'s hard 200 assertion crawls (its `/blog/e2e-…` fixture
+  exemption does not cover a `/pages/…` path). Each is now lint- or test-locked:
+  `jekyll-build.test.js` asserts the constants' inequality and the ownership
+  refusal, `fs-poll-lint.test.js` (AST) fails the build on the read-race shape,
+  and the sitemap prune mirrors `cms-publish-flow`'s.
 
 ## Consumers
 

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { fileReady } = require("./fs-poll");
 
 // Verifies the contributor capability "Schedule a Post for future publishing":
 //
@@ -88,7 +89,7 @@ test.describe(
         .first()
         .click();
 
-      await expect.poll(() => findSmokePostFile() !== null, { timeout: 60_000 }).toBe(true);
+      await expect.poll(() => fileReady(findSmokePostFile), { timeout: 60_000 }).toBe(true);
       const written = fs.readFileSync(findSmokePostFile(), "utf8");
       expect(written).toContain(`title: ${SMOKE_TITLE}`);
       expect(written).toMatch(/published:\s*false/);

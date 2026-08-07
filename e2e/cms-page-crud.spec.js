@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { pruneSitemapUrls } = require("./sitemap-prune");
 const { contentOrEmpty } = require("./fs-poll");
 const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
@@ -31,6 +32,20 @@ function removeSmokeFile() {
   // URL assertion after a delete.
   const site = path.join(REPO_ROOT, "_site", "pages", SMOKE_SLUG);
   if (fs.existsSync(site)) fs.rmSync(site, { recursive: true, force: true });
+  // ...and drop it from the sitemap, which the in-test build baked it into.
+  // Deleting the directory alone leaves `<loc>/pages/decap-page-crud-smoke/`
+  // advertised but 404-ing, and image-alt-text.spec.js — same
+  // chromium-desktop-3k job, same `_site/` — walks every sitemap URL with a
+  // hard 200 assertion. Its E2E-fixture exemption keys on the `e2e-` slug of a
+  // `/blog/<slug>/` path (blogSlugFromPath returns null for `/pages/…`), so
+  // this page is NOT exempt the way the sibling smoke posts are. Same fix
+  // cms-publish-flow.spec.js already applies to its own /blog/ + /tags/ entries.
+  const sitemap = path.join(REPO_ROOT, "_site", "sitemap.xml");
+  if (fs.existsSync(sitemap)) {
+    const xml = fs.readFileSync(sitemap, "utf8");
+    const cleaned = pruneSitemapUrls(xml, [SMOKE_PERMALINK]);
+    if (cleaned !== xml) fs.writeFileSync(sitemap, cleaned);
+  }
 }
 
 test.describe(

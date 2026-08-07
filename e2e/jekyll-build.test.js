@@ -12,7 +12,12 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { lockDirFor, creditWaitToTest } = require("./jekyll-build");
+const {
+  lockDirFor,
+  creditWaitToTest,
+  STALE_MS,
+  WAIT_TIMEOUT_MS,
+} = require("./jekyll-build");
 
 const HELPER = path.join(__dirname, "jekyll-build.js");
 
@@ -101,19 +106,57 @@ test("a second build waits for the first instead of running concurrently", () =>
   });
 });
 
+test("a waiter can actually REACH the stale break (STALE_MS < WAIT_TIMEOUT_MS)", () => {
+  // The bug this guards: the file shipped with WAIT 180 s / STALE 300 s. A
+  // waiter breaks a lock only once it is older than STALE_MS, so a FRESH waiter
+  // ran out its whole 180 s budget while the lock was still only 180 s old and
+  // threw "timed out waiting for the build lock" — a killed worker wedged the
+  // next build, the exact opposite of this file's documented guarantee. Any
+  // future retune must keep the break reachable.
+  expect(
+    STALE_MS,
+    "a lock must go stale well BEFORE a waiter gives up, or the break is dead code",
+  ).toBeLessThan(WAIT_TIMEOUT_MS);
+});
+
 test("a stale lock from a killed worker is broken, not waited on", () => {
   const site = fs.mkdtempSync(path.join(os.tmpdir(), "site-"));
   const lock = lockDirFor(site);
   fs.rmSync(lock, { recursive: true, force: true });
   fs.mkdirSync(lock);
-  // Backdate it past STALE_MS (300 s).
-  const old = Date.now() - 10 * 60 * 1000;
+  // Backdate it just past STALE_MS — NOT by minutes. At 10 min the old
+  // (broken) constants passed this test too; a hair over the threshold is what
+  // proves the break fires at the documented age.
+  const old = Date.now() - (STALE_MS + 10_000);
   fs.utimesSync(lock, old / 1000, old / 1000);
 
   const r = runWithFakeBundle(`#!/bin/sh\nexit 0\n`, { cwd: site });
   expect(r.stdout).toContain("BUILT");
   expect(r.stderr).toContain("stale build lock");
   expect(fs.existsSync(lock)).toBe(false);
+});
+
+test("a build refuses to release a lock that is no longer its own", () => {
+  // If a waiter breaks our lock as stale and a new holder takes it, our
+  // `finally` must NOT remove it — that would free THEIR lock and let a third
+  // build start alongside them, which is what the lock exists to prevent.
+  // Simulated deterministically: the fake build rewrites the owner file
+  // mid-build, exactly as a hand-off would.
+  const site = fs.mkdtempSync(path.join(os.tmpdir(), "site-"));
+  const lock = lockDirFor(site);
+  fs.rmSync(lock, { recursive: true, force: true });
+
+  const r = runWithFakeBundle(
+    `#!/bin/sh\nprintf 'someone-else' > "${lock}/owner"\nexit 0\n`,
+    { cwd: site },
+  );
+  expect(r.stdout).toContain("BUILT");
+  expect(r.stderr).toContain("not releasing");
+  expect(
+    fs.existsSync(lock),
+    "the new holder's lock must survive the previous holder's finally",
+  ).toBe(true);
+  fs.rmSync(lock, { recursive: true, force: true });
 });
 
 test("every in-test `jekyll build` goes through the helper", () => {

@@ -44,6 +44,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { fileReady } = require("./fs-poll");
 const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
@@ -330,7 +331,7 @@ test.describe(
       // because the Decap toast can appear before the file write
       // completes (decap-server-side race).
       await measure("06-wait-for-post-file", COMMIT_POLL_BUDGET_MS, async () => {
-        await expect.poll(() => findSmokePostFile() !== null, { timeout: 60_000 }).toBe(true);
+        await expect.poll(() => fileReady(findSmokePostFile), { timeout: 60_000 }).toBe(true);
         const written = fs.readFileSync(findSmokePostFile(), "utf8");
         expect(written, "front matter delimiter").toMatch(/^---/);
         expect(written).toContain(`title: ${SMOKE_TITLE}`);

@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { fileReady } = require("./fs-poll");
 const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 const { uploadFixture } = require("./upload-fixture");
@@ -147,7 +148,7 @@ test.describe(
         .click();
 
       // ── On-disk asserts ──────────────────────────────────────────────
-      await expect.poll(() => findSmokePostFile() !== null, { timeout: 60_000 }).toBe(true);
+      await expect.poll(() => fileReady(findSmokePostFile), { timeout: 60_000 }).toBe(true);
       await expect.poll(() => findUploadedFixture() !== null, { timeout: 60_000 }).toBe(true);
 
       const uploaded = findUploadedFixture();

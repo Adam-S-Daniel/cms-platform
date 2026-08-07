@@ -233,6 +233,10 @@ const PLATFORM_META_SPECS = [
   // the browser self-heal can't re-download engines the step never installed).
   // Consumers ship only thin wrappers — platform-internal, self-CI only.
   "engine-scope-lint.test.js",
+  // AST-walks every spec to forbid the `expect.poll(existsSync)`-then-read
+  // shape (an empty read where it feeds a write-back CORRUPTS the entry).
+  // Reads the harness's own spec sources — platform-internal.
+  "fs-poll-lint.test.js",
   // Reads EVERY platform reusable workflow DEFINITION plus the
   // .github/actions/install-playwright-browsers composite, to assert no lane
   // shells out to an UNBOUNDED `playwright install` (a slow apt mirror once
