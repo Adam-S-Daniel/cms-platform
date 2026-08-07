@@ -1003,29 +1003,64 @@ The three findings that shaped it, all measured on adamdaniel.ai:
   **`e2e/engine-scope-lint.test.js` fails if a step's `PW_PROJECT` is missing or
   disagrees with its `--project` flags.**
 - **NEVER shell out to a raw `npx playwright install` from a workflow** — use
-  `.github/actions/install-playwright-browsers`, which bounds each attempt
-  (`timeout 420`) and retries up to 3 times. `--with-deps` apt-installs ~90
-  packages first, and on 2026-08-07 the Ubuntu mirror served one runner at
-  ~35 KB/s for its whole run, so `install --with-deps webkit` took **39 minutes**
-  while the tests it installed for took 41.6 s (adamdaniel.ai job 92862768030).
-  Fanning out to ten lanes means ten INDEPENDENT apt exposures per run, and the
-  aggregating `e2e` gate waits for the slowest — so that one lane held a
-  delete-recovery PR open 40 min and blew the media-roundtrip loop's 30-minute
-  delete-leg budget. **Not rare:** a second run 67 min later did the same on a
-  different lane (run 31181957723, `chromium-mobile`, 606 s install / 20 s tests),
-  so expect it on the order of one run in ten. **Two wrong designs to avoid.** A bare
-  `timeout-minutes:` converts a slow mirror into a RED required check, which blocks
-  a `cms/*` canary PR permanently instead of merging it late. And a *uniform* retry
-  bound does the same thing whenever the mirror is slow for the WHOLE run — the
-  measured case needed 2340 s, so three 420 s attempts would all hit the bound and
-  exit 1. So the budget **escalates**: short early attempts abandon a stalled
-  connection fast, the LAST attempt gets 1200 s to actually finish, and apt +
-  `playwright install` both resume so attempts accumulate progress (apt's own
-  `Acquire::*::Timeout` does nothing — the bytes were flowing, just slowly). The
-  worst case must also stay under the caller's own `timeout-minutes`, or the job is
-  killed mid-retry and reports an opaque "job timed out" instead of the diagnostic
-  — `canary-prod`'s 10-minute probe passes smaller values for exactly that reason.
-  All three properties locked by **`e2e/playwright-install-bounded.test.js`**.
+  `.github/actions/install-playwright-browsers`, which splits the install into
+  TWO phases, each retried up to 3 times: `install-deps` (the apt half) and
+  `install` (the browser download, no `--with-deps`). `--with-deps` apt-installs
+  ~90 packages first, and on 2026-08-07 the Ubuntu mirror served one runner at
+  ~35 KB/s for its whole run, so the (then-combined) `install --with-deps webkit`
+  took **39 minutes** while the tests it installed for took 41.6 s (adamdaniel.ai
+  job 92862768030). Fanning out to ten lanes means ten INDEPENDENT apt exposures
+  per run, and the aggregating `e2e` gate waits for the slowest — so that one
+  lane held a delete-recovery PR open 40 min and blew the media-roundtrip loop's
+  30-minute delete-leg budget. **Not rare:** a second run 67 min later did the
+  same on a different lane (run 31181957723, `chromium-mobile`, 606 s install /
+  20 s tests), so expect it on the order of one run in ten.
+
+  **Only the download half is time-bounded — apt is retried but never wrapped in
+  `timeout`, and that asymmetry is deliberate, not a gap.** The action's first
+  version bounded the WHOLE `install --with-deps` call, and that didn't abandon a
+  slow install, it *orphaned* one. `timeout` signals only the process it directly
+  launched, but Playwright logs "Switching to root user to install
+  dependencies..." before it shells out to apt — so the `apt-get` doing the real
+  work is a **root-owned grandchild**. An unprivileged `timeout`'s signal to its
+  own process group can't touch a root-owned process (EPERM) no matter how the
+  process group is arranged, so `setsid` plus a group kill doesn't fix it either
+  — **no signal-based kill can**, because the privilege gap, not the process
+  grouping, is what blocks it. Measured on adamdaniel.ai job 92989057569:
+  attempt 1's apt started fetching under its 420 s bound with zero lock-wait
+  lines (it owned the dpkg lock cleanly); `timeout` killed attempt 1 mid-transaction
+  at the bound; 19 seconds later attempt 2 died with "Could not get lock
+  /var/lib/dpkg/lock-frontend. It is held by process 2857 (apt-get)" — that pid
+  was attempt 1's own killed-but-surviving `apt-get`, not the runner's boot-time
+  `apt-daily`, and every later attempt starved on the same orphan. So `apt`
+  (`install-deps`) now runs with no `timeout` around it — retried on failure,
+  never killed — while the download (`install`, no `--with-deps`) keeps the
+  bound below. The trade is deliberate: apt IS the slow phase (the 39-minute
+  incident above was package fetches, not the CDN), so one lane can still finish
+  late; late-and-green beats red-and-blocked, because a red required check blocks
+  a `cms/*` canary PR permanently instead of merging it late. A genuinely hung
+  apt is now bounded only by the caller's own job `timeout-minutes`, where "job
+  timed out" is an accurate report rather than a misleading one. `npx playwright
+  install` also wraps apt's exit 100 as exit 1, so the outer status was never
+  diagnostic on its own; classification now greps the captured output for
+  `Could not get lock|lock-frontend|dpkg was interrupted` before looking at the
+  exit code, so a lock failure on the unbounded apt phase is never misreported
+  as a timeout.
+
+  **Two wrong designs to avoid for the download half.** A bare
+  `timeout-minutes:` converts a slow mirror into a RED required check, which
+  blocks a `cms/*` canary PR permanently instead of merging it late. And a
+  *uniform* retry bound does the same thing whenever the mirror is slow for the
+  WHOLE run — the measured case needed 2340 s, so three 420 s attempts would all
+  hit the bound and exit 1. So the download's budget **escalates**: short early
+  attempts abandon a stalled connection fast, the LAST attempt gets 1200 s to
+  actually finish, and the download resumes so attempts accumulate progress
+  (apt's own `Acquire::*::Timeout` does nothing — the bytes were flowing, just
+  slowly). The worst case must also stay under the caller's own
+  `timeout-minutes`, or the job is killed mid-retry and reports an opaque "job
+  timed out" instead of the diagnostic — `canary-prod`'s 10-minute probe passes
+  smaller values for exactly that reason. These properties are locked by
+  **`e2e/playwright-install-bounded.test.js`**.
   **And the most common apt failure is not slowness at all — it is losing the dpkg
   lock to the runner's own boot-time `apt-daily`,** which exits 100. Retrying cannot
   fix that when the attempts are back-to-back: all three land in the same lock
@@ -1033,8 +1068,9 @@ The three findings that shaped it, all measured on adamdaniel.ai:
   gate, BLOCKED the host loop's canary PR, and the loop then timed out waiting for a
   merge that could never happen). So the action also (a) drops
   `DPkg::Lock::Timeout` into `apt.conf.d` so apt WAITS for the lock — a drop-in
-  because the apt-get that matters is inside `playwright install`, which we never
-  invoke — and (b) backs off between retries (15 s, 30 s). Same lint asserts both.
+  because the apt-get that matters is inside `playwright install-deps`, which we
+  never invoke directly — and (b) backs off between retries (15 s, 30 s). Same
+  lint asserts both.
 - **The reusable sets `DISABLE_PER_TEST_VIDEOS=1`.** `e2e/base.js` captures a
   full-page screenshot on every main-frame navigation of every test, and its only
   consumer (`e2e/generate-test-videos.js`) is invoked by no reusable — the
@@ -2246,6 +2282,10 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   bare `timeout-minutes:` would be WORSE — it turns a slow mirror into a RED
   required check, blocking a `cms/*` canary PR permanently instead of merging it
   late; only a retry recovers, because a fresh attempt gets fresh connections.
+  (A later release removed the bound from the apt half specifically: bounding it
+  orphaned a root-owned `apt-get` that then starved every retry on the dpkg lock
+  — job 92989057569. See the "NEVER shell out" bullet above for the current
+  two-phase design.)
 
   One more, and it was a REGRESSION from #202's own tagging: `cms-html-embed`
   carried a hand-rolled `beforeEach` gate skipping unless the project was

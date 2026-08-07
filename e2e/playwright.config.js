@@ -159,6 +159,11 @@ const PLATFORM_META_SPECS = [
   // the resolved output. Platform-internal (reads scripts/ + theme/ source);
   // self-CI only.
   "field-library-ref-render.test.js",
+  // #213 — drives scripts/render-decap-config.rb with the ambient locale
+  // stripped + reads theme/admin/config.base.yml for a non-ASCII fixture byte
+  // and the script's own source for the encoding pin. Platform-internal
+  // (reads scripts/ + theme/ source); self-CI only.
+  "render-decap-config-locale.test.js",
   "dependabot-skip.test.js",
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
