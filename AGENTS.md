@@ -1493,7 +1493,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.64)
+## Version history (v0.1.0 → v0.1.68)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2067,6 +2067,28 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   canonical skills. The gate now tests `git status --porcelain -- "$DEST"`
   (untracked-aware). Lock: `e2e/skills-sync.test.js` asserts the drift gate uses
   `git status --porcelain` and never `git diff --quiet`.
+
+- **v0.1.65–v0.1.67** (2026-07-13/22) — shipped without history entries here.
+- **v0.1.68** (2026-08-07) — **the e2e suite runs as one CI job per Playwright
+  project: ~680 s → ~200 s of wall clock, measured (#197).** `e2e-tests.yml` ran
+  the whole suite in ONE job at Playwright's default 2 workers; it now fans out a
+  `project` matrix (10 jobs, one project each, only that project's browser engine
+  installed, `150%` workers) behind an aggregating `e2e` gate job — so
+  `e2e / e2e` remains the single required context and NO consumer ruleset
+  changed. `e2e/ci-matrix.js` derives the matrix list, each job's engine, and the
+  worker count from `playwright.config.js`; `e2e/ci-matrix.test.js` fails self-CI
+  if the workflow's static `matrix.project` drifts from the real project list
+  (the one way the design can silently stop running a project). `--shard` was
+  measured and rejected (it balances by test COUNT; a 4-way shard put 71% of the
+  work in one shard), as were hand-grouped lanes and browser caching. Four
+  PRE-EXISTING test-isolation bugs surfaced and were fixed — a shared upload
+  basename (`e2e/upload-fixture.js`), an unbounded crawl on a fixed 30 s budget
+  (`image-alt-text`), nine specs racing one `jekyll build` (`e2e/jekyll-build.js`
+  + its lock test), and five `existsSync`-then-read waits on files decap-server
+  was still writing (`e2e/fs-poll.js`). The reusable also stops paying for the
+  per-navigation frame capture whose only consumer no reusable invokes
+  (`DISABLE_PER_TEST_VIDEOS=1`). Full measurements, both job shapes, the rejected
+  alternatives, and how to re-measure: **`docs/E2E-PARALLELISM.md`**.
 
 ## Consumers
 
