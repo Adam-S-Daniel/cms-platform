@@ -347,6 +347,26 @@ const ADMIN_TAGS_READ = /@admin-read\b/;
 const TARGET = (process.env.TARGET || "local").toLowerCase();
 const IS_LOCAL = TARGET === "local";
 
+// Worker concurrency (see the `workers:` key below for the why).
+//
+// Playwright validates this strictly: a NUMBER or a percentage STRING — `"4"`
+// is rejected with "config.workers must be a number or percentage". Env vars
+// are always strings, so `PW_WORKERS=4` has to be coerced or every lane dies
+// at config load (it did, on the first CI run of this feature). A malformed
+// value throws rather than silently falling back: someone dialling workers
+// down mid-incident must not have their override quietly ignored.
+function resolveWorkers() {
+  const raw = (process.env.PW_WORKERS || "").trim();
+  if (!raw) return process.env.CI ? "100%" : undefined;
+  if (/^\d+%$/.test(raw)) return raw;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n > 0) return n;
+  throw new Error(
+    `PW_WORKERS=${JSON.stringify(raw)} is not a positive integer or a percentage ` +
+      `like "50%" — Playwright rejects anything else. Leave it empty for the default.`,
+  );
+}
+
 module.exports = defineConfig({
   testDir: ".",
   testIgnore: TEST_IGNORE,
@@ -366,7 +386,7 @@ module.exports = defineConfig({
   // flaky under load. Local dev keeps Playwright's default (undefined) so an
   // interactive run leaves headroom for the editor/browser.
   // See docs/E2E-PARALLELISM.md for the measurements behind this.
-  workers: process.env.PW_WORKERS || (process.env.CI ? "100%" : undefined),
+  workers: resolveWorkers(),
   // Single auto-retry on CI for the decap-server file-write race (and any
   // similar transient flake). Local runs stay at 0 so a regression caught
   // while iterating fails loudly the first time. A test that fails once

@@ -127,11 +127,51 @@ test("lanes.js CLI: --list, --projects, and a loud failure on an unknown lane", 
 });
 
 test("CI runs one worker per vCPU by default, overridable without a release", () => {
-  const src = fs.readFileSync(path.join(__dirname, "playwright.config.js"), "utf8");
-  expect(src).toContain('workers: process.env.PW_WORKERS || (process.env.CI ? "100%" : undefined)');
   // The config is evaluated at require-time; assert the resolved value for this
-  // process too (self-CI's node-unit-lints lane runs with CI=true).
+  // process (self-CI's node-unit-lints lane runs with CI=true).
   if (process.env.CI && !process.env.PW_WORKERS) {
     expect(config.workers).toBe("100%");
   }
+  // Local dev keeps Playwright's own default so an interactive run leaves the
+  // machine usable.
+  expect(loadWorkers({})).toBe(undefined);
+  expect(loadWorkers({ CI: "true" })).toBe("100%");
 });
+
+// PW_WORKERS arrives from the workflow as a STRING, and Playwright rejects
+// `workers: "4"` outright ("must be a number or percentage") — every lane died
+// at config load on this feature's first CI run. Lock the coercion.
+test("PW_WORKERS is coerced to what Playwright accepts, and garbage fails loud", () => {
+  expect(loadWorkers({ CI: "true", PW_WORKERS: "4" })).toBe(4);
+  expect(loadWorkers({ CI: "true", PW_WORKERS: " 2 " })).toBe(2);
+  expect(loadWorkers({ CI: "true", PW_WORKERS: "50%" })).toBe("50%");
+  // Empty / whitespace-only = "not set" (the workflow passes "" by default).
+  expect(loadWorkers({ CI: "true", PW_WORKERS: "" })).toBe("100%");
+  expect(loadWorkers({ CI: "true", PW_WORKERS: "   " })).toBe("100%");
+
+  for (const bad of ["0", "-1", "2.5", "lots", "100 %"]) {
+    expect(
+      () => loadWorkers({ CI: "true", PW_WORKERS: bad }),
+      `PW_WORKERS=${bad} must fail loudly, not be silently ignored`,
+    ).toThrow(/PW_WORKERS/);
+  }
+});
+
+// Re-evaluate playwright.config.js in a child process with a given env and
+// report the `workers` value it resolves to. A child process is the only way
+// to test a require-time value without poisoning this process's module cache.
+function loadWorkers(env) {
+  const script =
+    "const c = require(process.argv[1]);" +
+    "process.stdout.write(JSON.stringify({ w: c.workers === undefined ? null : c.workers }));";
+  const r = require("node:child_process").spawnSync(
+    "node",
+    ["-e", script, path.join(__dirname, "playwright.config.js")],
+    { encoding: "utf8", env: { PATH: process.env.PATH, TARGET: "prod", ...env } },
+  );
+  // A rejected value throws at require-time; surface the whole stderr so the
+  // assertion can match the message (the stack tail alone would not carry it).
+  if (r.status !== 0) throw new Error(r.stderr.trim());
+  const { w } = JSON.parse(r.stdout);
+  return w === null ? undefined : w;
+}
