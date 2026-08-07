@@ -233,6 +233,12 @@ const PLATFORM_META_SPECS = [
   // the browser self-heal can't re-download engines the step never installed).
   // Consumers ship only thin wrappers — platform-internal, self-CI only.
   "engine-scope-lint.test.js",
+  // Reads EVERY platform reusable workflow DEFINITION plus the
+  // .github/actions/install-playwright-browsers composite, to assert no lane
+  // shells out to an UNBOUNDED `playwright install` (a slow apt mirror once
+  // stalled one for 39 min, blocking a canary PR and failing a prod loop).
+  // Platform-internal, self-CI only.
+  "playwright-install-bounded.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +

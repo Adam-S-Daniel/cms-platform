@@ -1,0 +1,119 @@
+name: Install Playwright browsers
+description: >-
+  `npx playwright install` for one engine, BOUNDED and RETRIED.
+
+  WHY THIS EXISTS (measured, adamdaniel.ai run 31177527405 job
+  92862768030). `--with-deps` runs `apt-get install` for ~90 system
+  packages before it downloads the browser. On 2026-08-07 the Ubuntu
+  archive mirror served that job at ~35 KB/s for the WHOLE run — every
+  package fetch stalling 86-391 s — so `install --with-deps webkit` took
+  39 MINUTES instead of its usual ~60 s. The tests themselves then ran
+  in 41.6 s. Nothing was broken; the mirror was slow, and the install
+  had no upper bound.
+
+  That was expensive because of what waits on it. The e2e matrix's
+  aggregating `e2e` gate waits for EVERY project job, so one stalled
+  lane sets the whole PR's critical path — and a `cms/*` canary PR that
+  can't merge until `e2e / e2e` reports blocks the prod loop that opened
+  it. That run's 39-minute lane held delete-recovery PR #2953 for 40
+  minutes and failed the media-roundtrip loop's 30-minute delete-leg
+  budget. Ten lanes take ten INDEPENDENT apt exposures per run, so the
+  chance a run hits one is roughly ten times a single lane's.
+
+  The fix is a bound plus a retry, not just a bound: a bare
+  `timeout-minutes:` would turn "slow mirror" into a RED required check,
+  which blocks a canary PR permanently instead of merging it late. A
+  fresh attempt gets fresh connections (azure.archive.ubuntu.com is
+  load-balanced), which is what actually recovers a collapsed transfer —
+  apt's own `Acquire::*::Timeout` does not, because the bytes were
+  flowing, just slowly.
+
+  Typical runs are unaffected: the timeout is a ~7x margin over the
+  normal ~60 s install, so it never trips on a healthy mirror.
+
+  Bash only — no transitive `uses:` (clean for the SHA-pin convention;
+  mirrors await-prod-deploy / cms-recursion-gate).
+
+inputs:
+  browser:
+    description: >-
+      Engine to install — `chromium`, `firefox`, `webkit`, or a
+      space-separated list. Must already be resolved (this action does
+      not read playwright.config.js); e2e-tests.yml derives it from
+      `node ci-matrix.js --engine "$PW_PROJECT"`.
+    required: false
+    default: chromium
+  working-directory:
+    description: "Directory holding the harness's node_modules (where `npx playwright` resolves)."
+    required: false
+    default: .cms-platform/e2e
+  deps-only:
+    description: >-
+      'true' runs `install-deps` (the apt half only) instead of
+      `install --with-deps` — for a lane that restored the browser
+      binaries from cache and needs just the OS libraries.
+    required: false
+    default: 'false'
+  attempts:
+    description: "How many times to try before failing the step."
+    required: false
+    default: '3'
+  timeout-seconds:
+    description: >-
+      Per-attempt wall-clock bound. Default 420 s is ~7x the normal
+      ~60 s install, so a healthy run never hits it.
+    required: false
+    default: '420'
+
+runs:
+  using: composite
+  steps:
+    - name: Install Playwright browser + system deps (bounded, retried)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PW_INSTALL_BROWSER: ${{ inputs.browser }}
+        PW_INSTALL_DEPS_ONLY: ${{ inputs.deps-only }}
+        PW_INSTALL_ATTEMPTS: ${{ inputs.attempts }}
+        PW_INSTALL_TIMEOUT_S: ${{ inputs.timeout-seconds }}
+      run: |
+        set -uo pipefail
+        # Inputs come through env, never interpolated into the command —
+        # the rendered `run:` is echoed to a public log (AGENTS.md).
+        if [ "$PW_INSTALL_DEPS_ONLY" = "true" ]; then
+          set -- install-deps "$PW_INSTALL_BROWSER"
+        else
+          set -- install --with-deps "$PW_INSTALL_BROWSER"
+        fi
+        echo "playwright $* (attempts=${PW_INSTALL_ATTEMPTS}, bound=${PW_INSTALL_TIMEOUT_S}s each)"
+
+        attempt=1
+        while :; do
+          # `timeout` kills the whole install — apt AND the CDN download —
+          # so a collapsed transfer at either end is bounded. Both halves
+          # are idempotent, so a retry resumes rather than redoes.
+          #
+          # Capture the status with `|| status=$?`, NOT `if …; fi` then `$?`:
+          # after a `fi` with no else branch, `$?` is the IF STATEMENT's
+          # status (0), not the command's, so the log would report every
+          # failure as "exit 0".
+          status=0
+          timeout "$PW_INSTALL_TIMEOUT_S" npx playwright "$@" || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "playwright install succeeded on attempt ${attempt}."
+            exit 0
+          fi
+          if [ "$attempt" -ge "$PW_INSTALL_ATTEMPTS" ]; then
+            echo "::error::playwright install failed ${PW_INSTALL_ATTEMPTS} time(s) (last exit ${status})." \
+                 "Exit 124 means it exceeded the ${PW_INSTALL_TIMEOUT_S}s bound — usually a slow apt mirror," \
+                 "not a broken install; re-run the job. Any other code is a real install failure."
+            exit 1
+          fi
+          # 124 is `timeout`'s "killed at the bound" code; anything else is
+          # a genuine failure that a retry may still ride out (a transient
+          # apt lock, a CDN 5xx).
+          echo "::warning::playwright install attempt ${attempt} of ${PW_INSTALL_ATTEMPTS} gave up (exit ${status}" \
+               "$([ "$status" = "124" ] && echo "— hit the ${PW_INSTALL_TIMEOUT_S}s bound" || echo "— install error"));" \
+               "retrying with fresh connections."
+          attempt=$((attempt + 1))
+        done

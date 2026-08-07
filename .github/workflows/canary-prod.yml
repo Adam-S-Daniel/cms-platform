@@ -87,8 +87,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser + system deps
-        working-directory: .cms-platform/e2e
-        run: npx playwright install --with-deps chromium
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: chromium
 
       - name: Run @canary-readonly probe against prod
         id: probe

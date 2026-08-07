@@ -157,6 +157,51 @@ declares the projects it runs via `PW_PROJECT`, and
 `e2e/engine-scope-lint.test.js` fails if one forgets — including the two REQUIRED
 per-PR checks, `parity / parity` and `preview-media / preview-media`.
 
+## The install is BOUNDED and RETRIED (a slow mirror once cost 39 minutes)
+
+Fanning out multiplies infrastructure exposure: ten lanes take ten *independent*
+`apt-get install` trips through the Ubuntu archive, and the aggregating `e2e`
+gate waits for the slowest of them. On 2026-08-07 that bill came due —
+adamdaniel.ai run 31177527405, job 92862768030 (`webkit-tablet`):
+
+| phase | duration |
+|---|---|
+| `npx playwright install --with-deps webkit` | **39 min** |
+| the tests it installed for | **41.6 s** (75 passed) |
+
+Nothing was broken. `azure.archive.ubuntu.com` served that one runner at
+~35 KB/s for the whole run — every package fetch stalling 86-391 s across ~90
+system packages — and the install had **no upper bound**, so it simply took as
+long as the mirror wanted. The other nine lanes finished in 80-200 s.
+
+What made it expensive is what waits on the gate. A `cms/*` canary PR cannot
+merge until `e2e / e2e` reports, so that lane held delete-recovery PR #2953 open
+for 40 min and blew `cms-media-roundtrip.spec.js`'s 30-minute delete-leg budget —
+the loop failed on a green test suite. Read the loop's own error and you would
+chase the deploy chain; the cause was three workflows away.
+
+The fix is a bound **plus** a retry, in one place —
+`.github/actions/install-playwright-browsers`, used by every lane that installs
+browsers:
+
+- **Bound:** each attempt runs under `timeout 420` (~7x the normal ~60 s
+  install, so a healthy mirror never trips it).
+- **Retry:** up to 3 attempts. A bare `timeout-minutes:` would be *worse* than
+  the stall — it turns "slow mirror" into a RED required check, which blocks the
+  canary PR permanently instead of merging it late. A fresh attempt gets fresh
+  connections to a load-balanced mirror, which is what actually recovers a
+  collapsed transfer. apt's own `Acquire::*::Timeout` does not help here: the
+  bytes were flowing, just slowly.
+- **Loud:** each retry logs `::warning::` with the attempt number and whether it
+  hit the bound (exit 124) or failed for real, so the log says which it was.
+
+`e2e/playwright-install-bounded.test.js` fails self-CI if any workflow goes back
+to a raw `npx playwright install`, and asserts the composite still bounds and
+retries.
+
+**Worst case is now ~21 min instead of unbounded** — and in the observed case the
+second attempt would have finished in the usual minute.
+
 ## Rejected: skipping tests per diff
 
 `e2e/select-specs.js` can narrow the suite to a diff's salient specs, and the

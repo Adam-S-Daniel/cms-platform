@@ -187,14 +187,17 @@ jobs:
 
       - name: Install Playwright browsers
         if: steps.pw-cache.outputs.cache-hit != 'true'
-        working-directory: .cms-platform/e2e
-        run: npx playwright install chromium --with-deps
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: chromium
 
+      # Browsers came from the cache, so only the apt half is missing.
       - name: Install Playwright OS deps (browsers cached)
         if: steps.pw-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 5
-        working-directory: .cms-platform/e2e
-        run: npx playwright install-deps chromium
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: chromium
+          deps-only: "true"
 
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg

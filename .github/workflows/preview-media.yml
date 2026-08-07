@@ -155,8 +155,9 @@ jobs:
 
       - name: Install Playwright browser + system deps
         if: steps.salient.outputs.salient == 'true'
-        working-directory: .cms-platform/e2e
-        run: npx playwright install --with-deps chromium
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: chromium
 
       - name: Wait for the preview surface (bounded)
         if: steps.salient.outputs.salient == 'true'

@@ -125,8 +125,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser + system deps
-        working-directory: .cms-platform/e2e
-        run: npx playwright install --with-deps chromium
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: chromium
 
       - name: Skip — playground mode disabled
         if: vars.PROD_PLAYGROUND_MODE != 'true'

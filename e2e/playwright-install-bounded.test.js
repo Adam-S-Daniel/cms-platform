@@ -1,0 +1,114 @@
+// @lane: local — pure-fs workflow lint; no browser, no build, no network.
+//
+// Lint: no workflow may install Playwright browsers with a raw, UNBOUNDED
+// `npx playwright install` — every lane goes through the
+// install-playwright-browsers composite, which bounds each attempt and retries.
+//
+// WHY THIS EXISTS (measured, adamdaniel.ai run 31177527405, job 92862768030)
+// `--with-deps` apt-installs ~90 system packages before downloading the
+// browser. On 2026-08-07 the Ubuntu mirror served that job at ~35 KB/s for its
+// whole run — each package fetch stalling 86-391 s — so
+// `install --with-deps webkit` took 39 MINUTES. Its tests then ran in 41.6 s.
+//
+// What that cost: the e2e matrix's aggregating `e2e` gate waits for EVERY
+// project job, so one stalled lane sets the PR's critical path — and a `cms/*`
+// canary PR cannot merge until `e2e / e2e` reports. That lane held
+// delete-recovery PR #2953 open for 40 minutes and blew the media-roundtrip
+// loop's 30-minute delete-leg budget, failing the loop. Fanning the suite out
+// to ten lanes multiplies the exposure: ten independent apt fetches per run.
+//
+// A bare `timeout-minutes:` is NOT the fix — it converts "slow mirror" into a
+// RED required check, which blocks the canary PR permanently instead of merging
+// it late. Only a retry recovers, because a fresh attempt gets fresh
+// connections. Hence: one composite, every lane, asserted here.
+//
+// Platform-internal: reads the platform's own workflow definitions.
+const { test, expect } = require("@playwright/test");
+const fs = require("node:fs");
+const path = require("node:path");
+const { parseYaml, listWorkflows } = require("./workflow-yaml-utils");
+
+const COMPOSITE_REF = "install-playwright-browsers";
+const COMPOSITE_ACTION = path.join(
+  __dirname,
+  "..",
+  ".github",
+  "actions",
+  COMPOSITE_REF,
+  "action.yml",
+);
+
+// `playwright install`, `playwright install-deps`, `playwright install chromium
+// --with-deps` — any shape that shells out to the installer.
+const RAW_INSTALL = /playwright\s+install(-deps)?\b/;
+
+function installSteps() {
+  const raw = [];
+  const viaComposite = [];
+  for (const file of listWorkflows()) {
+    const wf = parseYaml(fs.readFileSync(file, "utf8"));
+    for (const [jobName, job] of Object.entries(wf.jobs || {})) {
+      for (const step of job.steps || []) {
+        const where = `${path.basename(file)} :: ${jobName} :: ${step.name || "(unnamed)"}`;
+        if (typeof step.run === "string" && RAW_INSTALL.test(step.run)) raw.push(where);
+        if (typeof step.uses === "string" && step.uses.endsWith(`/${COMPOSITE_REF}`)) {
+          viaComposite.push(where);
+        }
+      }
+    }
+  }
+  return { raw, viaComposite };
+}
+
+const { raw, viaComposite } = installSteps();
+
+test("every browser install goes through the bounded composite", () => {
+  expect(
+    raw,
+    `these steps shell out to \`playwright install\` directly, so a slow apt mirror ` +
+      `can stall them without limit (39 min measured). Replace the \`run:\` with ` +
+      `\`uses: ./.cms-platform/.github/actions/${COMPOSITE_REF}\` — pass \`deps-only: "true"\` ` +
+      `if the lane restored the browser binaries from cache and needs only the OS libraries.`,
+  ).toEqual([]);
+});
+
+test("the lint still sees the install lanes it polices", () => {
+  // If a refactor renames the composite, this must fail loudly rather than
+  // quietly pass with nothing left to check.
+  expect(
+    viaComposite.length,
+    `no workflow step uses the ${COMPOSITE_REF} composite — did it get renamed?`,
+  ).toBeGreaterThan(10);
+});
+
+test("the composite bounds each attempt and retries", () => {
+  const src = fs.readFileSync(COMPOSITE_ACTION, "utf8");
+  const body = parseYaml(src).runs.steps[0].run;
+
+  expect(body, "the attempt must be wrapped in `timeout` or it is unbounded again").toMatch(
+    /\btimeout\s+"\$PW_INSTALL_TIMEOUT_S"/,
+  );
+  expect(body, "a bound with no retry turns a slow mirror into a red required check").toMatch(
+    /PW_INSTALL_ATTEMPTS/,
+  );
+  // Regression guard on a bug this action shipped with in draft: after a `fi`
+  // with no else branch, `$?` is the IF STATEMENT's status (always 0), not the
+  // command's — so every failure logged as "exit 0" and the 124-vs-real-error
+  // hint in the error message was wrong. Capture it with `|| status=$?`.
+  expect(
+    body,
+    "capture the exit status with `|| status=$?`, never `$?` after a `fi` (always 0)",
+  ).toMatch(/\|\|\s*status=\$\?/);
+});
+
+test("the composite never interpolates its inputs into the shell command", () => {
+  // The rendered `run:` is echoed to a public Actions log (AGENTS.md "Data
+  // exposure in CI"), and an interpolated input is a script-injection vector.
+  const step = parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8")).runs.steps[0];
+  expect(step.run, "inputs must reach the script via `env:`, not `${{ }}` in `run:`").not.toMatch(
+    /\$\{\{/,
+  );
+  expect(Object.keys(step.env || {}).length, "the script needs its inputs passed as env").toBeGreaterThan(
+    3,
+  );
+});

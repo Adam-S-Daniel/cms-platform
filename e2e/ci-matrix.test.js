@@ -63,9 +63,26 @@ test("each job derives its engine, workers, and --project from ci-matrix.js", ()
   const job = workflow().jobs.project;
   expect(job.env.PW_PROJECT).toBe("${{ matrix.project }}");
 
-  const install = job.steps.find((s) => String(s.name).startsWith("Install Playwright browser"));
-  expect(install.run, "the engine must come from the config, never a hand-written map").toContain(
+  // The engine is DERIVED (never a hand-written project→engine map) in its own
+  // step, whose output feeds the install. Two steps rather than one because the
+  // install itself is the bounded/retried composite — see
+  // playwright-install-bounded.test.js for why it can't be a raw `run:`.
+  const resolve = job.steps.find((s) => s.id === "engine");
+  expect(resolve, "the job must resolve its engine in a step with id 'engine'").toBeTruthy();
+  expect(resolve.run, "the engine must come from the config, never a hand-written map").toContain(
     "node ci-matrix.js --engine",
+  );
+  expect(resolve.run, "the resolved engine must be published as a step output").toContain(
+    'echo "engine=$PW_BROWSER" >> "$GITHUB_OUTPUT"',
+  );
+
+  const install = job.steps.find((s) => String(s.name).startsWith("Install Playwright browser"));
+  expect(
+    String(install.uses),
+    "the install must go through the bounded composite, not a raw `npx playwright install`",
+  ).toContain("install-playwright-browsers");
+  expect(install.with.browser, "the install must consume the DERIVED engine").toBe(
+    "${{ steps.engine.outputs.engine }}",
   );
 
   const run = job.steps.find((s) => s.name === "Run Playwright suite");
