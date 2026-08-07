@@ -214,6 +214,16 @@ browsers:
   `preview-media` (30 min) cap the final attempt at 900 s.
 - **Loud:** each retry logs `::warning::` with the attempt number and whether it
   hit the bound (exit 124) or failed for real, so the log says which it was.
+- **apt WAITS for the dpkg lock.** The most common apt failure here is not
+  slowness — it is losing a race for `/var/lib/dpkg/lock-frontend` to the runner's
+  own boot-time `apt-daily`, which exits **100**. Measured: job 92892148211's
+  webkit lane failed that way, failed the `e2e` gate, BLOCKED the host loop's
+  canary PR, and the loop then timed out waiting for a merge that could never
+  happen — a loop failure three workflows from its cause. A retry alone cannot fix
+  it (back-to-back attempts land in the same lock window), so the action drops
+  `DPkg::Lock::Timeout` into `apt.conf.d`, which is the only way to reach the
+  apt-get *inside* `playwright install`, and **backs off** 15 s / 30 s between
+  attempts.
 
 `e2e/playwright-install-bounded.test.js` fails self-CI if any workflow goes back
 to a raw `npx playwright install`, and asserts the composite still bounds and

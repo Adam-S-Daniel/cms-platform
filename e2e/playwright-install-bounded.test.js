@@ -76,15 +76,29 @@ function compositeDefaults() {
   };
 }
 
-// Worst case the step can take: (attempts-1) short bounds + one final bound.
+// Worst case the step can take: (attempts-1) short bounds + one final bound, plus
+// the escalating backoff BETWEEN attempts (15 s, 30 s, …) — leaving the backoff out
+// under-reports the budget, which is the number this lint compares to a job timeout.
 function worstCaseSeconds(withBlock, defaults) {
   const attempts = Number(withBlock.attempts ?? defaults.attempts);
   const early = Number(withBlock["timeout-seconds"] ?? defaults.timeoutSeconds);
   const final = Number(withBlock["final-timeout-seconds"] ?? defaults.finalTimeoutSeconds);
-  return (attempts - 1) * early + final;
+  let backoff = 0;
+  for (let i = 1; i < attempts; i++) backoff += i * 15;
+  return (attempts - 1) * early + final + backoff;
 }
 
 const { raw, viaComposite } = installSteps();
+
+// Find steps by CONTENT, never by index: the action grew a step in front of the
+// install (the apt dpkg-lock drop-in) and two assertions that used steps[0]
+// silently started checking the wrong script.
+function compositeStep(match) {
+  const steps = parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8")).runs.steps;
+  const found = steps.find((st) => match.test(String(st.run || "")));
+  expect(found, `no composite step matching ${match} — did the action get restructured?`).toBeTruthy();
+  return found;
+}
 
 test("every browser install goes through the bounded composite", () => {
   expect(
@@ -143,8 +157,7 @@ test("the lint still sees the install lanes it polices", () => {
 });
 
 test("the composite bounds each attempt and retries", () => {
-  const src = fs.readFileSync(COMPOSITE_ACTION, "utf8");
-  const body = parseYaml(src).runs.steps[0].run;
+  const body = String(compositeStep(/npx playwright/).run);
 
   expect(body, "the attempt must be wrapped in `timeout` or it is unbounded again").toMatch(
     /\btimeout\s+"\$bound"/,
@@ -165,14 +178,41 @@ test("the composite bounds each attempt and retries", () => {
   ).toMatch(/\|\|\s*status=\$\?/);
 });
 
+test("apt is told to WAIT for the dpkg lock, and retries back off", () => {
+  // The most common apt failure on a GitHub-hosted runner is not a slow mirror —
+  // it is losing a race for the dpkg lock to the runner's own boot-time apt-daily,
+  // which exits 100. Retrying cannot fix that if the attempts are back-to-back:
+  // all three land in the same lock window (measured, job 92892148211 — it failed
+  // the webkit lane, failed the `e2e` gate, and BLOCKED the host loop's canary PR).
+  // Two properties fix it: apt WAITS for the lock (a drop-in, because the apt-get
+  // that matters is inside `playwright install`), and retries BACK OFF.
+  const wf = parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8"));
+  const steps = wf.runs.steps;
+  const lockStep = steps.find((st) => /DPkg::Lock::Timeout/.test(String(st.run || "")));
+  expect(lockStep, "no step configures DPkg::Lock::Timeout — a dpkg-lock race exits 100").toBeTruthy();
+  expect(
+    String(lockStep.run),
+    "the drop-in must land in apt.conf.d so it reaches the apt inside `playwright install`",
+  ).toMatch(/apt\.conf\.d/);
+
+  const installStep = steps.find((st) => /npx playwright/.test(String(st.run || "")));
+  expect(String(installStep.run), "retries must back off, not fire back-to-back").toMatch(
+    /sleep\s+"\$backoff"/,
+  );
+});
+
 test("the composite never interpolates its inputs into the shell command", () => {
   // The rendered `run:` is echoed to a public Actions log (AGENTS.md "Data
   // exposure in CI"), and an interpolated input is a script-injection vector.
-  const step = parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8")).runs.steps[0];
-  expect(step.run, "inputs must reach the script via `env:`, not `${{ }}` in `run:`").not.toMatch(
-    /\$\{\{/,
-  );
-  expect(Object.keys(step.env || {}).length, "the script needs its inputs passed as env").toBeGreaterThan(
-    3,
-  );
+  for (const step of parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8")).runs.steps) {
+    expect(
+      String(step.run),
+      `step "${step.name}": inputs must reach the script via \`env:\`, not \`\${{ }}\` in \`run:\``,
+    ).not.toMatch(/\$\{\{/);
+  }
+  const install = compositeStep(/npx playwright/);
+  expect(
+    Object.keys(install.env || {}).length,
+    "the install script needs its inputs passed as env",
+  ).toBeGreaterThan(3);
 });

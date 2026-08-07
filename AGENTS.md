@@ -1026,6 +1026,15 @@ The three findings that shaped it, all measured on adamdaniel.ai:
   killed mid-retry and reports an opaque "job timed out" instead of the diagnostic
   — `canary-prod`'s 10-minute probe passes smaller values for exactly that reason.
   All three properties locked by **`e2e/playwright-install-bounded.test.js`**.
+  **And the most common apt failure is not slowness at all — it is losing the dpkg
+  lock to the runner's own boot-time `apt-daily`,** which exits 100. Retrying cannot
+  fix that when the attempts are back-to-back: all three land in the same lock
+  window (measured, job 92892148211 — it failed the webkit lane, failed the `e2e`
+  gate, BLOCKED the host loop's canary PR, and the loop then timed out waiting for a
+  merge that could never happen). So the action also (a) drops
+  `DPkg::Lock::Timeout` into `apt.conf.d` so apt WAITS for the lock — a drop-in
+  because the apt-get that matters is inside `playwright install`, which we never
+  invoke — and (b) backs off between retries (15 s, 30 s). Same lint asserts both.
 - **The reusable sets `DISABLE_PER_TEST_VIDEOS=1`.** `e2e/base.js` captures a
   full-page screenshot on every main-frame navigation of every test, and its only
   consumer (`e2e/generate-test-videos.js`) is invoked by no reusable — the
