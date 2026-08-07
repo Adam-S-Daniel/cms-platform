@@ -1,8 +1,8 @@
 // @lane: local — needs decap-server file IO + git execs to verify inline image drafts
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
 // B1 — Inline markdown image in post body.
@@ -180,10 +180,7 @@ test.describe(
       );
 
       // ── Rendered post asserts ────────────────────────────────────────
-      execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
-        cwd: REPO_ROOT,
-        stdio: "inherit",
-      });
+      jekyllBuild({ cwd: REPO_ROOT });
       const liveURL = `/blog/${SMOKE_SLUG}/`;
       const resp = await page.goto(liveURL);
       expect(resp.status(), `${liveURL} should be 200`).toBe(200);

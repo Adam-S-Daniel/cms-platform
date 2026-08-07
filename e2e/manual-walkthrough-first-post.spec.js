@@ -43,8 +43,8 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
 const { uploadFixture } = require("./upload-fixture");
@@ -115,15 +115,12 @@ function findUploadedFixture() {
   return matches[0] || null;
 }
 
-function jekyllBuild() {
+function rebuildSite() {
   // Quiet rebuild into the `_site/` the playwright webServer is
   // serving. The webServer pre-builds once at startup; without this
   // explicit rebuild the new post / upload aren't reachable at the
   // public URL during the test.
-  execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-  });
+  jekyllBuild({ cwd: REPO_ROOT });
 }
 
 function cleanup() {
@@ -196,7 +193,7 @@ test.describe(
       // exercises the same path the cleanup branch uses in production
       // when a real editor deletes a post.
       try {
-        jekyllBuild();
+        rebuildSite();
       } catch (_) {
         // Cleanup-best-effort — don't mask the test result with a
         // post-run rebuild error.
@@ -351,7 +348,7 @@ test.describe(
       // exactly here. The synchronous `bundle exec jekyll build` is the
       // path-of-least-regression — it returns when `_site/` is current.
       await measure("07-jekyll-rebuild", JEKYLL_REBUILD_BUDGET_MS, async () => {
-        jekyllBuild();
+        rebuildSite();
       });
 
       // ── Step 8: Fetch /blog/<slug>/ and assert 200 ─────────────────

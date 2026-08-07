@@ -1,8 +1,8 @@
 // @lane: local — needs decap-server file IO + git execs; drives local Decap publish leg
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 const { captureStep } = require("./manual-capture");
 const { pruneSitemapUrls } = require("./sitemap-prune");
@@ -94,14 +94,11 @@ function removeSmokePost() {
   }
 }
 
-function jekyllBuild() {
+function rebuildSite() {
   // Quiet build into the same `_site/` the playwright webServer is
   // serving from, so the new post becomes reachable at /blog/<slug>/
   // without needing to restart `npx serve`.
-  execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-  });
+  jekyllBuild({ cwd: REPO_ROOT });
 }
 
 test.describe(
@@ -202,7 +199,7 @@ test.describe(
       expect(written).toContain("published: true");
 
       // ── Rebuild Jekyll so /blog/<slug>/ is in `_site/` ────────────────
-      jekyllBuild();
+      rebuildSite();
 
       // ── Browse to the live URL, assert the post renders ──────────────
       const liveURL = `/blog/${SMOKE_SLUG}/`;

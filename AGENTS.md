@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.58`** — `v0.1.0`–`v0.1.58` are all tagged GitHub
+**Current release: `v0.1.68`** — `v0.1.0`–`v0.1.68` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -958,6 +958,69 @@ layer:
   failure class this audit exists to catch). Lint-locked by
   `e2e/scheduled-run-health.test.js` (workflow shapes + the script's pure
   helpers; registered in `PLATFORM_META_SPECS`).
+
+## E2E parallelism — one CI job per Playwright project (v0.1.68)
+
+`e2e-tests.yml` runs the suite as **one job per Playwright project**, each
+installing only its own browser engine, with `workers` raised only for the two
+admin projects. Machinery: **`e2e/ci-matrix.js`** derives the matrix list, each
+job's engine, and each job's worker count from `playwright.config.js`;
+**`e2e/ci-matrix.test.js`** fails self-CI if the workflow's static
+`matrix.project` drifts from the real project list (the one way this design can
+silently stop running a project). Full measurements + the rejected alternatives:
+**`docs/E2E-PARALLELISM.md`** — read it before re-tuning any of this.
+
+The three findings that shaped it, all measured on adamdaniel.ai:
+
+- **A 4-vCPU runner saturates at ~2 browser workers.** Pushing the public-page
+  projects to `100%` made the SAME tests report 2.1x longer (301 s → 641 s) and
+  the wall clock WORSE (263 s → 284 s): a Playwright browser test burns more
+  than one core. So `playwright.config.js` leaves `workers` to Playwright
+  (50% of cores) and **only the admin projects** go to `100%` — they are
+  wait-bound (Decap boot, editor mount, API polls) and measured 161 s → 128 s
+  and 166 s → 132 s. **Wall clock comes from more RUNNERS, not more workers.**
+- **`--shard` cannot balance this suite.** It balances by test COUNT while
+  per-test durations span 5 ms → 49 s; a real 4-way shard measured
+  80/105/88/**671** s. Hand-grouped lanes failed too (modelled 308/330/307,
+  measured 220/236/**373** s — the 8-project public lane's cost is dominated by
+  test COUNT, not duration). One job per project needs no cost table at all.
+- **The 3-engine `install --with-deps` was 58 s of every job's critical path**
+  (39 s apt + 19 s download). One engine per job removes most of it, needs no
+  cache key, and can't go stale. `install-browsers-on-miss.js` therefore reads
+  `PW_PROJECT` and checks ONLY that engine — a blanket check would re-download
+  the two engines the scoped install just skipped. **If you add a project, give
+  it an explicit `use.browserName`** (`engineFor()` throws otherwise) and add it
+  to the workflow matrix (the lint will tell you).
+
+The required status context is **unchanged**: the matrix sits behind an
+aggregating `e2e` gate job (`needs: project`, `if: always()`, fails on any
+non-success matrix result), so rulesets and the `e2e-required-stub` companion
+still name exactly `e2e / e2e`. Per-job artifacts and failure-comment markers
+are project-scoped (`playwright-report-<project>`,
+`e2e-failure-summary-<project>`) — jobs sharing either would clobber each other,
+and a marker that names the project says which one went red before you open a log.
+
+**Escape hatch:** the reusable's `workers` input overrides every job without a
+release (`workers: "2"`), for the day a project turns flaky under load.
+
+### Parallelism turns latent test-isolation bugs into real flakes
+
+Running the admin projects at 4 workers exposed two PRE-EXISTING bugs (both
+fixed in v0.1.68). Keep the pattern in mind when writing @admin-write specs:
+
+- **A fixture basename shared between specs is a cross-spec FS race.** Decap
+  names an uploaded asset after the basename it is handed, and three specs then
+  globbed `assets/images/uploads/` for the SAME `tiny-pixel.png` — so
+  `cms-image-upload`'s cleanup deleted `cms-featured-image-lifecycle`'s
+  in-flight upload ("replace with B → A still on disk" saw 0 files). Use
+  **`e2e/upload-fixture.js`** (`uploadFixture(source, basename)`) to hand each
+  spec its OWN stable basename.
+- **A test whose budget doesn't scale with its input will time out under
+  contention.** `image-alt-text.spec.js` crawls EVERY sitemap URL in one test on
+  Playwright's fixed 30 s default — already ~21 s at 2 workers. It now scales
+  its budget with the URL count, like `cms-link-crawler.spec.js`'s explicit
+  240 s crawl budget. The 30 s `actionTimeout` is what catches a genuine hang,
+  so a generous *test* budget hides nothing.
 
 ## E2E local webServer: decap readiness + :4000 crash resilience
 

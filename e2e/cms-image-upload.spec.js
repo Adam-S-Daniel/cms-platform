@@ -1,8 +1,8 @@
 // @lane: local — needs decap-server file IO to round-trip uploaded images
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 const { uploadFixture } = require("./upload-fixture");
 
@@ -182,10 +182,7 @@ test.describe(
       // the IDENTICAL path the production GitHub backend would — this
       // local run is a faithful end-to-end check, with no
       // template-expansion gap to tolerate. A 404 here is a real failure.
-      execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
-        cwd: REPO_ROOT,
-        stdio: "inherit",
-      });
+      jekyllBuild({ cwd: REPO_ROOT });
       const liveURL = `/blog/${SMOKE_SLUG}/`;
       const resp = await page.goto(liveURL);
       expect(resp.status(), `${liveURL} should be 200`).toBe(200);
