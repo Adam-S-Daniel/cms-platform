@@ -127,6 +127,42 @@ test.describe("cms-recursion-churn decision logic", () => {
     }
   });
 
+  test("a bump carrying only a NON-DEPLOYING doc is still bump-only — SKIPPED", () => {
+    // Observed live (adamdaniel.ai 2026-08-07): the gate required EVERY changed
+    // path to be a version pin, so one AGENTS.md commit landed on the bump PR was
+    // enough to make it RUN — all three prod loops fired on the same push, and
+    // because they share the `prod-mutating-loop` group (which drops a
+    // CO-ARRIVING sibling rather than queuing it), media-roundtrip's heavy job
+    // was CANCELLED (run 31185014802). #70's disjoint-push-trigger fix cannot
+    // help: a bump rewrites the @ref in EVERY loop's own workflow file.
+    for (const doc of ["AGENTS.md", "CLAUDE.md", "README.md", "LICENSE", "docs/E2E-PARALLELISM.md"]) {
+      const paths = ["platform.lock", "Gemfile", "Gemfile.lock", doc];
+      expect(isBumpOnlyPush(paths), `platform.lock + pins + ${doc} ⇒ still bump-only`).toBe(true);
+      for (const loop of Object.keys(SELF_CHURN)) {
+        expect(shouldRunLoop(loop, paths), `${loop}: bump + ${doc} must SKIP`).toBe(false);
+      }
+    }
+  });
+
+  test("the doc tolerance does NOT swallow a real change riding a bump", () => {
+    // The widening must stay surgical: only paths the deploy already ignores.
+    for (const real of [
+      "_posts/2026-01-01-a-real-post.md",
+      "scripts/deploy.sh",
+      "admin/collections.site.yml",
+      "_config.yml",
+      "assets/css/site.css",
+    ]) {
+      const paths = ["platform.lock", "Gemfile", real];
+      expect(isBumpOnlyPush(paths), `${real} must NOT count as bump-only`).toBe(false);
+      for (const loop of Object.keys(SELF_CHURN)) {
+        expect(shouldRunLoop(loop, paths), `${loop}: bump + ${real} must RUN`).toBe(true);
+      }
+    }
+    // And a doc WITHOUT a bump is not a bump at all.
+    expect(isBumpOnlyPush(["AGENTS.md"])).toBe(false);
+  });
+
   test("a workflow-LOGIC edit (no platform.lock) is NOT treated as a bump — RUNS", () => {
     // No platform.lock ⇒ not a bump; a real change to a loop's own workflow must
     // still run so its behaviour is validated.

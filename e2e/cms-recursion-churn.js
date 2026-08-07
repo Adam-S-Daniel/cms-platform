@@ -94,13 +94,44 @@ function isBumpArtifact(p) {
   );
 }
 
-// Is this push a PLATFORM-VERSION BUMP and nothing else? A bump always rewrites
-// platform.lock and touches only the version pins (workflows @ref + gem tag).
-// Requiring platform.lock to be present distinguishes a real bump from an
-// unrelated workflow-logic edit (which would NOT touch platform.lock and so
-// must still RUN the loop).
+// A doc that CANNOT change the built site, so its presence in a bump push does
+// not make the push "a real machinery change". These are exactly the paths the
+// deploy workflows already `paths-ignore`, so nothing the loops verify can
+// differ because of them.
+//
+// WHY THIS EXISTS (observed live, adamdaniel.ai 2026-08-07). The bump-only gate
+// below required EVERY changed path to be a version pin. A bump PR is the natural
+// place to land a doc correction that goes with the bump — and one AGENTS.md
+// commit was enough to fail `every(isBumpArtifact)`, so the gate said RUN, all
+// THREE prod loops fired on the same push, and because they share the
+// `prod-mutating-loop` concurrency group (which holds an in-flight run but DROPS
+// a co-arriving sibling), media-roundtrip's heavy job was CANCELLED outright
+// (run 31185014802) while host-loop's survived. #70's disjoint-push-trigger fix
+// cannot prevent that: a bump rewrites the @ref in EVERY loop's own workflow
+// file, which is each loop's own trigger path, so a bump always fires all three.
+// The skip is the only thing standing between a bump and a cancelled loop.
+function isNonDeployingDoc(p) {
+  return (
+    p === "AGENTS.md" ||
+    p === "CLAUDE.md" ||
+    p === "README.md" ||
+    p === "LICENSE" ||
+    p.startsWith("docs/")
+  );
+}
+
+// Is this push a PLATFORM-VERSION BUMP and nothing else that could change the
+// site? A bump always rewrites platform.lock and touches the version pins
+// (workflows @ref + gem tag); a doc that the deploy already ignores rides along
+// harmlessly. Requiring platform.lock to be present distinguishes a real bump
+// from an unrelated workflow-logic edit (which would NOT touch platform.lock and
+// so must still RUN the loop) — and a bump PR that also changes real site
+// content or a script still fails this and correctly RUNS.
 function isBumpOnlyPush(changedPaths) {
-  return changedPaths.includes("platform.lock") && changedPaths.every(isBumpArtifact);
+  return (
+    changedPaths.includes("platform.lock") &&
+    changedPaths.every((p) => isBumpArtifact(p) || isNonDeployingDoc(p))
+  );
 }
 
 // RUN (true) iff the push carries a real machinery change. SKIP (false) when
@@ -124,4 +155,11 @@ function shouldRunLoop(loop, changedPaths) {
   return changedPaths.some((p) => !isSelfChurn(loop, p)); // (a) self-churn skip
 }
 
-module.exports = { SELF_CHURN, shouldRunLoop, isSelfChurn, isBumpArtifact, isBumpOnlyPush };
+module.exports = {
+  SELF_CHURN,
+  shouldRunLoop,
+  isSelfChurn,
+  isBumpArtifact,
+  isNonDeployingDoc,
+  isBumpOnlyPush,
+};

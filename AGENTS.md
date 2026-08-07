@@ -1465,6 +1465,27 @@ Locked by `e2e/workflow-loop-branch-cleanup.test.js` (parses with the `yaml`
 lib). If you add a new ephemeral loop branch prefix, add its cleanup step AND
 extend that lint + the sweep safelist.
 
+### A bump push fires ALL THREE loops, so the bump-skip must not be brittle
+
+The `recursion-gate`'s bump-skip (#57) is what stops a platform-version bump from
+re-firing the prod loops, and it is load-bearing for a reason #70's
+disjoint-push-triggers fix cannot cover: **a bump rewrites the `uses:@<ref>` pin
+in EVERY loop's own workflow file**, which is each loop's own trigger path — so a
+bump always fires all three at once. They share the `prod-mutating-loop`
+concurrency group, which holds an in-flight run but **drops a co-arriving
+sibling**, so without the skip a bump costs you a CANCELLED loop.
+
+Observed live on adamdaniel.ai (2026-08-07): the gate required EVERY changed path
+to be a version pin, and a single `AGENTS.md` commit landed on the bump PR — the
+natural place for a doc correction that goes with the bump — was enough to fail
+that test. All three loops fired; `media-roundtrip`'s heavy job was cancelled
+outright (run 31185014802) while `host-loop`'s survived. So `isBumpOnlyPush` now
+also tolerates paths that **cannot change the built site** (`AGENTS.md`,
+`CLAUDE.md`, `README.md`, `LICENSE`, `docs/**` — exactly what the deploy
+workflows already `paths-ignore`). A bump carrying real content, a script, a
+config, or CSS still fails it and correctly RUNS. Both directions are locked by
+`e2e/cms-recursion-churn.test.js`.
+
 ## Remaining work
 
 Ported as reusable `workflow_call` + thin callers: deploy (prod+preview),
