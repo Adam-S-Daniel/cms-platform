@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.68`** — `v0.1.0`–`v0.1.68` are all tagged GitHub
+**Current release: `v0.1.69`** — `v0.1.0`–`v0.1.69` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1495,7 +1495,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.68)
+## Version history (v0.1.0 → v0.1.69)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2091,6 +2091,16 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   per-navigation frame capture whose only consumer no reusable invokes
   (`DISABLE_PER_TEST_VIDEOS=1`). Full measurements, both job shapes, the rejected
   alternatives, and how to re-measure: **`docs/E2E-PARALLELISM.md`**.
+
+- **v0.1.69** (2026-08-07) — **v0.1.68 follow-ups.** (1) The build lock now
+  CREDITS its waiting back to the caller's test timeout: the nine build-calling
+  specs run on Playwright's 30 s default with a ~4 s build, so a queue three deep
+  would have traded the build race for a timeout race (not observed failing — the
+  final config was green with zero flaky tests — but now structurally impossible).
+  (2) `docs/E2E-PARALLELISM.md` records the CONSUMER-VERIFIED numbers from both
+  v0.1.68 bump PRs (adamdaniel.ai 222 s, jodidaniel.com 148 s) plus what the
+  design costs: ~1.5x the runner-minutes for ~3x less wall clock, and the wall
+  clock includes GitHub allocating ten runners (3-10 s typical, once 59 s).
 
 ## Consumers
 
