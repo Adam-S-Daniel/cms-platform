@@ -1015,7 +1015,7 @@ release (`workers: "2"`), for the day a project turns flaky under load.
 
 ### Parallelism turns latent test-isolation bugs into real flakes
 
-Running the admin projects wider exposed three PRE-EXISTING bugs (all fixed in
+Running the admin projects wider exposed four PRE-EXISTING bugs (all fixed in
 v0.1.68). Keep the pattern in mind when writing @admin-write specs:
 
 - **A fixture basename shared between specs is a cross-spec FS race.** Decap
@@ -1031,6 +1031,11 @@ v0.1.68). Keep the pattern in mind when writing @admin-write specs:
   its budget with the URL count, like `cms-link-crawler.spec.js`'s explicit
   240 s crawl budget. The 30 s `actionTimeout` is what catches a genuine hang,
   so a generous *test* budget hides nothing.
+- **Never `existsSync`-then-read a file another process writes.** decap-server
+  creates an entry file and then fills it, so five specs' `expect.poll(() =>
+  fs.existsSync(file))` could win the race and read `""` — the "decap-server
+  file-write race" `retries: 1` was added for. Poll the CONTENT with
+  `contentOrEmpty()` from **`e2e/fs-poll.js`** instead.
 - **A shared external tool needs a lock.** Nine specs shell out to
   `bundle exec jekyll build` against the same tree and the same `_site` the
   webServer serves; two overlapping builds fight over `_site` and one dies. They

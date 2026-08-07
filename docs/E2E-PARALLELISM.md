@@ -152,10 +152,11 @@ run the *same* coverage faster, not to run less of it. Selection trades coverage
 for speed and adds a "did the selector miss something?" failure mode; the
 project matrix needs no such trade.
 
-## Three isolation bugs that parallelism exposed
+## Four isolation bugs that parallelism exposed
 
-Running the admin projects wider surfaced three genuine pre-existing test bugs.
-All are fixed; all would have bitten eventually at any worker count.
+Running the admin projects wider surfaced four genuine pre-existing test bugs.
+All are fixed; all would have bitten eventually at any worker count — the last
+one is literally the race the config's `retries: 1` was added for.
 
 * **Shared upload basename.** `cms-image-upload`, `manual-walkthrough-first-post`
   and `cms-featured-image-lifecycle` all handed Decap the same
@@ -179,9 +180,17 @@ All are fixed; all would have bitten eventually at any worker count.
   the class; `e2e/jekyll-build.test.js` proves the lock holds, releases on a
   failed build, breaks a stale one, and that no spec builds directly any more.
 
+* **Reading a file another process is writing.** Five specs waited with
+  `expect.poll(() => fs.existsSync(file))` and then read — but decap-server
+  CREATES the entry file and then fills it, so the poll can win and hand the
+  spec `""` (`Expected substring: "title: …" / Received string: ""`). They now
+  poll the CONTENT via `e2e/fs-poll.js`'s `contentOrEmpty()`, which is both the
+  correct wait and a better failure message.
+
 The lesson worth keeping: **a test whose budget doesn't scale with its input,
-whose fixture is shared with another spec, or which drives a shared external
-tool, is a latent flake that parallelism converts into a real one.**
+whose fixture is shared with another spec, which drives a shared external tool,
+or which reads a file another process is still writing, is a latent flake that
+parallelism converts into a real one.**
 
 ## The result
 

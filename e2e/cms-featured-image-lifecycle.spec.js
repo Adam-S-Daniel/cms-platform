@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { contentOrEmpty } = require("./fs-poll");
 const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
@@ -219,8 +220,12 @@ test.describe(
       await publishNow(page);
 
       // ── On-disk asserts ──────────────────────────────────────────────
-      await expect.poll(() => fs.existsSync(POST_PATH), { timeout: 60_000 }).toBe(true);
-      const written = fs.readFileSync(POST_PATH, "utf8");
+      // Poll the CONTENT, not just existence: decap-server creates the file
+      // and then writes it (see e2e/fs-poll.js).
+      await expect
+        .poll(() => contentOrEmpty(POST_PATH), { timeout: 60_000 })
+        .toContain(`title: ${TITLE}`);
+      const written = contentOrEmpty(POST_PATH);
       expect(written).toContain(`title: ${TITLE}`);
       // media_folder is flat + template-free, so the URL is exactly
       // public_folder + "/" + basename — no subdirectory. The `[^/]*`

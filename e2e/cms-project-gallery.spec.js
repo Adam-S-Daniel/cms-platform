@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
 const { test, expect } = require("./base");
+const { contentOrEmpty } = require("./fs-poll");
 const { jekyllBuild } = require("./jekyll-build");
 const { guard } = require("./base-collections-guards");
 
@@ -189,9 +190,13 @@ test.describe(
         .click();
 
       // ── Assertion 1: file on disk ────────────────────────────────────
-      await expect.poll(() => fs.existsSync(SMOKE_FILE), { timeout: 60_000 }).toBe(true);
+      // Poll the CONTENT, not just existence: decap-server creates the file
+      // and then writes it (see e2e/fs-poll.js).
+      await expect
+        .poll(() => contentOrEmpty(SMOKE_FILE), { timeout: 60_000 })
+        .toContain(`title: ${SMOKE_TITLE}`);
 
-      const saved = fs.readFileSync(SMOKE_FILE, "utf8");
+      const saved = contentOrEmpty(SMOKE_FILE);
       expect(saved).toContain(`title: ${SMOKE_TITLE}`);
       expect(saved).toMatch(/^images:/m);
       // Each list entry is one line `  - /assets/images/uploads/<file>.png`.
