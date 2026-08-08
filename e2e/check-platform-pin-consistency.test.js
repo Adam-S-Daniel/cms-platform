@@ -246,6 +246,108 @@ test.describe("check-platform-pin-consistency.js — SKEWED fixture (#29)", () =
   });
 });
 
+// ── The `platform_ref` INPUT (#220). The reusable's platform checkout does
+// `ref: ${{ inputs.platform_ref }}`, so THIS value — not the `uses:@` pin —
+// decides which platform tree the job actually runs. It's canonical by
+// definition, NOT a site-specific `with:` value, which is why the
+// workflow-CONTENT parity check (it masks `with:` VALUES) can't see it. Live:
+// jodidaniel.com's cms-scheduled-publish-loop shipped `uses:@v0.1.72` with
+// `platform_ref: v0.1.59` for 14 releases — the checkout predated the v0.1.70
+// install-playwright-browsers composite, so the step failed "Can't find
+// 'action.yml'" while every other pin check reported consistent.
+test.describe("check-platform-pin-consistency.js — stale platform_ref INPUT (#220)", () => {
+  // A caller whose `uses:@` pin and `platform_ref` input can disagree.
+  function splitCaller(name, usesRef, platformRefValue) {
+    return [
+      `name: ${name}`,
+      "on: { workflow_dispatch: {} }",
+      "jobs:",
+      "  call:",
+      `    uses: ${SLUG}/.github/workflows/${name}.yml@${usesRef}`,
+      "    with:",
+      "      # Pin to the SAME ref as the `uses:` pin above so the harness matches.",
+      `      platform_ref: ${platformRefValue}`,
+      "",
+    ].join("\n");
+  }
+
+  test("FAILS when uses:@ is current but the platform_ref input is stale", () => {
+    const root = mkConsumer();
+    const CANON = "v0.1.73";
+    write(root, "platform.lock", platformLock(CANON));
+    writeSentinel(root);
+    write(
+      root,
+      ".github/workflows/cms-scheduled-publish-loop.yml",
+      splitCaller("cms-scheduled-publish-loop", CANON, "v0.1.59"),
+    );
+
+    const res = run(root);
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).not.toBe(0);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toMatch(/cms-scheduled-publish-loop\.yml/);
+    expect(out).toMatch(/platform_ref/);
+    expect(out).toMatch(/v0\.1\.59/); // the stale INPUT value is named
+    expect(out).toMatch(/v0\.1\.73/); // …against the canonical expectation
+  });
+
+  test("exits 0 when the platform_ref input agrees with platform.lock", () => {
+    const root = mkConsumer();
+    const CANON = "v0.1.73";
+    write(root, "platform.lock", platformLock(CANON));
+    writeSentinel(root);
+    write(
+      root,
+      ".github/workflows/cms-scheduled-publish-loop.yml",
+      splitCaller("cms-scheduled-publish-loop", CANON, CANON),
+    );
+    const res = run(root);
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
+  });
+
+  test("ignores a `${{ … }}` expression value (a forwarded parameter, not a pin)", () => {
+    const root = mkConsumer();
+    const CANON = "v0.1.73";
+    write(root, "platform.lock", platformLock(CANON));
+    writeSentinel(root);
+    write(
+      root,
+      ".github/workflows/forwarder.yml",
+      splitCaller("forwarder", CANON, "${{ inputs.platform_ref }}"),
+    );
+    const res = run(root);
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
+  });
+
+  test("ignores an input DECLARATION (`platform_ref: { type: string, default: main }`)", () => {
+    const root = mkConsumer();
+    const CANON = "v0.1.73";
+    write(root, "platform.lock", platformLock(CANON));
+    writeSentinel(root);
+    // The shape every platform reusable uses to DECLARE the input — a map value,
+    // not a pin. `default: main` must not be read as a stale version.
+    write(
+      root,
+      ".github/workflows/declares-it.yml",
+      [
+        "name: declares-it",
+        "on:",
+        "  workflow_call:",
+        "    inputs:",
+        "      platform_ref: { type: string, default: main }",
+        "jobs:",
+        "  j:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - uses: actions/checkout@v4",
+        "",
+      ].join("\n"),
+    );
+    const res = run(root);
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
+  });
+});
+
 // ── Preview-media probe sentinel (#84): a consumer must carry
 // assets/images/uploads/e2e-preview-media-probe.png byte-identical to the
 // canonical 1x1 PNG (git-blob sha1 62a5f8f47fec02344e5bf9061888262f677cf5d6).

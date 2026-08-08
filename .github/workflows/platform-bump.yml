@@ -126,13 +126,24 @@ jobs:
             # being bumped to (examples/site is only re-pinned when THAT file's
             # content changes, not on every tag — this repo's own examples span
             # v0.1.1..v0.1.52 today), so stamp unconditionally to whatever
-            # version is actually there. Covers both ref shapes the
-            # pin-consistency checker recognizes: a reusable `uses:@vX.Y.Z` and
-            # a composite action's trailing `# vX.Y.Z` comment (defensive; no
-            # example currently uses the latter).
+            # version is actually there. Covers all THREE ref shapes the
+            # pin-consistency checker recognizes: a reusable `uses:@vX.Y.Z`, a
+            # composite action's trailing `# vX.Y.Z` comment (defensive; no
+            # example currently uses the latter), and the `platform_ref:` INPUT.
+            #
+            # That third one is not optional (#220). Stamping only `uses:@` seeded
+            # jodidaniel.com's cms-scheduled-publish-loop caller with the example's
+            # own `platform_ref: v0.1.59` while pinning `uses:@v0.1.62`, and the
+            # generic CUR->LATEST replace above could never repair it — CUR is the
+            # consumer's ref, which `v0.1.59` never matched again. The reusable's
+            # checkout obeys the INPUT, so that caller ran a v0.1.59 platform tree
+            # for 14 releases until the v0.1.70 composite it lacked failed the job.
             LATEST="$LATEST" perl -i -pe '
               s{(\Q$ENV{PLATFORM}\E/\.github/(?:workflows|actions)/[^@[:space:]]+\@)v[0-9]+(?:\.[0-9]+){0,3}}{$1$ENV{LATEST}}g;
               s{(\Q$ENV{PLATFORM}\E/\.github/actions/[^[:space:]]+\s+#\s*)v[0-9]+(?:\.[0-9]+){0,3}}{$1$ENV{LATEST}}g;
+              # \x27 is a literal apostrophe — writing one directly would close
+              # the shell single-quoted perl program around this whole block.
+              s{^(\s*platform_ref:[ \t]*["\x27]?)v[0-9]+(?:\.[0-9]+){0,3}\b}{$1$ENV{LATEST}};
             ' "$dest"
             SEEDED+=("$name")
           done
