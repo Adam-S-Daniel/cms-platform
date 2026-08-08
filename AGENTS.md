@@ -2435,6 +2435,23 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   flagged was an artifact of the grep that found it — a full per-workflow audit of
   both consumers found this caller to be the only real one.
 
+  **Why a stale `platform_ref` cannot be caught by symptoms — only by the guard.**
+  A composite is REFERENCED by the reusable (which comes from `uses:@`) but
+  RESOLVED from the `.cms-platform/` checkout (which comes from `platform_ref`).
+  Those two refs are independent, so a stale input is completely silent until a
+  reusable happens to reference a path its pinned tree lacks. Verified against the
+  real tag trees: at v0.1.67 and v0.1.69 the reusable shelled out to
+  `npx playwright install --with-deps chromium` and the composite did not exist,
+  so nothing resolved from the stale checkout and the daily run went green; v0.1.70
+  both added the composite AND switched the reusable to it, and the very next
+  scheduled run failed. So the *skew* lasted 14 releases while the *failure* lasted
+  one day (two runs: 31242320695, then the re-dispatch). Worse, the green month
+  before it was hollow — this loop's heavy leg self-skips on jodidaniel
+  (`PROD_PLAYGROUND_MODE` disabled), and the reusable itself did not even EXIST at
+  v0.1.59, so the `e2e/` harness being checked out was older than the workflow
+  driving it and nothing ever exercised it. **Do not reason about pin skew from
+  whether runs are passing.**
+
 ## Consumers
 
 - **adamdaniel.ai** — consumer #1, user-owned, the dogfood. Migrated to
