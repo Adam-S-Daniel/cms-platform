@@ -9,6 +9,8 @@
 //       `uses: <owner>/<repo>/.github/workflows/<name>.yml@<ref>`     (the <ref>)
 //     and SHA-pinned composite actions
 //       `uses: <owner>/<repo>/.github/actions/<name>@<sha>  # vX.Y.Z`  (the COMMENT)
+//     and the `platform_ref:` INPUT each caller passes — the ref the reusable's
+//       own platform checkout obeys, so it decides which platform tree RUNS (#220)
 //   - Gemfile      — `gem "cms-platform-theme", …, tag: "vX.Y.Z"`
 //   - Gemfile.lock — the cms-platform GIT source block's `tag:`
 //   - platform.lock — `platform_ref:` (the SOURCE OF TRUTH)
@@ -188,24 +190,44 @@ function classifyUses(usesStr) {
   return null;
 }
 
-// Collect every `uses:` scalar from the parsed YAML (anchors resolved). The
-// parser drops comments, so we ALSO need the source LINE for composite refs.
-// We gather { uses, line } via the Document API: visit Scalar nodes whose
-// parent Pair key is `uses`, and compute the 1-based line of the node's start.
-function usesNodesWithLines(text) {
+// Collect every `uses:` scalar AND every literal `platform_ref:` value from the
+// parsed YAML (anchors resolved). The parser drops comments, so we ALSO need the
+// source LINE for composite refs. We gather both via the Document API: visit
+// Pairs whose key is `uses` / `platform_ref`, and compute the 1-based line of
+// the value node's start.
+//
+// WHY `platform_ref` is in scope (#220): it is the input a reusable's platform
+// checkout does `ref: ${{ inputs.platform_ref }}` with, so it — not the `uses:@`
+// pin — decides WHICH platform tree the job actually runs. It is canonical by
+// definition, not a site-specific `with:` value, which is exactly why the
+// workflow-CONTENT parity check (which deliberately MASKS `with:` VALUES) is
+// blind to it. Live: jodidaniel.com's cms-scheduled-publish-loop carried
+// `uses:@v0.1.72` with `platform_ref: v0.1.59` — 13 releases stale — so the
+// checkout predated the v0.1.70 `install-playwright-browsers` composite and the
+// step failed `Can't find 'action.yml'`, silently, on a scheduled workflow,
+// while every other pin check reported consistent.
+//
+// A `platform_ref` Pair whose value is NOT a plain string is an input
+// DECLARATION, not a pin (`platform_ref: { type: string, default: main }` in the
+// reusables) — skipped. A value carrying a `${{ … }}` expression forwards a
+// parameter and cannot be resolved statically — also skipped.
+function pinNodesWithLines(text) {
   const doc = YAML.parseDocument(text);
   const out = [];
+  const platformRefs = [];
+  const lineOf = (node) => text.slice(0, node.range[0]).split("\n").length;
   YAML.visit(doc, {
     Pair(_key, pair) {
       const k = pair.key && pair.key.value;
       const v = pair.value;
-      if (k === "uses" && v && typeof v.value === "string" && v.range) {
-        const line = text.slice(0, v.range[0]).split("\n").length;
-        out.push({ uses: v.value, line });
+      if (!v || typeof v.value !== "string" || !v.range) return;
+      if (k === "uses") out.push({ uses: v.value, line: lineOf(v) });
+      else if (k === "platform_ref" && !v.value.includes("${{")) {
+        platformRefs.push({ ref: v.value.trim(), line: lineOf(v) });
       }
     },
   });
-  return { out, lines: text.split("\n") };
+  return { out, platformRefs, lines: text.split("\n") };
 }
 
 // LINE-AWARE read of the trailing `# …` comment on a given 1-based source line.
@@ -243,7 +265,7 @@ for (const wf of listWorkflowFiles()) {
   }
   let nodes;
   try {
-    nodes = usesNodesWithLines(text);
+    nodes = pinNodesWithLines(text);
   } catch (e) {
     violations.push({
       file: rel(wf),
@@ -277,6 +299,10 @@ for (const wf of listWorkflowFiles()) {
       }
       record(wf, `composite uses:@${cls.subpath} (# comment)`, ver, `uses: ${uses}`);
     }
+  }
+  // The `platform_ref` INPUT — the ref the reusable's platform checkout obeys (#220).
+  for (const { ref, line } of nodes.platformRefs) {
+    record(wf, `with: platform_ref (line ${line})`, ref, `platform_ref: ${ref}`);
   }
 }
 
@@ -672,8 +698,8 @@ for (const v of violations) {
 if (violations.some((v) => !v.message)) {
   process.stderr.write(
     `\nFix: bring every platform-version reference above to ${platformRef} (the platform.lock ` +
-      `platform_ref). Bump the workflow @ref pins + composite # comments, the ` +
-      `Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
+      `platform_ref). Bump the workflow @ref pins + composite # comments + the ` +
+      `with: platform_ref inputs, and the Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
       `(platform-bump bumps platform.lock + with: inputs; Dependabot bumps the ` +
       `uses:@ pins + gem — they can land out of step, which is what this guard catches.)\n`,
   );

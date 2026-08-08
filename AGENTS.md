@@ -745,6 +745,17 @@ repo's `yaml` lib) makes them all agree:
   LINE-AWARE pass** because the YAML parser drops comments — the one justified
   regex/line exception (same rationale as `scripts/sync-action-pin-comments.sh`,
   documented in the script header).
+- **Checks the `platform_ref:` INPUT each caller passes (#220).** The reusable's
+  platform checkout does `ref: ${{ inputs.platform_ref }}`, so this value — not
+  the `uses:@` pin — decides WHICH platform tree the job actually runs. It is
+  canonical by definition, **not** a site-specific `with:` value, which is
+  precisely why the workflow-CONTENT parity check below (it deliberately MASKS
+  `with:` VALUES) is blind to it: the one value that selects the platform tree
+  was the one thing the anti-skew guard didn't check. A `platform_ref` Pair
+  whose value is a MAP is an input DECLARATION, not a pin
+  (`platform_ref: { type: string, default: main }` in the reusables) and is
+  skipped; so is a `${{ … }}` expression (a forwarded parameter, not statically
+  resolvable).
 - Reads `Gemfile` (`gem "cms-platform-theme", …, tag:`) + `Gemfile.lock` (the
   cms-platform GIT-source `tag:`); both must == `platform_ref`. Tolerates a
   consumer with NO Gemfile; ignores non-cms-platform `uses:`.
@@ -777,6 +788,26 @@ both callers (comments/formatting drop out), compares the call interface, and
 flags the exact drifting facet. It does NOT fight a legit site difference (e.g.
 adamdaniel TRIMS the host-loop push `paths:` to dodge prod-loop co-arrival
 eviction #1892 — an `on:` change, excluded).
+
+### How a stale `platform_ref` INPUT got there, and why the seeder had to change (#220)
+
+The live instance was not a hand-edit. `platform-bump.yml`'s **seeding** path
+(the workflow-SET-parity feature, v0.1.20/#54) copies a newly-dictated caller
+from `examples/site/.github/workflows/` and re-pins it — but it stamped only the
+`uses:@` pin and the composite `# vX.Y.Z` comment, because those were "the ref
+shapes the pin-consistency checker recognizes." So jodidaniel.com's
+`cms-scheduled-publish-loop.yml`, seeded by the v0.1.62 bump, landed with
+`uses:@v0.1.62` **and the example template's own `platform_ref: v0.1.59`**. Every
+later bump's generic `CUR->LATEST` literal replace could never repair it — `CUR`
+is the CONSUMER's previous ref, which `v0.1.59` never matched again — so the
+input froze for 14 releases while the `uses:` line tracked every bump. At v0.1.70
+the checkout it selected (a v0.1.59 tree) predated the
+`install-playwright-browsers` composite and the job died on `Can't find
+'action.yml'`, silently, on a scheduled workflow. The seeder now stamps
+`platform_ref:` too (bare / `"quoted"` / `'quoted'`), so the guard and the seeder
+recognize the same three shapes. **Note the loop this closes:** the seeder's
+shape list was justified by the checker's shape list, so the checker's blind spot
+propagated into the seeder — keep the two in lockstep, in both directions.
 
 ## Consumer-context spec rule (v0.1.5)
 
