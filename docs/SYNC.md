@@ -85,13 +85,26 @@ checker derives the canonical version from `platform.lock`, parses every
 workflow with the **`yaml` parser** (anchors resolved — not regex) to collect
 cms-platform `uses:@` refs, reads the SHA-pinned composites' trailing
 `# vX.Y.Z` comment via a **line-aware pass** (the only justified exception — the
-YAML parser drops comments, same as `scripts/sync-action-pin-comments.sh`), and
+YAML parser drops comments, same as `scripts/sync-action-pin-comments.sh`),
+checks every literal **`with: platform_ref:`** input, and
 reads the Gemfile/Gemfile.lock `tag:`. It **aggregates all** violations and
 fails CI with a per-file diff (found vs expected) when any disagree; exits 0
 with an OK summary when they all match. It tolerates a consumer with no Gemfile
 and ignores non-cms-platform `uses:`. Self-tested by
 `e2e/check-platform-pin-consistency.test.js` (consistent fixture → 0; skewed
 fixture → non-zero, each offending file/value named).
+
+The **`platform_ref` input matters most and was the last one covered** (#220,
+v0.1.74). Each reusable's own platform checkout does `ref: ${{ inputs.platform_ref }}`,
+so that input — not the `uses:@` pin beside it — decides WHICH platform tree the
+job runs; and the workflow-CONTENT parity check below deliberately masks `with:`
+VALUES as site-specific, so nothing saw it. A caller sat 14 releases stale while
+every check reported consistent. An input DECLARATION (a map value, as in the
+reusables' own `platform_ref: { type: string, default: main }`) and a `${{ … }}`
+expression are skipped — neither is a pin. **A stale `platform_ref` produces no
+symptom until a reusable references a path its pinned tree lacks**, so the guard
+is the only thing that can see it; do not reason about pin skew from whether runs
+are passing.
 
 This **complements `platform-drift-guard`**: drift-guard guards file **content**
 (platform-owned files in the site must byte-match the platform); pin-consistency
