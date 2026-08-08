@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.71`** — `v0.1.0`–`v0.1.71` are all tagged GitHub
+**Current release: `v0.1.72`** — `v0.1.0`–`v0.1.72` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1616,7 +1616,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.71)
+## Version history (v0.1.0 → v0.1.72)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2321,6 +2321,47 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   job count — priced, and declined), the apt-stall frequency (~1 run in 10, two
   occurrences in one afternoon), and both consumers' AGENTS.md corrected where
   they still claimed per-project worker counts.
+
+- **v0.1.72** (2026-08-08) — **the apt bound orphaned a root-owned `apt-get`
+  (#216), plus the locale-dependent renderer (#213).** v0.1.70's install bound
+  wrapped the WHOLE `install --with-deps`, and that did not abandon a slow apt —
+  it ORPHANED one. Playwright logs "Switching to root user to install
+  dependencies..." before shelling out, so the `apt-get` doing the work is a
+  **root-owned grandchild**; an unprivileged `timeout`'s signal cannot reach it
+  (EPERM) however the process group is arranged, which means `setsid` plus a
+  group kill does not help either and **no signal-based kill can**. Measured on
+  adamdaniel.ai job 92989057569: attempt 1 fetched for 7 minutes with ZERO
+  lock-wait lines (it owned the dpkg lock), was killed mid-transaction at the
+  420 s bound, and 19 s later attempt 2 died on "Could not get lock
+  /var/lib/dpkg/lock-frontend. It is held by process 2857 (apt-get)" — attempt
+  1's own survivor, not the runner's `apt-daily`. That failed the webkit lane,
+  failed the `e2e` gate, BLOCKED canary PR #2978 and timed out the prod loop; a
+  re-run with zero code change went green. Fix: the install splits into two
+  phases — `install-deps` (apt) retried but **never** wrapped in `timeout`, and
+  `install` (the download, no `--with-deps`) keeping the escalating bound. The
+  trade is deliberate: apt IS the slow phase, so a lane can finish late, and
+  late-and-green beats red-and-blocked because a red required check blocks a
+  `cms/*` canary PR permanently. Classification now greps the captured output
+  for `Could not get lock|lock-frontend|dpkg was interrupted` BEFORE reading the
+  exit code, since `npx playwright install` wraps apt's 100 as 1.
+  Also: **#213** — `scripts/render-decap-config.rb` inherited
+  `Encoding.default_external` from the ambient locale, so with no `LANG` it
+  resolved to US-ASCII and the first `sub` over `config.base.yml`'s UTF-8
+  em-dashes raised `invalid byte sequence in US-ASCII`. CI masked it
+  (`ubuntu-latest` sets `LANG=C.UTF-8`); a deploy-time renderer must not depend
+  on that. Pinned in the CLI entry point (covering its reads/writes, both
+  `YAML.load_file` calls, and the `require_relative`'d `FieldLibrary`), NOT in
+  the Jekyll-hosted twin, which must not mutate its host's globals. Proven
+  output-neutral under a UTF-8 locale, so no consumer's admin config shifts.
+  Plus **build-lock hardening (#214)**: `release()` refuses unless the owner
+  reads back exactly our token (an unreadable owner used to fall through and
+  delete a lock it could not prove was ours); the stale branch no longer
+  `continue`s past the deadline check (an unbreakable lock used to spin
+  `acquire()` forever — a hang is worse than a timeout); and the lock wait is
+  credited to the caller's test budget INCREMENTALLY, so acquire's own
+  diagnostic can surface before Playwright kills the test. The "every in-test
+  jekyll build goes through the helper" lint was a regex matching one call
+  shape and is now an AST detector over the whole exec/spawn family.
 
 ## Consumers
 
