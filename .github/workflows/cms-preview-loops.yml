@@ -158,10 +158,21 @@ jobs:
         run: |
           set -o pipefail
           # --workers=1 serialises the three specs: they all mutate the
-          # same preview env via Decap → cms/* PR → auto-merge →
-          # deploy-preview (per-PR concurrency-grouped), so parallel
-          # specs would queue multiple deploys deep and blow their
-          # URL-wait budgets. --max-failures=1 bails on the first failure.
+          # SAME preview env via Decap → cms/* PR → auto-merge →
+          # deploy-preview, so parallel specs would blow their URL-wait
+          # budgets. --max-failures=1 bails on the first failure.
+          #
+          # This comment used to say deploy-preview was "per-PR
+          # concurrency-grouped", and it is NOT — deploy-preview.yml
+          # declares no `concurrency` at all (verified). That made the
+          # stated reason wrong ("deploys would QUEUE"), but the
+          # conclusion MORE necessary, not less: with no group, three
+          # concurrent deploys to the same `pr-<N>/` S3 prefix and the
+          # same CloudFront invalidation RACE each other, so a spec can
+          # observe another spec's content at its own URL. Serialising
+          # here is the only thing preventing that. Don't "fix" this by
+          # restoring the parenthetical, and don't drop --workers=1 on
+          # the belief that a concurrency group is catching it.
           npx playwright test \
             cms-publish-loop-prod-mutate-preview.spec.js \
             cms-unpublish-republish-preview.spec.js \
