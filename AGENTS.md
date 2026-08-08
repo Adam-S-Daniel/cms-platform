@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.72`** — `v0.1.0`–`v0.1.72` are all tagged GitHub
+**Current release: `v0.1.74`** — `v0.1.0`–`v0.1.74` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1647,7 +1647,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.72)
+## Version history (v0.1.0 → v0.1.74)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2393,6 +2393,47 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   diagnostic can surface before Playwright kills the test. The "every in-test
   jekyll build goes through the helper" lint was a regex matching one call
   shape and is now an AST detector over the whole exec/spawn family.
+
+- **v0.1.73** (2026-08-08) — **the regression capture scored a page as changed
+  before it finished rendering (#219).** `regression-video.spec.js` screenshotted
+  each page without waiting for render to settle, so a page whose paint had not
+  converged could be captured mid-render on one side of the PR-vs-prod pair and
+  score a pixel delta with **no text delta** — the signature of a false positive.
+  Observed on adamdaniel.ai #2994 (v0.1.72 harness): `/blog/introducing-gha-bench/`
+  reported visually different, forcing a human `regression-review` approval on a
+  pins-only bump. The controlled comparison is #2998 (v0.1.73, same pins-only
+  diff, same 13-page universe): 0 different, 13 identical, auto-approved.
+  **Read the shape, not just the count:** `Visually different ≥ 1` with
+  `Text changed: 0` is the false-positive signature; the v0.1.59–v0.1.62 bump PRs
+  also reported 1 different but carried `Text changed: 1` — a real content delta,
+  a different thing entirely. Across the 15 bump PRs with a regression comment the
+  false-positive shape appears exactly once, so treat any single green run as weak
+  evidence and watch the shape over several releases.
+
+- **v0.1.74** (2026-08-08) — **a stale `platform_ref` INPUT silently ran a
+  14-release-old platform tree, and the pin guard could not see it (#220).**
+  `check-platform-pin-consistency.js` validated every `uses:@` pin, every
+  composite `# vX.Y.Z` comment and the Gemfile tags — but not the `platform_ref:`
+  input, which is what each reusable's own checkout does `ref:` with, so it (not
+  the `uses:@` pin) decides WHICH platform tree runs. The workflow-CONTENT parity
+  check could not cover it either: it deliberately masks `with:` VALUES as
+  site-specific, and this one is canonical by definition. jodidaniel.com's
+  `cms-scheduled-publish-loop` therefore shipped `uses:@v0.1.73` with
+  `platform_ref: v0.1.59`, checking out a tree that predated the v0.1.70
+  `install-playwright-browsers` composite and failing `Can't find 'action.yml'`
+  silently, on a schedule, since v0.1.70 (runs 31242320695, 31266342355).
+  **The introduction path is the same blind spot, one level up:**
+  `platform-bump`'s newly-dictated-caller SEEDING re-pinned only `uses:@` and the
+  composite comment, justified in-comment as "the ref shapes the pin-consistency
+  checker recognizes" — so the checker's gap propagated into the seeder, and the
+  later generic `CUR->LATEST` replace could never repair the frozen value (`CUR`
+  is the consumer's previous ref, which `v0.1.59` never matched again). Both are
+  fixed: the guard checks every literal `platform_ref` (skipping input
+  DECLARATION maps and `${{ … }}` expressions), and the seeder stamps
+  `platform_ref:` in bare / `"double"` / `'single'`-quoted shapes. Keep the two
+  shape lists in lockstep, in BOTH directions. The `e2e-tests.yml` skew #220 also
+  flagged was an artifact of the grep that found it — a full per-workflow audit of
+  both consumers found this caller to be the only real one.
 
 ## Consumers
 
