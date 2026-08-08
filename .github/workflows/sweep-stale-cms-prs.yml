@@ -334,12 +334,28 @@ jobs:
             echo "::notice::Opened cleanup PR #${PR_NUM} on branch ${BRANCH}"
           fi
 
-      - name: Sweep stale ephemeral prod-loop `_posts/` + upload orphans left on main
+      - name: Sweep stale ephemeral loop `_posts/` + upload orphans left on main
         # #1771 step 4 made the prod-mutate + media-roundtrip loops create
         # + delete EPHEMERAL born-published per-run posts
         # (`_posts/2099-12-31-e2e-prod-mutate-<runId>.md` /
         # `_posts/2099-12-31-e2e-media-roundtrip-<runId>.md`) plus a per-run
         # uploaded image (`assets/images/uploads/e2e-media-roundtrip-<runId>.png`).
+        # The scheduled-publish loop follows the same ephemeral model
+        # (`_posts/2099-12-31-e2e-scheduled-publish-<runId>.md`, seeded
+        # `published: false` + a near-future `publish_date` so the real
+        # scheduler promotes it) and was NOT covered here until #224 — an
+        # orphan from a 2026-07-31 run sat on adamdaniel.ai's main for 8 days,
+        # publicly reachable, with nothing that would ever collect it.
+        #
+        # NOTE — deliberately NOT extended to the branch safelist. The
+        # scheduled-publish loop's own fixture PRs ride `cms/e2e-fixture/`
+        # (seedFixtureViaPr), which TEST_ONLY_PATTERNS already covers. The
+        # `cms/posts/scheduled-publish-<run_id>` branch is the REAL scheduler's
+        # (publish-scheduled-posts.yml `git checkout -b`), used for genuine
+        # editor-scheduled posts — safelisting it would let this sweep close a
+        # real queued-content PR and delete its branch. Those branches are
+        # handled by that loop's own `if: always()` cleanup, which skips any
+        # branch with an open PR.
         # A crashed run that died before its existence-only-delete afterAll
         # leaks at most ONE inert, uniquely-named orphan of each — never a
         # corrupt shared baseline. This tier mirrors the `_e2e/canary-delete-*`
@@ -362,8 +378,16 @@ jobs:
           THRESHOLD_TS=$(date -u -d "${THRESHOLD_HOURS} hours ago" +%s)
 
           # Ephemeral prod-loop posts: both per-run prefixes under _posts/.
+          # `|| post_files=""` sits OUTSIDE the command substitution on purpose
+          # (#130): `gh api` relays its HTTP error BODY to stdout, so a 404 on a
+          # consumer with no `_posts/` would otherwise capture
+          # `{"message":"Not Found",...}` as a filename. Keeping the fallback out
+          # here is also what makes a consumer that has no `_posts/` today
+          # (jodidaniel.com — a single-page bio) benefit the moment it grows one,
+          # with no per-consumer configuration: the listing just starts returning
+          # paths. Locked by workflow-loop-branch-cleanup.test.js.
           post_files=$(gh api "/repos/${GH_REPO}/contents/_posts?ref=main" --jq \
-            '.[] | select(.name | startswith("2099-12-31-e2e-prod-mutate-") or startswith("2099-12-31-e2e-media-roundtrip-")) | .path' \
+            '.[] | select(.name | startswith("2099-12-31-e2e-prod-mutate-") or startswith("2099-12-31-e2e-media-roundtrip-") or startswith("2099-12-31-e2e-scheduled-publish-")) | .path' \
             2>/dev/null) || post_files=""
           # Per-run media uploads from the media round-trip spec.
           upload_files=$(gh api "/repos/${GH_REPO}/contents/assets/images/uploads?ref=main" --jq \
@@ -409,8 +433,8 @@ jobs:
 
           if [ "$BRANCH_CREATED" = "true" ]; then
             PR_NUM=$(gh pr create \
-              --title "chore(sweep): remove stale ephemeral prod-loop orphans" \
-              --body "Automated cleanup by \`.github/workflows/sweep-stale-cms-prs.yml\`. The deleted files are throw-away ephemeral posts / uploads from \`cms-publish-loop-prod-mutate.spec.js\` / \`cms-media-roundtrip.spec.js\` (#1771 step 4) runs that crashed before their existence-only-delete cleanup could fire. Auto-merges via the \`cms/ready\` label." \
+              --title "chore(sweep): remove stale ephemeral loop orphans" \
+              --body "Automated cleanup by \`.github/workflows/sweep-stale-cms-prs.yml\`. The deleted files are throw-away ephemeral posts / uploads from \`cms-publish-loop-prod-mutate.spec.js\` / \`cms-media-roundtrip.spec.js\` / \`cms-scheduled-publish-loop.spec.js\` runs that crashed before their existence-only-delete cleanup could fire. Auto-merges via the \`cms/ready\` label." \
               --head "${BRANCH}" \
               --base main \
               --label "cms/ready" \
