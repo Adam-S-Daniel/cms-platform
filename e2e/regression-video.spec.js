@@ -2,6 +2,12 @@
 const { test } = require("@playwright/test");
 const fs = require("fs");
 const path = require("path");
+// Bounded "let the page finish rendering" wait — see that file's header for
+// the full incident (adamdaniel.ai PR #2994, /blog/introducing-gha-bench/).
+// MUST be called at BOTH capture sites below (PR side + prod side): prod is
+// the slow side over the network, but a wait on only one side just moves the
+// race instead of removing it.
+const { waitForRenderSettled } = require("./wait-for-render");
 
 const changesPath = process.env.PAGE_CHANGES_PATH || "/tmp/page-changes.json";
 
@@ -159,6 +165,11 @@ test.describe("Regression video screenshots", () => {
         await page.waitForTimeout(500);
       }
       await waitForAdminBootIfApplicable(page, pagePath);
+      // PR-SIDE capture. Local Jekyll paints fast, but not instantly on every
+      // runner/widget — this call MUST stay here alongside the prod-side one
+      // below (adamdaniel.ai PR #2994), or the two captures can again land on
+      // opposite sides of a client-side render.
+      await waitForRenderSettled(page);
       await page.screenshot({
         path: path.join(OUTPUT_DIR, "pr", `${safeName}.png`),
         fullPage: false,
@@ -202,6 +213,16 @@ test.describe("Regression video screenshots", () => {
           }
           await page.waitForTimeout(500);
           await waitForAdminBootIfApplicable(page, pagePath);
+          // PROD-SIDE capture — THE SLOW SIDE. This round-trips over the
+          // network (CloudFront), so a page whose content is built by
+          // client-side JS is far likelier to still be mid-render here than
+          // on the PR side's near-instant localhost load (adamdaniel.ai
+          // PR #2994: /blog/introducing-gha-bench/'s JS-built widget table
+          // was captured missing here while present on the PR side, on a
+          // bump that changed no rendering code at all). Removing this call
+          // — or "simplifying" the fix to only the PR side — restores that
+          // exact asymmetry; it must stay on both captures.
+          await waitForRenderSettled(page);
           await writeVisibleText(page, "prod", safeName);
         } catch {
           // The page can still be (re)navigating when we land here — e.g.
