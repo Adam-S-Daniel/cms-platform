@@ -40,6 +40,18 @@ permissions:
 jobs:
   bump:
     runs-on: ubuntu-latest
+    # Serialise bump runs per consumer repo (#222). Two overlapping runs — a
+    # cron firing while someone dispatches, or a retried dispatch — race: the
+    # loser force-pushes the same branch, finds `gh pr create` fails because the
+    # winner already opened the PR, and falls through to `gh pr edit --body`.
+    # See the idempotency gate in the bump step for why that edit is damaging.
+    # cancel-in-progress: false — the winner is mid-push; cancelling it could
+    # leave a branch pushed with no PR. The loser queues, then no-ops on the
+    # gate below. Serialising is what makes that gate sound: without it both
+    # runs can pass the "is a PR already open?" check before either creates one.
+    concurrency:
+      group: platform-bump-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       # The bump rewrites .github/workflows/* (the `uses:@` pins + `platform_ref:`
       # inputs), so the PUSH needs `workflows` permission. The default Actions
@@ -61,6 +73,36 @@ jobs:
           [ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
           CUR=$(sed -n -E 's/^platform_ref:[[:space:]]*//p' platform.lock 2>/dev/null || echo "")
           [ "$LATEST" = "$CUR" ] && { echo "already on $LATEST"; exit 0; }
+
+          # Idempotency gate (#222). The check just above reads platform.lock on
+          # the DEFAULT BRANCH, which only advances when a bump PR MERGES — so it
+          # cannot see a bump PR that is merely OPEN. A second run therefore
+          # sails past it, redoes the whole rewrite, force-pushes the same
+          # branch, finds `gh pr create` fails ("a pull request for branch …
+          # already exists"), and falls through to `|| gh pr edit --body`.
+          #
+          # That edit is not cosmetic: it fires a `pull_request: edited` event,
+          # and every required-check caller carries
+          #   if: github.event.action != 'edited' || github.event.changes.base.ref.from != ''
+          # so its job SKIPS. A skipped caller never invokes the reusable, so no
+          # check-run named `<caller job> / <reusable job>` is produced at all —
+          # the newest run WITHDRAWS a required context that was already green.
+          # GitHub then reports "N of M required status checks are expected" and
+          # the PR is unmergeable until someone pushes a new SHA, which a
+          # finished bump PR never gets. Observed live: adamdaniel.ai#3001 +
+          # jodidaniel.com#115, both hard-blocked with every check visibly green.
+          BRANCH="platform/bump-$LATEST"
+          # --limit 1: existence check only (the repo's `gh pr list` convention —
+          # the default limit of 30 silently truncates, so every call states one).
+          # FAIL-OPEN on a gh/API error: an empty EXISTING proceeds with the bump.
+          # A gate that failed CLOSED would silently skip a legitimate scheduled
+          # bump on a transient blip — worse than the race it guards, which the
+          # job-level `concurrency:` above already covers in the common case.
+          EXISTING=$(gh pr list --state open --head "$BRANCH" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
+          if [ -n "$EXISTING" ]; then
+            echo "bump PR #${EXISTING} for $LATEST is already open on $BRANCH — nothing to do"
+            exit 0
+          fi
 
           # Resolve the release tag -> its COMMIT sha (deref an annotated tag) for
           # the Gemfile.lock git `revision:` and any composite-action `@<sha>` pin.
@@ -159,7 +201,7 @@ jobs:
             echo "no changes"
             exit 0
           fi
-          BRANCH="platform/bump-$LATEST"
+          # BRANCH was set by the idempotency gate above.
           git config user.name  cms-platform-bot
           git config user.email cms-platform-bot@users.noreply.github.com
           git checkout -b "$BRANCH"
