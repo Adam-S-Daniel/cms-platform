@@ -33,6 +33,17 @@ const LOOPS = {
     job: "host-loop",
     patterns: ["cms/e2e/canary-", "cms/e2e-fixture/"],
   },
+  // #224. Its ephemeral BRANCH prefix is the one the REAL scheduler
+  // (publish-scheduled-posts.yml) pushes for genuine editor-scheduled posts,
+  // so unlike the two loops above it must NEVER be added to the sweep's
+  // TEST_ONLY_PATTERNS — that would let the daily sweep close a real
+  // queued-content PR and delete its branch. Its own `if: always()` cleanup
+  // (which skips any branch with an open PR) is the whole defence, which is
+  // exactly why it needs linting here.
+  "cms-scheduled-publish-loop.yml": {
+    job: "scheduled-publish-loop",
+    patterns: ["cms/posts/scheduled-publish-"],
+  },
 };
 const LOOP_WORKFLOWS = Object.keys(LOOPS);
 
@@ -220,6 +231,78 @@ test.describe("sweep-stale-cms-prs prunes orphaned canary BRANCHES (#22)", () =>
     for (const wf of LOOP_WORKFLOWS) {
       const names = jobs(readWorkflow(wf)).map((j) => j.name);
       expect(names, `${wf} must contain ${LOOPS[wf].job}`).toContain(LOOPS[wf].job);
+    }
+  });
+});
+
+// ── The ephemeral `_posts/` CONTENT sweep (#224) ──────────────────────────────
+// Distinct from the orphan-BRANCH prune above: this is the tier that DELETEs
+// orphaned per-run post FILES left on main by a loop that died before its own
+// existence-only-delete cleanup. Nothing linted it, and the scheduled-publish
+// loop was absent from it for its entire life — an orphan from a 2026-07-31 run
+// sat on adamdaniel.ai's `main` for 8 days, publicly reachable at its /blog/
+// URL, with nothing in the fleet that would ever collect it.
+test.describe("sweep-stale-cms-prs reaps ephemeral `_posts/` orphans (#224)", () => {
+  const SWEEP = "sweep-stale-cms-prs.yml";
+
+  // Every loop that creates an EPHEMERAL, uniquely-named per-run `_posts/`
+  // entry. Add a row when a new loop does — the sweep must list its prefix or
+  // its crashed runs leak forever.
+  const EPHEMERAL_POST_PREFIXES = [
+    "2099-12-31-e2e-prod-mutate-",
+    "2099-12-31-e2e-media-roundtrip-",
+    "2099-12-31-e2e-scheduled-publish-",
+  ];
+
+  // The content-sweep step is the one that LISTS `_posts` via the contents API.
+  function findPostSweepStep(sweepJob) {
+    return (sweepJob.steps || []).find((s) => /contents\/_posts/.test(String((s && s.run) || "")));
+  }
+
+  // Strip full-line and inline `#` comments so an explanatory comment that
+  // merely mentions a prefix can't satisfy the assertion while the actual
+  // jq `startswith(...)` filter is missing — same de-tautologization the
+  // orphan-branch assertions use. Load-bearing here: the step's own header
+  // comment names all three prefixes in prose.
+  function functionalRun(step) {
+    return String(step.run)
+      .split("\n")
+      .map((l) => l.replace(/\s#.*$/, ""))
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+  }
+
+  test("the content sweep lists EVERY ephemeral per-run post prefix", () => {
+    const doc = parseYaml(readWorkflow(SWEEP));
+    const sweepJob = doc.jobs.sweep;
+    const step = findPostSweepStep(sweepJob);
+    expect(step, `${SWEEP} must have a step that lists _posts via the contents API`).toBeTruthy();
+    const run = functionalRun(step);
+    for (const prefix of EPHEMERAL_POST_PREFIXES) {
+      expect(
+        run,
+        `${SWEEP}: the \`_posts/\` content sweep must select ${prefix}* — a loop whose ` +
+          `prefix is missing here leaks an orphan on main forever (#224)`,
+      ).toContain(prefix);
+    }
+  });
+
+  test("the content listings tolerate a consumer with no `_posts/` (or uploads) directory", () => {
+    // GitHub's contents API 404s a missing directory, and `gh api` relays the
+    // error BODY to stdout — so the fallback MUST sit outside the command
+    // substitution (`… ) || files=""`), not inside it (#127/#130). This is also
+    // what makes a consumer with no `_posts/` today (jodidaniel.com, a
+    // single-page bio) start benefiting automatically the moment it grows one:
+    // no per-consumer configuration, the listing simply starts returning paths.
+    const doc = parseYaml(readWorkflow(SWEEP));
+    const step = findPostSweepStep(doc.jobs.sweep);
+    const run = functionalRun(step);
+    for (const varName of ["post_files", "upload_files"]) {
+      expect(
+        run,
+        `${SWEEP}: \`${varName}\` must fall back OUTSIDE the command substitution ` +
+          `(\`) || ${varName}=""\`) so a missing directory yields empty, not an error body (#130)`,
+      ).toMatch(new RegExp(`\\)\\s*\\|\\|\\s*${varName}=""`));
     }
   });
 });
