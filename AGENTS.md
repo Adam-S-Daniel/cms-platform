@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.74`** — `v0.1.0`–`v0.1.74` are all tagged GitHub
+**Current release: `v0.1.75`** — `v0.1.0`–`v0.1.75` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -1647,7 +1647,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.74)
+## Version history (v0.1.0 → v0.1.75)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2451,6 +2451,50 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   v0.1.59, so the `e2e/` harness being checked out was older than the workflow
   driving it and nothing ever exercised it. **Do not reason about pin skew from
   whether runs are passing.**
+
+- **v0.1.75** (2026-08-08) — **two ways an automated PR could wedge itself, and a
+  sweep tier that never covered its third loop.**
+
+  **#222 — a second `platform-bump` run retracted its own PR's required checks.**
+  Two runs landed 14 s apart on each consumer; the loser force-pushed, found
+  `gh pr create` failed because the winner's PR was open, and fell through to
+  `|| gh pr edit --body`. That fires `pull_request: edited`, which every
+  required-check caller skips on — and **a skipped caller never invokes the
+  reusable, so no check-run named `<caller job> / <reusable job>` is produced at
+  all.** The newest run therefore WITHDRAWS a required context that was already
+  green; GitHub reports "5 of 6 required status checks are expected" and only a
+  new SHA restores them, which a finished bump PR never gets. Exactly 5 of the 6
+  required contexts are reusable-calling jobs with that guard (`editorial /
+  validate-content` is not), matching the error precisely. **`concurrency:`
+  alone does NOT fix it** — the existing "already on $LATEST" gate reads
+  `platform.lock` on the DEFAULT BRANCH, which only advances when a bump PR
+  MERGES, so a serialised second run still redoes the work. The fix is both: a
+  job-level `concurrency` group (which is what makes the gate sound — without it
+  two runs can both pass the check before either creates a PR) plus an
+  idempotency gate keyed on an OPEN `platform/bump-$LATEST` PR, fail-open on a
+  gh error. The `edited` guard itself is the amplifier and is tracked
+  separately: measured 2 firings in 4 days, self-healing on any PR that gets
+  another push, terminal only where none is coming — against **0 base retargets
+  in 60 PRs**, which is the only case it exists for.
+
+  **#224 — the sweep never reaped `e2e-scheduled-publish-` orphans.** That loop
+  follows the same ephemeral per-run `_posts/` model as prod-mutate and
+  media-roundtrip but was absent from the content tier; an orphan from
+  2026-07-31 served HTTP 200 on adamdaniel.ai for 8 days with nothing that would
+  collect it. Extends the EXISTING tier's jq filter (single source over
+  duplication), so it inherits the age gate, the labelled auto-merging cleanup
+  PR, and the #130 missing-directory tolerance — which is what makes a consumer
+  with no `_posts/` today (jodidaniel.com) benefit the moment it grows one, with
+  no per-consumer config. **Deliberately NOT added to the branch safelist**, and
+  this is the load-bearing detail: the issue proposed
+  `cms/posts/2099-12-31-e2e-scheduled-publish-`, which no code path creates —
+  the loop's fixtures ride `cms/e2e-fixture/` (already safelisted), while
+  `cms/posts/scheduled-publish-<run_id>` belongs to the REAL scheduler
+  (`publish-scheduled-posts.yml` `git checkout -b`) and is shared with genuine
+  editor-scheduled posts. Safelisting it would have let the daily sweep close
+  real queued content. Three lints added, each proven red-first, including a
+  comment-stripped prefix-completeness check (the step's own comment names all
+  three prefixes in prose, so an un-stripped assertion would be tautological).
 
 ## Consumers
 
