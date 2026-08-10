@@ -21,14 +21,49 @@
 # and no merge conflict, re-validates the SAME manifest-path allowlist
 # dependabot-auto-merge.yml enforces (scripts/check-dependabot-manifest-paths.sh
 # — the single shared source; see that script's header) and then:
-#   - merges DIRECTLY (`gh pr merge --squash`, no `--auto`) when GitHub
-#     already reports `mergeStateStatus == CLEAN` — this avoids re-entering
-#     the exact same auto-disable race a fresh `--auto` enable could hit if
-#     another PR in the batch merges first;
-#   - otherwise RE-ARMS auto-merge (`--auto --squash`) so GitHub finishes the
-#     job once its own required-check bookkeeping catches up.
-# Dependabot branches live in this repo (never a fork), so the default
-# GITHUB_TOKEN is sufficient — no PAT needed.
+#   - merges DIRECTLY (`gh pr merge --squash`, no `--auto`) — ALWAYS the first
+#     attempt. The checks are already verified green above, and branch
+#     protection still enforces every required check at merge time (the `main`
+#     ruleset carries no bypass actors), so a direct attempt can never bypass
+#     a gate;
+#   - RE-ARMS auto-merge (`--auto --squash`) only as RECOVERY, when the direct
+#     merge failed — the right move for a PR GitHub does not yet consider
+#     mergeable, and still the working path for a non-workflow-file bump;
+#   - counts a PR where BOTH failed as FAILED and exits non-zero, so the
+#     sweep's own inability to act is visible (the same "a red run means a
+#     human is needed" contract as audit-editorial-labels.js --fix).
+#
+# WHY `github.token`, AND WHAT ACTUALLY FAILS HERE
+# GITHUB_TOKEN *can* merge a workflow-file PR: #182 changed 31 files, all of
+# them under `.github/workflows/`, and merged at 19:06:16 — merged_by
+# github-actions[bot], 3 seconds after its last required check (node-unit-lints)
+# completed at 19:06:13. So "GITHUB_TOKEN cannot merge workflow-file PRs" is
+# FALSE; don't write it down again. What DOES fail is
+# `enablePullRequestAutoMerge` FROM THE SCHEDULE CONTEXT: sweep job
+# 93416787884 (2026-08-10) passed the mergeable gate, checks_ok and the
+# manifest re-check for BOTH #194 and #179, then logged
+#   GraphQL: Pull request refusing to allow a GitHub App to create or update
+#   workflow `.github/workflows/deploy-preview.yml` without `workflows`
+#   permission (enablePullRequestAutoMerge)
+# and ended "Sweep complete — merged=0 re-armed=0 skipped=0". The
+# discriminator is the EVENT CONTEXT, not the token class — which is exactly
+# why the direct merge goes first now.
+#
+# The sweep deliberately KEEPS `github.token` on the merge path. A merge
+# attributed to GITHUB_TOKEN fires NO push workflows (verified: neither #182's
+# nor #193's merge commit produced a self-ci push run), whereas an App- or
+# PAT-attributed merge WOULD — and a Dependabot bump touching
+# cms-publish-loop-prod.yml + cms-publish-loop-host.yml +
+# cms-media-roundtrip.yml would then fire all three prod loops onto the shared
+# `prod-mutating-loop` concurrency group, which DROPS a co-arriving sibling.
+# Never put an App/PAT token on this path.
+#
+# `mergeStateStatus` is VIEWER-SCOPED, so the old `CLEAN`-gated direct-merge
+# branch was UNREACHABLE and never once executed: it read BLOCKED to the
+# sweep's own token while all three required contexts (actionlint,
+# ruby-theme-specs, node-unit-lints) were SUCCESS on both PRs and the ruleset
+# requires zero approving reviews with no bypass actors. It is still LOGGED
+# (useful diagnostics) but it gates nothing.
 name: Dependabot re-arm sweep (reusable)
 
 on:
@@ -67,6 +102,8 @@ jobs:
 
           if [ "${#PR_NUMBERS[@]}" -eq 0 ]; then
             echo "::notice::No open Dependabot PRs — nothing to sweep."
+            echo "Dependabot re-arm sweep: no open Dependabot PRs — nothing to sweep." \
+              >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -74,16 +111,42 @@ jobs:
           REARMED=0
           MERGED=0
           SKIPPED=0
+          FAILED=0
+          UNDETERMINED=0
 
           for num in "${PR_NUMBERS[@]}"; do
-            pr_json=$(gh pr view "$num" --json number,baseRefName,mergeable,mergeStateStatus,statusCheckRollup)
-
-            mergeable=$(jq -r '.mergeable' <<<"$pr_json")
-            merge_state=$(jq -r '.mergeStateStatus' <<<"$pr_json")
+            # GitHub computes `mergeable` ASYNCHRONOUSLY, so a single read can
+            # come back UNKNOWN on a PR it simply hasn't got to yet — the
+            # 2026-08-09 run (job 93223897818) skipped BOTH open PRs on
+            # "mergeable=UNKNOWN" and reported skipped=2, and the very next day
+            # the same two PRs read MERGEABLE. So a single-shot read is an
+            # intermittent false skip: re-query while UNKNOWN. CONFLICTING (or
+            # anything else that isn't MERGEABLE) is TERMINAL — no retry.
+            pr_json=""
+            mergeable=""
+            merge_state=""
+            for attempt in 1 2 3 4 5; do
+              pr_json=$(gh pr view "$num" --json number,baseRefName,mergeable,mergeStateStatus,statusCheckRollup)
+              mergeable=$(jq -r '.mergeable' <<<"$pr_json")
+              merge_state=$(jq -r '.mergeStateStatus' <<<"$pr_json")
+              if [ "$mergeable" != "UNKNOWN" ]; then
+                break
+              fi
+              echo "#${num} — mergeable=UNKNOWN (attempt ${attempt}/5); GitHub is still computing it, re-querying"
+              if [ "$attempt" -lt 5 ]; then
+                sleep 6
+              fi
+            done
             base=$(jq -r '.baseRefName' <<<"$pr_json")
 
+            if [ "$mergeable" = "UNKNOWN" ]; then
+              echo "::warning::#${num} — mergeable still UNKNOWN after 5 queries; leaving it for the next sweep"
+              UNDETERMINED=$((UNDETERMINED + 1))
+              continue
+            fi
+
             if [ "$mergeable" != "MERGEABLE" ]; then
-              echo "skip #${num} — mergeable=${mergeable} (conflict, or GitHub still computing)"
+              echo "skip #${num} — mergeable=${mergeable} (merge conflict; terminal for this sweep)"
               SKIPPED=$((SKIPPED + 1))
               continue
             fi
@@ -114,29 +177,56 @@ jobs:
               continue
             fi
 
-            if [ "$merge_state" = "CLEAN" ]; then
-              echo "merge #${num} — mergeStateStatus=CLEAN; merging directly (squash) to avoid re-stranding"
-              if [ "$DRY_RUN" != "true" ]; then
-                if gh pr merge --squash "$num"; then
-                  MERGED=$((MERGED + 1))
-                else
-                  echo "::warning::direct merge failed for #${num}"
-                fi
-              else
-                MERGED=$((MERGED + 1))
-              fi
+            # Every gate above has passed: checks green, no conflict, diff
+            # confined to the manifest allowlist. `merge_state` is logged for
+            # diagnostics ONLY — it is viewer-scoped, so gating on it is what
+            # made the direct-merge branch unreachable (see the header).
+            echo "act on #${num} — checks green, manifest clean (mergeStateStatus=${merge_state}, diagnostic only)"
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "would merge #${num} directly (squash)"
+              MERGED=$((MERGED + 1))
+              continue
+            fi
+
+            if gh pr merge --squash "$num"; then
+              echo "merged #${num} directly (squash)"
+              MERGED=$((MERGED + 1))
+            elif gh pr merge --auto --squash "$num"; then
+              echo "re-armed auto-merge on #${num} — the direct merge was refused; GitHub lands it"
+              REARMED=$((REARMED + 1))
             else
-              echo "re-arm #${num} — mergeStateStatus=${merge_state}; re-enabling auto-merge (squash)"
-              if [ "$DRY_RUN" != "true" ]; then
-                if gh pr merge --auto --squash "$num"; then
-                  REARMED=$((REARMED + 1))
-                else
-                  echo "::warning::failed to re-enable auto-merge for #${num}"
-                fi
-              else
-                REARMED=$((REARMED + 1))
-              fi
+              echo "::warning::#${num} — neither a direct merge nor an auto-merge re-arm succeeded. On a workflow-file bump the likely cause is GitHub refusing enablePullRequestAutoMerge from the SCHEDULE context (\"without \`workflows\` permission\"); a human needs to merge it."
+              FAILED=$((FAILED + 1))
             fi
           done
 
-          echo "::notice::Sweep complete — merged=${MERGED} re-armed=${REARMED} skipped=${SKIPPED} (DRY_RUN=${DRY_RUN})"
+          echo "::notice::Sweep complete — merged=${MERGED} re-armed=${REARMED} skipped=${SKIPPED} failed=${FAILED} undetermined=${UNDETERMINED} (DRY_RUN=${DRY_RUN})"
+
+          # A month of "merged=0 skipped=2" read as success, and the 2026-08-10
+          # run reported 0/0/0 after failing twice — a failed merge/re-arm
+          # incremented NOTHING. FAILED and UNDETERMINED exist so "nothing to
+          # do" and "could not act" can never look the same again.
+          {
+            echo "### Dependabot re-arm sweep"
+            echo
+            echo "| outcome | count |"
+            echo "| --- | --- |"
+            echo "| merged | ${MERGED} |"
+            echo "| re-armed | ${REARMED} |"
+            echo "| skipped (conflict / not green / non-manifest diff) | ${SKIPPED} |"
+            echo "| failed (could not merge OR re-arm — needs a human) | ${FAILED} |"
+            echo "| undetermined (mergeable still UNKNOWN) | ${UNDETERMINED} |"
+            echo
+            echo "Candidates: ${#PR_NUMBERS[@]} · DRY_RUN=${DRY_RUN}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Exit non-zero ONLY when the sweep could not act. Same contract as
+          # audit-editorial-labels.js --fix: "a red run means a fix didn't
+          # stick and needs a human". UNDETERMINED stays green (a transient
+          # async read, not a refusal), and having nothing to sweep is never a
+          # failure.
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::${FAILED} Dependabot PR(s) could be neither merged nor re-armed — see the warnings above."
+            exit 1
+          fi
