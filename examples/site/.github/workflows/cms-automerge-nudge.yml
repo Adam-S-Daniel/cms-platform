@@ -47,15 +47,35 @@ jobs:
     with:
       # Required-status-check contexts this site's branch protection
       # enforces — mirror `.github/rulesets/main.json`. One per line.
+      #
+      # DERIVE THESE, don't copy them: the list below is only the shape a
+      # typical consumer ends up with, and a wrong entry silently disables
+      # the nudge (it waits forever for a context no run will ever report).
+      # Get the real list for YOUR site with:
+      #
+      #   gh api repos/<owner>/<repo>/rules/branches/main \
+      #     --jq '.[] | select(.type=="required_status_checks")
+      #                | .parameters.required_status_checks[].context'
+      #
+      # The nudge matches these suffix-tolerantly against check-run names,
+      # so either the bare job name or the full `<caller> / <job>` form
+      # works — the full form is used below because that is what the
+      # ruleset actually stores, and mirroring it keeps the two diffable.
+      #
+      # A previous version of this template listed nine contexts —
+      # `select`, `unit`, `e2e (1)`, `e2e-admin`, `finalize` among them —
+      # that match no job any current workflow produces. `e2e-tests.yml`
+      # has exactly two jobs, a `project` matrix and the aggregating `e2e`
+      # gate, so the single required e2e context is `e2e / e2e` and the
+      # ten `e2e / project (<name>)` contexts are informational.
+      #
+      # The list below is adamdaniel.ai's real set as of v0.1.79.
       required_contexts: |
-        validate-content
-        scan
-        select
-        unit
-        parity
-        e2e (1)
-        e2e-admin
-        finalize
-        preview-media
+        editorial / validate-content
+        scan / scan
+        parity / parity
+        preview-media / preview-media
+        e2e / e2e
+        visual-regression / approve-regression
     secrets:
       CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

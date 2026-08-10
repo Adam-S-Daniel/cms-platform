@@ -5,7 +5,10 @@ for spinning up new sites like [adamdaniel.ai](https://adamdaniel.ai) and keepin
 platform improvements flowing **both ways** after a site is created.
 
 > **Status:** mature and in production. Two live consumer sites (adamdaniel.ai,
-> jodidaniel.com) run on this platform at `v0.1.52`, with a full Playwright e2e
+> jodidaniel.com) run on this platform, kept in lockstep at the current
+> release — see the version history in `AGENTS.md`, which is the thing that
+> actually gets updated every release (a version hardcoded here went 20+
+> releases stale). Full Playwright e2e
 > matrix (publish loops, canary probes, parity, visual regression) validating
 > every release against real production deploys. The full design,
 > parameterization map, and history live in

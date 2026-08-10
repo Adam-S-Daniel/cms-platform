@@ -1,11 +1,28 @@
 ---
 name: code-quality
-description: Run, fix, and extend the repo's per-language lint + static-analysis + style toolchain (ESLint/Prettier, Ruff/Bandit/mypy, RuboCop, ShellCheck/shfmt, yamllint/actionlint, Stylelint, markdownlint). Use when a contributor asks to "lint", "format", "fix the lint errors", set up a linter for a new language, understand why a lint rule is disabled, add a check to CI or the pre-commit hook, or debug a code-quality.yml failure. Also use before opening a PR to confirm the lint gate is green.
+description: Reference for the per-language lint + static-analysis + style toolchain (ESLint/Prettier, Ruff/Bandit/mypy, RuboCop, ShellCheck/shfmt, yamllint/actionlint, Stylelint, markdownlint) — its rule relaxations and gotchas. Use when a contributor asks to "lint", "format", set up a linter for a new language, or understand why a lint rule is disabled. NOTE - the CI half described here is NOT wired up in cms-platform; read the "What actually runs" section first.
 ---
 
 # Code quality toolchain
 
-Every language has a linter + static-analyzer + style tool, configured to pass at a strong-but-pragmatic strength. Checks run locally (`npm run lint` or each tool directly), as a staged-file pre-commit guard (`scripts/lint-staged.sh`), and in CI (`.github/workflows/code-quality.yml`). The canonical reference — toolchain table, every deliberate rule relaxation, and the RuboCop-out-of-Gemfile rationale — lives in **AGENTS.md → "Code quality"**. Read it before changing any lint config.
+> ## What actually runs (read this first)
+>
+> **Most of this file describes a toolchain that is not wired up in cms-platform.** Verified against the repo: there is no `.github/workflows/code-quality.yml`, the root `package.json` has **no `scripts` key at all** (so `npm run lint` / `npm run format` cannot run), and there is no `pyproject.toml`, `.yamllint.yml`, or top-level `tests/`. AGENTS.md's own "Deliberate skips — NOT ported" list says `code-quality` was kept platform-internal and never shipped — but this skill *is* in the synced set, so it reached consumers describing machinery none of them have. The pointer below to "**AGENTS.md → Code quality**" as the canonical toolchain reference is also wrong: that heading is generic managed boilerplate and contains no toolchain table.
+>
+> What genuinely gates code in **cms-platform**:
+>
+> | lane | what it runs | hard-fail? |
+> | --- | --- | --- |
+> | `self-ci.yml` → `actionlint` | `actionlint` over `.github/workflows/*.yml` | yes |
+> | `self-ci.yml` → `ruby-theme-specs` | `ruby theme/spec/*_test.rb` | yes |
+> | `self-ci.yml` → `node-unit-lints` | the ~101 pure-fs `e2e/*.test.js` lints | yes |
+> | `self-ci.yml` → `cfn-lint` | the CloudFormation templates | advisory |
+> | `self-secrets-scan.yml` | gitleaks on the diff / history | yes |
+> | local pre-commit | `scripts/lint-staged.sh` + `scripts/secrets-scan.sh` (each skips any tool not on `PATH`) | local only |
+>
+> The sections below remain useful as the **reference for the tools themselves** — the deliberate rule relaxations, the RuboCop-out-of-Gemfile trap, the 100-column house width — and describe a real setup on a consumer that has adopted it. Treat every command as "if that tool is configured here", and verify before quoting a config path.
+
+Every language has a linter + static-analyzer + style tool, configured to pass at a strong-but-pragmatic strength.
 
 ## Run the checks
 

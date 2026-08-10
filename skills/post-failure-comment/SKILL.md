@@ -99,14 +99,18 @@ The caller-side gating in the patterns above is the only approach that has been 
 
 1. **Capture the log.** The Playwright invocation must `2>&1 | tee /tmp/<your-log>.log`. The action reads from this path verbatim. If the log is missing or empty, the action emits a "(no log captured)" comment instead of failing.
 2. **Pin a unique marker.** The action wraps `<your-marker>` as `<!-- your-marker -->`. Two workflows MUST NOT share a marker — they will clobber each other's comments. Existing markers in use:
-   - `e2e-failure-summary` — `e2e-tests.yml` → `finalize` (aggregates the e2e matrix)
-   - `unit-failure-summary` — `e2e-tests.yml` → `unit`
-   - `e2e-real-failure-summary` — `e2e-tests.yml` → `e2e-real`
-   - `parity-failure-summary` — `e2e-tests.yml` → `parity`
-   - `select-failure-summary` — `e2e-tests.yml` → `select`
+   - `e2e-failure-summary-<project>` — `e2e-tests.yml` → the `project` matrix job, **scoped per Playwright project** (e.g. `e2e-failure-summary-webkit-iphone16`). The ten matrix jobs post from inside themselves; one shared marker would have them clobber each other, and the project name in the marker says which lane went red before you open a log.
+   - `parity-preview-failure-summary` — `parity-preview.yml`
+   - `preview-media-failure-summary` — `preview-media.yml`
    - `host-loop-failure-summary` — `cms-publish-loop-host.yml`
    - `prod-mutate-failure-summary` — `cms-publish-loop-prod.yml`
+   - `media-roundtrip-failure-summary` — `cms-media-roundtrip.yml`
+   - `scheduled-publish-loop-failure-summary` — `cms-scheduled-publish-loop.yml`
    - `preview-loop-failure-summary` — `cms-publish-loop-preview.yml`
+   - `preview-loops-failure-summary` — `cms-preview-loops.yml` (distinct from the singular `preview-loop-…` above)
+   - `preview-delete-failure-summary` — `cms-delete-published-preview.yml`
+
+   > Earlier revisions of this list named `unit`, `e2e-real`, `parity`, `select` and `finalize` jobs on `e2e-tests.yml`. **None of those jobs exist** — that workflow has exactly a `project` matrix and an aggregating `e2e` gate. Regenerate this list with `grep -rhoP 'marker:\s*\K\S+' .github/workflows/*.yml | sort -u` rather than trusting it.
 3. **Check out the platform so the action is on disk.** The action shells out to its co-located `$ACTION_PATH/extract-playwright-failures.sh` and `$ACTION_PATH/scrub-secrets.js` (`$ACTION_PATH` = `${{ github.action_path }}`). The scripts ship inside the action's own directory, so you do NOT need a `scripts/` dir at the consuming repo's root — but the action's directory must be present, which means the workflow must check out the repo/path that contains `.github/actions/post-failure-comment/` (e.g. the reusable `e2e-tests.yml` checks the platform out into `.cms-platform/` and references the action as `./.cms-platform/.github/actions/post-failure-comment`). You still want `actions/checkout` for the *site* so the captured log path exists, but the extractor + scrubber no longer depend on a site-root `scripts/` dir.
 4. **Grant `pull-requests: write` to the workflow.** The default `GITHUB_TOKEN` works for posting comments on the same repo, BUT only if the workflow's `permissions:` block explicitly grants it. Without this, the embedded `actions/github-script` call 403s silently — the workflow log shows the error but no comment is posted, which can fool a casual review. The composite action does NOT require `CMS_E2E_PAT`. Minimum block:
 
