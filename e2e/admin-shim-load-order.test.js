@@ -29,7 +29,7 @@ const ADMIN_DIR = path.join(REPO_ROOT, "theme", "admin");
 const CONFIRM_WRAP = "confirm-wrap-local-backup.js";
 const AUTOSAVE = "autosave-on-hide.js";
 // The exact English confirmLoadBackup string Decap passes to window.confirm
-// (verified byte-identical in the decap-cms 3.12.2 + 3.14.1 bundles). If this
+// (verified byte-identical in the decap-cms 3.12.2 + 3.14.1 + 3.15.1 bundles). If this
 // ever drifts from the shim's literal, the wrap stops matching → the dialog
 // returns.
 const BACKUP_STRING = "A local backup was recovered for this entry, would you like to use it?";

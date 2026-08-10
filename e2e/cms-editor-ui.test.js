@@ -74,9 +74,62 @@ test.describe("cms-editor-ui shared helper — anti-drift lint (#1723)", () => {
       "mediaLibraryButton",
       "confirmEditorDelete",
       "deleteConfirmButton",
+      "collectionNewLink",
     ]) {
       expect(typeof m[fn], `cms-editor-ui must export ${fn}()`).toBe("function");
     }
+  });
+
+  // ── #162 decap bump: the collection-top "new entry" control ───────────
+  // The 3.14.1 bump attempt was reverted (v0.1.66 → v0.1.67) partly because
+  // cms-smoke's `getByRole("link", {name: /new tag|new entry/i})` click timed
+  // out 30 s, twice. Root cause found while retargeting to 3.15.1: Decap's EN
+  // `collection.collectionTop.newButton` became "＋ %{collectionLabel}" and
+  // 3.15.x sets `newButtonAriaLabel` ("Create entry of type %{collectionLabel}")
+  // as `aria-label`, which WINS over the text for the accessible name. The
+  // element never moved — only its NAME did — so a hand-rolled name regex is
+  // the failure mode, and the fix is to single-source it.
+  test("the collection-top new-entry locator lives ONLY in cms-editor-ui.js", () => {
+    // A spec matching a link/button on a /new …/ or /create …/ accessible
+    // name is hand-rolling collectionNewLink(). The workflow BOARD's own
+    // "New Post" control is a different string (`workflow.workflow.newPost`,
+    // verified unchanged from 3.12.2 to 3.15.1) and is matched by `/^New/`,
+    // which this deliberately does not flag.
+    const HAND_ROLLED =
+      /getByRole\(\s*["'`](?:link|button)["'`]\s*,\s*\{\s*name:\s*\/[^/\n]*\bnew (?:tag|post|page|project|entry)\b/i;
+    const offenders = [];
+    for (const f of specFiles()) {
+      if (f === HELPER) continue;
+      if (HAND_ROLLED.test(read(f))) offenders.push(f);
+    }
+    expect(
+      offenders,
+      `these files hand-roll the collection-top new-entry name instead of importing collectionNewLink() from ${HELPER}: ${offenders.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  test("collectionNewLink tolerates BOTH the 3.12.2 and 3.15.x accessible names", () => {
+    // Exercise the regex the helper builds, without a browser: capture the
+    // options Playwright would receive. The two real strings are
+    //   3.12.2 → "New Tag"                        (text, no aria-label)
+    //   3.15.x → "Create entry of type Tag"       (newButtonAriaLabel)
+    let captured = null;
+    const fakePage = {
+      getByRole(role, opts) {
+        captured = { role, ...opts };
+        return { first: () => "LOCATOR" };
+      },
+    };
+    const { collectionNewLink } = require("./cms-editor-ui");
+    expect(collectionNewLink(fakePage, "tag")).toBe("LOCATOR");
+    expect(captured.role).toBe("link");
+    expect(captured.name.test("New Tag"), "must match the 3.12.2 name").toBe(true);
+    expect(
+      captured.name.test("Create entry of type Tag"),
+      "must match the 3.15.x aria-label name",
+    ).toBe(true);
+    // Must NOT match a same-page control that merely mentions the label.
+    expect(captured.name.test("Tag"), "a bare collection label is not the New control").toBe(false);
   });
 
   // ── #1815 delete-phase: prove the editor delete actually DISPATCHED ───

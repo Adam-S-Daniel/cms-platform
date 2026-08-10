@@ -1,7 +1,7 @@
 /*
  * admin-mobile.css — responsive layer over the pinned Decap CMS bundle.
  *
- * Decap 3.12.2 is a desktop-first React/Emotion app. On an iPhone 16
+ * Decap 3.15.1 is a desktop-first React/Emotion app. On an iPhone 16
  * (393 CSS px) it renders ~800 px wide, producing three problems a
  * contributor hits immediately:
  *   1. ~407 px of dead horizontal scroll — the app shell carries a
@@ -216,7 +216,24 @@
    * of the phone (they become unreachable). Widen the card to the
    * viewport and wrap the header + button rows so every control stays
    * on-screen. `StyledModal` is Decap's generic modal card, so this also
-   * fits other dialogs (e.g. delete confirmations) to the phone. */
+   * fits other dialogs (e.g. delete confirmations) to the phone.
+   *
+   * ── Upstream caught up in 3.15.x — these rules are now belt-and-braces,
+   * and that is deliberate. DON'T delete them, and DON'T duplicate what
+   * upstream now ships. Diffed 3.12.2 vs 3.15.1 bundles directly:
+   *   - `StyledModal`: `grid-template-rows: 120px auto` → `auto 1fr` (plus
+   *     `gap: 20px`, `width: 100%`). That fixed-120px header is the exact
+   *     bug our override below works around. Ours keeps `minmax(0, 1fr)`
+   *     on the body track, which is marginally stronger than bare `1fr`
+   *     against overflow, so it stays.
+   *   - `RowContainer` / `ButtonsContainer`: gained `flex-wrap: wrap`,
+   *     `align-items: center`, `gap: 8px` (from `flex-shrink: 0`).
+   *   - `SearchIcon`: gained `pointer-events: none` — literally the fix
+   *     the #162 3.14.1 post-mortem asked us to write into this section.
+   *     Upstream shipped it, so we do NOT add a duplicate rule here; the
+   *     `admin-no-occlusion.spec.js` webkit-iphone16 occlusion (Copy's
+   *     centre covered by an `<svg>`) should be resolved by construction.
+   *     If that spec still reports occlusion on 3.15.1, THEN add ours. */
   [class*="StyledModal"] {
     width: calc(100vw - 1.5rem) !important;
     max-width: calc(100vw - 1.5rem) !important;
