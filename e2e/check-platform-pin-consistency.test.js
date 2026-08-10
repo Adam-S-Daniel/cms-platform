@@ -546,3 +546,289 @@ test.describe("check-platform-pin-consistency.js — workflow-content (call-inte
     expect(`${res.stdout}${res.stderr}`).toMatch(/with: keys/);
   });
 });
+
+// ── The guard must not SILENTLY DEGRADE. Run without a resolvable canonical set
+// the checker drops from 96 checks to 61 — losing exactly the workflow-SET and
+// workflow-CONTENT parity checks that police a consumer's `secrets:` map — and it
+// used to still print "Pins are consistent." A report that cannot distinguish
+// "verified" from "did not look" is the same defect class fixed in the re-arm
+// sweep's 0/0/0 summary, the scheduled-run health audit, and
+// `audit-repo-settings.js`'s unqualified OK line (whose
+// `unverifiableKeys`/`repoOkLine`/`cleanScanSummary` vocabulary `okSummary`
+// mirrors). Locked in BOTH directions, because the quiet half is the one a
+// refactor regresses: with parity VERIFIED the wording must stay byte-identical.
+test.describe("check-platform-pin-consistency.js — degraded-scan wording + --require-canonical", () => {
+  const { okSummary } = require("../scripts/check-platform-pin-consistency.js");
+  const V = "v0.1.76";
+
+  // A canonical dir + a consumer carrying EXACTLY that set, with identical call
+  // interfaces, so both parity checks RUN and PASS (the verified branch).
+  function mkCanonical(names) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-degrade-canon-"));
+    for (const n of names) {
+      fs.writeFileSync(path.join(dir, n), reusableCaller(n.replace(/\.ya?ml$/, ""), V));
+    }
+    return dir;
+  }
+  function mkConsistentConsumer(names) {
+    const root = mkConsumer();
+    write(root, "platform.lock", platformLock(V));
+    for (const n of names) {
+      write(root, `.github/workflows/${n}`, reusableCaller(n.replace(/\.ya?ml$/, ""), V));
+    }
+    writeSentinel(root);
+    return root;
+  }
+  function runWith(root, extraArgs) {
+    return spawnSync(
+      process.execPath,
+      [SCRIPT, "--root", root, "--owner", OWNER, "--repo", REPO, ...extraArgs],
+      { encoding: "utf8" },
+    );
+  }
+  const NAMES = ["deploy-production.yml", "e2e-tests.yml"];
+  // `--root <tmpdir>` makes the reported root deterministic (`rel(ROOT)` is "" →
+  // "."), so the summary line can be compared verbatim.
+  function summaryLine(out) {
+    const line = out.split("\n").find((l) => l.startsWith("platform-pin-consistency: OK —"));
+    expect(line, `no OK summary in:\n${out}`).toBeTruthy();
+    return line;
+  }
+
+  test("canonical PRESENT → summary is BYTE-IDENTICAL to today's wording", () => {
+    // (a) the pure helper's verified wording, asserted on the literal — this is
+    // what stops a later refactor quietly rephrasing the clean-scan sentence.
+    expect(
+      okSummary({
+        checked: 96,
+        root: ".",
+        platformRef: V,
+        lockRel: "platform.lock",
+        parityVerified: true,
+      }),
+    ).toBe(
+      "platform-pin-consistency: OK — all 96 platform-consistency check(s) in . " +
+        `pass for platform_ref ${V} (canonical, from platform.lock). Pins are consistent.`,
+    );
+
+    // (b) the CLI emits exactly what the helper produces for its own check count.
+    const root = mkConsistentConsumer(NAMES);
+    const res = runWith(root, ["--canonical-workflows", mkCanonical(NAMES)]);
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
+    const line = summaryLine(res.stdout);
+    const checked = Number(line.match(/all (\d+) platform-consistency/)[1]);
+    expect(line).toBe(
+      okSummary({
+        checked,
+        root: ".",
+        platformRef: V,
+        lockRel: "platform.lock",
+        parityVerified: true,
+      }),
+    );
+    expect(line).toContain("Pins are consistent.");
+    expect(res.stdout).not.toMatch(/workflow-set parity skipped/);
+  });
+
+  test("canonical MISSING → summary is QUALIFIED, never claims consistency, exit still 0", () => {
+    const root = mkConsistentConsumer(NAMES); // no --canonical-workflows, no .cms-platform
+    const res = runWith(root, []);
+    // Exit code UNCHANGED so no existing caller breaks — only the wording moves.
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
+    const line = summaryLine(res.stdout);
+    expect(line).not.toContain("Pins are consistent");
+    expect(line).toMatch(/NOT VERIFIED/);
+    expect(line).toMatch(/[Ww]orkflow-SET and workflow-CONTENT parity/);
+    // It must name what to pass to actually verify them.
+    expect(line).toMatch(/--canonical-workflows/);
+    expect(line).toMatch(/--require-canonical/);
+    // …and the pure helper agrees with the CLI on the degraded branch too.
+    const checked = Number(line.match(/all (\d+) platform-consistency/)[1]);
+    expect(line).toBe(
+      okSummary({
+        checked,
+        root: ".",
+        platformRef: V,
+        lockRel: "platform.lock",
+        parityVerified: false,
+      }),
+    );
+  });
+
+  test("canonical MISSING + --require-canonical → exit NON-ZERO, naming the flag + reason", () => {
+    const root = mkConsistentConsumer(NAMES);
+    const res = runWith(root, ["--require-canonical"]);
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).not.toBe(0);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toMatch(/::error/); // annotation, emitted regardless of CI
+    expect(out).toMatch(/--require-canonical/); // the flag that made it fatal
+    expect(out).toMatch(/NOT VERIFIED/); // the reason
+    expect(out).toMatch(/--canonical-workflows/); // how to fix it
+    // A hard failure must never also print the OK line.
+    expect(out).not.toContain("Pins are consistent");
+  });
+
+  test("--require-canonical is SATISFIED (exit 0) once the canonical set resolves", () => {
+    const root = mkConsistentConsumer(NAMES);
+    const res = runWith(root, ["--require-canonical", "--canonical-workflows", mkCanonical(NAMES)]);
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
+    expect(summaryLine(res.stdout)).toContain("Pins are consistent.");
+  });
+});
+
+// ── The reusable ALWAYS checks examples/site out into `.cms-platform/`, so a
+// parity SKIP there can only mean that checkout broke — it must therefore demand
+// --require-canonical rather than accept the 61-check degraded scan. Parsed with
+// the real YAML parser (workflow-yaml-utils), never a regex over the file.
+test.describe("platform-pin-consistency.yml reusable — demands --require-canonical", () => {
+  const { readWorkflow, parseYaml, jobs, runScripts, allStrings } = require("./workflow-yaml-utils");
+  const WF = "platform-pin-consistency.yml";
+
+  test("the checker invocation passes --require-canonical", () => {
+    const text = readWorkflow(WF);
+    const invocations = runScripts(text)
+      .map((b) => b.script)
+      .filter((s) => s.includes("check-platform-pin-consistency.js"));
+    expect(invocations.length, "no checker invocation found in the reusable").toBe(1);
+    expect(invocations[0]).toMatch(/--require-canonical\b/);
+  });
+
+  test("it still checks the canonical workflow SET out (what the flag demands)", () => {
+    const text = readWorkflow(WF);
+    const doc = parseYaml(text);
+    expect(Object.keys(jobs(text)).length).toBeGreaterThan(0);
+    const strings = allStrings(doc);
+    expect(
+      strings.some((s) => s.includes("examples/site/.github/workflows")),
+      "the reusable must sparse-checkout examples/site/.github/workflows, or " +
+        "--require-canonical would fail every run",
+    ).toBe(true);
+  });
+});
+
+// ── scripts/verify-consumer-pins.sh — ONE command whose EXIT CODE is the
+// definition of done for a consumer pin bump. It exists because the v0.1.76 bump
+// was delegated with the gate named in the spec and neither subagent ran it (one
+// left 58 stale refs and described the work as near-done). Driven end-to-end here
+// HERMETICALLY: a synthetic platform dir (real checker + an authored canonical
+// set + a symlink to the harness's own `yaml`) and a synthetic consumer.
+test.describe("scripts/verify-consumer-pins.sh — the consumer-bump gate", () => {
+  const VERIFIER = path.resolve(__dirname, "../scripts/verify-consumer-pins.sh");
+  const V = "v0.1.76";
+  const NAMES = ["deploy-production.yml", "e2e-tests.yml"];
+
+  test("exists, is executable, and is `bash -n` clean", () => {
+    expect(fs.existsSync(VERIFIER)).toBe(true);
+    // eslint-disable-next-line no-bitwise
+    expect((fs.statSync(VERIFIER).mode & 0o111) !== 0, "must be executable").toBe(true);
+    const res = spawnSync("bash", ["-n", VERIFIER], { encoding: "utf8" });
+    expect(res.status, `bash -n:\n${res.stderr}`).toBe(0);
+  });
+
+  test("structure: strict mode, demands --require-canonical, never swallows a check", () => {
+    const src = fs.readFileSync(VERIFIER, "utf8");
+    expect(src).toMatch(/^set -euo pipefail$/m);
+    expect(src).toMatch(/--require-canonical/);
+    expect(src).toMatch(/--canonical-workflows/);
+    // A check that cannot fail is the bug this script exists to prevent, so it
+    // must never `|| true` / `|| :` its way past one.
+    expect(src).not.toMatch(/\|\|\s*true\b/);
+    expect(src).not.toMatch(/\|\|\s*:\s*$/m);
+    // A missing node / yaml lib is a hard FAIL, never a skip.
+    expect(src).toMatch(/must not be skipped/);
+  });
+
+  // A synthetic platform tree: the REAL checker + an authored canonical set +
+  // the harness's own `yaml` (symlinked, so this stays hermetic and offline).
+  function mkPlatform(names) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-verify-plat-"));
+    fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
+    fs.copyFileSync(SCRIPT, path.join(dir, "scripts", path.basename(SCRIPT)));
+    const canon = path.join(dir, "examples", "site", ".github", "workflows");
+    fs.mkdirSync(canon, { recursive: true });
+    for (const n of names) {
+      fs.writeFileSync(path.join(canon, n), reusableCaller(n.replace(/\.ya?ml$/, ""), V));
+    }
+    fs.mkdirSync(path.join(dir, "e2e", "node_modules"), { recursive: true });
+    fs.symlinkSync(
+      path.resolve(__dirname, "node_modules", "yaml"),
+      path.join(dir, "e2e", "node_modules", "yaml"),
+      "dir",
+    );
+    return dir;
+  }
+  function mkVerifiableConsumer(refByName) {
+    const root = mkConsumer();
+    write(root, "platform.lock", platformLock(V));
+    for (const [n, ref] of Object.entries(refByName)) {
+      write(root, `.github/workflows/${n}`, reusableCaller(n.replace(/\.ya?ml$/, ""), ref));
+    }
+    writeSentinel(root);
+    return root;
+  }
+  function runVerifier(root, platformDir) {
+    return spawnSync("bash", [VERIFIER, "--platform-dir", platformDir], {
+      cwd: root,
+      encoding: "utf8",
+    });
+  }
+  const consistent = () => Object.fromEntries(NAMES.map((n) => [n, V]));
+
+  test("PASSES on a consistent consumer (exit 0, PASS verdict)", () => {
+    const res = runVerifier(mkVerifiableConsumer(consistent()), mkPlatform(NAMES));
+    const out = `${res.stdout}${res.stderr}`;
+    expect(res.status, out).toBe(0);
+    expect(out).toMatch(/verify-consumer-pins: PASS/);
+    expect(out).toMatch(/--require-canonical/); // parity really was verified
+  });
+
+  test("FAILS red on a consumer carrying ONE stale pin, naming that file", () => {
+    const refs = consistent();
+    refs["e2e-tests.yml"] = "v0.1.75"; // the exact shape of the v0.1.76 incident
+    const res = runVerifier(mkVerifiableConsumer(refs), mkPlatform(NAMES));
+    const out = `${res.stdout}${res.stderr}`;
+    expect(res.status, out).not.toBe(0);
+    expect(out).toMatch(/e2e-tests\.yml/); // the offending FILE is named
+    expect(out).toMatch(/v0\.1\.75/); // …and the stale value
+    expect(out).toMatch(/verify-consumer-pins: FAIL \(\d+ problem\(s\)\)/);
+    expect(out).not.toMatch(/verify-consumer-pins: PASS/);
+  });
+
+  test("does NOT trip on an unrelated version string (third-party pin / prose)", () => {
+    // The benign 35-vs-34 class: a `# v6.0.2` third-party pin comment and a prose
+    // "since v0.1.4" header line must not read as a stale platform ref.
+    const root = mkVerifiableConsumer(consistent());
+    write(
+      root,
+      ".github/workflows/noise.yml",
+      [
+        "# This caller has shipped since v0.1.4 (prose, not a pin).",
+        "name: noise",
+        "on: { pull_request: {} }",
+        "jobs:",
+        "  j:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567  # v6.0.2 (2026-01-09)",
+        "",
+      ].join("\n"),
+    );
+    // `noise.yml` is not platform-dictated, so workflow-SET parity flags it —
+    // scope this assertion to the STALE-REF check, which must stay silent.
+    const res = runVerifier(root, mkPlatform(NAMES));
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toMatch(/ok: no stale platform ref/);
+    expect(out).not.toMatch(/v6\.0\.2 \(expected/);
+    expect(out).not.toMatch(/v0\.1\.4 \(expected/);
+  });
+
+  test("FAILS when a workflow does not parse as YAML", () => {
+    const root = mkVerifiableConsumer(consistent());
+    write(root, ".github/workflows/broken.yml", "name: broken\non: { pull_request: {} }\njobs:\n  - [oops\n");
+    const res = runVerifier(root, mkPlatform(NAMES));
+    const out = `${res.stdout}${res.stderr}`;
+    expect(res.status, out).not.toBe(0);
+    expect(out).toMatch(/broken\.yml/);
+    expect(out).toMatch(/does not parse/);
+  });
+});

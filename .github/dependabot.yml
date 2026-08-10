@@ -19,16 +19,42 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    # Mechanise the repo's standing 7-day cooling-off for third-party action
-    # SHAs (see AGENTS.md "SHA-pin every workflow `uses:`"). Repairing the
-    # Dependabot pipeline removes the last human gate on a fresh SHA landing in
-    # the 18 reusables BOTH production sites execute, so the wait has to be
-    # enforced by the bot rather than by whoever happens to review the PR.
-    # Security updates bypass cooldown by GitHub's own spec, so an advisory
-    # still opens (and auto-merges) immediately.
+    # MINIMUM PACKAGE AGE ("cooldown") — how long a release must exist before
+    # Dependabot will even OPEN the PR. Version updates ONLY: security updates
+    # bypass cooldown by GitHub's spec, so an advisory still opens (and
+    # auto-merges) the moment the matrix is green. GitHub's own default is
+    # 3 days, so these values are a deliberate RAISE, not a floor from zero.
+    #
+    # `default-days: 7` mechanises this repo's standing cooling-off convention
+    # for third-party action SHAs (AGENTS.md, "SHA-pin every workflow `uses:`"),
+    # which until now depended on whoever happened to review the PR — and the
+    # repaired Dependabot pipeline merges these UNATTENDED, so the bot has to
+    # hold the wait instead.
+    #
+    # Majors wait far longer because a MAJOR is the class that has actually
+    # needed reverting here: setup-node 6->7 (#179) lands in 18 reusables BOTH
+    # production sites execute, and the Decap bundle bump is kept revertible on
+    # purpose (v0.1.66 -> v0.1.67). 30 days is long enough for upstream to yank
+    # or patch a bad major while patches and minors keep flowing in a week.
+    # Tune it here — it is one number, not a workflow change.
+    #
+    # semver-minor / semver-patch are deliberately left undefined: GitHub's
+    # documented precedence falls an undefined `semver-*-days` back to
+    # `default-days`, so spelling them out would only invite the three to drift.
     cooldown:
       default-days: 7
+      semver-major-days: 30
   - package-ecosystem: npm
     directory: "/e2e"
     schedule:
       interval: weekly
+    # Same graduated wait, same reason: the e2e harness under /e2e is not
+    # platform-internal — BOTH consumers check it out and execute it, so a bad
+    # Playwright major reaches production CI the same way a bad action SHA
+    # would. A Playwright major additionally REQUIRES a coupled
+    # .github/ci-runner/Dockerfile bump (the playwright-image-drift guard), and
+    # Dependabot cannot make both edits in one PR — 30 days is room to do it
+    # deliberately rather than in a red-CI scramble.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30

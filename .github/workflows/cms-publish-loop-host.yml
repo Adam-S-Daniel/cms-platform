@@ -123,6 +123,21 @@ jobs:
       # This block MUST stay byte-identical across all three workflows AND
       # remain on the loop job (NOT the workflow) — enforced by
       # e2e/workflow-prod-loop-serialized.test.js.
+      #
+      # SCOPE — the lane is REPOSITORY-scoped, and that is a GitHub fact rather
+      # than a choice here: Actions has no cross-repo concurrency at all. So a
+      # bare literal group serialises these three loops WITHIN one consumer and
+      # CANNOT serialise two consumers against each other — the group is
+      # evaluated in the CALLER's repository even though this reusable lives in
+      # cms-platform. Verified empirically, not assumed: adamdaniel.ai host-loop
+      # run 31179432081 and jodidaniel.com host-loop run 31181497216 overlapped
+      # 2026-08-07 13:11:48-13:13:08Z and BOTH succeeded — one of 4 such
+      # cross-consumer overlaps in 4 days. Within a consumer the exclusion is
+      # the whole point (all three mutate THAT site's prod content and race its
+      # `production` deploy lane); across consumers there is nothing to
+      # serialise — separate buckets, distributions and canaries — so do NOT
+      # "fix" this by adding ${{ github.repository }} to the group, which would
+      # be a no-op that only makes the byte-identity lint harder to satisfy.
       group: prod-mutating-loop
       cancel-in-progress: false
     env:
