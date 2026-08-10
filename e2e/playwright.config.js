@@ -164,6 +164,10 @@ const PLATFORM_META_SPECS = [
   // and the script's own source for the encoding pin. Platform-internal
   // (reads scripts/ + theme/ source); self-CI only.
   "render-decap-config-locale.test.js",
+  // Reads the platform's OWN workflow DEFINITIONS to assert every
+  // dependabot-* reusable is called by a local self-* caller (a consumer
+  // ships only thin wrappers) — platform-internal, self-CI only.
+  "dependabot-dogfood.test.js",
   "dependabot-skip.test.js",
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",

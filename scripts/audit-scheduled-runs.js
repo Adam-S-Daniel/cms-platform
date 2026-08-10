@@ -31,6 +31,16 @@
  * lag can never skip a failure, and the run-id dedupe keeps the double
  * coverage from double-reporting.
  *
+ * RUNNER STARVATION IS NOT A FAILURE (suppressed): GitHub reports the RUN as
+ * `failure` when its job(s) were CANCELLED before a runner was ever assigned —
+ * `runner_id: 0`, empty `runner_name`, no steps (observed live on
+ * jodidaniel.com runs 31118167966 and 31120011930). That is infrastructure
+ * noise, not a broken workflow, and the RUN conclusion alone cannot tell the
+ * two apart — so an otherwise-alertable run has its JOBS fetched and is
+ * suppressed when every job is cancelled-without-a-runner (or skipped). The
+ * suppressed count + workflow names are still emitted as a `::notice::`, so a
+ * systemic runner outage stays visible instead of becoming invisible.
+ *
  * EXIT CODE CONTRACT: exit 0 when the audit COMPLETED (even when failures
  * were found — the tracking issue is the alert channel); non-zero only when
  * the audit itself could not do its job (API/permission failure). A red
@@ -55,7 +65,9 @@ const MARKER = "<!-- scheduled-run-health-audit -->";
 const ISSUE_TITLE = "Scheduled workflow runs are failing (automated health audit)";
 // `cancelled` is deliberately EXCLUDED: the loop workflows cancel superseded
 // runs by design (concurrency groups), so a cancelled scheduled run is not a
-// health signal. `action_required` never occurs for schedule events.
+// health signal. `action_required` never occurs for schedule events. That
+// exclusion is RUN-level only — see isRunnerStarvationRun for the case where
+// the RUN says `failure` but its only job was cancelled without a runner.
 const BAD_CONCLUSIONS = ["failure", "startup_failure", "timed_out"];
 // Cap the VISIBLE per-workflow run links (a */5 cron can fail dozens of times
 // a day); every run id is still recorded in the hidden run-ids block, so the
@@ -90,6 +102,60 @@ function filterAlertRuns(runs, since) {
   return (runs || []).filter(
     (r) => isAlertRun(r) && (!since || String(r.run_started_at || r.created_at || "") >= since),
   );
+}
+
+// A job that was cancelled before a runner ever picked it up: GitHub leaves
+// `runner_id: 0` + an empty `runner_name` (and no steps) on such a job. A
+// SKIPPED job carries `runner_id: null` instead, which is why the runner test
+// applies to cancelled jobs only — see clause (v) in isRunnerStarvationRun.
+function isRunnerStarvedJob(job) {
+  if (!job || job.conclusion !== "cancelled") return false;
+  const name = job.runner_name;
+  return job.runner_id === 0 || name === undefined || name === null || name === "";
+}
+
+// True when an otherwise-alertable run is really runner starvation, not a
+// failure: the RUN reads `failure` while no job of it ever got a runner. All of
+//   (i)   the run HAS jobs — FIRST, and never to be dropped: a `startup_failure`
+//         run has ZERO jobs, and `[].every()` is vacuously TRUE, so an empty list
+//         reaching clause (v) would silence the exact class this audit exists
+//         for. Clause (iv)'s `some` also rejects it today, which makes this
+//         defence in depth against a future reorder — not dead code;
+//   (ii)  the run is not itself a `startup_failure`;
+//   (iii) no job failed or timed out;
+//   (iv)  at least one job was cancelled without a runner (the starvation mark);
+//   (v)   every job is cancelled or skipped (a skipped job needs no runner test).
+function isRunnerStarvationRun(run, jobs) {
+  const list = Array.isArray(jobs) ? jobs : [];
+  if (list.length === 0) return false;
+  if (!run || run.conclusion === "startup_failure") return false;
+  if (list.some((j) => j && (j.conclusion === "failure" || j.conclusion === "timed_out"))) {
+    return false;
+  }
+  if (!list.some(isRunnerStarvedJob)) return false;
+  return list.every((j) => j && (j.conclusion === "cancelled" || j.conclusion === "skipped"));
+}
+
+// Split alertable runs into the ones that still deserve the alert and the ones
+// suppressed as runner starvation. `fetchJobs(run)` is injected so the split is
+// unit-testable without gh; it FAILS SOFT — a jobs-fetch error keeps the run
+// ALERTABLE, because silently dropping a real failure is the worse outcome.
+function partitionStarvedRuns(runs, fetchJobs) {
+  const alertable = [];
+  const suppressed = [];
+  for (const r of runs || []) {
+    let jobs;
+    try {
+      jobs = fetchJobs(r);
+    } catch (e) {
+      console.error(`audit-scheduled-runs: could not read jobs for run ${r && r.id}: ${e.message}`);
+      alertable.push(r);
+      continue;
+    }
+    if (isRunnerStarvationRun(r, jobs)) suppressed.push(r);
+    else alertable.push(r);
+  }
+  return { alertable, suppressed };
 }
 
 // The stable identity of the failing WORKFLOW: the workflow file's basename.
@@ -230,6 +296,27 @@ function listScheduledRuns(repo, since) {
   return runs;
 }
 
+// One page of a run's jobs. EXPLICITLY paginated like every other list call
+// here: a bare /jobs returns 30, so a big matrix would have the starvation
+// predicate evaluated on a PARTIAL job set — silently wrong. Exported so the
+// pagination shape stays unit-assertable without shelling out to gh.
+function runJobsEndpoint(repo, runId, page) {
+  return `repos/${repo}/actions/runs/${runId}/jobs?per_page=100&page=${page}`;
+}
+
+// All jobs of one run (latest attempt — the API default). Only called for runs
+// that are ALREADY alertable, so the API cost stays proportional to failures,
+// not to the whole window.
+function listRunJobs(repo, runId) {
+  const jobs = [];
+  for (let page = 1; page <= 10; page++) {
+    const batch = JSON.parse(ghApi(runJobsEndpoint(repo, runId, page))).jobs || [];
+    jobs.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return jobs;
+}
+
 // The single open tracking issue: open issues carrying the label whose body
 // carries MARKER. The /issues listing includes PRs — filter them out.
 function findTrackingIssue(repo, label) {
@@ -294,13 +381,25 @@ function main() {
   const since = sinceIso(nowMs, windowHours);
   const nowIso = sinceIso(nowMs, 0);
 
-  let failures, issue;
+  let failures, starved, issue;
   try {
-    failures = filterAlertRuns(listScheduledRuns(repo, since), since);
+    const candidates = filterAlertRuns(listScheduledRuns(repo, since), since);
+    const split = partitionStarvedRuns(candidates, (r) => listRunJobs(repo, r.id));
+    failures = split.alertable;
+    starved = split.suppressed;
     issue = findTrackingIssue(repo, label);
   } catch (e) {
     console.error(`audit-scheduled-runs: failed to scan ${repo}: ${e.message}`);
     return 1;
+  }
+
+  // Suppressed runs are not alerted on, but a systemic runner outage must not
+  // become invisible — say how many, and which workflows they belong to.
+  if (starved.length > 0) {
+    const workflows = [...new Set(starved.map(workflowKey))].join(", ");
+    console.log(
+      `::notice title=Scheduled-run health::Suppressed ${starved.length} scheduled run(s) that never got a runner (cancelled before assignment): ${workflows}.`,
+    );
   }
 
   const summary = `${failures.length} failing scheduled run(s) in the last ${windowHours}h on ${repo}`;
@@ -404,6 +503,10 @@ module.exports = {
   sinceIso,
   isAlertRun,
   filterAlertRuns,
+  isRunnerStarvedJob,
+  isRunnerStarvationRun,
+  partitionStarvedRuns,
+  runJobsEndpoint,
   workflowKey,
   groupByWorkflow,
   extractReportedRunIds,

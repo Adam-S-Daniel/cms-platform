@@ -38,17 +38,30 @@ name: Dependabot comment sync (reusable)
 #     refusing to allow a GitHub App to create or update workflow
 #     `.github/workflows/...` without `workflows` permission
 #
-# The fix is a fine-grained Personal Access Token with the
-# `workflows` permission, passed in as the `workflow_sha_comment_pat`
-# secret. To create one: github.com → Settings → Developer settings →
-# Personal access tokens → Fine-grained → scope to the site repo, set
-# "Workflows: Read and write" + "Contents: Read and write" + "Pull
-# requests: Read", expire in 1 year, store it as a repo secret and wire
-# it through the caller.
+# The fix is a credential that carries the `workflows` permission, and
+# there are TWO accepted shapes — the PAT is PREFERRED, the App is the
+# fallback:
 #
-# When the PAT is unset the job logs a clear notice and exits cleanly
-# so the workflow doesn't show up red on every Dependabot PR — the
-# feature is opt-in via the PAT secret.
+#   1. A fine-grained Personal Access Token, passed in as the
+#      `workflow_sha_comment_pat` secret. To create one: github.com →
+#      Settings → Developer settings → Personal access tokens →
+#      Fine-grained → scope to the site repo, set "Workflows: Read and
+#      write" + "Contents: Read and write" + "Pull requests: Read",
+#      expire in 1 year, store it as a repo secret and wire it through
+#      the caller.
+#   2. A GitHub App (Contents R/W, Pull requests R/W, Workflows R/W)
+#      installed on the repo, from which this workflow mints a
+#      short-lived INSTALLATION token. Its App ID is read directly from
+#      the repository VARIABLE `vars.CMS_AUTOMATION_APP_ID` (a reusable
+#      invoked via `workflow_call` reads `vars.*` from the CALLER's
+#      repository, so no input plumbing is needed); only the private key
+#      is a secret, passed in as `app_private_key`
+#      (`CMS_AUTOMATION_APP_PRIVATE_KEY`). This is what a repo with no
+#      PAT of its own — cms-platform itself — runs on.
+#
+# When neither is configured the job logs a clear notice and exits
+# cleanly so the workflow doesn't show up red on every Dependabot PR —
+# the feature is opt-in via the PAT secret or the App credential pair.
 #
 # Standard `pull_request_target` security caveat: the workflow runs at
 # the BASE-branch HEAD, so any malicious change in the PR diff CAN'T
@@ -96,7 +109,15 @@ on:
         description: >-
           Fine-grained PAT with `workflows: write` + `contents: write` +
           `pull requests: read` so the follow-up commit can push back the
-          refreshed workflow files. When unset the job skips cleanly.
+          refreshed workflow files. When unset the job falls back to the
+          App credential below, and skips cleanly if that is unset too.
+        required: false
+      app_private_key:
+        description: >-
+          The `CMS_AUTOMATION_APP_PRIVATE_KEY` of the GitHub App
+          (Contents R/W, Pull requests R/W, Workflows R/W) used when no
+          PAT is configured. The App ID is NOT an input — it is read from
+          the caller repository's `vars.CMS_AUTOMATION_APP_ID` variable.
         required: false
 
 permissions:
@@ -127,7 +148,12 @@ jobs:
       # raises "Unrecognized named-value: 'secrets'" at parse time. Secrets
       # ARE valid in `env:` blocks at every scope, and `env.X` IS allowed
       # in `if:` conditions, so the hoist is the documented escape hatch.
+      # APP_ID/APP_KEY ride along for the same reason — the App-fallback
+      # step's `if:` tests `env.APP_ID` / `env.APP_KEY`, and its node
+      # script reads them from `process.env` rather than interpolating.
       PAT: ${{ secrets.workflow_sha_comment_pat }}
+      APP_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+      APP_KEY: ${{ secrets.app_private_key }}
     steps:
       - name: Skip non-Dependabot context
         # Three early-exit paths so GHA records the run as `success`
@@ -150,16 +176,94 @@ jobs:
           esac
           exit 0
 
-      - name: Bail early if the workflow PAT is unset
-        # Without a PAT carrying the `workflows` permission, pushing
-        # back a Dependabot action-bump fails with "refusing to allow
-        # a GitHub App to create or update workflow ... without
-        # workflows permission". Skip cleanly with a notice rather
-        # than fail loudly on every Dependabot PR.
-        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT == ''
+      - name: Mint a GitHub App installation token (no PAT configured)
+        # The App fallback (see header shape 2). Pure node + the stdlib
+        # `crypto` module — deliberately NOT a marketplace action: repo
+        # policy prefers built-ins, and a new action would also owe the
+        # 7-day cooling-off. Build an RS256 JWT from the App's private
+        # key, resolve the installation on THIS repo, exchange the JWT
+        # for a short-lived installation token, mask it, and hand it on
+        # as a step output. Fails SOFT — a warning and an empty output,
+        # never a red run on a Dependabot PR.
+        id: app-token
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT == '' && env.APP_ID != '' && env.APP_KEY != ''
         run: |
-          echo "::notice::workflow_sha_comment_pat secret is not configured. Skipping comment-sync — see this workflow's header for setup instructions."
-          exit 0
+          node - <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+
+          const b64url = (input) =>
+            Buffer.from(input)
+              .toString("base64")
+              .replace(/\+/g, "-")
+              .replace(/\//g, "_")
+              .replace(/=+$/, "");
+
+          function appJwt(appId, privateKey) {
+            const now = Math.floor(Date.now() / 1000);
+            const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+            // iat back-dated 60s to tolerate clock skew; exp 9 minutes out
+            // (GitHub rejects anything beyond 10).
+            const payload = b64url(JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId }));
+            const signer = crypto.createSign("RSA-SHA256");
+            signer.update(header + "." + payload);
+            return header + "." + payload + "." + b64url(signer.sign(privateKey));
+          }
+
+          async function api(url, jwt, method) {
+            const res = await fetch(url, {
+              method: method || "GET",
+              headers: {
+                authorization: "Bearer " + jwt,
+                accept: "application/vnd.github+json",
+                "user-agent": "cms-platform-dependabot-comment-sync",
+              },
+            });
+            // Status + method/url only — never the response body (it can
+            // quote data and must not land in a public log).
+            if (!res.ok) throw new Error((method || "GET") + " " + url + " -> HTTP " + res.status);
+            return res.json();
+          }
+
+          (async () => {
+            const apiBase = process.env.GITHUB_API_URL || "https://api.github.com";
+            const jwt = appJwt(process.env.APP_ID, process.env.APP_KEY);
+            const install = await api(apiBase + "/repos/" + process.env.GITHUB_REPOSITORY + "/installation", jwt);
+            const minted = await api(apiBase + "/app/installations/" + install.id + "/access_tokens", jwt, "POST");
+            if (!minted.token) throw new Error("installation response carried no token");
+            // Mask BEFORE the value reaches any other surface.
+            console.log("::add-mask::" + minted.token);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "token=" + minted.token + "\n");
+            console.log("::notice::Minted a GitHub App installation token (no PAT configured).");
+          })().catch((err) => {
+            console.log(
+              "::warning::Could not mint a GitHub App installation token (" +
+                err.message +
+                "); comment-sync will skip unless a PAT is configured.",
+            );
+          });
+          NODE
+
+      - name: Resolve the effective push credential
+        # ONE place decides which credential the rest of the job runs on,
+        # and publishes a job-visible `HAVE_PUSH_CRED` the downstream
+        # `if:`s gate on (a step-level `if:` can read an env var written
+        # to $GITHUB_ENV by an earlier step). The PAT wins when present,
+        # so the PAT path is unchanged. When neither credential exists,
+        # this is the clean-skip notice — naming all THREE knobs so
+        # "never onboarded" is distinguishable from "misconfigured".
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -n "${PAT}" ]; then
+            echo "HAVE_PUSH_CRED=1" >> "$GITHUB_ENV"
+          elif [ -n "${APP_TOKEN}" ]; then
+            echo "::notice::No workflow_sha_comment_pat — pushing with the GitHub App installation token (vars.CMS_AUTOMATION_APP_ID)."
+            echo "HAVE_PUSH_CRED=1" >> "$GITHUB_ENV"
+          else
+            echo "::notice::No workflows-scoped credential is configured (workflow_sha_comment_pat, or the CMS_AUTOMATION_APP_ID variable + CMS_AUTOMATION_APP_PRIVATE_KEY secret pair). Skipping comment-sync — see this workflow's header for setup instructions."
+          fi
 
       - name: Checkout PR head
         # `pull_request_target` defaults to the BASE ref. We need
@@ -171,24 +275,25 @@ jobs:
         # this workflow. The EXECUTED script is fetched separately
         # from the platform repo (see next step), so this checkout
         # is the mutation target only — never a source of code run.
-        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.HAVE_PUSH_CRED == '1'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           fetch-depth: 0
-          # Use the PAT (with `workflows: write`) for both the
-          # initial fetch and the persisted credential `git push`
-          # uses below. GITHUB_TOKEN can't push workflow-file
-          # changes — see this workflow's header for why.
-          token: ${{ secrets.workflow_sha_comment_pat }}
+          # The EFFECTIVE credential: the PAT when configured, else the
+          # minted App installation token. Used for both the initial
+          # fetch and the persisted credential `git push` uses below.
+          # GITHUB_TOKEN can't push workflow-file changes — see this
+          # workflow's header for why.
+          token: ${{ secrets.workflow_sha_comment_pat || steps.app-token.outputs.token }}
           persist-credentials: true
 
       - name: Checkout platform scripts
         # The sync script is platform-authoritative — fetched from the
         # pinned platform ref into a dot-dir, NOT taken from the PR head
         # tree. This is the hardening property the original lacked.
-        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.HAVE_PUSH_CRED == '1'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
         with:
           repository: ${{ inputs.platform_repo }}
@@ -201,7 +306,7 @@ jobs:
         # authored by Dependabot or by the PR creator) keeps
         # working. The 49699333+ ID is Dependabot's official
         # noreply email per https://api.github.com/users/dependabot%5Bbot%5D.
-        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.HAVE_PUSH_CRED == '1'
         run: |
           git config user.name "dependabot[bot]"
           git config user.email "49699333+dependabot[bot]@users.noreply.github.com"
@@ -213,13 +318,13 @@ jobs:
         # (listing tags, resolving commits) — only the push needs
         # the workflow-scoped PAT. Run the PLATFORM copy of the script
         # against the PR-head tree (cwd is the PR checkout).
-        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.HAVE_PUSH_CRED == '1'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash .cms-platform/scripts/sync-action-pin-comments.sh
 
       - name: Commit and push if changes
-        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.PAT != ''
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && env.HAVE_PUSH_CRED == '1'
         env:
           # Route the untrusted PR head ref through an env var rather than
           # interpolating it directly into the inline script (actionlint
@@ -248,4 +353,3 @@ jobs:
           EOF
           )"
           git push origin "HEAD:${HEAD_REF}"
-# Intentionally inert line (no functional effect).

@@ -4,9 +4,10 @@
 // infrastructure/), so it's registered in playwright.config.js PLATFORM_META_SPECS
 // and testIgnore'd on consumer lanes.
 //
-// Why this exists: the five repo VARIABLES the reusable workflows read via
-// `vars.*` (CMS_APEX, CMS_PROD_URL, PREVIEW_BUCKET, AWS_REGION, and the optional
-// PROD_PLAYGROUND_MODE) used to be set by hand per consumer. set-repo-variables.sh
+// Why this exists: the repo VARIABLES the reusable workflows read via `vars.*`
+// (CMS_APEX, CMS_PROD_URL, PREVIEW_BUCKET, AWS_REGION, plus the two optional
+// non-derived passthroughs PROD_PLAYGROUND_MODE and CMS_AUTOMATION_APP_ID) used
+// to be set by hand per consumer. set-repo-variables.sh
 // centralizes that in the platform and DERIVES every value from the single
 // source of truth (infrastructure/site-params.env → APEX_DOMAIN), so a value is
 // never typed twice and a consumer can't drift (e.g. PREVIEW_BUCKET that doesn't
@@ -16,7 +17,11 @@
 //       exactly the expected values from APEX_DOMAIN and makes no gh call;
 //   (c) overrides (GITHUB_ORG, RESOURCE_PREFIX) + opt-in PROD_PLAYGROUND_MODE work;
 //   (d) it refuses to run without APEX_DOMAIN (no silent half-config);
-//   (e) the scaffolder's nextSteps points operators at the script.
+//   (e) the scaffolder's nextSteps points operators at the script;
+//   (f) CMS_AUTOMATION_APP_ID is an opt-in passthrough in BOTH directions — the
+//       script pushes it only when set, AND the shipped example env documents the
+//       key so an operator can discover it (a passthrough the setter honours but
+//       site-params.example.env never mentions is unreachable in practice).
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -61,8 +66,9 @@ test.describe("scripts/set-repo-variables.sh", () => {
     expect(out).toMatch(/^\s*CMS_PROD_URL=https:\/\/example\.com$/m);
     expect(out).toMatch(/^\s*PREVIEW_BUCKET=example-com-previews$/m);
     expect(out).toMatch(/^\s*AWS_REGION=us-east-1$/m);
-    // opt-in only — example env doesn't set it, so it must not appear.
+    // opt-in only — the example env leaves both COMMENTED, so neither may appear.
     expect(out).not.toMatch(/PROD_PLAYGROUND_MODE/);
+    expect(out).not.toMatch(/CMS_AUTOMATION_APP_ID/);
     expect(out).toMatch(/done \(4 variables\)/);
   });
 
@@ -101,6 +107,48 @@ test.describe("scripts/set-repo-variables.sh", () => {
     const { code, out } = run(["--dry-run"]);
     expect(code, "must exit non-zero when APEX_DOMAIN is missing").not.toBe(0);
     expect(out).toMatch(/APEX_DOMAIN is required/);
+  });
+
+  test("(f) CMS_AUTOMATION_APP_ID is an opt-in passthrough, and the example env documents it", () => {
+    // Direction 1 — the SCRIPT honours it. Mirrors PROD_PLAYGROUND_MODE exactly:
+    // pushed only when the env explicitly sets it, absent otherwise. It is
+    // NON-DERIVED (a GitHub App ID, not something APEX_DOMAIN can produce), and
+    // its companion CMS_AUTOMATION_APP_PRIVATE_KEY is a SECRET, so the setter
+    // must never claim to handle the key half.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "setvars-app-"));
+    const base = [
+      'export GITHUB_REPO="example.com"',
+      'export APEX_DOMAIN="example.com"',
+    ];
+    try {
+      const withApp = path.join(dir, "with-app.env");
+      fs.writeFileSync(withApp, [...base, 'export CMS_AUTOMATION_APP_ID="123456"', ""].join("\n"));
+      const on = run(["--env-file", withApp, "--dry-run"]);
+      expect(on.code, on.out).toBe(0);
+      expect(on.out).toMatch(/^\s*CMS_AUTOMATION_APP_ID=123456$/m);
+      expect(on.out).toMatch(/done \(5 variables\)/);
+
+      const withoutApp = path.join(dir, "without-app.env");
+      fs.writeFileSync(withoutApp, [...base, ""].join("\n"));
+      const off = run(["--env-file", withoutApp, "--dry-run"]);
+      expect(off.code, off.out).toBe(0);
+      expect(off.out).not.toMatch(/CMS_AUTOMATION_APP_ID/);
+      expect(off.out).toMatch(/done \(4 variables\)/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    // Direction 2 — the shipped EXAMPLE ENV names it (commented, like the other
+    // optional knobs), so the passthrough is discoverable rather than a hidden
+    // env var only this script knows about.
+    const example = fs.readFileSync(EXAMPLE_ENV, "utf8");
+    expect(example, "site-params.example.env must document CMS_AUTOMATION_APP_ID").toMatch(
+      /CMS_AUTOMATION_APP_ID/,
+    );
+    expect(
+      /#\s*export CMS_AUTOMATION_APP_ID=/.test(example),
+      "the example key must stay COMMENTED — it is opt-in, and an uncommented one would push a bogus App ID",
+    ).toBe(true);
   });
 
   test("(e) scaffolder nextSteps points operators at set-repo-variables.sh", () => {

@@ -283,4 +283,63 @@ test.describe("waitForChangeReflected self-reports the failure leg (#21)", () =>
     // The trigger-problem leg must NOT claim the deploy completed.
     expect(threw.message).not.toMatch(/S3 sync \/ CloudFront/i);
   });
+
+  // #215: the PR simply hadn't merged. No deploy run can exist for an
+  // unmerged PR, so the message must name the PR + the pending check rather
+  // than blaming the (legitimately idle) deploy lane or the serve layer.
+  test("PR still awaiting a required check ⇒ names the PR + check, blames neither the deploy nor the serve layer", async () => {
+    const onBudgetExhausted = extenderWithVerdict({
+      kind: "pr-awaiting-required-check",
+      realMiss: false,
+      prNumber: 4242,
+      why: 'PR #4242 has not merged: check "editorial / validate-content" is in_progress',
+    });
+    let threw;
+    try {
+      await waitForChangeReflected({
+        page: makeFakePage(),
+        pillId: "x",
+        urlCheck: async () => false,
+        urlTimeoutMs: 20,
+        urlPollMs: 8,
+        onBudgetExhausted,
+      });
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeTruthy();
+    expect(threw.message).toMatch(/#4242/);
+    expect(threw.message).toMatch(/not\s+merged/i);
+    expect(threw.message).toMatch(/validate-content/);
+    expect(threw.message).not.toMatch(/never fired the chain|lane was idle/i);
+    expect(threw.message).not.toMatch(/S3 sync \/ CloudFront/i);
+  });
+
+  test("PR blocked by a RED required check ⇒ names the red check as the leg to fix", async () => {
+    const onBudgetExhausted = extenderWithVerdict({
+      kind: "pr-required-check-red",
+      realMiss: false,
+      prNumber: 77,
+      why: 'PR #77 cannot merge: check "e2e / e2e" concluded failure',
+    });
+    let threw;
+    try {
+      await waitForChangeReflected({
+        page: makeFakePage(),
+        pillId: "x",
+        urlCheck: async () => false,
+        urlTimeoutMs: 20,
+        urlPollMs: 8,
+        onBudgetExhausted,
+      });
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeTruthy();
+    expect(threw.message).toMatch(/#77/);
+    expect(threw.message).toMatch(/e2e \/ e2e/);
+    expect(threw.message).toMatch(/failure/);
+    expect(threw.message).not.toMatch(/never fired the chain|lane was idle/i);
+    expect(threw.message).not.toMatch(/S3 sync \/ CloudFront/i);
+  });
 });

@@ -189,6 +189,22 @@ async function waitForChangeReflected({
         `Waited ${elapsedS}s and NO deploy-production run fired for your merge — the chain never ` +
         `fired (auto-merge / editorial-workflow / deploy-trigger problem), rather than the ` +
         `change simply being slow to deploy.`;
+    } else if (verdict && verdict.kind === "pr-awaiting-required-check") {
+      // #215: the cms PR had NOT merged yet, so no deploy run could exist
+      // for it — the deploy chain is not the failing leg, whatever check is
+      // still pending. Naming the PR + the pending check points at the real
+      // one instead of mis-blaming a legitimately idle deploy lane.
+      detail =
+        `Waited ${elapsedS}s, but the cms PR${verdict.prNumber ? ` #${verdict.prNumber}` : ""} had NOT ` +
+        `MERGED yet — ${verdict.why || "it is still waiting on its required checks / the merge mechanism"}. ` +
+        `An unmerged PR cannot have a deploy, so the deploy chain is NOT the failing leg here (#215).`;
+    } else if (verdict && verdict.kind === "pr-required-check-red") {
+      // #215: same leg, sharper cause — a required check went red, so the
+      // PR can never merge until it is fixed.
+      detail =
+        `Waited ${elapsedS}s, but the cms PR${verdict.prNumber ? ` #${verdict.prNumber}` : ""} could NOT ` +
+        `MERGE — ${verdict.why || "a required check is red"}. Fix that check; the deploy chain never got ` +
+        `a chance to run (#215).`;
     } else if (extensionCount > 0) {
       // We extended for a real backlog and STILL never saw the change —
       // genuinely stuck/overlong past the queue, not a mis-sized budget.

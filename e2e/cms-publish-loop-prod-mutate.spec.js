@@ -339,18 +339,18 @@ test(
           return (await res.text()).includes(marker);
         },
         urlTimeoutMs: 15 * 60 * 1000,
-        // #21: anchor the deploy-lane judgment on THIS run's own deploy.
-        // `getMergedAt` lazily fetches the create PR's merged_at (the merge
-        // lands DURING this wait via auto-merge, so it isn't known up
-        // front); the extender then counts deploy-production runs created
-        // at/after the merge. A completed such run ⇒ the deploy fired +
-        // finished and the failure is URL-not-served (S3/CloudFront), NOT a
-        // chain miss — the error message self-reports which leg broke.
+        // #21 + #215: anchor the deploy-lane judgment on THIS run's own
+        // deploy. `getPr` lazily fetches the create PR (the merge lands
+        // DURING this wait via auto-merge, so neither the merge timestamp
+        // nor the check state is known up front); the extender derives
+        // mergedAt from it and counts deploy-production runs created at/after
+        // the merge. A completed such run ⇒ the deploy fired + finished and
+        // the failure is URL-not-served (S3/CloudFront), NOT a chain miss.
+        // While the PR is still UNMERGED the extender says so — and which
+        // check it is waiting on — instead of blaming a legitimately idle
+        // deploy lane (#215).
         onBudgetExhausted: makeDeployQueueExtender({
-          getMergedAt: async () => {
-            const pr = await getPullRequest({ prNumber: createPrNumber });
-            return pr && pr.merged_at;
-          },
+          getPr: () => getPullRequest({ prNumber: createPrNumber }),
         }),
       });
     });

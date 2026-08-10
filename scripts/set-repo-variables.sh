@@ -26,6 +26,15 @@
 #   PROD_PLAYGROUND_MODE = only when explicitly set (true on a throwaway sandbox
 #                          site; leave UNSET on a real prod site so the
 #                          prod-mutate loop stays in safe report-only mode).
+#   CMS_AUTOMATION_APP_ID = only when explicitly set — the GitHub App ID
+#                          dependabot-comment-sync falls back to when the repo
+#                          has no CMS_PLATFORM_PAT. Deliberately a VARIABLE, not
+#                          a secret, so it can be read while troubleshooting.
+#                          The App's PRIVATE KEY is a SECRET
+#                          (CMS_AUTOMATION_APP_PRIVATE_KEY) and is therefore NOT
+#                          settable here — set it with `gh secret set`. This
+#                          script targets CONSUMERS; cms-platform's own value is
+#                          set by hand.
 set -euo pipefail
 
 ENV_FILE=""
@@ -36,7 +45,7 @@ while [ $# -gt 0 ]; do
     --env-file) ENV_FILE="${2:?--env-file needs a path}"; shift 2 ;;
     --repo)     REPO_OVERRIDE="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
     --dry-run)  DRY_RUN=1; shift ;;
-    -h|--help)  sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,37p' "$0"; exit 0 ;;
     *) echo "set-repo-variables: unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -67,6 +76,15 @@ values=("$APEX_DOMAIN" "https://$APEX_DOMAIN" "${PREFIX}-previews" "$REGION")
 if [ -n "${PROD_PLAYGROUND_MODE:-}" ]; then
   names+=(PROD_PLAYGROUND_MODE)
   values+=("$PROD_PLAYGROUND_MODE")
+fi
+
+# CMS_AUTOMATION_APP_ID is opt-in too — the second NON-DERIVED passthrough (it
+# comes from a GitHub App, not from APEX_DOMAIN). Only the comment-sync fallback
+# needs it, and only on a repo with no CMS_PLATFORM_PAT. Its companion
+# CMS_AUTOMATION_APP_PRIVATE_KEY is a SECRET, so it is not settable here.
+if [ -n "${CMS_AUTOMATION_APP_ID:-}" ]; then
+  names+=(CMS_AUTOMATION_APP_ID)
+  values+=("$CMS_AUTOMATION_APP_ID")
 fi
 
 suffix=""

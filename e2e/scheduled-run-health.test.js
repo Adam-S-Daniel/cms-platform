@@ -51,6 +51,20 @@ function run(overrides = {}) {
   };
 }
 
+// A job of a run, shaped like the API's /jobs entries. Defaults are a NORMAL
+// job (a real runner picked it up) so each test overrides only what it means.
+function job(overrides = {}) {
+  return {
+    name: "some / some",
+    status: "completed",
+    conclusion: "success",
+    runner_id: 1000003871,
+    runner_name: "GitHub Actions 1000003871",
+    steps: [{ number: 1 }],
+    ...overrides,
+  };
+}
+
 test.describe("scheduled-run-health.yml (reusable) — workflow shape", () => {
   const raw = readWorkflow("scheduled-run-health.yml");
   const doc = parseYaml(raw);
@@ -248,5 +262,121 @@ test.describe("audit-scheduled-runs.js — pure helpers", () => {
     const links = md.match(/\/actions\/runs\/\d+/g) || [];
     expect(links.length).toBe(MAX_LINKS_PER_WORKFLOW);
     expect(md).toContain("and 4 more");
+  });
+});
+
+/*
+ * RUNNER STARVATION: GitHub reports the RUN as `failure` when its job(s) were
+ * cancelled before a runner was ever assigned, so BAD_CONCLUSIONS (a RUN-level
+ * test) alerted on pure infrastructure noise. Every fixture below is a VERIFIED
+ * live shape from jodidaniel/jodidaniel.com — field-for-field, including the
+ * asymmetry that a starved CANCELLED job carries `runner_id: 0` while a SKIPPED
+ * job carries `runner_id: null`.
+ */
+test.describe("audit-scheduled-runs.js — runner-starvation suppression", () => {
+  test("suppresses a run whose only job was cancelled with no runner (run 31118167966)", () => {
+    const { isRunnerStarvationRun } = loadScript();
+    const r = run({
+      id: 31118167966,
+      path: ".github/workflows/publish-scheduled-posts.yml",
+      conclusion: "failure",
+      created_at: "2026-08-06T15:59:06Z",
+      run_started_at: "2026-08-06T15:59:06Z",
+    });
+    const jobs = [
+      job({ name: "publish / publish", conclusion: "cancelled", runner_id: 0, runner_name: "", steps: [] }),
+    ];
+    expect(isRunnerStarvationRun(r, jobs)).toBe(true);
+  });
+
+  test("suppresses cancelled-starved + skipped, whose runner_id is null not 0 (run 31120011930)", () => {
+    // The skipped job must be tolerated by clause (v) WITHOUT a runner test —
+    // keying starvation on `runner_id == null` would mis-classify skipped jobs.
+    const { isRunnerStarvationRun, isRunnerStarvedJob } = loadScript();
+    const r = run({
+      id: 31120011930,
+      path: ".github/workflows/cms-media-roundtrip.yml",
+      conclusion: "failure",
+    });
+    const gate = job({
+      name: "media-roundtrip / recursion-gate",
+      conclusion: "cancelled",
+      runner_id: 0,
+      runner_name: "",
+      steps: [],
+    });
+    const heavy = job({
+      name: "media-roundtrip / media-roundtrip",
+      conclusion: "skipped",
+      runner_id: null,
+      runner_name: null,
+      steps: [],
+    });
+    expect(isRunnerStarvedJob(gate)).toBe(true);
+    expect(isRunnerStarvedJob(heavy)).toBe(false);
+    expect(isRunnerStarvationRun(r, [gate, heavy])).toBe(true);
+  });
+
+  test("NEGATIVE: a job that genuinely FAILED on a real runner still alerts (run 31242320695)", () => {
+    const { isRunnerStarvationRun } = loadScript();
+    const r = run({
+      id: 31242320695,
+      path: ".github/workflows/cms-scheduled-publish-loop.yml",
+      conclusion: "failure",
+    });
+    const jobs = [
+      job({
+        conclusion: "failure",
+        runner_id: 1000003871,
+        runner_name: "GitHub Actions 1000003871",
+        steps: Array.from({ length: 16 }, (_, i) => ({ number: i + 1 })),
+      }),
+    ];
+    expect(isRunnerStarvationRun(r, jobs)).toBe(false);
+  });
+
+  test("NEGATIVE: a zero-job startup_failure still alerts (clause (i) — the regression that matters most)", () => {
+    // `[].every()` is vacuously true, so an empty job list reaching clause (v)
+    // would silence the exact class this audit exists for (jodidaniel's sweep
+    // startup-failed 30/30 for a month). Both guards are asserted: no jobs at
+    // all, and a startup_failure that somehow reports a starved job.
+    const { isRunnerStarvationRun } = loadScript();
+    const r = run({ id: 42, conclusion: "startup_failure" });
+    expect(isRunnerStarvationRun(r, [])).toBe(false);
+    expect(isRunnerStarvationRun(run({ id: 43, conclusion: "failure" }), [])).toBe(false);
+    expect(
+      isRunnerStarvationRun(r, [job({ conclusion: "cancelled", runner_id: 0, runner_name: "" })]),
+    ).toBe(false);
+  });
+
+  test("NEGATIVE: a job cancelled MID-RUN on a real runner still alerts", () => {
+    // Superseded-by-concurrency is the run-level `cancelled` case BAD_CONCLUSIONS
+    // already drops; a real-runner cancellation inside a `failure` run is a
+    // genuine signal and must not be swallowed by the starvation carve-out.
+    const { isRunnerStarvationRun } = loadScript();
+    const jobs = [job({ conclusion: "cancelled", runner_id: 1000003871, runner_name: "GitHub Actions 1000003871" })];
+    expect(isRunnerStarvationRun(run({ conclusion: "failure" }), jobs)).toBe(false);
+  });
+
+  test("the jobs request is EXPLICITLY paginated at per_page=100 (a bare /jobs returns 30)", () => {
+    // A partial job set would evaluate the predicate on a truncated matrix and
+    // silently mis-classify a big-matrix run.
+    const { runJobsEndpoint } = loadScript();
+    expect(runJobsEndpoint("o/r", 31118167966, 1)).toBe(
+      "repos/o/r/actions/runs/31118167966/jobs?per_page=100&page=1",
+    );
+    expect(runJobsEndpoint("o/r", 7, 3)).toContain("per_page=100&page=3");
+  });
+
+  test("partitionStarvedRuns fails SOFT: a jobs-fetch error keeps the run alertable", () => {
+    const { partitionStarvedRuns } = loadScript();
+    const starved = run({ id: 1, conclusion: "failure" });
+    const unreadable = run({ id: 2, conclusion: "failure" });
+    const { alertable, suppressed } = partitionStarvedRuns([starved, unreadable], (r) => {
+      if (r.id === 2) throw new Error("gh: 502 Bad Gateway");
+      return [job({ conclusion: "cancelled", runner_id: 0, runner_name: "", steps: [] })];
+    });
+    expect(suppressed.map((r) => r.id)).toEqual([1]);
+    expect(alertable.map((r) => r.id)).toEqual([2]);
   });
 });

@@ -19,6 +19,15 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # Mechanise the repo's standing 7-day cooling-off for third-party action
+    # SHAs (see AGENTS.md "SHA-pin every workflow `uses:`"). Repairing the
+    # Dependabot pipeline removes the last human gate on a fresh SHA landing in
+    # the 18 reusables BOTH production sites execute, so the wait has to be
+    # enforced by the bot rather than by whoever happens to review the PR.
+    # Security updates bypass cooldown by GitHub's own spec, so an advisory
+    # still opens (and auto-merges) immediately.
+    cooldown:
+      default-days: 7
   - package-ecosystem: npm
     directory: "/e2e"
     schedule:

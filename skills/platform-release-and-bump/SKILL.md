@@ -118,6 +118,39 @@ parity/e2e are non-required.
   push) now fires at most one loop, and the shared group queues any remaining
   cron/dispatch time-overlap rather than evicting it. Still: do consumer bumps,
   THEN let the loops settle before dispatching a validation loop.
+- **A release that changes an `examples/site` caller's `secrets:` map REQUIRES
+  the matching consumer edit in the SAME bump PR.** The pin-consistency guard's
+  workflow-CONTENT parity check compares each job's `secrets:` map **WHOLE,
+  including VALUES** (`stableStringify(a.secrets) !== stableStringify(b.secrets)`)
+  and **symmetrically** — a key the canonical template gained and the consumer
+  lacks fails exactly like a key the consumer has and the template dropped. And
+  the canonical template it compares against is checked out at the **CONSUMER's
+  own `platform_ref`**, i.e. the NEW ref the bump PR is introducing, so the
+  mismatch surfaces **first on the bump PR itself**, not later. So the pin
+  rewrite alone is not enough: add the new `secrets:` line to the consumer's
+  caller in the same commit. The live instance is v0.1.76's
+  `dependabot-comment-sync` caller gaining
+  `app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}` (harmless when
+  the secret is unset — an unset secret is an empty string and the reusable then
+  skips cleanly). This is the same class of drift that let jodidaniel's sweep
+  caller silently lose its `CMS_E2E_PAT` map and `startup_failure` for weeks —
+  only caught earlier, at the bump.
+- **v0.1.76 also changes 9 workflow callers' `pull_request` types** (dropping
+  `edited` — #222 part 2), so both consumers' bump PRs carry that 9-file edit
+  alongside the pin rewrite. **`deploy-preview.yml` is the ONE exception and
+  KEEPS `closed`** — it is the only caller declaring it, and the reusable's
+  teardown (S3 `rm --recursive` + CloudFront invalidation + bot-comment update)
+  fires only on that action; the replacement lint asserts `closed` POSITIVELY,
+  so applying the generic diff there fails self-CI. Residual risk to record
+  beside `delete_branch_on_merge=true`: dropping `edited` reverts #145 / PR #166,
+  whose case is a PR **retargeted onto a different base** — that fires
+  `pull_request: edited` and, with no listener, the whole required suite silently
+  never re-runs against the new base. `delete_branch_on_merge=true` makes GitHub
+  auto-retarget dependent PRs, so the precondition is now MORE likely, and a base
+  retarget changes the effective diff **without** emitting `synchronize`. The
+  justification is the measurement: the guard fired twice in four days,
+  self-heals on any PR that gets another push, and there were **zero** base
+  retargets in 60 PRs.
 - **Release cadence example (this is normal):** one session shipped
   v0.1.13→v0.1.17, bumping both consumers after each — that's five cascades.
 

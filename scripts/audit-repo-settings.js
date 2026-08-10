@@ -619,6 +619,46 @@ function describeInformational(f) {
   return `ruleset \`${f.ruleset}\` / rule ${f.rule}: live-only parameter \`${f.key}\` (informational)`;
 }
 
+// The flag keys this scan could NOT verify: `flag-not-visible` means the
+// read-only PAT never SAW the live value, so an unqualified "OK" would claim a
+// match that was never checked. Surfacing them is ALL this does — unverifiable
+// is NOT drift: it never enters `findings`, never files/updates an issue, and
+// never changes an exit code (see runIssueLifecycle + main).
+function unverifiableKeys(informational) {
+  return (informational || []).filter((f) => f.kind === "flag-not-visible").map((f) => f.key);
+}
+
+// Per-repo OK line. With nothing unverifiable the wording is UNCHANGED; with
+// any, it says how many flags went unchecked instead of implying a full match.
+function repoOkLine(repo, rulesetCount, informational) {
+  const line = `== ${repo}: OK (flags + ${rulesetCount} ruleset(s) + actions permissions match)`;
+  const keys = unverifiableKeys(informational);
+  return keys.length ? `${line} — ${keys.length} flag(s) UNVERIFIABLE (need Contents)` : line;
+}
+
+// ONE collapsed notice per repo naming every unverifiable key (it used to be a
+// notice per key, which drowned the report on the 11 Contents-gated flags).
+function describeUnverifiable(keys) {
+  return (
+    `${keys.length} flag(s) UNVERIFIABLE — \`${keys.join("`, `")}\` not visible to this ` +
+    `token (merge settings need Contents; reconciled via \`--fix\` with admin gh auth). ` +
+    `Informational, not drift.`
+  );
+}
+
+// The clean-scan summary. "match … on every scanned repo" would OVERSTATE the
+// scan whenever some flags were never visible, so qualify it then; with nothing
+// unverifiable the sentence stays byte-identical to what it has always been.
+function cleanScanSummary(informational) {
+  const keys = unverifiableKeys(informational);
+  if (!keys.length) return "OK — live settings match repo-settings.yml on every scanned repo.";
+  return (
+    `OK — live settings match repo-settings.yml on every scanned repo, EXCEPT ` +
+    `${keys.length} flag(s) the read-only PAT cannot see (Contents-gated merge settings) ` +
+    `— UNVERIFIABLE, not drift.`
+  );
+}
+
 // Grouped markdown findings: one section per repo.
 function renderFindings(findings, informational) {
   const byRepo = new Map();
@@ -906,14 +946,21 @@ function printReport(results) {
       (f) => f.kind !== "flag-drift" && f.kind !== "actions-permission-drift",
     );
     if (r.findings.length === 0) {
-      console.log(`== ${r.repo}: OK (flags + ${r.liveRulesets.length} ruleset(s) + actions permissions match)`);
+      console.log(repoOkLine(r.repo, r.liveRulesets.length, r.informational));
     } else {
       console.log(
         `== ${r.repo}: DRIFT — ${flags.length} flag(s), ${actions.length} actions-permission(s), ${rulesets.length} ruleset finding(s)`,
       );
       for (const f of r.findings) console.log(`::error title=repo-settings drift::${r.repo}: ${describeFinding(f)}`);
     }
-    for (const f of r.informational) console.log(`::notice title=repo-settings::${r.repo}: ${describeInformational(f)}`);
+    const notVisible = unverifiableKeys(r.informational);
+    if (notVisible.length) {
+      console.log(`::notice title=repo-settings::${r.repo}: ${describeUnverifiable(notVisible)}`);
+    }
+    for (const f of r.informational) {
+      if (f.kind === "flag-not-visible") continue; // collapsed into the one notice above
+      console.log(`::notice title=repo-settings::${r.repo}: ${describeInformational(f)}`);
+    }
   }
 }
 
@@ -943,7 +990,9 @@ function runIssueLifecycle({ findings, informational, label, dryRun, nowIso }) {
         }
       }
     }
-    console.log("OK — live settings match repo-settings.yml on every scanned repo.");
+    // Exit 0 even when flags were UNVERIFIABLE — a key this token cannot see is
+    // not drift, so it never fails the run and never keeps the issue open.
+    console.log(cleanScanSummary(informational));
     return 0;
   }
 
@@ -1294,6 +1343,10 @@ module.exports = {
   fingerprint,
   fingerprintBlock,
   extractReportedFingerprints,
+  unverifiableKeys,
+  repoOkLine,
+  describeUnverifiable,
+  cleanScanSummary,
   renderFindings,
   buildIssueBody,
   buildComment,
