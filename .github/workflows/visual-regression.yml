@@ -282,7 +282,7 @@ jobs:
       # vars/secrets are unset on the consuming repo.
       - name: Configure AWS credentials
         if: github.actor != 'dependabot[bot]' && env.PREVIEW_BUCKET != ''
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # 6.2.2 (2026-07-07)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3 (2026-07-22)
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
