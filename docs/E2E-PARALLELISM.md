@@ -534,3 +534,24 @@ To try a different worker count without cutting a release, pass the reusable's
 permanently, edit `CI_WORKERS` in `e2e/ci-matrix.js` (locked by the "every
 project job runs at the same measured worker count" assertion in
 `e2e/ci-matrix.test.js`).
+
+## Operational invariants (moved from AGENTS.md)
+
+AGENTS.md used to carry its own summary of this design under "E2E
+parallelism — one CI job per Playwright project"; that summary duplicated
+the sections above almost line for line and was cut. Two pieces of guidance
+from it are NOT restated anywhere above, so they're kept here verbatim:
+
+- **The 3-engine `install --with-deps` was 58 s of every job's critical path**
+  (39 s apt + 19 s download). One engine per job removes most of it, needs no
+  cache key, and can't go stale. **If you add a project, give it an explicit
+  `use.browserName`** (`engineFor()` throws otherwise) and add it to the workflow
+  matrix (the lint will tell you).
+
+The required status context is **unchanged**: the matrix sits behind an
+aggregating `e2e` gate job (`needs: project`, `if: always()`, fails on any
+non-success matrix result), so rulesets and the `e2e-required-stub` companion
+still name exactly `e2e / e2e`. Per-job artifacts and failure-comment markers
+are project-scoped (`playwright-report-<project>`,
+`e2e-failure-summary-<project>`) — jobs sharing either would clobber each other,
+and a marker that names the project says which one went red before you open a log.
