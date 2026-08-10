@@ -4,6 +4,7 @@ const path = require("node:path");
 const { test, expect } = require("./base");
 const { contentOrEmpty } = require("./fs-poll");
 const { captureStep } = require("./manual-capture");
+const { collectionNewLink } = require("./cms-editor-ui");
 const { guard } = require("./base-collections-guards");
 
 // SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source
@@ -102,10 +103,10 @@ test.describe(
         title: "Open a collection",
         body: "Each collection lands on its own index page — a list of every entry on disk plus a New button. The Tags collection is the simplest schema (name + description) so it loads instantly; Posts and Projects can take a couple seconds on a cold cache.",
       });
-      await page
-        .getByRole("link", { name: /new tag|new entry/i })
-        .first()
-        .click();
+      // Version-tolerant by construction — see collectionNewLink's note in
+      // cms-editor-ui.js. Hand-rolling this locator is what cost the decap
+      // 3.14.1 bump attempt, so it is single-sourced and lint-locked.
+      await collectionNewLink(page, "tag").click();
 
       // Decap renders fields with their `label` as the accessible name.
       // We only fill the Name field — Description is `required: false` and

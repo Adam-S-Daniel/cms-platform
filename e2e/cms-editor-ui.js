@@ -213,7 +213,7 @@ async function clickEditorDelete(page, { visibleTimeout = 15_000, clickTimeout =
 }
 
 // ReDoS-safe flat-alternation selector for a hypothetical in-app DOM
-// confirm modal. Decap 3.12.2's "Delete published entry" actually uses a
+// confirm modal. Decap 3.15.1's "Delete published entry" actually uses a
 // NATIVE window.confirm (decap-cms-core@3.9.0 Editor.js handleDeleteEntry:
 // !window.confirm(t('editor.editor.onDeletePublishedEntry'))), so this DOM
 // button never renders in prod; kept as a forward-compatible fallback for a
@@ -245,7 +245,7 @@ function deleteConfirmButton(page) {
 // positive proof the delete fired. If it never fires, throw HERE (the real
 // fault site) instead of failing 900s later in the URL-404 wait. A
 // best-effort in-app confirm-button click (deleteConfirmButton) is folded in
-// for forward-compat and is harmless: under 3.12.2's native confirm the
+// for forward-compat and is harmless: under 3.15.1's native confirm the
 // button never renders and proof comes from the awaited request, not the
 // button. Both prod-loop specs call this instead of a bare clickEditorDelete.
 async function confirmEditorDelete(page, doClick, { dispatchTimeout = 60_000 } = {}) {
@@ -263,7 +263,7 @@ async function confirmEditorDelete(page, doClick, { dispatchTimeout = 60_000 } =
     .catch(() => false);
   await doClick();
   // Forward-compat: if a future Decap swaps the native confirm for an in-app
-  // modal, click its confirm button. No-op under 3.12.2's native confirm (the
+  // modal, click its confirm button. No-op under 3.15.1's native confirm (the
   // button never renders); proof of the delete is the awaited request below,
   // never this click — so a miss is logged, not fatal (silent-catch-lint).
   await deleteConfirmButton(page)
@@ -493,7 +493,7 @@ async function reopenForPublishedDelete(
 
 // Decap's GLOBAL media library is a MODAL opened from the top-nav
 // "Media" button — it is NOT a page route. `page.goto("…/admin/#/media")`
-// renders Decap's NotFound ("Not Found") because Decap 3.12.2 registers
+// renders Decap's NotFound ("Not Found") because Decap 3.15.1 registers
 // no `/media` page route (#1815, runs 26597250490 / 26602619236). The
 // library's header is a container whose class contains "LibraryTop"; it
 // holds the Upload / Copy / Download / Delete-selected controls and sits
@@ -549,7 +549,32 @@ async function closeMediaLibrary(page, { timeout = 10_000 } = {}) {
   }
 }
 
+// The collection-top "start a new entry" control, matched by accessible
+// name. Single-sourced because its NAME is version-dependent and that is
+// what silently broke the decap 3.14.1 bump attempt: cms-smoke's
+// `getByRole("link", {name: /new tag|new entry/i})` resolved nothing and
+// the click timed out 30 s, twice — misattributed at the time to "the
+// adamdaniel built-site shape × 3.14.1" rather than to a renamed control.
+//
+// Decap's EN `collection.collectionTop.newButton` went from
+// "New %{collectionLabel}" (3.12.2) to "＋ %{collectionLabel}" (3.15.x) and
+// 3.15.x additionally sets `newButtonAriaLabel` — "Create entry of type
+// %{collectionLabel}" — as the element's `aria-label`, which WINS over the
+// text content for the accessible name. So the visible label and the
+// accessible name diverge, and neither old pattern survives.
+//
+// The element itself is stable across both eras (a `CollectionTopNewButton`
+// LINK carrying the new-entry route), so match the one token both eras
+// share — the collection label — plus either verb. Flat alternation, no
+// nested quantifier (ReDoS-safe, same rule as DELETE_CONFIRM_BUTTON_RE).
+function collectionNewLink(page, collectionLabel) {
+  return page
+    .getByRole("link", { name: new RegExp(`(new|create)\\b.*\\b${collectionLabel}`, "i") })
+    .first();
+}
+
 module.exports = {
+  collectionNewLink,
   publishedSwitch,
   setPublished,
   expectPublished,
