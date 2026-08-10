@@ -75,8 +75,23 @@ Dependabot's github-actions ecosystem updates the `@<sha>` ref and the version p
 
 **Dependabot only rewrites a pin comment that matches the version it is bumping FROM.** Once the comment and the SHA disagree, every subsequent bump leaves the comment alone and the gap WIDENS. Both live instances on cms-platform, found when comment-sync was first dogfooded on this repo (it had been shipped to consumers and never run here): PR #179 carried `actions/setup-node` **v7.0.0**'s SHA behind `# v6.4.0 (2026-04-20)` across 18 files, and PR #194 bumped 6.2.2 → 6.2.3 while its comment still said `v6.1.1` — so the rewrite could never match. This is structurally the SAME trap as #220's frozen `platform_ref`, where a generic `CUR`→`LATEST` literal replace could not match an already-drifted value either. The lesson generalises: **a repair keyed on the old value cannot fix a value that has already drifted past it** — which is exactly why the fix is an out-of-band sync that reads the SHA's ACTUAL tag, not a smarter replace.
 
-### The 7-day cooling-off is MECHANISED on cms-platform (and only there)
+### The cooling-off is MECHANISED on cms-platform (and only there), and it is GRADUATED
 
-Rule 3 above is a convention a reviewer has to remember. On cms-platform it is now enforced by the bot: `.github/dependabot.yml`'s **`github-actions`** ecosystem carries `cooldown: default-days: 7`. The reason is blast radius — repairing the Dependabot pipeline (comment-sync + the re-arm sweep) removed the last human gate on a fresh third-party action SHA landing in the 18 reusables **both** production sites execute, so the wait has to be enforced by the bot rather than by whoever happens to review the PR. Security updates bypass cooldown by GitHub's own spec, so an advisory still opens (and auto-merges) immediately.
+Rule 3 above is a convention a reviewer has to remember. On cms-platform it is now enforced by the bot: `.github/dependabot.yml` gives **both** ecosystems — `github-actions` and the `/e2e` `npm` harness — a graduated minimum package age:
 
-**Do NOT add a cooldown to a CONSUMER's `github-actions` ecosystem.** A consumer's github-actions entry is what bumps the *platform pin* refs, so a 7-day wait there would delay every release's adoption — the opposite of the lockstep goal. The npm/bundler ecosystems are untouched in both.
+```yaml
+cooldown:
+  default-days: 7
+  semver-major-days: 30
+```
+
+The reason is blast radius — repairing the Dependabot pipeline (comment-sync + the re-arm sweep) removed the last human gate on a fresh third-party action SHA landing in the 18 reusables **both** production sites execute, so the wait has to be enforced by the bot rather than by whoever happens to review the PR. The `/e2e` harness gets the same treatment because it is not platform-internal either: both consumers check it out and execute it, so a bad Playwright major reaches production CI the same way a bad action SHA would.
+
+Four facts worth carrying:
+
+- **7 is a RAISE, not a floor from zero.** GitHub's own default minimum package age is **3 days**, so an unset `cooldown` is not "no wait" — writing 7 doubles it and makes the number reviewable.
+- **Majors wait 30 days because a major is the class that has actually needed reverting here** — `setup-node` 6→7 (#179) lands in 18 reusables both sites execute, and the Decap bundle bump is kept revertible on purpose (v0.1.66 → v0.1.67). A Playwright major additionally REQUIRES a coupled `.github/ci-runner/Dockerfile` bump (the `playwright-image-drift` guard) that Dependabot cannot make in the same PR, so 30 days is room to do it deliberately rather than in a red-CI scramble.
+- **Leave `semver-minor-days` / `semver-patch-days` undefined.** GitHub's documented precedence falls an undefined `semver-*-days` back to `default-days`, so spelling them out only invites the three numbers to drift apart. (`include:` / `exclude:` per-dependency lists exist too; nothing here needs them.)
+- **Cooldown is version-updates-only.** A security advisory bypasses it by GitHub's spec, so it still opens — and auto-merges — the moment the matrix is green. Cooldown never delays a fix.
+
+**Do NOT add a cooldown to a CONSUMER's `github-actions` ecosystem — and the reason matters, because the first one recorded was wrong.** The original claim was that a consumer cooldown "would delay every release's adoption"; that mechanism does not hold. Release adoption is landed by `platform-bump.yml`, which opens the bump PR itself (the last five releases all arrived as `platform/bump-vX.Y.Z`), so Dependabot is not on the adoption path. The actual reason is verified and simpler: **neither consumer pins a single third-party action** — every `uses:` in both repos targets `Adam-S-Daniel/cms-platform/.github/workflows/*.yml` — so a consumer cooldown has no supply-chain surface to hold and would be inert config that reads as policy. Dependabot remains the backstop that bumps a platform pin when `platform-bump` hasn't run, and cooling that off would delay our own release; that is a real but secondary reason. A consumer's `bundler` ecosystem (the `cms-platform-theme` gem) is untouched for the same reason — it tracks our own release, not a third party.

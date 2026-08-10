@@ -1013,12 +1013,35 @@ per-PR checkout):
 
   **The standing gate:** repairing this removes the last human gate on
   third-party action SHAs entering 18 reusables both production sites execute,
-  so cms-platform's `github-actions` ecosystem carries
-  `cooldown: default-days: 7`, mechanising the repo's existing cooling-off
-  convention. **Deliberately NOT applied to a CONSUMER's `github-actions`
-  ecosystem** — there it would delay the platform-pin bumps (the `uses:@<ref>` /
-  composite-SHA rewrites that carry a release to a site) and slow release
-  adoption. `npm` is untouched in both.
+  so BOTH of cms-platform's ecosystems (`github-actions` AND the `/e2e` `npm`
+  harness) carry a **graduated** minimum package age —
+  `cooldown: {default-days: 7, semver-major-days: 30}`. `default-days: 7`
+  mechanises the repo's existing cooling-off convention (GitHub's own default is
+  3 days, so 7 is a deliberate RAISE, not a floor from zero); majors wait 30
+  because a major is the class that has actually needed reverting here
+  (setup-node 6→7 in #179; the Decap bundle kept revertible on purpose at
+  v0.1.66→v0.1.67), and a Playwright major additionally needs a coupled
+  `.github/ci-runner/Dockerfile` edit Dependabot cannot make in the same PR.
+  `semver-minor` / `semver-patch` are left undefined on purpose — GitHub's
+  documented precedence falls an undefined `semver-*-days` back to
+  `default-days`, so spelling them out would only invite the three to drift.
+  Cooldown applies to **version** updates only: a security advisory bypasses it
+  by GitHub's spec and still opens (and auto-merges) immediately.
+
+  **Deliberately NOT applied to a CONSUMER's `github-actions` ecosystem — but
+  not for the reason first recorded here.** The original wording said a consumer
+  cooldown "would delay the platform-pin bumps and slow release adoption"; that
+  mechanism is wrong. Release adoption is landed by `platform-bump.yml`, which
+  opens the bump PR itself (the last five releases all arrived as
+  `platform/bump-vX.Y.Z`, not as Dependabot PRs), so a Dependabot cooldown is not
+  on that path at all. The real reason is simpler and verified: **neither consumer
+  pins a single third-party action** — every `uses:` in both repos targets
+  `Adam-S-Daniel/cms-platform/.github/workflows/*.yml` — so a consumer's
+  `github-actions` cooldown has no supply-chain surface to hold and would be an
+  inert setting that reads as policy. (Dependabot IS still the backstop that
+  bumps a platform pin when `platform-bump` hasn't run, and cooling THAT off
+  would delay our own release — a second, weaker reason, and the only one the old
+  wording was groping at.)
 - **The manifest-path allowlist is factored into `scripts/check-dependabot-
   manifest-paths.sh`**, the single source both `dependabot-auto-merge.yml`
   (the per-PR `pull_request` gate) and `dependabot-rearm-sweep.yml` (the
@@ -1516,6 +1539,32 @@ adversarial code-review lens caught). "Done" additionally requires:
 This gate is part of the `platform-release-and-bump` flow — apply it after the
 consumer bump, not before.
 
+### Delegated mechanical work is done when a VERIFIER exits 0
+
+From the v0.1.76 consumer bump, which was delegated to two small-model subagents
+with an exact spec that ENDED in "run the authoritative gate":
+
+- **Done means an exit code, not prose.** Name the exact verifier command in the
+  spec as the definition of done and require its exit code in the report. Neither
+  agent ran it, and its exit code was the one thing that would have caught the
+  incomplete work unambiguously.
+- **A subagent that cannot run the verifier must report BLOCKED.** Partial
+  completion described as progress is the failure mode: one agent stopped after 3
+  of 5 edit categories having INVENTED a constraint it was never given, left 58
+  stale `v0.1.75` refs and no `app_private_key`, and its report read as near-done.
+- **A count that disagrees with the spec's stated expectation is a
+  STOP-AND-REPORT condition**, never "minor variance from counting methodology".
+  Today's 35-vs-34 was benign (a prose `vX.Y.Z` mention in a comment), but nothing
+  in the process established that — the orchestrator had to.
+- **Prefer a verifier that CANNOT silently degrade.** `check-platform-pin-consistency.js`
+  used to drop from 96 checks to 61 with no canonical set and still print "Pins are
+  consistent", so even an agent that DID run it could be falsely reassured. Hence
+  `--require-canonical` (which the `platform-pin-consistency` reusable now passes).
+
+For a consumer pin bump that verifier is **`scripts/verify-consumer-pins.sh`**
+(run from the consumer root; `--platform-dir <path>` when the platform tree is
+elsewhere) — a green run of it, not a diff review, is what makes the bump done.
+
 ## E2E workflow matrix (ported)
 
 The full e2e/Playwright matrix is ported. Two shapes:
@@ -1539,7 +1588,19 @@ The full e2e/Playwright matrix is ported. Two shapes:
   `_layouts/post.html`) on push, media/host cover them via their daily cron — so
   a single push can't fire two loops and co-arrival-evict one in the shared lane
   (#70). The shared concurrency group still serializes any cron/dispatch/push
-  TIME-overlap by queuing; disjoint triggers remove the same-push co-arrival.)
+  TIME-overlap by queuing; disjoint triggers remove the same-push co-arrival.
+  **The lane is REPOSITORY-scoped — it serialises the three loops WITHIN one
+  consumer and does NOT serialise two consumers against each other.** That is a
+  GitHub fact, not a choice: Actions has no cross-repo concurrency, and the group
+  is evaluated in the CALLER's repository even though the reusable lives here. So
+  adamdaniel.ai and jodidaniel.com CAN run their prod loops simultaneously, and
+  should — separate buckets, distributions and canaries, nothing to serialise.
+  Verified rather than assumed: adamdaniel.ai host-loop run 31179432081 and
+  jodidaniel.com host-loop run 31181497216 overlapped 2026-08-07
+  13:11:48-13:13:08Z and both succeeded, one of 4 such cross-consumer overlaps in
+  4 days. Do NOT "fix" the bare literal group by adding
+  `${{ github.repository }}` — it would be a no-op that only makes the
+  byte-identity lint harder to satisfy.)
   and `visual-regression` (lints:
   `e2e/visual-regression-content-skip.test.js` + `-skip-review.test.js` — the
   `paths:` content-skip list, the `visually-different` output, the conditional
@@ -2710,10 +2771,12 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   minted in pure node + stdlib `crypto` (no new marketplace action); the PAT still
   wins when present so the consumer path is unchanged. Repairing this removes the
   last human gate on third-party action SHAs entering 18 reusables both
-  production sites execute, so cms-platform's `github-actions` ecosystem gains
-  `cooldown: default-days: 7` — mechanising the repo's existing cooling-off
-  convention, and deliberately NOT applied to a consumer's `github-actions`
-  ecosystem (see the re-arm-sweep section for why).
+  production sites execute, so both of cms-platform's ecosystems gain a graduated
+  `cooldown: {default-days: 7, semver-major-days: 30}` — mechanising the repo's
+  existing cooling-off convention, and deliberately NOT applied to a consumer's
+  `github-actions` ecosystem (see the re-arm-sweep section for why — and note the
+  reason recorded there is a CORRECTION: consumers pin zero third-party actions,
+  which is the actual reason, not the release-adoption delay first claimed).
 
   **#215 — the loop stopped blaming the deploy chain for a PR that has not
   merged, and the scope was wider than the issue.** Before the merge lands the
