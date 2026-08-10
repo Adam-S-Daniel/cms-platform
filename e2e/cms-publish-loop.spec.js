@@ -59,6 +59,7 @@ const { CANARIES, findCanary, makeMarker, MARKER_ANY_RE } = require("./canary-co
 const {
   fetchPublicUrl,
   gh,
+  getPullRequest,
   waitForCmsPullRequest,
   makeDeployQueueExtender,
 } = require("./github-actions-poll");
@@ -417,7 +418,13 @@ test("CMS publish loop — host repo, target main", { tag: ["@admin-write"] }, a
       // checks + deploy-production + CDN propagation under runner
       // saturation.
       urlTimeoutMs: 15 * 60 * 1000,
-      onBudgetExhausted: makeDeployQueueExtender(),
+      // #215: `pr` is THIS leg's create PR (step 4), so the extender can
+      // re-fetch it and tell "still awaiting a required check / the merge"
+      // apart from "the deploy chain never fired". A live re-fetch, not the
+      // step-4 snapshot — that snapshot's merged_at is null forever.
+      onBudgetExhausted: makeDeployQueueExtender({
+        getPr: () => getPullRequest({ prNumber: pr.number }),
+      }),
     });
     await page.goto(PUBLIC_URL, { waitUntil: "domcontentloaded" });
     await captureStep(page, {

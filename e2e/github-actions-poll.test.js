@@ -280,6 +280,146 @@ test.describe("makeDeployQueueExtender anchored on the spec's own merge (#21)", 
   });
 });
 
+// ── #215: an UNMERGED PR is not a deploy-chain miss ───────────────────
+//
+// Verdict (3) ("no-deploy-fired") reads "the chain never fired" from an idle
+// deploy lane — but the lane is LEGITIMATELY idle for as long as the cms PR
+// hasn't merged (nothing can deploy before a merge). That mis-diagnosed a
+// live media-roundtrip run at ~907s as "NO deploy-production run fired" when
+// the canary auto-merge was merely slow. With `getPr` supplied the extender
+// asks the weaker, list-free question "has it merged?" first, and check-run
+// STATE alone distinguishes "awaiting" from "red" — no requiredContexts list.
+test.describe("makeDeployQueueExtender PR-state verdicts (#215)", () => {
+  const MIN = 60 * 1000;
+  const idleLane = async () => ({
+    inFlight: 0,
+    recent: 0,
+    deployCompletedSinceMerge: false,
+    runsSinceMerge: 0,
+  });
+  // gh() double for the head-sha check-runs read the extender does.
+  const checkRunsGh = (checkRuns) => async (pathname) => {
+    if (String(pathname).includes("/check-runs")) return { check_runs: checkRuns };
+    throw new Error(`unexpected gh path ${pathname}`);
+  };
+  const unmergedPr = (overrides = {}) => ({
+    number: 4242,
+    merged: false,
+    merged_at: null,
+    head: { sha: "head-sha-1" },
+    ...overrides,
+  });
+
+  test("(1) BACK-COMPAT: with no getPr an idle lane still yields no-deploy-fired", async () => {
+    // The 13 bare call sites must keep today's verdicts byte-for-behaviour.
+    const ext = makeDeployQueueExtender({ mergedAt: 0, activity: idleLane });
+    const grant = await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(grant).toBe(0);
+    expect(ext.verdict.kind).toBe("no-deploy-fired");
+    expect(ext.verdict.realMiss).toBe(true);
+  });
+
+  test("(2) unmerged PR + a not-completed check ⇒ pr-awaiting-required-check + a POSITIVE extension", async () => {
+    const ext = makeDeployQueueExtender({
+      getPr: async () => unmergedPr(),
+      activity: idleLane,
+      minExtendMs: 3 * MIN,
+      maxTotalExtendMs: 30 * MIN,
+      _gh: checkRunsGh([{ name: "editorial / validate-content", status: "in_progress" }]),
+    });
+    const grant = await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(grant, "keep waiting through a slow auto-merge").toBe(3 * MIN);
+    expect(ext.verdict.kind).toBe("pr-awaiting-required-check");
+    expect(ext.verdict.realMiss, "an unmerged PR is NOT a deploy-chain miss").toBe(false);
+    expect(ext.verdict.prNumber).toBe(4242);
+    expect(ext.verdict.why).toMatch(/validate-content/);
+    expect(ext.verdict.why).toMatch(/in_progress/);
+  });
+
+  test("(3) unmerged PR + a completed FAILING check ⇒ pr-required-check-red", async () => {
+    const ext = makeDeployQueueExtender({
+      getPr: async () => unmergedPr(),
+      activity: idleLane,
+      _gh: checkRunsGh([
+        { name: "e2e / e2e", status: "completed", conclusion: "failure" },
+        { name: "scan / scan", status: "completed", conclusion: "success" },
+      ]),
+    });
+    await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(ext.verdict.kind).toBe("pr-required-check-red");
+    expect(ext.verdict.realMiss).toBe(false);
+    expect(ext.verdict.why).toMatch(/e2e \/ e2e/);
+    expect(ext.verdict.why).toMatch(/failure/);
+  });
+
+  test("(4) unmerged PR + all checks green ⇒ pr-awaiting-required-check (awaiting the merge mechanism)", async () => {
+    const ext = makeDeployQueueExtender({
+      getPr: async () => unmergedPr(),
+      activity: idleLane,
+      _gh: checkRunsGh([
+        { name: "editorial / validate-content", status: "completed", conclusion: "success" },
+        { name: "e2e / e2e", status: "completed", conclusion: "skipped" },
+      ]),
+    });
+    await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(ext.verdict.kind).toBe("pr-awaiting-required-check");
+    expect(ext.verdict.realMiss).toBe(false);
+    expect(ext.verdict.why).toMatch(/awaiting the merge mechanism/i);
+  });
+
+  test("(5) REACHABILITY LOCK: a MERGED PR + idle lane is STILL no-deploy-fired (realMiss true)", async () => {
+    // Load-bearing: if 'no-deploy-fired' became unreachable, a genuine chain
+    // miss would turn into silence — the opposite of #215's intent.
+    const ext = makeDeployQueueExtender({
+      getPr: async () => ({
+        number: 99,
+        merged: true,
+        merged_at: "2026-08-08T00:00:00Z",
+        head: { sha: "s" },
+      }),
+      activity: idleLane,
+      _gh: checkRunsGh([]),
+    });
+    const grant = await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(grant, "a merged PR with no deploy is a real miss ⇒ give up").toBe(0);
+    expect(ext.verdict.kind).toBe("no-deploy-fired");
+    expect(ext.verdict.realMiss).toBe(true);
+  });
+
+  test("(6) a check-run probe error never upgrades to a real miss", async () => {
+    const ext = makeDeployQueueExtender({
+      getPr: async () => unmergedPr(),
+      activity: idleLane,
+      _gh: async () => {
+        throw new Error("api 502");
+      },
+    });
+    const grant = await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(grant).toBeGreaterThan(0);
+    expect(ext.verdict.kind).toBe("pr-awaiting-required-check");
+    expect(ext.verdict.realMiss).toBe(false);
+    expect(ext.verdict.why).toMatch(/probe failed/i);
+  });
+
+  test("(7) BOUND: repeated unmerged-PR rounds cannot exceed maxTotalExtendMs", async () => {
+    const ext = makeDeployQueueExtender({
+      getPr: async () => unmergedPr(),
+      activity: idleLane,
+      minExtendMs: 3 * MIN,
+      maxTotalExtendMs: 10 * MIN,
+      _gh: checkRunsGh([{ name: "editorial / validate-content", status: "queued" }]),
+    });
+    let total = 0;
+    for (let i = 0; i < 20; i++) {
+      const g = await ext({ elapsedMs: 20 * MIN, extensionCount: i });
+      total += g;
+      if (g === 0) break;
+    }
+    expect(total, "the extender can never extend past its own ceiling").toBeLessThanOrEqual(10 * MIN);
+    expect(await ext({ elapsedMs: 40 * MIN, extensionCount: 99 })).toBe(0);
+  });
+});
+
 // ── #21: deployLaneActivity counts runs against mergedAt ───────────────
 test.describe("deployLaneActivity anchored on mergedAt (#21)", () => {
   // Mutates globalThis.fetch in beforeEach/afterEach — run serial so the

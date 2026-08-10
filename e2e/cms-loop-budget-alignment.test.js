@@ -24,6 +24,14 @@
 //   (4) the spec's TEST_TIMEOUT_MS fits inside its workflow job's
 //       timeout-minutes (so the spec budget can never be silently truncated by
 //       a smaller job cap).
+//   (5) #215 WORST CASE — each loop's TEST_TIMEOUT_MS also spans its MIN
+//       reflect leg PLUS the deploy-queue extender's maximum TOTAL extension
+//       (the extender now grants bounded extensions while the canary PR is
+//       still awaiting its required checks). Otherwise Playwright kills the
+//       test mid-extension and the run reports an opaque "Test timeout"
+//       instead of the extender's own diagnosis. The extension ceiling is read
+//       out of github-actions-poll.js, so changing that default trips this
+//       lint rather than silently eating a spec's budget.
 //
 // It does NOT change the publish mechanism — it only asserts the budget numbers
 // the two specs already declare, resolving named constants
@@ -82,6 +90,20 @@ function mergeBudget(src) {
 function testTimeout(src) {
   const m = src.match(/const\s+TEST_TIMEOUT_MS\s*=\s*([^;]+);/);
   if (!m) throw new Error("cms-loop-budget-alignment: no TEST_TIMEOUT_MS found");
+  return resolveMs(m[1], src);
+}
+
+// makeDeployQueueExtender's `maxTotalExtendMs` DEFAULT — the most extra time a
+// reflect leg can accumulate past its own urlTimeoutMs (#215). Read from the
+// source (first occurrence = makeDeployQueueExtender's signature; the sibling
+// makePreviewCanaryRecoverer declares the same option further down) so a change
+// to that default fails this lint instead of truncating a spec's budget.
+function extenderMaxTotalExtendMs() {
+  const src = fs.readFileSync(path.join(HARNESS, "github-actions-poll.js"), "utf8");
+  const m = src.match(/maxTotalExtendMs\s*=\s*([^,\n]+),/);
+  if (!m) {
+    throw new Error("cms-loop-budget-alignment: no maxTotalExtendMs default in github-actions-poll.js");
+  }
   return resolveMs(m[1], src);
 }
 
@@ -145,6 +167,35 @@ test.describe("#1815 real-prod loop budget alignment — media >= prod-mutate", 
       `${MEDIA_SPEC}'s TEST_TIMEOUT_MS (${mediaTT / MIN}min) must be >= ${PRODMUTATE_SPEC}'s ` +
         `(${prodTT / MIN}min) — media runs the strictly longer create+delete-post+delete-image loop.`,
     ).toBeGreaterThanOrEqual(prodTT);
+  });
+
+  test("#215 worst case: TEST_TIMEOUT_MS spans MIN reflect leg + the extender's max total extension", () => {
+    const cap = extenderMaxTotalExtendMs();
+    const loops = [
+      { spec: MEDIA_SPEC, src: mediaSrc, minReflect: mediaMinReflect, wf: "cms-media-roundtrip.yml" },
+      {
+        spec: PRODMUTATE_SPEC,
+        src: prodSrc,
+        minReflect: prodMinReflect,
+        wf: "cms-publish-loop-prod.yml",
+      },
+    ];
+    for (const { spec, src, minReflect, wf } of loops) {
+      const tt = testTimeout(src);
+      expect(
+        tt,
+        `${spec}'s TEST_TIMEOUT_MS (${tt / MIN}min) must be >= its shortest reflect leg ` +
+          `(${minReflect / MIN}min) + the deploy-queue extender's max total extension ` +
+          `(${cap / MIN}min) — otherwise Playwright kills the test mid-extension and the run ` +
+          `reports "Test timeout" instead of the extender's own verdict (#215).`,
+      ).toBeGreaterThanOrEqual(minReflect + cap);
+      const jobMin = jobTimeoutMinutes(wf);
+      expect(
+        jobMin,
+        `${wf}'s timeout-minutes (${jobMin}) must still accommodate ${spec}'s TEST_TIMEOUT_MS ` +
+          `(${tt / MIN}min) at that worst case.`,
+      ).toBeGreaterThanOrEqual(tt / MIN);
+    }
   });
 
   test("media job timeout-minutes accommodates its TEST_TIMEOUT_MS", () => {

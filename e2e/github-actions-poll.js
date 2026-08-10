@@ -603,6 +603,33 @@ async function deployLaneActivity({
 // the true failure leg. Bounded by `maxTotalExtendMs` (and by
 // waitForChangeReflected's own `maxExtensions` round cap). `activity` is
 // injectable for unit tests.
+//
+// #215 — DON'T BLAME THE DEPLOY CHAIN WHILE THE PR IS STILL UNMERGED.
+// Verdict (3) reads "the chain never fired" on an idle lane, but the lane
+// is LEGITIMATELY idle for as long as the cms PR hasn't merged: nothing
+// can deploy before a merge. That's the live #1815 media-roundtrip
+// failure (~907s, "NO deploy-production run fired") when the canary
+// auto-merge was merely slow. Pass `getPr` (an async getter for the PR
+// object) and the extender asks the weaker, LIST-FREE question "has it
+// merged?" before recording a real miss:
+//   - unmerged + a not-completed check-run → 'pr-awaiting-required-check'
+//   - unmerged + a completed non-green check-run → 'pr-required-check-red'
+//   - unmerged + everything green → 'pr-awaiting-required-check' (the
+//     merge mechanism itself hasn't landed it yet)
+// all `realMiss: false`, each with a bounded extension so the loop keeps
+// waiting through a slow auto-merge.
+//
+// Deliberately NOT the `requiredContexts` list #215 proposed: there is no
+// single source of that list in this repo (the harness default is the bare
+// ['validate-content'] feature-branch subset; one consumer's nudge caller
+// lists 6 contexts in `<caller job> / <reusable job>` form, another lists
+// 1, and the platform's own example caller still ships a stale 9-context
+// list matching no real check-run name), and headChecksTrulyGreen THROWS
+// on an empty list. Check-run STATE alone distinguishes "awaiting" from
+// "red" with no list at all.
+//
+// BACK-COMPAT: with `getPr` ABSENT the extender behaves EXACTLY as before
+// — every one of the 13 bare call sites keeps today's verdicts.
 function makeDeployQueueExtender({
   repo = HOST_REPO,
   workflow = "deploy-production.yml",
@@ -612,10 +639,28 @@ function makeDeployQueueExtender({
   recentWindowMs = 5 * 60 * 1000,
   mergedAt,
   getMergedAt,
+  // #215: async () => PR object | null. When supplied it is the single
+  // source for the merge anchor too (mergedAt is derived from
+  // pr.merged_at), so a caller need only pass this one thing.
+  getPr,
   activity,
+  _gh = gh,
 } = {}) {
   let extendedTotal = 0;
-  const resolveMergedAt = async () => {
+  const resolvePr = async () => {
+    if (typeof getPr !== "function") return undefined;
+    try {
+      return await getPr();
+    } catch (_) {
+      // Same defensive posture as resolveMergedAt: a failed getter means
+      // "no PR info", never a louder verdict.
+      return undefined;
+    }
+  };
+  const resolveMergedAt = async (pr) => {
+    // getPr wins when supplied — an unmerged PR has no merged_at, which is
+    // exactly the unanchored state the #215 verdicts then explain.
+    if (typeof getPr === "function") return (pr && pr.merged_at) || undefined;
     if (mergedAt != null && mergedAt !== "") return mergedAt;
     if (typeof getMergedAt === "function") {
       try {
@@ -626,18 +671,74 @@ function makeDeployQueueExtender({
     }
     return undefined;
   };
+  // Same paginated check-runs read headChecksTrulyGreen uses (NOT that
+  // helper itself — it throws on an empty requiredContexts, and #215 is
+  // deliberately list-free).
+  const fetchCheckRuns = async (sha) => {
+    if (!sha) return [];
+    const out = [];
+    for (let page = 1; ; page++) {
+      const data = await _gh(
+        `/repos/${repo}/commits/${encodeURIComponent(sha)}/check-runs?per_page=100&page=${page}`,
+      );
+      const runs = (data && data.check_runs) || [];
+      out.push(...runs);
+      if (runs.length < 100) break;
+    }
+    return out;
+  };
+  // #215: the PR-state verdict, or null when there is no PR info or the PR
+  // HAS merged — in which case the caller keeps today's 'no-deploy-fired'.
+  const unmergedPrVerdict = async (pr) => {
+    if (!pr || pr.merged || pr.merged_at) return null;
+    const prNumber = pr.number;
+    const awaiting = (why) => ({ kind: "pr-awaiting-required-check", realMiss: false, prNumber, why });
+    let runs;
+    try {
+      runs = await fetchCheckRuns(pr.head && pr.head.sha);
+    } catch (e) {
+      // A probe failure must never be upgraded to a real miss — we already
+      // know the load-bearing fact (the PR has not merged).
+      return awaiting(
+        `PR #${prNumber} has not merged; its check-run probe failed (${e && e.message}), so which check is pending is unknown`,
+      );
+    }
+    const pending = runs.find((r) => r.status !== "completed");
+    if (pending) {
+      return awaiting(`PR #${prNumber} has not merged: check "${pending.name}" is ${pending.status}`);
+    }
+    const GREEN = (c) => c === "SUCCESS" || c === "NEUTRAL" || c === "SKIPPED";
+    const red = runs.find((r) => !GREEN(String(r.conclusion || "").toUpperCase()));
+    if (red) {
+      return {
+        kind: "pr-required-check-red",
+        realMiss: false,
+        prNumber,
+        why: `PR #${prNumber} cannot merge: check "${red.name}" concluded ${red.conclusion}`,
+      };
+    }
+    return awaiting(
+      `PR #${prNumber} has not merged although all ${runs.length} check-run(s) on its head sha are green — it is awaiting the merge mechanism (auto-merge / nudge)`,
+    );
+  };
   const extender = async ({ elapsedMs = 0, extensionCount = 0 } = {}) => {
     const remaining = maxTotalExtendMs - extendedTotal;
+    const pr = await resolvePr();
     if (remaining <= 0) {
       console.warn(
         `[deploy-queue] hit the ${Math.round(maxTotalExtendMs / 1000)}s extension ceiling for the ${workflow} lane; failing as a real miss.`,
       );
       // Preserve any deploy-completed verdict already recorded; otherwise
-      // a stuck lane that never fired is a real miss.
-      if (!extender.verdict) extender.verdict = { kind: "no-deploy-fired", realMiss: true };
+      // a stuck lane that never fired is a real miss — unless the PR is
+      // still unmerged, in which case only the verdict TEXT improves (the
+      // budget is spent either way, so we still return 0). #215.
+      if (!extender.verdict) {
+        extender.verdict =
+          (await unmergedPrVerdict(pr)) || { kind: "no-deploy-fired", realMiss: true };
+      }
       return 0;
     }
-    const ma = await resolveMergedAt();
+    const ma = await resolveMergedAt(pr);
     let act;
     try {
       act = activity ? await activity() : await deployLaneActivity({ repo, workflow, recentWindowMs, mergedAt: ma });
@@ -677,6 +778,26 @@ function makeDeployQueueExtender({
       ? inFlight <= 0 && runsSinceMerge <= 0
       : inFlight <= 0 && recent <= 0;
     if (idleForMerge) {
+      // #215: an idle lane is EXPECTED while the cms PR is still unmerged —
+      // nothing can deploy before a merge — so ask "has it merged?" before
+      // blaming the deploy chain. When it hasn't, grant a bounded extension
+      // (double-bounded: by maxTotalExtendMs here and by
+      // waitForChangeReflected's maxExtensions round cap, so it CANNOT
+      // extend indefinitely) and report which check the PR is waiting on.
+      const pending = await unmergedPrVerdict(pr);
+      if (pending) {
+        extender.verdict = pending;
+        const grant = Math.min(minExtendMs, remaining);
+        extendedTotal += grant;
+        console.warn(
+          `[deploy-queue] URL still not reflected after ${Math.round(elapsedMs / 1000)}s and the ${workflow} lane is idle, but ${pending.why} — an unmerged PR cannot have a deploy, so this is NOT a chain miss; extending ${Math.round(grant / 1000)}s (ext #${extensionCount + 1}, ${Math.round(extendedTotal / 1000)}s total) (#215).`,
+        );
+        return grant;
+      }
+      // The PR HAS merged (or no getPr was supplied): a merged PR with an
+      // idle lane and no deploy for it IS the genuine chain miss. This path
+      // MUST stay reachable — if 'no-deploy-fired' became unreachable a
+      // real miss would turn into silence, the opposite of #215's intent.
       extender.verdict = { kind: "no-deploy-fired", realMiss: true };
       console.warn(
         `[deploy-queue] URL still not reflected after ${Math.round(elapsedMs / 1000)}s and ${

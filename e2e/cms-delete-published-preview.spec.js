@@ -58,6 +58,7 @@ const { getPat, HOST_REPO } = require("./decap-pat");
 const {
   addLabel,
   gh,
+  getPullRequest,
   makePreviewCanaryRecoverer,
   waitForMerge,
   makeDeployQueueExtender,
@@ -461,7 +462,18 @@ test(
       // Mirror prod step 5 (cms-delete-published.spec.js:477): extend the
       // deploy budget through queue contention. NOT makePreviewCanaryRecoverer —
       // see the recoverer-wiring rationale below.
-      makeOnBudgetExhausted: () => makeDeployQueueExtender(),
+      //
+      // #215: use the spine's `{ pr }` seam so a still-unmerged canary PR is
+      // reported as "awaiting <check>" rather than "the deploy chain never
+      // fired". This leg opts OUT of the spine's PR wait (Decap commits the
+      // delete ref directly via the git data API), so `pr` is null today and
+      // the extender keeps its pre-#215 behaviour — the wiring is here so it
+      // is correct if the leg ever grows a delete PR to wait on. Re-fetched
+      // live rather than reading the snapshot, whose merged_at never updates.
+      makeOnBudgetExhausted: ({ pr } = {}) =>
+        makeDeployQueueExtender(
+          pr && pr.number ? { getPr: () => getPullRequest({ prNumber: pr.number }) } : {},
+        ),
     });
 
     // ── 3. Final ground-truth assertion ────────────────────────────

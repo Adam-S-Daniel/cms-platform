@@ -335,7 +335,12 @@ test(
         // checks + deploy-production + CloudFront propagation under
         // runner contention. Matches cms-publish-loop / prod-mutate.
         urlTimeoutMs: 15 * 60 * 1000,
-        onBudgetExhausted: makeDeployQueueExtender(),
+        // #215: the create PR is captured above, so a still-unmerged PR is
+        // reported as "awaiting <check>" instead of "the chain never fired"
+        // (an idle deploy lane is EXPECTED before the merge).
+        onBudgetExhausted: makeDeployQueueExtender({
+          getPr: () => getPullRequest({ prNumber: createPrNumber }),
+        }),
       });
     });
 

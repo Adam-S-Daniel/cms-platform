@@ -355,7 +355,12 @@ test(
         // Cms PR cycle (validate-content + auto-merge + deploy-production
         // + CDN propagation), generous margin for queued runners.
         urlTimeoutMs: 15 * 60 * 1000,
-        onBudgetExhausted: makeDeployQueueExtender(),
+        // #215: the create PR is captured above, so a still-unmerged PR is
+        // reported as "awaiting <check>" instead of "the chain never fired"
+        // (an idle deploy lane is EXPECTED before the merge).
+        onBudgetExhausted: makeDeployQueueExtender({
+          getPr: () => getPullRequest({ prNumber: createPrNumber }),
+        }),
       });
     });
 
