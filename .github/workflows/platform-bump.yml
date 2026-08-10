@@ -60,7 +60,7 @@ jobs:
       # permission". Check out with the caller's PAT (CMS_PLATFORM_PAT —
       # fine-grained Contents + PR + Workflows: write) so THAT token is what git
       # persists as the push credential. (the live half of #13)
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6.0.2 (2026-01-09)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
         with:
           token: ${{ secrets.gh_token || github.token }}
       - name: Bump every cms-platform reference to the latest release (atomic)
