@@ -6,13 +6,32 @@
 # `pull_request`, so it arms native GitHub auto-merge (`gh pr merge --auto
 # --squash`) exactly once, the moment Dependabot opens a PR. That's enough for
 # a single PR, but Dependabot often opens a BATCH of PRs against the same
-# base in one run. The first PR(s) in the batch merge and advance `main`;
-# GitHub then AUTO-DISABLES auto-merge on every remaining PR in the batch
-# (PR #121's timeline: `auto_merge_disabled` performed by `github-actions[bot]`
-# at 19:06:03, 46 seconds after `auto_merge_enabled` fired). Nothing re-arms
-# them: no further `pull_request` event ever arrives for a PR nobody pushes to
-# again, so a green, conflict-free PR strands indefinitely — #121 and #122
-# sat `mergeStateStatus: CLEAN` for 6 days until merged by hand.
+# base in one run — and a batch strands for TWO compounding reasons, not one:
+#   1. GitHub AUTO-DISABLES auto-merge on the remaining PRs as the first ones
+#      merge (PR #121's timeline: `auto_merge_disabled` performed by
+#      `github-actions[bot]` at 19:06:03, 46 seconds after `auto_merge_enabled`
+#      fired), and nothing re-arms them — no further `pull_request` event ever
+#      arrives for a PR nobody pushes to again.
+#   2. Each merge ADVANCES the base, so every PR still open in the batch goes
+#      OUT OF DATE with it. A stale branch is genuinely un-mergeable here, and
+#      re-arming auto-merge cannot fix staleness — only UPDATING the branch
+#      can. This is why #121 and #122 sat for 6 days until merged by hand.
+#
+# MEASURED EVIDENCE for (2) — verified live 2026-08-10, and it supersedes the
+# earlier assumption that BLOCKED was merely viewer-scoped noise:
+#   PR #194  behind_by=31  mergeable_state=blocked
+#   PR #179  behind_by=41  mergeable_state=blocked
+#   PR #228  behind_by=0   mergeable_state=clean   <- fresh PR, same protection,
+#                                                     all checks green
+# The ONLY structural difference is staleness, so GitHub really does consider
+# #194/#179 un-mergeable for being out of date with `main`. The `main` ruleset
+# reports `strict_required_status_checks_policy: false` and
+# `GET /branches/main/protection` is 403 to the sweep's token, so CLASSIC
+# branch protection's "Require branches to be up to date before merging" is the
+# remaining explanation — enforced, but not exposed anywhere the sweep can read.
+# `allow_update_branch: true` is set DELIBERATELY on these repos (repo-settings
+# .yml records it as "lets bots/UI refresh a stale PR head against the base"),
+# so the capability the fix below needs is enabled on purpose.
 #
 # THE FIX
 # A thin caller (self-dependabot-rearm.yml here; examples/site/.github/
@@ -26,11 +45,19 @@
 #     protection still enforces every required check at merge time (the `main`
 #     ruleset carries no bypass actors), so a direct attempt can never bypass
 #     a gate;
-#   - RE-ARMS auto-merge (`--auto --squash`) only as RECOVERY, when the direct
-#     merge failed — the right move for a PR GitHub does not yet consider
-#     mergeable, and still the working path for a non-workflow-file bump;
-#   - counts a PR where BOTH failed as FAILED and exits non-zero, so the
-#     sweep's own inability to act is visible (the same "a red run means a
+#   - REFRESHES a BEHIND branch (`gh pr update-branch`) when the direct merge
+#     was refused and the compare API says the head is behind its base. That
+#     is the only action that can resolve reason (2), and it deliberately does
+#     NOT then re-arm: the refresh invalidates the currently-green checks and
+#     starts new ones, so such a PR cannot merge in THIS run by design. The
+#     next scheduled sweep (or native auto-merge once the fresh checks go
+#     green) finishes it — counted as UPDATED, which is a SUCCESSFUL outcome;
+#   - RE-ARMS auto-merge (`--auto --squash`) as RECOVERY, when the direct merge
+#     failed and the branch is NOT behind (or the refresh itself failed) — the
+#     right move for a PR GitHub does not yet consider mergeable, and still the
+#     working path for a non-workflow-file bump;
+#   - counts a PR where every attempt failed as FAILED and exits non-zero, so
+#     the sweep's own inability to act is visible (the same "a red run means a
 #     human is needed" contract as audit-editorial-labels.js --fix).
 #
 # WHY `github.token`, AND WHAT ACTUALLY FAILS HERE
@@ -58,12 +85,19 @@
 # `prod-mutating-loop` concurrency group, which DROPS a co-arriving sibling.
 # Never put an App/PAT token on this path.
 #
-# `mergeStateStatus` is VIEWER-SCOPED, so the old `CLEAN`-gated direct-merge
-# branch was UNREACHABLE and never once executed: it read BLOCKED to the
-# sweep's own token while all three required contexts (actionlint,
-# ruby-theme-specs, node-unit-lints) were SUCCESS on both PRs and the ruleset
-# requires zero approving reviews with no bypass actors. It is still LOGGED
-# (useful diagnostics) but it gates nothing.
+# WHY `mergeStateStatus` STILL GATES NOTHING (a corrected claim — do not
+# restore the old wording). The old `CLEAN`-gated direct-merge branch was
+# UNREACHABLE and never once executed: it read BLOCKED on #194/#179 while all
+# three required contexts (actionlint, ruby-theme-specs, node-unit-lints) were
+# SUCCESS and the ruleset requires zero approving reviews with no bypass
+# actors. It is now established that BLOCKED was substantively TRUE for those
+# PRs — they were 31 and 41 commits behind `main` (see MEASURED EVIDENCE
+# above). So the value was NOT meaningless; gating on it was still WRONG,
+# because `BLOCKED` conflates "out of date with the base" (fixable: refresh the
+# branch) with "unmergeable for any other reason", giving the sweep a single
+# bit it cannot act on. The sweep instead asks the compare API the precise
+# question — how many commits BEHIND is the head? — and acts on the answer.
+# `mergeStateStatus` is still LOGGED (useful diagnostics) but it gates nothing.
 name: Dependabot re-arm sweep (reusable)
 
 on:
@@ -110,6 +144,7 @@ jobs:
           echo "Open Dependabot PR(s): ${PR_NUMBERS[*]}"
           REARMED=0
           MERGED=0
+          UPDATED=0
           SKIPPED=0
           FAILED=0
           UNDETERMINED=0
@@ -126,7 +161,7 @@ jobs:
             mergeable=""
             merge_state=""
             for attempt in 1 2 3 4 5; do
-              pr_json=$(gh pr view "$num" --json number,baseRefName,mergeable,mergeStateStatus,statusCheckRollup)
+              pr_json=$(gh pr view "$num" --json number,baseRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup)
               mergeable=$(jq -r '.mergeable' <<<"$pr_json")
               merge_state=$(jq -r '.mergeStateStatus' <<<"$pr_json")
               if [ "$mergeable" != "UNKNOWN" ]; then
@@ -138,6 +173,7 @@ jobs:
               fi
             done
             base=$(jq -r '.baseRefName' <<<"$pr_json")
+            head_sha=$(jq -r '.headRefOid' <<<"$pr_json")
 
             if [ "$mergeable" = "UNKNOWN" ]; then
               echo "::warning::#${num} — mergeable still UNKNOWN after 5 queries; leaving it for the next sweep"
@@ -177,31 +213,72 @@ jobs:
               continue
             fi
 
+            # How far BEHIND its base is this head? That is the one question
+            # `mergeStateStatus` cannot answer (see the header) and the one a
+            # stale-branch strand turns on. Read-only, so it runs in DRY_RUN too.
+            #
+            # The fallback lives OUTSIDE the command substitution (#130: a
+            # `$(cmd) || true` swallows the exit code but still captures gh's
+            # HTTP error BODY as data), and the value must parse as a plain
+            # integer before it is trusted — a jq'd error body yields `null`,
+            # which is NOT a count. Anything unusable ⇒ behind_by=0 ⇒ do not act.
+            behind_by=0
+            behind_raw=$(gh api "repos/${GH_REPO}/compare/${base}...${head_sha}" --jq '.behind_by' 2>/dev/null) || behind_raw=""
+            if [ -n "$behind_raw" ] && [ -z "${behind_raw//[0-9]/}" ]; then
+              behind_by="$behind_raw"
+            else
+              echo "#${num} — could not read .behind_by from the compare API (unusable response; value not echoed); treating it as 0, so this sweep will NOT refresh the branch"
+            fi
+
             # Every gate above has passed: checks green, no conflict, diff
             # confined to the manifest allowlist. `merge_state` is logged for
-            # diagnostics ONLY — it is viewer-scoped, so gating on it is what
-            # made the direct-merge branch unreachable (see the header).
-            echo "act on #${num} — checks green, manifest clean (mergeStateStatus=${merge_state}, diagnostic only)"
+            # diagnostics ONLY — gating on it is what made the direct-merge
+            # branch unreachable (see the header).
+            echo "act on #${num} — checks green, manifest clean (behind_by=${behind_by}, mergeStateStatus=${merge_state}, diagnostic only)"
 
             if [ "$DRY_RUN" = "true" ]; then
-              echo "would merge #${num} directly (squash)"
-              MERGED=$((MERGED + 1))
+              if [ "$behind_by" -gt 0 ]; then
+                echo "would refresh #${num} — ${behind_by} commit(s) behind ${base}"
+                UPDATED=$((UPDATED + 1))
+              else
+                echo "would merge #${num} directly (squash)"
+                MERGED=$((MERGED + 1))
+              fi
               continue
             fi
 
             if gh pr merge --squash "$num"; then
               echo "merged #${num} directly (squash)"
               MERGED=$((MERGED + 1))
-            elif gh pr merge --auto --squash "$num"; then
+              continue
+            fi
+
+            if [ "$behind_by" -gt 0 ]; then
+              echo "#${num} — the direct merge was refused and the branch is ${behind_by} commit(s) behind ${base}. A stale branch cannot be merged, and re-arming auto-merge cannot make a stale branch mergeable either — refreshing it instead."
+              if gh pr update-branch "$num"; then
+                # DELIBERATELY no `--auto` after this, and do NOT "fix" it into a
+                # busy-wait: the refresh pushes a merge commit onto the head, which
+                # invalidates the green checks this run verified and starts fresh
+                # ones. #${num} therefore cannot merge in THIS run BY DESIGN — the
+                # next scheduled sweep (or native auto-merge once the new checks go
+                # green) lands it. UPDATED is a SUCCESS outcome, not a failure.
+                echo "refreshed #${num} against ${base} — its checks now re-run; the next sweep merges it"
+                UPDATED=$((UPDATED + 1))
+                continue
+              fi
+              echo "::warning::#${num} — \`gh pr update-branch\` failed; falling through to the auto-merge re-arm"
+            fi
+
+            if gh pr merge --auto --squash "$num"; then
               echo "re-armed auto-merge on #${num} — the direct merge was refused; GitHub lands it"
               REARMED=$((REARMED + 1))
             else
-              echo "::warning::#${num} — neither a direct merge nor an auto-merge re-arm succeeded. On a workflow-file bump the likely cause is GitHub refusing enablePullRequestAutoMerge from the SCHEDULE context (\"without \`workflows\` permission\"); a human needs to merge it."
+              echo "::warning::#${num} — neither a direct merge, a branch refresh, nor an auto-merge re-arm succeeded. On a workflow-file bump the likely cause is GitHub refusing enablePullRequestAutoMerge from the SCHEDULE context (\"without \`workflows\` permission\"); a human needs to merge it."
               FAILED=$((FAILED + 1))
             fi
           done
 
-          echo "::notice::Sweep complete — merged=${MERGED} re-armed=${REARMED} skipped=${SKIPPED} failed=${FAILED} undetermined=${UNDETERMINED} (DRY_RUN=${DRY_RUN})"
+          echo "::notice::Sweep complete — merged=${MERGED} refreshed=${UPDATED} re-armed=${REARMED} skipped=${SKIPPED} failed=${FAILED} undetermined=${UNDETERMINED} (DRY_RUN=${DRY_RUN})"
 
           # A month of "merged=0 skipped=2" read as success, and the 2026-08-10
           # run reported 0/0/0 after failing twice — a failed merge/re-arm
@@ -213,9 +290,10 @@ jobs:
             echo "| outcome | count |"
             echo "| --- | --- |"
             echo "| merged | ${MERGED} |"
+            echo "| refreshed (was behind base; next sweep merges it) | ${UPDATED} |"
             echo "| re-armed | ${REARMED} |"
             echo "| skipped (conflict / not green / non-manifest diff) | ${SKIPPED} |"
-            echo "| failed (could not merge OR re-arm — needs a human) | ${FAILED} |"
+            echo "| failed (could not merge, refresh OR re-arm — needs a human) | ${FAILED} |"
             echo "| undetermined (mergeable still UNKNOWN) | ${UNDETERMINED} |"
             echo
             echo "Candidates: ${#PR_NUMBERS[@]} · DRY_RUN=${DRY_RUN}"
@@ -224,9 +302,10 @@ jobs:
           # Exit non-zero ONLY when the sweep could not act. Same contract as
           # audit-editorial-labels.js --fix: "a red run means a fix didn't
           # stick and needs a human". UNDETERMINED stays green (a transient
-          # async read, not a refusal), and having nothing to sweep is never a
-          # failure.
+          # async read, not a refusal), UPDATED stays green (a refreshed branch
+          # is the sweep acting successfully — it just lands next run), and
+          # having nothing to sweep is never a failure.
           if [ "$FAILED" -gt 0 ]; then
-            echo "::error::${FAILED} Dependabot PR(s) could be neither merged nor re-armed — see the warnings above."
+            echo "::error::${FAILED} Dependabot PR(s) could be neither merged, refreshed, nor re-armed — see the warnings above."
             exit 1
           fi

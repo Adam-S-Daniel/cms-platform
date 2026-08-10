@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.75`** — `v0.1.0`–`v0.1.75` are all tagged GitHub
+**Current release: `v0.1.76`** — `v0.1.0`–`v0.1.76` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -927,13 +927,98 @@ per-PR checkout):
   `dependabot[bot]` PR (`gh pr list --author app/dependabot`); for each with
   ALL checks green (`statusCheckRollup` non-empty, no non-SUCCESS/NEUTRAL/
   SKIPPED entry) and `mergeable == MERGEABLE`, it re-validates the SAME
-  manifest-path allowlist `dependabot-auto-merge.yml` enforces, then merges:
-  **directly** (`gh pr merge --squash`, no `--auto`) when GitHub already
-  reports `mergeStateStatus == CLEAN` — avoids re-entering the same
-  auto-disable race — otherwise **re-arms** auto-merge (`--auto --squash`) so
-  GitHub finishes the job once its own bookkeeping catches up. Same-repo only
-  (Dependabot branches are never forks), so the default `GITHUB_TOKEN`
-  suffices — no PAT.
+  manifest-path allowlist `dependabot-auto-merge.yml` enforces, then merges
+  **directly** (`gh pr merge --squash`, no `--auto`) as the FIRST attempt —
+  which also avoids re-entering the auto-disable race — with `--auto --squash`
+  kept as recovery only.
+
+  **v0.1.76 correction — the sweep reached NEITHER branch, and the recorded
+  reason was wrong.** It used to gate the direct merge on `mergeStateStatus ==
+  CLEAN`, which read `BLOCKED` to the sweep's own token while all three required
+  contexts (`actionlint`, `ruby-theme-specs`, `node-unit-lints`) were SUCCESS on
+  #194 and #179, the `main` ruleset requires 0 approving reviews, and
+  `bypass_actors` is empty. So the direct-merge branch was UNREACHABLE and had
+  never once executed, and every run fell through to `--auto` — which GitHub
+  refuses **from the SCHEDULE context** ("GraphQL: Pull request refusing to allow a GitHub App to create or
+  update workflow `.github/workflows/deploy-preview.yml` without `workflows`
+  permission (enablePullRequestAutoMerge)", job 93416787884, after that run had
+  already passed the mergeable gate, `checks_ok` and the manifest re-check for
+  both PRs). **The discriminator is EVENT CONTEXT, not token class.** The old
+  header's premise — that `GITHUB_TOKEN` cannot merge workflow-file PRs — is
+  **FALSE and must not be re-derived**: PR #182 merged 31 changed files, ALL
+  under `.github/workflows/`, by `github-actions[bot]` 3 s after its last
+  required check went green (native auto-merge armed from the `pull_request`
+  event); PR #193 is a second instance. **Counters + exit code:** a failed merge
+  or re-arm used to increment NOTHING, so the 2026-08-10 run printed
+  `merged=0 re-armed=0 skipped=0` after failing twice, and a month of
+  `skipped=2 / merged=0` read as success. A PR that can be neither merged nor
+  re-armed now counts as **FAILED** and the run exits non-zero (a run that
+  cannot resolve a PR's state counts as UNDETERMINED rather than a silent skip;
+  `mergeable == UNKNOWN` is RETRIED, since job 93223897818 skipped both PRs on
+  UNKNOWN and the next day both read MERGEABLE) — the same "red means a human is
+  needed" contract as `audit-editorial-labels.js --fix`.
+
+  **The batch strand has TWO compounding causes, and the second one was missed
+  for the whole life of this feature.** Beyond GitHub auto-disabling auto-merge,
+  every merge ADVANCES the base, so each PR still open in the batch goes OUT OF
+  DATE with it — and a stale branch is genuinely un-mergeable here, which
+  re-arming auto-merge can never fix. Measured live 2026-08-10: #194
+  `behind_by=31` and #179 `behind_by=41`, both `mergeable_state: blocked`, versus
+  a fresh PR #228 at `behind_by=0`, `clean`, under identical protection with the
+  same checks green. Staleness is the ONLY structural difference, so `BLOCKED`
+  was substantively TRUE on those two — **this is a correction: the field was not
+  merely viewer-scoped noise.** Gating on it was still wrong, because `BLOCKED`
+  conflates "out of date" (fixable) with "unmergeable for any other reason",
+  giving the sweep one bit it cannot act on; the sweep now asks the compare API
+  the precise question (`.behind_by`) and, when the direct merge is refused on a
+  behind branch, runs `gh pr update-branch` — which `allow_update_branch: true`
+  exists to permit. A refreshed PR deliberately does NOT then get `--auto`: the
+  refresh invalidates the checks this run verified, so it lands on the NEXT
+  sweep, and `UPDATED` is a success outcome that never trips the non-zero exit.
+  (The ruleset reports `strict_required_status_checks_policy: false` and
+  `GET /branches/main/protection` is 403 to these tokens, so classic protection's
+  "Require branches to be up to date" is the only remaining explanation —
+  enforced, but not readable anywhere the sweep can see.) This also explains the
+  ORIGINAL #121/#122 six-day strand better than "auto-merge was disabled" alone
+  ever did.
+
+  **Why the sweep deliberately KEEPS `github.token` on the merge path.** A
+  `GITHUB_TOKEN`-attributed merge fires **no push workflows** here — verified:
+  neither #182's nor #193's merge commit produced a self-ci push run, and 0 of
+  the last 40 self-ci push runs carry a `build(deps)` head commit. An App- or
+  PAT-attributed merge WOULD, and a Dependabot bump touching
+  `cms-publish-loop-prod.yml` + `cms-publish-loop-host.yml` +
+  `cms-media-roundtrip.yml` would then fire all three prod loops onto the shared
+  `prod-mutating-loop` group, which DROPS a co-arriving sibling. That is the
+  recorded trigger-consequence CHOICE: keep `github.token` on the merge path;
+  teaching `isBumpOnlyPush` to classify a Dependabot action-SHA-only workflow
+  diff was NOT needed and was not implemented.
+
+  **Pin-comment drift is structural, so comment-sync is now dogfooded here
+  too.** Dependabot rewrites a pin comment ONLY when the comment matches the
+  version it is bumping FROM — #194 bumps 6.2.2 → 6.2.3 while its comment says
+  `v6.1.1`, so it can never self-repair and each bump widens the gap; #179
+  carries setup-node v7.0.0's SHA behind `# v6.4.0 (2026-04-20)` across 18
+  files. Same trap as #220's frozen `platform_ref` (a generic `CUR->LATEST`
+  replace cannot match an already-drifted value). `self-dependabot-comment-sync.yml`
+  closes it on this repo. Since cms-platform has no `CMS_PLATFORM_PAT` of its own
+  (that secret lives in the consumers), `dependabot-comment-sync.yml` gains an
+  **App fallback**: the ID is the repo VARIABLE `vars.CMS_AUTOMATION_APP_ID`,
+  only the private key is a secret (`CMS_AUTOMATION_APP_PRIVATE_KEY`), and the
+  installation token is minted in **pure node + stdlib `crypto`** — no new
+  marketplace action, no new SHA to pin. The PAT still wins when present, so the
+  consumer path is unchanged, and the bail names all three knobs so "never
+  onboarded" and "misconfigured" are distinguishable (it fails SOFT — see
+  "Environment gotchas").
+
+  **The standing gate:** repairing this removes the last human gate on
+  third-party action SHAs entering 18 reusables both production sites execute,
+  so cms-platform's `github-actions` ecosystem carries
+  `cooldown: default-days: 7`, mechanising the repo's existing cooling-off
+  convention. **Deliberately NOT applied to a CONSUMER's `github-actions`
+  ecosystem** — there it would delay the platform-pin bumps (the `uses:@<ref>` /
+  composite-SHA rewrites that carry a release to a site) and slow release
+  adoption. `npm` is untouched in both.
 - **The manifest-path allowlist is factored into `scripts/check-dependabot-
   manifest-paths.sh`**, the single source both `dependabot-auto-merge.yml`
   (the per-PR `pull_request` gate) and `dependabot-rearm-sweep.yml` (the
@@ -975,11 +1060,35 @@ layer:
   consecutive daily audit runs can be ~29h apart — a 24-25h window would
   leave a blind gap. The overlap can't double-report thanks to the run-id
   dedupe.
+- **Runner-starvation carve-out (v0.1.76).** GitHub reports the RUN as
+  `failure` when its job(s) were **cancelled before a runner was ever
+  assigned**, and `filterAlertRuns` only ever tested the RUN conclusion — so
+  pure infrastructure noise opened the tracking issue. `BAD_CONCLUSIONS`
+  already excludes `cancelled`, but that exclusion is RUN-level and could not
+  see this shape. A run is now suppressed only when ALL five hold: (1) it HAS
+  jobs, (2) it is not itself a `startup_failure`, (3) no job failed or timed
+  out, (4) at least one job was cancelled WITHOUT a runner, and (5) every job
+  is `cancelled` or `skipped`. **Clause (1) is first and load-bearing:** a
+  `startup_failure` run has ZERO jobs and `[].every()` is vacuously TRUE, so
+  without it the audit would silence the exact class it exists for. The
+  starvation test applies to **cancelled jobs only** — a SKIPPED job carries
+  `runner_id: null` while a starved cancelled job carries `runner_id: 0` (and
+  `runner_name: ""`), an asymmetry the fixtures pin. The jobs fetch paginates
+  at an explicit `per_page=100`, is issued only for runs that are ALREADY
+  alertable, and **fails SOFT** — a fetch error keeps the run alertable,
+  because silently dropping a real failure is the worse outcome. A `::notice::`
+  tallies the suppressed runs and names their workflows, so a systemic runner
+  outage stays visible instead of becoming invisible. **Verified live over a
+  168h window with the real module, on BOTH consumers — the class was never
+  jodidaniel-only:** jodidaniel.com 5 alertable → 1 (the genuine #220
+  `cms-scheduled-publish-loop` failure still alerts), adamdaniel.ai 6 → 2 (both
+  real `cms-publish-loop-host` failures, the ones #215 addresses, still alert).
 - **Exit-code contract:** the audit run stays GREEN when it successfully
   files/updates the alert (the issue is the channel); red means the audit
   ITSELF is broken (API/permission failure) — same "red needs a human"
   contract as `audit-editorial-labels.js --fix`. The audit is itself a
   scheduled workflow, so its own failed run is reported by the NEXT day's run.
+  The starvation carve-out does NOT change this contract.
 - **Callers:** `self-scheduled-run-health.yml` dogfoods it on cms-platform
   (cron `47 8 * * *` + dispatch); consumers get
   `examples/site/.github/workflows/scheduled-run-health.yml` (auto-seeded by
@@ -1523,6 +1632,46 @@ prod-mutate's AND `>=` the 30-min floor, media's `waitForMerge` `>=` prod-mutate
 media's `TEST_TIMEOUT_MS` `>=` prod-mutate's, and the spec timeout fits the job
 `timeout-minutes`. The publish mechanism + canaries are unchanged — only budgets.
 
+**Ask whether the PR MERGED before blaming the chain (#215, v0.1.76).** The
+#1815 budget widening bought time, but the verdict itself was still wrong in the
+same window: before the merge lands the deploy lane is idle for a **completely
+innocent** reason — nothing can deploy yet — and the extender read that as "the
+chain never fired". Observed live, not hypothetical: adamdaniel.ai run
+31107474927 (2026-08-06 host-loop) killed `cms-tags-lifecycle` at *"Waited 908s
+and NO deploy-production run fired for your merge — the chain never fired"* with
+in-flight 0 / queued 0, while the auto-merge was merely PENDING (908 s is well
+inside the documented ~30-min latency). Same class in runs 30915982319 and
+30822288078; the other two host-loop specs passed in that run, so the diagnostic
+— not the chain — failed the third.
+
+**The scope was wider than the issue:** **13 of the 15**
+`makeDeployQueueExtender` call sites called it BARE, hence unanchored, hence
+could never reach the conclusive `deploy-completed-url-missing` verdict at all —
+the #21 fix only ever applied to **2** legs. The extender now takes an optional
+`getPr`, and where `no-deploy-fired` would be emitted it first asks whether the
+PR has merged. Unmerged ⇒ `pr-awaiting-required-check` or
+`pr-required-check-red` (both `realMiss:false`, naming the check; check-run STATE
+alone separates awaiting from red), plus a bounded extension so the loop waits
+the merge out. **`no-deploy-fired` stays REACHABLE and remains `realMiss:true`**
+when the PR IS merged, or when no PR info was supplied — a unit test locks that
+reachability, because making a real miss unreachable would turn a failure into
+silence, the opposite of what #215 asks for. The extension is **double-bounded**:
+`maxTotalExtendMs` inside the extender and `maxExtensions` in
+`waitForChangeReflected`.
+
+**Six forward/create legs are threaded** (including the exact one that failed
+live); **nine stay BARE on purpose**, each because no PR for that leg is in scope
+— the delete legs discover their recovered PR inside a poll loop without
+capturing it, and `cms-unpublish-republish` never opens a tracked PR at all. Bare
+is the unchanged pre-#215 path, so those legs keep today's behaviour. **Deliberate
+deviation from the issue text** (recorded in-comment): it proposes threading a
+`requiredContexts` list, and there is **no single source** of those in this repo —
+the harness default is the bare `["validate-content"]`, adamdaniel's nudge caller
+lists 6, jodidaniel's 1, and `examples/site`'s template still ships a stale
+9-context list matching no real check-run name. Importing that divergence would
+make the verdict wrong in a NEW way, and `headChecksTrulyGreen` throws on an
+empty list — while the list-free question "has the PR merged?" needs none of it.
+
 ### Ephemeral canary branch hygiene (#22)
 
 The prod loops force-push EPHEMERAL per-run branches that orphan when a cycle
@@ -1647,7 +1796,7 @@ Still open:
   (`npx playwright test --update-snapshots` still applies to those
   specifically, not to pixel screenshots).
 
-## Version history (v0.1.0 → v0.1.75)
+## Version history (v0.1.0 → v0.1.76)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1955,7 +2104,12 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   regression watch; revert to false + an in-spec branch-delete is the fallback if
   it regresses elsewhere. cms-delete-published / cms-tags-lifecycle / cms-publish-loop
   unchanged from v0.1.39; the 3-of-4 that passed at `delete_branch_on_merge=false`
-  must be re-confirmed green at `true`.
+  must be re-confirmed green at `true`. **Second-order consequence, recorded in
+  v0.1.76:** with the flag ON, GitHub AUTO-RETARGETS dependent PRs, which raises
+  the likelihood of the base-retarget case — and a base retarget changes the
+  effective diff WITHOUT emitting `synchronize`. That is the residual risk of
+  v0.1.76's `pull_request: edited` removal (#222 part 2); the full argument, and
+  why it was accepted anyway, is in that entry.
 
 - **v0.1.41** (2026-06-29) — **#80 host-loop layer 11b — unpublish Save no-op on a
   deep-route-reloaded entry.** v0.1.40 (layer 11a) took the loop to 3/4 but
@@ -2496,6 +2650,146 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   comment-stripped prefix-completeness check (the step's own comment names all
   three prefixes in prose, so an un-stripped assertion would be tautological).
 
+- **v0.1.76** (2026-08-10) — **four separate automations were green and inert at
+  the same time.** The re-arm sweep never once reached the branch that works and
+  reported `merged=0 re-armed=0 skipped=0` after failing twice; comment-sync was
+  shipped to consumers and never run here, so the platform's OWN pin comments
+  lie; the repo-settings audit printed "OK — live settings match" for flags its
+  read-only PAT had never SEEN; and a month of `skipped=2 / merged=0` read as
+  success. A fifth, the health audit, was the inverse — alerting loudly on runs
+  that never got a runner. The common shape is a report that cannot distinguish
+  *verified* from *never looked*, which is why each fix below changes what gets
+  COUNTED and what the exit code means, not only the mechanism.
+
+  **The Dependabot causal story was recorded WRONG, and the wrong version must
+  never be re-derived.** "GITHUB_TOKEN cannot merge workflow-file PRs" is FALSE:
+  PR #182 merged **31 changed files, all under `.github/workflows/`**, by
+  `github-actions[bot]` at 2026-07-21T19:06:16Z — **3 s** after its last required
+  check (`node-unit-lints`) completed at 19:06:13. That is native auto-merge armed
+  from the `pull_request` event, firing the instant the last check went green;
+  PR #193 (6 files, all workflows) is a second instance. The two real causes are
+  (1) `enablePullRequestAutoMerge` is refused **from the SCHEDULE context** —
+  sweep job 93416787884 passed the mergeable gate, `checks_ok` and the manifest
+  re-check for BOTH #194 and #179, then logged "GraphQL: Pull request refusing to
+  allow a GitHub App to create or update workflow
+  `.github/workflows/deploy-preview.yml` without `workflows` permission"; the
+  discriminator is EVENT CONTEXT, not token class — and (2) the CLEAN-gated
+  direct-merge branch was UNREACHABLE and had never once executed:
+  `mergeStateStatus` read `BLOCKED` on both PRs while all three required contexts
+  (`actionlint`, `ruby-theme-specs`, `node-unit-lints`) were SUCCESS, the `main`
+  ruleset requires 0 approving reviews, and `bypass_actors` is empty. **A third
+  cause was then found, and it corrects (2):** `BLOCKED` was substantively TRUE —
+  #194 was 31 commits BEHIND `main` and #179 was 41, while a fresh PR (#228,
+  `behind_by=0`) read `clean` under identical protection. A batch strands because
+  each merge advances the base and leaves its siblings STALE, and no amount of
+  re-arming makes a stale branch mergeable; the sweep now reads `.behind_by` from
+  the compare API and runs `gh pr update-branch`, which is what
+  `allow_update_branch: true` exists to permit. Fix: the direct merge is **always the
+  first attempt** (the checks are already verified green and branch protection
+  still enforces every required check at merge time), `--auto` is recovery only,
+  `mergeable == UNKNOWN` is RETRIED rather than skipped (job 93223897818 skipped
+  both PRs on UNKNOWN on 2026-08-09 and the next day both read MERGEABLE), and a
+  PR that can be neither merged nor re-armed counts as **FAILED** and exits
+  non-zero — the same "a red run means a human is needed" contract as
+  `audit-editorial-labels.js --fix`. **The sweep KEEPS `github.token` on the
+  merge path deliberately** — see the re-arm-sweep section for the
+  push-trigger/prod-loop-eviction reason.
+
+  **Comment-sync is now dogfooded, and the drift it repairs is structural.**
+  Dependabot rewrites a pin comment ONLY when the comment matches the version it
+  is bumping FROM, so #194 (6.2.2 → 6.2.3 behind "# v6.1.1 (2026-05-05)") can
+  never self-repair and each bump widens the gap; #179 carries setup-node
+  v7.0.0's SHA behind "# v6.4.0 (2026-04-20)" across 18 files. That is the SAME
+  trap as #220's frozen `platform_ref` — a generic `CUR->LATEST` replace cannot
+  match an already-drifted value. (setup-node v7.0.0 was checked for real: v6.4.0
+  and v7.0.0 both declare `runs.using: 'node24'` with an IDENTICAL input set, so
+  the major is the internal ESM migration; its one behavioural removal, the dummy
+  `NODE_AUTH_TOKEN` export, is unused — zero references to `NODE_AUTH_TOKEN` /
+  `registry-url` / `mirror-token` in any of the three repos.) Since cms-platform
+  has no `CMS_PLATFORM_PAT` of its own, the reusable gains an **App fallback**
+  minted in pure node + stdlib `crypto` (no new marketplace action); the PAT still
+  wins when present so the consumer path is unchanged. Repairing this removes the
+  last human gate on third-party action SHAs entering 18 reusables both
+  production sites execute, so cms-platform's `github-actions` ecosystem gains
+  `cooldown: default-days: 7` — mechanising the repo's existing cooling-off
+  convention, and deliberately NOT applied to a consumer's `github-actions`
+  ecosystem (see the re-arm-sweep section for why).
+
+  **#215 — the loop stopped blaming the deploy chain for a PR that has not
+  merged, and the scope was wider than the issue.** Before the merge lands the
+  deploy lane is idle for a completely innocent reason (nothing can deploy yet),
+  so a merely-slow auto-merge was reported as "NO deploy-production run fired for
+  your merge — the chain never fired". Observed live: adamdaniel.ai run
+  31107474927 (2026-08-06 host-loop) killed `cms-tags-lifecycle` at exactly that
+  message after **908 s** with in-flight 0 / queued 0 while the auto-merge was
+  merely pending — well inside the documented ~30-min latency; same class in runs
+  30915982319 and 30822288078, while the other two host-loop specs passed in that
+  run. **13 of the 15 `makeDeployQueueExtender` call sites were BARE**, hence
+  unanchored, hence could never reach the conclusive verdict at all — the #21 fix
+  only ever applied to 2 legs. Details + the new verdicts: "Prod-loop deploy-lane
+  diagnostic" above.
+
+  **The health audit stopped alerting on runner starvation, and the class was
+  never jodidaniel-only.** GitHub reports the RUN as `failure` when its jobs were
+  cancelled before a runner was ever assigned, and `filterAlertRuns` only tested
+  the RUN conclusion. Verified live over a 168h window with the real module:
+  jodidaniel.com **5 alertable → 1** (the genuine #220
+  `cms-scheduled-publish-loop` failure still alerts) and adamdaniel.ai **6 → 2**
+  (both real `cms-publish-loop-host` failures — the ones #215 addresses — still
+  alert). The five-clause shape, the `runner_id` asymmetry and the fail-soft
+  posture are in "Scheduled-run health audit" above.
+
+  **The repo-settings audit's OK line no longer overstates what it verified.**
+  The audit already collected `flag-not-visible` informationals — keys the
+  read-only PAT never SAW — but both the per-repo OK line and the final summary
+  claimed an unqualified match. Per the owner-chosen approach this SURFACES the
+  gap rather than closing it: the per-repo line carries the unverifiable count,
+  the per-key notices collapse into one per repo naming the keys, and the
+  clean-scan summary says what it could not see. The PATs stay read-only and no
+  API call is added, so #172's "Actions variables/secrets in the manifest"
+  deferral is untouched, and **the exit code is UNCHANGED and commented as such**
+  — unverifiable is not drift, so it never files an issue and never fails the
+  run. Locked in BOTH directions, because the half that matters is the quiet one:
+  with nothing unverifiable both strings must stay byte-identical to today's
+  wording (`toBe` on the literal), which is what stops a later refactor quietly
+  restoring the overstating text; an unrelated informational kind must not
+  trigger the qualification either.
+
+  **#222 part 2 — dropping the `pull_request: edited` trigger, and its residual
+  risk.** A skipped required-context caller never invokes its reusable, so NO
+  check-run named `<caller job> / <reusable job>` is produced at all; an `edited`
+  run therefore WITHDRAWS a context that was already green, and only a new SHA
+  restores it — which a finished automated PR never gets. This deliberately
+  REVERTS #145 / PR #166, whose documented case is a PR **retargeted onto a
+  different base**: that fires `pull_request: edited` and, with no listener, the
+  whole required suite silently never re-runs against the new base. **That
+  precondition is now MORE likely**, because `delete_branch_on_merge=true` (see
+  v0.1.40) makes GitHub auto-retarget dependent PRs, and a base retarget changes
+  the effective diff WITHOUT emitting `synchronize` — so `dependabot-auto-merge`'s
+  allowlist re-check will not fire for it either. The justification is #222's own
+  measurement: the guard fired **twice in four days**, self-heals on any PR that
+  gets another push, against **ZERO base retargets in 60 PRs**. #222's
+  alternative — push the guard inside each reusable as always-run + early-skip —
+  was rejected: it spreads the workaround into 9 reusables for a case that has
+  not occurred, and an always-run job still has to emit the context, which is the
+  missing thing. **`deploy-preview.yml` is the ONE exception and KEEPS
+  `closed`** — its teardown (S3 `rm --recursive` + CloudFront invalidation + bot
+  comment) fires only on that action, so the generic diff there would leak every
+  closed PR's `pr-N/` prefix forever with no red check; the replacement lint
+  asserts `closed` POSITIVELY. `workflow-retarget-edited.test.js` hard-asserted
+  the opposite invariant in the REQUIRED `node-unit-lints` lane and is inverted in
+  the same commit, keeping its `hasBaseChangeGate` detector self-tests (folded
+  block-scalar gate + a negative case) and adding coverage assertions that the
+  candidate scan still sees the real callers. Consumer-side halves land with
+  their v0.1.76 bump.
+
+  Every new lint was proven **red-first**. Two design notes worth keeping: the
+  dogfood lint keys on the `uses:` TARGET, not a `self-<basename>` filename
+  convention (`dependabot-rearm-sweep.yml` is correctly dogfooded by
+  `self-dependabot-rearm.yml`, which a name rule would false-fail); and the budget
+  lint now reads `maxTotalExtendMs` out of the source rather than hardcoding it,
+  asserting each loop's worst case still fits its job `timeout-minutes`.
+
 ## Consumers
 
 - **adamdaniel.ai** — consumer #1, user-owned, the dogfood. Migrated to
@@ -2551,3 +2845,18 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
 - Background sessions: editing a non-cwd repo checkout trips a worktree-isolation
   prompt on the Edit/Write tools — write via Bash (`cat >`, a Python pass) which
   isn't tool-guarded. Writing `.claude/settings.json` is blocked as self-mod.
+
+### A live repo-settings check may be IMPOSSIBLE from the session (v0.1.76)
+
+The egress proxy in a sandboxed authoring session returns **403 for
+`/actions/variables` and `/actions/secrets`** on all three repos, so whether a
+credential is actually provisioned cannot be verified from there — during
+v0.1.76, `CMS_AUTOMATION_APP_ID` / `CMS_AUTOMATION_APP_PRIVATE_KEY` could not be
+confirmed. **State the limitation honestly rather than asserting either way**, and
+design credential-dependent features to **fail SOFT**: absent credentials must
+produce a clear notice that names the EXACT knobs, never a crash and never a
+silent no-op. `dependabot-comment-sync.yml` is the pattern — no App credential
+simply means it skips with a notice naming all three knobs
+(`CMS_PLATFORM_PAT` / `vars.CMS_AUTOMATION_APP_ID` /
+`CMS_AUTOMATION_APP_PRIVATE_KEY`), which is what keeps "never onboarded"
+distinguishable from "misconfigured".
