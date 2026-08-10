@@ -153,7 +153,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.76`** — `v0.1.0`–`v0.1.76` are all tagged GitHub
+**Current release: `v0.1.78`** — `v0.1.0`–`v0.1.78` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -2852,6 +2852,78 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   `self-dependabot-rearm.yml`, which a name rule would false-fail); and the budget
   lint now reads `maxTotalExtendMs` out of the source rather than hardcoding it,
   asserting each loop's worst case still fits its job `timeout-minutes`.
+
+- **v0.1.77** (2026-08-10) — **a verifier that could silently verify LESS than it
+  claimed, plus four record corrections.** `check-platform-pin-consistency.js`
+  dropped from **96 checks to 61** when it found no canonical `examples/site` set,
+  and still printed `Pins are consistent` and exited 0. The 35 it skipped are the
+  workflow-SET and workflow-CONTENT parity checks — the ones that police a
+  consumer's `secrets:` map, the facet whose absence startup-failed jodidaniel's
+  sweep for weeks. That mattered concretely: the v0.1.76 consumer bump was
+  delegated to subagents, and even one that HAD run the checker would have been
+  falsely reassured. `--require-canonical` makes a missing canonical set a hard
+  failure (the `platform-pin-consistency` reusable now passes it), the summary is
+  QUALIFIED when parity can't run, and **`scripts/verify-consumer-pins.sh`** is the
+  one-command consumer gate whose exit code IS the definition of done.
+
+  Also: the `prod-mutating-loop` lane's REPOSITORY scope written down (it
+  serialises the three loops within ONE consumer and cannot serialise two
+  consumers — Actions has no cross-repo concurrency, and the group is evaluated in
+  the CALLER's repo; adamdaniel.ai run 31179432081 and jodidaniel.com run
+  31181497216 overlapped 2026-08-07 and both succeeded, 1 of 4 such overlaps in 4
+  days — so do NOT add `${{ github.repository }}`, a no-op that only makes the
+  byte-identity lint harder); the graduated cooldown documented (GitHub's own
+  default minimum package age is **3 days**, so `default-days: 7` is a raise, not
+  a floor from zero; `semver-major-days: 30`; minor/patch left undefined because
+  GitHub falls them back to `default-days`; version-updates-only, so an advisory
+  still ships immediately); the consumer-cooldown rationale CORRECTED (it claimed
+  a cooldown would delay release adoption — adoption is landed by
+  `platform-bump.yml`, not Dependabot; the real reason is that neither consumer
+  pins a single third-party action); and "delegated mechanical work is done when a
+  VERIFIER exits 0" recorded as a standing rule.
+
+- **v0.1.78** (2026-08-10) — **decap-cms `3.12.2 → 3.15.1`, and the 3.14.1 revert
+  finally explained.** Retargets #162 (3.14.1 is no longer `latest`) and ships on
+  its own so the pin stays revertible alone — `v0.1.66 → v0.1.67` already needed
+  that once. Both blocking regressions were re-probed against the real 3.15.1
+  bundle rather than assumed:
+
+  **Regression 2 was OURS.** `cms-smoke`'s "New Tag" click that timed out 30 s
+  (twice) was attributed to "the adamdaniel built-site shape × 3.14.1". It was
+  neither. Decap's EN `collection.collectionTop.newButton` became
+  `"＋ %{collectionLabel}"` and 3.15.x sets `newButtonAriaLabel` — "Create entry of
+  type %{collectionLabel}" — as `aria-label`, which **wins over text content for
+  the accessible name**. So `getByRole("link",{name:/new tag|new entry/i})`
+  resolved nothing: the element never moved, only its NAME did. Now single-sourced
+  as **`collectionNewLink()`** in `cms-editor-ui.js` (same convention as
+  `publishedSwitch`), matched on the collection label plus either verb, with two
+  lint-locks — a lives-ONLY-in-the-helper scan and a browser-free assertion that
+  the regex matches BOTH era strings. The workflow BOARD's own "New Post"
+  (`workflow.workflow.newPost`) is a different string, verified unchanged, and is
+  deliberately not flagged. **Lesson: a role+name locator can break with no DOM
+  change at all** — an added `aria-label` is invisible to a DOM-shape diff.
+
+  **Regression 1 was fixed UPSTREAM — do not duplicate it.** The precondition was
+  to write `pointer-events: none` onto the decorative `SearchIcon` in
+  `admin-mobile.css` §7; 3.15.1 ships exactly that, plus `StyledModal`
+  `grid-template-rows: 120px auto → auto 1fr` (that fixed 120 px header IS the bug
+  §7 works around) and `flex-wrap: wrap; gap: 8px` on
+  `RowContainer`/`ButtonsContainer`. §7 stays as belt-and-braces with a note
+  saying so, so nobody adds a duplicate rule or deletes the overrides prematurely.
+
+  Verified byte-identical in 3.15.1 (each re-probed, none find-and-replaced): the
+  `confirmLoadBackup` call site incl. its `? :` else-branch (#161 shim),
+  `role:"switch"` + `aria-checked`, every pinned `editorToolbar` EN string,
+  `view_filters` normalization with still NO `default`/`active` flag,
+  `previewContext`, the absent `/media` route, `git/trees`/`deleteFiles`, and
+  `ListCard` still being an `<li>`. `react`/`react-dom` are `^19.1.0` across the
+  whole range including our 3.12.2, so this is not a React major jump. One thing
+  DID change shape — 3.15.x moved to React 19's automatic JSX runtime, so Save
+  renders as `jsx(...,{...,children},"save-button")` — but nothing matches on that
+  markup, so it is a comment fix only. **The ARIA baselines were deliberately NOT
+  pre-regenerated:** every pinned string is verified identical, and letting
+  `cms-editor-aria-contract.spec.js` run is STRONGER than regenerating, because a
+  real drift then fails by name instead of being blessed by `--update-snapshots`.
 
 ## Consumers
 
