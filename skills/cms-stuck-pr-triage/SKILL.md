@@ -76,6 +76,45 @@ v0.1.71+ prevents it: the install composite drops `DPkg::Lock::Timeout` into
 on v0.1.71 or later, the holder outlasted `apt-lock-timeout-seconds` (300 s) —
 raise it rather than adding more retries.
 
+### 1c. Read the loop's OWN verdict — since v0.1.76 it says whether the PR merged
+
+The loop's timeout message now distinguishes "the PR has not merged" from "the
+deploy chain missed", so it usually tells you which leg to triage before you
+enumerate anything:
+
+| Verdict in the message | What it means | Where to go |
+|---|---|---|
+| `the cms PR #N had NOT MERGED yet` (`pr-awaiting-required-check`) | a required check is still pending, or the merge mechanism has not fired. **An unmerged PR cannot have a deploy**, so the deploy chain is NOT the failing leg | §2/§3 below — the PR queue |
+| `the cms PR #N could NOT MERGE` (`pr-required-check-red`) | a required check went **red**; the message names it | §1b (an install failure?) then §2 |
+| `NO deploy-production run fired for your merge — the chain never fired` (`no-deploy-fired`) | the PR **IS** merged and no deploy ran — a genuine trigger problem | the deploy trigger / editorial-workflow, not the PR queue |
+| `your deploy-production run … DID complete, but the URL never served the marker` (`deploy-completed-url-missing`) | S3 sync / CloudFront / cache in the serve layer | not a PR problem at all |
+
+**In a log from BEFORE v0.1.76, `no-deploy-fired` is NOT evidence of a trigger
+problem.** The extender asked only "is the deploy lane idle?", and before the
+merge lands the lane is idle for an entirely innocent reason — nothing can
+deploy yet — so a merely-SLOW auto-merge was reported as "the chain never
+fired". Live instance: adamdaniel.ai run **31107474927** (2026-08-06 host loop)
+killed `cms-tags-lifecycle` at exactly that message after **908 s**, `in-flight:
+0, queued: 0`, while the auto-merge was simply still pending — well inside the
+documented ~30-min latency, and the other two host-loop specs passed in the same
+run. Same class in runs 30915982319 and 30822288078. So on an old log, re-read
+the message as "the URL did not reflect", check whether the PR had merged at
+that timestamp, and triage the queue from §2.
+
+Two scoping notes worth knowing when a verdict looks absent or vague. **Only 6
+of the 15 extender call sites are PR-anchored** (the forward/create legs,
+including the one that failed live); the other 9 stay bare on purpose because no
+PR for that leg is in scope — the delete legs discover their recovered PR inside
+a poll loop without capturing it, and `cms-unpublish-republish` never opens a
+tracked PR at all. A bare leg keeps the pre-#215 behaviour, so it can still emit
+`no-deploy-fired` without having asked the merge question. And the verdict is
+deliberately **list-free** — it never checks a `requiredContexts` list, because
+there is no single source of one in this repo (the harness default is the bare
+`["validate-content"]`, adamdaniel's nudge lists 6, jodidaniel's 1, and the
+`examples/site` template still ships a stale 9-context list matching no real
+check-run name). "Has the PR merged?" needs none of it, and check-run STATE
+alone separates *awaiting* from *red*.
+
 ### 2. For each BLOCKED PR, find the failing checks and the base it ran against
 
 ```bash

@@ -1,6 +1,6 @@
 ---
 name: cms-platform-secrets
-description: The exact GitHub Actions repository secrets AND variables a cms-platform consumer site must set — the precise fine-grained PAT permissions for each secret, plus the repo variables the reusable workflows read via vars.* and the scripts/set-repo-variables.sh setter that derives them. Use when setting up a new consumer, when a workflow fails with "GH_TOKEN env var is required" / "Input required and not supplied: github-token" / a startup_failure on a required secret, when auto-merge/nudge/sweep/auto-resolve don't run, when a loop probes the wrong URL/bucket, or when platform-bump fails "refusing to allow ... to update workflow ... without 'workflows' permission". Canonical, platform-versioned, synced to every consumer via skills-sync. Trigger on "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "WORKFLOW_SHA_COMMENT_PAT", "dependabot-comment-sync", "required secrets", "PAT permissions", "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables", "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
+description: The exact GitHub Actions repository secrets AND variables a cms-platform consumer site must set — the precise fine-grained PAT permissions for each secret, plus the repo variables the reusable workflows read via vars.* and the scripts/set-repo-variables.sh setter that derives them. Use when setting up a new consumer, when a workflow fails with "GH_TOKEN env var is required" / "Input required and not supplied: github-token" / a startup_failure on a required secret, when auto-merge/nudge/sweep/auto-resolve don't run, when a loop probes the wrong URL/bucket, or when platform-bump fails "refusing to allow ... to update workflow ... without 'workflows' permission". Canonical, platform-versioned, synced to every consumer via skills-sync. Trigger on "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "WORKFLOW_SHA_COMMENT_PAT", "CMS_AUTOMATION_APP_ID", "CMS_AUTOMATION_APP_PRIVATE_KEY", "dependabot-comment-sync", "required secrets", "PAT permissions", "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables", "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
 ---
 
 # Required GitHub secrets and variables for a cms-platform consumer
@@ -83,9 +83,67 @@ permission.
 > repo's owner (where it pushes). It does not need access to cms-platform.
 
 > **Comment-sync is optional but loud:** if `CMS_PLATFORM_PAT` is absent the
-> `dependabot-comment-sync` reusable **skips cleanly with a notice** — the
+> `dependabot-comment-sync` reusable falls back to the App credential pair
+> below, and if THAT is unset too it **skips cleanly with a notice** — the
 > workflow stays green, Dependabot's pin comments just aren't auto-refreshed.
 > (`platform-bump`, by contrast, hard-needs the PAT — issue cms-platform#13.)
+
+## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the workflows-scoped App (comment-sync fallback)
+
+A **GitHub App** credential pair that carries the same `workflows` permission
+`CMS_PLATFORM_PAT` does, for a repo that has **no PAT of its own**. That is
+exactly **cms-platform itself**: `CMS_PLATFORM_PAT` lives in the *consumers*
+(whose `platform-bump` / `dependabot-comment-sync` callers pass it), so the
+platform repo could ship comment-sync to consumers and never run it on its own
+Dependabot PRs. `dependabot-comment-sync.yml` therefore mints a short-lived
+**installation token** from the App when no PAT is configured — in pure node +
+the stdlib `crypto` module, deliberately not a new marketplace action (repo
+policy prefers built-ins, and a new action would itself owe the 7-day
+cooling-off).
+
+**The ID is a repository VARIABLE, not a secret** — deliberately, so it can be
+read while troubleshooting. Only the private key is a secret:
+
+| Knob | Kind | Where the workflow reads it |
+|---|---|---|
+| `CMS_AUTOMATION_APP_ID` | Actions repository **variable** (Variables tab) | directly as `vars.CMS_AUTOMATION_APP_ID` — a `workflow_call`'d reusable reads `vars.*` from the **CALLER's** repo, so there is no input to plumb |
+| `CMS_AUTOMATION_APP_PRIVATE_KEY` | Actions repository **secret** | passed to the reusable as the `app_private_key` secret input |
+
+**App permissions** (Repository permissions on the App itself, installed on both
+resource owners): **Contents: Read and write**, **Pull requests: Read and
+write**, **Workflows: Read and write**.
+
+**The PAT still WINS when present.** The reusable resolves ONE effective push
+credential — PAT first, minted App token second — so a consumer that already
+has `CMS_PLATFORM_PAT` behaves exactly as before and needs neither knob.
+
+**Deliberately NOT used for the `dependabot-rearm-sweep` merge path.** That
+sweep keeps the built-in `github.token`, and the reason is a
+trigger-consequence, not a permissions one: a `GITHUB_TOKEN`-attributed merge
+fires **no** downstream push workflows (verified — neither PR #182's nor #193's
+merge commit produced a self-ci push run, and 0 of the last 40 self-ci push runs
+carry a `build(deps)` head commit), whereas an App- or PAT-attributed merge
+WOULD. A Dependabot bump touching `cms-publish-loop-prod.yml` +
+`cms-publish-loop-host.yml` + `cms-media-roundtrip.yml` in one PR would then
+fire all three prod loops onto the shared `prod-mutating-loop` concurrency
+group, which **drops a co-arriving sibling** — a cancelled loop as the price of
+a pin bump. So the App is for the **push-back** credential only.
+
+> Related, and worth stating because the opposite claim was recorded here for a
+> while: **`GITHUB_TOKEN` CAN merge a workflow-file PR.** PR #182 (31 changed
+> files, all under `.github/workflows/`) merged as `github-actions[bot]` 3 s
+> after its last required check went green. What GitHub refuses is *writing*
+> workflow files without the `workflows` permission (hence this App), and
+> `enablePullRequestAutoMerge` **from the schedule context** — the discriminator
+> there is the EVENT CONTEXT, not the token class.
+
+**Failure mode — soft, and self-describing.** With neither a PAT nor the App
+pair, comment-sync logs a `::notice::` naming **all three** knobs
+(`workflow_sha_comment_pat`, the `CMS_AUTOMATION_APP_ID` variable, the
+`CMS_AUTOMATION_APP_PRIVATE_KEY` secret) and exits cleanly, so "never onboarded"
+is distinguishable from "misconfigured". It never reds a Dependabot PR. A failed
+*mint* is likewise a `::warning::` plus an empty token, which falls through to
+the same clean skip.
 
 ## AWS deploy secrets (from the bootstrap stack outputs)
 
@@ -114,6 +172,13 @@ bash <cms-platform>/scripts/set-repo-variables.sh        # add --dry-run to prev
 | `PREVIEW_BUCKET` | `<prefix>-previews` (apex, dots→hyphens) | `visual-regression` (S3 steps no-op if unset) |
 | `AWS_REGION` | `${AWS_REGION:-us-east-1}` | `visual-regression` |
 | `PROD_PLAYGROUND_MODE` | **opt-in** (`site-params.env`) | `cms-publish-loop-prod`, `cms-media-roundtrip` |
+| `CMS_AUTOMATION_APP_ID` | **opt-in** (`site-params.env`) | `dependabot-comment-sync` (read as `vars.*` from the caller repo; see its section above) |
+
+The last two are the only **non-derived** entries — everything else comes from
+`APEX_DOMAIN`, so the setter pushes these two only when `site-params.env`
+explicitly sets them. The App's **private key is a SECRET** and is therefore not
+settable by the variable setter at all; and cms-platform's own
+`CMS_AUTOMATION_APP_ID` is set **by hand** (the setter targets consumers).
 
 **`PROD_PLAYGROUND_MODE` is the one policy call:** it gates whether the
 prod-mutate loop actually creates+deletes a live canary. Leave it **unset** on a
@@ -192,6 +257,7 @@ platform-bump cron (a `::warning`, never a job failure).
 
 - [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Actions R/W** (+ be a reviewer of the `regression-review` environment)
 - [ ] `CMS_PLATFORM_PAT` — same **plus Workflows R/W**; powers **both** platform-bump and dependabot-comment-sync
+- [ ] `CMS_AUTOMATION_APP_PRIVATE_KEY` — **only if the repo has no `CMS_PLATFORM_PAT`**; the App (Contents R/W + Pull requests R/W + Workflows R/W) comment-sync falls back to. Pairs with the `CMS_AUTOMATION_APP_ID` **variable** below; the PAT wins when present, and both-unset skips cleanly
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
-- [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` opt-in)
+- [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` opt-in)
 - [ ] Settings → General → **Allow auto-merge** = ON
