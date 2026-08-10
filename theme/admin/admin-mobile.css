@@ -228,12 +228,28 @@
    *     against overflow, so it stays.
    *   - `RowContainer` / `ButtonsContainer`: gained `flex-wrap: wrap`,
    *     `align-items: center`, `gap: 8px` (from `flex-shrink: 0`).
-   *   - `SearchIcon`: gained `pointer-events: none` — literally the fix
-   *     the #162 3.14.1 post-mortem asked us to write into this section.
-   *     Upstream shipped it, so we do NOT add a duplicate rule here; the
-   *     `admin-no-occlusion.spec.js` webkit-iphone16 occlusion (Copy's
-   *     centre covered by an `<svg>`) should be resolved by construction.
-   *     If that spec still reports occlusion on 3.15.1, THEN add ours. */
+   *   - `SearchIcon`: gained `pointer-events: none`.
+   *   - `CloseButton`: its ENTIRE absolute-positioning block moved inside
+   *     `@media (min-width: 500px)`. Below 500px the modal's close "X" is
+   *     now an ORDINARY IN-FLOW flex item in the header's first row
+   *     (measured `position: static`, box 325,105 36x30 at 393px) instead
+   *     of hanging outside the corner at `left/top: -40px`. It no longer
+   *     straddles the corner on a phone. Nothing here needs to change for
+   *     it, but any future rule that assumes the X is out of flow at
+   *     phone widths is wrong.
+   *
+   * ── The `admin-no-occlusion` "Copy covered by <svg>" failure was NOT a
+   * CSS bug, and this section is NOT its fix. Recorded because the 3.14.1
+   * attempt mis-filed it as a media-library layout regression and a
+   * precondition to add `pointer-events: none` here, and re-deriving that
+   * wrong conclusion is easy. Measured at 393x852 against both bundles:
+   * 3.15.x made Copy Path / Download `ResponsiveActionButton`s that render
+   * ICON-ONLY below a breakpoint, with the label in a `visuallyHidden` 1x1
+   * span and the `<svg>` in a SIBLING `IconWrapper`. The spec's
+   * `getByText` resolved that invisible span, whose centre sits inside its
+   * sibling icon — so the occlusion report was accurate about an element
+   * no user can tap. The real buttons were reachable the whole time. Fixed
+   * in the SPEC (probe `button, label`, not the text node), not in CSS. */
   [class*="StyledModal"] {
     width: calc(100vw - 1.5rem) !important;
     max-width: calc(100vw - 1.5rem) !important;
