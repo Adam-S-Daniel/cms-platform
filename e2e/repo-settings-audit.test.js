@@ -730,4 +730,71 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(out.forkApproval.skipped).toBe(true);
     expect(out.forkApproval.reason).toMatch(/422|private/i);
   });
+
+  // The report used to claim an unqualified match even when `flag-not-visible`
+  // entries proved some flags were never SEEN — so the daily audit printed "OK —
+  // live settings match … on every scanned repo." over 11 unchecked keys. It now
+  // surfaces an UNVERIFIABLE tally (still read-only, still exit 0).
+  test("(r) UNVERIFIABLE: the per-repo OK line + the final summary are QUALIFIED when flags were not visible", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    // The same degraded read-only capture tests (n)/(o) simulate.
+    const degradedRepo = { ...fixture("cms-platform.repo.json") };
+    for (const k of CONTENTS_GATED_KEYS) delete degradedRepo[k];
+    const { findings, informational } = script.diffRepo({
+      repo,
+      desiredSettings: script.effectiveSettings(manifest, repo),
+      desiredRulesets: script.desiredRulesets(manifest, repo),
+      liveRepo: degradedRepo,
+      liveRulesets: [fixture("cms-platform.ruleset-main.json")],
+    });
+    expect(findings).toEqual([]); // clean scan — nothing is drift here
+    expect(script.unverifiableKeys(informational).sort()).toEqual([...CONTENTS_GATED_KEYS].sort());
+
+    const okLine = script.repoOkLine(repo, 1, informational);
+    expect(okLine).toContain(`${CONTENTS_GATED_KEYS.length} flag(s) UNVERIFIABLE (need Contents)`);
+
+    const summary = script.cleanScanSummary(informational);
+    expect(summary).not.toBe("OK — live settings match repo-settings.yml on every scanned repo.");
+    expect(summary).toMatch(/UNVERIFIABLE/);
+    expect(summary).toContain(`${CONTENTS_GATED_KEYS.length} flag(s)`);
+    expect(summary).toMatch(/read-only PAT cannot see/);
+    expect(summary).toMatch(/not drift/);
+
+    // ONE collapsed notice, naming every key (it was one notice per key).
+    const notice = script.describeUnverifiable(script.unverifiableKeys(informational));
+    for (const k of CONTENTS_GATED_KEYS) expect(notice).toContain(k);
+
+    // Unverifiable is NOT drift: the exit code is unchanged (a clean scan).
+    expect(findings.length).toBe(0);
+  });
+
+  test("(s) VERIFIED: with nothing unverifiable both lines are BYTE-IDENTICAL to today's wording", () => {
+    // The complete-payload half of (r): this is what stops a future refactor
+    // from quietly reverting to the overstating text, so assert the EXACT
+    // strings, not a substring.
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const { findings, informational } = diffAgainstFixtures(script, manifest, repo);
+    expect(findings).toEqual([]);
+    expect(script.unverifiableKeys(informational)).toEqual([]);
+
+    expect(script.repoOkLine(repo, 1, informational)).toBe(
+      "== Adam-S-Daniel/cms-platform: OK (flags + 1 ruleset(s) + actions permissions match)",
+    );
+    expect(script.cleanScanSummary(informational)).toBe(
+      "OK — live settings match repo-settings.yml on every scanned repo.",
+    );
+    // A ruleset-unknown-field informational is NOT a flag visibility problem —
+    // it must not qualify either line.
+    const unknownField = [{ repo, kind: "ruleset-unknown-field", ruleset: "main", key: "x", fixSkip: true }];
+    expect(script.repoOkLine(repo, 1, unknownField)).toBe(
+      "== Adam-S-Daniel/cms-platform: OK (flags + 1 ruleset(s) + actions permissions match)",
+    );
+    expect(script.cleanScanSummary(unknownField)).toBe(
+      "OK — live settings match repo-settings.yml on every scanned repo.",
+    );
+  });
 });
