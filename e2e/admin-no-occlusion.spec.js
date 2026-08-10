@@ -142,6 +142,24 @@ test.describe(
       // 1. Each action button is reachable (within the viewport
       //    horizontally and not covered). This catches the original
       //    overflow where the buttons ran off the right edge on a phone.
+      //
+      //    Probe the CONTROL, never the text node. `getByText` resolves to
+      //    the innermost element holding the string, and decap 3.15.x made
+      //    Copy Path / Download `ResponsiveActionButton`s: below a
+      //    breakpoint they render ICON-ONLY, with the label in a
+      //    `visuallyHidden` span (measured 1x1 at 393px) and the `<svg>` in
+      //    a SIBLING `IconWrapper`. So `getByText` picked the invisible
+      //    label, whose centre lands inside its sibling icon — a sibling is
+      //    neither descendant nor ancestor, so expectReachable correctly
+      //    reported it occluded, about an element no user can tap. Delete
+      //    and Upload kept text-bearing boxes, which is exactly why only
+      //    Copy failed and it read like a real regression.
+      //    `button, label` is the same set step 2 below already walks (the
+      //    Upload control is a `<label class="nc-fileUploadButton">`), and
+      //    `filter({ hasText })` matches on the SUBTREE, so it resolves the
+      //    real control on 3.12.2 (text inline) and 3.15.x (text hidden)
+      //    alike — verified against both bundles at 393x852: all four
+      //    controls unoccluded and unclipped on each.
       for (const [name, re] of [
         ["Copy", /Copy/i],
         ["Download", /Download/i],
@@ -150,7 +168,7 @@ test.describe(
       ]) {
         await expectReachable(
           page,
-          libraryTop.getByText(re).first(),
+          libraryTop.locator("button, label").filter({ hasText: re }).first(),
           `media-library "${name}" control`,
         );
       }

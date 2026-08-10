@@ -343,18 +343,15 @@ Every browser-based test captures one full-page screenshot per `framenavigated` 
 
 The assembly step is non-blocking — it never fails the build, and it's not a required check. Pure-node tests that don't request the `page` fixture are unaffected (no capture hook fires).
 
-## Visual showcase
+## Visual showcase — REMOVED, don't go looking for it
 
-**Standing rule:** after any change that could affect visual output (CSS, layouts, templates, images), regenerate the showcase before committing.
+This section used to tell you to run `node scripts/generate-showcase.js` after any change affecting visual output, having first copied `e2e/visual-regression.spec.js-snapshots` aside and re-run `--update-snapshots`.
 
-`scripts/generate-showcase.js` reads all snapshot PNGs, displays each in a labeled Playwright browser page for 3 seconds, and records the session as `recordings/visual-regression-showcase.webm`.
+**None of that machinery exists.** `scripts/generate-showcase.js` is not in the repo, and neither is any `visual-regression.spec.js-snapshots` directory — the committed-PNG suite was retired in **v0.1.34** (it had been passing only by skipping, since all 32 baselines were deleted in 2026-05 and never regenerated; the first curated prod tag un-skipped it and hard-failed a content PR). That is stated correctly in the "Visual regression" section above; this section was pre-v0.1.34 leftovers that contradicted it 40 lines later.
 
-```bash
-# Full workflow: save before, update baselines, generate before/after showcase
-cp -r e2e/visual-regression.spec.js-snapshots{,-before}
-npx playwright test e2e/visual-regression.spec.js --update-snapshots
-node scripts/generate-showcase.js
-# Commit updated snapshots + recordings/visual-regression-showcase.webm
-```
+What actually guards visual output now:
 
-If no `-before` directory exists (first run, no prior baselines), the showcase shows current snapshots only. The `-before` directory is auto-cleaned after the video is written.
+- **`visual-regression.yml`** — screenshots each changed page on the PR *and on production*, computes the pixel delta (`e2e/compute-visual-diffs.js`) plus a whitespace-normalized visible-text delta, and gates merge through the `regression-review` environment when anything is visually different. It needs **no committed baselines** — production *is* the baseline.
+- **The structural "renders" smoke checks** in `e2e/visual-regression.spec.js`, which assert a non-error status and a visible heading rather than a pixel match.
+
+The only committed snapshots left in the repo are the **ARIA-contract YAML** baselines under `e2e/cms-editor-aria-contract.spec.js-snapshots/`. `--update-snapshots` applies to those and only those — and per the standing rule, regenerating them on a Decap bump is a human-review moment, not a formality.

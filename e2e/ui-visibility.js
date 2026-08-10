@@ -56,16 +56,32 @@ async function expectReachable(page, locator, label) {
       const cx = r.left + r.width / 2;
       const cy = r.top + r.height / 2;
       const hit = document.elementFromPoint(cx, cy);
+      // Describe a node well enough to ACT on the failure. A bare tag name
+      // is not enough: decap's icons are unclassed inline `<svg>`s inside
+      // Emotion-styled wrappers, so an occlusion report of "hidden behind
+      // <svg>" names thousands of candidate elements and can't distinguish
+      // "a real overlay covers the control" from "the control's own icon".
+      // Diagnosing one such failure cost a full CI cycle plus a local
+      // bisect. So walk UP to the nearest classed ancestors and strip
+      // Emotion's rotating `css-<hash>-` prefix, leaving the stable
+      // component labels (`IconWrapper`, `ActionButton`, `LibraryTop`, …).
       const describe = (n) => {
         if (!n) return "null";
-        const cls =
-          typeof n.className === "string"
-            ? n.className
-            : (n.className && n.className.baseVal) || "";
-        return (
-          n.tagName.toLowerCase() +
-          (cls ? "." + String(cls).trim().split(/\s+/).join(".").slice(0, 40) : "")
-        );
+        const parts = [];
+        for (let e = n; e && e.tagName && parts.length < 4; e = e.parentElement) {
+          const cls =
+            typeof e.className === "string" ? e.className : (e.className && e.className.baseVal) || "";
+          const names = String(cls)
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((c) => c.replace(/^css-[a-z0-9]+-/, ""))
+            .filter((c) => !/^css-[a-z0-9]+$/.test(c))
+            .join(".");
+          parts.push(e.tagName.toLowerCase() + (names ? "." + names.slice(0, 60) : ""));
+          if (names) break;
+        }
+        return parts.join(" < ");
       };
       return {
         vw: window.innerWidth,
