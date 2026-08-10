@@ -14,9 +14,14 @@
  * hits Publish/Republish (which merges the PR).
  *
  * ── The Save seam (verbatim from the pinned decap-cms bundle) ─────────
- *   renderWorkflowControls: _n(SaveButton,{disabled:!i,key:"save-button",
- *     onClick:()=>i&&e()}, t(l?"editor.editorToolbar.saving":"editor.editorToolbar.save"))
- * where `i` = hasChanged, `e` = onPersist. The onClick is a BUILT-IN NO-OP
+ *   renderWorkflowControls: jsx(SaveButton,{disabled:!i,onClick:()=>i&&e(),
+ *     children:t(l?"editor.editorToolbar.saving":"editor.editorToolbar.save")},"save-button")
+ * where `i` = hasChanged, `e` = onPersist. (On 3.12.2 the same call read
+ * `_n(SaveButton,{disabled:!i,key:"save-button",onClick:()=>i&&e()}, t(...))`
+ * — 3.15.x moved to React 19's automatic JSX runtime, so `children` is now a
+ * prop and `key` is the third argument. The props that matter are unchanged,
+ * and nothing here matches on the markup: we locate Save by its rendered
+ * text, so this note is documentation only.) The onClick is a BUILT-IN NO-OP
  * when there are no unsaved changes (`i && e()`), so a Save click on a clean
  * entry produces no commit / no empty PR — we rely on that: tab-hide / idle
  * clicks on a non-dirty entry do nothing. We locate the Save button by its

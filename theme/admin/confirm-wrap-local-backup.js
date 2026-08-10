@@ -22,7 +22,10 @@
  *   componentDidUpdate: ... window.confirm(t("editor.editor.confirmLoadBackup"))
  *     ? this.props.loadLocalBackup() : this.deleteBackup()
  * The confirm is a NATIVE window.confirm (NOT a React modal), byte-identical
- * on 3.12.2 and 3.14.1. Returning FALSE from our wrapper both suppresses the
+ * on 3.12.2, 3.14.1 and 3.15.1 — the whole call site above, including the
+ * `? :` else-branch, greps out of the 3.15.1 bundle unchanged even though
+ * 3.15.x switched the surrounding render code to React 19's automatic JSX
+ * runtime. Returning FALSE from our wrapper both suppresses the
  * dialog AND drives Decap into its own `deleteBackup()` (the `? :`
  * else-branch), which clears the stale backup from the localForage
  * "keyvaluepairs" IndexedDB store for us — we do NOT touch that store
@@ -57,7 +60,7 @@
 
   // The exact English string Decap passes to window.confirm for
   // `editor.editor.confirmLoadBackup`. Verified byte-identical in the
-  // decap-cms 3.12.2 and 3.14.1 unpkg bundles. See the English-locale
+  // decap-cms 3.12.2, 3.14.1 and 3.15.1 unpkg bundles. See the English-locale
   // assumption note in the header — a locale change requires updating this.
   var BACKUP_STRING = "A local backup was recovered for this entry, would you like to use it?";
 
