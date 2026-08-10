@@ -74,4 +74,13 @@ jobs:
         # Owner/repo + canonical-source default from the consumer's platform.lock
         # (platform_repo / platform_ref). Aggregates ALL violations, names each
         # offending file + found/expected value, exits non-zero on any mismatch.
-        run: node .cms-platform/scripts/check-platform-pin-consistency.js
+        #
+        # `--require-canonical`: the step above ALWAYS checks
+        # examples/site/.github/workflows out into `.cms-platform/`, so this lane
+        # always has a canonical set — a parity SKIP here can only mean that
+        # checkout silently broke. Without the flag the checker would degrade to
+        # the pin-only subset (61 of 96 checks, dropping exactly the workflow-SET
+        # and workflow-CONTENT parity that police a consumer's `secrets:` map) and
+        # still exit 0, so the one lane that exists to verify parity must fail
+        # loudly instead of passing with fewer checks.
+        run: node .cms-platform/scripts/check-platform-pin-consistency.js --require-canonical

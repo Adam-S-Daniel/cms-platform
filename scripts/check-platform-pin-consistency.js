@@ -41,9 +41,24 @@
 // USAGE
 //   node scripts/check-platform-pin-consistency.js [--root DIR]
 //        [--owner OWNER] [--repo REPO] [--lock platform.lock]
-//   env equivalents: PIN_CHECK_ROOT, PLATFORM_OWNER, PLATFORM_REPO, PLATFORM_LOCK
+//        [--canonical-workflows DIR] [--require-canonical]
+//   env equivalents: PIN_CHECK_ROOT, PLATFORM_OWNER, PLATFORM_REPO, PLATFORM_LOCK,
+//                    PIN_CANONICAL_WORKFLOWS, PIN_REQUIRE_CANONICAL=1
 //   Defaults: root=cwd, owner/repo derived from platform.lock `platform_repo`
 //             (fallback Adam-S-Daniel/cms-platform), lock=platform.lock.
+//
+// THE GUARD MUST NOT SILENTLY DEGRADE
+// Without a resolvable canonical set this checker used to drop from 96 checks to
+// 61 — losing exactly the workflow-SET and workflow-CONTENT parity checks that
+// police a consumer's `secrets:` map — and STILL print "Pins are consistent."
+// A report that cannot distinguish "verified" from "did not look" is the same
+// defect class fixed in three sibling reporters (the re-arm sweep's 0/0/0
+// summary, the scheduled-run health audit, and `audit-repo-settings.js`'s
+// unqualified OK line — whose `unverifiableKeys`/`repoOkLine`/`cleanScanSummary`
+// vocabulary the `okSummary` helper below mirrors deliberately). So the summary
+// now QUALIFIES itself when parity was skipped, and `--require-canonical` turns
+// an unresolved canonical set into a hard failure for any lane that is supposed
+// to verify parity (the `platform-pin-consistency` reusable passes it).
 "use strict";
 
 const fs = require("node:fs");
@@ -91,6 +106,14 @@ function argOf(name, envName, def) {
 const ROOT = path.resolve(argOf("root", "PIN_CHECK_ROOT", process.cwd()));
 const LOCK_REL = argOf("lock", "PLATFORM_LOCK", "platform.lock");
 
+// `--require-canonical`: fail loudly instead of degrading. Any lane that is
+// SUPPOSED to verify workflow-set + workflow-content parity (the reusable always
+// checks `examples/site` out, so a skip there means the checkout broke) must not
+// pass with fewer checks. Default OFF, so an ad-hoc local run still exits 0 —
+// only the WORDING of its summary changes.
+const REQUIRE_CANONICAL =
+  process.argv.includes("--require-canonical") || process.env.PIN_REQUIRE_CANONICAL === "1";
+
 // ── platform.lock → canonical version (source of truth) ──────────────────────
 function die(msg) {
   process.stderr.write(`platform-pin-consistency: ${msg}\n`);
@@ -125,7 +148,15 @@ function readPlatformLock() {
   return { platformRef: ref.trim(), repoSlug };
 }
 
-const { platformRef, repoSlug: lockRepoSlug } = readPlatformLock();
+// This CLI does all of its work at TOP LEVEL (it reads the consumer tree and
+// process.exit()s), so a `require` — the unit test drives the pure summary
+// helpers below with no filesystem — must trigger none of it. Every
+// side-effecting statement hangs off this flag; the helpers stay pure.
+const RUN_AS_CLI = require.main === module;
+
+const { platformRef, repoSlug: lockRepoSlug } = RUN_AS_CLI
+  ? readPlatformLock()
+  : { platformRef: null, repoSlug: null };
 
 // owner/repo: explicit flag/env > platform.lock platform_repo > default.
 const DEFAULT_SLUG = "Adam-S-Daniel/cms-platform";
@@ -139,6 +170,10 @@ const SLUG = `${owner}/${repo}`;
 const violations = [];
 // Count of references we actually checked (for the OK summary).
 let checked = 0;
+// Did workflow-SET + workflow-CONTENT parity ACTUALLY run? (false = the canonical
+// set could not be resolved, so those checks were skipped — the summary must say
+// so rather than claim consistency it never verified.)
+let parityVerified = false;
 
 function rel(abs) {
   return path.relative(ROOT, abs).split(path.sep).join("/");
@@ -249,7 +284,9 @@ function versionFromComment(comment) {
   return m ? m[0] : null;
 }
 
-for (const wf of listWorkflowFiles()) {
+// RUN_AS_CLI-guarded: on `require` (the unit test drives the pure helpers) this
+// scan must not walk a tree.
+for (const wf of RUN_AS_CLI ? listWorkflowFiles() : []) {
   let text;
   try {
     text = fs.readFileSync(wf, "utf8");
@@ -434,13 +471,32 @@ function resolveCanonicalDir() {
 function checkWorkflowSetParity() {
   const canonicalDir = resolveCanonicalDir();
   if (!fs.existsSync(canonicalDir)) {
+    const where = rel(canonicalDir) || canonicalDir;
     process.stdout.write(
       "platform-pin-consistency: (workflow-set parity skipped — canonical set not found at " +
-        `${rel(canonicalDir) || canonicalDir}; pass --canonical-workflows, or run via the ` +
+        `${where}; pass --canonical-workflows, or run via the ` +
         "platform-pin-consistency reusable which checks out examples/site).\n",
     );
+    if (REQUIRE_CANONICAL) {
+      // A lane that asked to VERIFY parity gets a hard failure, not a quieter
+      // OK line: `::error::` (always, so it is visible off-CI too) + a violation
+      // carrying its own `message` so the report skips the pin-bump epilogue.
+      const msg = requireCanonicalError(where);
+      process.stdout.write(`::error title=platform-pin-consistency::${msg}\n`);
+      violations.push({
+        file: ".github/workflows",
+        kind: "workflow-set/content parity: NOT VERIFIED (--require-canonical)",
+        found: `canonical set not resolved at ${where}`,
+        expected: "a resolvable canonical set, so both parity checks actually run",
+        message: msg,
+        detail:
+          "pass --canonical-workflows <platform>/examples/site/.github/workflows (scripts/verify-consumer-pins.sh " +
+          "does), or run via the platform-pin-consistency reusable, which checks examples/site out at platform_ref",
+      });
+    }
     return;
   }
+  parityVerified = true;
   const canonical = new Set(listYamlBasenames(canonicalDir));
   const consumer = new Set(listYamlBasenames(path.join(ROOT, ".github", "workflows")));
   checked += 1;
@@ -657,51 +713,100 @@ function checkMediaProbeSentinel() {
   }
 }
 
-checkGemfile();
-checkGemfileLock();
-checkWorkflowSetParity();
-checkWorkflowContentParity();
-checkMediaProbeSentinel();
-
-// ── Report ────────────────────────────────────────────────────────────────────
-if (violations.length === 0) {
-  process.stdout.write(
+// ── Summary lines (PURE; exported for the unit test) ─────────────────────────
+// Mirrors `audit-repo-settings.js`'s `repoOkLine`/`cleanScanSummary` house
+// pattern: with nothing unverifiable the sentence is BYTE-IDENTICAL to what it
+// has always been (the unit test asserts it with `toBe` on the literal — that is
+// the half a refactor is most likely to regress); with parity unverified it says
+// what it did NOT check, and never the words "Pins are consistent".
+function okSummary({ checked, root, platformRef, lockRel, parityVerified }) {
+  const head =
     `platform-pin-consistency: OK — all ${checked} platform-consistency check(s) ` +
-      `in ${rel(ROOT) || "."} pass for platform_ref ${platformRef} ` +
-      `(canonical, from ${LOCK_REL}). Pins are consistent.\n`,
+    `in ${root} pass for platform_ref ${platformRef} ` +
+    `(canonical, from ${lockRel}).`;
+  if (parityVerified) return `${head} Pins are consistent.`;
+  return (
+    `${head} Workflow-SET and workflow-CONTENT parity were NOT VERIFIED — the canonical ` +
+    `set was not resolved, so this run did NOT check the consumer's workflow set or any ` +
+    `thin caller's call interface (uses target / with keys / secrets map / permissions). ` +
+    `Pass --canonical-workflows <platform>/examples/site/.github/workflows (or run via the ` +
+    `platform-pin-consistency reusable, which checks it out), and --require-canonical to make ` +
+    `an unresolved set a hard failure instead of this notice. Pin references are consistent; ` +
+    `parity is UNVERIFIED.`
   );
-  process.exit(0);
 }
 
-const isCI = !!process.env.GITHUB_ACTIONS;
-process.stderr.write(
-  `platform-pin-consistency: FAIL — ${violations.length} consistency check(s) failed ` +
-    `against the canonical platform_ref ${platformRef} (from ${LOCK_REL}).\n\n`,
-);
-for (const v of violations) {
-  // GitHub annotation (file-scoped) when in Actions; always a human line too.
-  // A violation may carry its OWN `message` (the sentinel does — its fix is
-  // committing a PNG, not bumping a pin); fall back to the pin-phrased default.
-  if (isCI) {
-    const annotation =
-      v.message || `${v.kind} pins '${v.found}' but platform.lock platform_ref is '${v.expected}'`;
-    process.stderr.write(`::error file=${v.file}::${annotation}\n`);
+// The `--require-canonical` failure text. Names the flag and the reason so the
+// output says WHY it failed rather than only that it did.
+function requireCanonicalError(where) {
+  return (
+    `workflow-SET and workflow-CONTENT parity NOT VERIFIED — the canonical set was not found ` +
+    `at ${where}, and --require-canonical was passed. A lane that is supposed to verify parity ` +
+    `must FAIL rather than pass with fewer checks (this guard used to drop from 96 checks to 61 ` +
+    `and still report a clean, consistent verdict). Pass --canonical-workflows ` +
+    `<platform>/examples/site/.github/workflows, or run via the platform-pin-consistency ` +
+    `reusable, which checks examples/site out at platform_ref.`
+  );
+}
+
+// Requireable for the unit test (see RUN_AS_CLI above): pure, no filesystem.
+module.exports = { okSummary, requireCanonicalError };
+
+if (RUN_AS_CLI) {
+  checkGemfile();
+  checkGemfileLock();
+  checkWorkflowSetParity();
+  checkWorkflowContentParity();
+  checkMediaProbeSentinel();
+
+  // ── Report ──────────────────────────────────────────────────────────────────
+  if (violations.length === 0) {
+    // Exit code UNCHANGED when parity was merely SKIPPED (no --require-canonical):
+    // a canonical set we could not resolve is not skew, so it must not break an
+    // existing caller. Only the wording above distinguishes the two runs.
+    process.stdout.write(
+      `${okSummary({
+        checked,
+        root: rel(ROOT) || ".",
+        platformRef,
+        lockRel: LOCK_REL,
+        parityVerified,
+      })}\n`,
+    );
+    process.exit(0);
   }
+
+  const isCI = !!process.env.GITHUB_ACTIONS;
   process.stderr.write(
-    `  ${v.file}\n    ${v.kind}\n      found:    ${v.found}\n      expected: ${v.expected}\n`,
+    `platform-pin-consistency: FAIL — ${violations.length} consistency check(s) failed ` +
+      `against the canonical platform_ref ${platformRef} (from ${LOCK_REL}).\n\n`,
   );
-  if (v.detail) process.stderr.write(`      detail:   ${v.detail}\n`);
+  for (const v of violations) {
+    // GitHub annotation (file-scoped) when in Actions; always a human line too.
+    // A violation may carry its OWN `message` (the sentinel does — its fix is
+    // committing a PNG, not bumping a pin); fall back to the pin-phrased default.
+    if (isCI) {
+      const annotation =
+        v.message ||
+        `${v.kind} pins '${v.found}' but platform.lock platform_ref is '${v.expected}'`;
+      process.stderr.write(`::error file=${v.file}::${annotation}\n`);
+    }
+    process.stderr.write(
+      `  ${v.file}\n    ${v.kind}\n      found:    ${v.found}\n      expected: ${v.expected}\n`,
+    );
+    if (v.detail) process.stderr.write(`      detail:   ${v.detail}\n`);
+  }
+  // The pin-bump epilogue only applies to VERSION-pin violations; a sentinel
+  // violation carries its own fix in `message`/`detail` above (commit a PNG, not
+  // bump a pin), so only emit it when a pin-class violation (no own message) is present.
+  if (violations.some((v) => !v.message)) {
+    process.stderr.write(
+      `\nFix: bring every platform-version reference above to ${platformRef} (the platform.lock ` +
+        `platform_ref). Bump the workflow @ref pins + composite # comments + the ` +
+        `with: platform_ref inputs, and the Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
+        `(platform-bump bumps platform.lock + with: inputs; Dependabot bumps the ` +
+        `uses:@ pins + gem — they can land out of step, which is what this guard catches.)\n`,
+    );
+  }
+  process.exit(1);
 }
-// The pin-bump epilogue only applies to VERSION-pin violations; a sentinel
-// violation carries its own fix in `message`/`detail` above (commit a PNG, not
-// bump a pin), so only emit it when a pin-class violation (no own message) is present.
-if (violations.some((v) => !v.message)) {
-  process.stderr.write(
-    `\nFix: bring every platform-version reference above to ${platformRef} (the platform.lock ` +
-      `platform_ref). Bump the workflow @ref pins + composite # comments + the ` +
-      `with: platform_ref inputs, and the Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
-      `(platform-bump bumps platform.lock + with: inputs; Dependabot bumps the ` +
-      `uses:@ pins + gem — they can land out of step, which is what this guard catches.)\n`,
-  );
-}
-process.exit(1);
