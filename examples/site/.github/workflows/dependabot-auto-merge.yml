@@ -8,7 +8,9 @@ run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, githu
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    # No `edited`: a skipped caller emits NO check-run, so an `edited` run WITHDRAWS
+    # contexts an earlier run reported green — only a new SHA restores them (#222).
+    types: [opened, synchronize, reopened]
     branches: [main]
 
 permissions:
@@ -16,7 +18,5 @@ permissions:
   pull-requests: write
 
 jobs:
-  # edited fires only for base retargets (changes.base present) — title/body edits stay no-ops (#145)
   auto-merge:
-    if: github.event.action != 'edited' || github.event.changes.base.ref.from != ''
     uses: Adam-S-Daniel/cms-platform/.github/workflows/dependabot-auto-merge.yml@v0.1.1

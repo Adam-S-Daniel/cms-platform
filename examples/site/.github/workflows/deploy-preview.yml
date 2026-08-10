@@ -10,7 +10,11 @@ run-name: >-
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed, edited]
+    # No `edited`: a skipped caller emits NO check-run, so an `edited` run WITHDRAWS
+    # contexts an earlier run reported green — only a new SHA restores them (#222).
+    # `closed` IS load-bearing — the reusable's teardown-preview job keys on it
+    # (S3 rm --recursive + CloudFront invalidation + the bot comment update).
+    types: [opened, synchronize, reopened, closed]
     branches: [main]
     # Customize per site (mirror deploy-production's list for what can't change
     # the built site).
@@ -32,9 +36,7 @@ permissions:
   statuses: write
 
 jobs:
-  # edited fires only for base retargets (changes.base present) — title/body edits stay no-ops (#145)
   preview:
-    if: github.event.action != 'edited' || github.event.changes.base.ref.from != ''
     uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-preview.yml@v0.1.1
     with:
       apex_domain: example.com
