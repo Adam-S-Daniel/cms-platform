@@ -176,6 +176,13 @@ const PLATFORM_META_SPECS = [
   "detect-changed-pages.test.js",
   "fixture-baseline.test.js",
   "generate-test-videos.test.js",
+  // The theme gemspec's version is deliberately frozen at 0.1.4 (see the
+  // gemspec header): both consumers' Gemfile.lock record it, their CI installs
+  // in bundler DEPLOYMENT/frozen mode, and platform-bump.yml rewrites the lock
+  // textually so it can never update the bare version. This lint reads
+  // theme/cms-platform-theme.gemspec + .github/workflows/platform-bump.yml —
+  // platform source absent on a consumer.
+  "gemspec-version-frozen.test.js",
   "github-actions-poll.test.js",
   "live-failures-reporter.test.js",
   // Reads the platform's admin shell SOURCE (theme/admin/index*.html) —
