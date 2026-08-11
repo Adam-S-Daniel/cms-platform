@@ -1077,3 +1077,63 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   pre-regenerated:** every pinned string is verified identical, and letting
   `cms-editor-aria-contract.spec.js` run is STRONGER than regenerating, because a
   real drift then fails by name instead of being blessed by `--update-snapshots`.
+
+- **v0.1.79** (2026-08-10) — **the occlusion probe was resolving a
+  visually-hidden label, so it was right about an element no user can tap.** The
+  decap 3.15.1 bump (v0.1.78) reddened `admin-no-occlusion.spec.js` on
+  `webkit-iphone16`, and #162's standing precondition said the fix belonged in
+  `admin-mobile.css` §7 (`pointer-events: none` on the decorative `SearchIcon`).
+  Both were wrong about the cause. Measured at 393×852:
+
+  ```
+  target: span.visuallyHidden-ResponsiveActionButton   box 46,161   1x1
+  hit:    svg < span.IconWrapper-visuallyHidden-…      box 47,152  18x18
+  ```
+
+  3.15.x made Copy Path / Download **`ResponsiveActionButton`s** — icon-only
+  below a breakpoint, the label parked in a `visuallyHidden` 1×1 span with the
+  `<svg>` in a **sibling** `IconWrapper`. The spec's `getByText` resolved that
+  invisible span, whose centre falls inside its sibling icon; a sibling is
+  neither descendant nor ancestor, so `expectReachable` was CORRECT — it was
+  reporting a genuinely untappable 1×1 target. Delete and Upload kept
+  text-bearing 36 px boxes, which is exactly why only Copy failed and why it read
+  as a real layout regression. Fixed in the SPEC (probe `button, label`, verified
+  against both bundles), NOT in CSS — and §7 now records this so the next reader
+  does not misfile it a third time.
+
+  Upstream had independently shipped `pointer-events: none` on `SearchIcon` and
+  `grid-template-rows: 120px auto → auto 1fr` on `StyledModal`; §7 documents both
+  as making our overrides belt-and-braces, so nobody duplicates or deletes them.
+  **Lesson worth carrying: a role/name/text locator can break with no DOM change
+  at all** — an added `aria-label`, or a label moved into a visually-hidden
+  sibling, is invisible to a DOM-shape diff, which is what both earlier
+  investigations of this were looking at.
+
+- **v0.1.80** (2026-08-11) — **the theme gemspec's version is deliberately
+  frozen, and now says so.** `spec.version = "0.1.4"` looks 75 releases stale and
+  is LOAD-BEARING: bumping it alone would break BOTH consumers' CI at
+  `bundle install`. Three verified facts — (1) each consumer's `Gemfile.lock`
+  records the version TWICE, in the GIT block's `specs:` and again under
+  `CHECKSUMS`, as `cms-platform-theme (0.1.4)`; (2) consumer CI installs in
+  bundler DEPLOYMENT/frozen mode, because `ruby/setup-ruby` sets
+  `bundle config deployment true` whenever a lockfile exists and both consumers
+  commit one — and frozen bundler materializes a git-source spec by
+  `[name, VERSION]` and refuses to rewrite the lock, so a disagreement is a hard
+  `GemNotFound`, not a re-resolve; (3) `platform-bump.yml` cannot repair it, since
+  it rewrites the lock TEXTUALLY (`CUR`→`LATEST` where `CUR` is the v-prefixed
+  `platform_ref`, so it can never match a bare `0.1.4`) and runs bundler zero
+  times. The RubyGems angle is real but inert — never published (API 404).
+
+  The reason lives in the gemspec itself, not only in a test, because a bare
+  frozen constant invites exactly the tidy-up it guards against.
+  `e2e/gemspec-version-frozen.test.js` pins the value, the self-explanation, and
+  the freeze's PRECONDITION (that platform-bump still cannot re-resolve the lock)
+  so the reasoning fails loud rather than rotting into folklore.
+
+  **Proving that lint red-first caught a vacuous assertion in the lint itself:**
+  `runScripts` takes raw workflow TEXT and returns `{script, line}` objects, so
+  `runScripts(wf).join()` yielded `"[object Object]"` — 15 characters — and BOTH
+  shell assertions were passing against it. Same "cannot distinguish *verified*
+  from *never looked*" failure this release train fixed in the re-arm sweep, the
+  repo-settings audit and the pin checker — this time in the guard written to
+  prevent it. It now asserts the extracted shell is non-trivial before matching.
