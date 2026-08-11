@@ -1,0 +1,232 @@
+# Repo settings APPLY-in-CI (#172, the first of #109's four deferrals).
+#
+# The audit (repo-settings-audit.yml) DETECTS drift and files a tracking issue;
+# converging it has been a human running `--fix --yes` with their own admin auth.
+# This workflow moves that apply into CI behind a reviewer gate. The audit stays
+# exactly as it is — this is additive, and either can be disabled alone.
+#
+# THREE THINGS HERE ARE LOAD-BEARING. Each is a trap, not a preference:
+#
+#  1. TWO JOBS, BECAUSE THE REVIEWER MUST SEE THE PLAN BEFORE APPROVING.
+#     A GitHub environment gate pauses a job BEFORE its first step, so a plan
+#     printed inside the gated job is invisible at approval time — the reviewer
+#     would be clicking "approve" on an unknown diff. `plan` therefore runs
+#     ungated and writes the full plan to the job summary; `apply` is gated and
+#     runs only if `plan` found pending changes.
+#
+#  2. THE PLAN JOB'S TOKEN CANNOT WRITE — BY CONSTRUCTION, NOT BY TRUST.
+#     `POST /app/installations/{id}/access_tokens` accepts a `permissions` object
+#     that can only NARROW the installation's grant. `plan` mints
+#     `administration:read`; `apply` mints `administration:write`. So the ungated
+#     job is incapable of mutating settings even if something in it misbehaves.
+#
+#  3. A MISSING ENVIRONMENT SILENTLY DISABLES THE GATE, SO WE VERIFY IT.
+#     Referencing `environment: repo-settings` when that environment does not
+#     exist does NOT fail — GitHub implicitly creates it with NO protection
+#     rules, and the "required reviewer" gate you think you have is absent. The
+#     apply job therefore ASKS the API whether the environment really carries a
+#     `required_reviewers` rule and refuses to apply if it does not. Without that
+#     check, a misprovisioned repo converts this from human-gated to unattended
+#     admin writes — the single worst failure mode available here.
+#
+# WHY A GITHUB APP AND NOT A PAT: the manifest governs repos under TWO owners
+# (Adam-S-Daniel and jodidaniel), and a fine-grained PAT cannot span owners. One
+# App installed on both owners can, and its installation tokens expire in ~1h, so
+# no long-lived admin credential sits in CI. Because a token is per-INSTALLATION
+# (i.e. per owner), the apply runs as a matrix — one leg per owner, each holding
+# only that owner's credential, so a leg's blast radius is one owner.
+#
+# The script's own rails still apply and are not re-implemented here:
+# `default_branch` is never PATCHed (FIX_FORBIDDEN_KEYS), a live ruleset carrying
+# an unknown field is SKIPPED rather than PUT lossily, live-only rulesets are
+# never deleted (no --prune in v1), and `--fix --yes` re-audits afterwards and
+# exits non-zero if drift persists.
+#
+# PROVISIONING (all three are required; without them this workflow no-ops with a
+# notice naming them — it never fails red for being un-onboarded):
+#   - vars.REPO_SETTINGS_APP_ID          (repository VARIABLE on cms-platform)
+#   - secrets.REPO_SETTINGS_APP_PRIVATE_KEY
+#   - a `repo-settings` environment WITH at least one required reviewer
+# The App needs Administration: Read and write, installed on BOTH owners.
+name: Repo settings apply
+
+run-name: >-
+  ${{ github.event_name == 'schedule' && format('scheduled re-converge — {0}', github.event.schedule)
+     || github.event_name == 'push' && format('manifest change — {0}', github.sha)
+     || format('manual — @{0}', github.actor) }}
+
+on:
+  # Auto-converge when the manifest lands on main…
+  push:
+    branches: [main]
+    paths: [repo-settings.yml]
+  # …and re-converge daily, so a live UI flip is pulled back without waiting for
+  # someone to edit the manifest. Offset from the audit's 17 9 so the audit's
+  # report reflects the state this workflow left behind, not a half-applied one.
+  schedule:
+    - cron: '37 10 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Shares a lane with nothing else, but must never run twice at once: two
+  # concurrent applies could race the same PUT. Queue, never cancel — a
+  # cancelled half-apply is the v0.1.27 lesson.
+  group: repo-settings-apply
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      pending: ${{ steps.plan.outputs.pending }}
+      onboarded: ${{ steps.creds.outputs.onboarded }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (2026-07-17)
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (2026-07-14)
+        with:
+          node-version: '20'
+      - name: Install harness deps (for the yaml parser; no browsers)
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Check whether apply-in-CI is onboarded
+        id: creds
+        # `secrets.*` is forbidden in a step-level `if:`, so the presence check
+        # is a run step writing an output the later `if:`s gate on.
+        env:
+          APP_ID: ${{ vars.REPO_SETTINGS_APP_ID }}
+          APP_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "${APP_ID}" ] && [ -n "${APP_KEY}" ]; then
+            echo "onboarded=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "onboarded=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Repo settings apply — not onboarded"
+              echo
+              echo "Skipping. To enable, provision all three:"
+              echo "- \`vars.REPO_SETTINGS_APP_ID\` (repository variable)"
+              echo "- \`secrets.REPO_SETTINGS_APP_PRIVATE_KEY\`"
+              echo "- a \`repo-settings\` environment with at least one required reviewer"
+              echo
+              echo "The daily audit is unaffected and still reports drift."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::apply-in-CI is not onboarded (vars.REPO_SETTINGS_APP_ID / secrets.REPO_SETTINGS_APP_PRIVATE_KEY); skipping."
+          fi
+
+      - name: Plan the convergence (read-scoped token; cannot write)
+        id: plan
+        if: steps.creds.outputs.onboarded == 'true'
+        env:
+          APP_ID: ${{ vars.REPO_SETTINGS_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
+        run: |
+          set -uo pipefail
+          pending=false
+          {
+            echo "### Repo settings — convergence plan"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          # One leg per owner: an installation token is per owner, and --repo
+          # keeps each leg scoped to the repos that token can actually see.
+          for spec in "Adam-S-Daniel:cms-platform:Adam-S-Daniel/cms-platform Adam-S-Daniel/adamdaniel.ai" \
+                      "jodidaniel:jodidaniel.com:jodidaniel/jodidaniel.com"; do
+            owner="${spec%%:*}"; rest="${spec#*:}"; probe="${rest%%:*}"; repos="${rest#*:}"
+            node scripts/mint-app-token.js --owner "$owner" --repo "$probe" \
+              --permissions administration=read > mint.log 2>&1 || {
+                echo "::error::could not mint a read token for ${owner}"; cat mint.log; exit 1; }
+            TOKEN=$(sed -n 's/^token=//p' "$GITHUB_OUTPUT" | tail -1)
+            args=(); for r in $repos; do args+=(--repo "$r"); done
+            # --fix WITHOUT --yes is plan-only and exits 2 when changes pend.
+            set +e
+            GH_TOKEN="$TOKEN" node scripts/audit-repo-settings.js --fix "${args[@]}" > plan.txt 2>&1
+            rc=$?
+            set -e
+            {
+              echo "<details><summary><code>${owner}</code> — exit ${rc}</summary>"
+              echo
+              echo '```'
+              cat plan.txt
+              echo '```'
+              echo
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$rc" = "2" ]; then pending=true
+            elif [ "$rc" != "0" ]; then echo "::error::plan failed for ${owner} (exit ${rc})"; exit "$rc"; fi
+          done
+          echo "pending=${pending}" >> "$GITHUB_OUTPUT"
+          echo "::notice::convergence pending=${pending}"
+
+  apply:
+    needs: plan
+    # Only ask a human when there is genuinely something to approve.
+    if: needs.plan.outputs.onboarded == 'true' && needs.plan.outputs.pending == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # THE GATE. Its required-reviewer rule is verified below — see header note 3;
+    # naming a nonexistent environment would silently create an unprotected one.
+    environment: repo-settings
+    strategy:
+      # One leg per owner, each holding only that owner's admin token.
+      # fail-fast:false so one owner's failure does not abandon the other's
+      # already-approved convergence half-done.
+      fail-fast: false
+      matrix:
+        include:
+          - owner: Adam-S-Daniel
+            probe: cms-platform
+            repos: Adam-S-Daniel/cms-platform Adam-S-Daniel/adamdaniel.ai
+          - owner: jodidaniel
+            probe: jodidaniel.com
+            repos: jodidaniel/jodidaniel.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (2026-07-17)
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0 (2026-07-14)
+        with:
+          node-version: '20'
+      - name: Install harness deps (for the yaml parser; no browsers)
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Verify the reviewer gate actually exists
+        # Header note 3: an undeclared environment is auto-created WITHOUT
+        # protection rules, so reaching this step proves nothing on its own.
+        # Ask the API, and refuse to apply if no required_reviewers rule is set.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rules=$(gh api "repos/${GITHUB_REPOSITORY}/environments/repo-settings" \
+            --jq '[.protection_rules[].type] | join(",")' 2>/dev/null || echo "")
+          echo "protection rules: ${rules:-<none>}"
+          case ",${rules}," in
+            *,required_reviewers,*) echo "::notice::reviewer gate present." ;;
+            *)
+              echo "::error::The \`repo-settings\` environment has no required_reviewers rule, so this apply would run UNATTENDED. Refusing. Add at least one required reviewer to the environment, then re-run."
+              exit 1 ;;
+          esac
+
+      - name: Apply the manifest (write-scoped token)
+        env:
+          APP_ID: ${{ vars.REPO_SETTINGS_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
+          OWNER: ${{ matrix.owner }}
+          PROBE: ${{ matrix.probe }}
+          REPOS: ${{ matrix.repos }}
+        run: |
+          set -uo pipefail
+          node scripts/mint-app-token.js --owner "$OWNER" --repo "$PROBE" \
+            --permissions administration=write > mint.log 2>&1 || {
+              echo "::error::could not mint a write token for ${OWNER}"; cat mint.log; exit 1; }
+          TOKEN=$(sed -n 's/^token=//p' "$GITHUB_OUTPUT" | tail -1)
+          args=(); for r in $REPOS; do args+=(--repo "$r"); done
+          # --yes applies, then RE-AUDITS and exits non-zero if drift persists.
+          GH_TOKEN="$TOKEN" node scripts/audit-repo-settings.js --fix --yes "${args[@]}"
