@@ -44,7 +44,7 @@
 #
 # PROVISIONING (all three are required; without them this workflow no-ops with a
 # notice naming them — it never fails red for being un-onboarded):
-#   - vars.REPO_SETTINGS_APP_ID          (repository VARIABLE on cms-platform)
+#   - vars.REPO_SETTINGS_APP_CLIENT_ID          (repository VARIABLE on cms-platform)
 #   - secrets.REPO_SETTINGS_APP_PRIVATE_KEY
 #   - a `repo-settings` environment WITH at least one required reviewer
 # The App needs Administration: Read and write, installed on BOTH owners.
@@ -100,10 +100,10 @@ jobs:
         # `secrets.*` is forbidden in a step-level `if:`, so the presence check
         # is a run step writing an output the later `if:`s gate on.
         env:
-          APP_ID: ${{ vars.REPO_SETTINGS_APP_ID }}
+          APP_CLIENT_ID: ${{ vars.REPO_SETTINGS_APP_CLIENT_ID }}
           APP_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
         run: |
-          if [ -n "${APP_ID}" ] && [ -n "${APP_KEY}" ]; then
+          if [ -n "${APP_CLIENT_ID}" ] && [ -n "${APP_KEY}" ]; then
             echo "onboarded=true" >> "$GITHUB_OUTPUT"
           else
             echo "onboarded=false" >> "$GITHUB_OUTPUT"
@@ -111,20 +111,20 @@ jobs:
               echo "### Repo settings apply — not onboarded"
               echo
               echo "Skipping. To enable, provision all three:"
-              echo "- \`vars.REPO_SETTINGS_APP_ID\` (repository variable)"
+              echo "- \`vars.REPO_SETTINGS_APP_CLIENT_ID\` (repository variable)"
               echo "- \`secrets.REPO_SETTINGS_APP_PRIVATE_KEY\`"
               echo "- a \`repo-settings\` environment with at least one required reviewer"
               echo
               echo "The daily audit is unaffected and still reports drift."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice::apply-in-CI is not onboarded (vars.REPO_SETTINGS_APP_ID / secrets.REPO_SETTINGS_APP_PRIVATE_KEY); skipping."
+            echo "::notice::apply-in-CI is not onboarded (vars.REPO_SETTINGS_APP_CLIENT_ID / secrets.REPO_SETTINGS_APP_PRIVATE_KEY); skipping."
           fi
 
       - name: Plan the convergence (read-scoped token; cannot write)
         id: plan
         if: steps.creds.outputs.onboarded == 'true'
         env:
-          APP_ID: ${{ vars.REPO_SETTINGS_APP_ID }}
+          APP_CLIENT_ID: ${{ vars.REPO_SETTINGS_APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
         run: |
           set -uo pipefail
@@ -216,7 +216,7 @@ jobs:
 
       - name: Apply the manifest (write-scoped token)
         env:
-          APP_ID: ${{ vars.REPO_SETTINGS_APP_ID }}
+          APP_CLIENT_ID: ${{ vars.REPO_SETTINGS_APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
           OWNER: ${{ matrix.owner }}
           PROBE: ${{ matrix.probe }}

@@ -19,7 +19,11 @@
 const { test, expect } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
-const { readWorkflow, parseYaml, runScripts } = require("./workflow-yaml-utils");
+const {
+  readWorkflow,
+  parseYaml,
+  runScripts,
+} = require("./workflow-yaml-utils");
 
 const WF = "repo-settings-apply.yml";
 const MINT = path.resolve(__dirname, "..", "scripts", "mint-app-token.js");
@@ -35,16 +39,20 @@ function shell() {
   // Guard against the "[object Object]" class of vacuous assertion: if the
   // extraction ever returns nothing, every content check below would pass by
   // matching an empty string.
-  expect(blocks.length, "runScripts extracted no shell from " + WF).toBeGreaterThan(3);
+  expect(
+    blocks.length,
+    "runScripts extracted no shell from " + WF,
+  ).toBeGreaterThan(3);
   return blocks.join("\n");
 }
 
 test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", () => {
   test("the apply job is environment-gated and the plan job is NOT", () => {
     const jobs = wfDoc().jobs;
-    expect(jobs.apply.environment, "apply must sit behind the repo-settings environment").toBe(
-      "repo-settings",
-    );
+    expect(
+      jobs.apply.environment,
+      "apply must sit behind the repo-settings environment",
+    ).toBe("repo-settings");
     expect(
       jobs.plan.environment,
       "plan must NOT be gated — a gate pauses the job before its first step, so the plan " +
@@ -74,9 +82,7 @@ test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", (
     // The write scope must appear ONLY in the gated job.
     const jobs = wfDoc().jobs;
     const jobShell = (j) =>
-      (jobs[j].steps || [])
-        .map((s) => s.run || "")
-        .join("\n");
+      (jobs[j].steps || []).map((s) => s.run || "").join("\n");
     expect(
       /administration=write/.test(jobShell("plan")),
       "the UNGATED plan job must never mint a write-scoped token",
@@ -121,8 +127,15 @@ test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", (
 
   test("it fails SOFT when un-onboarded, naming every required knob", () => {
     const src = shell() + fs.readFileSync(MINT, "utf8");
-    for (const knob of ["REPO_SETTINGS_APP_ID", "REPO_SETTINGS_APP_PRIVATE_KEY", "repo-settings"]) {
-      expect(src.includes(knob), `the un-onboarded notice must name ${knob}`).toBe(true);
+    for (const knob of [
+      "REPO_SETTINGS_APP_CLIENT_ID",
+      "REPO_SETTINGS_APP_PRIVATE_KEY",
+      "repo-settings",
+    ]) {
+      expect(
+        src.includes(knob),
+        `the un-onboarded notice must name ${knob}`,
+      ).toBe(true);
     }
     // The presence check must be a run-step output, not a step-level `if:` on
     // secrets.* — the expression evaluator forbids that and startup-fails.
@@ -145,7 +158,9 @@ test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", (
     // The data-exposure rule: an error may carry status + method + url, never
     // the body (it can quote data into a public log).
     expect(
-      /res\.(json|text)\(\)[^\n]*\berror|throw new Error\([^)]*await res/.test(src),
+      /res\.(json|text)\(\)[^\n]*\berror|throw new Error\([^)]*await res/.test(
+        src,
+      ),
       "the error path must not interpolate the response body",
     ).toBe(false);
   });

@@ -22,7 +22,9 @@
  *   node scripts/mint-app-token.js --owner OWNER --repo REPO \
  *     --permissions administration=read[,contents=read...]
  *
- * Reads APP_ID and APP_PRIVATE_KEY from the environment. On success it writes
+ * Reads APP_CLIENT_ID (the App's Client ID — GitHub accepts it as the JWT `iss`,
+ * and it is the fleet convention since Adam-S-Daniel/repo-settings PR #12; the
+ * legacy APP_ID is still honoured) and APP_PRIVATE_KEY. On success it writes
  * `token=<value>` to $GITHUB_OUTPUT (masking it first) and exits 0.
  *
  * FAILS SOFT (v0.1.76 rule): a missing credential is NOT an error — it prints a
@@ -93,13 +95,13 @@ async function main() {
   const permissions = parsePermissions(arg("permissions"));
   if (!owner || !repo) throw new Error("--owner and --repo are required");
 
-  const appId = process.env.APP_ID || "";
+  const appId = process.env.APP_CLIENT_ID || process.env.APP_ID || "";
   const privateKey = process.env.APP_PRIVATE_KEY || "";
   if (!appId || !privateKey) {
     // Fail SOFT and name the exact knobs.
     console.log(
       "::notice::No GitHub App credential configured — set the repository VARIABLE " +
-        "`REPO_SETTINGS_APP_ID` and the repository SECRET `REPO_SETTINGS_APP_PRIVATE_KEY` " +
+        "`REPO_SETTINGS_APP_CLIENT_ID` and the repository SECRET `REPO_SETTINGS_APP_PRIVATE_KEY` " +
         "on Adam-S-Daniel/cms-platform, and install the App on BOTH owners with " +
         "Administration: Read and write. Skipping.",
     );
