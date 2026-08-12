@@ -114,6 +114,10 @@ const PLATFORM_META_SPECS = [
   // path. Consumers ship none of that — platform-internal, self-CI only.
   "repo-settings-manifest.test.js",
   "repo-settings-audit.test.js",
+  // #172 deferral 1 — the apply-in-CI safety properties (ungated plan vs gated
+  // apply, mint-time read/write scope split, the required_reviewers
+  // verification). Reads .github/workflows + scripts/, absent on a consumer.
+  "repo-settings-apply.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN

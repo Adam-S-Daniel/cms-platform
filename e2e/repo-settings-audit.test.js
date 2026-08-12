@@ -26,11 +26,15 @@
  *     comment, the run-ids-dedupe analog).
  */
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
 
-const SCRIPT_PATH = path.resolve(__dirname, "../scripts/audit-repo-settings.js");
+const SCRIPT_PATH = path.resolve(
+  __dirname,
+  "../scripts/audit-repo-settings.js",
+);
 const MANIFEST_PATH = path.resolve(__dirname, "../repo-settings.yml");
 const FIXTURES_DIR = path.join(__dirname, "fixtures", "repo-settings");
 
@@ -51,11 +55,17 @@ const LIVE = {
   },
   "Adam-S-Daniel/adamdaniel.ai": {
     repo: "adamdaniel.repo.json",
-    rulesets: ["adamdaniel.ruleset-main.json", "adamdaniel.ruleset-feature.json"],
+    rulesets: [
+      "adamdaniel.ruleset-main.json",
+      "adamdaniel.ruleset-feature.json",
+    ],
   },
   "jodidaniel/jodidaniel.com": {
     repo: "jodidaniel.repo.json",
-    rulesets: ["jodidaniel.ruleset-main.json", "jodidaniel.ruleset-feature.json"],
+    rulesets: [
+      "jodidaniel.ruleset-main.json",
+      "jodidaniel.ruleset-feature.json",
+    ],
   },
 };
 
@@ -101,7 +111,8 @@ const CONTENTS_GATED_KEYS = [
 // an Error whose .message/.stderr mimic a gh 403/422 failure.
 function fakeApi(routes) {
   return (endpoint) => {
-    if (!(endpoint in routes)) throw new Error(`fakeApi: unrouted endpoint ${endpoint}`);
+    if (!(endpoint in routes))
+      throw new Error(`fakeApi: unrouted endpoint ${endpoint}`);
     const resp = routes[endpoint];
     if (typeof resp === "function") return resp(); // negative cases throw here
     return JSON.stringify(resp);
@@ -122,8 +133,8 @@ function liveActions(repo, mutate = {}) {
 function diffAgainstFixtures(script, manifest, repo, mutate = {}) {
   const live = LIVE[repo];
   const liveRepo = { ...fixture(live.repo), ...(mutate.repo || {}) };
-  const liveRulesets = (mutate.rulesets || live.rulesets.map(fixture)).map((r) =>
-    JSON.parse(JSON.stringify(r)),
+  const liveRulesets = (mutate.rulesets || live.rulesets.map(fixture)).map(
+    (r) => JSON.parse(JSON.stringify(r)),
   );
   return {
     repo,
@@ -149,7 +160,9 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const { ownerSlug, tokenEnvName } = loadScript();
     expect(ownerSlug("Adam-S-Daniel")).toBe("ADAM_S_DANIEL");
     expect(ownerSlug("jodidaniel")).toBe("JODIDANIEL");
-    expect(tokenEnvName("Adam-S-Daniel")).toBe("REPO_SETTINGS_READ_ADAM_S_DANIEL");
+    expect(tokenEnvName("Adam-S-Daniel")).toBe(
+      "REPO_SETTINGS_READ_ADAM_S_DANIEL",
+    );
     expect(tokenEnvName("jodidaniel")).toBe("REPO_SETTINGS_READ_JODIDANIEL");
   });
 
@@ -166,8 +179,15 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     for (const repo of Object.keys(LIVE)) {
-      const { findings, informational } = diffAgainstFixtures(script, manifest, repo);
-      expect(findings, `${repo}: expected zero drift, got ${JSON.stringify(findings)}`).toEqual([]);
+      const { findings, informational } = diffAgainstFixtures(
+        script,
+        manifest,
+        repo,
+      );
+      expect(
+        findings,
+        `${repo}: expected zero drift, got ${JSON.stringify(findings)}`,
+      ).toEqual([]);
       expect(
         informational,
         `${repo}: expected zero informational lines (anti-flap normalization ` +
@@ -182,7 +202,10 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const live = fixture("jodidaniel.ruleset-feature.json");
     // The org-repo-only decoration is present in the capture...
     const pr = live.rules.find((r) => r.type === "pull_request");
-    expect(pr.parameters.dismissal_restriction).toEqual({ enabled: false, allowed_actors: [] });
+    expect(pr.parameters.dismissal_restriction).toEqual({
+      enabled: false,
+      allowed_actors: [],
+    });
     // ...and both consumers resolve the SAME library entry cleanly.
     const { projected, unknownKeys } = script.normalizeRuleset(live);
     expect(unknownKeys).toEqual([]);
@@ -192,7 +215,14 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     });
     const findings = [];
     const informational = [];
-    script.diffRuleset("jodidaniel/jodidaniel.com", "cms-feature-branches", projected, desired, findings, informational);
+    script.diffRuleset(
+      "jodidaniel/jodidaniel.com",
+      "cms-feature-branches",
+      projected,
+      desired,
+      findings,
+      informational,
+    );
     expect(findings).toEqual([]);
     expect(informational).toEqual([]);
   });
@@ -206,9 +236,14 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     rsc.parameters.required_status_checks.reverse();
     shuffled.updated_at = "2099-01-01T00:00:00Z"; // server keys are stripped
     shuffled.current_user_can_bypass = "always";
-    const { findings, informational } = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
-      rulesets: [shuffled, fixture("adamdaniel.ruleset-feature.json")],
-    });
+    const { findings, informational } = diffAgainstFixtures(
+      script,
+      manifest,
+      "Adam-S-Daniel/adamdaniel.ai",
+      {
+        rulesets: [shuffled, fixture("adamdaniel.ruleset-feature.json")],
+      },
+    );
     expect(findings).toEqual([]);
     expect(informational).toEqual([]);
   });
@@ -220,9 +255,14 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // false, not the other direction.
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
-    const { findings } = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/cms-platform", {
-      repo: { delete_branch_on_merge: false }, // manifest says true (phase-2 desired)
-    });
+    const { findings } = diffAgainstFixtures(
+      script,
+      manifest,
+      "Adam-S-Daniel/cms-platform",
+      {
+        repo: { delete_branch_on_merge: false }, // manifest says true (phase-2 desired)
+      },
+    );
     expect(findings).toEqual([
       {
         repo: "Adam-S-Daniel/cms-platform",
@@ -248,10 +288,20 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const { projected } = script.normalizeRuleset(
       fixture("jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json"),
     );
-    const desired = script.sortRuleset({ name: "main", ...manifest.ruleset_library["consumer-main"] });
+    const desired = script.sortRuleset({
+      name: "main",
+      ...manifest.ruleset_library["consumer-main"],
+    });
     const findings = [];
     const informational = [];
-    script.diffRuleset("jodidaniel/jodidaniel.com", "main", projected, desired, findings, informational);
+    script.diffRuleset(
+      "jodidaniel/jodidaniel.com",
+      "main",
+      projected,
+      desired,
+      findings,
+      informational,
+    );
     expect(findings.map((f) => f.facet).sort()).toEqual([
       "bypass_actors",
       "rule:non_fast_forward",
@@ -280,7 +330,13 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     ]);
     // ...and --fix's plan only ever REPORTS it — no delete call is planned.
     const plan = script.buildFixPlan(manifest, [
-      { repo: "Adam-S-Daniel/cms-platform", findings, informational: [], liveRepo, liveRulesets },
+      {
+        repo: "Adam-S-Daniel/cms-platform",
+        findings,
+        informational: [],
+        liveRepo,
+        liveRulesets,
+      },
     ]);
     expect(plan[0].unmanaged).toEqual(["cms-feature-branches"]);
     expect(plan[0].puts).toEqual([]);
@@ -291,10 +347,17 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     const live = fixture("adamdaniel.ruleset-main.json");
-    live.rules.find((r) => r.type === "pull_request").parameters.some_future_param = 7;
-    const { findings, informational } = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
-      rulesets: [live, fixture("adamdaniel.ruleset-feature.json")],
-    });
+    live.rules.find(
+      (r) => r.type === "pull_request",
+    ).parameters.some_future_param = 7;
+    const { findings, informational } = diffAgainstFixtures(
+      script,
+      manifest,
+      "Adam-S-Daniel/adamdaniel.ai",
+      {
+        rulesets: [live, fixture("adamdaniel.ruleset-feature.json")],
+      },
+    );
     expect(findings).toEqual([]);
     expect(informational).toEqual([
       {
@@ -312,23 +375,40 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     const live = fixture("jodidaniel.ruleset-main.json");
-    live.rules.find((r) => r.type === "pull_request").parameters.dismissal_restriction = {
+    live.rules.find(
+      (r) => r.type === "pull_request",
+    ).parameters.dismissal_restriction = {
       enabled: true,
       allowed_actors: [{ actor_id: 5, actor_type: "RepositoryRole" }],
     };
-    const { findings } = diffAgainstFixtures(script, manifest, "jodidaniel/jodidaniel.com", {
-      rulesets: [live, fixture("jodidaniel.ruleset-feature.json")],
-    });
-    expect(findings.map((f) => f.facet)).toEqual(["rule:pull_request.dismissal_restriction"]);
+    const { findings } = diffAgainstFixtures(
+      script,
+      manifest,
+      "jodidaniel/jodidaniel.com",
+      {
+        rulesets: [live, fixture("jodidaniel.ruleset-feature.json")],
+      },
+    );
+    expect(findings.map((f) => f.facet)).toEqual([
+      "rule:pull_request.dismissal_restriction",
+    ]);
   });
 
   test("(g) the drift fingerprint is order-stable and change-sensitive", () => {
     const { fingerprint } = loadScript();
-    const f1 = { repo: "o/r", kind: "flag-drift", key: "has_wiki", live: true, desired: false };
+    const f1 = {
+      repo: "o/r",
+      kind: "flag-drift",
+      key: "has_wiki",
+      live: true,
+      desired: false,
+    };
     const f2 = { repo: "o/r", kind: "ruleset-unmanaged", ruleset: "stray" };
     expect(fingerprint([f1, f2])).toBe(fingerprint([f2, f1]));
     expect(fingerprint([f1, f2])).not.toBe(fingerprint([f1]));
-    expect(fingerprint([f1])).not.toBe(fingerprint([{ ...f1, live: false, desired: true }]));
+    expect(fingerprint([f1])).not.toBe(
+      fingerprint([{ ...f1, live: false, desired: true }]),
+    );
     expect(fingerprint([])).toBe(fingerprint([]));
   });
 
@@ -338,9 +418,14 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const live = fixture("cms-platform.ruleset-main.json");
     live.push_allowances = ["something-the-api-grew"]; // unknown top-level field
     live.enforcement = "disabled"; // AND a real drift on the same ruleset
-    const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/cms-platform", {
-      rulesets: [live],
-    });
+    const scan = diffAgainstFixtures(
+      script,
+      manifest,
+      "Adam-S-Daniel/cms-platform",
+      {
+        rulesets: [live],
+      },
+    );
     expect(scan.informational).toEqual([
       {
         repo: "Adam-S-Daniel/cms-platform",
@@ -360,12 +445,22 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   test("buildFixPlan: drifted keys only, manual-only keys refused, PUT carries the full library body", () => {
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
-    const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/cms-platform", {
-      // manifest desires true (phase-2 converged) — mutate live to false so
-      // this still exercises a real delete_branch_on_merge drift.
-      repo: { delete_branch_on_merge: false, default_branch: "master" },
-      rulesets: [{ ...fixture("cms-platform.ruleset-main.json"), enforcement: "evaluate" }],
-    });
+    const scan = diffAgainstFixtures(
+      script,
+      manifest,
+      "Adam-S-Daniel/cms-platform",
+      {
+        // manifest desires true (phase-2 converged) — mutate live to false so
+        // this still exercises a real delete_branch_on_merge drift.
+        repo: { delete_branch_on_merge: false, default_branch: "master" },
+        rulesets: [
+          {
+            ...fixture("cms-platform.ruleset-main.json"),
+            enforcement: "evaluate",
+          },
+        ],
+      },
+    );
     const plan = script.buildFixPlan(manifest, [scan]);
     expect(plan.length).toBe(1);
     // Only the drifted, non-forbidden key is PATCHed — never the full flag set.
@@ -384,26 +479,53 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   test("buildFixPlan is EMPTY on a clean scan (the --fix plan-mode proof)", () => {
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
-    const results = Object.keys(LIVE).map((repo) => diffAgainstFixtures(script, manifest, repo));
+    const results = Object.keys(LIVE).map((repo) =>
+      diffAgainstFixtures(script, manifest, repo),
+    );
     expect(script.buildFixPlan(manifest, results)).toEqual([]);
   });
 
   test("issue plumbing: stable marker, fingerprint block roundtrip, ratify-or-revert playbook", () => {
     const script = loadScript();
     const findings = [
-      { repo: "o/r", kind: "flag-drift", key: "has_wiki", live: true, desired: false, manualOnly: false },
+      {
+        repo: "o/r",
+        kind: "flag-drift",
+        key: "has_wiki",
+        live: true,
+        desired: false,
+        manualOnly: false,
+      },
     ];
     expect(script.MARKER).toBe("<!-- repo-settings-drift-audit -->");
-    const body = script.buildIssueBody({ findings, informational: [], nowIso: "2026-07-11T00:00:00Z" });
+    const body = script.buildIssueBody({
+      findings,
+      informational: [],
+      nowIso: "2026-07-11T00:00:00Z",
+    });
     expect(body.startsWith(script.MARKER)).toBe(true);
-    expect(script.extractReportedFingerprints([body]).has(script.fingerprint(findings))).toBe(true);
+    expect(
+      script
+        .extractReportedFingerprints([body])
+        .has(script.fingerprint(findings)),
+    ).toBe(true);
     expect(body).toMatch(/RATIFY/);
     expect(body).toMatch(/REVERT/);
     expect(body).toMatch(/--fix/);
-    const comment = script.buildComment({ findings, informational: [], nowIso: "2026-07-11T00:00:00Z" });
-    expect(script.extractReportedFingerprints([comment]).has(script.fingerprint(findings))).toBe(true);
+    const comment = script.buildComment({
+      findings,
+      informational: [],
+      nowIso: "2026-07-11T00:00:00Z",
+    });
+    expect(
+      script
+        .extractReportedFingerprints([comment])
+        .has(script.fingerprint(findings)),
+    ).toBe(true);
     // A hand-edited comment without a block never poisons the dedupe.
-    expect(script.extractReportedFingerprints(["no block here", null]).size).toBe(0);
+    expect(
+      script.extractReportedFingerprints(["no block here", null]).size,
+    ).toBe(0);
   });
 
   test("CLI refuses --issue + --repo (a clean subset must never auto-close the global alert)", () => {
@@ -417,7 +539,10 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       [SCRIPT_PATH, "--issue", "--repo", "Adam-S-Daniel/cms-platform"],
       { encoding: "utf8" },
     );
-    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).not.toBe(0);
+    expect(
+      res.status,
+      `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`,
+    ).not.toBe(0);
     expect(res.stderr).toMatch(/--issue audits ALL managed repos/);
     expect(res.stderr).toMatch(/drop --repo/);
   });
@@ -448,10 +573,13 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
         findings,
         informational,
       );
-      expect(findings.map((f) => f.key).sort(), `${repo}: ${JSON.stringify(findings)}`).toEqual(
-        expectByRepo[repo],
+      expect(
+        findings.map((f) => f.key).sort(),
+        `${repo}: ${JSON.stringify(findings)}`,
+      ).toEqual(expectByRepo[repo]);
+      expect(findings.every((f) => f.kind === "actions-permission-drift")).toBe(
+        true,
       );
-      expect(findings.every((f) => f.kind === "actions-permission-drift")).toBe(true);
       expect(informational).toEqual([]);
     }
   });
@@ -541,8 +669,12 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(plan.length).toBe(1);
     // Actions PUTs never leak into the flag PATCH body (separate surface).
     expect(plan[0].patchBody).toEqual({});
-    const sha = plan[0].actionsPuts.find((p) => p.key === "sha_pinning_required");
-    expect(sha.endpoint).toBe("repos/Adam-S-Daniel/cms-platform/actions/permissions");
+    const sha = plan[0].actionsPuts.find(
+      (p) => p.key === "sha_pinning_required",
+    );
+    expect(sha.endpoint).toBe(
+      "repos/Adam-S-Daniel/cms-platform/actions/permissions",
+    );
     // The live enabled + allowed_actions are echoed back so the PUT can't
     // disable Actions or narrow the allowed-actions policy.
     expect(sha.body).toEqual({
@@ -596,14 +728,17 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const rulesetBody = fixture("cms-platform.ruleset-main.json");
     const api = fakeApi({
       [`repos/${repo}`]: degradedRepo,
-      [`repos/${repo}/rulesets?per_page=100`]: [{ id: rulesetBody.id, source_type: "Repository" }],
+      [`repos/${repo}/rulesets?per_page=100`]: [
+        { id: rulesetBody.id, source_type: "Repository" },
+      ],
       [`repos/${repo}/rulesets/${rulesetBody.id}`]: rulesetBody,
       // actions/permissions IS readable (Administration:Read) — THE gate passes.
-      [`repos/${repo}/actions/permissions`]: fixture("cms-platform.actions-permissions.json"),
-      // public repo -> the fork endpoint returns a value (no 422 here).
-      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]: fixture(
-        "cms-platform.fork-pr-approval.json",
+      [`repos/${repo}/actions/permissions`]: fixture(
+        "cms-platform.actions-permissions.json",
       ),
+      // public repo -> the fork endpoint returns a value (no 422 here).
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        fixture("cms-platform.fork-pr-approval.json"),
     });
 
     // The removed canary must NOT abort a correctly read-only token.
@@ -629,8 +764,12 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     );
 
     // Every absent Contents-gated key is INFORMATIONAL flag-not-visible.
-    const notVisible = diff.informational.filter((i) => i.kind === "flag-not-visible");
-    expect(notVisible.map((i) => i.key).sort()).toEqual([...CONTENTS_GATED_KEYS].sort());
+    const notVisible = diff.informational.filter(
+      (i) => i.kind === "flag-not-visible",
+    );
+    expect(notVisible.map((i) => i.key).sort()).toEqual(
+      [...CONTENTS_GATED_KEYS].sort(),
+    );
     for (const i of notVisible) {
       expect(i.repo).toBe(repo);
       expect(i.fixSkip).toBe(true);
@@ -640,11 +779,16 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(diff.findings.filter((f) => f.kind === "flag-drift")).toEqual([]);
     // The VISIBLE flags (has_*/default_branch) still diffed — and matched.
     // The ruleset still diffed — and matched (zero ruleset findings).
-    expect(diff.findings.filter((f) => String(f.kind).startsWith("ruleset"))).toEqual([]);
+    expect(
+      diff.findings.filter((f) => String(f.kind).startsWith("ruleset")),
+    ).toEqual([]);
     // Actions-permissions STILL diffs on the degraded token — the as-found
     // drift (sha false->true, fork first_time->all_external) is intact.
     expect(
-      diff.findings.filter((f) => f.kind === "actions-permission-drift").map((f) => f.key).sort(),
+      diff.findings
+        .filter((f) => f.kind === "actions-permission-drift")
+        .map((f) => f.key)
+        .sort(),
     ).toEqual(["approval_policy", "sha_pinning_required"]);
 
     // --fix is driven off FINDINGS, so an absent (skipped) key is naturally
@@ -661,7 +805,8 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     ]);
     expect(plan.length).toBe(1);
     expect(plan[0].patchBody).toEqual({}); // no Contents-gated key PATCHed
-    for (const k of CONTENTS_GATED_KEYS) expect(plan[0].patchBody).not.toHaveProperty(k);
+    for (const k of CONTENTS_GATED_KEYS)
+      expect(plan[0].patchBody).not.toHaveProperty(k);
   });
 
   test("(o) DEGRADED describe: a flag-not-visible line renders as an informational notice, never a drift finding", () => {
@@ -670,7 +815,10 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     const repo = "Adam-S-Daniel/cms-platform";
-    const degradedRepo = { ...fixture("cms-platform.repo.json"), has_wiki: true }; // manifest: false
+    const degradedRepo = {
+      ...fixture("cms-platform.repo.json"),
+      has_wiki: true,
+    }; // manifest: false
     for (const k of CONTENTS_GATED_KEYS) delete degradedRepo[k];
     const { findings, informational } = script.diffRepo({
       repo,
@@ -680,10 +828,12 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       liveRulesets: [fixture("cms-platform.ruleset-main.json")],
     });
     // The visible has_wiki flip is a real flag-drift; the absent merge keys are not.
-    expect(findings.filter((f) => f.kind === "flag-drift").map((f) => f.key)).toEqual(["has_wiki"]);
-    expect(informational.filter((i) => i.kind === "flag-not-visible").length).toBe(
-      CONTENTS_GATED_KEYS.length,
-    );
+    expect(
+      findings.filter((f) => f.kind === "flag-drift").map((f) => f.key),
+    ).toEqual(["has_wiki"]);
+    expect(
+      informational.filter((i) => i.kind === "flag-not-visible").length,
+    ).toBe(CONTENTS_GATED_KEYS.length);
   });
 
   test("(p) THE GATE SURVIVES: a token lacking Administration:Read (actions/permissions has no `enabled`, or 403) STILL fails loud — never silent drift", () => {
@@ -693,18 +843,22 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const apiNoEnabled = fakeApi({
       [`repos/${repo}/actions/permissions`]: { message: "Not Found" }, // no `enabled`
     });
-    expect(() => script.fetchActionsPermissions(repo, null, apiNoEnabled)).toThrow(
-      /Administration: Read/,
-    );
+    expect(() =>
+      script.fetchActionsPermissions(repo, null, apiNoEnabled),
+    ).toThrow(/Administration: Read/);
     // A hard 403 from gh propagates as an operational failure (not swallowed).
     const api403 = fakeApi({
       [`repos/${repo}/actions/permissions`]: () => {
-        const e = new Error("gh: HTTP 403 Resource not accessible by personal access token");
+        const e = new Error(
+          "gh: HTTP 403 Resource not accessible by personal access token",
+        );
         e.stderr = "HTTP 403";
         throw e;
       },
     });
-    expect(() => script.fetchActionsPermissions(repo, null, api403)).toThrow(/403/);
+    expect(() => script.fetchActionsPermissions(repo, null, api403)).toThrow(
+      /403/,
+    );
   });
 
   test("(q) fetchActionsPermissions maps a fork-approval HTTP 422 to an operational SKIP (private repo), not a throw", () => {
@@ -716,11 +870,14 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
         allowed_actions: "all",
         sha_pinning_required: true,
       },
-      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]: () => {
-        const e = new Error("gh: HTTP 422 not allowed for private repositories");
-        e.stderr = "not allowed for private repositories (HTTP 422)";
-        throw e;
-      },
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        () => {
+          const e = new Error(
+            "gh: HTTP 422 not allowed for private repositories",
+          );
+          e.stderr = "not allowed for private repositories (HTTP 422)";
+          throw e;
+        },
     });
     let out;
     expect(() => {
@@ -750,20 +907,28 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       liveRulesets: [fixture("cms-platform.ruleset-main.json")],
     });
     expect(findings).toEqual([]); // clean scan — nothing is drift here
-    expect(script.unverifiableKeys(informational).sort()).toEqual([...CONTENTS_GATED_KEYS].sort());
+    expect(script.unverifiableKeys(informational).sort()).toEqual(
+      [...CONTENTS_GATED_KEYS].sort(),
+    );
 
     const okLine = script.repoOkLine(repo, 1, informational);
-    expect(okLine).toContain(`${CONTENTS_GATED_KEYS.length} flag(s) UNVERIFIABLE (need Contents)`);
+    expect(okLine).toContain(
+      `${CONTENTS_GATED_KEYS.length} flag(s) UNVERIFIABLE (need Contents)`,
+    );
 
     const summary = script.cleanScanSummary(informational);
-    expect(summary).not.toBe("OK — live settings match repo-settings.yml on every scanned repo.");
+    expect(summary).not.toBe(
+      "OK — live settings match repo-settings.yml on every scanned repo.",
+    );
     expect(summary).toMatch(/UNVERIFIABLE/);
     expect(summary).toContain(`${CONTENTS_GATED_KEYS.length} flag(s)`);
     expect(summary).toMatch(/read-only PAT cannot see/);
     expect(summary).toMatch(/not drift/);
 
     // ONE collapsed notice, naming every key (it was one notice per key).
-    const notice = script.describeUnverifiable(script.unverifiableKeys(informational));
+    const notice = script.describeUnverifiable(
+      script.unverifiableKeys(informational),
+    );
     for (const k of CONTENTS_GATED_KEYS) expect(notice).toContain(k);
 
     // Unverifiable is NOT drift: the exit code is unchanged (a clean scan).
@@ -777,7 +942,11 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     const repo = "Adam-S-Daniel/cms-platform";
-    const { findings, informational } = diffAgainstFixtures(script, manifest, repo);
+    const { findings, informational } = diffAgainstFixtures(
+      script,
+      manifest,
+      repo,
+    );
     expect(findings).toEqual([]);
     expect(script.unverifiableKeys(informational)).toEqual([]);
 
@@ -789,12 +958,603 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     );
     // A ruleset-unknown-field informational is NOT a flag visibility problem —
     // it must not qualify either line.
-    const unknownField = [{ repo, kind: "ruleset-unknown-field", ruleset: "main", key: "x", fixSkip: true }];
+    const unknownField = [
+      {
+        repo,
+        kind: "ruleset-unknown-field",
+        ruleset: "main",
+        key: "x",
+        fixSkip: true,
+      },
+    ];
     expect(script.repoOkLine(repo, 1, unknownField)).toBe(
       "== Adam-S-Daniel/cms-platform: OK (flags + 1 ruleset(s) + actions permissions match)",
     );
     expect(script.cleanScanSummary(unknownField)).toBe(
       "OK — live settings match repo-settings.yml on every scanned repo.",
     );
+  });
+
+  // ── Environments surface (a FOURTH managed surface: GET/PUT
+  // repos/{owner}/{repo}/environments/{name}, declared per repo with NO
+  // shared defaults). No live GET of a real GitHub environment was possible
+  // to capture from this sandbox (no gh/network access), so the fixtures
+  // below are HAND-CONSTRUCTED against GitHub's documented, stable
+  // environments API response shape (protection_rules[] with
+  // required_reviewers / wait_timer rule types) rather than a literal
+  // live-captured JSON file — unlike the repo/ruleset/actions-permissions
+  // fixtures above, which genuinely were captured. ────────────────────────
+  function writeManifest(yamlText) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-env-manifest-"));
+    const file = path.join(dir, "repo-settings.yml");
+    fs.writeFileSync(file, yamlText);
+    return file;
+  }
+
+  // A live GET repos/{owner}/{repo}/environments/{name} response matching
+  // the shipped manifest's `repo-settings` environment exactly (reviewer
+  // 4205216, wait_timer 0, prevent_self_review false).
+  const LIVE_ENV_MATCHED = {
+    name: "repo-settings",
+    protection_rules: [
+      {
+        id: 1,
+        node_id: "env-rule-reviewers",
+        type: "required_reviewers",
+        prevent_self_review: false,
+        reviewers: [
+          {
+            type: "User",
+            reviewer: { id: 4205216, login: "Adam-S-Daniel", type: "User" },
+          },
+        ],
+      },
+      { id: 2, node_id: "env-rule-wait", type: "wait_timer", wait_timer: 0 },
+    ],
+  };
+
+  // Every leaf drifted from the manifest: a different reviewer, a non-zero
+  // wait_timer, prevent_self_review flipped true.
+  const LIVE_ENV_DRIFTED = {
+    name: "repo-settings",
+    protection_rules: [
+      {
+        id: 1,
+        node_id: "env-rule-reviewers",
+        type: "required_reviewers",
+        prevent_self_review: true,
+        reviewers: [
+          {
+            type: "User",
+            reviewer: { id: 999999, login: "someone-else", type: "User" },
+          },
+        ],
+      },
+      { id: 2, node_id: "env-rule-wait", type: "wait_timer", wait_timer: 30 },
+    ],
+  };
+
+  test("normalizeEnvironment projects live protection_rules to {reviewers,wait_timer,prevent_self_review}", () => {
+    const script = loadScript();
+    expect(script.normalizeEnvironment(LIVE_ENV_MATCHED)).toEqual({
+      reviewers: [{ type: "User", id: 4205216 }],
+      wait_timer: 0,
+      prevent_self_review: false,
+    });
+  });
+
+  test("normalizeEnvironment: an ABSENT required_reviewers/wait_timer rule normalizes to GitHub's own defaults (never drift against nothing)", () => {
+    const script = loadScript();
+    expect(
+      script.normalizeEnvironment({ name: "x", protection_rules: [] }),
+    ).toEqual({
+      reviewers: [],
+      wait_timer: 0,
+      prevent_self_review: false,
+    });
+    expect(script.normalizeEnvironment({})).toEqual({
+      reviewers: [],
+      wait_timer: 0,
+      prevent_self_review: false,
+    });
+  });
+
+  test("sortReviewers + normalizeEnvironment: reviewer ORDER never counts as drift (both sides sorted by type,id)", () => {
+    const script = loadScript();
+    const live = {
+      protection_rules: [
+        {
+          type: "required_reviewers",
+          prevent_self_review: false,
+          reviewers: [
+            { type: "Team", reviewer: { id: 20 } },
+            { type: "User", reviewer: { id: 4205216 } },
+          ],
+        },
+      ],
+    };
+    const findings = [];
+    script.diffEnvironments(
+      "o/r",
+      {
+        env: {
+          reviewers: [
+            { type: "User", id: 4205216 },
+            { type: "Team", id: 20 },
+          ],
+        },
+      },
+      { env: live },
+      findings,
+      [],
+    );
+    expect(findings).toEqual([]);
+  });
+
+  test("diffEnvironments: a repo already at the desired baseline yields NO findings", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [];
+    const informational = [];
+    script.diffEnvironments(
+      repo,
+      script.desiredEnvironments(manifest, repo),
+      { "repo-settings": LIVE_ENV_MATCHED },
+      findings,
+      informational,
+    );
+    expect(findings).toEqual([]);
+    expect(informational).toEqual([]);
+  });
+
+  test("diffEnvironments: an EXISTING-BUT-DRIFTED environment emits one environment-drift finding PER drifted key", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [];
+    script.diffEnvironments(
+      repo,
+      script.desiredEnvironments(manifest, repo),
+      { "repo-settings": LIVE_ENV_DRIFTED },
+      findings,
+      [],
+    );
+    expect(findings.map((f) => f.key).sort()).toEqual([
+      "prevent_self_review",
+      "reviewers",
+      "wait_timer",
+    ]);
+    expect(findings.every((f) => f.kind === "environment-drift")).toBe(true);
+    expect(
+      findings.every(
+        (f) => f.repo === repo && f.environment === "repo-settings",
+      ),
+    ).toBe(true);
+    const reviewersFinding = findings.find((f) => f.key === "reviewers");
+    expect(reviewersFinding.live).toEqual([{ type: "User", id: 999999 }]);
+    expect(reviewersFinding.desired).toEqual([{ type: "User", id: 4205216 }]);
+  });
+
+  test("diffEnvironments: a declared-but-ABSENT environment (404) emits environment-absent findings, not an operational skip", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [];
+    const informational = [];
+    script.diffEnvironments(
+      repo,
+      script.desiredEnvironments(manifest, repo),
+      { "repo-settings": { absent: true } },
+      findings,
+      informational,
+    );
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((f) => f.kind === "environment-absent")).toBe(true);
+    expect(findings.every((f) => f.live === null)).toBe(true);
+    expect(informational).toEqual([]); // absent is DRIFT, never an operational skip
+  });
+
+  // ── fetchEnvironments (the 404 -> {absent:true} contract) ─────────────────
+  test("fetchEnvironments: 200 returns the live body verbatim", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/environments/repo-settings`]: LIVE_ENV_MATCHED,
+    });
+    const out = script.fetchEnvironments(repo, ["repo-settings"], null, api);
+    expect(out).toEqual({ "repo-settings": LIVE_ENV_MATCHED });
+  });
+
+  test("fetchEnvironments: 404 maps to {absent:true} — DRIFT, never a throw", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/environments/repo-settings`]: () => {
+        const e = new Error("gh: HTTP 404 Not Found");
+        e.stderr = "Not Found (HTTP 404)";
+        throw e;
+      },
+    });
+    let out;
+    expect(() => {
+      out = script.fetchEnvironments(repo, ["repo-settings"], null, api);
+    }).not.toThrow();
+    expect(out).toEqual({ "repo-settings": { absent: true } });
+  });
+
+  test("fetchEnvironments: any OTHER error (e.g. 403) propagates as an operational failure, never swallowed", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/environments/repo-settings`]: () => {
+        const e = new Error(
+          "gh: HTTP 403 Resource not accessible by personal access token",
+        );
+        e.stderr = "HTTP 403";
+        throw e;
+      },
+    });
+    expect(() =>
+      script.fetchEnvironments(repo, ["repo-settings"], null, api),
+    ).toThrow(/403/);
+  });
+
+  test("fetchLive: NO environments call is made when the repo declares none (no wasted calls)", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/adamdaniel.ai"; // declares zero environments in the shipped manifest
+    const api = fakeApi({
+      [`repos/${repo}`]: fixture("adamdaniel.repo.json"),
+      [`repos/${repo}/rulesets?per_page=100`]: [],
+      [`repos/${repo}/actions/permissions`]: fixture(
+        "adamdaniel.actions-permissions.json",
+      ),
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        fixture("adamdaniel.fork-pr-approval.json"),
+      // Deliberately NO route for an environments endpoint — if fetchLive
+      // called one anyway, fakeApi's "unrouted endpoint" throw catches it.
+    });
+    let live;
+    expect(() => {
+      live = script.fetchLive(repo, null, api, []);
+    }).not.toThrow();
+    expect(live.liveEnvironments).toEqual({});
+  });
+
+  test("fetchLive: WITH declared environment names, the environments endpoint is called and bundled as liveEnvironments", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}`]: fixture("cms-platform.repo.json"),
+      [`repos/${repo}/rulesets?per_page=100`]: [],
+      [`repos/${repo}/actions/permissions`]: fixture(
+        "cms-platform.actions-permissions.json",
+      ),
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        fixture("cms-platform.fork-pr-approval.json"),
+      [`repos/${repo}/environments/repo-settings`]: LIVE_ENV_MATCHED,
+    });
+    const live = script.fetchLive(repo, null, api, ["repo-settings"]);
+    expect(live.liveEnvironments).toEqual({
+      "repo-settings": LIVE_ENV_MATCHED,
+    });
+  });
+
+  // ── ENV_FIX_FORBIDDEN — the self-gating escalation guard ──────────────────
+  test("ENV_FIX_FORBIDDEN names exactly `repo-settings` (the environment that gates repo-settings-apply.yml)", () => {
+    const script = loadScript();
+    expect(script.ENV_FIX_FORBIDDEN).toEqual(["repo-settings"]);
+  });
+
+  test("(t) drift on the fix-forbidden `repo-settings` environment IS a finding (reaches the tracking issue)", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [];
+    script.diffEnvironments(
+      repo,
+      script.desiredEnvironments(manifest, repo),
+      { "repo-settings": LIVE_ENV_DRIFTED },
+      findings,
+      [],
+    );
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((f) => f.fixForbidden === true)).toBe(true);
+  });
+
+  test("(u) buildFixPlan NEVER puts a fix-forbidden environment — drifted case: no PUT, reported as envManualOnly", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [];
+    script.diffEnvironments(
+      repo,
+      script.desiredEnvironments(manifest, repo),
+      { "repo-settings": LIVE_ENV_DRIFTED },
+      findings,
+      [],
+    );
+    const plan = script.buildFixPlan(manifest, [
+      {
+        repo,
+        findings,
+        informational: [],
+        liveRepo: fixture("cms-platform.repo.json"),
+        liveRulesets: [fixture("cms-platform.ruleset-main.json")],
+        liveActionsPermissions: liveActions(repo, {
+          forkApproval: { approval_policy: "all_external_contributors" },
+          permissions: { sha_pinning_required: true },
+        }),
+      },
+    ]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].envPuts).toEqual([]);
+    // envManualOnly is the structured signal buildFixPlan reports for a
+    // fix-forbidden environment — printFixPlan (untested directly, like
+    // printReport, matching this file's existing convention of not exporting
+    // console-printing functions) renders it into the "FIX-FORBIDDEN
+    // environment ... reconcile by hand" plan line.
+    expect(plan[0].envManualOnly).toEqual(["repo-settings"]);
+  });
+
+  // (v) INVERTED, deliberately, in the same change as the behaviour it guarded.
+  // It asserted the ORIGINAL strict rule — ENV_FIX_FORBIDDEN means --fix never
+  // writes the environment at ANY drift state, so its first creation had to be a
+  // click-through in the settings UI. That was stricter than the threat requires
+  // and it left the as-code story with a manual hole. The rule is now CREATE-ONLY
+  // (see ENV_FIX_FORBIDDEN in the script): creating from the manifest can only
+  // produce the declared protected state, while UPDATING an existing one is the
+  // real escalation path. The contract is covered by (w1)/(w2)/(w3) below —
+  // absent-creates, exists-drifted-refuses, matches-no-op. Do NOT restore the
+  // old assertion without re-arguing the threat model.
+
+  // ── ENV_FIX_FORBIDDEN is CREATE-ONLY (the security asymmetry) ─────────────
+  // ABSENT may be created: the body comes from the manifest, so the only
+  // reachable outcome is the declared protected state. EXISTS-BUT-DRIFTED may
+  // not: an approved apply holds administration:write and could otherwise strip
+  // its own required reviewer, making every future apply unattended.
+  function forbiddenEnvPlan(liveEnv) {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const manifest = script.loadManifest(
+      path.resolve(__dirname, "..", "repo-settings.yml"),
+    );
+    const findings = [];
+    script.diffEnvironments(
+      repo,
+      script.desiredEnvironments(manifest, repo),
+      liveEnv,
+      findings,
+      [],
+    );
+    const plan = script.buildFixPlan(manifest, [
+      {
+        repo,
+        findings,
+        informational: [],
+        liveRepo: fixture("cms-platform.repo.json"),
+        liveRulesets: [fixture("cms-platform.ruleset-main.json")],
+        liveActionsPermissions: liveActions(repo, {
+          forkApproval: { approval_policy: "all_external_contributors" },
+          permissions: { sha_pinning_required: true },
+        }),
+      },
+    ]);
+    return { findings, plan };
+  }
+
+  test("(w1) a forbidden environment that is ABSENT is CREATED — bootstrap without a UI click", () => {
+    const { findings, plan } = forbiddenEnvPlan({
+      "repo-settings": { absent: true },
+    });
+    expect(findings.some((f) => f.kind === "environment-absent")).toBe(true);
+    expect(
+      (plan[0].envPuts || []).map((p) => p.environment),
+      "an absent gating environment must be creatable by --fix (create cannot weaken it)",
+    ).toEqual(["repo-settings"]);
+    expect(plan[0].envManualOnly || []).toEqual([]);
+  });
+
+  test("(w2) a forbidden environment that EXISTS but drifted is NEVER written", () => {
+    // Present, but the required reviewer has been stripped — precisely the state
+    // an apply must not be able to "converge" for its own gate.
+    const { findings, plan } = forbiddenEnvPlan({
+      "repo-settings": {
+        protection_rules: [{ type: "wait_timer", wait_timer: 0 }],
+      },
+    });
+    expect(
+      findings.some((f) => f.kind === "environment-drift"),
+      "a stripped reviewer must still be reported as drift",
+    ).toBe(true);
+    expect(
+      (plan[0].envPuts || []).map((p) => p.environment),
+      "an EXISTING forbidden environment must never be PUT — that is the escalation path",
+    ).toEqual([]);
+    expect(plan[0].envManualOnly || []).toEqual(["repo-settings"]);
+  });
+
+  test("(w3) a forbidden environment that MATCHES yields no finding and no write", () => {
+    const { findings, plan } = forbiddenEnvPlan({
+      "repo-settings": {
+        protection_rules: [
+          {
+            type: "required_reviewers",
+            prevent_self_review: false,
+            reviewers: [
+              {
+                type: "User",
+                reviewer: { id: 4205216, login: "Adam-S-Daniel" },
+              },
+            ],
+          },
+          { type: "wait_timer", wait_timer: 0 },
+        ],
+      },
+    });
+    expect(
+      findings.filter((f) => String(f.kind).startsWith("environment-")),
+    ).toEqual([]);
+    expect(plan.length === 0 || (plan[0].envPuts || []).length === 0).toBe(
+      true,
+    );
+  });
+
+  test("(w) buildFixPlan DOES put a NON-forbidden drifted/absent environment (the general path proof)", () => {
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo:",
+        "    environments:",
+        "      staging:",
+        "        reviewers:",
+        "          - { type: User, id: 42 }",
+        "        wait_timer: 5",
+        "        prevent_self_review: true",
+        "",
+      ].join("\n"),
+    );
+    const script2 = script; // same instance; separate manifest file
+    const manifest = script2.loadManifest(manifestPath);
+    const repo = "Owner/Repo";
+    const findings = [];
+    script2.diffEnvironments(
+      repo,
+      script2.desiredEnvironments(manifest, repo),
+      { staging: { absent: true } },
+      findings,
+      [],
+    );
+    expect(findings.every((f) => f.fixForbidden === false)).toBe(true);
+    const plan = script2.buildFixPlan(manifest, [
+      { repo, findings, informational: [], liveRepo: {}, liveRulesets: [] },
+    ]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].envManualOnly).toEqual([]);
+    expect(plan[0].envPuts).toEqual([
+      {
+        environment: "staging",
+        endpoint: "repos/Owner/Repo/environments/staging",
+        body: {
+          reviewers: [{ type: "User", id: 42 }],
+          wait_timer: 5,
+          prevent_self_review: true,
+        },
+      },
+    ]);
+  });
+
+  // ── manifest validation hard-fails (mirrors the MANAGED_REPO_KEY /
+  // MANAGED_ACTIONS_PERMISSION_KEY hard-fail posture — loadManifest() must
+  // reject an undeclared environment key or a malformed reviewer entry
+  // before anything reaches a live PUT). ────────────────────────────────────
+  test("loadManifest hard-fails on an environment key that is not a MANAGED_ENVIRONMENT_KEY", () => {
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo:",
+        "    environments:",
+        "      staging:",
+        "        bogus_field: true",
+        "",
+      ].join("\n"),
+    );
+    expect(() => script.loadManifest(manifestPath)).toThrow(
+      /repos\.Owner\/Repo\.environments\.staging\.bogus_field is not a MANAGED_ENVIRONMENT_KEY/,
+    );
+  });
+
+  test("loadManifest hard-fails on a reviewer entry missing `type`", () => {
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo:",
+        "    environments:",
+        "      staging:",
+        "        reviewers:",
+        "          - { id: 42 }",
+        "",
+      ].join("\n"),
+    );
+    expect(() => script.loadManifest(manifestPath)).toThrow(
+      /repos\.Owner\/Repo\.environments\.staging\.reviewers entry is missing "type"/,
+    );
+  });
+
+  test("loadManifest hard-fails on a reviewer entry with a non-numeric `id`", () => {
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo:",
+        "    environments:",
+        "      staging:",
+        "        reviewers:",
+        '          - { type: User, id: "42" }',
+        "",
+      ].join("\n"),
+    );
+    expect(() => script.loadManifest(manifestPath)).toThrow(
+      /repos\.Owner\/Repo\.environments\.staging\.reviewers entry has a non-numeric "id"/,
+    );
+  });
+
+  test("loadManifest accepts a well-formed environments block (the positive control for the three hard-fails above)", () => {
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo:",
+        "    environments:",
+        "      staging:",
+        "        reviewers:",
+        "          - { type: User, id: 42 }",
+        "          - { type: Team, id: 7 }",
+        "        wait_timer: 5",
+        "        prevent_self_review: true",
+        "",
+      ].join("\n"),
+    );
+    let manifest;
+    expect(() => {
+      manifest = script.loadManifest(manifestPath);
+    }).not.toThrow();
+    expect(script.desiredEnvironments(manifest, "Owner/Repo")).toEqual({
+      staging: {
+        reviewers: [
+          { type: "User", id: 42 },
+          { type: "Team", id: 7 },
+        ],
+        wait_timer: 5,
+        prevent_self_review: true,
+      },
+    });
+  });
+
+  test("the shipped manifest's `repo-settings` environment resolves cleanly and is itself fix-forbidden", () => {
+    // Locks the repo-settings.yml content addition (task item #5): the real
+    // manifest must declare exactly reviewer 4205216, and that name must be
+    // the one ENV_FIX_FORBIDDEN protects.
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const desired = script.desiredEnvironments(
+      manifest,
+      "Adam-S-Daniel/cms-platform",
+    );
+    expect(Object.keys(desired)).toEqual(["repo-settings"]);
+    expect(desired["repo-settings"]).toEqual({
+      reviewers: [{ type: "User", id: 4205216 }],
+      wait_timer: 0,
+      prevent_self_review: false,
+    });
+    expect(script.ENV_FIX_FORBIDDEN).toContain("repo-settings");
   });
 });
