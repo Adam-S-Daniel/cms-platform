@@ -38,6 +38,17 @@
 #   - approval_policy -> repos/{owner}/{repo}/actions/permissions/
 #     fork-pr-contributor-approval (HTTP 422 on a PRIVATE repo -> the audit
 #     SKIPS it as an operational skip, never drift).
+#
+# ENVIRONMENTS are a FOURTH managed surface: GET/PUT
+# `repos/{owner}/{repo}/environments/{name}`, declared per repo under
+# `repos.<repo>.environments.<name>` — no shared defaults block (an
+# environment's reviewers are inherently repo-specific), every key in the
+# script's MANAGED_ENVIRONMENT_KEYS (reviewers/wait_timer/prevent_self_review).
+# A declared-but-absent environment (GET 404) is DRIFT, not an operational
+# skip. `scripts/audit-repo-settings.js` ENV_FIX_FORBIDDEN names environments
+# `--fix` must never WRITE, at any drift state — see the `repo-settings`
+# environment below for why (it gates the apply-in-CI workflow's own reviewer
+# approval, so a write to it from `--fix` would be able to remove its own gate).
 version: 1
 
 settings_defaults:
@@ -243,6 +254,30 @@ repos:
   Adam-S-Daniel/cms-platform:
     rulesets:
       main: platform-main
+    environments:
+      repo-settings:
+        # why: THE self-gating environment for repo-settings-apply.yml's apply
+        # job (see that workflow's header note 3) — a required reviewer here is
+        # what makes every `--fix --yes` this workflow runs a human-approved
+        # action instead of an unattended admin write. Deliberately
+        # FIX-FORBIDDEN (scripts/audit-repo-settings.js ENV_FIX_FORBIDDEN): an
+        # approved apply run holds administration:write, so if `--fix` could
+        # rewrite this environment it could remove its own required reviewer
+        # and leave every future apply ungated. The rule is CREATE-ONLY, not
+        # never-write: an ABSENT environment may be created by `--fix` (the body
+        # comes from this manifest, so the only reachable outcome is the declared
+        # protected state), while an EXISTING one that has drifted is reported
+        # and reconciled BY HAND. So its first creation is
+        # `node scripts/audit-repo-settings.js --fix --yes` with an operator's
+        # own admin `gh` auth — never this workflow, which cannot reach
+        # its own gate anyway (referencing `environment: repo-settings` before
+        # it exists auto-creates an unprotected one, and the workflow's own
+        # verification step then refuses to proceed). id 4205216 =
+        # Adam-S-Daniel (the account this whole apply path is gated behind).
+        reviewers:
+          - { type: User, id: 4205216 }
+        wait_timer: 0
+        prevent_self_review: false
   Adam-S-Daniel/adamdaniel.ai:
     rulesets:
       main: consumer-main
