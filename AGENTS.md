@@ -367,6 +367,21 @@ out of lockstep piecemeal — a stale `platform_ref` input once silently ran a
 `platform-release-and-bump` skill) before changing
 `check-platform-pin-consistency.js` or `platform-bump.yml`'s seeding logic.
 
+### Dependabot must not bump the theme gem (#242)
+
+`platform-bump` owns the platform version atomically, gem included — a
+Dependabot bundler bump can only move the Gemfile/Gemfile.lock half and either
+lags `platform-bump` or actively skews the tree (adamdaniel.ai PR #3076 tried
+to downgrade the gem `v0.1.80` → `v0.1.75` this way). Both consumers and the
+`examples/site` template now carry an `ignore: dependency-name:
+cms-platform-theme` under the `bundler` ecosystem;
+two lints lock it — `e2e/dependabot-theme-gem-ignored.test.js` re-checks a
+consumer's own file in CONSUMER mode, and
+`e2e/scaffold-seeds-dependabot-ignore.test.js` asserts the template AND the
+scaffolder's output carry it, so no new site is born without it. Both require
+the ignore to be UNSCOPED: an `update-types`/`versions`-scoped one would not
+stop the plain version bump #3076 was. Do not re-enable it. → read `docs/SYNC.md`.
+
 ## Consumer-context spec rule (v0.1.5)
 
 A spec that runs in CONSUMER mode (`SITE_ROOT` set) must never read admin

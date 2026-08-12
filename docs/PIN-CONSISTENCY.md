@@ -19,7 +19,11 @@ A consumer references the platform version in MANY places (every reusable
 `tag:`, and `platform.lock` `platform_ref`). Dependabot + `platform-bump` land
 bumps PIECEMEAL, so consumers drift (observed live: adamdaniel.ai pinned `@v0.1.0`
 loop/deploy callers, gem `@v0.1.5`, others `@v0.1.3`/`@v0.1.6` at once — a `v0.1.0`
-reusable against a `v0.1.5` gem is a latent bug source). **`platform-bump.yml`
+reusable against a `v0.1.5` gem is a latent bug source). **Since #242 the gem
+`tag:` is out of that race** — Dependabot's `bundler` ecosystem now `ignore`s
+`cms-platform-theme`, so `platform-bump` is the gem's only bumper; Dependabot
+still races `platform-bump` piecemeal on the `uses:@` / composite-comment refs
+(see `docs/SYNC.md`). **`platform-bump.yml`
 rewrites `.github/workflows/*` and pushes, so its token (`CMS_PLATFORM_PAT`)
 MUST carry `workflow` scope** or GitHub rejects the push (`refusing to allow …
 to update workflow … without 'workflows' permission`) — the live half of #13.

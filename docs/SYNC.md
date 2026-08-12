@@ -7,7 +7,7 @@ How platform changes reach sites, and how site-side improvements get back.
 | What | Mechanism |
 |---|---|
 | Reusable workflow `uses:@<tag>` pins | **Dependabot** `github-actions` ecosystem (`examples/site/.github/dependabot.yml`) |
-| `cms-platform-theme` gem (layouts/includes/assets/plugins + Decap render hook + **admin UI** `theme/admin`) | **Dependabot** `bundler` ecosystem |
+| `cms-platform-theme` gem (layouts/includes/assets/plugins + Decap render hook + **admin UI** `theme/admin`) | **`platform-bump`** (Dependabot's `bundler` ecosystem `ignore`s this gem as of #242 — see below) |
 | **EVERY** version ref in ONE PR — `platform_ref:` inputs + `platform.lock`, the `uses:@<tag>` pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:`, and any composite `@<sha>` pin — plus seeding any workflow caller the release newly made platform-dictated | **`platform-bump`** reusable workflow — an **atomic single-version bump** (#13) that also seeds newly-dictated workflow callers so workflow-SET parity (#54) passes too. Checks out with the caller PAT so the workflow-file push is authorised |
 | Skills (`.claude/skills`) | **`skills-sync`** reusable workflow (rsync + PR, platform-authoritative) |
 | AWS infra templates | re-run `infrastructure/*/deploy.sh` with the new templates |
@@ -26,10 +26,34 @@ previously-pinned reusable.)
 
 `platform-bump` now moves **all** of the version references at once (rows 9–11
 above), so its PR is single-version-consistent on its own (#13) — Dependabot's
-`github-actions` / `bundler` ecosystems remain wired as an independent safety net
-(and for non-cms-platform deps), but they're no longer the *only* path for the
-`uses:@`/gem pins, so a consumer no longer sits skewed waiting for them to catch
-up. NOTE: a consumer only gets the atomic bump once its `platform-bump` thin
+`github-actions` ecosystem remains wired as an independent safety net for the
+`uses:@` pins (and for the site's own non-cms-platform deps), so a consumer no
+longer sits skewed waiting for it to catch up.
+
+**The `bundler` ecosystem is different (#242): Dependabot no longer bumps the
+theme gem at all.** Both consumers' `dependabot.yml`, and the canonical
+`examples/site/.github/dependabot.yml` template, carry an explicit `ignore` for
+`cms-platform-theme` under the `bundler` ecosystem — `platform-bump` is now the
+**only** down-sync path for the gem. A Dependabot bundler PR could only ever
+move the `Gemfile`/`Gemfile.lock` half of the gem's version references, so it
+was either redundant (`platform-bump` already got there) or actively skewed
+the tree: `Adam-S-Daniel/adamdaniel.ai` PR #3076 (2026-08-12) rebased a stale
+Dependabot PR forward without re-resolving its target and proposed
+**downgrading** the gem `v0.1.80` → `v0.1.75`; `platform-pin-consistency`,
+`admin-bundle-parity`, and `dependabot-auto-merge` all caught it and it was
+closed unmerged. **Note:** a bare `dependency-name` ignore suppresses
+*security* updates for that dependency too, not only version updates —
+nothing is lost here, since `cms-platform-theme` is a first-party git-sourced
+gem with no advisory-database entry, and `platform-bump` adopts every release,
+security fixes included. Two lints lock the ignore:
+`e2e/dependabot-theme-gem-ignored.test.js` re-checks a consumer's OWN file in
+CONSUMER mode, and `e2e/scaffold-seeds-dependabot-ignore.test.js` (platform-
+internal) asserts both the `examples/site` template and the scaffolder's
+generated output carry it. Both require the ignore to be UNSCOPED — an
+`update-types`- or `versions`-scoped ignore would not stop the plain version
+bump that #3076 was.
+
+NOTE: a consumer only gets the atomic bump once its `platform-bump` thin
 caller pins a platform release that **contains** this fix; until then bump it
 manually (see the `platform-release-and-bump` skill). `platform-bump` also
 seeds any workflow caller a release newly made platform-dictated — a file
@@ -45,7 +69,8 @@ that edits one **fails** with guidance to make the change in `cms-platform` inst
 
 The **admin machinery** (`admin/` except the seam) is shipped via the `cms-platform-theme`
 gem (`theme/admin`) as of v0.1.4 — sites no longer vendor byte-copies, so it isn't
-byte-match-guarded; a gem bump (Dependabot `bundler`) is its down-sync path. Site-owned
+byte-match-guarded; a gem bump (`platform-bump`, not Dependabot `bundler` — see
+above) is its down-sync path. Site-owned
 seams (`admin/collections.site.yml`) and generated configs (`admin/config.yml`,
 `admin/config-local.yml`) are never platform-owned. A site can also opt out of the
 platform's built-in collections via `_config.yml: cms.base_collections` (a keep-list;
@@ -63,7 +88,7 @@ down-sync mechanisms above land bumps **piecemeal** — so a consumer can drift:
 |---|---|
 | `.github/workflows/**` reusable-workflow `uses: …/.github/workflows/<n>.yml@<ref>` | Dependabot `github-actions` |
 | `.github/workflows/**` SHA-pinned composite `uses: …/.github/actions/<n>@<sha>  # vX.Y.Z` (the **comment**) | Dependabot + `dependabot-comment-sync` |
-| `Gemfile` `gem "cms-platform-theme", …, tag:` + `Gemfile.lock` git-source `tag:` | Dependabot `bundler` |
+| `Gemfile` `gem "cms-platform-theme", …, tag:` + `Gemfile.lock` git-source `tag:` | `platform-bump` (Dependabot `bundler` ignores this gem, #242) |
 | `platform.lock` `platform_ref` + `with: platform_ref:` workflow inputs | `platform-bump` |
 
 Because these run independently, a consumer can sit skewed for a long time

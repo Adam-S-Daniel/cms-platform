@@ -1,14 +1,44 @@
-# Down-sync: Dependabot opens PRs bumping the platform pins when cms-platform
-# tags a release.
+# Dependabot for a cms-platform consumer site.
+#
+# It does NOT own the platform version. `platform-bump.yml` does: that workflow
+# moves every cms-platform reference this repo pins — platform.lock, the gem,
+# the `uses:@<tag>` reusable pins, the composite `# vX.Y.Z` comments — as one
+# atomic PR. Dependabot's job here is the site's OWN dependencies.
 version: 2
 updates:
-  # Bumps `uses: Adam-S-Daniel/cms-platform/...@<tag>` in the workflow callers.
+  # Actions pinned in this site's thin workflow callers. Today every one of
+  # them is a cms-platform reusable, whose ref platform-bump also moves
+  # atomically; whether Dependabot should stop bumping those too is
+  # cms-platform#244. The ecosystem stays wired either way so a genuine
+  # third-party action is picked up the moment one is added.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
-  # Bumps the cms-platform-theme gem.
+  # The site's own gems (jekyll, webrick, any jekyll-* plugins) — NOT the
+  # platform theme gem, see the ignore below.
   - package-ecosystem: bundler
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      # why: platform-bump.yml owns this gem's version. It rewrites the Gemfile
+      # `tag:`, the Gemfile.lock git `revision:`, platform.lock's platform_ref,
+      # every reusable `uses:@<tag>` pin and every composite `# vX.Y.Z` comment
+      # as ONE atomic PR — which is exactly what lets
+      # check-platform-pin-consistency.js --require-canonical pass on that PR
+      # alone. Dependabot can only move the Gemfile/Gemfile.lock half, so its
+      # bump is either redundant (platform-bump got there first) or skews the
+      # tree and reddens platform-pin-consistency: adamdaniel.ai#3076 rebased a
+      # stale PR forward without re-resolving its target and proposed a
+      # DOWNGRADE, v0.1.80 -> v0.1.75.
+      #
+      # Scope: a bare dependency-name ignore suppresses SECURITY updates for
+      # this gem too, not just version updates. Nothing is lost — it is a
+      # first-party git-sourced gem with no advisory-database entry, and
+      # platform-bump adopts every release, security fixes included. The rest
+      # of the bundler ecosystem (jekyll, webrick, any jekyll-* plugins) is
+      # untouched and keeps flowing.
+      #
+      # See cms-platform#242.
+      - dependency-name: "cms-platform-theme"
