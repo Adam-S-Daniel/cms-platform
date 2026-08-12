@@ -1109,8 +1109,71 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   sibling, is invisible to a DOM-shape diff, which is what both earlier
   investigations of this were looking at.
 
-- **v0.1.80** (2026-08-11) — **the theme gemspec's version is deliberately
-  frozen, and now says so.** `spec.version = "0.1.4"` looks 75 releases stale and
+- **v0.1.80** (2026-08-12) — **apply-in-CI behind a verified reviewer gate, the
+  gate itself made drift-checkable, and two things that told the operator the
+  opposite of what the code did.** The largest single release since v0.1.76, and
+  the first to put a WRITE credential for repo administration into CI.
+
+  **Apply-in-CI (#172, the first of #109's four deferrals).**
+  `repo-settings-apply.yml` moves convergence from a human running `--fix --yes`
+  into CI behind a reviewer gate, additively — the audit is untouched and either
+  can be disabled alone. Three properties are load-bearing, each a trap rather
+  than a preference: (1) TWO jobs, because an environment gate pauses a job
+  BEFORE its first step, so a plan printed inside the gated job is invisible at
+  approval time and the reviewer would approve an unseen diff; (2) the ungated
+  plan job mints `administration:read` and the gated apply `administration:write`
+  — `POST /access_tokens` can only NARROW an installation's grant, so the ungated
+  job is INCAPABLE of writing rather than trusted not to; (3) naming an
+  environment that does not exist does NOT fail — GitHub creates it implicitly
+  with NO protection rules — so the apply job asks the API whether
+  `required_reviewers` is really present and refuses if not. A GitHub App rather
+  than a PAT because the manifest spans two owners and a fine-grained PAT cannot;
+  apply runs as a matrix so each leg holds one owner's credential.
+  `scripts/mint-app-token.js` is the single mint implementation (pure node +
+  stdlib crypto, no marketplace action in a workflow holding an admin
+  credential), failing SOFT when un-onboarded and HARD when a credential is
+  present but broken — both verified live, the soft path by a real
+  variable-vs-secret mix-up that skipped cleanly with a notice instead of
+  crashing.
+
+  **Environments became a fourth managed surface, because the gate's own config
+  was unaudited.** Remove the required reviewer and nothing noticed — the gate
+  silently became decorative. `repo-settings.yml` modelled repo flags, rulesets
+  and Actions permissions; environments were not modelled at all.
+  `MANAGED_ENVIRONMENT_KEYS` (reviewers / wait_timer / prevent_self_review) now
+  are, with a 404 mapped to `{absent:true}` as DRIFT, live `protection_rules`
+  projected to the comparable `{type,id}` reviewer shape and sorted so order is
+  never drift, and absent rules normalized to GitHub's own defaults.
+  `ENV_FIX_FORBIDDEN` is CREATE-ONLY and the asymmetry IS the security property:
+  an ABSENT gating environment may be created (the body comes from the manifest,
+  so the only reachable outcome is the declared protected state, and bootstrap
+  becomes a command rather than a UI click-through), while an EXISTING drifted
+  one is never written — an approved apply holds `administration:write` and could
+  otherwise strip its own required reviewer, one approval buying permanent
+  unattended access. Verified live: the operator's `--fix --yes` created the
+  environment and re-audited clean, idempotent on re-run.
+
+  **Two prose-vs-code mismatches, both caught by running the thing rather than
+  reading it.** `fetchEnvironments` shipped `catch (e) { throw e; }` beneath a
+  comment describing 404 handling it did not implement. And the drift annotation
+  said `--fix will not create or write it` for BOTH forbidden states, then
+  created the absent one — telling the operator the opposite of what happened and
+  sending them to the UI for nothing. Both fixed; the suffix now distinguishes
+  the states, and `(w4)` asserts it against the real `describeFinding` rather
+  than a copy of its wording.
+
+  **A cosmetic step could block a merge.** Root-caused from adamdaniel.ai#3064:
+  `e2e / project (chromium-large-text)` PASSED its tests, failed only on
+  "Resolve failure summary on success" — a step that stamps an EXISTING comment
+  as resolved — which reddened the job, reddened `e2e / e2e`, blocked
+  scheduled-publish seed PR #3063, timed out `waitForMerge` after 25 min, failed
+  the scheduled run and filed the issue. A DIAGNOSTIC became the CAUSE. All TEN
+  `mode: resolve` call sites were unprotected (the loops' existing
+  `continue-on-error` guards BRANCH cleanup, not this), now fail-open with the
+  same rationale; `mode: post` deliberately is NOT, since it runs under
+  `failure()` and swallowing its error would hide that the report never landed.
+
+  **The theme gemspec's version is deliberately frozen, and now says so.** `spec.version = "0.1.4"` looks 75 releases stale and
   is LOAD-BEARING: bumping it alone would break BOTH consumers' CI at
   `bundle install`. Three verified facts — (1) each consumer's `Gemfile.lock`
   records the version TWICE, in the GIT block's `specs:` and again under
