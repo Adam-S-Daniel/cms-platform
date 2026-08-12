@@ -27,7 +27,9 @@ whole design:
 
 2. **Consumers stop vendoring `admin/`.** A consuming site deletes its vendored
    `admin/` and keeps **only** the seam `admin/collections.site.yml` (+
-   `.example`). The down-sync path is a gem bump (Dependabot `bundler`).
+   `.example`). The down-sync path is a gem bump via `platform-bump` — since
+   #242, Dependabot's `bundler` ecosystem carries an explicit `ignore` for the
+   `cms-platform-theme` gem and never touches it (see `docs/SYNC.md`).
    `platform-drift-guard` is now **skills-only** (admin is no longer
    byte-guarded).
 

@@ -802,6 +802,16 @@ const SPEC_RULES = {
     /^e2e\/fixture-site-singlepage\/assets\/images\/uploads\//,
     /^e2e\/fixtures\/tiny-pixel\.png$/,
   ],
+  // #242 — the consumer-side dependabot.yml guard. Its entire subject IS this
+  // file, so a diff that touches it must re-select the guard; without this rule
+  // a PR removing the cms-platform-theme ignore selects nothing that checks it.
+  "e2e/dependabot-theme-gem-ignored.test.js": [/^\.github\/dependabot\.yml$/],
+  // #242 — the template + scaffold-output half. Re-select when the canonical
+  // template or the scaffolder that copies it changes.
+  "e2e/scaffold-seeds-dependabot-ignore.test.js": [
+    /^examples\/site\/\.github\/dependabot\.yml$/,
+    /^scaffold\//,
+  ],
   // #145 — pure-fs lint (no browser/network), but it MUST run whenever any
   // branches:[main]-filtered canonical caller (or the two platform self-*
   // callers) or the shared YAML helper changes — that's exactly when the

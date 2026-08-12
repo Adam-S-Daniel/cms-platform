@@ -241,6 +241,13 @@ const PLATFORM_META_SPECS = [
   "admin-keep-files.test.js",
   "scaffold-preview-and-404.test.js",
   "scaffold-seeds-neutral-logo.test.js",
+  // #242 — scaffold-output + template invariant: examples/site/.github/
+  // dependabot.yml's bundler ignore for cms-platform-theme, AND that
+  // scaffold/create-site.js copies it verbatim into a seeded site. A
+  // consumer ships no scaffold/ tree or examples/site/ template — the
+  // consumer-mode half of this guard is the separate, unregistered
+  // dependabot-theme-gem-ignored.test.js.
+  "scaffold-seeds-dependabot-ignore.test.js",
   "scaffold-deploy-delegators.test.js",
   "scaffold-platform-version.test.js",
   // #84 — scaffolder-output + fixture invariant: the preview-media probe

@@ -49,4 +49,6 @@ cms:
   shared `feed_exclude`/`sitemap: false` marker, while the post still serves at
   its own `/blog/<slug>/` URL.
 
-Updates flow to sites via a gem-version bump (Dependabot, `bundler` ecosystem).
+Updates flow to sites via a gem-version bump — `platform-bump`'s job, not
+Dependabot's: since #242, Dependabot's `bundler` ecosystem carries an explicit
+`ignore` for this gem (see `docs/SYNC.md` in cms-platform).

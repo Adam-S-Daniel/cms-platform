@@ -125,7 +125,11 @@ v0.1.76 incident this rule comes from.
   pin-consistency. **Caveat:** a consumer only gets the atomic bump once its
   `platform-bump` thin caller pins a release that CONTAINS this fix (≥
   v0.1.23); to bump a consumer still on an older caller, do step 2 manually
-  (above). Dependabot remains wired as an independent net.
+  (above). Dependabot remains wired as an independent net for the
+  `github-actions` ecosystem (workflow-SHA pins) and the site's own deps —
+  **not** for the theme gem: since #242 the `bundler` ecosystem `ignore`s
+  `cms-platform-theme`, so `platform-bump` is its only bumper (see
+  cms-platform `docs/SYNC.md`).
 - **Loop triggers are pairwise-disjoint (#70); the shared lane serializes
   time-overlap.** Each real-prod loop's heavy job shares the
   `prod-mutating-loop` concurrency group (HARD mutual exclusion — never two
