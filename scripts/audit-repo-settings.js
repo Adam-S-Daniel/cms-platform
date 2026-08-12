@@ -811,9 +811,18 @@ function describeFinding(f) {
       f.kind === "environment-absent"
         ? "absent live"
         : `live \`${JSON.stringify(f.live)}\``;
-    const suffix = f.fixForbidden
-      ? " (fix-forbidden environment — --fix will not create or write it; reconcile by hand)"
-      : "";
+    // ENV_FIX_FORBIDDEN is CREATE-ONLY, so the suffix MUST distinguish the two
+    // states or it actively misinforms. It previously said "--fix will not create
+    // or write it" for both — describing the superseded strict rule — while
+    // `--fix --yes` went on to create an absent one, which is correct behaviour
+    // and the opposite of what the operator was told.
+    const suffix = !f.fixForbidden
+      ? ""
+      : f.kind === "environment-absent"
+        ? " (fix-forbidden environment, but ABSENT — `--fix --yes` WILL create it from the " +
+          "manifest; creating cannot weaken it)"
+        : " (fix-forbidden environment that already EXISTS — `--fix` will NOT write it, because " +
+          "an approved apply could strip its own required reviewer; reconcile by hand)";
     return (
       `environment \`${f.environment}\` / \`${f.key}\`: ${live} -> ` +
       `manifest \`${JSON.stringify(f.desired)}\`${suffix}`
@@ -1835,6 +1844,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  // Exported for the (w4) regression test: the fix-forbidden suffix must tell
+  // the truth about each state, and that is only assertable on the real fn.
+  describeFinding,
   MARKER,
   ISSUE_TITLE,
   ISSUE_REPO,

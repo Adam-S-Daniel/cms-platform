@@ -1374,6 +1374,46 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(plan[0].envManualOnly || []).toEqual(["repo-settings"]);
   });
 
+  test("(w4) the fix-forbidden suffix tells the TRUTH about each state", () => {
+    // Regression: the suffix used to say "--fix will not create or write it" for
+    // BOTH states, so an operator was told the opposite of what `--fix --yes`
+    // then did to an ABSENT environment. Observed live on 2026-08-12.
+    const script = loadScript();
+    const absent = script.describeFinding({
+      kind: "environment-absent",
+      environment: "repo-settings",
+      key: "reviewers",
+      desired: [{ type: "User", id: 4205216 }],
+      fixForbidden: true,
+    });
+    expect(
+      absent,
+      "an ABSENT forbidden env must NOT claim --fix refuses to create it",
+    ).not.toMatch(/will not create/i);
+    expect(absent).toMatch(/WILL create it/);
+
+    const exists = script.describeFinding({
+      kind: "environment-drift",
+      environment: "repo-settings",
+      key: "reviewers",
+      live: [],
+      desired: [{ type: "User", id: 4205216 }],
+      fixForbidden: true,
+    });
+    expect(exists).toMatch(/will NOT write it/);
+    expect(exists).toMatch(/reconcile by hand/);
+
+    // A non-forbidden environment carries no suffix at all.
+    const plain = script.describeFinding({
+      kind: "environment-absent",
+      environment: "staging",
+      key: "reviewers",
+      desired: [],
+      fixForbidden: false,
+    });
+    expect(plain).not.toMatch(/fix-forbidden/);
+  });
+
   test("(w3) a forbidden environment that MATCHES yields no finding and no write", () => {
     const { findings, plan } = forbiddenEnvPlan({
       "repo-settings": {
