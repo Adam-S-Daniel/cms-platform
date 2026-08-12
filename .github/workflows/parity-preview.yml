@@ -252,6 +252,16 @@ jobs:
 
       - name: Resolve failure summary on success
         if: ${{ success() && steps.select.outputs.count != '0' }}
+        # FAIL-OPEN: this step only stamps an EXISTING failure comment as
+        # resolved. It runs on success(), so its own failure says nothing about
+        # the tests — but without this it turns a fully GREEN job red, and via
+        # the aggregating gate that blocks merges. Observed 2026-08-12:
+        # adamdaniel.ai e2e run 31569023550 passed its tests, failed HERE, reddened
+        # `e2e / e2e`, blocked seed PR #3063, timed out cms-scheduled-publish-loop
+        # after 25 min and filed health-audit issue #3064. Same fail-open rationale
+        # the ephemeral-branch cleanup steps already carry. Locked by
+        # e2e/resolve-summary-fail-open.test.js.
+        continue-on-error: true
         uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: resolve
