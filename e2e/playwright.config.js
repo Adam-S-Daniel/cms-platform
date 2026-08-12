@@ -118,6 +118,10 @@ const PLATFORM_META_SPECS = [
   // apply, mint-time read/write scope split, the required_reviewers
   // verification). Reads .github/workflows + scripts/, absent on a consumer.
   "repo-settings-apply.test.js",
+  // The failure-summary RESOLVE step must be fail-open — a cosmetic
+  // comment-stamping step reddened a green e2e job on 2026-08-12 and blocked a
+  // merge. Reads .github/workflows/, absent on a consumer.
+  "resolve-summary-fail-open.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN
