@@ -805,11 +805,28 @@ const SPEC_RULES = {
   // #242 — the consumer-side dependabot.yml guard. Its entire subject IS this
   // file, so a diff that touches it must re-select the guard; without this rule
   // a PR removing the cms-platform-theme ignore selects nothing that checks it.
-  "e2e/dependabot-theme-gem-ignored.test.js": [/^\.github\/dependabot\.yml$/],
+  // #244 extended the guard's subject to ALSO read this repo's own
+  // `.github/workflows/` tree — it derives the exact set of
+  // `Adam-S-Daniel/cms-platform/*` dependency names pinned there and asserts
+  // the github-actions ignore covers every one (with a non-vacuity check that
+  // fails outright if that tree yields zero cms-platform `uses:` refs). A
+  // workflow diff that adds, removes, or re-points a cms-platform `uses:`
+  // changes what the guard has to verify, so it must be re-selected too.
+  "e2e/dependabot-theme-gem-ignored.test.js": [
+    /^\.github\/dependabot\.yml$/,
+    /^\.github\/workflows\//,
+  ],
   // #242 — the template + scaffold-output half. Re-select when the canonical
   // template or the scaffolder that copies it changes.
+  // #244 extended the guard's subject to ALSO read
+  // `examples/site/.github/workflows/` — the template's own tree of
+  // `Adam-S-Daniel/cms-platform/*` pins that the github-actions ignore must
+  // cover (same non-vacuity check: zero cms-platform `uses:` refs found there
+  // fails the guard). A diff to that workflows tree changes the set of names
+  // the guard checks, so it must be re-selected too.
   "e2e/scaffold-seeds-dependabot-ignore.test.js": [
     /^examples\/site\/\.github\/dependabot\.yml$/,
+    /^examples\/site\/\.github\/workflows\//,
     /^scaffold\//,
   ],
   // #145 — pure-fs lint (no browser/network), but it MUST run whenever any
