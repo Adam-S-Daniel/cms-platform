@@ -5,9 +5,10 @@ its own `.github/workflows/` that owns the trigger (`on:`), `paths-ignore`, and
 `run-name`, then delegates the work here. Copyable wrappers live in
 [`examples/site/.github/workflows/`](../../examples/site/.github/workflows/).
 
-Pin the `uses:` reference to a release tag (`@v0.1.1`) or full SHA and let
-**Dependabot** (`github-actions` ecosystem) open the bump PRs — that is the
-platform→site down-sync path.
+Pin the `uses:` reference to a release tag (`@v0.1.1`) or full SHA —
+**`platform-bump`** opens the bump PR (Dependabot's `github-actions`
+ecosystem `ignore`s every `Adam-S-Daniel/cms-platform/*` ref, #244; see
+`docs/SYNC.md`); that is the platform→site down-sync path.
 
 ## `deploy-production.yml`
 

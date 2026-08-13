@@ -195,8 +195,9 @@ async function main() {
     target,
     "platform.lock",
     `# cms-platform lock — the platform release this site is pinned to.\n` +
-      `# Bumped by the platform-bump workflow; Dependabot bumps the uses:@ pins\n` +
-      `# and the theme gem in lockstep. See the platform's docs/SYNC.md.\n` +
+      `# Bumped by the platform-bump workflow, which moves the uses:@ pins and\n` +
+      `# the theme gem in lockstep too (Dependabot ignores all three — #242,\n` +
+      `# #244). See the platform's docs/SYNC.md.\n` +
       `platform_repo: ${PLATFORM_REPO}\n` +
       `platform_ref: ${platformVersion}\n`
   );

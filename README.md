@@ -31,7 +31,7 @@ is **opt-in** per site.
 
 | Layer | Consumed via | Down-sync (platform → site) | Up-sync (site → platform) |
 |---|---|---|---|
-| GitHub Actions | reusable `workflow_call` workflows pinned by SHA | Dependabot bumps the pin | PR to this repo |
+| GitHub Actions | reusable `workflow_call` workflows pinned by SHA | `platform-bump` (Dependabot ignores cms-platform refs, #244) | PR to this repo |
 | Jekyll theme | theme gem (layouts/includes/assets/plugin) | `platform-bump` (Dependabot ignores this gem, #242) | PR to this repo |
 | Decap CMS config | build-time render from the site's `_config.yml` | gem bump (`platform-bump`) | PR to this repo |
 | AWS infra | versioned CloudFormation (S3-published templates) | `platform-bump` workflow | PR to this repo |

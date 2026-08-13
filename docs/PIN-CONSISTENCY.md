@@ -16,14 +16,20 @@ See also the `platform-release-and-bump` skill and `docs/SYNC.md`'s
 A consumer references the platform version in MANY places (every reusable
 `uses: …/.github/workflows/<n>.yml@<ref>`, every SHA-pinned composite
 `uses: …/.github/actions/<n>@<sha>  # vX.Y.Z` COMMENT, the `Gemfile`/`Gemfile.lock`
-`tag:`, and `platform.lock` `platform_ref`). Dependabot + `platform-bump` land
-bumps PIECEMEAL, so consumers drift (observed live: adamdaniel.ai pinned `@v0.1.0`
-loop/deploy callers, gem `@v0.1.5`, others `@v0.1.3`/`@v0.1.6` at once — a `v0.1.0`
-reusable against a `v0.1.5` gem is a latent bug source). **Since #242 the gem
-`tag:` is out of that race** — Dependabot's `bundler` ecosystem now `ignore`s
-`cms-platform-theme`, so `platform-bump` is the gem's only bumper; Dependabot
-still races `platform-bump` piecemeal on the `uses:@` / composite-comment refs
-(see `docs/SYNC.md`). **`platform-bump.yml`
+`tag:`, and `platform.lock` `platform_ref`). Historically Dependabot + `platform-bump`
+landed bumps PIECEMEAL, so consumers drifted (observed live: adamdaniel.ai pinned
+`@v0.1.0` loop/deploy callers, gem `@v0.1.5`, others `@v0.1.3`/`@v0.1.6` at once — a
+`v0.1.0` reusable against a `v0.1.5` gem is a latent bug source). **As of #244 that
+race is fully closed, on both halves.** #242 took the gem `tag:` out of it first —
+Dependabot's `bundler` ecosystem `ignore`s `cms-platform-theme`, so `platform-bump`
+is the gem's only bumper — and #244 did the same for the `uses:@` / composite-comment
+refs: Dependabot's `github-actions` ecosystem now `ignore`s every
+`Adam-S-Daniel/cms-platform/*` dependency name too (see `docs/SYNC.md` for the
+evidence and the wildcard-matcher detail). **No Dependabot ecosystem bumps a
+cms-platform reference anymore** — `platform-bump` is the single writer of the
+platform version a consumer carries, which is what makes the single-version
+invariant below structurally maintainable rather than a race this guard merely
+catches after the fact. **`platform-bump.yml`
 rewrites `.github/workflows/*` and pushes, so its token (`CMS_PLATFORM_PAT`)
 MUST carry `workflow` scope** or GitHub rejects the push (`refusing to allow …
 to update workflow … without 'workflows' permission`) — the live half of #13.
