@@ -3,7 +3,10 @@
 //
 // WHAT
 // A consuming repo references the cms-platform version in many places that can
-// drift out of lockstep because Dependabot + platform-bump land bumps PIECEMEAL:
+// drift out of lockstep — not from Dependabot (it now `ignore`s every
+// cms-platform ref in both ecosystems, #242 + #244) but from a hand-edit, a
+// partially-applied platform-bump run, or a `platform_ref:` input that never
+// got stamped (#220):
 //
 //   - .github/workflows/**/*.yml — reusable-workflow callers
 //       `uses: <owner>/<repo>/.github/workflows/<name>.yml@<ref>`     (the <ref>)
@@ -804,8 +807,9 @@ if (RUN_AS_CLI) {
       `\nFix: bring every platform-version reference above to ${platformRef} (the platform.lock ` +
         `platform_ref). Bump the workflow @ref pins + composite # comments + the ` +
         `with: platform_ref inputs, and the Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
-        `(platform-bump bumps platform.lock + with: inputs; Dependabot bumps the ` +
-        `uses:@ pins + gem — they can land out of step, which is what this guard catches.)\n`,
+        `(platform-bump moves every reference atomically; Dependabot ignores all ` +
+        `cms-platform refs, #242 + #244 — a hand-edit, a partially-applied bump, or a ` +
+        `stale platform_ref input is what this guard catches.)\n`,
     );
   }
   process.exit(1);

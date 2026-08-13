@@ -1,9 +1,11 @@
 # Cut a cms-platform release.
 #
 # Releases are the platform's down-sync trigger: platform-bump.yml reads
-# `gh release view` (the latest RELEASE, not a bare tag) to bump each site's
-# platform_ref + platform.lock, and Dependabot bumps the `uses:@<tag>` pins +
-# the theme gem. Cutting was previously a manual `git tag` / UI step; this
+# `gh api repos/<repo>/releases/latest` (the latest RELEASE, not a bare tag)
+# to bump each site's platform_ref + platform.lock + the `uses:@<tag>` pins +
+# the theme gem, all atomically — Dependabot ignores every cms-platform ref in
+# both the github-actions (#244) and bundler (#242) ecosystems, so it never
+# touches these. Cutting was previously a manual `git tag` / UI step; this
 # makes it a one-click workflow_dispatch that creates the tag + GitHub Release
 # server-side from the current main HEAD.
 name: Cut release

@@ -6,7 +6,7 @@ How platform changes reach sites, and how site-side improvements get back.
 
 | What | Mechanism |
 |---|---|
-| Reusable workflow `uses:@<tag>` pins | **Dependabot** `github-actions` ecosystem (`examples/site/.github/dependabot.yml`) |
+| Reusable workflow `uses:@<tag>` pins | **`platform-bump`** (Dependabot's `github-actions` ecosystem `ignore`s every cms-platform ref as of #244 — see below) |
 | `cms-platform-theme` gem (layouts/includes/assets/plugins + Decap render hook + **admin UI** `theme/admin`) | **`platform-bump`** (Dependabot's `bundler` ecosystem `ignore`s this gem as of #242 — see below) |
 | **EVERY** version ref in ONE PR — `platform_ref:` inputs + `platform.lock`, the `uses:@<tag>` pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:`, and any composite `@<sha>` pin — plus seeding any workflow caller the release newly made platform-dictated | **`platform-bump`** reusable workflow — an **atomic single-version bump** (#13) that also seeds newly-dictated workflow callers so workflow-SET parity (#54) passes too. Checks out with the caller PAT so the workflow-file push is authorised |
 | Skills (`.claude/skills`) | **`skills-sync`** reusable workflow (rsync + PR, platform-authoritative) |
@@ -25,33 +25,115 @@ consumer picks them up one release AFTER adopting, since its caller runs the
 previously-pinned reusable.)
 
 `platform-bump` now moves **all** of the version references at once (rows 9–11
-above), so its PR is single-version-consistent on its own (#13) — Dependabot's
-`github-actions` ecosystem remains wired as an independent safety net for the
-`uses:@` pins (and for the site's own non-cms-platform deps), so a consumer no
-longer sits skewed waiting for it to catch up.
+above), so its PR is single-version-consistent on its own (#13). **Neither
+Dependabot ecosystem is a safety net for those references anymore** — #244
+closes the `github-actions` half the same way #242 already closed `bundler`
+(both below) — so `platform-bump` is the **sole** down-sync path for every
+cms-platform version reference a consumer carries. Dependabot stays wired
+only for the site's own non-cms-platform deps.
 
-**The `bundler` ecosystem is different (#242): Dependabot no longer bumps the
-theme gem at all.** Both consumers' `dependabot.yml`, and the canonical
-`examples/site/.github/dependabot.yml` template, carry an explicit `ignore` for
-`cms-platform-theme` under the `bundler` ecosystem — `platform-bump` is now the
-**only** down-sync path for the gem. A Dependabot bundler PR could only ever
-move the `Gemfile`/`Gemfile.lock` half of the gem's version references, so it
-was either redundant (`platform-bump` already got there) or actively skewed
-the tree: `Adam-S-Daniel/adamdaniel.ai` PR #3076 (2026-08-12) rebased a stale
-Dependabot PR forward without re-resolving its target and proposed
-**downgrading** the gem `v0.1.80` → `v0.1.75`; `platform-pin-consistency`,
-`admin-bundle-parity`, and `dependabot-auto-merge` all caught it and it was
-closed unmerged. **Note:** a bare `dependency-name` ignore suppresses
-*security* updates for that dependency too, not only version updates —
-nothing is lost here, since `cms-platform-theme` is a first-party git-sourced
-gem with no advisory-database entry, and `platform-bump` adopts every release,
-security fixes included. Two lints lock the ignore:
-`e2e/dependabot-theme-gem-ignored.test.js` re-checks a consumer's OWN file in
-CONSUMER mode, and `e2e/scaffold-seeds-dependabot-ignore.test.js` (platform-
-internal) asserts both the `examples/site` template and the scaffolder's
-generated output carry it. Both require the ignore to be UNSCOPED — an
-`update-types`- or `versions`-scoped ignore would not stop the plain version
-bump that #3076 was.
+**Dependabot does not own any cms-platform version reference (#242, #244).**
+Both consumers' `dependabot.yml`, and the canonical
+`examples/site/.github/dependabot.yml` template, carry explicit `ignore`
+entries so neither the `bundler` nor the `github-actions` ecosystem ever
+proposes a cms-platform bump. The structural reason is the same for both:
+`platform-bump` moves every reference in ONE PR, which is exactly what lets
+`check-platform-pin-consistency.js --require-canonical` pass on that PR
+alone — Dependabot's ecosystems can each see only their own narrow slice, so
+a Dependabot-authored bump there is either redundant (`platform-bump` already
+got there) or actively skews the tree.
+
+**`bundler` (#242): the theme gem.** A Dependabot bundler PR could only ever
+move the `Gemfile`/`Gemfile.lock` half of the gem's version references:
+`Adam-S-Daniel/adamdaniel.ai` PR #3076 (2026-08-12) rebased a stale Dependabot
+PR forward without re-resolving its target and proposed **downgrading** the
+gem `v0.1.80` → `v0.1.75`; `platform-pin-consistency`, `admin-bundle-parity`,
+and `dependabot-auto-merge` all caught it and it was closed unmerged. **Note:**
+a bare `dependency-name` ignore suppresses *security* updates for that
+dependency too, not only version updates — nothing is lost here, since
+`cms-platform-theme` is a first-party git-sourced gem with no
+advisory-database entry, and `platform-bump` adopts every release, security
+fixes included.
+
+**`github-actions` (#244): the `uses:@<tag>` / composite pins.** That
+ecosystem treats each workflow FILE's `uses:` as its own independent
+dependency, so Dependabot can only move them ONE PR AT A TIME — every such PR
+necessarily leaves the other ~34 references (`platform.lock`, the gem `tag:`,
+each caller's `platform_ref:` input, and every other `uses:@<tag>`) behind,
+which is precisely the skew `check-platform-pin-consistency.js` exists to
+fail. Not theoretical: **jodidaniel.com #8–#22** (2026-06-03/04) produced
+**fifteen** separate bump PRs from a single platform release, one per
+reusable caller, all `0.1.1 → 0.1.3` — Dependabot itself closed two of them
+(#9, #21) as "no longer needed" once `platform-bump` had already landed the
+change, pure redundant churn. **adamdaniel.ai #1895–#1898** (2026-06-04)
+produced four more with DIFFERENT from-versions per file in the same batch
+(`0.1.0 → 0.1.6`, `0.1.3 → 0.1.6`) — exactly the piecemeal-drift shape the
+single-version pin invariant below (#29) already exists to catch.
+**adamdaniel.ai #1900** was closed with reasoning that generalizes verbatim:
+"a piecemeal bump to v0.1.6 would now fail the platform-pin-consistency
+guard." The class had gone quiet since only because `platform-bump` (cron +
+release-dispatch) reliably beats Dependabot's weekly run to each release — a
+timing accident, not a guarantee, as `adamdaniel.ai#3076` (above) shows once
+a stale PR is left open long enough.
+
+Both consumers' `dependabot.yml` and the `examples/site` template ignore
+`Adam-S-Daniel/cms-platform/*` under `github-actions`, scoped deliberately
+narrower than a bare `*`: the ecosystem stays WIRED and still picks up a
+genuine third-party action the moment one is added. Today it watches nothing
+else there — verified, neither consumer pins a single third-party action;
+every `uses:` in both repos' `.github/workflows/` is a cms-platform reusable
+(34 in each). The thin-ification (adamdaniel.ai#2007-P7) removed the last of
+the third-party ones; the June 2026 Dependabot PRs for `ruby/setup-ruby`,
+`aws-actions/configure-aws-credentials`, `docker/*`, and `actions/checkout`
+all pre-date it.
+
+**The counter-argument, and how it was closed.** A Dependabot actions PR was,
+incidentally, the only INDEPENDENT signal that a release existed if
+`platform-bump` ever silently stopped — `scheduled-run-health.yml` alerts on
+a FAILING scheduled run, not one that succeeds-and-no-ops.
+`platform-bump.yml`'s release lookup had exactly that hole:
+
+```bash
+LATEST=$(gh release view --repo "$PLATFORM" --json tagName -q .tagName 2>/dev/null || echo "")
+[ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
+```
+
+— which folded an expired/insufficiently-granted `CMS_PLATFORM_PAT`, a
+revoked cross-repo grant, and a GitHub API outage into the SAME green
+`exit 0` as the one benign case (no release published yet). A consumer could
+freeze at its current platform version indefinitely while every weekly run
+reported success. v0.1.82 closes it: the lookup now uses
+`gh api repos/<repo>/releases/latest`, whose failure modes are
+distinguishable — **404 means "no published release" and nothing else**,
+because cms-platform is a PUBLIC repo, so a 404 can never mean "you lack
+access" — treats 404 as the benign `exit 0` and every other failure as
+`::error::` + `exit 1`, which `scheduled-run-health.yml` then surfaces. Only
+the HTTP status code is echoed on failure, never the response body. Locked by
+a new test in `e2e/platform-bump-atomic.test.js`.
+
+**Wildcard semantics (load-bearing).** Dependabot matches an `ignore:`
+`dependency-name` with a case-INSENSITIVE wildcard matcher
+(`Dependabot::Config::UpdateConfig.wildcard_match?`, in
+`common/lib/dependabot/config/update_config.rb`) that converts `*` to `.*`
+and anchors it, and that `.*` DOES cross `/`. That is why one `Adam-S-Daniel/cms-platform/*`
+pattern covers all 34 `…/.github/workflows/<n>.yml` dependency names (the
+github-actions dependency name for a reusable workflow INCLUDES its path)
+and any future `…/.github/actions/<n>` composite. Two lints lock both
+ignores: `e2e/dependabot-theme-gem-ignored.test.js` re-checks a consumer's
+OWN file in CONSUMER mode, and `e2e/scaffold-seeds-dependabot-ignore.test.js`
+(platform-internal) asserts both the `examples/site` template and the
+scaffolder's generated output carry it. Their shared helper
+`e2e/dependabot-config-utils.js` carries a faithful JS mirror of the
+wildcard matcher and asserts, against the workflows directory under test:
+(a) non-vacuity — the tree actually pins cms-platform `uses:` refs, so the
+check can never pass by looking at nothing; (b) every one of those
+dependency names is wildcard-covered by some ignore entry; (c) every
+covering entry is UNSCOPED (no `update-types`, no `versions` — a scoped one
+would let a plain version bump through, exactly as it would not have stopped
+adamdaniel.ai#3076); (d) no ignore entry matches a third-party action name
+(`actions/checkout`, `actions/setup-node`, `ruby/setup-ruby`,
+`aws-actions/configure-aws-credentials`), which catches a lazy
+`- dependency-name: "*"` that would silently disable the whole ecosystem.
 
 NOTE: a consumer only gets the atomic bump once its `platform-bump` thin
 caller pins a platform release that **contains** this fix; until then bump it
@@ -81,21 +163,35 @@ tag → it flows back down to all sites. Site **content/branding/docs never sync
 
 ## Single-version pin invariant (anti-skew, issue #29)
 
-A consuming repo references the platform version in **many** places, and the
-down-sync mechanisms above land bumps **piecemeal** — so a consumer can drift:
+A consuming repo references the platform version in **many** places. Before
+issues #242/#244 the down-sync mechanisms above landed bumps **piecemeal**
+across two independent bumpers (Dependabot + `platform-bump`) — so a consumer could
+drift; `platform-bump` is now the sole bumper of all four rows below, and
+this guard is what keeps that single-bumper invariant enforced rather than
+merely assumed:
 
 | Reference | Bumped by |
 |---|---|
-| `.github/workflows/**` reusable-workflow `uses: …/.github/workflows/<n>.yml@<ref>` | Dependabot `github-actions` |
-| `.github/workflows/**` SHA-pinned composite `uses: …/.github/actions/<n>@<sha>  # vX.Y.Z` (the **comment**) | Dependabot + `dependabot-comment-sync` |
+| `.github/workflows/**` reusable-workflow `uses: …/.github/workflows/<n>.yml@<ref>` | `platform-bump` (Dependabot `github-actions` ignores every cms-platform ref, #244) |
+| `.github/workflows/**` SHA-pinned composite `uses: …/.github/actions/<n>@<sha>  # vX.Y.Z` (the **comment**) | `platform-bump` (same #244 ignore covers a future composite too) |
 | `Gemfile` `gem "cms-platform-theme", …, tag:` + `Gemfile.lock` git-source `tag:` | `platform-bump` (Dependabot `bundler` ignores this gem, #242) |
 | `platform.lock` `platform_ref` + `with: platform_ref:` workflow inputs | `platform-bump` |
 
-Because these run independently, a consumer can sit skewed for a long time
-(observed live: **adamdaniel.ai** pinned `@v0.1.0` loop/deploy callers, gem
-`@v0.1.5`, and others `@v0.1.3`/`@v0.1.6` simultaneously). A `v0.1.0` reusable
-running against a `v0.1.5` gem is a latent behaviour-bug source and breaks the
-"platform moves in lockstep" model.
+**On the composite-comment row:** `dependabot-comment-sync.yml` exists to
+repair a `# vX.Y.Z` comment Dependabot's `github-actions` ecosystem left
+behind after bumping a SHA-pinned composite's SHA — but since #244 that
+ecosystem never bumps a cms-platform composite in the first place, so there
+is nothing for it to sync there today. Verified: zero
+`…/.github/actions/…@<sha>` pins in either consumer's `.github/workflows/`.
+It stays wired for the day a consumer pins a third-party composite by SHA
+(see the `github-actions-sha-pinning` skill), which is the case it was
+actually built for.
+
+Because they used to run independently, a consumer could sit skewed for a
+long time (observed live: **adamdaniel.ai** pinned `@v0.1.0` loop/deploy
+callers, gem `@v0.1.5`, and others `@v0.1.3`/`@v0.1.6` simultaneously). A
+`v0.1.0` reusable running against a `v0.1.5` gem is a latent behaviour-bug
+source and breaks the "platform moves in lockstep" model.
 
 **The invariant:** every platform-version reference in a consumer MUST equal a
 **single** version — the `platform.lock` `platform_ref` (the **source of

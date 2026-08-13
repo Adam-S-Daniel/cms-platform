@@ -146,10 +146,12 @@ per-PR checkout):
   pins a single third-party action** — every `uses:` in both repos targets
   `Adam-S-Daniel/cms-platform/.github/workflows/*.yml` — so a consumer's
   `github-actions` cooldown has no supply-chain surface to hold and would be an
-  inert setting that reads as policy. (Dependabot IS still the backstop that
-  bumps a platform pin when `platform-bump` hasn't run, and cooling THAT off
-  would delay our own release — a second, weaker reason, and the only one the old
-  wording was groping at.)
+  inert setting that reads as policy. (Before #244, Dependabot was still a
+  weaker second reason — it could backstop-bump a platform pin when
+  `platform-bump` hadn't run, and cooling THAT off would delay our own
+  release, which is what the old wording was groping at. #244 closed that:
+  Dependabot now `ignore`s every `Adam-S-Daniel/cms-platform/*` ref outright,
+  so there is no backstop left to reason about — see `docs/SYNC.md`.)
 - **The manifest-path allowlist is factored into `scripts/check-dependabot-
   manifest-paths.sh`**, the single source both `dependabot-auto-merge.yml`
   (the per-PR `pull_request` gate) and `dependabot-rearm-sweep.yml` (the

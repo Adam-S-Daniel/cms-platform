@@ -22,7 +22,23 @@ const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 const wf = parseYaml(readWorkflow("platform-bump.yml"));
 const steps = wf.jobs.bump.steps;
 const checkout = steps.find((s) => typeof s.uses === "string" && /actions\/checkout/.test(s.uses));
-const runStep = steps.find((s) => typeof s.run === "string" && /gh\s+release\s+view/.test(s.run));
+// Matches `gh api repos/$PLATFORM/releases/latest` (cms-platform#244) — NOT
+// `gh release view`, which this step no longer calls (see the new test
+// below locking that it stays gone).
+const runStep = steps.find((s) => typeof s.run === "string" && /releases\/latest/.test(s.run));
+
+// Drop full-line `#` comments before checking that a call does NOT reappear.
+// The run script's own header comment quotes the OLD `gh release view` line
+// verbatim as incident documentation (house style — comments carry the WHY,
+// with evidence), so a plain substring/regex check over the whole script
+// would false-positive on its own explanatory prose. Only the EXECUTABLE
+// text is what the regression guard cares about.
+function stripBashComments(script) {
+  return script
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+}
 
 test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
   test("checks out with the caller's PAT so the workflow-file push is authorised", () => {
@@ -37,7 +53,55 @@ test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
 
   test("the bump step exists and resolves the latest release", () => {
     expect(runStep, "the bump run-step must exist").toBeTruthy();
-    expect(runStep.run).toMatch(/gh\s+release\s+view/);
+    expect(runStep.run).toMatch(/releases\/latest/);
+  });
+
+  test("a release lookup FAILURE is loud, not a green no-op (#244)", () => {
+    expect(runStep, "the bump run-step must exist").toBeTruthy();
+    const run = runStep.run;
+
+    // Queries the /releases/latest endpoint (not `gh release view`) so a
+    // "no release yet" 404 is DISTINGUISHABLE from every other failure —
+    // cms-platform is a public repo, so a 404 here can only mean "nothing
+    // published yet," never "you lack access."
+    expect(run, "must query the /releases/latest endpoint so 404 is unambiguous").toMatch(
+      /gh api "repos\/\$PLATFORM\/releases\/latest"/,
+    );
+
+    // The benign path: a 404 (genuinely no release yet) is a quiet, GREEN
+    // no-op — this is the one case the old line got right.
+    expect(run, "a 404 (no release yet) must still exit 0, not fail the job").toMatch(
+      /REL_CODE" = "404"[\s\S]{0,200}exit 0/,
+    );
+
+    // Every OTHER failure — an expired/under-scoped CMS_PLATFORM_PAT, a
+    // revoked cross-repo grant, an API outage — must emit an `::error::`
+    // annotation and exit non-zero. A red run here has to explain the
+    // incident on its face, not just fail silently: it must name what to
+    // check (the token) and reference the issue that root-caused the fix.
+    expect(
+      run,
+      "a non-404 lookup failure must emit ::error:: naming the token to check, and exit 1",
+    ).toMatch(/::error::could not read the latest release[\s\S]{0,400}gh_token[\s\S]{0,200}exit 1/);
+
+    // An empty tag_name (the API call itself succeeded but returned no
+    // usable release) is its own distinct failure — also loud, also non-zero.
+    expect(run, "an empty tag_name response must also be loud, not silently swallowed").toMatch(
+      /returned no tag_name[\s\S]{0,100}exit 1/,
+    );
+
+    // The old swallow-everything-into-green form must never reappear as
+    // EXECUTABLE code in this step (comments are stripped first — see
+    // stripBashComments — because the step's own header comment quotes the
+    // old line verbatim as incident documentation). `gh release view`
+    // legitimately exists elsewhere in this repo (release.yml's own,
+    // unrelated, use) — this assertion is scoped to THIS step's `run`
+    // script, not the whole file.
+    expect(
+      stripBashComments(run),
+      "the old 'gh release view ... || echo \"\"' swallow must not come back as executable code " +
+        "in this step",
+    ).not.toMatch(/gh\s+release\s+view/);
   });
 
   test("it bumps EVERY reference atomically (not just platform_ref)", () => {

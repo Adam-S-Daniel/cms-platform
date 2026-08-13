@@ -191,7 +191,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.80`** — `v0.1.0`–`v0.1.80` are all tagged GitHub
+**Current release: `v0.1.82`** — `v0.1.0`–`v0.1.82` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
@@ -367,20 +367,29 @@ out of lockstep piecemeal — a stale `platform_ref` input once silently ran a
 `platform-release-and-bump` skill) before changing
 `check-platform-pin-consistency.js` or `platform-bump.yml`'s seeding logic.
 
-### Dependabot must not bump the theme gem (#242)
+### Dependabot must not bump ANY cms-platform reference (#242, #244)
 
-`platform-bump` owns the platform version atomically, gem included — a
-Dependabot bundler bump can only move the Gemfile/Gemfile.lock half and either
-lags `platform-bump` or actively skews the tree (adamdaniel.ai PR #3076 tried
-to downgrade the gem `v0.1.80` → `v0.1.75` this way). Both consumers and the
-`examples/site` template now carry an `ignore: dependency-name:
-cms-platform-theme` under the `bundler` ecosystem;
-two lints lock it — `e2e/dependabot-theme-gem-ignored.test.js` re-checks a
-consumer's own file in CONSUMER mode, and
-`e2e/scaffold-seeds-dependabot-ignore.test.js` asserts the template AND the
-scaffolder's output carry it, so no new site is born without it. Both require
-the ignore to be UNSCOPED: an `update-types`/`versions`-scoped one would not
-stop the plain version bump #3076 was. Do not re-enable it. → read `docs/SYNC.md`.
+`platform-bump` owns the platform version atomically — every `uses:@<tag>`
+pin, the gem `tag:`, `platform.lock`, every `platform_ref:` input — in ONE
+PR, which is what lets `check-platform-pin-consistency.js
+--require-canonical` pass on that PR alone. Either Dependabot ecosystem can
+only see its own narrow slice, so a Dependabot-authored bump is either
+redundant or actively skews the tree (adamdaniel.ai PR #3076 tried to
+downgrade the gem `v0.1.80` → `v0.1.75` this way; jodidaniel.com #8–#22
+produced fifteen piecemeal `uses:@` bump PRs from one release). Both
+consumers and the `examples/site` template now carry an UNSCOPED `ignore`
+for `cms-platform-theme` under `bundler` (#242) AND for
+`Adam-S-Daniel/cms-platform/*` under `github-actions` (#244) — an
+`update-types`/`versions`-scoped ignore would not have stopped either
+incident above. Two lints lock both:
+`e2e/dependabot-theme-gem-ignored.test.js` (CONSUMER mode) and
+`e2e/scaffold-seeds-dependabot-ignore.test.js` (template + scaffolder
+output). Do not re-enable either ecosystem for a cms-platform ref. The v0.1.82
+release also closed the resulting blind spot — `platform-bump.yml`'s release
+lookup no longer folds an auth/API failure into the same green `exit 0` as
+"no release published yet"; it now fails loud (`::error::` + `exit 1`) on
+anything but a genuine 404. → read `docs/SYNC.md` for the full evidence,
+posture-cost, and wildcard-matcher detail.
 
 ## Consumer-context spec rule (v0.1.5)
 

@@ -8,13 +8,63 @@ version: 2
 updates:
   # Actions pinned in this site's thin workflow callers. Today every one of
   # them is a cms-platform reusable, whose ref platform-bump also moves
-  # atomically; whether Dependabot should stop bumping those too is
-  # cms-platform#244. The ecosystem stays wired either way so a genuine
-  # third-party action is picked up the moment one is added.
+  # atomically — and unlike the bundler/theme-gem case (one Gemfile, one
+  # tag), github-actions treats each WORKFLOW FILE's `uses:` as its own
+  # independent dependency, so Dependabot can only move them ONE PR AT A
+  # TIME. Each such PR moves exactly one `uses:@<tag>` pin, leaving the
+  # other 33 behind — plus `platform.lock`, the gem `tag:`, `Gemfile.lock`,
+  # and all 24 `platform_ref:` inputs — which is exactly the skew
+  # check-platform-pin-consistency.js --require-canonical exists to fail.
+  # Not theoretical: jodidaniel.com#8-#22
+  # (2026-06-03/04) produced FIFTEEN separate bump PRs from a single
+  # release — two of which Dependabot itself closed as redundant once
+  # another had already landed the same ref — and adamdaniel.ai#1895-#1898
+  # produced four more PRs with DIFFERENT from-versions per file
+  # (0.1.0->0.1.6 and 0.1.3->0.1.6 in the same batch, because each workflow
+  # file had last been touched by a different prior bump). adamdaniel.ai#1900
+  # was closed outright with "a piecemeal bump to v0.1.6 would now fail the
+  # platform-pin-consistency guard." So this ecosystem ignores every
+  # cms-platform reference too, for the same reason #242 ignores the gem.
+  #
+  # Wildcard semantics (the load-bearing, non-obvious part): Dependabot
+  # matches an `ignore:` `dependency-name` with
+  # `Dependabot::Config::UpdateConfig.wildcard_match?` (in
+  # common/lib/dependabot/config/update_config.rb) — lowercase, split on `*`,
+  # regex-quote each literal segment, join with `.*`, anchor `^...$`. That
+  # `.*` DOES cross `/`, which is why the single pattern below covers every
+  # one of this file's 34
+  # `Adam-S-Daniel/cms-platform/.github/workflows/<name>.yml` dependency
+  # names (the github-actions dependency name for a reusable workflow
+  # INCLUDES its path — a bare "Adam-S-Daniel/cms-platform" would match
+  # nothing) as well as any future `.../.github/actions/<name>` composite.
+  # e2e/dependabot-config-utils.js's `wildcardMatches()` re-implements this
+  # matcher exactly, because it is the one piece of this fix that can't be
+  # proven empirically inside CI.
+  #
+  # Scope: deliberately `Adam-S-Daniel/cms-platform/*`, not a bare `*` —
+  # the ecosystem stays WIRED and picks up a genuine third-party action the
+  # instant this site adds one. Today it watches nothing else (every
+  # `uses:` here is a cms-platform reusable), and that's accepted on
+  # purpose — the same posture #242 already settled for the bundler half,
+  # where `jekyll`/`webrick`/any `jekyll-*` plugin keep flowing.
+  #
+  # Counter-argument, and how it was closed: a Dependabot actions PR was,
+  # incidentally, the only INDEPENDENT signal that a release existed if
+  # platform-bump.yml ever silently stopped bumping. Turning this ecosystem
+  # off removes that signal — so platform-bump.yml's own release lookup no
+  # longer swallows a lookup failure into a green `exit 0`; it now fails
+  # loud instead (cms-platform#244). See platform-bump.yml's "Bump every
+  # cms-platform reference..." step and e2e/platform-bump-atomic.test.js.
+  #
+  # Locked by e2e/dependabot-theme-gem-ignored.test.js (consumer mode) and
+  # e2e/scaffold-seeds-dependabot-ignore.test.js (this template + scaffolder
+  # output) — see cms-platform#244.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "Adam-S-Daniel/cms-platform/*"
   # The site's own gems (jekyll, webrick, any jekyll-* plugins) — NOT the
   # platform theme gem, see the ignore below.
   - package-ecosystem: bundler

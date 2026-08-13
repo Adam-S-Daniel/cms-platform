@@ -51,6 +51,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const { parse, calleeName, calleeTail, stringValue } = require("./spec-ast");
 
 const E2E_DIR = __dirname;
 const CONFIG = path.join(E2E_DIR, "playwright.config.js");
@@ -74,10 +75,108 @@ function stripComments(src) {
   return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+// ── #244 false-positive carve-out: SITE_ROOT-rooted workflows-dir reads ────
+//
+// THE INCIDENT. e2e/dependabot-theme-gem-ignored.test.js is a deliberately
+// CONSUMER-ONLY spec (never registered in PLATFORM_META_SPECS — see its own
+// header comment) whose whole reason to exist is running on a real
+// consumer's e2e lane against that consumer's OWN `.github/dependabot.yml`.
+// For cms-platform#244 it gained a second read, `path.join(process.env.
+// SITE_ROOT, ".github", "workflows")`, so it can check the consumer's
+// Dependabot ignore actually covers the cms-platform `uses:` refs that
+// consumer really pins — the CONSUMER'S OWN workflow tree, not the
+// platform's. But the plain `workflows-def` regex
+// (`/\.github["'`]\s*,\s*["'`]workflows["'`]/`) fires on that string shape
+// regardless of what it's rooted at, so it false-flagged the spec as
+// platform-internal.
+//
+// WHY "just register the spec" IS THE WRONG FIX. `playwright.config.js`
+// `testIgnore`s every name in PLATFORM_META_SPECS on every CONSUMER e2e
+// lane. Registering this spec would silently VOID the #244 guard on the
+// exact repos it exists to protect — the registry itself would ship a
+// regression while looking green.
+//
+// WHY THIS MUST BE AST, NOT REGEX. Whether a `path.join`/`path.resolve` call
+// is "rooted at SITE_ROOT" is a question about which ARGUMENTS belong to
+// which CALL — a regex sees "SITE_ROOT" and ".github"/"workflows" as tokens
+// floating independently in the file, with no notion of which call (if any)
+// each belongs to, so it cannot distinguish `path.join(process.env.
+// SITE_ROOT, ".github", "workflows")` from `path.join(__dirname, "..",
+// ".github", "workflows")` followed, elsewhere in the file, by an unrelated
+// `SITE_ROOT` reference. Per the repo's "AST always, never regex, for
+// code-shape lints" rule (AGENTS.md), this has to parse.
+//
+// Parses the RAW, un-comment-stripped source. acorn already discards
+// comments correctly as part of real JS parsing — that's the whole point of
+// using an AST here — and `stripComments()` is a lexical regex pass that can
+// mangle a string literal containing `//` (e.g. a URL), so its output must
+// never be fed back into a parser.
+function walkAst(node, fn) {
+  if (!node || typeof node.type !== "string") return;
+  fn(node);
+  for (const key of Object.keys(node)) {
+    const value = node[key];
+    if (Array.isArray(value)) value.forEach((child) => walkAst(child, fn));
+    else if (value && typeof value.type === "string") walkAst(value, fn);
+  }
+}
+
+// Does `node`'s subtree contain an Identifier literally named `name`?
+// Matches both `process.env.SITE_ROOT` (a MemberExpression whose
+// non-computed `.property` IS the Identifier `SITE_ROOT`) and a local
+// `const SITE_ROOT = ...` passed straight in (the argument itself is the
+// Identifier).
+function subtreeHasIdentifierNamed(node, name) {
+  let found = false;
+  walkAst(node, (n) => {
+    if (!found && n.type === "Identifier" && n.name === name) found = true;
+  });
+  return found;
+}
+
+// True only when the source contains AT LEAST ONE "workflows-dir join" — a
+// `path.join`/`path.resolve` call whose statically-resolvable string
+// arguments include BOTH ".github" and "workflows" — AND every such join is
+// rooted at SITE_ROOT. False (never suppressing anything) when there are
+// none, or the source fails to parse, so every spec that doesn't touch this
+// carve-out at all keeps a byte-identical classification to before it
+// existed.
+function allWorkflowsDirJoinsAreSiteRootRooted(rawSrc) {
+  let ast;
+  try {
+    ast = parse(rawSrc);
+  } catch {
+    return false; // unparseable — don't suppress; the plain regex still decides.
+  }
+
+  let sawWorkflowsDirJoin = false;
+  let allRooted = true;
+
+  walkAst(ast, (node) => {
+    if (node.type !== "CallExpression") return;
+    const tail = calleeTail(calleeName(node.callee));
+    if (tail !== "join" && tail !== "resolve") return;
+
+    const args = node.arguments || [];
+    const argStrings = args.map((a) => stringValue(a)).filter((v) => v != null);
+    const isWorkflowsDirJoin = argStrings.includes(".github") && argStrings.includes("workflows");
+    if (!isWorkflowsDirJoin) return;
+
+    sawWorkflowsDirJoin = true;
+    const rooted = args.some((a) => subtreeHasIdentifierNamed(a, "SITE_ROOT"));
+    if (!rooted) allRooted = false;
+  });
+
+  return sawWorkflowsDirJoin && allRooted;
+}
+
 // ── The detector ─────────────────────────────────────────────────────────
 // Return the list of platform-internal SIGNAL classes a spec's CODE carries
 // (empty ⇒ the spec is not platform-internal). Operates on comment-stripped
-// source so only REAL reads/execs count.
+// source so only REAL reads/execs count; `rawSrc` (default: `code`, for
+// backward compatibility with any other caller of this exported function) is
+// the ORIGINAL, un-comment-stripped source, needed only by the SITE_ROOT
+// carve-out above, which must feed a real parser.
 //
 // IMPORTANT — path-name-agnostic. A spec may name its base path REPO_ROOT,
 // E2E_DIR, __dirname, etc.; what matters is the literal SUBPATH it reads. So we
@@ -86,7 +185,7 @@ function stripComments(src) {
 // matter how the prefix variable is spelled. (cms-config-preview-delta.spec.js
 // exposed this: it execs `path.join(REPO_ROOT, "scripts/patch-preview-config.sh")`
 // — a `REPO_ROOT`-based prefix the original ../scripts-only matcher missed.)
-function platformSignals(code) {
+function platformSignals(code, rawSrc = code) {
   const s = [];
 
   // SCRIPTS — reads/execs the platform scripts/ tree.
@@ -114,7 +213,11 @@ function platformSignals(code) {
     /require\(["'`]\.\/workflow-yaml-utils["'`]\)/.test(code) ||
     /\breadWorkflow\s*\(/.test(code) ||
     /\.\.\/\.github\/workflows/.test(code) ||
-    /\.github["'`]\s*,\s*["'`]workflows["'`]/.test(code) ||
+    // #244: a `".github", "workflows"` join is platform-internal UNLESS every
+    // such join in the file is rooted at SITE_ROOT (the consumer's own tree)
+    // — see allWorkflowsDirJoinsAreSiteRootRooted() above for the full WHY.
+    (/\.github["'`]\s*,\s*["'`]workflows["'`]/.test(code) &&
+      !allWorkflowsDirJoinsAreSiteRootRooted(rawSrc)) ||
     /["'`]examples["'`]\s*,\s*["'`]site["'`]/.test(code) ||
     /\bexamples\/site\/\.github/.test(code)
   ) {
@@ -146,9 +249,10 @@ function platformSignals(code) {
   return s;
 }
 
-// Convenience boolean used by the gate + sabotage proof.
-function isPlatformInternal(code) {
-  return platformSignals(code).length > 0;
+// Convenience boolean used by the gate + sabotage proof. `rawSrc` mirrors
+// platformSignals()'s optional second parameter.
+function isPlatformInternal(code, rawSrc = code) {
+  return platformSignals(code, rawSrc).length > 0;
 }
 
 function allSpecFiles() {
@@ -176,8 +280,9 @@ test.describe("#16 PLATFORM_META_SPECS recurrence guard", () => {
     const meta = metaSpecs();
     const offenders = [];
     for (const f of allSpecFiles()) {
-      const code = stripComments(fs.readFileSync(path.join(E2E_DIR, f), "utf8"));
-      const sig = platformSignals(code);
+      const raw = fs.readFileSync(path.join(E2E_DIR, f), "utf8");
+      const code = stripComments(raw);
+      const sig = platformSignals(code, raw);
       if (sig.length && !meta.has(f)) {
         offenders.push(`${f} [${sig.join(", ")}]`);
       }
@@ -237,6 +342,48 @@ test.describe("#16 PLATFORM_META_SPECS recurrence guard", () => {
       isPlatformInternal(stripComments(siteBody)),
       "a spec that reads ${SITE_ROOT}/_site MUST NOT be classified platform-internal (it's a SITE spec)",
     ).toBe(false);
+
+    // #244 CARVE-OUT SABOTAGE PROOF — locks allWorkflowsDirJoinsAreSiteRootRooted()
+    // itself so it can't silently widen into a no-op (which would re-open the
+    // false positive) or, worse, silently widen into suppressing the WHOLE
+    // workflows-def signal class (which would blind the guard entirely).
+    const siteRootRootedWorkflowsJoin = `
+      const path = require("node:path");
+      const WF = path.join(process.env.SITE_ROOT, ".github", "workflows");
+    `;
+    expect(
+      isPlatformInternal(stripComments(siteRootRootedWorkflowsJoin), siteRootRootedWorkflowsJoin),
+      "a path.join(process.env.SITE_ROOT, '.github', 'workflows') read is the CONSUMER's own " +
+        "workflow tree (cms-platform#244's dependabot-theme-gem-ignored.test.js shape) — it must " +
+        "NOT be classified platform-internal, or registering it in PLATFORM_META_SPECS would " +
+        "testIgnore the #244 guard on every consumer e2e lane, silently voiding it there.",
+    ).toBe(false);
+
+    const platformRootedWorkflowsJoin = `
+      const path = require("node:path");
+      const WF = path.join(__dirname, "..", ".github", "workflows");
+    `;
+    expect(
+      isPlatformInternal(stripComments(platformRootedWorkflowsJoin), platformRootedWorkflowsJoin),
+      "a path.join(__dirname, '..', '.github', 'workflows') read carries NO SITE_ROOT anywhere " +
+        "— it is the platform's OWN reusable workflow tree and MUST stay classified " +
+        "platform-internal; the #244 carve-out must never widen past an ACTUAL SITE_ROOT-rooted join.",
+    ).toBe(true);
+
+    const siteRootRootedJoinPlusReadWorkflow = `
+      const path = require("node:path");
+      const WF = path.join(process.env.SITE_ROOT, ".github", "workflows");
+      const { readWorkflow } = require("./workflow-yaml-utils");
+    `;
+    expect(
+      isPlatformInternal(
+        stripComments(siteRootRootedJoinPlusReadWorkflow),
+        siteRootRootedJoinPlusReadWorkflow,
+      ),
+      "a spec with a SITE_ROOT-rooted workflows-dir join AND a require('./workflow-yaml-utils') " +
+        "call must STILL be classified platform-internal — the carve-out suppresses exactly the " +
+        "one '.github'/'workflows' path-join clause, never the whole workflows-def signal class.",
+    ).toBe(true);
   });
 });
 

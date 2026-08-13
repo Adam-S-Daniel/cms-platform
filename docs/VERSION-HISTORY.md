@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.76)
+## Version history (v0.1.0 → v0.1.82)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1200,3 +1200,121 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   from *never looked*" failure this release train fixed in the re-arm sweep, the
   repo-settings audit and the pin checker — this time in the guard written to
   prevent it. It now asserts the extracted shell is non-trivial before matching.
+
+- **v0.1.81** (2026-08-12) — **the theme gem's version reference gets the same
+  single-writer treatment the atomic bump already gave everything else (issue
+  #242, PR #245).** `platform-bump.yml` already moved every OTHER cms-platform
+  reference in one PR (#13); the `bundler` ecosystem's own Dependabot bumps of
+  `cms-platform-theme` were the one exception, and they could only ever move
+  the `Gemfile`/`Gemfile.lock` half of the gem's version references — either
+  redundant once `platform-bump` had already landed the change, or actively
+  skewing the tree. `Adam-S-Daniel/adamdaniel.ai` PR #3076 (2026-08-12)
+  demonstrated the skew live: a stale Dependabot bundler PR, rebased forward
+  without re-resolving its target, proposed **downgrading** the gem
+  `v0.1.80` → `v0.1.75`; `platform-pin-consistency`, `admin-bundle-parity`,
+  and `dependabot-auto-merge` all caught it independently and it was closed
+  unmerged rather than merged and repaired.
+
+  Both consumers' `dependabot.yml`, and the canonical
+  `examples/site/.github/dependabot.yml` template, now carry an explicit,
+  UNSCOPED `ignore: dependency-name: cms-platform-theme` under `bundler` — an
+  `update-types`/`versions`-scoped ignore would not have stopped a plain
+  version bump like #3076. **Note the ignore also suppresses *security*
+  updates for that dependency**, not only version ones — nothing is lost
+  here: `cms-platform-theme` is a first-party git-sourced gem with no
+  RubyGems advisory-database entry, and `platform-bump` adopts every release
+  cms-platform cuts, security fixes included. Two lints lock it:
+  `e2e/dependabot-theme-gem-ignored.test.js` re-checks a consumer's OWN file
+  in CONSUMER mode; `e2e/scaffold-seeds-dependabot-ignore.test.js`
+  (platform-internal) asserts both the `examples/site` template and the
+  scaffolder's generated output carry it, so no new site is born with the
+  defect. `select-specs.js` gained rules so a diff touching
+  `.github/dependabot.yml` actually selects both. Docs across
+  SYNC/ARCHITECTURE/ADMIN-DELIVERY/PIN-CONSISTENCY/READMEs and two skills
+  stopped naming Dependabot as the gem's down-sync path.
+
+  Closes #242.
+
+- **v0.1.82** (2026-08-13) — **the same fix for the other half — no
+  Dependabot ecosystem bumps a cms-platform reference anymore (issue #244) —
+  plus the bump-race sequencing hazard #242's own rollout surfaced (#246).**
+
+  **The `github-actions` ecosystem gets the #242 treatment (#244).** Unlike
+  `bundler`'s single Gemfile, `github-actions` treats each workflow FILE's
+  `uses:` as its own independent dependency, so Dependabot could only ever
+  move the `uses:@<tag>` pins ONE PR AT A TIME — every such PR necessarily
+  left the other ~34 references (`platform.lock`, the gem `tag:`, every
+  caller's `platform_ref:` input, and every OTHER `uses:@<tag>`) behind,
+  exactly the skew `check-platform-pin-consistency.js --require-canonical`
+  exists to fail. Verified, not theoretical: **jodidaniel.com #8–#22**
+  (2026-06-03/04) produced fifteen separate bump PRs from a single release,
+  one per reusable caller, all `0.1.1 → 0.1.3` (Dependabot itself closed two,
+  #9 and #21, as redundant once `platform-bump` had already landed the
+  change); **adamdaniel.ai #1895–#1898** (2026-06-04) produced four more with
+  DIFFERENT from-versions per file in the same batch; **adamdaniel.ai #1900**
+  was closed with reasoning that generalizes verbatim: "a piecemeal bump to
+  v0.1.6 would now fail the platform-pin-consistency guard." Both consumers'
+  `dependabot.yml` and the `examples/site` template now carry an UNSCOPED
+  `ignore: dependency-name: "Adam-S-Daniel/cms-platform/*"` under
+  `github-actions`, deliberately scoped narrower than a bare `*` so the
+  ecosystem stays wired for a genuine third-party action — verified, neither
+  consumer pins one today (34 `uses:` in each, all cms-platform; the
+  thin-ification, adamdaniel.ai#2007-P7, removed the last third-party
+  action). The pattern relies on Dependabot's wildcard matcher
+  (`Dependabot::Config::UpdateConfig.wildcard_match?`, in
+  `common/lib/dependabot/config/update_config.rb`; `*` → `.*`, crosses `/`) matching
+  every `…/.github/workflows/<n>.yml` dependency name with one entry;
+  `e2e/dependabot-config-utils.js`'s `wildcardMatches()` re-implements that
+  matcher exactly, because it's the one piece of the fix nothing else in CI
+  can prove empirically. The same two lints from #242 now cover both
+  ignores: `e2e/dependabot-theme-gem-ignored.test.js` and
+  `e2e/scaffold-seeds-dependabot-ignore.test.js`, each asserting non-vacuity
+  (the tree actually pins cms-platform refs), full wildcard coverage, that
+  every covering entry is UNSCOPED, and that no entry accidentally matches a
+  third-party action name (`actions/checkout`, `actions/setup-node`,
+  `ruby/setup-ruby`, `aws-actions/configure-aws-credentials`) — the last
+  check exists specifically to catch a lazy `dependency-name: "*"` that would
+  silently disable the whole ecosystem.
+
+  **Closing the ecosystem also closed a silent-failure blind spot in the
+  bumper itself.** A Dependabot actions PR was, incidentally, the only
+  INDEPENDENT signal that a release existed if `platform-bump.yml` ever
+  silently stopped — `scheduled-run-health.yml` alerts on a FAILING scheduled
+  run, not one that succeeds-and-no-ops. The release lookup had exactly that
+  hole:
+
+  ```bash
+  LATEST=$(gh release view --repo "$PLATFORM" --json tagName -q .tagName 2>/dev/null || echo "")
+  [ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
+  ```
+
+  which folded an expired/insufficiently-granted `CMS_PLATFORM_PAT`, a
+  revoked cross-repo grant, and a GitHub API outage into the same green
+  `exit 0` as the one genuinely benign case. The lookup now uses
+  `gh api repos/<repo>/releases/latest`: a 404 means "no published release"
+  and nothing else — cms-platform is a PUBLIC repo, so a 404 can never mean
+  "you lack access" — and is the only case treated as the benign `exit 0`;
+  every other failure is `::error::` + `exit 1`, surfaced by
+  `scheduled-run-health.yml` like any other scheduled failure. Only the HTTP
+  status code is echoed on failure, never the response body. Locked by a new
+  test in `e2e/platform-bump-atomic.test.js`.
+
+  **A bump PR cut in the same minute as another `main` merge can carry a
+  stale tree (#246).** `platform-bump` branches off `main` at the moment it
+  runs; dispatching it seconds after a release while another PR is mid-merge
+  cuts the bump branch from the PRE-merge tree. Observed live at v0.1.81:
+  both consumers' `platform/bump-v0.1.81` branches were cut ~17s after the
+  release and moments before the #242 `dependabot.yml` change merged, so they
+  would have run v0.1.81's new `dependabot-theme-gem-ignored.test.js` against
+  a config that did not yet carry the ignore that lint asserts. Not a
+  `platform-bump` bug — a branch cut at time T legitimately contains `main`
+  at time T — but a sequencing hazard, recorded where the sequencing decision
+  is made: let every other `main` merge settle before dispatching
+  `platform-bump`, or, if a bump PR is already open and stale, regenerate it
+  (deterministic: reapply the same `CUR`→`LATEST` / `OLD_SHA`→`NEW_SHA`
+  replace on top of current `main`, confirm with
+  `scripts/verify-consumer-pins.sh`, then force-push the bump branch) rather
+  than fighting an `update-branch` conflict. See `docs/PIN-CONSISTENCY.md`'s
+  platform-bump section and the `platform-release-and-bump` skill step 2b.
+
+  Closes #244. Refs #242, #246.

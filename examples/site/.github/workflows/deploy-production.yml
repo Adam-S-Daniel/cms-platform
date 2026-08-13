@@ -1,7 +1,8 @@
 # Thin caller — copied into a site repo as `.github/workflows/deploy-production.yml`.
 # It owns the trigger + paths-ignore; the build/deploy logic lives in the
-# platform's reusable workflow. Pin `@vX.Y.Z` to a cms-platform release and let
-# Dependabot (github-actions ecosystem) open the bump PRs.
+# platform's reusable workflow. Pin `@vX.Y.Z` to a cms-platform release —
+# `platform-bump` opens the bump PR (Dependabot ignores this ref, #244; see
+# docs/SYNC.md).
 name: Deploy to Production
 run-name: >-
   ${{ github.event_name == 'push'

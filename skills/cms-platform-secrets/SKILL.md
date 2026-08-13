@@ -57,6 +57,14 @@ Consumed by:
   the gem tag + every reusable `uses: …@<ref>` pin to a new release in one PR.
 - `dependabot-comment-sync` — after Dependabot bumps a pinned `uses: …@<sha>`,
   pushes the refreshed `# vX.Y.Z (date)` pin comment back into the workflow file.
+  Currently **dormant in both consumers**: adamdaniel.ai and jodidaniel.com each
+  pin zero third-party actions and zero
+  `Adam-S-Daniel/cms-platform/.github/actions/<x>@<sha>` composites — every
+  `uses:` in both repos is a cms-platform reusable workflow, and since #244
+  Dependabot `ignore`s all of those. The workflow (and its `Workflows: write`
+  credential requirement below) stays wired and will fire the moment a site
+  adds a genuine third-party SHA-pinned action; it just has nothing to sync
+  today.
 
 **Both edit `.github/workflows/*`, so both need `Workflows: write`** — the one
 permission `CMS_E2E_PAT` deliberately lacks. That shared requirement is why they
