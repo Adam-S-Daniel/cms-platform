@@ -72,6 +72,18 @@ MISSING (platform-dictated)` after a manual bump, either copy the missing file
 from `examples/site/.github/workflows/<name>.yml` by hand and re-pin it, or
 just use the automated `platform-bump.yml` reusable instead.
 
+## 2b. Sequencing: let other `main` merges settle first
+
+`platform-bump` branches off `main` at the moment it runs, so dispatching it
+while another PR is mid-merge cuts the bump branch from the PRE-merge tree.
+That either conflicts on `update-branch` (`422 merge conflict between base and
+head`), or — worse — makes the bump PR run the new release's checks against a
+tree that is missing the other PR's fix. Both happened at v0.1.81. If a bump PR
+is already open and stale, REGENERATE it from current `main` rather than
+merging through the conflict, and re-run the verifier below before
+force-pushing. See `docs/PIN-CONSISTENCY.md`, "A bump PR cut in the same minute
+as another `main` merge carries a stale tree".
+
 ## 3. Verify, then commit + PR + merge
 
 **The bump is done when this exits 0 — nothing else counts as verification.**
