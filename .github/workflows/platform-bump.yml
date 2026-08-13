@@ -69,8 +69,54 @@ jobs:
           PLATFORM: ${{ inputs.platform_repo }}
         run: |
           set -euo pipefail
-          LATEST=$(gh release view --repo "$PLATFORM" --json tagName -q .tagName 2>/dev/null || echo "")
-          [ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
+          # Resolve the latest release. The OLD form here —
+          #   LATEST=$(gh release view --repo "$PLATFORM" --json tagName -q .tagName 2>/dev/null || echo "")
+          #   [ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
+          # — folded EVERY failure mode into the SAME green `exit 0`: an
+          # expired or under-scoped CMS_PLATFORM_PAT, a revoked cross-repo
+          # grant, and an actual GitHub API outage all produced the identical
+          # "no release yet" success as the one genuinely benign case (a
+          # brand-new platform repo with nothing tagged). A consumer could
+          # freeze at its current platform version indefinitely while every
+          # weekly cron run reported success — `scheduled-run-health.yml`
+          # only alerts on RED scheduled runs, so a silent green no-op is
+          # invisible to it.
+          #
+          # This was survivable before #244: Dependabot's github-actions
+          # ecosystem kept opening its own redundant `uses:@` bump PR per
+          # workflow file, which was accidental INDEPENDENT evidence that a
+          # release existed even if this step went quiet. #244 switches that
+          # ecosystem off (each of those PRs skewed the single-version
+          # pin-consistency guard instead of helping — see the
+          # dependabot.yml ignore comment), so this lookup is now the ONLY
+          # thing that can notice a stuck bump, and it has to be loud.
+          #
+          # `gh api repos/<repo>/releases/latest` replaces `gh release view`
+          # because its failure modes are DISTINGUISHABLE: a 404 means "no
+          # published release" and nothing else — cms-platform is a PUBLIC
+          # repo, so a 404 here can never mean "you lack access" the way it
+          # would on a private one. `gh release view` exits non-zero
+          # identically for both "no release" and "can't reach/read the
+          # repo," which is exactly the ambiguity that let the old line
+          # swallow real failures.
+          #
+          # Only the HTTP status code is echoed below, never the response
+          # body — an API error body can quote account/repo detail into this
+          # (public) Actions log (AGENTS.md "Sanitize error output").
+          REL_ERR="${RUNNER_TEMP:-/tmp}/platform-release-lookup.err"
+          if ! LATEST=$(gh api "repos/$PLATFORM/releases/latest" --jq '.tag_name // ""' 2>"$REL_ERR"); then
+            REL_CODE=$(sed -n -E 's/.*\(HTTP ([0-9]{3})\).*/\1/p' "$REL_ERR" | head -1)
+            if [ "$REL_CODE" = "404" ]; then
+              echo "::notice::$PLATFORM has no published release yet — nothing to bump."
+              exit 0
+            fi
+            echo "::error::could not read the latest release of $PLATFORM (HTTP ${REL_CODE:-unknown}) — refusing to exit green. Check the caller's gh_token (CMS_PLATFORM_PAT — expired? still granted on $PLATFORM?) or GitHub API status. A silent success here would freeze this consumer's platform version indefinitely (cms-platform#244)."
+            exit 1
+          fi
+          if [ -z "$LATEST" ]; then
+            echo "::error::$PLATFORM/releases/latest returned no tag_name — refusing to exit green (cms-platform#244)."
+            exit 1
+          fi
           CUR=$(sed -n -E 's/^platform_ref:[[:space:]]*//p' platform.lock 2>/dev/null || echo "")
           [ "$LATEST" = "$CUR" ] && { echo "already on $LATEST"; exit 0; }
 
