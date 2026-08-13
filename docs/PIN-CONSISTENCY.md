@@ -111,3 +111,33 @@ the checkout it selected (a v0.1.59 tree) predated the
 recognize the same three shapes. **Note the loop this closes:** the seeder's
 shape list was justified by the checker's shape list, so the checker's blind spot
 propagated into the seeder — keep the two in lockstep, in both directions.
+
+### A bump PR cut in the same minute as another `main` merge carries a stale tree (v0.1.81)
+
+`platform-bump` branches off `main` at the moment it runs. Dispatch it seconds
+after a release while another PR is mid-merge and the bump branch is cut from
+the *pre-merge* `main` — so it silently omits whatever that PR changed. Two
+symptoms, in increasing order of nastiness:
+
+1. **`update-branch` returns `422 merge conflict between base and head`** when
+   the other PR touched a line the bump also rewrites. Annoying but loud.
+2. **The bump PR tests the wrong tree.** If the release being adopted adds a
+   CHECK that reads a file the other PR fixed, that check runs on the bump PR
+   against the unfixed content and fails for a reason that has nothing to do
+   with the bump. Observed live at v0.1.81: both consumers' `platform/bump-v0.1.81`
+   branches were cut ~17s after the release and ~seconds before the #242
+   `dependabot.yml` change merged, so they would have run v0.1.81's new
+   `dependabot-theme-gem-ignored.test.js` against a config that did not yet
+   carry the ignore that lint asserts.
+
+This is not a `platform-bump` bug — a branch cut at time T legitimately contains
+`main` at time T. It is a **sequencing** hazard, and the fix is ordering:
+**let every other `main` merge settle before dispatching `platform-bump`**, or,
+if a bump PR is already open and stale, regenerate it rather than trying to
+`update-branch` through the conflict. Regeneration is deterministic — apply the
+same `CUR`→`LATEST` and `OLD_SHA`→`NEW_SHA` replace over `platform.lock`,
+`Gemfile`, `Gemfile.lock` and `.github/workflows/**` on top of current `main`
+(the workflow's own algorithm), then confirm with
+`scripts/verify-consumer-pins.sh --platform-dir <platform>` before force-pushing
+the bump branch. Caller SEEDING only matters if the release newly dictated a
+workflow the consumer lacks; a release that adds none needs no seeding step.
