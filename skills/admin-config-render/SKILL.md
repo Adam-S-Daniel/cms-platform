@@ -88,15 +88,17 @@ into `PLATFORM_META_SPECS` in `e2e/playwright.config.js`.
 ## Verify after changing the render
 
 ```bash
+# Paths are relative to the directory HOLDING your cms-platform checkout — these
+# scripts and specs ship in the platform repo, not alongside this skill.
 # CLI render against a throwaway site root that has _config.yml (+ optional seam)
-ruby scripts/render-decap-config.rb <site_root> <site_root>/_site
+ruby cms-platform/scripts/render-decap-config.rb <site_root> <site_root>/_site
 # parity + base-collections specs
-cd e2e && npx playwright test --project=chromium-light decap-config-render-parity.test.js
-ruby theme/spec/base_collections_filter_test.rb
+cd cms-platform/e2e && npx playwright test --project=chromium-light decap-config-render-parity.test.js
+ruby cms-platform/theme/spec/base_collections_filter_test.rb
 ```
 
-For local dev of the commit pill, `bash scripts/write-commit-json.sh` writes
-`_site/admin/commit.json` (admin is served from `_site/admin/` now).
+For local dev of the commit pill, `bash cms-platform/scripts/write-commit-json.sh`
+writes `_site/admin/commit.json` (admin is served from `_site/admin/` now).
 
 ## Common symptoms -> cause
 
