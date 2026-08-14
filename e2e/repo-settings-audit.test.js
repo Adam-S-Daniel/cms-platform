@@ -11,7 +11,11 @@
  * (delete_branch_on_merge flipped true) and jodidaniel.ruleset-main.json
  * (now the phase-2 CONVERGED shape onto consumer-main; the as-found capture
  * moved to jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json), both
- * updated 2026-07-22 for #172 phase 2. So the anchor test locks the shipped
+ * updated 2026-07-22 for #172 phase 2, and cms-platform.ruleset-main.json
+ * (the `plugin-validate` required context added in v0.1.83 — the manifest
+ * declares it and this fixture encodes that desired state, so live stays
+ * BEHIND until a human runs `--fix --yes`; same manifest-ahead-of-live shape
+ * as the delete_branch_on_merge flip above). So the anchor test locks the shipped
  * manifest to "zero drift against the phase-2 desired-converged fixtures",
  * and the normalization tests lock the anti-flap rules that keep a daily
  * audit from crying wolf:

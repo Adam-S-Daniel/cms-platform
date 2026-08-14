@@ -39,6 +39,16 @@
 //   PLATFORM-FIXTURE  is a harness self-test that drives the platform's OWN
 //                 fixtures as a literal path (fixture-site / the singlepage
 //                 fixture only the PLATFORM carries), not via SITE_ROOT.
+//   PLUGIN-ROOT   reads the repo-root PLUGIN surface — either bundle manifest
+//                 (`plugin.json`, `.claude-plugin/plugin.json`) or the
+//                 `skills/` bundle tree when it is NOT rooted at SITE_ROOT.
+//                 Added v0.1.83 with the federated bundle: the first five
+//                 classes key off scripts/, scaffold/, .github/workflows,
+//                 theme/ and the fixtures, so a spec reading ONLY the plugin
+//                 root matched none of them and the gate was structurally
+//                 blind to it (plugin-manifests.test.js: SIGNALS=[],
+//                 REGISTERED=false — it survived only on its own SITE_ROOT
+//                 self-skip, i.e. belt with no braces).
 //
 // A genuine SITE spec — sitemap/tags/feeds/console-clean/cms-config/permalink/
 // post-summary, the canary content invariants, the manual walkthroughs, the
@@ -170,6 +180,76 @@ function allWorkflowsDirJoinsAreSiteRootRooted(rawSrc) {
   return sawWorkflowsDirJoin && allRooted;
 }
 
+// ── PLUGIN-ROOT (v0.1.83): the federated-bundle surface ──────────────────
+//
+// The repo ROOT is a plugin root — `agentskills` publishes `cms-platform` as a
+// FEDERATED marketplace entry whose source names no subdirectory, so the two
+// manifests and `skills/` are read from here. A spec that reads that surface is
+// platform-internal by the registry's own rule (a consumer installs skills from
+// the marketplace and vendors none of it), but none of the five older classes
+// could see it: they key off scripts/, scaffold/, .github/workflows, theme/ and
+// the fixtures.
+//
+// AST, NOT REGEX — the standing rule, and load-bearing twice here. First,
+// `skills` is a GENERIC path segment: whether a `path.join(…, "skills")` reads
+// the platform's bundle tree or a consumer's own tree is a question about which
+// ARGUMENTS belong to which CALL, which a regex cannot answer (it is the same
+// shape as the #244 carve-out above). Second, a manifest path is routinely
+// built by interpolation — `path.join(PLUGIN_ROOT, ".claude-plugin",
+// "plugin.json")` or a `${…}/plugin.json` template — and a regex over source is
+// blind to exactly that, which is how the jodidaniel host-loop guard gap
+// shipped.
+//
+// Returns true when the source reads EITHER manifest by name, or joins a
+// `skills` directory that is not SITE_ROOT-rooted. Unparseable source returns
+// false (the other five classes still decide), matching the carve-out's
+// posture.
+function readsPluginRootSurface(rawSrc) {
+  let ast;
+  try {
+    ast = parse(rawSrc);
+  } catch {
+    return false;
+  }
+
+  // `.claude-plugin` / `plugin.json` as a whole value or as a path segment —
+  // "plugin.json", "../plugin.json", ".claude-plugin/plugin.json" all count;
+  // an unrelated "myplugin.json" does not.
+  const namesAManifest = (v) =>
+    /(^|\/)\.claude-plugin(\/|$)/.test(v) || /(^|\/)plugin\.json$/.test(v);
+
+  let found = false;
+  walkAst(ast, (node) => {
+    if (found) return;
+
+    if (node.type === "Literal" || node.type === "TemplateLiteral") {
+      const v = stringValue(node);
+      if (v != null && namesAManifest(v)) found = true;
+      return;
+    }
+
+    if (node.type !== "CallExpression") return;
+    const tail = calleeTail(calleeName(node.callee));
+    if (tail !== "join" && tail !== "resolve") return;
+
+    const args = node.arguments || [];
+    const argStrings = args.map((a) => stringValue(a)).filter((v) => v != null);
+    if (argStrings.some((v) => namesAManifest(v))) {
+      found = true;
+      return;
+    }
+    // The bundle's skills tree — platform-internal UNLESS the join is rooted at
+    // SITE_ROOT, in which case it is the CONSUMER's own tree and registering the
+    // spec would testIgnore it on the very lane it exists for (the #244 lesson).
+    const siteRooted = args.some((a) => subtreeHasIdentifierNamed(a, "SITE_ROOT"));
+    if (argStrings.includes("skills") && !siteRooted) {
+      found = true;
+    }
+  });
+
+  return found;
+}
+
 // ── The detector ─────────────────────────────────────────────────────────
 // Return the list of platform-internal SIGNAL classes a spec's CODE carries
 // (empty ⇒ the spec is not platform-internal). Operates on comment-stripped
@@ -244,6 +324,13 @@ function platformSignals(code, rawSrc = code) {
     /\bfixture-site["'`]\s*,/.test(code)
   ) {
     s.push("platform-fixture");
+  }
+
+  // PLUGIN-ROOT — reads either bundle manifest or the non-SITE_ROOT skills/
+  // tree. Fed the RAW source: acorn discards comments itself, and
+  // stripComments() is a lexical pass whose output must never reach a parser.
+  if (readsPluginRootSurface(rawSrc)) {
+    s.push("plugin-root");
   }
 
   return s;
@@ -384,6 +471,55 @@ test.describe("#16 PLATFORM_META_SPECS recurrence guard", () => {
         "call must STILL be classified platform-internal — the carve-out suppresses exactly the " +
         "one '.github'/'workflows' path-join clause, never the whole workflows-def signal class.",
     ).toBe(true);
+
+    // PLUGIN-ROOT SABOTAGE PROOF (v0.1.83) — the sixth class. Each case asserts
+    // the "plugin-root" signal BY NAME, not merely that the body came out
+    // internal: without that, a case could pass on some other class's signal
+    // and the new class could silently regress to a no-op while the five older
+    // ones kept the test green. That is exactly the shape of blindness this
+    // class was added to remove.
+    const claudeManifestRead = `
+      const path = require("node:path");
+      const PLUGIN_ROOT = path.resolve(__dirname, "..");
+      const CLAUDE_MANIFEST = path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json");
+    `;
+    expect(
+      platformSignals(stripComments(claudeManifestRead), claudeManifestRead),
+      "a spec that reads .claude-plugin/plugin.json reads the PLUGIN ROOT — a surface a " +
+        "consumer never ships (skills install from the agentskills marketplace) — so it must " +
+        "carry the plugin-root signal and be registered.",
+    ).toContain("plugin-root");
+
+    const rootManifestRead = `
+      const path = require("node:path");
+      const ROOT_MANIFEST = path.join(path.resolve(__dirname, ".."), "plugin.json");
+    `;
+    expect(
+      platformSignals(stripComments(rootManifestRead), rootManifestRead),
+      "the root Agent Plugins manifest is the other half of the same surface — a spec reading " +
+        "it must carry the plugin-root signal too.",
+    ).toContain("plugin-root");
+
+    const platformRootedSkillsJoin = `
+      const path = require("node:path");
+      const SKILLS_DIR = path.join(__dirname, "..", "skills");
+    `;
+    expect(
+      platformSignals(stripComments(platformRootedSkillsJoin), platformRootedSkillsJoin),
+      "the bundle's skills/ tree, read from the PLATFORM root, is platform-internal — a " +
+        "consumer ships no skills/ at all since v0.1.83.",
+    ).toContain("plugin-root");
+
+    const siteRootRootedSkillsJoin = `
+      const path = require("node:path");
+      const SKILLS_DIR = path.join(process.env.SITE_ROOT, "skills");
+    `;
+    expect(
+      isPlatformInternal(stripComments(siteRootRootedSkillsJoin), siteRootRootedSkillsJoin),
+      "'skills' is a GENERIC path segment: a SITE_ROOT-rooted join reads the CONSUMER's own " +
+        "tree, and flagging it would push such a spec into PLATFORM_META_SPECS — which " +
+        "testIgnores it on the exact consumer lane it exists for (the #244 lesson).",
+    ).toBe(false);
   });
 });
 

@@ -133,8 +133,18 @@ actions_permissions_defaults:
 
 ruleset_library:
   # why: = live cms-platform ruleset 17169281 as-found 2026-07-10 — protects
-  # main behind the three self-CI lanes (actionlint / ruby-theme-specs /
-  # node-unit-lints) with PR-only writes and no bypass.
+  # main behind the hard-fail self-CI lanes (actionlint / ruby-theme-specs /
+  # node-unit-lints) with PR-only writes and no bypass. `plugin-validate` was
+  # added to the required set in v0.1.83: it is the only check that parses
+  # every `skills/*/SKILL.md` the way the runtime does, and this repo's ROOT is
+  # the plugin root the `agentskills` marketplace federates from — nothing in
+  # that repo can see these manifests, so if self-CI doesn't gate them nothing
+  # does. Left non-required it could not block a merge, which is the exact
+  # weakness that made `platform-drift-guard` (deleted in v0.1.83) worthless.
+  # This leaf is therefore AHEAD of live until a human runs
+  # `node scripts/audit-repo-settings.js --fix --yes` — expected, not drift.
+  # The context string is the self-ci.yml JOB ID (no `name:` override on that
+  # job), matching how the other three are spelled here.
   platform-main:
     target: branch
     enforcement: active
@@ -162,6 +172,7 @@ ruleset_library:
             - context: actionlint
             - context: ruby-theme-specs
             - context: node-unit-lints
+            - context: plugin-validate
     bypass_actors: []
 
   # why: = live adamdaniel.ai ruleset 13985217 as-found 2026-07-10 — the

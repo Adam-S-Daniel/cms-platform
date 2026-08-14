@@ -16,7 +16,8 @@
 #   2. theme-gem ruby unit specs: theme/spec/*_test.rb (hard-fail)
 #   3. node pure-fs harness lints: e2e/*.test.js that need no browser/build
 #                                                      (hard-fail)
-#   4. cfn-lint over the CloudFormation templates      (advisory, soft-fail)
+#   4. claude plugin validate over this repo's plugin ROOT (hard-fail)
+#   5. cfn-lint over the CloudFormation templates      (advisory, soft-fail)
 #
 # NOT RUN HERE (needs a browser / a built Jekyll site / AWS — covered by the
 # e2e reusable + dogfood/consumer CI, not by a unit-speed PR gate):
@@ -188,7 +189,63 @@ jobs:
           echo "Running ${#specs[@]} pure-fs lint spec file(s)."
           npx playwright test --project=chromium-light --reporter=line "${specs[@]}"
 
-  # ── 4. cfn-lint — CloudFormation templates (advisory) ────────────────────
+  # ── 4. claude plugin validate — this repo's own plugin ROOT ──────────────
+  # This repo's ROOT is a plugin root: `agentskills` publishes `cms-platform`
+  # as a FEDERATED marketplace entry sourced straight from here, so nothing in
+  # that repo can see these manifests or these skills — if this workflow
+  # doesn't check them, nothing does (see e2e/plugin-manifests.test.js's
+  # header for the full federation model).
+  #
+  # NON-STRICT, DELIBERATELY. Do NOT add `--strict`, and do NOT "fix" a red
+  # strict run by deleting CLAUDE.md. `--strict` treats warnings as errors,
+  # and this plugin root emits exactly one warning, permanently:
+  #   "root: CLAUDE.md at the plugin root is not loaded as project context.
+  #    To ship context with your plugin, use a skill instead."
+  # CLAUDE.md is the repo's agent guidance, managed by the _agent-guidance
+  # sync and not ours to delete — so `--strict` would be a gate whose only
+  # green path is removing a file we must keep. Measured 2026-08-14 with CLI
+  # 2.1.221: `--strict` exits 1 on this tree, 0 on the identical tree with
+  # CLAUDE.md removed; non-strict exits 0.
+  #
+  # WHY GATE ON IT AT ALL, next to the pure-fs lint in lane 3: the two catch
+  # DIFFERENT defects and neither subsumes the other. The CLI is the only
+  # check here that parses every skills/*/SKILL.md the way the runtime does —
+  # unparseable frontmatter YAML is a hard exit 1 (measured), which is exactly
+  # the defect class that shipped in skills/cms-platform-secrets. It is blind,
+  # though, to a frontmatter `name` that disagrees with its directory, to an
+  # over-1024-character description, and to the root plugin.json altogether (a
+  # root manifest carrying a 2.0.0 `$schema` plus `category`/`defaultEnabled`/
+  # `skills`/`author.github` still exits 0 — all measured 2026-08-14).
+  # e2e/plugin-manifests.test.js is what covers those.
+  plugin-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0 (2026-07-14)
+        with:
+          node-version: '20'
+
+      - name: Install the Claude Code CLI
+        env:
+          # Pinned + dated like the actionlint binary above, and past the
+          # 7-day dependency cooling-off (published 2026-08-03). Bump
+          # deliberately: the validator's warning set is what lane behaviour
+          # depends on.
+          CLAUDE_CODE_VERSION: '2.1.221'  # 2026-08-03
+        run: |
+          set -euo pipefail
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      - name: Validate the plugin root
+        # NON-STRICT on purpose — see the block comment above this job before
+        # changing this line.
+        run: claude plugin validate .
+
+  # ── 5. cfn-lint — CloudFormation templates (advisory) ────────────────────
   # `aws cloudformation validate-template` needs AWS credentials we don't have
   # in CI, so cfn-lint is the credential-free stand-in. Marked
   # continue-on-error: a cfn-lint version bump or a new rule shouldn't block an

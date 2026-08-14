@@ -144,11 +144,6 @@ const PLATFORM_META_SPECS = [
   // files must stay in lockstep. Reads .github/workflows + scripts + scaffold
   // (platform source), so platform-internal / self-CI only.
   "dev-hooks-sync.test.js",
-  // Locks the skills-sync repo-local carve-out: the reusable must keep
-  // rsync --delete yet exclude `.repo-local`-marked skills from transfer AND
-  // deletion. Reads the PLATFORM reusable workflow + skills/README.md source;
-  // platform-internal, self-CI only.
-  "skills-sync.test.js",
   // #123 — locks the visual-regression PROD baseline origin: PROD_BASE in
   // regression-video.spec.js must derive from APEX_DOMAIN (the consumer apex),
   // never a hardcoded site. Reads the platform e2e source; self-CI only.
@@ -209,6 +204,14 @@ const PLATFORM_META_SPECS = [
   // self-test; ENOENT/no-op on a consumer (no platform tree to police).
   "platform-meta-spec-registry.test.js",
   "playwright-image-drift.test.js",
+  // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
+  // root plugin.json + .claude-plugin/plugin.json manifests, the vendored
+  // Agent Plugins schema under e2e/fixtures/, and every skills/<name>/SKILL.md).
+  // A consumer ships none of that — skills are installed from the agentskills
+  // marketplace, never mirrored into a site — so it is platform-internal,
+  // self-CI only. (It also self-skips on SITE_ROOT; this registration is the
+  // belt to that spec's braces, and is what the recurrence guard demands.)
+  "plugin-manifests.test.js",
   // Reads the platform's SOURCE config templates (theme/admin/config*.yml)
   // + posts-list-enhance.js — meaningless on a consumer, which only ships
   // the rendered config.
