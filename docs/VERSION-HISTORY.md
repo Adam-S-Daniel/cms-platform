@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.82)
+## Version history (v0.1.0 → v0.1.83)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -434,9 +434,24 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   DEST presence; the platform never forces a mirror into existence. Preserves
   workflow-set parity (the canonical workflow stays present on EVERY consumer —
   only its behavior is data-driven; option (b) "drop it from the canonical set"
-  rejected as it forks the workflow set + the parity check). Gate unit-tested
+  rejected as it forks the workflow set + the parity check). Workflow-only; no
+  theme/gem change.
+
+  **Correction (v0.1.83).** This entry used to claim the gate was "unit-tested
   across absent / real-dir / symlink->dir / dangling-symlink / empty-dir (skips
-  ONLY on fully-absent). Workflow-only; no theme/gem change.
+  ONLY on fully-absent)." **No such test ever existed.**
+  `e2e/skills-sync.test.js` contained exactly four assertions, every one of them
+  about the `.repo-local` carve-out or the drift gate: that the reusable keeps
+  `rsync --delete`; that it discovers `.repo-local` markers, builds anchored
+  `--exclude=/${name}/` arguments, and never passes `--delete-excluded`; that
+  the "already in sync" early-exit tests untracked-aware `git status
+  --porcelain` rather than untracked-blind `git diff --quiet`; and that
+  `skills/README.md` documents the opt-out. None of them read the `[ ! -e
+  "$DEST" ] && [ ! -L "$DEST" ]` line, and no spec anywhere in `e2e/` ever
+  mentioned a symlink, an `lstat`, or a dangling link in connection with it —
+  the five-case matrix was fabricated. The gate shipped with zero coverage and
+  was deleted in v0.1.83; see that entry for why it could not have worked even
+  if it had been tested.
 
 - **v0.1.46** (2026-06-29) — **centralize the secrets-scan + lint-staged
   pre-commit guards (dev-hooks-sync, issue #116; also unblocks adamdaniel#2007-P7).**
@@ -576,7 +591,8 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   skills, so no guard change was needed. Lock: `e2e/skills-sync.test.js` asserts
   the reusable keeps `--delete`, discovers `.repo-local`, builds anchored
   excludes, and never passes `--delete-excluded`. Consumers opt a skill in by
-  committing `.claude/skills/<name>/.repo-local` (see `skills/README.md`).
+  committing `.claude/skills/<name>/.repo-local` (the mechanism and its
+  `skills/README.md` section were deleted in v0.1.83 — see that entry).
 - **v0.1.64** (2026-07-13) — **`skills-sync` additive drift is no longer
   silently dropped.** The "did anything change?" gate used `git diff --quiet`,
   which is BLIND to untracked files. rsync brings NEW platform skills in as
@@ -1318,3 +1334,106 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   platform-bump section and the `platform-release-and-bump` skill step 2b.
 
   Closes #244. Refs #242, #246.
+
+- **v0.1.83** (2026-08-14) — **skills stop being a file transport and become a
+  published bundle; the sync workflow, its drift guard, and their tests are
+  deleted.** `skills/` remains the canonical home of every platform skill and
+  authoring is unchanged — what goes away is the machinery that copied that
+  directory into a consumer and then policed the copy.
+
+  **Deleted:** `.github/workflows/skills-sync.yml`,
+  `.github/workflows/platform-drift-guard.yml`, both of their `examples/site`
+  thin callers, and `e2e/skills-sync.test.js`. The issue #83
+  destination-presence gate and the v0.1.63 `.repo-local` carve-out go with
+  them — both were properties of the transport, and there is no transport left
+  to opt out of.
+
+  **Replaced by a federated bundle.** The repo now carries a bundle manifest
+  (`.claude-plugin/plugin.json`, plus a root `plugin.json`) so the
+  `agentskills` marketplace can resolve `cms-platform` **straight from this
+  repo** rather than mirroring a copy of it. A durable machine installs it once
+  (`/plugin install cms-platform@agentskills`) and invokes the skills namespaced
+  as `/cms-platform:<skill>`. On an ephemeral surface — a cloud session, a CI
+  runner — that install does not persist, so the channel is the registry's
+  `skills-bootstrap` SessionStart hook, which installs against a pinned,
+  per-skill-hashed `skills.lock` because fetching instruction text at session
+  start is a supply-chain surface. That lock is a **per-consuming-repo**
+  artifact, not a registry-wide one: a repo gets this bundle only once its own
+  `skills.lock` declares `cms-platform` as a source, pinned to a commit with
+  per-skill digests. The registry's own `skills.lock` deliberately stays
+  `adam`-only and will not carry these skills. As of this release the
+  marketplace entry is the part that exists — **no consuming repo has declared
+  the source yet**, so the hook path is available rather than in use. Nothing is
+  rsynced into a consumer and no consumer vendors a copy, so there is no second
+  copy to drift.
+
+  **The `skills-sync` transport never reached every consumer anyway.** The
+  literal "copies into every consumer's `.claude/skills/`" in the root README
+  and "synced to every consumer via skills-sync" in the `cms-platform-secrets`
+  skill — and the same universal framing in `docs/SYNC.md`'s and
+  `docs/ARCHITECTURE.md`'s per-layer tables — were already false when written:
+  jodidaniel.com is a consumer, ships the `skills-sync.yml` caller to this day,
+  and has never had a `.claude/skills` directory at all. Those sentences are
+  corrected in this release rather than carried forward.
+
+  **What `platform-drift-guard` actually did.** Contemporary prose said it
+  *enforced* byte-parity between a consumer's `.claude/skills/` and the
+  platform. It did not, on three counts: it was **never a required check** (the
+  `consumer-main` ruleset requires `editorial / validate-content`, `scan /
+  scan`, `parity / parity`, `preview-media / preview-media`, `e2e / e2e`, and
+  `visual-regression / approve-regression` — the guard is not among them), so a
+  red run never blocked a merge; it walked `find "$p" -type f` over files
+  **present in the site**, so a platform-owned skill *deleted* from a consumer
+  was invisible to it; and its per-path loop opened with `[ -d "$p" ] || [ -f
+  "$p" ] || continue`, so an absent `.claude/skills` produced "No platform
+  drift." and a green exit. No drift was ever observed — but the strongest
+  thing the tree supports is a point-in-time observation, not a lifetime
+  claim: the one consumer that ever had a mirror (adamdaniel.ai) was
+  byte-identical at the time of removal. That is **observed zero, not enforced
+  zero**, and the distinction is the reason removing the guard costs nothing.
+
+  **Why the #83 gate is a deletion and not a repair — it could never achieve
+  its stated goal.** Its comment says it exists so a consumer "can drop its
+  mirror durably," but the gate keys on `.claude/skills` **existing** (`[ ! -e
+  "$DEST" ] && [ ! -L "$DEST" ]` → skip), while the `.repo-local` carve-out
+  requires a site-owned skill to live at `.claude/skills/<name>/.repo-local` —
+  inside that very path. So the state "this site owns skills of its own but
+  wants none of the platform's" is **unrepresentable by construction**: owning
+  a site-local skill makes `$DEST` exist, which disarms the gate, which
+  re-installs the whole platform set on the next run. The two features were
+  mutually exclusive on the same directory. That is a design contradiction, not
+  an oversight or a bug with a patch, which is why nothing here tries to fix
+  the gate. (It was also, per the v0.1.45 correction above, entirely untested —
+  the five-case coverage matrix that entry advertised was fabricated.)
+
+  **Skill-content fixes carried in the same release.** `skills/workflow-path-audit`
+  is **deleted** — the `adam` bundle ships the same skill, and a consumer with
+  both installed would see two `workflow-path-audit` entries competing to
+  trigger. `skills/cms-platform-secrets/SKILL.md` carried its whole
+  `description:` on one unquoted line — 1079 characters, past the 1024-char
+  limit, and **not valid YAML at all**: the embedded `"Input required and not
+  supplied: github-token"` puts a colon-space inside a plain scalar, so
+  `yaml.safe_load` on that frontmatter raises `mapping values are not allowed
+  here`. It is now a `>-` block scalar at 1006 characters, which parses, and
+  which no longer closes on the false "synced to every consumer via
+  skills-sync". Finally, several skills quoted their payload paths as if the
+  scripts sat beside the skill (`ruby scripts/render-decap-config.rb`, `node
+  scripts/audit-editorial-labels.js`) — true under the old mirror, where the
+  skill and the scripts shared one repo, but false for a bundle-installed
+  skill, which lands in `~/.claude/skills` with no platform checkout anywhere
+  near it. Those are now repo-relative (`cms-platform/scripts/…`) with a note
+  naming what they are relative to.
+
+  **Consumers must delete both callers in the SAME commit as the
+  `platform_ref` bump.** `check-platform-pin-consistency.js` compares a
+  consumer's `.github/workflows/*.yml` basenames against the canonical set read
+  from `examples/site/.github/workflows/` **at the pinned ref**, and reports
+  both directions. Split the change across two commits and exactly one side
+  goes red: delete the callers first and the still-pinned old ref reports
+  `workflow-set: MISSING (platform-dictated)`; bump `platform_ref` first and
+  the new canonical set — which no longer contains either file — reports
+  `workflow-set: EXTRA (not platform-dictated)`. Note that the automated
+  `platform-bump` PR **cannot do this for you**: it seeds a wholly-missing
+  dictated caller but never deletes a de-dictated one (deliberately — see its
+  seeding comment), so the v0.1.83 bump PR arrives carrying both stale callers
+  and fails parity until the two deletions are added to it.

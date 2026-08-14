@@ -26,6 +26,11 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      # Needed only by the manifest-version guard inside the next step — the
+      # release itself is cut server-side by `gh`, which needs no worktree.
+      - name: Check out the ref being tagged
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -52,6 +57,30 @@ jobs:
           fi
           if gh release view "$VERSION" --repo "$GH_REPO" >/dev/null 2>&1; then
             echo "::error::release ${VERSION} already exists"
+            exit 1
+          fi
+          # The two plugin manifests carry this version as well — Claude Code
+          # reads .claude-plugin/plugin.json, the Agent Plugins conformant
+          # clients (Codex/VS Code/Cursor/Copilot) read the root plugin.json —
+          # and until v0.1.83 NOTHING kept them in step with the tag, which is
+          # how they shipped declaring 0.1.82 in the very release that
+          # introduced them. This job cannot rewrite-and-push them either:
+          # `main` is PR-only by ruleset, so a release-time commit would be
+          # rejected (GH013). So the release REFUSES to cut a tag the manifests
+          # disagree with, which puts the bump in the release PR — reviewed,
+          # atomic with AGENTS.md + docs/VERSION-HISTORY.md — instead of in a
+          # step that can silently skew. e2e/plugin-manifests.test.js separately
+          # locks the two manifests to EACH OTHER; this locks them to the TAG.
+          expected="${VERSION#v}"
+          skew=0
+          for manifest in plugin.json .claude-plugin/plugin.json; do
+            declared=$(jq -r '.version // ""' "$manifest")
+            if [ "$declared" != "$expected" ]; then
+              echo "::error file=${manifest}::${manifest} declares version '${declared}' but this run cuts ${VERSION} (expected '${expected}'). Bump BOTH manifests and AGENTS.md's 'Current release:' line in the release PR, then re-dispatch."
+              skew=1
+            fi
+          done
+          if [ "$skew" -ne 0 ]; then
             exit 1
           fi
           gh release create "$VERSION" \

@@ -24,7 +24,7 @@ An editorial-workflow PR is an open PR whose head branch starts with the CMS
 branch prefix (default `cms/`). It is HEALTHY iff it carries exactly one
 `decap-cms/<status>` label.
 
-## Tooling shipped here
+## Tooling (ships in the cms-platform repo, not with this skill)
 
 - **`scripts/audit-editorial-labels.js`** — lists open `cms/*` PRs and flags any
   missing exactly one `decap-cms/<status>` label. With `--fix` it SELF-HEALS:
@@ -35,7 +35,9 @@ branch prefix (default `cms/`). It is HEALTHY iff it carries exactly one
   gh-authenticated env (`GH_TOKEN` or `gh auth`); `--fix` additionally needs
   that token to have `pull-requests: write`.
   ```bash
-  node scripts/audit-editorial-labels.js [--repo owner/name] \
+  # Run from the directory HOLDING your cms-platform checkout; CI instead
+  # sparse-checks the script into `.cms-platform/` (see the reusable below).
+  node cms-platform/scripts/audit-editorial-labels.js [--repo owner/name] \
     [--branch-prefix cms/] [--label-prefix decap-cms] [--fix]
   ```
 - **`.github/workflows/editorial-label-audit.yml`** — reusable `workflow_call`.

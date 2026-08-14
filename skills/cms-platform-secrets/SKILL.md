@@ -1,6 +1,20 @@
 ---
 name: cms-platform-secrets
-description: The exact GitHub Actions repository secrets AND variables a cms-platform consumer site must set — the precise fine-grained PAT permissions for each secret, plus the repo variables the reusable workflows read via vars.* and the scripts/set-repo-variables.sh setter that derives them. Use when setting up a new consumer, when a workflow fails with "GH_TOKEN env var is required" / "Input required and not supplied: github-token" / a startup_failure on a required secret, when auto-merge/nudge/sweep/auto-resolve don't run, when a loop probes the wrong URL/bucket, or when platform-bump fails "refusing to allow ... to update workflow ... without 'workflows' permission". Canonical, platform-versioned, synced to every consumer via skills-sync. Trigger on "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "WORKFLOW_SHA_COMMENT_PAT", "CMS_AUTOMATION_APP_ID", "CMS_AUTOMATION_APP_PRIVATE_KEY", "dependabot-comment-sync", "required secrets", "PAT permissions", "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables", "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
+description: >-
+  The exact GitHub Actions repository secrets AND variables a cms-platform
+  consumer site must set — the precise fine-grained PAT permissions for each
+  secret, plus the repo variables the reusable workflows read via vars.* and
+  the scripts/set-repo-variables.sh setter that derives them. Use when setting
+  up a new consumer, when a workflow fails with "GH_TOKEN env var is required"
+  / "Input required and not supplied: github-token" / a startup_failure on a
+  required secret, when auto-merge/nudge/sweep/auto-resolve don't run, when a
+  loop probes the wrong URL/bucket, or when platform-bump fails "refusing to
+  allow ... to update workflow ... without 'workflows' permission". Trigger on
+  "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "WORKFLOW_SHA_COMMENT_PAT",
+  "CMS_AUTOMATION_APP_ID", "CMS_AUTOMATION_APP_PRIVATE_KEY",
+  "dependabot-comment-sync", "required secrets", "PAT permissions",
+  "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables",
+  "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
 ---
 
 # Required GitHub secrets and variables for a cms-platform consumer
@@ -9,8 +23,10 @@ Set these as **Actions repository secrets** on the consumer repo
 (Settings → Secrets and variables → Actions → New repository secret). Two are
 Personal Access Tokens you create by hand; the three AWS values are emitted by
 the bootstrap stack (see the `aws-bootstrap` skill). This file is the single
-source of truth — it ships from cms-platform and syncs into every consumer's
-`.claude/skills/` via `skills-sync`.
+source of truth. It is authored in `cms-platform`'s `skills/` and reaches a
+session through the `cms-platform` bundle in the `agentskills` marketplace
+(`/plugin install cms-platform@agentskills`) — nothing copies it into a consumer
+repo, so a consumer's checkout is never a place to look for or edit it.
 
 > **Policy: fine-grained PATs only — never classic PATs.** Every token below is
 > a [fine-grained personal access token](https://github.com/settings/personal-access-tokens)

@@ -23,9 +23,10 @@ Two repos, not one:
 - **per-site repo** — holds only content (`_posts/`, `pages/`, …), identity (`_config.yml`),
   site-only overrides, and *thin consumers* of the platform.
 
-Site content, branding, and domain **never** sync. Platform / infra / CI / tooling /
-skills **always** sync; structural scaffolding (new collection types, layout patterns)
-is **opt-in** per site.
+Site content, branding, and domain **never** sync. Platform / infra / CI / tooling
+**always** sync; structural scaffolding (new collection types, layout patterns)
+is **opt-in** per site. Agent skills are a fourth case — they are authored here but
+**not synced into a site at all**; they ship as a marketplace bundle (below).
 
 ## How each layer is shared
 
@@ -35,11 +36,37 @@ is **opt-in** per site.
 | Jekyll theme | theme gem (layouts/includes/assets/plugin) | `platform-bump` (Dependabot ignores this gem, #242) | PR to this repo |
 | Decap CMS config | build-time render from the site's `_config.yml` | gem bump (`platform-bump`) | PR to this repo |
 | AWS infra | versioned CloudFormation (S3-published templates) | `platform-bump` workflow | PR to this repo |
-| `.claude` skills | `skills-sync` workflow at the pinned tag | same SHA pin | PR to this repo |
+| Agent skills | the `agentskills` marketplace, which federates the `cms-platform` bundle from `skills/` in this repo | **none** — nothing is copied into a site (see "Agent skills" below) | PR to this repo |
 
 Bidirectional sync in one line: **improvement made anywhere → PR to `cms-platform` →
-new tag → `platform-bump` fans the bump out to every site**; a `platform-drift-guard` check
-catches site edits to platform-owned files and routes them back here.
+new tag → `platform-bump` fans the bump out to every site**. Nothing platform-owned
+is vendored into a site anymore — the admin machinery ships in the gem and the skills
+in a marketplace bundle — so the `platform-drift-guard` check that used to police
+vendored copies was removed in v0.1.83.
+
+## Agent skills
+
+`skills/` is the canonical home of the platform's skills and the only place one is
+edited. They are **not** synced into a consumer: they are published as a federated
+bundle in the [`agentskills`](https://github.com/Adam-S-Daniel/agentskills)
+marketplace, which resolves `cms-platform` from this repo's plugin manifest.
+
+Type these two in a Claude Code session (they are slash commands, not shell):
+
+```text
+/plugin marketplace add Adam-S-Daniel/agentskills
+/plugin install cms-platform@agentskills
+```
+
+Skills are bundle-namespaced, so they invoke as `/cms-platform:<skill>` — e.g.
+`/cms-platform:admin-config-render`. On an ephemeral surface where that install
+does not persist (a cloud session, a CI runner), the delivery channel is instead
+the registry's `skills-bootstrap` SessionStart hook — but that hook installs this
+bundle into a repo only once **that repo's own `skills.lock`** declares
+`cms-platform` as a source, pinned and integrity-checked per skill. The lock is a
+per-consuming-repo artifact; the registry's own stays `adam`-only by design, and
+no consuming repo has declared the source yet. No consumer vendors a copy, so
+there is none to drift.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete plan.
 
@@ -47,9 +74,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete plan.
 
 Each consumer repo needs two hand-made PATs plus three AWS values. The **canonical,
 versioned spec — with the exact fine-grained permissions for each — lives in the
-`cms-platform-secrets` skill** (`skills/cms-platform-secrets/SKILL.md`), which
-`skills-sync` copies into every consumer's `.claude/skills/`, so it travels with the
-platform. At a glance:
+`cms-platform-secrets` skill** (`skills/cms-platform-secrets/SKILL.md`), which reaches
+a session through the marketplace bundle above rather than through the consumer repo.
+At a glance:
 
 - **`CMS_E2E_PAT`** (CMS automation + canary loops) — fine-grained, this repo: **Contents R/W, Pull requests R/W, Actions Read *and write***. Actions *write* is for `regression-review-reaper` (rejecting superseded review-gate deployments); the PAT user must also be a reviewer of the `regression-review` environment. Must be a PAT, not `GITHUB_TOKEN`, so canary-PR events fire downstream workflows.
 - **`CMS_PLATFORM_PAT`** (the `platform-bump` auto-bump) — the same **plus Workflows R/W**, because the bump rewrites `.github/workflows/*` pins. Missing this is issue #13.

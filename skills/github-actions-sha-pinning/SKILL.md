@@ -15,15 +15,17 @@ Git tags are mutable — a compromised maintainer can move a tag to arbitrary co
 # WRONG — mutable tag
 - uses: actions/checkout@v4
 
-# RIGHT — immutable SHA with version comment
-- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+# RIGHT — immutable SHA with dated version comment
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
 ```
 
-Every `uses:` line must reference a full 40-character commit SHA followed by a comment containing the exact version number (`# vX.Y.Z`).
+Every `uses:` line must reference a full 40-character commit SHA followed by a comment containing the exact version number **and its release date** (`# vX.Y.Z (YYYY-MM-DD)`).
 
-## Rule 2: Always include a version comment
+## Rule 2: Always include a dated version comment
 
-Append `  # vX.Y.Z` (two spaces before `#`) to the right of the SHA on the same line. This is required so humans can tell at a glance which version is pinned and agents know when to check for updates.
+Append `  # vX.Y.Z (YYYY-MM-DD)` (two spaces before `#`) to the right of the SHA on the same line. This is required so humans can tell at a glance which version is pinned and agents know when to check for updates.
+
+**The date is not optional.** It is what makes Rule 3's cooling-off auditable from the diff alone — without it a reviewer cannot tell a week-old release from a same-day one. AGENTS.md states the same convention ("SHA-pin every workflow `uses:` with a `# vX.Y.Z (date)` comment"), `dependabot-comment-sync.yml` exists specifically to keep the `(YYYY-MM-DD)` suffix accurate, and every pin in the tree already carries it — in cms-platform the count of pins carrying a dated comment equals the count of pins, with no exceptions.
 
 ## Rule 3: 7-day cooling-off period
 

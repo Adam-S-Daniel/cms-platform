@@ -7,7 +7,7 @@
  *       --owner Adam-S-Daniel --repo example.com --domain example.com --title "Example"
  *
  * Flags may be omitted; you'll be prompted. Copies the platform-owned files
- * (the admin/collections.site.yml.example seam reference, skills, thin
+ * (the admin/collections.site.yml.example seam reference, thin
  * workflow callers, dependabot) from this repo and generates the site
  * identity (_config.yml, Gemfile, site-params.env). Content,
  * branding, and AWS values stay in the new site; platform machinery flows in
@@ -160,7 +160,16 @@ async function main() {
     "admin/collections.site.yml.example",
     fs.readFileSync(path.join(PLATFORM_ROOT, "theme/admin/collections.site.yml.example"), "utf8"),
   );
-  copyTree(path.join(PLATFORM_ROOT, "skills"), path.join(target, ".claude/skills"));
+  // Platform skills are NOT vendored into a site. They ship as a federated
+  // bundle in the agentskills marketplace (`/plugin install
+  // cms-platform@agentskills`); on an ephemeral surface that install does not
+  // persist, and the channel there — that registry's skills-bootstrap
+  // SessionStart hook — delivers this bundle to a repo only once THAT repo's
+  // own `skills.lock` declares cms-platform as a source. The lock is a
+  // per-consuming-repo artifact, and a freshly scaffolded site has none at
+  // all, so it receives nothing here today. That is the point: a new site is
+  // never born with a `.claude/skills` mirror that nothing syncs and nothing
+  // guards.
 
   // Pre-commit guards (secrets-scan + lint-staged) — platform-authoritative,
   // kept current by .github/workflows/dev-hooks-sync.yml. Seed the canonical
@@ -478,7 +487,7 @@ function siteReadme({ title, domain, owner, repo, platformVersion }) {
   return `# ${title}
 
 A [cms-platform](https://github.com/${PLATFORM_REPO}) site. Machinery (theme,
-workflows, infra, skills) flows in from the platform; this repo holds the
+workflows, infra) flows in from the platform; this repo holds the
 content + identity.
 
 - Production: https://${domain}
@@ -506,8 +515,8 @@ Next:
        set -a; source infrastructure/site-params.env; set +a
        bash infrastructure/bootstrap/deploy.sh   # committed delegating wrapper
        bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,user,workflow)
-  5. Add GitHub secrets (exact fine-grained PAT permissions: see
-     .claude/skills/cms-platform-secrets/SKILL.md):
+  5. Add GitHub secrets (exact fine-grained PAT permissions: see the
+     /cms-platform:cms-platform-secrets skill, from the agentskills bundle):
        - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W; PAT user = reviewer of the regression-review env
        - CMS_PLATFORM_PAT same + Workflows R/W -- for platform-bump
        - AWS_ROLE_ARN, PREVIEW_CLOUDFRONT_ID, PRODUCTION_CLOUDFRONT_ID (bootstrap stack outputs)
