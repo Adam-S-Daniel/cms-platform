@@ -191,8 +191,14 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.82`** — `v0.1.0`–`v0.1.82` are all tagged GitHub
+**Current release: `v0.1.83`** — `v0.1.0`–`v0.1.83` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
+That number is also carried by the two plugin manifests (`plugin.json` +
+`.claude-plugin/plugin.json`), and `release.yml` REFUSES to cut a tag whose
+version disagrees with them — so bumping this line, both manifests, and the
+`docs/VERSION-HISTORY.md` entry is one atomic edit made in the release PR,
+before the dispatch.
+
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9
 per-section collections, `base_collections: []`, gated coming-soon). See
@@ -203,7 +209,8 @@ open issues" below.
 
 Two repos. **This repo owns all machinery** (versioned, semver tags). A **site
 repo** holds only content + identity (`_config.yml`) + thin consumers. Site
-content/branding/docs **never** sync; platform/infra/CI/tooling/skills do;
+content/branding/docs **never** sync; platform/infra/CI/tooling do (skills are
+not synced at all — see "Skills ship as a marketplace bundle" below);
 structural scaffolding (collection types) is opt-in via the SITE-owned seam
 `admin/collections.site.yml`. The Decap admin UI itself ships **inside the
 theme gem** (since v0.1.4) — consumers no longer vendor a byte-copy of `admin/`;
@@ -290,8 +297,8 @@ the gem onto a consumer's live `/admin`.
   any drift.
 - **SHA-pin every workflow `uses:`** with a `# vX.Y.Z (date)` comment; 7-day
   cooling-off before bumping (mirrors adamdaniel.ai policy).
-- **Verify before claiming done** — run the render, drift-guard, scaffolder
-  against throwaway inputs; syntax-check YAML/bash/Ruby/JS. See "Verify" below.
+- **Verify before claiming done** — run the render and the scaffolder against
+  throwaway inputs; syntax-check YAML/bash/Ruby/JS. See "Verify" below.
 - **Record knowledge here (AGENTS.md) and/or in `skills/`, not only in agent
   memory** — Adam's standing preference.
 - **Two render paths stay in lockstep.** The live Decap config + `window.CMS_*`
@@ -356,6 +363,27 @@ On an org-owned consumer, an unapproved OAuth App lets Decap authenticate and
 read but silently fails every persist — and there is no reliable API check
 for it. → read `docs/CONSUMER-COMPATIBILITY.md` before debugging a "login
 works, saving doesn't" report on an org-owned site.
+
+## Skills ship as a marketplace bundle, not a file sync (v0.1.83)
+
+`skills/` is the canonical home of the platform skills and the only place one
+is authored — but **nothing copies it into a consumer**. The repo is published
+as a federated bundle in the `agentskills` marketplace
+(`/plugin install cms-platform@agentskills`, invoked as `/cms-platform:<skill>`);
+an ephemeral surface (cloud session, CI runner) gets the same set from that
+registry's `skills-bootstrap` SessionStart hook — but only once the **consuming
+repo's own** `skills.lock` declares `cms-platform` as a source, pinned to a
+commit with per-skill digests. The lock is per-consuming-repo: the registry's
+own stays `adam`-only by design and never carries these skills, and no consumer
+has declared the source yet. The `skills-sync.yml`
+transport, its `platform-drift-guard.yml` companion, the issue #83
+destination-presence gate and the `.repo-local` carve-out were all **deleted**
+in v0.1.83 — do not reintroduce a per-consumer mirror, and do not add a
+`skills/` copy to a consumer repo. A **consumer adopting v0.1.83 must delete
+both thin callers in the same commit as its `platform_ref` bump**, or
+workflow-set parity reports MISSING/EXTRA and goes red. → read `docs/SYNC.md`
+("Skills — federated, not synced") and `docs/VERSION-HISTORY.md` v0.1.83
+before touching skill delivery.
 
 ## Single-version pin consistency guard (anti-skew, #29)
 
@@ -495,7 +523,7 @@ globs.
 other workflow here is an `on: workflow_call` reusable; `self-ci.yml` plus its
 sibling `self-secrets-scan.yml` — which dogfoods the `secrets-scan.yml`
 reusable on this repo's own history — are the only two that run directly on a
-plain PR). It runs four FAST lanes on `pull_request` + `push` to `main`:
+plain PR). It runs five FAST lanes on `pull_request` + `push` to `main`:
 
 1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail).
 2. **ruby-theme-specs** — `theme/spec/*_test.rb` (hard-fail).
@@ -503,7 +531,13 @@ plain PR). It runs four FAST lanes on `pull_request` + `push` to `main`:
    exclusion DENY list (build-/repo-dependent specs are denied; a new pure-fs
    lint is picked up automatically). Run with `TARGET=prod` +
    `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so no Jekyll/browser bring-up (hard-fail).
-4. **cfn-lint** over the CloudFormation templates (advisory, `continue-on-error`).
+4. **plugin-validate** — `claude plugin validate .` over this repo's own plugin
+   root (hard-fail), NON-STRICT deliberately: the repo-root `CLAUDE.md` emits a
+   permanent "not loaded as project context" warning that `--strict` would turn
+   into a failure, and `CLAUDE.md` is managed by the `_agent-guidance` sync and
+   is not ours to delete — so `--strict`'s only green path is removing a file we
+   must keep.
+5. **cfn-lint** over the CloudFormation templates (advisory, `continue-on-error`).
 
 `self-secrets-scan.yml` (#126) runs alongside it as its own workflow,
 gitleaks-scanning the platform repo's diff on `pull_request`, incrementally on
@@ -527,7 +561,7 @@ check the platform out into `.cms-platform/` (a dot-dir Jekyll ignores) at
 ```bash
 ruby scripts/render-decap-config.rb <site> <site>/_site   # Decap render
 node scaffold/create-site.js /tmp/x --yes --domain d --repo d --owner o   # scaffolder
-# drift-guard + workflows: python3 -c 'import yaml,...' parse + bash -n the run: blocks
+# workflows: python3 -c 'import yaml,...' parse + bash -n the run: blocks
 ```
 
 ## Definition of done (non-trivial changes)

@@ -9,7 +9,7 @@ How platform changes reach sites, and how site-side improvements get back.
 | Reusable workflow `uses:@<tag>` pins | **`platform-bump`** (Dependabot's `github-actions` ecosystem `ignore`s every cms-platform ref as of #244 — see below) |
 | `cms-platform-theme` gem (layouts/includes/assets/plugins + Decap render hook + **admin UI** `theme/admin`) | **`platform-bump`** (Dependabot's `bundler` ecosystem `ignore`s this gem as of #242 — see below) |
 | **EVERY** version ref in ONE PR — `platform_ref:` inputs + `platform.lock`, the `uses:@<tag>` pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:`, and any composite `@<sha>` pin — plus seeding any workflow caller the release newly made platform-dictated | **`platform-bump`** reusable workflow — an **atomic single-version bump** (#13) that also seeds newly-dictated workflow callers so workflow-SET parity (#54) passes too. Checks out with the caller PAT so the workflow-file push is authorised |
-| Skills (`.claude/skills`) | **`skills-sync`** reusable workflow (rsync + PR, platform-authoritative) |
+| Skills (`skills/`) | **not a down-sync at all** — published as a federated bundle in the `agentskills` marketplace; nothing is copied into a consumer (see "Skills" below) |
 | AWS infra templates | re-run `infrastructure/*/deploy.sh` with the new templates |
 
 Cut a release on `cms-platform` (Actions → **Cut release**, `workflow_dispatch`
@@ -145,9 +145,19 @@ version-pin-consistency (#29).
 
 ## Up (site → platform)
 
-**`platform-drift-guard`** runs on site PRs: platform-owned files that live in the
-site (`.claude/skills/`) must byte-match the platform at the site's pinned ref. A PR
-that edits one **fails** with guidance to make the change in `cms-platform` instead.
+**No platform-owned file physically lives in a site anymore**, so there is nothing
+left to byte-match: the admin machinery ships in the gem (v0.1.4) and the skills
+ship as a marketplace bundle (v0.1.83). The up-sync route is therefore just the
+plain one — make the change **here** and open a PR against this repo.
+
+The `platform-drift-guard` reusable, which byte-compared a consumer's vendored
+`.claude/skills/` against the platform at its pinned ref, was **deleted in
+v0.1.83** along with the transport that created those copies. It is worth being
+precise about what it did, because prose elsewhere used to say it *enforced*
+parity: it was never a required check on `consumer-main`, it iterated the files
+**present** in the site (so a deleted platform-owned file was invisible to it),
+and it exited green when the guarded path was absent. Drift over its lifetime was
+**observed zero, never enforced zero**.
 
 The **admin machinery** (`admin/` except the seam) is shipped via the `cms-platform-theme`
 gem (`theme/admin`) as of v0.1.4 — sites no longer vendor byte-copies, so it isn't
@@ -160,6 +170,39 @@ v0.1.7) without forking any admin file.
 
 So an improvement made while working on any site is routed here as a PR → merge →
 tag → it flows back down to all sites. Site **content/branding/docs never sync** — only machinery.
+
+## Skills — federated, not synced (v0.1.83)
+
+`skills/` in this repo is the canonical home of the platform skills, and the only
+place one is authored or edited. They do **not** travel down any of the paths
+above:
+
+- They are published as a **federated bundle in the `agentskills` marketplace**
+  (`Adam-S-Daniel/agentskills`), which resolves the `cms-platform` bundle from
+  this repo's own plugin manifest rather than holding a mirror of it.
+- A **durable machine** installs it once with
+  `/plugin install cms-platform@agentskills`; skills are bundle-namespaced, so
+  they invoke as `/cms-platform:<skill>`.
+- On an **ephemeral surface** — a Claude Code cloud session, a CI runner —
+  that install does not persist, so the delivery channel is the registry's
+  `skills-bootstrap` SessionStart hook. The hook installs what a pinned,
+  per-skill-hashed `skills.lock` names, and that lock is a **per-consuming-repo
+  artifact**: a repo receives this bundle only once its own `skills.lock`
+  declares `cms-platform` as a source, pinned to a commit with per-skill
+  digests. The registry's own `skills.lock` stays `adam`-only by design and
+  never carries these skills. No consuming repo has declared the source yet —
+  the marketplace entry is what exists repo-side today.
+
+**Nothing is rsynced into a consumer and no consumer vendors a copy**, so a
+consumer's `platform_ref` has no bearing on which skills a session sees, and
+there is no second copy that can drift. Until v0.1.83 a `skills-sync` reusable
+did copy `skills/` into a consumer's `.claude/skills/` — and it is worth
+recording that it **never reached every consumer**, contrary to the universal
+framing the READMEs and the down-sync table above used to carry: jodidaniel.com
+ships the caller to this day and has never had a `.claude/skills` directory at
+all, a state the issue #83 destination-presence gate then made permanent by
+design. See `docs/VERSION-HISTORY.md` v0.1.83 for the removal and for why that
+gate was unrepairable by construction.
 
 ## Single-version pin invariant (anti-skew, issue #29)
 
@@ -227,11 +270,14 @@ symptom until a reusable references a path its pinned tree lacks**, so the guard
 is the only thing that can see it; do not reason about pin skew from whether runs
 are passing.
 
-This **complements `platform-drift-guard`**: drift-guard guards file **content**
-(platform-owned files in the site must byte-match the platform); pin-consistency
-guards **version consistency** (all the version references must agree on one
-release). A consumer adopting the caller reconciles its pins to a single release
-in the same change.
+Since v0.1.83 this is the **only** cross-repo guard left. It used to be described
+as complementing `platform-drift-guard` — that one guarded file **content**
+(platform-owned files vendored into a site had to byte-match the platform), this
+one guards **version consistency** (all the version references must agree on one
+release). With the admin machinery in the gem and the skills in a marketplace
+bundle, no platform-owned file is vendored into a site at all, so only the
+version-consistency half still has something to check. A consumer adopting the
+caller reconciles its pins to a single release in the same change.
 
 ## Repo settings as code (#109)
 

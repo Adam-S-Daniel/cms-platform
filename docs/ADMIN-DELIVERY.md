@@ -30,8 +30,9 @@ whole design:
    `.example`). The down-sync path is a gem bump via `platform-bump` — since
    #242, Dependabot's `bundler` ecosystem carries an explicit `ignore` for the
    `cms-platform-theme` gem and never touches it (see `docs/SYNC.md`).
-   `platform-drift-guard` is now **skills-only** (admin is no longer
-   byte-guarded).
+   `platform-drift-guard` was narrowed to **skills-only** when admin stopped
+   being byte-guarded, and was deleted outright in v0.1.83 along with the skills
+   mirror it was left guarding — nothing byte-compares a consumer's tree today.
 
 **The render hook** (`theme/lib/cms-platform-theme/decap_config_hook.rb`, a
 `:site, :post_write` Jekyll hook) does, at the end of every build:

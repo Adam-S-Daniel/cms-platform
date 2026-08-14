@@ -5,7 +5,7 @@
 `adamdaniel.ai` is a Jekyll + Decap CMS site with a sophisticated machinery layer:
 ~22 GitHub Actions workflows, a Jekyll theme + custom plugin, a ~400-line
 invariant-heavy Decap config, parameterized CloudFormation (bootstrap / RUM /
-oauth-proxy), Playwright e2e, and a set of `.claude/skills`. The goal is to spin up
+oauth-proxy), Playwright e2e, and a set of agent skills (`skills/`). The goal is to spin up
 **new single-owner sites** that get this same machinery, and to let
 platform / infra / CMS / CI / tooling / skills improvements flow **both ways** after
 creation — while each site's content, branding, and domain stay independent.
@@ -42,7 +42,7 @@ only option delivering low-conflict bidirectional sync with clean identity isola
 | **Jekyll theme** (`_layouts _includes assets _plugins/auto_tag_pages`) | theme **gem** (gem, not `remote_theme` — `remote_theme` can't run the custom plugin reliably) | site `Gemfile` + `_config.yml: theme:`; branding becomes Liquid reading `site.*` | **`platform-bump`** (Dependabot's `bundler` ecosystem `ignore`s this gem as of #242 — see `docs/SYNC.md`) | PR to this repo |
 | **Decap CMS** (~400-line config + admin `*.js`/`*.html` + `reviews/` dashboards) | platform owns `theme/admin/` (`config.base.yml` machinery + default collections + mandatory e2e canary) — **shipped inside the theme gem since v0.1.4** (GOAL 1, below); consumers no longer vendor it | **build-time render hook** (`theme/lib/cms-platform-theme/decap_config_hook.rb`, mirrored by `scripts/render-decap-config.rb`) copies the gem-resident machinery into `_site/admin`, injects the site identity from `_config.yml`, and splices the SITE-owned seam `admin/collections.site.yml` (opt-in structure) | via gem bump (`platform-bump`, not Dependabot `bundler` — see `docs/SYNC.md`) | PR to this repo |
 | **AWS infra** (bootstrap / rum / oauth-proxy) | `infrastructure/*` + `oauth-proxy/*` parameterized templates; CloudFront Function regex templated via `Fn::Sub` over an `ApexDomain` param | a consumer commits ONLY thin **delegating `deploy.sh` wrappers** (scaffolder-emitted from `*.delegating`) that check the platform out at `platform_ref` into `.cms-platform/` and `exec` the platform deploy.sh under the site identity — never the vendored template/lambda (#69) | platform fix flows on the next `platform_ref` bump | PR to this repo |
-| **`.claude/skills`** | `skills/` canonical copy | a new `skills-sync.yml` reusable workflow pulls skills at the pinned tag. NOTE: adamdaniel.ai's old `skills-mirror.yml` (a *local structural verifier*, not a transport) has since been REMOVED (P7, v0.1.46), superseded by the platform's centralized `dev-hooks-sync.yml` guard — no risk of confusing it with `skills-sync.yml` anymore | via the same SHA pin | PR to this repo |
+| **Agent skills** | `skills/` — the canonical home, and the only place a platform skill is authored | **not consumed by a site at all.** Published as a federated bundle in the `agentskills` marketplace, which resolves `cms-platform` from this repo's plugin manifest; a durable machine runs `/plugin install cms-platform@agentskills` (skills invoke as `/cms-platform:<skill>`); on an ephemeral surface that install does not persist, so the channel is the registry's `skills-bootstrap` SessionStart hook — which delivers this bundle to a repo only once that repo's OWN `skills.lock` declares `cms-platform` as a source (the lock is per-consuming-repo; the registry's own stays `adam`-only by design). No consuming repo has declared it yet | **none** — nothing is copied into a consumer, so a site's SHA pin is irrelevant to which skills a session sees (the `skills-sync` transport was deleted in v0.1.83) | PR to this repo |
 
 ### How bidirectional sync works
 
@@ -52,14 +52,17 @@ only option delivering low-conflict bidirectional sync with clean identity isola
   `# vX.Y.Z` comments; site CI (e2e/preview) gates the merge. Dependabot's `bundler`
   ecosystem `ignore`s the theme gem as of #242 (see `docs/SYNC.md`); it can still
   open piecemeal `uses:@<ref>` PRs, which is the open question in #244.
-- **Up (site → platform):** a `platform-drift-guard` reusable workflow hashes
-  platform-owned paths that physically live in the site (`.claude/skills/`) against
-  the pinned gem/tag. A site PR that edits a platform-owned file **fails** the check
-  and emits a ready-to-run command to open the equivalent PR here. Merge → new tag →
-  `platform-bump` fans the fix back out. (Since v0.1.4 the admin machinery ships in the gem,
-  so it is no longer byte-copied into sites and the guard is **skills-only** — the gem
-  bump (`platform-bump`, not Dependabot — see `docs/SYNC.md`) is admin's down-sync
-  path.)
+- **Up (site → platform):** make the change **here** and open a PR. Merge → new tag →
+  `platform-bump` fans the fix back out. There is nothing to guard on the way up
+  anymore: since v0.1.4 the admin machinery ships in the gem and since v0.1.83 the
+  skills ship as a marketplace bundle, so **no platform-owned file is vendored into
+  a site** and none can be edited there by accident. The `platform-drift-guard`
+  reusable that used to byte-compare a site's `.claude/skills/` against the pinned
+  platform was deleted with the transport in v0.1.83 — and it never *enforced*
+  anything: it was not a required check, it was blind to deletions (it walked the
+  files present in the site), and it exited green when the guarded path was absent.
+  Drift was **observed zero, not enforced zero**; see `docs/SYNC.md` and
+  `docs/VERSION-HISTORY.md` v0.1.83.
 
 This satisfies "opt-in structure": the e2e canary collection + editorial-workflow
 invariants stay platform-owned and non-optional (they are *test infra*, not content

@@ -73,16 +73,20 @@ repo's `yaml` lib) makes them all agree:
   `GITHUB_ACTIONS`. Exit non-zero iff any mismatch; exit 0 + OK summary otherwise.
 
 Reusable + thin caller: `.github/workflows/platform-pin-consistency.yml`
-(`workflow_call`; mirrors `platform-drift-guard`'s checkout-consumer +
-checkout-platform-at-`platform_ref`-into-`.cms-platform/` + run-platform-script
-shape; the reusable `npm install --no-save yaml` before running, since the script
-resolves `yaml` from cwd/node_modules) + `examples/site/.github/workflows/...`
+(`workflow_call`; it was modelled on the since-deleted `platform-drift-guard`'s
+checkout-consumer + checkout-platform-at-`platform_ref`-into-`.cms-platform/` +
+run-platform-script shape; the reusable `npm install --no-save yaml` before
+running, since the script resolves `yaml` from cwd/node_modules) +
+`examples/site/.github/workflows/...`
 (`pull_request`, NO `paths:` filter — any pin-bearing file can skew). Self-test:
 `e2e/check-platform-pin-consistency.test.js` (`@lane local`, runs in
 node-unit-lints) — consistent fixture → 0; skewed fixture → non-zero, each
-offending file/value named. **Complements** `platform-drift-guard` (that guards
-file CONTENT byte-match; this guards VERSION CONSISTENCY). See `docs/SYNC.md`
-"Single-version pin invariant".
+offending file/value named. It **used to be described as complementing**
+`platform-drift-guard` (that one guarded file CONTENT byte-match; this one
+guards VERSION CONSISTENCY) — but that guard was **deleted in v0.1.83** along
+with the transport that vendored the files it compared, so since then this is
+the only cross-repo guard left. See `docs/SYNC.md` "Single-version pin
+invariant".
 
 The same guard also enforces **workflow-content (call-interface) parity**
 (companion to the workflow-SET parity): a consumer's thin caller must match the
