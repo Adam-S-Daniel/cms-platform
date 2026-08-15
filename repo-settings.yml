@@ -64,14 +64,28 @@ settings_defaults:
   # that motivated #109 and this manifest.
   delete_branch_on_merge: true
   # why: squash is the merge method every bot path arms (auto-merge-when-ready,
-  # cms-automerge-nudge, dependabot-rearm-sweep all use --squash).
+  # cms-automerge-nudge, dependabot-rearm-sweep all use --squash), and it is
+  # what collapses an editor's many per-save Decap commits into the single
+  # `publish: <title>` commit that lands on main.
+  #
+  # This is a DELIBERATE DIVERGENCE from the fleet, not drift. repo-settings'
+  # fleet.yml disables squash on every repo it manages, because a squash strands
+  # the pre-merge commits on no branch and so breaks any lockfile that pins one
+  # by sha (agentskills' skills.lock). These three repos are `manage: false`
+  # there precisely so that default cannot reach them; they pin nothing by sha,
+  # and the publish chain would stop working the moment squash went away.
+  # Turning it off here is a cms-platform release, not a settings flip: four
+  # workflows arm SQUASH explicitly and ~6 e2e lints assert it.
   allow_squash_merge: true
-  # why: as-found on all three repos; the main rulesets' pull_request rule
-  # allows merge/squash/rebase, so the repo-level toggles match.
+  # why: as-found on all three repos, and the method every non-CMS repo in the
+  # fleet is now restricted to — so `gh pr merge --merge` is the one form that
+  # works on every repo in the account, which is what stops an agent guessing.
   allow_merge_commit: true
-  # why: as-found on all three repos (see allowed_merge_methods in the main
-  # ruleset library entries).
-  allow_rebase_merge: true
+  # why: OFF, matching the fleet. Nothing here has ever used it — no workflow,
+  # script or e2e spec references a rebase merge (only prose about force-pushes
+  # in the secrets-scan headers) — so unlike squash there is nothing to break,
+  # and it is one less method for a human or an agent to pick wrongly.
+  allow_rebase_merge: false
   # why: REQUIRED — the whole CMS publish chain arms NATIVE auto-merge
   # (Decap canary PRs, the nudge, platform-bump, dependabot-auto-merge); the
   # cms-platform-secrets skill checklist calls this setting out explicitly.
@@ -163,7 +177,7 @@ ruleset_library:
           require_code_owner_review: false
           require_last_push_approval: false
           required_review_thread_resolution: false
-          allowed_merge_methods: [merge, squash, rebase]
+          allowed_merge_methods: [merge, squash]
       - type: required_status_checks
         parameters:
           strict_required_status_checks_policy: false
@@ -197,7 +211,7 @@ ruleset_library:
           require_code_owner_review: false
           require_last_push_approval: false
           required_review_thread_resolution: false
-          allowed_merge_methods: [merge, squash, rebase]
+          allowed_merge_methods: [merge, squash]
       - type: required_status_checks
         parameters:
           strict_required_status_checks_policy: false

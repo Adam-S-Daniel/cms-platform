@@ -279,14 +279,21 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     ]);
   });
 
-  test("(d) jodidaniel main vs consumer-main = EXACTLY the 3 known skew findings", () => {
-    // The historical drift corpus locking the 3-skew detection: missing
+  test("(d) jodidaniel main vs consumer-main = EXACTLY the 4 known skew findings", () => {
+    // The historical drift corpus locking the skew detection: missing
     // required_status_checks, missing non_fast_forward, admin bypass. #172
     // phase 2 (2026-07-22) converged jodidaniel main onto consumer-main and
     // deleted the DRIFTED library entry, but this test still diffs the
     // AS-FOUND capture (now DRIFTED-as-found-2026-07-10.json) against the
     // surviving manifest.ruleset_library["consumer-main"] entry, so the
     // regression lock stands unchanged.
+    //
+    // `rule:pull_request` is the FOURTH, and it is the corpus doing its job
+    // rather than a regression: the 2026-07-10 capture predates dropping
+    // `rebase` from consumer-main's allowed_merge_methods, so a fixture frozen
+    // before that change genuinely carries one more skew than it used to. The
+    // as-found file is deliberately NOT re-captured — an as-found corpus that
+    // gets edited every time desired state moves stops being evidence.
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     const { projected } = script.normalizeRuleset(
@@ -309,9 +316,10 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(findings.map((f) => f.facet).sort()).toEqual([
       "bypass_actors",
       "rule:non_fast_forward",
+      "rule:pull_request.allowed_merge_methods",
       "rule:required_status_checks",
     ]);
-    expect(findings.length).toBe(3);
+    expect(findings.length).toBe(4);
   });
 
   test("(e) an unmanaged live ruleset is detected (and never auto-deleted)", () => {
