@@ -101,8 +101,9 @@ function fixtureRepo(files, config) {
   return dir;
 }
 
-// Run the shipped probe against a fixture workspace.
-function runProbe(workspace) {
+// Run the shipped probe against a fixture workspace. `extraEnv` is applied last
+// so a test can shadow PATH (see blindGitleaksDir).
+function runProbe(workspace, extraEnv = {}) {
   const script = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "canary-probe-")), "probe.py");
   fs.writeFileSync(script, `${probeSource()}\n`);
   const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), "canary-temp-"));
@@ -112,9 +113,36 @@ function runProbe(workspace) {
       ...process.env,
       GITHUB_WORKSPACE: workspace,
       RUNNER_TEMP: runnerTemp,
+      ...extraEnv,
     },
   });
   return { code: res.status, out: `${res.stdout || ""}${res.stderr || ""}` };
+}
+
+// A directory holding a `gitleaks` that reports NOTHING, whatever it is asked to
+// scan. Prepended to PATH, it simulates the ONE condition the probe's own
+// self-check exists for: gitleaks' default ruleset no longer matching the shape
+// of the credential the canary plants. No caller config can produce that state
+// (the bare control scan runs the `useDefault` config written to $RUNNER_TEMP,
+// which the caller cannot influence), so the binary is what has to be replaced.
+function blindGitleaksDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "canary-stub-"));
+  const bin = path.join(dir, "gitleaks");
+  fs.writeFileSync(
+    bin,
+    `#!/bin/sh
+# Write an empty report to --report-path, exit 0: "scanned, found nothing".
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --report-path) shift; printf '[]' > "$1" ;;
+  esac
+  shift
+done
+exit 0
+`,
+  );
+  fs.chmodSync(bin, 0o755);
+  return dir;
 }
 
 // A fixture file whose content is inert: the canary plants its OWN credential,
@@ -250,10 +278,15 @@ paths = ['''scripts/nonexistent-file\\.js''']
     expect(out).toContain("allowlist canary: OK");
   });
 
-  test("reports the canary itself as broken when the planted token is undetectable", () => {
-    // Distinguishes "the config is blind" from "the canary's token shape went
-    // stale". Simulated with a config whose allowlist swallows any ghp_ token —
-    // the bare control scan then cannot see the plant either.
+  test("a config that swallows the plant is a blind spot at the CONTROL path", () => {
+    // An allowlist broad enough to swallow any ghp_ token blinds the caller's
+    // scan everywhere — including the control plant, which no sane allowlist
+    // would ever cover, and which is therefore the sharpest possible evidence.
+    //
+    // It does NOT blind the canary: the bare control scan runs the `useDefault`
+    // config written to $RUNNER_TEMP, which a caller cannot influence. So the
+    // verdict here must be the caller's blind spot, never "the canary broke" —
+    // the paired self-check test below covers the other side of that fork.
     const swallow = `[extend]
 useDefault = true
 [allowlist]
@@ -263,6 +296,38 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     const repo = fixtureRepo(FIXTURE_FILES, swallow);
     const { code, out } = runProbe(repo);
     expect(code, `a config swallowing every PAT should fail:\n${out}`).toBe(1);
-    expect(out).toContain("allowlist blind spot");
+    expect(out).toContain("allowlist blind spot: __gitleaks_canary_control__/control.txt");
+    expect(out, "the blind spot must be attributed to the control path").toContain(
+      "the control path",
+    );
+    expect(out, "the canary is healthy here — only the caller's config is blind").not.toContain(
+      "canary is BROKEN",
+    );
+  });
+});
+
+// ── the canary's own self-check (stubbed binary, no real gitleaks needed) ─────
+
+test.describe("secrets-scan allowlist canary: self-check", () => {
+  test("blames ITSELF, not the caller, when the bare ruleset cannot see the plant", () => {
+    // The probe's `CONTROL not in bare_found` branch exists so a canary whose
+    // token shape has gone stale relative to gitleaks' rules can never be
+    // reported as a caller's blind spot — that would send someone editing a
+    // .gitleaks.toml which was never at fault, and would do it on the day the
+    // check silently stopped proving anything.
+    //
+    // The caller config here is the GOOD one (NARROWED), so a false accusation
+    // would be unambiguous: nothing about it is blind.
+    const repo = fixtureRepo(FIXTURE_FILES, NARROWED);
+    const stub = blindGitleaksDir();
+    const { code, out } = runProbe(repo, {
+      PATH: `${stub}${path.delimiter}${process.env.PATH}`,
+    });
+    expect(code, `a blind bare control scan must fail the canary:\n${out}`).toBe(1);
+    expect(out).toContain("allowlist canary is BROKEN, not the config");
+    // The whole point of the branch: it must stop BEFORE accusing the caller.
+    expect(out, "a stale canary must never be reported as the caller's blind spot").not.toContain(
+      "allowlist blind spot",
+    );
   });
 });
