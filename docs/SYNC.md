@@ -190,8 +190,11 @@ above:
   artifact**: a repo receives this bundle only once its own `skills.lock`
   declares `cms-platform` as a source, pinned to a commit with per-skill
   digests. The registry's own `skills.lock` stays `adam`-only by design and
-  never carries these skills. No consuming repo has declared the source yet —
-  the marketplace entry is what exists repo-side today.
+  never carries these skills. adamdaniel.ai declared the source on 2026-08-14
+  (PR #3109): its lock pins this repo at `679fb614` and hashes the 14
+  `cms-platform` skills alongside the 9 it takes from `adam`. jodidaniel.com
+  has not adopted it — for that consumer the marketplace entry is still all
+  that exists repo-side.
 
 **Nothing is rsynced into a consumer and no consumer vendors a copy**, so a
 consumer's `platform_ref` has no bearing on which skills a session sees, and
