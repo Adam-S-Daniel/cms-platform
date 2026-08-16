@@ -186,6 +186,11 @@ const PLATFORM_META_SPECS = [
   // theme/cms-platform-theme.gemspec + .github/workflows/platform-bump.yml —
   // platform source absent on a consumer.
   "gemspec-version-frozen.test.js",
+  // #260 — the secrets-scan allowlist canary: reads the PLATFORM reusable
+  // DEFINITION (.github/workflows/secrets-scan.yml) and executes the exact
+  // python it ships against fixture configs. A consumer ships only a thin
+  // caller, so it is platform-internal, self-CI only.
+  "gitleaks-allowlist-canary.test.js",
   "github-actions-poll.test.js",
   "live-failures-reporter.test.js",
   // Reads the platform's admin shell SOURCE (theme/admin/index*.html) —
