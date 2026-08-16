@@ -405,8 +405,8 @@ repo's own** `skills.lock` declares `cms-platform` as a source, pinned to a
 commit with per-skill digests. The lock is per-consuming-repo: the registry's
 own stays `adam`-only by design and never carries these skills. adamdaniel.ai
 declared the source on 2026-08-14 (PR #3109), pinning this repo at `679fb614`
-for 14 skills alongside the 9 it takes from `adam`; jodidaniel.com has not
-adopted it. The `skills-sync.yml`
+for 14 skills alongside the 9 it takes from `adam`; jodidaniel.com adopted it
+on 2026-08-16 (PR #134), taking the same two sources. The `skills-sync.yml`
 transport, its `platform-drift-guard.yml` companion, the issue #83
 destination-presence gate and the `.repo-local` carve-out were all **deleted**
 in v0.1.83 — do not reintroduce a per-consumer mirror, and do not add a

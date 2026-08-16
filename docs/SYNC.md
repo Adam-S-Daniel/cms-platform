@@ -193,8 +193,8 @@ above:
   never carries these skills. adamdaniel.ai declared the source on 2026-08-14
   (PR #3109): its lock pins this repo at `679fb614` and hashes the 14
   `cms-platform` skills alongside the 9 it takes from `adam`. jodidaniel.com
-  has not adopted it — for that consumer the marketplace entry is still all
-  that exists repo-side.
+  adopted it on 2026-08-16 (PR #134), declaring the same two sources — so both
+  consumers now carry a federated lock.
 
 **Nothing is rsynced into a consumer and no consumer vendors a copy**, so a
 consumer's `platform_ref` has no bearing on which skills a session sees, and
@@ -202,9 +202,9 @@ there is no second copy that can drift. Until v0.1.83 a `skills-sync` reusable
 did copy `skills/` into a consumer's `.claude/skills/` — and it is worth
 recording that it **never reached every consumer**, contrary to the universal
 framing the READMEs and the down-sync table above used to carry: jodidaniel.com
-ships the caller to this day and has never had a `.claude/skills` directory at
-all, a state the issue #83 destination-presence gate then made permanent by
-design. See `docs/VERSION-HISTORY.md` v0.1.83 for the removal and for why that
+shipped the caller until v0.1.83 retired it, and has never had a
+`.claude/skills` directory at all, a state the issue #83 destination-presence
+gate then made permanent by design. See `docs/VERSION-HISTORY.md` v0.1.83 for the removal and for why that
 gate was unrepairable by construction.
 
 ## Single-version pin invariant (anti-skew, issue #29)
