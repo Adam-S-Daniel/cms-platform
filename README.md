@@ -64,8 +64,10 @@ does not persist (a cloud session, a CI runner), the delivery channel is instead
 the registry's `skills-bootstrap` SessionStart hook — but that hook installs this
 bundle into a repo only once **that repo's own `skills.lock`** declares
 `cms-platform` as a source, pinned and integrity-checked per skill. The lock is a
-per-consuming-repo artifact; the registry's own stays `adam`-only by design, and
-no consuming repo has declared the source yet. No consumer vendors a copy, so
+per-consuming-repo artifact; the registry's own stays `adam`-only by design.
+adamdaniel.ai declared the source on 2026-08-14 (PR #3109), taking 14 skills
+from this bundle; jodidaniel.com did the same on 2026-08-16 (PR #134). No
+consumer vendors a copy, so
 there is none to drift.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete plan.

@@ -155,8 +155,12 @@ ruleset_library:
   # that repo can see these manifests, so if self-CI doesn't gate them nothing
   # does. Left non-required it could not block a merge, which is the exact
   # weakness that made `platform-drift-guard` (deleted in v0.1.83) worthless.
-  # This leaf is therefore AHEAD of live until a human runs
-  # `node scripts/audit-repo-settings.js --fix --yes` — expected, not drift.
+  # That leaf has since been applied: ruleset 17169281 required all four
+  # contexts as of 2026-08-16, read straight from the API
+  # (`GET /repos/Adam-S-Daniel/cms-platform/rulesets/17169281`, unauthenticated
+  # — public repo). Treat that as a point-in-time reading, not a standing
+  # guarantee; `node scripts/audit-repo-settings.js` is what confirms what is
+  # live now, and `--fix --yes` is what reconciles any drift it reports.
   # The context string is the self-ci.yml JOB ID (no `name:` override on that
   # job), matching how the other three are spelled here.
   platform-main:
