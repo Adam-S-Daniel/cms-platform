@@ -15,11 +15,12 @@
 // findings. A real credential pasted into any of them would not have been
 // reported, in a public repo.
 //
-// Narrowing such an entry does not work: `regexTarget = "secret"` is INVALID
-// (only `match` and `line` are accepted) and gitleaks SILENTLY IGNORES unknown
-// TOML keys, so a `condition = "AND"` added to scope it is dropped without
-// warning. A config can look correct, load cleanly, and change nothing — which
-// is exactly why this is measured rather than reviewed.
+// Narrowing such an entry does not work: `regexTarget = "secret"` is ACCEPTED
+// but only names the allowlist's DEFAULT target, so it narrows nothing, and
+// gitleaks SILENTLY IGNORES unknown TOML keys, so a `condition = "AND"` added
+// to scope it is dropped without warning. A config can look correct, load
+// cleanly, and change nothing — which is exactly why this is measured rather
+// than reviewed.
 //
 // THE METHODOLOGY TRAP, locked below: gitleaks auto-loads `.gitleaks.toml` FROM
 // THE SCAN TARGET, so a "no config" control silently loads the config under

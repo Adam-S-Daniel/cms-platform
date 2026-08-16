@@ -19,9 +19,11 @@
 # `regexes` below already cover every fixture shape they contain.
 #
 # Narrowing a `paths` entry does not work either: `regexTarget = "secret"`
-# is invalid (only `match` and `line` are accepted) and gitleaks SILENTLY
-# IGNORES unknown TOML keys, so a `condition = "AND"` is dropped without
-# warning and the path alone re-suppresses the whole file.
+# is ACCEPTED — it names the allowlist's DEFAULT target, so it narrows
+# nothing (measured on 8.30.1: the config loads cleanly and behaves exactly
+# like omitting the key; only a value outside match/line/secret is fatal) —
+# and gitleaks SILENTLY IGNORES unknown TOML keys, so a `condition = "AND"`
+# is dropped without warning and the path alone re-suppresses the whole file.
 #
 # The "Allowlist canary" step in .github/workflows/secrets-scan.yml
 # enforces this: it plants a detectable credential at every allowlisted
