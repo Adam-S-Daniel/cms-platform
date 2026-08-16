@@ -22,7 +22,9 @@
  * guard so importing never runs the CLI.
  */
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
 const { readWorkflow, parseYaml, events } = require("./workflow-yaml-utils");
 
@@ -539,5 +541,154 @@ test.describe("audit-scheduled-runs.js — dead scheduled workflows (#258)", () 
     const { buildIssueBody } = loadScript();
     const base = { repo: "o/r", windowHours: 48, runs: [run()], nowIso: "2026-08-16T10:00:00Z" };
     expect(buildIssueBody({ ...base, dead: [] })).toBe(buildIssueBody(base));
+  });
+});
+
+// ── main() lifecycle: the issue is never closed on an incomplete answer ───────
+//
+// THE #258 BUG LIVED IN main(), AND NOWHERE ELSE. Every pure helper above can
+// be correct while the audit still closes a live alert, because the decision to
+// close is two conditions in the lifecycle — `dead.length === 0` and
+// `!deadProbeFailed`. Revert either and the bug is back with all the helper
+// tests still green, which is how it shipped the first time. These two tests
+// drive the real CLI end to end so that can't happen twice.
+//
+// `ghApi` shells out to `gh`, so a `gh` stub earlier on PATH is the entire
+// injection seam: no production code changes shape to be testable, and what
+// gets asserted is the argv the script really builds (`-X PATCH -f
+// state=closed`) rather than a mock's idea of it.
+//
+// Deterministic: no network, no sleeps, and both fixtures return ZERO runs, so
+// nothing depends on where "now" falls relative to a run's timestamp.
+
+// A `gh` that answers from a canned endpoint table and records every call.
+// Routes are tried in order: ["has", substring, body] or ["eq", endpoint, body]
+// (`eq` for `repos/o/r`, which is a substring of every other endpoint). A body
+// of null forces a non-zero exit. An UNMATCHED endpoint also exits non-zero
+// rather than returning something plausible — a silent wrong answer here would
+// be indistinguishable from the bug under test.
+function ghStubDir(routes) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gh-stub-"));
+  const log = path.join(dir, "calls.jsonl");
+  const routesFile = path.join(dir, "routes.json");
+  fs.writeFileSync(routesFile, JSON.stringify(routes));
+  const bin = path.join(dir, "gh");
+  fs.writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+// Logged BEFORE routing, so a call this table refuses to answer is still
+// recorded — an attempted close must be visible even when it then fails.
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(argv) + "\\n");
+const endpoint = argv[0] === "api" ? argv[1] : "";
+for (const [kind, pattern, body] of JSON.parse(fs.readFileSync(${JSON.stringify(routesFile)}, "utf8"))) {
+  if (kind === "eq" ? endpoint !== pattern : !endpoint.includes(pattern)) continue;
+  if (body === null) {
+    console.error("gh stub: forced failure for " + endpoint);
+    process.exit(1);
+  }
+  process.stdout.write(body);
+  process.exit(0);
+}
+console.error("gh stub: no route for " + endpoint);
+process.exit(1);
+`,
+  );
+  fs.chmodSync(bin, 0o755);
+  return { dir, log };
+}
+
+function callsOf(log) {
+  if (!fs.existsSync(log)) return [];
+  return fs
+    .readFileSync(log, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+// The one call that must not happen on either path below.
+function closeCalls(log) {
+  return callsOf(log).filter((argv) => argv.includes("PATCH") && argv.includes("state=closed"));
+}
+
+function runAudit(stubDir) {
+  const res = spawnSync(process.execPath, [SCRIPT_PATH, "--repo", "o/r"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${stubDir}${path.delimiter}${process.env.PATH}` },
+  });
+  return { code: res.status, out: `${res.stdout || ""}${res.stderr || ""}` };
+}
+
+const DEAD_WORKFLOW = {
+  id: 99,
+  name: "Sweep stale CMS PRs",
+  path: ".github/workflows/sweep.yml",
+  state: "disabled_inactivity",
+};
+
+test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", () => {
+  test("a DEAD workflow with zero failing runs must NOT close the tracking issue", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      // The dead-workflow probe: this one HAS fired on a cron before, so its
+      // disabled state is a finding rather than a workflow that never had one.
+      [
+        "has",
+        "actions/workflows/99/runs?event=schedule",
+        JSON.stringify({ workflow_runs: [{ id: 5 }] }),
+      ],
+      ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [DEAD_WORKFLOW] })],
+      // Zero failing scheduled runs in the window — the state that used to read
+      // as "healthy, close the alert".
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      [
+        "has",
+        "issues?state=open&labels=",
+        JSON.stringify([{ number: 7, body: `${MARKER}\nprevious alert` }]),
+      ],
+      ["has", "issues/7/comments?per_page", "[]"],
+      ["has", "issues/7/comments", "{}"],
+      ["eq", "repos/o/r", JSON.stringify({ private: false })],
+    ]);
+
+    const { code, out } = runAudit(dir);
+    expect(
+      closeCalls(log),
+      `THE #258 BUG: closed the alert with a dead workflow outstanding:\n${out}`,
+    ).toEqual([]);
+    // Not closing because it did nothing would be a different bug: prove it
+    // actually reported the dead workflow on the open issue.
+    const commented = callsOf(log).some(
+      (argv) => argv[1] === "repos/o/r/issues/7/comments" && argv.some((a) => a.startsWith("body=")),
+    );
+    expect(commented, `expected the dead workflow to be reported on issue #7:\n${out}`).toBe(true);
+    expect(out).toContain("sweep.yml");
+    expect(code, out).toBe(0);
+  });
+
+  test("an UNKNOWN dead-workflow answer must NOT close the tracking issue either", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      [
+        "has",
+        "issues?state=open&labels=",
+        JSON.stringify([{ number: 7, body: `${MARKER}\nprevious alert` }]),
+      ],
+      // The visibility probe fails, so the dead-workflow answer is UNKNOWN —
+      // not "none". A clean window is unproven and must not be acted on.
+      ["eq", "repos/o/r", null],
+    ]);
+
+    const { code, out } = runAudit(dir);
+    expect(
+      closeCalls(log),
+      `THE #258 BUG: closed the alert on an UNKNOWN dead-workflow answer:\n${out}`,
+    ).toEqual([]);
+    expect(out).toContain("Leaving tracking issue #7 OPEN");
+    // An audit that could not do its job must go RED, never report health.
+    expect(code, out).toBe(1);
   });
 });
