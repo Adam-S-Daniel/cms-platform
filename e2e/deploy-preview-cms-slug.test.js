@@ -145,6 +145,58 @@ test.describe("deploy-preview workflow: per-CMS-slug preview alias", () => {
     ).toBe(2);
   });
 
+  test("no `run:` body interpolates the cms_slug output directly", () => {
+    // Security regression guard (#259). `SLUG='${{ steps.cms_slug.outputs.slug }}'`
+    // is expanded by the Actions runner BEFORE bash sees the line, so a slug
+    // containing a single quote closes the literal and the rest of the slug is
+    // parsed as shell — `cms/a/'$(id)'` rendered as `SLUG='a-'$(id)''` and RAN
+    // `id`. Both jobs hold the live OIDC deploy role by then. The value must
+    // reach the script through an `env:` passthrough (the same shape this
+    // workflow already uses for HEAD_REF), where the runner never rewrites the
+    // command text.
+    const offenders = [];
+    for (const [jobName, job] of Object.entries(workflow().jobs || {})) {
+      for (const step of (job && job.steps) || []) {
+        if (typeof (step && step.run) !== "string") continue;
+        if (/\$\{\{[^}]*steps\.cms_slug\.outputs\.slug[^}]*\}\}/.test(step.run)) {
+          offenders.push(`${jobName} → ${step.name}`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      "steps.cms_slug.outputs.slug must be passed via `env:`, never interpolated into a run body",
+    ).toEqual([]);
+  });
+
+  test("every step that consumes the cms slug binds it through `env:`", () => {
+    // The positive half of the guard above: a future edit that simply DELETES
+    // the slug usage would pass the negative lint. Assert the four consuming
+    // steps still receive it, and via env.
+    const bound = [];
+    for (const job of Object.values(workflow().jobs || {})) {
+      for (const step of (job && job.steps) || []) {
+        const env = (step && step.env) || {};
+        for (const value of Object.values(env)) {
+          if (
+            typeof value === "string" &&
+            /\$\{\{[^}]*steps\.cms_slug\.outputs\.slug[^}]*\}\}/.test(value)
+          ) {
+            bound.push(step.name);
+          }
+        }
+      }
+    }
+    // Six consumers, all via env: the two github-script steps that were
+    // always env-bound (deployment registration + PR comment), plus the four
+    // shell steps converted by #259 — deploy's alias sync and invalidation,
+    // teardown's alias delete and invalidation.
+    expect(
+      bound.length,
+      `expected 6 env-bound cms-slug consumers, found ${bound.length}: ${bound.join(", ")}`,
+    ).toBe(6);
+  });
+
   test("PR-comment renders the cms-slug alias URL when applicable", () => {
     // The comment-builder branches on `slug` and renders an extra
     // table row mentioning the alias URL.
@@ -208,6 +260,49 @@ test.describe("cms-preview-slug.sh", () => {
     const branch =
       "cms/posts/2026-05-17-safely-keep-your-agent-iterating-autonomously-with-gitleaks-and-pr-comments";
     expect(slug(branch)).toBe(slug(branch));
+  });
+
+  test("hostile refs are constrained to the router's [a-z0-9-] charset", () => {
+    // Security regression guard (#259). The script's own header declares the
+    // CloudFront router matches `^preview-cms-([a-z0-9-]+)\.<apex>$`, but
+    // nothing enforced that charset: `cms/a/'$(id)'` passed a single quote
+    // straight through to a workflow line of the shape `SLUG='<slug>'`, which
+    // rendered as `SLUG='a-'$(id)''` and executed `id` under the deploy role.
+    // Anything outside the declared charset now folds to a hyphen.
+    const hostile = [
+      "cms/a/'$(id)'",
+      'cms/a/"; id #',
+      "cms/a/`id`",
+      "cms/a/$(id)",
+      "cms/a/x&&id",
+      "cms/a/x\\;id",
+      "cms/a/x|id",
+      "cms/posts/naïve-café",
+    ];
+    for (const branch of hostile) {
+      const out = slug(branch);
+      expect(out, `slug(${JSON.stringify(branch)}) escaped the charset: ${out}`).toMatch(
+        /^[a-z0-9-]*$/,
+      );
+      // And never a shell metacharacter, however the charset is spelled.
+      expect(out).not.toMatch(/['"`$;&|\\<>()]/);
+    }
+  });
+
+  test("sanitised slugs carry no leading/trailing or doubled hyphen", () => {
+    // The router regex tolerates them but a DNS label may not start or end
+    // with a hyphen, and doubled hyphens make the 51-char bound spend budget
+    // on nothing. Folding punctuation to `-` produces both without a collapse.
+    expect(slug("cms/posts/--foo--bar--")).toBe("posts-foo-bar");
+    expect(slug("cms/posts/a...b")).toBe("posts-a-b");
+    expect(slug("cms/posts/foo!")).toBe("posts-foo");
+  });
+
+  test("a ref that sanitises to nothing yields an empty slug, not a bare prefix", () => {
+    // Downstream steps gate on `slug != ''`, so an all-punctuation entry must
+    // skip the alias entirely rather than publish to a `cms-/` prefix.
+    expect(slug("cms/!!!")).toBe("");
+    expect(slug("cms/")).toBe("");
   });
 
   test("over-long slugs sharing a 42-char prefix stay distinct (hash suffix)", () => {

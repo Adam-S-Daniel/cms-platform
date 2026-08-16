@@ -180,8 +180,16 @@ jobs:
         # number, so editors get a URL stable across Decap's close/reopen
         # cycles. Same files; same --exclude set; kept in lockstep with the
         # primary sync above.
+        #
+        # The slug arrives via `env:`, never `${{ }}` inside this body: the
+        # runner expands an expression into the command TEXT before bash parses
+        # it, so a slug containing a quote would close the literal and execute
+        # the remainder under the OIDC deploy role assumed a few steps above.
+        # Same shape as HEAD_REF earlier in this job.
+        env:
+          CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
         run: |
-          SLUG='${{ steps.cms_slug.outputs.slug }}'
+          SLUG="$CMS_SLUG"
           aws s3 sync ./_site_preview \
             "s3://${PREVIEW_BUCKET}/cms-${SLUG}/" \
             --delete \
@@ -193,9 +201,13 @@ jobs:
 
       - name: Invalidate CloudFront cache
         if: env.CLOUDFRONT_DISTRIBUTION_ID != ''
+        # CMS_SLUG via `env:` — see the alias-sync step above for why an
+        # expression must never be expanded into this command text.
+        env:
+          CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
-          SLUG='${{ steps.cms_slug.outputs.slug }}'
+          SLUG="$CMS_SLUG"
           # Batch PR-number + (optional) cms-slug invalidations into one call —
           # invalidation requests are quota'd per month.
           PATHS=("/pr-${PR_NUMBER}/*")
@@ -447,15 +459,21 @@ jobs:
 
       - name: Delete per-CMS-slug alias from S3
         if: steps.cms_slug.outputs.slug != ''
+        # CMS_SLUG via `env:`, matching the deploy job — teardown assumes the
+        # same OIDC role, so an interpolated slug is exactly as dangerous here.
+        env:
+          CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
         run: |
-          SLUG='${{ steps.cms_slug.outputs.slug }}'
+          SLUG="$CMS_SLUG"
           aws s3 rm "s3://${PREVIEW_BUCKET}/cms-${SLUG}/" --recursive
 
       - name: Invalidate CloudFront cache
         if: env.CLOUDFRONT_DISTRIBUTION_ID != ''
+        env:
+          CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
-          SLUG='${{ steps.cms_slug.outputs.slug }}'
+          SLUG="$CMS_SLUG"
           PATHS=("/pr-${PR_NUMBER}/*")
           if [[ -n "$SLUG" ]]; then
             PATHS+=("/cms-${SLUG}/*")
