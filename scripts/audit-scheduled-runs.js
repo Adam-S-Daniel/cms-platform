@@ -31,6 +31,22 @@
  * lag can never skip a failure, and the run-id dedupe keeps the double
  * coverage from double-reporting.
  *
+ * ABSENCE IS NOT HEALTH (#258): a run-only detector cannot see a workflow that
+ * emits NO runs. GitHub auto-disables a scheduled workflow after 60 days with
+ * no repository activity (PUBLIC repos only), and a disabled workflow
+ * contributes nothing to `actions/runs?event=schedule` — so the audit scored it
+ * `0 failing scheduled run(s) … All scheduled workflows healthy` and, worse,
+ * CLOSED an open tracking issue on the strength of that silence. The signal is
+ * one field: `GET /actions/workflows` returns `state` ∈ `active | deleted |
+ * disabled_fork | disabled_inactivity | disabled_manually`. Dead cron-bearing
+ * workflows now join failing runs in the SAME finding set and the same
+ * open/comment/close lifecycle — only the input set widened. Two properties
+ * keep this from re-growing the bug it fixes: the check is public-repos-only
+ * (the 60-day rule does not apply elsewhere, and a private repo's disabled cron
+ * is off by intent), and an UNKNOWN answer — a failed probe, an ambiguous
+ * visibility — never counts as "no findings": it suppresses the auto-close and
+ * reds the audit, because "we could not tell" is the audit failing at its job.
+ *
  * RUNNER STARVATION IS NOT A FAILURE (suppressed): GitHub reports the RUN as
  * `failure` when its job(s) were CANCELLED before a runner was ever assigned —
  * `runner_id: 0`, empty `runner_name`, no steps (observed live on
@@ -73,6 +89,14 @@ const BAD_CONCLUSIONS = ["failure", "startup_failure", "timed_out"];
 // a day); every run id is still recorded in the hidden run-ids block, so the
 // dedupe stays exact even for capped-away runs.
 const MAX_LINKS_PER_WORKFLOW = 5;
+// Workflow `state` values that mean "this cron cannot fire any more".
+// `deleted` and `disabled_fork` are deliberate EXCLUSIONS: a deleted workflow
+// was removed on purpose (its file is gone) and disabled_fork is a fork-only
+// state, so alerting on either is pure noise. `disabled_inactivity` is the
+// target; `disabled_manually` on a cron-bearing workflow is worth reporting
+// because it is indistinguishable, from the outside, from a cron someone
+// turned off during an incident and forgot to turn back on.
+const DEAD_WORKFLOW_STATES = ["disabled_inactivity", "disabled_manually"];
 
 function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
@@ -158,6 +182,54 @@ function partitionStarvedRuns(runs, fetchJobs) {
   return { alertable, suppressed };
 }
 
+// GitHub auto-disables scheduled workflows for inactivity in PUBLIC repos
+// only, so the dead-workflow check is public-only. Both predicates demand a
+// STRICT boolean: a missing or non-boolean `private` reads as NEITHER public
+// nor private, so an ambiguous visibility answer becomes a probe failure
+// rather than a silent skip — the whole point of #258 is that "we could not
+// tell" must never be scored as health.
+function isPublicRepo(meta) {
+  return !!meta && meta.private === false;
+}
+
+function isPrivateRepo(meta) {
+  return !!meta && meta.private === true;
+}
+
+// A workflow whose cron can no longer fire (see DEAD_WORKFLOW_STATES).
+function isDeadWorkflow(wf) {
+  return !!wf && DEAD_WORKFLOW_STATES.includes(wf.state);
+}
+
+// Dead workflows that actually carry a cron. `hadScheduledRuns(wf)` is
+// injected so the scoping is unit-testable without gh; it FAILS SOFT — a probe
+// error keeps the workflow REPORTED, the same direction as
+// partitionStarvedRuns, because silently dropping a possibly-dead cron is the
+// worse outcome.
+//
+// WHY A RUNS PROBE AND NOT THE WORKFLOW FILE'S `on:` BLOCK: the reusable
+// sparse-checks-out only this script, so no consumer workflow file exists on
+// disk to parse, and the runtime is bare Node with no YAML parser available
+// (regex-scanning YAML is banned house-wide — anchors/aliases silently
+// mis-read). "It has fired on a cron before" is also the sharper question for
+// this detector: what we are looking for is a workflow that WAS emitting
+// scheduled runs and now cannot.
+function filterDeadScheduledWorkflows(workflows, hadScheduledRuns) {
+  const dead = [];
+  for (const wf of workflows || []) {
+    if (!isDeadWorkflow(wf)) continue;
+    try {
+      if (!hadScheduledRuns(wf)) continue;
+    } catch (e) {
+      console.error(
+        `audit-scheduled-runs: could not read scheduled runs for workflow ${wf.path}: ${e.message}`,
+      );
+    }
+    dead.push(wf);
+  }
+  return dead;
+}
+
 // The stable identity of the failing WORKFLOW: the workflow file's basename.
 // NOT `run.name` — the runs API's `name` is the run's DISPLAY TITLE, which
 // for this repo family is the evaluated dynamic `run-name:` (observed live:
@@ -212,6 +284,39 @@ function hiddenRunIdsBlock(runs) {
   return `<!-- run-ids: ${(runs || []).map((r) => r.id).join(" ")} -->`;
 }
 
+// A dead workflow has no run id to dedupe on, so it gets its own hidden block,
+// keyed by workflow FILE BASENAME (workflowKey — stable across renames of the
+// display `name:`). Without it every daily audit re-comments the same corpse.
+function hiddenDeadWorkflowsBlock(workflows) {
+  return `<!-- dead-workflows: ${(workflows || []).map(workflowKey).join(" ")} -->`;
+}
+
+// Every dead-workflow key already reported (issue body + comments). Kept
+// strictly separate from extractReportedRunIds so the two dedupe channels can
+// never clobber each other.
+function extractReportedDeadWorkflows(texts) {
+  const names = new Set();
+  for (const t of texts || []) {
+    if (typeof t !== "string") continue;
+    for (const m of t.matchAll(/<!--\s*dead-workflows:([^\n]*?)-->/g)) {
+      for (const name of m[1].trim().split(/\s+/)) if (name) names.add(name);
+    }
+  }
+  return names;
+}
+
+// One line per dead workflow: which file, and which `state` killed it (the
+// state is the actionable half — `disabled_inactivity` needs a re-enable plus
+// a keep-alive story, `disabled_manually` needs someone to say whether it was
+// deliberate).
+function renderDeadWorkflows(workflows) {
+  const lines = [];
+  for (const wf of workflows || []) {
+    lines.push(`- **${workflowKey(wf)}** — \`${wf.state}\` (emits no scheduled runs at all)`);
+  }
+  return lines.join("\n");
+}
+
 // Grouped markdown findings: one section per failing workflow, newest runs
 // first, links capped at MAX_LINKS_PER_WORKFLOW per workflow.
 function renderFindings(runs) {
@@ -229,42 +334,72 @@ function renderFindings(runs) {
   return lines.join("\n").trimEnd();
 }
 
-function buildIssueBody({ repo, windowHours, runs, nowIso }) {
-  return [
-    MARKER,
-    hiddenRunIdsBlock(runs),
+// The full finding set. Each section appears only when it has content, so a
+// runs-only report reads as it always did and a dead-workflow-only report does
+// not claim runs it never saw.
+function renderSections(runs, dead) {
+  const out = [];
+  if ((runs || []).length > 0) {
+    out.push(
+      `**Failing scheduled runs** (\`event=schedule\` ending in ` +
+        `\`${BAD_CONCLUSIONS.join("` / `")}\`):`,
+      "",
+      renderFindings(runs),
+    );
+  }
+  if ((dead || []).length > 0) {
+    if (out.length > 0) out.push("");
+    out.push(
+      "**Scheduled workflows that can no longer fire.** These emit NO runs at",
+      "all, so no run-level check can see them — GitHub auto-disables a cron",
+      "after 60 days without repository activity (public repos only):",
+      "",
+      renderDeadWorkflows(dead),
+    );
+  }
+  return out;
+}
+
+function buildIssueBody({ repo, windowHours, runs, dead, nowIso }) {
+  const deadList = dead || [];
+  const lines = [MARKER, hiddenRunIdsBlock(runs)];
+  if (deadList.length > 0) lines.push(hiddenDeadWorkflowsBlock(deadList));
+  lines.push(
     "",
-    "The daily **scheduled-run health audit** found scheduled workflow runs",
-    `(\`event=schedule\`) that ended in \`${BAD_CONCLUSIONS.join("` / `")}\``,
-    `in the last ${windowHours}h on \`${repo}\` (scanned at ${nowIso}).`,
+    "The daily **scheduled-run health audit** found scheduled workflows needing",
+    `attention on \`${repo}\` (last ${windowHours}h, scanned at ${nowIso}).`,
     "",
     "Scheduled runs have no PR to go red on — this issue is the alert.",
     "",
-    renderFindings(runs),
+    ...renderSections(runs, deadList),
     "",
-    "**What to do:** open the run links, fix the root cause, and leave this",
-    "issue open — the audit comments any NEW failing runs here (never a new",
-    `issue) and closes it automatically once a full ${windowHours}h window`,
-    "passes with no scheduled failures.",
+    "**What to do:** open the links, fix the root cause, and leave this issue",
+    "open — the audit comments any NEW findings here (never a new issue) and",
+    `closes it automatically once a full ${windowHours}h window passes clean.`,
     "",
     "_Filed automatically by the `scheduled-run-health` workflow (cms-platform)._",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
-function buildComment({ windowHours, runs, nowIso }) {
-  return [
-    hiddenRunIdsBlock(runs),
+function buildComment({ windowHours, runs, dead, nowIso }) {
+  const deadList = dead || [];
+  const lines = [hiddenRunIdsBlock(runs)];
+  if (deadList.length > 0) lines.push(hiddenDeadWorkflowsBlock(deadList));
+  lines.push(
     "",
-    `New failing scheduled run(s) in the last ${windowHours}h (scanned at ${nowIso}):`,
+    `New findings in the last ${windowHours}h (scanned at ${nowIso}):`,
     "",
-    renderFindings(runs),
-  ].join("\n");
+    ...renderSections(runs, deadList),
+  );
+  return lines.join("\n");
 }
 
 function buildCloseComment({ windowHours, nowIso }) {
   return (
-    `No failing scheduled runs in the last ${windowHours}h (scanned at ${nowIso}) — ` +
-    "closing. The audit will reopen a fresh tracking issue if scheduled runs fail again."
+    `No failing scheduled runs and no disabled scheduled workflows in the last ` +
+    `${windowHours}h (scanned at ${nowIso}) — closing. The audit will reopen a ` +
+    "fresh tracking issue if either returns."
   );
 }
 
@@ -315,6 +450,36 @@ function listRunJobs(repo, runId) {
     if (batch.length < 100) break;
   }
   return jobs;
+}
+
+// Repo metadata — read for `private` only. Needs no extra permission beyond
+// the reusable's existing `contents: read`.
+function getRepoMeta(repo) {
+  return JSON.parse(ghApi(`repos/${repo}`));
+}
+
+// Every workflow known to the repo, with its `state`. Needs `actions: read`,
+// which the reusable already grants for the runs listing.
+function listWorkflows(repo) {
+  const workflows = [];
+  for (let page = 1; page <= 10; page++) {
+    const endpoint = `repos/${repo}/actions/workflows?per_page=100&page=${page}`;
+    const batch = JSON.parse(ghApi(endpoint)).workflows || [];
+    workflows.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return workflows;
+}
+
+// "Has this workflow ever fired on a cron?" — one run is enough to answer, so
+// per_page=1. Exported so the shape stays unit-assertable without gh.
+function workflowScheduledRunsEndpoint(repo, workflowId) {
+  return `repos/${repo}/actions/workflows/${workflowId}/runs?event=schedule&per_page=1`;
+}
+
+function hasScheduledRuns(repo, workflowId) {
+  const res = JSON.parse(ghApi(workflowScheduledRunsEndpoint(repo, workflowId)));
+  return (res.workflow_runs || []).length > 0;
 }
 
 // The single open tracking issue: open issues carrying the label whose body
@@ -393,6 +558,39 @@ function main() {
     return 1;
   }
 
+  // Dead cron-bearing workflows — the runs query cannot see these (they emit
+  // nothing). Its own try/catch so a failure here never loses the run alert
+  // that already succeeded; `deadProbeFailed` then suppresses the auto-close
+  // and reds the run, because an unknown answer is not "no findings".
+  let dead = [];
+  let deadProbeFailed = false;
+  try {
+    const meta = getRepoMeta(repo);
+    if (isPrivateRepo(meta)) {
+      console.log(
+        "::notice title=Scheduled-run health::Private repo — GitHub's 60-day cron " +
+          "auto-disable applies to public repos only; skipping the dead-workflow check.",
+      );
+    } else if (isPublicRepo(meta)) {
+      dead = filterDeadScheduledWorkflows(listWorkflows(repo), (wf) =>
+        hasScheduledRuns(repo, wf.id),
+      );
+    } else {
+      throw new Error("repo metadata carried no boolean `private` field");
+    }
+  } catch (e) {
+    deadProbeFailed = true;
+    console.error(
+      `::error title=Scheduled-run health::Could not check ${repo} for disabled scheduled ` +
+        `workflows: ${e.message}. Treating the result as UNKNOWN, not as healthy.`,
+    );
+  }
+
+  // An UNKNOWN dead-workflow answer must not read as success: the audit could
+  // not do its job, which is exactly the "red means needs a human" case. Applied
+  // to the success paths only — a real error already returns its own code.
+  const done = (code) => (code === 0 && deadProbeFailed ? 1 : code);
+
   // Suppressed runs are not alerted on, but a systemic runner outage must not
   // become invisible — say how many, and which workflows they belong to.
   if (starved.length > 0) {
@@ -402,9 +600,28 @@ function main() {
     );
   }
 
-  const summary = `${failures.length} failing scheduled run(s) in the last ${windowHours}h on ${repo}`;
+  if (dead.length > 0) {
+    console.log(
+      `::notice title=Scheduled-run health::${dead.length} scheduled workflow(s) can no longer ` +
+        `fire: ${dead.map((w) => `${workflowKey(w)} (${w.state})`).join(", ")}.`,
+    );
+  }
 
-  if (failures.length === 0) {
+  const summary =
+    `${failures.length} failing scheduled run(s) in the last ${windowHours}h on ${repo}` +
+    (dead.length > 0 ? ` + ${dead.length} disabled scheduled workflow(s)` : "");
+
+  if (failures.length === 0 && dead.length === 0) {
+    // NEVER close on an unknown answer — that is the #258 bug exactly: the
+    // audit closed a live alert because it could not see the dead workflows.
+    if (issue && deadProbeFailed) {
+      console.log(
+        `::notice title=Scheduled-run health::Leaving tracking issue #${issue.number} OPEN — ` +
+          "no failing runs, but the dead-workflow check did not complete, so a clean " +
+          "window is unproven.",
+      );
+      return done(0);
+    }
     if (issue) {
       console.log(
         `::notice title=Scheduled-run health::Clean window — closing tracking issue #${issue.number}.`,
@@ -425,10 +642,10 @@ function main() {
       }
     }
     console.log(`OK — ${summary}. All scheduled workflows healthy.`);
-    return 0;
+    return done(0);
   }
 
-  // Failures found: the ISSUE is the alert; this run stays green once it is filed.
+  // Findings: the ISSUE is the alert; this run stays green once it is filed.
   if (!issue) {
     console.log(`::notice title=Scheduled-run health::${summary} — opening the tracking issue.`);
     if (!dryRun) {
@@ -438,7 +655,7 @@ function main() {
           ghApi(`repos/${repo}/issues`, {
             fields: [
               `title=${ISSUE_TITLE}`,
-              `body=${buildIssueBody({ repo, windowHours, runs: failures, nowIso })}`,
+              `body=${buildIssueBody({ repo, windowHours, runs: failures, dead, nowIso })}`,
               `labels[]=${label}`,
             ],
           }),
@@ -449,46 +666,56 @@ function main() {
         return 1;
       }
     } else {
-      console.log(`(dry-run) would open "${ISSUE_TITLE}" [${label}] with:\n${renderFindings(failures)}`);
+      console.log(
+        `(dry-run) would open "${ISSUE_TITLE}" [${label}] with:\n` +
+          renderSections(failures, dead).join("\n"),
+      );
     }
     console.log(`ALERT FILED — ${summary}.`);
-    return 0;
+    return done(0);
   }
 
-  let reported;
+  let reported, reportedDead;
   try {
-    reported = extractReportedRunIds([
-      issue.body,
-      ...listIssueComments(repo, issue.number).map((c) => c.body),
-    ]);
+    const texts = [issue.body, ...listIssueComments(repo, issue.number).map((c) => c.body)];
+    reported = extractReportedRunIds(texts);
+    reportedDead = extractReportedDeadWorkflows(texts);
   } catch (e) {
     console.error(`audit-scheduled-runs: failed to read issue #${issue.number}: ${e.message}`);
     return 1;
   }
   const fresh = failures.filter((r) => !reported.has(String(r.id)));
-  if (fresh.length === 0) {
+  // A dead workflow stays dead for as long as nobody re-enables it, so it is
+  // reported ONCE per tracking issue — re-comment it daily and the alert
+  // becomes the noise it exists to cut through.
+  const freshDead = dead.filter((w) => !reportedDead.has(workflowKey(w)));
+  if (fresh.length === 0 && freshDead.length === 0) {
     console.log(
       `OK — ${summary}; all already reported on tracking issue #${issue.number}. Nothing new.`,
     );
-    return 0;
+    return done(0);
   }
+  const newCount = fresh.length + freshDead.length;
   console.log(
-    `::notice title=Scheduled-run health::${summary} — ${fresh.length} new; commenting on issue #${issue.number}.`,
+    `::notice title=Scheduled-run health::${summary} — ${newCount} new; ` +
+      `commenting on issue #${issue.number}.`,
   );
   if (!dryRun) {
     try {
       ghApi(`repos/${repo}/issues/${issue.number}/comments`, {
-        fields: [`body=${buildComment({ windowHours, runs: fresh, nowIso })}`],
+        fields: [`body=${buildComment({ windowHours, runs: fresh, dead: freshDead, nowIso })}`],
       });
     } catch (e) {
       console.error(`audit-scheduled-runs: failed to comment on issue #${issue.number}: ${e.message}`);
       return 1;
     }
   } else {
-    console.log(`(dry-run) would comment:\n${renderFindings(fresh)}`);
+    console.log(`(dry-run) would comment:\n${renderSections(fresh, freshDead).join("\n")}`);
   }
-  console.log(`ALERT UPDATED — ${summary} (${fresh.length} newly reported).`);
-  return 0;
+  console.log(
+    `ALERT UPDATED — ${summary} (${newCount} newly reported).`,
+  );
+  return done(0);
 }
 
 if (require.main === module) {
@@ -500,9 +727,19 @@ module.exports = {
   ISSUE_TITLE,
   BAD_CONCLUSIONS,
   MAX_LINKS_PER_WORKFLOW,
+  DEAD_WORKFLOW_STATES,
   sinceIso,
   isAlertRun,
   filterAlertRuns,
+  isPublicRepo,
+  isPrivateRepo,
+  isDeadWorkflow,
+  filterDeadScheduledWorkflows,
+  workflowScheduledRunsEndpoint,
+  hiddenDeadWorkflowsBlock,
+  extractReportedDeadWorkflows,
+  renderDeadWorkflows,
+  renderSections,
   isRunnerStarvedJob,
   isRunnerStarvationRun,
   partitionStarvedRuns,

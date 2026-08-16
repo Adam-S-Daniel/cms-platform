@@ -380,3 +380,164 @@ test.describe("audit-scheduled-runs.js — runner-starvation suppression", () =>
     expect(alertable.map((r) => r.id)).toEqual([2]);
   });
 });
+
+/*
+ * DEAD SCHEDULED WORKFLOWS (#258): the audit alerted only on runs that EXIST
+ * and concluded badly. A workflow GitHub auto-disabled for inactivity emits NO
+ * runs, so `filterAlertRuns` returned `[]` — byte-identical to a repo with no
+ * schedules — and the `failures.length === 0` branch printed "All scheduled
+ * workflows healthy" AND closed any open tracking issue. A repo whose crons
+ * went dark mid-incident had its own alert actively closed.
+ *
+ * The signal is one field: GET /repos/{repo}/actions/workflows returns
+ * `state` ∈ active | deleted | disabled_fork | disabled_inactivity |
+ * disabled_manually. These lock the widened input set (bad runs → bad runs +
+ * dead workflows) and the two properties that keep it from re-introducing the
+ * bug: the public-repos-only exemption, and never scoring an UNKNOWN answer
+ * as health.
+ */
+test.describe("audit-scheduled-runs.js — dead scheduled workflows (#258)", () => {
+  // A workflow entry as GET /actions/workflows returns it.
+  function wf(overrides = {}) {
+    return {
+      id: 1001,
+      name: "Some workflow",
+      path: ".github/workflows/some.yml",
+      state: "active",
+      ...overrides,
+    };
+  }
+
+  test("THE BUG: zero runs + a disabled_inactivity cron workflow is a finding, not health", () => {
+    // The headline acceptance from #258. `filterAlertRuns([])` is `[]` and
+    // always will be — absence is not a conclusion. The finding set must stop
+    // being sourced from runs alone.
+    const { filterAlertRuns, filterDeadScheduledWorkflows } = loadScript();
+    expect(filterAlertRuns([], "2026-08-14T00:00:00Z")).toEqual([]);
+
+    const dead = filterDeadScheduledWorkflows(
+      [wf({ id: 7, path: ".github/workflows/propagation.yml", state: "disabled_inactivity" })],
+      () => true,
+    );
+    expect(dead.map((w) => w.path)).toEqual([".github/workflows/propagation.yml"]);
+  });
+
+  test("flags disabled_inactivity + disabled_manually; skips active/deleted/fork", () => {
+    // `deleted` and `disabled_fork` are deliberate exclusions: a deleted
+    // workflow was removed on purpose (its file is gone), and disabled_fork is
+    // a fork-only state, not a broken cron. Alerting on either is pure noise.
+    const { filterDeadScheduledWorkflows, DEAD_WORKFLOW_STATES } = loadScript();
+    expect(DEAD_WORKFLOW_STATES).toEqual(["disabled_inactivity", "disabled_manually"]);
+    const all = [
+      wf({ id: 1, path: ".github/workflows/a.yml", state: "active" }),
+      wf({ id: 2, path: ".github/workflows/b.yml", state: "disabled_inactivity" }),
+      wf({ id: 3, path: ".github/workflows/c.yml", state: "disabled_manually" }),
+      wf({ id: 4, path: ".github/workflows/d.yml", state: "deleted" }),
+      wf({ id: 5, path: ".github/workflows/e.yml", state: "disabled_fork" }),
+    ];
+    expect(filterDeadScheduledWorkflows(all, () => true).map((w) => w.id)).toEqual([2, 3]);
+  });
+
+  test("a disabled workflow that never fired a cron is NOT reported", () => {
+    // Scoping to cron-bearing workflows: a manually-disabled workflow that
+    // never had a schedule-event run is not this audit's business.
+    const { filterDeadScheduledWorkflows } = loadScript();
+    const all = [
+      wf({ id: 2, path: ".github/workflows/cron.yml", state: "disabled_inactivity" }),
+      wf({ id: 3, path: ".github/workflows/manual.yml", state: "disabled_manually" }),
+    ];
+    const dead = filterDeadScheduledWorkflows(all, (w) => w.id === 2);
+    expect(dead.map((w) => w.id)).toEqual([2]);
+  });
+
+  test("the schedule probe fails SOFT: an unreadable workflow stays REPORTED", () => {
+    // Same direction as partitionStarvedRuns — silently dropping a possibly
+    // dead cron is the worse outcome, so an errored probe reports.
+    const { filterDeadScheduledWorkflows } = loadScript();
+    const all = [
+      wf({ id: 2, path: ".github/workflows/ok.yml", state: "disabled_inactivity" }),
+      wf({ id: 3, path: ".github/workflows/boom.yml", state: "disabled_inactivity" }),
+    ];
+    const dead = filterDeadScheduledWorkflows(all, (w) => {
+      if (w.id === 3) throw new Error("gh: 502 Bad Gateway");
+      return true;
+    });
+    expect(dead.map((w) => w.id)).toEqual([2, 3]);
+  });
+
+  test("the schedule probe is a per_page=1 schedule-event runs query", () => {
+    const { workflowScheduledRunsEndpoint } = loadScript();
+    expect(workflowScheduledRunsEndpoint("o/r", 1001)).toBe(
+      "repos/o/r/actions/workflows/1001/runs?event=schedule&per_page=1",
+    );
+  });
+
+  test("visibility: public runs the check, private is exempt, UNKNOWN is neither", () => {
+    // GitHub auto-disables scheduled workflows in PUBLIC repos only, and
+    // `repo-settings` is private with crons that are off by intent. A missing
+    // or non-boolean `private` must NOT read as public OR as private — an
+    // ambiguous answer is a probe failure, never a silent skip (that is the
+    // absence-as-health bug in a new costume).
+    const { isPublicRepo, isPrivateRepo } = loadScript();
+    expect(isPublicRepo({ private: false })).toBe(true);
+    expect(isPrivateRepo({ private: false })).toBe(false);
+    expect(isPublicRepo({ private: true })).toBe(false);
+    expect(isPrivateRepo({ private: true })).toBe(true);
+    for (const meta of [null, undefined, {}, { private: "false" }, { visibility: "public" }]) {
+      expect(isPublicRepo(meta)).toBe(false);
+      expect(isPrivateRepo(meta)).toBe(false);
+    }
+  });
+
+  test("dead workflows reach the issue body, with their own dedupe block", () => {
+    // Runs dedupe by run id; a dead workflow has no run to key on, so it needs
+    // a parallel hidden block or every daily audit re-comments the same
+    // corpse forever.
+    const { buildIssueBody, extractReportedDeadWorkflows, MARKER } = loadScript();
+    const dead = [
+      {
+        id: 7,
+        name: "Propagation",
+        path: ".github/workflows/propagation.yml",
+        state: "disabled_inactivity",
+      },
+    ];
+    const body = buildIssueBody({
+      repo: "o/r",
+      windowHours: 48,
+      runs: [],
+      dead,
+      nowIso: "2026-08-16T10:00:00Z",
+    });
+    expect(body.startsWith(MARKER)).toBe(true);
+    expect(body).toContain("propagation.yml");
+    expect(body).toContain("disabled_inactivity");
+    expect(extractReportedDeadWorkflows([body]).has("propagation.yml")).toBe(true);
+  });
+
+  test("dead workflows dedupe through a comment too, and survive a mixed report", () => {
+    const { buildComment, extractReportedDeadWorkflows, extractReportedRunIds } = loadScript();
+    const dead = [
+      { id: 7, path: ".github/workflows/sweep.yml", state: "disabled_manually" },
+      { id: 8, path: ".github/workflows/eval.yml", state: "disabled_inactivity" },
+    ];
+    const comment = buildComment({
+      windowHours: 48,
+      runs: [run({ id: 4242 })],
+      dead,
+      nowIso: "2026-08-16T10:00:00Z",
+    });
+    const names = extractReportedDeadWorkflows([comment]);
+    expect(names.has("sweep.yml")).toBe(true);
+    expect(names.has("eval.yml")).toBe(true);
+    // The two dedupe channels must not clobber each other.
+    expect(extractReportedRunIds([comment]).has("4242")).toBe(true);
+    expect(extractReportedDeadWorkflows(["<!-- run-ids: 1 2 -->"]).size).toBe(0);
+  });
+
+  test("omitting `dead` keeps the runs-only body byte-identical (back-compat)", () => {
+    const { buildIssueBody } = loadScript();
+    const base = { repo: "o/r", windowHours: 48, runs: [run()], nowIso: "2026-08-16T10:00:00Z" };
+    expect(buildIssueBody({ ...base, dead: [] })).toBe(buildIssueBody(base));
+  });
+});
