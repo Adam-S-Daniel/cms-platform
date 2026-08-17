@@ -28,6 +28,18 @@
 // bare control config must live OUTSIDE the scanned tree. The first measurement
 // in #260 was invalid for precisely this reason.
 //
+// THE PAIR INVARIANT, also locked below — the rule-scoped half of the same
+// hazard #260 is about. An allowlist can blind ONE RULE at a path instead of
+// removing the file — `[[rules.allowlists]].paths`, the singular
+// `[rules.allowlist].paths`, a global `[[allowlists]]` with `targetRules`, or a
+// global `regexes` entry with `regexTarget = "match"`. The file then STILL
+// reports: measured on 8.30.1, a plant with `github-pat` blinded comes back
+// under `generic-api-key`. So the canary compares (file, RuleID) PAIRS, never
+// files — teaching it to COLLECT those entries while still comparing files was
+// built and measured, and it still printed OK over a live blind spot. The loss
+// is total for the blinded class: a bare `ghp_` token in prose vanishes
+// entirely, because `generic-api-key` never matched it.
+//
 // The behavioural half runs the EXACT python the workflow ships (extracted from
 // the step's heredoc), so it cannot drift from the deployed check. It needs the
 // gitleaks binary; the pure-fs structural assertions always run, and self-CI's
@@ -68,6 +80,73 @@ function probeSource() {
   const body = step.run.slice(open + "<<'PYEOF'\n".length);
   const close = body.lastIndexOf("\nPYEOF");
   return close < 0 ? null : body.slice(0, close);
+}
+
+// HOUSE RULE: reason about the probe's STRUCTURE with a parser, never a regex.
+// The probe is PYTHON, so e2e/spec-ast.js (acorn) cannot read it — python's own
+// `ast` is the right instrument, and `python3` is already a hard dependency of
+// this always-run lane (the "valid python" test below spawns it).
+const FACTS_PY = `
+import ast, json, sys
+
+tree = ast.parse(sys.stdin.read())
+
+def strings(node):
+    return [e.value for e in getattr(node, "elts", [])
+            if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+
+def named(name):
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name == name:
+            return n
+    return None
+
+seen_add = []
+scan = named("scan")
+for n in (ast.walk(scan) if scan else []):
+    if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
+        continue
+    if n.func.attr != "add" or not isinstance(n.func.value, ast.Name):
+        continue
+    if n.func.value.id != "seen":
+        continue
+    arg = n.args[0] if n.args else None
+    seen_add.append({"type": type(arg).__name__,
+                     "len": len(arg.elts) if isinstance(arg, ast.Tuple) else None})
+
+argv = []
+for n in ast.walk(tree):
+    if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
+        continue
+    if n.func.attr != "run" or not isinstance(n.func.value, ast.Name):
+        continue
+    if n.func.value.id != "subprocess" or not n.args:
+        continue
+    if not isinstance(n.args[0], ast.List):
+        continue
+    consts = strings(n.args[0])
+    if consts[:1] == ["gitleaks"]:
+        argv.append(consts)
+
+json.dump({
+    "funcs": [n.name for n in tree.body if isinstance(n, ast.FunctionDef)],
+    "called": sorted({n.func.id for n in ast.walk(tree)
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}),
+    "seenAdd": seen_add,
+    "gitleaksArgv": argv,
+}, sys.stdout)
+`;
+
+// Module-level function names, the names actually called, the shape of the
+// `seen.add(...)` argument inside scan(), and every gitleaks argv — as facts,
+// not text.
+function probeFacts() {
+  const res = require("node:child_process").spawnSync("python3", ["-c", FACTS_PY], {
+    input: probeSource(),
+    encoding: "utf8",
+  });
+  if (res.status !== 0) throw new Error(`probe fact extraction failed:\n${res.stderr}`);
+  return JSON.parse(res.stdout);
 }
 
 function hasBinary(bin) {
@@ -163,6 +242,93 @@ description = "fixture"
 regexes = ['''test_client_(id|secret)''']
 `;
 
+// ── rule-scoped allowlists ────────────────────────────────────────────────────
+// Each of these removes ONE RULE from a file instead of the file from the scan,
+// and every one of them printed `OK` before the (file, RuleID) comparison
+// landed. Fixture rule ids MUST be REAL default ids: measured, a `[[rules]]` id
+// that matches no rule makes gitleaks fail the config LOAD, so a typo would fail
+// a test for a reason unrelated to what it asserts.
+const PER_RULE_PLURAL = `[extend]
+useDefault = true
+
+[[rules]]
+id = "github-pat"
+[[rules.allowlists]]
+paths = ['''oauth-proxy/test_lambda\\.py''']
+`;
+const PER_RULE_SINGULAR = `[extend]
+useDefault = true
+
+[[rules]]
+id = "github-pat"
+[rules.allowlist]
+paths = ['''oauth-proxy/test_lambda\\.py''']
+`;
+const PER_RULE_DIRECTORY = `[extend]
+useDefault = true
+
+[[rules]]
+id = "github-pat"
+[[rules.allowlists]]
+paths = ['''oauth-proxy/''']
+`;
+const PER_RULE_BOTH = `[extend]
+useDefault = true
+
+[[rules]]
+id = "github-pat"
+[[rules.allowlists]]
+paths = ['''oauth-proxy/''']
+
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+paths = ['''oauth-proxy/''']
+`;
+const PER_RULE_UNRELATED = `[extend]
+useDefault = true
+
+[[rules]]
+id = "aws-access-token"
+[[rules.allowlists]]
+paths = ['''oauth-proxy/''']
+`;
+const PER_RULE_LATENT = `[extend]
+useDefault = true
+
+[[rules]]
+id = "github-pat"
+[[rules.allowlists]]
+paths = ['''scripts/nonexistent-file\\.js''']
+`;
+// A GLOBAL block that names `targetRules` — the construct the canary already
+// claimed to cover, blinding one rule at a path while the file still reports.
+const GLOBAL_TARGET_RULES = `[extend]
+useDefault = true
+
+[[allowlists]]
+targetRules = ["github-pat"]
+paths = ['''oauth-proxy/test_lambda\\.py''']
+`;
+// A GLOBAL `regexes` entry narrow enough to look responsible and broad enough to
+// swallow one rule's match everywhere — i.e. what the old failure message's own
+// remedy advice produces if taken too literally.
+const GLOBAL_MATCH_REGEXES = `[extend]
+useDefault = true
+[allowlist]
+regexTarget = "match"
+regexes = ['''^ghp_[A-Za-z0-9]{36}$''']
+`;
+// Loads-nowhere: `[[rules]]` with an id no rule has is fatal to gitleaks.
+const UNLOADABLE = `[extend]
+useDefault = true
+
+[[rules]]
+id = "githbu-pat"
+[[rules.allowlists]]
+paths = ['''oauth-proxy/''']
+`;
+
 // ── structural lints (always run) ─────────────────────────────────────────────
 
 test.describe("secrets-scan allowlist canary: shape", () => {
@@ -201,12 +367,42 @@ test.describe("secrets-scan allowlist canary: shape", () => {
     // THE #260 METHODOLOGY TRAP. gitleaks auto-loads .gitleaks.toml from the
     // scan target, so an invocation without --config silently loads the config
     // under test and the control measures nothing.
-    const src = probeSource();
-    const invocations = [...src.matchAll(/\[\s*"gitleaks"[\s\S]{0,600}?\]/g)].map((m) => m[0]);
-    expect(invocations.length, "found no gitleaks argv in the probe — detector broken").toBe(1);
-    for (const argv of invocations) {
-      expect(argv, "gitleaks argv omits --config").toContain('"--config"');
+    //
+    // Every argv is checked, not "the one argv": the old detector regex-scanned
+    // the python and asserted a count of exactly 1, so it broke on a second scan
+    // and on an argv longer than its character bound.
+    const argvs = probeFacts().gitleaksArgv;
+    expect(argvs.length, "found no gitleaks argv in the probe — detector broken").toBeGreaterThan(
+      0,
+    );
+    for (const argv of argvs) {
+      expect(argv, "gitleaks argv omits --config").toContain("--config");
     }
+  });
+
+  test("the probe collects PER-RULE allowlists, not just global ones", () => {
+    // A `[[rules.allowlists]]` / `[rules.allowlist]` `paths` entry removes ONE
+    // rule from a file. The shipped check collected only global blocks, so it
+    // planted nothing at such a path and reported "0 at allowlisted path(s)" —
+    // blind by OMISSION, printing OK over a live blind spot.
+    const facts = probeFacts();
+    expect(facts.funcs, "probe lost its per-rule allowlist collector").toContain("rule_allowlists");
+    expect(facts.called, "rule_allowlists is defined but never called").toContain(
+      "rule_allowlists",
+    );
+  });
+
+  test("the blind-spot comparison is over (file, RuleID) PAIRS, not files", () => {
+    // THE load-bearing half — and, on a lane with no gitleaks binary, the only
+    // automated defence there is. Measured: collecting the per-rule entries
+    // while still comparing FILES *still prints OK*, because a plant whose
+    // `github-pat` is blinded comes straight back under `generic-api-key`, so
+    // the file is in the report either way. Do not weaken this as "redundant
+    // with the behavioural tests" — those skip wherever gitleaks is absent.
+    const adds = probeFacts().seenAdd;
+    expect(adds.length, "found no `seen.add(...)` inside scan() — detector broken").toBe(1);
+    expect(adds[0].type, "scan() records bare files, not (file, RuleID) pairs").toBe("Tuple");
+    expect(adds[0].len, "the recorded pair must carry exactly the file and the RuleID").toBe(2);
   });
 
   test("the bare control config is written outside the scanned tree", () => {
@@ -302,6 +498,129 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     );
     expect(out, "the canary is healthy here — only the caller's config is blind").not.toContain(
       "canary is BROKEN",
+    );
+  });
+
+  // ── rule-scoped blind spots ────────────────────────────────────────────────
+  // The shipped check passed every one of the failing cases below. Measured on
+  // 8.30.1, and load-bearing for all of them: with `github-pat` blinded at a
+  // path, the plant is STILL reported there — by `generic-api-key` — so nothing
+  // short of a (file, RuleID) comparison can see the loss.
+
+  test("FAILS on a per-rule `[[rules.allowlists]]` paths entry", () => {
+    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_PLURAL);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary passed a per-rule paths entry:\n${out}`).toBe(1);
+    expect(out).toContain("rule 'github-pat' reports nothing at oauth-proxy/test_lambda.py");
+    // The message must name the entry AND the rule, so the reader can judge the
+    // blast radius in seconds rather than reading it as a whole-file exclusion.
+    expect(out, "the failure must name the per-rule entry it came from").toContain("per-rule");
+    expect(out, "a rule-scoped blind spot is not a whole-file one").not.toContain(
+      "skipped ENTIRELY",
+    );
+  });
+
+  test("FAILS on the singular `[rules.allowlist]` spelling too", () => {
+    // Half the bypass: measured, both spellings silence the rule identically.
+    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_SINGULAR);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary passed the singular per-rule spelling:\n${out}`).toBe(1);
+    expect(out).toContain("rule 'github-pat' reports nothing at oauth-proxy/test_lambda.py");
+  });
+
+  test("FAILS on an id-only rule stanza covering a whole directory", () => {
+    // The minimal real-world shape: three lines, no regex restated, attached to
+    // an INHERITED default rule, blinding it across a directory.
+    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_DIRECTORY);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary passed an id-only directory-wide entry:\n${out}`).toBe(1);
+    expect(out).toContain("rule 'github-pat' reports nothing at oauth-proxy/test_lambda.py");
+    expect(out, "the entry, not just the rule, must be named").toContain("'oauth-proxy/'");
+  });
+
+  test("FAILS, as a WHOLE-FILE blind spot, when every rule that sees the plant is blinded", () => {
+    // Measured: with both rules blinded the file produces ZERO findings, so the
+    // whole-file wording is the true one here — claiming "other rules still
+    // scan this file" would be a false statement in the canary's own output.
+    //
+    // This case alone is NOT sufficient coverage: the file vanishes entirely, so
+    // even a file-level comparison catches it. The three tests above are what
+    // discriminate the fix from the naive one.
+    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_BOTH);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary passed two entries blinding every rule:\n${out}`).toBe(1);
+    expect(out).toContain("oauth-proxy/test_lambda.py is skipped ENTIRELY");
+    expect(out, "no rule reports this file — do not claim others still scan it").not.toContain(
+      "Other rules still scan",
+    );
+  });
+
+  test("PASSES, with a not-measurable note, on an entry for an unrelated rule", () => {
+    // The false-positive bound. gitleaks DEDUPES: the bare baseline attributes
+    // the plant to exactly one rule, so an entry on any other rule cannot be
+    // measured here — and says so instead of guessing.
+    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_UNRELATED);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary failed an entry on a rule the plant never triggers:\n${out}`).toBe(0);
+    expect(out).toContain("NOT measurable by this check");
+    expect(out, "the note must name the rule it could not measure").toContain("aws-access-token");
+    expect(out, "an unmeasurable entry is not a blind spot").not.toContain("allowlist blind spot");
+  });
+
+  test("PASSES on a per-rule entry that matches no tracked file", () => {
+    // Mirrors the latent-global contract above: an entry that covers nothing
+    // today must not red anyone's CI. It activates when a matching file appears.
+    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_LATENT);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary failed on a latent per-rule entry:\n${out}`).toBe(0);
+    expect(out).toContain("allowlist canary: OK");
+  });
+
+  test("FAILS on a GLOBAL `[[allowlists]]` that names `targetRules`", () => {
+    // Not a per-rule block at all — a global one, i.e. squarely inside the scope
+    // this check already claimed to cover, and it passed anyway. `targetRules`
+    // is load-validated (a bogus id is fatal), so it is a first-class construct.
+    const repo = fixtureRepo(FIXTURE_FILES, GLOBAL_TARGET_RULES);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary passed a global targetRules entry:\n${out}`).toBe(1);
+    expect(out).toContain("rule 'github-pat' reports nothing at oauth-proxy/test_lambda.py");
+    expect(out, "the failure must name the construct that caused it").toContain("targetRules");
+    expect(out, "the file is still scanned by other rules").not.toContain("skipped ENTIRELY");
+  });
+
+  test('FAILS on a global `regexTarget = "match"` entry that blinds one rule', () => {
+    // Also global, and produced by following the old failure message's own
+    // advice too literally: the entry matches the credential SHAPE, so it
+    // silences `github-pat` everywhere — including the control path — while
+    // `generic-api-key` keeps reporting the same files.
+    const repo = fixtureRepo(FIXTURE_FILES, GLOBAL_MATCH_REGEXES);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary passed a match-target regexes entry:\n${out}`).toBe(1);
+    expect(out).toContain(
+      "rule 'github-pat' reports nothing at __gitleaks_canary_control__/control.txt",
+    );
+    expect(out, "the control file is still scanned by other rules").not.toContain(
+      "skipped ENTIRELY",
+    );
+    // The remedy must not be the thing they already did.
+    expect(out, "advice must not tell a regexTarget author to add regexTarget").toContain(
+      "literal text",
+    );
+  });
+
+  test("PASSES, with a warning, on a config gitleaks cannot LOAD", () => {
+    // Same contract as the unparseable-TOML case: one broken config must not
+    // become two confusing failures. Measured, an unloadable config writes NO
+    // report and exits non-zero — which the old code read as "nothing reported
+    // anywhere", i.e. a blind spot at the control path, sending the reader to
+    // hunt an allowlist that was never the problem.
+    const repo = fixtureRepo(FIXTURE_FILES, UNLOADABLE);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary hard-failed on a config gitleaks cannot load:\n${out}`).toBe(0);
+    expect(out).toContain("::warning::");
+    expect(out).toContain("could not load");
+    expect(out, "a config-load failure is not an allowlist blind spot").not.toContain(
+      "allowlist blind spot",
     );
   });
 });
