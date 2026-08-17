@@ -21,8 +21,13 @@ const { execFileSync } = require("child_process");
 const PLATFORM_ROOT = path.resolve(__dirname, "..");
 const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
 // Documented offline FALLBACK only — used when resolvePlatformVersion() below
-// can't reach GitHub. Refresh this on each platform release.
-const PLATFORM_VERSION = "v0.1.52";
+// can't reach GitHub. Refresh this on each platform release: it is the version
+// an OFFLINE scaffold stamps into every pin, so a stale value silently births a
+// site pinned many releases back. Kept in lockstep with plugin.json's version
+// (v-prefixed) and the examples/site template pins by
+// e2e/examples-site-pins-current.test.js — the release PR moves all of them
+// together.
+const PLATFORM_VERSION = "v0.1.84";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -139,6 +144,19 @@ async function main() {
   if (rl) rl.close();
 
   const prefix = domain.replace(/\./g, "-");
+  // Rewrite the template's identity + platform pins on the way into the new
+  // site. This is why a scaffolded site gets ONE platform version even when the
+  // examples/site template has drifted to several: every `platform_ref:` and
+  // every `@vX.Y.Z` is normalised to `platformVersion` here.
+  //
+  // HAZARD, latent: the `@vX.Y.Z` rule is version-shaped, not
+  // cms-platform-scoped, so it would ALSO clobber a THIRD-PARTY action pinned
+  // to a full semver tag (`uses: foo/bar@v1.2.3` → the platform's version).
+  // Safe today only because all 32 template `uses:` are cms-platform refs
+  // (measured; locked by e2e/examples-site-pins-current.test.js, which asserts
+  // every platform ref equals the canonical version). If a third-party
+  // `@vX.Y.Z` pin ever lands in examples/site, scope this rule to
+  // `Adam-S-Daniel/cms-platform@…` before it does.
   const sub = (s) =>
     s
       .replace(/example-com/g, prefix)
@@ -190,7 +208,7 @@ async function main() {
   write(target, ".claude/settings.json", DEV_HOOKS_SETTINGS_JSON);
 
   write(target, "_config.yml", configYml({ title, domain, author, owner, repo }));
-  write(target, "Gemfile", GEMFILE);
+  write(target, "Gemfile", gemfile(platformVersion));
   write(
     target,
     "infrastructure/site-params.env",
@@ -357,12 +375,21 @@ const DEV_HOOKS_SETTINGS_JSON =
     2,
   ) + "\n";
 
-const GEMFILE = `source "https://rubygems.org"
+// The new site's Gemfile. The theme gem MUST carry a `tag:` pin: it is one of
+// the platform-version references check-platform-pin-consistency.js compares
+// against platform.lock's platform_ref, so an untagged gem line means a freshly
+// scaffolded site FAILS its own pin-consistency gate on the first run (measured:
+// `gem "cms-platform-theme" tag:` found "(no tag: pin)", expected the canonical
+// ref → exit 1). An untagged git gem also floats to the platform's default
+// branch, which is the drift this whole pinning model exists to prevent.
+// platform-bump moves this tag in lockstep with the uses:@ pins; Dependabot
+// ignores it (#242).
+const gemfile = (platformVersion) => `source "https://rubygems.org"
 gem "jekyll", "~> 4.3"
 gem "webrick"
 
 group :jekyll_plugins do
-  gem "cms-platform-theme", git: "https://github.com/Adam-S-Daniel/cms-platform", glob: "theme/*.gemspec"
+  gem "cms-platform-theme", git: "https://github.com/Adam-S-Daniel/cms-platform", glob: "theme/*.gemspec", tag: "${platformVersion}"
 end
 `;
 

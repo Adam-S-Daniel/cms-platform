@@ -258,6 +258,12 @@ const PLATFORM_META_SPECS = [
   "scaffold-seeds-dependabot-ignore.test.js",
   "scaffold-deploy-delegators.test.js",
   "scaffold-platform-version.test.js",
+  // Single-version guard for the scaffold TEMPLATE's platform pins: reads the
+  // examples/site/.github templates, BOTH repo-root plugin manifests, and
+  // scaffold/create-site.js's PLATFORM_VERSION fallback. Three platform-only
+  // surfaces at once (WORKFLOWS-DEF + PLUGIN-ROOT + SCAFFOLD) — a consumer
+  // ships none of them.
+  "examples-site-pins-current.test.js",
   // #84 — scaffolder-output + fixture invariant: the preview-media probe
   // sentinel (assets/images/uploads/e2e-preview-media-probe.png). Runs
   // scaffold/create-site.js and reads the platform's own fixture trees
