@@ -319,6 +319,18 @@ useDefault = true
 regexTarget = "match"
 regexes = ['''^ghp_[A-Za-z0-9]{36}$''']
 `;
+// A per-rule allowlist that carries NO `paths` entry at all: `stopwords` blinds
+// the containing rule wherever its secret contains the word. The collector has
+// nothing to attribute, so the failure must fall back to a generic origin rather
+// than invent an entry — the arm this fixture exists to hold down.
+const PER_RULE_NO_PATHS = `[extend]
+useDefault = true
+
+[[rules]]
+id = "github-pat"
+[[rules.allowlists]]
+stopwords = ['''ghp_''']
+`;
 // Loads-nowhere: `[[rules]]` with an id no rule has is fatal to gitleaks.
 const UNLOADABLE = `[extend]
 useDefault = true
@@ -605,6 +617,37 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     // The remedy must not be the thing they already did.
     expect(out, "advice must not tell a regexTarget author to add regexTarget").toContain(
       "literal text",
+    );
+  });
+
+  test("FALLS BACK to a generic origin when no collected entry explains the blind rule", () => {
+    // The `origin = "an entry in .gitleaks.toml"` arm — the ONLY arm left after
+    // the unreachable `None in scopes` guess was dropped, and nothing asserted
+    // its text, so poisoning the string left the suite green. It is genuinely
+    // live: a config can blind a rule with NO `paths` entry anywhere, and then
+    // the collector has nothing to name. The honest wording is the whole point —
+    // attributing this to a `paths` entry would send the reader to delete a line
+    // that is not there.
+    //
+    // Measured on 8.30.1: this per-rule `stopwords` entry, a per-rule `regexes`
+    // + `regexTarget = "match"` entry matching the token, and `[extend]
+    // disabledRules = ["github-pat"]` all land here identically — exit 1 at the
+    // control path with `generic-api-key` still reporting it. `stopwords` is the
+    // fixture because it is an ALLOWLIST construct, i.e. squarely in scope.
+    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_NO_PATHS);
+    const { code, out } = runProbe(repo);
+    expect(code, `canary passed a stopwords entry blinding one rule:\n${out}`).toBe(1);
+    expect(out).toContain(
+      "rule 'github-pat' reports nothing at __gitleaks_canary_control__/control.txt",
+    );
+    expect(out, "the generic fallback origin must survive verbatim").toContain(
+      "an entry in .gitleaks.toml",
+    );
+    expect(out, "no `paths` entry was collected — the canary must not name one").not.toContain(
+      "paths entry",
+    );
+    expect(out, "the control file is still scanned by other rules").not.toContain(
+      "skipped ENTIRELY",
     );
   });
 
