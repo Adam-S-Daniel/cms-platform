@@ -1,7 +1,8 @@
 // @lane: local — PURE-FS single-version guard for the SCAFFOLD TEMPLATE's
-// platform pins (NO Jekyll build, NO browser, NO network). Runs in self-ci.yml's
-// node-unit-lints lane (picked up automatically — that lane builds its spec list
-// by EXCLUSION, so only a build-dependent lint ever needs registering).
+// platform pins (NO Jekyll build, NO browser, NO network, no child process).
+// Runs in self-ci.yml's node-unit-lints lane (picked up automatically — that
+// lane builds its spec list by EXCLUSION, so only a build-dependent lint ever
+// needs registering).
 //
 // ── WHAT ROTTED ───────────────────────────────────────────────────────────
 // `examples/site` is the tree `scaffold/create-site.js` copies into every NEW
@@ -10,74 +11,70 @@
 // …@vX.Y.Z` and 22 `with: platform_ref: vX.Y.Z`. Measured on the pre-fix tree,
 // those 54 held NINE DISTINCT versions (v0.1.1 ×40, v0.1.59 ×2, v0.1.52,
 // v0.1.46 ×2, v0.1.0, v0.1.6 ×2, v0.1.8 ×2, v0.1.3 ×2, v0.1.58 ×2) — up to 83
-// releases stale.
+// releases stale. Nothing read those values: check-platform-pin-consistency.js
+// NORMALISES `@vX.Y.Z` → `@vREF` before comparing (so it can compare pin SHAPES
+// across a repo), which makes it structurally blind to them, and both real
+// consumers passed at v0.1.84 against the fully-rotted template.
 //
-// COUNT, re-measured — and NOT the "56 in this tree" an earlier note claimed.
-// 56 is the `vX.Y.Z` token count of `.github/workflows` ALONE; across all 33
-// files the scaffolder copies it is 59. 59 = 54 refs + FIVE prose tokens that
-// must never move: two in the workflows ("real set as of v0.1.79", "secret
-// (from v0.1.3)") and three incident citations in `dependabot.yml` (v0.1.6,
-// v0.1.80, v0.1.75). A blanket `sed` over this tree corrupts FIVE, not two —
-// which is why this lint walks PARSED KEYS rather than matching version-shaped
-// text, and why it reads no prose but `scaffold/README.md`'s (see below).
+// The rot's victim is a human: docs/SYNC.md tells a maintainer to re-copy thin
+// callers FROM this tree when adopting a new workflow. Hand-copy one and you
+// import a v0.1.1 pin into a live consumer, which that consumer's own pin gate
+// then reds — far from the cause.
 //
-// ── WHY NOTHING CAUGHT IT ─────────────────────────────────────────────────
-// Not for lack of a pin-consistency gate. `check-platform-pin-consistency.js`
-// NORMALISES `@vX.Y.Z` → `@vREF` before comparing, precisely so it can compare
-// pin SHAPES across a repo; that makes it structurally BLIND to the template's
-// pin VALUES. Both real consumers passed at v0.1.84 against the fully-rotted
-// template. Nor does the scaffolder itself surface it: `create-site.js`'s `sub()`
-// transform rewrites every `platform_ref:` and every `@vX.Y.Z` on the way out, so
-// a SCAFFOLDED site gets ONE version and the nine stale ones never reach it.
+// ── WHAT THIS GUARD PROVES, EXACTLY ───────────────────────────────────────
+// Not "every version token a new site inherits" — a claim two earlier rounds
+// made and measurement refuted twice. What it proves is one thing, and it is
+// the thing that matters:
 //
-// So the rot is real but LATENT, and its victim is a human: `docs/SYNC.md` tells
-// a maintainer to re-copy thin callers FROM `examples/site` when adopting a new
-// workflow. Hand-copy a caller off this tree and you import a v0.1.1 pin into a
-// live consumer — which the consumer's own pin-consistency gate WILL then red,
-// far from the cause. This lint moves that failure to the platform PR that let
-// the template drift.
+//   Every template WORKFLOW file — as written, AND as `substitute()` would
+//   rewrite it into a new site — is clean under the SAME rules the consumer's
+//   own `scripts/verify-consumer-pins.sh` applies. Not equivalent rules. The
+//   same code: RULE A is `scripts/stale-platform-refs.js`, the module that
+//   script's stale-pin check literally runs, `require`d here; RULE B parses,
+//   mirroring the checker that script shells out to.
 //
-// ── THE CONTRACT ──────────────────────────────────────────────────────────
-// Every platform version reference reachable from a scaffolded site's WORKFLOW
-// inputs agrees on ONE version, and that version is the platform's CANONICAL
-// one (see "WHAT THIS DOES NOT COVER" for the edges this claim excludes):
+// The consequence is the property that was missing: a drift shape that would
+// red a scaffolded site's gate reds THIS lint first, on the platform PR that
+// introduced it. Rounds 1 and 2 shipped a re-derived parse-only detector and
+// each time a NEW spelling split the two — a composite's trailing comment, then
+// a reusable's, then a `platform_ref:` line's. See e2e/template-pin-rules.js for
+// why two rules replace that enumeration, and
+// examples-site-scaffold-agreement.test.js for the end-to-end proof (it
+// scaffolds from a DRIFTED template and runs the real shell gate on the result).
 //
+// ── THE CONTRACTS ─────────────────────────────────────────────────────────
 //   1. `plugin.json` and `.claude-plugin/plugin.json` versions agree.
-//   2. Every template reusable `uses: <platform>/…@ref` equals `v<version>`.
-//   3. A platform COMPOSITE (`<platform>/.github/actions/…`) is gated by its
-//      trailing `# vX.Y.Z` COMMENT — never by its ref, which is a SHA.
-//   4. Every template `with: platform_ref:` equals `v<version>`.
-//   5. No NON-platform `uses:` in the template carries an `@vX.Y.Z` pin.
+//   2. FLOOR: every template workflow yields at least one platform `uses:` ref.
+//   3. Every template workflow, AS WRITTEN, is clean under Rule A ∪ Rule B.
+//   4. Every template workflow, AS `substitute()` WOULD EMIT IT, likewise —
+//      the bytes a new site actually receives, scanned by the scanner that
+//      site's own gate will run.
+//   5. `substitute()` is ANCHORED to the platform slug: it rewrites a platform
+//      `@vX.Y.Z` — in ANY owner casing — and leaves every other `@vX.Y.Z` alone.
 //   6. `scaffold/create-site.js`'s `PLATFORM_VERSION` fallback equals
 //      `v<version>` — the value an OFFLINE scaffold stamps into every pin.
 //   7. `scaffold/README.md` names no platform version but the canonical one.
 //
-// ── (3) THE COMPOSITE COMMENT, AND WHY A LINE-AWARE PASS ──────────────────
-// A parse-only walk is INSUFFICIENT for this shape, and that is not a finding
-// invented here: `check-platform-pin-consistency.js:33-38` says so in as many
-// words and carries the same line-aware pass, and `platform-bump.yml`'s seeding
-// perl rewrites that same trailing comment defensively. The YAML parser DROPS
-// comments, so a composite pinned `@v0.1.84  # v0.1.1 (2026-01-01)` reads as
-// current to a parse-only walk while its real version gate says v0.1.1
-// (measured: the pre-fix version of this lint exited 0 on exactly that file,
-// while `verify-consumer-pins.sh`'s awk found the v0.1.1). Following the
-// existing precedent also fixes the COUPLED defect: gating a composite on its
-// `@ref` told a correctly SHA-pinned one to replace its SHA with a tag — i.e.
-// to UN-PIN — which house policy forbids. The ref of a composite is now never
-// compared and never named in the advice.
+// Contract 3 also rejects a MIS-CASED platform slug (`adam-s-daniel/…`, which
+// GitHub happily resolves) outright, with "fix the casing" rather than a version
+// remedy. That is a rule about ref IDENTITY, not another version position: every
+// case-sensitive tool downstream — the pin checker's classifyUses(), the
+// consumer gate's slug test, platform-bump.yml's `\Q…\E` rewrite — silently
+// stops version-checking such a ref, so the one tree we own must refuse it. It
+// replaces the accidental coverage the old "no third-party @vX.Y.Z" test gave
+// this shape, and it closes it for `@main` / `@v1` too, which that test never
+// reached.
 //
-// ── (5) THE sub() HAZARD ──────────────────────────────────────────────────
-// `create-site.js`'s `sub()` rewrites `@vX.Y.Z` with a VERSION-SHAPED regex,
-// not a cms-platform-scoped one. Drop `uses: actions/checkout@v5.0.0` into a
-// caller here and every scaffolded site ships `uses: actions/checkout@v0.1.84`
-// — an action tag that does not exist. Measured: the pre-fix version of this
-// lint exited 0 on exactly that input, because it only ever asserted a property
-// of PLATFORM refs while the hazard's trigger is the PRESENCE of a third-party
-// semver pin. So this lint applies `sub()`'s OWN rule to every non-platform
-// `uses:`, and the constant below is that rule copied verbatim — the detector
-// cannot disagree with the transform it guards. House policy (SHA-pin every
-// `uses:`, version in a trailing comment) already dodges the hazard: `sub()`
-// rewrites no SHA and no comment.
+// ── (4) AND (5): THE sub() HAZARD, FIXED AT THE TRANSFORM ─────────────────
+// `substitute()`'s pin rule used to be version-shaped rather than
+// cms-platform-scoped, so it clobbered ANY `@vX.Y.Z` in the file text —
+// `- run: pip install some-tool@v2.3.4` shipped as `some-tool@v0.1.84` into
+// every new site, seen by nothing (measured: guard 0, actionlint 0, new site's
+// own gate 0, and the site broken). Round 2 answered it with a lint listing the
+// positions where that could happen; `run:` was not on the list. The transform
+// is now anchored, which removes the hazard rather than enumerating it, and
+// contract 5 tests the TRANSFORM's behaviour instead of the template's contents
+// — so it stays true no matter what a future caller contains.
 //
 // ── WHY plugin.json IS THE CANONICAL SOURCE ───────────────────────────────
 // It is already locked at both ends: to its twin manifest by
@@ -91,123 +88,61 @@
 // template and the scaffolder together in that one PR and this lint goes green
 // BEFORE the tag is cut (verified against an unpublished version). The
 // deadlocking alternative — asserting against the LATEST PUBLISHED release — is
-// deliberately rejected: vNEXT would be unpublishable (the guard would demand a
-// tag that only the merge can create) and the lint would take a network
-// dependency and stop being deterministic.
+// deliberately rejected: vNEXT would be unpublishable and the lint would take a
+// network dependency and stop being deterministic.
 //
 // ── NON-DEGRADATION ───────────────────────────────────────────────────────
 // A lint that silently finds NOTHING passes vacuously — the failure mode
 // `--require-canonical` was added to check-platform-pin-consistency.js to close.
-// So this asserts a structural FLOOR too: every template workflow is a thin
-// caller, so each file must yield at least one platform `uses:` ref. If a parser
-// or layout change ever stops the walk from seeing refs, this reds instead of
-// going quietly green.
+// So contract 2 asserts a structural FLOOR, and contract 3 additionally asserts
+// it walked a non-zero number of refs.
 //
-// ── WHAT THIS DOES NOT COVER (measured; deliberate) ───────────────────────
-// The contract is the template's WORKFLOW CALLERS — not "every version token a
-// new site inherits". Three known gaps, stated rather than closed:
+// ── OUTSIDE THE CONTRACT (measured; deliberate; NOT claimed complete) ──────
+// This list is what has been MEASURED to fall outside, not a proof that nothing
+// else does — the last two rounds each shipped a "complete" gap list that the
+// next measurement refuted, so it is not claimed again here. Both entries are
+// outside the CONSUMER GATE too, which is why they do not split the two:
 //
-//   • `examples/site/.github/dependabot.yml` is outside the read set. Its three
-//     tokens are incident prose today, but `sub()` rewrites NEITHER `@vX.Y.Z`
-//     NOR `platform_ref:` in that file's shapes, so a stale `versions:` entry
-//     would propagate into a new site UNREWRITTEN — and the site's own
-//     `verify-consumer-pins.sh` would not see it either (its scan set is
-//     platform.lock / Gemfile* / .github/workflows).
-//   • `examples/site/.github/actions/**` — no such directory today. It would be
-//     neither walked here nor actionlint'ed (self-ci.yml's template step globs
-//     `workflows/*.yml`), though `sub()` WOULD rewrite it on scaffold.
-//   • A LOWERCASE-owner ref (`adam-s-daniel/cms-platform@…`, which GitHub
-//     resolves) is not classified as a platform ref here. Measured, and
-//     NARROWER than it looks: pinned to a full semver it is caught anyway —
-//     contract 5 sees a non-platform `uses:` carrying an `@vX.Y.Z` and reds
-//     (sole failing test, even with the floor satisfied by a second job). What
-//     survives is a lowercase-owner ref pinned to something ELSE — `@main`,
-//     `@v1` — which goes green (measured). Pre-existing fleet-wide:
-//     check-platform-pin-consistency.js's `classifyUses()` and
-//     platform-bump.yml's `\Q$ENV{PLATFORM}\E` rewrite are case-sensitive too,
-//     so case-folding here alone would only move the surprise to the next tool.
+//   • `examples/site/.github/dependabot.yml` — not a workflow, so neither this
+//     lint's read set nor `verify-consumer-pins.sh`'s scan set (platform.lock /
+//     Gemfile* / .github/workflows) covers it. Its three tokens are incident
+//     prose today; `substitute()` rewrites neither shape it uses, so a stale
+//     `versions:` entry would reach a new site unrewritten and unseen at both
+//     ends.
+//   • A THIRD-PARTY `uses:` pinned to a full semver is no longer an offence
+//     here, and that is a deliberate substitution rather than a lost control.
+//     It was only ever an offence because `substitute()`'s version-shaped rule
+//     would clobber it; the rule is anchored now, so `actions/checkout@v5.0.0`
+//     ships verbatim (measured) and there is nothing left to catch. Contract 5
+//     replaced it by testing the TRANSFORM directly — which also covers the
+//     `run:`-line position the old template-content test structurally could not
+//     see, and is the reason the hazard is closed rather than enumerated.
+//   • Rule A's LINE predicate is slug-cased (its `platform_ref` /
+//     `cms-platform-theme` / `tag:` clauses are not), inherited from the
+//     consumer gate it is shared with. Contract 3 refusing a mis-cased `uses:`
+//     covers the shape that matters; a mis-cased slug in some OTHER line
+//     position, carrying a stale token, would be seen by neither. Unmeasured
+//     shapes may exist — two rounds of "these are the gaps" were refuted by the
+//     next measurement, so this list is what has been measured, not a proof of
+//     completeness. The end-to-end table in
+//     examples-site-scaffold-agreement.test.js is what actually holds the line.
 const fs = require("node:fs");
 const path = require("node:path");
-const YAML = require("yaml");
 const { test, expect } = require("./base");
+const { formatOffence, offences, pinNodes, classifyUses } = require("./template-pin-rules");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const TEMPLATE_WORKFLOWS = path.join(REPO_ROOT, "examples", "site", ".github", "workflows");
 const ROOT_MANIFEST = path.join(REPO_ROOT, "plugin.json");
 const CLAUDE_MANIFEST = path.join(REPO_ROOT, ".claude-plugin", "plugin.json");
 const SCAFFOLD_README = path.join(REPO_ROOT, "scaffold", "README.md");
-const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
-// `sub()`'s own rewrite rule, copied verbatim from scaffold/create-site.js.
-// Keep the two identical: this is the detector for contract 5 and it must
-// match exactly what the transform would clobber.
-const SUB_VERSION_PIN = /@v\d+\.\d+\.\d+/;
+const { PLATFORM_REPO, substitute } = require("../scaffold/create-site.js");
 
 const rel = (p) => path.relative(REPO_ROOT, p);
 
 function readVersion(file) {
   const doc = JSON.parse(fs.readFileSync(file, "utf8"));
   return String(doc.version || "");
-}
-
-// Parse with the `yaml` Document API (anchors/aliases resolved — GitHub has
-// allowed them in workflows since 2025-09-18) AND keep each value's 1-based
-// SOURCE LINE. Mirrors check-platform-pin-consistency.js's pinNodesWithLines():
-// structure comes from the parser, and the line is what the trailing-comment
-// pass below needs. Per AGENTS.md ("AST always, never regex, for code-shape
-// lints") a lint reasoning about which KEY a value belongs to has to parse.
-function pinNodes(text) {
-  const doc = YAML.parseDocument(text);
-  const uses = [];
-  const platformRefs = [];
-  const lineOf = (node) => text.slice(0, node.range[0]).split("\n").length;
-  YAML.visit(doc, {
-    Pair(_i, pair) {
-      const key = pair.key && pair.key.value;
-      const value = pair.value;
-      if (!value || typeof value.value !== "string" || !value.range) return;
-      if (key === "uses") uses.push({ uses: value.value, line: lineOf(value) });
-      // A non-string `platform_ref` is an input DECLARATION, not a pin; a
-      // `${{ … }}` value forwards a parameter and cannot be resolved
-      // statically. Both skipped — the same rule the pin checker applies.
-      else if (key === "platform_ref" && !value.value.includes("${{")) {
-        platformRefs.push({ ref: value.value.trim(), line: lineOf(value) });
-      }
-    },
-  });
-  return { uses, platformRefs, lines: text.split("\n") };
-}
-
-// LINE-AWARE read of the trailing `# …` comment on a 1-based source line — the
-// documented exception to "parse, don't regex", justified at length above. Only
-// the COMMENT text is read from source; the `uses:` value itself came from the
-// parser. Same shape as check-platform-pin-consistency.js's trailingComment().
-function trailingComment(lines, line1) {
-  const lineStr = lines[line1 - 1] || "";
-  const hash = lineStr.indexOf("#");
-  return hash === -1 ? "" : lineStr.slice(hash + 1).trim();
-}
-
-// Pull a `vX.Y.Z` token out of a comment like `v0.1.0 (2026-05-29)`.
-function versionFromComment(comment) {
-  const m = comment.match(/\bv\d+(?:\.\d+){0,3}\b/);
-  return m ? m[0] : null;
-}
-
-// Mirrors check-platform-pin-consistency.js's classifyUses(), with one
-// deliberate widening: a platform ref under some OTHER subpath is still gated
-// on its `@ref` here (the pin checker ignores it), because `sub()` rewrites it
-// on the way into a new site, so a stale value there does reach a scaffolded
-// site.
-function classifyUses(usesStr) {
-  const at = usesStr.lastIndexOf("@");
-  const target = at === -1 ? usesStr : usesStr.slice(0, at);
-  const ref = at === -1 ? null : usesStr.slice(at + 1);
-  if (target !== PLATFORM_REPO && !target.startsWith(`${PLATFORM_REPO}/`)) {
-    return { kind: "third-party", ref, target };
-  }
-  const subpath = target.slice(PLATFORM_REPO.length + 1);
-  if (/^\.github\/actions\/.+$/i.test(subpath)) return { kind: "composite", ref, subpath };
-  return { kind: "platform", ref, subpath };
 }
 
 function templateFiles() {
@@ -221,42 +156,29 @@ function readTemplate(file) {
   return fs.readFileSync(path.join(TEMPLATE_WORKFLOWS, file), "utf8");
 }
 
-// Every platform version reference in one file, each reduced to the value that
-// must equal the canonical version plus the REMEDY to print when it doesn't.
-// The remedy is per-shape on purpose: a composite must be told to fix its
-// comment, never its (SHA) ref.
-function platformRefsIn(file) {
-  const { uses, platformRefs, lines } = pinNodes(readTemplate(file));
-  const out = [];
-  for (const { uses: value, line } of uses) {
-    const cls = classifyUses(value);
-    if (cls.kind === "third-party") continue; // contract 5 — its own test below
-    if (cls.kind === "composite") {
-      out.push({
-        kind: "composite",
-        found: versionFromComment(trailingComment(lines, line)) || "(no # vX.Y.Z comment)",
-        where: `line ${line}: uses: ${value}`,
-        remedy: "bring its trailing `# vX.Y.Z (date)` comment to",
-      });
-      continue;
-    }
-    out.push({
-      kind: "uses",
-      found: cls.ref === null ? "(no @ref)" : cls.ref,
-      where: `line ${line}: uses: ${value}`,
-      remedy: "pin it to",
-    });
-  }
-  for (const { ref, line } of platformRefs) {
-    out.push({
-      kind: "platform_ref",
-      found: ref,
-      where: `line ${line}: platform_ref: ${ref}`,
-      remedy: "set it to",
-    });
-  }
-  return out;
+// The bytes a scaffolded site receives for this file. Uses the REAL transform,
+// with the REAL canonical version — the default domain, so the identity
+// rewrites are an identity and only the pin rules move.
+function asScaffolded(text, canonical) {
+  return substitute(text, {
+    prefix: "example-com",
+    domain: "example.com",
+    platformVersion: canonical,
+  });
 }
+
+const REPORT_TAIL =
+  `\n\nEach line names its own remedy — follow it rather than generalising. A ` +
+  `platform REUSABLE is pinned by TAG, so its remedy names the @ref (including ` +
+  `when that ref is a SHA: the pin checker fails a SHA-pinned reusable, so ` +
+  `"fix the comment instead" would make this lint green where the consumer gate ` +
+  `is red). A COMPOSITE is SHA-pinned by policy, so its ref is never compared ` +
+  `and never named — its gate is the trailing comment.\n` +
+  `A maintainer hand-copies callers OUT of this tree (docs/SYNC.md), so a stale ` +
+  `pin here becomes a stale pin in a live consumer. If you are cutting a ` +
+  `release, bump the manifests, this template and scaffold/create-site.js's ` +
+  `PLATFORM_VERSION in the SAME PR — this lint never resolves the tag, so it ` +
+  `goes green before the tag exists.`;
 
 test.describe("examples/site template pins the CANONICAL platform version", () => {
   test("the two plugin manifests agree on a well-formed version", () => {
@@ -288,7 +210,8 @@ test.describe("examples/site template pins the CANONICAL platform version", () =
     ).toBeGreaterThan(0);
 
     const barren = files.filter(
-      (f) => !platformRefsIn(f).some((r) => r.kind === "uses" || r.kind === "composite"),
+      (f) =>
+        !pinNodes(readTemplate(f)).uses.some((u) => classifyUses(u.uses).kind !== "third-party"),
     );
 
     expect(
@@ -306,71 +229,114 @@ test.describe("examples/site template pins the CANONICAL platform version", () =
     ).toEqual([]);
   });
 
-  test("every template uses:@ref and platform_ref: equals the canonical version", () => {
+  test("every template workflow AS WRITTEN is clean under the consumer gate's own rules", () => {
     const canonical = `v${readVersion(ROOT_MANIFEST)}`;
-    const offenders = [];
-    let checked = 0;
+    const found = [];
+    let refs = 0;
 
     for (const file of templateFiles()) {
-      for (const found of platformRefsIn(file)) {
-        checked++;
-        if (found.found !== canonical) {
-          offenders.push(
-            `${file} ${found.where}\n    found ${found.found} — ${found.remedy} ${canonical}`,
-          );
-        }
+      const text = readTemplate(file);
+      refs += pinNodes(text).uses.length + pinNodes(text).platformRefs.length;
+      for (const o of offences(text, { canonical, file })) {
+        found.push(`${file} ${formatOffence(o, canonical)}`);
       }
     }
 
     expect(
-      checked,
-      `walked ${rel(TEMPLATE_WORKFLOWS)} and found ZERO platform version references — this lint ` +
-        `would pass vacuously. Investigate the walk before trusting a green run.`,
+      refs,
+      `walked ${rel(TEMPLATE_WORKFLOWS)} and found ZERO 'uses:' / 'platform_ref:' nodes — this ` +
+        `lint would pass vacuously. Investigate the walk before trusting a green run.`,
     ).toBeGreaterThan(0);
 
     expect(
-      offenders,
-      `${offenders.length} of ${checked} platform version reference(s) in ` +
-        `${rel(TEMPLATE_WORKFLOWS)} disagree with the canonical ${canonical} (from ` +
-        `${rel(ROOT_MANIFEST)}):\n  ${offenders.join("\n  ")}\n\n` +
-        `Each line names its own remedy — follow it rather than generalising. In particular a ` +
-        `COMPOSITE action's version gate is its trailing comment, so it is asked to fix the ` +
-        `COMMENT: never replace a composite's SHA with a tag, which would un-pin it. ` +
-        `A maintainer hand-copies callers OUT of this tree (docs/SYNC.md), so a stale pin here ` +
-        `becomes a stale pin in a live consumer. If you are cutting a release, bump the ` +
-        `manifests, this template and scaffold/create-site.js's PLATFORM_VERSION in the SAME ` +
-        `PR — this lint never resolves the tag, so it goes green before the tag exists.`,
+      found,
+      `${found.length} platform version reference(s) in ${rel(TEMPLATE_WORKFLOWS)} disagree with ` +
+        `the canonical ${canonical} (from ${rel(ROOT_MANIFEST)}):\n  ${found.join("\n  ")}` +
+        REPORT_TAIL,
     ).toEqual([]);
   });
 
-  test("no NON-platform uses: in the template carries an @vX.Y.Z pin (the sub() hazard)", () => {
-    const offenders = [];
+  test("every template workflow AS SCAFFOLDED is clean under those same rules", () => {
+    const canonical = `v${readVersion(ROOT_MANIFEST)}`;
+    const found = [];
+    let before = 0;
+    let after = 0;
 
     for (const file of templateFiles()) {
-      for (const { uses: value, line } of pinNodes(readTemplate(file)).uses) {
-        if (classifyUses(value).kind !== "third-party") continue;
-        if (SUB_VERSION_PIN.test(value)) offenders.push(`${file} line ${line}: uses: ${value}`);
+      const template = readTemplate(file);
+      const scaffolded = asScaffolded(template, canonical);
+      const count = (t) => {
+        const n = pinNodes(t);
+        return n.uses.length + n.platformRefs.length;
+      };
+      before += count(template);
+      after += count(scaffolded);
+      for (const o of offences(scaffolded, { canonical, file })) {
+        found.push(`${file} ${formatOffence(o, canonical)}`);
       }
     }
 
+    // FLOOR, mirroring the one on the AS-WRITTEN test: an empty or ref-less
+    // scaffolded text would make every assertion below pass vacuously. The
+    // equality is the sharper half — substitute() rewrites VALUES, so it must
+    // never add or drop a `uses:` / `platform_ref:` node.
     expect(
-      offenders,
-      `${offenders.length} non-platform 'uses:' in ${rel(TEMPLATE_WORKFLOWS)} carry a full ` +
-        `semver @ref:\n  ${offenders.join("\n  ")}\n\n` +
-        `scaffold/create-site.js's sub() rewrites EVERY '@vX.Y.Z' to the resolved platform ` +
-        `version — its rule is version-shaped, not cms-platform-scoped — so each of these ships ` +
-        `into every NEW SITE pointing at a tag of the platform repo's version number that the ` +
-        `third-party action does not have. Nothing downstream catches it: the pin checker ` +
-        `ignores non-platform refs and actionlint does not resolve tags.\n` +
-        `Remedy (either closes it): SHA-pin the action with a trailing '# vX.Y.Z (date)' ` +
-        `comment, which house policy requires anyway and which sub() does not touch — or scope ` +
-        `sub()'s '@vX.Y.Z' rule to '${PLATFORM_REPO}@…' and relax this test with it.\n` +
-        `If the offender is cms-platform itself under a different owner CASING, none of that ` +
-        `applies: fix the casing to '${PLATFORM_REPO}'. Every tool in this chain is ` +
-        `case-sensitive (the pin checker's classifyUses(), platform-bump.yml's rewrite, this ` +
-        `lint), so a mis-cased ref is not being version-checked at all — it only landed here ` +
-        `because a version-shaped pin is the one thing that still shows through.`,
+      after,
+      `substitute() changed the NUMBER of pin nodes: ${before} in the template, ${after} in the ` +
+        `scaffolded output. It rewrites VALUES only, so this means it mangled the YAML (or this ` +
+        `test scanned the wrong text and is now passing vacuously). Investigate before trusting ` +
+        `a green run.`,
+    ).toBe(before);
+    expect(after, "no pin nodes scanned — this test would pass vacuously").toBeGreaterThan(0);
+
+    expect(
+      found,
+      `${found.length} platform version reference(s) survive scaffold/create-site.js's ` +
+        `substitute() into a NEW SITE:\n  ${found.join("\n  ")}\n\n` +
+        `These are the actual bytes a scaffolded site receives, checked with the same module ` +
+        `that site's own scripts/verify-consumer-pins.sh runs — so each of these is a site that ` +
+        `would be BORN failing its own pin gate. substitute() normalises a platform '@vX.Y.Z' ` +
+        `and a 'platform_ref:' VALUE and nothing else (deliberately: repairing comments would ` +
+        `hide template rot from the test above), so the fix belongs in the TEMPLATE, not in the ` +
+        `transform.`,
     ).toEqual([]);
+  });
+
+  test("substitute() rewrites ONLY a platform @ref (the sub() hazard, fixed at the source)", () => {
+    const V = "v9.9.9";
+    const sub = (s) =>
+      substitute(s, { prefix: "example-com", domain: "example.com", platformVersion: V });
+
+    // Platform refs — every subpath shape, plus the bare repo — are rewritten.
+    expect(sub(`uses: ${PLATFORM_REPO}/.github/workflows/e2e-tests.yml@v0.1.1`)).toBe(
+      `uses: ${PLATFORM_REPO}/.github/workflows/e2e-tests.yml@${V}`,
+    );
+    expect(sub(`uses: ${PLATFORM_REPO}/.github/actions/recursion-gate@v0.1.1`)).toBe(
+      `uses: ${PLATFORM_REPO}/.github/actions/recursion-gate@${V}`,
+    );
+    expect(sub(`uses: ${PLATFORM_REPO}@v0.1.1`)).toBe(`uses: ${PLATFORM_REPO}@${V}`);
+    expect(sub("      platform_ref: v0.1.1")).toBe(`      platform_ref: ${V}`);
+
+    // …and NOTHING else is. Each of these was rewritten by the version-shaped
+    // rule this anchor replaced; the `run:` one shipped a broken new site.
+    const untouched = [
+      "      - uses: actions/checkout@v5.0.0",
+      "      - run: pip install some-tool@v2.3.4",
+      "      # pattern lifted from some-org/some-repo@v1.2.3",
+      "      IMAGE: ghcr.io/example/tool@v3.0.0",
+    ];
+    for (const line of untouched) {
+      expect(
+        sub(line),
+        `substitute() rewrote a NON-platform '@vX.Y.Z':\n  in:  ${line}\n  out: ${sub(line)}\n\n` +
+          `Its pin rule must stay ANCHORED to '${PLATFORM_REPO}'. A version-shaped rule clobbers ` +
+          `third-party pins and any version-shaped text, in EVERY scaffolded site, and nothing ` +
+          `downstream sees it: actionlint does not resolve tags, the pin checker ignores ` +
+          `non-platform refs, and a non-platform token is not a platform ref to the new site's ` +
+          `own verify-consumer-pins.sh. Fix the transform — a lint enumerating the positions ` +
+          `where this can happen is what this assertion replaced.`,
+      ).toBe(line);
+    }
   });
 
   test("the scaffolder's offline PLATFORM_VERSION fallback is the canonical version", () => {

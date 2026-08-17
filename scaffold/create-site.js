@@ -126,6 +126,50 @@ function write(dest, rel, content) {
   fs.writeFileSync(p, content);
 }
 
+// A platform ref's `@vX.Y.Z` pin, ANCHORED TO THE PLATFORM SLUG. It used to be
+// the bare `/@v\d+\.\d+\.\d+/g` — version-shaped rather than cms-platform-scoped
+// — so it also rewrote a THIRD-PARTY pin, and anything version-shaped that
+// merely looked like one. Measured before the anchor landed: a template caller
+// carrying `- run: pip install some-tool@v2.3.4` shipped `some-tool@v0.1.84`
+// into every new site, and NOTHING saw it — not this scaffolder, not actionlint
+// (it does not resolve tags), not the pin checker (it ignores non-platform
+// refs), not the new site's own verify-consumer-pins.sh (a non-platform token is
+// not a platform ref). A lint enumerating the positions where that can happen
+// keeps losing to the next position; anchoring the transform removes the hazard.
+// Locked by e2e/examples-site-pins-current.test.js, which drives THIS function.
+// The `i` is load-bearing, and was MEASURED: GitHub resolves a lowercase-owner
+// ref (`adam-s-daniel/cms-platform@…`), and the bare version-shaped rule used to
+// normalise one by accident. A case-SENSITIVE anchor would have shipped
+// `adam-s-daniel/…@v0.1.1` verbatim into a new site — a genuinely stale platform
+// pin that nothing downstream sees, because the pin checker's classifyUses(),
+// verify-consumer-pins.sh's slug test and platform-bump.yml's rewrite are all
+// case-sensitive. So anchoring must not narrow WHICH platform refs get
+// normalised; it only narrows the rule to platform refs. (The template guard
+// separately REJECTS a mis-cased slug outright, so one should never get here.)
+const PLATFORM_PIN = new RegExp(
+  `(${PLATFORM_REPO.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\s@]*)@v\\d+\\.\\d+\\.\\d+`,
+  "gi",
+);
+
+// The template → new-site text transform: site identity first, then the platform
+// pins. Module-level (not a closure inside main()) so the template guard can
+// apply the REAL transform to the REAL template and scan the bytes a new site
+// would actually receive — the agreement two rounds of a re-derived detector
+// could not establish.
+//
+// It deliberately does NOT rewrite a trailing `# vX.Y.Z (date)` comment on a
+// platform line. That is not an oversight: the guard forbids a stale one in the
+// template, so there is none left to rewrite, and a transform that silently
+// repaired comments would HIDE template rot from the scan that proves the
+// template clean.
+function substitute(text, { prefix, domain, platformVersion }) {
+  return String(text)
+    .replace(/example-com/g, prefix)
+    .replace(/example\.com/g, domain)
+    .replace(/platform_ref:\s*v\d+\.\d+\.\d+/g, `platform_ref: ${platformVersion}`)
+    .replace(PLATFORM_PIN, `$1@${platformVersion}`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const platformVersion = await resolvePlatformVersion(args);
@@ -145,32 +189,9 @@ async function main() {
 
   const prefix = domain.replace(/\./g, "-");
   // Rewrite the template's identity + platform pins on the way into the new
-  // site. This is why a scaffolded site gets ONE platform version even when the
-  // examples/site template has drifted to several: every `platform_ref:` and
-  // every `@vX.Y.Z` is normalised to `platformVersion` here.
-  //
-  // HAZARD: the `@vX.Y.Z` rule below is version-shaped, not cms-platform-scoped,
-  // so it would ALSO clobber a THIRD-PARTY action pinned to a full semver tag —
-  // `uses: actions/checkout@v5.0.0` becomes `@v0.1.84`, an action tag that does
-  // not exist, in EVERY new site. Nothing downstream catches that: the pin
-  // checker ignores non-platform refs and actionlint does not resolve tags.
-  //
-  // What holds it today is e2e/examples-site-pins-current.test.js's "no
-  // NON-platform uses: carries an @vX.Y.Z pin" test, which copies the regex
-  // below verbatim so the detector cannot disagree with the transform. (Its
-  // sibling test — every platform ref equals the canonical version — does NOT
-  // cover this: the hazard's trigger is the presence of a third-party semver
-  // pin, not the value of a platform one. That distinction was measured: a
-  // third-party `@v5.0.0` appended to a template caller left the lint at exit 0
-  // before that test existed.) If a third-party `@vX.Y.Z` pin ever has to land
-  // in examples/site, scope this rule to `Adam-S-Daniel/cms-platform@…` first,
-  // and relax the test with it.
-  const sub = (s) =>
-    s
-      .replace(/example-com/g, prefix)
-      .replace(/example\.com/g, domain)
-      .replace(/platform_ref:\s*v\d+\.\d+\.\d+/g, `platform_ref: ${platformVersion}`)
-      .replace(/@v\d+\.\d+\.\d+/g, `@${platformVersion}`);
+  // site — see substitute() above for what it does and, more importantly, what
+  // it deliberately does not.
+  const sub = (s) => substitute(s, { prefix, domain, platformVersion });
 
   if (fs.existsSync(target) && fs.readdirSync(target).length)
     throw new Error(`target ${target} is not empty`);
@@ -586,4 +607,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { resolvePlatformVersion, PLATFORM_VERSION };
+module.exports = { resolvePlatformVersion, PLATFORM_VERSION, PLATFORM_REPO, substitute };

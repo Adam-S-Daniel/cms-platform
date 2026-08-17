@@ -26,6 +26,7 @@ const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
 
 const SCRIPT = path.resolve(__dirname, "../scripts/check-platform-pin-consistency.js");
+const STALE_SCANNER = path.resolve(__dirname, "../scripts/stale-platform-refs.js");
 const OWNER = "Acme-Org";
 const REPO = "cms-platform";
 const SLUG = `${OWNER}/${REPO}`;
@@ -744,6 +745,11 @@ test.describe("scripts/verify-consumer-pins.sh — the consumer-bump gate", () =
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-verify-plat-"));
     fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
     fs.copyFileSync(SCRIPT, path.join(dir, "scripts", path.basename(SCRIPT)));
+    // The verifier's stale-pin check (2) runs this shared scanner — the same
+    // module e2e/template-pin-rules.js applies to examples/site, which is what
+    // makes the two impossible to split. A platform dir without it is a hard
+    // FAIL by design, so the synthetic one has to carry it.
+    fs.copyFileSync(STALE_SCANNER, path.join(dir, "scripts", path.basename(STALE_SCANNER)));
     const canon = path.join(dir, "examples", "site", ".github", "workflows");
     fs.mkdirSync(canon, { recursive: true });
     for (const n of names) {

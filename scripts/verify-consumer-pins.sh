@@ -14,7 +14,14 @@
 # WHAT IT CHECKS, in order, stopping at the first problem:
 #   1. platform.lock declares a `platform_ref` (the canonical version).
 #   2. No OTHER platform version ref survives in platform.lock / Gemfile /
-#      Gemfile.lock / .github/workflows/ — i.e. no stale pin.
+#      Gemfile.lock / .github/workflows/ — i.e. no stale pin. This is the most
+#      GENERAL pin rule in the repo (it reads LINES, so it sees a trailing
+#      `# vX.Y.Z` comment that a parse-only walk cannot), and it now lives in
+#      scripts/stale-platform-refs.js so the scaffold-template guard can apply
+#      the SAME code to examples/site before a site is ever generated from it —
+#      instead of re-implementing an approximation that goes green exactly where
+#      this script goes red. Was an inline `awk`; output format is unchanged
+#      (verified byte-identical against the awk it replaced).
 #   3. Every .github/workflows file parses as YAML.
 #   4. check-platform-pin-consistency.js passes with --require-canonical (all 96
 #      checks, including workflow-SET + workflow-CONTENT parity — the guard
@@ -61,12 +68,20 @@ fail() {
 ok() { echo "ok: $1"; }
 
 CHECKER="${PLATFORM_DIR}/scripts/check-platform-pin-consistency.js"
+SCANNER="${PLATFORM_DIR}/scripts/stale-platform-refs.js"
 CANONICAL="${PLATFORM_DIR}/examples/site/.github/workflows"
 YAML_LIB="${PLATFORM_DIR}/e2e/node_modules/yaml"
 
 # ── 0. the platform tree we were pointed at must actually hold the machinery ──
+# node moved UP here from check 3: check 2 now runs the shared scanner, and a
+# missing interpreter must be a hard FAIL at the point of use, never a check
+# that quietly does not run.
 [ -f "$CHECKER" ] || fail "no checker at ${CHECKER} — pass --platform-dir <cms-platform checkout>"
+[ -f "$SCANNER" ] ||
+  fail "no stale-ref scanner at ${SCANNER} — pass --platform-dir <checkout>"
 [ -d "$CANONICAL" ] || fail "no canonical workflow set at ${CANONICAL} — pass --platform-dir <cms-platform checkout>"
+command -v node >/dev/null 2>&1 ||
+  fail "node not found — required to scan pins and parse workflow YAML (must not be skipped)"
 ok "platform machinery found under ${PLATFORM_DIR}"
 
 # ── 1. platform.lock platform_ref (the canonical version) ────────────────────
@@ -101,24 +116,19 @@ if [ "${#WF_FILES[@]}" -gt 0 ]; then
   SCAN_FILES+=("${WF_FILES[@]}")
 fi
 
-STALE="$(awk -v REF="$REF" -v SLUG="$SLUG" '
-  function mentions_platform(l) {
-    if (index(l, SLUG) > 0) return 1
-    if (index(l, "platform_ref") > 0) return 1
-    if (index(l, "cms-platform-theme") > 0) return 1
-    if (l ~ /^[[:space:]]*tag:[[:space:]]/) return 1
-    return 0
-  }
-  {
-    if (!mentions_platform($0)) next
-    s = $0
-    while (match(s, /v[0-9]+\.[0-9]+\.[0-9]+/)) {
-      tok = substr(s, RSTART, RLENGTH)
-      if (tok != REF) printf "  %s:%d: %s (expected %s)\n", FILENAME, FNR, tok, REF
-      s = substr(s, RSTART + RLENGTH)
-    }
-  }
-' "${SCAN_FILES[@]}")"
+# The scanner is three-valued so "found drift" and "could not run" stay distinct:
+# 0 clean, 1 stale token(s) printed, 2 could not run. The status is captured with
+# an `if` (which `set -e` tolerates) rather than a swallowing `||` fallback — a
+# check that can quietly not-run is the exact defect this script exists to
+# prevent, and its own structure lint forbids those idioms outright.
+if STALE="$(node "$SCANNER" --ref "$REF" --slug "$SLUG" -- "${SCAN_FILES[@]}")"; then
+  SCAN_RC=0
+else
+  SCAN_RC=$?
+fi
+if [ "$SCAN_RC" -gt 1 ]; then
+  fail "stale-ref scan could not run (scanner exited ${SCAN_RC}) — must not be skipped"
+fi
 if [ -n "$STALE" ]; then
   echo "$STALE"
   fail "stale platform ref(s) survive — every platform-version reference must be ${REF}" \

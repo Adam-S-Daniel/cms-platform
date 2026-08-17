@@ -265,6 +265,13 @@ const PLATFORM_META_SPECS = [
   // surfaces at once (WORKFLOWS-DEF + PLUGIN-ROOT + SCAFFOLD) — a consumer
   // ships none of them.
   "examples-site-pins-current.test.js",
+  // The END-TO-END half of the guard above: it mutates the examples/site
+  // template in a temp tree, applies scaffold/create-site.js's REAL
+  // substitute(), and runs the platform's own scripts/verify-consumer-pins.sh
+  // over the result — proving a drift shape cannot red a scaffolded site while
+  // the template guard stays green. Reads scripts/, scaffold/ and the workflow
+  // templates (SCRIPTS + SCAFFOLD + WORKFLOWS-DEF); a consumer ships none.
+  "examples-site-scaffold-agreement.test.js",
   // #84 — scaffolder-output + fixture invariant: the preview-media probe
   // sentinel (assets/images/uploads/e2e-preview-media-probe.png). Runs
   // scaffold/create-site.js and reads the platform's own fixture trees
