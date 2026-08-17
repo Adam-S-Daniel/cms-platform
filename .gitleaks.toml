@@ -26,16 +26,20 @@
 # is dropped without warning and the path alone re-suppresses the whole file.
 #
 # Scoping a suppression to ONE RULE is not a way around that either — it
-# is the rule-scoped half of the same hazard. Four shapes remove a single
-# rule from a file rather than the file from the scan:
+# is the rule-scoped half of the same hazard. Several shapes remove a
+# single rule from a file rather than the file from the scan; among them
 # `[[rules.allowlists]].paths`, the singular `[rules.allowlist].paths`, an
 # `[[allowlists]]` block carrying `targetRules`, and a `regexes` entry
 # with `regexTarget = "match"` broad enough to match the credential
-# itself. Each is quieter than a blanket `paths` entry — the file keeps
-# reporting under some other rule — and each is TOTAL for the class it
-# blinded: measured on 8.30.1, with `github-pat` blinded, a bare `ghp_`
-# token in prose disappears from the scan completely. Suppress the
-# fixture's literal TEXT, as below, and every rule stays live on the file.
+# itself. That list is not exhaustive — measured on 8.30.1, a per-rule
+# `stopwords` entry, a per-rule `regexes` + `regexTarget = "match"` entry
+# and `[extend] disabledRules` each blind one rule the same way, and the
+# canary catches all three. Each is quieter than a blanket `paths` entry
+# — the file keeps reporting under some other rule — and each is TOTAL
+# for the class it blinded: measured on 8.30.1, with `github-pat`
+# blinded, a bare `ghp_` token in prose disappears from the scan
+# completely. Suppress the fixture's literal TEXT, as below, and every
+# rule stays live on the file.
 #
 # The "Allowlist canary" step in .github/workflows/secrets-scan.yml enforces
 # all of it: it plants a detectable credential at every allowlisted path,
