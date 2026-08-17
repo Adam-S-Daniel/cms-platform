@@ -38,14 +38,42 @@
  * comparison is what keeps it unflagged in every spelling, rather than
  * the trailing dot of a substring match.
  *
- * Deliberately OUT of this arm: `github.run_id` / `github.repository`
- * (runner-set), `needs.*`, `inputs.*`, and `steps.*.outputs.*`. That is
- * NOT a claim that those classes are inherently safe — a step output is
- * only ever as closed as the step that produced it. Each current site was
- * traced to a closed value space individually (see docs/CI-INVARIANTS.md,
- * "Workflow interpolation sinks"), and `steps.*.outputs.*` keeps its own
- * dedicated coverage in deploy-preview-cms-slug.test.js, which this lint
- * does NOT subsume. Do not delete that guard.
+ * …plus `env.*` and `matrix.*`, the two LAUNDERING contexts — a value
+ * bound there is whatever the workflow put in it, and `env:` is the fix
+ * this very file recommends. See UNSAFE_ROOTS for the measurement.
+ *
+ * ── WHERE THE GUARANTEE ENDS — READ THIS BEFORE TRUSTING ARM 1 ───────
+ *
+ * ARM 1 MATCHES A ROOT **NAME SET**, NOT DATAFLOW. The runner's real
+ * danger property is *"an expression result is substituted into text that
+ * is then parsed as code"* — that is a dataflow question, and this lint
+ * does not do dataflow and is not going to. Four rounds of adversarial
+ * work closed WHERE the expression sits (parsed bodies, not source
+ * lines), HOW it is spelled (lexed path segments, not expression text)
+ * and WHERE it ends (a lexed occurrence boundary, not the first `}}`);
+ * each of those three is now general by construction. THE ROOT SET IS THE
+ * ONE AXIS THAT REMAINS AN APPROXIMATION, and adding two more names to it
+ * keeps it a list of names.
+ *
+ * So, plainly: **a dangerous value laundered through a root outside the
+ * set will not be caught here.** Deliberately outside it are
+ * `github.run_id` and `github.repository` (runner-set), `needs.*`,
+ * `inputs.*`, and `steps.*.outputs.*`. That is NOT a claim that those
+ * classes are inherently safe — a step output is only ever as closed as
+ * the step that produced it, and `e2e/select-specs.js` demonstrably does
+ * `specs.add(f)` on a changed FILE NAME. Each current site was traced to a
+ * closed value space individually (see docs/CI-INVARIANTS.md, "Workflow
+ * interpolation sinks"), and `steps.*.outputs.*` keeps its own dedicated
+ * coverage in deploy-preview-cms-slug.test.js, which this lint does NOT
+ * subsume. Do not delete that guard.
+ *
+ * Why `env`/`matrix` were added and those five were not is a COST call,
+ * not a principle: the two additions have zero live sites, so they close a
+ * shape for free, and `env` is where the file's own HOWTO tells you to put
+ * the dangerous value. The five have live, individually-traced sites. A
+ * new site under any of them owes the trace again — this lint will not ask
+ * for it. Widening further is legitimate; claiming the list is complete is
+ * not.
  *
  * ── ARM 2 — `actions/github-script` `with.script` bodies ─────────────
  * Red on ANY interpolation. A github-script body is JS handed to an eval;
@@ -67,8 +95,14 @@
  * its interpolation at body offset 0, so a body-relative "line above"
  * check cannot see the comment at the only place it fits — above the
  * `run:` key — and the waiver would silently fail to apply (measured).
- * `env:` binding needs no waiver: it removes the `${{ }}` from the body
- * entirely, into a map this lint does not scan.
+ * An `env:` binding READ BACK AS A SHELL VARIABLE needs no waiver: `"$NAME"`
+ * removes the `${{ }}` from the body entirely, into a map this lint does
+ * not scan. Reading it back as an EXPRESSION — `"${{ env.NAME }}"` — does
+ * not; that is the sink again with an extra hop, and arm 1 flags it. The
+ * distinction is the whole fix: `$` vs `${{`, not where the value came
+ * from. (This sentence used to say a binding needs no waiver full stop.
+ * That was FALSE whenever the body read it back, and the false version
+ * shipped while the exact shape it blessed passed both gates at exit 0.)
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -113,14 +147,54 @@ const { listWorkflows, runScripts, githubScriptBlocks } = require("./workflow-ya
 // next spelling, exactly as the previous three rounds did.
 //
 // DEFAULT-DENY AT THE BOUNDARY — the rule the regex quietly broke. A span
-// whose string literal never closes, or that never reaches `}}` at all, is
-// a span the grammar CANNOT read, and this file's standing rule is that
-// such a thing is never resolved to "safe" (the same rule `endOfString`'s
-// -1 sentinel enforces one layer down). So extraction marks it UNSAFE
-// itself, in BOTH arms, without consulting `runUnsafe` — flagged, never
-// silently skipped. It cannot be a false positive on a workflow that
-// parses: actionlint's own expression lexer rejects both shapes at exit 1
-// (measured). `endOfString` is shared with the path lexer below (hoisted).
+// the grammar CANNOT read is never resolved to "safe" (the same rule
+// `endOfString`'s -1 sentinel enforces one layer down). So extraction marks
+// it UNREADABLE itself, in BOTH arms, without consulting `runUnsafe` —
+// flagged, never silently skipped. `endOfString` is shared with the path
+// lexer below (hoisted). Three ways a span is unreadable:
+//
+//   1. its string literal never closes;
+//   2. it never reaches `}}` at all;
+//   3. it steps over a character the expression lexer cannot lex (`LEXABLE`).
+//
+// (3) IS THE ONE THAT CLOSES THE LAST BOUNDARY RESIDUAL, and it is here so
+// that this file's safety argument stops depending on actionlint. Without it,
+// a span terminating at a `}}` that sits inside a construct the lexer does
+// NOT model — `"…"`, backticks — yields a SHORT span with no paths and
+// `unreadable: false`, and is silently skipped:
+//
+//     echo "${{ "}}" && github.event.pull_request.base.ref }}"
+//                ^^ span cut here; everything behind it invisible
+//
+// That was benign only because `"` and `` ` `` are actionlint lex errors —
+// an EXTERNAL dependency on a tool this same file proves twice over is no
+// backstop (see UNSAFE_ROOTS: it stays silent on a field on its own untrusted
+// list, one `env:` hop away). So the check is made locally instead.
+//
+// `LEXABLE` is read off the reference lexer's own error, which enumerates the
+// legal token-start charset verbatim (measured, actionlint v1.7.7 on
+// `${{ github.run_id + 1 }}`): *got unexpected character '+' while lexing
+// expression, expecting 'a'..'z', 'A'..'Z', '_', '0'..'9', ''', '}', '(',
+// ')', '[', ']', '.', '!', '<', '>', '=', '&', '|', '*', ',', ' '*. Two
+// members are added to that list, each measured rather than assumed:
+// `-`, which is a name CONTINUATION and not a token start (`github.event-name`
+// lexes as ONE token — *property "event-name" is not defined*); and `\t`/`\n`
+// /`\r`, which the ' ' in that message stands in for (a span carrying a tab,
+// and one straddling a line break, both exit 0). `$` and `{` are absent on
+// purpose — `{` outside a literal is a lex error, and the scan starts PAST the
+// `${{` opener, so a nested `${{` is convicted by its `$`.
+//
+// It cannot false-positive on a workflow that parses — by the grammar, since
+// every legal token starts with a listed character and literal CONTENT is
+// skipped before the test — and it does not on this tree: across all 21 live
+// spans the distinct set of characters stepped over outside literals is
+// `" &()-.=JNOS_a-z|"`, of which ZERO are out of charset. Note the `-` and the
+// `|`: `needs.generate.outputs.visually-different` and a `||` are both live, so
+// neither addition is theoretical. This is deliberately NOT "flag any span
+// containing a quote" — `'` is legal and its contents are data; the canary's
+// safe-brace control pins that direction shut.
+const LEXABLE = /[-A-Za-z0-9_'}()[\].!<>=&|*,\s]/;
+
 function interpolations(body) {
   const out = [];
   let i = 0;
@@ -129,32 +203,36 @@ function interpolations(body) {
     if (open < 0) return out;
     let k = open + 3;
     let end = -1;
-    let unterminated = false;
+    let unreadable = false;
     while (k < body.length) {
       if (body[k] === "'") {
         const after = endOfString(body, k);
         if (after < 0) {
-          unterminated = true;
+          unreadable = true;
           break;
         }
         k = after;
       } else if (body[k] === "}" && body[k + 1] === "}") {
         end = k + 2;
         break;
+      } else if (!LEXABLE.test(body[k])) {
+        unreadable = true;
+        break;
       } else k += 1;
     }
-    if (unterminated) {
-      // The literal swallowed the rest of the body, so there is no true
-      // end to report. Fall back to the naive first `}}` — the span still
-      // yields ONE occurrence, anchored where it opened and readable in
-      // the failure message, and `unterminated` is what convicts it.
+    if (unreadable) {
+      // There is no true end to report — the literal swallowed the rest of
+      // the body, or the lexer stopped on a character it cannot read. Fall
+      // back to the naive first `}}`: the span still yields ONE occurrence,
+      // anchored where it opened and readable in the failure message, and
+      // `unreadable` is what convicts it.
       const naive = body.indexOf("}}", open + 3);
       end = naive < 0 ? body.length : naive + 2;
     } else if (end < 0) {
-      unterminated = true;
+      unreadable = true;
       end = body.length;
     }
-    out.push({ text: body.slice(open, end), index: open, unterminated });
+    out.push({ text: body.slice(open, end), index: open, unreadable });
     // Resume AFTER this span: a `${{` written inside a literal belongs to
     // the span that quoted it, not to a new occurrence.
     i = end;
@@ -362,11 +440,50 @@ function contextPaths(expr) {
   return paths;
 }
 
-// The attacker-authored free strings, as folded segment paths.
+// The attacker-authored free strings, as folded segment paths — plus the two
+// LAUNDERING contexts, whose values are whatever the workflow bound into them.
+//
+// `env` is here because it is THE FIX THIS FILE RECOMMENDS, and the fix is the
+// `env:` KEY, not the `env` CONTEXT. Binding `BASE: ${{ …base.ref }}` and
+// reading `"$BASE"` leaves the command text byte-identical; binding the same
+// value and reading `${{ env.BASE }}` re-opens the identical sink, because the
+// runner substitutes the branch name into the command TEXT either way. Both
+// halves look individually blessed — the binding is the HOWTO, and reading it
+// back is "just a variable" — which is exactly why it is the shape the next
+// real sink will wear. Measured in `visual-regression.yml`'s `Fetch base ref`,
+// its `run:` respelled as `git fetch --no-tags origin "${{ env.BASE }}"`:
+// this lint exit 0 (`hits: []`) and actionlint v1.7.7 exit 0.
+//
+// AND ACTIONLINT IS NO BACKSTOP HERE EITHER — measured on a field on its OWN
+// untrusted-input list, in that same step: `run: … "${{ …pull_request.title }}"`
+// exits 1 (*"github.event.pull_request.title" is potentially untrusted*), while
+// `env: {T: ${{ …title }}}` + `run: … "${{ env.T }}"` exits 0 and says nothing.
+// It models `env` as a live resolvable context inside `run:` (`${{ env.ANY }}`
+// type-checks at exit 0), so the expansion is real; it simply has no dataflow
+// rule. One `env:` hop launders a value straight off its own list.
+//
+// `matrix` is the same laundering shape without the irony: a matrix value is
+// only as closed as whatever built it, and a DYNAMIC matrix
+// (`fromJSON(needs.x.outputs.y)`) can carry anything. It is not the fix this
+// file recommends, so it is the weaker of the two additions — included because
+// it costs nothing and closes the shape in advance, not because a sink exists.
+//
+// COST, MEASURED ON THE TREE, NOT ASSUMED: 42 files, 149 code bodies, 21
+// interpolations, and the root heads are `github.event_name` x2,
+// `github.repository` x2, `github.run_id` x2, `inputs.*` x7, `needs.generate`
+// x4, `steps.*` x5 — ZERO `env.*` and ZERO `matrix.*`. Both contexts DO appear
+// elsewhere in the tree (`e2e-tests.yml`'s `PW_PROJECT: ${{ matrix.project }}`,
+// `repo-settings-apply.yml`'s `OWNER: ${{ matrix.owner }}`), but only in `env:`
+// / `with:` / `name:` — runner-expression keys this lint does not scan, i.e.
+// the fix, which stays expressible. Every `env.` inside a code body is
+// JavaScript `process.env.X`, not a `${{ }}` span, so it never reaches the path
+// lexer at all (and would lex as head `process` if it did).
 const UNSAFE_ROOTS = [
   ["github", "event"],
   ["github", "head_ref"],
   ["github", "base_ref"],
+  ["env"],
+  ["matrix"],
 ];
 
 // A path is unsafe when it sits on the same branch as an unsafe root, in
@@ -435,16 +552,16 @@ function isWaived(fileLines, absLine) {
 // strict direction for the waiver window: a marker sitting above the
 // CLOSING `}}` — a line inside the expression itself — grants nothing.
 //
-// An occurrence the boundary lexer could not terminate is unsafe on its
-// own account (see `interpolations`), so `isUnsafe` is consulted only for
+// An occurrence the boundary lexer could not read is unsafe on its own
+// account (see `interpolations`), so `isUnsafe` is consulted only for
 // spans the grammar could actually read. A waiver still applies: an
-// unterminated span is a defect to fix, not a hole to be un-waivable.
+// unreadable span is a defect to fix, not a hole to be un-waivable.
 function scan(blocks, fileLines, isUnsafe, kind) {
   const hits = [];
   for (const block of blocks) {
     const body = block.script;
     for (const occ of interpolations(body)) {
-      if (!occ.unterminated && !isUnsafe(occ.text)) continue;
+      if (!occ.unreadable && !isUnsafe(occ.text)) continue;
       const abs = block.line + body.slice(0, occ.index).split("\n").length - 1;
       if (isWaived(fileLines, abs)) continue;
       hits.push(`line ${abs} (${kind}): ${occ.text.replace(/\s+/g, " ").trim()}`);
@@ -1048,6 +1165,79 @@ const CANARY = [
       "    echo \"${{ format('{0}}}{1}', github.run_id, github.event_name) }}\"",
     ]),
     hits: [],
+  },
+  {
+    // AXIS 4, THE ROOT — and the only one of the four that is an
+    // APPROXIMATION rather than a construction (see the header's scope
+    // note). `env:` is the fix this lint RECOMMENDS, but a body that reads
+    // the binding back as an EXPRESSION re-opens the sink the binding
+    // closed: the runner substitutes the branch name into the command text
+    // either way. Measured — this exact shape in `visual-regression.yml`'s
+    // `Fetch base ref` passed this lint AND actionlint at exit 0, and
+    // actionlint stayed silent even when the bound value was swapped for
+    // `pull_request.title`, a field on its OWN untrusted-input list (direct:
+    // exit 1; one `env:` hop: exit 0). `matrix` is the same laundering
+    // shape via a dynamic `fromJSON(needs.…)` matrix. Zero live `env.*` /
+    // `matrix.*` interpolations in any code body, so closing it cost
+    // nothing.
+    name: "an env- or matrix-bound value read BACK as an expression is caught",
+    yaml: wf([
+      "- name: rebound",
+      "  env:",
+      "    BASE: ${{ github.event.pull_request.base.ref }}",
+      '  run: |',
+      '    git fetch --no-tags origin "${{ env.BASE }}"',
+      '    npx playwright test --project="${{ matrix.project }}"',
+    ]),
+    hits: [
+      "line 10 (run:): ${{ env.BASE }}",
+      "line 11 (run:): ${{ matrix.project }}",
+    ],
+  },
+  {
+    // CONTROL for axis 4, and the half that keeps the FIX EXPRESSIBLE. The
+    // `env:` KEY is the fix; the `env` CONTEXT read back is the bug. Line 1
+    // is the sanctioned shell read and must stay silent — if it ever reds,
+    // the lint has made its own HOWTO un-followable. Lines 2-3 pin that the
+    // match is SEGMENT-WISE, not a prefix: `environment` and `matrixed` are
+    // not the segments `env` / `matrix`, and `process.env.X` inside a
+    // github-script body is JS property access that never enters a `${{ }}`
+    // span at all.
+    name: "the env: KEY and env-lookalike segments stay silent",
+    yaml: wf([
+      "- name: bound properly",
+      "  env:",
+      "    BASE: ${{ github.event.pull_request.base.ref }}",
+      "  run: |",
+      '    git fetch --no-tags origin "$BASE"',
+      '    echo "${{ needs.environment.outputs.name }}"',
+      '    echo "${{ steps.matrixed.outputs.v }}"',
+    ]),
+    hits: [],
+  },
+  {
+    // THE LAST BOUNDARY RESIDUAL, closed locally rather than left leaning on
+    // actionlint. Each line terminates its span at a `}}` sitting inside a
+    // construct the expression lexer does NOT model, so the span comes back
+    // SHORT, with no paths and nothing unterminated — silently skipped
+    // before `LEXABLE`. Line 1 hides the reference behind a double-quoted
+    // region, line 2 behind backticks, line 3 behind a nested `${{`. All
+    // three are actionlint lex errors, which is what made the silence
+    // benign; that made the guarantee an EXTERNAL DEPENDENCY on a tool this
+    // file proves is no backstop, so the character is now convicted here.
+    name: "a span stopped by an unlexable character is flagged, not skipped",
+    yaml: wf([
+      "- name: unlexable",
+      "  run: |",
+      '    echo "${{ "}}" && github.event.pull_request.base.ref }}"',
+      "    echo \"${{ `}}` && github.event.pull_request.base.ref }}\"",
+      '    echo "${{ ${{ github.head_ref }} }}"',
+    ]),
+    hits: [
+      'line 10 (run:): ${{ ${{ github.head_ref }}',
+      'line 8 (run:): ${{ "}}',
+      'line 9 (run:): ${{ `}}',
+    ],
   },
 ];
 
