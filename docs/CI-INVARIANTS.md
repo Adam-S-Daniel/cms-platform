@@ -624,7 +624,18 @@ waiver silently fails to apply. `env:` binding needs no waiver at all: it
 removes the `${{ }}` from the body entirely, into a map this lint does not
 scan.
 
-### Two shapes that made the lint itself fail
+**The waiver has no split-across-lines evasion of its own** — checked when
+the split-expression hole below was closed, because a permission that could
+be smuggled would have re-opened it by another route. Two properties hold it
+shut, both locked by the canary. The window anchors to the line the `${{`
+OPENS on, so a marker sitting above the closing `}}` — an interior line of
+the span, the tempting placement — grants nothing. And a marker cannot
+itself be split: a YAML (or shell) comment does not span lines, and `WAIVER`
+is matched per raw source line, so `# injection-` / `# allow: …` on two
+lines grants nothing either. Splitting can only ever LOSE a waiver, never
+gain one.
+
+### Three shapes that made the lint itself fail
 
 - **One `test()` per FILE, never one per OFFENDER.** A test-per-offender
   design emits ZERO tests once the tree is clean, and Playwright exits 1 on
@@ -632,7 +643,28 @@ scan.
   (measured: `EXIT = 1`). It exits 0 only when co-run with a sibling that
   emits tests, so the self-CI glob would mask it while a targeted run of just
   this spec went red. Per-file keeps file+line in the failure message and
-  always emits 42 tests.
+  always emits one test per workflow (42 today), plus the canary below.
+- **A per-line scan is BLIND to a SPLIT expression.** `${{` and `}}` may sit
+  on different source lines. The runner reads that span as one expression and
+  substitutes it exactly as if it had been written on one line — actionlint's
+  expression parser agrees, resolving contexts *inside* the span — but the
+  first version of this lint matched per body line and so saw neither half.
+  Measured: `base.ref` reinstated into `visual-regression.yml`'s
+  `Fetch base ref` as
+
+  ```yaml
+  run: |
+    git fetch --no-tags origin "${{
+      github.event.pull_request.base.ref
+    }}"
+  ```
+
+  passed this lint **and** actionlint, both **exit 0** — the repo's one
+  charset-injectable sink straight back through the gate, with nothing going
+  red. `scan()` therefore matches over the WHOLE parsed body, where the
+  parser has handed the expression back contiguous and where the runner does
+  its substituting, and anchors each hit to the line its `${{` OPENS on. Do
+  not "optimise" it back to a per-line loop.
 - **The `with.script` extractor is STRUCTURAL** (`githubScriptBlocks()` in
   `e2e/workflow-yaml-utils.js`): it walks to a step mapping carrying a
   `uses:`, matches it against an **anchored** `/^actions\/github-script@/`

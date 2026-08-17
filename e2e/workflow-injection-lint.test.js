@@ -70,8 +70,10 @@ const path = require("node:path");
 const { test, expect } = require("./base");
 const { listWorkflows, runScripts, githubScriptBlocks } = require("./workflow-yaml-utils");
 
-// One `${{ … }}` occurrence. Non-greedy so two interpolations on one line
-// stay two hits instead of merging into the span between them.
+// One `${{ … }}` occurrence. `[\s\S]` rather than `.` is LOAD-BEARING: an
+// expression may straddle a source line break, and that span has to match
+// as one occurrence (see `scan`). Non-greedy so two interpolations stay
+// two hits instead of merging into the span between them.
 const INTERPOLATION = /\$\{\{[\s\S]*?\}\}/g;
 
 // Tested against the WHOLE interpolation, not just its head, so a wrapped
@@ -90,22 +92,55 @@ function isWaived(fileLines, absLine) {
 }
 
 // `blocks` are {script, line} pairs where `line` is the 1-based FILE line
-// of the body's first line, so `block.line + i` is the absolute line of
-// body line `i` — the anchor both the waiver window and the failure
-// message need.
+// of the body's first line, so `block.line` plus the newline count before
+// a match is that match's absolute line — the anchor both the waiver
+// window and the failure message need.
+//
+// SCANNED OVER THE WHOLE PARSED BODY, NEVER LINE BY LINE. A `${{ … }}` may
+// legally straddle a source line break. The runner reads the span as ONE
+// expression and substitutes it exactly as if it had been written on one
+// line — actionlint's expression parser agrees, resolving contexts inside
+// the span — but a per-line scan sees `${{` and `}}` on different lines
+// and matches NEITHER, so the sink is invisible. Measured: `base.ref`
+// reinstated into visual-regression.yml's `Fetch base ref` as
+//
+//     run: |
+//       git fetch --no-tags origin "${{
+//         github.event.pull_request.base.ref
+//       }}"
+//
+// passed the per-line form of this lint AND actionlint, both exit 0 — a
+// live, charset-injectable sink through the gate. The parser hands the
+// body back as one scalar, where the expression is contiguous again, so
+// matching there is both the structural read (house rule: parser, not
+// regex over raw source) and the text the runner actually substitutes
+// into. `abs` anchors to the line the `${{` OPENS on, which is also the
+// strict direction for the waiver window: a marker sitting above the
+// CLOSING `}}` — a line inside the expression itself — grants nothing.
 function scan(blocks, fileLines, isUnsafe, kind) {
   const hits = [];
   for (const block of blocks) {
-    block.script.split("\n").forEach((bodyLine, i) => {
-      const abs = block.line + i;
-      for (const expr of bodyLine.match(INTERPOLATION) || []) {
-        if (!isUnsafe(expr)) continue;
-        if (isWaived(fileLines, abs)) continue;
-        hits.push(`line ${abs} (${kind}): ${expr.trim()}`);
-      }
-    });
+    const body = block.script;
+    for (const m of body.matchAll(INTERPOLATION)) {
+      if (!isUnsafe(m[0])) continue;
+      const abs = block.line + body.slice(0, m.index).split("\n").length - 1;
+      if (isWaived(fileLines, abs)) continue;
+      hits.push(`line ${abs} (${kind}): ${m[0].replace(/\s+/g, " ").trim()}`);
+    }
   }
   return hits;
+}
+
+// Both arms over one workflow's text → the sorted offender list. The
+// per-file assertion below and the regression canary at the bottom BOTH
+// go through here, so the canary exercises the shipped detector rather
+// than a copy of it that could drift green while the real one rots.
+function offenders(yaml) {
+  const fileLines = yaml.split("\n");
+  return [
+    ...scan(runScripts(yaml), fileLines, (e) => RUN_UNSAFE.test(e), "run:"),
+    ...scan(githubScriptBlocks(yaml), fileLines, () => true, "with.script"),
+  ].sort();
 }
 
 const HOWTO =
@@ -122,23 +157,166 @@ test.describe("workflow interpolation sinks are env-bound", () => {
   // state would fail its own verifier (measured). Per-file keeps the
   // file+line detail in the message and always emits tests.
   for (const file of listWorkflows()) {
-    const yaml = fs.readFileSync(file, "utf8");
-    const fileLines = yaml.split("\n");
     const base = path.basename(file);
-
-    const offenders = [
-      ...scan(runScripts(yaml), fileLines, (e) => RUN_UNSAFE.test(e), "run:"),
-      ...scan(githubScriptBlocks(yaml), fileLines, () => true, "with.script"),
-    ].sort();
+    const hits = offenders(fs.readFileSync(file, "utf8"));
 
     test(`no expression is substituted into a code body (${base})`, () => {
       expect(
-        offenders,
+        hits,
         `${base} expands a \${{ }} expression into text that is then PARSED as ` +
           `code — a run: shell body or an actions/github-script with.script JS ` +
           `body. The runner substitutes the value before bash/eval parses, so the ` +
           `value becomes SOURCE, not data. ${HOWTO}`,
       ).toEqual([]);
+    });
+  }
+});
+
+// ── PERMANENT REGRESSION CANARY — the split-expression evasion ────────
+//
+// Synthetic workflow text driven through `offenders()`, the SHIPPED
+// detector rather than a copy of it. Pure string in / hits out: no fs,
+// no network, no clock.
+//
+// It guards the defect that shipped past this spec's first version. A
+// `${{ }}` written across a source line break substitutes at runtime
+// exactly as if it sat on one line, but the per-line scan then in place
+// matched neither half — so a live, charset-injectable `base.ref` sink
+// passed BOTH this lint and actionlint at exit 0. Reverting `scan()` to
+// iterate body lines turns every RED case below green again.
+//
+// The three control cases carry as much weight as the red ones: an
+// `env:`-bound value and a properly waived line must stay SILENT, or the
+// canary would also pass on a detector that just flagged everything.
+function wf(stepLines) {
+  return ["on: push", "jobs:", "  j:", "    runs-on: ubuntu-latest", "    steps:"]
+    .concat(stepLines.map((l) => "      " + l))
+    .join("\n");
+}
+
+const CANARY = [
+  {
+    name: "a run: expression split across source lines is caught",
+    yaml: wf([
+      "- name: split",
+      "  run: |",
+      '    git fetch --no-tags origin "${{',
+      "      github.event.pull_request.base.ref",
+      '    }}"',
+    ]),
+    hits: ["line 8 (run:): ${{ github.event.pull_request.base.ref }}"],
+  },
+  {
+    name: "a with.script expression split across source lines is caught",
+    yaml: wf([
+      "- name: split script",
+      "  uses: actions/github-script@v7",
+      "  with:",
+      "    script: |",
+      '      core.info("${{',
+      "        github.event.pull_request.title",
+      '      }}")',
+    ]),
+    hits: ["line 10 (with.script): ${{ github.event.pull_request.title }}"],
+  },
+  {
+    // A folded scalar rejoins the split expression with SPACES rather
+    // than newlines, so it is contiguous in the parsed value either way.
+    name: "a split expression in a FOLDED (>) scalar is caught",
+    yaml: wf([
+      "- name: folded",
+      "  run: >",
+      '    git fetch --no-tags origin "${{',
+      "    github.event.pull_request.base.ref",
+      '    }}"',
+    ]),
+    hits: ["line 8 (run:): ${{ github.event.pull_request.base.ref }}"],
+  },
+  {
+    // CONTROL. `env:` is a runner-expression context, never scanned —
+    // binding is the fix, so it must not register as a hit.
+    name: "an env-bound value is silent",
+    yaml: wf([
+      "- name: bound",
+      "  env:",
+      "    BASE: ${{ github.event.pull_request.base.ref }}",
+      '  run: git fetch --no-tags origin "$BASE"',
+    ]),
+    hits: [],
+  },
+  {
+    // CONTROL. The waiver window anchors to the line the `${{` OPENS on.
+    name: "a waiver above the OPENING line still grants",
+    yaml: wf([
+      "- name: waived",
+      "  run: |",
+      "    # injection-allow: measured closed value space",
+      '    echo "${{',
+      "      github.event.pull_request.base.ref",
+      '    }}"',
+    ]),
+    hits: [],
+  },
+  {
+    // …and CANNOT be gained from an interior line of the split span. The
+    // most tempting placement — immediately above the closing `}}` —
+    // grants nothing, so splitting buys no waiver it could not already
+    // have had.
+    name: "a waiver above the CLOSING brace grants nothing",
+    yaml: wf([
+      "- name: sneaky",
+      "  run: |",
+      '    echo "${{',
+      "      github.event.pull_request.base.ref",
+      "    # injection-allow: interior line",
+      '    }}"',
+    ]),
+    hits: [
+      "line 8 (run:): ${{ github.event.pull_request.base.ref " +
+        "# injection-allow: interior line }}",
+    ],
+  },
+  {
+    // The waiver has no split-across-lines analogue to exploit: a YAML
+    // (or shell) comment cannot span lines, and WAIVER is matched per
+    // raw source line, so half a marker grants nothing.
+    name: "a waiver marker split across two lines grants nothing",
+    yaml: wf([
+      "- name: split marker",
+      "  run: |",
+      "    # injection-",
+      "    # allow: marker split across lines",
+      '    echo "${{ github.head_ref }}"',
+    ]),
+    hits: ["line 10 (run:): ${{ github.head_ref }}"],
+  },
+  {
+    // The property the non-greedy quantifier protects, kept under the
+    // whole-body scan: two occurrences must not merge into the span
+    // between them.
+    name: "two interpolations on one line stay two hits",
+    yaml: wf([
+      "- name: two",
+      "  run: |",
+      '    echo "${{ github.head_ref }}" "${{ github.base_ref }}"',
+    ]),
+    hits: [
+      "line 8 (run:): ${{ github.base_ref }}",
+      "line 8 (run:): ${{ github.head_ref }}",
+    ],
+  },
+];
+
+test.describe("the detector reads whole bodies, not source lines", () => {
+  for (const c of CANARY) {
+    test(c.name, () => {
+      expect(
+        offenders(c.yaml),
+        `${c.name} — a \${{ }} may legally straddle a source line break; the ` +
+          `runner substitutes the span as one expression regardless. Scanning ` +
+          `the PARSED body (where it is contiguous) is what makes it visible, ` +
+          `so a per-line scan here is a silent hole, not a style choice.`,
+      ).toEqual(c.hits);
     });
   }
 });
