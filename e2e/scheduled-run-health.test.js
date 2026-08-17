@@ -455,16 +455,68 @@ test.describe("audit-scheduled-runs.js — dead scheduled workflows (#258)", () 
   test("the schedule probe fails SOFT: an unreadable workflow stays REPORTED", () => {
     // Same direction as partitionStarvedRuns — silently dropping a possibly
     // dead cron is the worse outcome, so an errored probe reports.
+    //
+    // THE STATE MATTERS: `disabled_inactivity` short-circuits the probe
+    // entirely, so only `disabled_manually` still reaches the try/catch. These
+    // fixtures were disabled_inactivity until the short-circuit landed —
+    // measured, the test then passed with ZERO probe calls and asserted
+    // nothing about fail-soft. Do not change them back.
     const { filterDeadScheduledWorkflows } = loadScript();
     const all = [
-      wf({ id: 2, path: ".github/workflows/ok.yml", state: "disabled_inactivity" }),
-      wf({ id: 3, path: ".github/workflows/boom.yml", state: "disabled_inactivity" }),
+      wf({ id: 2, path: ".github/workflows/ok.yml", state: "disabled_manually" }),
+      wf({ id: 3, path: ".github/workflows/boom.yml", state: "disabled_manually" }),
     ];
     const dead = filterDeadScheduledWorkflows(all, (w) => {
       if (w.id === 3) throw new Error("gh: 502 Bad Gateway");
       return true;
     });
     expect(dead.map((w) => w.id)).toEqual([2, 3]);
+  });
+
+  test("a dead cron whose run RECORDS are gone is STILL a finding (#258 deferred)", () => {
+    // The probe answers "no runs" identically for "never a cron" and "the run
+    // records are gone" (deleted via DELETE /actions/runs/{id} or the Actions
+    // tab). For disabled_inactivity the state already proves the workflow is
+    // cron-bearing, so the probe must not get a vote — a "no" there would drop
+    // the workflow from the finding set silently, which is #258 all over again.
+    const { filterDeadScheduledWorkflows } = loadScript();
+    const dead = filterDeadScheduledWorkflows(
+      [wf({ id: 99, path: ".github/workflows/sweep.yml", state: "disabled_inactivity" })],
+      () => false,
+    );
+    expect(dead.map((w) => w.id)).toEqual([99]);
+  });
+
+  test("a self-evidencing state never CALLS the probe (one fewer API call)", () => {
+    const { filterDeadScheduledWorkflows, stateImpliesCron, SELF_EVIDENCING_CRON_STATES } =
+      loadScript();
+    expect(SELF_EVIDENCING_CRON_STATES).toEqual(["disabled_inactivity"]);
+    expect(stateImpliesCron({ state: "disabled_inactivity" })).toBe(true);
+    expect(stateImpliesCron({ state: "disabled_manually" })).toBe(false);
+    let calls = 0;
+    filterDeadScheduledWorkflows([wf({ id: 99, state: "disabled_inactivity" })], () => {
+      calls += 1;
+      return true;
+    });
+    expect(calls).toBe(0);
+  });
+
+  test("disabled_manually KEEPS the probe: no scheduled runs, not reported", () => {
+    // THE NOISE BOUNDARY. This guards a DIFFERENT mutation from the two tests
+    // above: widening SELF_EVIDENCING_CRON_STATES to include
+    // "disabled_manually". Doing that would report every hand-disabled
+    // workflow, making dead.length > 0 permanent — and main()'s close branch is
+    // gated on `failures.length === 0 && dead.length === 0`, so the tracking
+    // issue could never auto-close again.
+    const { filterDeadScheduledWorkflows } = loadScript();
+    expect(
+      filterDeadScheduledWorkflows([wf({ id: 98, state: "disabled_manually" })], () => false),
+    ).toEqual([]);
+    expect(
+      filterDeadScheduledWorkflows([wf({ id: 98, state: "disabled_manually" })], () => true).map(
+        (w) => w.id,
+      ),
+    ).toEqual([98]);
   });
 
   test("the schedule probe is a per_page=1 schedule-event runs query", () => {
@@ -632,8 +684,13 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
   test("a DEAD workflow with zero failing runs must NOT close the tracking issue", () => {
     const { MARKER } = loadScript();
     const { dir, log } = ghStubDir([
-      // The dead-workflow probe: this one HAS fired on a cron before, so its
-      // disabled state is a finding rather than a workflow that never had one.
+      // DELIBERATELY UNUSED, and kept that way on purpose: DEAD_WORKFLOW is
+      // `disabled_inactivity`, a self-evidencing state that short-circuits the
+      // probe, so this route is consulted ZERO times (measured: 1 -> 0 when the
+      // short-circuit landed; total gh calls 7 -> 6). It stays as a tripwire —
+      // if a change ever re-routes a disabled_inactivity workflow through the
+      // probe, this answer keeps THIS test honest rather than turning it into a
+      // stub-miss red that hides which behaviour actually changed.
       [
         "has",
         "actions/workflows/99/runs?event=schedule",
@@ -664,6 +721,53 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       (argv) => argv[1] === "repos/o/r/issues/7/comments" && argv.some((a) => a.startsWith("body=")),
     );
     expect(commented, `expected the dead workflow to be reported on issue #7:\n${out}`).toBe(true);
+    expect(out).toContain("sweep.yml");
+    expect(code, out).toBe(0);
+  });
+
+  test("a dead cron whose run records are GONE must NOT close the tracking issue", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      // The probe route is supplied ON PURPOSE and answers EMPTY. Omitting it
+      // would make the stub exit non-zero, and filterDeadScheduledWorkflows
+      // fails SOFT on a THROWING probe — so the test would go green without the
+      // fix, for the wrong reason. An empty ANSWER is the condition under test.
+      ["has", "actions/workflows/99/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [DEAD_WORKFLOW] })],
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      [
+        "has",
+        "issues?state=open&labels=",
+        JSON.stringify([{ number: 7, body: `${MARKER}\nprevious alert` }]),
+      ],
+      ["has", "issues/7/comments?per_page", "[]"],
+      ["has", "issues/7/comments", "{}"],
+      // The close is ROUTED so that, unfixed, the run exits 0 — the bug's real
+      // signature is a GREEN audit that closed a live alert, not an error. It is
+      // NOT what makes this test discriminate: closeCalls reads the stub log,
+      // which is appended BEFORE routing, so the closeCalls assertion fails
+      // pre-fix with or without this route (measured). What the route buys is a
+      // clean pre-fix signature instead of a misleading stub-miss error line.
+      ["eq", "repos/o/r/issues/7", JSON.stringify({ number: 7, state: "closed" })],
+      ["eq", "repos/o/r", JSON.stringify({ private: false })],
+    ]);
+
+    const { code, out } = runAudit(dir);
+    expect(
+      closeCalls(log),
+      `#258 DEFERRED: closed the alert because the dead cron's run records were gone:\n${out}`,
+    ).toEqual([]);
+    // Not closing because it did nothing would be a different bug. NOTE the
+    // body= match on `sweep.yml`: a bare "some comment was posted" check does
+    // NOT discriminate here — measured, it passes pre-fix too, because the
+    // close path posts its own close comment to the same endpoint. Only the
+    // CONTENT separates "reported the dead workflow" from "announced health".
+    const reported = callsOf(log).some(
+      (argv) =>
+        argv[1] === "repos/o/r/issues/7/comments" &&
+        argv.some((a) => a.startsWith("body=") && a.includes("sweep.yml")),
+    );
+    expect(reported, `expected the dead workflow to be reported on issue #7:\n${out}`).toBe(true);
     expect(out).toContain("sweep.yml");
     expect(code, out).toBe(0);
   });

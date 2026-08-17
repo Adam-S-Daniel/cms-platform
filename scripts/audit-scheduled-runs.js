@@ -97,6 +97,22 @@ const MAX_LINKS_PER_WORKFLOW = 5;
 // because it is indistinguishable, from the outside, from a cron someone
 // turned off during an incident and forgot to turn back on.
 const DEAD_WORKFLOW_STATES = ["disabled_inactivity", "disabled_manually"];
+// `disabled_inactivity` is SELF-EVIDENCING: GitHub sets it from exactly one
+// mechanism — the 60-day auto-disable, which targets SCHEDULED workflows in
+// public repos — so the state already proves the workflow carries a cron.
+// THAT PREMISE IS GITHUB'S DOCUMENTED BEHAVIOUR, NOT MEASURED HERE: a 60-day
+// auto-disable cannot be induced in a test, and there is no live specimen to
+// read it off (measured 2026-08-17, all 111 workflows across cms-platform,
+// adamdaniel.ai and jodidaniel.com are `state=active`). If GitHub ever sets
+// the state some other way, the blast radius is bounded to one extra reported
+// line, once per tracking issue, about a workflow that genuinely IS disabled.
+// Re-deriving that from a runs probe can only LOSE information: the probe
+// answers "no" identically for "never a cron" and "its run records are gone"
+// (runs deleted via DELETE /actions/runs/{id} or the Actions tab), and a "no"
+// there silently drops the workflow from the finding set. That is #258
+// verbatim, merely deferred. `disabled_manually` gets no such guarantee — any
+// workflow can be switched off by hand — so it keeps the probe.
+const SELF_EVIDENCING_CRON_STATES = ["disabled_inactivity"];
 
 function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
@@ -201,23 +217,49 @@ function isDeadWorkflow(wf) {
   return !!wf && DEAD_WORKFLOW_STATES.includes(wf.state);
 }
 
+// A dead workflow whose STATE alone proves it carried a cron, so the runs
+// probe has nothing to add (see SELF_EVIDENCING_CRON_STATES).
+function stateImpliesCron(wf) {
+  return !!wf && SELF_EVIDENCING_CRON_STATES.includes(wf.state);
+}
+
 // Dead workflows that actually carry a cron. `hadScheduledRuns(wf)` is
 // injected so the scoping is unit-testable without gh; it FAILS SOFT — a probe
 // error keeps the workflow REPORTED, the same direction as
 // partitionStarvedRuns, because silently dropping a possibly-dead cron is the
-// worse outcome.
+// worse outcome — the catch below deliberately has no `continue`, so a throw
+// falls through to `dead.push(wf)`. That catch is now reachable for
+// `disabled_manually` only (see below).
 //
 // WHY A RUNS PROBE AND NOT THE WORKFLOW FILE'S `on:` BLOCK: the reusable
 // sparse-checks-out only this script, so no consumer workflow file exists on
-// disk to parse, and the runtime is bare Node with no YAML parser available
+// disk to parse; the runtime is bare Node with no YAML parser available
 // (regex-scanning YAML is banned house-wide — anchors/aliases silently
-// mis-read). "It has fired on a cron before" is also the sharper question for
-// this detector: what we are looking for is a workflow that WAS emitting
-// scheduled runs and now cannot.
+// mis-read); and the file on the default branch may no longer carry
+// `on: schedule` while the disabled workflow entry persists, so a YAML read
+// can answer "no cron" about a workflow GitHub disabled precisely because it
+// had one.
+//
+// WHY THE PROBE NOW SCOPES `disabled_manually` ONLY: for
+// `disabled_inactivity` it is redundant AND lossy. Redundant because the state
+// is self-evidencing (SELF_EVIDENCING_CRON_STATES). Lossy because it answers
+// from run RECORDS, and "no records" is byte-identical for "never a cron" and
+// "the records were deleted" — a "no" there removes the workflow from the
+// finding set silently, which is #258 deferred rather than fixed. Deleting the
+// probe for that state is not a heuristic trade: a strictly weaker signal
+// stops overruling a stronger one, and it costs one fewer API call per dead
+// workflow. `disabled_manually` implies nothing about a cron, so it keeps the
+// probe — reporting every hand-disabled workflow would make `dead.length > 0`
+// permanent and, because main()'s close branch is gated on `dead.length === 0`,
+// the tracking issue could never auto-close again.
 function filterDeadScheduledWorkflows(workflows, hadScheduledRuns) {
   const dead = [];
   for (const wf of workflows || []) {
     if (!isDeadWorkflow(wf)) continue;
+    if (stateImpliesCron(wf)) {
+      dead.push(wf);
+      continue;
+    }
     try {
       if (!hadScheduledRuns(wf)) continue;
     } catch (e) {
@@ -728,12 +770,14 @@ module.exports = {
   BAD_CONCLUSIONS,
   MAX_LINKS_PER_WORKFLOW,
   DEAD_WORKFLOW_STATES,
+  SELF_EVIDENCING_CRON_STATES,
   sinceIso,
   isAlertRun,
   filterAlertRuns,
   isPublicRepo,
   isPrivateRepo,
   isDeadWorkflow,
+  stateImpliesCron,
   filterDeadScheduledWorkflows,
   workflowScheduledRunsEndpoint,
   hiddenDeadWorkflowsBlock,

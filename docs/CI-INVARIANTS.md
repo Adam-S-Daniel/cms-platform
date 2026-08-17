@@ -243,17 +243,53 @@ layer:
     window is unproven) and reds the run. That is the #258 bug's exact shape,
     so it is guarded rather than trusted. The per-workflow schedule probe
     itself **fails SOFT** in the other direction — an unreadable workflow
-    stays REPORTED, matching `partitionStarvedRuns`.
-  - **Scoped by a runs probe, not by parsing the workflow file.** The reusable
-    sparse-checks-out only the audit script, so no consumer workflow file
-    exists on disk, and the runtime is bare Node with no YAML parser (regex-
-    scanning YAML is banned house-wide). `workflowScheduledRunsEndpoint` asks
-    `…/workflows/{id}/runs?event=schedule&per_page=1` — "did this ever fire on
-    a cron?" — which is also the sharper question for this detector. Dead
-    workflows dedupe on a parallel hidden `<!-- dead-workflows: … -->` block
-    keyed by file basename, kept strictly separate from `<!-- run-ids: … -->`
-    so the two channels cannot clobber each other; each is reported **once**
-    per tracking issue.
+    stays REPORTED, matching `partitionStarvedRuns`. That fail-soft path is
+    now reachable for `disabled_manually` only (see the next bullet), which is
+    why `e2e/scheduled-run-health.test.js`'s "the schedule probe fails SOFT"
+    fixtures are `disabled_manually`: measured, with `disabled_inactivity`
+    fixtures that test passes having called the probe **zero** times — a
+    vacuous green. Do not change them back.
+  - **Scoped by a runs probe for `disabled_manually` ONLY;
+    `disabled_inactivity` short-circuits it.** The YAML route is still
+    rejected — the reusable sparse-checks-out only the audit script, so no
+    consumer workflow file exists on disk; the runtime is bare Node with no
+    YAML parser (regex-scanning YAML is banned house-wide); and the file on
+    the default branch may no longer carry `on: schedule` while the disabled
+    workflow entry persists, so a YAML read can answer "no cron" about a
+    workflow GitHub disabled precisely *because* it had one. But
+    `workflowScheduledRunsEndpoint`
+    (`…/workflows/{id}/runs?event=schedule&per_page=1`) answers from run
+    RECORDS, and **"no records" is byte-identical for "never a cron" and "the
+    records are gone"** — so a "no" there drops the workflow from the finding
+    set silently. That is #258 deferred, not fixed. For `disabled_inactivity`
+    the probe is therefore redundant *and* lossy: GitHub sets that state from
+    exactly one mechanism, the 60-day auto-disable, which targets scheduled
+    workflows in public repos — the state already proves the cron. **That
+    premise is GitHub's documented behaviour, not measured here** — a 60-day
+    auto-disable cannot be induced in a test and there is no live specimen
+    (measured 2026-08-17: all 111 workflows across cms-platform 44/44,
+    adamdaniel.ai 34/34 and jodidaniel.com 33/33 are `state=active`) — so if
+    it is ever wrong the blast radius is one extra reported line, once per
+    tracking issue, about a workflow that genuinely IS disabled.
+    `SELF_EVIDENCING_CRON_STATES` short-circuits the probe for it (one fewer
+    API call per dead workflow). Earlier text here called "did this ever fire
+    on a cron?" *the sharper question for this detector*; that is now false
+    for `disabled_inactivity`, where `state` is the sharper signal and the
+    probe could only overrule it with a weaker one. **This is NOT a
+    retention race** — measured 2026-08-17 on adamdaniel.ai, 531 schedule-event
+    run records survive from >90 days ago and 241 from >124 days (none before
+    the repo's own creation), so run RECORDS are not pruned on the documented
+    90-day clock, which governs artifacts and logs. The reachable path is
+    manual run deletion (`DELETE /actions/runs/{id}` or the Actions tab); the
+    fix is justified by the probe being redundant and lossy on a
+    silent-failure-detection path, not by a clock. `disabled_manually` KEEPS
+    the probe: nothing about that state implies a cron, and reporting every
+    hand-disabled workflow would make `dead.length > 0` permanent — the close
+    branch is gated on `dead.length === 0`, so the tracking issue could never
+    auto-close again. Dead workflows dedupe on a parallel hidden
+    `<!-- dead-workflows: … -->` block keyed by file basename, kept strictly
+    separate from `<!-- run-ids: … -->` so the two channels cannot clobber
+    each other; each is reported **once** per tracking issue.
 - **Exit-code contract:** the audit run stays GREEN when it successfully
   files/updates the alert (the issue is the channel); red means the audit
   ITSELF is broken (API/permission failure) — same "red needs a human"
