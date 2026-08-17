@@ -578,11 +578,15 @@ recorded here because the issue text will outlive anyone's memory of it:
 
 ### What the lint scans, and what it deliberately does not
 
-**Arm 1 — `run:` bodies.** Red on any interpolation mentioning
-`github.event.`, `github.head_ref` or `github.base_ref`. The dot in
-`github.event.` is load-bearing: `github.event_name` is a closed enum the
-runner sets, used today in `dependabot-comment-sync.yml` and
-`repo-settings-audit.yml`, and must stay unflagged.
+**Arm 1 — `run:` bodies.** Red on any interpolation that REFERENCES
+`github.event`, `github.head_ref` or `github.base_ref` — in **any spelling**.
+The match is on lexed expression **paths**, not on expression text (see "A
+regex over expression TEXT is blind to a RESPELLING" below).
+`github.event_name` is a closed enum the runner sets, used today in
+`dependabot-comment-sync.yml` and `repo-settings-audit.yml`, and must stay
+unflagged; comparing SEGMENTS is what keeps it unflagged in every spelling —
+`github['event_name']` and `GITHUB.EVENT_NAME` included — rather than the
+trailing dot of a substring match.
 
 **Arm 2 — `with.script` bodies.** Red on ANY interpolation, with no
 allowlist. A github-script body is JS handed to an eval and every dynamic
@@ -635,7 +639,7 @@ is matched per raw source line, so `# injection-` / `# allow: …` on two
 lines grants nothing either. Splitting can only ever LOSE a waiver, never
 gain one.
 
-### Three shapes that made the lint itself fail
+### Four shapes that made the lint itself fail
 
 - **One `test()` per FILE, never one per OFFENDER.** A test-per-offender
   design emits ZERO tests once the tree is clean, and Playwright exits 1 on
@@ -665,6 +669,84 @@ gain one.
   parser has handed the expression back contiguous and where the runner does
   its substituting, and anchors each hit to the line its `${{` OPENS on. Do
   not "optimise" it back to a per-line loop.
+- **A regex over expression TEXT is blind to a RESPELLING.** Closing the
+  split-expression hole above fixed *where* the expression sits and left *how
+  it is spelled* untouched: `scan()` read the parsed body, but arm 1 still
+  substring-tested the expression with `/github\.event\./`. An Actions
+  expression has its own grammar — index syntax is interchangeable with
+  property dereference, whitespace (spaces **and tabs**) is insignificant, and
+  names are **case-insensitive** — so all five of
+
+  ```text
+  github.event.pull_request.base.ref
+  github['event']['pull_request']['base']['ref']
+  github.event['pull_request'].base['ref']
+  github . event . pull_request . base . ref
+  GitHub.Event.Pull_Request.Base.Ref
+  ```
+
+  read the same branch name at runtime, and that regex saw only the first.
+  Measured: the index form reinstated into the same `Fetch base ref` step
+  passed this lint **and** actionlint, both **exit 0** — the identical
+  charset-injectable sink through the gate again, respelled. Verified against
+  actionlint v1.7.7's own expression parser, which normalises every spelling
+  above back to the dot path.
+
+  **actionlint is no backstop for this value.** It does normalise the
+  spellings, but `base.ref` is not on its untrusted-input list in *any* of
+  them: all five, plus `toJSON(github.event)` and `toJSON(github['event'])`,
+  pass it at **exit 0** in a `run:` body (measured on all 42 workflows). For
+  the repo's one charset-injectable value, this lint is the only net.
+
+  Arm 1 therefore LEXES each interpolation into context paths
+  (`contextPaths()`) and compares folded SEGMENTS (`onUnsafeBranch()`) — the
+  house "parser, not regex, for code structure" rule applied one layer below
+  the YAML, since an expression path *is* code structure. Four properties are
+  load-bearing, and each has a canary case that goes RED when it is removed
+  (measured, one mutation at a time):
+
+  - **Segments are compared, and folded to lower case.** Folding is what
+    catches `GitHub.Event.…`; a draft that closed only index/mixed/spaced
+    still passed it. Comparing segments rather than substrings is what keeps
+    `github.event_name` unflagged in *every* spelling without a special case
+    (`event_name` is simply not the segment `event`). Index literals are
+    folded too — one step beyond what is provable here, because actionlint
+    treats them as case-*sensitive* (it rejects `github['EVENT']`) and the
+    runner's behaviour cannot be measured offline. Folding can only add hits,
+    never drop one, so the conservative branch is the right one.
+  - **Both directions on the branch count.** A reference to an *ancestor* of
+    an unsafe root is unsafe too: `toJSON(github.event)`, `toJSON(github)` and
+    a bare `${{ github }}` serialise the whole attacker payload into the body,
+    and the old trailing dot passed all three at exit 0. A deliberate
+    widening, not a side effect — and free: it changes the verdict on none of
+    the tree's 21 live `run:` interpolations (measured, old matcher vs new,
+    zero disagreements).
+  - **An unresolvable segment matches any name.** A dynamic index
+    (`github[inputs.k]`), a function-computed one (`github[format(…)]`) and a
+    star filter all become `ANY` and flag. A star's *position* matters and is
+    why this cannot be left to a text prefix: `github.event.…*.ref` keeps the
+    literal `github.event.` in front of it and the old regex caught it by
+    accident, while `github.*.pull_request.base.ref` erased the only thing
+    that regex could see. Zero such forms exist in the tree (measured: 149
+    code bodies, 21 interpolations), so closing the shape costs nothing.
+  - **`-` is a name character, and `'` is the only string delimiter.** The
+    grammar has no subtraction operator, so `a-b` lexes as one segment —
+    actionlint reports `github.event-name` as *property "event-name" is not
+    defined* and rejects `github.run_number - 1` as a lex error. Dropping `-`
+    from the name charset would split `github.base_ref-ish` into a FALSE
+    POSITIVE on `github.base_ref`. A *double*-quoted index is a lexer error,
+    not a second spelling (actionlint rejects `github["event"]`, and its error
+    enumerates the legal charset with `"` absent); it lexes as `ANY` here and
+    flags, harmlessly, since it can never run.
+
+  The **tempting shortcut is text-rewriting** `['x']` to `.x` and then
+  substring-testing. Do not: measured, it closes only the index spelling and
+  still passes both `GitHub.Event.Pull_Request.Base.Ref` and
+  `toJSON(github.event)`. (A related claim — that the rewrite would red
+  `dependabot-comment-sync.yml` and `repo-settings-audit.yml` — is **false**
+  as long as the substring keeps its trailing dot: `github.event_name` does
+  not contain `github.event.`. The shortcut's real defect is the spellings it
+  misses, not a false positive it creates.)
 - **The `with.script` extractor is STRUCTURAL** (`githubScriptBlocks()` in
   `e2e/workflow-yaml-utils.js`): it walks to a step mapping carrying a
   `uses:`, matches it against an **anchored** `/^actions\/github-script@/`
