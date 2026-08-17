@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.84)
+## Version history (v0.1.0 → v0.1.85)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1534,3 +1534,50 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   appear on either path (`-X PATCH -f state=closed`).
 
   Closes #258, #259, #260.
+
+- **v0.1.85** (2026-08-17) — **five-item follow-up sweep from #261, all adversarially verified.**
+  - **Gitleaks canary compared per FILE, so a rule-scoped allowlist hid (#264).** A config blinding
+    `github-pat` at the control path still saw the file reported by `generic-api-key`, so the canary
+    printed OK and exited 0 over a live blind spot. Now compares `(file, RuleID)` PAIRS. An
+    unreachable `elif None in scopes` origin arm was deleted (proven unreachable by fixture, not
+    merely untested), and the previously-unasserted `"an entry in .gitleaks.toml"` fallback gained a
+    test — poisoning that string had left all 23 cases green. Suite 23 → 24. Two comments claiming
+    "four shapes" now say "several … among them": per-rule `stopwords`, per-rule `regexes` +
+    `regexTarget = "match"`, and `[extend] disabledRules` were each measured to reach the same
+    fallback.
+  - **Workflow injection lint matched expression TEXT (#265).** Five adversarial rounds, each
+    closing an evasion the previous round's author believed closed — only the cms slug was linted
+    and `with.script` was unscanned; then a `${{ }}` split across lines; then index syntax
+    `github['event'][…]` plus case-insensitivity; then `}}` inside a quoted literal ending the span
+    early; and finally the lint's OWN recommended `env:` remediation read back as an expression
+    (`env: BASE: ${{ github.event…base.ref }}` + `run: "${{ env.BASE }}"` passed both gates at exit
+    0 with the injection intact, while the header asserted that an `env:` binding "removes the `${{
+    }}` from the body entirely" — false whenever the body reads it back). actionlint is no backstop:
+    a field on its own untrusted list goes from exit 1 to silent across one `env:` hop. The boundary
+    is now general by construction (the reference lexer's token-start charset admits exactly one
+    construct that opens a data region; property-tested over 43,054 generated bodies across two
+    seeds, 0 under-flags). The root set remains an approximation and now says so — see "WHERE THE
+    GUARANTEE ENDS" in `docs/CI-INVARIANTS.md`.
+  - **`#258`'s dead-cron detector could be defeated by run-record retention (#263).** The scoping
+    probe read RUNS, and an empty runs list is byte-identical to "never had a schedule", so a
+    finding silently drops out once records age. `state == disabled_inactivity` is self-evidencing
+    and now short-circuits the probe. Two filing premises were refuted and are not repeated: run
+    records do NOT age out at 90 days (531 schedule-event records older than that on adamdaniel.ai),
+    and "widen the `created:` window" was vacuous (the probe carries no such bound). A collateral
+    casualty was fixed too — `scheduled-run-health.test.js:455` had begun passing with zero probe
+    calls, silently no longer testing what it names.
+  - **Both consumers carried latent `.gitleaks.toml` `paths` entries** (adamdaniel.ai#3161,
+    jodidaniel.com#136): whole-file allowlist entries that would blind every rule if those paths
+    were ever recreated. Removed; the load-bearing `regexes` blocks kept.
+  - **Scaffolded sites were born failing the authoritative pin gate (#266).** The cause was NOT the
+    template's stale pins — `create-site.js` rewrites refs on copy, so a new site always got one
+    version — but the static `GEMFILE` constant carrying no `tag:`. Fixed at the source; the
+    template pinned; `examples/site` added to actionlint, which had never linted those 32 workflows
+    at all. The anti-rot guard now RUNS the consumer gate's own rule rather than a lookalike:
+    `scripts/stale-platform-refs.js` is `verify-consumer-pins.sh`'s awk extracted verbatim and
+    `require`d by both, with a 12-shape agreement table asserting the guard's verdict and the shell
+    gate's exit code together. **This makes the 54 template refs and `PLATFORM_VERSION` part of the
+    atomic release-PR edit set**, enforced by a required lane; `release.yml`'s error string and
+    AGENTS.md's release paragraph — the only two enumerations of that set — now name them.
+
+  Closes #263, #264, #265, #266.
