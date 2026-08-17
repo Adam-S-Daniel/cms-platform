@@ -33,11 +33,31 @@ if [[ "$BRANCH" != cms/* ]]; then
   exit 0
 fi
 
-# `cms/<col>/<entry>` -> `<col>-<entry>`. Lowercase is assumed (Decap's slug
-# template enforces it); the router regex only matches [a-z0-9-], so stray
-# uppercase 404s loudly rather than mis-routing — we deliberately don't
-# lowercase here so that contract stays visible.
-slug=$(printf '%s' "$BRANCH" | sed -E 's|^cms/||; s|/|-|g')
+# `cms/<col>/<entry>` -> `<col>-<entry>`, then folded to the [a-z0-9-] charset
+# the router regex (and the DNS-label rules) already declare above.
+#
+# The fold is a SECURITY boundary, not just tidiness. The branch ref is
+# attacker-influenced input — a Decap editor picks the entry title that becomes
+# the ref — and callers embed this output in shell. Before the fold a single
+# quote survived verbatim, so `cms/a/'$(id)'` yielded `a-'$(id)'`, and a caller
+# line of the shape `SLUG='<slug>'` rendered as `SLUG='a-'$(id)''` and EXECUTED
+# `id`. Constraining the charset removes every shell metacharacter at the
+# source; deploy-preview.yml separately passes this value via `env:` rather
+# than string interpolation, so neither half stands alone.
+#
+# Uppercase folds to `-` like any other out-of-charset byte. It used to pass
+# through on the theory that a stray capital should 404 loudly at the router
+# rather than mis-route — but the same pass-through is what let a quote reach
+# a shell, and Decap's slug template emits lowercase anyway, so no real ref
+# relies on it.
+#
+# Collapse runs of hyphens and trim the ends: a DNS label may not begin or end
+# with one, and a doubled hyphen would spend the 51-char budget on nothing. An
+# entry that folds away entirely (all punctuation) yields the empty string,
+# which callers already gate on (`slug != ''`) and so skips the alias rather
+# than publishing to a bare `cms-/` prefix.
+slug=$(printf '%s' "$BRANCH" |
+  sed -E 's|^cms/||; s|/|-|g; s|[^a-z0-9-]|-|g; s|-+|-|g; s|^-||; s|-$||')
 
 # Bound to a valid DNS label. `preview-cms-` (12) + slug must be <= 63, so
 # slug <= 51. On overflow keep a readable 42-char prefix and append a short

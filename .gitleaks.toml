@@ -7,23 +7,33 @@
 #
 # When adding a new test that hardcodes a fake-looking token, add it
 # here rather than disabling gitleaks. See AGENTS.md "Secrets scan".
+#
+# Suppress by `regexes` — NEVER by `paths` (issue #260). A `paths` entry
+# is not a finding filter: gitleaks skips the file entirely, before any
+# rule runs, so a REAL credential pasted into it is never reported. This
+# config used to exclude oauth-proxy/test_lambda.py, the two
+# e2e/admin-reviews-*.spec.js files and scripts/scrub-secrets.js that
+# way — 29,326 bytes unscanned in a public repo, and measurement showed
+# the exclusions were suppressing nothing: with the default ruleset and
+# no `paths` at all, those four files produce zero findings. The
+# `regexes` below already cover every fixture shape they contain.
+#
+# Narrowing a `paths` entry does not work either: `regexTarget = "secret"`
+# is ACCEPTED — it names the allowlist's DEFAULT target, so it narrows
+# nothing (measured on 8.30.1: the config loads cleanly and behaves exactly
+# like omitting the key; only a value outside match/line/secret is fatal) —
+# and gitleaks SILENTLY IGNORES unknown TOML keys, so a `condition = "AND"`
+# is dropped without warning and the path alone re-suppresses the whole file.
+#
+# The "Allowlist canary" step in .github/workflows/secrets-scan.yml
+# enforces this: it plants a detectable credential at every allowlisted
+# path and fails if the config cannot see it.
 
 [extend]
 useDefault = true
 
 [allowlist]
 description = "CMS platform test fixtures"
-paths = [
-  # OAuth Lambda unit tests use literal "test_client_id",
-  # "test_client_secret", and "ghp_test_access_token".
-  '''oauth-proxy/test_lambda\.py''',
-  # Admin-reviews specs hardcode a fake GitHub PAT to drive the auth
-  # flow without touching the real OAuth proxy.
-  '''e2e/admin-reviews-(auth|stats)\.spec\.js''',
-  # The scrubber's own comments reference rule IDs and example
-  # secrets in docstrings.
-  '''scripts/scrub-secrets\.js''',
-]
 regexes = [
   # Belt-and-braces: any ghp_*test*/ghp_*fake* literal anywhere.
   '''ghp_(test|fake)[A-Za-z0-9_]*''',

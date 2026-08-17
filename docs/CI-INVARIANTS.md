@@ -216,12 +216,53 @@ layer:
   jodidaniel-only:** jodidaniel.com 5 alertable → 1 (the genuine #220
   `cms-scheduled-publish-loop` failure still alerts), adamdaniel.ai 6 → 2 (both
   real `cms-publish-loop-host` failures, the ones #215 addresses, still alert).
+- **Absence is not health — dead scheduled workflows (#258).** The audit
+  alerted only on runs that EXIST and concluded badly, so a workflow GitHub
+  auto-disabled for inactivity — which emits **no runs at all** — was
+  indistinguishable from a repo with no schedules: `filterAlertRuns([])` is
+  `[]`, the `failures.length === 0` branch printed *"All scheduled workflows
+  healthy"*, and if a tracking issue was open it posted a "clean window"
+  comment and `PATCH state=closed`. A repo whose crons went dark mid-incident
+  had its own alert **actively closed**. The signal is one field:
+  `GET /repos/{repo}/actions/workflows` returns `state` ∈ `active | deleted |
+  disabled_fork | disabled_inactivity | disabled_manually`. Dead cron-bearing
+  workflows now feed the SAME finding set and the SAME open/comment/close
+  lifecycle — only the *input set* widened (bad runs → bad runs + dead
+  workflows). Four things are load-bearing and must not be undone:
+  - **`DEAD_WORKFLOW_STATES` is `disabled_inactivity` + `disabled_manually`
+    only.** `deleted` (file removed on purpose) and `disabled_fork` (a
+    fork-only state) are deliberate exclusions — alerting on either is noise.
+  - **Public repos only.** GitHub's 60-day auto-disable applies to public
+    repos; `repo-settings` is private and carries crons that are off by
+    intent. `isPublicRepo` / `isPrivateRepo` both demand a STRICT boolean
+    `private`, so an ambiguous answer is neither — it becomes a probe failure,
+    never a silent skip.
+  - **An UNKNOWN answer never reads as "no findings."** A failed
+    visibility/workflows probe sets `deadProbeFailed`, which **suppresses the
+    auto-close** (the issue stays open with a `::notice::` saying a clean
+    window is unproven) and reds the run. That is the #258 bug's exact shape,
+    so it is guarded rather than trusted. The per-workflow schedule probe
+    itself **fails SOFT** in the other direction — an unreadable workflow
+    stays REPORTED, matching `partitionStarvedRuns`.
+  - **Scoped by a runs probe, not by parsing the workflow file.** The reusable
+    sparse-checks-out only the audit script, so no consumer workflow file
+    exists on disk, and the runtime is bare Node with no YAML parser (regex-
+    scanning YAML is banned house-wide). `workflowScheduledRunsEndpoint` asks
+    `…/workflows/{id}/runs?event=schedule&per_page=1` — "did this ever fire on
+    a cron?" — which is also the sharper question for this detector. Dead
+    workflows dedupe on a parallel hidden `<!-- dead-workflows: … -->` block
+    keyed by file basename, kept strictly separate from `<!-- run-ids: … -->`
+    so the two channels cannot clobber each other; each is reported **once**
+    per tracking issue.
 - **Exit-code contract:** the audit run stays GREEN when it successfully
   files/updates the alert (the issue is the channel); red means the audit
   ITSELF is broken (API/permission failure) — same "red needs a human"
   contract as `audit-editorial-labels.js --fix`. The audit is itself a
   scheduled workflow, so its own failed run is reported by the NEXT day's run.
-  The starvation carve-out does NOT change this contract.
+  The starvation carve-out does NOT change this contract. The dead-workflow
+  probe does not change it either — it OBEYS it: a probe that could not answer
+  is the audit failing at its job, so it reds the run (while the run-based
+  alert it already filed still stands, the probe having its own try/catch).
 - **Callers:** `self-scheduled-run-health.yml` dogfoods it on cms-platform
   (cron `47 8 * * *` + dispatch); consumers get
   `examples/site/.github/workflows/scheduled-run-health.yml` (auto-seeded by
