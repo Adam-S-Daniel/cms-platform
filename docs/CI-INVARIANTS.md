@@ -3,13 +3,15 @@
 What this is: hard-won operational rules for the platform's CI machinery —
 the Dependabot batch-strand re-arm sweep, the scheduled-run health audit
 (silent-failure alerting), the local e2e `webServer` readiness/crash-resilience
-rules, why a cancelled required check permanently blocks a merge, and the
-ported e2e workflow matrix (including the prod-loop deploy-lane diagnostic,
-ephemeral canary branch hygiene, and the bump-push recursion-gate tolerance).
+rules, why a cancelled required check permanently blocks a merge, the ported
+e2e workflow matrix (including the prod-loop deploy-lane diagnostic,
+ephemeral canary branch hygiene, and the bump-push recursion-gate tolerance),
+and the workflow-interpolation-sink invariant (`run:` + `with.script`).
 Read this before touching `dependabot-rearm-sweep.yml`,
 `scheduled-run-health.yml`, `e2e/playwright.config.js`'s local `webServer`
-config, any job that produces a required status context, or any of the three
-real-prod loop workflows. See also the `ci-watcher-loops`,
+config, any job that produces a required status context, any of the three
+real-prod loop workflows, or any `run:` / `actions/github-script` body that
+wants to read a `${{ … }}` expression. See also the `ci-watcher-loops`,
 `cms-stuck-pr-triage`, and `browser-testing` skills.
 
 ## Dependabot batch-strand re-arm sweep (#118-122 postmortem)
@@ -575,3 +577,392 @@ also tolerates paths that **cannot change the built site** (`AGENTS.md`,
 workflows already `paths-ignore`). A bump carrying real content, a script, a
 config, or CSS still fails it and correctly RUNS. Both directions are locked by
 `e2e/cms-recursion-churn.test.js`.
+
+## Workflow interpolation sinks: `run:` AND `with.script` (#261)
+
+`e2e/workflow-injection-lint.test.js` is the standing guard. The invariant:
+**a `${{ … }}` expression must never be expanded into text that is later
+PARSED as code** — neither a `run:` shell body nor an `actions/github-script`
+`with.script` JS body. The runner substitutes the value into the command text
+*before* bash (or the github-script eval) parses it, so the value arrives as
+source, not data. `env:` binding (`"$NAME"`) and `process.env.NAME` are the
+fix, and they work because they leave the command text byte-identical
+whatever the value is.
+
+This generalises #259, which fixed exactly one expression (the cms slug) at
+its six call sites. The lint fixes the *shape*.
+
+### Two corrections to the permanent record
+
+Issue #261's body carried two claims that a parser scan refutes. Both are
+recorded here because the issue text will outlive anyone's memory of it:
+
+1. **"the lint also does not cover `with.script` on `actions/github-script`,
+   the same substitution sink (no such use exists today, verified by
+   parser)" — REFUTED.** Two such uses existed when #261 was written:
+   `deploy-preview.yml`'s "Post preview URL comment" (`head.sha`) and
+   `deploy-production.yml`'s "Update GitHub Deployment status"
+   (`deployment_id`). The "verified by parser" was true only of the *slug*
+   expression — `e2e/deploy-preview-cms-slug.test.js` checks
+   `steps.cms_slug.outputs.slug` and nothing else. Generalised to "no such
+   use exists", it was wrong.
+2. **"six residual `${{ github.event.* }}` in `run:` bodies" is scoped, not
+   repo-wide.** Six is `deploy-preview.yml`'s own deploy + teardown jobs
+   (`number` ×5 + `head.sha` ×1). Repo-wide the run-body count was **11**,
+   and the full category (run + `with.script`) was **13**. All 13 are now
+   bound; the lint holds the tree at zero.
+
+### What the lint scans, and what it deliberately does not
+
+**Arm 1 — `run:` bodies.** Red on any interpolation that REFERENCES
+`github.event`, `github.head_ref` or `github.base_ref` — in **any spelling**.
+The match is on lexed expression **paths**, not on expression text (see "A
+regex over expression TEXT is blind to a RESPELLING" below).
+`github.event_name` is a closed enum the runner sets, used today in
+`dependabot-comment-sync.yml` and `repo-settings-audit.yml`, and must stay
+unflagged; comparing SEGMENTS is what keeps it unflagged in every spelling —
+`github['event_name']` and `GITHUB.EVENT_NAME` included — rather than the
+trailing dot of a substring match.
+
+**Arm 2 — `with.script` bodies.** Red on ANY interpolation, with no
+allowlist. A github-script body is JS handed to an eval and every dynamic
+value it needs is already reachable through `process.env` or `context` —
+which is how 18 of the repo's 20 github-script steps, and all of the
+composite actions, already read theirs. No value class needs to arrive as
+source text, so the shape itself is the defect.
+
+**Scope stops at `run:` and `with.script`.** `if:`, `env:`, and every other
+`with:` key are runner-EXPRESSION contexts where the value never becomes
+code. Binding a value there is the fix, not the bug — scanning them would
+make the fix un-expressible. `deploy-production.yml`'s
+`if: always() && steps.deploy-start.outputs.deployment_id` gate is the
+standing example: it reads the output directly and must stay that way.
+
+**`steps.*.outputs.*` and `inputs.*` are excluded from arm 1 — per-site, not
+categorically.** This is NOT a claim that either class is inherently safe: a
+step output is only ever as closed as the step that produced it, and
+`e2e/select-specs.js` demonstrably does `specs.add(f)` on a changed *file
+name*. Each current site was traced to a closed value space individually
+(`parity-preview.yml`'s `steps.select.outputs.specs` draws from the closed
+`PARITY_PREVIEW_SPECS` constant; `cms-preview-slug.sh` sanitises to
+`[a-z0-9-]` since #259). A new step-output site owes that trace again.
+**`e2e/deploy-preview-cms-slug.test.js` is NOT subsumed by this lint** — it
+is the only coverage for the slug-output class, and deleting it as
+"redundant" would silently re-open #259.
+
+### The waiver, and why it matches ABSOLUTE file lines
+
+Default-deny with an inline escape hatch: an occurrence is permitted only
+when `# injection-allow: <reason>` sits on its own source line or the line
+immediately above. A bare marker with no reason does not grant.
+
+The window is matched against **absolute file lines, not the extracted body
+array** — measured, and not a detail. A one-line plain `run:` scalar puts its
+interpolation at body offset 0, so a body-relative "line above" check cannot
+see a comment at the only place it fits (above the `run:` key), and the
+waiver silently fails to apply. An `env:` binding **read back as a shell
+variable** needs no waiver at all: `"$NAME"` removes the `${{ }}` from the
+body entirely, into a map this lint does not scan. Reading it back as an
+**expression** — `"${{ env.NAME }}"` — does *not*, and is flagged; see "the
+root set is a NAME SET" below. This sentence previously said a binding needs
+no waiver full stop, which was **false** whenever the body read it back.
+
+**The waiver has no split-across-lines evasion of its own** — checked when
+the split-expression hole below was closed, because a permission that could
+be smuggled would have re-opened it by another route. Two properties hold it
+shut, both locked by the canary. The window anchors to the line the `${{`
+OPENS on, so a marker sitting above the closing `}}` — an interior line of
+the span, the tempting placement — grants nothing. And a marker cannot
+itself be split: a YAML (or shell) comment does not span lines, and `WAIVER`
+is matched per raw source line, so `# injection-` / `# allow: …` on two
+lines grants nothing either. Splitting can only ever LOSE a waiver, never
+gain one.
+
+### Where the guarantee ends: the root set is a NAME SET, not dataflow
+
+Read this before trusting arm 1. The runner's real danger property is *"an
+expression result is substituted into text that is then parsed as code"* —
+a **dataflow** question. This lint does not do dataflow and is not going to.
+Four adversarial rounds closed *where* the expression sits (parsed bodies),
+*how* it is spelled (lexed path segments) and *where* it ends (a lexed
+occurrence boundary); each of those three is now general by construction.
+**The root set is the one axis that stays an approximation** — it is a list
+of names, and it stays a list of names however many are added.
+
+So, plainly: **a dangerous value laundered through a root outside the set
+will not be caught.** Deliberately outside it: `github.run_id`,
+`github.repository`, `needs.*`, `inputs.*`, `steps.*.outputs.*`. Those have
+live, individually-traced sites (see the `steps.*.outputs.*` paragraph
+above); a *new* site under any of them owes that trace again, and this lint
+will not ask for it.
+
+**`env.*` and `matrix.*` ARE in the set (#264 round 5)** — the two
+laundering contexts. `env` is there because it is **the fix this lint
+recommends**, and the fix is the `env:` *key*, not the `env` *context*:
+
+```yaml
+env:
+  BASE: ${{ github.event.pull_request.base.ref }}
+run: git fetch --no-tags origin "$BASE"          # the fix — silent
+run: git fetch --no-tags origin "${{ env.BASE }}" # the sink again — flagged
+```
+
+Both halves of the second form look individually blessed (the binding is the
+HOWTO; reading it back is "just a variable"), and the runner substitutes the
+branch name into the command TEXT either way. Measured in
+`visual-regression.yml`'s `Fetch base ref`: before this change the second
+form passed this lint (`hits: []`) **and** actionlint v1.7.7, both **exit
+0**. And actionlint is no backstop here either, measured on a field on its
+*own* untrusted-input list in that same step — direct
+`${{ github.event.pull_request.title }}` in `run:` exits **1** (*"is
+potentially untrusted"*), while binding it and reading `${{ env.T }}` exits
+**0** and says nothing. It models `env` as a live resolvable context
+(`${{ env.ANY }}` type-checks at exit 0); it simply has no dataflow rule.
+`matrix` is the same laundering shape without the irony (a dynamic
+`fromJSON(needs.…)` matrix can carry anything) and is the weaker of the two
+additions — included because it is free, not because a sink exists.
+
+**Free, measured, not assumed:** 42 files, 149 code bodies, 21
+interpolations, root heads `github.event_name` ×2, `github.repository` ×2,
+`github.run_id` ×2, `inputs.*` ×7, `needs.generate` ×4, `steps.*` ×5 —
+**zero** `env.*`, **zero** `matrix.*`; and 0 of the 30 pre-existing canary
+cases change verdict. Both contexts *do* appear elsewhere in the tree
+(`e2e-tests.yml`'s `PW_PROJECT: ${{ matrix.project }}`,
+`repo-settings-apply.yml`'s `OWNER: ${{ matrix.owner }}`) but only under
+`env:` / `with:` / `name:`, which this lint does not scan — so the fix stays
+expressible. Every `env.` inside a code body is JavaScript `process.env.X`,
+never a `${{ }}` span.
+
+Why these two and not the other five is a **cost call, not a principle**:
+these cost nothing today and `env` is where the file's own HOWTO puts the
+dangerous value. Widening further is legitimate. Claiming the list is
+complete is not.
+
+### Five shapes that made the lint itself fail
+
+- **One `test()` per FILE, never one per OFFENDER.** A test-per-offender
+  design emits ZERO tests once the tree is clean, and Playwright exits 1 on
+  `No tests found` — so the lint's own success state fails its own verifier
+  (measured: `EXIT = 1`). It exits 0 only when co-run with a sibling that
+  emits tests, so the self-CI glob would mask it while a targeted run of just
+  this spec went red. Per-file keeps file+line in the failure message and
+  always emits one test per workflow (42 today), plus the canary below.
+- **A per-line scan is BLIND to a SPLIT expression.** `${{` and `}}` may sit
+  on different source lines. The runner reads that span as one expression and
+  substitutes it exactly as if it had been written on one line — actionlint's
+  expression parser agrees, resolving contexts *inside* the span — but the
+  first version of this lint matched per body line and so saw neither half.
+  Measured: `base.ref` reinstated into `visual-regression.yml`'s
+  `Fetch base ref` as
+
+  ```yaml
+  run: |
+    git fetch --no-tags origin "${{
+      github.event.pull_request.base.ref
+    }}"
+  ```
+
+  passed this lint **and** actionlint, both **exit 0** — the repo's one
+  charset-injectable sink straight back through the gate, with nothing going
+  red. `scan()` therefore matches over the WHOLE parsed body, where the
+  parser has handed the expression back contiguous and where the runner does
+  its substituting, and anchors each hit to the line its `${{` OPENS on. Do
+  not "optimise" it back to a per-line loop.
+- **A regex over expression TEXT is blind to a RESPELLING.** Closing the
+  split-expression hole above fixed *where* the expression sits and left *how
+  it is spelled* untouched: `scan()` read the parsed body, but arm 1 still
+  substring-tested the expression with `/github\.event\./`. An Actions
+  expression has its own grammar — index syntax is interchangeable with
+  property dereference, whitespace (spaces **and tabs**) is insignificant, and
+  names are **case-insensitive** — so all five of
+
+  ```text
+  github.event.pull_request.base.ref
+  github['event']['pull_request']['base']['ref']
+  github.event['pull_request'].base['ref']
+  github . event . pull_request . base . ref
+  GitHub.Event.Pull_Request.Base.Ref
+  ```
+
+  read the same branch name at runtime, and that regex saw only the first.
+  Measured: the index form reinstated into the same `Fetch base ref` step
+  passed this lint **and** actionlint, both **exit 0** — the identical
+  charset-injectable sink through the gate again, respelled. Verified against
+  actionlint v1.7.7's own expression parser, which normalises every spelling
+  above back to the dot path.
+
+  **actionlint is no backstop for this value.** It does normalise the
+  spellings, but `base.ref` is not on its untrusted-input list in *any* of
+  them: all five, plus `toJSON(github.event)` and `toJSON(github['event'])`,
+  pass it at **exit 0** in a `run:` body (measured on all 42 workflows). For
+  the repo's one charset-injectable value, this lint is the only net.
+
+  Arm 1 therefore LEXES each interpolation into context paths
+  (`contextPaths()`) and compares folded SEGMENTS (`onUnsafeBranch()`) — the
+  house "parser, not regex, for code structure" rule applied one layer below
+  the YAML, since an expression path *is* code structure. Four properties are
+  load-bearing, and each has a canary case that goes RED when it is removed
+  (measured, one mutation at a time):
+
+  - **Segments are compared, and folded to lower case.** Folding is what
+    catches `GitHub.Event.…`; a draft that closed only index/mixed/spaced
+    still passed it. Comparing segments rather than substrings is what keeps
+    `github.event_name` unflagged in *every* spelling without a special case
+    (`event_name` is simply not the segment `event`). Index literals are
+    folded too — one step beyond what is provable here, because actionlint
+    treats them as case-*sensitive* (it rejects `github['EVENT']`) and the
+    runner's behaviour cannot be measured offline. Folding can only add hits,
+    never drop one, so the conservative branch is the right one.
+  - **Both directions on the branch count.** A reference to an *ancestor* of
+    an unsafe root is unsafe too: `toJSON(github.event)`, `toJSON(github)` and
+    a bare `${{ github }}` serialise the whole attacker payload into the body,
+    and the old trailing dot passed all three at exit 0. A deliberate
+    widening, not a side effect — and free: it changes the verdict on none of
+    the tree's 21 live `run:` interpolations (measured, old matcher vs new,
+    zero disagreements).
+  - **An unresolvable segment matches any name.** A dynamic index
+    (`github[inputs.k]`), a function-computed one (`github[format(…)]`) and a
+    star filter all become `ANY` and flag. A star's *position* matters and is
+    why this cannot be left to a text prefix: `github.event.…*.ref` keeps the
+    literal `github.event.` in front of it and the old regex caught it by
+    accident, while `github.*.pull_request.base.ref` erased the only thing
+    that regex could see. Zero such forms exist in the tree (measured: 149
+    code bodies, 21 interpolations), so closing the shape costs nothing.
+  - **`-` is a name character, and `'` is the only string delimiter.** The
+    grammar has no subtraction operator, so `a-b` lexes as one segment —
+    actionlint reports `github.event-name` as *property "event-name" is not
+    defined* and rejects `github.run_number - 1` as a lex error. Dropping `-`
+    from the name charset would split `github.base_ref-ish` into a FALSE
+    POSITIVE on `github.base_ref`. A *double*-quoted index is a lexer error,
+    not a second spelling (actionlint rejects `github["event"]`, and its error
+    enumerates the legal charset with `"` absent); it lexes as `ANY` here and
+    flags, harmlessly, since it can never run.
+
+  The **tempting shortcut is text-rewriting** `['x']` to `.x` and then
+  substring-testing. Do not: measured, it closes only the index spelling and
+  still passes both `GitHub.Event.Pull_Request.Base.Ref` and
+  `toJSON(github.event)`. (A related claim — that the rewrite would red
+  `dependabot-comment-sync.yml` and `repo-settings-audit.yml` — is **false**
+  as long as the substring keeps its trailing dot: `github.event_name` does
+  not contain `github.event.`. The shortcut's real defect is the spellings it
+  misses, not a false positive it creates.)
+- **A regex over expression text is also blind to where the expression
+  ENDS.** Fixing *where* the expression sits and *how it is spelled* still
+  left the OCCURRENCE BOUNDARY as a regex, `/\$\{\{[\s\S]*?\}\}/g`, which
+  stops at the first `}}`. The runner's lexer does not: a `}}` inside a
+  single-quoted literal is **data**, so writing one first hides everything
+  behind it. Measured, reinstated into the same `Fetch base ref` step:
+
+  ```yaml
+  run: git fetch --no-tags origin "${{ '}}' != '' && github.event.pull_request.base.ref }}"
+  ```
+
+  the regex extracted `"${{ '}}"`, which lexes to **no paths at all**, so
+  arm 1 saw nothing and the spec passed at **exit 0** — the same
+  charset-injectable sink through the gate a third time, alongside
+  `${{ format('{1}', '}}', …) }}` and `${{ '}}' == '' && 'x' || … }}`, and
+  composing with the line-break split. actionlint passed the first and third
+  at exit 0. (**Correction, re-measured:** it exits **1** on the `format`
+  one — but on an unrelated *arity* finding, *format string "{1}" does not
+  contain placeholder {0}*, not on the injection. The well-formed respelling
+  `format('{0}{1}', '}}', …)` exits **0**, so the evasion class is real and
+  only the old blanket sentence was wrong.) The span is genuinely readable,
+  not a lex error: swapping in
+  the untrusted-listed `.title` makes actionlint report at **column 50**,
+  *past* the in-literal `}}`, and on a truly unterminated literal it says
+  `unexpected EOF while lexing end of string literal` — which it does not
+  say here.
+
+  `interpolations()` therefore finds a span's end by **lexing**, skipping
+  `'…'` literals (and their `''` escape) via the same `endOfString()` the
+  path lexer uses, and resumes scanning at the END of each span so a `${{`
+  written inside a literal opens nothing. Two properties are load-bearing
+  beyond the literal-skip itself, each with its own canary witness: a
+  truncated span does not merely under-report but can vanish entirely (the
+  regex's resync lands mid-expression), and resuming at `open + 3` instead
+  of at the span end FALSE-POSITIVES on a quoted `${{`.
+
+  **Default-deny extends to the boundary**, on **three** counts. A span
+  whose literal never closes, one that never reaches `}}` at all, and one
+  that steps over a character the expression lexer cannot lex are all spans
+  the grammar cannot read — so `interpolations()` marks each UNREADABLE
+  *itself*, in both arms, without consulting the path matcher. The old
+  regex emitted no occurrence at all for the second shape, which is
+  silent-skip in its purest form. Verdict-neutral on the tree: 149 code
+  bodies, 21 interpolations, **zero** unterminated spans and **zero**
+  old-vs-new disagreements.
+
+  The third count (`LEXABLE`) closes the last boundary residual, and the
+  reason it is done locally rather than left to actionlint is the point. A
+  span terminating at a `}}` sitting inside a construct the lexer does NOT
+  model — `"…"`, backticks, a nested `${{` — comes back SHORT, with no
+  paths and nothing unterminated, and was silently skipped:
+
+  ```yaml
+  run: echo "${{ "}}" && github.event.pull_request.base.ref }}"
+  #                ^^ span cut here; everything behind it invisible
+  ```
+
+  That was benign only because those characters are actionlint lex errors —
+  an **external dependency** on a tool this same section proves twice over
+  is no backstop (it is silent on `base.ref` in every spelling, and silent
+  on `pull_request.title` one `env:` hop away — a field on its *own*
+  untrusted list). `LEXABLE` is read off the reference lexer's own error,
+  which enumerates the legal token-start charset verbatim: *expecting
+  'a'..'z', 'A'..'Z', '_', '0'..'9', ''', '}', '(', ')', '[', ']', '.',
+  '!', '<', '>', '=', '&', '|', '*', ',', ' '*. Two members are added, each
+  measured: `-`, a name *continuation* rather than a token start
+  (`github.event-name` lexes as ONE token), and `\t`/`\n`/`\r`, which that
+  message's `' '` stands in for (a tab inside a span and a span straddling
+  a line break both exit 0). It cannot false-positive on a workflow that
+  parses — by the grammar, and literal *content* is skipped before the
+  test — and it does not on this tree: across all 21 live spans the
+  distinct characters stepped over outside literals are
+  `" &()-.=JNOS_a-z|"`, of which **zero** are out of charset. This is
+  deliberately **not** "flag any span containing a quote"; `'` is legal and
+  its contents are data, and the canary's safe-brace control pins that
+  direction shut.
+- **The `with.script` extractor is STRUCTURAL** (`githubScriptBlocks()` in
+  `e2e/workflow-yaml-utils.js`): it walks to a step mapping carrying a
+  `uses:`, matches it against an **anchored** `/^actions\/github-script@/`
+  so a lookalike fork is not trusted, and only then reads `with.script` off
+  that same mapping. Matching bodies by content would misattribute two
+  github-script steps that share a body.
+
+### What this bought, stated honestly
+
+**Zero of the 13 were anonymously exploitable.** A PR `number` is a
+GitHub-assigned integer; a `head.sha` is 40 hex; a `deployment_id` comes from
+the workflow's own prior API call; a `user.login` is `[A-Za-z0-9-]` (plus
+`[bot]`) and carries no shell metacharacter. The one charset-injectable sink
+was `github.event.pull_request.base.ref` — `git check-ref-format` permits
+`$( )`, backticks, `;`, `|` and `&` in a branch name, and `${IFS}`
+substitutes for the space that IS rejected — but poisoning it needs a branch
+in the base repo, i.e. write access, which already lets the attacker edit the
+workflow. Every current caller also triggers on `pull_request` with
+`branches: [main]`, which pins `base.ref` to `main`; that is a property of
+the CONSUMER's caller, not of the reusable, so a future permissive caller
+restores reachability.
+
+So the value is in the **lint** — blocking the next sink, which may not be a
+hex string — plus defense-in-depth on `user.login`, the one genuinely
+adversary-supplied value reaching a body under the privileged
+`pull_request_target` trigger. Treat the `deploy-preview.yml` /
+`deploy-production.yml` edits as live-deploy-chain changes and validate them
+with the prod-mutate loop, not with the lint's exit code.
+
+### Two things the lint cannot see
+
+- **It cannot tell a complete fix from a half-applied one.** Dropping a
+  `${{ }}` *without* adding the `env:` key leaves `$BASE_REF` undefined and
+  the lint stays green. That is why `dependabot-comment-sync.yml`'s skip
+  block gained `set -euo pipefail` — without `set -u` it would emit an empty
+  author forever, silently. Any new binding in a block lacking `set -u` owes
+  the same hardening, or an explicit non-empty assertion.
+- **Consumers get no enforcement from it.** The spec is registered in
+  `PLATFORM_META_SPECS`, which `testIgnore`s it on every CONSUMER e2e lane —
+  the same posture as `workflow-shell-glob-lint.test.js`. Registration is
+  mandatory (the #16 recurrence guard reds otherwise, measured), and it costs
+  nothing today: `adamdaniel.ai`, `jodidaniel.com` and `examples/site` scan
+  **0 sinks each** across 32 workflows apiece. A consumer thin caller that
+  grows one is not caught here.

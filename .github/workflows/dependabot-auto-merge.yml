@@ -48,7 +48,13 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch base ref
-        run: git fetch origin "${{ github.event.pull_request.base.ref }}"
+        # BASE_REF via `env:`, never `${{ }}` inside the body: a branch name
+        # may legally contain `$( )`, backticks and `;` (git permits them),
+        # and the runner expands an expression into the command TEXT before
+        # bash parses it — so the substitution would run as code.
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: git fetch origin "$BASE_REF"
 
       - name: Get Dependabot metadata
         # Surfaces dependency-name / update-type / etc. as outputs.
@@ -68,10 +74,16 @@ jobs:
         # — the single source shared with dependabot-rearm-sweep.yml's
         # scheduled re-arm sweep (see AGENTS.md "Dependabot batch-strand
         # re-arm sweep"); keep both call sites in lockstep.
+        #
+        # Both values via `env:` — see the "Fetch base ref" step above for
+        # why an interpolated branch name is executable here.
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          BASE="origin/${{ github.event.pull_request.base.ref }}"
-          HEAD="${{ github.event.pull_request.head.sha }}"
+          BASE="origin/${BASE_REF}"
+          HEAD="$HEAD_SHA"
 
           if bash scripts/check-dependabot-manifest-paths.sh "$BASE" "$HEAD"; then
             echo "safe=true" >> "$GITHUB_OUTPUT"

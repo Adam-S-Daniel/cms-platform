@@ -70,6 +70,11 @@ jobs:
       PREVIEW_BUCKET: ${{ inputs.preview_bucket }}
       APEX_DOMAIN: ${{ inputs.apex_domain }}
       CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.PREVIEW_CLOUDFRONT_ID }}
+      # Bound once at job level (visual-regression.yml's generate job does the
+      # same) rather than re-expanded in each consuming step: an expression is
+      # substituted into the command TEXT before bash parses it, so no `run:`
+      # body may carry one. Three steps below read "$PR_NUMBER" from here.
+      PR_NUMBER: ${{ github.event.pull_request.number }}
 
     steps:
       - name: Checkout
@@ -126,7 +131,6 @@ jobs:
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
           BRANCH="$HEAD_REF"
           CONFIG=./_site_preview/admin/config.yml
           PREVIEW_HOST="preview-pr${PR_NUMBER}.${APEX_DOMAIN}"
@@ -141,11 +145,16 @@ jobs:
           grep -E "^(site_url|display_url):|^  branch:|preview_path:" "$CONFIG" || true
 
       - name: Write deploy-time commit metadata
+        # PR_HEAD_SHA via `env:` — the same name the three github-script
+        # steps below already bind. A head SHA is 40 hex chars and cannot
+        # carry a metacharacter, but the SHAPE is what review can check, and
+        # binding costs one line.
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           mkdir -p ./_site_preview/admin
-          SHA="${{ github.event.pull_request.head.sha }}"
+          SHA="$PR_HEAD_SHA"
           ISO=$(git log -1 --format=%cI HEAD)
           # Tolerant: see deploy-production.yml's identical read — missing
           # file/keys must never fail this step, just omit that pill.
@@ -164,7 +173,6 @@ jobs:
 
       - name: Sync to S3
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
           aws s3 sync ./_site_preview \
             "s3://${PREVIEW_BUCKET}/pr-${PR_NUMBER}/" \
             --delete \
@@ -206,7 +214,6 @@ jobs:
         env:
           CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
           SLUG="$CMS_SLUG"
           # Batch PR-number + (optional) cms-slug invalidations into one call —
           # invalidation requests are quota'd per month.
@@ -343,10 +350,15 @@ jobs:
 
       - name: Post preview URL comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        # PR_HEAD_SHA joins the env map this step already carries: a
+        # github-script body is JS handed to an eval, so an interpolated
+        # value arrives as SOURCE. Every other value here was already read
+        # from process.env/context — the sha was the lone substitution.
         env:
           CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
           BOT_MARKER_SLUG: ${{ inputs.bot_marker }}
           HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           script: |
             const pr = context.payload.pull_request.number;
@@ -356,6 +368,7 @@ jobs:
             const region = process.env.AWS_REGION;
             const slug = process.env.CMS_SLUG;
             const branch = process.env.HEAD_REF;
+            const sha = process.env.PR_HEAD_SHA;
 
             const url = cfId
               ? `https://preview-pr${pr}.${apex}/`
@@ -385,7 +398,7 @@ jobs:
               );
             }
             rows.push(
-              `| **Commit** | \`${{ github.event.pull_request.head.sha }}\` |`,
+              `| **Commit** | \`${sha}\` |`,
               `| **Branch** | \`${branch}\` |`,
             );
 
@@ -426,6 +439,10 @@ jobs:
       AWS_REGION: ${{ inputs.aws_region }}
       PREVIEW_BUCKET: ${{ inputs.preview_bucket }}
       CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.PREVIEW_CLOUDFRONT_ID }}
+      # Job-level, matching the deploy job above — the two teardown steps
+      # below read "$PR_NUMBER" instead of expanding an expression into
+      # their command text.
+      PR_NUMBER: ${{ github.event.pull_request.number }}
 
     steps:
       - name: Checkout platform scripts
@@ -454,7 +471,6 @@ jobs:
 
       - name: Delete preview from S3
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
           aws s3 rm "s3://${PREVIEW_BUCKET}/pr-${PR_NUMBER}/" --recursive
 
       - name: Delete per-CMS-slug alias from S3
@@ -472,7 +488,6 @@ jobs:
         env:
           CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
           SLUG="$CMS_SLUG"
           PATHS=("/pr-${PR_NUMBER}/*")
           if [[ -n "$SLUG" ]]; then

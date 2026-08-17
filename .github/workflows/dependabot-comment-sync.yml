@@ -162,7 +162,22 @@ jobs:
         #   2. Non-Dependabot `pull_request_target`: notice + exit 0.
         #   3. `workflow_dispatch` (manual): no PR head to sync; no-op.
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request_target' && github.event.pull_request.user.login != 'dependabot[bot]')
+        # PR_AUTHOR via `env:`. This job runs on `pull_request_target` — the
+        # PRIVILEGED trigger — so the author string is the one genuinely
+        # adversary-supplied value reaching a body here. A GitHub login's
+        # charset ([A-Za-z0-9-], plus `[bot]`) carries no shell
+        # metacharacter, so this is defense-in-depth rather than a live
+        # hole; it is bound because the SHAPE is what review can check.
+        #
+        # `set -u` is load-bearing: if the env key is ever dropped while the
+        # `$PR_AUTHOR` reference stays (the half-applied-fix regression this
+        # binding invites), the step fails loudly instead of quietly
+        # emitting an empty author forever. `${{ github.event_name }}` below
+        # is a runner-set enum, not attacker text — deliberately left as-is.
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
+          set -euo pipefail
           case "${{ github.event_name }}" in
             push)
               echo "::notice::Push event — comment-sync is dependabot-only; this run exists to suppress GHA's phantom-failure pattern. Skipping cleanly."
@@ -171,7 +186,7 @@ jobs:
               echo "::notice::Manual dispatch — comment-sync is dependabot-only; nothing to do. Skipping cleanly."
               ;;
             *)
-              echo "::notice::PR is from ${{ github.event.pull_request.user.login }}, not dependabot[bot]; comment-sync is dependabot-only — skipping cleanly."
+              echo "::notice::PR is from ${PR_AUTHOR}, not dependabot[bot]; comment-sync is dependabot-only — skipping cleanly."
               ;;
           esac
           exit 0

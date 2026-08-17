@@ -179,11 +179,19 @@ jobs:
       - name: Update GitHub Deployment status (success/failure)
         if: always() && steps.deploy-start.outputs.deployment_id
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        # DEPLOYMENT_ID joins JOB_STATUS in the env map: a github-script body
+        # is JS handed to an eval, so an interpolated value arrives as SOURCE
+        # rather than data. This step already read JOB_STATUS the right way —
+        # the id was the one value still substituted into the text. The `if:`
+        # gate above stays an expression (never parsed as code), so it keeps
+        # reading the output directly. Number() because process.env is
+        # strings and deployment_id is used numerically.
         env:
           JOB_STATUS: ${{ job.status }}
+          DEPLOYMENT_ID: ${{ steps.deploy-start.outputs.deployment_id }}
         with:
           script: |
-            const id = ${{ steps.deploy-start.outputs.deployment_id }};
+            const id = Number(process.env.DEPLOYMENT_ID);
             const job = process.env.JOB_STATUS;        // success | failure | cancelled
             const state = job === 'success' ? 'success' : 'failure';
             const apex = process.env.APEX_DOMAIN;
