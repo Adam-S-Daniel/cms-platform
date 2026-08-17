@@ -68,15 +68,22 @@ jobs:
           # `main` is PR-only by ruleset, so a release-time commit would be
           # rejected (GH013). So the release REFUSES to cut a tag the manifests
           # disagree with, which puts the bump in the release PR — reviewed,
-          # atomic with AGENTS.md + docs/VERSION-HISTORY.md — instead of in a
-          # step that can silently skew. e2e/plugin-manifests.test.js separately
-          # locks the two manifests to EACH OTHER; this locks them to the TAG.
+          # atomic with AGENTS.md, docs/VERSION-HISTORY.md and the two pin
+          # surfaces the error below names — instead of in a step that can
+          # silently skew. e2e/plugin-manifests.test.js separately locks the two
+          # manifests to EACH OTHER; this locks them to the TAG.
+          #
+          # The message below is one of only two enumerations of the release
+          # PR's edit set (AGENTS.md's release paragraph is the other). Keep them
+          # complete: a releaser who fixes exactly what this names and no more
+          # cuts the tag and THEN reds the required node-unit-lints lane, which
+          # is the worst possible moment to discover a missing edit.
           expected="${VERSION#v}"
           skew=0
           for manifest in plugin.json .claude-plugin/plugin.json; do
             declared=$(jq -r '.version // ""' "$manifest")
             if [ "$declared" != "$expected" ]; then
-              echo "::error file=${manifest}::${manifest} declares version '${declared}' but this run cuts ${VERSION} (expected '${expected}'). Bump BOTH manifests and AGENTS.md's 'Current release:' line in the release PR, then re-dispatch."
+              echo "::error file=${manifest}::${manifest} declares version '${declared}' but this run cuts ${VERSION} (expected '${expected}'). The release PR bumps ALL of: both plugin manifests, AGENTS.md's 'Current release:' line, every platform pin in examples/site/.github/workflows (uses:@ref AND with: platform_ref:), and scaffold/create-site.js's PLATFORM_VERSION — the last two enforced by e2e/examples-site-pins-current.test.js in the REQUIRED node-unit-lints lane, so skipping them reds self-CI right after the tag is cut. Fix them all, then re-dispatch."
               skew=1
             fi
           done

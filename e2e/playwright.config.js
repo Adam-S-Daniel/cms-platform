@@ -259,8 +259,9 @@ const PLATFORM_META_SPECS = [
   "scaffold-deploy-delegators.test.js",
   "scaffold-platform-version.test.js",
   // Single-version guard for the scaffold TEMPLATE's platform pins: reads the
-  // examples/site/.github templates, BOTH repo-root plugin manifests, and
-  // scaffold/create-site.js's PLATFORM_VERSION fallback. Three platform-only
+  // examples/site/.github templates, BOTH repo-root plugin manifests, and the
+  // scaffolder's own PLATFORM_VERSION fallback + scaffold/README.md (whose
+  // prose copy of that constant is the thing that rotted). Three platform-only
   // surfaces at once (WORKFLOWS-DEF + PLUGIN-ROOT + SCAFFOLD) — a consumer
   // ships none of them.
   "examples-site-pins-current.test.js",

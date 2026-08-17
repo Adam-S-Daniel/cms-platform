@@ -149,14 +149,22 @@ async function main() {
   // examples/site template has drifted to several: every `platform_ref:` and
   // every `@vX.Y.Z` is normalised to `platformVersion` here.
   //
-  // HAZARD, latent: the `@vX.Y.Z` rule is version-shaped, not
-  // cms-platform-scoped, so it would ALSO clobber a THIRD-PARTY action pinned
-  // to a full semver tag (`uses: foo/bar@v1.2.3` → the platform's version).
-  // Safe today only because all 32 template `uses:` are cms-platform refs
-  // (measured; locked by e2e/examples-site-pins-current.test.js, which asserts
-  // every platform ref equals the canonical version). If a third-party
-  // `@vX.Y.Z` pin ever lands in examples/site, scope this rule to
-  // `Adam-S-Daniel/cms-platform@…` before it does.
+  // HAZARD: the `@vX.Y.Z` rule below is version-shaped, not cms-platform-scoped,
+  // so it would ALSO clobber a THIRD-PARTY action pinned to a full semver tag —
+  // `uses: actions/checkout@v5.0.0` becomes `@v0.1.84`, an action tag that does
+  // not exist, in EVERY new site. Nothing downstream catches that: the pin
+  // checker ignores non-platform refs and actionlint does not resolve tags.
+  //
+  // What holds it today is e2e/examples-site-pins-current.test.js's "no
+  // NON-platform uses: carries an @vX.Y.Z pin" test, which copies the regex
+  // below verbatim so the detector cannot disagree with the transform. (Its
+  // sibling test — every platform ref equals the canonical version — does NOT
+  // cover this: the hazard's trigger is the presence of a third-party semver
+  // pin, not the value of a platform one. That distinction was measured: a
+  // third-party `@v5.0.0` appended to a template caller left the lint at exit 0
+  // before that test existed.) If a third-party `@vX.Y.Z` pin ever has to land
+  // in examples/site, scope this rule to `Adam-S-Daniel/cms-platform@…` first,
+  // and relax the test with it.
   const sub = (s) =>
     s
       .replace(/example-com/g, prefix)

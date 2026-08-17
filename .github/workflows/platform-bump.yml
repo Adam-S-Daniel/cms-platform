@@ -209,12 +209,21 @@ jobs:
             gh api "repos/$PLATFORM/contents/examples/site/.github/workflows/$name?ref=$LATEST" \
               --jq '.content' | base64 -d > "$dest"
             # Stamp the seeded file's platform-ref pin(s) to $LATEST. Can't reuse
-            # the CUR->LATEST replace above: CUR is the CONSUMER's old ref, but
-            # the example's own embedded pin can lag well behind the release
-            # being bumped to (examples/site is only re-pinned when THAT file's
-            # content changes, not on every tag — this repo's own examples span
-            # v0.1.1..v0.1.52 today), so stamp unconditionally to whatever
-            # version is actually there. Covers all THREE ref shapes the
+            # the CUR->LATEST replace above: CUR is the CONSUMER's old ref, which
+            # the example's own embedded pin need not equal — so stamp
+            # unconditionally to whatever version is actually there.
+            #
+            # This used to say the example ALSO lags the release being bumped to
+            # ("examples/site is only re-pinned when THAT file's content changes,
+            # not on every tag — this repo's own examples span v0.1.1..v0.1.52
+            # today"). That premise is dead: e2e/examples-site-pins-current.test.js
+            # now holds every examples/site pin to the platform's canonical
+            # version, so a tag cut under that lint carries a template already at
+            # $LATEST and this stamp is a no-op there. It stays because it is
+            # still load-bearing for what the lint cannot reach BACKWARDS: every
+            # tag cut BEFORE it (v0.1.0..v0.1.84, whose drift is frozen into the
+            # release tree) and any bump targeting one of those.
+            # Covers all THREE ref shapes the
             # pin-consistency checker recognizes: a reusable `uses:@vX.Y.Z`, a
             # composite action's trailing `# vX.Y.Z` comment (defensive; no
             # example currently uses the latter), and the `platform_ref:` INPUT.
