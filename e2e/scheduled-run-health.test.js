@@ -742,10 +742,12 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       ],
       ["has", "issues/7/comments?per_page", "[]"],
       ["has", "issues/7/comments", "{}"],
-      // The close is ROUTED so that, unfixed, it SUCCEEDS and the run exits 0 —
-      // the bug's real signature is a GREEN audit that closed a live alert, not
-      // an error. Without this route the pre-fix run reds on a stub miss and
-      // the test could pass on the exit code rather than on the close.
+      // The close is ROUTED so that, unfixed, the run exits 0 — the bug's real
+      // signature is a GREEN audit that closed a live alert, not an error. It is
+      // NOT what makes this test discriminate: closeCalls reads the stub log,
+      // which is appended BEFORE routing, so the closeCalls assertion fails
+      // pre-fix with or without this route (measured). What the route buys is a
+      // clean pre-fix signature instead of a misleading stub-miss error line.
       ["eq", "repos/o/r/issues/7", JSON.stringify({ number: 7, state: "closed" })],
       ["eq", "repos/o/r", JSON.stringify({ private: false })],
     ]);

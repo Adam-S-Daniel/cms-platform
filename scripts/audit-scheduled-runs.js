@@ -100,6 +100,12 @@ const DEAD_WORKFLOW_STATES = ["disabled_inactivity", "disabled_manually"];
 // `disabled_inactivity` is SELF-EVIDENCING: GitHub sets it from exactly one
 // mechanism — the 60-day auto-disable, which targets SCHEDULED workflows in
 // public repos — so the state already proves the workflow carries a cron.
+// THAT PREMISE IS GITHUB'S DOCUMENTED BEHAVIOUR, NOT MEASURED HERE: a 60-day
+// auto-disable cannot be induced in a test, and there is no live specimen to
+// read it off (measured 2026-08-17, all 111 workflows across cms-platform,
+// adamdaniel.ai and jodidaniel.com are `state=active`). If GitHub ever sets
+// the state some other way, the blast radius is bounded to one extra reported
+// line, once per tracking issue, about a workflow that genuinely IS disabled.
 // Re-deriving that from a runs probe can only LOSE information: the probe
 // answers "no" identically for "never a cron" and "its run records are gone"
 // (runs deleted via DELETE /actions/runs/{id} or the Actions tab), and a "no"

@@ -264,7 +264,13 @@ layer:
     set silently. That is #258 deferred, not fixed. For `disabled_inactivity`
     the probe is therefore redundant *and* lossy: GitHub sets that state from
     exactly one mechanism, the 60-day auto-disable, which targets scheduled
-    workflows in public repos — the state already proves the cron.
+    workflows in public repos — the state already proves the cron. **That
+    premise is GitHub's documented behaviour, not measured here** — a 60-day
+    auto-disable cannot be induced in a test and there is no live specimen
+    (measured 2026-08-17: all 111 workflows across cms-platform 44/44,
+    adamdaniel.ai 34/34 and jodidaniel.com 33/33 are `state=active`) — so if
+    it is ever wrong the blast radius is one extra reported line, once per
+    tracking issue, about a workflow that genuinely IS disabled.
     `SELF_EVIDENCING_CRON_STATES` short-circuits the probe for it (one fewer
     API call per dead workflow). Earlier text here called "did this ever fire
     on a cron?" *the sharper question for this detector*; that is now false
