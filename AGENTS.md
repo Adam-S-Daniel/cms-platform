@@ -224,9 +224,18 @@ model: `docs/SYNC.md`.
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 That number is also carried by the two plugin manifests (`plugin.json` +
 `.claude-plugin/plugin.json`), and `release.yml` REFUSES to cut a tag whose
-version disagrees with them — so bumping this line, both manifests, and the
-`docs/VERSION-HISTORY.md` entry is one atomic edit made in the release PR,
-before the dispatch.
+version disagrees with them — so bumping this line, both manifests, the
+`docs/VERSION-HISTORY.md` entry, **every platform pin under
+`examples/site/.github/workflows`** (each `uses:@ref` and each
+`with: platform_ref:`) and **`scaffold/create-site.js`'s `PLATFORM_VERSION`**
+is ONE atomic edit made in the release PR, before the dispatch.
+
+Those last two are not bookkeeping. `e2e/examples-site-pins-current.test.js`
+enforces them in the REQUIRED node-unit-lints lane, so a tag cut without them
+reds self-CI the moment it lands. That lint compares in-repo values only and
+never resolves the tag, which is exactly what lets the release PR go green
+*before* the tag exists. This paragraph and `release.yml`'s manifest-skew error
+string are the only two places the edit set is written down — keep them in step.
 
 Consumers: **adamdaniel.ai** (consumer #1, dogfood; gem-delivered admin live on
 prod) and **jodidaniel.com** (consumer #2; single-page bio, gem admin + 9

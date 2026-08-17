@@ -21,8 +21,13 @@ const { execFileSync } = require("child_process");
 const PLATFORM_ROOT = path.resolve(__dirname, "..");
 const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
 // Documented offline FALLBACK only — used when resolvePlatformVersion() below
-// can't reach GitHub. Refresh this on each platform release.
-const PLATFORM_VERSION = "v0.1.52";
+// can't reach GitHub. Refresh this on each platform release: it is the version
+// an OFFLINE scaffold stamps into every pin, so a stale value silently births a
+// site pinned many releases back. Kept in lockstep with plugin.json's version
+// (v-prefixed) and the examples/site template pins by
+// e2e/examples-site-pins-current.test.js — the release PR moves all of them
+// together.
+const PLATFORM_VERSION = "v0.1.84";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -121,6 +126,50 @@ function write(dest, rel, content) {
   fs.writeFileSync(p, content);
 }
 
+// A platform ref's `@vX.Y.Z` pin, ANCHORED TO THE PLATFORM SLUG. It used to be
+// the bare `/@v\d+\.\d+\.\d+/g` — version-shaped rather than cms-platform-scoped
+// — so it also rewrote a THIRD-PARTY pin, and anything version-shaped that
+// merely looked like one. Measured before the anchor landed: a template caller
+// carrying `- run: pip install some-tool@v2.3.4` shipped `some-tool@v0.1.84`
+// into every new site, and NOTHING saw it — not this scaffolder, not actionlint
+// (it does not resolve tags), not the pin checker (it ignores non-platform
+// refs), not the new site's own verify-consumer-pins.sh (a non-platform token is
+// not a platform ref). A lint enumerating the positions where that can happen
+// keeps losing to the next position; anchoring the transform removes the hazard.
+// Locked by e2e/examples-site-pins-current.test.js, which drives THIS function.
+// The `i` is load-bearing, and was MEASURED: GitHub resolves a lowercase-owner
+// ref (`adam-s-daniel/cms-platform@…`), and the bare version-shaped rule used to
+// normalise one by accident. A case-SENSITIVE anchor would have shipped
+// `adam-s-daniel/…@v0.1.1` verbatim into a new site — a genuinely stale platform
+// pin that nothing downstream sees, because the pin checker's classifyUses(),
+// verify-consumer-pins.sh's slug test and platform-bump.yml's rewrite are all
+// case-sensitive. So anchoring must not narrow WHICH platform refs get
+// normalised; it only narrows the rule to platform refs. (The template guard
+// separately REJECTS a mis-cased slug outright, so one should never get here.)
+const PLATFORM_PIN = new RegExp(
+  `(${PLATFORM_REPO.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\s@]*)@v\\d+\\.\\d+\\.\\d+`,
+  "gi",
+);
+
+// The template → new-site text transform: site identity first, then the platform
+// pins. Module-level (not a closure inside main()) so the template guard can
+// apply the REAL transform to the REAL template and scan the bytes a new site
+// would actually receive — the agreement two rounds of a re-derived detector
+// could not establish.
+//
+// It deliberately does NOT rewrite a trailing `# vX.Y.Z (date)` comment on a
+// platform line. That is not an oversight: the guard forbids a stale one in the
+// template, so there is none left to rewrite, and a transform that silently
+// repaired comments would HIDE template rot from the scan that proves the
+// template clean.
+function substitute(text, { prefix, domain, platformVersion }) {
+  return String(text)
+    .replace(/example-com/g, prefix)
+    .replace(/example\.com/g, domain)
+    .replace(/platform_ref:\s*v\d+\.\d+\.\d+/g, `platform_ref: ${platformVersion}`)
+    .replace(PLATFORM_PIN, `$1@${platformVersion}`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const platformVersion = await resolvePlatformVersion(args);
@@ -139,12 +188,10 @@ async function main() {
   if (rl) rl.close();
 
   const prefix = domain.replace(/\./g, "-");
-  const sub = (s) =>
-    s
-      .replace(/example-com/g, prefix)
-      .replace(/example\.com/g, domain)
-      .replace(/platform_ref:\s*v\d+\.\d+\.\d+/g, `platform_ref: ${platformVersion}`)
-      .replace(/@v\d+\.\d+\.\d+/g, `@${platformVersion}`);
+  // Rewrite the template's identity + platform pins on the way into the new
+  // site — see substitute() above for what it does and, more importantly, what
+  // it deliberately does not.
+  const sub = (s) => substitute(s, { prefix, domain, platformVersion });
 
   if (fs.existsSync(target) && fs.readdirSync(target).length)
     throw new Error(`target ${target} is not empty`);
@@ -190,7 +237,7 @@ async function main() {
   write(target, ".claude/settings.json", DEV_HOOKS_SETTINGS_JSON);
 
   write(target, "_config.yml", configYml({ title, domain, author, owner, repo }));
-  write(target, "Gemfile", GEMFILE);
+  write(target, "Gemfile", gemfile(platformVersion));
   write(
     target,
     "infrastructure/site-params.env",
@@ -357,12 +404,21 @@ const DEV_HOOKS_SETTINGS_JSON =
     2,
   ) + "\n";
 
-const GEMFILE = `source "https://rubygems.org"
+// The new site's Gemfile. The theme gem MUST carry a `tag:` pin: it is one of
+// the platform-version references check-platform-pin-consistency.js compares
+// against platform.lock's platform_ref, so an untagged gem line means a freshly
+// scaffolded site FAILS its own pin-consistency gate on the first run (measured:
+// `gem "cms-platform-theme" tag:` found "(no tag: pin)", expected the canonical
+// ref → exit 1). An untagged git gem also floats to the platform's default
+// branch, which is the drift this whole pinning model exists to prevent.
+// platform-bump moves this tag in lockstep with the uses:@ pins; Dependabot
+// ignores it (#242).
+const gemfile = (platformVersion) => `source "https://rubygems.org"
 gem "jekyll", "~> 4.3"
 gem "webrick"
 
 group :jekyll_plugins do
-  gem "cms-platform-theme", git: "https://github.com/Adam-S-Daniel/cms-platform", glob: "theme/*.gemspec"
+  gem "cms-platform-theme", git: "https://github.com/Adam-S-Daniel/cms-platform", glob: "theme/*.gemspec", tag: "${platformVersion}"
 end
 `;
 
@@ -551,4 +607,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { resolvePlatformVersion, PLATFORM_VERSION };
+module.exports = { resolvePlatformVersion, PLATFORM_VERSION, PLATFORM_REPO, substitute };

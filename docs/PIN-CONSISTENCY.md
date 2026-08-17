@@ -151,3 +151,36 @@ same `CUR`→`LATEST` and `OLD_SHA`→`NEW_SHA` replace over `platform.lock`,
 `scripts/verify-consumer-pins.sh --platform-dir <platform>` before force-pushing
 the bump branch. Caller SEEDING only matters if the release newly dictated a
 workflow the consumer lacks; a release that adds none needs no seeding step.
+
+### The consumer gate's stale-pin rule has one home, and two callers
+
+`scripts/verify-consumer-pins.sh`'s check 2 — "no platform version token other
+than the canonical one on any platform-mentioning line" — is the most GENERAL
+pin detector here. Unlike `check-platform-pin-consistency.js`, which walks
+parsed YAML by key, it reads LINES, so it sees a trailing `# vX.Y.Z (date)`
+comment on a `uses:` or a `platform_ref:` — a shape a parser cannot see at all,
+because the parser drops comments.
+
+It used to be an inline `awk` program. It now lives in
+**`scripts/stale-platform-refs.js`** and is `require`d by
+`e2e/template-pin-rules.js`, which is what the scaffold-template guard
+(`e2e/examples-site-pins-current.test.js`) applies to `examples/site`. That is
+deliberate and load-bearing: two earlier rounds gave the template guard its own
+parse-only approximation of this rule, and each shipped a SPLIT — the guard
+green on a drifted template while a site scaffolded from it exited 1 on its own
+`verify-consumer-pins.sh`. Sharing the code removes the thing that can disagree.
+
+Two consequences to know before changing either:
+
+- **Changing the rule changes both.** Its output format is the awk's, verbatim,
+  so the verifier's report is unchanged; the exit code is three-valued (0 clean,
+  1 stale, 2 could-not-run) so "did not run" can never read as a pass.
+- **`verify-consumer-pins.sh` now hard-FAILs without that file** in the
+  `--platform-dir` tree, as it already did without the checker. Nothing in CI
+  sparse-checks this script out (only `check-platform-pin-consistency.js` is,
+  by `platform-pin-consistency.yml`), so no workflow needs a new path — but a
+  hand-assembled platform dir does.
+- `e2e/examples-site-scaffold-agreement.test.js` holds the line end-to-end: it
+  mutates the template, applies the scaffolder's real `substitute()`, and runs
+  this script on the result, asserting a shape can never red a scaffolded site
+  while the template guard stays green.

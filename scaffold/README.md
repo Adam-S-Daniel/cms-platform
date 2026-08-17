@@ -11,11 +11,15 @@ node scaffold/create-site.js <target-dir>
 
 The scaffolder pins the new site to the **latest cms-platform release**,
 resolved at scaffold time via `gh api repos/Adam-S-Daniel/cms-platform/releases/latest`
-(if `gh` is installed and authenticated), else the GitHub REST API, else a
-baked-in fallback constant (currently `v0.1.52` — refreshed on each platform
-release). Pass `--platform-ref <tag>` or set `CMS_PLATFORM_REF` to override the
-resolved version explicitly (e.g. to pin an older release, or to keep a test
-hermetic and offline).
+(if `gh` is installed and authenticated), else the GitHub REST API, else the
+baked-in `PLATFORM_VERSION` constant in `create-site.js`, which the release PR
+bumps with the plugin manifests. That value is deliberately **not** repeated
+here: a second copy in prose is a second thing to bump, and this one sat 32
+releases stale until `e2e/examples-site-pins-current.test.js` came along — which
+now holds both the constant and this file to the canonical version. Pass
+`--platform-ref <tag>` or set `CMS_PLATFORM_REF` to override the resolved
+version explicitly (e.g. to pin an older release, or to keep a test hermetic and
+offline).
 
 Generates `_config.yml` (identity + `cms:` block + `theme:`), `Gemfile` (pins the
 theme gem in `:jekyll_plugins`), the thin workflow callers + `dependabot.yml`

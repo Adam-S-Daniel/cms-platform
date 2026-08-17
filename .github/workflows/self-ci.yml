@@ -12,7 +12,8 @@
 # Playwright browser matrix or any AWS credentials.
 #
 # WHAT IT RUNS (all fast — target < a few minutes)
-#   1. actionlint over .github/workflows/*.yml        (hard-fail)
+#   1. actionlint over .github/workflows/*.yml AND the examples/site
+#      thin-caller templates                          (hard-fail)
 #   2. theme-gem ruby unit specs: theme/spec/*_test.rb (hard-fail)
 #   3. node pure-fs harness lints: e2e/*.test.js that need no browser/build
 #                                                      (hard-fail)
@@ -67,6 +68,9 @@ jobs:
   # pattern in secrets-scan.yml) rather than a marketplace action: one fewer
   # third-party action in the supply chain, and the version is pinned + dated
   # right here. Hard-fails on any finding — a malformed workflow is a real bug.
+  # TWO invocations: this repo's own workflows, then the examples/site
+  # thin-caller TEMPLATES (an explicit path list replaces actionlint's default
+  # tree walk, so one command cannot cover both).
   actionlint:
     runs-on: ubuntu-latest
     steps:
@@ -91,6 +95,33 @@ jobs:
         # `-color` keeps the annotations readable in the run log. actionlint
         # exits non-zero on any finding, which fails the job.
         run: actionlint -color
+
+      - name: Lint the examples/site workflow TEMPLATES
+        # A BARE `actionlint` walks only the repo's OWN .github/workflows, so the
+        # 32 thin-caller templates under examples/site/.github/workflows had NO
+        # static analysis at all — measured: a deliberately broken canary file
+        # dropped in that tree left `actionlint -color` at exit 0, while naming
+        # the same file explicitly exited 1. That tree is what `scaffold/
+        # create-site.js` copies into every NEW SITE and what docs/SYNC.md tells
+        # a maintainer to hand-copy callers out of, so a malformed template
+        # propagates instead of just sitting there.
+        #
+        # Explicit paths REPLACE actionlint's default tree walk rather than
+        # adding to it, which is why this is a second invocation and not a flag
+        # on the one above.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          templates=(examples/site/.github/workflows/*.yml examples/site/.github/workflows/*.yaml)
+          if [ ${#templates[@]} -eq 0 ]; then
+            # Never pass silently on an empty glob: this lane's whole value is
+            # that the template tree IS analysed, so "found nothing to lint"
+            # is a failure, not a green run.
+            echo "::error::no workflow templates found under examples/site/.github/workflows" >&2
+            exit 1
+          fi
+          echo "Linting ${#templates[@]} workflow template(s)."
+          actionlint -color "${templates[@]}"
 
   # ── 2. theme-gem ruby unit specs ─────────────────────────────────────────
   # Plain-ruby tests (no rspec/minitest, no bundle) — each `ruby <file>` exits
