@@ -75,11 +75,91 @@ const path = require("node:path");
 const { test, expect } = require("./base");
 const { listWorkflows, runScripts, githubScriptBlocks } = require("./workflow-yaml-utils");
 
-// One `${{ … }}` occurrence. `[\s\S]` rather than `.` is LOAD-BEARING: an
-// expression may straddle a source line break, and that span has to match
-// as one occurrence (see `scan`). Non-greedy so two interpolations stay
-// two hits instead of merging into the span between them.
-const INTERPOLATION = /\$\{\{[\s\S]*?\}\}/g;
+// ── AN OCCURRENCE'S BOUNDARY IS GRAMMAR, SO IT IS LEXED TOO ───────────
+//
+// Where a `${{ … }}` ENDS is a structural question, not a character
+// search. `}}` inside a single-quoted literal is DATA — the expression
+// lexer is mid-string there and does not close the span — so the obvious
+// matcher, which this file used until this change,
+//
+//     /\$\{\{[\s\S]*?\}\}/g
+//
+// stops at the FIRST `}}` and hands the path lexer a TRUNCATED span.
+// Everything after the literal brace is invisible. Measured, reinstated
+// into visual-regression.yml's `Fetch base ref` step in place of its
+// `env:` binding:
+//
+//     run: git fetch --no-tags origin "${{ '}}' != '' && github.…base.ref }}"
+//
+//     EXTRACTED  "${{ '}}"   → contextPaths []   → runUnsafe false → exit 0
+//     real span  "${{ '}}' != '' && github.event.pull_request.base.ref }}"
+//                → [["github","event","pull_request","base","ref"]] → unsafe
+//
+// `contextPaths` was already right; the BOUNDARY was wrong — and that put
+// the repo's one charset-injectable sink back through this lint at exit 0
+// for the third time, alongside `format('{1}', '}}', …)` and
+// `'}}' == '' && 'x' || …`, and composing with the line-break split.
+//
+// The span is real, not a lex error: actionlint reads all of it. Swapping
+// in `.title` (which IS on its untrusted-input list) reports at COLUMN 50,
+// PAST the in-literal `}}`; and on a genuinely unterminated literal it
+// says `unexpected EOF while lexing end of string literal`, which it does
+// NOT say here. So this is a spelling the runner accepts, not one it
+// rejects.
+//
+// This is the same house rule as `contextPaths` (parser for code
+// structure, regex only for genuinely lexical concerns) applied to the
+// layer above it. Enumerating one more alternative would have lost to the
+// next spelling, exactly as the previous three rounds did.
+//
+// DEFAULT-DENY AT THE BOUNDARY — the rule the regex quietly broke. A span
+// whose string literal never closes, or that never reaches `}}` at all, is
+// a span the grammar CANNOT read, and this file's standing rule is that
+// such a thing is never resolved to "safe" (the same rule `endOfString`'s
+// -1 sentinel enforces one layer down). So extraction marks it UNSAFE
+// itself, in BOTH arms, without consulting `runUnsafe` — flagged, never
+// silently skipped. It cannot be a false positive on a workflow that
+// parses: actionlint's own expression lexer rejects both shapes at exit 1
+// (measured). `endOfString` is shared with the path lexer below (hoisted).
+function interpolations(body) {
+  const out = [];
+  let i = 0;
+  for (;;) {
+    const open = body.indexOf("${{", i);
+    if (open < 0) return out;
+    let k = open + 3;
+    let end = -1;
+    let unterminated = false;
+    while (k < body.length) {
+      if (body[k] === "'") {
+        const after = endOfString(body, k);
+        if (after < 0) {
+          unterminated = true;
+          break;
+        }
+        k = after;
+      } else if (body[k] === "}" && body[k + 1] === "}") {
+        end = k + 2;
+        break;
+      } else k += 1;
+    }
+    if (unterminated) {
+      // The literal swallowed the rest of the body, so there is no true
+      // end to report. Fall back to the naive first `}}` — the span still
+      // yields ONE occurrence, anchored where it opened and readable in
+      // the failure message, and `unterminated` is what convicts it.
+      const naive = body.indexOf("}}", open + 3);
+      end = naive < 0 ? body.length : naive + 2;
+    } else if (end < 0) {
+      unterminated = true;
+      end = body.length;
+    }
+    out.push({ text: body.slice(open, end), index: open, unterminated });
+    // Resume AFTER this span: a `${{` written inside a literal belongs to
+    // the span that quoted it, not to a new occurrence.
+    i = end;
+  }
+}
 
 // ── ARM 1 MATCHES EXPRESSION PATHS, NOT EXPRESSION TEXT ──────────────
 //
@@ -354,15 +434,20 @@ function isWaived(fileLines, absLine) {
 // into. `abs` anchors to the line the `${{` OPENS on, which is also the
 // strict direction for the waiver window: a marker sitting above the
 // CLOSING `}}` — a line inside the expression itself — grants nothing.
+//
+// An occurrence the boundary lexer could not terminate is unsafe on its
+// own account (see `interpolations`), so `isUnsafe` is consulted only for
+// spans the grammar could actually read. A waiver still applies: an
+// unterminated span is a defect to fix, not a hole to be un-waivable.
 function scan(blocks, fileLines, isUnsafe, kind) {
   const hits = [];
   for (const block of blocks) {
     const body = block.script;
-    for (const m of body.matchAll(INTERPOLATION)) {
-      if (!isUnsafe(m[0])) continue;
-      const abs = block.line + body.slice(0, m.index).split("\n").length - 1;
+    for (const occ of interpolations(body)) {
+      if (!occ.unterminated && !isUnsafe(occ.text)) continue;
+      const abs = block.line + body.slice(0, occ.index).split("\n").length - 1;
       if (isWaived(fileLines, abs)) continue;
-      hits.push(`line ${abs} (${kind}): ${m[0].replace(/\s+/g, " ").trim()}`);
+      hits.push(`line ${abs} (${kind}): ${occ.text.replace(/\s+/g, " ").trim()}`);
     }
   }
   return hits;
@@ -409,16 +494,16 @@ test.describe("workflow interpolation sinks are env-bound", () => {
   }
 });
 
-// ── PERMANENT REGRESSION CANARY — the two respelling evasions ─────────
+// ── PERMANENT REGRESSION CANARY — the three evasion axes ─────────────
 //
 // Synthetic workflow text driven through `offenders()`, the SHIPPED
 // detector rather than a copy of it. Pure string in / hits out: no fs,
 // no network, no clock.
 //
-// It guards two defects that each shipped past an earlier version of this
-// spec, and each let the SAME live, charset-injectable `base.ref` sink in
-// visual-regression.yml's `Fetch base ref` step through BOTH this lint and
-// actionlint at exit 0:
+// It guards three defects that each shipped past an earlier version of
+// this spec, and each let the SAME live, charset-injectable `base.ref`
+// sink in visual-regression.yml's `Fetch base ref` step through BOTH this
+// lint and actionlint at exit 0:
 //
 //   1. WHERE the expression sits. A `${{ }}` written across a source line
 //      break substitutes at runtime exactly as if it sat on one line, but
@@ -429,19 +514,26 @@ test.describe("workflow interpolation sinks are env-bound", () => {
 //      spellings of the same dot path, and the `/github\.event\./` text
 //      regex then in place saw none of them. Reverting `runUnsafe` to that
 //      regex turns those cases green again.
+//   3. WHERE the expression ENDS. A `}}` inside a single-quoted literal is
+//      DATA, so the non-greedy `/\$\{\{[\s\S]*?\}\}/g` then in place cut
+//      the span at the literal and never saw the reference behind it.
+//      Reverting `interpolations()` to that regex turns those cases green
+//      again.
 //
-// The two axes COMPOSE — an index-form expression also split across lines
-// is a case of its own below — which is the argument for matching parsed
-// bodies and lexed path segments instead of enumerating spellings. Each
+// All three axes COMPOSE — an index-form expression also split across
+// lines is a case of its own below, and so is a literal-brace one — which
+// is the argument for matching parsed bodies, lexed occurrence boundaries
+// and lexed path segments instead of enumerating spellings. Each
 // enumeration has lost to the next spelling; the case form below is the one
 // that a draft closing only the three spellings named in review still let
-// through (measured).
+// through (measured), and the literal-brace form is the one that survived
+// the round that closed every spelling.
 //
 // The control cases carry as much weight as the red ones: an `env:`-bound
 // value, a properly waived line, `github.event_name` in EVERY spelling, a
-// path quoted inside a string literal, and the safe `github.*` members must
-// all stay SILENT, or the canary would also pass on a detector that just
-// flagged everything.
+// path quoted inside a string literal, a literal `}}` in front of a SAFE
+// reference, and the safe `github.*` members must all stay SILENT, or the
+// canary would also pass on a detector that just flagged everything.
 function wf(stepLines) {
   return ["on: push", "jobs:", "  j:", "    runs-on: ubuntu-latest", "    steps:"]
     .concat(stepLines.map((l) => "      " + l))
@@ -681,11 +773,22 @@ const CANARY = [
     // NAME the grammar cannot read, and calling it safe. Default-deny
     // forbids exactly that direction, hence the -1 sentinel.
     //
-    // The FIRST line is the witness (unclosed QUOTE — green before the
-    // sentinel, measured); the second is coverage only (the quote closes,
-    // just the `]` is missing, so the trailing junk already defeated
-    // `indexLiteral` either way). Both are here because only one of them
-    // tests the guard and it is not the one that looks more broken.
+    // The FIRST line is the witness (unclosed QUOTE); the second is
+    // coverage only (the quote closes, just the `]` is missing, so the
+    // trailing junk already defeated `indexLiteral` either way). Both are
+    // here because only one of them tests the guard and it is not the one
+    // that looks more broken.
+    //
+    // WHAT THE SENTINEL WITNESSES CHANGED when `interpolations()` began
+    // lexing occurrence boundaries with the same `endOfString`. It used to
+    // be the VERDICT: pre-sentinel, line 1 went green. Now the boundary
+    // lexer convicts any span it cannot terminate, so the verdict survives
+    // the mutation and the sentinel is witnessed by the SPAN EXTENT
+    // instead — reverting it to `return k` merges both lines into one
+    // occurrence running to end-of-body (measured: the two hits become
+    // `${{ github['ev }}" echo "${{ github['event' }}"`). Still a witness,
+    // still red, but for the occurrence count rather than the verdict —
+    // recorded because "the case is unchanged" would be false.
     name: "an unterminated index literal is caught, not resolved",
     yaml: wf([
       "- name: unterminated",
@@ -718,9 +821,12 @@ const CANARY = [
     // DELIBERATE WIDENING, decided rather than inherited. `toJSON(github)`
     // and `toJSON(github.event)` serialise the WHOLE attacker payload into
     // the body — strictly worse than any single field — yet the text
-    // regex's trailing dot passed all three of these, and actionlint
-    // reports nothing for them either (measured, exit 0). Segment matching
-    // counts a reference to an ANCESTOR of an unsafe root as unsafe.
+    // regex's trailing dot passed all three of these. actionlint is a
+    // backstop for only ONE of them: the two `toJSON` forms pass it at exit
+    // 0, while a bare `${{ github }}` is rejected at exit 1 (*object,
+    // array, and null values should not be evaluated in template*) — all
+    // three measured. Segment matching counts a reference to an ANCESTOR of
+    // an unsafe root as unsafe, so this lint covers all three regardless.
     name: "toJSON of the event object, and a bare github, are caught",
     yaml: wf([
       "- name: dump",
@@ -809,6 +915,139 @@ const CANARY = [
       "line 8 (run:): ${{ github.base_ref }}",
       "line 8 (run:): ${{ github.head_ref }}",
     ],
+  },
+  {
+    // AXIS 3, THE OCCURRENCE BOUNDARY. `}}` inside a single-quoted literal
+    // is DATA — the expression lexer is mid-string and the span does not
+    // end there — so a literal brace written FIRST hid everything after it
+    // from the non-greedy regex. All three lines put a `}}` in a literal
+    // and then read the branch name behind it; all three passed this lint
+    // AND actionlint at exit 0 before `interpolations()` lexed the
+    // boundary, the first of them reinstated verbatim into the real
+    // `Fetch base ref` step (measured).
+    name: "a literal }} inside the expression does not end it",
+    yaml: wf([
+      "- name: literal brace",
+      "  run: |",
+      "    git fetch --no-tags origin " +
+        "\"${{ '}}' != '' && github.event.pull_request.base.ref }}\"",
+      "    echo \"${{ format('{1}', '}}', github.event.pull_request.base.ref) }}\"",
+      "    echo \"${{ '}}' == '' && 'x' || github.event.pull_request.base.ref }}\"",
+    ]),
+    hits: [
+      "line 10 (run:): ${{ '}}' == '' && 'x' || github.event.pull_request.base.ref }}",
+      "line 8 (run:): ${{ '}}' != '' && github.event.pull_request.base.ref }}",
+      "line 9 (run:): ${{ format('{1}', '}}', github.event.pull_request.base.ref) }}",
+    ],
+  },
+  {
+    // `''` is the grammar's ONLY escape, so a literal may carry a quote AND
+    // a brace. Skipping to the first `'` would end the literal early and
+    // resynchronise the scan onto the wrong characters; `endOfString`
+    // consumes the pair, which is what keeps the `}}` inside the literal.
+    name: "an escaped quote inside the literal does not end it",
+    yaml: wf([
+      "- name: escaped quote",
+      "  run: |",
+      "    echo \"${{ 'it''s }}' != '' && github.event.pull_request.base.ref }}\"",
+    ]),
+    hits: [
+      "line 8 (run:): ${{ 'it''s }}' != '' && github.event.pull_request.base.ref }}",
+    ],
+  },
+  {
+    // Axis 3 composes with axis 1, as every pair of these does: a literal
+    // brace in a span that also straddles a line break needs the parsed-body
+    // scan AND the boundary lexer to be seen at all.
+    name: "a literal }} in an expression SPLIT across lines is caught",
+    yaml: wf([
+      "- name: literal brace split",
+      "  run: |",
+      "    git fetch --no-tags origin \"${{ '}}' != '' &&",
+      "      github.event.pull_request.base.ref }}\"",
+    ]),
+    hits: ["line 8 (run:): ${{ '}}' != '' && github.event.pull_request.base.ref }}"],
+  },
+  {
+    // DEFAULT-DENY AT THE BOUNDARY, and the case that proves it is enforced
+    // by `interpolations()` rather than falling out of `contextPaths()`:
+    // NEITHER line references attacker context, so nothing downstream would
+    // convict them. Line 1's literal never closes; line 2's span never
+    // reaches `}}` at all — the old regex emitted NO occurrence for it
+    // whatsoever, which is silent-skip in its purest form. Both are spans
+    // the grammar cannot read, so both are flagged unread. Neither can be a
+    // false positive on a workflow that parses: actionlint's own expression
+    // lexer rejects both at exit 1 (measured — `unexpected EOF while lexing
+    // end of string literal` and `unexpected character '"' while lexing
+    // expression`).
+    name: "a span the boundary lexer cannot read is flagged, not skipped",
+    yaml: wf([
+      "- name: unreadable",
+      "  run: |",
+      "    echo \"${{ 'x }}\"",
+      '    echo "${{ github.repository"',
+    ]),
+    hits: [
+      "line 8 (run:): ${{ 'x }}",
+      'line 9 (run:): ${{ github.repository"',
+    ],
+  },
+  {
+    // Occurrence SEPARATION under the lexer — the property the non-greedy
+    // quantifier used to provide — plus the two rules that replace it.
+    // Each line pins a different one, and they have DIFFERENT witnesses:
+    //
+    //   L8  a self-contained `${{ '}}' }}` must not swallow the neighbour
+    //       behind it: the neighbour is its own occurrence and is the one
+    //       convicted, while the safe first span stays silent. COVERAGE
+    //       ONLY — the old regex resynchronised onto the same two spans
+    //       here, so this line is green either way (measured).
+    //   L9  the same shape with the literal brace in the SECOND span. The
+    //       regex's resync lands mid-expression and truncates it to
+    //       `${{ 'a}}`, losing `github.base_ref` ENTIRELY — so this line is
+    //       the boundary WITNESS, and it is what shows a truncated span
+    //       does not merely under-report, it can vanish.
+    //   L10 a `${{` written INSIDE a literal opens nothing: the path
+    //       spelled there references nothing (the grammar has no eval), so
+    //       the line is silent. This is the witness for resuming at the END
+    //       of a span — resuming at `open + 3` instead reopens inside the
+    //       literal and FALSE-POSITIVES on `base.ref` (measured).
+    name: "adjacent spans separate, and a quoted ${{ opens nothing",
+    yaml: wf([
+      "- name: adjacent",
+      "  run: |",
+      "    echo \"${{ '}}' }}\" \"${{ github.head_ref }}\"",
+      "    echo \"${{ '}}' }}\" \"${{ 'a}}b' != '' && github.base_ref }}\"",
+      "    echo \"${{ '${{ github.event.pull_request.base.ref' }}\"",
+    ]),
+    hits: [
+      "line 8 (run:): ${{ github.head_ref }}",
+      "line 9 (run:): ${{ 'a}}b' != '' && github.base_ref }}",
+    ],
+  },
+  {
+    // CONTROL, and the zero-false-positive half of axis 3. Reading the
+    // boundary correctly must not degrade into "anything with a quote is
+    // suspicious": each line carries a `}}` inside a literal and then
+    // references only runner-set context, so each must stay SILENT. Line 3
+    // additionally puts the brace inside a `format()` template, where `}}`
+    // is that function's own escape for a literal brace (all three pass
+    // actionlint at exit 0 — measured).
+    //
+    // Being a control, this case CANNOT go red on a mutation that loses
+    // detection, and it is the one new case here that stays green when the
+    // boundary lexer is reverted. That is the point of it, not a gap: it
+    // fails only in the OTHER direction, if the boundary lexer is ever
+    // widened into flagging any span that contains a quote.
+    name: "a literal }} in front of a safe reference is silent",
+    yaml: wf([
+      "- name: safe brace",
+      "  run: |",
+      "    echo \"${{ '}}' != '' && github.repository }}\"",
+      "    echo \"${{ '}}' != '' && github.event_name }}\"",
+      "    echo \"${{ format('{0}}}{1}', github.run_id, github.event_name) }}\"",
+    ]),
+    hits: [],
   },
 ];
 

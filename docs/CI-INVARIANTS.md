@@ -639,7 +639,7 @@ is matched per raw source line, so `# injection-` / `# allow: …` on two
 lines grants nothing either. Splitting can only ever LOSE a waiver, never
 gain one.
 
-### Four shapes that made the lint itself fail
+### Five shapes that made the lint itself fail
 
 - **One `test()` per FILE, never one per OFFENDER.** A test-per-offender
   design emits ZERO tests once the tree is clean, and Playwright exits 1 on
@@ -747,6 +747,46 @@ gain one.
   as long as the substring keeps its trailing dot: `github.event_name` does
   not contain `github.event.`. The shortcut's real defect is the spellings it
   misses, not a false positive it creates.)
+- **A regex over expression text is also blind to where the expression
+  ENDS.** Fixing *where* the expression sits and *how it is spelled* still
+  left the OCCURRENCE BOUNDARY as a regex, `/\$\{\{[\s\S]*?\}\}/g`, which
+  stops at the first `}}`. The runner's lexer does not: a `}}` inside a
+  single-quoted literal is **data**, so writing one first hides everything
+  behind it. Measured, reinstated into the same `Fetch base ref` step:
+
+  ```yaml
+  run: git fetch --no-tags origin "${{ '}}' != '' && github.event.pull_request.base.ref }}"
+  ```
+
+  the regex extracted `"${{ '}}"`, which lexes to **no paths at all**, so
+  arm 1 saw nothing and the spec passed at **exit 0** — the same
+  charset-injectable sink through the gate a third time, alongside
+  `${{ format('{1}', '}}', …) }}` and `${{ '}}' == '' && 'x' || … }}`, and
+  composing with the line-break split. actionlint passed all of them at
+  exit 0 too. The span is genuinely readable, not a lex error: swapping in
+  the untrusted-listed `.title` makes actionlint report at **column 50**,
+  *past* the in-literal `}}`, and on a truly unterminated literal it says
+  `unexpected EOF while lexing end of string literal` — which it does not
+  say here.
+
+  `interpolations()` therefore finds a span's end by **lexing**, skipping
+  `'…'` literals (and their `''` escape) via the same `endOfString()` the
+  path lexer uses, and resumes scanning at the END of each span so a `${{`
+  written inside a literal opens nothing. Two properties are load-bearing
+  beyond the literal-skip itself, each with its own canary witness: a
+  truncated span does not merely under-report but can vanish entirely (the
+  regex's resync lands mid-expression), and resuming at `open + 3` instead
+  of at the span end FALSE-POSITIVES on a quoted `${{`.
+
+  **Default-deny extends to the boundary.** A span whose literal never
+  closes, or that never reaches `}}` at all, is one the grammar cannot
+  read — so `interpolations()` marks it unsafe *itself*, in both arms,
+  without consulting the path matcher. The old regex emitted no occurrence
+  at all for the second shape, which is silent-skip in its purest form.
+  Neither can false-positive on a workflow that parses: actionlint's own
+  expression lexer rejects both at exit 1 (measured). Verdict-neutral on
+  the tree — 149 code bodies, 21 interpolations, **zero** unterminated
+  spans and **zero** old-vs-new disagreements.
 - **The `with.script` extractor is STRUCTURAL** (`githubScriptBlocks()` in
   `e2e/workflow-yaml-utils.js`): it walks to a step mapping carrying a
   `uses:`, matches it against an **anchored** `/^actions\/github-script@/`
