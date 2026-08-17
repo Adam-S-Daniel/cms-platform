@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.83)
+## Version history (v0.1.0 → v0.1.84)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1437,3 +1437,100 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   dictated caller but never deletes a de-dictated one (deliberately — see its
   seeding comment), so the v0.1.83 bump PR arrives carrying both stale callers
   and fails parity until the two deletions are added to it.
+
+- **v0.1.84** (2026-08-17) — **three defects a green CI run could not tell
+  apart from health: a command injection reachable from a `cms/*` branch ref
+  (#259), a gitleaks allowlist that silently left whole files unscanned
+  (#260), and an audit that closed its own alert about a dead cron (#258).**
+  These are the **first consumer-facing changes since v0.1.83** — both sites
+  still pin that tag, so none of it reaches them until this release exists.
+
+  **Command injection from a `cms/*` ref into the preview deploy (#259).**
+  `scripts/cms-preview-slug.sh` derived the preview slug from the PR head ref
+  with **no charset filter**, and `deploy-preview.yml` embedded that output
+  inside single quotes at four `run:` sites. The runner expands `${{ }}` into
+  the command TEXT before bash parses it, so single quotes stop `$( )` but not
+  a `'`: head ref `cms/a/'$(id)'` produced slug `a-'$(id)'`, which rendered as
+  `SLUG='a-'$(id)''` and executed `id` — in the deploy AND the teardown job,
+  both of which by then hold the live OIDC deploy role. Reachability was nil
+  *today* — the trigger is `pull_request`, not `pull_request_target`, so it
+  needs base-repo write, and every current writer is an admin who could already
+  run code by editing the workflow — and stops being nil the moment a
+  write-but-not-admin collaborator exists, which is the CMS's design intent,
+  since Decap editors push exactly these `cms/*` refs. **Both halves are fixed
+  so neither stands alone:** the script folds anything outside `[a-z0-9-]` to a
+  hyphen, collapses runs and trims the ends — the charset its own header and
+  the CloudFront router (`/^[a-z0-9-]+$/`) already declared but never enforced
+  — applied BEFORE the 51-char bound so the overflow hash stays deterministic;
+  and all six consumers of the slug now bind it through an `env: CMS_SLUG`
+  passthrough, matching how this workflow already handles `HEAD_REF`, so the
+  runner never rewrites the command text. A ref that folds away entirely yields
+  the empty string, which callers already gate on, so it skips the alias rather
+  than publishing a bare `cms-/` prefix. Slug output changes **only** for a ref
+  carrying an out-of-charset byte, and for those it repairs a **latent silent
+  404**: DNS lowercases the Host, so the router rewrote a mixed-case ref to a
+  lowercased S3 prefix while the sync had written a case-preserved one, and S3
+  keys are case-sensitive — those aliases never resolved at all. New lints in
+  `e2e/deploy-preview-cms-slug.test.js` assert that no `run:` body interpolates
+  the slug expression and that all six consumers bind it via `env:`, parsed off
+  the real YAML so an aliased value cannot hide.
+
+  **A `paths` entry in a gitleaks allowlist is a blind spot, not a filter
+  (#260).** gitleaks skips a `paths`-matched file **entirely, before any rule
+  runs** — and nothing in CI could tell that apart from a clean scan, which is
+  what made it survivable. Two behaviours kept it invisible: unknown TOML keys
+  are silently ignored, so an attempt to narrow such an entry (`condition =
+  "AND"`) loads cleanly and changes nothing, and `regexTarget = "secret"`
+  narrows nothing either because it names the allowlist's *default* target.
+  `secrets-scan.yml` gains an **"Allowlist canary"** step: it plants a freshly
+  generated, detectable `ghp_`-shaped credential at every path the caller's
+  allowlist covers, scans that tree with the caller's own config, and requires
+  every plant back as a finding — a plant the config cannot see is a file a
+  real secret could hide in. The comparison is **differential** against a bare
+  `useDefault` config so gitleaks' own upstream exclusions are not misread as
+  the caller's blind spot, and both scans pass `--config` explicitly, because
+  gitleaks auto-loads `.gitleaks.toml` from the scan TARGET and a "no config"
+  control would silently load the config under test. It fails **soft** for a
+  caller with no allowlist or an unparseable one, and a `paths` entry matching
+  no tracked file (both consumers today) stays green until a matching file
+  appears. This repo's own three `paths` entries are **deleted**, because the
+  canary fails on them: measured at gitleaks 8.30.1 they removed 29,326 bytes —
+  four files — from every scan of a public repo while suppressing nothing (with
+  the default ruleset and no `paths` at all those files produce zero findings;
+  the `regexes` block already covers every fixture shape in them). The
+  scaffolder copies this config verbatim, so new sites stop inheriting the
+  latent entries too. **Correction carried in the same release:** the original
+  commit and three comments called `regexTarget = "secret"` *invalid*; measured
+  on the pinned 8.30.1 it is **accepted** (gitleaks validates the key — `zzzz`
+  is fatal — but special-cases `secret` while its own error text lists only
+  `match`/`line`). Only the word "invalid" was wrong; every consequence built on
+  it is unchanged and still measured.
+
+  **The scheduled-run audit scored a dead cron as healthy and closed its own
+  alert (#258).** `scripts/audit-scheduled-runs.js` sourced its finding set
+  entirely from runs that EXIST, so a workflow **GitHub auto-disabled for
+  inactivity** was invisible to it: such a workflow emits no runs,
+  `filterAlertRuns([])` is `[]`, and that is byte-identical to a repo with no
+  schedules at all. The `failures.length === 0` branch then printed "All
+  scheduled workflows healthy" and — if a tracking issue was open — posted a
+  "clean window" comment and **closed it**. A repo whose crons went dark
+  mid-incident had its own alert actively reaped. The fix widens the input set
+  rather than the lifecycle: `GET /actions/workflows` exposes `state`, and dead
+  cron-bearing workflows now flow through the same open/comment/close tracking
+  issue as failing runs, with their own hidden dedupe block so a corpse is
+  reported once rather than daily. Three properties keep the bug from
+  re-growing: **public repos only** (the 60-day auto-disable rule applies
+  there; a private repo's disabled cron is off by intent, and both visibility
+  predicates demand a strict boolean so an ambiguous answer is neither); an
+  **UNKNOWN probe answer is never "no findings"** — it suppresses the auto-close
+  and reds the run, which is the existing "red means the alerting layer needs a
+  human" contract; and scoping asks the API "did this ever fire on a cron?"
+  rather than parsing the workflow file, since the reusable sparse-checks-out
+  only this script and the runtime has no YAML parser. The nine tests that
+  landed with the fix all exercised pure helpers — **a mutant reverting the two
+  lifecycle conditions shipped green**, reintroducing the bug in #258's own
+  title — so `e2e/scheduled-run-health.test.js` now drives the real CLI end to
+  end through a `gh` stub on PATH and asserts the one argv that must never
+  appear on either path (`-X PATCH -f state=closed`).
+
+  Closes #258, #259, #260.
