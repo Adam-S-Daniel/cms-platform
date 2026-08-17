@@ -3,13 +3,15 @@
 What this is: hard-won operational rules for the platform's CI machinery —
 the Dependabot batch-strand re-arm sweep, the scheduled-run health audit
 (silent-failure alerting), the local e2e `webServer` readiness/crash-resilience
-rules, why a cancelled required check permanently blocks a merge, and the
-ported e2e workflow matrix (including the prod-loop deploy-lane diagnostic,
-ephemeral canary branch hygiene, and the bump-push recursion-gate tolerance).
+rules, why a cancelled required check permanently blocks a merge, the ported
+e2e workflow matrix (including the prod-loop deploy-lane diagnostic,
+ephemeral canary branch hygiene, and the bump-push recursion-gate tolerance),
+and the workflow-interpolation-sink invariant (`run:` + `with.script`).
 Read this before touching `dependabot-rearm-sweep.yml`,
 `scheduled-run-health.yml`, `e2e/playwright.config.js`'s local `webServer`
-config, any job that produces a required status context, or any of the three
-real-prod loop workflows. See also the `ci-watcher-loops`,
+config, any job that produces a required status context, any of the three
+real-prod loop workflows, or any `run:` / `actions/github-script` body that
+wants to read a `${{ … }}` expression. See also the `ci-watcher-loops`,
 `cms-stuck-pr-triage`, and `browser-testing` skills.
 
 ## Dependabot batch-strand re-arm sweep (#118-122 postmortem)
@@ -539,3 +541,139 @@ also tolerates paths that **cannot change the built site** (`AGENTS.md`,
 workflows already `paths-ignore`). A bump carrying real content, a script, a
 config, or CSS still fails it and correctly RUNS. Both directions are locked by
 `e2e/cms-recursion-churn.test.js`.
+
+## Workflow interpolation sinks: `run:` AND `with.script` (#261)
+
+`e2e/workflow-injection-lint.test.js` is the standing guard. The invariant:
+**a `${{ … }}` expression must never be expanded into text that is later
+PARSED as code** — neither a `run:` shell body nor an `actions/github-script`
+`with.script` JS body. The runner substitutes the value into the command text
+*before* bash (or the github-script eval) parses it, so the value arrives as
+source, not data. `env:` binding (`"$NAME"`) and `process.env.NAME` are the
+fix, and they work because they leave the command text byte-identical
+whatever the value is.
+
+This generalises #259, which fixed exactly one expression (the cms slug) at
+its six call sites. The lint fixes the *shape*.
+
+### Two corrections to the permanent record
+
+Issue #261's body carried two claims that a parser scan refutes. Both are
+recorded here because the issue text will outlive anyone's memory of it:
+
+1. **"the lint also does not cover `with.script` on `actions/github-script`,
+   the same substitution sink (no such use exists today, verified by
+   parser)" — REFUTED.** Two such uses existed when #261 was written:
+   `deploy-preview.yml`'s "Post preview URL comment" (`head.sha`) and
+   `deploy-production.yml`'s "Update GitHub Deployment status"
+   (`deployment_id`). The "verified by parser" was true only of the *slug*
+   expression — `e2e/deploy-preview-cms-slug.test.js` checks
+   `steps.cms_slug.outputs.slug` and nothing else. Generalised to "no such
+   use exists", it was wrong.
+2. **"six residual `${{ github.event.* }}` in `run:` bodies" is scoped, not
+   repo-wide.** Six is `deploy-preview.yml`'s own deploy + teardown jobs
+   (`number` ×5 + `head.sha` ×1). Repo-wide the run-body count was **11**,
+   and the full category (run + `with.script`) was **13**. All 13 are now
+   bound; the lint holds the tree at zero.
+
+### What the lint scans, and what it deliberately does not
+
+**Arm 1 — `run:` bodies.** Red on any interpolation mentioning
+`github.event.`, `github.head_ref` or `github.base_ref`. The dot in
+`github.event.` is load-bearing: `github.event_name` is a closed enum the
+runner sets, used today in `dependabot-comment-sync.yml` and
+`repo-settings-audit.yml`, and must stay unflagged.
+
+**Arm 2 — `with.script` bodies.** Red on ANY interpolation, with no
+allowlist. A github-script body is JS handed to an eval and every dynamic
+value it needs is already reachable through `process.env` or `context` —
+which is how 18 of the repo's 20 github-script steps, and all of the
+composite actions, already read theirs. No value class needs to arrive as
+source text, so the shape itself is the defect.
+
+**Scope stops at `run:` and `with.script`.** `if:`, `env:`, and every other
+`with:` key are runner-EXPRESSION contexts where the value never becomes
+code. Binding a value there is the fix, not the bug — scanning them would
+make the fix un-expressible. `deploy-production.yml`'s
+`if: always() && steps.deploy-start.outputs.deployment_id` gate is the
+standing example: it reads the output directly and must stay that way.
+
+**`steps.*.outputs.*` and `inputs.*` are excluded from arm 1 — per-site, not
+categorically.** This is NOT a claim that either class is inherently safe: a
+step output is only ever as closed as the step that produced it, and
+`e2e/select-specs.js` demonstrably does `specs.add(f)` on a changed *file
+name*. Each current site was traced to a closed value space individually
+(`parity-preview.yml`'s `steps.select.outputs.specs` draws from the closed
+`PARITY_PREVIEW_SPECS` constant; `cms-preview-slug.sh` sanitises to
+`[a-z0-9-]` since #259). A new step-output site owes that trace again.
+**`e2e/deploy-preview-cms-slug.test.js` is NOT subsumed by this lint** — it
+is the only coverage for the slug-output class, and deleting it as
+"redundant" would silently re-open #259.
+
+### The waiver, and why it matches ABSOLUTE file lines
+
+Default-deny with an inline escape hatch: an occurrence is permitted only
+when `# injection-allow: <reason>` sits on its own source line or the line
+immediately above. A bare marker with no reason does not grant.
+
+The window is matched against **absolute file lines, not the extracted body
+array** — measured, and not a detail. A one-line plain `run:` scalar puts its
+interpolation at body offset 0, so a body-relative "line above" check cannot
+see a comment at the only place it fits (above the `run:` key), and the
+waiver silently fails to apply. `env:` binding needs no waiver at all: it
+removes the `${{ }}` from the body entirely, into a map this lint does not
+scan.
+
+### Two shapes that made the lint itself fail
+
+- **One `test()` per FILE, never one per OFFENDER.** A test-per-offender
+  design emits ZERO tests once the tree is clean, and Playwright exits 1 on
+  `No tests found` — so the lint's own success state fails its own verifier
+  (measured: `EXIT = 1`). It exits 0 only when co-run with a sibling that
+  emits tests, so the self-CI glob would mask it while a targeted run of just
+  this spec went red. Per-file keeps file+line in the failure message and
+  always emits 42 tests.
+- **The `with.script` extractor is STRUCTURAL** (`githubScriptBlocks()` in
+  `e2e/workflow-yaml-utils.js`): it walks to a step mapping carrying a
+  `uses:`, matches it against an **anchored** `/^actions\/github-script@/`
+  so a lookalike fork is not trusted, and only then reads `with.script` off
+  that same mapping. Matching bodies by content would misattribute two
+  github-script steps that share a body.
+
+### What this bought, stated honestly
+
+**Zero of the 13 were anonymously exploitable.** A PR `number` is a
+GitHub-assigned integer; a `head.sha` is 40 hex; a `deployment_id` comes from
+the workflow's own prior API call; a `user.login` is `[A-Za-z0-9-]` (plus
+`[bot]`) and carries no shell metacharacter. The one charset-injectable sink
+was `github.event.pull_request.base.ref` — `git check-ref-format` permits
+`$( )`, backticks, `;`, `|` and `&` in a branch name, and `${IFS}`
+substitutes for the space that IS rejected — but poisoning it needs a branch
+in the base repo, i.e. write access, which already lets the attacker edit the
+workflow. Every current caller also triggers on `pull_request` with
+`branches: [main]`, which pins `base.ref` to `main`; that is a property of
+the CONSUMER's caller, not of the reusable, so a future permissive caller
+restores reachability.
+
+So the value is in the **lint** — blocking the next sink, which may not be a
+hex string — plus defense-in-depth on `user.login`, the one genuinely
+adversary-supplied value reaching a body under the privileged
+`pull_request_target` trigger. Treat the `deploy-preview.yml` /
+`deploy-production.yml` edits as live-deploy-chain changes and validate them
+with the prod-mutate loop, not with the lint's exit code.
+
+### Two things the lint cannot see
+
+- **It cannot tell a complete fix from a half-applied one.** Dropping a
+  `${{ }}` *without* adding the `env:` key leaves `$BASE_REF` undefined and
+  the lint stays green. That is why `dependabot-comment-sync.yml`'s skip
+  block gained `set -euo pipefail` — without `set -u` it would emit an empty
+  author forever, silently. Any new binding in a block lacking `set -u` owes
+  the same hardening, or an explicit non-empty assertion.
+- **Consumers get no enforcement from it.** The spec is registered in
+  `PLATFORM_META_SPECS`, which `testIgnore`s it on every CONSUMER e2e lane —
+  the same posture as `workflow-shell-glob-lint.test.js`. Registration is
+  mandatory (the #16 recurrence guard reds otherwise, measured), and it costs
+  nothing today: `adamdaniel.ai`, `jodidaniel.com` and `examples/site` scan
+  **0 sinks each** across 32 workflows apiece. A consumer thin caller that
+  grows one is not caught here.

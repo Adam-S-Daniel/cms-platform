@@ -116,6 +116,47 @@ function runScripts(text) {
   return out;
 }
 
+// Every `actions/github-script` step's `script:` body as { script, line },
+// where `line` is the 1-based file line of the body's first line — the
+// `run:` counterpart for the OTHER substitution sink a workflow has.
+//
+// STRUCTURAL, not textual, and deliberately so. The script node is found
+// by walking to a mapping that IS a step — it carries a `uses:` — and
+// only then reading `with.script` off that same mapping. Two things fall
+// out of that which a text scan gets wrong:
+//
+//   • Attribution. Matching bodies by content (a Set of script strings)
+//     misattributes two github-script steps that happen to share a body;
+//     here each hit is anchored to the step mapping that owns it.
+//   • Trust. The `uses:` matcher is ANCHORED (`^actions/github-script@`)
+//     so `evilorg/actions-github-script@…` — a lookalike fork — is not
+//     silently treated as the real action.
+//
+// `with:` keys other than `script` are skipped: they are runner-expression
+// contexts (an `env:`-style value map), not JS source text.
+function githubScriptBlocks(text) {
+  const doc = YAML.parseDocument(text);
+  const out = [];
+  YAML.visit(doc, {
+    Map(_, node) {
+      const pairs = (node && node.items) || [];
+      const at = (k) => pairs.find((p) => p.key && String(p.key.value) === k);
+      const uses = at("uses");
+      const usesVal = uses && uses.value ? String(uses.value.value || "") : "";
+      if (!/^actions\/github-script@/.test(usesVal)) return;
+      const withPair = at("with");
+      const withMap = withPair && withPair.value;
+      if (!withMap || !withMap.items) return;
+      const scriptPair = withMap.items.find((p) => p.key && String(p.key.value) === "script");
+      const sv = scriptPair && scriptPair.value;
+      if (!sv || typeof sv.value !== "string" || !sv.range) return;
+      const isBlock = sv.type === "BLOCK_LITERAL" || sv.type === "BLOCK_FOLDED";
+      out.push({ script: sv.value, line: lineOf(text, sv.range[0]) + (isBlock ? 1 : 0) });
+    },
+  });
+  return out;
+}
+
 // Every scalar string value reachable in `obj` (recursive). Content
 // searches — expressions inside `if:`, JS inside `github-script`, shell
 // inside `run:` — run against these instead of grepping raw file text,
@@ -150,6 +191,7 @@ module.exports = {
   jobSubBlock,
   jobs,
   runScripts,
+  githubScriptBlocks,
   allStrings,
   events,
 };

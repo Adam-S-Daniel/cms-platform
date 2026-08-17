@@ -111,7 +111,14 @@ jobs:
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
       - name: Fetch base ref
-        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+        # BASE via `env:`, same name+expression the "Decide salience" step
+        # below already binds. A branch name may legally contain `$( )`,
+        # backticks and `;` (git permits them), and an expression is expanded
+        # into the command TEXT before bash parses it — so an interpolated
+        # base.ref would execute here.
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: git fetch --no-tags origin "$BASE"
       - name: Decide salience
         id: salience
         env:

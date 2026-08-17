@@ -306,6 +306,14 @@ const PLATFORM_META_SPECS = [
   "visreg-ignore-lint.test.js",
   "workflow-github-sha-lint.test.js",
   "workflow-graph.test.js",
+  // #261 — the widened injection lint: parses the platform's OWN reusable
+  // workflow DEFINITIONS (workflow-yaml-utils) to assert no `${{ }}` is
+  // substituted into a `run:` shell body or an actions/github-script
+  // `with.script` JS body. Platform-internal; a consumer ships only thin
+  // callers. NOTE this means consumer thin callers get NO enforcement from
+  // it — same posture as workflow-shell-glob-lint.test.js, and acceptable
+  // because all three consumer trees scan 0 sinks today.
+  "workflow-injection-lint.test.js",
   // #16 — lints the prod-loop reusables' if:always() branch-cleanup steps by
   // parsing the platform's OWN workflow DEFINITIONS (readWorkflow). Platform-
   // internal: a consumer doesn't ship those reusable definitions.
