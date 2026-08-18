@@ -333,8 +333,6 @@ the gem onto a consumer's live `/admin`.
   flips must be ratified (PR the value in with a `# why:`) or reverted the same
   day — the daily `repo-settings-audit` workflow files a `ci` tracking issue on
   any drift.
-- **SHA-pin every workflow `uses:`** with a `# vX.Y.Z (date)` comment; 7-day
-  cooling-off before bumping (mirrors adamdaniel.ai policy).
 - **Verify before claiming done** — run the render and the scaffolder against
   throwaway inputs; syntax-check YAML/bash/Ruby/JS. See "Verify" below.
 - **Record knowledge here (AGENTS.md) and/or in `skills/`, not only in agent
