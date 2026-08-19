@@ -1,5 +1,10 @@
-# Local harness prefs (not for the published platform)
-/.claude/settings.json
+# Local harness prefs (not for the published platform). Narrowed from
+# `/.claude/settings.json`: that file is no longer purely local. The fleet's
+# skills-bootstrap delivery registers its SessionStart hook there, and
+# `sync.sh` APPENDS to the file rather than owning it, so it now carries
+# fleet-managed config that has to be tracked. Personal overrides belong in
+# `settings.local.json`, which Claude Code reads and this repo still ignores.
+/.claude/settings.local.json
 # Real per-site deploy params (secrets) — only the .example.env is tracked
 infrastructure/site-params.env
 __pycache__/
@@ -33,6 +38,14 @@ e2e/fixture-site/admin/config-local.yml
 # AWS SAM build output (oauth-proxy deploy)
 oauth-proxy/.aws-sam/
 
-# Claude Code session worktrees / state
-.claude/
+# Claude Code session worktrees / state. NOT a blanket `.claude/` ignore:
+# `_agent-guidance`'s sync commits `.claude/hooks/skills-bootstrap.sh` and
+# `.claude/settings.json` here, and `git add` on an ignored path exits 1 —
+# which under `set -euo pipefail` aborts the entire two-owner fleet sync at
+# this repo and silently leaves every repo after it unsynced. The sync
+# deliberately refuses to `git add -f` past a repo's own policy, so the
+# ignore has to name the transient paths instead of the directory.
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claude/skills/
 screenshots/
