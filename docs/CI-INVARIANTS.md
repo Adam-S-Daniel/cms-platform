@@ -167,19 +167,28 @@ per-PR checkout):
   batch-strand exposure applies to every consumer that calls
   `dependabot-auto-merge.yml`.
 
-## Scheduled-run health audit (silent-failure alerting, v0.1.57)
+## Silent-failure alerting: the scheduled-run health audit (v0.1.57, push lane #279)
 
-Scheduled workflows fail SILENTLY — an `event=schedule` failure has no PR to
-go red on and fires no notification. Observed live (the 2026-07 audit that
+Two lanes fail SILENTLY — neither an `event=schedule` failure nor a
+default-branch `event=push` failure has a PR to go red on, and neither fires a
+notification. Observed live (the 2026-07 audit that
 motivated this): adamdaniel.ai's daily editorial-label-audit was red 24/30
 days for three weeks unnoticed; jodidaniel.com's sweep-stale-cms-prs
 startup-failed 30/30 for a month (a dropped `secrets:` map). The alerting
 layer:
 
 - **`.github/workflows/scheduled-run-health.yml`** (reusable) — daily scan of
-  the CALLER repo's last `window_hours` (default **48h**) of schedule-event
-  runs for `failure` / `startup_failure` / `timed_out` (NOT `cancelled` — the
-  loops cancel superseded runs by design). Findings land on **one** tracking
+  the CALLER repo's last `window_hours` (default **48h**) of BOTH
+  schedule-event runs AND default-branch push-event runs, for `failure` /
+  `startup_failure` / `timed_out` (NOT `cancelled` — the loops cancel
+  superseded runs by design, and push runs are cancelled by concurrency groups
+  the same way). The push lane is on by default and opts out with
+  `push_scan: false`; it was added after a `.gitleaks.toml` change passed its
+  PR check and then failed EIGHT consecutive pushes to adamdaniel.ai's `main`
+  — each one a blocked editorial publish — with nothing surfacing it (#279).
+  The two lanes render as SEPARATE sections rather than one merged list,
+  because `secrets-scan.yml` fires on both and the signal that mattered was
+  "scheduled green, push on fire". Findings land on **one** tracking
   issue (label `ci`, found via a hidden `<!-- scheduled-run-health-audit -->`
   marker): opened on first failure (the issue notification IS the alert),
   NEW runs commented with run-id dedupe (a hidden `<!-- run-ids: … -->`

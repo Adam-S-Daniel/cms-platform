@@ -76,7 +76,7 @@ jobs:
           GH_TOKEN: ${{ github.token }} # issue open/comment/close on THIS repo only
           # Per-owner READ-ONLY fine-grained PATs (Administration: Read-only) —
           # a fine-grained PAT can't span two owners, so one secret per owner.
-          # Minting/verification: skills/cms-platform-secrets/SKILL.md
+          # Minting/verification: skills/consumer-repo-provisioning/SKILL.md
           # "Platform-repo secrets". A missing/expired one turns this run RED
           # with a distinct "read path broken" error — by design.
           REPO_SETTINGS_READ_ADAM_S_DANIEL: ${{ secrets.REPO_SETTINGS_READ_ADAM_S_DANIEL }}

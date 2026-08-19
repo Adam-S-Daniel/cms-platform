@@ -1,5 +1,5 @@
 ---
-name: cms-platform-secrets
+name: consumer-repo-provisioning
 description: >-
   The exact GitHub Actions repository secrets AND variables a cms-platform
   consumer site must set — the precise fine-grained PAT permissions for each

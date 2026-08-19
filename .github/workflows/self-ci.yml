@@ -242,7 +242,7 @@ jobs:
   # DIFFERENT defects and neither subsumes the other. The CLI is the only
   # check here that parses every skills/*/SKILL.md the way the runtime does —
   # unparseable frontmatter YAML is a hard exit 1 (measured), which is exactly
-  # the defect class that shipped in skills/cms-platform-secrets. It is blind,
+  # the defect class that shipped in skills/consumer-repo-provisioning. It is blind,
   # though, to a frontmatter `name` that disagrees with its directory, to an
   # over-1024-character description, and to the root plugin.json altogether (a
   # root manifest carrying a 2.0.0 `$schema` plus `category`/`defaultEnabled`/

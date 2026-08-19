@@ -28,9 +28,29 @@
 //       subtests (rather than adding two more) keeps the scaffolder — which
 //       shells out to `node` and does real fs work — running exactly once.
 //
-// PLATFORM-ONLY: reads examples/site/.github/dependabot.yml (the template)
-// and runs scaffold/create-site.js (the platform generator) — both absent on
-// a consumer. Registered in PLATFORM_META_SPECS (playwright.config.js) so a
+// Both subtests also now assert `assertNoUnsupportedActionsCooldownDays`: the
+// github-actions entry's `cooldown` (if any) must carry no `semver-*-days`
+// key, since GitHub doesn't support per-SemVer-tier cooldown for that
+// ecosystem at all — a schema error, not merely a stricter policy. Neither
+// the template nor the scaffolder output currently sets a `cooldown` block
+// at all, so this passes vacuously today; it exists to catch a future one
+// that copies the wrong shape from a github-actions-with-majors example.
+//
+// Subtest (c) points the same cooldown assertion at THIS REPO'S OWN
+// .github/dependabot.yml. That is the only one of the three that carries a
+// `cooldown` block today, so it is the only place the assertion runs against
+// real data rather than vacuously — and it is the file that actually carried
+// the bug: cms-platform's github-actions entry had `semver-major-days: 30`,
+// which silently disabled that whole updates[] entry. Without (c) this spec
+// would ship the rule to consumers and to new sites while leaving the
+// platform itself unchecked — the same shape as dependabot-dogfood.test.js's
+// realized gap, where the repo whose convention it was turned out to be the
+// one repo not running it. Note (c) must NOT assert the npm entry is clean:
+// npm DOES support semver-*-days and legitimately sets it.
+//
+// PLATFORM-ONLY: reads examples/site/.github/dependabot.yml (the template),
+// this repo's own .github/dependabot.yml, and runs scaffold/create-site.js
+// (the platform generator) — all absent on a consumer. Registered in PLATFORM_META_SPECS (playwright.config.js) so a
 // CONSUMER=true e2e lane testIgnore's it rather than ENOENT-failing.
 const fs = require("node:fs");
 const os = require("node:os");
@@ -41,6 +61,7 @@ const {
   parseDependabotConfig,
   assertUnscopedThemeIgnore,
   assertPlatformActionsIgnored,
+  assertNoUnsupportedActionsCooldownDays,
 } = require("./dependabot-config-utils");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -61,6 +82,7 @@ test.describe(
       ).toBe(true);
       assertUnscopedThemeIgnore(TEMPLATE_PATH, doc);
       assertPlatformActionsIgnored(TEMPLATE_PATH, doc, TEMPLATE_WORKFLOWS_DIR);
+      assertNoUnsupportedActionsCooldownDays(TEMPLATE_PATH, doc);
     });
 
     test("(b) scaffold/create-site.js seeds a .github/dependabot.yml with both ignores", () => {
@@ -91,9 +113,16 @@ test.describe(
         const doc = parseDependabotConfig(seededPath);
         assertUnscopedThemeIgnore(seededPath, doc);
         assertPlatformActionsIgnored(seededPath, doc, seededWorkflowsDir);
+        assertNoUnsupportedActionsCooldownDays(seededPath, doc);
       } finally {
         fs.rmSync(target, { recursive: true, force: true });
       }
+    });
+
+    test("(c) this repo's own .github/dependabot.yml carries no github-actions semver-*-days", () => {
+      const selfPath = path.join(REPO_ROOT, ".github", "dependabot.yml");
+      const doc = parseDependabotConfig(selfPath);
+      assertNoUnsupportedActionsCooldownDays(selfPath, doc);
     });
   },
 );

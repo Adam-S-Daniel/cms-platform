@@ -92,6 +92,14 @@ test.describe("scheduled-run-health.yml (reusable) — workflow shape", () => {
     expect(raw).toMatch(/\$\{\{\s*inputs\.dry_run\s*&&\s*'--dry-run'\s*\|\|\s*''\s*\}\}/);
   });
 
+  test("push_scan input (boolean, default TRUE) wires through as an opt-out flag (#279)", () => {
+    // Default true is deliberate — see the reusable's header: an opt-in-off
+    // flag would leave exactly the repos that need this uncovered.
+    const inputs = doc.on.workflow_call.inputs;
+    expect(inputs.push_scan).toMatchObject({ type: "boolean", default: true });
+    expect(raw).toMatch(/\$\{\{\s*inputs\.push_scan\s*&&\s*''\s*\|\|\s*'--no-push-scan'\s*\}\}/);
+  });
+
   test("window_hours and issue_label pass through to the script", () => {
     const inputs = doc.on.workflow_call.inputs;
     // Strings, so thin callers can wire dispatch inputs straight through.
@@ -188,6 +196,46 @@ test.describe("audit-scheduled-runs.js — pure helpers", () => {
       run({ id: 2, run_started_at: "2026-07-01T09:00:00Z" }),
     ];
     expect(filterAlertRuns(runs, "2026-07-04T10:00:00Z").map((r) => r.id)).toEqual([1]);
+  });
+
+  test("isAlertRun / filterAlertRuns generalize to event=push via default params (#279)", () => {
+    // Every existing call site (above) omits `event` and must keep seeing
+    // ONLY schedule runs — the default param is what makes that byte-
+    // identical. The push lane (default-branch push failures are exactly as
+    // silent as scheduled ones) is the first caller to pass "push" explicitly.
+    const { isAlertRun, filterAlertRuns } = loadScript();
+    const scheduled = run({ id: 1, event: "schedule", conclusion: "failure" });
+    const pushed = run({ id: 2, event: "push", conclusion: "failure" });
+    expect(isAlertRun(scheduled)).toBe(true);
+    expect(isAlertRun(pushed)).toBe(false);
+    expect(isAlertRun(pushed, "push")).toBe(true);
+    expect(isAlertRun(scheduled, "push")).toBe(false);
+
+    const runs = [scheduled, pushed];
+    expect(filterAlertRuns(runs).map((r) => r.id)).toEqual([1]);
+    expect(filterAlertRuns(runs, undefined, "push").map((r) => r.id)).toEqual([2]);
+  });
+
+  test("runsForEventEndpoint: the schedule shape is byte-identical to the pre-#279 endpoint", () => {
+    const { runsForEventEndpoint } = loadScript();
+    expect(runsForEventEndpoint("o/r", "schedule", "2026-07-04T10:00:00Z", 1)).toBe(
+      `repos/o/r/actions/runs?event=schedule&created=${encodeURIComponent(
+        ">=2026-07-04T10:00:00Z",
+      )}&per_page=100&page=1`,
+    );
+  });
+
+  test("runsForEventEndpoint: the push lane scopes to event=push + branch=<default_branch> (#279)", () => {
+    // Mirrors runJobsEndpoint's pagination-shape test below — the push
+    // listing shape stays unit-assertable without shelling out to gh.
+    const { runsForEventEndpoint } = loadScript();
+    expect(
+      runsForEventEndpoint("o/r", "push", "2026-07-04T10:00:00Z", 2, "&branch=main"),
+    ).toBe(
+      `repos/o/r/actions/runs?event=push&created=${encodeURIComponent(
+        ">=2026-07-04T10:00:00Z",
+      )}&branch=main&per_page=100&page=2`,
+    );
   });
 
   test("groupByWorkflow groups by workflow FILE basename (never run.name), newest run first", () => {
@@ -596,6 +644,89 @@ test.describe("audit-scheduled-runs.js — dead scheduled workflows (#258)", () 
   });
 });
 
+/*
+ * DEFAULT-BRANCH PUSH FAILURES (#279): a `push`-to-default-branch failure is
+ * exactly as silent as a scheduled one — no PR to go red on. Live incident,
+ * 2026-08: a `.gitleaks.toml` change on adamdaniel.ai passed its PR check but
+ * broke `secrets-scan.yml`'s `push`-to-`main` run for 8 CONSECUTIVE pushes,
+ * each one a blocked Decap editorial publish, with no tracking issue ever
+ * filed. The push lane reuses every mechanism the scheduled lane already has
+ * (isAlertRun/filterAlertRuns via the `event` param, the same run-id dedupe
+ * channel, the same runner-starvation suppression) and renders as its OWN
+ * section — never merged into the scheduled list, because `secrets-scan.yml`
+ * fires on BOTH events and a merged list would bury exactly the signal the
+ * incident needed: "scheduled green, push on fire".
+ */
+test.describe("audit-scheduled-runs.js — default-branch push lane (#279)", () => {
+  const pushRun = (overrides = {}) =>
+    run({
+      id: 601,
+      event: "push",
+      path: ".github/workflows/secrets-scan.yml",
+      html_url: "https://github.com/o/r/actions/runs/601",
+      ...overrides,
+    });
+
+  test("renderSections renders the push lane as its OWN section, never merged with scheduled", () => {
+    const { renderSections } = loadScript();
+    const scheduled = [run({ id: 1, path: ".github/workflows/a.yml" })];
+    const pushed = [pushRun()];
+    const rendered = renderSections(scheduled, [], pushed, "main").join("\n");
+    expect(rendered).toContain("**Failing scheduled runs**");
+    expect(rendered).toContain(
+      "**Failing default-branch push runs** (`event=push` on `main` ending in " +
+        "`failure` / `startup_failure` / `timed_out`):",
+    );
+    expect(rendered).toContain("secrets-scan.yml");
+    expect(rendered).toContain("https://github.com/o/r/actions/runs/601");
+    // Two DISTINCT sections, in order — not one list with both runs interleaved.
+    const scheduledIdx = rendered.indexOf("**Failing scheduled runs**");
+    const pushIdx = rendered.indexOf("**Failing default-branch push runs**");
+    expect(scheduledIdx).toBeGreaterThanOrEqual(0);
+    expect(pushIdx).toBeGreaterThan(scheduledIdx);
+  });
+
+  test("renderSections omits the push section entirely when pushRuns is empty", () => {
+    const { renderSections } = loadScript();
+    const rendered = renderSections([run({ id: 1 })], [], [], "main").join("\n");
+    expect(rendered).not.toContain("push run");
+  });
+
+  test("omitting `pushRuns` keeps the body byte-identical (back-compat)", () => {
+    const { buildIssueBody, buildComment } = loadScript();
+    const base = { repo: "o/r", windowHours: 48, runs: [run()], nowIso: "2026-08-16T10:00:00Z" };
+    expect(buildIssueBody({ ...base, pushRuns: [] })).toBe(buildIssueBody(base));
+    const commentBase = { windowHours: 48, runs: [run()], nowIso: "2026-08-16T10:00:00Z" };
+    expect(buildComment({ ...commentBase, pushRuns: [] })).toBe(buildComment(commentBase));
+  });
+
+  test("run-id dedupe roundtrip: a push run recorded once is filtered out of the next scan's fresh set", () => {
+    // The push lane has REAL run ids (unlike a dead workflow), so it dedupes
+    // through the SAME hidden run-ids channel as scheduled runs — no second
+    // hidden block. This is the exact `fresh`/`freshPush` computation main()
+    // does against the shared `reported` set.
+    const { buildIssueBody, extractReportedRunIds } = loadScript();
+    const scheduled = run({ id: 501 });
+    const pushed = pushRun();
+    const body = buildIssueBody({
+      repo: "o/r",
+      windowHours: 48,
+      runs: [scheduled],
+      pushRuns: [pushed],
+      defaultBranch: "main",
+      nowIso: "2026-08-16T10:00:00Z",
+    });
+    const reported = extractReportedRunIds([body]);
+    expect(reported.has("501")).toBe(true);
+    expect(reported.has("601")).toBe(true);
+
+    // Next scan: run 601 is STILL failing, plus a genuinely new push run 602.
+    const nextPushFailures = [pushed, pushRun({ id: 602 })];
+    const freshPush = nextPushFailures.filter((r) => !reported.has(String(r.id)));
+    expect(freshPush.map((r) => r.id)).toEqual([602]);
+  });
+});
+
 // ── main() lifecycle: the issue is never closed on an incomplete answer ───────
 //
 // THE #258 BUG LIVED IN main(), AND NOWHERE ELSE. Every pure helper above can
@@ -700,6 +831,9 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       // Zero failing scheduled runs in the window — the state that used to read
       // as "healthy, close the alert".
       ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      // Push lane (#279): zero failing push runs, so it stays out of this
+      // dead-workflow-specific test's assertions.
+      ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [] })],
       [
         "has",
         "issues?state=open&labels=",
@@ -707,7 +841,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       ],
       ["has", "issues/7/comments?per_page", "[]"],
       ["has", "issues/7/comments", "{}"],
-      ["eq", "repos/o/r", JSON.stringify({ private: false })],
+      ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
     ]);
 
     const { code, out } = runAudit(dir);
@@ -735,6 +869,9 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       ["has", "actions/workflows/99/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
       ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [DEAD_WORKFLOW] })],
       ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      // Push lane (#279): zero failing push runs, so it stays out of this
+      // dead-workflow-specific test's assertions.
+      ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [] })],
       [
         "has",
         "issues?state=open&labels=",
@@ -749,7 +886,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       // pre-fix with or without this route (measured). What the route buys is a
       // clean pre-fix signature instead of a misleading stub-miss error line.
       ["eq", "repos/o/r/issues/7", JSON.stringify({ number: 7, state: "closed" })],
-      ["eq", "repos/o/r", JSON.stringify({ private: false })],
+      ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
     ]);
 
     const { code, out } = runAudit(dir);
@@ -794,5 +931,161 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
     expect(out).toContain("Leaving tracking issue #7 OPEN");
     // An audit that could not do its job must go RED, never report health.
     expect(code, out).toBe(1);
+  });
+
+  // ── push lane (#279): the SAME close-gate discipline, for the SAME reason ──
+  //
+  // THE CLOSE-GATE IS TWO CONDITIONS BECOMING THREE. `dead.length === 0` and
+  // `!deadProbeFailed` guard the dead-workflow lane; #279 adds
+  // `pushFailures.length === 0` and folds `pushProbeFailed` into the same
+  // `deadProbeFailed || pushProbeFailed` unknown-answer check. Drop the new
+  // term and the gate still compiles, every OTHER test above still passes, and
+  // the audit closes a live alert with a push failure outstanding — the #258
+  // failure mode in a new lane. These tests drive the real CLI end to end so
+  // that can't happen unnoticed a second time.
+
+  // The `run()` fixture default (run_started_at: "2026-07-05T09:00:00Z") is
+  // long outside the real 48h `since` window the CLI subprocess computes from
+  // the actual wall clock at spawnSync time — filterAlertRuns would drop it
+  // silently, making every push-lane assertion below false-negative for the
+  // wrong reason. An offset from `Date.now()` (not a network- or sleep-
+  // dependent value — see AGENTS.md) keeps it inside the window regardless of
+  // when this suite runs.
+  const PUSH_RUN = run({
+    id: 601,
+    event: "push",
+    path: ".github/workflows/secrets-scan.yml",
+    conclusion: "failure",
+    html_url: "https://github.com/o/r/actions/runs/601",
+    run_started_at: new Date(Date.now() - 3600_000).toISOString(),
+    created_at: new Date(Date.now() - 3600_000).toISOString(),
+  });
+
+  test("schedule lane clean but push has a FRESH failure — issue must NOT close (#279 close-gate)", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [PUSH_RUN] })],
+      ["has", "actions/runs/601/jobs", JSON.stringify({ jobs: [job()] })],
+      ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
+      [
+        "has",
+        "issues?state=open&labels=",
+        JSON.stringify([{ number: 7, body: `${MARKER}\nprevious alert` }]),
+      ],
+      ["has", "issues/7/comments?per_page", "[]"],
+      ["has", "issues/7/comments", "{}"],
+      ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
+    ]);
+
+    const { code, out } = runAudit(dir);
+    expect(
+      closeCalls(log),
+      `#279: closed the alert with a live push-lane failure outstanding:\n${out}`,
+    ).toEqual([]);
+    // NOTE: the comment BODY is a `gh api ... -f body=...` argv element, not
+    // console output — check the logged call, not `out` (which only carries
+    // the audit's own log lines, never the payload it posts).
+    const commented = callsOf(log).some(
+      (argv) =>
+        argv[1] === "repos/o/r/issues/7/comments" &&
+        argv.some((a) => a.startsWith("body=") && a.includes("secrets-scan.yml")),
+    );
+    expect(commented, `expected the push failure to be reported on issue #7:\n${out}`).toBe(true);
+    expect(code, out).toBe(0);
+  });
+
+  test("both the schedule and push lanes clean, and no dead workflows — issue closes", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [] })],
+      ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
+      [
+        "has",
+        "issues?state=open&labels=",
+        JSON.stringify([{ number: 7, body: `${MARKER}\nprevious alert` }]),
+      ],
+      ["eq", "repos/o/r/issues/7/comments", "{}"],
+      ["eq", "repos/o/r/issues/7", JSON.stringify({ number: 7, state: "closed" })],
+      ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
+    ]);
+
+    const { code, out } = runAudit(dir);
+    expect(
+      closeCalls(log).length,
+      `expected the issue to close on a fully clean window (both lanes):\n${out}`,
+    ).toBe(1);
+    expect(out).toContain("Clean window");
+    expect(code, out).toBe(0);
+  });
+
+  test("a repo-metadata probe failure SKIPS the push lane (never attempts it) — issue stays open, exit reflects unknown", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      [
+        "has",
+        "issues?state=open&labels=",
+        JSON.stringify([{ number: 7, body: `${MARKER}\nprevious alert` }]),
+      ],
+      // No route for actions/runs?event=push and no route for
+      // actions/workflows — if the push lane (or the dead-workflow lane) were
+      // attempted anyway, the stub would raise "no route", so their absence
+      // from callsOf(log) below is the discriminating assertion, not a
+      // convenience.
+      ["eq", "repos/o/r", null],
+    ]);
+
+    const { code, out } = runAudit(dir);
+    expect(
+      closeCalls(log),
+      `closed the alert on an UNKNOWN repo-metadata answer:\n${out}`,
+    ).toEqual([]);
+    const attemptedPush = callsOf(log).some(
+      (argv) => argv[0] === "api" && typeof argv[1] === "string" && argv[1].includes("event=push"),
+    );
+    expect(
+      attemptedPush,
+      `the push lane must be SKIPPED, not attempted, when repo metadata is unknown:\n${out}`,
+    ).toBe(false);
+    expect(out).toContain("Leaving tracking issue #7 OPEN");
+    expect(out).toContain("the push-run check");
+    // An audit that could not do its job must go RED, never report health.
+    expect(code, out).toBe(1);
+  });
+
+  test("a push run already recorded on the issue is never re-reported (run-id dedupe, main() lifecycle)", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
+      ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [PUSH_RUN] })],
+      ["has", "actions/runs/601/jobs", JSON.stringify({ jobs: [job()] })],
+      ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
+      [
+        "has",
+        "issues?state=open&labels=",
+        // The issue ALREADY carries run 601 in its hidden run-ids block — a
+        // prior scan already reported this exact push failure.
+        JSON.stringify([{ number: 7, body: `${MARKER}\n<!-- run-ids: 601 -->\nprevious alert` }]),
+      ],
+      ["has", "issues/7/comments?per_page", "[]"],
+      // Deliberately NO route for POSTing a new comment — if the dedupe ever
+      // regresses and re-reports run 601, the stub raises "no route" and the
+      // `commented` assertion below still catches it (the call is logged
+      // before routing), but a missing route also makes the failure mode loud.
+      ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
+    ]);
+
+    const { code, out } = runAudit(dir);
+    const commented = callsOf(log).some(
+      (argv) => argv[1] === "repos/o/r/issues/7/comments" && argv.some((a) => a.startsWith("body=")),
+    );
+    expect(
+      commented,
+      `re-reported a push run already recorded in the hidden run-ids block:\n${out}`,
+    ).toBe(false);
+    expect(out).toContain("Nothing new");
+    expect(code, out).toBe(0);
   });
 });

@@ -55,7 +55,7 @@ jobs:
       # files INTO .github/workflows/, so it needs Workflows: write — the same
       # permission platform-bump already requires. (It can't reuse CMS_E2E_PAT,
       # which has no Workflows permission.) Exact permissions: see the
-      # /cms-platform:cms-platform-secrets skill. Drop this line if the site hasn't
+      # /cms-platform:consumer-repo-provisioning skill. Drop this line if the site hasn't
       # configured the PAT — the reusable then falls back to the App below.
       workflow_sha_comment_pat: ${{ secrets.CMS_PLATFORM_PAT }}
       # Fallback for a repo with no PAT: the CMS automation GitHub App

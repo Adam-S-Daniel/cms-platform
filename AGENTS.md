@@ -975,7 +975,7 @@ routinely reports pre-existing drift as its own diff and parks on the manual
   the environment id and `current_user_can_approve`, then
   `gh api -X POST .../pending_deployments -f state=approved -F "environment_ids[]=<id>"`.
   The approver must be a configured reviewer of the `regression-review`
-  environment (see the `cms-platform-secrets` skill).
+  environment (see the `consumer-repo-provisioning` skill).
 - If either check fails, the gate is doing its job — review the pixels, don't
   approve.
 

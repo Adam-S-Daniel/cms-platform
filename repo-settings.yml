@@ -8,7 +8,7 @@
 #     by design, so an emergency live flip can never be auto-clobbered.
 #   - The daily `repo-settings-audit` workflow re-reads the live values with
 #     per-owner READ-ONLY PATs (`REPO_SETTINGS_READ_*`, see the
-#     cms-platform-secrets skill) and files a `ci`-labelled tracking issue on
+#     consumer-repo-provisioning skill) and files a `ci`-labelled tracking issue on
 #     any drift. RATIFY (PR the live value in here with a `# why:`) or REVERT
 #     (`--fix --yes`) the same day — never leave live != manifest.
 #   - Every value leaf carries a `# why:` comment (lint-enforced by
@@ -17,7 +17,7 @@
 #     `delete_branch_on_merge` silently OFF on both consumers with no record
 #     anywhere of who flipped it or why.
 #   - Actions VARIABLES / SECRETS are OUT OF SCOPE here — they are owned by
-#     scripts/set-repo-variables.sh + skills/cms-platform-secrets/SKILL.md
+#     scripts/set-repo-variables.sh + skills/consumer-repo-provisioning/SKILL.md
 #     (which cross-references back to this manifest for settings).
 #
 # SHAPES: effective flags per repo = shallow merge(settings_defaults,
@@ -88,7 +88,7 @@ settings_defaults:
   allow_rebase_merge: false
   # why: REQUIRED — the whole CMS publish chain arms NATIVE auto-merge
   # (Decap canary PRs, the nudge, platform-bump, dependabot-auto-merge); the
-  # cms-platform-secrets skill checklist calls this setting out explicitly.
+  # consumer-repo-provisioning skill checklist calls this setting out explicitly.
   allow_auto_merge: true
   # why: lets bots/UI refresh a stale PR head against the base — the #1812
   # stale-merge-snapshot class the nudge/recoverers work around.

@@ -76,7 +76,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete plan.
 
 Each consumer repo needs two hand-made PATs plus three AWS values. The **canonical,
 versioned spec — with the exact fine-grained permissions for each — lives in the
-`cms-platform-secrets` skill** (`skills/cms-platform-secrets/SKILL.md`), which reaches
+`consumer-repo-provisioning` skill** (`skills/consumer-repo-provisioning/SKILL.md`), which reaches
 a session through the marketplace bundle above rather than through the consumer repo.
 At a glance:
 

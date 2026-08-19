@@ -39,6 +39,7 @@ const {
   parseDependabotConfig,
   assertUnscopedThemeIgnore,
   assertPlatformActionsIgnored,
+  assertNoUnsupportedActionsCooldownDays,
 } = require("./dependabot-config-utils");
 
 const CONSUMER = !!process.env.SITE_ROOT;
@@ -88,5 +89,16 @@ test.describe("consumer dependabot.yml: platform-bump-owned refs are ignored (#2
 
     const { label, doc } = parseTarget();
     assertPlatformActionsIgnored(label, doc, WORKFLOWS_DIR);
+  });
+
+  // `semver-major-days` under a github-actions block is a schema error, not
+  // a stricter policy — GitHub does not support per-SemVer-tier cooldown for
+  // that ecosystem at all (see dependabot-config-utils.js). A consumer's own
+  // dependabot.yml carries a github-actions block, so it's in scope.
+  test("github-actions entry's cooldown carries no semver-*-days keys (unsupported for this ecosystem)", () => {
+    test.skip(SKIP, SKIP_REASON);
+
+    const { label, doc } = parseTarget();
+    assertNoUnsupportedActionsCooldownDays(label, doc);
   });
 });

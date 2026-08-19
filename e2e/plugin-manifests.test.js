@@ -58,10 +58,10 @@
 // — for a file the _agent-guidance sync owns and this repo must keep. The CLI
 // is gated anyway because it is the only check that parses each
 // skills/*/SKILL.md the way the runtime does (unparseable frontmatter YAML =>
-// exit 1), which is the exact defect that shipped in cms-platform-secrets.
+// exit 1), which is the exact defect that shipped in consumer-repo-provisioning.
 //
 // PARSE, NEVER REGEX. The frontmatter goes through the `yaml` library (already
-// an e2e devDependency). `skills/cms-platform-secrets/SKILL.md` writes its
+// an e2e devDependency). `skills/consumer-repo-provisioning/SKILL.md` writes its
 // description as a `>-` folded block scalar — a regex would hand back the
 // literal ">-" and then measure the wrong string against the cap, i.e. a check
 // that passes while checking nothing.

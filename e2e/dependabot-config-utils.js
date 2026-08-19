@@ -324,6 +324,43 @@ function assertPlatformActionsIgnored(label, doc, workflowsDir) {
   }
 }
 
+// ── cooldown: github-actions does not support per-SemVer-tier days ─────
+//
+// GitHub's Dependabot options reference marks `default-days` as supported for
+// every ecosystem but `semver-major-days` / `semver-minor-days` /
+// `semver-patch-days` as supported "only where indicated" — and the
+// github-actions row is a hard NOT SUPPORTED for that column (npm, bundler,
+// and most other ecosystems DO support it). Supplying any of the three under
+// a `github-actions` block's `cooldown` is a schema validation error of the
+// form `The property '#/updates/N/cooldown' is not supported for the package
+// ecosystem 'github-actions'` — a hard error on that WHOLE `updates[]` entry,
+// not a silently-ignored key. dependabot/dependabot-core#14628 is the open
+// upstream request to add the support.
+const UNSUPPORTED_ACTIONS_COOLDOWN_KEYS = ["semver-major-days", "semver-minor-days", "semver-patch-days"];
+
+// Full assertion for a parsed dependabot.yml doc: every `github-actions`
+// `updates[]` entry's `cooldown` block (if any — the key is optional) must
+// carry none of the per-SemVer-tier keys. Entries for other ecosystems (npm,
+// bundler, ...) are unconstrained by this rule; they legitimately use these
+// keys.
+function assertNoUnsupportedActionsCooldownDays(label, doc) {
+  for (const entry of actionsEntries(doc)) {
+    const cooldown = entry && typeof entry.cooldown === "object" && entry.cooldown !== null ? entry.cooldown : null;
+    if (!cooldown) continue;
+    for (const key of UNSUPPORTED_ACTIONS_COOLDOWN_KEYS) {
+      expect(
+        Object.prototype.hasOwnProperty.call(cooldown, key),
+        `${label}: a 'github-actions' updates[] entry's 'cooldown' carries '${key}', but GitHub ` +
+          `does not support per-SemVer-tier cooldown for the github-actions ecosystem at all — ` +
+          `only 'default-days' is honored there. This is a schema validation error ` +
+          `("...cooldown' is not supported for the package ecosystem 'github-actions'") that ` +
+          `disables the WHOLE updates[] entry, not a silently-ignored key. Remove '${key}' — see ` +
+          `dependabot/dependabot-core#14628 for the open upstream request to add the support.`,
+      ).toBe(false);
+    }
+  }
+}
+
 module.exports = {
   parseDependabotConfig,
   bundlerEntries,
@@ -334,4 +371,5 @@ module.exports = {
   usesDependencyName,
   platformActionNames,
   assertPlatformActionsIgnored,
+  assertNoUnsupportedActionsCooldownDays,
 };

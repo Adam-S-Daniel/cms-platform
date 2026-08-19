@@ -1,9 +1,11 @@
 # Self-caller: dogfood the scheduled-run-health reusable on cms-platform's
-# OWN scheduled runs (self-dependabot-rearm daily, self-secrets-scan weekly).
-# The reusable scans the last 48h of `event=schedule` runs for
-# failure / startup_failure / timed_out and opens-or-updates a single
-# `ci`-labelled tracking issue — see scheduled-run-health.yml's header for
-# the full silent-failure postmortem and the 48h-window rationale.
+# OWN scheduled runs (self-dependabot-rearm daily, self-secrets-scan weekly)
+# AND on this repo's own default-branch push runs (#279). The reusable scans
+# the last 48h of `event=schedule` runs AND `event=push` runs on the default
+# branch for failure / startup_failure / timed_out and opens-or-updates a
+# single `ci`-labelled tracking issue — see scheduled-run-health.yml's header
+# for the full silent-failure postmortem, the push-lane incident, and the
+# 48h-window rationale. `push_scan` is left at its default (true).
 name: Scheduled-run health audit
 
 # Dynamic per-run title (issue #1776 grammar; enforced by

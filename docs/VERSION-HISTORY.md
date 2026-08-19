@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.85)
+## Version history (v0.1.0 → v0.1.86)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1581,3 +1581,43 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
     AGENTS.md's release paragraph — the only two enumerations of that set — now name them.
 
   Closes #263, #264, #265, #266.
+
+- **v0.1.86** (pending release) — **the scheduled-run health audit widens to
+  cover silent default-branch PUSH failures too (#279).** `audit-scheduled-runs.js`
+  watched only `event=schedule`; a `push`-to-default-branch failure is exactly
+  as silent (no PR to go red on, no notification). Live incident, 2026-08: a
+  `.gitleaks.toml` change on adamdaniel.ai passed its PR check (the PR lane
+  scans `base..head`) but broke `secrets-scan.yml`'s `push`-to-`main` run (the
+  push lane scans full history) for **8 CONSECUTIVE pushes** — each one a
+  blocked Decap editorial publish — with no tracking issue ever filed. The
+  fix generalizes rather than duplicates: `isAlertRun`/`filterAlertRuns` take
+  an `event` parameter (default `"schedule"`, so every existing call site
+  stays byte-identical); the runs paginator factors into `listRunsForEvent`,
+  with `listPushRuns` calling it as `event=push&branch=<default_branch>`; the
+  default branch is read off the SAME `getRepoMeta` call the dead-workflow
+  probe already makes (zero new API calls, never hardcoded `main`); and
+  `partitionStarvedRuns`/runner-starvation suppression apply unchanged, since
+  neither references `run.event`. The two lanes render as **separate**
+  sections — `secrets-scan.yml` fires on both events, and a merged list would
+  bury exactly the signal the incident needed ("scheduled green, push on
+  fire") — but dedupe through the SAME hidden run-ids channel (a push run has
+  a real run id, unlike a dead workflow, so no second hidden block is
+  needed) and share ONE close-gate: the tracking issue does not close until
+  scheduled runs, push runs, AND dead workflows are all clean. A repo-metadata
+  probe failure now marks the push lane (not only the dead-workflow lane)
+  UNKNOWN rather than clean, per the same #258 principle — an answer the audit
+  could not verify must never read as health. The reusable's new `push_scan`
+  input defaults to **true**, deliberately: an opt-in-off flag would leave
+  exactly the busy, bot-automated repos that need this uncovered until someone
+  remembered to flip it. `e2e/scheduled-run-health.test.js` gained pure-helper
+  coverage for the `event` parameter and the push endpoint shape, plus — in
+  the same style as the #258 regression guards — `main()`-lifecycle tests
+  driven through the `gh` stub: a live push-lane failure must not close the
+  issue, both lanes clean closes it, a repo-metadata probe failure skips the
+  push lane without attempting it, and a push run once reported is never
+  re-reported. The close-gate change was verified with a negative control:
+  reverting it to the old two-term form reproduces the bug (the stub log
+  shows an attempted `-X PATCH -f state=closed` with a live push failure
+  still outstanding) before the fix, and shows none after.
+
+  Closes #279.

@@ -1,4 +1,4 @@
-# Scheduled-run health audit (reusable).
+# Scheduled-run + default-branch-push health audit (reusable).
 #
 # THE PROBLEM (2026-07 workflow audit): scheduled workflows fail SILENTLY —
 # an `event=schedule` failure has no PR to go red on and fires no
@@ -18,6 +18,13 @@
 # crons on these repos (daily crons measured 4-5h late), so two daily audit
 # runs can be ~29h apart — a 24h window would leave a blind gap.
 #
+# THE SAME BLIND SPOT HITS `event=push` ON THE DEFAULT BRANCH (#279): a push
+# to `main` has no PR to go red on either. Live incident, 2026-08: a
+# `.gitleaks.toml` change on adamdaniel.ai passed its PR check but broke 8
+# CONSECUTIVE `push`-to-`main` runs of `secrets-scan.yml`, each one a blocked
+# Decap editorial publish, with no tracking issue ever filed. `push_scan`
+# (default TRUE — see below) adds that lane to the same audit.
+#
 # The audit run itself stays GREEN when it successfully files/updates the
 # alert (the ISSUE is the alert channel); it goes red only when it could not
 # do its job (API/permission failure) — "red means the alerting layer needs
@@ -36,6 +43,11 @@ on:
       window_hours:  { type: string, default: "48" }
       issue_label:   { type: string, default: "ci" }
       dry_run:       { type: boolean, default: false }
+      # Default TRUE, deliberately: an opt-in-off flag would leave exactly the
+      # repos that need this — busy, bot-automated ones — uncovered until
+      # someone remembers to flip it, the same "silence reads as health"
+      # failure this audit exists to close.
+      push_scan:     { type: boolean, default: true }
 
 # Reusable-workflow permissions are capped by the CALLER's grant: the caller
 # must give actions: read (list workflow runs) + issues: write (open /
@@ -74,4 +86,5 @@ jobs:
             --repo "${{ github.repository }}" \
             --window-hours "${{ inputs.window_hours }}" \
             --label "${{ inputs.issue_label }}" \
-            ${{ inputs.dry_run && '--dry-run' || '' }}
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.push_scan && '' || '--no-push-scan' }}
