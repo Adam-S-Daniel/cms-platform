@@ -1261,7 +1261,7 @@ function scanRepos(manifest, repos, fixMode) {
       console.error(
         `  This is an OPERATIONAL failure (exit 1), not drift — the audit's read path is broken.\n` +
           `  Check the ${envName} secret/env var (expired? unminted? missing "Administration: Read-only"?)\n` +
-          `  or the ambient gh auth. See skills/cms-platform-secrets/SKILL.md "Platform-repo secrets".`,
+          `  or the ambient gh auth. See skills/consumer-repo-provisioning/SKILL.md "Platform-repo secrets".`,
       );
       const err = new Error(`read failure on ${repo}`);
       err.operational = true;

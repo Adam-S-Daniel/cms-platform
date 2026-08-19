@@ -336,7 +336,7 @@ skewed with no guard analogous to `platform-pin-consistency`.
   a push-triggered run on manifest changes. **No write credential in CI** —
   reads use per-owner fine-grained `REPO_SETTINGS_READ_*` PATs
   (Administration: **Read-only**; minting/verification in the
-  `cms-platform-secrets` skill), writes are operator-only.
+  `consumer-repo-provisioning` skill), writes are operator-only.
 
 **Ratify-or-revert protocol:** when the audit files drift, the same day
 either RATIFY (PR the live value into `repo-settings.yml` with a `# why:`)
@@ -357,7 +357,7 @@ silent.
   settings churn too heavy to hand-normalize.
 
 Actions **variables/secrets stay out of scope** here — they are owned by
-`scripts/set-repo-variables.sh` + the `cms-platform-secrets` skill (which
+`scripts/set-repo-variables.sh` + the `consumer-repo-provisioning` skill (which
 cross-reference back to `repo-settings.yml` for settings). Actions
 **permissions** (SHA pinning, fork-PR approval) are settings, not
 variables/secrets, and ARE managed here (see above).

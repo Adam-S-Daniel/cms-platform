@@ -572,7 +572,7 @@ Next:
        bash infrastructure/bootstrap/deploy.sh   # committed delegating wrapper
        bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,user,workflow)
   5. Add GitHub secrets (exact fine-grained PAT permissions: see the
-     /cms-platform:cms-platform-secrets skill, from the agentskills bundle):
+     /cms-platform:consumer-repo-provisioning skill, from the agentskills bundle):
        - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W; PAT user = reviewer of the regression-review env
        - CMS_PLATFORM_PAT same + Workflows R/W -- for platform-bump
        - AWS_ROLE_ARN, PREVIEW_CLOUDFRONT_ID, PRODUCTION_CLOUDFRONT_ID (bootstrap stack outputs)
