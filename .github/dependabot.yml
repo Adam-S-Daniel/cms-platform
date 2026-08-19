@@ -23,27 +23,27 @@ updates:
     # Dependabot will even OPEN the PR. Version updates ONLY: security updates
     # bypass cooldown by GitHub's spec, so an advisory still opens (and
     # auto-merges) the moment the matrix is green. GitHub's own default is
-    # 3 days, so these values are a deliberate RAISE, not a floor from zero.
-    #
-    # `default-days: 7` mechanises this repo's standing cooling-off convention
+    # 3 days, so `default-days: 7` here is a deliberate RAISE, not a floor
+    # from zero. It mechanises this repo's standing cooling-off convention
     # for third-party action SHAs (AGENTS.md, "SHA-pin every workflow `uses:`"),
     # which until now depended on whoever happened to review the PR — and the
     # repaired Dependabot pipeline merges these UNATTENDED, so the bot has to
     # hold the wait instead.
     #
-    # Majors wait far longer because a MAJOR is the class that has actually
-    # needed reverting here: setup-node 6->7 (#179) lands in 18 reusables BOTH
-    # production sites execute, and the Decap bundle bump is kept revertible on
-    # purpose (v0.1.66 -> v0.1.67). 30 days is long enough for upstream to yank
-    # or patch a bad major while patches and minors keep flowing in a week.
-    # Tune it here — it is one number, not a workflow change.
-    #
-    # semver-minor / semver-patch are deliberately left undefined: GitHub's
-    # documented precedence falls an undefined `semver-*-days` back to
-    # `default-days`, so spelling them out would only invite the three to drift.
+    # NO semver-major-days here — UNLIKE the npm block below. GitHub's
+    # Dependabot options reference marks github-actions as supporting
+    # `default-days` but NOT per-SemVer-tier cooldown at all, while npm
+    # supports it fully; that split, not preference, is why the
+    # setup-node-6->7-style major revert this repo has actually hit (#179)
+    # gets no separate major-bump wait on the actions side — only the flat
+    # 7 days above. Re-adding any `semver-*-days` key to THIS block is a
+    # schema validation error ("...cooldown' is not supported for the
+    # package ecosystem 'github-actions'") that disables the whole
+    # `updates[]` entry, not a silently-ignored key.
+    # dependabot/dependabot-core#14628 is the open upstream request to add
+    # the support; until it lands, this stays flat.
     cooldown:
       default-days: 7
-      semver-major-days: 30
   - package-ecosystem: npm
     directory: "/e2e"
     schedule:
