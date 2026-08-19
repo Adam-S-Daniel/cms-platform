@@ -69,7 +69,15 @@ jobs:
           # On synchronize, the just-pushed sha owns the LIVE run and must NOT
           # be reaped. On close, empty so EVERY waiting run for the branch is
           # reaped regardless of sha.
-          KEEP_SHA: ${{ github.event.action == 'closed' && '' || github.event.pull_request.head.sha }}
+          #
+          # The NON-EMPTY value sits on the truthy side deliberately. Written the
+          # other way round — `action == 'closed' && '' || head.sha` — this never
+          # emitted the empty string at all: `a && b || c` is two operators, not a
+          # ternary, and GitHub returns `c` whenever `b` is falsy. An empty string
+          # IS falsy, so KEEP_SHA was ALWAYS the head sha, and the close branch
+          # spared one waiting run on every closed PR — in the workflow whose whole
+          # job is to reap them. Found by e2e/expression-empty-truthy-branch.test.js.
+          KEEP_SHA: ${{ github.event.action != 'closed' && github.event.pull_request.head.sha || '' }}
           ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |

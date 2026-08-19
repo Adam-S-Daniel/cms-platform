@@ -76,28 +76,47 @@ test.describe("scheduled-run-health.yml (reusable) — workflow shape", () => {
     expect(doc.name).toMatch(/\(reusable\)$/);
   });
 
-  test("the audit step passes --repo ${{ github.repository }}", () => {
+  // Every assertion below reads the PARSED step (its `env` map and its `run`
+  // body), not the raw file text. The previous versions text-matched the exact
+  // interpolation, which is how the push_scan bug shipped WITH coverage: the
+  // spec asserted the literal characters `inputs.push_scan && '' || '--no-push-scan'`
+  // were present, and they were — while meaning the opposite of what was
+  // intended. A spelling check is not a behaviour check.
+  const auditStep = doc.jobs.audit.steps.find((s) => /audit-scheduled-runs\.js/.test(s.run || ""));
+
+  test("the audit step passes the caller's repo, via env not inline", () => {
     // The reusable SPARSE-checks-out only the audit script — github.workspace
     // is not a git repo, so gh cannot infer the repo from a local remote.
-    expect(raw).toMatch(/--repo\s+"?\$\{\{\s*github\.repository\s*\}\}"?/);
+    expect(auditStep, "no step invokes audit-scheduled-runs.js").toBeTruthy();
+    expect(auditStep.env.AUDIT_REPO).toMatch(/\$\{\{\s*github\.repository\s*\}\}/);
+    expect(auditStep.run).toMatch(/--repo\s+"\$AUDIT_REPO"/);
   });
 
   test("declares actions: read + issues: write (list runs / file the alert)", () => {
     expect(doc.permissions).toMatchObject({ actions: "read", issues: "write" });
   });
 
-  test("dry_run input (boolean, default false) wires through to --dry-run", () => {
+  test("dry_run input (boolean, default false) adds --dry-run only when true", () => {
     const inputs = doc.on.workflow_call.inputs;
     expect(inputs.dry_run).toMatchObject({ type: "boolean", default: false });
-    expect(raw).toMatch(/\$\{\{\s*inputs\.dry_run\s*&&\s*'--dry-run'\s*\|\|\s*''\s*\}\}/);
+    expect(auditStep.env.AUDIT_DRY_RUN).toMatch(/\$\{\{\s*inputs\.dry_run\s*\}\}/);
+    // OPT-IN: the flag is added when the env value IS "true".
+    expect(auditStep.run).toMatch(/if\s+\[\[\s+"\$AUDIT_DRY_RUN"\s+==\s+"true"\s+\]\];\s*then\s+args\+=\(--dry-run\)/);
   });
 
-  test("push_scan input (boolean, default TRUE) wires through as an opt-out flag (#279)", () => {
+  test("push_scan (boolean, default TRUE) adds --no-push-scan only when NOT true (#279)", () => {
     // Default true is deliberate — see the reusable's header: an opt-in-off
     // flag would leave exactly the repos that need this uncovered.
     const inputs = doc.on.workflow_call.inputs;
     expect(inputs.push_scan).toMatchObject({ type: "boolean", default: true });
-    expect(raw).toMatch(/\$\{\{\s*inputs\.push_scan\s*&&\s*''\s*\|\|\s*'--no-push-scan'\s*\}\}/);
+    expect(auditStep.env.AUDIT_PUSH_SCAN).toMatch(/\$\{\{\s*inputs\.push_scan\s*\}\}/);
+    // OPT-OUT, and the polarity is the whole point: `!=` not `==`. Measured on
+    // run 32280743541, the previous inline form emitted --no-push-scan
+    // unconditionally, so a dispatch with push_scan=true silently skipped the
+    // push scan and still reported "0 failing push run(s)" from a static default.
+    expect(auditStep.run).toMatch(/if\s+\[\[\s+"\$AUDIT_PUSH_SCAN"\s+!=\s+"true"\s+\]\];\s*then\s+args\+=\(--no-push-scan\)/);
+    // And it must never be emitted unconditionally again.
+    expect(auditStep.run).not.toMatch(/^\s*args\+=\(--no-push-scan\)\s*$/m);
   });
 
   test("window_hours and issue_label pass through to the script", () => {
@@ -105,8 +124,10 @@ test.describe("scheduled-run-health.yml (reusable) — workflow shape", () => {
     // Strings, so thin callers can wire dispatch inputs straight through.
     expect(inputs.window_hours).toMatchObject({ type: "string", default: "48" });
     expect(inputs.issue_label).toMatchObject({ type: "string", default: "ci" });
-    expect(raw).toMatch(/--window-hours\s+"\$\{\{\s*inputs\.window_hours\s*\}\}"/);
-    expect(raw).toMatch(/--label\s+"\$\{\{\s*inputs\.issue_label\s*\}\}"/);
+    expect(auditStep.env.AUDIT_WINDOW_HOURS).toMatch(/\$\{\{\s*inputs\.window_hours\s*\}\}/);
+    expect(auditStep.env.AUDIT_LABEL).toMatch(/\$\{\{\s*inputs\.issue_label\s*\}\}/);
+    expect(auditStep.run).toMatch(/--window-hours\s+"\$AUDIT_WINDOW_HOURS"/);
+    expect(auditStep.run).toMatch(/--label\s+"\$AUDIT_LABEL"/);
   });
 });
 

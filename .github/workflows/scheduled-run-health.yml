@@ -75,16 +75,36 @@ jobs:
         with:
           node-version: "20"
       - name: Audit scheduled-run health
+        # Build every conditional flag in SHELL from env, never inline with an
+        # `a && b || c` expression. That form is not a ternary: it is two
+        # operators, and GitHub returns `c` whenever `b` is falsy — and an EMPTY
+        # STRING is falsy. The push-scan flag was written that way with the empty
+        # string on the truthy side, so it emitted its opt-out UNCONDITIONALLY.
+        # Measured on run 32280743541: dispatched with push_scan=true, it skipped
+        # the push scan entirely and still printed "0 failing push run(s)" from
+        # the static default rather than from any API call. A silent no-op that
+        # reports healthy is worse than a crash — nothing goes red, so nothing
+        # draws attention. The neighbouring dry-run flag survived only because
+        # its truthy branch was a non-empty string.
+        # e2e/expression-empty-truthy-branch.test.js now fails the build on it.
         env:
           GH_TOKEN: ${{ github.token }}
+          AUDIT_REPO: ${{ github.repository }}
+          AUDIT_WINDOW_HOURS: ${{ inputs.window_hours }}
+          AUDIT_LABEL: ${{ inputs.issue_label }}
+          AUDIT_DRY_RUN: ${{ inputs.dry_run }}
+          AUDIT_PUSH_SCAN: ${{ inputs.push_scan }}
         run: |
           # Pass the caller's repo explicitly: the reusable only SPARSE-checks-out
           # the audit script (no consumer checkout), so github.workspace is not a
           # git repo and gh could not infer the repo from a local remote (the
           # editorial-label-audit v0.1.16 trap).
-          node .cms-platform/scripts/audit-scheduled-runs.js \
-            --repo "${{ github.repository }}" \
-            --window-hours "${{ inputs.window_hours }}" \
-            --label "${{ inputs.issue_label }}" \
-            ${{ inputs.dry_run && '--dry-run' || '' }} \
-            ${{ inputs.push_scan && '' || '--no-push-scan' }}
+          #
+          # Flags are built here in shell from env, never inline in an expression
+          # — see the note above this step. `if` blocks, not
+          # `[[ ... ]] && args+=(...)`: GitHub runs `run:` under `bash -e`, so a
+          # false `[[ ]]` as the last statement would exit the step 1.
+          args=(--repo "$AUDIT_REPO" --window-hours "$AUDIT_WINDOW_HOURS" --label "$AUDIT_LABEL")
+          if [[ "$AUDIT_DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+          if [[ "$AUDIT_PUSH_SCAN" != "true" ]]; then args+=(--no-push-scan); fi
+          node .cms-platform/scripts/audit-scheduled-runs.js "${args[@]}"
