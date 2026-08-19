@@ -41,6 +41,10 @@ const PLATFORM_META_SPECS = [
   "cms-posts-list-enhance.spec.js",
   "e2e-posts-public-exclusion.test.js",
   "admin-bundle-parity.spec.js",
+  // Lints every workflow in THIS repo for `${{ x && '' || y }}` — an expression
+  // that silently returns `y` unconditionally. Platform-internal: a consumer has
+  // no platform workflows to lint.
+  "expression-empty-truthy-branch.test.js",
   // Its pure-logic unit sibling: the bump-window verdicts + the served-file
   // exclusion lock. The drift guard reads theme/lib/.../decap_config_hook.rb
   // + scripts/render-decap-config.rb (platform source absent on a consumer),
