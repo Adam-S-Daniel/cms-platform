@@ -458,7 +458,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.87`** — `v0.1.0`–`v0.1.87` are all tagged GitHub
+**Current release: `v0.1.88`** — `v0.1.0`–`v0.1.88` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 That number is also carried by the two plugin manifests (`plugin.json` +
 `.claude-plugin/plugin.json`), and `release.yml` REFUSES to cut a tag whose
