@@ -742,6 +742,37 @@ lookup no longer folds an auth/API failure into the same green `exit 0` as
 anything but a genuine 404. → read `docs/SYNC.md` for the full evidence,
 posture-cost, and wildcard-matcher detail.
 
+### A pin carries no version comment - lint-locked (2026-08-20)
+
+The managed half of this file states the rule; these two specs are what stop it
+drifting back. Eleven PRs stripped every trailing `# vX.Y.Z (YYYY-MM-DD)` label
+fleet-wide and deleted the machinery that regenerated them, but nothing then
+ASSERTED the absence - and a convention with no verifier returns the first time
+an agent helpfully labels a SHA it just bumped, which is how the labels drifted
+out of true to begin with.
+
+- `e2e/action-pin-comment-lint.test.js` - the PLATFORM half: this repo's
+  `.github/workflows/`, the `.github/actions/*/action.yml` composites, and the
+  `examples/site` thin-caller templates. Registered in `PLATFORM_META_SPECS`.
+- `e2e/consumer-action-pin-comment-lint.test.js` - the CONSUMER half: a site's
+  own `.github` tree, where most of the fleet's pinned `uses:` lines actually
+  live. Deliberately NOT registered (the #244 lesson - registering it would
+  testIgnore it on the exact lane it exists for). Do not "tidy" it onto the list.
+
+Both drive one detector, `e2e/pin-comment-rules.js`, so they cannot drift apart.
+
+It PARSES, and that is what makes it correct rather than merely house-style
+compliant. YAML comments are outside the data model, so `YAML.parse()` drops
+them - but `YAML.parseDocument()` keeps a same-line trailing comment as
+`node.comment` (verified against `yaml` 2.9.0 for plain, quoted,
+last-line-no-newline, composite-action and flow-mapping shapes), so no lexical
+fallback is needed. A line scan would also be WRONG here: two legal shapes carry
+a version token in the VALUE - `…/e2e-tests.yml@v0.1.88` and
+`docker://alpine:3.20` - and a regex over the line flags both. The detector
+reads only the comment, so a tag-pinned own-account ref, a `./local` path and a
+`docker://` ref are inherently untouched; there is no carve-out to get wrong.
+A trailing comment that is not a version (`# zizmor: ignore[...]`) stays legal.
+
 ## Consumer-context spec rule (v0.1.5)
 
 A spec that runs in CONSUMER mode (`SITE_ROOT` set) must never read admin
