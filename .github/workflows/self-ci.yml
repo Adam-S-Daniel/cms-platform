@@ -95,7 +95,7 @@ permissions:
 # times to completion instead of once. These are the FAST lanes (target: a few
 # minutes, no browser, no AWS), so the bill is small — and runner minutes are
 # recoverable where a wedged required check is not. Locked by
-# e2e/required-context-concurrency.test.js.
+# e2e/required-context-cancellable.test.js.
 
 jobs:
   # ── 1. actionlint — static analysis of every workflow YAML ───────────────

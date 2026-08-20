@@ -102,6 +102,36 @@ const ISSUE_TITLE = "Workflow runs are failing (automated health audit)";
 // health signal. `action_required` never occurs for schedule events. That
 // exclusion is RUN-level only — see isRunnerStarvationRun for the case where
 // the RUN says `failure` but its only job was cancelled without a runner.
+//
+// DO NOT ADD `cancelled` HERE, AND #289 IS THE REASON SOMEONE WILL WANT TO.
+// A job GitHub kills at its `timeout-minutes` wall reports conclusion
+// `cancelled`, NOT `timed_out` — so when three REQUIRED contexts on
+// adamdaniel.ai (#3202, #3217) died on a 30-minute wall, this audit was silent
+// even though `timed_out` sits in the list right above. The temptation is to
+// close that by admitting `cancelled`. It cannot be done here, for two
+// independent reasons:
+//
+//   1. IT WOULD DISARM THE RUNNER-STARVATION CARVE-OUT. The suppression this
+//      audit depends on (isRunnerStarvationRun, below) is ITSELF a
+//      cancelled-jobs shape: `runner_id: 0`, no runner name, no steps. Treating
+//      `cancelled` as bad at run level makes that suppression meaningless, and
+//      the alert channel goes back to crying wolf on every runner outage.
+//   2. IT IS THE WRONG LANE ANYWAY. This audit scans `event=schedule` and
+//      `event=push` on the default branch. A required context wedging a merge
+//      is an `event=pull_request` run, which neither query returns. A detector
+//      for "a context named in a live ruleset ended cancelled" would be a THIRD
+//      lane over open PRs and their check rollups, needing `pull-requests: read`
+//      + `checks: read`, and needing to distinguish a cancelled run superseded
+//      by a later push (routine, constant) from a cancelled run still sitting on
+//      the PR's CURRENT head sha with no successful sibling for that context
+//      (the wedge). That is a separate change with its own evidence and its own
+//      false-positive tuning, not a one-word edit to this array.
+//
+// The cause is instead prevented at the source, which is where it is cheap:
+// `e2e/required-context-cancellable.test.js` and its CONSUMER-mode sibling
+// reject a `timeout-minutes` on any job that publishes a required context, and
+// `parity-preview.yml` / `preview-media.yml` now carry the wall on a work job
+// whose conclusion no ruleset names.
 const BAD_CONCLUSIONS = ["failure", "startup_failure", "timed_out"];
 // Cap the VISIBLE per-workflow run links (a */5 cron can fail dozens of times
 // a day); every run id is still recorded in the hidden run-ids block, so the

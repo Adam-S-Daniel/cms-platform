@@ -1,16 +1,16 @@
 // @lane: local — pure-fs, CONSUMER-ONLY lint (parses with the `yaml` library,
 // never regex) asserting that no job publishing one of a consumer's REQUIRED
-// status contexts sits in a `concurrency` group.
+// status contexts can end up `cancelled`.
 //
 // WHY THIS EXISTS — THE HALF ITS PLATFORM SIBLING CANNOT COVER
 // ------------------------------------------------------------
-// `e2e/required-context-concurrency.test.js` enforces the same rule on the
+// `e2e/required-context-cancellable.test.js` enforces the same invariant on the
 // PLATFORM tree and on the canonical thin-caller TEMPLATES under this repo's
 // examples/ directory. It is registered in playwright.config.js's
 // PLATFORM_META_SPECS — it has to be, because it reads the platform's own
 // workflow definitions — and `playwright.config.js` testIgnore's every registered
 // name on a CONSUMER lane. So the sibling can never run on adamdaniel.ai or
-// jodidaniel.com, which are the only two repos where cms-platform#285 actually
+// jodidaniel.com, which are the only two repos where this class of bug actually
 // wedges a pull request. A template lint proves what a site COPIED FROM; only a
 // consumer-mode lint proves what a site SHIPS.
 //
@@ -30,23 +30,42 @@
 // place from the platform checkout). `github.workspace` is the CONSUMER root in
 // both, so one value is correct for both.
 //
-// ── THE RULE ─────────────────────────────────────────────────────────────
+// ── THE INVARIANT ────────────────────────────────────────────────────────
 //
-// A job publishing a REQUIRED status context carries NO `concurrency`
-// declaration, at any of the four sites that can govern it (caller workflow,
-// caller job, reusable workflow, reusable job). Once two runs share a group key
-// AND a head SHA, GitHub cancels one, and a CANCELLED required context
+// NO REQUIRED STATUS CONTEXT MAY END `cancelled`. A cancelled required check
 // hard-blocks the merge: the API answers
 // `405 Required status check "<ctx>" is cancelled`, which nothing overrides — not
 // native auto-merge, not an explicit merge call, not a nudge bot, not an admin.
-// The PR reads all-green and simply never lands, non-deterministically.
+// The PR reads all-green and simply never lands.
 //
-// The "narrow the triggers instead" escape hatch does not exist. Measured on
-// adamdaniel.ai PR #3006 (2026-08-09): opened 01:57:10Z, head_ref_force_pushed
-// 01:57:38Z, and two visual-regression runs BOTH created 01:57:41Z on head_sha
-// 68d7c777 — webhook latency dispatches the `opened` run after the force-push has
-// already advanced the ref. `opened` and `synchronize` cannot be removed (the
-// required context would never report), so no trigger set is collision-free.
+// TWO CAUSES HAVE SHIPPED HERE, AND THE SECOND IS WHY THIS FILE IS NO LONGER
+// NAMED AFTER THE FIRST:
+//
+//   1. A `concurrency` group governing the publishing job (cms-platform#285).
+//      Measured on adamdaniel.ai PR #3006 (2026-08-09): opened 01:57:10Z,
+//      head_ref_force_pushed 01:57:38Z, and two visual-regression runs BOTH
+//      created 01:57:41Z on head_sha 68d7c777 — webhook latency dispatches the
+//      `opened` run after the force-push has already advanced the ref. `opened`
+//      and `synchronize` cannot be removed (the required context would never
+//      report), so no trigger set is collision-free.
+//   2. A `timeout-minutes` ON the publishing job (cms-platform#289). v0.1.87
+//      deleted every group from every required-context publisher; four days
+//      later three required contexts on adamdaniel.ai still concluded
+//      `cancelled` — `parity / parity` at 30m26s (#3217) and 30m16s (#3202),
+//      `preview-media / preview-media` at 30m20s (#3217) — all on a 30-minute
+//      wall with no group anywhere near them. GitHub reports a job it killed at
+//      its wall as `cancelled`, NOT `timed_out`, which is exactly why nothing
+//      alerted: `timed_out` is already in audit-scheduled-runs.js's
+//      BAD_CONCLUSIONS and `cancelled` necessarily is not.
+//
+// `cancellationHazards()` also reports two shapes that have never shipped here —
+// `fail-fast` on a matrix publisher, and a `needs:` gate with no `always()` — for
+// the reason the rename exists: a guard named after one cause does not grow a
+// second one on its own.
+//
+// WHAT NONE OF IT SEES: a human pressing Cancel, `gh run cancel`, GitHub's
+// 6-hour job and 35-day run ceilings, a runner evicted mid-job. Those are not in
+// the workflow text and no static lint over that text can find them.
 //
 // ── THE ORACLE CAVEAT, STATED HONESTLY ───────────────────────────────────
 //
@@ -68,7 +87,7 @@
 // registry's `workflows-def` detector treats a require of that helper as an
 // UNCONDITIONAL platform-internal signal, which would force this file into
 // PLATFORM_META_SPECS and undo everything above. The shared MATCHER logic lives
-// in `e2e/required-context-concurrency-utils.js`, which names no path at all and
+// in `e2e/required-context-cancellable-utils.js`, which names no path at all and
 // so carries no signal for either spec to inherit. Same shape as
 // `e2e/dependabot-config-utils.js` and its consumer-only caller.
 //
@@ -83,13 +102,13 @@ const YAML = require("yaml");
 const { test, expect } = require("./base");
 const {
   publishKind,
-  concurrencyDeclarations,
+  cancellationHazards,
   reusableBasename,
   splitContext,
   requiredContexts,
   workflowOn,
   FIX_ADVICE,
-} = require("./required-context-concurrency-utils");
+} = require("./required-context-cancellable-utils");
 
 const CONSUMER = !!process.env.SITE_ROOT;
 const SITE_ROOT = process.env.SITE_ROOT || null;
@@ -125,7 +144,7 @@ const CONSUMER_RULESET = "consumer-main";
 
 const SKIP_REASON =
   "SITE_ROOT is unset (platform self-CI) — a consumer's own .github/workflows tree and its " +
-  ".cms-platform checkout are not present here; see e2e/required-context-concurrency.test.js " +
+  ".cms-platform checkout are not present here; see e2e/required-context-cancellable.test.js " +
   "for the platform-mode coverage of this same rule against the platform tree and the " +
   "canonical thin-caller templates.";
 
@@ -204,10 +223,13 @@ function consumerContexts() {
   return contexts;
 }
 
-// Scan the consumer's callers for required contexts sitting in a group. Mirrors
-// scanCallers() in the platform sibling exactly — same matcher module, same four
-// declaration sites, same bare/two-part context handling — differing only in
-// which trees it reads.
+// Scan the consumer's callers for required contexts that can end cancelled.
+// Mirrors scanCallers() in the platform sibling exactly — same matcher module,
+// same `cancellationHazards()` cause set, same bare/two-part context handling —
+// differing only in which trees it reads. Both go through the ONE hazard function
+// on purpose: a cause added there arms this consumer lane in the same commit,
+// which is precisely what did not happen when the guard was named after
+// `concurrency` alone.
 function scan() {
   // callerFiles() FIRST: it is the function that asserts all three trees exist,
   // with messages that name the missing one and say what its absence means. Read
@@ -253,10 +275,10 @@ function scan() {
             unreadable.push(
               `${callerName} job \`${callerJob.name}\` publishes the first half of required ` +
                 `context \`${context}\` through \`uses: ${(callerJob.value || {}).uses}\`, which ` +
-                `does not resolve under ${REUSABLE_DIR}. The no-concurrency rule is UNENFORCED ` +
-                `for this context.`,
+                `does not resolve under ${REUSABLE_DIR}. The never-cancelled invariant is ` +
+                `UNENFORCED for this context.`,
             );
-            for (const { where, what } of concurrencyDeclarations({
+            for (const { where, what, fix } of cancellationHazards({
               callerDoc: caller.doc,
               callerJob: callerJob.value,
             })) {
@@ -264,7 +286,7 @@ function scan() {
                 `${callerName} → required context \`${context}\` (caller job ` +
                   `\`${callerJob.name}\` matched by ${how}; reusable ` +
                   `\`${(callerJob.value || {}).uses}\` UNREADABLE, so only the caller side was ` +
-                  `checked) — ${where} declares ${what}. DELETE that block.`,
+                  `checked) — ${where} ${what}. ${fix}`,
               );
             }
             continue;
@@ -272,17 +294,17 @@ function scan() {
           for (const reusableJob of reusable.jobList) {
             if (!publishKind(reusableJob.name, reusableJob.value, reusableHalf)) continue;
             resolved.set(context, resolved.get(context) + 1);
-            const decls = concurrencyDeclarations({
+            const decls = cancellationHazards({
               callerDoc: caller.doc,
               callerJob: callerJob.value,
               reusableDoc: reusable.doc,
               reusableJob: reusableJob.value,
             });
-            for (const { where, what } of decls) {
+            for (const { where, what, fix } of decls) {
               offenders.push(
                 `${callerName} → required context \`${context}\` (caller job ` +
                   `\`${callerJob.name}\` matched by ${how}; reusable ${basename} job ` +
-                  `\`${reusableJob.name}\`) — ${where} declares ${what}. DELETE that block.`,
+                  `\`${reusableJob.name}\`) — ${where} ${what}. ${fix}`,
               );
             }
           }
@@ -290,15 +312,15 @@ function scan() {
         }
 
         resolved.set(context, resolved.get(context) + 1);
-        const decls = concurrencyDeclarations({
+        const decls = cancellationHazards({
           callerDoc: caller.doc,
           callerJob: callerJob.value,
           reusableDoc: reusable ? reusable.doc : null,
         });
-        for (const { where, what } of decls) {
+        for (const { where, what, fix } of decls) {
           offenders.push(
             `${callerName} → required context \`${context}\` (job \`${callerJob.name}\` matched ` +
-              `by ${how}) — ${where} declares ${what}. DELETE that block.`,
+              `by ${how}) — ${where} ${what}. ${fix}`,
           );
         }
       }
@@ -308,7 +330,7 @@ function scan() {
   return { contexts, offenders, unreadable, resolved, examined };
 }
 
-test.describe("this consumer's required contexts sit in no concurrency group", () => {
+test.describe("this consumer's required contexts can never end `cancelled`", () => {
   // Fail-on-zero, asserted before the rule itself so a harness that reads nothing
   // is distinguishable from a tree that is clean.
   test("this consumer's callers, reusables and ruleset manifest were all read", () => {
@@ -343,13 +365,14 @@ test.describe("this consumer's required contexts sit in no concurrency group", (
     expect(
       unreadable,
       `a caller in this consumer publishes a required context through a reusable this lint ` +
-        `cannot read under .cms-platform/, so the no-concurrency rule is UNENFORCED for it. ` +
+        `cannot read under .cms-platform/, so the never-cancelled invariant is UNENFORCED for ` +
+        `it. ` +
         `Either the caller's \`uses:\` drifted off the pinned platform or the \`.cms-platform\` ` +
         `checkout is incomplete — fix that, do not widen this lint.`,
     ).toEqual([]);
   });
 
-  test("no job publishing a required context declares a `concurrency:` block", () => {
+  test("no job publishing a required context can be cancelled structurally", () => {
     test.skip(!CONSUMER, SKIP_REASON);
 
     const { offenders } = scan();

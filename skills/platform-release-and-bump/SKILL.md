@@ -97,12 +97,21 @@ bash ~/repos/cms-platform/scripts/verify-consumer-pins.sh --platform-dir ~/repos
 It asserts `platform.lock`'s `platform_ref`, that NO other platform version ref
 survives in `platform.lock` / `Gemfile` / `Gemfile.lock` / `.github/workflows/`,
 that every workflow parses as YAML, and then runs
-`check-platform-pin-consistency.js --require-canonical` (all 96 checks, parity
-included). **A green run of this script — not a visual diff review, and not a
-report that says the edits look complete — is what makes a consumer bump done.**
-Never substitute the bare checker: without `--require-canonical` (and a canonical
-set) it degrades to 61 checks, silently dropping the workflow-SET and
-workflow-CONTENT parity that police a consumer's `secrets:` map.
+`check-platform-pin-consistency.js --require-canonical`, parity included.
+**A green run of this script — not a visual diff review, and not a report that
+says the edits look complete — is what makes a consumer bump done.** Never
+substitute the bare checker: without `--require-canonical` (and a canonical set)
+it skips the workflow-SET and workflow-CONTENT parity that police a consumer's
+`secrets:` map, and still exits 0. It does say so — a degraded run prints a
+"workflow-set parity skipped" notice and ends "parity is UNVERIFIED" rather than
+"Pins are consistent" — but an exit-0 run with a notice is one CI does not fail
+on, which is why the flag, not the reader, has to be the thing that enforces it.
+Don't look for a fixed check COUNT here — it is
+derived from how many pin references the consumer's tree carries and moves with
+every workflow added or removed, which is why the numbers this paragraph used to
+quote ("96", degrading to "61") were both stale when measured on 2026-08-20 (90
+and 57, on both consumers, at `platform_ref` v0.1.86). Read the count off the
+script's own summary line, which prints the real one every run.
 
 If it reports a mismatch, a reference was missed (commonly `Gemfile.lock`'s
 `revision:` on jodidaniel, or a stale `# vX.Y.Z` trailing comment). Fix, re-run.

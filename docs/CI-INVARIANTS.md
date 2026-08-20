@@ -370,9 +370,9 @@ status context AND can be triggered more than once on the same sha
 (label/multi-event triggers) must have NO `concurrency` group — a cancelled
 required run is a hard, non-deterministic merge block. Locked by
 `workflow-graph.test.js` for `validate-content`, and, since #285, for EVERY
-required context by `e2e/required-context-concurrency.test.js` (platform tree +
+required context by `e2e/required-context-cancellable.test.js` (platform tree +
 the `examples/site` templates) and its CONSUMER-mode sibling
-`e2e/consumer-required-context-concurrency.test.js` (a consumer's own callers
+`e2e/consumer-required-context-cancellable.test.js` (a consumer's own callers
 plus the reusables in its `.cms-platform/` checkout).
 
 **The `push`/`synchronize` carve-out was withdrawn at #285.** This paragraph used
@@ -402,6 +402,72 @@ has drifted, and `check-platform-pin-consistency.js`'s `structuralShape()`
 compares `permissions` + `jobs.*` with `on:` deliberately excluded. A
 template-only trigger change reaches neither live site, while a lint reading
 `examples/site/` reports green forever.
+
+### A `timeout-minutes` is the SECOND route to a cancelled required check (#289)
+
+Everything above is about `concurrency`, and it is still true. It is also only
+half the hazard, and naming the guard after that half is what let the other half
+ship. **A job GitHub kills at its `timeout-minutes` wall reports conclusion
+`cancelled`, not `timed_out`** — so it lands on the same unblockable
+`405 Required status check "<ctx>" is cancelled` as a group-cancelled run, by a
+completely different mechanism.
+
+v0.1.87 removed every `concurrency` group from every required-context publisher.
+Four days later, three required contexts on adamdaniel.ai concluded `cancelled`
+anyway, each sitting exactly on a 30-minute wall with no group within reach:
+
+| PR | context | window | duration |
+| --- | --- | --- | --- |
+| #3217 | `preview-media / preview-media` | 15:22:25Z → 15:52:45Z | 30m20s |
+| #3217 | `parity / parity` | 15:22:19Z → 15:52:45Z | 30m26s |
+| #3202 | `parity / parity` | 04:40:11Z → 05:10:27Z | 30m16s |
+
+**Scope it honestly.** Neither PR was all-green-but-unmergeable — both also
+carried `e2e / e2e: failure`, so both were blocked for an ordinary reason too.
+What is demonstrated is the MECHANISM, not the wedge. The wedge is what the
+mechanism produces the first time it lands on an otherwise-green PR.
+
+**Aggravating:** deleting the groups increases runner QUEUEING, and queueing is
+charged against the same wall. The #285 fix plausibly makes this route MORE
+likely, not less.
+
+**The fix, and why it is not a bigger number.** A larger wall moves the number
+and keeps the failure mode. Instead the wall moves onto a job whose conclusion no
+ruleset requires, and the required context is published by a gate that cannot be
+killed at a wall:
+
+- `parity-preview.yml` — work job `parity-probe` (keeps `timeout-minutes: 30`),
+  gate job `parity` (`needs: parity-probe`, `if: ${{ always() }}`, no timeout)
+  which exits non-zero unless `needs.parity-probe.result == 'success'`.
+- `preview-media.yml` — the same split as `media-probe` + `preview-media`.
+
+This is not a new pattern: `e2e-tests.yml` already publishes `e2e / e2e` from an
+`if: always()` job over its `project` matrix, and `visual-regression.yml`
+publishes `visual-regression / approve-regression` the same way. Both live in the
+PLATFORM reusable, so a `platform_ref` bump carries the fix to both consumers —
+the same travel property the `concurrency` removal has.
+
+**The guard was renamed, not just widened.** `required-context-concurrency*` →
+`required-context-cancellable*` (and its shared
+`required-context-cancellable-utils.js`), because the property that matters is
+the OUTCOME: **no required context may end `cancelled`**. Its
+`cancellationHazards()` now reports four structural causes — a `concurrency`
+declaration at any of the four governing sites, a `timeout-minutes` on the
+publishing job, `strategy.fail-fast` not explicitly `false` on a matrix
+publisher, and a publisher with `needs:` whose `if:` never says `always()` (the
+twin failure, where the gate SKIPS instead of reddening).
+
+**What no static lint over workflow text can see, stated so nobody infers
+coverage:** a human pressing Cancel, `gh run cancel`, GitHub's 6-hour job and
+35-day run ceilings, a runner evicted mid-job, an org-level cancellation policy.
+
+**Do not fix this by adding `cancelled` to `audit-scheduled-runs.js`'s
+`BAD_CONCLUSIONS`.** That list excludes `cancelled` necessarily: the
+runner-starvation carve-out that audit depends on is itself a cancelled-jobs
+shape, so admitting `cancelled` would make that suppression meaningless. A
+detector for "a context named in a live ruleset ended cancelled" would also be
+looking at the wrong lane — that audit scans `event=schedule` and `event=push` on
+the default branch, and this failure happens on `event=pull_request`.
 
 ## E2E workflow matrix (ported)
 

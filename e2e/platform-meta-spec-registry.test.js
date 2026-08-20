@@ -73,9 +73,10 @@ const CONFIG = path.join(E2E_DIR, "playwright.config.js");
 // the config (which has env/webServer side effects). AST, not regex — a
 // `PLATFORM_META_SPECS = [ ... ]` array literal can legitimately carry a
 // comment that itself quotes a `*.test.js`/`*.spec.js` name — playwright.
-// config.js still does, in the note beside "required-context-concurrency.
-// test.js" naming the CONSUMER-mode siblings that are deliberately NOT
-// registered — and a regex scanning the array BODY for quoted spec-like
+// config.js still does, in the note beside "required-context-cancellable.
+// test.js" — which quotes both the CONSUMER-mode sibling that is deliberately
+// NOT registered AND the file's own pre-#289 name, a name with no file on disk
+// at all — and a regex scanning the array BODY for quoted spec-like
 // tokens cannot distinguish that comment text from a real element. The
 // original instance was a "DEFERRED, NOT FORGOTTEN" comment quoting a spec
 // held BACK, which the old extractor silently counted as registered; that
@@ -447,9 +448,9 @@ test.describe("#16 PLATFORM_META_SPECS recurrence guard", () => {
 
   // REGRESSION WITNESS — a comment-only mention of a spec name inside the
   // array literal must never be counted as a registered element. This is the
-  // exact shape of the live false positive: playwright.config.js carries a
-  // "DEFERRED, NOT FORGOTTEN" comment quoting "required-context-concurrency.
-  // test.js" as an entry deliberately held back (no such file exists yet), and
+  // exact shape of the live false positive: playwright.config.js carried a
+  // "DEFERRED, NOT FORGOTTEN" comment quoting a spec name as an entry
+  // deliberately held back (no such file existed), and
   // the OLD regex-over-array-body extractor could not tell that quoted comment
   // text apart from a real element, so it counted the deferred name as
   // registered and turned "every registered meta-spec name exists on disk"

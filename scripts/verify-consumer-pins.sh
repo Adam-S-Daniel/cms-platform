@@ -23,9 +23,24 @@
 #      this script goes red. Was an inline `awk`; output format is unchanged
 #      (verified byte-identical against the awk it replaced).
 #   3. Every .github/workflows file parses as YAML.
-#   4. check-platform-pin-consistency.js passes with --require-canonical (all 96
-#      checks, including workflow-SET + workflow-CONTENT parity — the guard
-#      degrades to 61 checks and still says "Pins are consistent" without it).
+#   4. check-platform-pin-consistency.js passes with --require-canonical, which
+#      is what makes workflow-SET + workflow-CONTENT parity actually RUN. Without
+#      it the guard skips both and still EXITS 0 — which is the whole reason the
+#      flag exists. It is not silent about it, and has not been since the summary
+#      was hardened: a degraded run prints a "workflow-set parity skipped" notice
+#      and ends "Pin references are consistent; parity is UNVERIFIED", never the
+#      words "Pins are consistent" (see `okSummary`). It USED to report a clean
+#      consistent verdict, and that is the incident the flag was added for. Pass
+#      the flag anyway: a notice on an exit-0 run is a thing CI does not fail on
+#      and a human scrolls past, so "loud" is not the same as "enforced".
+#      NO CHECK COUNT IS NAMED HERE ON PURPOSE. This header used to advertise
+#      "all 96 checks ... degrades to 61", and both numbers were wrong by the
+#      time anyone read them: the count is DERIVED from how many pin references
+#      the consumer's tree carries, so it moves with every workflow added or
+#      removed. Measured 2026-08-20 against platform_ref v0.1.86: 90 with the
+#      canonical set on BOTH adamdaniel.ai and jodidaniel.com, 57 without.
+#      A number in a comment cannot be kept true; the script prints the real one
+#      on every run ("all N platform-consistency check(s)"), so read it there.
 #
 # USAGE
 #   scripts/verify-consumer-pins.sh [--platform-dir <path>]
@@ -46,7 +61,13 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     -h | --help)
-      sed -n '1,26p' "$0"
+      # Print the header by finding where it ENDS, never by a line number. A
+      # hardcoded range was '1,26p' against a 33-line header, so `--help`
+      # truncated mid-sentence inside "WHAT IT CHECKS" and never reached USAGE.
+      # Replacing one stale number with a fresh one just resets that clock — and
+      # would contradict item 4 above, which argues a number in a comment cannot
+      # be kept true. This form re-measures on every run.
+      sed -n '/^set -euo pipefail/q;p' "$0"
       exit 0
       ;;
     *)
