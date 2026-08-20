@@ -383,10 +383,20 @@ function renderDeadWorkflows(workflows) {
 
 // Grouped markdown findings: one section per failing workflow, newest runs
 // first, links capped at MAX_LINKS_PER_WORKFLOW per workflow.
-function renderFindings(runs) {
+//
+// `noun` names what the runs ARE, because this renderer serves BOTH lanes. It
+// used to hardcode "scheduled run", which is how the push lane shipped saying
+// "**secrets-scan.yml** — 8 failing SCHEDULED run(s)" underneath a heading that
+// said "Failing default-branch PUSH runs" — observed in the wild on
+// adamdaniel.ai#3173 (comment 5350014233) the first time the push lane ever ran
+// against real data. The existing test asserted the section HEADING and never
+// the line beneath it, so the contradiction was invisible to CI: a text
+// assertion that checks the characters you thought about, not the ones you did
+// not.
+function renderFindings(runs, noun = "scheduled run") {
   const lines = [];
   for (const [name, list] of groupByWorkflow(runs)) {
-    lines.push(`**${name}** — ${list.length} failing scheduled run(s):`);
+    lines.push(`**${name}** — ${list.length} failing ${noun}(s):`);
     for (const r of list.slice(0, MAX_LINKS_PER_WORKFLOW)) {
       lines.push(`- [${r.conclusion} — ${r.run_started_at || r.created_at}](${r.html_url})`);
     }
@@ -419,7 +429,7 @@ function renderSections(runs, dead, pushRuns, defaultBranch) {
       `**Failing default-branch push runs** (\`event=push\` on \`${defaultBranch}\` ending in ` +
         `\`${BAD_CONCLUSIONS.join("` / `")}\`):`,
       "",
-      renderFindings(pushRuns),
+      renderFindings(pushRuns, "default-branch push run"),
     );
   }
   if ((dead || []).length > 0) {

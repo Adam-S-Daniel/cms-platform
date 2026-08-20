@@ -18,6 +18,12 @@ on:
   pull_request:
     # No `edited`: a skipped caller emits NO check-run, so an `edited` run WITHDRAWS
     # contexts an earlier run reported green — only a new SHA restores them (#222).
+    #
+    # `reopened` is back (cms-platform#285). It was briefly dropped because the
+    # reusable grouped its runs and a reopen re-enters that group on the same head
+    # SHA; the reusable now carries NO `concurrency:` block at all, so nothing can
+    # cancel anything and this list matches every other required-context caller
+    # here and on both live consumers.
     types: [opened, synchronize, reopened]
     branches:
       - main

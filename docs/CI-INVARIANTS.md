@@ -368,10 +368,40 @@ real fix removed the concurrency entirely at v0.1.28). `cms-editorial-workflow.y
 `validate-content` was the offender. **Rule:** any job that produces a REQUIRED
 status context AND can be triggered more than once on the same sha
 (label/multi-event triggers) must have NO `concurrency` group — a cancelled
-required run is a hard, non-deterministic merge block. (Workflows triggered only
-by `push`/`synchronize` — each a new sha — are safe to cancel; `secrets-scan` +
-`visual-regression` keep `cancel-in-progress: true` for that reason.) Locked by
-`workflow-graph.test.js`.
+required run is a hard, non-deterministic merge block. Locked by
+`workflow-graph.test.js` for `validate-content`, and, since #285, for EVERY
+required context by `e2e/required-context-concurrency.test.js` (platform tree +
+the `examples/site` templates) and its CONSUMER-mode sibling
+`e2e/consumer-required-context-concurrency.test.js` (a consumer's own callers
+plus the reusables in its `.cms-platform/` checkout).
+
+**The `push`/`synchronize` carve-out was withdrawn at #285.** This paragraph used
+to end "(Workflows triggered only by `push`/`synchronize` — each a new sha — are
+safe to cancel; `secrets-scan` + `visual-regression` keep `cancel-in-progress:
+true` for that reason.)" Its premise is false, measured on adamdaniel.ai PR #3006
+(2026-08-09): the PR opened at 01:57:10Z, a force-push moved the head at
+01:57:38Z, and visual-regression runs 31289327061 (cancelled) and 31289327099
+(skipped) were BOTH created at 01:57:41Z carrying head_sha `68d7c777` — webhook
+delivery latency dispatches the `opened` run after the force-push has already
+advanced the ref, so the two land on one sha. That time the cancelled check-run
+was the non-required `visual-regression / generate`, so it was a near-miss. And
+`opened`/`synchronize` cannot be narrowed away — without them the required
+context never reports — so **no trigger set makes a shared key collision-free**.
+
+`secrets-scan.yml`, `visual-regression.yml` and `self-ci.yml` therefore carry NO
+`concurrency:` block at all as of #285. The cost is accepted knowingly:
+superseded runs finish instead of being cancelled, so a rapidly-pushed PR burns
+several full runs of each lane. Runner minutes are recoverable; a wedged required
+check has no operator remedy.
+
+Note also **where** each half of the fix can travel. `concurrency` lives in the
+PLATFORM reusable, so a `platform_ref` bump carries its removal to both consumers
+automatically. A `pull_request.types` narrowing would NOT have: `platform-bump.yml`
+seeds only a wholly-MISSING caller and leaves an existing one alone even when it
+has drifted, and `check-platform-pin-consistency.js`'s `structuralShape()`
+compares `permissions` + `jobs.*` with `on:` deliberately excluded. A
+template-only trigger change reaches neither live site, while a lint reading
+`examples/site/` reports green forever.
 
 ## E2E workflow matrix (ported)
 

@@ -37,8 +37,23 @@ function listWorkflows() {
 
 // Parse YAML text → plain JS object with anchors/aliases fully resolved.
 // Use for any structural assertion (jobs, steps, on, permissions, …).
+//
+// `merge: true` resolves YAML MERGE KEYS (`<<: *anchor`). It is off by default in
+// `yaml` v2 because merge keys are a YAML 1.1 feature, and leaving it off makes
+// `<<` survive as a LITERAL KEY: a job written `<<: *defaults` parses to own keys
+// `['<<', 'uses']`, so every structural lint that asks "does this job declare X?"
+// answers no — for a key that a merge-key-honouring parser plainly sees. That is
+// a parser-level blind spot underneath EVERY workflow lint here, not just one, so
+// it is closed at the shared seam rather than per-spec.
+//
+// Whether GitHub Actions itself honours `<<` could not be verified from this
+// sandbox (no network), and the fix is deliberately chosen to be correct either
+// way: if GitHub honours it, this closes a real hole; if GitHub rejects it, the
+// workflow never runs and reporting on it costs nothing. No workflow in this repo
+// or in either consumer contains a merge key today (grepped), so enabling it is a
+// behavioural no-op on the current tree — the verifier count is unchanged.
 function parseYaml(text) {
-  return YAML.parse(text);
+  return YAML.parse(text, { merge: true });
 }
 
 // 1-based source line containing byte offset `off`.
@@ -73,7 +88,10 @@ function jobSubBlock(text, jobName, key) {
 // `comment` is the comment block immediately above the job head (the
 // dependabot allow-list lint reads it). Returns [] when there are none.
 function jobs(text) {
-  const root = YAML.parse(text) || {};
+  // `merge: true` for the same reason as parseYaml() above — this is the read
+  // that produces each job's VALUE, so a `concurrency:` arriving through a merge
+  // key must be visible here too or a job-level lint sees a job that isn't there.
+  const root = YAML.parse(text, { merge: true }) || {};
   const jobsObj = (root && root.jobs) || {};
   const doc = YAML.parseDocument(text);
   const jobsPair = ((doc.contents && doc.contents.items) || []).find(
