@@ -65,6 +65,18 @@ const PLATFORM_META_SPECS = [
   "admin-spec-source-read-lint.test.js",
   "admin-theme-removed.test.js",
   "analytics-cloudwatch-rum.test.js",
+  // The "a pin carries no version comment" gate (2026-08-20). Reads THIS repo's
+  // .github/workflows + .github/actions composite definitions and the
+  // examples thin-caller TEMPLATES — none of which a consumer ships in that
+  // position — so it is platform-internal and testIgnored on a CONSUMER lane.
+  //
+  // Registering it covers only HALF the surface: the platform tree and the
+  // templates a site copies FROM, never the copies a site actually ships, which
+  // is where most of the fleet's pinned `uses:` lines live. The other half is
+  // "consumer-action-pin-comment-lint.test.js", deliberately absent from this
+  // list for the same cms-platform#244 reason as the three consumer specs named
+  // above. Do not "tidy" it on.
+  "action-pin-comment-lint.test.js",
   "auto-merge-uses-queue.test.js",
   // #33 — platform-internal: the base_collections capability helper's unit
   // test (drives the platform's TWO fixtures) + the build-and-run meta proof
