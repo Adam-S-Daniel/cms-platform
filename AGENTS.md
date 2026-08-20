@@ -782,6 +782,47 @@ platform-internal spec ships green here and red-fails on the next consumer.
 → read `docs/CONSUMER-COMPATIBILITY.md` before writing a new e2e spec or
 touching `PLATFORM_META_SPECS`.
 
+### A consumer's nudge `required_contexts` is bound to its OWN ruleset (#284)
+
+`required_contexts` is the auto-merge nudge's entire notion of "green" — the
+reusable builds `REQUIRED` from it and gates `pulls.merge()` on every member
+being green. A list SHORTER than the repo's real required set therefore asks
+for a merge it has not established. jodidaniel.com passed ONE of six for months
+(jodidaniel.com#156); it was safe only because `pulls.merge()` answered 405 on
+its behalf, i.e. safe by accident.
+
+`e2e/consumer-automerge-nudge-contexts.test.js` closes it where it has to hold —
+on the site whose branch protection is doing the waiting. It reads the manifest
+the consumer's own lane checked out (`<SITE_ROOT>/.cms-platform/repo-settings.yml`
+— every lane that runs this harness against a site checks the WHOLE platform out,
+no `sparse-checkout:`), looks the site up by `CMS_REPO`, and asserts its
+`required_contexts` equals that repo's `rulesets.main` → `ruleset_library[…]`
+→ `required_status_checks` set, is non-empty, and is ` / `-shaped throughout.
+
+Three things about it that are decisions, not accidents:
+
+- **It is deliberately NOT in `PLATFORM_META_SPECS`** — registering it would
+  testIgnore it on the CONSUMER lane it exists for (the #244 lesson that also
+  keeps `consumer-required-check-mirrors.test.js` unregistered). It requires the
+  `yaml` library DIRECTLY rather than through `workflow-yaml-utils.js`, because
+  the registry's `workflows-def` detector treats that require as an
+  unconditional platform signal; its one `.github`/`workflows` path join is
+  SITE_ROOT-rooted for the same reason.
+- **The oracle is PINNED, not live** — it is the manifest at the site's own
+  `platform_ref`, so it lags in the false-GREEN direction. Accepted knowingly:
+  reading the live ruleset is a network call this suite forbids, the window is
+  one release wide (a bump moves `platform_ref` and every `uses:@` together),
+  and a pinned check would still have caught #156 by months.
+- **A site absent from `repos:` FAILS, it does not skip.** The objection that
+  killed earlier attempts — "a scaffolded site isn't in the manifest, so it
+  needs a skip" — is the argument for failing: rulesets change only via a
+  `repo-settings.yml` PR, so absence means no MANAGED ruleset at all and a nudge
+  anchored to nothing. A soft path there would land on exactly the sites with
+  the least review behind them.
+
+The platform-side half stays `e2e/cms-automerge-nudge.test.js` (the TEMPLATE's
+list vs `ruleset_library.consumer-main`). Neither covers the other's surface.
+
 ## Editorial-workflow label audit (v0.1.6; self-heal + label-at-creation v0.1.48)
 
 Decap re-runs its editorial-workflow label migration on **every** `/admin` load
