@@ -21,8 +21,14 @@ const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 
 test.describe("parity-preview reusable exports SITE_ROOT for the consumer crawl", () => {
   const wf = parseYaml(readWorkflow("parity-preview.yml"));
-  const steps = wf.jobs.parity.steps;
-  const runStep = steps.find((s) => s.name === "Run @parity-preview specs");
+  // Found by STEP NAME across every job, never off a hardcoded `jobs.parity`.
+  // cms-platform#289 split that reusable into a `parity-probe` work job plus a
+  // `parity` gate that publishes the required context, and a job-id lookup would
+  // have thrown `Cannot read properties of undefined` on the rename rather than
+  // following the step it actually cares about.
+  const runStep = Object.values(wf.jobs || {})
+    .flatMap((job) => (job && Array.isArray(job.steps) ? job.steps : []))
+    .find((s) => s && s.name === "Run @parity-preview specs");
 
   test("the @parity-preview spec-run step exists", () => {
     expect(runStep, "Run @parity-preview specs step must exist").toBeTruthy();

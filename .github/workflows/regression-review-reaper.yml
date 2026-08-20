@@ -19,7 +19,7 @@
 # permanently, because approve-regression is a REQUIRED status context and a
 # cancelled required check hard-blocks the merge with no operator remedy (see
 # visual-regression.yml's own "NO `concurrency:` BLOCK" note, locked by
-# e2e/required-context-concurrency.test.js).
+# e2e/required-context-cancellable.test.js).
 #
 # The consequence for THIS workflow is a real, accepted timing gap: a superseded
 # run now runs `generate` to completion and can enter the gate on a STALE sha

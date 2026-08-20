@@ -113,8 +113,8 @@ permissions:
 # + Node + Playwright + ffmpeg build), and a superseded run now finishes instead
 # of being cancelled, so a rapidly-pushed PR can burn several of them. That is
 # the accepted price: runner minutes are recoverable, a wedged required check has
-# no operator remedy. Locked by e2e/required-context-concurrency.test.js and its
-# CONSUMER-mode sibling e2e/consumer-required-context-concurrency.test.js.
+# no operator remedy. Locked by e2e/required-context-cancellable.test.js and its
+# CONSUMER-mode sibling e2e/consumer-required-context-cancellable.test.js.
 #
 # ONE OTHER WORKFLOW IS COUPLED TO THIS ABSENCE: regression-review-reaper.yml.
 # Its rationale was written when the group existed — a superseded run was

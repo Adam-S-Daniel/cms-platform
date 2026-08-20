@@ -6,81 +6,110 @@
 // manifest and the platform's OWN workflow DEFINITIONS, neither of which a
 // consumer ships, so it is listed in playwright.config.js's PLATFORM_META_SPECS
 // and testIgnore'd on every CONSUMER lane. That ignore is why it is only HALF the
-// coverage: the repos where the #285 bug actually wedges a PR are the two
-// consumers, and this file cannot run there. Its CONSUMER-mode sibling
-// `e2e/consumer-required-context-concurrency.test.js` — deliberately absent from
+// coverage: the repos where this bug actually wedges a PR are the two consumers,
+// and this file cannot run there. Its CONSUMER-mode sibling
+// `e2e/consumer-required-context-cancellable.test.js` — deliberately absent from
 // the registry, reading `<SITE_ROOT>/.github/workflows/` and the consumer's own
 // `.cms-platform/` checkout — is the half that does. Neither substitutes for the
 // other: this one is the only coverage of the platform tree and the canonical
 // templates, that one the only coverage of what a site actually ships.
 //
-// ── THE TRAP: A CANCELLED REQUIRED CHECK IS AN UNBLOCKABLE MERGE BLOCK ────
+// ── THE INVARIANT: NO REQUIRED CONTEXT MAY END `cancelled` ───────────────
 //
-// A job that publishes a REQUIRED status context, sitting in a `concurrency`
-// group, will eventually leave a CANCELLED run shadowing a successful one for the
-// same context+SHA. GitHub then picks between them NON-DETERMINISTICALLY, and
-// when cancelled wins the merge API answers
+// A cancelled required check is an UNBLOCKABLE merge block. GitHub's merge API
+// answers
 //
 //     405 Required status check "<ctx>" is cancelled
 //
 // and NOTHING overrides it — not native auto-merge, not an explicit merge call,
 // not a nudge bot, not an admin. The PR reads all-green in the UI and simply
 // never lands. That is the whole reason this is a lint and not a code-review
-// note: the symptom is a PR that looks fine, the cause is one line three screens
-// away (often in another repository), and the failure is a coin flip so it does
-// not reproduce on demand.
+// note: the symptom is a PR that looks fine, and the cause is one line three
+// screens away, often in another repository.
 //
-// `cancel-in-progress: false` IS NOT THE FIX, and is the fix that looks right.
-// GitHub keeps the in-progress run plus only the LATEST pending run in a group
-// and cancels the OTHER pending duplicates, so a same-SHA burst still strands
-// cancelled runs.
+// ── WHY THE INVARIANT IS STATED AS AN OUTCOME, NOT AS A FORBIDDEN KEY ────
 //
-// ── WHY THIS IS CATEGORICAL, AND WHY THE CARVE-OUT WAS DROPPED ───────────
+// This file used to be `required-context-concurrency.test.js` and enforced ONE
+// cause: a `concurrency` declaration governing the publishing job
+// (cms-platform#285). It enforced that correctly and it is still enforced below.
+// Naming the guard after one cause is what let a SECOND one ship underneath it.
 //
-// AGENTS.md states the rule twice. The categorical sentence — "a job that
-// publishes a REQUIRED status context and can fire more than once on the same
-// head sha gets no `concurrency` block at all" — is the headline. Four bullets
-// down sits what reads as a carve-out: "Jobs triggered only by `push` /
-// `synchronize` — each a new sha — are safe to cancel."
+// v0.1.87 deleted every `concurrency` group from every required-context
+// publisher. Four days later, on adamdaniel.ai PRs #3202 and #3217, three
+// required contexts concluded `cancelled` anyway:
 //
-// An earlier version of this lint implemented the carve-out: it passed a required
-// job in a group as long as every event reaching that group brought a distinct
-// head SHA, and the fix it locked narrowed the callers' `types:` to
-// `[opened, synchronize]`. Two independent findings killed that approach.
+//     #3217  preview-media / preview-media  cancelled  15:22:25Z → 15:52:45Z  30m20s
+//     #3217  parity / parity                cancelled  15:22:19Z → 15:52:45Z  30m26s
+//     #3202  parity / parity                cancelled  04:40:11Z → 05:10:27Z  30m16s
+//
+// Every one sat on a 30-minute wall, and there was no `concurrency` group within
+// reach of any of them. `timeout-minutes` was the cause. What hid it is a GitHub
+// quirk worth writing down: A JOB KILLED AT ITS `timeout-minutes` WALL REPORTS
+// CONCLUSION `cancelled`, NOT `timed_out`. `timed_out` is already alertable in
+// scripts/audit-scheduled-runs.js's BAD_CONCLUSIONS — had the API used it, that
+// audit would have caught this without any of this file. cms-platform#289.
+//
+// SCOPE, STATED HONESTLY: neither PR was "all-green but unmergeable". Both also
+// carried `e2e / e2e: failure`, so both were blocked for an ordinary reason too.
+// What is DEMONSTRATED is the MECHANISM — a required context reaching `cancelled`
+// with no concurrency group anywhere near it. The wedge-with-everything-else-green
+// case has not been observed, and this comment does not claim it.
+//
+// AGGRAVATING, and the reason this is not "wait and see": deleting the groups in
+// v0.1.87 increases runner QUEUEING, and queueing is charged against the same
+// 30-minute wall. The #285 fix may make the #289 route MORE likely, not less.
+//
+// ── WHAT THIS LINT CAN SEE, AND WHAT IT CANNOT ──────────────────────────
+//
+// `cancellationHazards()` in required-context-cancellable-utils.js reports four
+// structural causes, each readable off parsed workflow YAML:
+//
+//   1. `concurrency` at any of the four sites that can govern the job (#285).
+//   2. `timeout-minutes` ON THE PUBLISHING JOB (#289).
+//   3. `strategy.fail-fast` not explicitly false on a MATRIX publisher.
+//   4. `needs:` without `always()` — the twin failure, where the gate SKIPS
+//      instead of reporting and the required context hangs or never reddens.
+//
+// IT CANNOT SEE: a human pressing Cancel, `gh run cancel`, GitHub's 6-hour job
+// and 35-day run ceilings, a runner evicted mid-job, an org-level cancellation
+// policy. None of those live in the workflow text, so no static lint over that
+// text can flag them. Nothing here should be read as covering them.
+//
+// ── WHY THE #285 CARVE-OUT WAS DROPPED (cause 1) ────────────────────────
+//
+// AGENTS.md states the concurrency rule twice. The categorical sentence — "a job
+// that publishes a REQUIRED status context and can fire more than once on the
+// same head sha gets no `concurrency` block at all" — is the headline. Four
+// bullets down sits what reads as a carve-out: "Jobs triggered only by
+// `push` / `synchronize` — each a new sha — are safe to cancel."
+//
+// An earlier version of this lint implemented the carve-out. Two independent
+// findings killed it.
 //
 //   1. THE PREMISE IS FALSE, MEASURED IN PRODUCTION. adamdaniel.ai PR #3006
 //      (2026-08-09): opened 01:57:10Z, head_ref_force_pushed 01:57:38Z, and
 //      visual-regression runs 31289327061 (cancelled) and 31289327099 (skipped)
 //      BOTH created 01:57:41Z carrying head_sha 68d7c777. Webhook delivery
 //      latency dispatches the `opened` run AFTER the force-push has already moved
-//      the head, so the two land on one SHA. On that occasion the required
-//      `visual-regression / approve-regression` concluded success and the
-//      cancelled check-run was the non-required `generate` — a near-miss, not an
-//      outage. And `opened`/`synchronize` cannot be narrowed away: without them
-//      the required context never reports at all. So NO trigger set makes a
-//      shared key collision-free.
-//   2. THE TRIGGER FIX CANNOT REACH PRODUCTION; THE GROUP FIX CAN. `concurrency`
-//      lives in the PLATFORM reusable, so a `platform_ref` bump carries it to
-//      both consumers. `pull_request.types` lives in the CONSUMER's own caller,
-//      and nothing propagates it — `platform-bump.yml` seeds only a WHOLLY-MISSING
-//      caller (its own comment says so) and `check-platform-pin-consistency.js`'s
+//      the head, so the two land on one SHA. And `opened`/`synchronize` cannot be
+//      narrowed away: without them the required context never reports at all. So
+//      NO trigger set makes a shared key collision-free.
+//   2. THE TRIGGER FIX CANNOT REACH PRODUCTION; THE REUSABLE-SIDE FIX CAN.
+//      `concurrency` and `timeout-minutes` both live in the PLATFORM reusable, so
+//      a `platform_ref` bump carries either fix to both consumers.
+//      `pull_request.types` lives in the CONSUMER's own caller, and nothing
+//      propagates it — `platform-bump.yml` seeds only a WHOLLY-MISSING caller
+//      (its own comment says so) and `check-platform-pin-consistency.js`'s
 //      `structuralShape()` compares `permissions` + `jobs.*` with `on:`
 //      deliberately excluded. A template-only `types:` change would have reached
 //      neither live site while THIS lint, reading examples/site/, reported green
 //      forever.
 //
-// So the rule enforced here is the headline one, with no exemptions at all: a job
-// publishing a required context carries NO `concurrency` declaration, at any of
-// the four sites that can govern it. That is enforceable structurally without
-// reasoning about triggers, expression semantics, or key spaces — and every
-// exemption the carve-out version needed (an event allow-list, a PR-type
-// allow-list, a GitHub-expression evaluator, a `github.run_id` sentinel) was a
-// place a wrong shape could earn a pass. A group whose key is genuinely per-run
-// never cancels anything, so it is pure machinery; deleting it loses nothing.
-//
-// THE COST IS REAL AND IS ACCEPTED: superseded runs finish instead of being
-// cancelled, so a rapidly-pushed PR burns several full runs of the heaviest lanes
-// in the family. Runner minutes are recoverable; a wedged required check has no
+// So the rule enforced here has no exemptions at all, and neither does the
+// timeout rule: a bigger wall only moves the number. THE COST IS REAL AND IS
+// ACCEPTED — superseded runs finish instead of being cancelled, and a runaway job
+// is bounded by a wall on a job whose conclusion nobody requires rather than on
+// the publisher. Runner minutes are recoverable; a wedged required check has no
 // operator remedy.
 //
 // ── WHY THIS PARSES YAML AND NEVER GREPS IT ──────────────────────────────
@@ -88,10 +117,10 @@
 // Per AGENTS.md's standing rule, anything reasoning about workflow STRUCTURE goes
 // through the real `yaml` parser via workflow-yaml-utils — a regex over source
 // reads clean on structure it cannot see (an aliased `types:` list, a flow-style
-// `on: [pull_request, push]`, a `concurrency:` inherited from a job rather than
-// the workflow). It also matters that a BARE `on:` key can parse as the BOOLEAN
-// `true` under a YAML 1.1 schema, which is why the trigger value is read through
-// `workflowOn()` rather than off `doc.on` alone.
+// `on: [pull_request, push]`, a `concurrency:` or a `timeout-minutes:` inherited
+// through a merge key). It also matters that a BARE `on:` key can parse as the
+// BOOLEAN `true` under a YAML 1.1 schema, which is why the trigger value is read
+// through `workflowOn()` rather than off `doc.on` alone.
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
@@ -99,6 +128,10 @@ const { listWorkflows, readWorkflow, parseYaml, jobs, events } = require("./work
 const {
   publishKind,
   concurrencyDeclarations,
+  timeoutDeclarations,
+  failFastDeclarations,
+  gateShapeDeclarations,
+  cancellationHazards,
   reusableBasename,
   splitContext,
   requiredContexts,
@@ -107,7 +140,7 @@ const {
   dynamicNameSkeleton,
   stripMatrixSuffix,
   FIX_ADVICE,
-} = require("./required-context-concurrency-utils");
+} = require("./required-context-cancellable-utils");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const MANIFEST_PATH = path.join(REPO_ROOT, "repo-settings.yml");
@@ -133,10 +166,11 @@ const CONSUMER_RULESET = "consumer-main";
 // (the consumer callers publish it as the two-part `editorial / validate-content`
 // under consumer-main), so pointing this scanner at that ruleset would fail
 // `assertResolved` on a shape whose real publisher is unclear — that is a
-// repo-settings question, not a concurrency one. No live exposure today: the job
+// repo-settings question, not a cancellation one. No live exposure today: the job
 // that would satisfy it is cms-editorial-workflow.yml's `validate-content`, which
 // consumer-main already brings under this guard via `editorial / validate-content`
-// and which declares no group. Resolve the bare-context question first; only then
+// and which carries no group, no `timeout-minutes` and no `needs:` — clean against
+// all four causes, not just the first. Resolve the bare-context question first; only then
 // add the ruleset here.
 
 function manifest() {
@@ -235,15 +269,15 @@ function scanCallers({ contexts, callerFiles, callerLabel, reusableDir }) {
                 `see whether that reusable declares a \`concurrency:\` block, so the rule is ` +
                 `UNENFORCED for this context.`,
             );
-            for (const { where, what } of concurrencyDeclarations({
+            for (const { where, what, fix } of cancellationHazards({
               callerDoc: caller.doc,
               callerJob: callerJob.value,
             })) {
               offenders.push(
                 `${label} → required context \`${context}\` (caller job \`${callerJob.name}\` ` +
                   `matched by ${how}; reusable \`${(callerJob.value || {}).uses}\` UNREADABLE, so ` +
-                  `only the caller side was checked; triggers: ${triggers}) — ${where} declares ` +
-                  `${what}. DELETE that block.`,
+                  `only the caller side was checked; triggers: ${triggers}) — ${where} ${what}. ` +
+                  `${fix}`,
               );
             }
             continue;
@@ -251,17 +285,17 @@ function scanCallers({ contexts, callerFiles, callerLabel, reusableDir }) {
           for (const reusableJob of reusable.jobList) {
             if (!publishKind(reusableJob.name, reusableJob.value, reusableHalf)) continue;
             resolved.set(context, resolved.get(context) + 1);
-            const decls = concurrencyDeclarations({
+            const decls = cancellationHazards({
               callerDoc: caller.doc,
               callerJob: callerJob.value,
               reusableDoc: reusable.doc,
               reusableJob: reusableJob.value,
             });
-            for (const { where, what } of decls) {
+            for (const { where, what, fix } of decls) {
               offenders.push(
                 `${label} → required context \`${context}\` (caller job \`${callerJob.name}\` ` +
                   `matched by ${how}; reusable ${basename} job \`${reusableJob.name}\`; caller ` +
-                  `triggers: ${triggers}) — ${where} declares ${what}. DELETE that block.`,
+                  `triggers: ${triggers}) — ${where} ${what}. ${fix}`,
               );
             }
           }
@@ -272,16 +306,16 @@ function scanCallers({ contexts, callerFiles, callerLabel, reusableDir }) {
         // anyway when there is one — a workflow-level group on the reusable
         // governs the run that produces this job's check-run.
         resolved.set(context, resolved.get(context) + 1);
-        const decls = concurrencyDeclarations({
+        const decls = cancellationHazards({
           callerDoc: caller.doc,
           callerJob: callerJob.value,
           reusableDoc: reusable ? reusable.doc : null,
         });
-        for (const { where, what } of decls) {
+        for (const { where, what, fix } of decls) {
           offenders.push(
             `${label} → required context \`${context}\` (job \`${callerJob.name}\` matched by ` +
               `${how}${basename ? `; calls reusable ${basename}` : ""}; triggers: ${triggers}) — ` +
-              `${where} declares ${what}. DELETE that block.`,
+              `${where} ${what}. ${fix}`,
           );
         }
       }
@@ -301,8 +335,8 @@ function assertReadable(unreadable, callerLabel) {
   expect(
     unreadable,
     `a caller under ${callerLabel} publishes a required context through a reusable this lint ` +
-      `cannot read, so the no-concurrency rule is UNENFORCED there. Fix the \`uses:\` (or the ` +
-      `checkout that should have supplied the reusable) — do not widen this lint to ignore it.`,
+      `cannot read, so the never-cancelled invariant is UNENFORCED there. Fix the \`uses:\` (or ` +
+      `the checkout that should have supplied the reusable) — do not widen this lint to ignore it.`,
   ).toEqual([]);
 }
 
@@ -317,7 +351,7 @@ function assertResolved(resolved, rulesetName, callerLabel) {
   ).toEqual([]);
 }
 
-test.describe("a required status context never sits in a concurrency group", () => {
+test.describe("a required status context can never end `cancelled`", () => {
   test("required_status_checks parses out of repo-settings.yml", () => {
     // A lint whose required set silently empties would sweep every workflow and
     // find nothing to assert — green, and protecting nothing.
@@ -338,8 +372,10 @@ test.describe("a required status context never sits in a concurrency group", () 
   // `platform-main` requires four BARE contexts, all published by self-ci.yml.
   // That workflow carried `group: self-ci-<event>-<pr|ref>` with
   // `cancel-in-progress: true` until #285; the group is gone and this pass is
-  // what keeps it gone.
-  test("no platform required-context job declares a concurrency group", () => {
+  // what keeps it gone. None of the four carries a `timeout-minutes` either, and
+  // this pass is now what keeps THAT true as well (#289) — a wall added to
+  // `node-unit-lints` would be the same defect in a different key.
+  test("no platform required-context job can be cancelled structurally", () => {
     const contexts = contextsOf(PLATFORM_RULESET);
     const files = listWorkflows();
     // `listWorkflows()` returns ABSOLUTE paths while `readWorkflow()` takes a
@@ -385,7 +421,7 @@ test.describe("a required status context never sits in a concurrency group", () 
   // trade is that this pass says nothing about what the pinned tag contains — the
   // CONSUMER-mode sibling, which reads the site's own `.cms-platform/` checkout at
   // its pinned ref, is what covers that.
-  test("no consumer required context sits in a group, as templated here", () => {
+  test("no consumer required context can be cancelled, as templated here", () => {
     const contexts = contextsOf(CONSUMER_RULESET);
     // Read OUTSIDE any try: an absent or emptied caller directory is a bug in
     // this repo or in this spec, and must fail loudly rather than read as
@@ -465,7 +501,7 @@ test.describe("publishKind — a job's context is its `name:`, falling back to i
 
 // concurrencyDeclarations must see a declaration wherever it sits — including on
 // the REUSABLE, which is where BOTH live consumer offenders hid theirs.
-test.describe("concurrencyDeclarations — all four sites, presence not value", () => {
+test.describe("cause 1 — concurrencyDeclarations: all four sites, presence not value", () => {
   test("reports all four declaration sites, and none when there are none", () => {
     expect(concurrencyDeclarations({ callerDoc: {}, callerJob: {} })).toEqual([]);
     const all = concurrencyDeclarations({
@@ -499,6 +535,138 @@ test.describe("concurrencyDeclarations — all four sites, presence not value", 
       concurrencyDeclarations({ callerDoc: { concurrency: { group: "g-${{ github.run_id }}" } } }),
     ).toHaveLength(1);
     expect(describeConcurrency(undefined)).toContain("no value");
+  });
+});
+
+// ── CAUSE 2, the one #285's name hid ────────────────────────────────────
+//
+// PRESENCE ON THE PUBLISHING JOB is the finding, exactly as with `concurrency`.
+// The unit cases below are what stop this arm being quietly narrowed to "a
+// timeout larger than N" or "a timeout on the reusable only" — either narrowing
+// re-opens #289 while the pass stays green.
+test.describe("cause 2 — timeoutDeclarations: a wall on the PUBLISHER", () => {
+  test("fires on the publishing job at either site, and on neither when absent", () => {
+    expect(timeoutDeclarations({ callerJob: {}, reusableJob: {} })).toEqual([]);
+    const both = timeoutDeclarations({
+      callerJob: { "timeout-minutes": 10 },
+      reusableJob: { "timeout-minutes": 30 },
+    });
+    expect(both).toHaveLength(2);
+    expect(both[0].where).toContain("publishing job's own");
+    expect(both[1].where).toContain("REUSABLE publishing job's");
+    expect(both[1].what).toContain("timeout-minutes: 30");
+    // The remedy must name the SHAPE, not a bigger number — a larger wall moves
+    // the number and keeps the failure mode.
+    expect(both[1].fix).toContain("always()");
+    expect(both[1].fix).not.toMatch(/increase|raise|larger/i);
+  });
+
+  // There is no safe VALUE, so there is no threshold to smuggle one under. A
+  // 30-minute wall cancelled `parity / parity` twice in one week.
+  test("any value counts — 1 minute, 30, or a `${{ }}` expression", () => {
+    for (const v of [1, 30, 360, "${{ inputs.budget }}"]) {
+      expect(timeoutDeclarations({ reusableJob: { "timeout-minutes": v } })).toHaveLength(1);
+    }
+  });
+
+  // A STEP-level wall is NOT a finding and must not become one: GitHub kills an
+  // over-running step and marks it FAILED, so the job concludes `failure` — the
+  // outcome this invariant wants. Flagging it would push authors toward removing
+  // the one bound that already behaves correctly.
+  test("a STEP-level `timeout-minutes` is not a finding", () => {
+    expect(
+      timeoutDeclarations({ reusableJob: { steps: [{ run: "x", "timeout-minutes": 5 }] } }),
+    ).toEqual([]);
+  });
+});
+
+// ── CAUSE 3: fail-fast over a matrix ────────────────────────────────────
+//
+// No publisher in this repo has a matrix today, so this arm finds nothing over
+// the real tree and is exercised ONLY here. It is present because the invariant
+// is the outcome, not the cause list — and a cause a reader can write down in one
+// line is exactly the kind that shipped past a guard named after a different one.
+test.describe("cause 3 — failFastDeclarations: a matrix publisher that cancels siblings", () => {
+  test("only an EXPLICIT `fail-fast: false` is clean", () => {
+    const matrix = { os: ["ubuntu-latest"] };
+    const ff = (value) =>
+      failFastDeclarations({ callerJob: { strategy: { matrix, ...value } } });
+    expect(ff({ "fail-fast": false })).toEqual([]);
+    expect(failFastDeclarations({ callerJob: { strategy: { matrix } } })).toHaveLength(1);
+    expect(ff({ "fail-fast": true })).toHaveLength(1);
+    // An expression this file cannot evaluate is reported: "we could not tell"
+    // is not "clean" — the same posture the scheduled-run health audit takes on
+    // an unknown answer.
+    expect(ff({ "fail-fast": "${{ inputs.ff }}" })).toHaveLength(1);
+  });
+
+  test("a job with no matrix is never a fail-fast finding", () => {
+    expect(failFastDeclarations({ callerJob: { strategy: { "fail-fast": true } } })).toEqual([]);
+    expect(failFastDeclarations({ callerJob: {} })).toEqual([]);
+  });
+});
+
+// ── CAUSE 4: the twin failure the cause-2 FIX can introduce ─────────────
+//
+// Splitting a required job into work + gate is only an improvement while the
+// gate actually reports. Without `always()` the gate SKIPS the moment the work
+// job fails or is cancelled, and the required context hangs on "Waiting for
+// status to be reported" or reports a `skipped` conclusion that never reddens.
+test.describe("cause 4 — gateShapeDeclarations: `needs:` without `always()`", () => {
+  test("a publisher with `needs:` must reference always(); one without owes nothing", () => {
+    expect(gateShapeDeclarations({ callerJob: { needs: "work", if: "${{ always() }}" } })).toEqual(
+      [],
+    );
+    expect(gateShapeDeclarations({ callerJob: { needs: ["a", "b"], if: "always()" } })).toEqual([]);
+    expect(gateShapeDeclarations({ callerJob: { needs: "work" } })).toHaveLength(1);
+    expect(gateShapeDeclarations({ callerJob: { needs: "w", if: "success()" } })).toHaveLength(1);
+    // No `needs:` — the job runs on its own and cannot be skipped by an upstream
+    // result, so an `if:` here is none of this rule's business.
+    expect(gateShapeDeclarations({ callerJob: { if: "github.event_name == 'push'" } })).toEqual([]);
+  });
+
+  // STATED AS THE FLOOR IT IS: this arm is textual on the `if:` expression and
+  // evaluates nothing, so a condition that MENTIONS always() and can still be
+  // false passes here. Asserted so the limitation is a decision on record rather
+  // than something a later reader discovers as a bug.
+  test("it is a substring test, and does not pretend to evaluate the expression", () => {
+    expect(
+      gateShapeDeclarations({
+        callerJob: { needs: "work", if: "always() && github.event_name == 'push'" },
+      }),
+      "documented floor: an always() that is ANDed with a falsifiable clause still passes",
+    ).toEqual([]);
+  });
+});
+
+// One entry point, so the two specs cannot drift apart on WHICH causes they
+// check. Every hazard carries its OWN remedy, because the two live causes have
+// opposite fixes: delete the block vs. move the work into a job whose conclusion
+// nobody requires.
+test.describe("cancellationHazards — one call, every cause, each with its own fix", () => {
+  test("aggregates all four causes and is empty on a clean job", () => {
+    expect(cancellationHazards({ callerDoc: {}, callerJob: {} })).toEqual([]);
+    const all = cancellationHazards({
+      callerDoc: { concurrency: { group: "g" } },
+      callerJob: {
+        "timeout-minutes": 30,
+        needs: "work",
+        strategy: { matrix: { os: ["ubuntu-latest"] } },
+      },
+    });
+    expect(all).toHaveLength(4);
+    expect(all.every((h) => h.where && h.what && h.fix)).toBe(true);
+    const fixes = all.map((h) => h.fix).join(" | ");
+    expect(fixes).toContain("DELETE that block");
+    expect(fixes).toContain("fail-fast: false");
+    expect(fixes).toContain("always()");
+  });
+
+  test("the shared preamble states the OUTCOME and names both live causes", () => {
+    expect(FIX_ADVICE).toContain("NO REQUIRED STATUS CONTEXT MAY END `cancelled`");
+    expect(FIX_ADVICE).toContain("concurrency");
+    expect(FIX_ADVICE).toContain("timeout-minutes");
+    expect(FIX_ADVICE).toContain("cms-platform#289");
   });
 });
 
@@ -602,6 +770,75 @@ test.describe("required-context derivation", () => {
           `\`concurrency:\` (cms-platform#285). Re-adding one re-opens a hard merge block that ` +
           `no merge mechanism can override.`,
       ).toBe(false);
+    }
+  });
+
+  // ── The #289 SPLIT, locked by name ───────────────────────────────────────
+  //
+  // The scanner above already rejects a `timeout-minutes` on the publisher, so
+  // half of this is belt-and-braces. The half that is NOT redundant is the
+  // positive side: that the work job still carries a wall at all, and that the
+  // gate still translates. Delete the probe's `timeout-minutes` and the scanner
+  // stays green while an unbounded job replaces a bounded one; delete the gate's
+  // translating step and the scanner stays green while the required context goes
+  // permanently pass. Neither is a cancellation-cause question, so neither belongs in
+  // the pass above — and both are one careless edit away.
+  //
+  // Named by file/job on purpose: `readWorkflow` throws on a missing file rather
+  // than skipping, so a rename reds here with the name in the message instead of
+  // quietly examining nothing.
+  test("parity-preview and preview-media publish their required context from a gate", () => {
+    for (const { file, gate, probe } of [
+      { file: "parity-preview.yml", gate: "parity", probe: "parity-probe" },
+      { file: "preview-media.yml", gate: "preview-media", probe: "media-probe" },
+    ]) {
+      const doc = parseYaml(readWorkflow(file)) || {};
+      const gateJob = (doc.jobs || {})[gate];
+      const probeJob = (doc.jobs || {})[probe];
+      expect(
+        probeJob,
+        `${file} must keep its \`${probe}\` WORK job — it is what carries the wall clock`,
+      ).toBeTruthy();
+      expect(
+        gateJob,
+        `${file} must keep its \`${gate}\` job: it publishes the required context ` +
+          `\`${gate} / ${gate}\` that both consumers' main ruleset names. Renaming it makes ` +
+          `that context unreportable, which hangs every PR on "Waiting for status".`,
+      ).toBeTruthy();
+
+      // The wall stays on the probe. PRESENCE is asserted first and separately:
+      // `toBeGreaterThan` on an absent key reports a Playwright MATCHER ERROR
+      // ("received value must be a number") and swallows the custom message, so
+      // the one reader who needs the explanation would not get it.
+      expect(
+        Object.prototype.hasOwnProperty.call(probeJob, "timeout-minutes"),
+        `${file} job \`${probe}\` must keep a \`timeout-minutes\` — the wall is not being ` +
+          `removed by #289, only moved onto a job whose conclusion no ruleset requires`,
+      ).toBe(true);
+      expect(probeJob["timeout-minutes"]).toBeGreaterThan(0);
+      // …and never on the gate, which must be unkillable-at-a-wall.
+      expect(
+        Object.prototype.hasOwnProperty.call(gateJob, "timeout-minutes"),
+        `${file} job \`${gate}\` publishes a REQUIRED context and must carry NO ` +
+          `\`timeout-minutes\`: GitHub reports a job killed at its wall as \`cancelled\`, and ` +
+          `a cancelled required context cannot be merged past by any mechanism ` +
+          `(cms-platform#289).`,
+      ).toBe(false);
+
+      // And the gate must actually TRANSLATE: depend on the probe, run anyway,
+      // and read the probe's rolled-up `result`. Without the last of those it is
+      // a job that always passes — a required check that can never go red.
+      expect(String(gateJob.needs)).toContain(probe);
+      expect(String(gateJob.if)).toContain("always()");
+      const body = JSON.stringify(gateJob.steps || []);
+      expect(
+        body,
+        `${file} job \`${gate}\` must READ \`needs.${probe}.result\` and exit non-zero unless ` +
+          `it is \`success\`. A gate that never inspects the job it needs is a required check ` +
+          `that can never fail.`,
+      ).toContain(`needs.${probe}.result`);
+      expect(body).toContain("success");
+      expect(body).toContain("exit 1");
     }
   });
 });

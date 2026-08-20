@@ -74,10 +74,33 @@ defaults:
     shell: bash
 
 jobs:
-  # Job name == GitHub check context. Kept as `parity` to match an
-  # existing required_status_checks entry if the consuming site gates on
-  # it; rename to match the site's ruleset if different.
-  parity:
+  # ── THE WORK JOB: it carries the wall clock and publishes NO required ────
+  #
+  # `timeout-minutes` lives HERE and never on the `parity` gate below, because a
+  # job GitHub kills at its wall concludes `cancelled`, NOT `timed_out`. A
+  # CANCELLED required context hard-blocks the merge — the API answers
+  # `405 Required status check "<ctx>" is cancelled` — and nothing overrides it:
+  # not native auto-merge, not an explicit merge call, not a nudge bot, not an
+  # admin. Measured on adamdaniel.ai PR #3217 (2026-08-19): `parity / parity` ran
+  # 15:22:19Z → 15:52:45Z — 30m26s, exactly this wall — and concluded `cancelled`
+  # with NO `concurrency` group anywhere near it, v0.1.87 having already deleted
+  # those. Again on PR #3202: 04:40:11Z → 05:10:27Z, 30m16s. So the group #285
+  # removed was only ONE route to a cancelled required context; the timeout is a
+  # second one, and the #285 rule never covered it. cms-platform#289.
+  #
+  # This job publishes `<caller job> / parity-probe`, which no ruleset names, so
+  # ITS cancellation is informational. The gate below turns it into a RED
+  # `parity / parity`, which a human can simply re-run.
+  #
+  # WHY A GATE JOB AND NOT AN IN-JOB WATCHDOG that exits just before the wall:
+  # this is the shape the repo already uses for exactly this problem —
+  # `e2e-tests.yml` publishes `e2e / e2e` from an `if: always()` job over its
+  # `project` matrix, and `visual-regression.yml` publishes
+  # `visual-regression / approve-regression` the same way. A watchdog would have
+  # to be threaded into every step's shell, would re-guess the remaining budget
+  # at each one, and still could not stop the wall arriving first inside a step
+  # it does not own (an `npx playwright test`, a composite action).
+  parity-probe:
     runs-on: ubuntu-latest
     env:
       CMS_APEX: ${{ inputs.apex }}
@@ -150,10 +173,11 @@ jobs:
         uses: ./.cms-platform/.github/actions/install-playwright-browsers
         with:
           browser: chromium
-          # This job's timeout-minutes is 30; keep the composite's worst case
-          # under it so a stalled mirror surfaces as this action's diagnostic
-          # rather than an opaque job timeout, and still leaves room for the
-          # probe itself. (Locked by e2e/playwright-install-bounded.test.js.)
+          # The `parity-probe` job's timeout-minutes is 30; keep the composite's
+          # worst case under it so a stalled mirror surfaces as this action's
+          # diagnostic rather than an opaque job timeout, and still leaves room
+          # for the probe itself. (Locked by
+          # e2e/playwright-install-bounded.test.js.)
           final-timeout-seconds: '900'
 
       - name: Wait for the preview surface (bounded)
@@ -268,3 +292,44 @@ jobs:
           marker: parity-preview-failure-summary
           title: parity-preview
           pr-number: ${{ inputs.pr_number }}
+
+  # ── THE REQUIRED STATUS CONTEXT ──────────────────────────────────────────
+  #
+  # Branch protection requires `<caller-job> / parity` (`parity / parity` on both
+  # consumers). This job is the ONLY thing that ruleset has to know about, so do
+  # NOT rename it — and do NOT give it a `timeout-minutes`. Being a job that
+  # cannot be killed at a wall IS its purpose: the context it publishes can then
+  # only ever be success or failure.
+  #
+  # `always()` so a red, skipped or CANCELLED probe still reports here instead of
+  # leaving the required check pending forever (the missing-check trap), and so a
+  # cancelled RUN still gets a translated verdict rather than a cancelled one.
+  #
+  # Locked by e2e/required-context-cancellable.test.js (platform tree + the
+  # examples/site templates) and its CONSUMER-mode sibling
+  # e2e/consumer-required-context-cancellable.test.js.
+  parity:
+    needs: parity-probe
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on the parity probe
+        env:
+          PROBE_RESULT: ${{ needs.parity-probe.result }}
+        run: |
+          set -euo pipefail
+          echo "parity-probe result: ${PROBE_RESULT}"
+          if [ "${PROBE_RESULT}" = "success" ]; then
+            echo "The parity probe passed."
+            exit 0
+          fi
+          msg="The parity-probe job concluded ${PROBE_RESULT} — read that job for the reason."
+          if [ "${PROBE_RESULT}" = "cancelled" ]; then
+            msg="${msg} A cancelled probe is usually its 30-minute timeout-minutes wall:"
+            msg="${msg} GitHub reports a job it killed at the wall as cancelled, never as"
+            msg="${msg} timed_out. This gate reports that as FAILURE deliberately — a"
+            msg="${msg} cancelled REQUIRED context cannot be merged past by any mechanism,"
+            msg="${msg} whereas a failed one can be re-run (cms-platform#289)."
+          fi
+          echo "::error title=parity::${msg}"
+          exit 1

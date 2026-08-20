@@ -774,14 +774,27 @@ ENOENT there once cascaded into an 85-test failure). → read
 `docs/CI-INVARIANTS.md` (see also the `browser-testing` skill) before
 touching `e2e/playwright.config.js`'s local `webServer` config.
 
-## A cancelled required check blocks the merge (#1815)
+## A cancelled required check blocks the merge (#1815, #285, #289)
 
 A required-check job that can fire more than once on the same head sha
 (label or multi-event triggers) will eventually leave a cancelled run
 shadowing a success — and no merge mechanism can override a cancelled
-required check, so the PR blocks non-deterministically. → read
-`docs/CI-INVARIANTS.md` before adding a `concurrency` block to any job that
-produces a required status context.
+required check, so the PR blocks non-deterministically.
+
+**The invariant is the OUTCOME, not one key: NO REQUIRED CONTEXT MAY END
+`cancelled`.** Naming it after `concurrency` is what let a second cause ship
+underneath the first. #285 removed every group from every required-context
+publisher; four days later `parity / parity` and
+`preview-media / preview-media` still concluded `cancelled` on adamdaniel.ai
+#3202/#3217 — on a `timeout-minutes` wall, because **GitHub reports a job it
+killed at its wall as `cancelled`, not `timed_out`**. The wall now lives on a
+work job whose conclusion no ruleset names, with the required context published
+by a `needs:` + `if: always()` gate that translates — the shape `e2e-tests.yml`
+already used for `e2e / e2e`. → read `docs/CI-INVARIANTS.md` before adding a
+`concurrency` block **or a `timeout-minutes`** to any job that produces a
+required status context; the guards are
+`e2e/required-context-cancellable.test.js` (renamed from
+`…-concurrency.test.js` at #289) and its CONSUMER-mode sibling.
 
 ## Admin-bundle parity is bump-aware (#14)
 

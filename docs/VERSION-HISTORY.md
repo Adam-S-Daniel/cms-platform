@@ -1671,11 +1671,14 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   — static text, always colliding — earned the exemption. Detection now keys on
   PRESENCE of a `concurrency` key: there is no value left to forge.
 
-  IT IS SPLIT IN TWO ON PURPOSE. `required-context-concurrency.test.js` is
+  IT IS SPLIT IN TWO ON PURPOSE. `required-context-concurrency.test.js`
+  (renamed `required-context-cancellable.test.js` in #289, when the guard was
+  renamed after the OUTCOME it forbids rather than one cause of it) is
   registered in `PLATFORM_META_SPECS` and gates the required `node-unit-lints`
   lane against the WORKING TREE — a pre-release gate. Registration is precisely
   what `testIgnore`s a spec on consumer lanes, i.e. on the repos where #285
-  actually wedges PRs, so `consumer-required-context-concurrency.test.js` is
+  actually wedges PRs, so `consumer-required-context-concurrency.test.js`
+  (likewise `consumer-required-context-cancellable.test.js` since #289) is
   deliberately UNregistered and reads the site's own callers, its pinned
   `.cms-platform/` reusables and that checkout's `repo-settings.yml`. Shared
   matching lives in a plain helper module so neither spec inherits the other's
