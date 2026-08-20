@@ -22,6 +22,36 @@
 // "dependabot-theme-gem-ignored.test.js" off that list. Registering it would
 // silently void it on the exact repos it exists to protect. Do not "tidy" it on.
 //
+// WHAT IT GUARDS TODAY: ZERO SHA PINS — AND THAT IS THE POINT, NOT A DEFECT
+// ------------------------------------------------------------------------
+// The paragraph above used to claim the two consumers "between them carry the
+// majority of the fleet's pinned `uses:` lines". That was FALSE, and is
+// corrected here (2026-08-20) rather than deleted, because it is the exact
+// failure the version-comment retirement was called for: an unmaintained
+// factual claim that a reader trusts instead of re-measuring. Measured across
+// all 13 repos' `origin/main` `.github` trees on 2026-08-20, counting `uses:`
+// lines whose ref is a full 40-hex SHA:
+//
+//     cms-platform  128     skills-evals  17     _agent-guidance   16
+//     agentskills    11     claude-memory-map 9  repo-settings      8
+//     fastmail-actions 7    GHA-bench      5     wsl-automation     1
+//     adamdaniel.ai   0     jodidaniel.com 0     (202 fleet-wide)
+//
+// Both consumers carry 0. All 32 of each one's `uses:` lines are cms-platform
+// TAG pins (`…@v0.1.88`) — the carve-out shape, which `isVersionComment()`
+// never reaches because the detector reads the trailing comment and not the
+// ref. So this lint scans 32 files per consumer and has no SHA pin to fire on.
+//
+// It is kept, and is still worth its keep, as a FORWARD TRIPWIRE: the day
+// either site adopts its first third-party action, that pin lands in a tree the
+// platform sibling structurally cannot see (registration testIgnores it on the
+// consumer lane), and a helpfully-labelled SHA would otherwise ship unguarded.
+// The structural argument above is unchanged and still correct; only the
+// quantitative claim was wrong. Do not delete this lint on the grounds that it
+// currently matches nothing — "matches nothing today" is its steady state, and
+// the `pinFiles(SITE_ROOT).length > 0` assertion below is what keeps that
+// distinguishable from a lint that silently scanned no files at all.
+//
 // It reads only a tree a consumer really has — its own `.github` — resolved
 // from SITE_ROOT, which `e2e-tests.yml` exports as `github.workspace` (the
 // CONSUMER root) on the Playwright step in both the local and the preview/prod
