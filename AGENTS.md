@@ -747,6 +747,13 @@ The caller checks ITSELF: it reads the caller's (always current) workflow tree,
 so a half-bump is caught even when a stale `platform_ref` supplies the old
 script, and a `platform_ref` predating the script fails the step loudly.
 
+**#283 is NOT closed by shipping this.** The checker and the reusable are option
+1's mechanism; option 1 lands when the seven repos actually carry the thin
+caller. None does yet. The hand-mitigation #283 announced did land — re-measured
+2026-08-20, all seven agree at `v0.1.87` — but the platform is at `v0.1.88` and
+both consumers are already there, so the seven are a release behind again one
+release later. Values fixed, mechanism unchanged.
+
 → read `docs/PIN-CONSISTENCY.md` ("Pin AGREEMENT") before changing the checker,
 the reusable, or the two options (#283's 2 and 3) deliberately left out of it.
 

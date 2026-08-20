@@ -222,15 +222,27 @@ jobs:
 ```
 
 Dependabot's `github-actions` ecosystem moves the first (a dependency ref) and
-**structurally cannot** move the second (a `with:` input value). Four of those
-repos have no cms-platform `ignore`, so they are live to it. The skew that
-results is worse than a crash: the NEW reusable runs against the OLD script its
-stale `platform_ref` sparse-checks out; an argv-scanning `flag()` silently
-ignores a flag it does not know; and the job goes **green**, having performed
-none of the detection the new workflow asked for. Measured 2026-08-20: seven of
-the eight sat on `v0.1.85`, a tag whose `scheduled-run-health.yml` has no push
-lane at all, while `skills-evals` accumulated fourteen unreported failing
+**structurally cannot** move the second (a `with:` input value). Four of the
+seven carry no cms-platform `ignore`: three of them (`GHA-bench`,
+`repo-settings`, `claude-memory-map`) run the `github-actions` ecosystem and are
+live to the half-bump today, and `agentskills` has no `dependabot.yml` at all,
+so nothing moves its pin in either direction. The skew that results is worse
+than a crash: the NEW reusable runs against the OLD script its stale
+`platform_ref` sparse-checks out; an argv-scanning `flag()` silently ignores a
+flag it does not know; and the job goes **green**, having performed none of the
+detection the new workflow asked for. Measured when #283 was filed: seven of the
+eight sat on `v0.1.85`, a tag whose `scheduled-run-health.yml` has no push lane
+at all, while `skills-evals` accumulated fourteen unreported failing
 default-branch push runs its own health audit structurally could not see.
+
+**#283's announced hand-mitigation has since landed, and the gap has already
+re-opened — which is the whole point.** Re-measured 2026-08-20 by parsing each
+repo's `origin/main` workflow tree: all seven now pin `scheduled-run-health.yml`
+at `v0.1.87` with `platform_ref` agreeing, so the VALUES are consistent. But the
+platform is at `v0.1.88` and both consumers are already there, moved by
+`platform-bump.yml` — which never targets these seven. They are a release behind
+again, one release after the hand-bump, exactly as #283 predicted. The hand-bump
+fixed the values; nothing fixed the mechanism, and that is why #283 stays open.
 
 ### The check
 
@@ -301,4 +313,9 @@ Two other options were on the table for #283 and are out of scope here:
   is reachable; it is a change to the reusable's contract, not a lint, and it
   belongs in its own change with its own evidence.
 
-This lint makes the skew LOUD. It does not make it impossible.
+This lint makes the skew LOUD. It does not make it impossible — and until a
+fleet repo actually adds the thin caller, it does not make it loud there either.
+**Adoption is the remaining work, and it is #283's, not this page's:** shipping
+the checker and the reusable is option 1's *mechanism*; option 1 is only
+delivered once the seven repos carry the caller and the three with a
+cms-platform `ignore` can drop it. #283 stays open for that.

@@ -66,8 +66,21 @@ function runCli(args) {
   }
 }
 
+// Every scratch tree this file makes, reaped in afterAll. This lint runs in the
+// REQUIRED node-unit-lints lane, so without the teardown it strands one mkdtemp
+// dir per CLI assertion on every developer machine and every CI runner that
+// executes it, on every run, forever.
+const SCRATCH_DIRS = [];
+
+test.afterAll(() => {
+  for (const dir of SCRATCH_DIRS.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function tmpWorkflows(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pin-agreement-"));
+  SCRATCH_DIRS.push(dir);
   for (const [name, body] of Object.entries(files)) {
     fs.writeFileSync(path.join(dir, name), body, "utf8");
   }
@@ -265,9 +278,25 @@ test.describe("#283 pin agreement — the real trees this repo owns", () => {
     ).toBeGreaterThan(0);
   });
 
-  test("this repo's own workflows agree with themselves", () => {
+  test("every workflow file in this repo parses, and none carries a skewed pair", () => {
     const res = runCli([path.join(REPO_ROOT, ".github", "workflows")]);
     expect(res.code, `platform workflows must agree. Output:\n${res.output}`).toBe(0);
+    // Fail-on-zero, on FILES — deliberately NOT on pairs, the way the sibling
+    // template test above does it. The pair count here is legitimately zero and
+    // always will be: this repo's workflows ARE the reusables, so they sit on
+    // the callee side of the pair and carry no `uses:@` + `platform_ref` of
+    // their own. A bare exit 0 therefore asserts nothing whatsoever here. The
+    // FILE count is what carries weight: it establishes that the scan reached
+    // this tree and PARSED every file in it, since an unreadable or
+    // unparseable platform workflow exits 2, and a scan that matched no files
+    // exits 2 as well. That makes this a real guard against the platform's own
+    // workflow tree going unparseable — the one thing about it this check is in
+    // a position to prove.
+    const files = Number((res.output.match(/across (\d+) workflow file\(s\)/) || [])[1]);
+    expect(
+      files,
+      "the platform workflow scan must have parsed a non-zero number of files",
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -348,6 +377,39 @@ test.describe("#283 pin agreement — the reusable that delivers it to repos wit
       pin,
       "the reusable's parser pin must equal the harness's, so one vetted version covers both",
     ).toBe(harnessPin);
+  });
+
+  test("the parser install names its prefix, so it cannot escape into the caller's tree", () => {
+    const steps = ((doc().jobs || {})["pin-agreement"] || {}).steps || [];
+    const install = steps.find((s) => /\bnpm install\b/.test(String(s.run || "")));
+    expect(install, "the reusable must install the parser — its only novel step").toBeTruthy();
+
+    // REGRESSION. The first cut of this step paired `working-directory:
+    // .cms-platform` with a bare `npm install`, commented "leaving the caller's
+    // tree untouched". It does the OPPOSITE on a caller that has a root
+    // `package.json`. The sparse checkout above brings down ONE file, so
+    // `.cms-platform` holds no `package.json`, and npm picks its install prefix
+    // by walking UP from the working directory until it finds one — straight
+    // past the platform checkout and into the CALLER's tree. Reproduced under
+    // npm 10.9.7: `yaml` AND the caller's own unrelated dependency landed in
+    // `<caller>/node_modules` while `.cms-platform/node_modules` was never
+    // created at all, because `npm install` (unlike `npm ci`) resolves the
+    // caller's whole dependency tree while it is there. Two of the seven fleet
+    // repos this reusable targets carry a root `package.json` today.
+    expect(
+      String(install.run),
+      "the install must name its prefix explicitly — `working-directory` does not confine npm, " +
+        "it only sets the directory the prefix walk starts FROM",
+    ).toContain("--prefix .cms-platform");
+    // The two are coupled, not merely redundant: `--prefix` here is RELATIVE,
+    // so a `working-directory: .cms-platform` underneath it would re-root the
+    // install at `.cms-platform/.cms-platform`. The invariant is that the
+    // prefix resolves to the platform checkout, which means this step runs from
+    // the workspace root.
+    expect(
+      install["working-directory"],
+      "and must not reintroduce a `working-directory`, which would re-root the relative prefix",
+    ).toBeUndefined();
   });
 
   test("caller inputs reach the run block through env, never interpolated into it", () => {

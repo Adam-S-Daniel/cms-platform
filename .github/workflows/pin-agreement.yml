@@ -95,10 +95,23 @@ jobs:
         # because it cannot see the value at all. Pinned EXACT (no caret) to the
         # version this repo already vets in e2e/package.json, so the
         # dependency cooling-off period is inherited rather than restarted.
-        # Installed into the platform checkout so the script's own resolver
-        # finds it beside itself, leaving the caller's tree untouched.
-        working-directory: .cms-platform
-        run: npm install --no-save --no-audit --no-fund yaml@2.9.0
+        #
+        # `--prefix` IS LOAD-BEARING — it is what makes "leaves the caller's
+        # tree untouched" true rather than merely intended. The sparse checkout
+        # above brings down ONE file, so `.cms-platform` holds no
+        # `package.json`, and npm picks its install prefix by walking UP from
+        # the working directory until it finds one. A bare
+        # `working-directory: .cms-platform` therefore resolves straight past
+        # the platform checkout and installs into the CALLER's `node_modules`
+        # on any repo that has a root `package.json` — measured: 2 of the 7
+        # fleet repos this targets (`_agent-guidance`, `claude-memory-map`).
+        # Worse, `npm install` (unlike `npm ci`) then resolves and installs the
+        # caller's ENTIRE dependency tree while it is there, so an unrelated
+        # dependency failure in the caller reds the pin lint for reasons that
+        # have nothing to do with pins. Naming the prefix explicitly stops the
+        # walk; the script's own resolver looks in `<script>/../node_modules`,
+        # which is exactly where this puts it.
+        run: npm install --prefix .cms-platform --no-save --no-audit --no-fund yaml@2.9.0
       - name: Check pin agreement
         # `inputs.*` reaches the script through env, never interpolated into the
         # `run:` body: a rendered command is echoed to the log, and the shell
