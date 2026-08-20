@@ -1,0 +1,108 @@
+# Pin-agreement lint (reusable) — a workflow that names a version TWICE must
+# name the SAME version both times.
+#
+# THE DEFECT (#283). A caller of a cms-platform reusable carries the platform
+# version twice — `uses: …@vX.Y.Z` and `with: platform_ref: vX.Y.Z`.
+# Dependabot's `github-actions` ecosystem moves the first (a dependency ref) and
+# structurally CANNOT move the second (a `with:` input value). The resulting
+# skew is worse than a crash: a half-bumped caller runs the NEW reusable against
+# the OLD script its stale `platform_ref` sparse-checks out, an argv-scanning
+# `flag()` silently ignores a flag it does not know, and the job goes GREEN
+# having performed none of the detection the new workflow asked for. Measured
+# live: seven fleet repos a release behind on exactly this pair, one of them
+# accumulating fourteen unreported failing default-branch push runs while its
+# own health audit structurally could not see them.
+#
+# WHY THIS EXISTS AS A REUSABLE RATHER THAN A CONSUMER LINT. The repos exposed
+# to that skew are the FLEET repos, not the two sites: they have no
+# `platform.lock`, no theme gem, no e2e harness and no pin-consistency gate, so
+# every existing guard is unreachable from them. The check itself is
+# identity-free — it compares a file against ITSELF, needing no canonical
+# version, manifest or lockfile — and this workflow is the delivery that asks an
+# adopting repo for nothing it does not already have: one thin caller, no Node
+# project, no lockfile, no local dependency. It is deliberately NOT added to the
+# `examples/site` template set, which is the CONSUMER-dictated workflow set: a
+# new file there makes both consumers' workflow-set parity report MISSING until
+# they adopt it, and the consumers are the two repos this skew already cannot
+# reach (their Dependabot ignores every cms-platform ref, and `platform-bump.yml`
+# moves both halves atomically).
+#
+# THE CALLER a fleet repo adds — run it on the events that can INTRODUCE the
+# skew, so a half-bump PR goes red before it merges rather than after:
+#
+#     name: Pin agreement
+#     run-name: >-
+#       ${{ github.event_name == 'pull_request'
+#             && format('pr #{0}', github.event.number)
+#          || format('push — {0}', github.ref_name) }}
+#     on:
+#       pull_request:
+#         paths: ['.github/workflows/**']
+#       push:
+#         branches: [main]
+#         paths: ['.github/workflows/**']
+#     permissions:
+#       contents: read
+#     jobs:
+#       pin-agreement:
+#         uses: Adam-S-Daniel/cms-platform/.github/workflows/pin-agreement.yml@vX.Y.Z
+#         with:
+#           platform_ref: vX.Y.Z
+#
+# THAT CALLER CHECKS ITSELF, and the self-application is sound in both broken
+# directions. The check reads the CALLER's workflow tree, which is always the
+# current one, so a half-bump is caught even when the stale `platform_ref` hands
+# it the OLD copy of the script; and a `platform_ref` predating the script
+# entirely leaves nothing to execute, which fails the step loudly. There is no
+# arrangement of the two refs in which this lint quietly reports success.
+name: Pin agreement (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
+      platform_ref: { type: string, default: main }
+      # Where to look, relative to the caller's checkout. A repo that keeps
+      # callers somewhere unusual can point this at them; the default is the
+      # only place GitHub runs workflows from.
+      workflows_dir: { type: string, default: .github/workflows }
+
+permissions:
+  contents: read
+
+jobs:
+  pin-agreement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The CALLER's tree — the workflows under test.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Fetch the pin-agreement check from the platform
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          sparse-checkout: scripts/check-pin-agreement.js
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+      - name: Install the YAML parser
+        # The check PARSES: GitHub has allowed YAML anchors in workflows since
+        # 2025-09-18, so a `uses:` or a `platform_ref:` can be an ALIAS whose
+        # value is written elsewhere, and a regex reads such a file as clean
+        # because it cannot see the value at all. Pinned EXACT (no caret) to the
+        # version this repo already vets in e2e/package.json, so the
+        # dependency cooling-off period is inherited rather than restarted.
+        # Installed into the platform checkout so the script's own resolver
+        # finds it beside itself, leaving the caller's tree untouched.
+        working-directory: .cms-platform
+        run: npm install --no-save --no-audit --no-fund yaml@2.9.0
+      - name: Check pin agreement
+        # `inputs.*` reaches the script through env, never interpolated into the
+        # `run:` body: a rendered command is echoed to the log, and the shell
+        # would re-parse whatever the value contained.
+        env:
+          WORKFLOWS_DIR: ${{ inputs.workflows_dir }}
+        run: node .cms-platform/scripts/check-pin-agreement.js "$GITHUB_WORKSPACE/$WORKFLOWS_DIR"

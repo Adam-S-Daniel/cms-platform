@@ -718,6 +718,38 @@ out of lockstep piecemeal — a stale `platform_ref` input once silently ran a
 `platform-release-and-bump` skill) before changing
 `check-platform-pin-consistency.js` or `platform-bump.yml`'s seeding logic.
 
+### A caller naming the version twice must name it the same twice (#283)
+
+Ten repos call a cms-platform reusable; only the two consumers have a
+`platform.lock`, a gem and a pin-consistency gate, so every guard on that page
+is unreachable from the other eight. Each of their callers names the version
+TWICE — `uses: …@vX.Y.Z` and `with: platform_ref: vX.Y.Z` — and Dependabot's
+`github-actions` ecosystem moves the first and **structurally cannot** move the
+second. The skew is worse than a crash: the NEW reusable runs against the OLD
+sparse-checked-out script, an argv-scanning `flag()` ignores flags it does not
+know, and the job reports **green** having detected nothing. Measured
+2026-08-20: seven of eight a release behind, one of them with fourteen
+unreported failing default-branch push runs its own audit could not see.
+
+`scripts/check-pin-agreement.js` asserts the two refs agree, and is deliberately
+**identity-free** — no slug, no canonical version, no lockfile; it compares a
+file against itself, which is what makes it runnable by a repo with none of the
+platform's machinery. It PARSES (`merge: true`), because an aliased or
+merge-keyed value is invisible to a line scan. Exit codes are three-valued: `0`
+agree, `1` skew, `2` could-not-run — a zero-file scan is `2`, never `0`.
+
+Delivery is `.github/workflows/pin-agreement.yml`, a reusable, because a thin
+caller is the only thing these repos can adopt. **Do not add a caller for it to
+`examples/site/.github/workflows/`** — that set is the consumer-dictated
+workflow set, so a new file there reports MISSING on both consumers until they
+adopt it, and the consumers are the two repos this skew cannot reach anyway.
+The caller checks ITSELF: it reads the caller's (always current) workflow tree,
+so a half-bump is caught even when a stale `platform_ref` supplies the old
+script, and a `platform_ref` predating the script fails the step loudly.
+
+→ read `docs/PIN-CONSISTENCY.md` ("Pin AGREEMENT") before changing the checker,
+the reusable, or the two options (#283's 2 and 3) deliberately left out of it.
+
 ### Dependabot must not bump ANY cms-platform reference (#242, #244)
 
 `platform-bump` owns the platform version atomically — every `uses:@<tag>`
