@@ -126,11 +126,13 @@ const PLATFORM_META_SPECS = [
   // comment-stamping step reddened a green e2e job on 2026-08-12 and blocked a
   // merge. Reads .github/workflows/, absent on a consumer.
   "resolve-summary-fail-open.test.js",
-  // A job publishing a REQUIRED status context must not be reachable twice on
-  // one head SHA inside a `concurrency` group — a cancelled required context
-  // answers `405 ... is cancelled` and nothing overrides it. Reads the root
-  // repo-settings.yml ruleset + .github/workflows/, absent on a consumer.
-  "required-context-concurrency.test.js",
+  // DEFERRED, NOT FORGOTTEN: "required-context-concurrency.test.js" belongs on
+  // this list — it reads the root repo-settings.yml ruleset + .github/workflows/,
+  // which a consumer does not have. It is held back with the fix it locks (see
+  // #285: the collision actually observed in production is an opened+synchronize
+  // burst, not the `reopened` one the first fix narrowed away). Re-add this entry
+  // in the SAME commit as the spec file — a registered name whose file is absent
+  // reds the #16 recurrence guard, which is exactly how this comment got written.
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN

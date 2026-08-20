@@ -59,22 +59,61 @@
 // ../theme, ../.github/workflows, the platform fixtures), which a SITE_ROOT-
 // rooted `_site/**` read never matches — so site specs are never flagged.
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const walk = require("acorn-walk");
 const { parse, calleeName, calleeTail, stringValue } = require("./spec-ast");
 
 const E2E_DIR = __dirname;
 const CONFIG = path.join(E2E_DIR, "playwright.config.js");
 
-// Parse PLATFORM_META_SPECS out of playwright.config.js (its single source of
-// truth) so this lint stays in lockstep without importing the config (which has
-// env/webServer side effects). Same parser idiom as
-// admin-spec-source-read-lint.test.js / base-collections-guard-registry.test.js.
+// Parse PLATFORM_META_SPECS out of a playwright.config.js SOURCE FILE (its
+// single source of truth) so this lint stays in lockstep without importing
+// the config (which has env/webServer side effects). AST, not regex — a
+// `PLATFORM_META_SPECS = [ ... ]` array literal can legitimately carry a
+// comment that itself quotes a `*.test.js`/`*.spec.js` name (playwright.
+// config.js's own "DEFERRED, NOT FORGOTTEN" comment does exactly this,
+// quoting "required-context-concurrency.test.js" as the name of an entry
+// deliberately held BACK, not a live one), and a regex scanning the array
+// BODY for quoted spec-like tokens cannot distinguish that comment text from
+// a real element — it silently counted the deferred name as registered,
+// which is what turned "every registered meta-spec name exists on disk" red
+// in CI run 32325181214 (the name had no matching file). Walking a real AST
+// for the declarator and reading only its ArrayExpression ELEMENTS' string
+// values sidesteps this entirely: acorn discards comments as part of parsing
+// a real array literal, so one can never be mistaken for an element. Same
+// parser idiom as platformMetaSpecs() in base-collections-guard-registry.
+// test.js. Factored to take an explicit `configPath` so the recurrence-guard
+// test below can point it at a synthetic file without touching the
+// production call site (`metaSpecs()`, which always reads the real CONFIG).
+function metaSpecsFrom(configPath) {
+  const src = fs.readFileSync(configPath, "utf8");
+  const ast = parse(src);
+  const out = new Set();
+  let found = false;
+  walk.simple(ast, {
+    VariableDeclarator(node) {
+      if (
+        node.id &&
+        node.id.name === "PLATFORM_META_SPECS" &&
+        node.init &&
+        node.init.type === "ArrayExpression"
+      ) {
+        found = true;
+        for (const el of node.init.elements) {
+          const s = stringValue(el);
+          if (s != null) out.add(s);
+        }
+      }
+    },
+  });
+  if (!found) throw new Error("could not locate PLATFORM_META_SPECS in playwright.config.js");
+  return out;
+}
+
 function metaSpecs() {
-  const src = fs.readFileSync(CONFIG, "utf8");
-  const m = src.match(/PLATFORM_META_SPECS\s*=\s*\[([\s\S]*?)\];/);
-  if (!m) throw new Error("could not locate PLATFORM_META_SPECS in playwright.config.js");
-  return new Set([...m[1].matchAll(/["'`]([^"'`]+\.(?:spec|test)\.js)["'`]/g)].map((x) => x[1]));
+  return metaSpecsFrom(CONFIG);
 }
 
 // Strip JS comments before scanning — a comment may legitimately MENTION
@@ -403,6 +442,43 @@ test.describe("#16 PLATFORM_META_SPECS recurrence guard", () => {
       `PLATFORM_META_SPECS lists names with no matching e2e/ file — remove the stale ` +
         `entries (or restore the files): ${missing.join(", ")}`,
     ).toEqual([]);
+  });
+
+  // REGRESSION WITNESS — a comment-only mention of a spec name inside the
+  // array literal must never be counted as a registered element. This is the
+  // exact shape of the live false positive: playwright.config.js carries a
+  // "DEFERRED, NOT FORGOTTEN" comment quoting "required-context-concurrency.
+  // test.js" as an entry deliberately held back (no such file exists yet), and
+  // the OLD regex-over-array-body extractor could not tell that quoted comment
+  // text apart from a real element, so it counted the deferred name as
+  // registered and turned "every registered meta-spec name exists on disk"
+  // red in CI (run 32325181214). Builds a synthetic config with one real
+  // array element plus a `//` comment and a `/* */` comment, each quoting a
+  // DIFFERENT *.test.js/*.spec.js name, and asserts the AST extractor returns
+  // ONLY the real element.
+  test("a comment inside the array literal quoting a spec name is not registered", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-meta-spec-registry-"));
+    const tmpConfig = path.join(tmpDir, "playwright.config.js");
+    try {
+      fs.writeFileSync(
+        tmpConfig,
+        [
+          "const PLATFORM_META_SPECS = [",
+          '  "real-registered.test.js",',
+          '  // deferred: "line-comment-decoy.test.js" is NOT registered yet',
+          "  /* deferred: \"block-comment-decoy.spec.js\" is NOT registered yet */",
+          "];",
+          "module.exports = { PLATFORM_META_SPECS };",
+        ].join("\n"),
+      );
+      expect(
+        [...metaSpecsFrom(tmpConfig)],
+        "only the real ArrayExpression element may be returned — a `//` or `/* */` " +
+          "comment quoting a spec-like name inside the array body must never be counted",
+      ).toEqual(["real-registered.test.js"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   // SABOTAGE PROOF — the detector actually fires. A synthetic platform-internal
