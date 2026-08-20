@@ -10,8 +10,8 @@
 //
 //   - .github/workflows/**/*.yml — reusable-workflow callers
 //       `uses: <owner>/<repo>/.github/workflows/<name>.yml@<ref>`     (the <ref>)
-//     and SHA-pinned composite actions
-//       `uses: <owner>/<repo>/.github/actions/<name>@<sha>  # vX.Y.Z`  (the COMMENT)
+//     and TAG-pinned composite actions
+//       `uses: <owner>/<repo>/.github/actions/<name>@<ref>`           (the <ref>)
 //     and the `platform_ref:` INPUT each caller passes — the ref the reusable's
 //       own platform checkout obeys, so it decides which platform tree RUNS (#220)
 //   - Gemfile      — `gem "cms-platform-theme", …, tag: "vX.Y.Z"`
@@ -33,14 +33,18 @@
 //   - The reusable/composite `uses:` STRINGS are read with a real YAML parser
 //     (`yaml`, eemeli) so anchors/aliases resolve and GitHub's evaluated value
 //     is what we check — NOT a regex over raw text.
-//   - EXCEPTION: a SHA-pinned composite action's required version GATE lives in
-//     the trailing `# vX.Y.Z` COMMENT, and the YAML parser DROPS comments. So
-//     for composite refs we additionally do a LINE-AWARE pass to read the
-//     comment on the same source line as the `uses:` (documented, justified
-//     exception: the gate lives in a comment, and no YAML parser can reach it).
-//     The comment, not the SHA, is the gate (resolving SHA→tag would need
-//     network/git; optional). NOTE this is the PLATFORM's own `@vX.Y.Z` release
-//     identity, not the third-party action pin comment that was retired.
+//   - NO EXCEPTION, and no comment is read. A composite USED to be the one
+//     carve-out: SHA-pinned, with its version gate in a trailing `# vX.Y.Z`
+//     COMMENT that the YAML parser drops, reached by a deliberate LINE-AWARE
+//     pass. That comment went with the 2026-08-20 fleet-wide retirement of the
+//     action pin comment (it drifted silently and then lied, and Dependabot
+//     rewrote it inconsistently). A composite is TAG-pinned now — the same
+//     carve-out the reusables take — so its version is the structural `<ref>`
+//     and ONE rule covers both. This script reads NO comments at all; do not
+//     re-introduce a comment pass, and do not re-introduce a SHA-pinned
+//     composite, which `fails a composite pinned by SHA, even with a CURRENT
+//     version comment` in e2e/check-platform-pin-consistency.test.js asserts is
+//     a violation regardless of what its comment says.
 //
 // USAGE
 //   node scripts/check-platform-pin-consistency.js [--root DIR]
@@ -777,7 +781,7 @@ if (RUN_AS_CLI) {
   if (violations.some((v) => !v.message)) {
     process.stderr.write(
       `\nFix: bring every platform-version reference above to ${platformRef} (the platform.lock ` +
-        `platform_ref). Bump the workflow @ref pins + composite # comments + the ` +
+        `platform_ref). Bump the workflow @ref pins (reusables AND composites) + the ` +
         `with: platform_ref inputs, and the Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
         `(platform-bump moves every reference atomically; Dependabot ignores all ` +
         `cms-platform refs, #242 + #244 — a hand-edit, a partially-applied bump, or a ` +

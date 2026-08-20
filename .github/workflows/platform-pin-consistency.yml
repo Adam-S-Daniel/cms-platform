@@ -1,8 +1,9 @@
 # Reusable ANTI-SKEW guard (issue #29) — single platform-version pin.
 #
 # A consuming repo references the cms-platform version in MANY places (every
-# reusable-workflow `uses:@<tag>`, every SHA-pinned composite action's trailing
-# `# vX.Y.Z` comment, the Gemfile gem `tag:`, the Gemfile.lock git-source
+# reusable-workflow `uses:@<tag>`, every composite action's `uses:@<tag>` — they
+# are TAG-pinned too since 2026-08-20, and no comment is read anywhere; see
+# docs/PIN-CONSISTENCY.md — the Gemfile gem `tag:`, the Gemfile.lock git-source
 # `tag:`, and platform.lock `platform_ref`). Skew no longer comes from
 # Dependabot — it now `ignore`s every cms-platform ref in both ecosystems
 # (#242 + #244) — but from a hand-edit, a partially-applied platform-bump

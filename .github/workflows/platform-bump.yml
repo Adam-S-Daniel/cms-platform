@@ -224,18 +224,22 @@ jobs:
             # tag cut BEFORE it (v0.1.0..v0.1.84, whose drift is frozen into the
             # release tree) and any bump targeting one of those.
             # Covers BOTH ref shapes a seeded example can actually carry: a
-            # reusable `uses:@vX.Y.Z` and the `platform_ref:` INPUT. A third
-            # substitution used to sit here, stamping a composite action's
-            # trailing `# vX.Y.Z` comment. It was DEFENSIVE and never had a
-            # target — measured 2026-08-20: zero
-            # `…/.github/actions/<n>@<sha>` pins exist anywhere in this repo or
-            # its examples tree. It is removed because the fleet is retiring the
-            # trailing version comment on SHA pins (it goes stale silently and
-            # then lies), so a comment-WRITING substitution is a latent reverter
-            # rather than a harmless no-op. The pin-consistency checker still
-            # reads a composite's comment as its version GATE — see
-            # docs/PIN-CONSISTENCY.md; if a composite pin is ever introduced,
-            # settle the gate there before re-adding any stamping here.
+            # reusable `uses:@vX.Y.Z` and the `platform_ref:` INPUT — and the
+            # `uses:@` arm spans `workflows` AND `actions`, so a COMPOSITE is
+            # already carried by it. A composite takes the platform TAG now, the
+            # same carve-out the reusables take, so its version IS the ref and
+            # moves with this one substitution.
+            #
+            # A third substitution used to sit here, stamping a composite's
+            # trailing `# vX.Y.Z` comment. It is gone, and it must NOT be
+            # re-added. The comment is not merely unwritten — it is not READ
+            # anywhere either: check-platform-pin-consistency.js parses the
+            # structural ref and no comments at all (docs/PIN-CONSISTENCY.md),
+            # and e2e/check-platform-pin-consistency.test.js asserts a
+            # SHA-pinned composite FAILS even when its comment is CURRENT. So
+            # re-adding a comment-WRITING substitution here would not restore a
+            # gate; it would stamp a label the checker now rejects — the exact
+            # reverter the 2026-08-20 fleet-wide retirement removed.
             #
             # The `platform_ref:` one is not optional (#220). Stamping only `uses:@` seeded
             # jodidaniel.com's cms-scheduled-publish-loop caller with the example's
