@@ -197,3 +197,125 @@ Two consequences to know before changing either:
   mutates the template, applies the scaffolder's real `substitute()`, and runs
   this script on the result, asserting a shape can never red a scaffolded site
   while the template guard stays green.
+
+## Pin AGREEMENT — the one-file check a fleet repo can actually run (#283)
+
+Everything above is the CONSUMER story, and it stops at the two sites.
+`check-platform-pin-consistency.js` needs a `platform.lock` for its canonical
+ref, a gem `tag:`, and a `platform-pin-consistency` reusable wired into CI.
+**Ten repos call a cms-platform reusable; only two have any of that.** The other
+eight — `_agent-guidance`, `skills-evals`, `fastmail-actions`, `GHA-bench`,
+`repo-settings`, `claude-memory-map`, `agentskills` and this repo's own
+self-caller — carry a single thin caller and nothing else, so every guard on
+this page is structurally unreachable from them.
+
+### The defect
+
+Each of those callers names the platform version TWICE:
+
+```yaml
+jobs:
+  audit:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/scheduled-run-health.yml@v0.1.88
+    with:
+      platform_ref: v0.1.88
+```
+
+Dependabot's `github-actions` ecosystem moves the first (a dependency ref) and
+**structurally cannot** move the second (a `with:` input value). Four of the
+seven carry no cms-platform `ignore`: three of them (`GHA-bench`,
+`repo-settings`, `claude-memory-map`) run the `github-actions` ecosystem and are
+live to the half-bump today, and `agentskills` has no `dependabot.yml` at all,
+so nothing moves its pin in either direction. The skew that results is worse
+than a crash: the NEW reusable runs against the OLD script its stale
+`platform_ref` sparse-checks out; an argv-scanning `flag()` silently ignores a
+flag it does not know; and the job goes **green**, having performed none of the
+detection the new workflow asked for. Measured when #283 was filed: seven of the
+eight sat on `v0.1.85`, a tag whose `scheduled-run-health.yml` has no push lane
+at all, while `skills-evals` accumulated fourteen unreported failing
+default-branch push runs its own health audit structurally could not see.
+
+**#283's announced hand-mitigation has since landed, and the gap has already
+re-opened — which is the whole point.** Re-measured 2026-08-20 by parsing each
+repo's `origin/main` workflow tree: all seven now pin `scheduled-run-health.yml`
+at `v0.1.87` with `platform_ref` agreeing, so the VALUES are consistent. But the
+platform is at `v0.1.88` and both consumers are already there, moved by
+`platform-bump.yml` — which never targets these seven. They are a release behind
+again, one release after the hand-bump, exactly as #283 predicted. The hand-bump
+fixed the values; nothing fixed the mechanism, and that is why #283 stays open.
+
+### The check
+
+`scripts/check-pin-agreement.js`: **any mapping carrying both a `uses:@<ref>`
+and a `with.platform_ref` must have the two refs equal.** That is all of it.
+
+Three properties are the point, not incidental:
+
+- **Identity-free.** No repo slug, no canonical version, no lockfile, no
+  manifest — it compares a file against ITSELF. That is what makes it runnable
+  by a repo with none of the machinery this page otherwise assumes. A job-level
+  `uses:` is always a reusable WORKFLOW (steps, not jobs, name actions) and a
+  `platform_ref` input only means anything to a platform reusable, so the
+  pairing needs no configuration to disambiguate.
+- **It parses.** Anchors have been legal in workflows since 2025-09-18, so
+  either half can be an alias whose value is written elsewhere; a regex reads
+  such a file as clean because it cannot see the value at all. `merge: true` is
+  set for the same reason — without it a `<<:` merge key survives as a literal
+  own key and a job assembled that way looks like a job with no `uses:` and no
+  `with:`. Findings are located by KEY PATH (`jobs.audit`), not line number,
+  because an aliased value's line is not the line to edit.
+- **Three-valued exit.** `0` agree, `1` skew, `2` could-not-run — including a
+  scan that examined ZERO files. Folding could-not-run into `0` is the exact
+  silent-green failure this issue is about.
+
+### Where it lives, and why not somewhere else
+
+`.github/workflows/pin-agreement.yml` is a **reusable workflow**, because that
+is the only delivery an adopting fleet repo can take: one thin caller, no Node
+project, no lockfile, no local dependency. It checks the caller's tree out,
+sparse-checks the script out of the platform, installs the `yaml` parser at the
+exact version this repo already vets in `e2e/package.json`, and runs it.
+
+Adopt it by copying the caller snippet in that file's header, triggered on
+`pull_request` + `push` over `.github/workflows/**` — so a half-bump PR goes red
+*before* it merges rather than after. **That also makes Dependabot safe to
+re-enable** on the four repos that currently have no cms-platform `ignore`,
+which is what un-stalls the three that do (their `ignore` was copied from the
+consumers, where `platform-bump.yml` owns the version atomically — but
+`platform-bump` never targets these repos, so nothing else moves the pin and
+they simply stop).
+
+**The caller checks itself, and that is sound in both broken directions.** The
+check reads the CALLER's workflow tree, which is always current, so a half-bump
+is caught even when the stale `platform_ref` hands it the OLD script; and a
+`platform_ref` predating the script leaves nothing to execute, which fails the
+step loudly. There is no arrangement of the two refs in which it quietly passes.
+
+It is deliberately **not** added to `examples/site/.github/workflows/`. That set
+is the consumer-dictated workflow set, so a new file there makes both consumers'
+workflow-set parity report MISSING until they adopt it — and the consumers are
+the two repos this skew already cannot reach.
+
+`e2e/pin-agreement.test.js` (a registered meta-spec) drives the checker over
+synthetic workflows, over `examples/site` and over this repo's own workflows,
+and locks the reusable's shape.
+
+### What this deliberately does NOT do
+
+Two other options were on the table for #283 and are out of scope here:
+
+- **Extending `platform-bump.yml` to these repos.** Atomic and correct, but they
+  have no `platform.lock`, no gem and no pin-consistency gate, so most of what
+  that workflow does would have nothing to act on.
+- **Removing the second reference** — having the reusable resolve its own script
+  from the ref it was called at, so `platform_ref:` need not exist for these
+  callers and the skew class disappears entirely. That is the better fix if it
+  is reachable; it is a change to the reusable's contract, not a lint, and it
+  belongs in its own change with its own evidence.
+
+This lint makes the skew LOUD. It does not make it impossible — and until a
+fleet repo actually adds the thin caller, it does not make it loud there either.
+**Adoption is the remaining work, and it is #283's, not this page's:** shipping
+the checker and the reusable is option 1's *mechanism*; option 1 is only
+delivered once the seven repos carry the caller and the three with a
+cms-platform `ignore` can drop it. #283 stays open for that.

@@ -718,6 +718,45 @@ out of lockstep piecemeal — a stale `platform_ref` input once silently ran a
 `platform-release-and-bump` skill) before changing
 `check-platform-pin-consistency.js` or `platform-bump.yml`'s seeding logic.
 
+### A caller naming the version twice must name it the same twice (#283)
+
+Ten repos call a cms-platform reusable; only the two consumers have a
+`platform.lock`, a gem and a pin-consistency gate, so every guard on that page
+is unreachable from the other eight. Each of their callers names the version
+TWICE — `uses: …@vX.Y.Z` and `with: platform_ref: vX.Y.Z` — and Dependabot's
+`github-actions` ecosystem moves the first and **structurally cannot** move the
+second. The skew is worse than a crash: the NEW reusable runs against the OLD
+sparse-checked-out script, an argv-scanning `flag()` ignores flags it does not
+know, and the job reports **green** having detected nothing. Measured
+2026-08-20: seven of eight a release behind, one of them with fourteen
+unreported failing default-branch push runs its own audit could not see.
+
+`scripts/check-pin-agreement.js` asserts the two refs agree, and is deliberately
+**identity-free** — no slug, no canonical version, no lockfile; it compares a
+file against itself, which is what makes it runnable by a repo with none of the
+platform's machinery. It PARSES (`merge: true`), because an aliased or
+merge-keyed value is invisible to a line scan. Exit codes are three-valued: `0`
+agree, `1` skew, `2` could-not-run — a zero-file scan is `2`, never `0`.
+
+Delivery is `.github/workflows/pin-agreement.yml`, a reusable, because a thin
+caller is the only thing these repos can adopt. **Do not add a caller for it to
+`examples/site/.github/workflows/`** — that set is the consumer-dictated
+workflow set, so a new file there reports MISSING on both consumers until they
+adopt it, and the consumers are the two repos this skew cannot reach anyway.
+The caller checks ITSELF: it reads the caller's (always current) workflow tree,
+so a half-bump is caught even when a stale `platform_ref` supplies the old
+script, and a `platform_ref` predating the script fails the step loudly.
+
+**#283 is NOT closed by shipping this.** The checker and the reusable are option
+1's mechanism; option 1 lands when the seven repos actually carry the thin
+caller. None does yet. The hand-mitigation #283 announced did land — re-measured
+2026-08-20, all seven agree at `v0.1.87` — but the platform is at `v0.1.88` and
+both consumers are already there, so the seven are a release behind again one
+release later. Values fixed, mechanism unchanged.
+
+→ read `docs/PIN-CONSISTENCY.md` ("Pin AGREEMENT") before changing the checker,
+the reusable, or the two options (#283's 2 and 3) deliberately left out of it.
+
 ### Dependabot must not bump ANY cms-platform reference (#242, #244)
 
 `platform-bump` owns the platform version atomically — every `uses:@<tag>`
@@ -781,6 +820,47 @@ definitions — consumers don't have them, and an unregistered
 platform-internal spec ships green here and red-fails on the next consumer.
 → read `docs/CONSUMER-COMPATIBILITY.md` before writing a new e2e spec or
 touching `PLATFORM_META_SPECS`.
+
+### A consumer's nudge `required_contexts` is bound to its OWN ruleset (#284)
+
+`required_contexts` is the auto-merge nudge's entire notion of "green" — the
+reusable builds `REQUIRED` from it and gates `pulls.merge()` on every member
+being green. A list SHORTER than the repo's real required set therefore asks
+for a merge it has not established. jodidaniel.com passed ONE of six for months
+(jodidaniel.com#156); it was safe only because `pulls.merge()` answered 405 on
+its behalf, i.e. safe by accident.
+
+`e2e/consumer-automerge-nudge-contexts.test.js` closes it where it has to hold —
+on the site whose branch protection is doing the waiting. It reads the manifest
+the consumer's own lane checked out (`<SITE_ROOT>/.cms-platform/repo-settings.yml`
+— every lane that runs this harness against a site checks the WHOLE platform out,
+no `sparse-checkout:`), looks the site up by `CMS_REPO`, and asserts its
+`required_contexts` equals that repo's `rulesets.main` → `ruleset_library[…]`
+→ `required_status_checks` set, is non-empty, and is ` / `-shaped throughout.
+
+Three things about it that are decisions, not accidents:
+
+- **It is deliberately NOT in `PLATFORM_META_SPECS`** — registering it would
+  testIgnore it on the CONSUMER lane it exists for (the #244 lesson that also
+  keeps `consumer-required-check-mirrors.test.js` unregistered). It requires the
+  `yaml` library DIRECTLY rather than through `workflow-yaml-utils.js`, because
+  the registry's `workflows-def` detector treats that require as an
+  unconditional platform signal; its one `.github`/`workflows` path join is
+  SITE_ROOT-rooted for the same reason.
+- **The oracle is PINNED, not live** — it is the manifest at the site's own
+  `platform_ref`, so it lags in the false-GREEN direction. Accepted knowingly:
+  reading the live ruleset is a network call this suite forbids, the window is
+  one release wide (a bump moves `platform_ref` and every `uses:@` together),
+  and a pinned check would still have caught #156 by months.
+- **A site absent from `repos:` FAILS, it does not skip.** The objection that
+  killed earlier attempts — "a scaffolded site isn't in the manifest, so it
+  needs a skip" — is the argument for failing: rulesets change only via a
+  `repo-settings.yml` PR, so absence means no MANAGED ruleset at all and a nudge
+  anchored to nothing. A soft path there would land on exactly the sites with
+  the least review behind them.
+
+The platform-side half stays `e2e/cms-automerge-nudge.test.js` (the TEMPLATE's
+list vs `ruleset_library.consumer-main`). Neither covers the other's surface.
 
 ## Editorial-workflow label audit (v0.1.6; self-heal + label-at-creation v0.1.48)
 

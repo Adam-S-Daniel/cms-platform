@@ -248,6 +248,12 @@ const PLATFORM_META_SPECS = [
   // harness spec sources for unregistered platform-internal specs. A harness
   // self-test; ENOENT/no-op on a consumer (no platform tree to police).
   "platform-meta-spec-registry.test.js",
+  // #283 — the pin-agreement lint: drives scripts/check-pin-agreement.js over
+  // synthetic workflows AND over this repo's own .github/workflows plus the
+  // examples/site thin-caller templates, and asserts the shape of the
+  // pin-agreement.yml reusable that delivers the check to fleet repos with no
+  // harness. All platform tree; a consumer ships none of it.
+  "pin-agreement.test.js",
   "playwright-image-drift.test.js",
   // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
   // root plugin.json + .claude-plugin/plugin.json manifests, the vendored
