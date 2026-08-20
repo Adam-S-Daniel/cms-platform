@@ -133,7 +133,7 @@ jobs:
 
       - name: Lint the examples/site workflow TEMPLATES
         # A BARE `actionlint` walks only the repo's OWN .github/workflows, so the
-        # 32 thin-caller templates under examples/site/.github/workflows had NO
+        # thin-caller templates under examples/site/.github/workflows had NO
         # static analysis at all — measured: a deliberately broken canary file
         # dropped in that tree left `actionlint -color` at exit 0, while naming
         # the same file explicitly exited 1. That tree is what `scaffold/

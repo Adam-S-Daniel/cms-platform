@@ -37,9 +37,10 @@
 //     the trailing `# vX.Y.Z` COMMENT, and the YAML parser DROPS comments. So
 //     for composite refs we additionally do a LINE-AWARE pass to read the
 //     comment on the same source line as the `uses:` (documented, justified
-//     exception — same rationale as scripts/sync-action-pin-comments.sh, which
-//     also must read trailing `uses:` comments line-aware). The comment, not the
-//     SHA, is the gate (resolving SHA→tag would need network/git; optional).
+//     exception: the gate lives in a comment, and no YAML parser can reach it).
+//     The comment, not the SHA, is the gate (resolving SHA→tag would need
+//     network/git; optional). NOTE this is the PLATFORM's own `@vX.Y.Z` release
+//     identity, not the third-party action pin comment that was retired.
 //
 // USAGE
 //   node scripts/check-platform-pin-consistency.js [--root DIR]
@@ -271,9 +272,8 @@ function pinNodesWithLines(text) {
 // LINE-AWARE read of the trailing `# …` comment on a given 1-based source line.
 // JUSTIFIED EXCEPTION to the "parse with YAML, not regex" rule: a SHA-pinned
 // composite action's REQUIRED version gate lives in the trailing comment, which
-// the YAML parser discards. Same pattern as scripts/sync-action-pin-comments.sh
-// (which also must read trailing `uses:` comments line-aware). We only read the
-// comment text here — the structural `uses:` value itself came from the parser.
+// the YAML parser discards. We only read the comment text here — the structural
+// `uses:` value itself came from the parser.
 function trailingComment(lines, line1) {
   const lineStr = lines[line1 - 1] || "";
   const hash = lineStr.indexOf("#");

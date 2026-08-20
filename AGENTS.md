@@ -1048,11 +1048,15 @@ v0.1.76, `CMS_AUTOMATION_APP_ID` / `CMS_AUTOMATION_APP_PRIVATE_KEY` could not be
 confirmed. **State the limitation honestly rather than asserting either way**, and
 design credential-dependent features to **fail SOFT**: absent credentials must
 produce a clear notice that names the EXACT knobs, never a crash and never a
-silent no-op. `dependabot-comment-sync.yml` is the pattern — no App credential
-simply means it skips with a notice naming all three knobs
-(`CMS_PLATFORM_PAT` / `vars.CMS_AUTOMATION_APP_ID` /
-`CMS_AUTOMATION_APP_PRIVATE_KEY`), which is what keeps "never onboarded"
-distinguishable from "misconfigured".
+silent no-op. The pattern was set by `dependabot-comment-sync.yml` (deleted
+2026-08-20 with the pin-comment convention): no App credential simply meant it
+skipped with a notice naming all three knobs (`CMS_PLATFORM_PAT` /
+`vars.CMS_AUTOMATION_APP_ID` / `CMS_AUTOMATION_APP_PRIVATE_KEY`), which is what
+keeps "never onboarded" distinguishable from "misconfigured". `repo-settings-apply.yml`
+carries the same shape today. Note `CMS_AUTOMATION_APP_ID` /
+`CMS_AUTOMATION_APP_PRIVATE_KEY` now have NO consumer — the passthrough in
+`scripts/set-repo-variables.sh` is kept for the next workflows-scoped job, not
+because something reads it.
 
 ## Approving `regression-review` on a render-neutral PR
 

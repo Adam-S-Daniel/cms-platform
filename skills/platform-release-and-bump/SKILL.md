@@ -175,11 +175,16 @@ v0.1.76 incident this rule comes from.
   own `platform_ref`**, i.e. the NEW ref the bump PR is introducing, so the
   mismatch surfaces **first on the bump PR itself**, not later. So the pin
   rewrite alone is not enough: add the new `secrets:` line to the consumer's
-  caller in the same commit. The live instance is v0.1.76's
+  caller in the same commit. The live instance was v0.1.76's
   `dependabot-comment-sync` caller gaining
   `app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}` (harmless when
   the secret is unset — an unset secret is an empty string and the reusable then
-  skips cleanly). This is the same class of drift that let jodidaniel's sweep
+  skipped cleanly). That caller has since been DELETED along with the
+  pin-comment convention, which makes it the other half of the same lesson: a
+  release that REMOVES a dictated caller obliges every consumer to delete its
+  thin caller in the same commit as the `platform_ref` bump, or workflow-set
+  parity reports EXTRA and reds the bump PR (same shape as the v0.1.83 skills
+  transport removal). This is the same class of drift that let jodidaniel's sweep
   caller silently lose its `CMS_E2E_PAT` map and `startup_failure` for weeks —
   only caught earlier, at the bump.
 - **v0.1.76 also changes 9 workflow callers' `pull_request` types** (dropping

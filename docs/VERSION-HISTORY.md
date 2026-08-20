@@ -926,6 +926,10 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   push-trigger/prod-loop-eviction reason.
 
   **Comment-sync is now dogfooded, and the drift it repairs is structural.**
+  (SUPERSEDED 2026-08-20: comment-sync and the pin-comment convention it served
+  were deleted fleet-wide — Dependabot's refresh proved not just incomplete but
+  INCONSISTENT, so the label was removed rather than synced. The drift analysis
+  below is still the evidence for that decision.)
   Dependabot rewrites a pin comment ONLY when the comment matches the version it
   is bumping FROM, so #194 (6.2.2 → 6.2.3 behind "# v6.1.1 (2026-05-05)") can
   never self-repair and each bump widens the gap; #179 carries setup-node

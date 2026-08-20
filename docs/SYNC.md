@@ -223,15 +223,16 @@ merely assumed:
 | `Gemfile` `gem "cms-platform-theme", …, tag:` + `Gemfile.lock` git-source `tag:` | `platform-bump` (Dependabot `bundler` ignores this gem, #242) |
 | `platform.lock` `platform_ref` + `with: platform_ref:` workflow inputs | `platform-bump` |
 
-**On the composite-comment row:** `dependabot-comment-sync.yml` exists to
-repair a `# vX.Y.Z` comment Dependabot's `github-actions` ecosystem left
-behind after bumping a SHA-pinned composite's SHA — but since #244 that
-ecosystem never bumps a cms-platform composite in the first place, so there
-is nothing for it to sync there today. Verified: zero
-`…/.github/actions/…@<sha>` pins in either consumer's `.github/workflows/`.
-It stays wired for the day a consumer pins a third-party composite by SHA
-(see the `github-actions-sha-pinning` skill), which is the case it was
-actually built for.
+**On the composite-comment row:** the `# vX.Y.Z` here is the PLATFORM's own
+release identity on a cms-platform composite — the pin-consistency gate — and
+`platform-bump` owns it. It is NOT the third-party action pin comment, which
+was retired fleet-wide (2026-08-20): a trailing `# vX.Y.Z (YYYY-MM-DD)` on a
+third-party SHA pin goes stale silently and then actively lies, and
+Dependabot rewrites it only sometimes. `dependabot-comment-sync.yml` and
+`scripts/sync-action-pin-comments.sh`, which existed to keep those comments
+accurate, are deleted. A third-party `uses:` is now `@<sha>` and nothing
+else; resolve the version when you need it
+(`git ls-remote <url> | grep <sha>`, or the Dependabot PR title).
 
 Because they used to run independently, a consumer could sit skewed for a
 long time (observed live: **adamdaniel.ai** pinned `@v0.1.0` loop/deploy
@@ -252,7 +253,7 @@ checker derives the canonical version from `platform.lock`, parses every
 workflow with the **`yaml` parser** (anchors resolved — not regex) to collect
 cms-platform `uses:@` refs, reads the SHA-pinned composites' trailing
 `# vX.Y.Z` comment via a **line-aware pass** (the only justified exception — the
-YAML parser drops comments, same as `scripts/sync-action-pin-comments.sh`),
+YAML parser drops comments and the gate lives in one),
 checks every literal **`with: platform_ref:`** input, and
 reads the Gemfile/Gemfile.lock `tag:`. It **aggregates all** violations and
 fails CI with a per-file diff (found vs expected) when any disagree; exits 0

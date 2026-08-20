@@ -52,8 +52,9 @@ repo's `yaml` lib) makes them all agree:
   `platform_ref`. Composite refs `.../actions/*@<sha>`: SHA-pinned, so the gate is
   the trailing `# vX.Y.Z` COMMENT == `platform_ref`. **The comment is read by a
   LINE-AWARE pass** because the YAML parser drops comments — the one justified
-  regex/line exception (same rationale as `scripts/sync-action-pin-comments.sh`,
-  documented in the script header).
+  regex/line exception. (This is the PLATFORM's own release identity, and is
+  unaffected by the 2026-08-20 retirement of the third-party action pin
+  comment.)
 - **Checks the `platform_ref:` INPUT each caller passes (#220).** The reusable's
   platform checkout does `ref: ${{ inputs.platform_ref }}`, so this value — not
   the `uses:@` pin — decides WHICH platform tree the job actually runs. It is

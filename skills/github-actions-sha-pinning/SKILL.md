@@ -1,6 +1,6 @@
 ---
 name: github-actions-sha-pinning
-description: How cms-platform and its consumer sites pin GitHub Actions — third-party actions and cms-platform composite actions go to a full 40-character commit SHA with a dated version comment, while a reusable-workflow reference to cms-platform stays on its release tag — plus the 7-day cooling-off before adopting a new release. Trigger when adding, editing, or auditing workflow files in cms-platform, adamdaniel.ai, or jodidaniel.com.
+description: How cms-platform and its consumer sites pin GitHub Actions — third-party actions go to a bare full 40-character commit SHA with NO trailing version comment, a cms-platform composite action keeps a `# vX.Y.Z` comment because that comment is the pin-consistency gate, and a reusable-workflow reference to cms-platform stays on its release tag — plus the 7-day cooling-off before adopting a new release. Trigger when adding, editing, or auditing workflow files in cms-platform, adamdaniel.ai, or jodidaniel.com.
 ---
 
 # GitHub Actions Security: SHA Pinning and Version Policy
@@ -18,11 +18,14 @@ Git tags are mutable — a compromised maintainer can move a tag to arbitrary co
 # WRONG — mutable tag
 - uses: actions/checkout@v4
 
-# RIGHT — immutable SHA with dated version comment
+# WRONG — trailing version comment (retired 2026-08-20; see Rule 2)
 - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+
+# RIGHT — immutable SHA, nothing after it
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 ```
 
-Every **third-party** `uses:` line, and every reference to one of cms-platform's own **composite actions** under `.github/actions/`, must be a full 40-character commit SHA followed by a comment containing the exact version number **and its release date** (`# vX.Y.Z (YYYY-MM-DD)`). AGENTS.md's "Pinning GitHub Actions" section — synced fleet-wide from `_agent-guidance` — is the source of that universal rule; what this skill adds is the cms-platform-specific mechanics, starting with the one shape the rule does NOT reach.
+Every **third-party** `uses:` line, and every reference to one of cms-platform's own **composite actions** under `.github/actions/`, must be a full 40-character commit SHA. AGENTS.md's "Pinning GitHub Actions" section — synced fleet-wide from `_agent-guidance` — is the source of that universal rule; what this skill adds is the cms-platform-specific mechanics, starting with the one shape the rule does NOT reach.
 
 ### The carve-out: a reusable-WORKFLOW reference to cms-platform stays on the release TAG
 
@@ -33,11 +36,25 @@ Every **third-party** `uses:` line, and every reference to one of cms-platform's
 
 **Composite actions are the opposite case, and the contrast is the whole point.** `uses: …/.github/actions/<n>@<sha>` IS SHA-pinned; there the version gate moves to the trailing `# vX.Y.Z` comment, which the checker reads with a deliberate LINE-AWARE pass because the YAML parser drops comments. So the checker recognises three shapes under two disciplines: a reusable workflow pinned by TAG, a composite action pinned by SHA with the version in its comment, and the `platform_ref:` INPUT carrying the version literal. `docs/PIN-CONSISTENCY.md` is the full account — read it before changing anything in this section, and keep the two in step.
 
-## Rule 2: Always include a dated version comment
+## Rule 2: No trailing version comment on a third-party pin (reversed 2026-08-20)
 
-Append `  # vX.Y.Z (YYYY-MM-DD)` (two spaces before `#`) to the right of the SHA on the same line. This is required so humans can tell at a glance which version is pinned and agents know when to check for updates.
+**A third-party `uses:` ends at `@<sha>`. Do not append `# vX.Y.Z`, `# vX.Y.Z (YYYY-MM-DD)`, or any other version label.**
 
-**The date is not optional.** It is what makes Rule 3's cooling-off auditable from the diff alone — without it a reviewer cannot tell a week-old release from a same-day one. AGENTS.md states the same convention ("SHA-pin every workflow `uses:` with a `# vX.Y.Z (date)` comment"), `dependabot-comment-sync.yml` exists specifically to keep the `(YYYY-MM-DD)` suffix accurate, and every pin in the tree already carries it — in cms-platform the count of pins carrying a dated comment equals the count of pins, with no exceptions.
+This reverses the previous rule, which required a dated comment. The measured reason: the comment goes stale silently and then actively **lies**, and a wrong label is worse than no label because it is read and believed. Dependabot's rewriting of it is **inconsistent and cannot be relied on** — it rewrote a bare `# v5` to `# v7.0.0` in GHA-bench#52 while leaving `# v4` stale on the line above **in the same file**, and left every `# vX.Y.Z (YYYY-MM-DD)` comment untouched in skills-evals #38/#39/#40 while moving their SHAs. The result was `actions/checkout` at v7.0.1 labelled `# v4.3.1` in one file and `# v6.0.0` in two others in the same repo.
+
+The SHA is the truth. **When you need the version, resolve it:**
+
+```bash
+git ls-remote https://github.com/actions/checkout | grep <sha>
+```
+
+or read it off the Dependabot PR title.
+
+The machinery that existed to keep the comments honest — `.github/workflows/dependabot-comment-sync.yml`, its self-caller, the consumer template, and `scripts/sync-action-pin-comments.sh` — is **deleted**. Do not reintroduce a comment-writing job: `sync-action-pin-comments.sh` treated the comment as OPTIONAL in its match, so it rewrote a comment-LESS line to GROW one, and a single manual run would undo the fleet change.
+
+### The ONE surviving `# vX.Y.Z` comment, and why it is not an exception to the above
+
+A cms-platform **composite** pin — `uses: Adam-S-Daniel/cms-platform/.github/actions/<n>@<sha>  # v0.1.88` — keeps its comment, because there the comment is not a label: it is the **pin-consistency GATE**. `scripts/check-platform-pin-consistency.js` reads it with a deliberate line-aware pass and asserts it equals `platform.lock`'s `platform_ref`; `platform-bump` moves it in lockstep with every other platform ref. It is the platform's release identity, not a third-party version annotation, and it is machine-checked on every PR — so it cannot go quietly stale the way a third-party label does. Strip it and pin-consistency reds. See `docs/PIN-CONSISTENCY.md`.
 
 ## Rule 3: 7-day cooling-off period
 
@@ -86,13 +103,13 @@ Within whichever repo you are in, the rules reach every `uses:` line under `.git
 
 ## Dependabot interaction
 
-Dependabot's github-actions ecosystem updates the `@<sha>` ref and the version part of the trailing comment, but it does NOT refresh the `(YYYY-MM-DD)` release-date suffix cms-platform's pinning convention requires — and over a few bumps the `vX.Y.Z` part of the comment can drift behind the SHA. The `dependabot-comment-sync.yml` workflow runs on every Dependabot PR and pushes a follow-up commit that rewrites every drifted `# vX.Y.Z (YYYY-MM-DD)` comment to match the new SHA's actual tag and tag-commit date. Do NOT manually fix Dependabot's comments — the sync workflow handles it before the auto-merge gate fires.
+Dependabot's github-actions ecosystem updates the `@<sha>` ref. It is now the ONLY thing it needs to update, because a third-party pin carries no comment (Rule 2). Nothing about a Dependabot PR needs a follow-up commit any more, and no `workflows`-scoped credential is needed to service one.
 
-**The workflow needs a `workflows`-scoped credential, and there are TWO accepted shapes.** The PAT is preferred: `CMS_PLATFORM_PAT` (a fine-grained PAT with Contents + `workflows: write` — the same token platform-bump uses), passed as the `workflow_sha_comment_pat` secret. The fallback is a **GitHub App** (Contents R/W + Pull requests R/W + Workflows R/W) from which the reusable mints a short-lived installation token: its ID is read from the caller repo's `vars.CMS_AUTOMATION_APP_ID` **variable** and only its private key is a secret (`app_private_key` ← `CMS_AUTOMATION_APP_PRIVATE_KEY`). The App exists for a repo with no PAT of its own — cms-platform itself, since that PAT lives in the consumers. The PAT wins when both are present, so a consumer's existing path is unchanged; with NEITHER configured the job logs a `::notice::` naming all three knobs and exits cleanly, never reddening a Dependabot PR. Full setup: the `consumer-repo-provisioning` skill.
+### Why a drifted comment could never self-repair — the evidence behind Rule 2's reversal
 
-### Why a drifted comment can never self-repair
+**Dependabot only rewrites a pin comment that matches the version it is bumping FROM.** Once the comment and the SHA disagree, every subsequent bump leaves the comment alone and the gap WIDENS. Both live instances on cms-platform, found when comment-sync was first dogfooded on this repo (it had been shipped to consumers and never run here): PR #179 carried `actions/setup-node` **v7.0.0**'s SHA behind `# v6.4.0 (2026-04-20)` across 18 files, and PR #194 bumped 6.2.2 → 6.2.3 while its comment still said `v6.1.1` — so the rewrite could never match. This is structurally the SAME trap as #220's frozen `platform_ref`, where a generic `CUR`→`LATEST` literal replace could not match an already-drifted value either.
 
-**Dependabot only rewrites a pin comment that matches the version it is bumping FROM.** Once the comment and the SHA disagree, every subsequent bump leaves the comment alone and the gap WIDENS. Both live instances on cms-platform, found when comment-sync was first dogfooded on this repo (it had been shipped to consumers and never run here): PR #179 carried `actions/setup-node` **v7.0.0**'s SHA behind `# v6.4.0 (2026-04-20)` across 18 files, and PR #194 bumped 6.2.2 → 6.2.3 while its comment still said `v6.1.1` — so the rewrite could never match. This is structurally the SAME trap as #220's frozen `platform_ref`, where a generic `CUR`→`LATEST` literal replace could not match an already-drifted value either. The lesson generalises: **a repair keyed on the old value cannot fix a value that has already drifted past it** — which is exactly why the fix is an out-of-band sync that reads the SHA's ACTUAL tag, not a smarter replace.
+The account first answered this with an out-of-band sync that read the SHA's ACTUAL tag. The 2026-08-20 measurement retired that answer in favour of removing the field: Dependabot's behaviour is not merely incomplete but **inconsistent** (it refreshed one comment and not its neighbour in the same file — GHA-bench#52), so no amount of syncing makes the label trustworthy, and an untrustworthy label that is nonetheless believed is a net negative. The general lesson survives its instance: **a repair keyed on the old value cannot fix a value that has already drifted past it** — and the cheapest repair is often deleting the derived field rather than keeping it in sync.
 
 ### The cooling-off is MECHANISED on cms-platform (and only there), and it is GRADUATED
 

@@ -62,6 +62,13 @@ example caller's top-level `permissions:` block).
 
 ## Action pinning
 
-Every `uses:` in these files is pinned to a full 40-char commit SHA with a
-version + date comment, per the platform's SHA-pinning policy. Bump them only
+Every third-party `uses:` in these files is pinned to a full 40-char commit SHA
+and **nothing after it** — the trailing `# vX.Y.Z (YYYY-MM-DD)` comment was
+retired on 2026-08-20 because it went stale silently and then lied, and
+Dependabot refreshed it only sometimes. Resolve a version when you need one
+(`git ls-remote <url> | grep <sha>`, or the Dependabot PR title). Bump only
 after the 7-day cooling-off window.
+
+The one `# vX.Y.Z` that stays is on a cms-platform **composite** pin, where the
+comment is the pin-consistency GATE rather than a label — see
+`docs/PIN-CONSISTENCY.md`.
