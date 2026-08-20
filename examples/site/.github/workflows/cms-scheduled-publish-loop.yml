@@ -36,9 +36,9 @@ permissions:
 
 jobs:
   scheduled-publish-loop:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/cms-scheduled-publish-loop.yml@v0.1.86
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cms-scheduled-publish-loop.yml@v0.1.87
     with:
       # Pin to the SAME ref as the `uses:` pin above so the harness matches.
-      platform_ref: v0.1.86
+      platform_ref: v0.1.87
     secrets:
       CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

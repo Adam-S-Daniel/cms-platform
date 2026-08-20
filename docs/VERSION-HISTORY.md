@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.86)
+## Version history (v0.1.0 → v0.1.87)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1582,7 +1582,7 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
 
   Closes #263, #264, #265, #266.
 
-- **v0.1.86** (pending release) — **the scheduled-run health audit widens to
+- **v0.1.86** (2026-08-19) — **the scheduled-run health audit widens to
   cover silent default-branch PUSH failures too (#279).** `audit-scheduled-runs.js`
   watched only `event=schedule`; a `push`-to-default-branch failure is exactly
   as silent (no PR to go red on, no notification). Live incident, 2026-08: a
@@ -1621,3 +1621,97 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   still outstanding) before the fix, and shows none after.
 
   Closes #279.
+
+- **v0.1.87** (pending release) — **a required status context may no longer sit
+  inside a `concurrency` group, on the platform or on a consumer (#285).** A
+  cancelled required check answers `405 Required status check "<ctx>" is
+  cancelled` and nothing overrides it — not native auto-merge, not an explicit
+  merge call, not a nudge bot. AGENTS.md states the rule categorically and then
+  offers an operative carve-out ("jobs triggered only by `push`/`synchronize`
+  are safe to cancel"); v0.1.87 implements the CATEGORICAL form, because the
+  carve-out is false in both of its halves.
+
+  ITS PREMISE IS FALSE. `opened` and `synchronize` DO share a head sha.
+  Measured on adamdaniel.ai PR #3006, 2026-08-09: opened `01:57:10Z`,
+  `head_ref_force_pushed` `01:57:38Z`, and visual-regression runs
+  `31289327061` (cancelled) and `31289327099` (skipped) BOTH created
+  `01:57:41Z` carrying `head_sha 68d7c777` — webhook latency dispatches the
+  `opened` run after the force-push has already moved the head. jodidaniel.com
+  has the twin at `01:58:49Z` on `bf49581a`. On that occasion the required
+  context concluded `success` and the cancelled check-run was the non-required
+  `visual-regression / generate`: a near-miss, not an outage, which is exactly
+  the non-determinism the rule exists to remove. Neither type can be dropped —
+  without them the required check never reports at all.
+
+  IT COULD NOT TRAVEL. `concurrency` lives in the platform reusable, which a
+  `platform_ref` bump carries to both consumers. `pull_request.types` lives in
+  the consumer CALLER, which nothing propagates: `platform-bump.yml` seeds only
+  a wholly-MISSING caller (its own comment says so) and
+  `check-platform-pin-consistency.js`'s `structuralShape()` deliberately
+  excludes `on:`. A template-only trigger change reaches neither live site,
+  ever, while a lint reading `examples/site/` reports green forever.
+
+  THREE OFFENDERS, not the two first identified: `secrets-scan.yml`
+  (`scan / scan`), `visual-regression.yml`
+  (`visual-regression / approve-regression`), and `self-ci.yml` — THIS repo's
+  own merge gate, whose four jobs are platform-main's four required contexts
+  and which carried `cancel-in-progress: true`. `repo-settings-pat-verify.yml`
+  keeps its group: its dynamic job name skeletonises to
+  `/^verify [\s\S]* PAT$/` and cannot be any required context. `reopened` is
+  restored everywhere the previous attempt narrowed it — its only
+  justification was the group now gone.
+
+  THE GUARD, and why it is SMALLER than the attempt it replaces. Deleting the
+  exemption deleted its machinery and three defects with it: `SHA_REPEATING_EVENTS`
+  was ALLOW-by-default (`issue_comment`, `workflow_run`, `merge_group`,
+  `check_suite`, `check_run:rerequested`, `status`, `label`,
+  `deployment_status` and tag `push` all returned zero offenders);
+  `SHA_DISTINCT_PR_TYPES` blessed the wedge shape above; and the run-sentinel
+  was substring-matched into the resolved key, so a literal `deploy-<run-id>-lane`
+  — static text, always colliding — earned the exemption. Detection now keys on
+  PRESENCE of a `concurrency` key: there is no value left to forge.
+
+  IT IS SPLIT IN TWO ON PURPOSE. `required-context-concurrency.test.js` is
+  registered in `PLATFORM_META_SPECS` and gates the required `node-unit-lints`
+  lane against the WORKING TREE — a pre-release gate. Registration is precisely
+  what `testIgnore`s a spec on consumer lanes, i.e. on the repos where #285
+  actually wedges PRs, so `consumer-required-context-concurrency.test.js` is
+  deliberately UNregistered and reads the site's own callers, its pinned
+  `.cms-platform/` reusables and that checkout's `repo-settings.yml`. Shared
+  matching lives in a plain helper module so neither spec inherits the other's
+  platform-internal signal. Run against adamdaniel.ai's live callers paired with
+  the pre-fix reusables, the consumer spec exits 1 naming both real offenders.
+
+  TWO BYPASSES adversarial review found in the rewrite, both unit-locked. An
+  unresolvable `uses:` passed GREEN via three composing defects — a
+  case-sensitive owner regex (lowercasing the owner, which GitHub resolves
+  identically, flipped a real offender from `1 failed` to `15 passed`),
+  caller-side declarations discarded before they were reported, and a
+  per-context resolution counter masked by a sibling publisher (`e2e / e2e` has
+  two, so one going unreadable was invisible). And a `concurrency:` arriving
+  through a YAML MERGE KEY was invisible: `yaml` v2 leaves `<<` as a literal
+  key, so a merged job's own keys are `['<<','uses']`. Fixed at the shared
+  `workflow-yaml-utils.js` seam rather than per-spec, because that blind spot
+  sat under EVERY workflow lint here; a measured no-op today (no merge key
+  exists in this repo or either consumer).
+
+  ALSO IN THIS RELEASE, three silent-detection fixes. `audit-scheduled-runs.js`'s
+  `renderFindings()` hardcoded the scheduled-lane noun while serving both lanes,
+  so the #279 push lane rendered "N failing SCHEDULED run(s)" under a heading
+  saying PUSH — found by running that lane against real data for the first time
+  (run `32320712148`). The `cms-automerge-nudge` template passed five of
+  `consumer-main`'s six required contexts, short `e2e / e2e`, so a freshly
+  scaffolded site inherited the jodidaniel.com#156 defect. And
+  `platform-meta-spec-registry.test.js` extracted `PLATFORM_META_SPECS` by
+  REGEX over the array body, so a quoted spec name inside a comment counted as a
+  registration — now acorn, matching the sibling that always did it correctly.
+  Under the old form the new test fails AND the "every platform-internal spec is
+  registered" test spuriously PASSES, so it could mask a real gap, not merely
+  false-fail.
+
+  SCOPE LIMIT, recorded in both specs: `repo-settings.yml`'s third ruleset
+  `cms-feature-branches` (bare `validate-content`, active on both consumers) is
+  not scanned. Adding it naively would MISFIRE — no caller job is named
+  `validate-content`, since callers publish the two-part
+  `editorial / validate-content` — and there is no live exposure: the underlying
+  job is covered via `consumer-main` and declares no group.

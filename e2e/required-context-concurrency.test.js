@@ -377,7 +377,7 @@ test.describe("a required status context never sits in a concurrency group", () 
   // is free to drift, and no lint here can see that copy — hence the CONSUMER-mode
   // sibling named in the header.
   //
-  // NOTE WHICH REUSABLE IT READS. The templates pin `@v0.1.86`, but the second
+  // NOTE WHICH REUSABLE IT READS. The templates pin a RELEASED tag, but the second
   // half of each context is resolved against the WORKING TREE's
   // `.github/workflows/`, not against that tag. That is deliberate and is what
   // makes this a PRE-RELEASE gate: a group added to a reusable in this PR is
