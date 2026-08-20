@@ -22,9 +22,9 @@ permissions:
 
 jobs:
   preview-media:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/preview-media.yml@v0.1.87
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/preview-media.yml@v0.1.88
     with:
       pr_number: ${{ github.event.pull_request.number }}
       base_ref: ${{ github.base_ref }}
       apex: example.com
-      platform_ref: v0.1.87
+      platform_ref: v0.1.88

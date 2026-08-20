@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.87)
+## Version history (v0.1.0 → v0.1.88)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1622,7 +1622,7 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
 
   Closes #279.
 
-- **v0.1.87** (pending release) — **a required status context may no longer sit
+- **v0.1.87** (2026-08-20) — **a required status context may no longer sit
   inside a `concurrency` group, on the platform or on a consumer (#285).** A
   cancelled required check answers `405 Required status check "<ctx>" is
   cancelled` and nothing overrides it — not native auto-merge, not an explicit
@@ -1718,3 +1718,69 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
   `validate-content`, since callers publish the two-part
   `editorial / validate-content` — and there is no live exposure: the underlying
   job is covered via `consumer-main` and declares no group.
+
+- **v0.1.88** (pending release) — **the invariant becomes the OUTCOME: no required
+  status context may end `cancelled` (#289).** v0.1.87 removed every `concurrency`
+  group from every required-context publisher and closed the route THOSE had. Four
+  days later the next route surfaced, and it had already fired: a job also ends
+  `cancelled` when it hits `timeout-minutes`, and two required-context reusables
+  carried one. Measured on live PRs — adamdaniel.ai#3217
+  `preview-media / preview-media` cancelled at 30m20s and `parity / parity` at
+  30m26s, adamdaniel.ai#3202 `parity / parity` at 30m16s — all three on the
+  30-minute wall with no `concurrency` group anywhere near them, and both PRs still
+  unmerged. Scoped honestly: neither PR is "all-green but unmergeable" (both also
+  carry a real `e2e / e2e` failure), so what is demonstrated is the MECHANISM, not
+  yet a wedge with everything else green.
+
+  A GitHub quirk sharpens it: a job killed by `timeout-minutes` reports `cancelled`,
+  NOT `timed_out`. `timed_out` is already in the health audit's `BAD_CONCLUSIONS` —
+  had the API used it here, the audit would have caught this.
+
+  WHY ALL THREE DETECTION LAYERS WERE BLIND, and each defensibly. The v0.1.87 lint
+  keys on the PRESENCE of a `concurrency` key; there is none here, so it correctly
+  reported clean — it enforced what it said, and what it said was one cause.
+  `audit-scheduled-runs.js` excludes `cancelled` NECESSARILY, because the
+  runner-starvation carve-out is itself a cancelled shape. And the push lane is
+  scoped to the default branch on the recorded rationale that "a push to a feature
+  branch already has a human watching it via the PR" — the exact assumption that
+  fails when the check never goes red.
+
+  THE FIX. `parity` and `preview-media` are split the way `e2e` and
+  `visual-regression` ALREADY do it: a WORK job keeps the 30-minute wall under a name
+  no ruleset requires (`parity / parity-probe`, `preview-media / media-probe`), plus
+  a GATE job that keeps the required name, carries `needs:` + `if: always()` and NO
+  `timeout-minutes`, and exits non-zero unless the probe succeeded. A wall-killed
+  probe now concludes `cancelled` on a context nobody requires and the required
+  context goes RED. The wall is neither raised nor deleted — a bigger number keeps
+  the failure mode, and no number makes a runaway job bounded — and both properties
+  are locked positively so a later edit cannot quietly drop the probe's timeout. The
+  fix lives entirely in the platform reusables, which is what lets it travel: a
+  `platform_ref` bump carries it to both consumers, and `structuralShape()` compares
+  the caller's `permissions` + `jobs.*`, so there is no consumer-side parity churn.
+
+  THE GUARDS ARE RENAMED `required-context-concurrency*` ->
+  `required-context-cancellable*`. Naming a guard after one CAUSE is precisely what
+  let the second cause ship underneath it four days after #285 closed the first. The
+  shared matcher now reports four structural causes rather than one: a `concurrency`
+  declaration at any of the four sites; a `timeout-minutes` on a publisher without
+  the translating shape; `strategy.fail-fast` not explicitly false on a matrix
+  publisher; and a publisher with `needs:` whose `if:` never says `always()` — that
+  last being the TWIN defect a careless version of this very fix would introduce,
+  where the gate SKIPS instead of reddening. The third has no live instance and the
+  header says so rather than implying coverage. Both registry facts survive the
+  rename and are asserted: the platform spec registered in `PLATFORM_META_SPECS`,
+  the CONSUMER sibling deliberately not.
+
+  DELIBERATELY NOT DONE, with the reasoning recorded at `BAD_CONCLUSIONS`: no
+  `cancelled` detector was added to the health audit. Admitting it at run level would
+  void the runner-starvation carve-out, and it is the wrong lane regardless — a
+  wedged required context is an `event=pull_request` run that neither the schedule
+  nor the push query returns. A precise detector is a THIRD lane over open PRs' check
+  rollups, separating a cancelled run superseded by a later push (routine) from one
+  still on the PR's CURRENT head sha with no successful sibling for that context (the
+  wedge). That has its own evidence and its own false-positive tuning; the split
+  above prevents the cause, a detector would report the symptom.
+
+  Also: `verify-consumer-pins.sh` advertised 96 checks while running 90 — the number
+  is REMOVED rather than corrected, since a count in prose drifts again — and its
+  `--help` range was truncating mid-sentence.

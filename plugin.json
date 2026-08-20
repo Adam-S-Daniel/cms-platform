@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "cms-platform",
-  "version": "0.1.87",
+  "version": "0.1.88",
   "description": "cms-platform's operational skills for its Jekyll + Decap CMS + AWS sites: admin config render, publish-loop and stuck-PR triage, cutting a release and reconciling consumer pins, preview environments, and the Playwright e2e harness.",
   "author": { "name": "Adam Daniel" },
   "repository": "https://github.com/Adam-S-Daniel/cms-platform",
