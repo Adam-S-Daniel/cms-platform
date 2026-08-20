@@ -2,7 +2,7 @@
 
 What this is: how `scripts/check-platform-pin-consistency.js` keeps every
 place a consumer references the platform version — reusable `uses:@ref`
-pins, SHA-pinned composite `# vX.Y.Z` comments, `Gemfile`/`Gemfile.lock`
+pins, composite `uses:@ref` pins, `Gemfile`/`Gemfile.lock`
 `tag:`, `platform.lock` `platform_ref`, and each caller's `platform_ref:`
 input — in lockstep, plus the workflow-content (call-interface) parity check
 that catches a thin caller whose body drifted from the canonical template.
@@ -14,16 +14,16 @@ See also the `platform-release-and-bump` skill and `docs/SYNC.md`'s
 ## Single-version pin consistency guard (anti-skew, #29)
 
 A consumer references the platform version in MANY places (every reusable
-`uses: …/.github/workflows/<n>.yml@<ref>`, every SHA-pinned composite
-`uses: …/.github/actions/<n>@<sha>  # vX.Y.Z` COMMENT, the `Gemfile`/`Gemfile.lock`
+`uses: …/.github/workflows/<n>.yml@<ref>`, every cross-repo composite
+`uses: …/.github/actions/<n>@<ref>`, the `Gemfile`/`Gemfile.lock`
 `tag:`, and `platform.lock` `platform_ref`). Historically Dependabot + `platform-bump`
 landed bumps PIECEMEAL, so consumers drifted (observed live: adamdaniel.ai pinned
 `@v0.1.0` loop/deploy callers, gem `@v0.1.5`, others `@v0.1.3`/`@v0.1.6` at once — a
 `v0.1.0` reusable against a `v0.1.5` gem is a latent bug source). **As of #244 that
 race is fully closed, on both halves.** #242 took the gem `tag:` out of it first —
 Dependabot's `bundler` ecosystem `ignore`s `cms-platform-theme`, so `platform-bump`
-is the gem's only bumper — and #244 did the same for the `uses:@` / composite-comment
-refs: Dependabot's `github-actions` ecosystem now `ignore`s every
+is the gem's only bumper — and #244 did the same for every `uses:@` platform
+ref: Dependabot's `github-actions` ecosystem now `ignore`s every
 `Adam-S-Daniel/cms-platform/*` dependency name too (see `docs/SYNC.md` for the
 evidence and the wildcard-matcher detail). **No Dependabot ecosystem bumps a
 cms-platform reference anymore** — `platform-bump` is the single writer of the
@@ -49,12 +49,20 @@ repo's `yaml` lib) makes them all agree:
   resolved — NOT regex); collects `uses:@` refs targeting the platform owner/repo
   (configurable via `--owner/--repo`, defaulting from `platform.lock`
   `platform_repo`). Reusable refs `.../workflows/*.yml@<ref>`: the `<ref>` must ==
-  `platform_ref`. Composite refs `.../actions/*@<sha>`: SHA-pinned, so the gate is
-  the trailing `# vX.Y.Z` COMMENT == `platform_ref`. **The comment is read by a
-  LINE-AWARE pass** because the YAML parser drops comments — the one justified
-  regex/line exception. (This is the PLATFORM's own release identity, and is
-  unaffected by the 2026-08-20 retirement of the third-party action pin
-  comment.)
+  `platform_ref`. Composite refs `.../actions/*@<ref>`: **the same rule** — the
+  `<ref>` is a TAG and must == `platform_ref`.
+
+  A composite used to be the exception: SHA-pinned, with its version carried in a
+  trailing `# vX.Y.Z` COMMENT read by a LINE-AWARE pass (the one justified
+  regex/line exception to "parse, don't scan"). That comment went with the
+  2026-08-20 fleet-wide retirement of the action pin comment — it drifted
+  silently and then actively lied, and Dependabot rewrote it inconsistently. The
+  tag ties a composite to `platform.lock`'s `platform_ref` DIRECTLY and is
+  auditable without parsing a comment, so the checker now reads no comments at
+  all and reusables and composites obey one rule. The tag carve-out in AGENTS.md
+  ("a reusable *workflow* from a repo this account owns stays on a tag") extends
+  to these composites for exactly that reason; nothing third-party is ever a
+  tag.
 - **Checks the `platform_ref:` INPUT each caller passes (#220).** The reusable's
   platform checkout does `ref: ${{ inputs.platform_ref }}`, so this value — not
   the `uses:@` pin — decides WHICH platform tree the job actually runs. It is
@@ -108,8 +116,9 @@ eviction #1892 — an `on:` change, excluded).
 The live instance was not a hand-edit. `platform-bump.yml`'s **seeding** path
 (the workflow-SET-parity feature, v0.1.20/#54) copies a newly-dictated caller
 from `examples/site/.github/workflows/` and re-pins it — but it stamped only the
-`uses:@` pin and the composite `# vX.Y.Z` comment, because those were "the ref
-shapes the pin-consistency checker recognizes." So jodidaniel.com's
+`uses:@` pin and the composite ref (then a SHA plus a `# vX.Y.Z` comment),
+because those were "the ref shapes the pin-consistency checker recognizes." So
+jodidaniel.com's
 `cms-scheduled-publish-loop.yml`, seeded by the v0.1.62 bump, landed with
 `uses:@v0.1.62` **and the example template's own `platform_ref: v0.1.59`**. Every
 later bump's generic `CUR->LATEST` literal replace could never repair it — `CUR`
@@ -158,9 +167,12 @@ workflow the consumer lacks; a release that adds none needs no seeding step.
 `scripts/verify-consumer-pins.sh`'s check 2 — "no platform version token other
 than the canonical one on any platform-mentioning line" — is the most GENERAL
 pin detector here. Unlike `check-platform-pin-consistency.js`, which walks
-parsed YAML by key, it reads LINES, so it sees a trailing `# vX.Y.Z (date)`
-comment on a `uses:` or a `platform_ref:` — a shape a parser cannot see at all,
-because the parser drops comments.
+parsed YAML by key, it reads LINES, so it sees a stale version token in a
+LEFTOVER trailing `# vX.Y.Z (date)` comment on a `uses:` or a `platform_ref:` —
+a shape a parser cannot see at all, because the parser drops comments. House
+style carries no such comment since 2026-08-20, which is precisely why this
+check still earns its place: it is what turns a stray surviving one into a
+finding instead of an invisible lie.
 
 It used to be an inline `awk` program. It now lives in
 **`scripts/stale-platform-refs.js`** and is `require`d by

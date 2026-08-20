@@ -69,6 +69,9 @@ Dependabot refreshed it only sometimes. Resolve a version when you need one
 (`git ls-remote <url> | grep <sha>`, or the Dependabot PR title). Bump only
 after the 7-day cooling-off window.
 
-The one `# vX.Y.Z` that stays is on a cms-platform **composite** pin, where the
-comment is the pin-consistency GATE rather than a label — see
+**No `# vX.Y.Z` survives anywhere, including on a platform ref.** A cms-platform
+**composite** referenced from another repo was the last holdout — there the
+comment was the pin-consistency GATE rather than a label — and it now takes a
+release TAG instead (`…/.github/actions/<n>@v0.1.88`), which ties it to
+`platform.lock`'s `platform_ref` directly with no comment to parse. See
 `docs/PIN-CONSISTENCY.md`.

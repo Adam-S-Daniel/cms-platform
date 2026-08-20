@@ -694,7 +694,7 @@ before touching skill delivery.
 ## Single-version pin consistency guard (anti-skew, #29)
 
 A consumer references the platform version in many independent places
-(`uses:@ref` pins, composite SHA comments, `Gemfile`/`Gemfile.lock` tags,
+(reusable and composite `uses:@ref` pins, `Gemfile`/`Gemfile.lock` tags,
 `platform.lock`, and each caller's own `platform_ref:` input) that can drift
 out of lockstep piecemeal — a stale `platform_ref` input once silently ran a
 14-release-old platform tree. → read `docs/PIN-CONSISTENCY.md` (see also the

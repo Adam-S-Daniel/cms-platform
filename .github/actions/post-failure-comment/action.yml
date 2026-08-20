@@ -173,7 +173,7 @@ runs:
 
     - name: Post failure summary to PR
       if: ${{ inputs.mode == 'post' && (github.event_name == 'pull_request' || inputs.pr-number != '') }}
-      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
       env:
         # Pass inputs via env vars to avoid script-injection: the
         # actions/github-script README explicitly recommends this
@@ -246,7 +246,7 @@ runs:
 
     - name: Resolve failure-summary comment on success
       if: ${{ inputs.mode == 'resolve' && (github.event_name == 'pull_request' || inputs.pr-number != '') }}
-      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
       env:
         FAILURE_MARKER: ${{ inputs.marker }}
         FAILURE_TITLE: ${{ inputs.title }}

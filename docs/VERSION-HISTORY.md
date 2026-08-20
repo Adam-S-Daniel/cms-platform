@@ -14,6 +14,41 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED (2026-08-20) — the action pin comment is retired fleet-wide, and a
+cross-repo composite is now TAG-pinned.** Deliberately NOT a release: skills
+reach consumers through their own `skills.lock`, not the release tag, so no
+version bump is needed and cutting one would force the whole atomic edit set
+`e2e/examples-site-pins-current.test.js` enforces.
+
+- **Every `uses:` line ends at its ref.** 128 trailing `# vX.Y.Z (date)`
+  comments were stripped from this repo's 32 workflows and the
+  `post-failure-comment` composite. WHY: the comment goes stale silently and
+  then actively lies, and Dependabot's rewriting of it is INCONSISTENT — it
+  rewrote a bare `# v5` to `# v7.0.0` in GHA-bench#52 while leaving `# v4` stale
+  on the line above in the same file, and left every `# vX.Y.Z (YYYY-MM-DD)`
+  untouched in skills-evals #38/#39/#40 while moving their SHAs, so
+  `actions/checkout` at v7.0.1 read `# v4.3.1` in one file and `# v6.0.0` in two
+  others in one repo. A wrong label is worse than no label, because it is read
+  and believed. The SHA is the truth; resolve the version when you need it.
+- **The composite version gate was REPLACED, not deleted.** A cms-platform
+  composite referenced from another repo was the one shape whose comment was
+  machine-checked (it was the pin-consistency gate), which is exactly why it
+  could not simply be stripped. It now takes the same TAG form the reusables
+  already use — `…/.github/actions/<n>@v0.1.88` — which ties it to
+  `platform.lock`'s `platform_ref` directly and is auditable without parsing a
+  comment. `check-platform-pin-consistency.js` and `e2e/template-pin-rules.js`
+  moved together (they MUST NOT diverge, or the template lint and the consumer
+  gate disagree about what a valid pin is), and the checker now reads no
+  comments at all — retiring the "one justified regex exception" to the
+  parse-don't-scan rule rather than documenting it.
+- **The gate was DORMANT when this landed**, which is what made it safe to
+  change: no consumer SHA-pins a platform composite today, and this repo's own
+  composite refs are local `./…` paths. It is shipped and would re-arm.
+- The comment-WRITING machinery (`dependabot-comment-sync.yml`, its self-caller,
+  the consumer template, `scripts/sync-action-pin-comments.sh`) was deleted in
+  the preceding commit — its matcher treated the comment as OPTIONAL, so one run
+  would have rewritten comment-less lines to GROW one and undone the change.
+
 - **v0.1.0** — initial extraction; dogfooded on adamdaniel.ai (prod green, pixel-identical).
 - **v0.1.1** — org-portability hardening (de-identified secrets-scan / identity).
 - **v0.1.2** — fixes pass.

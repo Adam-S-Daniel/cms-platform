@@ -84,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -95,7 +95,7 @@ jobs:
         # site repo. Fetch them from the pinned ref so the guard stays in
         # lockstep with the labeller (label-non-decap-prs.yml) and the
         # fixture harness on what "Decap-shaped" means.
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
@@ -116,7 +116,7 @@ jobs:
         # from scripts/content-pr-guard.js below — not re-typed here) for
         # deliberate maintenance (fixture repair, bulk migration) — the
         # `labeled` event re-runs this check and it then passes.
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const path = require('path');
@@ -239,7 +239,7 @@ jobs:
             }
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b  # v1.321.0 (2026-07-22)
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b
         with:
           ruby-version: '3.2'
           bundler-cache: true
@@ -279,7 +279,7 @@ jobs:
 
       - name: Apply draft label on new PR
         if: github.event.action == 'opened'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             // Ensure the 'cms/draft' label exists
@@ -391,7 +391,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Enable auto-merge for CMS PR
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           # CMS_E2E_PAT, NOT the default GITHUB_TOKEN. GitHub's policy
           # is that push events created by GITHUB_TOKEN don't trigger

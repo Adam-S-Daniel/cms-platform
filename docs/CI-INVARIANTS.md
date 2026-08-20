@@ -115,8 +115,11 @@ per-PR checkout):
   with a sync workflow; the measured verdict is that a label which goes stale
   silently and then LIES is worse than no label, because it is read and
   believed. So `dependabot-comment-sync.yml`, its self-caller and
-  `scripts/sync-action-pin-comments.sh` are DELETED, and a third-party
-  `uses:` carries `@<sha>` and nothing after it. Resolve the version when you
+  `scripts/sync-action-pin-comments.sh` are DELETED, and EVERY `uses:` line
+  carries its ref and nothing after it — `@<sha>` for a third-party action,
+  `@<tag>` for a cms-platform reusable or composite (the composite was the last
+  shape keeping a comment, as its pin-consistency gate; it takes the tag now).
+  Resolve the version when you
   actually need it (`git ls-remote <url> | grep <sha>`, or the Dependabot PR
   title). Do not reintroduce a comment-writing job — it would silently revert
   the fleet.

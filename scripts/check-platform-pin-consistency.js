@@ -230,10 +230,13 @@ function classifyUses(usesStr) {
 }
 
 // Collect every `uses:` scalar AND every literal `platform_ref:` value from the
-// parsed YAML (anchors resolved). The parser drops comments, so we ALSO need the
-// source LINE for composite refs. We gather both via the Document API: visit
-// Pairs whose key is `uses` / `platform_ref`, and compute the 1-based line of
-// the value node's start.
+// parsed YAML (anchors resolved), via the Document API: visit Pairs whose key is
+// `uses` / `platform_ref`. We also compute the 1-based line of each
+// `platform_ref` value node so a violation can point at it.
+//
+// No comment is read here. Composite refs used to need one — their version lived
+// in a trailing `# vX.Y.Z` that the YAML parser discards — but composites are
+// TAG-pinned now, so the structural value is the whole story.
 //
 // WHY `platform_ref` is in scope (#220): it is the input a reusable's platform
 // checkout does `ref: ${{ inputs.platform_ref }}` with, so it — not the `uses:@`
@@ -260,31 +263,13 @@ function pinNodesWithLines(text) {
       const k = pair.key && pair.key.value;
       const v = pair.value;
       if (!v || typeof v.value !== "string" || !v.range) return;
-      if (k === "uses") out.push({ uses: v.value, line: lineOf(v) });
+      if (k === "uses") out.push({ uses: v.value });
       else if (k === "platform_ref" && !v.value.includes("${{")) {
         platformRefs.push({ ref: v.value.trim(), line: lineOf(v) });
       }
     },
   });
-  return { out, platformRefs, lines: text.split("\n") };
-}
-
-// LINE-AWARE read of the trailing `# …` comment on a given 1-based source line.
-// JUSTIFIED EXCEPTION to the "parse with YAML, not regex" rule: a SHA-pinned
-// composite action's REQUIRED version gate lives in the trailing comment, which
-// the YAML parser discards. We only read the comment text here — the structural
-// `uses:` value itself came from the parser.
-function trailingComment(lines, line1) {
-  const lineStr = lines[line1 - 1] || "";
-  const hash = lineStr.indexOf("#");
-  if (hash === -1) return "";
-  return lineStr.slice(hash + 1).trim();
-}
-
-// Extract a `vX.Y.Z` (or any `vN…`) token from a comment like `v0.1.0 (2026-05-29)`.
-function versionFromComment(comment) {
-  const m = comment.match(/\bv\d+(?:\.\d+){0,3}\b/);
-  return m ? m[0] : null;
+  return { out, platformRefs };
 }
 
 // RUN_AS_CLI-guarded: on `require` (the unit test drives the pure helpers) this
@@ -316,29 +301,16 @@ for (const wf of RUN_AS_CLI ? listWorkflowFiles() : []) {
     });
     continue;
   }
-  for (const { uses, line } of nodes.out) {
+  for (const { uses } of nodes.out) {
     const cls = classifyUses(uses);
     if (!cls) continue; // not a cms-platform ref → ignore
-    if (cls.type === "reusable") {
-      // The pinned ref IS the version: `…@<ref>` must equal platform_ref.
-      record(wf, `reusable uses:@${cls.subpath}`, cls.ref, `uses: ${uses}`);
-    } else {
-      // Composite: SHA-pinned; the gate is the trailing `# vX.Y.Z` comment.
-      const comment = trailingComment(nodes.lines, line);
-      const ver = versionFromComment(comment);
-      if (!ver) {
-        violations.push({
-          file: rel(wf),
-          kind: `composite uses:@${cls.subpath}`,
-          found: comment ? `# ${comment} (no vX.Y.Z token)` : "(no # vX.Y.Z comment)",
-          expected: platformRef,
-          detail: `uses: ${uses}`,
-        });
-        checked += 1;
-        continue;
-      }
-      record(wf, `composite uses:@${cls.subpath} (# comment)`, ver, `uses: ${uses}`);
-    }
+    // Reusable workflow OR composite action: the pinned ref IS the version, and
+    // it must equal platform_ref. Composites used to be SHA-pinned with the
+    // version carried in a trailing `# vX.Y.Z` comment; that comment was retired
+    // (it drifted silently and Dependabot rewrote it inconsistently), so a
+    // cross-repo composite now takes the same TAG form the reusables already
+    // use. One rule, one thing to read, and no comment to parse.
+    record(wf, `${cls.type} uses:@${cls.subpath}`, cls.ref, `uses: ${uses}`);
   }
   // The `platform_ref` INPUT — the ref the reusable's platform checkout obeys (#220).
   for (const { ref, line } of nodes.platformRefs) {

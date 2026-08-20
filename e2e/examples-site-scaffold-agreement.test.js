@@ -109,6 +109,30 @@ const SHAPES = [
     guard: "red",
     site: 1,
   },
+  // A cross-repo COMPOSITE is TAG-pinned, exactly like a reusable. It used to be
+  // SHA-pinned with its version in a trailing `# vX.Y.Z` comment; that comment
+  // was retired fleet-wide on 2026-08-20 (it drifted silently and Dependabot
+  // rewrote it inconsistently), so the SHA form — with or without a comment —
+  // is now the violation and the tag is the only green shape.
+  {
+    name: "COMPOSITE pinned by canonical TAG (house style — must PASS)",
+    file: "deploy-production.yml",
+    mutate: (t) =>
+      t + stepJob(`      - uses: ${SLUG}/.github/actions/recursion-gate@${CANONICAL}`),
+    guard: "green",
+    site: 0,
+  },
+  {
+    // Guard STRICTER, same as the drifted-reusable row below: substitute()
+    // rewrites a stale platform @ref on the way into a new site, so the
+    // scaffolded site is born clean and only the TEMPLATE is red. Measured.
+    name: "COMPOSITE pinned to a STALE tag (guard STRICTER — substitute() heals it)",
+    file: "deploy-production.yml",
+    mutate: (t) =>
+      t + stepJob(`      - uses: ${SLUG}/.github/actions/recursion-gate@v0.1.1`),
+    guard: "red",
+    site: 0,
+  },
   {
     name: "COMPOSITE pinned by SHA with a stale comment",
     file: "deploy-production.yml",
@@ -122,7 +146,7 @@ const SHAPES = [
     site: 1,
   },
   {
-    name: "COMPOSITE pinned by SHA with a CURRENT comment (house style — must PASS)",
+    name: "COMPOSITE pinned by SHA with a CURRENT comment (SHA is the violation now)",
     file: "deploy-production.yml",
     mutate: (t) =>
       t +
@@ -130,11 +154,11 @@ const SHAPES = [
         `      - uses: ${SLUG}/.github/actions/recursion-gate@${"1".repeat(40)}` +
           `  # ${CANONICAL} (2026-08-17)`,
       ),
-    guard: "green",
-    site: 0,
+    guard: "red",
+    site: 1,
   },
   {
-    name: "COMPOSITE with NO version comment at all",
+    name: "COMPOSITE pinned by bare SHA, no comment",
     file: "deploy-production.yml",
     mutate: (t) =>
       t + stepJob(`      - uses: ${SLUG}/.github/actions/recursion-gate@${"1".repeat(40)}`),

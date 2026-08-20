@@ -1,6 +1,6 @@
 ---
 name: github-actions-sha-pinning
-description: How cms-platform and its consumer sites pin GitHub Actions — third-party actions go to a bare full 40-character commit SHA with NO trailing version comment, a cms-platform composite action keeps a `# vX.Y.Z` comment because that comment is the pin-consistency gate, and a reusable-workflow reference to cms-platform stays on its release tag — plus the 7-day cooling-off before adopting a new release. Trigger when adding, editing, or auditing workflow files in cms-platform, adamdaniel.ai, or jodidaniel.com.
+description: How cms-platform and its consumer sites pin GitHub Actions — third-party actions go to a bare full 40-character commit SHA with NO trailing version comment, and a cross-repo reference to cms-platform's own reusable workflows or composite actions stays on its release tag — plus the 7-day cooling-off before adopting a new release. Trigger when adding, editing, or auditing workflow files in cms-platform, adamdaniel.ai, or jodidaniel.com.
 ---
 
 # GitHub Actions Security: SHA Pinning and Version Policy
@@ -9,6 +9,11 @@ Three rules govern every `uses:` line under `.github/workflows/` and
 `.github/actions/` — with one shape carved out of Rule 1, and in a consumer
 that shape is the whole population. Read `## Scope` at the end before acting
 on any of this in a repo other than cms-platform.
+
+The short version: **SHA, and nothing after it — unless the target is this
+account's own platform repo, in which case a release TAG, and nothing after it
+either.** No `uses:` line in any of the three repos carries a version comment
+any more.
 
 ## Rule 1: Pin every action by full commit SHA
 
@@ -25,20 +30,24 @@ Git tags are mutable — a compromised maintainer can move a tag to arbitrary co
 - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 ```
 
-Every **third-party** `uses:` line, and every reference to one of cms-platform's own **composite actions** under `.github/actions/`, must be a full 40-character commit SHA. AGENTS.md's "Pinning GitHub Actions" section — synced fleet-wide from `_agent-guidance` — is the source of that universal rule; what this skill adds is the cms-platform-specific mechanics, starting with the one shape the rule does NOT reach.
+Every **third-party** `uses:` line must be a full 40-character commit SHA. AGENTS.md's "Pinning GitHub Actions" section — synced fleet-wide from `_agent-guidance` — is the source of that universal rule; what this skill adds is the cms-platform-specific mechanics, starting with the one shape the rule does NOT reach.
 
-### The carve-out: a reusable-WORKFLOW reference to cms-platform stays on the release TAG
+### The carve-out: a CROSS-REPO reference to cms-platform stays on the release TAG
 
-**`uses: Adam-S-Daniel/cms-platform/.github/workflows/<name>.yml@v0.1.85` is correct exactly as written. Do NOT rewrite it to a SHA.** For that one shape the tag is not a mutable pointer someone forgot to nail down — it IS the version, and two pieces of machinery read it as such:
+**`uses: Adam-S-Daniel/cms-platform/.github/workflows/<name>.yml@v0.1.85` is correct exactly as written. Do NOT rewrite it to a SHA.** The same goes for a composite: `uses: Adam-S-Daniel/cms-platform/.github/actions/<name>@v0.1.85`. For those shapes the tag is not a mutable pointer someone forgot to nail down — it IS the version, and two pieces of machinery read it as such:
 
-- **The pin-consistency lint asserts the ref EQUALS `platform.lock`'s `platform_ref`.** `scripts/check-platform-pin-consistency.js`'s `classifyUses()` sorts `<owner>/<repo>/.github/workflows/<n>.yml@<ref>` into `type: "reusable"` and hands the raw `<ref>` straight to `record()`, which files a violation on anything that is not the canonical version string. A 40-character SHA is never equal to `v0.1.85`, so SHA-pinning a reusable is a guaranteed non-zero exit — the lint reports your "fix" as the breakage.
+- **The pin-consistency lint asserts the ref EQUALS `platform.lock`'s `platform_ref`.** `scripts/check-platform-pin-consistency.js`'s `classifyUses()` sorts both `<owner>/<repo>/.github/workflows/<n>.yml@<ref>` and `<owner>/<repo>/.github/actions/<n>@<ref>` into a platform ref and hands the raw `<ref>` straight to `record()`, which files a violation on anything that is not the canonical version string. A 40-character SHA is never equal to `v0.1.85`, so SHA-pinning either shape is a guaranteed non-zero exit — the lint reports your "fix" as the breakage.
 - **`platform-bump.yml` can no longer move it, and fails SILENTLY.** Its rewrite matches `…/.github/(?:workflows|actions)/[^@\s]+@` followed by `v[0-9]+(?:\.[0-9]+){0,3}` — a version literal, not a SHA. A SHA-pinned ref simply does not match, so the bump skips it without a word and the next pin-consistency run reds the PR. The caller then keeps executing whatever platform tree it was frozen at: structurally the same failure as #220, where jodidaniel.com's `cms-scheduled-publish-loop` ran a v0.1.59 tree for 14 releases because one value the bumper could not rewrite went unnoticed.
 
-**Composite actions are the opposite case, and the contrast is the whole point.** `uses: …/.github/actions/<n>@<sha>` IS SHA-pinned; there the version gate moves to the trailing `# vX.Y.Z` comment, which the checker reads with a deliberate LINE-AWARE pass because the YAML parser drops comments. So the checker recognises three shapes under two disciplines: a reusable workflow pinned by TAG, a composite action pinned by SHA with the version in its comment, and the `platform_ref:` INPUT carrying the version literal. `docs/PIN-CONSISTENCY.md` is the full account — read it before changing anything in this section, and keep the two in step.
+**Composite actions used to be the opposite case; as of 2026-08-20 they are not.** A cross-repo composite was SHA-pinned, with its version gate in a trailing `# vX.Y.Z` comment that the checker read with a deliberate LINE-AWARE pass. That comment went with the fleet-wide retirement described in Rule 2 — the same drift and the same inconsistent Dependabot rewriting applied to it, and it was the last thing in the checker that had to parse a comment at all. A composite now takes the tag, which ties it to `platform.lock`'s `platform_ref` directly and is auditable structurally.
 
-## Rule 2: No trailing version comment on a third-party pin (reversed 2026-08-20)
+So the checker recognises **two** shapes under **one** discipline: a platform ref (reusable workflow OR composite action) pinned by TAG, and the `platform_ref:` INPUT carrying the same version literal. `docs/PIN-CONSISTENCY.md` is the full account — read it before changing anything in this section, and keep the two in step.
 
-**A third-party `uses:` ends at `@<sha>`. Do not append `# vX.Y.Z`, `# vX.Y.Z (YYYY-MM-DD)`, or any other version label.**
+Note what did NOT change: a composite is still a piece of code executing on a runner with the job's token, and a tag is still mutable. The carve-out is safe here for the same reason it is safe for the reusables — the tag points at a repo **this account owns and controls**, and `platform-bump.yml` moves every one of those refs to a single release atomically. Nothing third-party is ever a tag.
+
+## Rule 2: No trailing version comment on ANY pin (reversed 2026-08-20)
+
+**A `uses:` line ends at its ref — `@<sha>` for a third-party action, `@<tag>` for a platform ref. Do not append `# vX.Y.Z`, `# vX.Y.Z (YYYY-MM-DD)`, or any other version label to either.**
 
 This reverses the previous rule, which required a dated comment. The measured reason: the comment goes stale silently and then actively **lies**, and a wrong label is worse than no label because it is read and believed. Dependabot's rewriting of it is **inconsistent and cannot be relied on** — it rewrote a bare `# v5` to `# v7.0.0` in GHA-bench#52 while leaving `# v4` stale on the line above **in the same file**, and left every `# vX.Y.Z (YYYY-MM-DD)` comment untouched in skills-evals #38/#39/#40 while moving their SHAs. The result was `actions/checkout` at v7.0.1 labelled `# v4.3.1` in one file and `# v6.0.0` in two others in the same repo.
 
@@ -52,9 +61,16 @@ or read it off the Dependabot PR title.
 
 The machinery that existed to keep the comments honest — `.github/workflows/dependabot-comment-sync.yml`, its self-caller, the consumer template, and `scripts/sync-action-pin-comments.sh` — is **deleted**. Do not reintroduce a comment-writing job: `sync-action-pin-comments.sh` treated the comment as OPTIONAL in its match, so it rewrote a comment-LESS line to GROW one, and a single manual run would undo the fleet change.
 
-### The ONE surviving `# vX.Y.Z` comment, and why it is not an exception to the above
+### There are NO surviving version comments — including on a platform ref
 
-A cms-platform **composite** pin — `uses: Adam-S-Daniel/cms-platform/.github/actions/<n>@<sha>  # v0.1.88` — keeps its comment, because there the comment is not a label: it is the **pin-consistency GATE**. `scripts/check-platform-pin-consistency.js` reads it with a deliberate line-aware pass and asserts it equals `platform.lock`'s `platform_ref`; `platform-bump` moves it in lockstep with every other platform ref. It is the platform's release identity, not a third-party version annotation, and it is machine-checked on every PR — so it cannot go quietly stale the way a third-party label does. Strip it and pin-consistency reds. See `docs/PIN-CONSISTENCY.md`.
+An earlier revision of this rule kept ONE exception: a cms-platform **composite** pin stayed `@<sha>  # v0.1.88`, on the argument that there the comment was not a label but the **pin-consistency GATE**, machine-checked on every PR and therefore unable to go quietly stale.
+
+That exception is **retired**. It was true that the comment was checked — and still the wrong design, for two reasons:
+
+- **It kept a comment-parsing pass alive in the checker** for exactly one shape, which is the "one justified regex exception" that AGENTS.md's "AST always, never regex" rule exists to resist. Moving the version into the `@ref` deletes the exception instead of documenting it.
+- **A single carve-out is what makes a fleet rule fail to land.** A rule stated as "never a version comment, except here" invites the next agent to decide their case is also the exception, and invites comment-writing machinery back to service that one shape. `sync-action-pin-comments.sh` matched the comment as OPTIONAL, so it rewrote comment-LESS lines to GROW one — a single run against a repo kept "for the composite's sake" would have undone the fleet change everywhere.
+
+So: **a `uses:` line ends at its ref, in all three repos, with no exceptions.** If you find a version comment on one, it is a leftover, and `scripts/verify-consumer-pins.sh`'s stale-token check is what turns a drifted one into a finding rather than an invisible lie.
 
 ## Rule 3: 7-day cooling-off period
 
@@ -96,8 +112,8 @@ If `object.type` is `"commit"`, the `object.sha` is already the commit SHA.
 
 This skill ships in the **`cms-platform` bundle** on the `agentskills` marketplace, so it loads wherever that bundle is installed: cms-platform itself, and the two consumer sites that name it as a source in their own `skills.lock` — **adamdaniel.ai** and **jodidaniel.com**. "This repo" is therefore ambiguous, and the three repos have materially different pin populations. Read the rules against the one in front of you.
 
-- **In cms-platform**, every `uses:` is either a third-party action or a local `./` path. There is no reusable-workflow reference to itself, so the carve-out never fires and Rule 1 applies without exception: `actions/checkout`, `actions/github-script`, `actions/setup-node`, `actions/upload-artifact`, `ruby/setup-ruby`, `aws-actions/configure-aws-credentials` and the rest are all SHA-pinned with a dated comment — in `.github/workflows/` **and** inside the `.github/actions/` composite definitions, which carry `uses:` lines of their own. The `./…` refs have nothing to pin; leave them.
-- **In a consumer (adamdaniel.ai, jodidaniel.com), the carve-out IS the entire population.** Every `uses:` line in both repos — 32 apiece at v0.1.85 — targets `Adam-S-Daniel/cms-platform/.github/workflows/*.yml@<tag>`. Neither repo pins a single third-party action, and neither calls a composite action directly. **There is nothing in a consumer for Rule 1 to fix.** If this skill has you in a consumer reaching for `gh api …/git/ref/tags/…` to convert those 32 refs to SHAs, stop — you are about to break the release machinery in both of the ways the carve-out describes, and you will have "fixed" a repo that had no violation to begin with.
+- **In cms-platform**, every `uses:` is either a third-party action or a local `./` path. It references neither its own reusable workflows nor its own composites across a repo boundary, so the carve-out never fires here and Rule 1 applies without exception: `actions/checkout`, `actions/github-script`, `actions/setup-node`, `actions/upload-artifact`, `ruby/setup-ruby`, `aws-actions/configure-aws-credentials` and the rest are all pinned to a bare SHA with **nothing after it** — in `.github/workflows/` **and** inside the `.github/actions/` composite definitions, which carry `uses:` lines of their own. The `./…` refs have nothing to pin; leave them. (This is also why the tag carve-out is currently DORMANT: it is shipped and would re-arm the moment a consumer referenced a platform composite, but nothing does today.)
+- **In a consumer (adamdaniel.ai, jodidaniel.com), the carve-out IS the entire population.** Every `uses:` line in both repos — 32 apiece at v0.1.85 — targets `Adam-S-Daniel/cms-platform/.github/workflows/*.yml@<tag>`. Neither repo pins a single third-party action, and neither calls a composite action directly today; if one ever does, it takes the same `@<tag>` form. **There is nothing in a consumer for Rule 1 to fix.** If this skill has you in a consumer reaching for `gh api …/git/ref/tags/…` to convert those 32 refs to SHAs, stop — you are about to break the release machinery in both of the ways the carve-out describes, and you will have "fixed" a repo that had no violation to begin with.
 
 Within whichever repo you are in, the rules reach every `uses:` line under `.github/workflows/` and `.github/actions/`.
 

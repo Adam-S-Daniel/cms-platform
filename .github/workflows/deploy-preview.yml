@@ -78,12 +78,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Checkout platform scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
@@ -110,7 +110,7 @@ jobs:
           fi
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b  # v1.321.0 (2026-07-22)
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b
         with:
           ruby-version: ${{ inputs.ruby_version }}
           bundler-cache: true
@@ -166,7 +166,7 @@ jobs:
           cat ./_site_preview/admin/commit.json
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3 (2026-07-22)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -228,7 +228,7 @@ jobs:
       - name: Register GitHub Deployment for the preview URL
         # Registers a GH Deployment so the per-PR Environment row exists and
         # admin/deploy-status-pill.js can find the preview URL.
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -275,7 +275,7 @@ jobs:
         # backend implements getDeployPreview as
         # GET /repos/.../commits/<pr-head-sha>/status and picks the status
         # whose `context` matches backend.preview_context = `deploy/preview`).
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -306,7 +306,7 @@ jobs:
 
       - name: Register GitHub Deployment for the per-CMS-slug preview
         if: steps.cms_slug.outputs.slug != ''
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
@@ -349,7 +349,7 @@ jobs:
             core.notice(`Registered cms-slug deployment ${deployment.id} → ${url}`);
 
       - name: Post preview URL comment
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         # PR_HEAD_SHA joins the env map this step already carries: a
         # github-script body is JS handed to an eval, so an interpolated
         # value arrives as SOURCE. Every other value here was already read
@@ -448,7 +448,7 @@ jobs:
       - name: Checkout platform scripts
         # Only the slug script is needed here; pin to the same ref so the
         # teardown computes the identical bounded slug the deploy job used.
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
@@ -464,7 +464,7 @@ jobs:
           echo "slug=${SLUG}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3 (2026-07-22)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -498,7 +498,7 @@ jobs:
             --paths "${PATHS[@]}"
 
       - name: Post teardown comment
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           BOT_MARKER_SLUG: ${{ inputs.bot_marker }}
         with:

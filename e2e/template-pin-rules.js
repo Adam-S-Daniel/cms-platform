@@ -15,38 +15,43 @@
  *   RULE A — STALE TOKEN (general, line-aware). Literally
  *     scripts/stale-platform-refs.js, the module the consumer gate itself runs.
  *     Not a mirror of it, not a port of it — the same file, `require`d. It is
- *     the only reason a trailing `# vX.Y.Z` comment on a reusable, on a
- *     composite, or on a `platform_ref:` line is caught: those live in a
- *     COMMENT, and a YAML parser drops comments.
+ *     the only reason a stale version token in a LEFTOVER trailing comment —
+ *     on a reusable, a composite, or a `platform_ref:` line — is still caught:
+ *     it lives in a COMMENT, and a YAML parser drops comments. House style
+ *     carries no such comment any more, but Rule A is what makes a stray one
+ *     that drifts a finding rather than invisible.
  *
  *   RULE B — STRUCTURE (parse-based). What Rule A structurally cannot see: a
  *     ref carrying NO version token at all. `@main`, `@v1`, a missing `@ref`,
- *     `platform_ref: main`, a composite with no `# vX.Y.Z` comment — every one
- *     of them is invisible to a token scan and RED at the consumer gate
- *     (measured: a template `uses:…@main` scaffolds a site whose
- *     verify-consumer-pins.sh exits 1). This mirrors
+ *     `platform_ref: main` — every one of them is invisible to a token scan and
+ *     RED at the consumer gate (measured: a template `uses:…@main` scaffolds a
+ *     site whose verify-consumer-pins.sh exits 1). This mirrors
  *     check-platform-pin-consistency.js — the consumer gate's check 4 — and per
  *     AGENTS.md ("AST always, never regex, for code-shape lints") it parses.
  *
  * Rule A ∪ Rule B is the whole contract. Neither is a spelling; adding a third
  * would be the mistake that produced this file.
  *
- * ── WHAT THE TWO REMEDIES SAY, AND WHY THEY DIFFER ────────────────────────
- * A platform REUSABLE is pinned by TAG and a platform COMPOSITE by SHA, so the
- * version GATE is in a different place for each and the advice has to be too:
+ * ── WHY THERE IS NOW ONE REMEDY, NOT TWO ──────────────────────────────────
+ * EVERY cross-repo platform ref — reusable workflow AND composite action — is
+ * pinned by TAG, so the `@ref` IS the version everywhere and one remedy covers
+ * all of them: set the `@ref` to the canonical tag.
  *
- *   reusable / any other subpath → the `@ref` IS the version. Its remedy names
- *     the ref, including when the ref is a SHA. That is NOT the un-pin advice
- *     it resembles: check-platform-pin-consistency.js records a reusable's
- *     `@ref` as its version and fails a SHA-pinned one outright, so a guard
- *     that told a SHA-pinned reusable to "fix its comment" instead would go
- *     GREEN while the consumer gate went RED — re-opening the very split this
- *     file closes (measured: SHA-pinned reusable + a CURRENT `# v0.1.84`
- *     comment → consumer gate exit 1).
- *   composite → SHA-pinned by house policy; its `@ref` is never compared and
- *     never named in the advice (replacing a composite's SHA with a tag would
- *     un-pin it). The gate is its trailing comment, read by Rule A; Rule B only
- *     asserts a comment EXISTS.
+ * A composite used to be the exception: SHA-pinned, with its version carried in
+ * a trailing `# vX.Y.Z` comment that Rule A read and Rule B asserted the
+ * PRESENCE of. That comment was retired fleet-wide (2026-08-20) because it went
+ * stale silently and then actively lied — Dependabot rewrote it inconsistently,
+ * leaving actions/checkout at v7.0.1 labelled `# v4.3.1` in one file and
+ * `# v6.0.0` in two others in the same repo. A wrong label is worse than no
+ * label. The tag ties a composite to platform.lock's `platform_ref` DIRECTLY
+ * and is auditable without parsing a comment, which is the whole point.
+ *
+ * The rule that still holds, and the reason a SHA-pinned platform ref is a
+ * finding rather than a nicety: check-platform-pin-consistency.js records a
+ * platform ref's `@ref` as its version and fails a SHA-pinned one outright, so
+ * a guard that accepted a SHA here would go GREEN while the consumer gate went
+ * RED — the very split this file exists to close (measured: SHA-pinned reusable
+ * + a CURRENT `# v0.1.84` comment -> consumer gate exit 1).
  */
 const YAML = require("yaml");
 const {
@@ -56,7 +61,7 @@ const {
 
 // Parse with the `yaml` Document API (anchors/aliases resolved — GitHub has
 // allowed them in workflows since 2025-09-18) AND keep each value's 1-based
-// SOURCE LINE, which is what the composite-comment presence check needs.
+// SOURCE LINE, so a finding can point at it.
 // Mirrors check-platform-pin-consistency.js's pinNodesWithLines().
 function pinNodes(text) {
   const doc = YAML.parseDocument(text);
@@ -77,21 +82,7 @@ function pinNodes(text) {
       }
     },
   });
-  return { uses, platformRefs, lines: text.split("\n") };
-}
-
-// The trailing `# …` comment on a 1-based source line. Rule B needs only its
-// PRESENCE (a composite with no version comment has no gate at all); the
-// comment's VALUE is Rule A's business.
-function trailingComment(lines, line1) {
-  const lineStr = lines[line1 - 1] || "";
-  const hash = lineStr.indexOf("#");
-  return hash === -1 ? "" : lineStr.slice(hash + 1).trim();
-}
-
-function versionFromComment(comment) {
-  const m = comment.match(/\bv\d+(?:\.\d+){0,3}\b/);
-  return m ? m[0] : null;
+  return { uses, platformRefs };
 }
 
 // Mirrors check-platform-pin-consistency.js's classifyUses(), with one
@@ -119,14 +110,17 @@ function classifyUses(usesStr) {
     return { kind: "third-party", ref, target };
   }
   const subpath = target.slice(PLATFORM_SLUG.length + 1);
+  // A composite action and a reusable workflow are BOTH tag-pinned now, so they
+  // obey one version rule. `kind` still distinguishes them because callers
+  // report the two differently — nothing here branches on it.
   if (/^\.github\/actions\/.+$/i.test(subpath)) return { kind: "composite", ref, subpath };
   return { kind: "platform", ref, subpath };
 }
 
-// RULE B — structure. Every platform ref must carry a version GATE, in the
-// place its kind puts it.
+// RULE B — structure. Every platform ref must be pinned to the canonical TAG,
+// which for every kind IS its version gate.
 function structuralOffences(text, { canonical, file = "<text>" }) {
-  const { uses, platformRefs, lines } = pinNodes(text);
+  const { uses, platformRefs } = pinNodes(text);
   const out = [];
   for (const { uses: value, line } of uses) {
     const cls = classifyUses(value);
@@ -142,20 +136,6 @@ function structuralOffences(text, { canonical, file = "<text>" }) {
           `by nothing downstream, so it silently rots`,
         noCanonical: true,
       });
-      continue;
-    }
-    if (cls.kind === "composite") {
-      // SHA-pinned by policy: never compare the ref, never name it. Only
-      // assert the gate EXISTS — Rule A checks its value.
-      if (!versionFromComment(trailingComment(lines, line))) {
-        out.push({
-          rule: "structure",
-          line,
-          found: "(no # vX.Y.Z comment)",
-          where: `line ${line}: uses: ${value}`,
-          remedy: "give it a trailing `# vX.Y.Z (date)` comment naming",
-        });
-      }
       continue;
     }
     if (cls.ref !== canonical) {
@@ -220,6 +200,4 @@ module.exports = {
   pinNodes,
   staleTokenOffences,
   structuralOffences,
-  trailingComment,
-  versionFromComment,
 };

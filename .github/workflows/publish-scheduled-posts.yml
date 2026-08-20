@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           # CMS_E2E_PAT when available so the branch push below is
           # PAT-authenticated (checkout persists this token for git
@@ -103,7 +103,7 @@ jobs:
           token: ${{ secrets.CMS_E2E_PAT || github.token }}
 
       - name: Checkout platform scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
@@ -120,7 +120,7 @@ jobs:
           # reusable workflow — surface presence through env and branch
           # in the script instead.
           HAS_CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT != '' }}
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             if (process.env.HAS_CMS_E2E_PAT !== 'true') {
@@ -138,7 +138,7 @@ jobs:
       - name: Stacking guard — skip when a scheduled-publish PR is already open
         id: stack
         if: steps.check.outputs.changed == 'true'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           github-token: ${{ secrets.CMS_E2E_PAT }}
           script: |
@@ -179,7 +179,7 @@ jobs:
 
       - name: Open the auto-publish PR and label it for auto-merge
         if: steps.check.outputs.changed == 'true' && steps.stack.outputs.skip != 'true'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           COUNT: ${{ steps.check.outputs.count }}
           BRANCH: cms/posts/scheduled-publish-${{ github.run_id }}
