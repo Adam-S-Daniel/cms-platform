@@ -126,6 +126,11 @@ const PLATFORM_META_SPECS = [
   // comment-stamping step reddened a green e2e job on 2026-08-12 and blocked a
   // merge. Reads .github/workflows/, absent on a consumer.
   "resolve-summary-fail-open.test.js",
+  // A job publishing a REQUIRED status context must not be reachable twice on
+  // one head SHA inside a `concurrency` group — a cancelled required context
+  // answers `405 ... is cancelled` and nothing overrides it. Reads the root
+  // repo-settings.yml ruleset + .github/workflows/, absent on a consumer.
+  "required-context-concurrency.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN

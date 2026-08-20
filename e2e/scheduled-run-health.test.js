@@ -707,6 +707,29 @@ test.describe("audit-scheduled-runs.js — default-branch push lane (#279)", () 
     expect(pushIdx).toBeGreaterThan(scheduledIdx);
   });
 
+  // The per-workflow line under each heading must name the lane it is IN.
+  // `renderFindings` serves both lanes and used to hardcode "scheduled run", so
+  // the push section shipped saying "**secrets-scan.yml** — 8 failing SCHEDULED
+  // run(s)" under a heading that said PUSH. Observed live on adamdaniel.ai#3173
+  // (comment 5350014233), the first time the push lane ever ran against real
+  // data. The test above did not catch it because it asserted the HEADING and
+  // never the line beneath — so this asserts the line beneath, per lane.
+  test("each lane's per-workflow line names its OWN lane, not the other's", () => {
+    const { renderSections } = loadScript();
+    const rendered = renderSections(
+      [run({ id: 1, path: ".github/workflows/a.yml" })],
+      [],
+      [pushRun()],
+      "main",
+    ).join("\n");
+    expect(rendered).toContain("**a.yml** — 1 failing scheduled run(s):");
+    expect(rendered).toContain("**secrets-scan.yml** — 1 failing default-branch push run(s):");
+    // And the contradiction itself is impossible: no line may sit under the
+    // push heading while calling its runs "scheduled".
+    const pushSection = rendered.slice(rendered.indexOf("**Failing default-branch push runs**"));
+    expect(pushSection).not.toContain("failing scheduled run(s)");
+  });
+
   test("renderSections omits the push section entirely when pushRuns is empty", () => {
     const { renderSections } = loadScript();
     const rendered = renderSections([run({ id: 1 })], [], [], "main").join("\n");

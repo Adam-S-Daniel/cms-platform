@@ -16,10 +16,85 @@
 //   - the CALLER wiring: schedule-driven (no pull_request/push), passes a
 //     non-empty `required_contexts`, forwards CMS_E2E_PAT.
 //
-// On a CONSUMING SITE the maintainer keeps a copy pointed at its own
-// `.github/rulesets/main.json` and asserts the caller's `required_contexts`
-// matches that ruleset (a lock that can't live in the platform — no ruleset to
-// lock against — so it's documented in the caller header instead).
+//   - the TEMPLATE caller's `required_contexts` list against the AUTHORITATIVE
+//     declaration of a consumer's required checks: this repo's own
+//     `repo-settings.yml`, `ruleset_library.consumer-main`. Both files live
+//     here, so the lock is entirely platform-side.
+//
+// That last one replaces a claim this header used to make and that was simply
+// false: that a consuming site keeps its own copy of this spec pointed at its
+// `.github/rulesets/main.json`, and that no ruleset existed in the platform to
+// lock against. Neither holds. Consumers track no `e2e/` tree at all since the
+// harness became platform-delivered; jodidaniel.com has no `.github/rulesets/`
+// directory; adamdaniel.ai's is a vestige nothing reads (the applier
+// `scripts/audit-repo-settings.js` reads `repo-settings.yml` and PUTs to the
+// live API, and that stale file even declares a ruleset that does not exist
+// live). Meanwhile `ruleset_library.consumer-main` has been the real
+// declaration all along. Until this lock landed the template's list was checked
+// against nothing and its own comment admitted it had been hand-copied from one
+// site "as of v0.1.79" — free to rot, and a wrong entry silently disables
+// stuck-PR recovery, because the nudge waits forever for a context no run will
+// ever report.
+//
+// The comparison is a SET, and it is on the TEMPLATE only.
+//
+// An earlier version of this header justified that scoping with a worked example
+// that was false when it was written: that jodidaniel.com "deliberately passes
+// only `editorial / validate-content`". It did pass exactly one context — but not
+// deliberately. That was an unrevisited seed value, and every one of the six
+// commits touching that file between the seeding and the fix is a `chore: bump
+// cms-platform to vX`. jodidaniel.com's live `main` ruleset requires all six
+// `consumer-main` contexts, and jodidaniel.com#156 ("Give the auto-merge nudge
+// all six required contexts, not one") brought the caller back in line. Citing
+// that file as a legitimate narrowing recommended, to every site that reads the
+// template this lock guards, the exact defect that was fixed the same day.
+//
+// What IS true: the authoritative per-repo declaration is this repo's own
+// `repo-settings.yml`. `repos[<owner/repo>].rulesets.main` names an entry in
+// `ruleset_library`, and THAT entry's `required_status_checks` is the list
+// `scripts/audit-repo-settings.js --fix --yes` PUTs live. A site's
+// `required_contexts` should equal ITS OWN ruleset's required set — today the
+// same six for both consumers, because `repos:` maps `Adam-S-Daniel/adamdaniel.ai`
+// and `jodidaniel/jodidaniel.com` alike to `consumer-main`. A site mapped to some
+// other entry owes that entry's list, not this one's, which is why the lock stops
+// at the template.
+//
+// The failure has TWO directions and only one was ever written down:
+//   - a WRONG entry makes the nudge wait forever for a context nothing reports,
+//     silently disabling stuck-PR recovery (the hazard already documented);
+//   - a SHORT list makes it ask to merge on incomplete evidence — jodidaniel.com#156,
+//     where one green context out of six would have fired `pulls.merge()` while the
+//     other five were still pending. That was safe only because the ruleset answered
+//     405; a guard that requests a merge it has not established is safe by accident,
+//     and only for as long as branch protection holds.
+//
+// #284 — WHY THERE IS STILL NO CONSUMER-MODE VERSION OF THIS LOCK. The reason
+// previously recorded ("making it consumer-mode would immediately red-fail
+// jodidaniel.com for a deliberate choice") died with the false claim above: both
+// consumers map to `consumer-main` and both now pass its six contexts, so nothing
+// would red. The MECHANISM is available too, recorded here so the next reader need
+// not re-derive it: `e2e-tests.yml`'s `project` job checks the WHOLE platform out
+// to `.cms-platform` (no `sparse-checkout:`) and exports `SITE_ROOT` =
+// `github.workspace` plus `CMS_REPO` = `github.repository` in BOTH target lanes, so
+// `<SITE_ROOT>/.cms-platform/repo-settings.yml` is readable on a consumer lane and
+// `repos:` is keyed by `owner/repo`, letting a site look itself up.
+// `e2e/admin-spec-source-read-lint.test.js` does not object — it scans only
+// `*.spec.js`, and its forbidden patterns are `theme/admin` and the legacy
+// `../admin`, neither of which a `.cms-platform` read matches.
+//
+// It is nonetheless NOT built, and the reasons are about the ORACLE rather than the
+// plumbing. First, the manifest a consumer can read is the copy pinned at its
+// `platform_ref`, not the live ruleset; it lags, and it lags in the false-GREEN
+// direction, since a consumer pinned behind a manifest change agrees with its own
+// stale list. Reading the live ruleset instead is a `gh api` call, which the
+// no-network rule forbids in this suite. Second, a freshly scaffolded site is not in
+// `repos:` at all, so the lint needs an "absent from the manifest" skip — and that
+// soft path would land on precisely the sites with the least review behind them.
+// Neither objection is fatal and both want deciding before the lint earns its keep.
+// For whoever picks this up: a pinned-manifest check WOULD have caught
+// jodidaniel.com#156 (the manifest converged jodidaniel onto `consumer-main` on
+// 2026-07-22, months before the caller was fixed), so the objection is to this
+// shape, not to the idea.
 
 const { test, expect } = require("./base");
 const fs = require("node:fs");
@@ -29,6 +104,8 @@ const { readWorkflow, parseYaml, events } = require("./workflow-yaml-utils");
 const { parse, analyzeSpec, calleeName, stringValue } = require("./spec-ast");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
+const MANIFEST_PATH = path.join(REPO_ROOT, "repo-settings.yml");
+const CONSUMER_RULESET = "consumer-main";
 const NUDGE_REUSABLE = "cms-automerge-nudge.yml";
 const NUDGE_CALLER_PATH = path.join(
   REPO_ROOT,
@@ -472,5 +549,58 @@ test.describe("cms-automerge-nudge caller — wiring lint (#1815)", () => {
     ).toBeGreaterThan(0);
     // Secret forwarded (YAML structure).
     expect(job.secrets && job.secrets.CMS_E2E_PAT).toBe("${{ secrets.CMS_E2E_PAT }}");
+  });
+
+  test("caller's required_contexts SET equals repo-settings.yml's consumer-main ruleset", () => {
+    // Both sides are PARSED, never regex-scanned: the manifest is YAML and so is
+    // the caller, and the contexts sit three levels down inside a `rules` ARRAY
+    // that is keyed by `type`, not by position.
+    const manifest = parseYaml(fs.readFileSync(MANIFEST_PATH, "utf8")) || {};
+    const ruleset = (manifest.ruleset_library || {})[CONSUMER_RULESET];
+    expect(
+      ruleset,
+      `repo-settings.yml must declare ruleset_library.${CONSUMER_RULESET} — it is the ` +
+        `authoritative statement of what a consumer's main branch requires, and what ` +
+        `scripts/audit-repo-settings.js PUTs live.`,
+    ).toBeTruthy();
+    const rule = (ruleset.rules || []).find((r) => r && r.type === "required_status_checks");
+    expect(
+      rule,
+      `ruleset_library.${CONSUMER_RULESET} must carry a required_status_checks rule — with ` +
+        `none, a consumer's main is gated on nothing and this lock would mean nothing either.`,
+    ).toBeTruthy();
+    const declared = ((rule.parameters || {}).required_status_checks || []).map((c) =>
+      String(c && c.context),
+    );
+    expect(
+      declared.length,
+      `ruleset_library.${CONSUMER_RULESET}'s required_status_checks list must be non-empty`,
+    ).toBeGreaterThan(0);
+
+    const passed = String((parseYaml(callerText()).jobs.nudge.with || {}).required_contexts || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect(
+      passed.length,
+      "the template caller must pass a non-empty required_contexts block",
+    ).toBeGreaterThan(0);
+
+    // SET, not sequence: neither the ruleset body nor the nudge's suffix-tolerant
+    // matcher cares about order, so ordering churn must not red this lint.
+    // Duplicates would, and should — a repeated context is a hand-edit accident.
+    expect(
+      [...passed].sort(),
+      `the TEMPLATE caller's required_contexts must equal ruleset_library.${CONSUMER_RULESET}'s ` +
+        `required_status_checks contexts (as a set) — that is the shape a canonical consumer's ` +
+        `main branch actually enforces. An entry here that no run ever reports makes the nudge ` +
+        `wait on it forever and silently disables stuck-PR recovery; a MISSING entry lets the ` +
+        `nudge merge a PR its branch protection has not cleared. Change repo-settings.yml and ` +
+        `this template together.`,
+    ).toEqual([...declared].sort());
+    expect(
+      new Set(passed).size,
+      "the template caller's required_contexts must list each context exactly once",
+    ).toBe(passed.length);
   });
 });

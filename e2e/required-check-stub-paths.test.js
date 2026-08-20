@@ -15,25 +15,53 @@ const { parseYaml } = require("./workflow-yaml-utils");
 // (matched by neither) or needlessly double-run — so this lint asserts they
 // are identical, and that the stub caller is wired to surface `e2e / e2e`.
 //
-// It reads the canonical examples/site thin callers (the platform templates).
-// In a consumed checkout (no examples/) the assertions skip — each site's own
-// copy is linted where it lives by this same spec run from the platform
-// harness against `<site>/.github/workflows` is out of scope here; the mirror
-// invariant is enforced on the template that sites copy.
+// SCOPE — what this spec does and does NOT cover. It reads the canonical
+// examples/site thin callers, i.e. the platform TEMPLATES a site copies from,
+// and nothing else; in a consumed checkout there is no examples/ tree, so
+// every assertion here skips. A consumer's OWN copies of the pair — once
+// copied away from the template and free to drift from it — are covered by the
+// CONSUMER-mode sibling e2e/consumer-required-check-mirrors.test.js, which
+// reads `<SITE_ROOT>/.github/workflows/` and runs on a real consumer's e2e lane
+// (it is deliberately absent from PLATFORM_META_SPECS for exactly that reason).
+// Neither spec substitutes for the other: this one is the only coverage of the
+// template, that one the only coverage of what a site actually ships. Before
+// that sibling existed nothing checked a consumer's copy at all — both
+// consumers happened to match the template, so the gap was latent, not live.
 //
 // Also locks the two callers' `pull_request.types` lists to be identical
 // (#145): a docs-only PR that gets RETARGETED onto a new base needs its
 // synthetic `e2e / e2e` stub to re-fire too, exactly like the heavy lane — if
 // `edited` (or any other type) drifted between the two, a retargeted
 // docs-only PR could hang with neither caller reporting the required context.
+//
+// And the two filters the mirror argument silently assumed but never checked:
+//
+//   - `pull_request.branches` must match. `paths` and `types` agreeing means
+//     nothing if the two lanes disagree about WHICH BASE they watch. Move the
+//     stub's `branches` off `main` and a docs-only PR targeting `main` matches
+//     the heavy lane's `paths-ignore` (no run) AND falls outside the stub's
+//     `branches` (no run) — the required `e2e / e2e` never reports and the PR
+//     hangs on "Waiting for status to be reported", with both `paths` and
+//     `types` still perfectly mirrored.
+//   - the two must use OPPOSITE filter KEYS: the stub declares `paths` and NOT
+//     `paths-ignore`, the heavy lane the reverse. GitHub rejects a `paths` and
+//     a `paths-ignore` on the SAME event, so a stub that gained a `paths-ignore`
+//     alongside its `paths` would never run at all — and every docs-only PR
+//     would hang while this lint's list comparison went on passing, because
+//     the list it compares is still there and still correct.
 
 const WF = path.join(__dirname, "..", "examples", "site", ".github", "workflows");
 const E2E = path.join(WF, "e2e-tests.yml");
 const STUB = path.join(WF, "e2e-stub.yml");
 const HAVE_BOTH = fs.existsSync(E2E) && fs.existsSync(STUB);
 
+// The trigger mapping of a workflow. A bare `on:` (no value) parses to null,
+// and a YAML-1.1-schema reader folds the `on` KEY into the boolean `true` —
+// probe both before giving up, so a trigger block is never silently read as
+// absent and compared `undefined` to `undefined`.
 function onOf(file) {
-  return (parseYaml(fs.readFileSync(file, "utf8")) || {}).on || {};
+  const doc = parseYaml(fs.readFileSync(file, "utf8")) || {};
+  return (doc.on != null ? doc.on : doc[true]) || {};
 }
 
 test.describe("e2e required-check stub mirrors e2e-tests paths-ignore", () => {
@@ -74,12 +102,57 @@ test.describe("e2e required-check stub mirrors e2e-tests paths-ignore", () => {
     const stubTypes = onOf(STUB).pull_request && onOf(STUB).pull_request.types;
     expect(Array.isArray(e2eTypes), "e2e-tests.yml must declare on.pull_request.types").toBe(true);
     expect(Array.isArray(stubTypes), "e2e-stub.yml must declare on.pull_request.types").toBe(true);
+    // SET, not sequence — the test's name says "same set" and the assertion now
+    // agrees with it. GitHub does not care what order `types:` are listed in, so
+    // a reordering must not red this lint; sorting BOTH sides keeps a duplicate
+    // or a missing entry failing exactly as before.
     expect(
-      stubTypes.map(String),
+      [...stubTypes.map(String)].sort(),
       "e2e-stub.yml's pull_request.types must mirror e2e-tests.yml's — otherwise a " +
         "retargeted docs-only PR's synthetic e2e / e2e stub won't re-fire on the new " +
         "base (or the heavy lane fires an event the stub doesn't, double-reporting). " +
         "Update them together.",
-    ).toEqual(e2eTypes.map(String));
+    ).toEqual([...e2eTypes.map(String)].sort());
+  });
+
+  // A mirrored `paths` list means nothing if the two lanes watch different bases.
+  test("stub `pull_request.branches` equals e2e-tests `pull_request.branches` (same set)", () => {
+    test.skip(!HAVE_BOTH, "examples/site e2e callers absent (consumed checkout)");
+    const e2eBranches = onOf(E2E).pull_request && onOf(E2E).pull_request.branches;
+    const stubBranches = onOf(STUB).pull_request && onOf(STUB).pull_request.branches;
+    expect(Array.isArray(e2eBranches), "e2e-tests.yml must declare on.pull_request.branches").toBe(
+      true,
+    );
+    expect(Array.isArray(stubBranches), "e2e-stub.yml must declare on.pull_request.branches").toBe(
+      true,
+    );
+    expect(
+      [...stubBranches.map(String)].sort(),
+      "e2e-stub.yml's pull_request.branches must mirror e2e-tests.yml's. The pair splits the " +
+        "PR population by PATH; if they also split it by BASE, a docs-only PR onto a base only " +
+        "the heavy lane watches matches that lane's paths-ignore (no run) and falls outside the " +
+        "stub's branches (no run), so the required e2e / e2e reports from neither and the PR " +
+        `hangs on "Waiting for status to be reported". Update them together.`,
+    ).toEqual([...e2eBranches.map(String)].sort());
+  });
+
+  // GitHub rejects `paths` and `paths-ignore` on one event — a stub carrying
+  // both would never run, and the list comparison above would not notice.
+  test("stub declares `paths` only; e2e-tests `paths-ignore` only", () => {
+    test.skip(!HAVE_BOTH, "examples/site e2e callers absent (consumed checkout)");
+    const heavyPr = onOf(E2E).pull_request || {};
+    const stubPr = onOf(STUB).pull_request || {};
+    expect(
+      stubPr["paths-ignore"],
+      "e2e-stub.yml must NOT declare `paths-ignore` alongside its `paths`: GitHub rejects both " +
+        "filters on the same event, so the stub would never run and EVERY docs-only PR would " +
+        "hang on the required e2e / e2e — while the paths mirror above kept passing, because " +
+        "the list it compares is still present and still correct.",
+    ).toBeUndefined();
+    expect(
+      heavyPr.paths,
+      "e2e-tests.yml must NOT declare `paths` alongside its `paths-ignore` — the same " +
+        "rejection, and a silent heavy lane takes the required e2e / e2e down on every code PR.",
+    ).toBeUndefined();
   });
 });
