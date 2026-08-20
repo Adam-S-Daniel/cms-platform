@@ -60,7 +60,7 @@ jobs:
     steps:
       - name: Register GitHub Deployment (in_progress)
         id: deploy-start
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const { data: deployment } = await github.rest.repos.createDeployment({
@@ -86,12 +86,12 @@ jobs:
             core.notice(`Registered production deployment ${deployment.id} (in_progress)`);
 
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0   # needed for last-modified dates in Jekyll
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b  # v1.321.0 (2026-07-22)
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b
         with:
           ruby-version: ${{ inputs.ruby_version }}
           bundler-cache: true   # runs `bundle install` and caches gems
@@ -141,7 +141,7 @@ jobs:
           cat ./_site/admin/commit.json
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3 (2026-07-22)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -178,7 +178,7 @@ jobs:
 
       - name: Update GitHub Deployment status (success/failure)
         if: always() && steps.deploy-start.outputs.deployment_id
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         # DEPLOYMENT_ID joins JOB_STATUS in the env map: a github-script body
         # is JS handed to an eval, so an interpolated value arrives as SOURCE
         # rather than data. This step already read JOB_STATUS the right way —

@@ -26,10 +26,13 @@
 #   PROD_PLAYGROUND_MODE = only when explicitly set (true on a throwaway sandbox
 #                          site; leave UNSET on a real prod site so the
 #                          prod-mutate loop stays in safe report-only mode).
-#   CMS_AUTOMATION_APP_ID = only when explicitly set — the GitHub App ID
-#                          dependabot-comment-sync falls back to when the repo
-#                          has no CMS_PLATFORM_PAT. Deliberately a VARIABLE, not
-#                          a secret, so it can be read while troubleshooting.
+#   CMS_AUTOMATION_APP_ID = only when explicitly set — the workflows-scoped
+#                          GitHub App ID, for a repo with no CMS_PLATFORM_PAT.
+#                          Its only consumer was dependabot-comment-sync, which
+#                          was deleted with the pin-comment convention; the
+#                          passthrough stays for the next workflows-scoped job.
+#                          Deliberately a VARIABLE, not a secret, so it can be
+#                          read while troubleshooting.
 #                          The App's PRIVATE KEY is a SECRET
 #                          (CMS_AUTOMATION_APP_PRIVATE_KEY) and is therefore NOT
 #                          settable here — set it with `gh secret set`. This

@@ -3,13 +3,13 @@
 //
 // THE INVARIANT (the realized gap): a reusable the platform ships to consumers
 // but never CALLS on itself is untested against the one repo whose maintainers
-// would notice. `dependabot-comment-sync.yml` shipped that way, and the
-// platform's OWN action-pin comments drifted as a direct result — PR #179 moves
-// actions/setup-node onto v7.0.0's SHA across 18 files with every comment still
-// reading "# v6.4.0 (2026-04-20)", and #194's SHA is v6.2.3 while its comment
-// says "# v6.1.1 (2026-05-05)" (stale by TWO releases). The repo whose whole
-// convention is "the SHA and its comment stay in lockstep" was the one repo not
-// running the lockstep-keeper.
+// would notice. The original instance was `dependabot-comment-sync.yml`, which
+// shipped un-dogfooded and let the platform's own action-pin comments drift
+// (#179, #194). That workflow — and the pin-comment convention it maintained —
+// has since been deleted fleet-wide: a trailing `# vX.Y.Z (YYYY-MM-DD)` goes
+// stale silently and then actively lies, and Dependabot rewrites it only
+// sometimes. The SHA is the truth. The invariant this lint enforces outlived
+// the workflow that motivated it and still binds the reusables that remain.
 //
 // THE RULE: every `dependabot-*.yml` reusable MUST be invoked by SOME workflow
 // in this repo via a LOCAL `uses: ./.github/workflows/<file>` — i.e. dogfooded.
@@ -58,14 +58,14 @@ const CALLED = locallyCalledWorkflows();
 
 test.describe("every dependabot-* reusable is dogfooded on this repo", () => {
   // Detector self-check: if the scan finds nothing, the lint would pass
-  // vacuously. The platform ships three today (auto-merge, comment-sync,
-  // rearm-sweep).
+  // vacuously. The platform ships two today (auto-merge, rearm-sweep) — it was
+  // three until comment-sync was deleted with the pin-comment convention.
   test("the scan finds the platform's dependabot-* reusables (detector intact)", () => {
     expect(
       REUSABLES.length,
       `expected several 'dependabot-*.yml' reusables under .github/workflows, found ` +
         `${REUSABLES.length} — the scan likely drifted`,
-    ).toBeGreaterThanOrEqual(3);
+    ).toBeGreaterThanOrEqual(2);
   });
 
   for (const reusable of REUSABLES) {

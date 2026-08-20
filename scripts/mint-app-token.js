@@ -31,10 +31,6 @@
  * ::notice:: naming the EXACT knobs and exits 0 with no token, so "never
  * onboarded" stays distinguishable from "misconfigured" and the caller decides.
  * A credential that is PRESENT but broken exits non-zero: that is a real fault.
- *
- * NOTE: .github/workflows/dependabot-comment-sync.yml inlines an older copy of
- * this JWT/mint logic. It predates this script and should adopt it; not done
- * here to keep this change to one concern.
  */
 const crypto = require("node:crypto");
 const fs = require("node:fs");

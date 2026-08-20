@@ -12,7 +12,7 @@ description: >-
   allow ... to update workflow ... without 'workflows' permission". Trigger on
   "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "WORKFLOW_SHA_COMMENT_PAT",
   "CMS_AUTOMATION_APP_ID", "CMS_AUTOMATION_APP_PRIVATE_KEY",
-  "dependabot-comment-sync", "required secrets", "PAT permissions",
+  "required secrets", "PAT permissions",
   "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables",
   "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
 ---
@@ -66,27 +66,24 @@ permissions**:
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
   reject its pending deployments even with `Actions: write`.
 
-## `CMS_PLATFORM_PAT` — anything that edits `.github/workflows/*` (bump + comment-sync)
+## `CMS_PLATFORM_PAT` — anything that edits `.github/workflows/*`
 
 Consumed by:
 - `platform-bump` — opens the single-version bump PR that moves `platform_ref` +
   the gem tag + every reusable `uses: …@<ref>` pin to a new release in one PR.
-- `dependabot-comment-sync` — after Dependabot bumps a pinned `uses: …@<sha>`,
-  pushes the refreshed `# vX.Y.Z (date)` pin comment back into the workflow file.
-  Currently **dormant in both consumers**: adamdaniel.ai and jodidaniel.com each
-  pin zero third-party actions and zero
-  `Adam-S-Daniel/cms-platform/.github/actions/<x>@<sha>` composites — every
-  `uses:` in both repos is a cms-platform reusable workflow, and since #244
-  Dependabot `ignore`s all of those. The workflow (and its `Workflows: write`
-  credential requirement below) stays wired and will fire the moment a site
-  adds a genuine third-party SHA-pinned action; it just has nothing to sync
-  today.
+- `dev-hooks-sync` — pushes the platform's dev hooks into the consumer.
 
-**Both edit `.github/workflows/*`, so both need `Workflows: write`** — the one
+There used to be a third, `dependabot-comment-sync`, which pushed a refreshed
+`# vX.Y.Z (date)` pin comment back into the workflow file after Dependabot
+bumped a `uses: …@<sha>`. It was **deleted on 2026-08-20** along with the pin
+comment itself: the comment goes stale silently and then actively lies, and
+Dependabot refreshes it only sometimes, so a wrong label is worse than no
+label. A third-party `uses:` now ends at `@<sha>`.
+
+**These edit `.github/workflows/*`, so they need `Workflows: write`** — the one
 permission `CMS_E2E_PAT` deliberately lacks. That shared requirement is why they
 **consolidate onto this single `repo`+`workflow` PAT** rather than a third
-secret. (comment-sync exercises only Contents + Workflows of it; the wider scope
-below is platform-bump's.)
+secret.
 
 It needs **Workflows** but — unlike `CMS_E2E_PAT` — does **not** need **Actions**
 (it neither polls runs nor reviews deployments). **Repository permissions**:
@@ -106,40 +103,44 @@ permission.
 > have different owners, `CMS_PLATFORM_PAT` must be authorized for the consumer
 > repo's owner (where it pushes). It does not need access to cms-platform.
 
-> **Comment-sync is optional but loud:** if `CMS_PLATFORM_PAT` is absent the
-> `dependabot-comment-sync` reusable falls back to the App credential pair
-> below, and if THAT is unset too it **skips cleanly with a notice** — the
-> workflow stays green, Dependabot's pin comments just aren't auto-refreshed.
-> (`platform-bump`, by contrast, hard-needs the PAT — issue cms-platform#13.)
+> `platform-bump` hard-needs this PAT — issue cms-platform#13.
 
-## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the workflows-scoped App (comment-sync fallback)
+## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the workflows-scoped App (NO CONSUMER TODAY)
+
+> **Dormant since 2026-08-20 — do not provision this for a new consumer.** Its
+> only reader was `dependabot-comment-sync.yml`, deleted with the pin-comment
+> convention. Nothing in the tree reads either knob now
+> (`repo-settings-apply.yml` uses a *different* App, `REPO_SETTINGS_APP_*`).
+> The `scripts/set-repo-variables.sh` passthrough and this section are kept
+> for the next workflows-scoped job that needs a non-PAT credential; until
+> then, setting them accomplishes nothing. Retire or re-point them the next
+> time this area is touched.
 
 A **GitHub App** credential pair that carries the same `workflows` permission
 `CMS_PLATFORM_PAT` does, for a repo that has **no PAT of its own**. That is
-exactly **cms-platform itself**: `CMS_PLATFORM_PAT` lives in the *consumers*
-(whose `platform-bump` / `dependabot-comment-sync` callers pass it), so the
-platform repo could ship comment-sync to consumers and never run it on its own
-Dependabot PRs. `dependabot-comment-sync.yml` therefore mints a short-lived
-**installation token** from the App when no PAT is configured — in pure node +
-the stdlib `crypto` module, deliberately not a new marketplace action (repo
-policy prefers built-ins, and a new action would itself owe the 7-day
-cooling-off).
+exactly **cms-platform itself**: `CMS_PLATFORM_PAT` lives in the *consumers*,
+so the platform repo could ship a workflows-editing reusable to consumers and
+never run it on its own Dependabot PRs. The consuming workflow minted a
+short-lived **installation token** from the App when no PAT was configured — in
+pure node + the stdlib `crypto` module (`scripts/mint-app-token.js`),
+deliberately not a new marketplace action (repo policy prefers built-ins, and a
+new action would itself owe the 7-day cooling-off).
 
 **The ID is a repository VARIABLE, not a secret** — deliberately, so it can be
 read while troubleshooting. Only the private key is a secret:
 
 | Knob | Kind | Where the workflow reads it |
 |---|---|---|
-| `CMS_AUTOMATION_APP_ID` | Actions repository **variable** (Variables tab) | directly as `vars.CMS_AUTOMATION_APP_ID` — a `workflow_call`'d reusable reads `vars.*` from the **CALLER's** repo, so there is no input to plumb |
-| `CMS_AUTOMATION_APP_PRIVATE_KEY` | Actions repository **secret** | passed to the reusable as the `app_private_key` secret input |
+| `CMS_AUTOMATION_APP_ID` | Actions repository **variable** (Variables tab) | *(nothing today)* — a `workflow_call`'d reusable reads `vars.*` from the **CALLER's** repo, so there is no input to plumb |
+| `CMS_AUTOMATION_APP_PRIVATE_KEY` | Actions repository **secret** | *(nothing today)* — was passed to the reusable as the `app_private_key` secret input |
 
 **App permissions** (Repository permissions on the App itself, installed on both
 resource owners): **Contents: Read and write**, **Pull requests: Read and
 write**, **Workflows: Read and write**.
 
-**The PAT still WINS when present.** The reusable resolves ONE effective push
+**The PAT always WON when present.** The reusable resolved ONE effective push
 credential — PAT first, minted App token second — so a consumer that already
-has `CMS_PLATFORM_PAT` behaves exactly as before and needs neither knob.
+has `CMS_PLATFORM_PAT` never needed either knob.
 
 **Deliberately NOT used for the `dependabot-rearm-sweep` merge path.** That
 sweep keeps the built-in `github.token`, and the reason is a
@@ -161,13 +162,13 @@ a pin bump. So the App is for the **push-back** credential only.
 > `enablePullRequestAutoMerge` **from the schedule context** — the discriminator
 > there is the EVENT CONTEXT, not the token class.
 
-**Failure mode — soft, and self-describing.** With neither a PAT nor the App
-pair, comment-sync logs a `::notice::` naming **all three** knobs
-(`workflow_sha_comment_pat`, the `CMS_AUTOMATION_APP_ID` variable, the
-`CMS_AUTOMATION_APP_PRIVATE_KEY` secret) and exits cleanly, so "never onboarded"
-is distinguishable from "misconfigured". It never reds a Dependabot PR. A failed
-*mint* is likewise a `::warning::` plus an empty token, which falls through to
-the same clean skip.
+**Failure mode — soft, and self-describing.** The pattern worth keeping: with
+neither a PAT nor the App pair, the job logged a `::notice::` naming **all
+three** knobs and exited cleanly, so "never onboarded" stayed distinguishable
+from "misconfigured", and it never redded a Dependabot PR. A failed *mint* was
+likewise a `::warning::` plus an empty token, falling through to the same clean
+skip. Any future credential-dependent job owes the same shape
+(`scripts/mint-app-token.js` implements it).
 
 ## AWS deploy secrets (from the bootstrap stack outputs)
 
@@ -196,7 +197,7 @@ bash <cms-platform>/scripts/set-repo-variables.sh        # add --dry-run to prev
 | `PREVIEW_BUCKET` | `<prefix>-previews` (apex, dots→hyphens) | `visual-regression` (S3 steps no-op if unset) |
 | `AWS_REGION` | `${AWS_REGION:-us-east-1}` | `visual-regression` |
 | `PROD_PLAYGROUND_MODE` | **opt-in** (`site-params.env`) | `cms-publish-loop-prod`, `cms-media-roundtrip` |
-| `CMS_AUTOMATION_APP_ID` | **opt-in** (`site-params.env`) | `dependabot-comment-sync` (read as `vars.*` from the caller repo; see its section above) |
+| `CMS_AUTOMATION_APP_ID` | **opt-in** (`site-params.env`) | *nothing today* — dormant since comment-sync was deleted; see its section above |
 
 The last two are the only **non-derived** entries — everything else comes from
 `APEX_DOMAIN`, so the setter pushes these two only when `site-params.env`
@@ -280,8 +281,8 @@ platform-bump cron (a `::warning`, never a job failure).
 ## Quick checklist for a new consumer
 
 - [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Actions R/W** (+ be a reviewer of the `regression-review` environment)
-- [ ] `CMS_PLATFORM_PAT` — same **plus Workflows R/W**; powers **both** platform-bump and dependabot-comment-sync
-- [ ] `CMS_AUTOMATION_APP_PRIVATE_KEY` — **only if the repo has no `CMS_PLATFORM_PAT`**; the App (Contents R/W + Pull requests R/W + Workflows R/W) comment-sync falls back to. Pairs with the `CMS_AUTOMATION_APP_ID` **variable** below; the PAT wins when present, and both-unset skips cleanly
+- [ ] `CMS_PLATFORM_PAT` — same **plus Workflows R/W**; powers platform-bump and dev-hooks-sync
+- [ ] ~~`CMS_AUTOMATION_APP_PRIVATE_KEY`~~ — **skip: dormant.** Its only reader (comment-sync) was deleted 2026-08-20; nothing reads it or the `CMS_AUTOMATION_APP_ID` variable today
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
 - [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` opt-in)
 - [ ] Settings → General → **Allow auto-merge** = ON

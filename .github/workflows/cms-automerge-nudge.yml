@@ -157,7 +157,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Re-enable auto-merge on stuck CMS PRs
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           # Site-specific required-status-check contexts, newline-list.
           # Parsed into the REQUIRED Set below.

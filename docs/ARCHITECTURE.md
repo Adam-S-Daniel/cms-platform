@@ -48,8 +48,10 @@ only option delivering low-conflict bidirectional sync with clean identity isola
 
 - **Down (platform → every site):** publish a `cms-platform` tag. **`platform-bump`**
   opens ONE atomic bump PR per consumer, moving every platform reference together —
-  `platform.lock`, the theme gem, the reusable `uses:@<ref>` pins, the composite
-  `# vX.Y.Z` comments; site CI (e2e/preview) gates the merge. Dependabot's `bundler`
+  `platform.lock`, the theme gem, and every `uses:@<ref>` pin — reusable and
+  composite alike, both TAG-pinned since 2026-08-20 (the composite's trailing
+  `# vX.Y.Z` comment was retired with the fleet-wide action pin comment, and
+  nothing reads or writes one now); site CI (e2e/preview) gates the merge. Dependabot's `bundler`
   ecosystem `ignore`s the theme gem as of #242 (see `docs/SYNC.md`); it can still
   open piecemeal `uses:@<ref>` PRs, which is the open question in #244.
 - **Up (site → platform):** make the change **here** and open a PR. Merge → new tag →

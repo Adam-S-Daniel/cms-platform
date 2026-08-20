@@ -104,22 +104,25 @@ per-PR checkout):
   teaching `isBumpOnlyPush` to classify a Dependabot action-SHA-only workflow
   diff was NOT needed and was not implemented.
 
-  **Pin-comment drift is structural, so comment-sync is now dogfooded here
-  too.** Dependabot rewrites a pin comment ONLY when the comment matches the
-  version it is bumping FROM — #194 bumps 6.2.2 → 6.2.3 while its comment says
-  `v6.1.1`, so it can never self-repair and each bump widens the gap; #179
-  carries setup-node v7.0.0's SHA behind `# v6.4.0 (2026-04-20)` across 18
-  files. Same trap as #220's frozen `platform_ref` (a generic `CUR->LATEST`
-  replace cannot match an already-drifted value). `self-dependabot-comment-sync.yml`
-  closes it on this repo. Since cms-platform has no `CMS_PLATFORM_PAT` of its own
-  (that secret lives in the consumers), `dependabot-comment-sync.yml` gains an
-  **App fallback**: the ID is the repo VARIABLE `vars.CMS_AUTOMATION_APP_ID`,
-  only the private key is a secret (`CMS_AUTOMATION_APP_PRIVATE_KEY`), and the
-  installation token is minted in **pure node + stdlib `crypto`** — no new
-  marketplace action, no new SHA to pin. The PAT still wins when present, so the
-  consumer path is unchanged, and the bail names all three knobs so "never
-  onboarded" and "misconfigured" are distinguishable (it fails SOFT — see
-  "Environment gotchas").
+  **Pin-comment drift was structural, so the comment was retired rather than
+  repaired (2026-08-20).** Dependabot rewrites a pin comment ONLY when the
+  comment matches the version it is bumping FROM — #194 bumps 6.2.2 → 6.2.3
+  while its comment says `v6.1.1`, so it can never self-repair and each bump
+  widens the gap; #179 carries setup-node v7.0.0's SHA behind
+  `# v6.4.0 (2026-04-20)` across 18 files. Same trap as #220's frozen
+  `platform_ref` (a generic `CUR->LATEST` replace cannot match an
+  already-drifted value). The account first tried to keep the comment honest
+  with a sync workflow; the measured verdict is that a label which goes stale
+  silently and then LIES is worse than no label, because it is read and
+  believed. So `dependabot-comment-sync.yml`, its self-caller and
+  `scripts/sync-action-pin-comments.sh` are DELETED, and EVERY `uses:` line
+  carries its ref and nothing after it — `@<sha>` for a third-party action,
+  `@<tag>` for a cms-platform reusable or composite (the composite was the last
+  shape keeping a comment, as its pin-consistency gate; it takes the tag now).
+  Resolve the version when you
+  actually need it (`git ls-remote <url> | grep <sha>`, or the Dependabot PR
+  title). Do not reintroduce a comment-writing job — it would silently revert
+  the fleet.
 
   **The standing gate:** repairing this removes the last human gate on
   third-party action SHAs entering 18 reusables both production sites execute,
@@ -724,7 +727,7 @@ recorded here because the issue text will outlive anyone's memory of it:
 The match is on lexed expression **paths**, not on expression text (see "A
 regex over expression TEXT is blind to a RESPELLING" below).
 `github.event_name` is a closed enum the runner sets, used today in
-`dependabot-comment-sync.yml` and `repo-settings-audit.yml`, and must stay
+`repo-settings-audit.yml` and the loop workflows, and must stay
 unflagged; comparing SEGMENTS is what keeps it unflagged in every spelling —
 `github['event_name']` and `GITHUB.EVENT_NAME` included — rather than the
 trailing dot of a substring match.
@@ -946,8 +949,8 @@ complete is not.
   The **tempting shortcut is text-rewriting** `['x']` to `.x` and then
   substring-testing. Do not: measured, it closes only the index spelling and
   still passes both `GitHub.Event.Pull_Request.Base.Ref` and
-  `toJSON(github.event)`. (A related claim — that the rewrite would red
-  `dependabot-comment-sync.yml` and `repo-settings-audit.yml` — is **false**
+  `toJSON(github.event)`. (A related claim — that the rewrite would red the
+  `github.event_name` users such as `repo-settings-audit.yml` — is **false**
   as long as the substring keeps its trailing dot: `github.event_name` does
   not contain `github.event.`. The shortcut's real defect is the spellings it
   misses, not a false positive it creates.)
@@ -1060,10 +1063,11 @@ with the prod-mutate loop, not with the lint's exit code.
 
 - **It cannot tell a complete fix from a half-applied one.** Dropping a
   `${{ }}` *without* adding the `env:` key leaves `$BASE_REF` undefined and
-  the lint stays green. That is why `dependabot-comment-sync.yml`'s skip
-  block gained `set -euo pipefail` — without `set -u` it would emit an empty
-  author forever, silently. Any new binding in a block lacking `set -u` owes
-  the same hardening, or an explicit non-empty assertion.
+  the lint stays green. The case that taught this was the (since-deleted)
+  `dependabot-comment-sync.yml` skip block, which needed `set -euo pipefail`
+  — without `set -u` it would emit an empty author forever, silently. Any new
+  binding in a block lacking `set -u` owes the same hardening, or an explicit
+  non-empty assertion.
 - **Consumers get no enforcement from it.** The spec is registered in
   `PLATFORM_META_SPECS`, which `testIgnore`s it on every CONSUMER e2e lane —
   the same posture as `workflow-shell-glob-lint.test.js`. Registration is

@@ -3,8 +3,8 @@
  * scripts/check-platform-pin-consistency.js is the platform-owned anti-skew
  * guard (issue #29). A consuming repo references the platform version in many
  * places — every reusable-workflow `uses: …/.github/workflows/<n>.yml@<ref>`,
- * every SHA-pinned composite `uses: …/.github/actions/<n>@<sha>  # vX.Y.Z`
- * comment, the `Gemfile` gem `tag:`, the `Gemfile.lock` git-source `tag:`, and
+ * every cross-repo composite `uses: …/.github/actions/<n>@<ref>`, the `Gemfile`
+ * gem `tag:`, the `Gemfile.lock` git-source `tag:`, and
  * `platform.lock`'s `platform_ref` — and Dependabot/platform-bump land bumps
  * piecemeal, so a consumer drifts (observed live: adamdaniel.ai pinned @v0.1.0
  * loop/deploy callers, gem @v0.1.5, others @v0.1.3/@v0.1.6 at once). This guard
@@ -31,8 +31,8 @@ const OWNER = "Acme-Org";
 const REPO = "cms-platform";
 const SLUG = `${OWNER}/${REPO}`;
 
-// A 40-hex placeholder SHA for composite-action pins (the checker gates on the
-// trailing version COMMENT, not on resolving the SHA).
+// A 40-hex placeholder SHA. Composites are TAG-pinned now, so this stands in
+// for the WRONG shape — a SHA where a tag belongs.
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 // The preview-media probe sentinel (#84) — checkMediaProbeSentinel() now
@@ -94,8 +94,12 @@ function reusableCaller(name, ref) {
   ].join("\n");
 }
 
-// A workflow that pins a SHA composite action with a trailing `# vX.Y.Z` comment.
-function compositeCaller(name, commentVersion) {
+// A workflow that pins a cross-repo composite action. Like a reusable, it is
+// TAG-pinned and the `@ref` IS its version. It used to be SHA-pinned with the
+// version in a trailing `# vX.Y.Z` comment; that comment was retired fleet-wide
+// on 2026-08-20 (it drifted silently, and Dependabot rewrote it inconsistently),
+// so the tag is now the gate and there is no comment to parse.
+function compositeCaller(name, ref) {
   return [
     `name: ${name}`,
     "on: { pull_request: {} }",
@@ -103,7 +107,7 @@ function compositeCaller(name, commentVersion) {
     "  job:",
     "    runs-on: ubuntu-latest",
     "    steps:",
-    `      - uses: ${SLUG}/.github/actions/post-failure-comment@${SHA}  # ${commentVersion} (2026-05-29)`,
+    `      - uses: ${SLUG}/.github/actions/post-failure-comment@${ref}`,
     "",
   ].join("\n");
 }
@@ -182,7 +186,7 @@ test.describe("check-platform-pin-consistency.js — CONSISTENT fixture (#29)", 
         "    steps:",
         "      - uses: actions/checkout@v4",
         "      - uses: actions/setup-node@v9.9.9  # some other repo",
-        `      - uses: ${SLUG}/.github/actions/post-failure-comment@${SHA}  # ${V} (2026-05-29)`,
+        `      - uses: ${SLUG}/.github/actions/post-failure-comment@${V}`,
         "",
       ].join("\n"),
     );
@@ -200,7 +204,7 @@ test.describe("check-platform-pin-consistency.js — SKEWED fixture (#29)", () =
     write(root, ".github/workflows/deploy.yml", reusableCaller("deploy", "v0.1.0"));
     // a second reusable caller that DOES agree (must not be reported)
     write(root, ".github/workflows/e2e-tests.yml", reusableCaller("e2e-tests", CANON));
-    // (b) a composite action whose # comment is MISMATCHED
+    // (b) a composite action pinned to a MISMATCHED tag
     write(root, ".github/workflows/code-quality.yml", compositeCaller("code-quality", "v0.1.3"));
     // (c) the gem @newer than platform_ref
     write(root, "Gemfile", gemfile("v0.1.8"));
@@ -221,11 +225,42 @@ test.describe("check-platform-pin-consistency.js — SKEWED fixture (#29)", () =
 
     // Each offending VALUE is named.
     expect(out).toMatch(/v0\.1\.0/); // the skewed reusable ref
-    expect(out).toMatch(/v0\.1\.3/); // the skewed composite comment
+    expect(out).toMatch(/v0\.1\.3/); // the skewed composite tag
     expect(out).toMatch(/v0\.1\.8/); // the skewed gem tag
 
     // The CONSISTENT caller is NOT reported as a violation.
     expect(out).not.toMatch(/e2e-tests\.yml/);
+  });
+
+  // The retired-comment policy, asserted directly (2026-08-20). Before it, a
+  // SHA-pinned composite carrying a CURRENT `# vX.Y.Z` comment was house style
+  // and passed. Now the tag IS the gate, so the SHA is the violation and a
+  // still-current comment does not rescue it — otherwise the fleet change would
+  // silently half-apply.
+  test("fails a composite pinned by SHA, even with a CURRENT version comment", () => {
+    const root = mkConsumer();
+    const V = "v0.1.7";
+    write(root, "platform.lock", platformLock(V));
+    writeSentinel(root);
+    write(
+      root,
+      ".github/workflows/code-quality.yml",
+      [
+        "name: code-quality",
+        "on: { pull_request: {} }",
+        "jobs:",
+        "  j:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        `      - uses: ${SLUG}/.github/actions/post-failure-comment@${SHA}  # ${V} (2026-05-29)`,
+        "",
+      ].join("\n"),
+    );
+    const res = run(root);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(res.status, out).not.toBe(0);
+    expect(out).toMatch(/code-quality\.yml/);
+    expect(out).toMatch(new RegExp(SHA));
   });
 
   test("fails clearly when platform.lock is missing", () => {
@@ -801,8 +836,10 @@ test.describe("scripts/verify-consumer-pins.sh — the consumer-bump gate", () =
   });
 
   test("does NOT trip on an unrelated version string (third-party pin / prose)", () => {
-    // The benign 35-vs-34 class: a `# v6.0.2` third-party pin comment and a prose
-    // "since v0.1.4" header line must not read as a stale platform ref.
+    // The benign 35-vs-34 class: a stray `# v6.0.2` third-party pin comment and
+    // a prose "since v0.1.4" header line must not read as a stale platform ref.
+    // House style carries no version comment on a pin any more, but a leftover
+    // one in a consumer must still not false-fire this check.
     const root = mkVerifiableConsumer(consistent());
     write(
       root,

@@ -158,10 +158,12 @@ const PLATFORM_PIN = new RegExp(
 // could not establish.
 //
 // It deliberately does NOT rewrite a trailing `# vX.Y.Z (date)` comment on a
-// platform line. That is not an oversight: the guard forbids a stale one in the
-// template, so there is none left to rewrite, and a transform that silently
+// platform line. That is not an oversight: since the 2026-08-20 fleet-wide
+// retirement a `uses:` line ends at its ref and carries NO version comment at
+// all, so there is none left to rewrite — and a transform that silently
 // repaired comments would HIDE template rot from the scan that proves the
-// template clean.
+// template clean, as well as re-minting the very label the pin checker now
+// rejects. Do not teach it to write one.
 function substitute(text, { prefix, domain, platformVersion }) {
   return String(text)
     .replace(/example-com/g, prefix)

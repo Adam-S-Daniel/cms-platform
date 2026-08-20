@@ -33,8 +33,8 @@
  * expression reference attacker-influenced context at all"), so the
  * matcher lexes expression PATHS rather than testing expression text
  * (see `contextPaths`). `github.event_name` is a closed enum the runner
- * sets, in use today (dependabot-comment-sync.yml,
- * repo-settings-audit.yml), and must stay unflagged; segment-wise
+ * sets, in use today (repo-settings-audit.yml, secrets-scan.yml and the
+ * loop workflows), and must stay unflagged; segment-wise
  * comparison is what keeps it unflagged in every spelling, rather than
  * the trailing dot of a substring match.
  *
@@ -961,12 +961,12 @@ const CANARY = [
   {
     // CONTROL, and the load-bearing half of the widening.
     // `github.event_name` is a closed enum the runner sets, live in
-    // dependabot-comment-sync.yml and repo-settings-audit.yml. Segment-wise
+    // repo-settings-audit.yml and secrets-scan.yml. Segment-wise
     // comparison keeps it silent in EVERY spelling without a special case:
     // `event_name` is simply not the segment `event`. A matcher that
     // normalised index syntax by rewriting `['x']` to `.x` and then
     // substring-tested `github.event` (no trailing dot) would flag all
-    // three of these and red those two workflows.
+    // three of these and red those workflows.
     name: "github.event_name stays silent in every spelling",
     yaml: wf([
       "- name: enum",

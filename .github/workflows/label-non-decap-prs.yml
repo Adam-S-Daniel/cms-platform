@@ -70,14 +70,14 @@ jobs:
         # the platform's e2e/cms-fixture-pr.js (FIXTURE_BRANCH_PREFIX). Fetch
         # it from the pinned ref so the labeller and the fixture harness
         # agree on the `cms/` convention.
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
 
       - name: Tag PR(s) not created by Decap
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0 (2026-04-09)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           DRY_RUN: ${{ inputs.dry_run }}
         with:

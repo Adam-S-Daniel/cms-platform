@@ -7,14 +7,16 @@
 // the two sanctioned, repo-agnostic PAT secrets —
 //   - CMS_E2E_PAT      (Contents+PR+Actions, NO Workflows) — CMS automation, loops, reaper
 //   - CMS_PLATFORM_PAT (Contents+PR+Workflows)             — anything that edits
-//                                          .github/workflows/* (platform-bump +
-//                                          dependabot-comment-sync)
+//                                          .github/workflows/* (platform-bump,
+//                                          dev-hooks-sync)
 // Both are FINE-GRAINED PATs (no classic PATs — Adam directive 2026-06-05).
 // A third/legacy/per-repo name (e.g. the old ADAMDANIELAI_WORKFLOW_SHA_COMMENT_PAT
 // or the generic WORKFLOW_SHA_COMMENT_PAT) reappearing in a template is the
 // regression this guard catches — every consumer ends up with the SAME minimal
-// secret set, and comment-sync (which needs Workflows: write) rides
-// CMS_PLATFORM_PAT rather than a bespoke token.
+// secret set, and anything needing Workflows: write rides CMS_PLATFORM_PAT
+// rather than a bespoke token. (Those two legacy names were minted for
+// dependabot-comment-sync, deleted with the pin-comment convention; the guard
+// against their return outlives it.)
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
@@ -62,12 +64,5 @@ test.describe("consumer workflow templates: PAT-secret consolidation", () => {
         `${f}: the bare WORKFLOW_SHA_COMMENT_PAT was consolidated onto CMS_PLATFORM_PAT`,
       ).not.toMatch(/secrets\.WORKFLOW_SHA_COMMENT_PAT/);
     }
-  });
-
-  test("dependabot-comment-sync wires its workflow-editing PAT to CMS_PLATFORM_PAT", () => {
-    const file = path.join(TEMPLATES, "dependabot-comment-sync.yml");
-    const text = fs.readFileSync(file, "utf8");
-    // It pushes into .github/workflows/* → needs Workflows: write → CMS_PLATFORM_PAT.
-    expect(text).toMatch(/workflow_sha_comment_pat:\s*\$\{\{\s*secrets\.CMS_PLATFORM_PAT\s*\}\}/);
   });
 });

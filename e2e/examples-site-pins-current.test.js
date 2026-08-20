@@ -168,12 +168,13 @@ function asScaffolded(text, canonical) {
 }
 
 const REPORT_TAIL =
-  `\n\nEach line names its own remedy — follow it rather than generalising. A ` +
-  `platform REUSABLE is pinned by TAG, so its remedy names the @ref (including ` +
-  `when that ref is a SHA: the pin checker fails a SHA-pinned reusable, so ` +
-  `"fix the comment instead" would make this lint green where the consumer gate ` +
-  `is red). A COMPOSITE is SHA-pinned by policy, so its ref is never compared ` +
-  `and never named — its gate is the trailing comment.\n` +
+  `\n\nEach line names its own remedy — follow it rather than generalising. EVERY ` +
+  `cross-repo platform ref — reusable workflow AND composite action — is pinned ` +
+  `by TAG, so every remedy names the @ref (including when that ref is a SHA: the ` +
+  `pin checker fails a SHA-pinned platform ref, so "fix the comment instead" ` +
+  `would make this lint green where the consumer gate is red). A composite was ` +
+  `SHA-pinned with its gate in a trailing comment until 2026-08-20; that comment ` +
+  `is retired and a uses: line now ends at its ref.\n` +
   `A maintainer hand-copies callers OUT of this tree (docs/SYNC.md), so a stale ` +
   `pin here becomes a stale pin in a live consumer. If you are cutting a ` +
   `release, bump the manifests, this template and scaffold/create-site.js's ` +

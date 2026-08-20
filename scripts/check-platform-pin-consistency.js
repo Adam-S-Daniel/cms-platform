@@ -10,8 +10,8 @@
 //
 //   - .github/workflows/**/*.yml — reusable-workflow callers
 //       `uses: <owner>/<repo>/.github/workflows/<name>.yml@<ref>`     (the <ref>)
-//     and SHA-pinned composite actions
-//       `uses: <owner>/<repo>/.github/actions/<name>@<sha>  # vX.Y.Z`  (the COMMENT)
+//     and TAG-pinned composite actions
+//       `uses: <owner>/<repo>/.github/actions/<name>@<ref>`           (the <ref>)
 //     and the `platform_ref:` INPUT each caller passes — the ref the reusable's
 //       own platform checkout obeys, so it decides which platform tree RUNS (#220)
 //   - Gemfile      — `gem "cms-platform-theme", …, tag: "vX.Y.Z"`
@@ -33,13 +33,18 @@
 //   - The reusable/composite `uses:` STRINGS are read with a real YAML parser
 //     (`yaml`, eemeli) so anchors/aliases resolve and GitHub's evaluated value
 //     is what we check — NOT a regex over raw text.
-//   - EXCEPTION: a SHA-pinned composite action's required version GATE lives in
-//     the trailing `# vX.Y.Z` COMMENT, and the YAML parser DROPS comments. So
-//     for composite refs we additionally do a LINE-AWARE pass to read the
-//     comment on the same source line as the `uses:` (documented, justified
-//     exception — same rationale as scripts/sync-action-pin-comments.sh, which
-//     also must read trailing `uses:` comments line-aware). The comment, not the
-//     SHA, is the gate (resolving SHA→tag would need network/git; optional).
+//   - NO EXCEPTION, and no comment is read. A composite USED to be the one
+//     carve-out: SHA-pinned, with its version gate in a trailing `# vX.Y.Z`
+//     COMMENT that the YAML parser drops, reached by a deliberate LINE-AWARE
+//     pass. That comment went with the 2026-08-20 fleet-wide retirement of the
+//     action pin comment (it drifted silently and then lied, and Dependabot
+//     rewrote it inconsistently). A composite is TAG-pinned now — the same
+//     carve-out the reusables take — so its version is the structural `<ref>`
+//     and ONE rule covers both. This script reads NO comments at all; do not
+//     re-introduce a comment pass, and do not re-introduce a SHA-pinned
+//     composite, which `fails a composite pinned by SHA, even with a CURRENT
+//     version comment` in e2e/check-platform-pin-consistency.test.js asserts is
+//     a violation regardless of what its comment says.
 //
 // USAGE
 //   node scripts/check-platform-pin-consistency.js [--root DIR]
@@ -229,10 +234,13 @@ function classifyUses(usesStr) {
 }
 
 // Collect every `uses:` scalar AND every literal `platform_ref:` value from the
-// parsed YAML (anchors resolved). The parser drops comments, so we ALSO need the
-// source LINE for composite refs. We gather both via the Document API: visit
-// Pairs whose key is `uses` / `platform_ref`, and compute the 1-based line of
-// the value node's start.
+// parsed YAML (anchors resolved), via the Document API: visit Pairs whose key is
+// `uses` / `platform_ref`. We also compute the 1-based line of each
+// `platform_ref` value node so a violation can point at it.
+//
+// No comment is read here. Composite refs used to need one — their version lived
+// in a trailing `# vX.Y.Z` that the YAML parser discards — but composites are
+// TAG-pinned now, so the structural value is the whole story.
 //
 // WHY `platform_ref` is in scope (#220): it is the input a reusable's platform
 // checkout does `ref: ${{ inputs.platform_ref }}` with, so it — not the `uses:@`
@@ -259,32 +267,13 @@ function pinNodesWithLines(text) {
       const k = pair.key && pair.key.value;
       const v = pair.value;
       if (!v || typeof v.value !== "string" || !v.range) return;
-      if (k === "uses") out.push({ uses: v.value, line: lineOf(v) });
+      if (k === "uses") out.push({ uses: v.value });
       else if (k === "platform_ref" && !v.value.includes("${{")) {
         platformRefs.push({ ref: v.value.trim(), line: lineOf(v) });
       }
     },
   });
-  return { out, platformRefs, lines: text.split("\n") };
-}
-
-// LINE-AWARE read of the trailing `# …` comment on a given 1-based source line.
-// JUSTIFIED EXCEPTION to the "parse with YAML, not regex" rule: a SHA-pinned
-// composite action's REQUIRED version gate lives in the trailing comment, which
-// the YAML parser discards. Same pattern as scripts/sync-action-pin-comments.sh
-// (which also must read trailing `uses:` comments line-aware). We only read the
-// comment text here — the structural `uses:` value itself came from the parser.
-function trailingComment(lines, line1) {
-  const lineStr = lines[line1 - 1] || "";
-  const hash = lineStr.indexOf("#");
-  if (hash === -1) return "";
-  return lineStr.slice(hash + 1).trim();
-}
-
-// Extract a `vX.Y.Z` (or any `vN…`) token from a comment like `v0.1.0 (2026-05-29)`.
-function versionFromComment(comment) {
-  const m = comment.match(/\bv\d+(?:\.\d+){0,3}\b/);
-  return m ? m[0] : null;
+  return { out, platformRefs };
 }
 
 // RUN_AS_CLI-guarded: on `require` (the unit test drives the pure helpers) this
@@ -316,29 +305,16 @@ for (const wf of RUN_AS_CLI ? listWorkflowFiles() : []) {
     });
     continue;
   }
-  for (const { uses, line } of nodes.out) {
+  for (const { uses } of nodes.out) {
     const cls = classifyUses(uses);
     if (!cls) continue; // not a cms-platform ref → ignore
-    if (cls.type === "reusable") {
-      // The pinned ref IS the version: `…@<ref>` must equal platform_ref.
-      record(wf, `reusable uses:@${cls.subpath}`, cls.ref, `uses: ${uses}`);
-    } else {
-      // Composite: SHA-pinned; the gate is the trailing `# vX.Y.Z` comment.
-      const comment = trailingComment(nodes.lines, line);
-      const ver = versionFromComment(comment);
-      if (!ver) {
-        violations.push({
-          file: rel(wf),
-          kind: `composite uses:@${cls.subpath}`,
-          found: comment ? `# ${comment} (no vX.Y.Z token)` : "(no # vX.Y.Z comment)",
-          expected: platformRef,
-          detail: `uses: ${uses}`,
-        });
-        checked += 1;
-        continue;
-      }
-      record(wf, `composite uses:@${cls.subpath} (# comment)`, ver, `uses: ${uses}`);
-    }
+    // Reusable workflow OR composite action: the pinned ref IS the version, and
+    // it must equal platform_ref. Composites used to be SHA-pinned with the
+    // version carried in a trailing `# vX.Y.Z` comment; that comment was retired
+    // (it drifted silently and Dependabot rewrote it inconsistently), so a
+    // cross-repo composite now takes the same TAG form the reusables already
+    // use. One rule, one thing to read, and no comment to parse.
+    record(wf, `${cls.type} uses:@${cls.subpath}`, cls.ref, `uses: ${uses}`);
   }
   // The `platform_ref` INPUT — the ref the reusable's platform checkout obeys (#220).
   for (const { ref, line } of nodes.platformRefs) {
@@ -805,7 +781,7 @@ if (RUN_AS_CLI) {
   if (violations.some((v) => !v.message)) {
     process.stderr.write(
       `\nFix: bring every platform-version reference above to ${platformRef} (the platform.lock ` +
-        `platform_ref). Bump the workflow @ref pins + composite # comments + the ` +
+        `platform_ref). Bump the workflow @ref pins (reusables AND composites) + the ` +
         `with: platform_ref inputs, and the Gemfile/Gemfile.lock tag, all to a SINGLE release. ` +
         `(platform-bump moves every reference atomically; Dependabot ignores all ` +
         `cms-platform refs, #242 + #244 — a hand-edit, a partially-applied bump, or a ` +

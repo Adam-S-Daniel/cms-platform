@@ -1,6 +1,6 @@
 ---
 name: platform-release-and-bump
-description: Cut a new cms-platform release (vX.Y.Z) and reconcile BOTH consumer repos (adamdaniel.ai, jodidaniel.com) to it in single-version lockstep. Use when you've merged a platform fix and need it to flow to consumers, when bumping platform_ref, or when the pin-consistency guard fails after a partial bump. Covers the release dispatch, the exact set of references to bump (platform_ref, gem tag+revision, workflow @ref pins, composite-action SHA, the trailing # vX.Y.Z comments), the pin-consistency check, and the lockstep invariant. Trigger on "cut a release", "release vX.Y.Z", "bump platform_ref", "reconcile consumers", "platform-pin-consistency", or "flow the fix to consumers".
+description: Cut a new cms-platform release (vX.Y.Z) and reconcile BOTH consumer repos (adamdaniel.ai, jodidaniel.com) to it in single-version lockstep. Use when you've merged a platform fix and need it to flow to consumers, when bumping platform_ref, or when the pin-consistency guard fails after a partial bump. Covers the release dispatch, the exact set of references to bump (platform_ref, gem tag+revision, workflow and composite @ref pins), the pin-consistency check, and the lockstep invariant. Trigger on "cut a release", "release vX.Y.Z", "bump platform_ref", "reconcile consumers", "platform-pin-consistency", or "flow the fix to consumers".
 compatibility: Requires gh CLI authed to Adam-S-Daniel (repo + workflow scope) and Node 20. Run from ~/repos/{cms-platform,adamdaniel.ai,jodidaniel.com}.
 ---
 
@@ -29,13 +29,19 @@ gh api repos/Adam-S-Daniel/cms-platform/git/refs/tags/vX.Y.Z --jq '.object.sha'
 A consumer pins the platform in MANY places; they must ALL move together or
 the pin-consistency guard fails. The two consumers differ slightly:
 
-- **adamdaniel.ai** — pins reusable workflows by **`@<40-hex-SHA>`** with a
-  trailing `# vX.Y.Z (date)` comment, PLUS a composite-action SHA pin
-  (`post-failure-comment@<SHA>`). So a bump replaces BOTH the old `vX.Y.Z`
-  string AND the old 40-hex SHA → the new ones.
-- **jodidaniel.com** — pins reusable workflows by **`@vX.Y.Z`** tag (no SHA),
-  so only the version string changes — EXCEPT `Gemfile.lock`'s git `revision:`
-  is the resolved commit SHA and must move to the new release commit too.
+- **Both consumers** pin every cross-repo platform ref — reusable workflow and
+  composite action alike — by **`@vX.Y.Z`** TAG, so only the version string
+  changes. Measured 2026-08-20: 32 `@v0.1.88` refs in adamdaniel.ai, zero SHA
+  pins, zero pin comments; jodidaniel.com the same shape.
+- **jodidaniel.com additionally** has `Gemfile.lock`'s git `revision:`, which is
+  the resolved commit SHA and must move to the new release commit too.
+- **Historical, and why a stale doc here bites:** adamdaniel.ai once SHA-pinned
+  its reusables with a trailing `# vX.Y.Z (date)` comment, and composites were
+  SHA-pinned with the version in that comment. Both forms are gone — the tag
+  carve-out took the reusables, and the 2026-08-20 fleet retirement of the pin
+  comment took the composites (see the `github-actions-sha-pinning` skill). A
+  bump replaces version STRINGS now; if you find yourself hunting 40-hex SHAs in
+  a consumer's workflows, you are working from the old model.
 
 The robust, idempotent way (handles the unicode-quoted-filename trap — use
 `git ls-files -z`, not plain `ls-files`):
@@ -62,8 +68,8 @@ References the replace covers: `platform.lock` (`platform_ref:` + `tag:`),
 `Gemfile` (`tag: "vX.Y.Z"`), `Gemfile.lock` (`tag:` + `revision:` — the SHA
 replace moves the revision for adamdaniel; for jodidaniel set `revision:`
 explicitly to the new release SHA since its files carry no SHA strings),
-`.github/workflows/*` (`uses:@` pins + `platform_ref:` with-inputs + the
-composite `@<SHA> # vX.Y.Z` pins).
+`.github/workflows/*` (`uses:@` pins — reusable and composite alike, both
+tag-pinned — plus `platform_ref:` with-inputs).
 
 **This manual path does NOT seed newly-dictated workflow callers** — unlike
 `platform-bump.yml` (below), it only rewrites pins in files the consumer
@@ -114,7 +120,8 @@ and 57, on both consumers, at `platform_ref` v0.1.86). Read the count off the
 script's own summary line, which prints the real one every run.
 
 If it reports a mismatch, a reference was missed (commonly `Gemfile.lock`'s
-`revision:` on jodidaniel, or a stale `# vX.Y.Z` trailing comment). Fix, re-run.
+`revision:` on jodidaniel, or a stale version token in a LEFTOVER `# vX.Y.Z`
+trailing comment — house style carries none since 2026-08-20). Fix, re-run.
 Then commit, push, open the PR, and merge once CI is green. adamdaniel's `e2e`
 gate is REQUIRED (wait for the real run, not just the docs-stub); jodidaniel's
 parity/e2e are non-required.
@@ -134,7 +141,7 @@ v0.1.76 incident this rule comes from.
   **atomic single-version bump** (issue #13 **resolved**, v0.1.23): it rewrites
   EVERY version ref in one PR — `platform_ref:` + `platform.lock`, the `uses:@`
   pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:` (it resolves the
-  release commit sha itself), and any composite `@<sha>` pin — so its PR passes
+  release commit sha itself), and any composite `@<tag>` pin — so its PR passes
   `pin-consistency` alone. It checks out with the caller PAT (`secrets.gh_token`
   = `CMS_PLATFORM_PAT`, which MUST carry **Workflows: write** / `workflow` scope)
   so the workflow-file push is authorised — otherwise GitHub rejects it
@@ -149,8 +156,8 @@ v0.1.76 incident this rule comes from.
   (above). **Neither Dependabot ecosystem is wired as a net for a
   cms-platform reference anymore.** Since #242 the `bundler` ecosystem
   `ignore`s `cms-platform-theme`, and since #244 the `github-actions`
-  ecosystem `ignore`s every `Adam-S-Daniel/cms-platform/*` ref (workflow
-  `uses:@<tag>` pins and composite SHA comments alike) — `platform-bump` is
+  ecosystem `ignore`s every `Adam-S-Daniel/cms-platform/*` ref (reusable and
+  composite `uses:@<tag>` pins alike) — `platform-bump` is
   the sole bumper of everything a consumer pins to the platform. Dependabot
   stays wired only for the site's own non-cms-platform deps (see cms-platform
   `docs/SYNC.md`).
@@ -175,11 +182,16 @@ v0.1.76 incident this rule comes from.
   own `platform_ref`**, i.e. the NEW ref the bump PR is introducing, so the
   mismatch surfaces **first on the bump PR itself**, not later. So the pin
   rewrite alone is not enough: add the new `secrets:` line to the consumer's
-  caller in the same commit. The live instance is v0.1.76's
+  caller in the same commit. The live instance was v0.1.76's
   `dependabot-comment-sync` caller gaining
   `app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}` (harmless when
   the secret is unset — an unset secret is an empty string and the reusable then
-  skips cleanly). This is the same class of drift that let jodidaniel's sweep
+  skipped cleanly). That caller has since been DELETED along with the
+  pin-comment convention, which makes it the other half of the same lesson: a
+  release that REMOVES a dictated caller obliges every consumer to delete its
+  thin caller in the same commit as the `platform_ref` bump, or workflow-set
+  parity reports EXTRA and reds the bump PR (same shape as the v0.1.83 skills
+  transport removal). This is the same class of drift that let jodidaniel's sweep
   caller silently lose its `CMS_E2E_PAT` map and `startup_failure` for weeks —
   only caught earlier, at the bump.
 - **v0.1.76 also changes 9 workflow callers' `pull_request` types** (dropping
