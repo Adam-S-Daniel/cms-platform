@@ -72,14 +72,15 @@ const CONFIG = path.join(E2E_DIR, "playwright.config.js");
 // single source of truth) so this lint stays in lockstep without importing
 // the config (which has env/webServer side effects). AST, not regex — a
 // `PLATFORM_META_SPECS = [ ... ]` array literal can legitimately carry a
-// comment that itself quotes a `*.test.js`/`*.spec.js` name (playwright.
-// config.js's own "DEFERRED, NOT FORGOTTEN" comment does exactly this,
-// quoting "required-context-concurrency.test.js" as the name of an entry
-// deliberately held BACK, not a live one), and a regex scanning the array
-// BODY for quoted spec-like tokens cannot distinguish that comment text from
-// a real element — it silently counted the deferred name as registered,
-// which is what turned "every registered meta-spec name exists on disk" red
-// in CI run 32325181214 (the name had no matching file). Walking a real AST
+// comment that itself quotes a `*.test.js`/`*.spec.js` name — playwright.
+// config.js still does, in the note beside "required-context-concurrency.
+// test.js" naming the CONSUMER-mode siblings that are deliberately NOT
+// registered — and a regex scanning the array BODY for quoted spec-like
+// tokens cannot distinguish that comment text from a real element. The
+// original instance was a "DEFERRED, NOT FORGOTTEN" comment quoting a spec
+// held BACK, which the old extractor silently counted as registered; that
+// is what turned "every registered meta-spec name exists on disk" red in CI
+// run 32325181214 (the name had no matching file). Walking a real AST
 // for the declarator and reading only its ArrayExpression ELEMENTS' string
 // values sidesteps this entirely: acorn discards comments as part of parsing
 // a real array literal, so one can never be mistaken for an element. Same

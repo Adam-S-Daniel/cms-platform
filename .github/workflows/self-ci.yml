@@ -48,37 +48,14 @@ run-name: >-
    || format('push — {0} @{1}', github.ref_name, github.actor) }}
 
 on:
-  # EXPLICIT `types:` — EVERY event that can enter the `concurrency` group below
-  # must carry a DISTINCT head SHA, and `reopened` does not.
-  #
-  # The four jobs here publish this repo's four REQUIRED status contexts
-  # (repo-settings.yml -> ruleset_library.platform-main). A required context left
-  # CANCELLED on a SHA hard-blocks the merge: the API answers
-  # `405 Required status check "<ctx>" is cancelled`, and NOTHING overrides it —
-  # not native auto-merge, not an explicit merge call, not a nudge bot. GitHub
-  # picks between a cancelled and a successful run for the same context+SHA
-  # NON-DETERMINISTICALLY, so the PR reads all-green and simply never lands.
-  #
-  # `opened` and `synchronize` each bring a NEW head SHA, so superseding the
-  # previous run can only ever cancel a STALE SHA — the deliberate, correct use
-  # of this group. `reopened` is the odd one out: GitHub's default types list is
-  # [opened, synchronize, reopened], and a reopen re-fires on the SAME SHA into
-  # the SAME group (the group keys on `github.event_name`, which is
-  # `pull_request` for all three), so a close+reopen inside a run's lifetime
-  # cancels the in-flight run and strands cancelled required contexts on that
-  # SHA. Dropping it costs nothing: branch protection evaluates check runs BY
-  # HEAD SHA and reopening a PR does not clear them, so the greens the earlier
-  # `opened`/`synchronize` run already reported still satisfy the gate.
-  #
-  # `workflow_dispatch` is ABSENT for exactly the same reason — a dispatch can
-  # always be fired against a SHA a PR is already using, and two dispatches land
-  # in one group where the first is cancelled. Do not add it, and do not try to
-  # "fix" any of this with `cancel-in-progress: false`: GitHub keeps the
-  # in-progress run plus only the LATEST pending run in a group and cancels the
-  # other pending duplicates, so a same-SHA burst still leaves cancelled runs
-  # behind. Locked by e2e/required-context-concurrency.test.js.
+  # No `edited` (#222): a skipped caller emits NO check-run, so an `edited` run
+  # WITHDRAWS contexts an earlier run reported green, and only a new SHA restores
+  # them. Everything else is GitHub's default types list. `workflow_dispatch` is
+  # absent because these four jobs are a MERGE GATE, not an on-demand tool — a
+  # dispatch would report the four required contexts against a ref nobody is
+  # merging.
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
 
@@ -87,10 +64,38 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # One in-flight run per PR (or per branch on push); supersede stale runs.
-  group: self-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+# NO `concurrency:` BLOCK — a deliberate, load-bearing ABSENCE. Do not add one.
+#
+# The four jobs below publish this repo's four REQUIRED status contexts
+# (repo-settings.yml -> `ruleset_library.platform-main`: actionlint,
+# ruby-theme-specs, node-unit-lints, plugin-validate). AGENTS.md's rule for a job
+# in that position is categorical — no `concurrency` block at all — and this
+# workflow carried `group: self-ci-<event>-<pr|ref>` with
+# `cancel-in-progress: true` until cms-platform#285.
+#
+# The reason the group could not stay, even keyed per PR and even with an
+# explicit `types: [opened, synchronize]`: those two types CAN share a head SHA.
+# Measured on adamdaniel.ai PR #3006 (2026-08-09) — opened 01:57:10Z, force-push
+# 01:57:38Z, and two runs created 01:57:41Z BOTH carrying head_sha 68d7c777,
+# because webhook latency dispatches the `opened` run after the force-push has
+# already advanced the ref. Neither type can be dropped (without them the
+# required contexts never report), so no trigger set makes a shared key
+# collision-free.
+#
+# WHAT RE-ADDING A GROUP WOULD COST. A cancelled run shadowing a successful one
+# for the same context+SHA hard-blocks the merge: the API answers
+# `405 Required status check "<ctx>" is cancelled`, and NOTHING overrides it —
+# not native auto-merge, not an explicit merge call, not a nudge bot, not an
+# admin. GitHub picks between the two NON-DETERMINISTICALLY, so the PR reads
+# all-green and never lands, and it will not reproduce on demand.
+# `cancel-in-progress: false` is not a fix: GitHub keeps the in-progress run plus
+# only the LATEST pending run in a group and cancels the other pending duplicates.
+#
+# WHAT THE ABSENCE COSTS. Pushing three times in a minute now runs self-CI three
+# times to completion instead of once. These are the FAST lanes (target: a few
+# minutes, no browser, no AWS), so the bill is small — and runner minutes are
+# recoverable where a wedged required check is not. Locked by
+# e2e/required-context-concurrency.test.js.
 
 jobs:
   # ── 1. actionlint — static analysis of every workflow YAML ───────────────

@@ -119,12 +119,22 @@ function pullRequestOf(label, doc) {
 // the header), and the read itself sits OUTSIDE any try/catch: an ENOENT or a
 // permissions failure must surface as the error it is, never be mistaken for a
 // malformed-input case this lint decided to tolerate.
+//
+// `count` is DERIVED FROM WHAT PARSED, not from the length of the list above.
+// It used to be `files.length` — a literal 2-element array — which made the
+// fail-on-zero test downstream a TAUTOLOGY: `toBeGreaterThan(0)` and `toBe(2)`
+// were both true no matter what the files contained, including an empty file
+// that parses to `null`. A count that cannot disagree with its own assertion is
+// not a check; it is a comment that costs a test slot. Now a file that parses to
+// anything other than a mapping is not counted, so `toBe(2)` fails on exactly the
+// case the assertion claims to rule out.
 function parsePair() {
   const files = [
     { label: "e2e-tests.yml", file: HEAVY_PATH },
     { label: "e2e-stub.yml", file: STUB_PATH },
   ];
   const parsed = {};
+  let count = 0;
   for (const { label, file } of files) {
     expect(
       fs.existsSync(file),
@@ -134,9 +144,11 @@ function parsePair() {
         `be reported". Ship both callers, or neither plus a ruleset that does not require the ` +
         `context.`,
     ).toBe(true);
-    parsed[label] = YAML.parse(fs.readFileSync(file, "utf8"));
+    const doc = YAML.parse(fs.readFileSync(file, "utf8"));
+    if (doc !== null && typeof doc === "object" && !Array.isArray(doc)) count += 1;
+    parsed[label] = doc;
   }
-  return { parsed, count: files.length };
+  return { parsed, count };
 }
 
 test.describe("consumer e2e required-check pair: the stub mirrors the heavy lane's filters", () => {
@@ -152,7 +164,12 @@ test.describe("consumer e2e required-check pair: the stub mirrors the heavy lane
 
     const { parsed, count } = parsePair();
     expect(count, "this lint must examine a non-zero number of workflow files").toBeGreaterThan(0);
-    expect(count, "both halves of the e2e required-check pair must be parsed").toBe(2);
+    expect(
+      count,
+      "both halves of the e2e required-check pair must parse to a real YAML MAPPING — an empty " +
+        "or scalar file parses to null/a string, reports no check run, and would leave every " +
+        "list comparison below comparing two absences",
+    ).toBe(2);
     expect(
       Object.keys(parsed).sort(),
       "the parsed pair must be exactly the heavy lane and its stub",

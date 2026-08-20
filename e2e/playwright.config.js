@@ -126,13 +126,23 @@ const PLATFORM_META_SPECS = [
   // comment-stamping step reddened a green e2e job on 2026-08-12 and blocked a
   // merge. Reads .github/workflows/, absent on a consumer.
   "resolve-summary-fail-open.test.js",
-  // DEFERRED, NOT FORGOTTEN: "required-context-concurrency.test.js" belongs on
-  // this list — it reads the root repo-settings.yml ruleset + .github/workflows/,
-  // which a consumer does not have. It is held back with the fix it locks (see
-  // #285: the collision actually observed in production is an opened+synchronize
-  // burst, not the `reopened` one the first fix narrowed away). Re-add this entry
-  // in the SAME commit as the spec file — a registered name whose file is absent
-  // reds the #16 recurrence guard, which is exactly how this comment got written.
+  // #285 — the required-context/concurrency gate: reads the root repo-settings.yml
+  // ruleset manifest, .github/workflows/ and the examples/site thin-caller
+  // templates, none of which a consumer ships. Platform-internal, self-CI only.
+  //
+  // Registering it testIgnores it on every CONSUMER lane, so it covers only HALF
+  // the surface — the platform tree and the TEMPLATES a site copies from, never
+  // the copies a site actually ships, which is where #285 wedges a PR. The other
+  // half is "consumer-required-context-concurrency.test.js", deliberately absent
+  // from this list for exactly that reason (the cms-platform#244 lesson that also
+  // keeps "dependabot-theme-gem-ignored.test.js" and
+  // "consumer-required-check-mirrors.test.js" unregistered). Those three names are
+  // spelled in QUOTES on purpose: a comment inside this array literal quoting a
+  // spec name must never be counted as a registered element, and keeping one here
+  // keeps e2e/platform-meta-spec-registry.test.js's AST extractor honest against a
+  // real file rather than only a synthetic one. Do not "tidy" the consumer spec
+  // onto this list.
+  "required-context-concurrency.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN

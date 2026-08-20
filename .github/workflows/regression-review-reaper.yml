@@ -3,15 +3,32 @@
 # WHY THIS EXISTS
 # visual-regression.yml puts approve-regression behind the `regression-review`
 # GitHub Environment whenever a PR has visually-different pages — a human gate.
-# Its concurrency group cancels the IN-PROGRESS generate job on a new push
-# (cancel-in-progress: true), BUT a run that has already reached the manual
-# gate is no longer "in progress" — it sits in the `waiting` state holding a
-# PENDING DEPLOYMENT. The run-cancel API and cancel-in-progress do NOT clear a
-# waiting deployment; it lingers forever as an orphaned "Waiting" entry (and,
-# because each waiting run still occupies the environment, stacks up across
-# pushes). The ONLY thing that clears it is an environment REVIEW decision —
-# and GITHUB_TOKEN cannot review (reject) its own run's pending deployment, so
-# this needs a reviewer PAT (CMS_E2E_PAT).
+# A run that reaches that gate sits in the `waiting` state holding a PENDING
+# DEPLOYMENT, and nothing in the ordinary lifecycle clears one: neither the
+# run-cancel API nor a superseding push retires a waiting deployment, so it
+# lingers as an orphaned "Waiting" entry and, because each waiting run still
+# occupies the environment, stacks up across pushes. The ONLY thing that clears
+# it is an environment REVIEW decision — and GITHUB_TOKEN cannot review (reject)
+# its own run's pending deployment, so this needs a reviewer PAT (CMS_E2E_PAT).
+#
+# TIMING CHANGED AT cms-platform#285 — READ THIS BEFORE DEBUGGING A STRAY GATE.
+# visual-regression.yml USED TO carry `concurrency: … cancel-in-progress: true`,
+# and this file's rationale used to be written around it: a new push cancelled
+# the in-progress `generate` job, so a superseded run mostly never REACHED the
+# gate, and only a run already waiting needed reaping. That group is gone —
+# permanently, because approve-regression is a REQUIRED status context and a
+# cancelled required check hard-blocks the merge with no operator remedy (see
+# visual-regression.yml's own "NO `concurrency:` BLOCK" note, locked by
+# e2e/required-context-concurrency.test.js).
+#
+# The consequence for THIS workflow is a real, accepted timing gap: a superseded
+# run now runs `generate` to completion and can enter the gate on a STALE sha
+# AFTER the same push's `synchronize` sweep has already finished. That run is
+# therefore not reaped by the push that superseded it — it is reaped by the NEXT
+# `synchronize`, or by `closed`, which is what actually bounds accumulation. So a
+# transient extra "Waiting" entry on an old sha is EXPECTED here now, not a bug in
+# the sweep. It does not block the PR (see below), and it is not a reason to
+# re-add a concurrency group to visual-regression.yml.
 #
 # HOW IT'S WIRED
 # A consuming site calls this from a thin `regression-review-reaper.yml` on

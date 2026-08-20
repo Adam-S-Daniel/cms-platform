@@ -78,9 +78,53 @@ permissions:
   pull-requests: write
   id-token: write
 
-concurrency:
-  group: "visual-regression-pr-${{ github.event.pull_request.number }}"
-  cancel-in-progress: true
+# NO `concurrency:` BLOCK — a deliberate, load-bearing ABSENCE. Do not add one.
+#
+# This workflow used to carry `group: visual-regression-pr-<PR#>` with
+# `cancel-in-progress: true`, and `approve-regression` below publishes
+# `visual-regression / approve-regression` — a context repo-settings.yml's
+# `ruleset_library.consumer-main` REQUIRES on both consumer mains. AGENTS.md's
+# rule for that combination is categorical: a job publishing a REQUIRED status
+# context that can fire more than once on one head SHA gets no `concurrency`
+# block AT ALL (cms-platform#285).
+#
+# THIS WORKFLOW IS WHERE THE COLLISION WAS ACTUALLY MEASURED. adamdaniel.ai PR
+# #3006 (2026-08-09): opened 01:57:10Z, head_ref_force_pushed 01:57:38Z, and
+# runs 31289327061 (cancelled) and 31289327099 (skipped) BOTH created 01:57:41Z
+# on the SAME head_sha 68d7c777 — an `opened` run dispatched after the
+# force-push had already advanced the ref, landing in the same PR-numbered group
+# as the `synchronize` run. That time the cancelled check-run was the
+# NON-required `visual-regression / generate` and the required
+# `approve-regression` concluded success, so it was a near-miss rather than an
+# outage. Narrowing `pull_request.types` does not close it: `opened` and
+# `synchronize` are the two types that cannot be removed (without them the
+# required context never reports), and they are the pair that collided.
+#
+# WHAT RE-ADDING A GROUP WOULD COST. A cancelled run shadowing a successful one
+# for the same context+SHA hard-blocks the merge — the API answers
+# `405 Required status check "visual-regression / approve-regression" is
+# cancelled` — and NOTHING overrides it: not native auto-merge, not an explicit
+# merge call, not a nudge bot, not an admin. GitHub chooses between the two runs
+# NON-DETERMINISTICALLY, so the PR reads all-green and simply never lands.
+# `cancel-in-progress: false` is not a fix: GitHub keeps the in-progress run plus
+# only the LATEST pending run in a group and cancels the other pending duplicates.
+#
+# WHAT THE ABSENCE COSTS. This is the most expensive lane in the family (a Ruby
+# + Node + Playwright + ffmpeg build), and a superseded run now finishes instead
+# of being cancelled, so a rapidly-pushed PR can burn several of them. That is
+# the accepted price: runner minutes are recoverable, a wedged required check has
+# no operator remedy. Locked by e2e/required-context-concurrency.test.js and its
+# CONSUMER-mode sibling e2e/consumer-required-context-concurrency.test.js.
+#
+# ONE OTHER WORKFLOW IS COUPLED TO THIS ABSENCE: regression-review-reaper.yml.
+# Its rationale was written when the group existed — a superseded run was
+# cancelled before it could reach the `regression-review` gate, so only a run
+# ALREADY waiting needed reaping. Without the group a superseded run finishes and
+# can enter the gate on a stale sha AFTER the same push's `synchronize` sweep has
+# run, so it is reaped by the NEXT push or by `closed` instead. A transient extra
+# "Waiting" entry on an old sha is expected, does not block the PR (protection
+# evaluates this context on the head sha, which the live run owns), and is NOT a
+# reason to re-add a group here. That file's header carries the full timing note.
 
 jobs:
   # ── salience gate ────────────────────────────────────────────────────
