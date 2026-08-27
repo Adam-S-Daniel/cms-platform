@@ -260,6 +260,123 @@ jobs:
             printf 'seeded %d newly platform-dictated workflow(s): %s\n' "${#SEEDED[@]}" "${SEEDED[*]}"
           fi
 
+          # RETIRE a caller that LEFT the canonical set (#315) — the symmetric
+          # counterpart of the seeding above, and the half that was missing.
+          #
+          # It HAS to ride this commit. pin-consistency compares the consumer's
+          # workflow set against the platform at that consumer's OWN
+          # platform.lock ref, so the deletion cannot be split into its own PR:
+          # delete first and the still-old pin reports `workflow-set: MISSING`;
+          # bump first and the new canonical set reports `workflow-set: EXTRA`.
+          # Mirror-image failures, one on each side. v0.1.83 hit exactly this
+          # (docs/VERSION-HISTORY.md says so in as many words) and both
+          # deletions had to be hand-added to the bump PR on both consumers.
+          #
+          # "WAS it dictated?" is answered by the canonical set at the OLD ref —
+          # NOT by "the consumer has a file we don't recognise". A site-authored
+          # workflow that was never platform-dictated is not this bump's to
+          # delete, and that distinction is the one piece of judgement the
+          # seed-only code never had to make. Getting it wrong deletes someone's
+          # work, so the fallback is always "delete nothing".
+          mapfile -t WAS_DICTATED < <(
+            gh api "repos/$PLATFORM/contents/examples/site/.github/workflows?ref=$CUR" \
+              --jq '.[] | select(.type=="file") | .name' 2>/dev/null | grep -E '\.ya?ml$' || true
+          )
+          RETIRED=()
+          if [ "${#DICTATED[@]}" -eq 0 ] || [ "${#WAS_DICTATED[@]}" -eq 0 ]; then
+            # UNKNOWN is never "quietly delete nothing and report success": an
+            # empty listing means the API answer was unusable (a $CUR that
+            # predates examples/site, a transient failure), and "not in the new
+            # set" computed from an unusable old set would retire live callers.
+            echo "::notice::retire pass skipped — could not read both canonical sets (old=${#WAS_DICTATED[@]}, new=${#DICTATED[@]}); nothing deleted."
+          else
+            for name in "${WAS_DICTATED[@]}"; do
+              dest=".github/workflows/$name"
+              if [ ! -f "$dest" ]; then continue; fi
+              # `if` blocks, never `cmd && continue`: GitHub runs `run:` under
+              # `bash -e`, so a false AND-list as a loop body's last command
+              # exits the step.
+              if printf '%s\n' "${DICTATED[@]}" | grep -qxF -- "$name"; then continue; fi
+              git rm -q --ignore-unmatch -- "$dest" || rm -f "$dest"
+              RETIRED+=("$name")
+            done
+          fi
+          if [ "${#RETIRED[@]}" -gt 0 ]; then
+            printf 'retired %d de-dictated workflow caller(s): %s\n' "${#RETIRED[@]}" "${RETIRED[*]}"
+          fi
+
+          # RECONCILE a platform-DICTATED caller INPUT (#315, second half).
+          #
+          # Seeding and retiring both move whole FILES. The other thing a
+          # release can change is an input the platform dictates inside a caller
+          # that already exists — and nothing moved those. When #309 added
+          # `prerelease-guard / prerelease-guard` to `consumer-main`, every
+          # consumer's `cms-automerge-nudge.yml` `required_contexts` went stale
+          # in the very commit that moved the pin, reddening `e2e / e2e` on both.
+          #
+          # That input is not cosmetic: the nudge builds its notion of "green"
+          # from it, so a list SHORTER than the repo's real required set asks for
+          # a merge it has not established (jodidaniel.com#156 passed ONE of six
+          # for months, safe only because pulls.merge() answered 405 on its
+          # behalf).
+          #
+          # The list is DERIVED per consumer, exactly as
+          # e2e/consumer-automerge-nudge-contexts.test.js derives it: the
+          # manifest's ruleset for THIS repo, not the template's list — a
+          # consumer may map `main` to some other library entry, and copying the
+          # template would silently impose the wrong set on it.
+          #
+          # A REAL PARSER reads both sides (house rule; a line scanner is blind
+          # to anchors and aliases). The WRITE is a splice of the block scalar's
+          # own lines, so the caller's comments survive — and it is verified by
+          # RE-PARSING the result before anything is saved, because a text splice
+          # nobody checks is how you ship a mangled workflow.
+          NUDGE=".github/workflows/cms-automerge-nudge.yml"
+          CONTEXT_NOTE=""
+          if [ -f "$NUDGE" ]; then
+            RS_YML="${RUNNER_TEMP:-/tmp}/platform-repo-settings.yml"
+            RECONCILE_PY="${RUNNER_TEMP:-/tmp}/reconcile-nudge-contexts.py"
+            # Both come from the platform AT $LATEST — the manifest so the
+            # derived list is the one the landed pin will be checked against,
+            # and the script so this workflow is not carrying a second copy of
+            # logic that lives (and is reviewed) in scripts/.
+            if gh api "repos/$PLATFORM/contents/repo-settings.yml?ref=$LATEST" \
+                 --jq '.content' 2>/dev/null | base64 -d > "$RS_YML" \
+               && gh api "repos/$PLATFORM/contents/scripts/reconcile-nudge-contexts.py?ref=$LATEST" \
+                 --jq '.content' 2>/dev/null | base64 -d > "$RECONCILE_PY"; then
+              set +e
+              CONTEXT_OUT=$(
+                NUDGE_PATH="$NUDGE" MANIFEST_PATH="$RS_YML" SLUG="$GITHUB_REPOSITORY" \
+                python3 "$RECONCILE_PY"
+              )
+              CONTEXT_RC=$?
+              set -e
+              printf '%s\n' "$CONTEXT_OUT"
+              case "$CONTEXT_OUT" in
+                UPDATED*)
+                  CONTEXT_NOTE=" Reconciled \`cms-automerge-nudge.yml\`'s \`required_contexts\` with the platform manifest's ruleset for this repo." ;;
+                MANUAL*)
+                  # Direction 3 of #315, as the fallback for directions 1-2: if
+                  # it cannot be done automatically, the PR must SAY so rather
+                  # than arrive quietly wrong. The e2e guard still catches a
+                  # stale list, so failing soft here moves the signal — it does
+                  # not lose it.
+                  CONTEXT_NOTE=" :warning: \`required_contexts\` in \`cms-automerge-nudge.yml\` could NOT be reconciled automatically and may be stale — check it against the platform manifest's ruleset for this repo before merging."
+                  echo "::warning::could not reconcile required_contexts automatically — $CONTEXT_OUT" ;;
+                *)
+                  if [ "$CONTEXT_RC" -ne 0 ]; then
+                    CONTEXT_NOTE=" :warning: the \`required_contexts\` reconciliation did not run — check that input by hand before merging."
+                    echo "::warning::required_contexts reconciliation exited $CONTEXT_RC"
+                  fi ;;
+              esac
+            else
+              # A $LATEST that predates this script is the ordinary case here,
+              # not an error — say so and move on, with the PR body carrying it.
+              echo "::warning::could not read the platform manifest or the reconcile script at $LATEST — skipping the required_contexts reconciliation"
+              CONTEXT_NOTE=" :warning: the \`required_contexts\` reconciliation was skipped (manifest or script unreadable at $LATEST) — check that input by hand."
+            fi
+          fi
+
           # git diff --quiet alone is blind to a brand-new UNTRACKED file (a
           # seeded caller, or a first-adoption platform.lock) — it only compares
           # tracked content. Fold in `git status --porcelain` so an add-only
@@ -279,6 +396,10 @@ jobs:
           if [ "${#SEEDED[@]}" -gt 0 ]; then
             SEED_NOTE=" Seeded newly platform-dictated workflow caller(s): ${SEEDED[*]}."
           fi
+          if [ "${#RETIRED[@]}" -gt 0 ]; then
+            SEED_NOTE="${SEED_NOTE} Retired de-dictated workflow caller(s): ${RETIRED[*]}."
+          fi
+          SEED_NOTE="${SEED_NOTE}${CONTEXT_NOTE}"
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
             --title "Bump cms-platform to $LATEST" \
             --body "Atomic single-version bump of every cms-platform reference (\`platform_ref:\` + \`platform.lock\`, the \`uses:@\` reusable-workflow pins, the \`cms-platform-theme\` Gemfile \`tag:\`, and \`Gemfile.lock\` \`tag:\` + \`revision:\`) to $LATEST. The pin-consistency guard (#29) passes on this PR alone.${SEED_NOTE}" \
