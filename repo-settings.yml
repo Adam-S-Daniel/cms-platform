@@ -181,6 +181,17 @@ ruleset_library:
           require_code_owner_review: false
           require_last_push_approval: false
           required_review_thread_resolution: false
+          # why: = live on ALL FIVE rulesets across all three repos (measured
+          # 2026-08-27: cms-platform 17169281, adamdaniel.ai 13985217/15756474,
+          # jodidaniel.com 17032014/17032043 — `true` on every one). GitHub
+          # started returning this pull_request parameter after the manifest was
+          # written, and an UNDECLARED live parameter makes every PUT lossy, so
+          # `--fix` skipped the whole `main` ruleset rather than silently turning
+          # a real protection off. That skip is what left both consumers
+          # unconverged for eleven days (#313, layer 2) — the guard behaving
+          # correctly, against a manifest that had gone incomplete. Declaring the
+          # LIVE value changes nothing live; it only lets the PUT carry it.
+          require_extra_approval_for_unattributed_changes: true
           allowed_merge_methods: [merge, squash]
       - type: required_status_checks
         parameters:
@@ -215,6 +226,17 @@ ruleset_library:
           require_code_owner_review: false
           require_last_push_approval: false
           required_review_thread_resolution: false
+          # why: = live on ALL FIVE rulesets across all three repos (measured
+          # 2026-08-27: cms-platform 17169281, adamdaniel.ai 13985217/15756474,
+          # jodidaniel.com 17032014/17032043 — `true` on every one). GitHub
+          # started returning this pull_request parameter after the manifest was
+          # written, and an UNDECLARED live parameter makes every PUT lossy, so
+          # `--fix` skipped the whole `main` ruleset rather than silently turning
+          # a real protection off. That skip is what left both consumers
+          # unconverged for eleven days (#313, layer 2) — the guard behaving
+          # correctly, against a manifest that had gone incomplete. Declaring the
+          # LIVE value changes nothing live; it only lets the PUT carry it.
+          require_extra_approval_for_unattributed_changes: true
           allowed_merge_methods: [merge, squash]
       - type: required_status_checks
         parameters:
@@ -276,6 +298,17 @@ ruleset_library:
           require_code_owner_review: false
           require_last_push_approval: false
           required_review_thread_resolution: false
+          # why: = live on ALL FIVE rulesets across all three repos (measured
+          # 2026-08-27: cms-platform 17169281, adamdaniel.ai 13985217/15756474,
+          # jodidaniel.com 17032014/17032043 — `true` on every one). GitHub
+          # started returning this pull_request parameter after the manifest was
+          # written, and an UNDECLARED live parameter makes every PUT lossy, so
+          # `--fix` skipped the whole `main` ruleset rather than silently turning
+          # a real protection off. That skip is what left both consumers
+          # unconverged for eleven days (#313, layer 2) — the guard behaving
+          # correctly, against a manifest that had gone incomplete. Declaring the
+          # LIVE value changes nothing live; it only lets the PUT carry it.
+          require_extra_approval_for_unattributed_changes: true
           allowed_merge_methods: [squash, merge]
       - type: required_status_checks
         parameters:

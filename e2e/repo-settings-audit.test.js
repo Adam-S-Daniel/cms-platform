@@ -279,7 +279,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     ]);
   });
 
-  test("(d) jodidaniel main vs consumer-main = EXACTLY the 4 known skew findings", () => {
+  test("(d) jodidaniel main vs consumer-main = EXACTLY the 5 known skew findings", () => {
     // The historical drift corpus locking the skew detection: missing
     // required_status_checks, missing non_fast_forward, admin bypass. #172
     // phase 2 (2026-07-22) converged jodidaniel main onto consumer-main and
@@ -294,6 +294,15 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // before that change genuinely carries one more skew than it used to. The
     // as-found file is deliberately NOT re-captured — an as-found corpus that
     // gets edited every time desired state moves stops being evidence.
+    //
+    // `…require_extra_approval_for_unattributed_changes` is the FIFTH, by that
+    // same rule (#313). GitHub added that pull_request parameter after this
+    // capture was taken, and it is now `true` live on all five rulesets across
+    // all three repos (measured 2026-08-27), so the manifest declares it —
+    // leaving it UNDECLARED is what made every PUT lossy and got the `main`
+    // ruleset fix-skipped for eleven days. A fixture frozen before GitHub
+    // shipped the parameter cannot carry it, so the skew count goes up by one.
+    // The CURRENT fixtures were re-captured for that field; this one was not.
     const script = loadScript();
     const manifest = script.loadManifest(MANIFEST_PATH);
     const { projected } = script.normalizeRuleset(
@@ -317,9 +326,10 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       "bypass_actors",
       "rule:non_fast_forward",
       "rule:pull_request.allowed_merge_methods",
+      "rule:pull_request.require_extra_approval_for_unattributed_changes",
       "rule:required_status_checks",
     ]);
-    expect(findings.length).toBe(4);
+    expect(findings.length).toBe(5);
   });
 
   test("(e) an unmanaged live ruleset is detected (and never auto-deleted)", () => {
@@ -378,6 +388,10 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
         ruleset: "main",
         rule: "pull_request",
         key: "some_future_param",
+        // #313: the VALUE rides along. Naming only the KEY is what forced a
+        // hand-read of the live ruleset to find out whether the undeclared
+        // parameter was a real protection or GitHub's inert default.
+        value: 7,
         fixSkip: true,
       },
     ]);
