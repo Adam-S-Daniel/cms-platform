@@ -2,7 +2,23 @@
   <div class="container">
     <a class="site-logo" href="{{ '/' | relative_url }}">{{ site.title }}</a>
     <nav class="site-nav" aria-label="Main navigation">
+      {%- comment -%}
+        Show "Blog" only on a site that HAS a blog index. This link used to be
+        unconditional, so a consumer with no blog served it on every
+        default-layout page and every click 404'd — jodidaniel.com is a
+        single-page bio with `cms.base_collections: []` and no `_posts/`, and
+        both its 404 page and its /preview/ shell shipped a dead "Blog" link.
+        (Found by e2e/site-link-crawler.spec.js on its first run.)
+
+        The test is "does the page this links to exist", not "are there posts":
+        the link addresses `/blog/`, so that page's own presence is the precise
+        signal. A blog index that is momentarily empty keeps its nav entry; a
+        site that never had one never advertises it.
+      {%- endcomment -%}
+      {%- assign blog_index = site.pages | where: "url", "/blog/" | first -%}
+      {%- if blog_index -%}
       <a href="{{ '/blog/' | relative_url }}" {% if page.url contains '/blog' %}class="active"{% endif %}>Blog</a>
+      {%- endif -%}
       {% comment %} Disabled sections — uncomment a line to re-enable that page. See also: `published:` in projects/index.html, pages/about.md, pages/contact.md, and `output:` for the projects collection in _config.yml.
       <a href="{{ '/projects/' | relative_url }}" {% if page.url contains '/projects' %}class="active"{% endif %}>Projects</a>
       <a href="{{ '/pages/about/' | relative_url }}" {% if page.url contains '/about' %}class="active"{% endif %}>About</a>
