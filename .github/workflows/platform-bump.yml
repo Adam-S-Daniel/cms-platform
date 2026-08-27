@@ -16,10 +16,19 @@
 # PRs failed and needed a manual follow-up commit to unblock. A consumer that
 # once deliberately DELETED a dictated caller gets it re-seeded too — the
 # checker has no such opt-out (it fails MISSING unconditionally), so seeding
-# is always the correct move, never a false-positive graft-back. This only
+# is always the correct move, never a false-positive graft-back. Seeding only
 # ever ADDS a wholly-absent caller; a file that exists but has drifted CONTENT
 # is untouched (that's dev-hooks-sync / the CUR->LATEST rewrite's job — #63
 # content parity catches that class separately).
+#
+# It RETIRES the mirror case (#315): a caller that LEFT the canonical set is
+# deleted, not rewritten to a tag at which its reusable no longer exists. And it
+# RECONCILES one dictated INPUT inside a caller that already exists —
+# `cms-automerge-nudge.yml`'s `required_contexts`, derived from the manifest's
+# ruleset for THIS repo. Both have to ride the bump commit, because
+# pin-consistency compares the consumer's workflow set against the platform at
+# that consumer's OWN pinned ref: split either off into its own PR and it fails
+# in the mirror-image direction instead.
 #
 # (Previously this bumped ONLY `platform_ref:` and left the `uses:@` pins + the
 # theme gem to Dependabot's piecemeal PRs — which breaks the single-version
