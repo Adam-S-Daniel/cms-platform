@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.89)
+## Version history (v0.1.0 → v0.1.90)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1920,3 +1920,44 @@ version bump is needed and cutting one would force the whole atomic edit set
   the caller may never gain a path filter, and the two job ids must compose exactly
   the context string `repo-settings.yml` requires (a rename orphans the ruleset entry
   and hangs every consumer PR).
+
+- **v0.1.90** — **a tag pill has never linked to a page that exists (#308's
+  crawler, first catch).** `theme/_layouts/post.html` built the href as
+  `{{ '/tags/' | append: tag | slugify | relative_url }}`. Liquid applies a
+  filter chain left-to-right over the whole accumulated value, so `slugify` ran
+  on `/tags/quotes`, not on `quotes`; `Jekyll::Utils.slugify` collapses that
+  non-alphanumeric run — both slashes included — to a single dash, and
+  `relative_url` guarantees a leading slash back. Result: `/tags-quotes`. The
+  tags collection's permalink is `/tags/:slug/`, so the page that href names has
+  never existed, on any post, on any consumer with a blog.
+
+  MEASURED, NOT INFERRED: 3 of 66 internal links broken on adamdaniel.ai — the
+  home page, the blog index, and the post itself — live on production at the
+  time of this release.
+
+  WHAT MAKES IT A GOOD STORY FOR #308. `e2e/site-link-crawler.spec.js` shipped
+  one release earlier because nothing crawled the PUBLIC pages; the `/admin`
+  crawler walks only the five base collections. This is the first defect it
+  found against a real consumer, and it found it on the first run of the first
+  bump PR that carried it — which is also why v0.1.89's consumer bump could not
+  merge on adamdaniel.ai until this release existed.
+
+  THE PAGE WAS THERE ALL ALONG. `auto_tag_pages.rb` generates `/tags/<slug>/`
+  for every tag any post references — its own header names "a tag pill that
+  404s" as the condition it exists to prevent. It was doing that correctly; the
+  layout pointed elsewhere. So no `_tags/<slug>.md` and no content edit fixes
+  this, and adding one would have looked like a fix while changing nothing.
+
+  THE FIX is the idiom the two sibling usages already used and this one did not
+  — slugify into a variable first, then append (`default.html:16`,
+  `atom_feed.xml:5-6`) — plus the trailing slash the permalink requires.
+
+  `theme/spec/post_tag_pill_url_test.rb` locks it BEHAVIOURALLY: it extracts the
+  href expression from the layout and EVALUATES the filter chain, rather than
+  matching the text, so the regression re-reds in any spelling. One detail there
+  is load-bearing and was got wrong once before being got right — modelling
+  `relative_url` as an identity function makes the regression assertion pass
+  VACUOUSLY against the unfixed layout, because the leading slash in
+  `/tags-quotes` is precisely what that filter puts back. Verified red-first
+  twice: the unfixed layout fails 4 of 4 assertions with actual
+  `/tags-ai-engineering`; the fixed one passes 17 assertions.

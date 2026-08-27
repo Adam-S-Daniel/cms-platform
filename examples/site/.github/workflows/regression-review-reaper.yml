@@ -30,6 +30,6 @@ jobs:
     # Decap/editorial flow, the only PRs that reach the regression-review gate)
     # run. The reusable also no-ops on an empty PAT as a backstop.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/regression-review-reaper.yml@v0.1.89
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/regression-review-reaper.yml@v0.1.90
     secrets:
       CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
