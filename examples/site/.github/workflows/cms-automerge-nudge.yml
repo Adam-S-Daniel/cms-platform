@@ -109,5 +109,6 @@ jobs:
         preview-media / preview-media
         e2e / e2e
         visual-regression / approve-regression
+        prerelease-guard / prerelease-guard
     secrets:
       CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

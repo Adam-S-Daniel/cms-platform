@@ -1,0 +1,52 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/platform-prerelease-guard.yml`. Owns the pull_request
+# trigger + run-name; delegates the check to the platform's reusable workflow.
+#
+# Refuses to let this repo's DEFAULT branch be pinned to a prerelease
+# cms-platform. An RC (`vX.Y.Z-rc.N`, cut by release.yml with `prerelease: true`)
+# exists so a platform fix can be validated on one consumer PR's preview before
+# it reaches production. Pinning it on a stacked branch is the intended use;
+# merging that branch into the branch `deploy-production` builds from is not.
+#
+# NO `paths` OR `paths-ignore` FILTER HERE, and that is load-bearing twice over:
+#
+#   1. The context this publishes is REQUIRED (repo-settings.yml, `consumer-main`
+#      ruleset). A workflow excluded by a path filter emits NO check run, so a
+#      required context would hang forever — "Waiting for status to be reported".
+#      That is the trap platform-pin-consistency.yml's caller documents.
+#   2. The usual remedy for (1) — a mirroring stub caller, as e2e-stub.yml does
+#      for `e2e / e2e` — does not work for THIS check. A stub emits a synthetic
+#      success, and a content-only PR on a branch already pinned to an RC would
+#      collect that pass and stay mergeable. The pin does not have to change in
+#      the PR for the pin to be wrong.
+#
+# The lane can afford to always run: it reads one key out of one file.
+#
+# `branches: [main]` is what scopes the guard. An RC stays pinnable on every
+# other branch — that is the entire point of cutting one — and only a merge
+# INTO the default branch is refused.
+#
+# Keep `platform_ref` pinned to the SAME release as the `uses:@<tag>` below;
+# the single-version pin-consistency guard enforces it.
+name: Platform prerelease guard
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    # No `edited`: a skipped caller emits NO check-run, so an `edited` run WITHDRAWS
+    # contexts an earlier run reported green — only a new SHA restores them (#222).
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  # The job id is half the required context string (`prerelease-guard /
+  # prerelease-guard`). Renaming it silently orphans the ruleset entry, which
+  # then hangs every PR waiting on a context nothing publishes.
+  prerelease-guard:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-prerelease-guard.yml@v0.1.88
+    with:
+      platform_ref: v0.1.88

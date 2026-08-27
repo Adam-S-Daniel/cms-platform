@@ -288,6 +288,9 @@ const PLATFORM_META_SPECS = [
   // #16 — locks the e2e required-check stub's `paths:` to e2e-tests.yml's
   // `paths-ignore` by reading the platform examples/site/.github templates.
   "required-check-stub-paths.test.js",
+  // Reads examples/site + repo-settings.yml (the prerelease merge guard's
+  // template + ruleset wiring); neither exists in a consumed checkout.
+  "prerelease-guard.test.js",
   "run-cms-loop.test.js",
   // #16 — scaffolder-output invariants: they run scaffold/create-site.js (and
   // read the platform fixture) to assert the seeded /preview/ + 404 + neutral
