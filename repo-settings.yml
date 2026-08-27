@@ -227,6 +227,15 @@ ruleset_library:
             - context: preview-media / preview-media
             - context: e2e / e2e
             - context: visual-regression / approve-regression
+            # Refuses a prerelease platform pin on main (assert-release-pin.js via
+            # platform-prerelease-guard.yml). Required, not merely red: an RC is
+            # pinnable on a stacked branch by design, so the only thing that can
+            # stop it reaching production is blocking the MERGE. Its caller
+            # deliberately carries no path filter — a required context whose
+            # workflow is skipped hangs branch protection, and the usual stub
+            # remedy would hand a content-only PR a synthetic pass while the
+            # branch is still pinned to an RC.
+            - context: prerelease-guard / prerelease-guard
     bypass_actors: []
 
   # consumer-main-jodidaniel-DRIFTED removed 2026-07-22 (phase 2, #172):

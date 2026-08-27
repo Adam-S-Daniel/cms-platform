@@ -50,10 +50,19 @@
 const fs = require("node:fs");
 
 const PLATFORM_SLUG = "Adam-S-Daniel/cms-platform";
-// The awk's `v[0-9]+\.[0-9]+\.[0-9]+`, unanchored and non-overlapping. Both
-// engines take the leftmost-longest match and resume after it, so `v0.1.844`
-// yields one token in each.
-const VERSION_TOKEN = /v\d+\.\d+\.\d+/g;
+// Unanchored and non-overlapping: leftmost-longest, resuming after each match,
+// so `v0.1.844` yields one token. (The shape used to be justified by parity with
+// an awk implementation; that awk is gone, and the trailing group below has no
+// awk counterpart to keep in step.)
+//
+// The optional suffix is what makes a PRERELEASE one token instead of two.
+// Without it `v0.1.89-rc.1` tokenizes as `v0.1.89`, which then does not equal
+// the canonical `v0.1.89-rc.1` — so a consumer correctly pinned to an RC had
+// EVERY pin reported stale (55 of them, measured on jodidaniel.com), and
+// verify-consumer-pins.sh, the gate that defines a bump as done, could never
+// pass on one. Same prefix-normalization bug as the parity checker's, in a
+// second copy. A version's suffix is part of the version.
+const VERSION_TOKEN = /v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g;
 
 // The awk's mentions_platform(). Kept in this order and this shape so the two
 // read as the same predicate. `tag:` is deliberately position-anchored (a

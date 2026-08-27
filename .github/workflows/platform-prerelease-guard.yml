@@ -1,0 +1,90 @@
+# Reusable PRERELEASE MERGE GUARD — a consumer's default branch may not be
+# pinned to a prerelease cms-platform.
+#
+# `release.yml` can cut `vX.Y.Z-rc.N` as a GitHub prerelease so a platform fix
+# gets validated on ONE consumer PR before it reaches production. That pin is
+# meant to live on a stacked branch, where its preview exercises the fix. What
+# must not happen is that branch merging: the consumer's default branch is what
+# `deploy-production` builds from, and an RC is a validation tag, not a release.
+#
+# Nothing stopped that before. `platform-bump` cannot introduce a prerelease (it
+# resolves `releases/latest`, which excludes them), but a hand-pinned validation
+# branch is precisely how one enters a repo — and merging it was one click.
+#
+# WHY THIS IS ITS OWN WORKFLOW, and not a job bolted onto
+# platform-pin-consistency.yml:
+#
+#   1. That caller carries a site-tuned `paths-ignore` on adamdaniel.ai, so it
+#      does not run on content-only PRs. A REQUIRED context whose workflow is
+#      skipped emits no check run and hangs branch protection forever ("Waiting
+#      for status to be reported") — the trap that caller's own header names.
+#   2. The usual remedy, a mirroring stub caller (see e2e-stub.yml), is WRONG
+#      here. A stub emits a synthetic success; a content-only PR on a branch
+#      already pinned to an RC would collect that pass and stay mergeable. The
+#      pin does not have to change in the PR for the pin to be wrong.
+#
+# So this lane carries NO path filter at all and always reports. It can afford
+# to: it reads one key out of one file. The canonical caller
+# (examples/site/.github/workflows/platform-prerelease-guard.yml) targets the
+# default branch, which is what scopes the guard — an RC stays pinnable on every
+# other branch, which is the entire point of cutting one.
+#
+# The context this publishes is `prerelease-guard / prerelease-guard` (caller job
+# id / this job id). repo-settings.yml lists it in the `consumer-main` ruleset's
+# required checks; without that it would only go red, and red does not stop a
+# merge.
+name: Platform prerelease guard (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_repo:
+        description: "owner/name of the platform repo to fetch the guard script from."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the guard script from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  prerelease-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout consumer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Fetch the guard from the platform
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          # Sparse: one script. It reads the CONSUMER's platform.lock, so nothing
+          # else from the platform tree is needed beyond the `yaml` parser below.
+          sparse-checkout: |
+            scripts/assert-release-pin.js
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: Install the YAML parser
+        # platform.lock is parsed with the real `yaml` lib, never a line regex
+        # (AGENTS.md). Installed into the consumer workspace so the script — run
+        # from the consumer root — resolves it. Same version the platform's e2e
+        # harness and platform-pin-consistency.yml pin.
+        run: npm install --no-save --no-package-lock yaml@2.9.0
+
+      - name: Refuse a prerelease platform pin on this branch
+        # Exit 1 = the pin is a prerelease (the guard's whole purpose).
+        # Exit 2 = the guard could not read platform.lock, which fails the job
+        # too: a guard that cannot evaluate its input must never look like a pass.
+        run: node .cms-platform/scripts/assert-release-pin.js
