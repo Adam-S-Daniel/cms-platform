@@ -524,6 +524,14 @@ function diffRuleset(repo, name, live, desired, findings, informational) {
           ruleset: name,
           rule: dRule.type,
           key,
+          // The VALUE, not just the key. #313: this line named
+          // `require_extra_approval_for_unattributed_changes` on both consumers
+          // and stopped there, so "is the live value a real protection or
+          // GitHub's inert default?" — the one question that decides whether the
+          // fix is `declare it` or `declare it as false` — could only be answered
+          // by reading the live ruleset by hand. It was `true`, a genuine
+          // protection a manifest-built PUT would have silently turned off.
+          value: lp[key],
           fixSkip: true,
         });
       }
@@ -854,7 +862,11 @@ function describeInformational(f) {
       `(tolerated; --fix SKIPS this ruleset — a manifest-built PUT would drop it)`
     );
   }
-  return `ruleset \`${f.ruleset}\` / rule ${f.rule}: live-only parameter \`${f.key}\` (informational)`;
+  return (
+    `ruleset \`${f.ruleset}\` / rule ${f.rule}: live-only parameter \`${f.key}\` = ` +
+    `${JSON.stringify(f.value)} — undeclared, so --fix SKIPS this ruleset (a ` +
+    `manifest-built PUT would drop it). Declare it in the manifest to converge.`
+  );
 }
 
 // The flag keys this scan could NOT verify: `flag-not-visible` means the

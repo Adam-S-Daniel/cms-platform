@@ -48,6 +48,12 @@ on:
       # someone remembers to flip it, the same "silence reads as health"
       # failure this audit exists to close.
       push_scan:     { type: boolean, default: true }
+      # THE STALENESS LANE (#313). Days without a SUCCESS before a scheduled
+      # workflow is reported. String for the same reason as window_hours.
+      # Default TRUE / on, for the same reason push_scan is: the repos that
+      # most need this are the ones nobody would remember to flip it for.
+      stale_days:    { type: string, default: "14" }
+      stale_scan:    { type: boolean, default: true }
 
 # Reusable-workflow permissions are capped by the CALLER's grant: the caller
 # must give actions: read (list workflow runs) + issues: write (open /
@@ -94,6 +100,8 @@ jobs:
           AUDIT_LABEL: ${{ inputs.issue_label }}
           AUDIT_DRY_RUN: ${{ inputs.dry_run }}
           AUDIT_PUSH_SCAN: ${{ inputs.push_scan }}
+          AUDIT_STALE_DAYS: ${{ inputs.stale_days }}
+          AUDIT_STALE_SCAN: ${{ inputs.stale_scan }}
         run: |
           # Pass the caller's repo explicitly: the reusable only SPARSE-checks-out
           # the audit script (no consumer checkout), so github.workspace is not a
@@ -107,4 +115,6 @@ jobs:
           args=(--repo "$AUDIT_REPO" --window-hours "$AUDIT_WINDOW_HOURS" --label "$AUDIT_LABEL")
           if [[ "$AUDIT_DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
           if [[ "$AUDIT_PUSH_SCAN" != "true" ]]; then args+=(--no-push-scan); fi
+          args+=(--stale-days "$AUDIT_STALE_DAYS")
+          if [[ "$AUDIT_STALE_SCAN" != "true" ]]; then args+=(--no-stale-scan); fi
           node .cms-platform/scripts/audit-scheduled-runs.js "${args[@]}"

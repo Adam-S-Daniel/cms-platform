@@ -1133,3 +1133,182 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
     expect(code, out).toBe(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE STALENESS LANE (#313).
+//
+// `repo-settings-apply.yml` fired its daily cron for eleven days and converged
+// nothing: twelve runs concluded `cancelled` — evicted from a concurrency group
+// held by a run parked at an unapproved environment gate — and every one
+// allocated ZERO jobs. `cancelled` is deliberately absent from BAD_CONCLUSIONS
+// (the runner-starvation carve-out is itself a cancelled shape), so the audit
+// reported the repo healthy throughout.
+//
+// These lock the lane that closes that blind spot WITHOUT touching the
+// carve-out: it never reads a conclusion as bad, only the absence of a recent
+// `success`.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe("audit-scheduled-runs.js — no-recent-success lane (#313)", () => {
+  const NOW = Date.parse("2026-08-27T22:00:00Z");
+  const DAY = 86400000;
+
+  function run(conclusion, daysAgo, extra = {}) {
+    return {
+      id: `${conclusion}-${daysAgo}`,
+      conclusion,
+      run_started_at: new Date(NOW - daysAgo * DAY).toISOString(),
+      workflow_id: 333034951,
+      path: ".github/workflows/repo-settings-apply.yml",
+      ...extra,
+    };
+  }
+
+  // The measured shape: 15 scheduled runs, not one of them a success.
+  function wedgedHistory() {
+    return Array.from({ length: 15 }, (_, i) =>
+      run(i % 5 === 0 ? "failure" : "cancelled", i),
+    );
+  }
+
+  test("a workflow that keeps firing and never succeeds is STALE — the #313 shape", () => {
+    const { staleVerdict } = loadScript();
+    const v = staleVerdict(wedgedHistory(), NOW, 14);
+    expect(v.stale, "eleven days of cancelled runs must not read as healthy").toBe(true);
+    expect(v.lastSuccessAt).toBeNull();
+    expect(v.runCount).toBe(15);
+    expect(v.reason).toMatch(/no successful run/);
+  });
+
+  test("it fires on the no-success branch WITHOUT waiting out --stale-days", () => {
+    // The whole point of that branch: a daily cron alerts in days, not weeks.
+    // Every run here is 0-2 days old, far inside a 14-day threshold.
+    const { staleVerdict, STALE_MIN_RUNS } = loadScript();
+    const young = [run("cancelled", 0), run("cancelled", 1), run("cancelled", 2)];
+    expect(young.length).toBe(STALE_MIN_RUNS);
+    expect(staleVerdict(young, NOW, 14).stale).toBe(true);
+  });
+
+  test("it is CONCLUSION-AGNOSTIC — `cancelled` is never treated as a bad conclusion", () => {
+    // The guard that keeps this lane compatible with the runner-starvation
+    // carve-out: adding `cancelled` to BAD_CONCLUSIONS was the tempting fix and
+    // is explicitly forbidden. This lane must not have smuggled it in.
+    const { BAD_CONCLUSIONS, isAlertRun } = loadScript();
+    expect(BAD_CONCLUSIONS).not.toContain("cancelled");
+    expect(isAlertRun({ event: "schedule", conclusion: "cancelled" })).toBe(false);
+  });
+
+  test("a success inside the threshold is healthy, whatever the newest run concluded", () => {
+    // A weekly cron that failed once. Cadence must not manufacture an alert.
+    const { staleVerdict } = loadScript();
+    const v = staleVerdict([run("failure", 1), run("success", 8)], NOW, 14);
+    expect(v.stale, "one failure after a recent success is not staleness").toBe(false);
+  });
+
+  test("a success OLDER than the threshold is stale", () => {
+    const { staleVerdict } = loadScript();
+    const v = staleVerdict([run("cancelled", 1), run("success", 20)], NOW, 14);
+    expect(v.stale).toBe(true);
+    expect(v.reason).toMatch(/last succeeded 20 day\(s\) ago/);
+  });
+
+  test("a brand-new cron below STALE_MIN_RUNS is never stale", () => {
+    const { staleVerdict, STALE_MIN_RUNS } = loadScript();
+    const young = Array.from({ length: STALE_MIN_RUNS - 1 }, (_, i) => run("cancelled", i));
+    expect(staleVerdict(young, NOW, 14).stale, "a first run still in flight is not a streak").toBe(
+      false,
+    );
+    expect(staleVerdict([], NOW, 14).stale).toBe(false);
+  });
+
+  test("candidates come from the runs ALREADY fetched, deduped by workflow_id", () => {
+    // No extra listing call, and — the reason this matters — a workflow is only
+    // judged on a day it actually fired, so a weekly cron is never scored
+    // against a daily threshold.
+    const { staleCandidates } = loadScript();
+    const runs = [
+      run("cancelled", 0),
+      run("cancelled", 1),
+      run("success", 2, { workflow_id: 999, path: ".github/workflows/other.yml" }),
+      { conclusion: "success", run_started_at: "x" }, // no workflow_id — ignored
+    ];
+    const got = staleCandidates(runs);
+    expect(got.map((c) => c.workflow_id).sort()).toEqual([333034951, 999]);
+  });
+
+  test("a probe error is UNKNOWN — never a finding, never health", () => {
+    // Deliberately the opposite fail-soft direction from partitionStarvedRuns:
+    // asserting staleness from a history we could not read would be a FALSE
+    // alert. It sets probeFailed instead, which reds the run and blocks the
+    // auto-close (the #258 contract).
+    const { findStaleWorkflows } = loadScript();
+    const r = findStaleWorkflows(
+      wedgedHistory(),
+      () => {
+        throw new Error("API down");
+      },
+      NOW,
+      14,
+    );
+    expect(r.stale, "an unreadable history must not become a finding").toEqual([]);
+    expect(r.probeFailed, "…but it must not read as healthy either").toBe(true);
+  });
+
+  test("findings carry the workflow FILE BASENAME, not the run display title", () => {
+    const { findStaleWorkflows, renderStaleWorkflows } = loadScript();
+    const { stale } = findStaleWorkflows(wedgedHistory(), () => wedgedHistory(), NOW, 14);
+    expect(stale).toHaveLength(1);
+    expect(renderStaleWorkflows(stale)).toContain("**repo-settings-apply.yml**");
+  });
+
+  test("the dedupe channel is separate from the run-id and dead-workflow ones", () => {
+    const {
+      hiddenStaleWorkflowsBlock,
+      extractReportedStaleWorkflows,
+      extractReportedDeadWorkflows,
+      extractReportedRunIds,
+    } = loadScript();
+    const block = hiddenStaleWorkflowsBlock([{ path: ".github/workflows/a.yml" }]);
+    expect(extractReportedStaleWorkflows([block])).toEqual(new Set(["a.yml"]));
+    // …and it must not bleed into either sibling channel.
+    expect(extractReportedDeadWorkflows([block]).size).toBe(0);
+    expect(extractReportedRunIds([block]).size).toBe(0);
+    const dead = loadScript().hiddenDeadWorkflowsBlock([{ path: ".github/workflows/b.yml" }]);
+    expect(extractReportedStaleWorkflows([dead]).size).toBe(0);
+  });
+
+  test("the issue body renders a stale section, and the close comment mentions it", () => {
+    const { buildIssueBody, buildCloseComment } = loadScript();
+    const body = buildIssueBody({
+      repo: "o/r",
+      windowHours: 48,
+      runs: [],
+      dead: [],
+      pushRuns: [],
+      defaultBranch: "main",
+      stale: [{ path: ".github/workflows/repo-settings-apply.yml", reason: "no successful run" }],
+      nowIso: "2026-08-27T22:00:00Z",
+    });
+    expect(body).toContain("no longer SUCCEED");
+    expect(body).toContain("repo-settings-apply.yml");
+    expect(body).toContain("<!-- stale-workflows: repo-settings-apply.yml -->");
+    expect(buildCloseComment({ windowHours: 48, nowIso: "x" })).toMatch(/recent\s+success/);
+  });
+
+  test("the reusable wires --stale-days from an input, built in SHELL from env", () => {
+    // The `a && b || c` trap this repo already ate once (run 32280743541): that
+    // form is two operators, and an EMPTY STRING is falsy, so the flag emitted
+    // its opt-out unconditionally and the lane silently no-op'd while reporting
+    // healthy. Flags are built in shell from env, never inline in an expression.
+    const doc = parseYaml(readWorkflow("scheduled-run-health.yml"));
+    const inputs = doc.on.workflow_call.inputs;
+    expect(inputs.stale_days.type, "string, so a dispatch input wires through uncoerced").toBe(
+      "string",
+    );
+    expect(inputs.stale_scan.default, "on by default, like push_scan").toBe(true);
+    const step = (doc.jobs.audit.steps || []).find((s) => String(s.run || "").includes("args="));
+    expect(step, "no step builds the argv").toBeTruthy();
+    expect(step.env.AUDIT_STALE_DAYS).toContain("inputs.stale_days");
+    expect(step.run).toContain('args+=(--stale-days "$AUDIT_STALE_DAYS")');
+    expect(step.run).toMatch(/if \[\[ "\$AUDIT_STALE_SCAN" != "true" \]\]; then args\+=\(--no-stale-scan\); fi/);
+  });
+});

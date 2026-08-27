@@ -1137,6 +1137,58 @@ required status context; the guards are
 `e2e/required-context-cancellable.test.js` (renamed from
 `…-concurrency.test.js` at #289) and its CONSUMER-mode sibling.
 
+## An unapproved gate holds its concurrency group, silently (#313)
+
+`repo-settings-apply.yml` applied NOTHING for eleven days and nothing alerted.
+Twelve consecutive runs concluded `cancelled`. The mechanism is worth knowing
+before you write any workflow that pauses for a human:
+
+- A run parked at an unapproved `environment:` gate is not finished, so it holds
+  its concurrency group indefinitely. `cancel-in-progress: false` retains the
+  holder plus only the LATEST pending run and cancels the rest — so with the
+  group at WORKFLOW level, every later run dies without allocating a job.
+- **Read the JOBS, not the run conclusion.** A cancelled run with
+  `total_count: 0` from `/actions/runs/<id>/jobs` was cancelled while PENDING on
+  a group; one with jobs was started and killed. Those are different bugs, and
+  from the outside a run pending on concurrency looks exactly like a run waiting
+  on a gate — which is how a correct head-of-line diagnosis got "refuted" here
+  by a misread of run #22.
+- So: **a job that can wait on a human gets no workflow-level group.** Scope it
+  to the writing job and let newest win — the newer run planned against newer
+  `main`, and superseding a stale gate-park is the desired outcome, not a loss.
+- The health audit could not see ANY of it, necessarily: `cancelled` is excluded
+  from `BAD_CONCLUSIONS` because the runner-starvation carve-out is itself a
+  cancelled shape. The lane that closes it never reads a conclusion at all — it
+  alerts when a workflow that keeps firing has no recent SUCCESS.
+
+→ read `docs/CI-INVARIANTS.md` ("An UNAPPROVED environment gate must not hold a
+concurrency group") before adding a `concurrency` block to any workflow with an
+environment gate, or before touching `audit-scheduled-runs.js`'s lanes.
+
+## platform-bump moves files and one dictated input, not just pins (#315)
+
+A release can require three kinds of consumer-side change, and for a long time
+the bump made only the first: it re-pins, it SEEDS a newly-dictated thin caller,
+it RETIRES one that left the canonical set, and it RECONCILES
+`cms-automerge-nudge.yml`'s `required_contexts` from the manifest's ruleset for
+that repo. The retire and reconcile halves have to ride the bump commit —
+pin-consistency compares the consumer's workflow set against the platform at
+that consumer's OWN pinned ref, so splitting either off fails in the
+mirror-image direction (`MISSING` instead of `EXTRA`).
+
+Two things to keep straight if you touch it: "was this caller ever dictated?" is
+answered by the canonical set at the OLD ref, never by "the consumer has a file
+we don't recognise" — that distinction is what stops it deleting site-authored
+workflows — and the `required_contexts` list is DERIVED per consumer from
+`repo-settings.yml`, never copied from the template, because a consumer may map
+`main` to a different library entry.
+
+Note also that the check reporting `workflow-set: EXTRA` is
+`platform-pin-consistency / pin-consistency`, NOT `parity / parity` (that one is
+`parity-preview.yml`'s preview gate). Only the latter is in `consumer-main`'s
+required set today, so a stale or orphaned caller currently reports on an
+OPTIONAL check.
+
 ## Admin-bundle parity is bump-aware (#14)
 
 The admin-bundle parity check has to tell a legitimate gem-bump lag (prod

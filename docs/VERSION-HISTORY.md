@@ -1472,11 +1472,15 @@ version bump is needed and cutting one would force the whole atomic edit set
   goes red: delete the callers first and the still-pinned old ref reports
   `workflow-set: MISSING (platform-dictated)`; bump `platform_ref` first and
   the new canonical set — which no longer contains either file — reports
-  `workflow-set: EXTRA (not platform-dictated)`. Note that the automated
-  `platform-bump` PR **cannot do this for you**: it seeds a wholly-missing
-  dictated caller but never deletes a de-dictated one (deliberately — see its
-  seeding comment), so the v0.1.83 bump PR arrives carrying both stale callers
-  and fails parity until the two deletions are added to it.
+  `workflow-set: EXTRA (not platform-dictated)`. At the time, the automated
+  `platform-bump` PR **could not do this for you**: it seeded a wholly-missing
+  dictated caller but never deleted a de-dictated one, so the v0.1.83 bump PR
+  arrived carrying both stale callers and failed parity until the two deletions
+  were hand-added to it. **That is fixed (#315)** — `platform-bump` now retires a
+  caller that left the canonical set in the same commit as the pin, deciding
+  "was it ever dictated?" from the canonical set at the OLD ref so a
+  site-authored workflow is never touched. The constraint above still holds and
+  is the reason the deletion rides the bump commit rather than a follow-up PR.
 
 - **v0.1.84** (2026-08-17) — **three defects a green CI run could not tell
   apart from health: a command injection reachable from a `cms/*` branch ref

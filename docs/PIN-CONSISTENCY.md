@@ -7,7 +7,8 @@ pins, composite `uses:@ref` pins, `Gemfile`/`Gemfile.lock`
 input — in lockstep, plus the workflow-content (call-interface) parity check
 that catches a thin caller whose body drifted from the canonical template.
 Read this before changing the pin-consistency script, `platform-bump.yml`'s
-seeding logic, or anything that adds a new "pin shape" a consumer can carry.
+seeding/retire/reconcile logic, or anything that adds a new "pin shape" a
+consumer can carry.
 See also the `platform-release-and-bump` skill and `docs/SYNC.md`'s
 "Single-version pin invariant".
 

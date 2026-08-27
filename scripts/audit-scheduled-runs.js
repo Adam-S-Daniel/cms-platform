@@ -85,6 +85,7 @@
  * Usage:
  *   node scripts/audit-scheduled-runs.js [--repo owner/name] \
  *     [--window-hours 48] [--label ci] [--dry-run] [--no-push-scan]
+ *     [--stale-days 14] [--no-stale-scan]
  *
  * Requires a gh-authenticated environment (GH_TOKEN or gh auth) with
  * actions: read (list runs) + issues: write (open/comment/close).
@@ -161,6 +162,40 @@ const DEAD_WORKFLOW_STATES = ["disabled_inactivity", "disabled_manually"];
 // verbatim, merely deferred. `disabled_manually` gets no such guarantee — any
 // workflow can be switched off by hand — so it keeps the probe.
 const SELF_EVIDENCING_CRON_STATES = ["disabled_inactivity"];
+
+// ── THE STALENESS LANE (#313) ───────────────────────────────────────────────
+// Both lanes above key off a RUN CONCLUSION, and `cancelled` is excluded from
+// BAD_CONCLUSIONS for a reason that cannot be revisited: the runner-starvation
+// carve-out is itself a cancelled shape. That exclusion is a contract, not an
+// oversight — and it left a whole failure class structurally invisible.
+//
+// MEASURED (#313): `repo-settings-apply.yml` fired its daily cron for eleven
+// consecutive days and converged NOTHING. Twelve runs concluded `cancelled`,
+// each evicted from a concurrency group held by a run parked at an unapproved
+// environment gate; every one allocated zero jobs. No conclusion in
+// BAD_CONCLUSIONS ever appeared, so this audit reported the repo healthy
+// throughout while both consumers' branch protection sat unconverged.
+//
+// The lane below is deliberately CONCLUSION-AGNOSTIC, which is exactly what
+// lets it coexist with that contract: it never asks whether a run failed, only
+// whether the workflow has SUCCEEDED lately. `cancelled`, `failure`,
+// `startup_failure`, runner starvation and a wedged gate all reach it by the
+// same door, and the carve-out above is untouched.
+//
+// Its candidate set is the workflows that appear in the scheduled runs ALREADY
+// fetched for the lane above — no extra listing call, and, more importantly, no
+// cadence false positive: a workflow is only ever judged on a day it actually
+// fired, so a weekly cron is never scored against a daily threshold.
+const STALE_SCAN_RUNS = 20;
+// A workflow with fewer than this many scheduled runs on record has not had
+// time to establish a no-success streak — a brand-new cron whose first run is
+// still in flight must not read as stale.
+const STALE_MIN_RUNS = 3;
+// Generous on purpose. The sharp half of this lane is the no-success-in-N-runs
+// branch, which fires within days on a daily cron (repo-settings-apply would
+// have alerted on day three); the day threshold only has to catch the slow
+// case without flagging a weekly cron that failed once.
+const DEFAULT_STALE_DAYS = 14;
 
 function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
@@ -324,6 +359,97 @@ function filterDeadScheduledWorkflows(workflows, hadScheduledRuns) {
   return dead;
 }
 
+// Distinct workflows among a set of runs, projected onto the minimum shape
+// workflowKey() needs. Deduped by workflow_id (not by path — two runs of the
+// same workflow always share the id, and a rename mid-window would otherwise
+// double-count).
+function staleCandidates(runs) {
+  const byId = new Map();
+  for (const r of runs || []) {
+    if (!r || !r.workflow_id) continue;
+    if (byId.has(r.workflow_id)) continue;
+    byId.set(r.workflow_id, { workflow_id: r.workflow_id, path: r.path, name: r.name });
+  }
+  return [...byId.values()];
+}
+
+// Newest `success` timestamp in a run list, or null when none succeeded.
+function lastSuccessAt(runs) {
+  let newest = null;
+  for (const r of runs || []) {
+    if (!r || r.conclusion !== "success") continue;
+    const at = String(r.run_started_at || r.created_at || "");
+    if (!at) continue;
+    if (newest === null || at > newest) newest = at;
+  }
+  return newest;
+}
+
+// Is this workflow's scheduled history healthy? Two independent branches, and
+// the FIRST is the one that catches a wedge fast:
+//   - no success anywhere in the last STALE_SCAN_RUNS runs (and enough runs on
+//     record to mean it) — cadence-independent, so it fires on day three of a
+//     daily cron rather than day fourteen;
+//   - a success exists but is older than `staleDays` — the slow case.
+// THROWS on a success whose timestamp will not parse: "we could not tell" is
+// never scored as health here, the same rule the dead-workflow probe follows.
+function staleVerdict(history, nowMs, staleDays) {
+  const runs = Array.isArray(history) ? history : [];
+  if (runs.length === 0) return { stale: false, reason: "no scheduled runs on record" };
+  const last = lastSuccessAt(runs);
+  if (last === null) {
+    if (runs.length < STALE_MIN_RUNS) {
+      return { stale: false, reason: "too few scheduled runs to judge" };
+    }
+    return {
+      stale: true,
+      lastSuccessAt: null,
+      runCount: runs.length,
+      reason: `no successful run in its last ${runs.length} scheduled run(s)`,
+    };
+  }
+  const t = Date.parse(last);
+  if (!Number.isFinite(t)) {
+    throw new Error(`unparseable success timestamp ${JSON.stringify(last)}`);
+  }
+  const ageDays = (nowMs - t) / 86400000;
+  if (ageDays <= staleDays) {
+    return { stale: false, lastSuccessAt: last, reason: "succeeded recently" };
+  }
+  return {
+    stale: true,
+    lastSuccessAt: last,
+    runCount: runs.length,
+    reason: `last succeeded ${Math.floor(ageDays)} day(s) ago (threshold ${staleDays})`,
+  };
+}
+
+// Stale workflows among those that fired in the window. `fetchHistory` is
+// injected so the lane is unit-testable without gh. A probe error does NOT
+// report the workflow — unlike the starvation and dead-workflow splits, whose
+// fail-soft direction is "keep reporting", a stale finding asserted from a
+// history we could not read would be a false alert. It sets probeFailed
+// instead, which suppresses the auto-close and reds the audit: the
+// "could not tell" contract, routed to the honest side for this lane.
+function findStaleWorkflows(scheduledRuns, fetchHistory, nowMs, staleDays) {
+  const stale = [];
+  let probeFailed = false;
+  for (const candidate of staleCandidates(scheduledRuns)) {
+    let verdict;
+    try {
+      verdict = staleVerdict(fetchHistory(candidate), nowMs, staleDays);
+    } catch (e) {
+      probeFailed = true;
+      console.error(
+        `audit-scheduled-runs: could not judge ${workflowKey(candidate)}: ${e.message}`,
+      );
+      continue;
+    }
+    if (verdict.stale) stale.push({ ...candidate, ...verdict });
+  }
+  return { stale, probeFailed };
+}
+
 // The stable identity of the failing WORKFLOW: the workflow file's basename.
 // NOT `run.name` — the runs API's `name` is the run's DISPLAY TITLE, which
 // for this repo family is the evaluated dynamic `run-name:` (observed live:
@@ -399,6 +525,33 @@ function extractReportedDeadWorkflows(texts) {
   return names;
 }
 
+// A stale workflow, like a dead one, has no run id to dedupe on — its finding
+// is about an ABSENCE of successes, not about one run. Third hidden channel,
+// kept strictly separate from the other two so none can clobber another.
+function hiddenStaleWorkflowsBlock(workflows) {
+  return `<!-- stale-workflows: ${(workflows || []).map(workflowKey).join(" ")} -->`;
+}
+
+function extractReportedStaleWorkflows(texts) {
+  const names = new Set();
+  for (const t of texts || []) {
+    if (typeof t !== "string") continue;
+    for (const m of t.matchAll(/<!--\s*stale-workflows:([^\n]*?)-->/g)) {
+      for (const name of m[1].trim().split(/\s+/)) if (name) names.add(name);
+    }
+  }
+  return names;
+}
+
+// One line per stale workflow: which file, and WHY it is stale — the two
+// branches read differently ("no success in its last 15 runs" vs "last
+// succeeded 20 days ago") and the distinction is the actionable half.
+function renderStaleWorkflows(workflows) {
+  return (workflows || [])
+    .map((w) => `- **${workflowKey(w)}** — ${w.reason}`)
+    .join("\n");
+}
+
 // One line per dead workflow: which file, and which `state` killed it (the
 // state is the actionable half — `disabled_inactivity` needs a re-enable plus
 // a keep-alive story, `disabled_manually` needs someone to say whether it was
@@ -443,7 +596,7 @@ function renderFindings(runs, noun = "scheduled run") {
 // push-only) report does not claim findings it never saw. `pushRuns` defaults
 // to `[]` and `defaultBranch` is only read when a push section is actually
 // rendered, so every existing call site stays byte-identical.
-function renderSections(runs, dead, pushRuns, defaultBranch) {
+function renderSections(runs, dead, pushRuns, defaultBranch, stale) {
   const out = [];
   if ((runs || []).length > 0) {
     out.push(
@@ -472,14 +625,29 @@ function renderSections(runs, dead, pushRuns, defaultBranch) {
       renderDeadWorkflows(dead),
     );
   }
+  if ((stale || []).length > 0) {
+    if (out.length > 0) out.push("");
+    out.push(
+      "**Scheduled workflows that keep running but no longer SUCCEED.** These",
+      "are invisible to the conclusion-based lanes above — a run evicted from a",
+      "concurrency group concludes `cancelled`, which is deliberately not an",
+      "alertable conclusion (it is also what runner starvation looks like). What",
+      "is reported here is the absence of a recent success, whatever the runs",
+      "concluded:",
+      "",
+      renderStaleWorkflows(stale),
+    );
+  }
   return out;
 }
 
-function buildIssueBody({ repo, windowHours, runs, dead, pushRuns, defaultBranch, nowIso }) {
+function buildIssueBody({ repo, windowHours, runs, dead, pushRuns, defaultBranch, stale, nowIso }) {
   const deadList = dead || [];
   const pushList = pushRuns || [];
+  const staleList = stale || [];
   const lines = [MARKER, hiddenRunIdsBlock([...(runs || []), ...pushList])];
   if (deadList.length > 0) lines.push(hiddenDeadWorkflowsBlock(deadList));
+  if (staleList.length > 0) lines.push(hiddenStaleWorkflowsBlock(staleList));
   lines.push(
     "",
     "The daily **scheduled-run health audit** found workflow runs needing",
@@ -488,7 +656,7 @@ function buildIssueBody({ repo, windowHours, runs, dead, pushRuns, defaultBranch
     "Neither a scheduled run nor a default-branch push run has a PR to go red",
     "on — this issue is the alert.",
     "",
-    ...renderSections(runs, deadList, pushList, defaultBranch),
+    ...renderSections(runs, deadList, pushList, defaultBranch, staleList),
     "",
     "**What to do:** open the links, fix the root cause, and leave this issue",
     "open — the audit comments any NEW findings here (never a new issue) and",
@@ -499,25 +667,28 @@ function buildIssueBody({ repo, windowHours, runs, dead, pushRuns, defaultBranch
   return lines.join("\n");
 }
 
-function buildComment({ windowHours, runs, dead, pushRuns, defaultBranch, nowIso }) {
+function buildComment({ windowHours, runs, dead, pushRuns, defaultBranch, stale, nowIso }) {
   const deadList = dead || [];
   const pushList = pushRuns || [];
+  const staleList = stale || [];
   const lines = [hiddenRunIdsBlock([...(runs || []), ...pushList])];
   if (deadList.length > 0) lines.push(hiddenDeadWorkflowsBlock(deadList));
+  if (staleList.length > 0) lines.push(hiddenStaleWorkflowsBlock(staleList));
   lines.push(
     "",
     `New findings in the last ${windowHours}h (scanned at ${nowIso}):`,
     "",
-    ...renderSections(runs, deadList, pushList, defaultBranch),
+    ...renderSections(runs, deadList, pushList, defaultBranch, staleList),
   );
   return lines.join("\n");
 }
 
 function buildCloseComment({ windowHours, nowIso }) {
   return (
-    `No failing scheduled runs, no failing default-branch push runs, and no ` +
-    `disabled scheduled workflows in the last ${windowHours}h (scanned at ${nowIso}) ` +
-    "— closing. The audit will reopen a fresh tracking issue if any returns."
+    `No failing scheduled runs, no failing default-branch push runs, no ` +
+    `disabled scheduled workflows, and no scheduled workflow without a recent ` +
+    `success in the last ${windowHours}h (scanned at ${nowIso}) — closing. The ` +
+    "audit will reopen a fresh tracking issue if any returns."
   );
 }
 
@@ -622,6 +793,19 @@ function hasScheduledRuns(repo, workflowId) {
   return (res.workflow_runs || []).length > 0;
 }
 
+// One workflow's recent SCHEDULED run history — the staleness lane's only API
+// call, one per workflow that fired in the window. Exported so the shape stays
+// unit-assertable without shelling out to gh.
+function workflowRunHistoryEndpoint(repo, workflowId, perPage = STALE_SCAN_RUNS) {
+  return (
+    `repos/${repo}/actions/workflows/${workflowId}/runs?event=schedule&per_page=${perPage}`
+  );
+}
+
+function listWorkflowRunHistory(repo, workflowId) {
+  return JSON.parse(ghApi(workflowRunHistoryEndpoint(repo, workflowId))).workflow_runs || [];
+}
+
 // The single open tracking issue: open issues carrying the label whose body
 // carries MARKER. The /issues listing includes PRs — filter them out.
 function findTrackingIssue(repo, label) {
@@ -687,6 +871,16 @@ function main() {
   // unknown answer: it never sets pushProbeFailed, unlike every other reason
   // the push lane can come up empty.
   const pushScanDisabled = flag("no-push-scan");
+  // Same opt-out-only shape as the push lane, and the same reasoning: an
+  // opt-in-off default would leave exactly the repos that need this uncovered.
+  const staleScanDisabled = flag("no-stale-scan");
+  const staleDays = Number.parseInt(arg("stale-days", String(DEFAULT_STALE_DAYS)), 10);
+  if (!Number.isInteger(staleDays) || staleDays <= 0) {
+    console.error(
+      `audit-scheduled-runs: invalid --stale-days ${arg("stale-days", String(DEFAULT_STALE_DAYS))}`,
+    );
+    return 2;
+  }
   const nowMs = Date.now();
   const since = sinceIso(nowMs, windowHours);
   const nowIso = sinceIso(nowMs, 0);
@@ -705,8 +899,15 @@ function main() {
   let defaultBranch = null;
 
   let failures, starved, pushFailures, pushStarved, issue;
+  let scheduledRuns = [];
+  let stale = [];
+  let staleProbeFailed = false;
   try {
-    const candidates = filterAlertRuns(listScheduledRuns(repo, since), since);
+    // Hoisted (it used to be inlined into filterAlertRuns): the staleness lane
+    // derives its candidate workflows from this SAME list, so it costs no extra
+    // listing call and can only ever judge a workflow that actually fired.
+    scheduledRuns = listScheduledRuns(repo, since);
+    const candidates = filterAlertRuns(scheduledRuns, since);
     const split = partitionStarvedRuns(candidates, (r) => listRunJobs(repo, r.id));
     failures = split.alertable;
     starved = split.suppressed;
@@ -777,11 +978,40 @@ function main() {
     );
   }
 
+  // Scheduled workflows that keep firing but no longer succeed — the lane no
+  // run CONCLUSION can see (see the STALENESS LANE note at the top). Runs
+  // outside the window are irrelevant here: the candidate set is exactly the
+  // workflows that fired inside it.
+  if (!staleScanDisabled) {
+    const result = findStaleWorkflows(
+      scheduledRuns,
+      (wf) => listWorkflowRunHistory(repo, wf.workflow_id),
+      nowMs,
+      staleDays,
+    );
+    stale = result.stale;
+    staleProbeFailed = result.probeFailed;
+    if (staleProbeFailed) {
+      console.error(
+        `::error title=Scheduled-run health::Could not judge every scheduled workflow on ${repo} ` +
+          "for a recent success. Treating the result as UNKNOWN, not as healthy.",
+      );
+    }
+  }
+
+  if (stale.length > 0) {
+    console.log(
+      `::notice title=Scheduled-run health::${stale.length} scheduled workflow(s) without a ` +
+        `recent success: ${stale.map((w) => `${workflowKey(w)} (${w.reason})`).join(", ")}.`,
+    );
+  }
+
   // An UNKNOWN dead-workflow OR push-lane answer must not read as success:
   // the audit could not do its job, which is exactly the "red means needs a
   // human" case. Applied to the success paths only — a real error already
   // returns its own code.
-  const done = (code) => (code === 0 && (deadProbeFailed || pushProbeFailed) ? 1 : code);
+  const done = (code) =>
+    code === 0 && (deadProbeFailed || pushProbeFailed || staleProbeFailed) ? 1 : code;
 
   // Suppressed runs are not alerted on, but a systemic runner outage must not
   // become invisible — say how many, and which workflows they belong to.
@@ -820,16 +1050,23 @@ function main() {
   const summary =
     `${failures.length} failing scheduled run(s) + ${pushFailures.length} failing push run(s) ` +
     `in the last ${windowHours}h on ${repo}` +
-    (dead.length > 0 ? ` + ${dead.length} disabled scheduled workflow(s)` : "");
+    (dead.length > 0 ? ` + ${dead.length} disabled scheduled workflow(s)` : "") +
+    (stale.length > 0 ? ` + ${stale.length} workflow(s) with no recent success` : "");
 
-  if (failures.length === 0 && dead.length === 0 && pushFailures.length === 0) {
+  if (
+    failures.length === 0 &&
+    dead.length === 0 &&
+    pushFailures.length === 0 &&
+    stale.length === 0
+  ) {
     // NEVER close on an unknown answer — that is the #258 bug exactly: the
     // audit closed a live alert because it could not see the dead workflows
     // (or, now, the push lane).
-    if (issue && (deadProbeFailed || pushProbeFailed)) {
+    if (issue && (deadProbeFailed || pushProbeFailed || staleProbeFailed)) {
       const unknownParts = [];
       if (deadProbeFailed) unknownParts.push("the dead-workflow check");
       if (pushProbeFailed) unknownParts.push("the push-run check");
+      if (staleProbeFailed) unknownParts.push("the no-recent-success check");
       console.log(
         `::notice title=Scheduled-run health::Leaving tracking issue #${issue.number} OPEN — ` +
           `no failing runs, but ${unknownParts.join(" and ")} did not complete, so a clean ` +
@@ -877,6 +1114,7 @@ function main() {
                 dead,
                 pushRuns: pushFailures,
                 defaultBranch,
+                stale,
                 nowIso,
               })}`,
               `labels[]=${label}`,
@@ -891,18 +1129,19 @@ function main() {
     } else {
       console.log(
         `(dry-run) would open "${ISSUE_TITLE}" [${label}] with:\n` +
-          renderSections(failures, dead, pushFailures, defaultBranch).join("\n"),
+          renderSections(failures, dead, pushFailures, defaultBranch, stale).join("\n"),
       );
     }
     console.log(`ALERT FILED — ${summary}.`);
     return done(0);
   }
 
-  let reported, reportedDead;
+  let reported, reportedDead, reportedStale;
   try {
     const texts = [issue.body, ...listIssueComments(repo, issue.number).map((c) => c.body)];
     reported = extractReportedRunIds(texts);
     reportedDead = extractReportedDeadWorkflows(texts);
+    reportedStale = extractReportedStaleWorkflows(texts);
   } catch (e) {
     console.error(`audit-scheduled-runs: failed to read issue #${issue.number}: ${e.message}`);
     return 1;
@@ -916,13 +1155,22 @@ function main() {
   // reported ONCE per tracking issue — re-comment it daily and the alert
   // becomes the noise it exists to cut through.
   const freshDead = dead.filter((w) => !reportedDead.has(workflowKey(w)));
-  if (fresh.length === 0 && freshDead.length === 0 && freshPush.length === 0) {
+  // Same once-per-tracking-issue rule as a dead workflow: a stale one stays
+  // stale until somebody fixes it, and re-commenting it daily would make the
+  // alert the noise it exists to cut through.
+  const freshStale = stale.filter((w) => !reportedStale.has(workflowKey(w)));
+  if (
+    fresh.length === 0 &&
+    freshDead.length === 0 &&
+    freshPush.length === 0 &&
+    freshStale.length === 0
+  ) {
     console.log(
       `OK — ${summary}; all already reported on tracking issue #${issue.number}. Nothing new.`,
     );
     return done(0);
   }
-  const newCount = fresh.length + freshDead.length + freshPush.length;
+  const newCount = fresh.length + freshDead.length + freshPush.length + freshStale.length;
   console.log(
     `::notice title=Scheduled-run health::${summary} — ${newCount} new; ` +
       `commenting on issue #${issue.number}.`,
@@ -937,6 +1185,7 @@ function main() {
             dead: freshDead,
             pushRuns: freshPush,
             defaultBranch,
+            stale: freshStale,
             nowIso,
           })}`,
         ],
@@ -947,7 +1196,7 @@ function main() {
     }
   } else {
     console.log(
-      `(dry-run) would comment:\n${renderSections(fresh, freshDead, freshPush, defaultBranch).join("\n")}`,
+      `(dry-run) would comment:\n${renderSections(fresh, freshDead, freshPush, defaultBranch, freshStale).join("\n")}`,
     );
   }
   console.log(
@@ -967,6 +1216,17 @@ module.exports = {
   MAX_LINKS_PER_WORKFLOW,
   DEAD_WORKFLOW_STATES,
   SELF_EVIDENCING_CRON_STATES,
+  STALE_SCAN_RUNS,
+  STALE_MIN_RUNS,
+  DEFAULT_STALE_DAYS,
+  staleCandidates,
+  lastSuccessAt,
+  staleVerdict,
+  findStaleWorkflows,
+  workflowRunHistoryEndpoint,
+  hiddenStaleWorkflowsBlock,
+  extractReportedStaleWorkflows,
+  renderStaleWorkflows,
   sinceIso,
   isAlertRun,
   filterAlertRuns,

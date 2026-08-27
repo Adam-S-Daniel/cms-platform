@@ -16,6 +16,8 @@
 //      `platform_ref:`-only PR fails pin-consistency until Dependabot's piecemeal
 //      PRs land. So the run script must resolve the release COMMIT sha and
 //      rewrite the Gemfile / Gemfile.lock revision too.
+const fs = require("node:fs");
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 
@@ -191,5 +193,129 @@ test.describe("platform-bump reusable — closes superseded platform/bump-* PRs"
     expect(run, "the gh pr list enumeration must also be fail-open").toMatch(
       /2>\/dev\/null \|\| true/,
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #315. Seeding moves a wholly-MISSING file INTO a consumer. Two other kinds of
+// consumer-side change a release can require had no mechanism at all, and both
+// reddened a required check on both consumers as delivered:
+//
+//   1. a caller that LEFT the canonical set was rewritten to a tag at which its
+//      reusable no longer exists, instead of being deleted;
+//   2. an input the platform dictates inside an EXISTING caller
+//      (`required_contexts`) was never rewritten, so it went stale in the very
+//      commit that moved the pin.
+//
+// Neither can be split into its own PR: pin-consistency compares the consumer's
+// workflow set against the platform at that consumer's OWN pinned ref, so each
+// half fails in the mirror-image direction on its own. They have to ride the
+// bump commit, which is why they belong here rather than in a follow-up.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe("platform-bump reusable — retires de-dictated callers (#315)", () => {
+  test("it reads the canonical set at the OLD ref, not just the new one", () => {
+    // The whole judgement call: "was this file ever platform-dictated?" is
+    // answered by the canonical set at $CUR. Deciding from "the consumer has a
+    // file we don't recognise" would delete site-authored workflows.
+    expect(runStep.run).toMatch(
+      /contents\/examples\/site\/\.github\/workflows\?ref=\$CUR/,
+    );
+    expect(runStep.run, "the new set is still read at the NEW ref").toMatch(
+      /contents\/examples\/site\/\.github\/workflows\?ref=\$LATEST/,
+    );
+  });
+
+  test("a file still in the new set is kept; one that left it is git rm'd", () => {
+    const script = stripBashComments(runStep.run);
+    expect(script).toMatch(/for name in "\$\{WAS_DICTATED\[@\]\}"/);
+    expect(
+      script,
+      "membership of the NEW set must be an exact whole-line match — a substring " +
+        "test would spare `e2e-tests.yml` on the strength of `e2e-tests.yml.bak`",
+    ).toMatch(/grep -qxF -- "\$name"/);
+    expect(script).toMatch(/git rm -q --ignore-unmatch -- "\$dest"/);
+  });
+
+  test("an unreadable canonical set on EITHER side deletes nothing", () => {
+    // "Could not tell" must never become "not in the new set, so retire it".
+    // An empty listing is exactly what a $CUR predating examples/site returns.
+    const script = stripBashComments(runStep.run);
+    expect(script).toMatch(
+      /if \[ "\$\{#DICTATED\[@\]\}" -eq 0 \] \|\| \[ "\$\{#WAS_DICTATED\[@\]\}" -eq 0 \]; then/,
+    );
+    // …and the guard must come BEFORE the loop it guards, or it guards nothing.
+    expect(script.indexOf('-eq 0 ] || [ "${#WAS_DICTATED[@]}" -eq 0 ]')).toBeLessThan(
+      script.indexOf('for name in "${WAS_DICTATED[@]}"'),
+    );
+  });
+
+  test("membership is tested with `if`, never `cmd && continue`", () => {
+    // GitHub runs `run:` under `bash -e`, so a false AND-list as a loop body's
+    // last command exits the step — the trap scheduled-run-health.yml's header
+    // already records. A `continue` reached that way would abort the bump.
+    const script = stripBashComments(runStep.run);
+    expect(script).not.toMatch(/grep -qxF[^\n]*&&\s*continue/);
+    expect(script).toMatch(/if printf '%s\\n' "\$\{DICTATED\[@\]\}" \| grep -qxF -- "\$name"; then continue; fi/);
+  });
+
+  test("the PR body names what was retired, so the diff is never a surprise", () => {
+    expect(runStep.run).toMatch(/Retired de-dictated workflow caller\(s\)/);
+  });
+});
+
+test.describe("platform-bump reusable — reconciles dictated caller inputs (#315)", () => {
+  test("it derives the list from the MANIFEST at the new ref, not from the template", () => {
+    // A consumer may map `main` to a library entry other than `consumer-main`.
+    // Copying the template's list would silently impose the wrong set on it —
+    // and a `required_contexts` shorter than the repo's real required set asks
+    // the nudge for a merge it has not established (jodidaniel.com#156).
+    expect(runStep.run).toMatch(/contents\/repo-settings\.yml\?ref=\$LATEST/);
+    expect(runStep.run).toMatch(/contents\/scripts\/reconcile-nudge-contexts\.py\?ref=\$LATEST/);
+    expect(runStep.run, "the consumer's own slug is what selects the ruleset").toMatch(
+      /SLUG="\$GITHUB_REPOSITORY"/,
+    );
+  });
+
+  test("a caller the consumer does not have is not conjured up", () => {
+    const script = stripBashComments(runStep.run);
+    expect(script).toMatch(/if \[ -f "\$NUDGE" \]; then/);
+  });
+
+  test("every non-success outcome reaches the PR body instead of passing quietly", () => {
+    // Direction 3 of #315 as the fallback for directions 1-2: when it cannot be
+    // done automatically the PR must SAY so. A silent skip is the failure mode
+    // the issue exists to end ("the bump PR arrives red and a human works out
+    // why"), and it is worse when the PR is green and merely wrong.
+    const script = stripBashComments(runStep.run);
+    for (const arm of ["UPDATED*", "MANUAL*"]) {
+      expect(script, `the ${arm} outcome must be handled explicitly`).toContain(arm);
+    }
+    expect(script).toMatch(/CONTEXT_NOTE=/);
+    expect(script, "and the note must actually reach the PR body").toMatch(
+      /SEED_NOTE="\$\{SEED_NOTE\}\$\{CONTEXT_NOTE\}"/,
+    );
+  });
+
+  test("the reconciler exists, parses both sides, and verifies its own splice", () => {
+    // The script is the reviewable home for this logic — the workflow only
+    // fetches and runs it. These assert the three properties that make a text
+    // splice of a YAML block scalar defensible at all.
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "..", "scripts", "reconcile-nudge-contexts.py"),
+      "utf8",
+    );
+    expect(src, "both sides are read with a real parser, never line-scanned").toMatch(
+      /yaml\.safe_load/,
+    );
+    expect(
+      src,
+      "the write is a splice so the caller's comments survive — including the " +
+        "block telling the next reader to DERIVE this list rather than copy it",
+    ).toMatch(/def splice_block_scalar/);
+    expect(
+      src,
+      "and the splice is re-parsed and compared before anything is saved: a " +
+        "splice nobody checks is how a mangled workflow ships",
+    ).toMatch(/sorted\(verified\) != sorted\(contexts\)/);
   });
 });

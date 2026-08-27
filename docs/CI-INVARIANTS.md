@@ -323,6 +323,115 @@ layer:
   `e2e/scheduled-run-health.test.js` (workflow shapes + the script's pure
   helpers; registered in `PLATFORM_META_SPECS`).
 
+### The no-recent-success lane (#313)
+
+Both lanes above key off a run CONCLUSION, and that leaves a whole failure class
+structurally invisible. `repo-settings-apply.yml` fired its daily cron for
+eleven days and converged nothing: twelve runs concluded `cancelled`, and
+`cancelled` is deliberately absent from `BAD_CONCLUSIONS` because the
+runner-starvation carve-out is itself a cancelled shape. The audit reported the
+repo healthy throughout while both consumers' branch protection sat unconverged.
+
+The third lane never reads a conclusion at all — it asks only whether a workflow
+has SUCCEEDED lately, which is what lets it coexist with that exclusion rather
+than fight it. `cancelled`, `failure`, `startup_failure`, runner starvation and a
+wedged approval gate all reach it through the same door.
+
+- **Candidates are the workflows already present in the scheduled runs the audit
+  fetched for the first lane.** No extra listing call — and, the part that
+  matters, no cadence false positive: a workflow is only ever judged on a day it
+  actually fired, so a weekly cron is never scored against a daily threshold.
+- **Two branches, and the first is the sharp one.** No success anywhere in the
+  workflow's last `STALE_SCAN_RUNS` (20) scheduled runs, with at least
+  `STALE_MIN_RUNS` (3) on record so a brand-new cron is not a streak — this is
+  cadence-independent and would have fired on day three here. Or: a success
+  exists but is older than `--stale-days` (default 14, wired from the reusable's
+  `stale_days` input), which is the slow case.
+- **A probe error is UNKNOWN, deliberately the OPPOSITE fail-soft direction from
+  `partitionStarvedRuns` and `filterDeadScheduledWorkflows`.** Those keep
+  reporting on error because dropping a real failure is worse; here, asserting
+  staleness from a history that could not be read would be a false alert. It sets
+  `staleProbeFailed`, which suppresses the auto-close and reds the audit — the
+  #258 "could not tell is never health" contract, routed to the honest side.
+- Findings dedupe through a THIRD hidden channel
+  (`<!-- stale-workflows: … -->`), kept strictly separate from the run-id and
+  dead-workflow ones, and are reported once per tracking issue. The close gate
+  now requires all four lanes clean.
+
+## An UNAPPROVED environment gate must not hold a concurrency group (#313)
+
+`repo-settings-apply.yml` applied nothing for eleven days. Twelve consecutive
+runs concluded `cancelled`; both consumers' live `main` rulesets still read
+`updated_at: 2026-08-16`, matching the last success. The obvious suspect was the
+`concurrency` block, and reaching for it without evidence would have produced a
+fix that looked right. **Read the JOBS, not the YAML** — that is what settles it:
+
+- run #9's two `apply` legs were created `2026-08-17T11:00:09Z` and carry
+  `completed_at: 2026-08-27T21:27:48Z`. Ten days parked at an unapproved gate,
+  and a run parked there is not finished, so it holds its group the whole time.
+- runs #10–#21 each return `total_count: 0` from `/actions/runs/<id>/jobs`. Not
+  one allocated a single job — the signature of a run cancelled while PENDING on
+  the group, never of one that started and was killed.
+- each cancelled run's `updated_at` sits within ~1s of the next run's
+  `created_at`. `cancel-in-progress: false` does not mean "queue them all":
+  GitHub keeps the holder plus only the LATEST pending run and cancels the rest.
+- run #22 was created `20:43:54` and allocated its first job at `21:27:49` — one
+  second after #9 was rejected and released the group.
+
+That last line also refutes the refutation that had stalled the diagnosis: #22
+was read as sitting at the gate with its own `pending_deployments` WHILE #9 was
+parked, which would have ruled out head-of-line blocking. It had no jobs at all
+until #9 completed, so it cannot have been at the gate. **A run pending on
+concurrency and a run waiting on a gate look alike from the outside; only the
+jobs list tells them apart.** Check it before believing either.
+
+The invariant: **a job that can WAIT ON A HUMAN gets no workflow-level
+concurrency group.** Scope the group to the job that actually writes, and let
+newest win.
+
+- `plan` is read-only and carries no group. Un-grouping it is what makes a wedged
+  gate VISIBLE — every run plans and publishes its summary instead of dying
+  job-less.
+- `apply` keeps the group with `cancel-in-progress: true`. What that cancels is,
+  in every ordinary case, a job parked at a gate having written nothing, and
+  superseding it is the point: the newer run planned against newer `main`, which
+  is exactly why #9 was ultimately rejected as stale rather than approved. It
+  also makes two overlapping applies impossible rather than merely unlikely, so
+  the mutual exclusion is STRONGER than the `false` it replaced.
+- The residual is the ~10s a live apply takes (measured: #22's apply step ran
+  `21:53:35`→`21:53:44`), in which a second approval could interrupt it. The
+  script converges and `fail-fast: false` already accepts a partly-applied
+  matrix, so the next run finishes the job. A bounded ~10s window against a
+  demonstrated eleven-day outage.
+- This is a deliberate reversal of the v0.1.27 half-apply lesson, and
+  `e2e/repo-settings-apply.test.js` INVERTS the assertion that encoded it rather
+  than deleting it, with the measurement attached so it is not "restored" by a
+  later reading of v0.1.27.
+
+Note this is NOT the same rule as "a required status check gets no `concurrency`
+group" — `repo-settings-apply` publishes no required context. The shared lesson
+is narrower and worse: `cancel-in-progress: false` retains exactly one pending
+run, so anything that can occupy a group indefinitely converts every later run
+into a silent, job-less cancellation.
+
+### The second layer: a lossy PUT is refused, and that is correct
+
+Even a run that reached the gate and WAS approved failed. Run #22's apply legs
+exited 2 with `SKIPPED ruleset "main" — its live body carries an unknown
+non-allowlisted field`. The field is
+`require_extra_approval_for_unattributed_changes`, a `pull_request` rule
+parameter GitHub started returning after the manifest was written, measured
+`true` on all five rulesets across all three repos (2026-08-27). A
+manifest-built PUT replaces the rule body wholesale, so applying would have
+silently turned a real protection off. **The engine was right to refuse; the
+manifest had gone incomplete underneath it.** `repo-settings.yml` now declares
+the live value, which changes nothing live and only lets the PUT carry it.
+
+The diagnostic gap is worth the same attention as the bug: the `rule-param-extra`
+informational named the KEY and stopped, and whether the fix is "declare it" or
+"declare it as `false`" turns entirely on the VALUE. It now prints the value and
+says plainly that the parameter fix-skips the ruleset.
+
 ## E2E local webServer: decap readiness + :4000 crash resilience
 
 `e2e/playwright.config.js`'s local lane (`TARGET=local`) starts two webServers;
