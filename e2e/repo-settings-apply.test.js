@@ -116,13 +116,36 @@ test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", (
     ).toBe(true);
   });
 
-  test("apply is serialized and never cancelled mid-write", () => {
-    const c = wfDoc().concurrency;
+  // #313. This test previously asserted the EXACT OPPOSITE — a workflow-level
+  // group with `cancel-in-progress: false`, justified by the v0.1.27
+  // half-apply lesson. That shape produced an eleven-day silent outage: a run
+  // parked at the un-approved gate held the group from 2026-08-17 to
+  // 2026-08-27, and because `false` retains only the LATEST pending run, runs
+  // #10-#21 were each cancelled with ZERO jobs allocated. Inverted here
+  // deliberately, in the same commit as the workflow, with the measurement
+  // recorded so it is not "restored" by a later reading of v0.1.27.
+  test("the concurrency group is on the WRITING job, never on the workflow", () => {
+    const doc = wfDoc();
+    expect(
+      doc.concurrency,
+      "a workflow-level group makes a gate-parked run wedge every later run " +
+        "before it can allocate a single job (#313) — the group belongs on `apply`",
+    ).toBeUndefined();
+    expect(
+      doc.jobs.plan.concurrency,
+      "`plan` is read-only and must never queue: un-grouping it is what makes a " +
+        "wedged gate visible instead of silent",
+    ).toBeUndefined();
+    const c = doc.jobs.apply.concurrency;
+    expect(c, "`apply` must still be serialized — it is the job that writes").toBeTruthy();
     expect(c.group).toBe("repo-settings-apply");
     expect(
       c["cancel-in-progress"],
-      "a cancelled half-apply leaves settings partly converged (the v0.1.27 lesson)",
-    ).toBe(false);
+      "newest-wins: what this cancels is normally a gate-parked job that has " +
+        "written nothing, and superseding it is the point — the newer run planned " +
+        "against newer `main`. It also makes two overlapping applies impossible " +
+        "rather than merely unlikely (#313)",
+    ).toBe(true);
   });
 
   test("it fails SOFT when un-onboarded, naming every required knob", () => {

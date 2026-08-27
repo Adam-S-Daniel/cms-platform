@@ -5,7 +5,7 @@
 # This workflow moves that apply into CI behind a reviewer gate. The audit stays
 # exactly as it is — this is additive, and either can be disabled alone.
 #
-# THREE THINGS HERE ARE LOAD-BEARING. Each is a trap, not a preference:
+# FOUR THINGS HERE ARE LOAD-BEARING. Each is a trap, not a preference:
 #
 #  1. TWO JOBS, BECAUSE THE REVIEWER MUST SEE THE PLAN BEFORE APPROVING.
 #     A GitHub environment gate pauses a job BEFORE its first step, so a plan
@@ -28,6 +28,45 @@
 #     `required_reviewers` rule and refuses to apply if it does not. Without that
 #     check, a misprovisioned repo converts this from human-gated to unattended
 #     admin writes — the single worst failure mode available here.
+#
+#  4. THE CONCURRENCY GROUP IS ON `apply`, NEWEST-WINS — NOT ON THE WORKFLOW.
+#     A run parked at an UN-APPROVED gate is not finished, so it holds its
+#     concurrency group for as long as nobody clicks approve. And
+#     `cancel-in-progress: false` does not mean "queue them all": GitHub keeps
+#     the holder plus only the LATEST pending run and cancels the rest. With the
+#     group at WORKFLOW level those two facts compose into a silent outage.
+#
+#     MEASURED, not theorised (#313). Run #9's `apply` legs were created
+#     2026-08-17T11:00:09Z and sat `waiting` until rejected
+#     2026-08-27T21:27:48Z — ten days holding the group. Across that window runs
+#     #10-#21 all concluded `cancelled` having allocated ZERO JOBS
+#     (`/actions/runs/<id>/jobs` returns `total_count: 0`), each one cancelled
+#     within ~1s of its successor being created. Run #22 was created
+#     20:43:54 and allocated its first job at 21:27:49 — one second after #9
+#     released the group. Eleven days, twelve cancellations, nothing applied.
+#
+#     (An earlier reading had #22 sitting at the gate WHILE #9 was still parked,
+#     which would have refuted head-of-line blocking. The job timestamps above
+#     refute the refutation: #22 held no jobs at all until #9 completed. A run
+#     pending on concurrency and a run waiting on a gate look alike from the
+#     outside; only the jobs list tells them apart.)
+#
+#     So the group is scoped to the job that actually writes, and flipped to
+#     newest-wins. What that cancels is, in every ordinary case, a job parked at
+#     a gate having written NOTHING — and superseding it is the point: the newer
+#     run planned against newer `main`, which is exactly why #9 was ultimately
+#     rejected as stale rather than approved. It also makes overlap impossible
+#     rather than merely unlikely, so the mutual exclusion note 4 replaces is
+#     strictly stronger. The residual is a ~10s window (measured: run #22's
+#     apply step ran 21:53:35→21:53:44) in which a second approval could
+#     interrupt a live apply; the script converges and `fail-fast: false` below
+#     already accepts a partly-applied matrix, so the next run finishes the job.
+#     That is the trade, made with both sides measured: a bounded ~10s
+#     interruption window against a demonstrated eleven-day outage.
+#
+#     `plan` deliberately carries NO group. It is read-only and cheap, and
+#     un-grouping it is what makes a wedged gate VISIBLE — every run now plans
+#     and publishes its summary instead of dying job-less.
 #
 # WHY A GITHUB APP AND NOT A PAT: the manifest governs repos under TWO owners
 # (Adam-S-Daniel and jodidaniel), and a fine-grained PAT cannot span owners. One
@@ -70,12 +109,8 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Shares a lane with nothing else, but must never run twice at once: two
-  # concurrent applies could race the same PUT. Queue, never cancel — a
-  # cancelled half-apply is the v0.1.27 lesson.
-  group: repo-settings-apply
-  cancel-in-progress: false
+# NO WORKFLOW-LEVEL `concurrency` BLOCK — see header note 4. The group lives on
+# the `apply` job, which is the only thing that writes.
 
 jobs:
   plan:
@@ -172,6 +207,10 @@ jobs:
     # THE GATE. Its required-reviewer rule is verified below — see header note 3;
     # naming a nonexistent environment would silently create an unprotected one.
     environment: repo-settings
+    # Header note 4. Scoped to the WRITING job, and newest-wins.
+    concurrency:
+      group: repo-settings-apply
+      cancel-in-progress: true
     strategy:
       # One leg per owner, each holding only that owner's admin token.
       # fail-fast:false so one owner's failure does not abandon the other's
