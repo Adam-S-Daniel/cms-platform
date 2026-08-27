@@ -16,6 +16,6 @@ permissions:
 
 jobs:
   audit:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/editorial-label-audit.yml@v0.1.88
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/editorial-label-audit.yml@v0.1.89
     with:
-      platform_ref: v0.1.88
+      platform_ref: v0.1.89

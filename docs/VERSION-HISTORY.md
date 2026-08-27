@@ -10,12 +10,13 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.88)
+## Version history (v0.1.0 → v0.1.89)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**UNRELEASED (2026-08-20) — the action pin comment is retired fleet-wide, and a
-cross-repo composite is now TAG-pinned.** Deliberately NOT a release: skills
+**SHIPPED IN v0.1.89 (landed 2026-08-20, unreleased at the time) — the action
+pin comment is retired fleet-wide, and a cross-repo composite is now
+TAG-pinned.** Deliberately not released *when it landed*: skills
 reach consumers through their own `skills.lock`, not the release tag, so no
 version bump is needed and cutting one would force the whole atomic edit set
 `e2e/examples-site-pins-current.test.js` enforces.
@@ -1758,7 +1759,7 @@ version bump is needed and cutting one would force the whole atomic edit set
   `editorial / validate-content` — and there is no live exposure: the underlying
   job is covered via `consumer-main` and declares no group.
 
-- **v0.1.88** (pending release) — **the invariant becomes the OUTCOME: no required
+- **v0.1.88** — **the invariant becomes the OUTCOME: no required
   status context may end `cancelled` (#289).** v0.1.87 removed every `concurrency`
   group from every required-context publisher and closed the route THOSE had. Four
   days later the next route surfaced, and it had already fired: a job also ends
@@ -1823,3 +1824,99 @@ version bump is needed and cutting one would force the whole atomic edit set
   Also: `verify-consumer-pins.sh` advertised 96 checks while running 90 — the number
   is REMOVED rather than corrected, since a count in prose drifts again — and its
   `--help` range was truncating mid-sentence.
+
+- **v0.1.89** — **a public-site link crawler, and prereleases that a consumer's
+  default branch will refuse (#308, #309).** Both halves come out of
+  jodidaniel.com PR #176, where every one of the home page's 16 media links 404'd
+  on the preview deploy while every CI lane stayed green.
+
+  NOTHING CRAWLED THE PUBLIC PAGES. `e2e/cms-link-crawler.spec.js` walks `/admin`
+  only, over the five base collections — so a site could ship a section whose
+  every link 404s and CI never noticed. `e2e/site-link-crawler.spec.js` closes
+  it: it walks every built HTML page under `_site` (admin excluded, it has its
+  own crawler), harvests each `<a href>` pointing back at the site, and asserts
+  the target exists in the build. Pure-fs — no browser, no server — and
+  `SITE_ROOT`-aware, so it runs on consumers. It reports EVERY broken link rather
+  than the first, because one root cause takes out a whole section at once.
+  Verified against the real regression: with jodidaniel's media collection back
+  at `output: false` it reports 18 broken links; with the fix, 2.
+
+  THOSE REMAINING 2 WERE A PLATFORM BUG the new crawler found on its first run.
+  `theme/_includes/header.html` linked `/blog/` unconditionally, so a consumer
+  with no blog served a dead "Blog" link on every default-layout page — live at
+  the time on jodidaniel.com's 404 page and its `/preview/` shell. The nav entry
+  is now conditional on the `/blog/` page actually existing, which is the precise
+  signal: an empty-but-real blog index keeps its nav, a site that never had one
+  stops advertising it.
+
+  RELEASES CAN NOW BE CUT AS PRERELEASES, so a platform fix is validated on ONE
+  consumer PR before it fans out to prod. `release.yml` gains a `prerelease`
+  input: it requires a `vX.Y.Z-<suffix>` version, passes `--prerelease`, skips the
+  plugin-manifest version guard (which locks the manifests to a RELEASE tag — a
+  prerelease precedes that bump by design), and skips the consumer fan-out
+  dispatch. GitHub keeps a prerelease off `repos/<repo>/releases/latest`, the only
+  thing `platform-bump` resolves, so no consumer can drift onto one; the fan-out
+  is skipped anyway rather than leaning on that downstream detail.
+
+  AND THE DEFAULT BRANCH NOW REFUSES ONE. Nothing stopped an RC pin riding into
+  the consumer's default branch afterwards — the branch `deploy-production` builds
+  from — and a merge was one click. `scripts/assert-release-pin.js` reads the
+  consumer's `platform.lock` and exits 1 when `platform_ref` is a prerelease, 0
+  when it is not, and 2 when it could not evaluate its input at all: three-valued,
+  so a guard that cannot read `platform.lock` never looks like a pass. A sha or
+  branch `platform_ref` is deliberately out of scope — also not releases, but not
+  what this guards, and failing them would change the failure mode for setups
+  nobody audited.
+
+  IT RUNS FROM ITS OWN REUSABLE + `examples/site` CALLER rather than as a job on
+  `platform-pin-consistency.yml`, for two reasons that both end in a broken repo.
+  (1) That caller carries a site-tuned `paths-ignore` on adamdaniel.ai, and a
+  REQUIRED context whose workflow is skipped emits no check run — branch
+  protection then hangs forever on "Waiting for status to be reported". (2) The
+  standard remedy for (1), a mirroring stub as `e2e-stub.yml` does for
+  `e2e / e2e`, is WRONG here: a stub emits a synthetic success, so a content-only
+  PR on a branch already pinned to an RC would collect that pass and stay
+  mergeable. The pin does not have to change in the PR for the pin to be wrong. So
+  this lane carries no path filter and always reports — it can afford to, it reads
+  one key out of one file — and `branches: [main]` on the caller is what scopes
+  it, leaving an RC pinnable everywhere else, which is the entire point of cutting
+  one.
+
+  `repo-settings.yml` adds `prerelease-guard / prerelease-guard` to the
+  `consumer-main` ruleset's required checks. Required, not merely red: red does not
+  stop a merge, and stopping the merge is the whole ask. That obliged two edits the
+  repo's own locks caught and which are correct in their own right —
+  `examples/site`'s `cms-automerge-nudge` caller gains the context in
+  `required_contexts` (per #284: the nudge's gate and branch protection have to
+  agree, or the nudge could recover a PR the guard has not passed), and both
+  consumer ruleset fixtures gain it, since manifest + fixtures encode the DESIRED
+  converged state.
+
+  SEQUENCING, AND THE WINDOW IT OPENS. `repo-settings-apply.yml` fires on a push to
+  `main` touching `repo-settings.yml`, so the required context auto-applies to both
+  live consumers — while NO consumer yet carries the caller that publishes it. A
+  consumer whose ruleset has converged before its `platform_ref` reaches v0.1.89
+  has every open PR into `main` wedged on "Expected — Waiting for status to be
+  reported", with `bypass_actors: []` and so no override. The escape is
+  self-unblocking and needs no revert: `platform-bump`'s own PR seeds the newly
+  dictated caller pinned at v0.1.89 and publishes the context ON ITSELF (a
+  `pull_request` workflow runs from the PR head), and passes, because
+  `platform.lock` then reads a real release. That is why the release must precede
+  the bump — a caller pinned at v0.1.88 references a reusable that does not exist
+  at that tag, so the job errors and the context reports FAILURE instead.
+
+  Also fixes `scripts/stale-platform-refs.js`, which tokenized versions with
+  `/v\d+\.\d+\.\d+/` and so read `v0.1.89-rc.1` as `v0.1.89`. Compared against the
+  canonical `v0.1.89-rc.1` that made EVERY pin look stale — 55 of them, measured on
+  jodidaniel.com — so `verify-consumer-pins.sh`, the gate that defines a consumer
+  bump as done, could never pass on an RC-pinned tree. The same prefix-normalization
+  bug bit the parity checker in #308 (a consumer pinned at `v0.1.89-rc.1` compared as
+  `@vREF-rc.1` against the template's `@vREF` and was reported as call-interface
+  DRIFT); each was a separate copy, and the #308 fix missed this one. With both
+  corrected an RC is usable for the one job it exists to do.
+
+  `e2e/prerelease-guard.test.js` locks the guard, including the two invariants that
+  fail as "this PR hangs forever" / "this PR merged an RC" rather than as a red lint:
+  the caller may never gain a path filter, and the two job ids must compose exactly
+  the context string `repo-settings.yml` requires (a rename orphans the ruleset entry
+  and hangs every consumer PR).
