@@ -9,15 +9,19 @@
 # makes it a one-click workflow_dispatch that creates the tag + GitHub Release
 # server-side from the current main HEAD.
 name: Cut release
-run-name: "${{ format('cut {0} — @{1}', inputs.version, github.actor) }}"
+run-name: "${{ format('cut {0}{1} — @{2}', inputs.version, inputs.prerelease && ' (prerelease)' || '', github.actor) }}"
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release tag to cut (vX.Y.Z). Tags the dispatched ref + creates a GitHub Release.'
+        description: 'Release tag to cut (vX.Y.Z, or vX.Y.Z-rc.N with prerelease). Tags the dispatched ref + creates a GitHub Release.'
         type: string
         required: true
+      prerelease:
+        description: 'Cut a PRERELEASE instead. Marked prerelease on GitHub, so releases/latest skips it and NO consumer is bumped — pin ONE consumer PR at it to validate a fix on a real preview before cutting the real release.'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -36,6 +40,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
           TARGET: ${{ github.sha }}
           GH_REF: ${{ github.ref }}
         run: |
@@ -51,7 +56,16 @@ jobs:
             echo "::error::releases must be cut from main (dispatched ref: ${GH_REF}). Re-run with 'main' selected in the branch dropdown."
             exit 1
           fi
-          if ! printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          # A prerelease MUST carry a suffix, so it can never collide with — or be
+          # mistaken for — the release it precedes. `v0.1.89-rc.1` also sorts before
+          # `v0.1.89` under semver, which is what makes "cut the RC, validate, then
+          # cut the real one" a coherent sequence rather than a version rewind.
+          if [ "$PRERELEASE" = "true" ]; then
+            if ! printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$'; then
+              echo "::error::a prerelease must look like vX.Y.Z-<suffix>, e.g. v0.1.89-rc.1 (got '${VERSION}')"
+              exit 1
+            fi
+          elif ! printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::version must look like vX.Y.Z (got '${VERSION}')"
             exit 1
           fi
@@ -78,9 +92,19 @@ jobs:
           # complete: a releaser who fixes exactly what this names and no more
           # cuts the tag and THEN reds the required node-unit-lints lane, which
           # is the worst possible moment to discover a missing edit.
+          # The manifest guard locks the two plugin manifests to the RELEASE tag.
+          # A prerelease deliberately PRECEDES that bump — it is cut from main as-is
+          # to validate a fix, and the manifests move in the release PR that follows
+          # — so requiring them to already declare `0.1.89-rc.1` would force a commit
+          # whose only purpose is to be reverted. Skip the guard, never weaken it:
+          # the real release still cannot cut with skewed manifests.
           expected="${VERSION#v}"
           skew=0
-          for manifest in plugin.json .claude-plugin/plugin.json; do
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "::notice::prerelease ${VERSION} — skipping the plugin-manifest version guard (it locks manifests to a RELEASE tag)."
+            expected=""
+          fi
+          for manifest in ${expected:+plugin.json .claude-plugin/plugin.json}; do
             declared=$(jq -r '.version // ""' "$manifest")
             if [ "$declared" != "$expected" ]; then
               echo "::error file=${manifest}::${manifest} declares version '${declared}' but this run cuts ${VERSION} (expected '${expected}'). The release PR bumps ALL of: both plugin manifests, AGENTS.md's 'Current release:' line, every platform pin in examples/site/.github/workflows (uses:@ref AND with: platform_ref:), and scaffold/create-site.js's PLATFORM_VERSION — the last two enforced by e2e/examples-site-pins-current.test.js in the REQUIRED node-unit-lints lane, so skipping them reds self-CI right after the tag is cut. Fix them all, then re-dispatch."
@@ -90,12 +114,19 @@ jobs:
           if [ "$skew" -ne 0 ]; then
             exit 1
           fi
-          gh release create "$VERSION" \
-            --repo "$GH_REPO" \
-            --target "$TARGET" \
-            --title "$VERSION" \
-            --generate-notes
-          echo "::notice::Cut ${VERSION} at ${TARGET}. platform-bump + Dependabot will fan it out to consuming sites."
+          RELEASE_ARGS=(--repo "$GH_REPO" --target "$TARGET" --title "$VERSION" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            RELEASE_ARGS+=(--prerelease)
+          fi
+          gh release create "$VERSION" "${RELEASE_ARGS[@]}"
+          if [ "$PRERELEASE" = "true" ]; then
+            # `--prerelease` is what keeps this off `repos/<repo>/releases/latest`,
+            # which is the ONLY thing platform-bump resolves. A consumer therefore
+            # cannot drift onto this tag on its own — pin it deliberately, on ONE PR.
+            echo "::notice::Cut PRERELEASE ${VERSION} at ${TARGET}. It is excluded from releases/latest, so no consumer will be bumped to it. Pin one consumer PR at ${VERSION} to validate, then cut the real release."
+          else
+            echo "::notice::Cut ${VERSION} at ${TARGET}. platform-bump + Dependabot will fan it out to consuming sites."
+          fi
 
       # Chained down-sync: dispatch each consumer's platform-bump the moment
       # the release exists, instead of waiting for its weekly cron (Mondays
@@ -108,7 +139,13 @@ jobs:
       # release up) — warnings, never a job failure. Fine-grained PATs are
       # minted per RESOURCE OWNER, so each consumer owner supplies its own
       # secret: Actions read+write on that one repo, nothing else.
+      # A prerelease is validated on ONE consumer PR, pinned by hand. Dispatching
+      # the consumers' platform-bump would be a no-op today (it resolves
+      # releases/latest, which skips prereleases, and would exit "already on
+      # <current>") — but relying on that is relying on a downstream detail to
+      # undo something this job should not have done. Don't dispatch.
       - name: Fan out bump dispatches to consumers
+        if: ${{ inputs.prerelease != true }}
         env:
           VERSION: ${{ inputs.version }}
           TOKEN_ADAMDANIEL_AI: ${{ secrets.BUMP_DISPATCH_ADAMDANIEL_AI }}

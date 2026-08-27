@@ -534,7 +534,14 @@ function stableStringify(v) {
 // formatting drop out via the YAML parse.
 function structuralShape(text) {
   const YAML = loadYaml();
-  const normalized = text.replace(/@v\d+\.\d+\.\d+/g, "@vREF").replace(/\b[0-9a-f]{40}\b/g, "SHA40");
+  // The version suffix is part of the version. A consumer validating a fix can
+  // be pinned at a PRERELEASE (`v0.1.89-rc.1`) while the canonical examples/site
+  // template at that same ref still pins the last full release — normalizing only
+  // `vX.Y.Z` left `@vREF-rc.1` vs `@vREF` and reported the RC pin as content DRIFT,
+  // which is the pin half of an RC being unusable at all.
+  const normalized = text
+    .replace(/@v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g, "@vREF")
+    .replace(/\b[0-9a-f]{40}\b/g, "SHA40");
   const obj = YAML.parse(normalized) || {};
   const jobs = obj.jobs || {};
   const shape = { permissions: obj.permissions || null, jobs: {} };
@@ -729,7 +736,7 @@ function requireCanonicalError(where) {
 }
 
 // Requireable for the unit test (see RUN_AS_CLI above): pure, no filesystem.
-module.exports = { okSummary, requireCanonicalError };
+module.exports = { okSummary, requireCanonicalError, structuralShape };
 
 if (RUN_AS_CLI) {
   checkGemfile();

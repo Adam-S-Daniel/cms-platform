@@ -593,6 +593,46 @@ test.describe("check-platform-pin-consistency.js — workflow-content (call-inte
 // `unverifiableKeys`/`repoOkLine`/`cleanScanSummary` vocabulary `okSummary`
 // mirrors). Locked in BOTH directions, because the quiet half is the one a
 // refactor regresses: with parity VERIFIED the wording must stay byte-identical.
+test.describe("workflow-content parity — a PRERELEASE pin is the same version shape", () => {
+  // A consumer PR validating a platform fix pins a PRERELEASE (`v0.1.89-rc.1`)
+  // while the canonical examples/site template — checked out at that same ref —
+  // still pins the last full release. Version normalization has to swallow the
+  // whole version INCLUDING its suffix, or the two shapes differ only by the
+  // suffix and parity reports the RC pin as content DRIFT. That failure made an
+  // RC unusable for the one job it exists to do.
+  const { structuralShape } = require("../scripts/check-platform-pin-consistency.js");
+
+  const caller = (ref) =>
+    [
+      "permissions:",
+      "  contents: read",
+      "jobs:",
+      "  x:",
+      `    uses: Adam-S-Daniel/cms-platform/.github/workflows/e2e-tests.yml@${ref}`,
+      "    with:",
+      `      platform_ref: ${ref}`,
+      "",
+    ].join("\n");
+
+  test("a prerelease pin normalizes to the same shape as a release pin", () => {
+    expect(structuralShape(caller("v0.1.89-rc.1"))).toEqual(structuralShape(caller("v0.1.88")));
+  });
+
+  test("suffix shapes other than -rc.N normalize too", () => {
+    const release = structuralShape(caller("v0.1.88"));
+    for (const ref of ["v0.1.89-rc1", "v0.1.89-beta.2", "v0.2.0-alpha"]) {
+      expect(structuralShape(caller(ref)), `${ref} should normalize like a release pin`).toEqual(
+        release,
+      );
+    }
+  });
+
+  test("normalization is version-only — a real call-interface drift still differs", () => {
+    const drifted = caller("v0.1.89-rc.1").replace("contents: read", "contents: write");
+    expect(structuralShape(drifted)).not.toEqual(structuralShape(caller("v0.1.88")));
+  });
+});
+
 test.describe("check-platform-pin-consistency.js — degraded-scan wording + --require-canonical", () => {
   const { okSummary } = require("../scripts/check-platform-pin-consistency.js");
   const V = "v0.1.76";
