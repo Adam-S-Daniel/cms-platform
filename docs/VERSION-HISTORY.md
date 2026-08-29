@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.90)
+## Version history (v0.1.0 → v0.1.91)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -1965,3 +1965,78 @@ version bump is needed and cutting one would force the whole atomic edit set
   `/tags-quotes` is precisely what that filter puts back. Verified red-first
   twice: the unfixed layout fails 4 of 4 assertions with actual
   `/tags-ai-engineering`; the fixed one passes 17 assertions.
+
+- **v0.1.91** — **the 2026-08-29 user-testing remediation: what a real owner
+  and real visitors hit on jodidaniel.com's go-live build.** Six issues, all
+  found by human-eye testing rather than by CI, and each one invisible to every
+  lint that existed at the time.
+
+  **#324 — preview environments served raw S3 errors for every 404**, bucket
+  key, `RequestId` and `HostId` included, plus a nested "could not retrieve a
+  custom error document". Production was fine; the gap was preview-only, which
+  is the surface a non-technical reviewer gets sent. `ProductionDistribution`
+  had a `CustomErrorResponses` block and `PreviewDistribution` had none.
+  Fixed twice over, deliberately. CloudFront now maps 404/403 to a generic
+  preview page at the bucket ROOT — the viewer-request Function's `pr-<N>/`
+  rewrite does not re-apply to CloudFront's own error fetch, which is why the
+  target cannot live under the prefix. That half needs an operator-run
+  `infrastructure/bootstrap/deploy.sh` per consumer, so validating the RC
+  against the live preview drove out a second, deploy-free half: the full error
+  body names `Key: 404.html`, and the previews bucket's own
+  `WebsiteConfiguration` already declares exactly that error document, resolved
+  against the bucket root, where the object had simply never existed. Seeding it
+  is one `aws s3 cp` and fixes previews on the next deploy with no
+  infrastructure change at all. Both are kept: S3's covers 404 immediately,
+  CloudFront's also covers 403 and normalises status at the edge.
+
+  **#325 — the theme shipped no favicon mechanism**, so both consumers 404ed
+  `/favicon.ico` on every page view and every tab showed the generic globe.
+  Fixed with issue #25's established pattern: the gem ships a neutral,
+  brand-free, site-shadowable `assets/favicon.svg` and emits the tag from a
+  gem-owned partial. The consumer wrinkle is the part worth remembering — a
+  site with its OWN layouts never runs the gem's `<head>`, so the include is
+  standalone by design and such a layout adopts it in one line. jodidaniel.com
+  needed exactly that, and pinning the RC without it left the measured defect
+  live: gem asset shipped, pages carrying no icon tag at all.
+
+  **#326 — the seeded 404 rode the gem `default` layout**, so on a
+  design-custom consumer a mistyped URL landed on a near-black monospace page
+  that read as a different site. Two testers independently made it their top
+  finding. It works perfectly on adamdaniel.ai, whose site IS the gem look — it
+  breaks precisely on the consumer shape the platform exists to support, and
+  every future design-custom consumer would inherit it from the seed. The seed
+  is now self-contained and neutral with `--nf-*` custom properties a site can
+  shadow, with the required bits (permalink, noindex, sitemap:false, a link
+  home, no site identity) lint-locked so a restyle cannot lose them. An
+  EXISTING consumer does not pick this up — `404.html` is site-owned and a
+  `platform_ref` bump does not touch it.
+
+  **#328 / #329 — the admin actively misled owners on section-collection
+  sites.** "VIEW PAGE ON SITE: Set a title or slug to see the URL" showed on
+  every entry of every such collection, including entries WITH a title and
+  singletons that will never have a page — `compute()` returned `{url: null}`
+  for anything it could not route and the banner rendered that as an
+  instruction the owner could never satisfy. Live Preview rendered a Media
+  entry as a generic dark blog article with "1 MIN READ" chrome, because any
+  collection without its own preview variant falls back to the posts one; a
+  preview showing the WRONG design is worse than none, because it teaches
+  distrust of the real one. Both affordances are now gated on what actually
+  works, both maps dual-maintained and lint-locked. Also: `sortable_fields`
+  modelled in the example seam so a reorder is verifiable in the admin, and two
+  phone-layout fixes.
+
+  **What did NOT ship, and why it is recorded here rather than quietly
+  dropped:** #329's blocker — after one publish, reverting a field to its
+  pre-session value leaves no way to save, because Decap's dirty-tracking
+  compares against the snapshot loaded at editor-open rather than the
+  just-published state. On a boolean like `site_live` that strands the whole
+  site gated, i.e. stuck not launched. The real fix reaches into Decap's Redux
+  internals, which an upgrade would silently break; the public-API alternative
+  depends on remount behaviour that could not be tested (no Decap in the
+  authoring container, `unpkg.com` 403 at the egress proxy). For a blocker whose
+  failure mode is a site stuck unlaunched, an unverified shim is worse than an
+  honest proposal, so a concrete patch sketch went on the issue for a session
+  with real-backend access. #329.5's null `aria-label` on the list-row chevron
+  is deferred for the same reason: every shim here that touches Decap's rendered
+  DOM was built against live observation, and guessing a selector is the
+  brittleness to avoid.
