@@ -45,14 +45,17 @@ whole design:
   `reviews/` subdir only (skipping `*.base.yml`, the seam, `README.md`). **If you
   add another subdirectory under `theme/admin/`, extend this copy AND its parity
   sibling `scripts/render-decap-config.rb`.**
-- **Render `config.yml` from `config.base.yml`** by token-substituting the
-  `window.CMS_*` identity (`{{CMS_REPO}}`, `{{CMS_OAUTH_BASE_URL}}`,
-  `{{CMS_SITE_URL}}`, `{{CMS_DISPLAY_URL}}`, `{{CMS_LOGO_URL}}`) and **splicing
-  the SITE-OWNED seam** `admin/collections.site.yml` at the `# __SITE_COLLECTIONS__`
-  marker. The seam is read from the **SITE source**, never the gem. Before the
-  splice, the seam's `$ref`s are expanded against the platform `field_library`
-  (see "field_library + `$ref` reuse" below) — the base config itself stays
-  TEXT and is spliced byte-for-byte as today.
+- **Render `config.yml` AND `config-local.yml` from their `.base.yml`
+  templates** by token-substituting the `window.CMS_*` identity
+  (`{{CMS_REPO}}`, `{{CMS_OAUTH_BASE_URL}}`, `{{CMS_SITE_URL}}`,
+  `{{CMS_DISPLAY_URL}}`, `{{CMS_LOGO_URL}}`) and **splicing the SITE-OWNED
+  seam** `admin/collections.site.yml` at each template's own
+  `# __SITE_COLLECTIONS__` marker — both `config.base.yml` and
+  `config-local.base.yml` carry one, so a site's own collections reach LOCAL
+  dev too, not just prod. The seam is read from the **SITE source**, never
+  the gem. Before the splice, the seam's `$ref`s are expanded against the
+  platform `field_library` (see "field_library + `$ref` reuse" below) — the
+  base config itself stays TEXT and is spliced byte-for-byte as today.
 - **Inject `window.CMS_*` globals** into the admin shells (`index*.html`) AND the
   reviews dashboards (`reviews/*.html`) — skipping a file only if it already
   *defines* the identity, not merely uses it.
