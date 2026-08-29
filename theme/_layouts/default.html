@@ -8,6 +8,7 @@
   <meta name="robots" content="{{ page.robots }}">
   {%- endif -%}
   <link rel="stylesheet" href="{{ '/assets/css/main.css' | cachebust }}">
+  {% include favicon.html %}
   {% seo %}
   <link rel="alternate" type="application/atom+xml" title="{{ site.title }}" href="{{ '/feed.xml' | relative_url }}">
   {%- if page.layout == 'tag' -%}

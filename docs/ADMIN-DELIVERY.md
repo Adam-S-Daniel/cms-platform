@@ -10,6 +10,12 @@ reuse mechanism. Read this before touching `theme/admin/`, either render path
 site's `admin/collections.site.yml` seam. See also the `admin-config-render`
 skill.
 
+This is also the doc that carries the two other gem-shipped-asset patterns
+below — the favicon (#325) and the seeded 404 page (#326) — because it's the
+one doc a change to `theme/**` is scoped to edit; neither is `/admin`
+machinery, but both extend the same "gem ships a neutral, site-shadowable
+default" pattern this file already documents for the logo.
+
 ## Admin delivery (gem-shipped, v0.1.4+) — the render hook, the seam, base_collections
 
 The Decap admin (`/admin`) is the ~400-line invariant-heavy CMS config plus a
@@ -141,3 +147,132 @@ field (or fields) would go:
   (a site overriding/reordering a base collection's fields) is deferred. Today
   the seam is still **append-only** (collections are spliced after the base);
   `$ref` only delivers shared-field REUSE, not base override.
+
+## Site favicon (gem-shipped, brand-free — issue #325)
+
+The gem ships zero favicon references (no `<link rel="icon">` anywhere in
+`theme/_layouts/`, no icon asset), so every consumer page carries no
+declared icon and the browser falls back to an automatic same-origin
+`GET /favicon.ico` — which 404s, on both consumers, on every page view.
+
+**Same shadowing pattern as the `/admin` logo above**, applied to a page-level
+asset instead of an admin-only one:
+
+- **The gem ships a neutral, brand-free favicon**: `theme/assets/favicon.svg`
+  — wordless, no initials/wordmark, carrying an override comment (mirrors
+  `theme/assets/images/logo.svg`; locked by `theme/spec/neutral_favicon_test.rb`
+  the same way `neutral_logo_test.rb` locks the logo).
+- **A gem-owned, standalone include emits the `<link>` tag**:
+  `theme/_includes/favicon.html`. It reads only `site.cms.favicon_url` (falls
+  back to `<baseurl>/assets/favicon.svg` via `relative_url`, honoring an
+  explicit override verbatim — same own-value-wins semantics as `cms.logo_url`
+  in `decap_config_hook.rb`) and `site.baseurl`. Because it depends on nothing
+  else `default.html` provides, it also works from a **site-owned layout with
+  its own `<head>`** — just add:
+
+  ```liquid
+  {% include favicon.html %}
+  ```
+
+  inside that layout's `<head>`. This is the piece a single-page,
+  custom-design consumer (jodidaniel.com's `home.html`) needs, since its
+  layout never extends the gem's `default.html`.
+- **`theme/_layouts/default.html`'s `<head>` includes it once**, which is
+  sufficient coverage for every gem layout: `post.html`, `page.html`,
+  `project.html`, `tag.html`, `canary.html`, and `preview.html` all declare
+  `layout: default` in their own front matter, so they inherit it —
+  `e2e/scaffold-seeds-favicon.test.js` asserts this is actually true (parses
+  every non-`default.html` layout's front matter) rather than assuming it.
+- **A site brands it by shadowing `assets/favicon.svg`** (Jekyll site files
+  win over same-path gem files) or by setting `cms.favicon_url`. The
+  scaffolder seeds a "replace me" copy at `assets/favicon.svg`, byte-derived
+  from the gem asset so the two can't drift (`seedFavicon()` in
+  `scaffold/create-site.js`, mirroring `seedLogo()`).
+- **Fallback strategy, deliberately SVG-only**: once the `<link rel="icon">`
+  tag is present, on-spec browsers stop the automatic `/favicon.ico` probe
+  that was 404ing (that request only fires when the page declares no icon at
+  all) — so the SVG-only asset already closes the reported gap for every
+  currently-supported browser (Chromium/Firefox since ~2021, Safari 16.4+).
+  We do NOT also ship an `.ico`/`.png` fallback, for the same reason the logo
+  placeholder is SVG-only: it would be the only raster asset type the gem
+  ships. A site that needs pre-2021-browser or platform-icon (e.g.
+  `apple-touch-icon`) support can add those tags itself alongside the include.
+
+**Locked by**: `theme/spec/neutral_favicon_test.rb` (gem asset is wordless,
+square viewBox, carries the override comment) and
+`e2e/scaffold-seeds-favicon.test.js` (scaffold output + neutrality + the
+actual `<head>` emission — both the include's own content and its real
+presence in `default.html`'s `<head>`, not just documented intent). Existing
+consumers (adamdaniel.ai, jodidaniel.com) will not retroactively pick this
+up — a `platform_ref` bump gets them the gem's `favicon.html` include and
+`assets/favicon.svg` default automatically (nothing to change on their end for
+the default to work), but the fix for jodidaniel.com's own `<head>`
+(`_layouts/home.html`) is the one-line `{% include favicon.html %}` add above,
+made in that repo.
+
+## Seeded 404 page: self-contained and neutral, not gem-styled (issue #326)
+
+`404.html` is, and always was, **site-owned** — the scaffolder seeds it
+(`SEED_404` in `scaffold/create-site.js`), but a consuming site's own repo
+commits and can freely edit its own copy. What changed in #326 is the LOOK the
+*seed* ships with.
+
+**The problem the redesign fixes**: the old seed carried `layout: default`, so
+its look came from the gem's `default` layout + `assets/css/main.css` — the
+"Cobalt Thermal" dark, monospace-accented design that IS adamdaniel.ai's whole
+site. That's invisible on adamdaniel.ai (it's the same look everywhere) and
+jarring on a consumer with its own design system (jodidaniel.com's light
+blue-gradient, Raleway/Source-Sans bio) whose 404 page was the ONLY gem-styled
+surface left in a visitor's path — two independent testers flagged it
+unprompted as reading like a different project. This is a **platform pattern
+problem**: every future design-custom consumer inherits the same brand break
+from the seed, not just this one site.
+
+**The fix**: the seeded `404.html` now carries **no `layout:` field at all**.
+It is its own complete, self-contained `<!DOCTYPE html>` document — no
+dependence on `default.html`, no `{% include header.html %}` /
+`{% include footer.html %}`, no `assets/css/main.css` — with its own minimal,
+neutral, system-font inline `<style>`. Brandability is a SMALL, explicit
+surface: a `:root { --nf-bg; --nf-fg; --nf-muted; --nf-accent; --nf-font; }`
+block at the top of that `<style>` a site can retune (in its own committed
+copy — there's no gem asset to shadow here, since 404.html was never
+gem-owned) without needing to redesign the whole page. The defaults are
+neutral enough to sit acceptably next to either the gem's own look or a fully
+custom one.
+
+**LOCKED regardless of any future restyle** (`e2e/scaffold-preview-and-404.test.js`
+enforces every one of these):
+
+- `permalink: /404.html` (the correct-HTTP-404 contract — unchanged),
+- `robots: "noindex,nofollow"` + `sitemap: false` — and since no layout
+  renders `page.robots` for this page anymore, it emits its own
+  `<meta name="robots" content="{{ page.robots }}">` directly,
+- a working link home (`{{ '/' | relative_url }}`),
+- generic, site-agnostic copy (no site identity baked into the seed).
+
+The lint also now asserts the *shape* of the redesign itself, not just the
+locked bits: the seed has NO `layout:` field (self-contained), is a full
+`<!DOCTYPE html>…</html>` document, does not reference
+`assets/css/main.css` or the gem header/footer includes, and exposes at least
+a few `--*` CSS custom properties. `e2e/fixture-site/404.html` is kept
+byte-identical to the scaffolder's own output (assertion (b) in that spec).
+
+As a byproduct, the redesign also dropped a dead "browse the blog" link the
+old seed carried unconditionally — a single-page-bio consumer with no `_posts/`
+had a 404 page linking to a blog index that itself 404s (the same class of bug
+`header.html`'s conditional Blog nav link exists to avoid — see the comment
+there).
+
+**Existing consumers do not retroactively pick this up.** `404.html` is
+site-owned and already committed in both adamdaniel.ai and jodidaniel.com; a
+`platform_ref` bump changes nothing about it, because the scaffolder only runs
+once, at site creation. A site that wants the new neutral shape has to copy
+the new `SEED_404` template (or hand-author an equivalent) into its own
+`404.html` itself. For jodidaniel.com specifically, this is a low-risk,
+high-value adopt: replace its `404.html` body with the new self-contained
+template (adjusting `--nf-*` to its own palette if desired) in a normal PR —
+nothing else in the seeding contract changes, and the render-neutral check in
+"Approving `regression-review` on a render-neutral PR" above does not apply
+here (`404.html` is not under `theme/`, so that specific gate is irrelevant;
+the PR will still go through the ordinary visual-regression lane like any
+other content change).

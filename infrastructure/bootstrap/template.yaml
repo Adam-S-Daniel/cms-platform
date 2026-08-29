@@ -426,6 +426,40 @@ Resources:
               HTTPPort: 80
         DefaultRootObject: index.html
         HttpVersion: http2and3
+        # issue #324 — every 404 on a preview host used to fall through to
+        # S3's raw website error document, whose lookup is relative to the
+        # BUCKET ROOT and never matches a per-PR `pr-<N>/404.html` (or
+        # `cms-<slug>/404.html`) key — so the viewer got S3's bare XML error
+        # (bucket key layout, RequestId) plus a second nested
+        # "could not retrieve custom error document" failure, on exactly the
+        # links sent to a non-technical reviewer.
+        #
+        # Fix: point every preview 404/403 at ONE generic object kept at the
+        # previews bucket root (deploy-preview.yml's "Ensure preview 404
+        # error page exists at bucket root" step keeps it there — see that
+        # step for why nothing reaps it).
+        #
+        # Non-obvious: CloudFront fetches ResponsePagePath directly from the
+        # origin at the CloudFront layer, NOT as a fresh viewer request — so
+        # PreviewRouterFunction's viewer-request `/pr-<N>` prefix rewrite
+        # (above) does NOT re-apply to this fetch. ResponsePagePath is
+        # therefore resolved against the origin's root as-is, which is
+        # exactly why the target must live at the bucket ROOT rather than
+        # under any `pr-<N>/`/`cms-<slug>/` prefix — and why the naive fix of
+        # reusing `/404.html` would collide with a real per-PR object at that
+        # same relative path. `/preview-404.html` cannot collide with a
+        # `pr-<N>/…` or `cms-<slug>/…` key (both prefixes are reserved shapes
+        # the PreviewRouterFunction above recognizes; a bare root path is
+        # neither).
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /preview-404.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: /preview-404.html
+            ErrorCachingMinTTL: 0
 
   # ── Route53 wildcard alias for *.<apex> → preview distribution ──────────
   #

@@ -171,6 +171,94 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Ensure preview 404 error page exists at bucket root
+        # issue #324 — PreviewDistribution's CustomErrorResponses (see
+        # infrastructure/bootstrap/template.yaml) point every preview 404/403
+        # at ONE generic object kept at the previews bucket ROOT — never under
+        # a `pr-<N>/` or `cms-<slug>/` prefix, because CloudFront fetches
+        # ResponsePagePath directly from the origin and does NOT re-run the
+        # viewer-request Function that prepends those prefixes for a normal
+        # client request, so a prefixed path would never resolve for that
+        # fetch. Without this object present, CloudFront's own error-page
+        # fetch 404s too, and the viewer gets S3's nested "could not retrieve
+        # custom error document" failure — the exact bug #324 exists to fix,
+        # just moved one layer down.
+        #
+        # Deliberately generic and preview-flavoured, not per-site-branded:
+        # this ONE object is shared by every PR (and every cms-<slug> alias)
+        # of every consumer of this reusable workflow, because it lives at
+        # the bucket root rather than under any one PR's prefix.
+        #
+        # `aws s3 cp` of a small static file is idempotent — safe to repeat on
+        # every deploy. It must stay OUTSIDE any `pr-<N>/`/`cms-<slug>/`
+        # prefix: both `aws s3 sync --delete` steps below are scoped to their
+        # own prefix (`s3://.../pr-${PR_NUMBER}/`, `s3://.../cms-${SLUG}/`),
+        # and the teardown job's `aws s3 rm --recursive` is scoped the same
+        # way — none of them can ever see, let alone reap, a root-level key.
+        run: |
+          set -euo pipefail
+          cat > /tmp/preview-404.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <meta name="robots" content="noindex, nofollow">
+          <title>Not Found — Preview</title>
+          <style>
+            :root { color-scheme: light dark; }
+            body {
+              margin: 0;
+              min-height: 100vh;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 2rem;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+              background: #f6f7f9;
+              color: #1a1a1a;
+            }
+            @media (prefers-color-scheme: dark) {
+              body { background: #17181a; color: #e8e8e8; }
+              .card { background: #202124; border-color: #34363a; }
+              a { color: #8ab4ff; }
+            }
+            .card {
+              max-width: 32rem;
+              padding: 2rem 2.25rem;
+              border: 1px solid #e2e4e8;
+              border-radius: 12px;
+              background: #fff;
+            }
+            h1 { margin: 0 0 0.5rem; font-size: 1.375rem; }
+            p { margin: 0.5rem 0; line-height: 1.5; }
+            .tag {
+              display: inline-block;
+              font-size: 0.75rem;
+              letter-spacing: 0.04em;
+              text-transform: uppercase;
+              color: #6b7280;
+              margin-bottom: 0.75rem;
+            }
+            a { color: #2563eb; text-decoration: none; }
+            a:hover { text-decoration: underline; }
+          </style>
+          </head>
+          <body>
+            <div class="card">
+              <span class="tag">Preview environment</span>
+              <h1>Page not found</h1>
+              <p>This page doesn't exist on this preview — it may not have been deployed here yet, or the link may be out of date.</p>
+              <p>Previews are temporary, per-change copies of the site and won't always have everything the live site has.</p>
+              <p><a href="/">&larr; Back to this preview's home page</a></p>
+            </div>
+          </body>
+          </html>
+          HTML
+          aws s3 cp /tmp/preview-404.html "s3://${PREVIEW_BUCKET}/preview-404.html" \
+            --content-type "text/html" \
+            --cache-control "no-cache, must-revalidate"
+
       - name: Sync to S3
         run: |
           aws s3 sync ./_site_preview \

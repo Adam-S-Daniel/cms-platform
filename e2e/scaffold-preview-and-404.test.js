@@ -20,9 +20,20 @@
 // (theme/_layouts/preview.html) HARDCODES `<meta name="robots"
 // content="noindex, nofollow">`, so the seeded preview.md deliberately OMITS a
 // front-matter `robots` (a second one would double the meta) — mirroring
-// adamdaniel.ai/preview.md. The 404 page rides the gem `default` layout, which
-// renders `page.robots` from front-matter, so 404.html DOES carry
-// `robots: noindex,nofollow`.
+// adamdaniel.ai/preview.md.
+//
+// 404 SELF-CONTAINMENT (redesigned, issue #326): 404.html used to ride the gem
+// `default` layout, which is adamdaniel.ai's whole opinionated dark/monospace
+// look — fine for a site that IS that look, jarring for a site with its own
+// design system (e.g. a light single-page bio) whose only gem-styled surface
+// in a visitor's path was the 404. The seed now carries NO `layout:` at all —
+// it is its own full <html> document with its own minimal, neutral,
+// system-font styling and a SMALL set of `--nf-*` CSS custom properties a
+// site can retune. LOCKED regardless of restyle: `permalink: /404.html`
+// (correct HTTP 404 behavior), `robots: noindex,nofollow` + `sitemap: false`,
+// and a working link home. Because it has no layout to render `page.robots`
+// FOR it, the page emits its own `<meta name="robots">` reading the front
+// matter field directly — so it still carries a real noindex,nofollow.
 const { test, expect } = require("./base");
 const fs = require("fs");
 const os = require("os");
@@ -61,14 +72,40 @@ function assertPreviewContract(label, text) {
 function assert404Contract(label, text) {
   const fm = frontMatter(text);
   expect(fm, `${label}: must open with a YAML front-matter block`).not.toBeNull();
-  expect(fmField(text, "layout"), `${label}: layout`).toBe("default");
+  // Self-contained (#326): NO layout — riding the gem `default` layout is
+  // exactly the dependency this redesign removes, so a returning `layout:`
+  // field (of any value, including "default") is a regression.
+  expect(fmField(text, "layout"), `${label}: must carry NO layout (self-contained page)`).toBeNull();
+  // LOCKED bits that a restyle must never lose:
+  expect(fmField(text, "permalink"), `${label}: permalink`).toBe("/404.html");
   expect(fmField(text, "sitemap"), `${label}: sitemap`).toBe("false");
-  // default layout renders page.robots from front-matter → keep a real one.
-  expect(fmField(text, "robots"), `${label}: robots`).toMatch(/noindex\s*,\s*nofollow/);
+  // No layout renders page.robots FOR this page anymore — it must emit its
+  // own <meta name="robots"> reading the front-matter field directly.
+  expect(fmField(text, "robots"), `${label}: front-matter robots`).toMatch(/noindex\s*,\s*nofollow/);
+  expect(text, `${label}: must emit its own <meta name="robots"> (no layout does it now)`).toMatch(
+    /<meta\s+name="robots"\s+content="\{\{\s*page\.robots\s*\}\}"/,
+  );
   // It must link back home so a lost visitor has a way out.
   expect(text, `${label}: links back to the homepage`).toMatch(/['"]\s*\/\s*['"]\s*\|\s*relative_url/);
   // Site-agnostic: no leaked adamdaniel identity.
   expect(text, `${label}: must not hardcode a specific site identity`).not.toMatch(/adamdaniel/i);
+  // Self-contained proof: its own full document, not a fragment relying on a
+  // layout to supply <html>/<head>/<body>.
+  expect(text, `${label}: must be a full standalone <html> document`).toMatch(/<!DOCTYPE html>/i);
+  expect(text, `${label}: must close its own <html> document`).toMatch(/<\/html>\s*$/i);
+  // No dependence on the gem's opinionated default layout/stylesheet — the
+  // whole point of the redesign (#326).
+  expect(text, `${label}: must not load the gem's assets/css/main.css`).not.toMatch(/assets\/css\/main\.css/);
+  expect(text, `${label}: must not include the gem header/footer chrome`).not.toMatch(
+    /\{%\s*include\s+(header|footer)\.html\s*%\}/,
+  );
+  // Brandable via a SMALL set of CSS custom properties a site can retune
+  // in place, rather than needing to redesign the whole page.
+  const customProps = text.match(/--[\w-]+\s*:/g) || [];
+  expect(
+    customProps.length,
+    `${label}: must expose a few CSS custom properties for brand overrides`,
+  ).toBeGreaterThanOrEqual(3);
 }
 
 test.describe("scaffolder + fixture expose /preview/ and a 404 page (#23)", () => {
