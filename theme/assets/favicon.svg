@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Neutral placeholder favicon shipped by cms-platform. It carries NO site
+  brand on purpose. Your site SHOULD override it: ship your own
+  assets/favicon.svg (it shadows this gem asset) or set cms.favicon_url in
+  _config.yml. Until then, browser tabs/bookmarks show this generic mark.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Site icon placeholder">
+  <rect x="2" y="2" width="28" height="28" rx="8" fill="#3a4a7a"/>
+  <circle cx="16" cy="16" r="7" fill="#d8e4ff"/>
+</svg>

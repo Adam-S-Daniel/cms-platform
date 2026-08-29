@@ -304,6 +304,13 @@ const PLATFORM_META_SPECS = [
   "admin-keep-files.test.js",
   "scaffold-preview-and-404.test.js",
   "scaffold-seeds-neutral-logo.test.js",
+  // #325 — same shape as scaffold-seeds-neutral-logo.test.js above, plus a
+  // head-emission half: it runs scaffold/create-site.js (SCAFFOLD) and reads
+  // theme/assets/favicon.svg, theme/_includes/favicon.html, and every
+  // theme/_layouts/*.html layout (theme-src) to assert the gem-shipped
+  // neutral favicon and its <head> emission are real, not just documented.
+  // A consumer ships neither the scaffold/ tree nor theme/ source.
+  "scaffold-seeds-favicon.test.js",
   // #242 — scaffold-output + template invariant: examples/site/.github/
   // dependabot.yml's bundler ignore for cms-platform-theme, AND that
   // scaffold/create-site.js copies it verbatim into a seeded site. A

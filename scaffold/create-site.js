@@ -269,6 +269,12 @@ async function main() {
   // cms.logo_url). Reuse the gem placeholder so the two never drift; prepend a
   // "replace me" note for the new owner.
   write(target, "assets/images/logo.svg", seedLogo());
+  // Seed a NEUTRAL "replace me" placeholder favicon (issue #325), same pattern
+  // as the logo above: the gem ships only a neutral placeholder; the gem
+  // include theme/_includes/favicon.html defaults favicon_url to
+  // <baseurl>/assets/favicon.svg, and this site-owned copy SHADOWS it. The
+  // owner replaces it with their real icon (or sets cms.favicon_url).
+  write(target, "assets/favicon.svg", seedFavicon());
   write(target, "_e2e/canary-post.md", SEED_CANARY);
   write(target, "index.html", SEED_INDEX);
   // Seed the consuming-site half of the live-preview + graceful-404 contract
@@ -446,6 +452,28 @@ function seedLogo() {
   return m ? m[1] + note + gemLogo.slice(m[1].length) : note + gemLogo;
 }
 
+// The site-owned placeholder favicon seeded into assets/favicon.svg (issue
+// #325) — same shadowing pattern as seedLogo() above. It's the gem's NEUTRAL
+// placeholder (read from theme/assets/favicon.svg so the two can't drift)
+// with a leading "replace me" note for the new owner. The owner drops in
+// their real icon here (it shadows the gem asset) or sets cms.favicon_url.
+function seedFavicon() {
+  const gemFavicon = fs.readFileSync(
+    path.join(PLATFORM_ROOT, "theme/assets/favicon.svg"),
+    "utf8",
+  );
+  const note =
+    "<!--\n" +
+    "  REPLACE ME. This is a neutral placeholder favicon for your new site.\n" +
+    "  Drop in your own icon at this path (assets/favicon.svg) or set\n" +
+    "  cms.favicon_url in _config.yml. This file shadows the cms-platform-theme\n" +
+    "  gem's placeholder; until you replace it, browser tabs show the generic\n" +
+    "  mark below.\n" +
+    "-->\n";
+  const m = gemFavicon.match(/^(<\?xml[^>]*\?>\s*)/);
+  return m ? m[1] + note + gemFavicon.slice(m[1].length) : note + gemFavicon;
+}
+
 const seedDate = () => new Date().toISOString().slice(0, 10);
 const SEED_POST = (t) => `---
 title: Hello world
@@ -497,33 +525,97 @@ title: "Live Preview"
 description: "Internal CMS preview surface — not a real post."
 ---
 `;
-// A friendly not-found page on the gem \`default\` layout (issue #23). Generic +
-// site-agnostic; links back to home and the blog. The default layout renders
-// \`page.robots\` from front-matter, so this carries a real noindex,nofollow.
+// A friendly, SELF-CONTAINED not-found page (issue #23; redesigned #326).
+// Generic + site-agnostic; links back to home. Deliberately carries NO
+// \`layout:\` — it is its own full <html> document and does NOT extend the
+// gem's \`default\` layout or load assets/css/main.css. That layout is the
+// gem's own opinionated dark/monospace look (adamdaniel.ai's whole site IS
+// that look), which reads as "a different project" when it's the only gem
+// surface a visitor to a site with its OWN design system (e.g. a light,
+// custom-font single-page site) ever lands on. Instead this page ships its
+// own minimal, neutral, system-font styling and exposes a SMALL set of CSS
+// custom properties (--nf-*) up top so a site can restyle it to match its
+// brand with a one-line edit each, rather than rewriting the whole page.
+// Sensible defaults below sit acceptably next to either the gem's default
+// look or a fully custom one. LOCKED bits a restyle must not lose: the
+// \`permalink: /404.html\` contract (correct HTTP 404 behavior),
+// \`robots: noindex,nofollow\` + \`sitemap: false\`, and a working link home.
+// \`page.robots\` is still read from front matter (this page has no layout to
+// render it FOR it, so it emits its own <meta> tag directly).
 const SEED_404 = `---
-layout: default
 permalink: /404.html
 sitemap: false
 robots: "noindex,nofollow"
 title: Page Not Found
 description: The page you were looking for does not exist.
 ---
-<div class="container">
-  <div class="page-header page-not-found">
-    <p class="page-not-found__code" aria-hidden="true">404</p>
-    <h1>Page not found</h1>
-    <p class="page-not-found__message">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="{{ page.robots }}">
+  <title>{{ page.title }}</title>
+  <style>
+    /* A site can restyle this page by overriding these few custom
+       properties (in its own copy of this file — it is site-owned, not
+       gem-shadowed) rather than rewriting the markup below. */
+    :root {
+      --nf-bg: #fafafa;
+      --nf-fg: #1f2430;
+      --nf-muted: #5b6472;
+      --nf-accent: #2f5fd6;
+      --nf-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+      background: var(--nf-bg);
+      color: var(--nf-fg);
+      font-family: var(--nf-font);
+      line-height: 1.5;
+      text-align: center;
+    }
+    .not-found__code {
+      margin: 0;
+      font-size: 3.5rem;
+      font-weight: 700;
+      color: var(--nf-muted);
+    }
+    .not-found__heading {
+      margin: 0.25rem 0 0.75rem;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    .not-found__message {
+      margin: 0 0 1.5rem;
+      color: var(--nf-muted);
+    }
+    .not-found__home {
+      color: var(--nf-accent);
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <p class="not-found__code" aria-hidden="true">404</p>
+    <h1 class="not-found__heading">Page not found</h1>
+    <p class="not-found__message">
       The page you were looking for doesn't exist, or it may have moved.
     </p>
-  </div>
-  <div class="page-content page-not-found__actions">
     <p>
-      <a href="{{ '/' | relative_url }}">Return to the homepage</a>
-      or browse the
-      <a href="{{ '/blog/' | relative_url }}">blog</a>.
+      <a class="not-found__home" href="{{ '/' | relative_url }}">Return to the homepage</a>
     </p>
   </div>
-</div>
+</body>
+</html>
 `;
 // The preview-media probe sentinel (issue #84) — a canonical 1x1 PNG, 69 bytes.
 // Byte-identical to e2e/fixtures/tiny-pixel.png (git blob sha
