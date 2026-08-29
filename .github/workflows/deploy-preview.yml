@@ -258,6 +258,27 @@ jobs:
           aws s3 cp /tmp/preview-404.html "s3://${PREVIEW_BUCKET}/preview-404.html" \
             --content-type "text/html" \
             --cache-control "no-cache, must-revalidate"
+          # ALSO seed the same page at the key S3's own website error-document
+          # lookup asks for (#324). The previews bucket's WebsiteConfiguration
+          # declares `ErrorDocument: 404.html`, and that lookup resolves against
+          # the BUCKET ROOT, not the pr-<N>/ prefix the viewer-request Function
+          # rewrote to -- which is why a miss produced the raw double-error page
+          # naming `Key: 404.html`. Measured on preview-pr176 2026-08-29.
+          #
+          # This half needs NO CloudFormation deploy: it takes effect on the next
+          # preview deploy, whereas the CustomErrorResponses block is inert until
+          # an operator runs infrastructure/bootstrap/deploy.sh per consumer. Both
+          # are kept: S3's error document covers previews the moment this ships,
+          # and CloudFront's covers 403 as well and normalises the status at the
+          # edge regardless of the bucket's website config.
+          #
+          # Same reaping analysis as above: every sync/rm in this workflow is
+          # scoped to pr-<N>/ or cms-<slug>/, so a bucket-root key is outside all
+          # of them. A site's OWN 404.html still syncs to pr-<N>/404.html and is
+          # untouched by this.
+          aws s3 cp /tmp/preview-404.html "s3://${PREVIEW_BUCKET}/404.html" \
+            --content-type "text/html" \
+            --cache-control "no-cache, must-revalidate"
 
       - name: Sync to S3
         run: |
