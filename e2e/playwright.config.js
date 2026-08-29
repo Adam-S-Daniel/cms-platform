@@ -273,6 +273,12 @@ const PLATFORM_META_SPECS = [
   "preflight-oauth.test.js",
   "preview-bot-comment.test.js",
   "preview-config-patch.spec.js",
+  // cms-platform#324 — reads infrastructure/bootstrap/template.yaml (the
+  // platform's own CloudFormation template; a consumer vendors no copy of
+  // it — see AGENTS.md "Bootstrap template is PLATFORM-OWNED"). Self-CI only,
+  // same posture as its cloudfront-preview-router/-location-fixer siblings
+  // a little above.
+  "preview-custom-error-response.test.js",
   "preview-deploy-superset.test.js",
   "prod-mutate-fixture.test.js",
   "public-content.test.js",
