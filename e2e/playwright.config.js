@@ -63,6 +63,12 @@ const PLATFORM_META_SPECS = [
   // platform-internal and testIgnored on a CONSUMER lane.
   "admin-shim-load-order.test.js",
   "confirm-wrap-local-backup.test.js",
+  // #329 owner-persona fix set — same shape as admin-shim-load-order.test.js
+  // right above: reads the three theme/admin shells + the five shim SOURCE
+  // files (platform theme/admin tree, absent on a consumer's rendered
+  // ${SITE_ROOT}/_site/admin), so it is platform-internal and testIgnored on
+  // a CONSUMER lane.
+  "admin-329-shims.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.
