@@ -96,11 +96,22 @@
   <script>
     // Keep the Live Preview link's `?collection=…` in sync with the
     // collection the editor is currently inside, and only SHOW the link
-    // while an entry editor is open. Decap uses hash routing, so we
-    // listen on hashchange (and call updateHref once directly for the
-    // initial load).
+    // while an entry editor is open ON A COLLECTION /preview/ CAN ACTUALLY
+    // RENDER. Decap uses hash routing, so we listen on hashchange (and call
+    // updateHref once directly for the initial load).
     (function () {
       var link = document.getElementById('live-preview-link');
+      // Collections with a REAL /preview/ template — see the
+      // data-preview-layout variants in theme/_layouts/preview.html. Any
+      // OTHER collection falls back there to the "posts" variant and
+      // renders as a generic dark blog article with "1 MIN READ" chrome —
+      // nothing like the entry actually is on the site. A wrong preview is
+      // worse than none (it teaches distrust of the real one), so those
+      // collections get no Live Preview button at all rather than a
+      // misleading one (cms-platform#328.1). Keep this in lockstep with
+      // preview.html's variants — e2e/live-preview-gating-lint.test.js
+      // locks both.
+      var PREVIEWABLE_COLLECTIONS = { posts: true, pages: true, projects: true };
       function updateHref() {
         var h = location.hash || '';
         var m = /#\/collections\/([^\/]+)/.exec(h);
@@ -114,7 +125,7 @@
         // flex; the anchor stays in the DOM (link crawler + native-view
         // -live specs address it by id/href, not visibility).
         var editing = /^#\/collections\/[^\/]+\/(entries\/|new(\?|$))/.test(h);
-        link.style.display = editing ? '' : 'none';
+        link.style.display = editing && PREVIEWABLE_COLLECTIONS[col] ? '' : 'none';
       }
       window.addEventListener('hashchange', updateHref);
       updateHref();

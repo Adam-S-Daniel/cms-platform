@@ -51,6 +51,10 @@ const PLATFORM_META_SPECS = [
   // so it is platform-internal and must be testIgnored on a CONSUMER lane.
   "admin-bundle-parity.test.js",
   "admin-css-banned-patterns.test.js",
+  // #328.4 / #329.6 — reads the platform's theme/admin/admin-mobile.css
+  // SOURCE (the mobile-breakpoint clearance/affordance fixes); meaningless
+  // on a consumer, which ships only the gem-rendered admin CSS.
+  "admin-mobile-clearance-lint.test.js",
   "admin-pin-invariant.test.js",
   // #161 — the confirm-wrap + autosave shim load-order lint (reads the three
   // theme/admin shells + the confirm-wrap SOURCE) and the confirm-wrap unit
@@ -64,6 +68,10 @@ const PLATFORM_META_SPECS = [
   // self-test, meaningless (and ENOENT-prone) on a consumer.
   "admin-spec-source-read-lint.test.js",
   "admin-theme-removed.test.js",
+  // #329.3 — parses the platform's theme/admin/collections.site.yml.example
+  // SOURCE template; meaningless on a consumer, which owns its own
+  // (already-populated) admin/collections.site.yml, not this reference file.
+  "collections-example-sortable-fields.test.js",
   "analytics-cloudwatch-rum.test.js",
   // The "a pin carries no version comment" gate (2026-08-20). Reads THIS repo's
   // .github/workflows + .github/actions composite definitions and the
@@ -236,6 +244,11 @@ const PLATFORM_META_SPECS = [
   // Reads the platform's admin shell SOURCE (theme/admin/index*.html) —
   // meaningless on a consumer, which ships only the gem-rendered admin.
   "live-preview-gating-lint.test.js",
+  // #328.3 — loads admin/live-url-derive.js's browser IIFE in a vm sandbox
+  // and calls window.LiveURL.compute() directly. Reads the platform's
+  // theme/admin SOURCE (not a consumer's rendered/gem admin) — platform-
+  // internal, self-CI only.
+  "live-url-derive-routable.test.js",
   "matchmedia-skip-lint.test.js",
   "oauth-app-restriction-detector.spec.js",
   "oauth-app-restriction-detector.test.js",

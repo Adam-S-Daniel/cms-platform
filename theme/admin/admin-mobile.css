@@ -197,7 +197,13 @@
 
   /* Collection nav sidebar: was an inline rule in admin/index*.html.
    * Stack it above the entries with a bounded height instead of letting
-   * it overlap the content as a side rail. */
+   * it overlap the content as a side rail. `overflow-y: auto` already
+   * makes it touch-scrollable once there are more collections than fit in
+   * 35vh, but a hard-clipped 5th item gave no visual cue that scrolling
+   * reveals more — it just looked cut off, with no scroll affordance
+   * (cms-platform#329.6). An inset shadow at the bottom edge is the
+   * standard "more content below" cue; it costs nothing when the list
+   * already fits (no visible clipped edge, so nothing to shadow). */
   aside[class*="SidebarContainer"] {
     position: static !important;
     width: 100% !important;
@@ -205,6 +211,7 @@
     max-height: 35vh;
     overflow-y: auto;
     border-bottom: 1px solid #d0d7de;
+    box-shadow: inset 0 -10px 8px -8px rgba(0, 0, 0, 0.25);
   }
 
   /* ── 7. Media library modal ─────────────────────────────────────────
@@ -288,5 +295,30 @@
    * (Copy Path / Download / Delete / Upload), rather than being clipped. */
   [class*="ButtonsContainer"] > * {
     flex: 0 0 auto !important;
+  }
+
+  /* ── 8. Keep the floating Live Preview / Reviews buttons off form
+   * controls (cms-platform#328.4) ─────────────────────────────────────
+   * #live-preview-link / #reviews-link are position:fixed at bottom-right
+   * (see the .floating-link rule in admin/index*.html) and stay on top
+   * (z-index:10000) of whatever scrolls beneath them. On a phone the LAST
+   * field in a short form — e.g. a file-upload widget's own buttons in a
+   * Media Items entry — can land directly under them, half-covered and
+   * hard to tap. Reserve blank clearance at the end of the control pane
+   * so the buttons always float over empty space once the user has
+   * scrolled to the bottom of the form, never a live control.
+   *
+   * 10rem covers both stacked buttons' combined footprint on the prod
+   * shell (Live Preview: bottom 6rem, ~2.5rem tall; Reviews: bottom
+   * 3.25rem) plus margin; the local shell's single button sits lower
+   * still (bottom 1.5rem), so the same clearance covers it too.
+   *
+   * Scoped to the FORM pane, not the PREVIEW pane (already display:none
+   * on mobile via rule 4 above, so this would be a no-op there anyway) —
+   * same ControlPaneContainer-minus-PreviewPaneContainer distinction
+   * admin/live-url-banner.js's ensureBanner() makes, kept here as a
+   * belt-and-braces scope rather than relying on the display:none. */
+  [class*="ControlPaneContainer"]:not([class*="PreviewPaneContainer"]) {
+    padding-bottom: 10rem !important;
   }
 }
