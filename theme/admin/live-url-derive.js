@@ -32,9 +32,27 @@
  * field always wins (if set), then the title is slugified as the fallback,
  * then `name` for tags. This mirrors what Decap actually writes to disk
  * AFTER stripping the `_posts/` `YYYY-MM-DD-` date prefix Jekyll adds.
+ *
+ * ROUTABLE_COLLECTIONS (cms-platform#328.3) — compute() only knows how to
+ * derive a URL for the four collection shapes above. Any OTHER collection —
+ * a file/singleton collection (Header/Hero, Site Settings) or a folder
+ * collection with no per-entry route (the section-collection shape both
+ * single-page consumers' custom seams use) — has nothing to derive, no
+ * matter how the entry's fields are filled in. Before this fix compute()
+ * still returned `{ url: null }` for those, and live-url-banner.js rendered
+ * that as "Set a title or slug to see the URL" — a hint the owner could
+ * never satisfy, showing on every entry of every such collection including
+ * ones with a filled title. Returning `null` outright (same as the
+ * no-collection-at-all case just below) makes the banner hide entirely
+ * instead — see live-url-banner.js's `render()`, `if (!data) { ...
+ * display:none... }`. A future collection with a genuine per-entry route
+ * (a `preview_path`) needs its own entry in this map AND in the `path`
+ * lookup below to get a real URL rather than just going quiet.
  */
 (function () {
   "use strict";
+
+  var ROUTABLE_COLLECTIONS = { pages: true, posts: true, tags: true, projects: true };
 
   function getCollection() {
     var m = /#\/collections\/([^/]+)/.exec(window.location.hash || "");
@@ -84,7 +102,7 @@
 
   function compute() {
     var collection = getCollection();
-    if (!collection) return null;
+    if (!collection || !ROUTABLE_COLLECTIONS[collection]) return null;
     var origin = window.location.origin;
 
     if (collection === "pages") {

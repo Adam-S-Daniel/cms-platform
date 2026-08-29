@@ -20,9 +20,25 @@
     create: true
     delete: true
     slug: "{{slug}}"
+    # `sortable_fields` is what puts a field into the admin list's "Sort by"
+    # dropdown — WITHOUT it there's no way to view a collection's manual
+    # order in the admin at all, even though the underlying entries really
+    # did get reordered on disk. If you add a manual-order field to a
+    # collection of your own (`weight` below, or under whatever name you
+    # give it), list it here too — skipping this is cms-platform#329.3:
+    # reordering worked, but the admin list never visibly reflected it, so
+    # there was no way to verify a reorder had taken effect.
+    sortable_fields:
+      - weight
+      - title
     fields:
       # Inline fields (the status quo — still fully supported):
       - { name: title, label: Title, widget: string, required: true }
+      # Manual-order integer, paired with the `sortable_fields` entry above
+      # — the pairing IS the cms-platform#329.3 fix, not two unrelated
+      # lines. "Sort by → Weight" in the admin only works because both are
+      # present.
+      - { name: weight, label: Order, widget: number, value_type: int, default: 0, hint: "Lower numbers sort first. Controls display order on the site." }
       # …or REUSE a platform field def by $ref:
       - $ref: "#/field_library/body_markdown"      # → one markdown body field
       - $ref: "#/field_library/image_widget"       # → one image field

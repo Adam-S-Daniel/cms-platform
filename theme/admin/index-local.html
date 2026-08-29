@@ -67,16 +67,21 @@
   <script>
     (function () {
       var link = document.getElementById('live-preview-link');
+      // Collections with a REAL /preview/ template — see admin/index.html's
+      // sync script for the full rationale (cms-platform#328.1). Keep in
+      // lockstep with preview.html's data-preview-layout variants.
+      var PREVIEWABLE_COLLECTIONS = { posts: true, pages: true, projects: true };
       function updateHref() {
         var h = location.hash || '';
         var m = /#\/collections\/([^\/]+)/.exec(h);
         var col = m ? m[1] : '';
         link.href = '/preview/' + (col ? '?collection=' + encodeURIComponent(col) : '');
-        // Shown only in the entry editor — see admin/index.html's sync
-        // script for the full rationale (/preview/ fills only from the
-        // editor's Save broadcasts; the anchor stays in the DOM).
+        // Shown only in the entry editor, on a previewable collection — see
+        // admin/index.html's sync script for the full rationale (/preview/
+        // fills only from the editor's Save broadcasts; the anchor stays in
+        // the DOM).
         var editing = /^#\/collections\/[^\/]+\/(entries\/|new(\?|$))/.test(h);
-        link.style.display = editing ? '' : 'none';
+        link.style.display = editing && PREVIEWABLE_COLLECTIONS[col] ? '' : 'none';
       }
       window.addEventListener('hashchange', updateHref);
       updateHref();
