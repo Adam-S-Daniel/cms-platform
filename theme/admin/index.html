@@ -162,6 +162,39 @@
   -->
   <script src="https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js"></script>
 
+  <!--
+    Issue #329 owner-persona fix set. All five are independent, standalone
+    shims — no shared state beyond the DOM/hash contracts each documents in
+    its own header comment. Loaded after decap-cms.js so `window.CMS` and
+    Decap's rendered DOM exist; each degrades to a silent no-op if a future
+    Decap release changes the surface it reads.
+
+      1. publish-baseline-refresh.js       — #329.1 (BLOCKER): a Publish
+         doesn't refresh Decap's dirty-tracking baseline, so retyping a
+         prior value can silently strand an unpublished edit. Remounts the
+         entry (a hash round-trip) after a publish to refresh it.
+      2. publish-step-hint.js              — #329.2: the toolbar's one
+         obvious "Publish" control is a dropdown trigger, not a button.
+         Shows an unmissable "not published yet" notice while it's present.
+      3. search-scope-all.js               — #329.4: the sidebar search box
+         is labelled "Search all" but can silently scope to the current
+         collection. Rewrites a scoped search route to the all-collections
+         one.
+      4. list-row-affordance.js            — #329.5: list-widget rows are
+         collapsed behind an unlabeled 32×26px chevron. Labels the chevron
+         and makes the row's own summary text clickable too.
+      5. single-entry-collection-shortcut.js — #329.7: singleton file
+         collections (Header/Hero, About, Contact, Site Settings) force an
+         extra click through a one-item list. Jumps straight to the single
+         entry — never for a folder collection, which always keeps its
+         "+ New" link reachable.
+  -->
+  <script src="publish-baseline-refresh.js" defer></script>
+  <script src="publish-step-hint.js" defer></script>
+  <script src="search-scope-all.js" defer></script>
+  <script src="list-row-affordance.js" defer></script>
+  <script src="single-entry-collection-shortcut.js" defer></script>
+
   <!-- "HTML Embed" editor component — adds a toolbar button on every
        markdown body field so authors can drop a block of raw HTML / JS /
        CSS that round-trips through rich-text and raw modes. Loads after

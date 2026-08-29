@@ -107,6 +107,16 @@
   -->
   <script src="https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js"></script>
 
+  <!-- Issue #329 owner-persona fix set — see admin/index.html for the full
+       rationale for all five shims (each documents its own contract in its
+       own header comment). Loaded here too for parity across all three
+       admin shells. -->
+  <script src="publish-baseline-refresh.js" defer></script>
+  <script src="publish-step-hint.js" defer></script>
+  <script src="search-scope-all.js" defer></script>
+  <script src="list-row-affordance.js" defer></script>
+  <script src="single-entry-collection-shortcut.js" defer></script>
+
   <!-- "HTML Embed" editor component — see admin/index.html for rationale. -->
   <script src="editor-component-html-embed.js" defer></script>
 
