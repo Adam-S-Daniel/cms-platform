@@ -1,0 +1,36 @@
+{%- comment -%}
+  Favicon <link> tag(s) — issue #325. Standalone include: it reads only
+  `site.cms.favicon_url` and `site.baseurl`, so it works from the gem's own
+  `default.html` <head> AND from a SITE-OWNED layout that has its own <head>
+  (e.g. a single-page site with a custom home layout) — just add
+  `{% include favicon.html %}` inside that layout's <head>.
+
+  Default asset: the gem-shipped, brand-free `assets/favicon.svg` (issue #25's
+  shadowing pattern — a site overrides it by shipping its own
+  assets/favicon.svg, which Jekyll resolves in preference to the gem's, or by
+  setting `cms.favicon_url` in _config.yml to any URL, honored verbatim like
+  `cms.logo_url` already is for the /admin config).
+
+  Fallback strategy: SVG favicons have broad modern support (Chromium/Firefox
+  since ~2021, Safari 16.4+) and are the only raster-free format Jekyll can
+  serve without adding a binary asset type the gem doesn't otherwise ship (the
+  logo placeholder is SVG-only for the same reason — see theme/assets/images/
+  logo.svg). We deliberately do NOT also ship an .ico/.png fallback: once this
+  <link> is present, on-spec browsers stop the automatic same-origin
+  GET /favicon.ico probe that was 404ing (that request only fires when the
+  page declares no icon at all), so the SVG-only asset already closes the
+  reported gap. A site that needs pre-2021-browser or platform-icon (e.g.
+  apple-touch-icon) support can add those tags itself alongside this include.
+{%- endcomment -%}
+{%- comment -%}
+  The `type` hint is emitted ONLY for the gem's own SVG default. cms.favicon_url
+  is honored verbatim and may point at a .ico/.png, and a WRONG type hint is
+  worse than none -- some browsers reject an icon whose declared type does not
+  match the resource. With no `type`, the browser sniffs, which is correct for
+  every format a site might legitimately point at.
+{%- endcomment -%}
+{%- if site.cms.favicon_url -%}
+<link rel="icon" href="{{ site.cms.favicon_url }}">
+{%- else -%}
+<link rel="icon" type="image/svg+xml" href="{{ '/assets/favicon.svg' | relative_url }}">
+{%- endif -%}

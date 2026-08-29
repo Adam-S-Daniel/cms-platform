@@ -1,24 +1,74 @@
 ---
-layout: default
 permalink: /404.html
 sitemap: false
 robots: "noindex,nofollow"
 title: Page Not Found
 description: The page you were looking for does not exist.
 ---
-<div class="container">
-  <div class="page-header page-not-found">
-    <p class="page-not-found__code" aria-hidden="true">404</p>
-    <h1>Page not found</h1>
-    <p class="page-not-found__message">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="{{ page.robots }}">
+  <title>{{ page.title }}</title>
+  <style>
+    /* A site can restyle this page by overriding these few custom
+       properties (in its own copy of this file — it is site-owned, not
+       gem-shadowed) rather than rewriting the markup below. */
+    :root {
+      --nf-bg: #fafafa;
+      --nf-fg: #1f2430;
+      --nf-muted: #5b6472;
+      --nf-accent: #2f5fd6;
+      --nf-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+      background: var(--nf-bg);
+      color: var(--nf-fg);
+      font-family: var(--nf-font);
+      line-height: 1.5;
+      text-align: center;
+    }
+    .not-found__code {
+      margin: 0;
+      font-size: 3.5rem;
+      font-weight: 700;
+      color: var(--nf-muted);
+    }
+    .not-found__heading {
+      margin: 0.25rem 0 0.75rem;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    .not-found__message {
+      margin: 0 0 1.5rem;
+      color: var(--nf-muted);
+    }
+    .not-found__home {
+      color: var(--nf-accent);
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <p class="not-found__code" aria-hidden="true">404</p>
+    <h1 class="not-found__heading">Page not found</h1>
+    <p class="not-found__message">
       The page you were looking for doesn't exist, or it may have moved.
     </p>
-  </div>
-  <div class="page-content page-not-found__actions">
     <p>
-      <a href="{{ '/' | relative_url }}">Return to the homepage</a>
-      or browse the
-      <a href="{{ '/blog/' | relative_url }}">blog</a>.
+      <a class="not-found__home" href="{{ '/' | relative_url }}">Return to the homepage</a>
     </p>
   </div>
-</div>
+</body>
+</html>
