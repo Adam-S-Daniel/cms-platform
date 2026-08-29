@@ -96,9 +96,14 @@ module CmsPlatformTheme
       field_library_path = File.join(src, "field_library.yml")
 
       render = lambda do |b, o|
-        t = File.read(b)
+        # Pinned to UTF-8: this hook runs under the HOST's locale (a
+        # non-UTF-8 default_external raises ArgumentError once the read
+        # content hits a regex op below), and — unlike the script path's fix
+        # for the same bug class (#213) — a library hook must never mutate
+        # the process-global Encoding.default_external to work around it.
+        t = File.read(b, encoding: "utf-8")
         tokens.each { |k, v| t = t.gsub("{{#{k}}}", v) }
-        raw = File.exist?(site_collections) ? File.read(site_collections) : ""
+        raw = File.exist?(site_collections) ? File.read(site_collections, encoding: "utf-8") : ""
         # Expand any `$ref: "#/field_library/<name>"` in the seam BEFORE
         # splicing. No-op (byte-identical to the legacy splice) when no $ref.
         inject = CmsPlatformTheme::FieldLibrary.expand_seam_text(raw, field_library_path)
@@ -122,7 +127,7 @@ module CmsPlatformTheme
       js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};</script>}
       shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html"))
       shells.each do |h|
-        s = File.read(h)
+        s = File.read(h, encoding: "utf-8")
         # Skip only if the file already DEFINES the identity (a prior render,
         # or a self-defining shell) — NOT if it merely USES window.CMS_REPO
         # (the commit-pill + reviews dashboards read it; matching a use here

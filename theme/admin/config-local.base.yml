@@ -224,3 +224,6 @@ collections:
         modes:
           - rich_text
           - raw
+
+  # Mirrors config.base.yml's marker so site collections reach local dev too.
+  # __SITE_COLLECTIONS__  (render injects admin/collections.site.yml here, if present)

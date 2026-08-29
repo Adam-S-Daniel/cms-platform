@@ -157,16 +157,18 @@ opted-out — `admin-no-occlusion`, `cms-mobile-layout`, `cms-editorial-workflow
 `cms-field-targeting`, `cms-native-view-live`, …) must **NOT** be guarded. The
 drift lint distinguishes them by the index-local route / sidebar-wait signal.
 
-**The config-local single-page limitation (known):** the gem's
+**Single-page consumers and `config-local.yml` (fixed 2026-08):** the gem's
 `decap_config_hook.rb` applies the `base_collections` keep-list deletion to BOTH
-`config.yml` AND `config-local.yml`, but `config-local.base.yml` has **no
+`config.yml` AND `config-local.yml`. `config-local.base.yml` used to carry **no
 `__SITE_COLLECTIONS__` marker**, so a single-page consumer's **LOCAL-dev**
-`/admin` (decap-server) shows **NO collections at all** — not even its own custom
-ones (which DO appear in the prod `config.yml` via the marker). jodidaniel uses
-the **prod github backend**, so this is local-dev-only; the #33 skips handle the
-e2e impact. If a single-page consumer ever needs local-dev admin editing of its
-custom collections, add a `__SITE_COLLECTIONS__` marker to `config-local.base.yml`
-(follow-up — not done here).
+`/admin` (decap-server) showed **NO collections at all** — the keep-list
+stripped every built-in and the (marker-less) splice put nothing in to survive
+it. Both templates now carry the marker, so a site's own collections reach
+local dev exactly as they reach the prod `config.yml`;
+`theme/spec/decap_config_hook_render_test.rb` locks the splice+strip end to end
+plus a one-marker-per-template assertion. The #33 skips are unaffected — they
+guard specs that assume BASE collections exist, and hiding those on a
+`base_collections: []` consumer is still the intended behavior.
 
 **The two fixtures (the platform's own both-paths proof):**
 `e2e/fixture-site` keeps every base collection + the 3 canonical canaries (the
