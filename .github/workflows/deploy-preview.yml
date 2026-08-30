@@ -20,6 +20,15 @@ on:
         description: "S3 bucket name for PR previews."
         required: true
         type: string
+      media_archive_bucket:
+        description: >
+          Optional private S3 bucket holding archived media PDFs. Mirrors the
+          production input so an editor can check a newly-ticked
+          `pdf_public` on the preview before it reaches the live site. Empty
+          (the default) skips the step.
+        required: false
+        type: string
+        default: ""
       bot_marker:
         description: "Slug for the HTML-comment marker on the preview PR comment (kept unique per site)."
         required: false
@@ -279,6 +288,16 @@ jobs:
           aws s3 cp /tmp/preview-404.html "s3://${PREVIEW_BUCKET}/404.html" \
             --content-type "text/html" \
             --cache-control "no-cache, must-revalidate"
+
+      - name: Publish opted-in archived PDFs
+        # Between the credentials and BOTH syncs below: they upload
+        # ./_site_preview, so an opted-in PDF has to be in that tree first, and
+        # reading the private archive needs the role. See
+        # deploy-production.yml's copy of this step and docs/MEDIA-ARCHIVE.md.
+        if: inputs.media_archive_bucket != ''
+        env:
+          MEDIA_ARCHIVE_BUCKET: ${{ inputs.media_archive_bucket }}
+        run: bash ./.cms-platform/scripts/publish-opted-in-pdfs.sh ./_site_preview
 
       - name: Sync to S3
         run: |

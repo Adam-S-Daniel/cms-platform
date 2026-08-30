@@ -41,6 +41,13 @@ jobs:
     with:
       apex_domain: example.com
       prod_bucket: example-com-production
+      # Archived media PDFs (opt-in; see cms-platform docs/MEDIA-ARCHIVE.md).
+      # Uncomment BOTH lines together once the bootstrap stack has been
+      # redeployed with MediaArchiveBucketName set. `platform_ref` is what
+      # fetches the publish script, and `platform-bump` moves it in lockstep
+      # with the `uses:@` pin above -- so it must equal this file's ref.
+      # media_archive_bucket: example-com-media-archive
+      # platform_ref: v0.1.92
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       PRODUCTION_CLOUDFRONT_ID: ${{ secrets.PRODUCTION_CLOUDFRONT_ID }}

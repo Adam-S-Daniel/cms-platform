@@ -45,6 +45,10 @@ jobs:
       bot_marker: example-com-preview-bot
       # Pin to the SAME ref as the `uses:` pin above so the helper scripts match.
       platform_ref: v0.1.92
+      # Archived media PDFs (opt-in; see cms-platform docs/MEDIA-ARCHIVE.md).
+      # Uncomment once the bootstrap stack carries MediaArchiveBucketName, so an
+      # editor can check a newly-ticked `pdf_public` on the preview first.
+      # media_archive_bucket: example-com-media-archive
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       PREVIEW_CLOUDFRONT_ID: ${{ secrets.PREVIEW_CLOUDFRONT_ID }}
