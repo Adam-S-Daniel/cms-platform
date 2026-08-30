@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.91)
+## Version history (v0.1.0 → v0.1.92)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2040,3 +2040,83 @@ version bump is needed and cutting one would force the whole atomic edit set
   is deferred for the same reason: every shim here that touches Decap's rendered
   DOM was built against live observation, and guessing a selector is the
   brittleness to avoid.
+
+- **v0.1.92** — **the rest of #329, fixed against a real Decap instance
+  instead of deferred for want of one.** v0.1.91 shipped 2 of the 9
+  user-testing findings and deferred the blocker for an honest reason: `/admin`
+  loads Decap from unpkg, the egress proxy answers that 403, and there was no
+  instance in the authoring container to reproduce against, inspect, or test a
+  candidate fix on. The unlock was that `registry.npmjs.org` sits in the
+  container's `no_proxy` list — so `decap-cms@3.15.1` came from npm, the real
+  gem admin shells were served against jodidaniel.com's own seam and content,
+  and Playwright drove it. Every claim below was measured with the shims off
+  and on.
+
+  **#329.1, the blocker.** Decap's dirty-tracking baseline is the entry
+  snapshot taken when the editor OPENED, and publishing never refreshes it.
+  Publish a change, retype the original, and the form now equals the STALE
+  baseline: Decap reports "Changes saved" and removes the publish control while
+  the backend still holds the old value. Reproduced on a string widget and on
+  jodidaniel.com's `Site Live` boolean — the catastrophic one, where "flip it
+  off to look, flip it back" left the site gated with the admin insisting there
+  was nothing to publish. Re-opening the entry refreshes the baseline, so
+  `publish-baseline-refresh.js` makes a publish do what a re-open does: on
+  `postPublish`, remount the entry editor with a hash round-trip. Public
+  `window.CMS` APIs only — no Redux internals, which is what the deferred
+  option-1 sketch would have cost. It acts only when the editor is clean, so an
+  in-flight edit is never discarded, and only on the entry route, so it is
+  inert on the editorial-workflow path.
+
+  **#329.2** shipped as the issue's option (b), not (a), on evidence:
+  click-forwarding was implemented and tested, and programmatically activating
+  the single menu item — by `.click()` and by a full synthetic pointer sequence
+  — does not publish and raises a page error, besides being the branch that
+  risks double-publishing. `publish-step-hint.js` shows an unmissable "not
+  published yet" state instead.
+
+  **#329.4** was root-caused rather than guessed. The scope is not merely
+  "the open collection" — it is sticky and history-dependent. One session, same
+  collection, same term: first search routed to
+  `#/collections/expertise/search/HIPAA` and returned 0 hits, though "HIPAA" is
+  in that collection's own `description`; later the same search routed to
+  `#/search/HIPAA` and returned 3. `search-scope-all.js` rewrites the scoped
+  route so the box labelled "Search all" searches all.
+
+  **#329.5 / #329.7** — `list-row-affordance.js` (the row's summary text
+  expands the row; the chevron gets the `aria-label` it lacked) and
+  `single-entry-collection-shortcut.js` (skip the one-item list for file
+  collections). The latter is guarded on the absence of a `/new` link, so a
+  FOLDER collection that happens to hold one entry is never trapped with no way
+  back to its list — the guard earned itself within the day, when
+  jodidaniel.com added an `events` folder collection.
+
+  **#329.8** — `local-save-indicator.js`, local shell only: the editor toolbar
+  reads `local · saves to your working copy`, then `saved to working copy ·
+  HH:MM:SS` after a save, persistently. The persistence IS the fix; a 3-second
+  toast was the defect. It is barred from implying a deploy, because on the
+  local backend there is none.
+
+  **The finding worth keeping.** That last shim's first draft assigned
+  `textContent` unconditionally on every render. Assigning `textContent`
+  replaces the child text node even when the string is identical — a
+  `childList` mutation inside `document.documentElement`, the exact subtree the
+  shim's own `MutationObserver` watched with `subtree: true`. So `render()` fed
+  the observer that called it, and because observer callbacks are microtasks
+  the loop never yielded: injected into a live admin it killed the page target
+  outright ("Target page, context or browser has been closed"). The entire
+  pure-fs lint suite was green through it, 1551/0. It is a clean instance of
+  this repo's own "green unit lints routinely ship a LIVE regression" rule, and
+  it was caught only because the fix was driven against a real instance.
+  `render()` now compares before writing; a regression guard is lint-locked and
+  was proved able to fail.
+
+  Also filed from this work: **#342**, a pre-existing Decap 3.15.1 defect
+  reproduced identically WITHOUT these shims — direct hash navigation between
+  two entry routes breaks the next publish with `Cannot read properties of
+  undefined (reading 'reduce')`. The admin UI offers no such navigation, so it
+  is reachable only from a synthetic harness; it is a live trap for e2e specs
+  that publish in two entries in one session.
+
+  Item 9 (contradictory status badges on the test-repo backend) remains open on
+  its original terms: it needs real-backend confirmation before badge logic is
+  treated as trustworthy.
