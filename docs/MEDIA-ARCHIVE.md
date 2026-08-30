@@ -48,14 +48,44 @@ bucket is created and nothing else changes.
    MEDIA_ARCHIVE_BUCKET=jodidaniel-com-media-archive
    ```
 
-3. **Redeploy the bootstrap stack** from the site repo:
+3. **Redeploy the bootstrap stack.** It is an ordinary stack update: one new
+   bucket and one read-only IAM statement, touching no existing bucket,
+   distribution or DNS record. HOW you run it differs per site, because not
+   every consumer ships a wrapper:
+
+   **adamdaniel.ai** has `infrastructure/bootstrap/deploy.sh` — a thin wrapper
+   that checks the platform out at `platform.lock`'s `platform_ref` and
+   exports the site's params itself:
 
    ```sh
-   bash infrastructure/bootstrap/deploy.sh
+   MEDIA_ARCHIVE_BUCKET=adamdaniel-ai-media-archive \
+     bash infrastructure/bootstrap/deploy.sh
    ```
 
-   This is an ordinary stack update — it adds one bucket and one read-only IAM
-   statement. It touches no existing bucket, distribution or DNS record.
+   **jodidaniel.com has no such wrapper** — only
+   `infrastructure/site-params.example.env`. Source the params and run the
+   PLATFORM's script from a cms-platform checkout:
+
+   ```sh
+   set -a; source infrastructure/site-params.env; set +a
+   STACK_NAME=jodidaniel-com-bootstrap \
+   MEDIA_ARCHIVE_BUCKET=jodidaniel-com-media-archive \
+     bash /path/to/cms-platform/infrastructure/bootstrap/deploy.sh
+   ```
+
+   > **Set `STACK_NAME` explicitly there, and do not skip it.** That params
+   > file exports `STACK_NAME="jodidaniel-com-oauth-proxy"` for the OAuth-proxy
+   > deploy, and the bootstrap script honours an inherited `STACK_NAME`
+   > (`${STACK_NAME:-${RESOURCE_PREFIX}-bootstrap}`). Sourcing the file and
+   > running the bootstrap deploy without overriding it aims the BOOTSTRAP
+   > template at the OAuth-proxy stack. Overriding it on the command line, as
+   > above, is the whole fix.
+
+   > **Until this change is released and the consumer bumped**, a wrapper that
+   > checks the platform out at `platform_ref` will fetch a template that has
+   > no `MediaArchiveBucketName` parameter and the deploy will reject it. Run
+   > the platform script from a checkout of the branch/tag that carries it, or
+   > wait for the release.
 
    > On adamdaniel.ai the wrapper must keep exporting
    > `CREATE_APEX_DNS_RECORDS=true`. It is a live apex and the A-records are
