@@ -18,6 +18,26 @@ on:
         description: "S3 bucket name for the production site."
         required: true
         type: string
+      media_archive_bucket:
+        description: >
+          Optional private S3 bucket holding archived media PDFs. When set, the
+          deploy copies each `_media` entry carrying `pdf_public: true` out of
+          it into the built site. Entries left unticked are never copied, so
+          their PDF is not on the public site at all -- not merely unlinked.
+          Empty (the default) skips the whole thing, checkout included.
+        required: false
+        type: string
+        default: ""
+      platform_repo:
+        description: "owner/name of the platform repo holding the helper scripts."
+        required: false
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch scripts from (pin to the same ref as this workflow)."
+        required: false
+        type: string
+        default: main
       aws_region:
         description: "AWS region for S3 + CloudFront."
         required: false
@@ -56,6 +76,7 @@ jobs:
       PRODUCTION_BUCKET: ${{ inputs.prod_bucket }}
       APEX_DOMAIN: ${{ inputs.apex_domain }}
       CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.PRODUCTION_CLOUDFRONT_ID }}
+      MEDIA_ARCHIVE_BUCKET: ${{ inputs.media_archive_bucket }}
 
     steps:
       - name: Register GitHub Deployment (in_progress)
@@ -145,6 +166,30 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check out platform scripts (media archive only)
+        if: inputs.media_archive_bucket != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Publish opted-in archived PDFs
+        # Ordering is load-bearing: AFTER `Configure AWS credentials` (the
+        # archive is private, so reading it needs the role) and BEFORE
+        # `Sync to S3` (the copied files have to be in the tree that
+        # `aws s3 sync --delete` uploads). After the sync it would upload
+        # nothing at all.
+        #
+        # The `if:` guards SCRIPT AVAILABILITY, not the decision -- with no
+        # bucket configured the checkout above is skipped, so there is no
+        # script to run. When it does run, the script itself distinguishes
+        # "nothing opted in" (notice, exit 0 -- the default and not a problem)
+        # from "an opted-in PDF is missing from the archive" (error, exit 1),
+        # because that second one ships a Download PDF button that 404s.
+        if: inputs.media_archive_bucket != ''
+        run: bash ./.cms-platform/scripts/publish-opted-in-pdfs.sh ./_site
 
       - name: Sync to S3
         # `--exclude` keeps the local-dev / e2e-test admin variants out of

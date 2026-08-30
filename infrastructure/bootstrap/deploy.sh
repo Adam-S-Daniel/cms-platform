@@ -32,6 +32,11 @@ RESOURCE_PREFIX="${RESOURCE_PREFIX:-$(printf '%s' "$APEX_DOMAIN" | tr '.' '-')}"
 ARTIFACT_BUCKET="${ARTIFACT_BUCKET:-${RESOURCE_PREFIX}-cfn-artifacts}"
 PREVIEW_BUCKET="${PREVIEW_BUCKET:-${RESOURCE_PREFIX}-previews}"
 PRODUCTION_BUCKET="${PRODUCTION_BUCKET:-${RESOURCE_PREFIX}-production}"
+# Deliberately NOT defaulted to "${RESOURCE_PREFIX}-media-archive": unlike the
+# three buckets above, this one is opt-in. Defaulting it would hand every
+# existing site a new bucket on its next bootstrap redeploy, which nobody asked
+# for. Set it to opt in; see docs/MEDIA-ARCHIVE.md.
+MEDIA_ARCHIVE_BUCKET="${MEDIA_ARCHIVE_BUCKET:-}"
 PREVIEW_DOMAIN="${PREVIEW_DOMAIN:-*.${APEX_DOMAIN}}"
 STACK_NAME="${STACK_NAME:-${RESOURCE_PREFIX}-bootstrap}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
@@ -92,7 +97,8 @@ aws cloudformation deploy \
   "CreateOIDCProvider=${CREATE_OIDC_PROVIDER}" \
   "CreateApexDnsRecords=${CREATE_APEX_DNS_RECORDS:-false}" \
   "HostedZoneId=${HOSTED_ZONE_ID}" \
-  "PreviewDomainName=${PREVIEW_DOMAIN}"
+  "PreviewDomainName=${PREVIEW_DOMAIN}" \
+  "MediaArchiveBucketName=${MEDIA_ARCHIVE_BUCKET}"
 
 # ── Fetch outputs ──────────────────────────────────────────────────────────
 info "Fetching stack outputs…"

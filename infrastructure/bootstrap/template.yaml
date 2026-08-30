@@ -66,6 +66,23 @@ Parameters:
     AllowedPattern: "^Z[A-Z0-9]+$"
     Description: "Route53 hosted zone ID for the apex domain (e.g. Z02339993KRS1LII3B24S)"
 
+  MediaArchiveBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      OPTIONAL private S3 bucket holding archived PDFs of third-party articles
+      that a site's `_media` entries reference. Leave EMPTY to skip it
+      entirely; a site that does not archive PDFs needs nothing here.
+
+      It exists because a site repo is PUBLIC: a PDF committed there is
+      world-readable at raw.githubusercontent.com whatever the site renders,
+      and git history keeps it after a `git rm`. So the bytes live here, the
+      repo names the object, and a per-item `pdf_public` checkbox decides
+      whether a deploy copies one onto the public site. Public access is
+      blocked on every axis and NO bucket policy grants read: the only reader
+      is the GitHub Actions role, via the statement below. Convention:
+      `<prefix>-media-archive`. See docs/MEDIA-ARCHIVE.md.
+
   CreateOIDCProvider:
     Type: String
     Default: "true"
@@ -92,6 +109,7 @@ Parameters:
 Conditions:
   ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
   ShouldCreateApexDnsRecords: !Equals [!Ref CreateApexDnsRecords, "true"]
+  ShouldCreateMediaArchive: !Not [!Equals [!Ref MediaArchiveBucketName, ""]]
 
 Resources:
 
@@ -170,6 +188,32 @@ Resources:
   # production can't silently lose its website config + policy the way it did
   # when earlier versions of this stack removed them.
   #
+  # Private archive of media PDFs. Deliberately unlike the three buckets
+  # around it: no website configuration, no bucket policy, no CloudFront
+  # origin, and Block Public Access ON for all four axes -- so it cannot be
+  # made public by a stray ACL or a policy added later without also editing
+  # this block. Versioning is on because the archive is the ONLY copy of a
+  # rendered article capture; an overwrite with the wrong file is otherwise
+  # unrecoverable. Retained on stack delete for the same reason.
+  MediaArchiveBucket:
+    Type: AWS::S3::Bucket
+    Condition: ShouldCreateMediaArchive
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref MediaArchiveBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
   ProductionBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -641,6 +685,21 @@ Resources:
                   - !Sub "arn:aws:s3:::${PreviewBucketName}/*"
                   - !Sub "arn:aws:s3:::${ProductionBucketName}"
                   - !Sub "arn:aws:s3:::${ProductionBucketName}/*"
+              # READ-ONLY, and a separate statement on purpose: the deploy
+              # copies an opted-in PDF OUT of the archive, and must never be
+              # able to write to or delete from the only copy of it. Present
+              # only when the archive exists -- an empty bucket name would
+              # otherwise render `arn:aws:s3:::` and fail validation.
+              - !If
+                - ShouldCreateMediaArchive
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Sub "arn:aws:s3:::${MediaArchiveBucketName}"
+                    - !Sub "arn:aws:s3:::${MediaArchiveBucketName}/*"
+                - !Ref "AWS::NoValue"
 
         # ── CloudFormation: manage stacks with <prefix>- prefix ────────────
         - PolicyName: CloudFormationAccess
@@ -842,6 +901,13 @@ Outputs:
   ProductionDistributionDomain:
     Description: "CloudFront domain name for the production distribution"
     Value: !GetAtt ProductionDistribution.DomainName
+
+  MediaArchiveBucketName:
+    Description: >
+      Private bucket holding archived media PDFs. Pass it to the deploy
+      workflows as `media_archive_bucket` to enable publishing opted-in PDFs.
+    Condition: ShouldCreateMediaArchive
+    Value: !Ref MediaArchiveBucket
 
   OIDCProviderArn:
     Description: "GitHub OIDC identity provider ARN"
