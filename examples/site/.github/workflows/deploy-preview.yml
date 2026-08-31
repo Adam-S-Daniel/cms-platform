@@ -37,14 +37,14 @@ permissions:
 
 jobs:
   preview:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-preview.yml@v0.1.92
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-preview.yml@v0.1.93
     with:
       apex_domain: example.com
       preview_bucket: example-com-previews
       # Keep unique per site so multiple sites' bots never clobber comments.
       bot_marker: example-com-preview-bot
       # Pin to the SAME ref as the `uses:` pin above so the helper scripts match.
-      platform_ref: v0.1.92
+      platform_ref: v0.1.93
       # Archived media PDFs (opt-in; see cms-platform docs/MEDIA-ARCHIVE.md).
       # Uncomment once the bootstrap stack carries MediaArchiveBucketName, so an
       # editor can check a newly-ticked `pdf_public` on the preview first.

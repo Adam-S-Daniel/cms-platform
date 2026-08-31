@@ -109,7 +109,7 @@ bucket is created and nothing else changes.
    ```yaml
    with:
      media_archive_bucket: jodidaniel-com-media-archive
-     platform_ref: v0.1.92   # production caller only; must equal the uses:@ ref
+     platform_ref: v0.1.93   # production caller only; must equal the uses:@ ref
    ```
 
    The production caller needs `platform_ref` because that is what fetches the
