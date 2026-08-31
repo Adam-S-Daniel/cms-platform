@@ -257,6 +257,58 @@ test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", (
     expect(new Set(groups).size, "both lanes converge the same owners, so they share one group per owner").toBe(1);
   });
 
+  // General form of the trap above: hardcoding `apply-auto`/`apply-gated` and
+  // `matrix.owner` (the test above) proves THOSE two jobs are safe today but
+  // says nothing about a THIRD job added later with its own matrix — exactly
+  // the shape that let a static group ship unnoticed the first time. This
+  // derives the dimension names from each job's OWN `strategy.matrix` (an
+  // `include:` list's dimensions are the keys of its entries; a classic
+  // `matrix: { axis: [...] }` block's are its own top-level keys other than
+  // `include`) rather than hardcoding `owner`, so the guard still fires if the
+  // matrix is ever reshaped — a `probe`-keyed group, or `owner` renamed to
+  // `installation`, would still have to interpolate SOME axis of its own.
+  test("REGRESSION GUARD: no matrix job's concurrency group can omit its own matrix axis", () => {
+    const jobs = wfDoc().jobs;
+    let checked = 0;
+    for (const [name, job] of Object.entries(jobs)) {
+      if (!job.strategy || !job.strategy.matrix || !job.concurrency) continue;
+      checked += 1;
+      const matrix = job.strategy.matrix;
+      const dimensions = new Set();
+      if (Array.isArray(matrix.include)) {
+        for (const entry of matrix.include) {
+          for (const key of Object.keys(entry || {})) dimensions.add(key);
+        }
+      }
+      for (const key of Object.keys(matrix)) {
+        if (key !== "include") dimensions.add(key);
+      }
+      expect(
+        dimensions.size,
+        `job "${name}" declares strategy.matrix but no dimension name could be derived from it`,
+      ).toBeGreaterThan(0);
+      const group = String(job.concurrency.group || "");
+      const interpolatesOwnAxis = [...dimensions].some((dim) =>
+        new RegExp(`\\$\\{\\{\\s*matrix\\.${dim}\\s*\\}\\}`).test(group),
+      );
+      expect(
+        interpolatesOwnAxis,
+        `job "${name}" has both a matrix and a concurrency group ("${group}") that interpolates ` +
+          `none of its own matrix dimensions (${[...dimensions].join(", ")}) — a STATIC group on a ` +
+          "MATRIX job admits exactly one leg per run and cancels the rest with no runner allocated, " +
+          "so the matrix silently collapses to one leg (header note 4's second outage).",
+      ).toBe(true);
+    }
+    // A vacuous pass (nothing in the workflow has both a matrix and a group)
+    // would make every assertion above true by never running — this file
+    // currently has two such jobs, and the guard is worthless if that count
+    // ever drops to zero without anyone noticing.
+    expect(
+      checked,
+      "no job with BOTH strategy.matrix and concurrency was found — this test would pass vacuously",
+    ).toBeGreaterThan(0);
+  });
+
   test("a human who IS needed gets told, and untold when the gate resolves", () => {
     // An `environment:` gate is invisible unless you are watching the Actions
     // tab — #313 sat unapproved for ten days partly for that reason.
