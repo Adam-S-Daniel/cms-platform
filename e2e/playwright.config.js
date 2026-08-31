@@ -241,6 +241,14 @@ const PLATFORM_META_SPECS = [
   // dependabot-* reusable is called by a local self-* caller (a consumer
   // ships only thin wrappers) — platform-internal, self-CI only.
   "dependabot-dogfood.test.js",
+  // Reads THIS repo's own .github/dependabot.yml by literal path — a
+  // consumer's dependabot.yml is a different file with legitimately
+  // different groups, so this is platform-internal, self-CI only. Guards
+  // that every `groups.<name>` key (and every `applies-to` value) is one
+  // Dependabot actually recognises — an unrecognised key is silently
+  // ignored, not rejected, which would quietly reopen the #118-122
+  // batch-strand risk with nothing going red.
+  "dependabot-groups.test.js",
   "dependabot-skip.test.js",
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
