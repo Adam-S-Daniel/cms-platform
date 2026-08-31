@@ -45,14 +45,15 @@
 // index-test.html must NOT) is the contract, not an oversight to normalize
 // away.
 //
-// This spec is deliberately NOT registered in PLATFORM_META_SPECS — it
-// reads only theme/admin/, which every consumer also ships (the gem
-// delivers this directory verbatim), so there is no platform-vs-consumer
-// split here the way there is for e.g. the .github/workflows/ pin lints.
+// This spec IS registered in PLATFORM_META_SPECS, so it is testIgnored on a
+// CONSUMER lane — same shape as admin-shim-load-order.test.js. It reads the
+// platform's theme/admin SOURCE tree, which a consumer does not have in that
+// position: a consumer ships only the gem-RENDERED ${SITE_ROOT}/_site/admin.
+// (This note used to claim the opposite. It was wrong — playwright.config.js
+// has listed this file since it was written — and a stale "not registered"
+// note is the kind of thing a later edit acts on.)
 const fs = require("node:fs");
 const path = require("node:path");
-const acorn = require("acorn");
-const walk = require("acorn-walk");
 const { test, expect } = require("./base");
 
 const REPO_ROOT = path.join(__dirname, "..");
@@ -66,55 +67,11 @@ const ADMIN_DIR = path.join(REPO_ROOT, "theme", "admin");
 // EXPLAINS the fixed-overlay defect it exists to prevent. A lint that forbids
 // naming the thing it forbids is a lint nobody can document around.
 //
-// So the check reads string literals and style writes from the AST, where
-// comments do not exist by construction (the house rule in AGENTS.md,
-// "AST always, never regex, for code-shape lints"). It covers the three
-// shapes an admin shim could actually use: a `cssText`/style string carrying
-// `position:fixed`, `el.style.position = "fixed"`, and
-// `el.style.setProperty("position", "fixed")`.
-function fixedPositionEvidence(src) {
-  let ast;
-  try {
-    ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "script" });
-  } catch {
-    ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "module" });
-  }
-  const FIXED_IN_CSS = /position\s*:\s*fixed/i;
-  const hits = [];
-  const isFixed = (n) => n && n.type === "Literal" && String(n.value).toLowerCase() === "fixed";
-  walk.simple(ast, {
-    Literal(n) {
-      if (typeof n.value === "string" && FIXED_IN_CSS.test(n.value)) hits.push(n.value.slice(0, 60));
-    },
-    TemplateLiteral(n) {
-      for (const q of n.quasis) {
-        const v = q.value.cooked || "";
-        if (FIXED_IN_CSS.test(v)) hits.push(v.slice(0, 60));
-      }
-    },
-    AssignmentExpression(n) {
-      const l = n.left;
-      if (l.type === "MemberExpression" && !l.computed && l.property.name === "position" && isFixed(n.right)) {
-        hits.push('style.position = "fixed"');
-      }
-    },
-    CallExpression(n) {
-      const c = n.callee;
-      if (
-        c.type === "MemberExpression" &&
-        !c.computed &&
-        c.property.name === "setProperty" &&
-        n.arguments.length >= 2 &&
-        n.arguments[0].type === "Literal" &&
-        String(n.arguments[0].value).toLowerCase() === "position" &&
-        isFixed(n.arguments[1])
-      ) {
-        hits.push('setProperty("position", "fixed")');
-      }
-    },
-  });
-  return hits;
-}
+// The detector now lives in e2e/admin-shim-rules.js, shared with
+// admin-publishing-ux.test.js — one detector, so the two lints cannot drift
+// into two different definitions of the same rule (the e2e/pin-comment-rules.js
+// precedent).
+const { fixedPositionEvidence } = require("./admin-shim-rules");
 
 const SHIMS = [
   "publish-baseline-refresh.js",

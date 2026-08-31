@@ -73,6 +73,18 @@ const PLATFORM_META_SPECS = [
   // ${SITE_ROOT}/_site/admin), so it is platform-internal and testIgnored on
   // a CONSUMER lane.
   "admin-329-shims.test.js",
+  // Publishing-UX staged plan, phases 2-5 (docs/PUBLISHING-UX.md §4). Reads the
+  // platform's theme/admin SOURCE tree AND both render paths
+  // (scripts/render-decap-config.rb + theme/lib/.../decap_config_hook.rb) —
+  // none of which a consumer has in that position — so it is platform-internal
+  // and testIgnored on a CONSUMER lane, exactly like the two entries above.
+  "admin-publishing-ux.test.js",
+  // Pure-Node vm-sandbox unit tests for theme/admin/entry-status-model.js, the
+  // shared four-badge derivation. Reads the platform theme/admin SOURCE.
+  "entry-status-model.test.js",
+  // Sandbox unit tests for the one-door + publish-progress ROUTE matchers.
+  // Reads theme/admin sources; platform-internal for the same reason.
+  "admin-publish-routing.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.

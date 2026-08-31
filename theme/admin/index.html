@@ -192,8 +192,40 @@
          entry — never for a folder collection, which always keeps its
          "+ New" link reachable.
   -->
+
+  <!-- Publishing UX (docs/PUBLISHING-UX.md, staged plan phases 2-5).
+       ORDER IS LOAD-BEARING, and `defer` preserves document order:
+
+       1. entry-status-model.js — pure, no DOM, no network. The single
+          derivation of "is this on the website?" (four badges + two
+          modifiers) that BOTH the editor bar and the collection list
+          render, which is what stops them drifting back into three
+          vocabularies for three states. Must precede every consumer.
+       2. publish-progress.js — polls the entry's own PR, so the 5-15
+          minutes between Publish and the deploy stops being a silence.
+          Must precede publish-button.js, which reads its PR number.
+       3. publish-step-hint.js — the state bar, and the host of the
+          actions slot the Publish button renders into.
+       4. publish-button.js — the platform-owned Publish button; hides
+          Decap's split button ONLY once its own replacement is on
+          screen. Must follow publish-step-hint.js.
+       5. one-door-publish.js — closes the second, unlabelled route to
+          production (Status -> Ready, and the Workflow board).
+       6. site-gate-banner.js — inert unless the site declares
+          `cms.site_gate`; says so when the whole site is gated.
+
+       2, 4, 5 and 6 are PRODUCTION-SHELL ONLY. index-test.html keeps
+       Decap's real Status control and board because the editorial-workflow
+       specs drive them there; index-local.html has no editorial workflow
+       at all. Both facts are asserted by e2e/admin-329-shims.test.js.
+  -->
+  <script src="entry-status-model.js" defer></script>
+  <script src="publish-progress.js" defer></script>
   <script src="publish-baseline-refresh.js" defer></script>
   <script src="publish-step-hint.js" defer></script>
+  <script src="publish-button.js" defer></script>
+  <script src="one-door-publish.js" defer></script>
+  <script src="site-gate-banner.js" defer></script>
   <script src="search-scope-all.js" defer></script>
   <script src="list-row-affordance.js" defer></script>
   <script src="single-entry-collection-shortcut.js" defer></script>

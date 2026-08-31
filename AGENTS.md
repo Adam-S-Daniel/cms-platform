@@ -287,10 +287,33 @@ Two rules that came out of the fix and generalise past it:
   (acorn, string literals + style writes only) — the house AST rule, in its
   cheapest possible form.
 
+**All five staged phases shipped in v0.1.95.** Both doors are now one:
+`one-door-publish.js` hides the Status dropdown, the Workflow nav link and
+the `#/workflow` route on the PRODUCTION shell (only — `index-test.html`
+must keep exercising Decap's real controls, and `index-local.html` has no
+editorial workflow to hide). `publish-button.js` replaces the split button,
+`publish-progress.js` polls the entry's own PR so the 5-15 invisible minutes
+report, and `entry-status-model.js` is the ONE derivation both the editor bar
+and the collection list render.
+
+Three things from that work worth knowing before you touch any of it:
+
+- **An `auto-merge-when-ready` re-arm needs the label REMOVED first.** The job
+  fires on the `labeled` event and GitHub emits none for a label already
+  present — so the second Publish press, the one that follows a "Needs
+  attention", would 200 and do nothing.
+- **A shim that hides a Decap control must not hide it before its replacement
+  is on screen**, and must not write the hiding styles on the steady state:
+  an unconditional style write fires an `attributes` mutation inside the
+  subtree `publish-step-hint.js`'s own observer watches, twice a second.
+- **`mergeable` is absent from the `/pulls` LIST response** — only the
+  single-PR endpoint carries it, and it is `null` until GitHub computes it.
+  Reading it off the list leaves a merge-conflict branch that looks alive and
+  can never fire.
+
 → read `docs/PUBLISHING-UX.md` before changing `theme/admin/`'s toolbar
 shims, the status model, or any copy an editor reads. It carries the full
-inventory, the measurements, and the staged plan (phases 2-5 are unbuilt and
-phase 2 needs an operator decision).
+inventory, the measurements, and what each phase actually built.
 
 ## Skills ship as a marketplace bundle, not a file sync (v0.1.83)
 
