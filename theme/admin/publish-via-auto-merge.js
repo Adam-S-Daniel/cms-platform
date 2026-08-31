@@ -301,6 +301,75 @@
     return out;
   }
 
+  // ── Suppressing Decap's own, WRONG, "Failed to publish" toast ─────────
+  //
+  // The synthetic 422 above is deliberate — a 2xx makes Decap's
+  // publishUnpublishedEntry fall through to an UNCONDITIONAL
+  // deleteBranch(headBranch) that closes the still-open PR (#80 layer 9).
+  // The cost is that Decap's own catch fires and flashes
+  // `ui.toast.onFailToPublishEntry` ("Failed to publish: <details>") in red
+  // for eight seconds, over a publish that is in fact under way. An editor's
+  // entire feedback for the most consequential action in the product was a
+  // toast that outlived it by 0.2% of its duration, immediately contradicted
+  // by an error message that is false (docs/PUBLISHING-UX.md §2.4).
+  //
+  // So the toast is removed — but ONLY the one our own 422 provoked. The
+  // matcher requires BOTH Decap's failure wording AND the marker string this
+  // file put in the 422 body, which Decap interpolates into `details`. A
+  // REAL publish failure carries a different body and is left completely
+  // alone: suppressing those would replace a misleading error with a silent
+  // one, which is worse.
+  var SUPPRESS_MARKER = "Queued for auto-merge via the cms/ready label";
+
+  function looksLikeOurFalseFailure(text) {
+    if (!text) return false;
+    var t = String(text);
+    return /failed to publish/i.test(t) && t.indexOf(SUPPRESS_MARKER) !== -1;
+  }
+
+  function installFalseFailureSuppressor() {
+    if (typeof document === "undefined" || typeof MutationObserver !== "function") return;
+    var check = function (node) {
+      if (!node || node.nodeType !== 1) return;
+      if (!looksLikeOurFalseFailure(node.textContent)) return;
+      // Walk up to the notification wrapper Decap actually removes, but
+      // never past the body — removing a container that is not ours would
+      // take the app with it.
+      var el = node;
+      for (var i = 0; i < 4 && el.parentElement && el.parentElement !== document.body; i++) {
+        if (!looksLikeOurFalseFailure(el.parentElement.textContent)) break;
+        el = el.parentElement;
+      }
+      try {
+        el.remove();
+      } catch (e) {
+        /* already gone */
+      }
+    };
+    var run = function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var added = records[i].addedNodes;
+        for (var j = 0; j < added.length; j++) check(added[j]);
+        if (records[i].type === "characterData") check(records[i].target.parentElement);
+      }
+    };
+    var observe = function () {
+      if (!document.body) return;
+      new MutationObserver(run).observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    };
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", observe, { once: true });
+    } else {
+      observe();
+    }
+  }
+
+  installFalseFailureSuppressor();
+
   function toast(msg) {
     try {
       var t = document.createElement("div");

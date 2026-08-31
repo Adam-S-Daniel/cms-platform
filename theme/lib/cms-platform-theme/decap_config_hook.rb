@@ -14,6 +14,7 @@
 #   - still reads the SITE-OWNED seam (admin/collections.site.yml) from the
 #     site source, never the gem.
 # No-op for sites with neither a gem-shipped nor a vendored admin/config.base.yml.
+require "json"
 require "uri"
 require "fileutils"
 # Shared field_library $ref resolver — the SINGLE source of truth, also
@@ -120,11 +121,23 @@ module CmsPlatformTheme
       lb = File.join(src, "config-local.base.yml")
       render.call(lb, File.join(out, "config-local.yml")) if File.exist?(lb)
 
+      # `cms.site_gate` (OPTIONAL) — the site-level publish gate, if the site
+      # has one. jodidaniel.com ships coming-soon behind `site_live` in
+      # `_data/settings.yml`, and while that is false an editor can save,
+      # publish, watch the deploy succeed and see nothing on the site. The
+      # platform must not hardcode which boolean that is (it is site
+      # identity), so the site declares it and admin/site-gate-banner.js
+      # reads it. A site with no gate injects `null` and the banner is inert.
+      # Serialised with to_json, NOT inspect: Ruby's Hash#inspect emits
+      # `{"a"=>1}`, which is a syntax error in JavaScript.
+      gate = cms["site_gate"]
+      gate_js = gate.nil? ? "null" : JSON.generate(gate)
+
       # Inject the SAME window.CMS_* identity globals as scripts/render-decap-config.rb
       # into BOTH the Decap shells (index*.html) AND the review dashboards
       # (reviews/*.html). Kept in lockstep with the script by
       # e2e/decap-config-render-parity.test.js — update both or the lint fails.
-      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};</script>}
+      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};</script>}
       shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html"))
       shells.each do |h|
         s = File.read(h, encoding: "utf-8")

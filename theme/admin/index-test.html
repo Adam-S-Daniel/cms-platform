@@ -137,6 +137,14 @@
        rationale for all five shims (each documents its own contract in its
        own header comment). Loaded here too for parity across all three
        admin shells. -->
+
+  <!-- The shared publish-status vocabulary (docs/PUBLISHING-UX.md §3.1).
+       Pure module, no DOM and no network — posts-list-enhance.js reads it
+       to render the same four badges + two modifiers the production
+       editor bar renders. The POLLER and the publish button that go with
+       it on production are deliberately absent here: this shell has no
+       editorial-workflow pull request to poll. -->
+  <script src="entry-status-model.js" defer></script>
   <script src="publish-baseline-refresh.js" defer></script>
   <script src="publish-step-hint.js" defer></script>
   <script src="search-scope-all.js" defer></script>

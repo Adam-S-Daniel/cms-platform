@@ -385,7 +385,22 @@
         // PR whose head ref ends with a posts file slug.
         var mm = /(?:^|\/)((?:\d{4}-\d{2}-\d{2}-)?[a-z0-9-]+)$/i.exec(ref);
         if (/cms\/posts\//i.test(ref) && mm) {
-          map[mm[1]] = { number: pr.number, url: pr.html_url };
+          // `labels`, `auto_merge` and the head sha come free in this same
+          // response — they are what entry-status-model.js needs to tell a
+          // Draft from a publish that is already on its way, so reading them
+          // here costs nothing and saves a request per card.
+          var labels = (pr.labels || []).map(function (l) {
+            return typeof l === "string" ? l : l.name;
+          });
+          map[mm[1]] = {
+            number: pr.number,
+            url: pr.html_url,
+            sha: (pr.head && pr.head.sha) || null,
+            armed:
+              Boolean(pr.auto_merge) ||
+              labels.indexOf("cms/ready") !== -1 ||
+              labels.indexOf("decap-cms/pending_publish") !== -1,
+          };
         }
       });
     } catch {
@@ -394,16 +409,66 @@
     return map;
   }
 
+  // Whether each open editorial PR's checks have already FAILED. Without
+  // this the list can only ever say "Going live…", and an entry parked on
+  // the manual regression-review gate would spin that phrase forever — the
+  // §2.4 defect (claiming progress that is not happening) reintroduced on a
+  // new surface.
+  //
+  // Bounded at CHECK_FETCH_CAP PRs per refresh. A collection with more open
+  // drafts than that is not a normal state, and the degradation is in the
+  // safe direction: the uncapped ones fall back to no check facts, so they
+  // read as Draft / Going live rather than as a failure nobody can see.
+  // Refreshes are cached for CACHE_TTL_MS and happen on nav-back or the ↻
+  // button, never on a timer, so this is a handful of requests per session.
+  var CHECK_FETCH_CAP = 10;
+  async function fetchChecksForPrs(token, prBySlug) {
+    var out = {};
+    var seen = {};
+    var slugs = Object.keys(prBySlug || {}).filter(function (slug) {
+      var pr = prBySlug[slug];
+      if (!pr || !pr.sha || seen[pr.sha]) return false;
+      seen[pr.sha] = true;
+      return true;
+    });
+    for (var i = 0; i < slugs.length && i < CHECK_FETCH_CAP; i++) {
+      var pr = prBySlug[slugs[i]];
+      try {
+        var res = await fetch(REST + "/commits/" + pr.sha + "/check-runs?per_page=100", {
+          headers: {
+            Authorization: "token " + token,
+            Accept: "application/vnd.github+json",
+          },
+        });
+        var body = await safeJson(res);
+        var runs = body && Array.isArray(body.check_runs) ? body.check_runs : [];
+        out[pr.sha] = runs.some(function (r) {
+          return (
+            r.status === "completed" &&
+            ["failure", "timed_out", "cancelled", "action_required", "stale"].indexOf(
+              r.conclusion,
+            ) !== -1
+          );
+        });
+      } catch {
+        /* degrade — no check facts for this PR */
+      }
+    }
+    return out;
+  }
+
   async function refreshRemote(cards) {
     var token = getToken();
     if (!token) return null;
     var lastEdited = await fetchLastEdited(token, cards);
     var siteDeploy = await fetchSiteDeploy(token);
     var prBySlug = await fetchOpenPrBySlug(token);
+    var checksFailedBySha = await fetchChecksForPrs(token, prBySlug);
     var data = {
       lastEdited: lastEdited,
       siteDeploy: siteDeploy,
       prBySlug: prBySlug,
+      checksFailedBySha: checksFailedBySha,
     };
     memCache = data;
     writeCache(data);
@@ -423,6 +488,12 @@
       ".cms-ple-pill{display:inline-block;padding:0.05rem 0.45rem;",
       "border-radius:999px;font-weight:600;font-size:0.66rem;",
       "letter-spacing:0.02em;color:#fff;}",
+      // A modifier is the editor's OWN choice, not the system's state, so it
+      // reads as an outlined chip rather than a second filled pill — one
+      // filled pill per row keeps "which one is the status" unambiguous.
+      ".cms-ple-modifier{display:inline-block;padding:0.05rem 0.45rem;",
+      "border-radius:999px;font-weight:600;font-size:0.66rem;",
+      "letter-spacing:0.02em;color:#57606a;border:1px solid #d0d7de;}",
       ".cms-ple-meta a{color:#0969da;text-decoration:none;}",
       ".cms-ple-meta a:hover{text-decoration:underline;}",
       ".cms-ple-fixture-tag{color:#8250df;font-weight:600;}",
@@ -555,6 +626,65 @@
     }
   }
 
+  // ── ONE vocabulary (docs/PUBLISHING-UX.md §3.1, phase 5) ────────────────
+  //
+  // The pill used to read Published / Draft / Scheduled, derived from the
+  // summary text alone — which is the FRONT-MATTER axis (`published`,
+  // `publish_date`), not the "is it on the website" axis. Two different
+  // questions sharing one word is exactly the §2.6 trap: an entry can be
+  // published in Decap's sense (merged, deployed) and render nowhere
+  // because `published: false`, and the old pill called that "Draft" —
+  // the same word it used for an entry that had never left its branch.
+  //
+  // So the pill is now the BADGE (Live / Draft / Going live… / Needs
+  // attention), derived by the shared entry-status-model.js from the PR
+  // facts fetchOpenPrBySlug + fetchChecksForPrs already carry, and the
+  // front-matter axis renders BESIDE it as the two modifiers (Hidden,
+  // Scheduled). Same component, same words, same colours as the editor
+  // bar — see publish-step-hint.js.
+  //
+  // With no remote data at all (signed out, or the batched fetch has not
+  // landed) there is no way to tell Live from Draft, so the legacy
+  // summary-only pill is kept for that case rather than guessing. Guessing
+  // "Live" for an entry that never left its branch is the one wrong answer
+  // that would actively mislead.
+  function badgeFor(card, remote) {
+    var model = window.CMSEntryStatus;
+    if (!model || !remote) {
+      return { label: card.state.label, color: card.state.color, modifiers: [] };
+    }
+    var pr =
+      remote.prBySlug && (remote.prBySlug[card.slug] || remote.prBySlug[urlSlug(card.slug)]);
+    var checksFailed = Boolean(
+      pr && pr.sha && remote.checksFailedBySha && remote.checksFailedBySha[pr.sha],
+    );
+    var derived = model.derive(
+      {
+        hasOpenPr: Boolean(pr),
+        armed: Boolean(pr && pr.armed),
+        merged: false,
+        checksFailed: checksFailed,
+        mergeConflict: false,
+        awaitingReviewGate: false,
+        deployState: null,
+        waitingOn: null,
+        startedAt: null,
+      },
+      { now: Date.now(), contact: window.CMS_SUPPORT_CONTACT || null },
+    );
+    // The modifiers come from the summary text, which is the only place
+    // this list can read the entry's own front matter from — Decap exposes
+    // no supported path to it (see this file's header).
+    var modifiers = [];
+    if (card.state.label === "Draft") modifiers.push(model.MODIFIER_LABELS.hidden);
+    if (card.state.label === "Scheduled") modifiers.push(model.MODIFIER_LABELS.scheduled);
+    return {
+      label: model.SHORT_LABELS[derived.badge] || derived.label,
+      color: model.BADGE_COLORS[derived.badge] || card.state.color,
+      modifiers: modifiers,
+    };
+  }
+
   function decorate(card, remote) {
     var li = card.li;
     if (!li) return;
@@ -565,13 +695,17 @@
       li.appendChild(meta);
     }
     var bits = [];
+    var badge = badgeFor(card, remote);
     bits.push(
       '<span class="cms-ple-pill" style="background:' +
-        card.state.color +
+        badge.color +
         '">' +
-        esc(card.state.label) +
+        esc(badge.label) +
         "</span>",
     );
+    badge.modifiers.forEach(function (m) {
+      bits.push('<span class="cms-ple-modifier">' + esc(m) + "</span>");
+    });
     if (card.postDate) {
       bits.push('<span title="Post date (from the post\'s file name)">' + esc(card.postDate) + "</span>");
     }
