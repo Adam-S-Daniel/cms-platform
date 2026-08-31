@@ -383,7 +383,28 @@ ruleset_library:
           strict_required_status_checks_policy: false
           do_not_enforce_on_create: true
           required_status_checks:
-            - context: validate-content
+            # why: the CONTEXT NAME, not the job name. A consumer's
+            # `cms-editorial-workflow.yml` thin caller declares job id
+            # `editorial`, which `uses:` the platform reusable whose job id is
+            # `validate-content`, and GitHub publishes that check run as
+            # `editorial / validate-content` — exactly how `consumer-main`
+            # above spells the same check. The bare `validate-content` this
+            # read until #371 is a context NOTHING publishes, and a required
+            # context that never reports never goes green: every PR into a
+            # `cms/**`, `claude/**`, `feat/**`, … base was permanently
+            # `mergeable_state: blocked`, with no error anywhere, until an
+            # admin (actor_id 5, below) used their bypass by hand.
+            #
+            # That is the server half of #371. A CMS edit made on a PR-preview
+            # deploy opens its editorial PR against the preview's feature
+            # branch (scripts/patch-preview-config.sh rewrites the preview
+            # admin's backend.branch on purpose), so it lands on exactly these
+            # refs — native auto-merge ARMS fine, and then waits forever on a
+            # check that cannot exist. Measured on jodidaniel.com#233: armed
+            # 22:05:25, `editorial / validate-content` green 22:06:27, still
+            # open and unmerged when a human merged it by hand twenty minutes
+            # later. Locked by e2e/ruleset-context-publishable.test.js.
+            - context: editorial / validate-content
     bypass_actors:
       - actor_id: 5
         actor_type: RepositoryRole

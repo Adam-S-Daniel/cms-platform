@@ -183,7 +183,80 @@ function hasBareReturnGuardOn(src, identifierName) {
   return found;
 }
 
+// The key set of every object literal in `src` that carries `anchorKey` — the
+// way to ask "what shape is the facts bag?" without naming a variable the code
+// is free to rename. publish-progress.js builds one on each of its two return
+// paths, and a fact added to only one of them is a fact half the states lack.
+function objectKeySetsAnchoredOn(src, anchorKey) {
+  const ast = parse(src);
+  const out = [];
+  walk.simple(ast, {
+    ObjectExpression(n) {
+      const keys = new Set();
+      for (const p of n.properties) {
+        if (p.type !== "Property" || p.computed) continue;
+        const k = p.key.type === "Identifier" ? p.key.name : p.key.value;
+        if (typeof k === "string") keys.add(k);
+      }
+      if (keys.has(anchorKey)) out.push(keys);
+    },
+  });
+  return out;
+}
+
+// Identifier names appearing in the TEST of each `if` whose test mentions
+// `name` — one Set per such `if`. Lets a lint ask "is this decision ever taken
+// without consulting X?", which is a question about code structure and so
+// cannot be asked of raw text: the same words appear in the header comment
+// explaining the rule.
+function ifTestsMentioning(src, name) {
+  const ast = parse(src);
+  const out = [];
+  walk.simple(ast, {
+    IfStatement(n) {
+      const names = new Set();
+      walk.simple(n.test, {
+        Identifier(i) {
+          names.add(i.name);
+        },
+        // acorn-walk does NOT descend into the `property` of a non-computed
+        // MemberExpression, so `facts.armed` would otherwise be invisible here
+        // — and `facts.armed` is exactly how every one of these decisions is
+        // actually written. A detector blind to the only spelling in use is a
+        // detector that passes by accident.
+        MemberExpression(m) {
+          if (!m.computed && m.property.type === "Identifier") names.add(m.property.name);
+        },
+      });
+      if (names.has(name)) out.push(names);
+    },
+  });
+  return out;
+}
+
+// Names of the functions called inside the function declared as `fnName`.
+function callsInsideFunction(src, fnName) {
+  const ast = parse(src);
+  const out = new Set();
+  walk.simple(ast, {
+    FunctionDeclaration(n) {
+      if (!n.id || n.id.name !== fnName) return;
+      walk.simple(n.body, {
+        CallExpression(c) {
+          if (c.callee.type === "Identifier") out.add(c.callee.name);
+          else if (c.callee.type === "MemberExpression" && !c.callee.computed)
+            out.add(c.callee.property.name);
+        },
+      });
+    },
+  });
+  return out;
+}
+
 module.exports = {
+  objectKeySetsAnchoredOn,
+  ifTestsMentioning,
+  callsInsideFunction,
   fixedPositionEvidence,
   hasCssDisplayNoneHide,
   removeChildReceivers,

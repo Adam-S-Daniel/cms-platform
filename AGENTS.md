@@ -328,6 +328,47 @@ Three things from that work worth knowing before you touch any of it:
 shims, the status model, or any copy an editor reads. It carries the full
 inventory, the measurements, and what each phase actually built.
 
+### A required status check nobody publishes blocks forever, silently (#371)
+
+`repo-settings.yml`'s `cms-feature-branches` required the context
+`validate-content`. Nothing publishes that string. GitHub names a check run
+after the JOB — `<job>` for a job with steps, `<caller job> / <called job>` for
+a job that `uses:` a reusable — so the consumer's `editorial` caller of the
+platform's `validate-content` job publishes `editorial / validate-content`,
+which is how `consumer-main` spells it twenty lines earlier in the same file.
+
+A required context that never reports never goes green, and a branch ruleset
+does not time out. Every PR onto `cms/**`, `claude/**`, `feat/**`, … on BOTH
+consumers was permanently `mergeable_state: blocked` — live since at least the
+2026-07-10 fixture capture. It produced no signal because `bypass_actors`
+grants admins `bypass_mode: always`: the only people who could merge never met
+the wall, and merged by hand.
+
+Three generalisations:
+
+- **Lock a required context to the thing that would EMIT it, not to another
+  list.** `cms-automerge-nudge.test.js` compares the nudge's
+  `required_contexts` against `consumer-main` — two lists against each other,
+  both free to name a context nothing publishes.
+  `e2e/ruleset-context-publishable.test.js` is the missing join and is red
+  against the tree as it stood.
+- **A manifest defect is live even where it is not yet applied.**
+  `audit-repo-settings.js --fix --yes` PUTs this file, so an unpublishable
+  context in it becomes one live at the next reconcile.
+- **`armed` is not "on its way".** An admin surface that reads a queued-to-merge
+  signal and never asks whether the queue moves will report "Going live…"
+  forever. The positive signal costs nothing and needs no timer: armed, at least
+  one check run, none incomplete, nothing red, no conflict, no gate park, and
+  still open ⇒ nothing left to wait for ⇒ the merge is not coming.
+  `publish-progress.js` reports `settledSince`; the threshold lives in the pure
+  `entry-status-model.js`, so both surfaces read one verdict.
+
+One tool note that will bite any AST lint here: **acorn-walk does not descend
+into the `property` of a non-computed `MemberExpression`.** A detector
+collecting `Identifier` nodes cannot see `facts.armed` — the only spelling the
+shim actually uses — so it finds zero decisions and passes. Walk
+`MemberExpression` explicitly.
+
 ## Skills ship as a marketplace bundle, not a file sync (v0.1.83)
 
 `skills/` is the canonical home of the platform skills and the only place one

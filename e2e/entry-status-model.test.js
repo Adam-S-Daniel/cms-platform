@@ -272,3 +272,147 @@ test.describe("entry-status-model — one vocabulary", () => {
     }
   });
 });
+
+/*
+ * #371 — the two additions, and the two lies each of them avoids.
+ *
+ * These are the branches that decide whether an editor who pressed Publish on
+ * a PR-preview environment is told the truth. Measured instance:
+ * jodidaniel.com#233 — armed, every check green a minute later, still open and
+ * unmerged twenty minutes on. The old model rendered that as "Going live…
+ * (about 1 minute left)" for as long as the tab stayed open.
+ */
+const GRACE = 3 * MIN; // entry-status-model.js's STALL_GRACE_MIN
+
+test.describe("entry-status-model — the stall (#371)", () => {
+  const armedAndSettled = (sinceMsAgo) =>
+    facts({
+      hasOpenPr: true,
+      armed: true,
+      settledSince: NOW - sinceMsAgo,
+    });
+
+  test("the module's own grace constant is the one these tests use", () => {
+    const m = loadModel();
+    expect(m.STALL_GRACE_MIN * MIN).toBe(GRACE);
+  });
+
+  test("armed with nothing left to wait for, past the grace, is Needs attention", () => {
+    const m = loadModel();
+    const got = m.derive(armedAndSettled(GRACE + MIN), { now: NOW });
+    expect(got.badge).toBe(m.BADGE.NEEDS_ATTENTION);
+    expect(got.minutesLeft).toBe(null);
+  });
+
+  // The mirror-image lie. Native auto-merge fires a moment AFTER the last check
+  // completes, so a publish that is about to land must not be reported stopped.
+  test("inside the grace it is still Going live", () => {
+    const m = loadModel();
+    const got = m.derive(armedAndSettled(GRACE - MIN), { now: NOW });
+    expect(got.badge).toBe(m.BADGE.GOING_LIVE);
+  });
+
+  test("exactly at the grace boundary it is a stall", () => {
+    const m = loadModel();
+    expect(m.derive(armedAndSettled(GRACE), { now: NOW }).badge).toBe(
+      m.BADGE.NEEDS_ATTENTION,
+    );
+  });
+
+  // An unknown must never manufacture a failure report: no settledSince means
+  // the poller has not seen the condition hold, not that it has.
+  test("no settledSince is never a stall", () => {
+    const m = loadModel();
+    const got = m.derive(facts({ hasOpenPr: true, armed: true }), { now: NOW });
+    expect(got.badge).toBe(m.BADGE.GOING_LIVE);
+    expect(m.isStalled(facts({ settledSince: null }), NOW)).toBe(false);
+  });
+
+  test("an unknown `now` is never a stall either", () => {
+    const m = loadModel();
+    expect(m.isStalled(facts({ settledSince: NOW - GRACE - MIN }), null)).toBe(false);
+    expect(m.derive(armedAndSettled(GRACE + MIN), {}).badge).toBe(m.BADGE.GOING_LIVE);
+  });
+
+  // A named cause outranks the generic stall copy: the poller only ever sets
+  // settledSince when no specific cause holds, but the model must not depend on
+  // that to say the right thing.
+  test("a named failure keeps its own copy even alongside a stall", () => {
+    const m = loadModel();
+    const got = m.derive(
+      facts({ hasOpenPr: true, armed: true, checksFailed: true, settledSince: NOW - GRACE - MIN }),
+      { now: NOW },
+    );
+    expect(got.badge).toBe(m.BADGE.NEEDS_ATTENTION);
+    expect(got.detail).toMatch(/automatic safety checks did not pass/);
+  });
+
+  test("a stall on the live site names the site, not a branch", () => {
+    const m = loadModel();
+    const got = m.derive(armedAndSettled(GRACE + MIN), { now: NOW, contact: "Adam" });
+    expect(got.detail).toMatch(/the website did not take the update/);
+    expect(got.detail).toMatch(/Adam/);
+    expect(got.detail).not.toMatch(/preview/i);
+  });
+
+  test("a stall on a preview says plainly that it will not reach the live website", () => {
+    const m = loadModel();
+    const got = m.derive(
+      facts({
+        hasOpenPr: true,
+        armed: true,
+        previewOnly: true,
+        baseRef: "claude/issue-26-site-live-on",
+        settledSince: NOW - GRACE - MIN,
+      }),
+      { now: NOW, contact: "Adam" },
+    );
+    expect(got.badge).toBe(m.BADGE.NEEDS_ATTENTION);
+    expect(got.detail).toMatch(/claude\/issue-26-site-live-on/);
+    expect(got.detail).toMatch(/does not reach the live website/);
+    expect(got.detail).toMatch(/nothing you typed has been lost/i);
+    expect(got.waitingOn).toMatch(/live website/);
+  });
+});
+
+test.describe("entry-status-model — the destination (#371)", () => {
+  test("with no preview fact the words are unchanged", () => {
+    const m = loadModel();
+    expect(m.destination(facts())).toEqual({ noun: "the website", preview: false });
+    expect(m.derive(facts(), { now: NOW }).detail).toBe("This is on the website now.");
+    expect(m.derive(facts({ hasOpenPr: true }), { now: NOW }).detail).toMatch(
+      /not on the website yet/,
+    );
+  });
+
+  test("a preview names its own branch and never promises the live site", () => {
+    const m = loadModel();
+    const dest = m.destination(facts({ previewOnly: true, baseRef: "claude/x" }));
+    expect(dest.preview).toBe(true);
+    expect(dest.noun).toMatch(/claude\/x/);
+
+    const going = m.derive(
+      facts({ hasOpenPr: true, armed: true, previewOnly: true, baseRef: "claude/x" }),
+      { now: NOW },
+    );
+    expect(going.badge).toBe(m.BADGE.GOING_LIVE);
+    expect(going.detail).toMatch(/claude\/x/);
+    expect(going.detail).toMatch(/not going to the live website/);
+
+    const draft = m.derive(
+      facts({ hasOpenPr: true, previewOnly: true, baseRef: "claude/x" }),
+      { now: NOW },
+    );
+    expect(draft.badge).toBe(m.BADGE.DRAFT);
+    expect(draft.detail).toMatch(/will not go to the live website/);
+  });
+
+  // A preview whose base ref we somehow do not know must still not claim the
+  // live site — the honest degradation is a vaguer noun, never a wrong one.
+  test("a preview with no known branch degrades to a vague noun, not a wrong one", () => {
+    const m = loadModel();
+    const dest = m.destination(facts({ previewOnly: true, baseRef: null }));
+    expect(dest.preview).toBe(true);
+    expect(dest.noun).toBe("the preview for this branch");
+  });
+});

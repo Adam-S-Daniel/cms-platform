@@ -8,7 +8,11 @@
  * under e2e/fixtures/repo-settings/ are REAL API responses captured
  * 2026-07-10 (gh api repos/<r> and .../rulesets/<id>; ruleset ids 17169281,
  * 13985217, 15756474, 17032014, 17032043) — EXCEPT cms-platform.repo.json
- * (delete_branch_on_merge flipped true) and jodidaniel.ruleset-main.json
+ * (delete_branch_on_merge flipped true), BOTH consumers'
+ * *.ruleset-feature.json (the #371 required-context spelling flipped from the
+ * unpublishable `validate-content` to `editorial / validate-content`; the
+ * as-found captures moved to *.ruleset-feature.DRIFTED-as-found-2026-07-10.json
+ * — see test (g)) and jodidaniel.ruleset-main.json
  * (now the phase-2 CONVERGED shape onto consumer-main; the as-found capture
  * moved to jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json), both
  * updated 2026-07-22 for #172 phase 2, and cms-platform.ruleset-main.json
@@ -330,6 +334,54 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       "rule:required_status_checks",
     ]);
     expect(findings.length).toBe(5);
+  });
+
+  // #371. The as-found captures are the EVIDENCE that the defect was live on
+  // both consumers, not merely latent in the manifest — so they are kept, and
+  // diffed, rather than quietly overwritten. Same rule as (d): an as-found
+  // corpus that gets edited every time desired state moves stops being
+  // evidence.
+  //
+  // What they show: `cms-feature-branches` required the context
+  // `validate-content`, which nothing publishes. A consumer's thin caller
+  // declares job id `editorial` and `uses:` the platform reusable whose job id
+  // is `validate-content`, so the check run GitHub actually reports is
+  // `editorial / validate-content`. A required context that never reports never
+  // goes green and a branch ruleset does not time out, so every PR onto
+  // `cms/**`, `claude/**`, `feat/**`, … was permanently `mergeable_state:
+  // blocked` — which is why an editor publishing from a PR-preview admin (whose
+  // editorial PR is based on exactly those refs) got every success signal and
+  // no merge, ever. Measured on jodidaniel.com#233.
+  //
+  // Only an admin's `bypass_actors` entry ever moved one, which is why it went
+  // unnoticed: the people who could merge never met the wall.
+  test("(g) the as-found feature rulesets carry EXACTLY the #371 required-context skew", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    for (const [repo, file] of [
+      ["Adam-S-Daniel/adamdaniel.ai", "adamdaniel.ruleset-feature.DRIFTED-as-found-2026-07-10.json"],
+      ["jodidaniel/jodidaniel.com", "jodidaniel.ruleset-feature.DRIFTED-as-found-2026-07-10.json"],
+    ]) {
+      const asFound = fixture(file);
+      expect(
+        asFound.rules.find((r) => r.type === "required_status_checks").parameters
+          .required_status_checks,
+        `${file} must preserve the unpublishable context as captured`,
+      ).toEqual([{ context: "validate-content" }]);
+
+      const { projected } = script.normalizeRuleset(asFound);
+      const desired = script.sortRuleset({
+        name: "cms-feature-branches",
+        ...manifest.ruleset_library["cms-feature-branches"],
+      });
+      const findings = [];
+      const informational = [];
+      script.diffRuleset(repo, "cms-feature-branches", projected, desired, findings, informational);
+      expect(
+        findings.map((f) => f.facet),
+        `${repo}: the as-found capture must differ from the fixed manifest in exactly one facet`,
+      ).toEqual(["rule:required_status_checks.required_status_checks"]);
+    }
   });
 
   test("(e) an unmanaged live ruleset is detected (and never auto-deleted)", () => {

@@ -194,6 +194,11 @@ const PLATFORM_META_SPECS = [
   "required-context-cancellable.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
+  // #371 — joins repo-settings.yml's required-context strings to the workflow
+  // tree that would have to publish them. Reads the platform's own
+  // repo-settings.yml, .github/workflows/ and examples/site/ — none of which a
+  // consumer has — so it is platform-internal and testIgnored on a CONSUMER lane.
+  "ruleset-context-publishable.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN
   // cms-media-roundtrip + cms-publish-loop-prod-mutate spec sources + the media
   // workflow's timeout-minutes; platform-internal, self-CI only.

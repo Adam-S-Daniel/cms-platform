@@ -36,6 +36,29 @@
  * "Publish" the button differ by one letter and sit a screen apart. Merging
  * them into one word is what made that unreadable.
  *
+ * ── Two additions from #371, both about not spinning forever ───────────
+ * 1. THE STALL. `armed` meant "queued to merge itself", and the going-live
+ *    branch believed it indefinitely — so every failure of the merge
+ *    machinery rendered as "Going live…" for as long as the tab stayed open.
+ *    publish-progress.js now reports `settledSince`: when the PR first had
+ *    NOTHING LEFT TO WAIT FOR (armed, every check complete, nothing red, no
+ *    conflict, no review-gate park) while still being open. Past
+ *    STALL_GRACE_MIN of that, the honest badge is Needs attention, because a
+ *    merge that was going to happen on its own had everything it needed and
+ *    did not happen. The grace exists because native auto-merge fires a
+ *    moment after the last check completes, and calling that a stall would
+ *    be the mirror-image lie.
+ *
+ * 2. THE DESTINATION. A PR-preview admin edits a feature branch, not the
+ *    live site — `scripts/patch-preview-config.sh` rewrites the preview
+ *    admin's `backend.branch` on purpose, and cms-editorial-workflow.yml
+ *    then labels the PR `cms/preview-only`, whose own description reads
+ *    "drop this content from the parent branch when it merges to main". So
+ *    on that surface every sentence containing "the website" was false.
+ *    §2.8 measured the only thing distinguishing that admin from the real
+ *    one as a 0.65rem pill in a corner; this puts it in the sentence the
+ *    editor is already reading, where it cannot be missed.
+ *
  * ── Deliberately pure ──────────────────────────────────────────────────
  * No DOM, no network, no clock of its own — `now` is a parameter. That is
  * what lets e2e/entry-status-model.test.js exercise every branch in a Node
@@ -68,6 +91,12 @@
   var CHECKS_NOMINAL_MIN = 12;
   var DEPLOY_NOMINAL_MIN = 2;
   var MS_PER_MIN = 60 * 1000;
+  // How long "nothing left to wait for, still not merged" has to hold before
+  // it is a stall rather than the ordinary few seconds between the last check
+  // completing and native auto-merge firing. Generous on purpose: reporting a
+  // healthy publish as stopped is the same class of lie as reporting a stopped
+  // one as in flight, and this module's whole job is to tell neither.
+  var STALL_GRACE_MIN = 3;
 
   // The two modifier words, exported so the collection list and the editor
   // bar cannot drift into two spellings of the same thing — which is the
@@ -169,15 +198,41 @@
     }
   }
 
+  // ── The stall ─────────────────────────────────────────────────────────
+  // Pure and clock-free: `settledSince` is gathered by publish-progress.js,
+  // `now` is the caller's. With either unknown this is false — an unknown
+  // must never manufacture a failure report.
+  function isStalled(facts, now) {
+    var f = facts || {};
+    if (!isFiniteNumber(f.settledSince) || !isFiniteNumber(now)) return false;
+    return now - f.settledSince >= STALL_GRACE_MIN * MS_PER_MIN;
+  }
+
+  // ── Where this entry is actually going ────────────────────────────────
+  // "the website" is a lie on a preview surface (see the header). Naming the
+  // branch rather than inventing a preview URL follows publish-button.js's
+  // targetUrl() rule: naming the wrong URL would be worse than naming none.
+  function destination(facts) {
+    var f = facts || {};
+    if (!f.previewOnly) return { noun: "the website", preview: false };
+    return {
+      noun: "the preview for " + (f.baseRef ? "“" + f.baseRef + "”" : "this branch"),
+      preview: true,
+    };
+  }
+
   // ── Needs-attention copy ──────────────────────────────────────────────
   // Every branch names ONE thing a non-technical person can actually do.
   // A raw Actions URL is not an action for this audience (§4 phase 4), so
   // the contact is named instead; `contact` comes from the site's own
   // window.CMS_SUPPORT_CONTACT, falling back to a generic noun rather than
   // to a broken link.
-  function attentionCopy(facts, contact) {
+  function attentionCopy(facts, contact, stalled) {
     var f = facts || {};
     var who = contact || "whoever looks after this website";
+    // Ordered before the generic fallback but AFTER every specific cause: a
+    // PR is only ever `settled` when none of those hold, so the ordering here
+    // is documentation rather than arbitration.
     if (f.mergeConflict) {
       return {
         detail:
@@ -211,6 +266,27 @@
         waitingOn: "the website update, which did not finish",
       };
     }
+    if (stalled) {
+      // Two genuinely different situations, and conflating them is what made
+      // the preview case invisible for as long as it was.
+      if (f.previewOnly) {
+        return {
+          detail:
+            "Everything passed, but this was edited on a preview of " +
+            (f.baseRef ? "“" + f.baseRef + "”" : "another branch") +
+            ", and a change made on a preview does not reach the live website " +
+            "on its own. Nothing you typed has been lost — ask " + who +
+            " to put it on the live website.",
+          waitingOn: "a person to move this from the preview to the live website",
+        };
+      }
+      return {
+        detail:
+          "Every check passed, but the website did not take the update. Nothing " +
+          "you typed has been lost — ask " + who + " to finish putting it live.",
+        waitingOn: "a person to finish putting this live",
+      };
+    }
     return {
       detail:
         "Something stopped this from going live. Nothing you typed has been lost. " +
@@ -232,16 +308,22 @@
     var now = isFiniteNumber(opts.now) ? opts.now : null;
     var contact = opts.contact || null;
     var modifiers = modifiersFor(f, now);
+    var dest = destination(f);
 
+    // A stall is a stopped publish (see the header): the merge had everything
+    // it needed and did not happen, so believing `armed` past that point is
+    // the "Going live… forever" defect #371 measured.
+    var stalled = isStalled(f, now);
     var stopped =
       Boolean(f.mergeConflict) ||
       Boolean(f.awaitingReviewGate) ||
       Boolean(f.checksFailed) ||
       f.deployState === "failure" ||
-      f.deployState === "error";
+      f.deployState === "error" ||
+      stalled;
 
     if (stopped) {
-      var copy = attentionCopy(f, contact);
+      var copy = attentionCopy(f, contact, stalled);
       return {
         badge: BADGE.NEEDS_ATTENTION,
         label: "Needs attention",
@@ -265,8 +347,9 @@
         badge: BADGE.GOING_LIVE,
         label: mins === null ? "Going live… (about 5–15 minutes)" : "Going live… (about " + mins + " minute" + (mins === 1 ? "" : "s") + " left)",
         detail:
-          "This is on its way to the website. It is waiting for " + waiting + ". " +
-          "You can close this tab — it carries on without you.",
+          "This is on its way to " + dest.noun + ". It is waiting for " + waiting + ". " +
+          "You can close this tab — it carries on without you." +
+          (dest.preview ? " It is not going to the live website." : ""),
         waitingOn: waiting,
         minutesLeft: mins,
         modifiers: modifiers,
@@ -278,8 +361,9 @@
         badge: BADGE.DRAFT,
         label: "Draft — only you can see this",
         detail:
-          "This is saved, but it is not on the website. Click Publish to put it " +
-          "on the website.",
+          "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
+          "put it on " + dest.noun + "." +
+          (dest.preview ? " It will not go to the live website." : ""),
         waitingOn: null,
         minutesLeft: null,
         modifiers: modifiers,
@@ -289,7 +373,7 @@
     return {
       badge: BADGE.LIVE,
       label: "Live",
-      detail: "This is on the website now.",
+      detail: "This is on " + dest.noun + " now.",
       waitingOn: null,
       minutesLeft: null,
       modifiers: modifiers,
@@ -303,7 +387,10 @@
     BADGE_COLORS: BADGE_COLORS,
     CHECKS_NOMINAL_MIN: CHECKS_NOMINAL_MIN,
     DEPLOY_NOMINAL_MIN: DEPLOY_NOMINAL_MIN,
+    STALL_GRACE_MIN: STALL_GRACE_MIN,
     derive: derive,
+    isStalled: isStalled,
+    destination: destination,
     modifiersFor: modifiersFor,
     remainingMinutes: remainingMinutes,
     parseDate: parseDate,
