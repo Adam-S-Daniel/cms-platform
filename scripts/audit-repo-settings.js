@@ -117,6 +117,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
+const {
+  classifyPlan,
+  planUnfixables,
+} = require("./repo-settings-write-risk.js");
 
 // Hidden marker that identifies THE tracking issue among the label's issues —
 // stable across releases; never change it or the audit will open a duplicate.
@@ -881,6 +885,30 @@ function diffEnvironments(repo, desired, live, findings, informational) {
 // Order-stable drift fingerprint: sha256 over the SORTED canonical findings.
 // Stored in the tracking issue so persistent, unchanged drift is commented
 // exactly once (the run-ids dedupe analog).
+// A stable identity for one finding, so two scans can be compared without
+// re-deriving the finding text. Deliberately coarse — it names the SURFACE
+// (which flag, which ruleset, which environment), not the values — because it
+// is used to answer "is this the same unreconciled thing as before?", and a
+// value change on the same surface is still the same thing.
+function findingKey(f) {
+  if (!f) return "|";
+  switch (f.kind) {
+    case "flag-drift":
+      return `${f.repo}|flag|${f.key}`;
+    case "actions-permission-drift":
+      return `${f.repo}|actions|${f.key}`;
+    case "ruleset-drift":
+    case "ruleset-missing":
+    case "ruleset-unmanaged":
+      return `${f.repo}|ruleset|${f.ruleset}`;
+    case "environment-drift":
+    case "environment-absent":
+      return `${f.repo}|environment|${f.environment}`;
+    default:
+      return `${f.repo}|${f.kind}|${f.key || f.ruleset || f.environment || ""}`;
+  }
+}
+
 function fingerprint(findings) {
   const canon = (findings || []).map(canonical).sort();
   return crypto.createHash("sha256").update(canon.join("\n")).digest("hex");
@@ -1811,10 +1839,17 @@ function buildFixPlan(manifest, results) {
     const settings = effectiveSettings(manifest, r.repo);
     const patchBody = {};
     const manualOnly = [];
+    // `flagLive` mirrors patchBody's keys with the LIVE value. The write-risk
+    // classifier asks "can this write remove a capability the repo has now?",
+    // which is unanswerable from the desired value alone.
+    const flagLive = {};
     for (const f of r.findings) {
       if (f.kind !== "flag-drift") continue;
       if (f.manualOnly) manualOnly.push(f.key);
-      else patchBody[f.key] = settings[f.key];
+      else {
+        patchBody[f.key] = settings[f.key];
+        flagLive[f.key] = f.live;
+      }
     }
     const skipNames = new Set(
       r.informational.filter((i) => i.fixSkip).map((i) => i.ruleset),
@@ -1836,6 +1871,10 @@ function buildFixPlan(manifest, results) {
         name,
         id: liveByName.get(name).id,
         body: { name, ...desired[name] },
+        // The PROJECTED live body — the same shape diffRuleset compares
+        // against, so the classifier's delta is the audit's delta and not a
+        // second, subtly different one.
+        live: normalizeRuleset(liveByName.get(name)).projected,
       });
     }
     const posts = r.findings
@@ -1860,6 +1899,7 @@ function buildFixPlan(manifest, results) {
         actionsPuts.push({
           endpoint: `repos/${r.repo}/${ACTIONS_PERMISSIONS_ENDPOINT}`,
           key: f.key,
+          live: f.live,
           body: {
             enabled: livePerms.enabled,
             allowed_actions: livePerms.allowed_actions,
@@ -1870,6 +1910,7 @@ function buildFixPlan(manifest, results) {
         actionsPuts.push({
           endpoint: `repos/${r.repo}/${FORK_PR_APPROVAL_ENDPOINT}`,
           key: f.key,
+          live: f.live,
           body: { approval_policy: f.desired },
         });
       }
@@ -1976,6 +2017,7 @@ function buildFixPlan(manifest, results) {
       plan.push({
         repo: r.repo,
         patchBody,
+        flagLive,
         manualOnly,
         puts,
         posts,
@@ -2141,6 +2183,11 @@ function main() {
   const issueMode = flag("issue");
   const fixMode = flag("fix");
   const yes = flag("yes");
+  // The ungated apply lane passes this. It re-derives the write-risk verdict
+  // from the plan it is ABOUT TO APPLY and refuses everything if any write is
+  // not provably non-weakening — so a wrong workflow `if:` costs a red job,
+  // never an unattended weakening write.
+  const refuseWeakening = flag("refuse-weakening");
   const dryRun = flag("dry-run");
   const label = arg("label", "ci");
   const filter = argAll("repo");
@@ -2217,7 +2264,40 @@ function main() {
   if (fixMode) {
     const plan = buildFixPlan(manifest, results);
     printFixPlan(plan);
+    const risk = classifyPlan(plan);
+    const unfixables = planUnfixables(plan);
+    // ONE machine-readable line, so a caller never has to parse the prose
+    // above it. `gated` is what decides whether a human is asked; `writes` is
+    // what decides whether there is anything to ask ABOUT.
+    console.log(
+      `repo-settings-plan: writes=${risk.writes.length} safe=${risk.safe.length} ` +
+        `gated=${risk.gated.length} unfixable=${unfixables.length}`,
+    );
+    for (const g of risk.gated) console.log(`   NEEDS-REVIEW ${g.repo}: ${g.reason}`);
     if (plan.length === 0) return 0;
+    // A plan can be non-empty and yet contain NOTHING this tool will write —
+    // a manual-only key, a fix-skipped or unmanaged ruleset, a fix-forbidden
+    // environment. Exiting 2 there told the workflow "changes pending" and
+    // sent a human to approve an apply with no writes in it, which then
+    // re-audited, found the finding intact, and went red. There is no approval
+    // that fixes these; the audit issue is where they belong.
+    if (risk.writes.length === 0) {
+      console.log(
+        `Plan-only: NO APPLICABLE WRITES — ${unfixables.length} finding(s) need manual ` +
+          "reconciliation and cannot be applied by this tool:",
+      );
+      for (const u of unfixables) console.log(`   ${u}`);
+      return 0;
+    }
+    if (refuseWeakening && risk.gated.length) {
+      console.error(
+        `repo-settings-audit: --refuse-weakening: ${risk.gated.length} planned write(s) ` +
+          "could reduce protection, or are not on the non-weakening allowlist. Refusing the " +
+          "WHOLE plan — re-run this convergence through the reviewer-gated path.",
+      );
+      for (const g of risk.gated) console.error(`  ${g.repo}: ${g.reason}`);
+      return 1;
+    }
     if (!yes) {
       console.log(
         "Plan-only (no --yes): exiting 2 with changes pending. Re-run with --yes to apply.",
@@ -2243,11 +2323,33 @@ function main() {
       return 1;
     }
     const remaining = recheck.flatMap((r) => r.findings);
-    if (remaining.length) {
-      console.error(
-        `repo-settings-audit: ${remaining.length} finding(s) PERSIST after apply:`,
+    // A finding that persists because this tool REFUSES to write it is not an
+    // apply failure — it was reported before the apply, it is reported by the
+    // daily audit, and there is no run of this command that clears it. Only a
+    // finding the plan meant to write, or one that appeared during the apply,
+    // means the write did not take.
+    const knownUnfixable = new Set(
+      plan.flatMap((p) =>
+        [
+          ...(p.manualOnly || []).map((k) => `${p.repo}|flag|${k}`),
+          ...(p.skipped || []).map((n) => `${p.repo}|ruleset|${n}`),
+          ...(p.unmanaged || []).map((n) => `${p.repo}|ruleset|${n}`),
+          ...(p.envManualOnly || []).map((n) => `${p.repo}|environment|${n}`),
+        ],
+      ),
+    );
+    const unresolved = remaining.filter((f) => !knownUnfixable.has(findingKey(f)));
+    const tolerated = remaining.filter((f) => knownUnfixable.has(findingKey(f)));
+    for (const f of tolerated)
+      console.log(
+        `repo-settings-audit: still unreconciled (manual-only, unchanged by this run): ` +
+          `${f.repo}: ${describeFinding(f)}`,
       );
-      for (const f of remaining)
+    if (unresolved.length) {
+      console.error(
+        `repo-settings-audit: ${unresolved.length} finding(s) PERSIST after apply:`,
+      );
+      for (const f of unresolved)
         console.error(`  ${f.repo}: ${describeFinding(f)}`);
       return 2;
     }
@@ -2265,6 +2367,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  // Exported so a test can compare two scans the way the re-audit does.
+  findingKey,
   // Exported for the (w4) regression test: the fix-forbidden suffix must tell
   // the truth about each state, and that is only assertable on the real fn.
   describeFinding,

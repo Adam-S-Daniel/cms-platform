@@ -2,71 +2,85 @@
 #
 # The audit (repo-settings-audit.yml) DETECTS drift and files a tracking issue;
 # converging it has been a human running `--fix --yes` with their own admin auth.
-# This workflow moves that apply into CI behind a reviewer gate. The audit stays
-# exactly as it is — this is additive, and either can be disabled alone.
+# This workflow moves that apply into CI. The audit stays exactly as it is —
+# this is additive, and either can be disabled alone.
 #
-# FOUR THINGS HERE ARE LOAD-BEARING. Each is a trap, not a preference:
+# SIX THINGS HERE ARE LOAD-BEARING. Each is a trap, not a preference:
 #
 #  1. TWO JOBS, BECAUSE THE REVIEWER MUST SEE THE PLAN BEFORE APPROVING.
 #     A GitHub environment gate pauses a job BEFORE its first step, so a plan
 #     printed inside the gated job is invisible at approval time — the reviewer
 #     would be clicking "approve" on an unknown diff. `plan` therefore runs
-#     ungated and writes the full plan to the job summary; `apply` is gated and
-#     runs only if `plan` found pending changes.
+#     ungated and writes the full plan to the job summary; the apply lanes are
+#     downstream and run only if `plan` found pending changes.
 #
 #  2. THE PLAN JOB'S TOKEN CANNOT WRITE — BY CONSTRUCTION, NOT BY TRUST.
 #     `POST /app/installations/{id}/access_tokens` accepts a `permissions` object
 #     that can only NARROW the installation's grant. `plan` mints
-#     `administration:read`; `apply` mints `administration:write`. So the ungated
-#     job is incapable of mutating settings even if something in it misbehaves.
+#     `administration:read`; the apply lanes mint `administration:write`. So the
+#     ungated job is incapable of mutating settings even if something in it
+#     misbehaves. (`plan` also holds `issues: write` on the *workflow* token, to
+#     file the approval issue. That is a different credential on a different
+#     surface — `github.token` cannot touch repo settings on any repo.)
 #
 #  3. A MISSING ENVIRONMENT SILENTLY DISABLES THE GATE, SO WE VERIFY IT.
 #     Referencing `environment: repo-settings` when that environment does not
 #     exist does NOT fail — GitHub implicitly creates it with NO protection
 #     rules, and the "required reviewer" gate you think you have is absent. The
-#     apply job therefore ASKS the API whether the environment really carries a
-#     `required_reviewers` rule and refuses to apply if it does not. Without that
-#     check, a misprovisioned repo converts this from human-gated to unattended
-#     admin writes — the single worst failure mode available here.
+#     gated apply therefore ASKS the API whether the environment really carries
+#     a `required_reviewers` rule and refuses to apply if it does not.
 #
-#  4. THE CONCURRENCY GROUP IS ON `apply`, NEWEST-WINS — NOT ON THE WORKFLOW.
+#  4. THE CONCURRENCY GROUP IS PER OWNER, ON THE APPLY JOBS, NEWEST-WINS.
 #     A run parked at an UN-APPROVED gate is not finished, so it holds its
 #     concurrency group for as long as nobody clicks approve. And
 #     `cancel-in-progress: false` does not mean "queue them all": GitHub keeps
 #     the holder plus only the LATEST pending run and cancels the rest. With the
-#     group at WORKFLOW level those two facts compose into a silent outage.
+#     group at WORKFLOW level those two facts compose into a silent outage
+#     (#313: eleven days, twelve cancellations, nothing applied).
 #
-#     MEASURED, not theorised (#313). Run #9's `apply` legs were created
-#     2026-08-17T11:00:09Z and sat `waiting` until rejected
-#     2026-08-27T21:27:48Z — ten days holding the group. Across that window runs
-#     #10-#21 all concluded `cancelled` having allocated ZERO JOBS
-#     (`/actions/runs/<id>/jobs` returns `total_count: 0`), each one cancelled
-#     within ~1s of its successor being created. Run #22 was created
-#     20:43:54 and allocated its first job at 21:27:49 — one second after #9
-#     released the group. Eleven days, twelve cancellations, nothing applied.
-#
-#     (An earlier reading had #22 sitting at the gate WHILE #9 was still parked,
-#     which would have refuted head-of-line blocking. The job timestamps above
-#     refute the refutation: #22 held no jobs at all until #9 completed. A run
-#     pending on concurrency and a run waiting on a gate look alike from the
-#     outside; only the jobs list tells them apart.)
-#
-#     So the group is scoped to the job that actually writes, and flipped to
-#     newest-wins. What that cancels is, in every ordinary case, a job parked at
-#     a gate having written NOTHING — and superseding it is the point: the newer
-#     run planned against newer `main`, which is exactly why #9 was ultimately
-#     rejected as stale rather than approved. It also makes overlap impossible
-#     rather than merely unlikely, so the mutual exclusion note 4 replaces is
-#     strictly stronger. The residual is a ~10s window (measured: run #22's
-#     apply step ran 21:53:35→21:53:44) in which a second approval could
-#     interrupt a live apply; the script converges and `fail-fast: false` below
-#     already accepts a partly-applied matrix, so the next run finishes the job.
-#     That is the trade, made with both sides measured: a bounded ~10s
-#     interruption window against a demonstrated eleven-day outage.
+#     PER OWNER is the second half of that lesson, and it cost a second outage
+#     to learn. The #313 fix moved the group onto `apply` but left it a CONSTANT
+#     — and `apply` is a two-leg matrix, so both legs landed in one group and
+#     one leg cancelled the other, non-deterministically, on every single run.
+#     MEASURED across four consecutive runs: run 33123351877 and run
+#     33259840589 killed the `jodidaniel` leg within a second and parked
+#     `Adam-S-Daniel` at the gate until the NEXT DAY's run reaped it; runs
+#     33318291358 and 33420951576 killed the `Adam-S-Daniel` leg within a second
+#     and a human approved the `jodidaniel` leg, whose log reads
+#     "Fix plan: EMPTY — live settings already match the manifest." So the leg
+#     holding the only real drift (adamdaniel.ai's `main` ruleset, missing
+#     `prerelease-guard / prerelease-guard`, #310) never ran once between
+#     2026-08-27 and 2026-08-31 — while a human was asked to approve, and did,
+#     every day. Interpolating `${{ matrix.owner }}` is what makes the two legs
+#     independent.
 #
 #     `plan` deliberately carries NO group. It is read-only and cheap, and
-#     un-grouping it is what makes a wedged gate VISIBLE — every run now plans
-#     and publishes its summary instead of dying job-less.
+#     un-grouping it is what makes a wedged gate VISIBLE — every run plans and
+#     publishes its summary instead of dying job-less.
+#
+#  5. THE GATE ASKS ONLY ABOUT WRITES THAT COULD REDUCE PROTECTION.
+#     A gate a person clicks every morning is not a control, it is a habit, and
+#     habits do not read the diff — which is exactly how the four runs above
+#     produced four approvals and zero convergences. `scripts/repo-settings-
+#     write-risk.js` classifies every planned write: adding a required status
+#     check, disabling a merge method, creating a ruleset or an environment can
+#     only ADD constraints, so those apply unattended. Anything that could
+#     remove a constraint — a required check dropped, a bypass actor added,
+#     enforcement relaxed — and anything the classifier does not recognise
+#     (it is an ALLOWLIST, it fails closed) goes to the human.
+#
+#     The routing below is not what enforces that. `apply-auto` also passes
+#     `--refuse-weakening`, which re-derives the verdict from the plan it is
+#     about to apply and refuses the whole plan if anything is gated-class. A
+#     wrong `if:` here costs a red job, never an unattended weakening write.
+#     Same shape as note 2: incapable, rather than trusted.
+#
+#  6. WHEN A HUMAN *IS* NEEDED, THEY ARE TOLD. An `environment:` gate is
+#     invisible unless you are watching the Actions tab; #313 sat unapproved for
+#     ten days partly for that reason. `plan` opens an assigned tracking issue
+#     naming the run, the approval URL, the reviewers and the reason, and the
+#     issue is closed again the moment the gate resolves — approved, rejected,
+#     or superseded. See scripts/gate-approval-issue.js.
 #
 # WHY A GITHUB APP AND NOT A PAT: the manifest governs repos under TWO owners
 # (Adam-S-Daniel and jodidaniel), and a fine-grained PAT cannot span owners. One
@@ -79,7 +93,7 @@
 # `default_branch` is never PATCHed (FIX_FORBIDDEN_KEYS), a live ruleset carrying
 # an unknown field is SKIPPED rather than PUT lossily, live-only rulesets are
 # never deleted (no --prune in v1), and `--fix --yes` re-audits afterwards and
-# exits non-zero if drift persists.
+# exits non-zero if a finding it meant to write is still there.
 #
 # PROVISIONING (all three are required; without them this workflow no-ops with a
 # notice naming them — it never fails red for being un-onboarded):
@@ -110,14 +124,21 @@ permissions:
   contents: read
 
 # NO WORKFLOW-LEVEL `concurrency` BLOCK — see header note 4. The group lives on
-# the `apply` job, which is the only thing that writes.
+# the apply jobs, per owner, because those are the only things that write.
 
 jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # Header note 6 — the approval issue. `github.token` with issues:write
+      # cannot touch repo settings on any repo, so this does not widen the
+      # ungated job's reach over the surface this workflow governs.
+      issues: write
     outputs:
       pending: ${{ steps.plan.outputs.pending }}
+      gate: ${{ steps.plan.outputs.gate }}
       onboarded: ${{ steps.creds.outputs.onboarded }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -164,6 +185,9 @@ jobs:
         run: |
           set -uo pipefail
           pending=false
+          gate=false
+          : > plan-all.txt
+          : > gated-all.txt
           {
             echo "### Repo settings — convergence plan"
             echo
@@ -178,7 +202,7 @@ jobs:
                 echo "::error::could not mint a read token for ${owner}"; cat mint.log; exit 1; }
             TOKEN=$(sed -n 's/^token=//p' "$GITHUB_OUTPUT" | tail -1)
             args=(); for r in $repos; do args+=(--repo "$r"); done
-            # --fix WITHOUT --yes is plan-only and exits 2 when changes pend.
+            # --fix WITHOUT --yes is plan-only and exits 2 when WRITES pend.
             set +e
             GH_TOKEN="$TOKEN" node scripts/audit-repo-settings.js --fix "${args[@]}" > plan.txt 2>&1
             rc=$?
@@ -192,24 +216,97 @@ jobs:
               echo
               echo "</details>"
             } >> "$GITHUB_STEP_SUMMARY"
+            cat plan.txt >> plan-all.txt
+            # Read the machine-readable verdict from the FILE, never through a
+            # pipe into an early-exiting reader — see AGENTS.md on `grep -q`
+            # taking SIGPIPE once the payload passes the pipe buffer.
+            verdict=$(grep -m1 '^repo-settings-plan: ' plan.txt || true)
+            gated=$(printf '%s' "$verdict" | sed -n 's/.*gated=\([0-9][0-9]*\).*/\1/p')
+            if [ -z "$gated" ]; then
+              echo "::error::plan for ${owner} printed no machine-readable verdict — refusing to guess whether a human is needed"
+              exit 1
+            fi
+            if [ "$gated" != "0" ]; then
+              gate=true
+              grep '^   NEEDS-REVIEW ' plan.txt >> gated-all.txt || true
+            fi
             if [ "$rc" = "2" ]; then pending=true
             elif [ "$rc" != "0" ]; then echo "::error::plan failed for ${owner} (exit ${rc})"; exit "$rc"; fi
           done
           echo "pending=${pending}" >> "$GITHUB_OUTPUT"
-          echo "::notice::convergence pending=${pending}"
+          echo "gate=${gate}" >> "$GITHUB_OUTPUT"
+          echo "::notice::convergence pending=${pending} needs-human=${gate}"
 
-  apply:
+      # Header note 6. Reconciling, not fire-and-forget: this both OPENS the
+      # request when one is needed and CLOSES a stale one when it is not, so a
+      # cleanup job lost to a cancelled run self-heals on the next run rather
+      # than leaving an issue that lies about the present.
+      - name: Announce (or retract) the approval request
+        if: steps.creds.outputs.onboarded == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE: ${{ steps.plan.outputs.gate }}
+          PENDING: ${{ steps.plan.outputs.pending }}
+        run: |
+          set -euo pipefail
+          if [ "${GATE}" = "true" ] && [ "${PENDING}" = "true" ]; then
+            node scripts/gate-approval-issue.js open \
+              --repo "${GITHUB_REPOSITORY}" \
+              --run-id "${GITHUB_RUN_ID}" \
+              --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --plan-file plan-all.txt \
+              --gated-file gated-all.txt
+          else
+            node scripts/gate-approval-issue.js close \
+              --repo "${GITHUB_REPOSITORY}" \
+              --reason "a later plan needs no approval (nothing pending, or every planned write is non-weakening)"
+          fi
+
+  # ── the ungated lane ───────────────────────────────────────────────────────
+  # Every planned write is provably non-weakening. NO `environment:`, and
+  # `refuse-weakening` re-checks that claim at write time (header note 5).
+  apply-auto:
     needs: plan
-    # Only ask a human when there is genuinely something to approve.
-    if: needs.plan.outputs.onboarded == 'true' && needs.plan.outputs.pending == 'true'
+    if: needs.plan.outputs.onboarded == 'true' && needs.plan.outputs.pending == 'true' && needs.plan.outputs.gate == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: repo-settings-apply-${{ matrix.owner }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - owner: Adam-S-Daniel
+            probe: cms-platform
+            repos: Adam-S-Daniel/cms-platform Adam-S-Daniel/adamdaniel.ai
+          - owner: jodidaniel
+            probe: jodidaniel.com
+            repos: jodidaniel/jodidaniel.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/repo-settings-converge
+        with:
+          owner: ${{ matrix.owner }}
+          probe: ${{ matrix.probe }}
+          repos: ${{ matrix.repos }}
+          app-client-id: ${{ vars.REPO_SETTINGS_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
+          refuse-weakening: 'true'
+
+  # ── the gated lane ─────────────────────────────────────────────────────────
+  # At least one planned write could reduce protection, or is a shape the
+  # classifier does not recognise. A human looks at it.
+  apply-gated:
+    needs: plan
+    if: needs.plan.outputs.onboarded == 'true' && needs.plan.outputs.pending == 'true' && needs.plan.outputs.gate == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # THE GATE. Its required-reviewer rule is verified below — see header note 3;
     # naming a nonexistent environment would silently create an unprotected one.
     environment: repo-settings
-    # Header note 4. Scoped to the WRITING job, and newest-wins.
     concurrency:
-      group: repo-settings-apply
+      group: repo-settings-apply-${{ matrix.owner }}
       cancel-in-progress: true
     strategy:
       # One leg per owner, each holding only that owner's admin token.
@@ -226,14 +323,6 @@ jobs:
             repos: jodidaniel/jodidaniel.com
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: '20'
-      - name: Install harness deps (for the yaml parser; no browsers)
-        working-directory: e2e
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-        run: npm ci
 
       - name: Verify the reviewer gate actually exists
         # Header note 3: an undeclared environment is auto-created WITHOUT
@@ -253,19 +342,37 @@ jobs:
               exit 1 ;;
           esac
 
-      - name: Apply the manifest (write-scoped token)
+      - uses: ./.github/actions/repo-settings-converge
+        with:
+          owner: ${{ matrix.owner }}
+          probe: ${{ matrix.probe }}
+          repos: ${{ matrix.repos }}
+          app-client-id: ${{ vars.REPO_SETTINGS_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
+
+  # Close the approval request as soon as the gate stops waiting — approved,
+  # rejected, or the job cancelled. `always()` so a rejection closes it too: an
+  # issue that outlives the thing it is asking about is the failure mode this
+  # whole lane exists to avoid. It closes only an issue still naming THIS run
+  # (see gate-approval-issue.js), so a superseded run cannot retract the live
+  # request.
+  close-approval-issue:
+    needs: [plan, apply-gated]
+    if: always() && needs.plan.outputs.onboarded == 'true' && needs.plan.outputs.gate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Close the approval issue
         env:
-          APP_CLIENT_ID: ${{ vars.REPO_SETTINGS_APP_CLIENT_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
-          OWNER: ${{ matrix.owner }}
-          PROBE: ${{ matrix.probe }}
-          REPOS: ${{ matrix.repos }}
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.apply-gated.result }}
         run: |
-          set -uo pipefail
-          node scripts/mint-app-token.js --owner "$OWNER" --repo "$PROBE" \
-            --permissions administration=write > mint.log 2>&1 || {
-              echo "::error::could not mint a write token for ${OWNER}"; cat mint.log; exit 1; }
-          TOKEN=$(sed -n 's/^token=//p' "$GITHUB_OUTPUT" | tail -1)
-          args=(); for r in $REPOS; do args+=(--repo "$r"); done
-          # --yes applies, then RE-AUDITS and exits non-zero if drift persists.
-          GH_TOKEN="$TOKEN" node scripts/audit-repo-settings.js --fix --yes "${args[@]}"
+          set -euo pipefail
+          node scripts/gate-approval-issue.js close \
+            --repo "${GITHUB_REPOSITORY}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --reason "the gated apply finished with result \`${RESULT}\`"
