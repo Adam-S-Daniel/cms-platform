@@ -386,8 +386,12 @@ concurrency and a run waiting on a gate look alike from the outside; only the
 jobs list tells them apart.** Check it before believing either.
 
 The invariant: **a job that can WAIT ON A HUMAN gets no workflow-level
-concurrency group.** Scope the group to the job that actually writes, and let
-newest win.
+concurrency group.** Scope the group to the job that actually writes, PER
+INDEPENDENT UNIT OF WORK, and let newest win.
+
+That middle clause was missing for four days and cost a second outage — see
+"The sequel: a constant group across a matrix" below. Read both halves before
+touching this block.
 
 - `plan` is read-only and carries no group. Un-grouping it is what makes a wedged
   gate VISIBLE — every run plans and publishes its summary instead of dying
@@ -413,6 +417,103 @@ group" — `repo-settings-apply` publishes no required context. The shared lesso
 is narrower and worse: `cancel-in-progress: false` retains exactly one pending
 run, so anything that can occupy a group indefinitely converts every later run
 into a silent, job-less cancellation.
+
+### The sequel: a constant group across a MATRIX is the same bug, renamed
+
+The fix above moved the group off the workflow and onto `apply` — and left the
+group name a CONSTANT. `apply` is a two-leg matrix (one per owner, because an
+installation token is per owner), and **a job-level `concurrency` block applies
+to each matrix leg separately**, so both legs joined one group and
+`cancel-in-progress: true` had one kill the other within a second. Every run.
+Winner non-deterministic.
+
+Measured over the four runs after the #313 fix landed:
+
+| run | `Adam-S-Daniel` leg | `jodidaniel` leg |
+|---|---|---|
+| [33123351877](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33123351877) | parked at the gate ~22h, reaped by the next run | killed in <1s |
+| [33259840589](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33259840589) | parked at the gate ~23h, reaped by the next run | killed in <1s |
+| [33318291358](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33318291358) | killed in <1s | approved → `Fix plan: EMPTY` |
+| [33420951576](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33420951576) | killed in <1s | approved → `Fix plan: EMPTY` |
+
+The fleet's only real drift — adamdaniel.ai's `main` ruleset missing
+`prerelease-guard / prerelease-guard`, [#310](https://github.com/Adam-S-Daniel/cms-platform/issues/310)
+— lives on the `Adam-S-Daniel` leg. It was never applied once across those four
+days, so the daily plan found it again every morning and asked again. **A human
+approved, twice, and both approvals landed on the leg with nothing to do.**
+
+Two things generalise past this workflow:
+
+- **A constant `concurrency.group` on a matrix job serialises the matrix.** If
+  the legs are independent work — and a per-owner credential leg is about as
+  independent as work gets — interpolate the axis: `group: <name>-${{ matrix.owner }}`.
+- **The run CONCLUSION lies about it.** Run 33420951576 concluded `cancelled`
+  though its approved leg succeeded, which is also why
+  [#319](https://github.com/Adam-S-Daniel/cms-platform/issues/319) reported
+  "no successful run in its last 15 scheduled runs" — true, and for a reason the
+  conclusion could not name. Read the JOBS, again.
+
+`e2e/repo-settings-apply.test.js` now asserts the group interpolates
+`matrix.owner` on BOTH lanes, and that assertion was proven red by restoring the
+constant.
+
+### The third layer: a gate nobody can refuse is not a control
+
+The four approvals above are the real lesson, and it is not about concurrency.
+A gate that fires every morning on routine, already-reviewed tightenings trains
+the reviewer to click, and a reviewer who clicks is not reviewing. The
+indistinguishability is the damage: the one request that mattered looked exactly
+like the ninety that did not.
+
+So the gate was narrowed to the writes where a human's judgement can change the
+outcome. `scripts/repo-settings-write-risk.js` classifies every planned write:
+
+- **Applied unattended** (cannot reduce protection): a required status check
+  ADDED, a merge method DISABLED, `sha_pinning_required` turned on, a fork-PR
+  approval policy made MORE restrictive, a ruleset created (GitHub enforces the
+  union, so a new one only adds), an environment created from the manifest.
+- **Sent to a human**: a required check removed, a bypass actor added,
+  enforcement relaxed, ref conditions moved, a rule dropped, any `pull_request`
+  parameter change (`required_approving_review_count` and `allowed_merge_methods`
+  both have a weakening direction and neither is modelled), and — the property
+  the design rests on — **anything unrecognised**. It is an ALLOWLIST. A ruleset
+  key GitHub adds next year is gated, not blessed.
+
+Two properties make that safe, and both are load-bearing:
+
+1. **Fail closed, always.** A false GATED costs one click. A false SAFE is an
+   unattended admin write that weakened a production repo. The module is written
+   as though only the second exists.
+2. **Enforced at WRITE time, not routing time.** The ungated lane passes
+   `--refuse-weakening`, which re-derives the verdict from the plan it is about
+   to apply and refuses the whole plan if anything is gated-class. A wrong
+   workflow `if:` therefore costs a red job, never an unattended weakening
+   write. Same shape as the read/write token split: incapable, not trusted.
+
+**And when a human IS needed, they are told.** An `environment:` gate is
+invisible unless you are watching the Actions tab — part of why #313's run #9
+sat unapproved for ten days. The plan job now opens an assigned tracking issue
+naming the run, the approval URL, the configured reviewers and the specific
+writes that need a look; it is closed again the moment the gate resolves, and a
+later run that needs no approval closes a stale one as a backstop. A superseded
+run cannot retract the live request — the issue carries a `<!-- run:N -->`
+marker and `close` refuses to act on an issue that names a different run. See
+`scripts/gate-approval-issue.js`.
+
+### A plan can be non-empty and have nothing to apply
+
+Separate defect, same "asked a human for nothing" family. `buildFixPlan` emits an
+entry when a repo has ANY finding, including the four kinds `--fix --yes`
+refuses to write: a manual-only key (`default_branch`), a fix-skipped ruleset
+(lossy PUT, below), an unmanaged live ruleset, a fix-forbidden environment. That
+exited 2 — "changes pending" — which asked for an approval that could not
+accomplish anything, and then went red on the post-apply re-audit when the
+finding was, necessarily, still there.
+
+Plan-only now exits 0 when there are no applicable WRITES, printing what needs
+manual reconciliation; and the post-apply re-audit separates a finding the plan
+meant to write (a real apply failure) from one this tool declines to write
+(already reported, already tracked).
 
 ### The second layer: a lossy PUT is refused, and that is correct
 

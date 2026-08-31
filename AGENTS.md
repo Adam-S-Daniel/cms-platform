@@ -578,16 +578,42 @@ before you write any workflow that pauses for a human:
   on a gate — which is how a correct head-of-line diagnosis got "refuted" here
   by a misread of run #22.
 - So: **a job that can wait on a human gets no workflow-level group.** Scope it
-  to the writing job and let newest win — the newer run planned against newer
-  `main`, and superseding a stale gate-park is the desired outcome, not a loss.
+  to the writing job, PER INDEPENDENT UNIT OF WORK, and let newest win — the
+  newer run planned against newer `main`, and superseding a stale gate-park is
+  the desired outcome, not a loss.
 - The health audit could not see ANY of it, necessarily: `cancelled` is excluded
   from `BAD_CONCLUSIONS` because the runner-starvation carve-out is itself a
   cancelled shape. The lane that closes it never reads a conclusion at all — it
   alerts when a workflow that keeps firing has no recent SUCCESS.
 
+**That "per independent unit of work" clause cost a second outage to learn.**
+The #313 fix moved the group onto `apply` and left the name a CONSTANT — but a
+job-level `concurrency` block applies to each MATRIX LEG separately, and `apply`
+is a two-leg matrix (one per owner). Both legs joined one group and one killed
+the other within a second, on every run, winner non-deterministic. Measured over
+the next four runs: two killed the `jodidaniel` leg and parked `Adam-S-Daniel`
+at the gate until the next day reaped it; two killed the `Adam-S-Daniel` leg and
+a human approved `jodidaniel`, whose log reads `Fix plan: EMPTY`. So the leg
+holding the fleet's only real drift never ran once, the drift re-armed the
+prompt every morning, and the run CONCLUSION said `cancelled` even on days the
+approved leg succeeded. Interpolate the axis: `group: <name>-${{ matrix.owner }}`.
+
+**And the four approvals are the bigger lesson.** A gate that fires every
+morning on routine, already-reviewed tightenings trains the reviewer to click,
+and a reviewer who clicks is not reviewing — the request that mattered looked
+exactly like the ones that did not. `repo-settings-apply` now gates only writes
+that could REDUCE protection (`scripts/repo-settings-write-risk.js`, an
+ALLOWLIST that fails closed), applies the rest unattended, enforces that at
+WRITE time via `--refuse-weakening` rather than trusting the routing `if:`, and
+FILES AN ASSIGNED ISSUE when a human genuinely is needed — closing it again when
+the gate resolves, because an `environment:` gate is invisible unless you happen
+to be looking at the Actions tab.
+
 → read `docs/CI-INVARIANTS.md` ("An UNAPPROVED environment gate must not hold a
-concurrency group") before adding a `concurrency` block to any workflow with an
-environment gate, or before touching `audit-scheduled-runs.js`'s lanes.
+concurrency group", and its three sequels) before adding a `concurrency` block
+to any workflow with an environment gate, before widening or narrowing what the
+write-risk classifier calls safe, or before touching `audit-scheduled-runs.js`'s
+lanes.
 
 ## platform-bump moves files and one dictated input, not just pins (#315)
 
