@@ -174,8 +174,11 @@
          prior value can silently strand an unpublished edit. Remounts the
          entry (a hash round-trip) after a publish to refresh it.
       2. publish-step-hint.js              — #329.2: the toolbar's one
-         obvious "Publish" control is a dropdown trigger, not a button.
-         Shows an unmissable "not published yet" notice while it's present.
+         obvious "Publish" control is a dropdown trigger, not a button, and
+         a SAVED entry is not a published one. Renders the publish-state bar
+         (#cms-publish-state) directly under the toolbar, IN FLOW — it began
+         life as a fixed top-centre overlay and covered the very controls it
+         named (see that file's PLACEMENT block, and docs/PUBLISHING-UX.md).
       3. search-scope-all.js               — #329.4: the sidebar search box
          is labelled "Search all" but can silently scope to the current
          collection. Rewrites a scoped search route to the all-collections

@@ -111,4 +111,88 @@ async function expectReachable(page, locator, label) {
   }).toPass({ timeout: 15_000, intervals: [200, 500, 1000, 2000] });
 }
 
-module.exports = { expectReachable };
+/**
+ * Assert that nothing this admin INJECTS geometrically overlaps a control.
+ *
+ * `expectReachable` above is a HIT test — `document.elementFromPoint` at the
+ * control's centre. That is the right question for "can the user click it",
+ * and the wrong one for "can the user read it": an overlay carrying
+ * `pointer-events: none` is invisible to `elementFromPoint`, so a banner can
+ * paint straight over a button's label and the hit test still returns the
+ * button.
+ *
+ * That is not hypothetical. `theme/admin/publish-step-hint.js` shipped as a
+ * `position: fixed`, top-centre, `pointer-events: none` notice and covered
+ * 68% of the Publish button and 47% of the Status control it was pointing at
+ * (measured on a live Decap 3.15.1 at 1280x800, reported with a screenshot).
+ * Every occlusion assertion in this repo stayed green for the whole time it
+ * was on production, because they all asked the clickability question.
+ *
+ * So this asks the geometric one: for every element the platform adds to
+ * Decap's DOM, its rectangle must not intersect any named control's
+ * rectangle. Containment is exempt in both directions — an injected pill that
+ * lives INSIDE the toolbar is in flow, and a control's own icon is a
+ * descendant, neither of which is an overlay.
+ *
+ * "Injected by the platform" is `id^="cms-"` (the namespace every admin shim
+ * uses) plus the two floating chrome links from the shells. It deliberately
+ * does not try to enumerate individual shims: the point is to catch the NEXT
+ * one, not to re-list the ones that exist today.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {Record<string,string>} controls  label → CSS selector for each
+ *   control that must stay legible.
+ */
+async function expectNoInjectedOverlap(page, controls) {
+  const offenders = await page.evaluate((sel) => {
+    const INJECTED = '[id^="cms-"], #live-preview-link, #reviews-link';
+    const strip = (c) =>
+      String((c && c.baseVal) || c || "")
+        .trim()
+        .split(/\s+/)
+        .map((x) => x.replace(/^css-[a-z0-9]+-/, ""))
+        .filter((x) => x && !/^css-[a-z0-9]+$/.test(x))
+        .join(".");
+    const out = [];
+    for (const [label, selector] of Object.entries(sel)) {
+      const control = document.querySelector(selector);
+      if (!control) continue;
+      const rb = control.getBoundingClientRect();
+      if (!rb.width || !rb.height) continue;
+      for (const overlay of document.querySelectorAll(INJECTED)) {
+        // In flow inside the control's subtree (or wrapping it) is not an
+        // overlay — only a genuinely separate box painting on top is.
+        if (overlay.contains(control) || control.contains(overlay)) continue;
+        const style = getComputedStyle(overlay);
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        const ra = overlay.getBoundingClientRect();
+        if (!ra.width || !ra.height) continue;
+        const ox = Math.max(0, Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left));
+        const oy = Math.max(0, Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top));
+        const area = Math.round(ox * oy);
+        if (area > 0) {
+          out.push({
+            control: label,
+            overlay: overlay.id || strip(overlay.className) || overlay.tagName,
+            overlapPx: area,
+            pctOfControl: Math.round((area / (rb.width * rb.height)) * 100),
+            pointerEvents: style.pointerEvents,
+            position: style.position,
+          });
+        }
+      }
+    }
+    return out;
+  }, controls);
+
+  expect(
+    offenders,
+    "an element this admin injects is painting over a control the editor has to " +
+      "read. A `pointer-events: none` overlay passes every hit test in this file " +
+      "and is still unreadable — put the element in normal flow instead:\n" +
+      JSON.stringify(offenders, null, 2),
+  ).toEqual([]);
+}
+
+module.exports = { expectReachable, expectNoInjectedOverlap };
+
