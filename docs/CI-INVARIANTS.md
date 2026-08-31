@@ -500,6 +500,45 @@ run cannot retract the live request — the issue carries a `<!-- run:N -->`
 marker and `close` refuses to act on an issue that names a different run. See
 `scripts/gate-approval-issue.js`.
 
+### Two clean-merging PRs made the classifier fail OPEN, six minutes apart
+
+The write-risk classifier merged 2026-08-31 20:31. `securityWrites` — the
+Dependabot vulnerability-alerts / automated-security-fixes surface (#355) —
+merged at 20:25, six minutes earlier, on a branch cut before it. Git merged
+both cleanly (different regions of `audit-repo-settings.js`), self-CI was green
+on each, and the result was a hole in the one module whose entire contract is
+failing closed:
+
+`planWrites()` iterated a HARDCODED list of plan buckets, so security writes
+were invisible to it. Two consequences, and the second is the bad one:
+
+- a plan of ONLY security writes counted `writes=0`, took the "no applicable
+  writes" path, exited 0, and never applied — silently, with the daily audit
+  left reporting drift nothing would ever converge;
+- a plan mixing one safe ruleset write with a security **DELETE** counted
+  `gated=0` and routed to the **ungated** lane, which would have disabled a
+  repo's security alerts with nobody asked.
+
+The manifest declares both keys `true` (enabling), so nothing was actually
+weakened — the exposure was the shape, not an incident.
+
+**The generalisable part is not "remember securityWrites."** It is that an
+allowlist over a data structure someone else owns fails open by default, and
+that neither PR could have caught it alone: each was correct against the tree
+it was written on. Two things now hold the line, and both are in
+`e2e/repo-settings-audit.test.js`:
+
+- **A cross-check that PARSES `buildFixPlan`'s own `plan.push({...})`** (acorn,
+  per the house AST rule — the subject is which properties an object literal
+  carries) and fails if any key is one `repo-settings-write-risk.js` has not
+  been taught. Proven by reverting the classifier to its pre-fix state: the
+  test reds. A new managed surface now cannot land without either a
+  `classifyWrite` case or an explicit entry on the unfixable/metadata lists.
+- **An unrecognised bucket classifies as GATED at runtime**, and counts as a
+  write, so even a surface added without running these lints routes to a human
+  instead of vanishing. An EMPTY unknown bucket is still not a write — content
+  is what gates, or every plan would need an approval forever.
+
 ### A plan can be non-empty and have nothing to apply
 
 Separate defect, same "asked a human for nothing" family. `buildFixPlan` emits an

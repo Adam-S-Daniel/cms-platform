@@ -2414,3 +2414,136 @@ test.describe("repo-settings write-risk classification", () => {
     expect(risk.classifyPlan([{ repo: "o/r", manualOnly: ["default_branch"] }]).writes.length).toBe(0);
   });
 });
+
+// ── the classifier must know every bucket the plan can carry ────────────────
+//
+// This is the guard that was missing, and its absence was measured rather than
+// imagined. `scripts/repo-settings-write-risk.js` merged on 2026-08-31 at
+// 20:31; `securityWrites` (#355, Dependabot vulnerability alerts + automated
+// security fixes) merged at 20:25 — six minutes earlier, on a branch cut before
+// it. Both files merged CLEAN because they touch different regions, and every
+// lint stayed green. But planWrites() iterated a hardcoded list of buckets, so
+// security writes were invisible to it, which meant:
+//
+//   - a plan of ONLY security writes counted writes=0, took the "no applicable
+//     writes" path, exited 0, and never applied — silently; and
+//   - a plan mixing one safe ruleset write with a security DELETE counted
+//     gated=0 and routed to the UNGATED lane, which would have disabled a
+//     repo's security alerts with nobody asked.
+//
+// The second is a fail-OPEN in the module whose entire contract is failing
+// closed. So the fix is not just "teach it about securityWrites" — it is this
+// test, which reads buildFixPlan's OWN plan.push() and fails the moment a new
+// bucket appears that the classifier has not been taught.
+//
+// AST, not regex (the house rule): the subject is which properties a specific
+// object literal carries, which is a question about code STRUCTURE.
+const acorn = require("acorn");
+const walk = require("acorn-walk");
+
+test.describe("write-risk classifier vs. the real fix plan", () => {
+  function planPushKeys() {
+    const src = fs.readFileSync(SCRIPT_PATH, "utf8");
+    const ast = acorn.parse(src, { ecmaVersion: "latest" });
+    const found = [];
+    walk.simple(ast, {
+      CallExpression(n) {
+        const c = n.callee;
+        if (
+          c.type === "MemberExpression" &&
+          c.object &&
+          c.object.name === "plan" &&
+          c.property &&
+          c.property.name === "push" &&
+          n.arguments[0] &&
+          n.arguments[0].type === "ObjectExpression"
+        ) {
+          for (const p of n.arguments[0].properties) {
+            const k = p.key && (p.key.name || p.key.value);
+            if (k) found.push(k);
+          }
+        }
+      },
+    });
+    return found;
+  }
+
+  test("every key buildFixPlan emits is one the classifier knows", () => {
+    const keys = planPushKeys();
+    // Non-vacuity: if the AST walk stops finding the call, this test would
+    // otherwise pass over an empty list forever.
+    expect(
+      keys.length,
+      "found no plan.push({...}) in audit-repo-settings.js — the walk is broken, " +
+        "not the code under test",
+    ).toBeGreaterThan(5);
+    const known = loadRisk().PLAN_KNOWN_KEYS;
+    const unknown = keys.filter((k) => !known.has(k));
+    expect(
+      unknown,
+      `buildFixPlan emits ${JSON.stringify(unknown)}, which scripts/repo-settings-write-risk.js ` +
+        "has never been taught. A bucket the classifier cannot see is a write the UNGATED " +
+        "lane would apply unexamined. Add it to PLAN_WRITE_KEYS (and a classifyWrite case) " +
+        "or to the unfixable/metadata lists, in the SAME PR that adds the surface.",
+    ).toEqual([]);
+  });
+
+  test("an unrecognised bucket is GATED, not skipped", () => {
+    // The structural half: even with the cross-check above, a bucket added
+    // without running these lints must still fail closed at runtime.
+    const risk = loadRisk();
+    const c = risk.classifyPlan([{ repo: "o/r", someFutureSurface: [{ x: 1 }] }]);
+    expect(c.writes.length, "an unknown bucket must COUNT as a write").toBe(1);
+    expect(c.gated.length).toBe(1);
+    expect(c.gated[0].reason).toMatch(/not known to the write-risk classifier/);
+    // …but an EMPTY unknown bucket is not a write and must not gate anything,
+    // or every plan would need a human forever.
+    expect(risk.classifyPlan([{ repo: "o/r", someFutureSurface: [] }]).writes.length).toBe(0);
+  });
+
+  test("security analysis: enabling is safe, DISABLING needs a human", () => {
+    const risk = loadRisk();
+    const enable = risk.classifyPlan([
+      {
+        repo: "o/r",
+        securityWrites: [
+          { key: "vulnerability_alerts", desired: true, method: "PUT" },
+          { key: "automated_security_fixes", desired: true, method: "PUT" },
+        ],
+      },
+    ]);
+    expect(enable.gated).toEqual([]);
+    expect(enable.safe.length).toBe(2);
+
+    const disable = risk.classifyPlan([
+      {
+        repo: "o/r",
+        securityWrites: [
+          { key: "vulnerability_alerts", desired: false, method: "DELETE" },
+        ],
+      },
+    ]);
+    expect(disable.safe).toEqual([]);
+    expect(disable.gated.length).toBe(1);
+    expect(disable.gated[0].reason).toMatch(/DISABLED/);
+  });
+
+  test("a security write mixed with a safe write still gates the whole plan", () => {
+    // The exact shape that would have slipped through: one write the
+    // classifier likes, one it never saw.
+    const risk = loadRisk();
+    const c = risk.classifyPlan([
+      {
+        repo: "o/r",
+        patchBody: { allow_rebase_merge: false },
+        flagLive: { allow_rebase_merge: true },
+        securityWrites: [
+          { key: "automated_security_fixes", desired: false, method: "DELETE" },
+        ],
+      },
+    ]);
+    expect(c.writes.length).toBe(2);
+    expect(c.safe.length).toBe(1);
+    expect(c.gated.length).toBe(1);
+  });
+});

@@ -153,6 +153,26 @@ function classifyWrite(w) {
         );
       return safe(`Actions permission \`${w.key}\` -> ${JSON.stringify(w.desired)}`);
 
+    case "security-analysis":
+      // Dependabot vulnerability alerts / automated security fixes. The
+      // METHOD is the value: PUT enables, DELETE disables. Enabling adds a
+      // protection the repo did not have; disabling removes one, and removing
+      // a security control unattended is the single least acceptable write on
+      // this whole surface.
+      if (w.desired === true)
+        return safe(`security analysis \`${w.key}\` -> enabled`);
+      return gated(`security analysis \`${w.key}\` -> DISABLED`);
+
+    case "unknown-bucket":
+      // See planWrites: a fix-plan bucket this module has never been taught
+      // about. It reaches here rather than being skipped, because a write the
+      // classifier cannot see is a write the ungated lane would perform
+      // unexamined — which is the one outcome this file exists to prevent.
+      return gated(
+        `fix-plan bucket \`${w.key}\` is not known to the write-risk classifier ` +
+          "(a new managed surface shipped without teaching it) — routing to a human",
+      );
+
     case "ruleset-post":
       // GitHub enforces the UNION of every ruleset on a repo, so a ruleset
       // that does not exist yet cannot be relaxing anything by existing — its
@@ -314,11 +334,61 @@ function classifyRequiredStatusChecks(name, liveP, desiredP) {
     : gated(`ruleset "${name}": required_status_checks differ inexplicably`);
 }
 
+// Every key a fix-plan entry may carry, split by what it means. This list is
+// the classifier's model of buildFixPlan's output, and it is ENFORCED rather
+// than assumed — see the unknown-bucket handling in planWrites.
+//
+// It exists because the obvious implementation of planWrites (iterate the
+// buckets I know about) fails OPEN on a bucket added later: the new writes are
+// silently absent from the verdict, so a plan carrying one reports gated=0 and
+// the UNGATED lane applies it unexamined. That is not hypothetical — it
+// happened within six minutes of this module landing. `securityWrites` (#355,
+// Dependabot alerts and automated security fixes) merged just ahead of it, and
+// until the `security-analysis` case above existed, a plan mixing one safe
+// ruleset write with a security DELETE would have disabled a repo's security
+// alerts with nobody asked.
+const PLAN_IDENTITY_KEYS = ["repo"];
+// Not writes: findings --fix --yes deliberately refuses to perform.
+const PLAN_UNFIXABLE_KEYS = ["manualOnly", "skipped", "unmanaged", "envManualOnly"];
+// Not a write either: the live values patchBody's keys are being changed FROM.
+const PLAN_METADATA_KEYS = ["flagLive"];
+// The buckets applyFixPlan actually writes from.
+const PLAN_WRITE_KEYS = [
+  "patchBody",
+  "puts",
+  "posts",
+  "actionsPuts",
+  "envPuts",
+  "securityWrites",
+];
+const PLAN_KNOWN_KEYS = new Set([
+  ...PLAN_IDENTITY_KEYS,
+  ...PLAN_UNFIXABLE_KEYS,
+  ...PLAN_METADATA_KEYS,
+  ...PLAN_WRITE_KEYS,
+]);
+
+// True when a plan bucket actually holds something. An empty array or object
+// is not a write and must not gate a plan — only CONTENT does.
+function bucketHasContent(v) {
+  if (Array.isArray(v)) return v.length > 0;
+  if (v && typeof v === "object") return Object.keys(v).length > 0;
+  return v !== undefined && v !== null && v !== false;
+}
+
 // Flatten a fix plan (the array buildFixPlan returns) into the normalised
 // write list, in the order applyFixPlan would perform them.
 function planWrites(plan) {
   const writes = [];
   for (const p of plan || []) {
+    // FAIL CLOSED on a surface this module has not been taught. Emitted as a
+    // write so it both counts toward "is there anything to do" and classifies
+    // as gated — the two things a silently-skipped bucket got wrong.
+    for (const key of Object.keys(p || {})) {
+      if (PLAN_KNOWN_KEYS.has(key)) continue;
+      if (!bucketHasContent(p[key])) continue;
+      writes.push({ repo: p.repo, kind: "unknown-bucket", key });
+    }
     for (const [key, desired] of Object.entries(p.patchBody || {})) {
       writes.push({
         repo: p.repo,
@@ -358,6 +428,14 @@ function planWrites(plan) {
         name: put.environment,
         desired: put.body,
       });
+    for (const w of p.securityWrites || [])
+      writes.push({
+        repo: p.repo,
+        kind: "security-analysis",
+        key: w.key,
+        // The METHOD is the value on this surface; `desired` mirrors it.
+        desired: w.desired,
+      });
   }
   return writes;
 }
@@ -396,6 +474,8 @@ function planUnfixables(plan) {
 }
 
 module.exports = {
+  PLAN_KNOWN_KEYS,
+  PLAN_WRITE_KEYS,
   classifyWrite,
   classifyPlan,
   planWrites,
