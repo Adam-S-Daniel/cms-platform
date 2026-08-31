@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.92)
+## Version history (v0.1.0 → v0.1.93)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2040,6 +2040,42 @@ version bump is needed and cutting one would force the whole atomic edit set
   is deferred for the same reason: every shim here that touches Decap's rendered
   DOM was built against live observation, and guessing a selector is the
   brittleness to avoid.
+
+- **v0.1.93** — **the archive field name, fixed before it reached a
+  consumer's immutable history.** v0.1.92's media-archive publish path (#347)
+  read `pdf_archive_key`; jodidaniel.com's consumer half shipped
+  `pdf_archive_file`. Nothing connects the two repos, so nothing caught the
+  skew — and the consumer's name is the one that had to win, for a reason
+  worth stating plainly because it decides every future field name this
+  platform dictates.
+
+  gitleaks' `generic-api-key` rule fires on a KEYWORD next to a high-entropy
+  value, and `key` is on its list. This repo names the field, but a CONSUMER
+  writes it beside a long hyphenated PDF filename, which clears the entropy
+  floor. So the name reddens THEIR scan, never ours, where it only ever sits
+  next to `fm[...]` — three of jodidaniel.com's eight media entries tripped it
+  on the pinned 8.30.1. `secrets-scan.yml` reads FULL history on push and on
+  the weekly sweep and history is immutable, so a name reaching a consumer's
+  default branch reddens every future push to it, permanently, one repo at a
+  time. Renaming at source is the fix; an allowlist is per-repo and a
+  `.gitleaksignore` fingerprint is commit-sha-keyed and cannot propagate.
+
+  It was not breaking anything yet, and the reason is worth recording: every
+  jodidaniel entry is `pdf_public: false`, so the script skipped them all and
+  exited 0. It would have broken the first time an editor ticked the box on a
+  bumped consumer — `fm["pdf_archive_key"]` nil, key empty, `exit 1`, a failed
+  production deploy from a routine editorial action, citing a field the site
+  does not have. Fail-loud working correctly on a defect. Reproduced both
+  directions against the real script with fixtures before the fix was trusted.
+
+  The lint is what stops the next one. `media-archive-publish-gate` already
+  asserted the step ordering, all four public-access blocks, the read-only IAM
+  grant, the masked-exit-code trap and the `== true` gate — thorough, and blind
+  to this, because nothing checked the field NAME. It now rejects any
+  front-matter field this script dictates that contains a gitleaks keyword, so
+  the next one fails in a platform PR rather than in a consumer's history.
+  Proven able to fail: reverting the script reds it (1 failed, 12 passed).
+  #348.
 
 - **v0.1.92** — **the rest of #329, fixed against a real Decap instance
   instead of deferred for want of one.** v0.1.91 shipped 2 of the 9
