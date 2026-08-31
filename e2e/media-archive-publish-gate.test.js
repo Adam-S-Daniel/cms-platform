@@ -168,3 +168,51 @@ test("only a real boolean true opens the gate", () => {
   // this script must agree that ONLY `true` publishes.
   expect(src).toMatch(/fm\["pdf_public"\]\s*==\s*true/);
 });
+
+// gitleaks' `generic-api-key` rule fires on a KEYWORD next to a high-entropy
+// value. This is its keyword list, and it is short and ordinary enough that a
+// field name lands on it by accident.
+const GITLEAKS_KEYWORDS = [
+  "access", "auth", "api", "credential", "creds",
+  "key", "passwd", "password", "secret", "token",
+];
+
+test("no front-matter field this script dictates carries a gitleaks keyword", () => {
+  // Why this lint exists, and why it belongs on the PLATFORM side of the line:
+  // this script is the only thing that names these fields, so every consumer
+  // that adopts the archive copies the name into its own `_media/*.md` --
+  // directly beside a long hyphenated PDF filename, which clears the entropy
+  // floor. The name therefore reddens the CONSUMER's secrets scan, never this
+  // repo's, where it only ever sits next to `fm[...]`.
+  //
+  // That is not hypothetical. The field shipped as `pdf_archive_key`, and
+  // `key` is on the list below: three of jodidaniel.com's eight media entries
+  // tripped `generic-api-key` on the pinned gitleaks 8.30.1. The expensive part
+  // is that `secrets-scan.yml` reads FULL history on push and on the weekly
+  // sweep, and history is immutable -- so a name that reaches a consumer's
+  // default branch reddens every future push to it, permanently, one repo at a
+  // time. Renaming at source is the fix; an allowlist entry is per-repo and a
+  // `.gitleaksignore` fingerprint is commit-sha-keyed and cannot propagate.
+  //
+  // Regex, not AST, and deliberately: the field names are string literals in a
+  // ruby snippet embedded in a shell heredoc, so there is no JS AST to walk.
+  // This is the lexical case AGENTS.md carves out ("a leaf token's content"),
+  // and it matches how the `pdf_public` assertion above already reads this same
+  // script.
+  const src = fs.readFileSync(SCRIPT, "utf8");
+  const fields = [...src.matchAll(/fm\["([A-Za-z0-9_]+)"\]/g)].map((m) => m[1]);
+  expect(
+    fields.length,
+    `${SCRIPT_REL} should read at least one front-matter field`,
+  ).toBeGreaterThan(0);
+  for (const field of new Set(fields)) {
+    const hit = GITLEAKS_KEYWORDS.find((kw) => field.includes(kw));
+    expect(
+      hit,
+      `${SCRIPT_REL} dictates the front-matter field \`${field}\`, which contains ` +
+        `the gitleaks keyword "${hit}". Every consumer writes this name next to a ` +
+        `PDF filename, so it will fire generic-api-key on their full history. ` +
+        `Pick a name off that keyword list.`,
+    ).toBeUndefined();
+  }
+});

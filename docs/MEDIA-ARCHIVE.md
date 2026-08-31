@@ -128,7 +128,7 @@ From the **site repo** (needs AWS credentials that can write the bucket):
 ```sh
 bash scripts/media-archive.sh put /path/to/1-fda-amicus.pdf
 bash scripts/media-archive.sh list
-bash scripts/media-archive.sh audit    # every pdf_archive_key resolves to an object
+bash scripts/media-archive.sh audit    # every pdf_archive_file resolves to an object
 bash scripts/media-archive.sh link 1-fda-amicus.pdf 900   # presigned URL, 15 min
 ```
 
