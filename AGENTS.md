@@ -125,6 +125,7 @@ that area.
 | `docs/PIN-CONSISTENCY.md` | you're changing the pin-consistency script or `platform-bump.yml`'s seeding logic. |
 | `docs/CI-INVARIANTS.md` | you're touching a required-check job, a scheduled workflow, the local e2e webServer, or a real-prod loop. |
 | `docs/E2E-PARALLELISM.md` | you're re-tuning e2e CI workers, sharding, or the browser-install step. |
+| `docs/PUBLISHING-UX.md` | you're touching how publish/status is PRESENTED to an editor — the toolbar shims, the status model, the deploy-status surfaces, or any copy an editor reads. |
 | `docs/VERSION-HISTORY.md` | you need to know whether/when something was already fixed, or the full story behind a fact stated tersely elsewhere here. |
 
 ## Layout
@@ -254,6 +255,42 @@ On an org-owned consumer, an unapproved OAuth App lets Decap authenticate and
 read but silently fails every persist — and there is no reliable API check
 for it. → read `docs/CONSUMER-COMPATIBILITY.md` before debugging a "login
 works, saving doesn't" report on an org-owned site.
+
+## Publishing is presented as nine overlapping statuses (#329 follow-on)
+
+An editor on these sites meets nine different notions of "published" across
+four systems, and the two most consequential are invisible to them: six
+required checks, and a MANUAL `regression-review` environment gate that can
+park a publish indefinitely with no error anywhere in `/admin`. Two of the
+nine contradict each other outright — Decap's **workflow board** hard-gates
+publishing on `Ready` (`WorkflowList.requestPublish` alerts and returns
+otherwise) while the **entry editor's** Publish dropdown has no status gate
+at all, and on this platform setting `Status: Ready` publishes on its own,
+because `auto-merge-when-ready` fires on the `decap-cms/pending_publish`
+label Decap writes.
+
+Two rules that came out of the fix and generalise past it:
+
+- **No admin shim may paint a `position: fixed` overlay over the editor
+  toolbar.** `publish-step-hint.js` did, and covered 68% of the Publish
+  button its own text was pointing at. It shipped because `pointer-events:
+  none` makes an overlay invisible to a HIT-test occlusion guard
+  (`elementFromPoint`), and because the `@admin-read` viewport matrix
+  (3000x1500 and 393x852) brackets the band where a centred overlay actually
+  lands — the damage is zero at both matrix points and 68% at 1280x800.
+  `expectNoInjectedOverlap` in `e2e/ui-visibility.js` asks the geometric
+  question at pinned widths; `e2e/admin-329-shims.test.js` carries the
+  pure-fs half for both shims.
+- **A lint that forbids a token must not read comments.** The first draft of
+  that lint was `/position\s*:\s*fixed/` over the source and it red-failed
+  the fixed file, whose header comment explains the defect. It parses now
+  (acorn, string literals + style writes only) — the house AST rule, in its
+  cheapest possible form.
+
+→ read `docs/PUBLISHING-UX.md` before changing `theme/admin/`'s toolbar
+shims, the status model, or any copy an editor reads. It carries the full
+inventory, the measurements, and the staged plan (phases 2-5 are unbuilt and
+phase 2 needs an operator decision).
 
 ## Skills ship as a marketplace bundle, not a file sync (v0.1.83)
 

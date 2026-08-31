@@ -72,9 +72,11 @@
  * route — when there is no toolbar yet, `render()` does nothing, quietly.
  *
  * Placement note: this sits IN the toolbar row — its CSS never pins it to
- * a fixed spot in the viewport — never floating over the page the way
- * `publish-step-hint.js` does with its top-centre notice; the two must
- * not collide.
+ * a fixed spot in the viewport. That is now the rule for every admin shim,
+ * not a courtesy to this one: `publish-step-hint.js` WAS a fixed top-centre
+ * overlay and covered 68% of the Publish button at ordinary laptop widths
+ * before it was moved into flow (2026-08-31). Both files are lint-locked
+ * against `position: fixed` in e2e/admin-329-shims.test.js.
  *
  * ── Test contract ────────────────────────────────────────────────────────
  * Static, filesystem-only assertions live in

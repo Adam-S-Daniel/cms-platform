@@ -16,9 +16,20 @@
 //      header comment for the full rationale);
 //   4. publish-step-hint.js still carries BOTH a MutationObserver and a
 //      setInterval re-sync — the interval is REQUIRED (verified live that
-//      after a real publish the observer alone left the hint stale on
+//      after a real publish the observer alone left the bar stale on
 //      screen), not belt-and-braces, and it's cheap for a future edit to
 //      drop one without noticing since either alone still "looks" wired up;
+//   4b. publish-step-hint.js renders IN FLOW, never as a `position: fixed`
+//      overlay, and compares before it writes `textContent`. Both are
+//      measured regressions, not style preferences. The first shipped
+//      version WAS a fixed top-centre notice and it covered 68% of the
+//      Publish button and 47% of the Status control it was pointing at
+//      (measured against a live Decap 3.15.1 at 1280x800); the browser-level
+//      geometric assertion lives in e2e/admin-no-occlusion.spec.js, and this
+//      is its cheap pure-fs half. The second is the render-loop trap that
+//      killed a live page target from local-save-indicator.js's first draft:
+//      an unconditional textContent write is a childList mutation inside the
+//      subtree this shim's own MutationObserver watches;
 //   5. publish-baseline-refresh.js registers `postPublish` and never
 //      reaches into Decap's Redux internals (no `store` / `getState` /
 //      `dispatch` token anywhere in the file) — it's public
@@ -40,10 +51,70 @@
 // split here the way there is for e.g. the .github/workflows/ pin lints.
 const fs = require("node:fs");
 const path = require("node:path");
+const acorn = require("acorn");
+const walk = require("acorn-walk");
 const { test, expect } = require("./base");
 
 const REPO_ROOT = path.join(__dirname, "..");
 const ADMIN_DIR = path.join(REPO_ROOT, "theme", "admin");
+
+// ── "no fixed overlay" is a code-shape question, so it PARSES ────────────
+//
+// The obvious implementation — `/position\s*:\s*fixed/i.test(src)` — is
+// wrong here, and provably so: it was written that way first and it red-failed
+// the very file it was meant to bless, because that file's header comment
+// EXPLAINS the fixed-overlay defect it exists to prevent. A lint that forbids
+// naming the thing it forbids is a lint nobody can document around.
+//
+// So the check reads string literals and style writes from the AST, where
+// comments do not exist by construction (the house rule in AGENTS.md,
+// "AST always, never regex, for code-shape lints"). It covers the three
+// shapes an admin shim could actually use: a `cssText`/style string carrying
+// `position:fixed`, `el.style.position = "fixed"`, and
+// `el.style.setProperty("position", "fixed")`.
+function fixedPositionEvidence(src) {
+  let ast;
+  try {
+    ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "script" });
+  } catch {
+    ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "module" });
+  }
+  const FIXED_IN_CSS = /position\s*:\s*fixed/i;
+  const hits = [];
+  const isFixed = (n) => n && n.type === "Literal" && String(n.value).toLowerCase() === "fixed";
+  walk.simple(ast, {
+    Literal(n) {
+      if (typeof n.value === "string" && FIXED_IN_CSS.test(n.value)) hits.push(n.value.slice(0, 60));
+    },
+    TemplateLiteral(n) {
+      for (const q of n.quasis) {
+        const v = q.value.cooked || "";
+        if (FIXED_IN_CSS.test(v)) hits.push(v.slice(0, 60));
+      }
+    },
+    AssignmentExpression(n) {
+      const l = n.left;
+      if (l.type === "MemberExpression" && !l.computed && l.property.name === "position" && isFixed(n.right)) {
+        hits.push('style.position = "fixed"');
+      }
+    },
+    CallExpression(n) {
+      const c = n.callee;
+      if (
+        c.type === "MemberExpression" &&
+        !c.computed &&
+        c.property.name === "setProperty" &&
+        n.arguments.length >= 2 &&
+        n.arguments[0].type === "Literal" &&
+        String(n.arguments[0].value).toLowerCase() === "position" &&
+        isFixed(n.arguments[1])
+      ) {
+        hits.push('setProperty("position", "fixed")');
+      }
+    },
+  });
+  return hits;
+}
 
 const SHIMS = [
   "publish-baseline-refresh.js",
@@ -112,6 +183,53 @@ test.describe("issue #329 owner-persona fix set", () => {
       "publish-step-hint.js must ALSO re-sync on an interval — verified live that the " +
         "MutationObserver alone missed the post-publish re-render and left the hint stale " +
         "on screen after a real publish",
+    ).toBe(true);
+  });
+
+  // ── Placement: in flow, never an overlay ─────────────────────────────
+  //
+  // The first shipped version of this shim was a `position: fixed`,
+  // top-centre notice. On a real Decap 3.15.1 instance it painted ON TOP of
+  // the toolbar it was pointing at — 2682px2 of the Publish button (68% of
+  // it) and 2520px2 of the Status control, at 1280x800. It was reported from
+  // a live preview session, with a screenshot.
+  //
+  // Nothing caught it because the overlay carried `pointer-events: none`,
+  // and the repo's occlusion guard (e2e/ui-visibility.js's expectReachable)
+  // decides "covered" with document.elementFromPoint at the control's
+  // centre — a HIT test, which a pointer-events:none overlay is invisible
+  // to. The control stayed clickable while its label was unreadable, so the
+  // guard stayed green. e2e/admin-no-occlusion.spec.js now also asserts the
+  // GEOMETRIC case in a browser; this is the pure-fs half that runs in the
+  // required node-unit-lints lane.
+  test("publish-step-hint.js renders in flow — no position:fixed overlay", () => {
+    const src = fs.readFileSync(path.join(ADMIN_DIR, "publish-step-hint.js"), "utf8");
+    expect(
+      fixedPositionEvidence(src),
+      "publish-step-hint.js must render its state bar in normal document flow. A " +
+        "position:fixed overlay paints over the very toolbar controls the bar " +
+        "describes (measured: 68% of the Publish button, 47% of the Status control " +
+        "at 1280x800 on Decap 3.15.1) — and `pointer-events: none` hides that from " +
+        "the hit-test-based occlusion guard, so it ships green.",
+    ).toEqual([]);
+  });
+
+  // Guards the render loop that killed a live page target when
+  // local-save-indicator.js's first draft made the same mistake. Assigning
+  // textContent replaces the child text node even when the string is
+  // identical — a childList mutation inside document.documentElement, the
+  // exact subtree this shim's MutationObserver watches with subtree:true.
+  // render() would then feed the observer that called it, and observer
+  // callbacks are microtasks, so the loop never yields. A lexical check on a
+  // leaf token, not a claim about code structure.
+  test("publish-step-hint.js compares before it writes textContent", () => {
+    const src = fs.readFileSync(path.join(ADMIN_DIR, "publish-step-hint.js"), "utf8");
+    expect(
+      /textContent\s*!==/.test(src),
+      "publish-step-hint.js must compare textContent before assigning it — an " +
+        "unconditional write feeds this shim's own MutationObserver and wedges the " +
+        "page (the exact failure local-save-indicator.js's first draft shipped past " +
+        "a fully green pure-fs suite).",
     ).toBe(true);
   });
 
@@ -191,10 +309,12 @@ test.describe("issue #329 item 8 — local-mode save/status indicator", () => {
   test("local-save-indicator.js does not use position:fixed", () => {
     const src = fs.readFileSync(path.join(ADMIN_DIR, LOCAL_SAVE_INDICATOR), "utf8");
     expect(
-      /position\s*:\s*fixed/i.test(src),
-      "local-save-indicator.js must live in the toolbar row (no position:fixed) — a " +
-        "fixed overlay would collide with publish-step-hint.js's fixed top-centre notice",
-    ).toBe(false);
+      fixedPositionEvidence(src),
+      "local-save-indicator.js must live in the toolbar row (no position:fixed) — no " +
+        "admin shim may paint a fixed overlay over the editor toolbar. " +
+        "publish-step-hint.js did exactly that until 2026-08-31 and covered 68% of " +
+        "the Publish button; the same rule now applies to both files.",
+    ).toEqual([]);
   });
 
   // ── Regression guard: the render loop that killed the page ────────────
