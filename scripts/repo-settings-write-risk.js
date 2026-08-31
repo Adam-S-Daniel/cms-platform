@@ -404,7 +404,12 @@ function planWrites(plan) {
         kind: "ruleset-put",
         name: put.name,
         live: put.live,
-        desired: put.body,
+        // `desiredSorted` carries the manifest body under the SAME
+        // normalization the live side already went through. Falling back to
+        // the raw body keeps an older plan shape working, but it compares
+        // sorted against unsorted and will read array ORDER as a delta — see
+        // buildFixPlan's note.
+        desired: put.desiredSorted || put.body,
       });
     for (const post of p.posts || [])
       writes.push({

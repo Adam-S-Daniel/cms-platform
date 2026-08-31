@@ -1875,6 +1875,19 @@ function buildFixPlan(manifest, results) {
         // against, so the classifier's delta is the audit's delta and not a
         // second, subtly different one.
         live: normalizeRuleset(liveByName.get(name)).projected,
+        // …and the SAME normalization applied to the desired side, for the
+        // classifier only. `body` above stays the raw manifest body because
+        // that is what gets PUT; but normalizeRuleset SORTS the live side
+        // (rules, contexts, bypass actors, ref-name globs), and the manifest
+        // lists them in whatever order a human wrote them. Comparing sorted
+        // against unsorted made array ORDER read as a difference: measured
+        // 2026-08-31 on run 33437449511, where `cms-feature-branches` reported
+        // "`conditions` differs" on both consumers whose conditions were
+        // identical — the real delta was a bypass actor. Fail-closed, so it
+        // gated rather than waved anything through, but a classifier that
+        // gates ordinary tightenings is the daily-approval habit this whole
+        // mechanism exists to end.
+        desiredSorted: sortRuleset({ name, ...desired[name] }),
       });
     }
     const posts = r.findings
