@@ -1623,4 +1623,459 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     });
     expect(script.ENV_FIX_FORBIDDEN).toContain("repo-settings");
   });
+
+  // ── Security-analysis surface (a FIFTH managed surface: Dependabot alerts +
+  // Dependabot security updates, own GET/PUT/DELETE endpoint PER KEY where the
+  // HTTP METHOD — not the request body — carries the enable/disable value;
+  // added 2026-08-31). No live capture of these two endpoints was possible
+  // from this sandbox (same "no gh/network access" constraint the hand-built
+  // environments fixtures above note), so the fetch-path tests below drive
+  // `fetchSecurityAnalysis` through `fakeApi` against the documented response
+  // shapes (204-empty / 404 / 403 / the 200-JSON {enabled,paused} form) rather
+  // than a literal live-captured JSON file. ─────────────────────────────────
+
+  test("fetchSecurityAnalysis: an empty (204) body on both endpoints maps to {enabled:true}", () => {
+    // The vulnerability-alerts endpoint's documented "enabled" response has
+    // NO JSON body at all — an HTTP 204. fakeApi's function-route form
+    // returns its value VERBATIM (never JSON.stringified), which is what
+    // lets a route simulate a truly empty stdout string.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    const out = script.fetchSecurityAnalysis(repo, null, api);
+    expect(out.vulnerabilityAlerts).toEqual({ enabled: true });
+    expect(out.automatedSecurityFixes).toEqual({ enabled: true });
+  });
+
+  test("fetchSecurityAnalysis: automated-security-fixes' 200 JSON {enabled,paused} shape maps to {enabled} (paused is read but never carried through)", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: {
+        enabled: false,
+        paused: false,
+      },
+    });
+    const out = script.fetchSecurityAnalysis(repo, null, api);
+    expect(out.automatedSecurityFixes).toEqual({ enabled: false });
+  });
+
+  test("fetchSecurityAnalysis: a 404 on vulnerability-alerts maps to {enabled:false} — DRIFT, never a throw", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => {
+        const e = new Error("gh: HTTP 404 Not Found");
+        e.stderr = "HTTP 404";
+        throw e;
+      },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    let out;
+    expect(() => {
+      out = script.fetchSecurityAnalysis(repo, null, api);
+    }).not.toThrow();
+    expect(out.vulnerabilityAlerts).toEqual({ enabled: false });
+  });
+
+  test("fetchSecurityAnalysis: a 403 on vulnerability-alerts is an operational SKIP, not a throw", () => {
+    // GUARD: this is the departure from "a GitHub 404 means not authorized" —
+    // see fetchSecurityAnalysisKey's header comment for why a 404 here is
+    // safe to read as "genuinely disabled" (fetchActionsPermissions has
+    // already proven Administration:Read on this token/repo earlier in the
+    // same fetchLive call). A 403 gets the DIFFERENT, informational-skip
+    // treatment: the read-only PATs predate this surface, so a scope gap is
+    // expected on day one and must not take the whole scan down.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => {
+        const e = new Error(
+          "gh: HTTP 403 Resource not accessible by personal access token",
+        );
+        e.stderr = "HTTP 403";
+        throw e;
+      },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    let out;
+    expect(() => {
+      out = script.fetchSecurityAnalysis(repo, null, api);
+    }).not.toThrow();
+    expect(out.vulnerabilityAlerts.skipped).toBe(true);
+    expect(out.vulnerabilityAlerts.reason).toMatch(/vulnerability-alerts/);
+    expect(out.vulnerabilityAlerts.reason).toMatch(/403/);
+  });
+
+  test("fetchSecurityAnalysis: any OTHER error (e.g. HTTP 500) propagates unchanged, never swallowed", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => {
+        const e = new Error("gh: HTTP 500 Internal Server Error");
+        e.stderr = "HTTP 500";
+        throw e;
+      },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    expect(() => script.fetchSecurityAnalysis(repo, null, api)).toThrow(/500/);
+  });
+
+  test("fetchSecurityAnalysis: a non-empty non-JSON body is a guarded operational error, not a raw SyntaxError", () => {
+    // Locks the JSON.parse guard: a genuinely malformed body must name the
+    // endpoint in a clear error, never bubble up a bare "Unexpected token" it
+    // would take a stack trace to attribute to this endpoint.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => "not json",
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    let threw;
+    try {
+      script.fetchSecurityAnalysis(repo, null, api);
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeInstanceOf(Error);
+    expect(threw).not.toBeInstanceOf(SyntaxError);
+    expect(threw.message).toContain("vulnerability-alerts");
+  });
+
+  test("fetchSecurityAnalysis: a parsed JSON body with no boolean `enabled` is an operational failure, never a silent {enabled:true} default", () => {
+    // The {enabled:true} default is legitimate ONLY for the empty/204 shape
+    // (handled before JSON.parse ever runs) — a body that DID parse but
+    // carries no boolean `enabled` is an unexpected shape and must fail loud.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: { some: "unexpected shape" },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    expect(() => script.fetchSecurityAnalysis(repo, null, api)).toThrow(
+      /vulnerability-alerts/,
+    );
+  });
+
+  test("fetchSecurityAnalysis: a self-raised shape error whose BODY contains \"Not Found\" still throws — it is never re-read as {enabled:false}", () => {
+    // REGRESSION GUARD. The unexpected-shape error interpolates the raw
+    // response body into its message, and the catch below it status-matches on
+    // /HTTP 404|Not Found/i. Untagged, a success body merely CONTAINING that
+    // text would be caught by this function's OWN error and silently downgraded
+    // to `{enabled:false}` — reporting "Dependabot alerts are off" for a repo
+    // whose alerts were never actually read. The shapeError tag is what keeps a
+    // failure this module raised out of the transport-status matching.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: { message: "Not Found" },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    expect(() => script.fetchSecurityAnalysis(repo, null, api)).toThrow(
+      /unexpected JSON shape/,
+    );
+  });
+
+  test("diffSecurityAnalysis: a repo already at the desired baseline yields NO findings and NO informationals", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const desired = {
+      vulnerability_alerts: true,
+      automated_security_fixes: true,
+    };
+    const live = {
+      vulnerabilityAlerts: { enabled: true },
+      automatedSecurityFixes: { enabled: true },
+    };
+    const findings = [];
+    const informational = [];
+    script.diffSecurityAnalysis(repo, desired, live, findings, informational);
+    expect(findings).toEqual([]);
+    expect(informational).toEqual([]);
+  });
+
+  test("diffSecurityAnalysis: a live false against desired true is exactly one endpoint-tagged security-analysis-drift finding", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const desired = {
+      vulnerability_alerts: true,
+      automated_security_fixes: true,
+    };
+    const live = {
+      vulnerabilityAlerts: { enabled: false },
+      automatedSecurityFixes: { enabled: true },
+    };
+    const findings = [];
+    const informational = [];
+    script.diffSecurityAnalysis(repo, desired, live, findings, informational);
+    expect(findings).toEqual([
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        live: false,
+        desired: true,
+      },
+    ]);
+    expect(informational).toEqual([]);
+  });
+
+  test("diffSecurityAnalysis: a {skipped:true} live entry is ONE security-analysis-skipped informational and ZERO findings", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const desired = {
+      vulnerability_alerts: true,
+      automated_security_fixes: true,
+    };
+    const live = {
+      vulnerabilityAlerts: {
+        skipped: true,
+        reason:
+          "vulnerability-alerts returned HTTP 403 — the read token lacks this surface",
+      },
+      automatedSecurityFixes: { enabled: true },
+    };
+    const findings = [];
+    const informational = [];
+    script.diffSecurityAnalysis(repo, desired, live, findings, informational);
+    expect(findings).toEqual([]);
+    expect(informational).toEqual([
+      {
+        repo,
+        kind: "security-analysis-skipped",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        reason:
+          "vulnerability-alerts returned HTTP 403 — the read token lacks this surface",
+        fixSkip: true,
+      },
+    ]);
+  });
+
+  // buildFixPlan ordering + methods — THE DEPENDENCY-ORDER REGRESSION GUARD:
+  // Dependabot security updates require Dependabot alerts to already be on,
+  // so an ENABLE must land vulnerability_alerts BEFORE automated_security_
+  // fixes, and a DISABLE must land automated_security_fixes BEFORE
+  // vulnerability_alerts (undo the dependent feature first). Both cases below
+  // deliberately feed the findings array in the OPPOSITE order from what
+  // buildFixPlan must emit, so a regression that just preserved input order
+  // (instead of enforcing the real dependency) would fail this test.
+  test("buildFixPlan: security-analysis ENABLE order is vulnerability_alerts THEN automated_security_fixes (the dependency-order regression guard)", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "automated_security_fixes",
+        endpoint: script.AUTOMATED_SECURITY_FIXES_ENDPOINT,
+        live: false,
+        desired: true,
+      },
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        live: false,
+        desired: true,
+      },
+    ];
+    const plan = script.buildFixPlan(manifest, [
+      { repo, findings, informational: [], liveRepo: {}, liveRulesets: [] },
+    ]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].securityWrites).toEqual([
+      {
+        endpoint: `repos/${repo}/vulnerability-alerts`,
+        method: "PUT",
+        key: "vulnerability_alerts",
+        desired: true,
+      },
+      {
+        endpoint: `repos/${repo}/automated-security-fixes`,
+        method: "PUT",
+        key: "automated_security_fixes",
+        desired: true,
+      },
+    ]);
+  });
+
+  test("buildFixPlan: security-analysis DISABLE order is automated_security_fixes THEN vulnerability_alerts (the dependency-order regression guard, reversed)", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        live: true,
+        desired: false,
+      },
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "automated_security_fixes",
+        endpoint: script.AUTOMATED_SECURITY_FIXES_ENDPOINT,
+        live: true,
+        desired: false,
+      },
+    ];
+    const plan = script.buildFixPlan(manifest, [
+      { repo, findings, informational: [], liveRepo: {}, liveRulesets: [] },
+    ]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].securityWrites).toEqual([
+      {
+        endpoint: `repos/${repo}/automated-security-fixes`,
+        method: "DELETE",
+        key: "automated_security_fixes",
+        desired: false,
+      },
+      {
+        endpoint: `repos/${repo}/vulnerability-alerts`,
+        method: "DELETE",
+        key: "vulnerability_alerts",
+        desired: false,
+      },
+    ]);
+  });
+
+  test("describeFinding: security-analysis-drift names the key and the endpoint", () => {
+    const script = loadScript();
+    const line = script.describeFinding({
+      repo: "o/r",
+      kind: "security-analysis-drift",
+      key: "vulnerability_alerts",
+      endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+      live: false,
+      desired: true,
+    });
+    expect(line).toContain("vulnerability_alerts");
+    expect(line).toContain(script.VULNERABILITY_ALERTS_ENDPOINT);
+    expect(line).toContain("false");
+    expect(line).toContain("true");
+  });
+
+  test("describeInformational: security-analysis-skipped reads as an OPERATIONAL skip, never as drift", () => {
+    const script = loadScript();
+    const line = script.describeInformational({
+      repo: "o/r",
+      kind: "security-analysis-skipped",
+      key: "vulnerability_alerts",
+      endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+      reason:
+        "vulnerability-alerts returned HTTP 403 — the read token lacks this surface",
+      fixSkip: true,
+    });
+    expect(line).toMatch(/SKIPPED/);
+    expect(line).toMatch(/OPERATIONAL skip/);
+    expect(line).toMatch(/NOT drift/);
+    // A real drift line always carries the live -> desired arrow; the skip
+    // line must not, or it would read as an (unresolved) drift finding.
+    expect(line).not.toContain("->");
+  });
+
+  test("loadManifest hard-fails on a non-boolean security_analysis_defaults value", () => {
+    // These two endpoints are enable/disable only (PUT vs. DELETE with no
+    // body) — a string value has no PUT payload to carry it, so a typo like
+    // `"true"` (a truthy STRING, not the boolean) must fail loudly at load
+    // time rather than silently reach buildFixPlan's `f.desired ? "PUT" :
+    // "DELETE"` truthiness check and coerce to the same outcome by accident.
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo: {}",
+        "security_analysis_defaults:",
+        '  vulnerability_alerts: "true"',
+        "",
+      ].join("\n"),
+    );
+    expect(() => script.loadManifest(manifestPath)).toThrow(
+      /security_analysis_defaults\.vulnerability_alerts must be a boolean/,
+    );
+  });
+
+  test("loadManifest hard-fails on an undeclared repos.<repo>.security_analysis key", () => {
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo:",
+        "    security_analysis:",
+        "      grouped_security_updates: true",
+        "",
+      ].join("\n"),
+    );
+    expect(() => script.loadManifest(manifestPath)).toThrow(
+      /repos\.Owner\/Repo\.security_analysis\.grouped_security_updates is not a MANAGED_SECURITY_ANALYSIS_KEY/,
+    );
+  });
+
+  // ── fetchLive gating (mirrors the two existing environments-gating tests
+  // above — same backward-compatibility shape, one surface further out): a
+  // NEW positional arg defaulting to [] must never break an existing 3- or
+  // 4-arg fetchLive call, so fakeApi's closed route map (throws "unrouted
+  // endpoint" on anything not listed) is the proof the fetch is genuinely
+  // conditional and not merely "usually empty". ────────────────────────────
+  test("fetchLive: NO security-analysis call is made when desiredSecurityKeys is omitted/empty (no wasted calls, no break on old call sites)", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/adamdaniel.ai";
+    const api = fakeApi({
+      [`repos/${repo}`]: fixture("adamdaniel.repo.json"),
+      [`repos/${repo}/rulesets?per_page=100`]: [],
+      [`repos/${repo}/actions/permissions`]: fixture(
+        "adamdaniel.actions-permissions.json",
+      ),
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        fixture("adamdaniel.fork-pr-approval.json"),
+      // Deliberately NO route for vulnerability-alerts / automated-security-
+      // fixes — if fetchLive called either anyway, fakeApi's "unrouted
+      // endpoint" throw catches it, exactly like the environments-gating
+      // test this one mirrors.
+    });
+    let live;
+    expect(() => {
+      live = script.fetchLive(repo, null, api, []);
+    }).not.toThrow();
+    expect(live.liveSecurityAnalysis).toEqual({});
+  });
+
+  test("fetchLive: WITH desiredSecurityKeys, both endpoints are called and bundled as liveSecurityAnalysis", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}`]: fixture("cms-platform.repo.json"),
+      [`repos/${repo}/rulesets?per_page=100`]: [],
+      [`repos/${repo}/actions/permissions`]: fixture(
+        "cms-platform.actions-permissions.json",
+      ),
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        fixture("cms-platform.fork-pr-approval.json"),
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: { enabled: true },
+    });
+    const live = script.fetchLive(
+      repo,
+      null,
+      api,
+      [],
+      ["vulnerability_alerts", "automated_security_fixes"],
+    );
+    expect(live.liveSecurityAnalysis).toEqual({
+      vulnerabilityAlerts: { enabled: true },
+      automatedSecurityFixes: { enabled: true },
+    });
+  });
 });

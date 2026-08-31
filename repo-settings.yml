@@ -49,6 +49,28 @@
 # `--fix` must never WRITE, at any drift state — see the `repo-settings`
 # environment below for why (it gates the apply-in-CI workflow's own reviewer
 # approval, so a write to it from `--fix` would be able to remove its own gate).
+#
+# SECURITY ANALYSIS (Dependabot alerts + Dependabot security updates) is a
+# FIFTH managed surface: effective per repo = shallow merge(security_analysis_
+# defaults, repos.<repo>.security_analysis), every key in the script's
+# MANAGED_SECURITY_ANALYSIS_KEYS. Like Actions permissions, these do NOT live
+# on `repos/{owner}/{repo}` — but unlike EVERY other surface above, each key
+# is its own GET/PUT/DELETE endpoint where the HTTP METHOD carries the desired
+# value, not the request body (both PUT and DELETE are bodyless here):
+#   - vulnerability_alerts -> repos/{owner}/{repo}/vulnerability-alerts. GET
+#     returns HTTP 204 (empty body, no JSON) when enabled and 404 when
+#     disabled; PUT enables, DELETE disables.
+#   - automated_security_fixes -> repos/{owner}/{repo}/automated-security-fixes.
+#     GET returns 200 JSON {enabled, paused} on current GitHub (older/edge
+#     behaviour was the same 204/404-empty shape as above, and the script
+#     tolerates both); PUT enables, DELETE disables. Only `enabled` is
+#     managed — `paused` is GitHub's own rate-limiting backoff, not a policy
+#     this manifest asserts against.
+# Grouped security updates (the "batch minor/patch bumps into one PR" toggle)
+# has NO repo-level REST endpoint at all — it is not part of
+# `security_and_analysis` and there is no dedicated GET/PUT for it — so it is
+# permanently OUT OF SCOPE here and stays a manual settings-UI click. That is
+# a deliberate omission, not something this manifest forgot to declare.
 version: 1
 
 settings_defaults:
@@ -144,6 +166,52 @@ actions_permissions_defaults:
   # are currently public so the value applies. As-found 2026-07-13 on all three:
   # first_time_contributors — the drift this leaf corrects on the next `--fix`.
   approval_policy: all_external_contributors
+
+# Security-analysis defaults (the FIFTH managed surface — own GET/PUT/DELETE
+# endpoint PER KEY, method-carries-the-value, no request body; see the
+# header). Both leaves are declared identically on all three repos, so they
+# live only here — desired VALUES, reconciled by a human running
+# `node scripts/audit-repo-settings.js --fix --yes` (there is no write
+# credential in CI, same standing contract as every other surface), so the
+# audit will legitimately keep reporting drift on whichever repos are off
+# until that is run.
+security_analysis_defaults:
+  # why: Dependabot ALERTS — the feed of "this dependency has a known CVE"
+  # that every other Dependabot surface in this repo depends on. Measured
+  # 2026-08-31: `GET /repos/Adam-S-Daniel/cms-platform/dependabot/alerts`
+  # answered HTTP 403 "Dependabot alerts are disabled for this repository" —
+  # an explicit, unambiguous feature-off message (not the ambiguous bare 404
+  # this account otherwise treats as "not authorized, not not there"), so
+  # this is a MEASURED fact about the live repo, not an inference. This leaf
+  # is the prerequisite for automated_security_fixes below — security updates
+  # cannot open a PR resolving an alert that does not exist, which is also
+  # why `--fix`'s write order enables this key FIRST (scripts/audit-repo-
+  # settings.js buildFixPlan) — see that script's header comment.
+  vulnerability_alerts: true
+  # why: Dependabot SECURITY updates — the leaf that matters most here,
+  # because THREE places in this codebase already describe a security
+  # fast-path that does not currently exist while this is off:
+  # .github/workflows/dependabot-auto-merge.yml's header ("A vulnerability
+  # bump opens a PR immediately, lands here on the same auto-merge gate, and
+  # ships as soon as the test matrix is green"), .github/dependabot.yml's
+  # cooldown comment ("security updates bypass cooldown by GitHub's spec"),
+  # and the account-level AGENTS.md guidance on dependency cooldown. All
+  # three are true statements about what GitHub DOES — but all three
+  # describe a lane that literally cannot fire while this leaf is off,
+  # because GitHub never opens the security-update PR the fast-path assumes
+  # exists. That makes this repo's deliberate 7-day / 30-day version-update
+  # `cooldown` (.github/dependabot.yml) not a raised floor with an emergency
+  # exit underneath it — it is the ONLY path a fix can take, version or
+  # security, until this is enabled. The cooldown policy was designed
+  # assuming the escape hatch was there.
+  #
+  # It is also not a narrow risk: `e2e/` is not platform-internal machinery
+  # only this repo runs — both consumer sites (adamdaniel.ai, jodidaniel.com)
+  # check it out and execute it as part of their own CI, so a vulnerable
+  # Playwright / `serve` / `decap-server` dependency here reaches both
+  # consumers' pipelines, and the dozen third-party actions this repo pins
+  # (see the SHA-pinning policy above) all run holding a repo token.
+  automated_security_fixes: true
 
 ruleset_library:
   # why: = live cms-platform ruleset 17169281 as-found 2026-07-10 — protects

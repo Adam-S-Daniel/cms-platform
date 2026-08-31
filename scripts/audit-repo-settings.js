@@ -39,6 +39,19 @@
  *     future apply unattended. Drift on a fix-forbidden environment is still a
  *     finding (still reaches the tracking issue) — it is only ever reported as
  *     a skipped fix item, never PUT.
+ *     Dependabot security-analysis (vulnerability_alerts + automated_security_
+ *     fixes) is a FIFTH surface, keyed to MANAGED_SECURITY_ANALYSIS_KEYS, shallow
+ *     merge(security_analysis_defaults, repos.<r>.security_analysis) like the
+ *     Actions-permissions surface above — but unlike every other surface in this
+ *     file, each key is its OWN GET/PUT/DELETE endpoint where the desired VALUE
+ *     is carried by the HTTP METHOD (PUT enables, DELETE disables), never a
+ *     request body. A 404 GET reads as genuinely disabled (safe only because
+ *     fetchActionsPermissions has already proven Administration:Read on this
+ *     token/repo earlier in the same fetchLive call — see fetchSecurityAnalysis's
+ *     header comment); a 403 is an operational SKIP (informational, never drift),
+ *     matching the fork-PR-approval 422 posture above. Grouped security updates
+ *     has NO repo-level REST endpoint at all and is therefore permanently out of
+ *     scope — it stays a manual settings-UI toggle, not an oversight.
  *   - default mode: READ-ONLY drift scan. Exit 0 clean / 2 drift / 1
  *     operational failure. Drift is a finding, not a breakage.
  *   - --issue: the audit-scheduled-runs.js tracking-issue lifecycle on the
@@ -55,7 +68,10 @@
  *     the drifted flag keys, PUTs drifted rulesets (matched BY NAME) with
  *     the full library body, POSTs manifest-only rulesets, PUTs drifted or
  *     absent environments (full manifest body, one PUT per environment) EXCEPT
- *     any ENV_FIX_FORBIDDEN name, then re-audits and exits non-zero if drift
+ *     any ENV_FIX_FORBIDDEN name, PUTs/DELETEs drifted security-analysis keys
+ *     (bodyless — vulnerability_alerts before automated_security_fixes on an
+ *     enable, the reverse order on a disable, since the latter DEPENDS on the
+ *     former being on), then re-audits and exits non-zero if drift
  *     persists. Live-only rulesets are NEVER deleted (reported as unmanaged;
  *     no --prune in v1); `default_branch` (FIX_FORBIDDEN_KEYS) is audited but
  *     never PATCHed, and an ENV_FIX_FORBIDDEN environment is CREATE-ONLY: it may
@@ -163,6 +179,29 @@ const MANAGED_ACTIONS_PERMISSION_KEYS = [
 const ACTIONS_PERMISSIONS_ENDPOINT = "actions/permissions";
 const FORK_PR_APPROVAL_ENDPOINT =
   "actions/permissions/fork-pr-contributor-approval";
+
+// The SSOT of Dependabot security-analysis keys the manifest may declare and
+// --fix may enable/disable. A FIFTH surface, and it looks nothing like the
+// four above: `vulnerability_alerts` and `automated_security_fixes` are NOT
+// part of `repos/{owner}/{repo}` (unlike MANAGED_REPO_KEYS) and are NOT a
+// shared GET-then-diff-then-PUT-the-whole-object endpoint the way Actions
+// permissions or an environment are — each key is its OWN standalone
+// GET/PUT/DELETE endpoint, and on THIS surface the desired VALUE is carried
+// by the HTTP METHOD, not by a request body: PUT enables, DELETE disables,
+// and both take NO body at all. Every other managed surface in this file
+// PATCHes or PUTs a JSON value; --fix's writes here are silent by
+// comparison — `applyWrite` has to special-case a bodyless call (see below).
+// Grouped security updates (the "group minor/patch upgrades into one PR"
+// toggle) has NO repo-level REST endpoint at all — it isn't part of
+// `security_and_analysis`, and there is no dedicated GET/PUT for it — so it
+// is deliberately OUT OF SCOPE for this script and stays a manual settings-UI
+// toggle. Do not go looking for a way to manage it here; there isn't one.
+const MANAGED_SECURITY_ANALYSIS_KEYS = [
+  "vulnerability_alerts",
+  "automated_security_fixes",
+];
+const VULNERABILITY_ALERTS_ENDPOINT = "vulnerability-alerts";
+const AUTOMATED_SECURITY_FIXES_ENDPOINT = "automated-security-fixes";
 
 // The SSOT of Environment keys the manifest may declare and --fix may PUT.
 // A FOURTH surface — GET/PUT repos/{owner}/{repo}/environments/{name}, one
@@ -346,6 +385,20 @@ function effectiveActionsPermissions(manifest, repo) {
   return {
     ...(manifest.actions_permissions_defaults || {}),
     ...(entry.actions_permissions || {}),
+  };
+}
+
+// Effective security-analysis settings for a repo: shallow merge of the
+// shared defaults and the repo's own overrides — only
+// MANAGED_SECURITY_ANALYSIS_KEYS are ever compared or written. Same shape as
+// effectiveActionsPermissions above (there is no environments-style "no
+// defaults block" carve-out here: unlike a reviewer list, "alerts on" is a
+// sane default for every repo in the fleet).
+function effectiveSecurityAnalysis(manifest, repo) {
+  const entry = (manifest.repos || {})[repo] || {};
+  return {
+    ...(manifest.security_analysis_defaults || {}),
+    ...(entry.security_analysis || {}),
   };
 }
 
@@ -679,6 +732,61 @@ function diffActionsPermissions(repo, desired, live, findings, informational) {
   }
 }
 
+// Maps a MANAGED_SECURITY_ANALYSIS_KEYS entry to the fetchSecurityAnalysis()
+// bundle field that carries it and the endpoint constant used for both the
+// GET (fetchSecurityAnalysis) and the enable/disable write (buildFixPlan).
+// One place to keep the key <-> field <-> endpoint triple in step, since
+// diffSecurityAnalysis and buildFixPlan both need all three.
+const SECURITY_ANALYSIS_FIELDS = {
+  vulnerability_alerts: {
+    liveKey: "vulnerabilityAlerts",
+    endpoint: VULNERABILITY_ALERTS_ENDPOINT,
+  },
+  automated_security_fixes: {
+    liveKey: "automatedSecurityFixes",
+    endpoint: AUTOMATED_SECURITY_FIXES_ENDPOINT,
+  },
+};
+
+// Security-analysis diff — a FIFTH surface, separate from every other one
+// above (own GET/PUT/DELETE endpoint PER KEY, not repos/{owner}/{repo} and
+// not one shared endpoint the way Actions permissions is). `live` is
+// fetchSecurityAnalysis()'s { vulnerabilityAlerts, automatedSecurityFixes }
+// bundle — each entry either { enabled } or the operational-skip shape
+// { skipped: true, reason }. Only the MANAGED_SECURITY_ANALYSIS_KEYS the
+// manifest declares are ever compared. A live entry that is missing
+// entirely (the surface was never fetched — see fetchLive's gating) is
+// treated the same as an explicit {skipped:true}: informational, never
+// drift, because there is nothing to diff against.
+function diffSecurityAnalysis(repo, desired, live, findings, informational) {
+  for (const key of MANAGED_SECURITY_ANALYSIS_KEYS) {
+    if (!(key in (desired || {}))) continue;
+    const { liveKey, endpoint } = SECURITY_ANALYSIS_FIELDS[key];
+    const entry = (live || {})[liveKey];
+    if (!entry || entry.skipped) {
+      informational.push({
+        repo,
+        kind: "security-analysis-skipped",
+        key,
+        endpoint,
+        reason: (entry && entry.reason) || "endpoint not read",
+        fixSkip: true,
+      });
+      continue;
+    }
+    if (!deepEqual(entry.enabled, desired[key])) {
+      findings.push({
+        repo,
+        kind: "security-analysis-drift",
+        key,
+        endpoint,
+        live: entry.enabled === undefined ? null : entry.enabled,
+        desired: desired[key],
+      });
+    }
+  }
+}
+
 // Order-normalize a reviewers list to [{type,id}] sorted by (type, id).
 // Applied to BOTH the projected-live and the manifest-declared side so
 // reviewer order can never flap the audit (mirrors sortRuleset's treatment of
@@ -809,6 +917,12 @@ function describeFinding(f) {
       `\`${JSON.stringify(f.live)}\` -> manifest \`${JSON.stringify(f.desired)}\``
     );
   }
+  if (f.kind === "security-analysis-drift") {
+    return (
+      `security setting \`${f.key}\` (${f.endpoint}): live ` +
+      `\`${JSON.stringify(f.live)}\` -> manifest \`${JSON.stringify(f.desired)}\``
+    );
+  }
   if (f.kind === "ruleset-missing")
     return `ruleset \`${f.ruleset}\`: declared in the manifest, absent live`;
   if (f.kind === "ruleset-unmanaged") {
@@ -860,6 +974,13 @@ function describeInformational(f) {
     return (
       `ruleset \`${f.ruleset}\`: live body carries unknown field \`${f.key}\` ` +
       `(tolerated; --fix SKIPS this ruleset — a manifest-built PUT would drop it)`
+    );
+  }
+  if (f.kind === "security-analysis-skipped") {
+    return (
+      `security setting \`${f.key}\` (${f.endpoint}): SKIPPED — ${f.reason} ` +
+      `(this is an OPERATIONAL skip — the token cannot read this surface — NOT drift; ` +
+      `--fix leaves it untouched)`
     );
   }
   return (
@@ -1015,6 +1136,28 @@ function loadManifest(manifestPath) {
         );
       }
     }
+    for (const [key, value] of Object.entries(
+      (entry && entry.security_analysis) || {},
+    )) {
+      if (!MANAGED_SECURITY_ANALYSIS_KEYS.includes(key)) {
+        throw new Error(
+          `${manifestPath}: repos.${repo}.security_analysis.${key} is not a MANAGED_SECURITY_ANALYSIS_KEY`,
+        );
+      }
+      // These two endpoints are enable/disable only (PUT vs. DELETE with no
+      // body — see the MANAGED_SECURITY_ANALYSIS_KEYS header comment), so a
+      // string/number value is meaningless: there is no PUT payload to carry
+      // it. Fail loudly at load time rather than let buildFixPlan's
+      // `f.desired ? "PUT" : "DELETE"` truthiness check silently coerce a
+      // typo'd `"true"` (a non-empty string, hence truthy) into the SAME
+      // outcome as the real boolean and mask the mistake.
+      if (typeof value !== "boolean") {
+        throw new Error(
+          `${manifestPath}: repos.${repo}.security_analysis.${key} must be a boolean ` +
+            `(enable/disable only), got ${JSON.stringify(value)}`,
+        );
+      }
+    }
     for (const [name, libName] of Object.entries(
       (entry && entry.rulesets) || {},
     )) {
@@ -1062,6 +1205,21 @@ function loadManifest(manifestPath) {
     if (!MANAGED_ACTIONS_PERMISSION_KEYS.includes(key)) {
       throw new Error(
         `${manifestPath}: actions_permissions_defaults.${key} is not a MANAGED_ACTIONS_PERMISSION_KEY`,
+      );
+    }
+  }
+  for (const [key, value] of Object.entries(
+    doc.security_analysis_defaults || {},
+  )) {
+    if (!MANAGED_SECURITY_ANALYSIS_KEYS.includes(key)) {
+      throw new Error(
+        `${manifestPath}: security_analysis_defaults.${key} is not a MANAGED_SECURITY_ANALYSIS_KEY`,
+      );
+    }
+    if (typeof value !== "boolean") {
+      throw new Error(
+        `${manifestPath}: security_analysis_defaults.${key} must be a boolean (enable/disable ` +
+          `only), got ${JSON.stringify(value)}`,
       );
     }
   }
@@ -1115,8 +1273,23 @@ function readToken(owner, fixMode) {
 // a no-op default so every existing positional call site keeps working
 // unchanged; fetchEnvironments is only ever called when the repo actually
 // declares environments (no wasted calls on the two-thirds of repos that
-// don't).
-function fetchLive(repo, token, api = ghApi, declaredEnvNames = []) {
+// don't). `desiredSecurityKeys` (default []) is the same gating shape one
+// positional argument further out, for the SAME reason plus one more: every
+// EXISTING call site in e2e/repo-settings-audit.test.js builds a `fakeApi`
+// whose route map is an exact, closed set that throws `fakeApi: unrouted
+// endpoint` on anything not in it, so an unconditional new fetch here would
+// break every one of those tests even though none of them changed. Gating on
+// the caller having actually declared a security_analysis key keeps every
+// 3-and-4-arg call passing unchanged and avoids two calls per scan on repos
+// (there are none today, but the manifest doesn't forbid it) that manage
+// nothing on this surface. Do NOT make this fetch unconditional.
+function fetchLive(
+  repo,
+  token,
+  api = ghApi,
+  declaredEnvNames = [],
+  desiredSecurityKeys = [],
+) {
   const liveRepo = JSON.parse(api(`repos/${repo}`, { token }));
   const list = JSON.parse(
     api(`repos/${repo}/rulesets?per_page=100`, { token }),
@@ -1130,11 +1303,26 @@ function fetchLive(repo, token, api = ghApi, declaredEnvNames = []) {
       JSON.parse(api(`repos/${repo}/rulesets/${r.id}`, { token })),
     );
   }
+  // fetchActionsPermissions runs BEFORE fetchSecurityAnalysis below — that
+  // ordering is load-bearing, not incidental (see fetchSecurityAnalysis's own
+  // header comment for why): it is THE Administration:Read gate for the whole
+  // scan, and only once it has succeeded is a 404 on the security-analysis
+  // endpoints safe to read as "genuinely disabled" rather than "token can't
+  // see this repo at all". Do not reorder these two calls.
   const liveActionsPermissions = fetchActionsPermissions(repo, token, api);
   const liveEnvironments = declaredEnvNames.length
     ? fetchEnvironments(repo, declaredEnvNames, token, api)
     : {};
-  return { liveRepo, liveRulesets, liveActionsPermissions, liveEnvironments };
+  const liveSecurityAnalysis = desiredSecurityKeys.length
+    ? fetchSecurityAnalysis(repo, token, api)
+    : {};
+  return {
+    liveRepo,
+    liveRulesets,
+    liveActionsPermissions,
+    liveEnvironments,
+    liveSecurityAnalysis,
+  };
 }
 
 // The Actions-permissions surface (two standalone endpoints). This is THE
@@ -1175,6 +1363,127 @@ function fetchActionsPermissions(repo, token, api = ghApi) {
     }
   }
   return { permissions, forkApproval };
+}
+
+// The Dependabot security-analysis surface: two standalone endpoints,
+// GET/PUT/DELETE repos/{owner}/{repo}/vulnerability-alerts and
+// .../automated-security-fixes, where the enable/disable VALUE is carried by
+// the HTTP METHOD rather than a request body — `PUT` = on, `DELETE` = off,
+// both bodiless. GET on `vulnerability-alerts` returns HTTP 204 (empty body)
+// when enabled and 404 when disabled, with no JSON either way; GET on
+// `automated-security-fixes` returns 200 JSON `{enabled, paused}` on current
+// GitHub, but tolerates the older/edge 204-empty/404 shape too, because we
+// have not verified every account/repo vintage returns the newer shape.
+//
+// Three things worth being explicit about, because they are the load-bearing
+// reasoning and not obvious from the code alone:
+//
+// (a) A 404 here is read as "the feature is genuinely OFF". That is, on its
+// face, backwards from this account's own standing rule that "a GitHub 404
+// means NOT AUTHORIZED, not NOT THERE" — and it would be unsound applied in
+// isolation. It is sound HERE specifically because fetchLive calls
+// fetchActionsPermissions BEFORE this function (see fetchLive's comment on
+// that ordering): GET actions/permissions has no public exemption and throws
+// a loud operational failure the moment a token lacks Administration:Read on
+// this repo, so by the time fetchSecurityAnalysis ever runs, admin-read
+// access has ALREADY been proven for this exact token on this exact repo. A
+// 404 that survives that gate cannot be a scope problem; it can only be the
+// documented "disabled" response. Do not read a 404 here as "disabled" in any
+// code path that has not first cleared that gate.
+//
+// (b) HTTP 403 is an operational SKIP (informational — never drift), not a
+// hard failure, and that is a DELIBERATE departure from how this file treats
+// every other unexpected-status case (which all rethrow). This surface is
+// being bolted onto an ALREADY-GREEN daily audit whose read-only PATs
+// (REPO_SETTINGS_READ_*) were minted before MANAGED_SECURITY_ANALYSIS_KEYS
+// existed — a token that predates a scope grant is exactly the shape a scan
+// runs into on day one of a new managed surface. Throwing here would take the
+// WHOLE fleet scan down (every repo, every surface) over one repo's missing
+// grant on this one surface, converting a working alerting lane into a
+// broken one for a gap that is expected to close as the PATs get re-minted.
+// The skip still reports LOUDLY — printReport turns every
+// `security-analysis-skipped` informational into a `::notice` per repo via
+// describeInformational, so it is never a silent green — matching the exact
+// contract the private-repo fork-approval 422 skip already uses in
+// fetchActionsPermissions above.
+//
+// (c) `automated-security-fixes`'s `paused` field is deliberately NOT
+// managed here — MANAGED_SECURITY_ANALYSIS_KEYS carries only `enabled`. GitHub
+// pauses security fixes on its own (e.g. after a burst of failed CI runs on
+// the auto-opened PRs) as a rate-limiting behaviour, not a policy choice this
+// manifest should fight; asserting `paused: false` would turn GitHub's own
+// backoff into permanent drift.
+//
+// `api` is injectable (defaults to the real gh-backed ghApi) so the fetch
+// path is unit-testable without a network / gh auth.
+// A shape failure this module raises ITSELF (as opposed to a gh transport
+// error), tagged so the catch below can tell the two apart.
+function shapeError(message) {
+  const err = new Error(message);
+  err.shapeError = true;
+  return err;
+}
+
+function fetchSecurityAnalysisKey(repo, endpoint, token, api) {
+  try {
+    const raw = api(`repos/${repo}/${endpoint}`, { token });
+    const trimmed = typeof raw === "string" ? raw.trim() : raw;
+    if (!trimmed) return { enabled: true }; // HTTP 204, empty body
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw shapeError(
+        `repos/${repo}/${endpoint} returned a non-empty, non-JSON body — ` +
+          `cannot determine enabled state`,
+      );
+    }
+    if (parsed && typeof parsed.enabled === "boolean") {
+      return { enabled: parsed.enabled };
+    }
+    // Parsed to JSON but carries no boolean `enabled` — an unexpected shape
+    // (not the 204-empty case, which is handled above and never reaches
+    // JSON.parse at all) is an operational failure, never a silent default.
+    throw shapeError(
+      `repos/${repo}/${endpoint} returned an unexpected JSON shape (no ` +
+        `boolean 'enabled'): ${trimmed}`,
+    );
+  } catch (e) {
+    // A shape error raised by THIS function must never be re-classified by the
+    // transport regexes below: its message interpolates the raw response body,
+    // so a body merely CONTAINING "Not Found" would otherwise be silently
+    // downgraded to `{enabled:false}` — an outcome attributed to something
+    // other than what produced it, the same defect class as reading `$?` from
+    // the wrong end of a pipe. Rethrow ours first; only gh's own failures
+    // reach the status matching.
+    if (e && e.shapeError) throw e;
+    const text = `${(e && e.stderr) || ""}${(e && e.message) || ""}`;
+    if (/HTTP 404|Not Found/i.test(text)) return { enabled: false };
+    if (/HTTP 403/.test(text)) {
+      return {
+        skipped: true,
+        reason: `${endpoint} returned HTTP 403 — the read token lacks this surface`,
+      };
+    }
+    throw e;
+  }
+}
+
+function fetchSecurityAnalysis(repo, token, api = ghApi) {
+  return {
+    vulnerabilityAlerts: fetchSecurityAnalysisKey(
+      repo,
+      VULNERABILITY_ALERTS_ENDPOINT,
+      token,
+      api,
+    ),
+    automatedSecurityFixes: fetchSecurityAnalysisKey(
+      repo,
+      AUTOMATED_SECURITY_FIXES_ENDPOINT,
+      token,
+      api,
+    ),
+  };
 }
 
 // The Environments surface: GET repos/{owner}/{repo}/environments/{name}, one
@@ -1262,9 +1571,16 @@ function scanRepos(manifest, repos, fixMode) {
     const owner = repo.split("/")[0];
     const token = readToken(owner, fixMode);
     const envNames = Object.keys(desiredEnvironments(manifest, repo));
+    const desiredSecurity = effectiveSecurityAnalysis(manifest, repo);
     let live;
     try {
-      live = fetchLive(repo, token, ghApi, envNames);
+      live = fetchLive(
+        repo,
+        token,
+        ghApi,
+        envNames,
+        Object.keys(desiredSecurity),
+      );
     } catch (e) {
       const envName = tokenEnvName(owner);
       console.error(
@@ -1303,6 +1619,15 @@ function scanRepos(manifest, repos, fixMode) {
       diff.findings,
       diff.informational,
     );
+    // The security-analysis surface (Dependabot alerts + security updates),
+    // likewise separate — own GET/PUT/DELETE endpoint per key.
+    diffSecurityAnalysis(
+      repo,
+      desiredSecurity,
+      live.liveSecurityAnalysis,
+      diff.findings,
+      diff.informational,
+    );
     results.push({ repo, ...diff, ...live });
   }
   return results;
@@ -1317,12 +1642,19 @@ function printReport(results) {
     const environments = r.findings.filter(
       (f) => f.kind === "environment-drift" || f.kind === "environment-absent",
     );
+    // security-analysis-drift MUST be excluded here too, or it silently
+    // miscounts into the `rulesets` bucket below — the same trap the
+    // environment findings were added to this exclusion chain to avoid.
+    const security = r.findings.filter(
+      (f) => f.kind === "security-analysis-drift",
+    );
     const rulesets = r.findings.filter(
       (f) =>
         f.kind !== "flag-drift" &&
         f.kind !== "actions-permission-drift" &&
         f.kind !== "environment-drift" &&
-        f.kind !== "environment-absent",
+        f.kind !== "environment-absent" &&
+        f.kind !== "security-analysis-drift",
     );
     if (r.findings.length === 0) {
       console.log(repoOkLine(r.repo, r.liveRulesets.length, r.informational));
@@ -1330,7 +1662,7 @@ function printReport(results) {
       console.log(
         `== ${r.repo}: DRIFT — ${flags.length} flag(s), ` +
           `${actions.length} actions-permission(s), ${environments.length} environment(s), ` +
-          `${rulesets.length} ruleset finding(s)`,
+          `${security.length} security-analysis setting(s), ${rulesets.length} ruleset finding(s)`,
       );
       for (const f of r.findings)
         console.log(
@@ -1591,6 +1923,44 @@ function buildFixPlan(manifest, results) {
       endpoint: `repos/${r.repo}/environments/${name}`,
       body: envDesired[name],
     }));
+    // Security-analysis writes — a FIFTH surface whose "write" is nothing
+    // like a PATCH/PUT body: the desired value is carried by the HTTP METHOD
+    // (PUT enables, DELETE disables), with no request body at all (see the
+    // MANAGED_SECURITY_ANALYSIS_KEYS header comment and applyWrite below).
+    //
+    // The ORDER these fire in is a real dependency, not cosmetics — Dependabot
+    // security updates cannot open a PR resolving an alert that doesn't
+    // exist, so `automated_security_fixes` REQUIRES `vulnerability_alerts` to
+    // already be on. Concretely:
+    //   - ENABLING both: vulnerability_alerts must land FIRST, or the
+    //     automated_security_fixes PUT would be turning on a feature whose
+    //     prerequisite isn't there yet.
+    //   - DISABLING both: automated_security_fixes must land FIRST — undo the
+    //     dependent feature before pulling out what it depends on, the
+    //     mirror image of the enable case.
+    // Every enable is emitted before every disable (rather than interleaving
+    // key-by-key) so the ordering stays correct even when one repo drifts in
+    // BOTH directions on the same run (one key needs to go on, the other
+    // off) — sorting by (desired DESC, fixed key order) rather than by
+    // whatever order `r.findings` happened to collect them in.
+    const securityFindings = r.findings.filter(
+      (f) => f.kind === "security-analysis-drift",
+    );
+    const ENABLE_ORDER = ["vulnerability_alerts", "automated_security_fixes"];
+    const DISABLE_ORDER = ["automated_security_fixes", "vulnerability_alerts"];
+    const securityWrites = [
+      ...ENABLE_ORDER.map((key) =>
+        securityFindings.find((f) => f.key === key && f.desired),
+      ).filter(Boolean),
+      ...DISABLE_ORDER.map((key) =>
+        securityFindings.find((f) => f.key === key && !f.desired),
+      ).filter(Boolean),
+    ].map((f) => ({
+      endpoint: `repos/${r.repo}/${SECURITY_ANALYSIS_FIELDS[f.key].endpoint}`,
+      method: f.desired ? "PUT" : "DELETE",
+      key: f.key,
+      desired: f.desired,
+    }));
     if (
       Object.keys(patchBody).length ||
       manualOnly.length ||
@@ -1600,7 +1970,8 @@ function buildFixPlan(manifest, results) {
       unmanaged.length ||
       actionsPuts.length ||
       envPuts.length ||
-      envManualOnly.length
+      envManualOnly.length ||
+      securityWrites.length
     ) {
       plan.push({
         repo: r.repo,
@@ -1613,6 +1984,7 @@ function buildFixPlan(manifest, results) {
         actionsPuts,
         envPuts,
         envManualOnly,
+        securityWrites,
       });
     }
   }
@@ -1679,6 +2051,11 @@ function printFixPlan(plan) {
           `and leave every future apply unattended). Reconcile by hand.`,
       );
     }
+    for (const w of p.securityWrites || []) {
+      console.log(
+        `   ${w.method} ${w.endpoint}  ${w.key} -> ${JSON.stringify(w.desired)} (no request body)`,
+      );
+    }
   }
 }
 
@@ -1701,10 +2078,42 @@ function applyFixPlan(plan) {
     for (const put of p.envPuts || []) {
       applyWrite(put.endpoint, "PUT", put.body);
     }
+    // Security-analysis writes carry NO body at all — the method IS the
+    // value (see MANAGED_SECURITY_ANALYSIS_KEYS above) — so `body` is
+    // deliberately omitted here rather than passed as `{}` or `undefined`
+    // explicitly; applyWrite's `body === undefined` branch below is what
+    // that omission triggers.
+    for (const w of p.securityWrites || []) {
+      applyWrite(w.endpoint, w.method);
+    }
   }
 }
 
+// `body === undefined` is a DISTINCT call shape from every other applyWrite
+// caller in this file, not an edge case of the same one: the security-
+// analysis endpoints (vulnerability-alerts, automated-security-fixes) take NO
+// request body on either PUT or DELETE — the method alone carries the
+// enable/disable value — so sending `--input -` with an empty/null payload
+// there would be sending a body an endpoint that doesn't expect one, not
+// "the same write with nothing in it". Every other caller (flag PATCH,
+// ruleset PUT/POST, actions-permissions PUT, environment PUT) keeps going
+// through the `body` branch completely unchanged — same success log, same
+// error lines including the `payload:` line, same thrown `err.operational`.
 function applyWrite(endpoint, method, body) {
+  if (body === undefined) {
+    try {
+      ghApi(endpoint, { method });
+      console.log(`applied ${method} ${endpoint} (no request body)`);
+    } catch (e) {
+      console.error(
+        `repo-settings-audit: ${method} ${endpoint} FAILED: ${e.message}`,
+      );
+      const err = new Error(`write failure: ${method} ${endpoint}`);
+      err.operational = true;
+      throw err;
+    }
+    return;
+  }
   const payload = JSON.stringify(body);
   try {
     ghApi(endpoint, { method, input: payload });
@@ -1859,6 +2268,10 @@ module.exports = {
   // Exported for the (w4) regression test: the fix-forbidden suffix must tell
   // the truth about each state, and that is only assertable on the real fn.
   describeFinding,
+  // Exported alongside it for the same reason (the security-analysis-skipped
+  // regression test needs to assert its wording directly, not through
+  // printReport's console.log side effect).
+  describeInformational,
   MARKER,
   ISSUE_TITLE,
   ISSUE_REPO,
@@ -1869,6 +2282,9 @@ module.exports = {
   FORK_PR_APPROVAL_ENDPOINT,
   MANAGED_ENVIRONMENT_KEYS,
   ENV_FIX_FORBIDDEN,
+  MANAGED_SECURITY_ANALYSIS_KEYS,
+  VULNERABILITY_ALERTS_ENDPOINT,
+  AUTOMATED_SECURITY_FIXES_ENDPOINT,
   KNOWN_RULE_TYPES,
   RULESET_SERVER_KEYS,
   RULESET_BODY_KEYS,
@@ -1881,6 +2297,7 @@ module.exports = {
   loadManifest,
   effectiveSettings,
   effectiveActionsPermissions,
+  effectiveSecurityAnalysis,
   desiredRulesets,
   desiredEnvironments,
   sortRuleset,
@@ -1891,9 +2308,11 @@ module.exports = {
   diffRepo,
   diffActionsPermissions,
   diffEnvironments,
+  diffSecurityAnalysis,
   fetchLive,
   fetchActionsPermissions,
   fetchEnvironments,
+  fetchSecurityAnalysis,
   fingerprint,
   fingerprintBlock,
   extractReportedFingerprints,
