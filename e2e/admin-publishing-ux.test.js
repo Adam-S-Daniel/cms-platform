@@ -313,6 +313,43 @@ test.describe("publishing UX phase 5 — the site gate", () => {
   });
 });
 
+test.describe("publishing UX phase 3 — the harness publishes the way an editor does", () => {
+  // THE REGRESSION THIS EXISTS FOR, measured on adamdaniel.ai run 33439336337.
+  //
+  // Every real-prod loop publishes through publishViaUi() in
+  // e2e/cms-editor-ui.js, whose old body was Status -> Ready -> Publish ->
+  // "Publish now". Phase 2 hides the Status control and phase 3 hides Decap's
+  // split Publish button on the PRODUCTION shell — and the old body did not
+  // simply fail to find a control, which would have been loud. It found the
+  // WRONG one: `getByRole("button", {name: /^Publish$/i})` skips the
+  // CSS-hidden Decap control and resolves to the platform's own button, so
+  // the click "succeeded", opened the inline confirmation, and only then did
+  // the `publish now` MENUITEM lookup find nothing. The entry was created,
+  // its PR opened, and the publish leg died about two minutes in.
+  //
+  // Nothing pure-fs could see that, and the unit-lint lane was green
+  // throughout. This is the cheap guard that the helper still knows both
+  // shells exist.
+  test("publishViaUi drives the platform Publish button, not only Decap's menu", () => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, "e2e", "cms-editor-ui.js"), "utf8");
+    expect(
+      src.includes("cms-publish-button"),
+      "publishViaUi() must drive #cms-publish-button on the production shell — Decap's " +
+        "split control is CSS-hidden there, and getByRole resolves the name 'Publish' to " +
+        "the platform's button instead, so the old Decap-only path fails at the menuitem",
+    ).toBe(true);
+    expect(
+      /Yes, publish/.test(src),
+      "publishViaUi() must confirm through the platform button's inline confirmation",
+    ).toBe(true);
+    expect(
+      /publish now/i.test(src),
+      "publishViaUi() must KEEP the Decap path for index-test.html and index-local.html, " +
+        "which have no platform button",
+    ).toBe(true);
+  });
+});
+
 test.describe("publishing UX phase 5 — one vocabulary, two surfaces", () => {
   // The §2.9 defect this whole phase exists to end: three vocabularies for
   // three states. Both surfaces must read their words from the shared model

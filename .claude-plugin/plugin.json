@@ -1,6 +1,6 @@
 {
   "name": "cms-platform",
-  "version": "0.1.96",
+  "version": "0.1.97",
   "description": "cms-platform's operational skills for its Jekyll + Decap CMS + AWS sites: admin config render, publish-loop and stuck-PR triage, cutting a release and reconciling consumer pins, preview environments, and the Playwright e2e harness.",
   "author": { "name": "Adam Daniel" }
 }

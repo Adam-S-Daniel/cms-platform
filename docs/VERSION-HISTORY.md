@@ -10,9 +10,57 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.96)
+## Version history (v0.1.0 → v0.1.97)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.97 — the harness has to publish the way an editor does.** v0.1.96
+hid Decap's Status dropdown and its split Publish button on the production
+shell (phases 2 and 3). Every real-prod loop publishes through
+`publishViaUi()` in `e2e/cms-editor-ui.js`, whose body was
+`Status -> Ready -> Publish -> "Publish now"`. The first prod-mutate dispatch
+after the bump failed about two minutes in
+([adamdaniel.ai run 33439336337](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/33439336337)):
+the entry was created and its PR opened, then the publish leg died.
+
+**The interesting part is HOW it failed, because it is the shape that
+defeats the obvious guard.** It did not fail to find a control — that would
+have been loud and immediate. `getByRole("button", { name: /^Publish$/i })`
+skips CSS-hidden elements, so it skipped Decap's hidden control and resolved
+to the PLATFORM's own `#cms-publish-button` instead. The click succeeded, the
+inline confirmation opened, and only then did the `publish now` MENUITEM
+lookup find nothing. One selector silently retargeted onto a different
+control with the same accessible name.
+
+Two things this cost, worth keeping:
+
+- **Hiding a control retargets every selector that matched it by NAME.**
+  The replacement was deliberately labelled "Publish" because that is the
+  right word for an editor; that is exactly what made it a drop-in for a
+  test selector aiming at something else. When a shim hides a control, audit
+  what selects it by role and name, not just what selects it by class.
+- **A green unit-lint lane is not evidence for a Decap-DOM change** — the
+  standing rule in AGENTS.md's definition of done, demonstrated again. 1656
+  pure-fs assertions passed over this. The live loop is what found it, which
+  is precisely why the loop is the acceptance test for these repos.
+
+Fixed by branching `publishViaUi()`: it drives `#cms-publish-button` plus its
+"Yes, publish" confirmation where that exists, and keeps the Decap
+Status→Ready→Publish-now path for `index-test.html` (the rehearsal surface,
+which deliberately keeps Decap's own controls) and `index-local.html` (no
+editorial workflow). The wait before clicking is load-bearing: the platform
+button only renders once `publish-progress.js` has found the entry's PR, one
+poll after Save, so without it the helper races the poller and falls through
+to the Decap branch on the very shell where Decap's control is hidden — the
+same bug in a new costume.
+
+Also hardened in the same change: `publish-button.js` no longer hides Decap's
+control on its "nothing to publish" branch. That branch normally means the
+entry is already live, where Decap renders no control anyway — but it is also
+what a FAILED PR match looks like, and hiding the only route to production
+while offering no replacement is the outcome that file's own header calls
+worse than either alone.
+
 
 **Why this is v0.1.96 and not v0.1.95, which its own PR said.** Two release
 PRs were in flight at once, and both claimed `v0.1.95`: this one and #362 (the
