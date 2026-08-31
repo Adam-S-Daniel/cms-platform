@@ -75,7 +75,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.95`** — `v0.1.0`–`v0.1.95` are all tagged GitHub
+**Current release: `v0.1.96`** — `v0.1.0`–`v0.1.96` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 That number is also carried by the two plugin manifests (`plugin.json` +
 `.claude-plugin/plugin.json`), and `release.yml` REFUSES to cut a tag whose
@@ -287,7 +287,7 @@ Two rules that came out of the fix and generalise past it:
   (acorn, string literals + style writes only) — the house AST rule, in its
   cheapest possible form.
 
-**All five staged phases shipped in v0.1.95.** Both doors are now one:
+**All five staged phases shipped in v0.1.96.** Both doors are now one:
 `one-door-publish.js` hides the Status dropdown, the Workflow nav link and
 the `#/workflow` route on the PRODUCTION shell (only — `index-test.html`
 must keep exercising Decap's real controls, and `index-local.html` has no

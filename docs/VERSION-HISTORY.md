@@ -10,11 +10,33 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.95)
+## Version history (v0.1.0 → v0.1.96)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**v0.1.95 — the publishing-UX staged plan, phases 2 through 5
+**Why this is v0.1.96 and not v0.1.95, which its own PR said.** Two release
+PRs were in flight at once, and both claimed `v0.1.95`: this one and #362 (the
+PDF publication workflow). #362 merged and cut the tag ~40 seconds before this
+work's merge landed on top of it, so `v0.1.95` points at `09a2c55` — an
+ancestor of the merge that carries none of the five shims below — while `main`'s
+manifests already read `0.1.95`. The dispatch for this work then failed on the
+existing tag, which is the only reason it was caught before two consumers had
+been bumped to a release that did not contain it.
+
+A published release tag is what every consumer pins by, so it was NOT moved.
+The version was rolled forward instead: the whole atomic edit set went to
+`v0.1.96` and the tag was cut from the merge that has both changes.
+
+**The generalisable bit: the "Current release" line in AGENTS.md, the two
+plugin manifests and the tag are only consistent because a HUMAN keeps them
+so** — nothing serialises two concurrent release PRs, and `release.yml`'s
+manifest-skew guard compares the dispatched version against the manifests in
+the tree, which both PRs satisfied independently. Before dispatching a
+release, re-read `main`'s current version rather than the one your branch
+bumped from, and check `git ls-remote --tags origin` for the tag you are about
+to cut.
+
+**v0.1.96 — the publishing-UX staged plan, phases 2 through 5
 (docs/PUBLISHING-UX.md §4).** Phase 1 shipped the in-flow state bar with that
 document. This is the remaining four, and the through-line is that an editor
 on these sites met NINE overlapping notions of "published" across four

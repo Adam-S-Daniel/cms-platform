@@ -66,7 +66,7 @@ whole design:
   reviews dashboards (`reviews/*.html`) — skipping a file only if it already
   *defines* the identity, not merely uses it.
   `CMS_REPO` / `CMS_SITE_ORIGIN` / `CMS_APEX` / `CMS_OAUTH_BASE_URL` /
-  `CMS_SITE_TITLE` are strings; **`CMS_SITE_GATE` (v0.1.95) is an OBJECT or
+  `CMS_SITE_TITLE` are strings; **`CMS_SITE_GATE` (v0.1.96) is an OBJECT or
   `null`** — the site-level publish gate a site optionally declares as
   `cms.site_gate`, read by `admin/site-gate-banner.js`. It is the one global
   that must be serialised with `JSON.generate` rather than the `.inspect` the
