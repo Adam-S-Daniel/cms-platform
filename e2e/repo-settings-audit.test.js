@@ -2547,3 +2547,117 @@ test.describe("write-risk classifier vs. the real fix plan", () => {
     expect(c.gated.length).toBe(1);
   });
 });
+
+// ── the classifier must compare like with like ─────────────────────────────
+//
+// MEASURED on the first real run of the ungated lane
+// (https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33437449511):
+// `cms-feature-branches` came back NEEDS-REVIEW on BOTH consumers with the
+// reason "`conditions` differs" — on two repos whose conditions were
+// identical. The real delta was a bypass actor.
+//
+// Cause: normalizeRuleset SORTS the live side (rules by type, contexts by
+// context, bypass actors, and the ref_name globs), while the manifest lists
+// them in whatever order a human wrote them — and repo-settings.yml writes
+// this ruleset's include list as cms, claude, feat, fix, chore, test, ci,
+// docs. Comparing sorted against unsorted makes array ORDER read as a
+// difference, so the walk hits `conditions` first and returns before it ever
+// reaches the key that actually changed.
+//
+// It failed CLOSED, so nothing was waved through. But a classifier that gates
+// ordinary tightenings on array order recreates the daily-approval habit this
+// whole mechanism exists to end, and it reports the wrong reason while doing
+// it. buildFixPlan therefore hands the classifier `desiredSorted` — the
+// manifest body under the same normalization the live side already went
+// through — and `body` stays raw because that is what gets PUT.
+test.describe("write-risk classification is not fooled by array order", () => {
+  test("a bypass-actor add is named as such, not as a `conditions` diff", () => {
+    const script = loadScript();
+    const risk = loadRisk();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    // The real incident, reproduced: `cms-feature-branches` is the one library
+    // entry that declares a bypass actor, and live carries none — so the
+    // manifest is ADDING one. (Live-has / manifest-hasn't is the mirror case
+    // and is safe: fewer ways around the rules.)
+    const scan = diffAgainstFixtures(
+      script,
+      manifest,
+      "Adam-S-Daniel/adamdaniel.ai",
+      {
+        rulesets: [
+          fixture("adamdaniel.ruleset-main.json"),
+          { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] },
+        ],
+      },
+    );
+    const plan = script.buildFixPlan(manifest, [scan]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].puts.length).toBe(1);
+    expect(plan[0].puts[0].name).toBe("cms-feature-branches");
+    // The seam itself: the classifier's desired side must be normalized the
+    // same way the live side is.
+    expect(
+      plan[0].puts[0].desiredSorted,
+      "buildFixPlan must hand the classifier a normalized desired body",
+    ).toEqual(script.sortRuleset(plan[0].puts[0].body));
+
+    const c = risk.classifyPlan(plan);
+    expect(c.gated.length, "removing a bypass actor is safe; ADDING one is not").toBe(1);
+    expect(
+      c.gated[0].reason,
+      "the reason must name the key that actually changed — a wrong reason sends a " +
+        "human to look at the wrong thing",
+    ).toMatch(/bypass actor/);
+    expect(c.gated[0].reason).not.toMatch(/`conditions` differs/);
+  });
+
+  test("array order alone is never a delta", () => {
+    // The direct form of the same property, at the level the bug lived.
+    const risk = loadRisk();
+    const sorted = {
+      name: "main",
+      target: "branch",
+      enforcement: "active",
+      conditions: {
+        ref_name: { include: ["refs/heads/a/**", "refs/heads/b/**"], exclude: [] },
+      },
+      bypass_actors: [],
+      rules: [
+        { type: "deletion" },
+        {
+          type: "required_status_checks",
+          parameters: {
+            strict_required_status_checks_policy: true,
+            do_not_enforce_on_create: false,
+            required_status_checks: [{ context: "a / a" }],
+          },
+        },
+      ],
+    };
+    // Same ruleset, human-written order, plus ONE added required check.
+    const scrambled = JSON.parse(JSON.stringify(sorted));
+    scrambled.conditions.ref_name.include = ["refs/heads/b/**", "refs/heads/a/**"];
+    scrambled.rules.reverse();
+    scrambled.rules.find(
+      (r) => r.type === "required_status_checks",
+    ).parameters.required_status_checks = [{ context: "b / b" }, { context: "a / a" }];
+
+    const plan = [
+      {
+        repo: "o/r",
+        puts: [
+          {
+            name: "main",
+            live: sorted,
+            body: scrambled,
+            desiredSorted: loadScript().sortRuleset(scrambled),
+          },
+        ],
+      },
+    ];
+    const c = risk.classifyPlan(plan);
+    expect(c.gated, "only the ADDED check differs; order must not gate").toEqual([]);
+    expect(c.safe.length).toBe(1);
+    expect(c.safe[0].reason).toMatch(/required check\(s\) added — b \/ b/);
+  });
+});
