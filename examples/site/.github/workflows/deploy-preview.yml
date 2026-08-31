@@ -48,6 +48,9 @@ jobs:
       # Archived media PDFs (opt-in; see cms-platform docs/MEDIA-ARCHIVE.md).
       # Uncomment once the bootstrap stack carries MediaArchiveBucketName, so an
       # editor can check a newly-ticked `pdf_public` on the preview first.
+      # scripts/check-platform-pin-consistency.js treats this key as an
+      # optional per-site input, so uncommenting it does not trip
+      # workflow-content: DRIFT on the required pin-consistency check.
       # media_archive_bucket: example-com-media-archive
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}

@@ -112,11 +112,22 @@ bucket is created and nothing else changes.
      platform_ref: v0.1.94   # production caller only; must equal the uses:@ ref
    ```
 
-   The production caller needs `platform_ref` because that is what fetches the
-   publish script; `platform-bump` moves it in lockstep with the `uses:@` pin,
-   and the pin-consistency guard fails the build if the two ever disagree. The
-   preview caller already passes `platform_ref` and already checks the platform
-   out, so it needs only the bucket line.
+   `media_archive_bucket` (both callers) and `platform_ref` (production only)
+   are exactly the two inputs `examples/site/.github/workflows/deploy-*.yml`
+   ship commented out, and `scripts/check-platform-pin-consistency.js` knows
+   it: it treats both as deliberately OPTIONAL per-site inputs
+   (`OPTIONAL_WITH_KEYS`), so adding them no longer trips
+   `workflow-content: DRIFT` on the required `pin-consistency` check —
+   uncommenting the pair really is a supported opt-in, not just a documented
+   one. **On the production caller, uncomment both lines together.**
+   `platform_ref` is what fetches the publish script, and the reusable's
+   `platform_ref` input DEFAULTS TO `main` — so `media_archive_bucket` set
+   without `platform_ref` would publish PDFs to the live site from an
+   unpinned checkout, and `check-platform-pin-consistency.js` fails the build
+   on exactly that pairing. `platform-bump` moves `platform_ref` in lockstep
+   with the `uses:@` pin once it is present. The preview caller already
+   passes `platform_ref` unconditionally (it already checks the platform
+   out), so it needs only the bucket line.
 
 Both inputs default to empty, so a site that skips all of this deploys exactly
 as before.

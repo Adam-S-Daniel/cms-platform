@@ -46,6 +46,13 @@ jobs:
       # redeployed with MediaArchiveBucketName set. `platform_ref` is what
       # fetches the publish script, and `platform-bump` moves it in lockstep
       # with the `uses:@` pin above -- so it must equal this file's ref.
+      # scripts/check-platform-pin-consistency.js treats both keys as
+      # optional per-site inputs, so uncommenting them does not trip
+      # workflow-content: DRIFT -- but it separately requires platform_ref
+      # whenever media_archive_bucket is set (this reusable's platform_ref
+      # input defaults to `main`, so leaving it commented out here would
+      # publish PDFs from an unpinned checkout). That is why both lines
+      # must come uncommented together, not just documented as such.
       # media_archive_bucket: example-com-media-archive
       # platform_ref: v0.1.94
     secrets:
