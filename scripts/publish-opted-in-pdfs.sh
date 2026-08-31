@@ -4,7 +4,7 @@
 # built site, so the deploy publishes it.
 #
 # The archive is a private S3 bucket: a site's `_media/*.md` entries name an
-# object in it (`pdf_archive_key`) but the bytes never live in the site repo,
+# object in it (`pdf_archive_file`) but the bytes never live in the site repo,
 # which is public. `pdf_public` is the editor's permission gate — off by
 # default. This script is the ONLY thing that moves an object from the private
 # archive onto the public web, and it moves exactly the ones whose gate is
@@ -84,9 +84,9 @@ if ! ruby -ryaml -rdate -e '
     # Only a real boolean true opens the gate, mirroring the layout guard, so a
     # stray "false" / "no" / "" STRING can never publish anything.
     next unless fm["pdf_public"] == true
-    key = fm["pdf_archive_key"].to_s.strip
+    key = fm["pdf_archive_file"].to_s.strip
     if key.empty?
-      warn "::error::#{f}: pdf_public is true but pdf_archive_key is empty"
+      warn "::error::#{f}: pdf_public is true but pdf_archive_file is empty"
       exit 1
     end
     puts key
