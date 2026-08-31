@@ -253,7 +253,7 @@ builds — a real action with a real artefact, replacing a status nobody reads.
 
 ### 3.3 One place statuses live
 
-The Workflow board goes away (`§4`, phase 3). It is a second status surface
+The Workflow board goes away (`§4`, phase 2 — shipped). It is a second status surface
 with a *different publish rule* (§2.1), it is where #329.9's contradictory
 badges were seen, and everything it offers is available per-entry in the
 collection list once the badge above exists.
@@ -266,6 +266,10 @@ Phases are ordered by (value ÷ risk). Everything from phase 2 on changes
 publishing semantics for both live consumers, so each carries its own
 verification bar; this repo's standing rule is that a green unit-lint lane is
 not evidence for a Decap-DOM change.
+
+**All five phases have shipped** — phase 1 with this document, phases 2–5 in
+v0.1.95. Each section below now records what was built and why, rather than
+what was planned.
 
 ### Phase 1 — shipped with this document
 
@@ -282,73 +286,161 @@ not evidence for a Decap-DOM change.
   widths) and two pure-fs lints in `e2e/admin-329-shims.test.js` — no
   `position: fixed`, and compare-before-write on `textContent`.
 
-Phase 1 deliberately does **not** close the second door (§2.2). It names one
-route to publish; removing the other is phase 2, and that is a product
-decision rather than a bug fix.
+Phase 1 deliberately did **not** close the second door (§2.2). It named one
+route to publish; removing the other was phase 2, below, which has since
+shipped.
 
-### Phase 2 — one door (needs a decision)
+### Phase 2 — one door — SHIPPED (v0.1.95)
 
-Hide the Status dropdown and the Workflow board on the **production** shell,
-leaving Publish as the only route to production. Mechanically this is the
-`native-preview-href.js` precedent — CSS-hide a Decap control while leaving
-it in React's tree, never `removeChild`.
+`theme/admin/one-door-publish.js`, production shell only. The Status
+dropdown, the Workflow nav link and the `#/workflow` route are CSS-hidden
+and redirected, leaving Publish as the only route to production.
+Mechanically it is the `native-preview-href.js` precedent — hide a Decap
+control while leaving it in React's tree, never `removeChild`.
 
-- **Cost:** `pending_review` becomes unreachable from the editor. Nothing on
-  this platform consumes it (no notification, no queue, no required
-  reviewer), and the label audit keys on `decap-cms/*` generally, so
-  `decap-cms/draft` still satisfies it.
-- **Scope:** production shell only. `cms-editorial-workflow.spec.js` drives
-  the Status dropdown on `index-test.html`, and that rehearsal surface should
-  keep exercising Decap's real controls.
-- **Decision required from the operator**, because it removes a capability
-  rather than fixing a defect.
+**The decision this needed was taken, and this is the record of it.** The
+phase removes a capability rather than fixing a defect, so it was staged
+behind an operator call; the operator's instruction was to complete all
+five phases. Its cost, restated so a future reader can weigh a reversal:
 
-### Phase 3 — one honest publish button
+- **Cost:** `pending_review` becomes unreachable from the production
+  editor. Nothing on this platform consumes it (no notification, no queue,
+  no required reviewer), and the label audit keys on `decap-cms/*`
+  generally, so `decap-cms/draft` still satisfies it and the "adding
+  labels…" dialog stays closed.
+- **Scope:** production shell only. `cms-editorial-workflow.spec.js` and
+  `cms-workflow-states.spec.js` drive the Status dropdown and the board on
+  `index-test.html`, and that rehearsal surface keeps exercising Decap's
+  real controls — which is the coverage that would tell us if Decap ever
+  stopped behaving the way this shim assumes.
+  `index-local.html` has no editorial workflow at all, so there is nothing
+  there to hide. Both negatives are asserted, not assumed
+  (`e2e/admin-publishing-ux.test.js`).
 
-Replace Decap's split-button with a platform-owned primary **Publish**
-button, and CSS-hide Decap's.
+The route matchers are exported on `window.__oneDoorPublish` and unit-tested
+(`e2e/admin-publish-routing.test.js`), because they are the part a Decap
+router change would move, and because there is deliberately no browser spec:
+the only served shell that loads this file is production.
 
-The unlock is that on this platform *publishing is already "add a label to a
-PR"*: Decap's synchronous merge always 422s against the branch ruleset, and
-`publish-via-auto-merge.js` converts that into a `cms/ready` label. A
-platform-owned button can add that label directly, with the editor's own
-Decap token (the one `deploy-status-pill.js` already uses), against the
-`cms/<collection>/<slug>` branch convention `posts-list-enhance.js` already
-queries.
+### Phase 3 — one honest publish button — SHIPPED (v0.1.95)
 
-That is **public API on both sides** — GitHub REST and the DOM, no Decap
-internals — which is what makes it safer than the click-forwarding that was
-tried and rejected under #329.2 (activating the menu item programmatically
-does not publish and raises a page error).
+`theme/admin/publish-button.js` replaces Decap's split button with a
+platform-owned primary **Publish**, and CSS-hides Decap's — but only once
+its own replacement is actually on screen. Hiding a control while failing
+to provide its replacement is worse than either alone, so before the poller
+has answered, nothing is hidden and Decap's own button stays.
 
-It also gets the two things the split button cannot: a confirmation that
-names the URL and the ETA, and a disabled state that says *why* (unsaved
-changes) instead of vanishing.
+The unlock is that on this platform *publishing is already "add a label to
+a PR"*: Decap's synchronous merge always 422s against the branch ruleset,
+and `publish-via-auto-merge.js` converts that into a `cms/ready` label. The
+button adds that label directly, with the editor's own Decap token, against
+the `cms/<collection>/<slug>` branch convention. That is **public API on
+both sides** — GitHub REST and the DOM, no Decap internals — which is what
+makes it safer than the click-forwarding tried and rejected under #329.2.
 
-### Phase 4 — a progress state that outlives the operation
+Three things it gets that the split button cannot:
 
-Extend `deploy-status-pill.js` backwards to cover the invisible 5–15 minutes
-(§2.4): poll the entry's PR for check status, not just the post-merge
-deployment. Three terminal states, in the editor, in words:
+- a confirmation naming the URL and the ETA, inline in the state bar rather
+  than as a modal or a `window.confirm` (which is already wrapped, for
+  Decap's backup dialog, by `confirm-wrap-local-backup.js`);
+- a disabled state that says *why* (unsaved changes) instead of vanishing;
+- a **re-publish that actually re-publishes**. `auto-merge-when-ready` fires
+  on the `labeled` EVENT, and GitHub emits none for a label already present
+  — so the second Publish press, which is the most likely one in the whole
+  product because it follows a "Needs attention", would have returned 200
+  and done nothing. The button removes the label before adding it.
 
-- **Going live… (about N minutes left)**, with what it is waiting on;
-- **Live** — with the URL, as a link;
-- **Needs attention** — naming the failure in plain English, plus one action
-  a non-technical person can take. For the `regression-review` park (§2.7)
-  that action is "Ask <maintainer> to review the visual changes", pre-filled,
-  not a raw Actions URL.
+It renders into the state bar's actions slot rather than the toolbar: the
+toolbar is `flex-wrap: nowrap` on desktop and a fifth control squeezes the
+other four at 1024 wide, and the bar is structurally incapable of covering
+anything (§2.3).
 
-Also in this phase: suppress Decap's misleading post-publish error toast,
-which the shim's 422 provokes by design.
+### Phase 4 — a progress state that outlives the operation — SHIPPED (v0.1.95)
 
-### Phase 5 — collapse the vocabularies
+`theme/admin/publish-progress.js` polls the entry's own pull request, which
+exists from the moment of Save, so the invisible 5–15 minutes stops being a
+silence. It reports, in the editor, in words: **Going live… (about N
+minutes left)** with what it is waiting on; **Live**; and **Needs
+attention** naming the failure in plain English plus one action a
+non-technical person can take.
 
-One badge component, four states plus two modifiers (§3.1), rendered in the
-collection list and the editor; the site-level gate banner; and retire the
-posts-list pill's separate `Published/Draft/Scheduled` wording in favour of
-the modifiers.
+Four details worth keeping:
 
----
+- **The `regression-review` park (§2.7) is detected positively**, not
+  inferred from silence: GitHub sets a workflow run's status to `waiting`
+  exactly and only while it is pending a manual environment approval.
+- **The ETA degrades to the range rather than inventing a number.** With no
+  known start time `minutesLeft` is `null` and the copy says "about 5–15
+  minutes". It also floors at one minute, because an ETA that reaches zero
+  and keeps counting reads as broken.
+- **Stopped outranks in-flight.** A PR whose checks failed is still
+  *armed*, so an in-flight-first ordering would spin "Going live…" forever
+  over a publish that stopped ten minutes ago. That precedence is the thing
+  most likely to be "simplified" into a lie, so it has its own test.
+- **A hidden tab polls nothing.** An admin left open overnight in a
+  background tab must not spend the editor's rate limit on an entry nobody
+  is looking at.
+
+Also in this phase: Decap's misleading post-publish error toast is
+suppressed — the one the shim's deliberate 422 provokes. The matcher
+requires BOTH Decap's failure wording AND the marker string the 422 body
+carries, so a REAL publish failure is never eaten; replacing a misleading
+error with a silent one would be worse than the defect. The two literals
+must move together, and `e2e/admin-publishing-ux.test.js` is what sees it if
+they do not.
+
+### Phase 5 — collapse the vocabularies — SHIPPED (v0.1.95)
+
+`theme/admin/entry-status-model.js` is one derivation — four states plus
+two modifiers (§3.1) — rendered by BOTH the editor bar
+(`publish-step-hint.js`) and the collection list
+(`posts-list-enhance.js`), in a sentence form and a chip form of the same
+words. The posts-list pill's separate `Published / Draft / Scheduled`
+wording is retired: the badge is now the "is it on the website" axis and
+the front-matter axis renders beside it as the two modifiers.
+
+The module is deliberately pure — no DOM, no network, and `now` is a
+parameter — which is what makes every branch of it reachable in a Node vm
+sandbox with no browser and no wall-clock dependency
+(`e2e/entry-status-model.test.js`, 22 tests). That purity was a design
+constraint rather than a happy accident: the alternative shape, where each
+surface derives its own words from whatever facts it happens to hold, is
+exactly how one product ends up with three vocabularies for three states,
+and it is not testable at all without a browser.
+
+The site-level banner is `theme/admin/site-gate-banner.js`. A site declares
+its gate in `_config.yml` and both render paths inject it as
+`window.CMS_SITE_GATE`:
+
+```yaml
+cms:
+  site_gate:
+    path: _data/settings.yml                          # file holding it
+    field: site_live                                  # the boolean key
+    entry: "#/collections/settings/entries/settings"  # where to change it
+    label: coming-soon mode
+```
+
+A site with no gate — adamdaniel.ai, every scaffolded site — injects `null`
+and the shim is inert. The banner is in NORMAL FLOW, not fixed: it is
+permanent while it applies, and permanent chrome that overlays is
+occlusion. (`oauth-app-restriction-detector.js` is fixed and correct to be:
+it is a transient, dismissible alert.)
+
+### What is deliberately NOT covered by a browser spec
+
+Phases 2–4 load on the production shell only, and the only served shell a
+browser spec in this suite can drive is `index-test.html` — which must keep
+exercising Decap's own controls, because that is the coverage telling us
+Decap still behaves the way these shims assume. Reading the shim sources off
+the platform tree and injecting them into a synthetic page would break the
+consumer-context rule the moment it ran on a consumer lane.
+
+So the pure parts are exported and unit-tested instead — the status model,
+and the route/branch matchers a Decap change would move — and the rest is
+locked structurally by `e2e/admin-publishing-ux.test.js`. This is stated
+here rather than left as an apparent gap, because "there is no browser spec"
+is otherwise indistinguishable from an oversight.
 
 ## 5. Options considered and rejected
 
@@ -411,9 +503,23 @@ with the pre-fix file and the post-fix file, in the same session.
 
 ## 7. Related
 
+- `theme/admin/entry-status-model.js` — the four badges + two modifiers, and
+  the only place any surface derives status words from. Pure; unit-tested in
+  `e2e/entry-status-model.test.js`.
+- `theme/admin/publish-progress.js` — the poller: which facts are read, from
+  where, and the request budget that keeps a background tab silent.
 - `theme/admin/publish-step-hint.js` — the state bar, and the placement
   rationale in full.
-- `theme/admin/publish-via-auto-merge.js` — why publishing is a label.
+- `theme/admin/publish-button.js` — the platform-owned Publish button, and why
+  it replaces rather than drives Decap's.
+- `theme/admin/one-door-publish.js` — the second door, and what closing it
+  costs.
+- `theme/admin/site-gate-banner.js` — the site-level gate, and why it is in
+  flow while the OAuth banner is fixed.
+- `theme/admin/publish-via-auto-merge.js` — why publishing is a label, and the
+  false-"Failed to publish" suppressor.
+- `e2e/admin-publishing-ux.test.js` / `e2e/admin-publish-routing.test.js` — the
+  structural and route-matcher halves of the guard set.
 - `.github/workflows/cms-editorial-workflow.yml` — `auto-merge-when-ready`,
   the job that turns a label into a live site.
 - `docs/CI-INVARIANTS.md` — the required-check topology behind the 5–15

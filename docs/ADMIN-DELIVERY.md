@@ -65,6 +65,15 @@ whole design:
 - **Inject `window.CMS_*` globals** into the admin shells (`index*.html`) AND the
   reviews dashboards (`reviews/*.html`) — skipping a file only if it already
   *defines* the identity, not merely uses it.
+  `CMS_REPO` / `CMS_SITE_ORIGIN` / `CMS_APEX` / `CMS_OAUTH_BASE_URL` /
+  `CMS_SITE_TITLE` are strings; **`CMS_SITE_GATE` (v0.1.95) is an OBJECT or
+  `null`** — the site-level publish gate a site optionally declares as
+  `cms.site_gate`, read by `admin/site-gate-banner.js`. It is the one global
+  that must be serialised with `JSON.generate` rather than the `.inspect` the
+  others use: Ruby's `Hash#inspect` emits `{"a"=>1}`, which is a JavaScript
+  syntax error, and it lands *inside* the shell's `<script>` block — so
+  getting it wrong takes the whole admin down rather than degrading. A site
+  with no gate injects `null` and the banner is inert.
 - **Delete `*.base.yml`** from the output (the templates aren't published).
 
 `scripts/render-decap-config.rb` is the **deploy-time CLI mirror** of the hook

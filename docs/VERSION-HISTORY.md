@@ -10,9 +10,101 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.94)
+## Version history (v0.1.0 → v0.1.95)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.95 — the publishing-UX staged plan, phases 2 through 5
+(docs/PUBLISHING-UX.md §4).** Phase 1 shipped the in-flow state bar with that
+document. This is the remaining four, and the through-line is that an editor
+on these sites met NINE overlapping notions of "published" across four
+systems, in three vocabularies for three states, with the two most
+consequential — the six required checks and the manual `regression-review`
+gate — invisible to them entirely.
+
+- **Phase 2, one door (`theme/admin/one-door-publish.js`, production shell
+  only).** Setting `Status: Ready` publishes on this platform: Decap writes
+  `decap-cms/pending_publish` and `auto-merge-when-ready` fires on exactly
+  that label. So there were two doors to production and only one was
+  labelled — and the two surfaces offering the unlabelled one contradict each
+  other, the Workflow board hard-gating publishing on Ready
+  (`WorkflowList.requestPublish` alerts and returns) while the entry editor's
+  dropdown has no status gate at all. The Status control, the Workflow nav
+  link and the `#/workflow` route are now closed on production, CSS-hidden
+  and redirected (never `removeChild` — the React re-mount fight loop that
+  wedged the editor at commit 503365a). **This removes a capability rather
+  than fixing a defect**, which is why the plan staged it behind an operator
+  decision; the decision was taken and is recorded in the doc. Cost:
+  `pending_review` is unreachable from the production editor, which nothing
+  on this platform consumes, and the label audit keys on `decap-cms/*`
+  generally so `decap-cms/draft` still satisfies it.
+- **Phase 3, one button (`theme/admin/publish-button.js`).** Decap's Publish
+  is a split button whose menu item is the only thing that publishes — click
+  it once, see the menu, click away, and you have published nothing with no
+  error — and it VANISHES entirely while there are unsaved changes, because
+  Decap renders it only under `!hasChanged`. Replaced with a real button that
+  confirms with the URL and the ETA and that says *why* when it cannot act.
+  Possible because publishing here is already "add a label to a PR": public
+  REST on one side, public DOM on the other. Forwarding the click was
+  implemented and rejected under #329.2 (it does not publish, and raises a
+  page error).
+- **A re-publish must REMOVE the label before adding it.**
+  `auto-merge-when-ready` fires on the `labeled` EVENT, and GitHub emits none
+  for a label already present. So the second Publish press — the most likely
+  one in the whole product, because it follows a "Needs attention" — would
+  have returned 200 and armed nothing, with the button reporting success over
+  a publish that never restarted.
+- **Phase 4, a progress state that outlives the operation
+  (`theme/admin/publish-progress.js`).** The old feedback for a 5–15 minute
+  action was a 14-second toast, then Decap's red "Failed to publish" for 8s —
+  which is FALSE, provoked by the deliberate 422 `publish-via-auto-merge.js`
+  returns so Decap never deletes the head ref (#80 layer 9) — and then
+  nothing at all, because `deploy-status-pill.js` polls Deployments and
+  `deploy-production` registers one only AFTER the merge. The poller reads
+  the entry's own PR from Save onwards. The `regression-review` park is
+  detected POSITIVELY: GitHub sets a workflow run's status to `waiting`
+  exactly and only while it is pending a manual environment approval.
+- **The false toast is suppressed by a matcher that requires BOTH halves** —
+  Decap's failure wording AND the marker string our own 422 body carries — so
+  a REAL publish failure is never eaten. Replacing a misleading error with a
+  silent one would be worse than the defect. `e2e/admin-publishing-ux.test.js`
+  asserts the two literals still move together; each is individually fine, so
+  nothing else could see them drift apart.
+- **Phase 5, one vocabulary (`theme/admin/entry-status-model.js`).** Four
+  badges plus two modifiers, derived once and rendered by both the editor bar
+  and the collection list. The modifiers (Hidden, Scheduled) stay OUT of the
+  badge because Live and Hidden are simultaneously true for an entry that is
+  merged, deployed and rendering nowhere — the §2.6 trap where "Published"
+  the toggle and "Publish" the button differ by one letter and sit a screen
+  apart. The posts-list pill's separate `Published / Draft / Scheduled`
+  wording is retired. The module is PURE — no DOM, no network, `now` is a
+  parameter — which is what makes all 22 of its unit tests run in a Node vm
+  sandbox with no browser and no wall-clock dependency.
+- **Precedence in that model is load-bearing: stopped outranks in-flight.** A
+  PR whose checks failed is still *armed*, so an in-flight-first ordering
+  spins "Going live…" forever over a publish that stopped ten minutes ago.
+  Proved able to fail: inverting the two blocks reds 4 of the 22 tests.
+- **A site-level gate banner (`theme/admin/site-gate-banner.js`) and a new
+  injected global, `window.CMS_SITE_GATE`.** jodidaniel.com ships coming-soon
+  behind `site_live` in `_data/settings.yml`, and while that is false an
+  editor can save, publish, watch the deploy succeed and see nothing — with
+  no notice anywhere in `/admin`. The platform must not hardcode which
+  boolean that is, so a site declares `cms.site_gate` and BOTH render paths
+  inject it (`scripts/render-decap-config.rb` and the gem's
+  `decap_config_hook.rb`, parity-locked). Serialised with `JSON.generate`,
+  NOT Ruby's `inspect` — `{"a"=>1}` is a JS syntax error and would take the
+  whole shell down rather than degrade. A site with no gate injects `null`
+  and the shim is inert.
+- **Three defects found in self-review before merge, all of the same family —
+  a write on the steady state.** The button rebuilt its own slot at 2 Hz,
+  which drops a click when a node is replaced between mousedown and mouseup;
+  the hiding shims re-asserted their styles unconditionally, firing an
+  `attributes` mutation inside the subtree `publish-step-hint.js`'s observer
+  watches; and `mergeConflict` was read from the `/pulls` LIST response,
+  which does not carry `mergeable` at all, so that branch could never fire.
+  All three are the compare-before-write discipline this directory already
+  documents, applied to three new places.
+
 
 **SHIPPED IN v0.1.89 (landed 2026-08-20, unreleased at the time) — the action
 pin comment is retired fleet-wide, and a cross-repo composite is now
