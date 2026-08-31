@@ -915,3 +915,147 @@ test.describe("scripts/verify-consumer-pins.sh — the consumer-bump gate", () =
     expect(out).toMatch(/does not parse/);
   });
 });
+
+// ── media_archive_bucket / platform_ref opt-in (deploy-production.yml,
+// deploy-preview.yml). The canonical examples/site template ships these two
+// `with:` inputs COMMENTED OUT — the private media archive is a per-site
+// decision (docs/MEDIA-ARCHIVE.md) — so uncommenting them used to gain a
+// `with:` key the canonical set doesn't have and trip
+// `workflow-content: DRIFT` on every consumer that adopted the docs'
+// step 5 (jodidaniel.com had to revert its wiring — commit 07e5c4b).
+// `OPTIONAL_WITH_KEYS` strips both keys from the key-set compare for these
+// two basenames; `checkOptionalInputPairing()` then re-asserts, directly,
+// the one thing the key-set compare used to enforce as a side effect: a
+// production caller that sets `media_archive_bucket` must also set
+// `platform_ref` (its reusable's `platform_ref` input defaults to `main`,
+// so without it the publish script runs from an unpinned checkout).
+//
+// Local helpers only — the shared `mkCanonicalDir`/`consumer` helpers above
+// are sweep-caller-shaped (single hardcoded job/basename) and other sessions
+// are editing this file, so this block stays self-contained.
+test.describe("check-platform-pin-consistency.js — media_archive_bucket / platform_ref opt-in (#deploy-*)", () => {
+  const V = "v0.1.94";
+
+  // A realistic thin caller for deploy-production.yml / deploy-preview.yml:
+  // `uses:@<ref>`, the real per-file `secrets:` map (mirrors
+  // examples/site/.github/workflows/deploy-*.yml), and whatever `with:` keys
+  // the test asks for. `name` is the basename without `.yml` (also the
+  // reusable's own name, so `uses:` targets the right workflow).
+  function deployCaller({ name, ref = V, keys = {} }) {
+    const secrets =
+      name === "deploy-production"
+        ? {
+            AWS_ROLE_ARN: "${{ secrets.AWS_ROLE_ARN }}",
+            PRODUCTION_CLOUDFRONT_ID: "${{ secrets.PRODUCTION_CLOUDFRONT_ID }}",
+          }
+        : {
+            AWS_ROLE_ARN: "${{ secrets.AWS_ROLE_ARN }}",
+            PREVIEW_CLOUDFRONT_ID: "${{ secrets.PREVIEW_CLOUDFRONT_ID }}",
+          };
+    return [
+      `name: ${name}`,
+      "on: { workflow_dispatch: {} }",
+      "jobs:",
+      "  job:",
+      `    uses: ${SLUG}/.github/workflows/${name}.yml@${ref}`,
+      "    with:",
+      ...Object.entries(keys).map(([k, v]) => `      ${k}: ${v}`),
+      "    secrets:",
+      ...Object.entries(secrets).map(([k, v]) => `      ${k}: ${v}`),
+      "",
+    ].join("\n");
+  }
+
+  function mkCanonicalDeploy(name, keys, ref = V) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-canon-deploy-"));
+    fs.writeFileSync(path.join(dir, `${name}.yml`), deployCaller({ name, ref, keys }));
+    return dir;
+  }
+  function consumerDeploy(name, keys, ref = V) {
+    const root = mkConsumer();
+    write(root, "platform.lock", platformLock(V));
+    write(root, `.github/workflows/${name}.yml`, deployCaller({ name, ref, keys }));
+    writeSentinel(root);
+    return root;
+  }
+  function runC(root, canonicalDir) {
+    return spawnSync(
+      process.execPath,
+      [SCRIPT, "--root", root, "--owner", OWNER, "--repo", REPO, "--canonical-workflows", canonicalDir],
+      { encoding: "utf8" },
+    );
+  }
+
+  const PROD_BASE = { apex_domain: "example.com", prod_bucket: "example-com-production" };
+  const PREVIEW_BASE = {
+    apex_domain: "example.com",
+    preview_bucket: "example-com-previews",
+    bot_marker: "example-com-preview-bot",
+    platform_ref: V,
+  };
+
+  test("deploy-production.yml: consumer has BOTH keys, canonical has NEITHER -> exit 0, no workflow-content", () => {
+    // The exact shape of the documented opt-in (docs/MEDIA-ARCHIVE.md step 5) —
+    // this is the case the whole change exists to unblock.
+    const canon = mkCanonicalDeploy("deploy-production", PROD_BASE);
+    const root = consumerDeploy("deploy-production", {
+      ...PROD_BASE,
+      media_archive_bucket: "example-com-media-archive",
+      platform_ref: V,
+    });
+    const res = runC(root, canon);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(res.status, out).toBe(0);
+    expect(out).not.toMatch(/workflow-content/);
+  });
+
+  test("deploy-production.yml: consumer has NEITHER key, canonical has NEITHER -> exit 0", () => {
+    // The unadopted default: a site that never touches the archive keeps
+    // deploying exactly as before.
+    const canon = mkCanonicalDeploy("deploy-production", PROD_BASE);
+    const root = consumerDeploy("deploy-production", PROD_BASE);
+    const res = runC(root, canon);
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+  });
+
+  test("deploy-production.yml: media_archive_bucket WITHOUT platform_ref -> non-zero, names the pairing kind", () => {
+    // Removing platform_ref from the key-set compare removed the only thing
+    // that used to force its presence — this is the check that replaces it.
+    // Without it, the caller would fetch publish-opted-in-pdfs.sh from an
+    // unpinned `main` (the reusable's platform_ref input defaults to main).
+    const canon = mkCanonicalDeploy("deploy-production", PROD_BASE);
+    const root = consumerDeploy("deploy-production", {
+      ...PROD_BASE,
+      media_archive_bucket: "example-com-media-archive",
+    });
+    const res = runC(root, canon);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(res.status, out).not.toBe(0);
+    expect(out).toMatch(/media_archive_bucket without platform_ref/);
+  });
+
+  test("deploy-production.yml: an UNRELATED extra key still fails the key-set compare (negative control)", () => {
+    // Proves the exemption is scoped to exactly the two named keys, not a
+    // blanket disable of the key-set compare for this basename.
+    const canon = mkCanonicalDeploy("deploy-production", PROD_BASE);
+    const root = consumerDeploy("deploy-production", { ...PROD_BASE, bogus_key: "1" });
+    const res = runC(root, canon);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(res.status, out).not.toBe(0);
+    expect(out).toMatch(/with: keys/);
+  });
+
+  test("deploy-preview.yml: consumer adds media_archive_bucket (canonical doesn't), both keep platform_ref -> exit 0", () => {
+    // platform_ref is NOT optional on the preview caller (it already checks
+    // the platform out unconditionally) — only media_archive_bucket is.
+    const canon = mkCanonicalDeploy("deploy-preview", PREVIEW_BASE);
+    const root = consumerDeploy("deploy-preview", {
+      ...PREVIEW_BASE,
+      media_archive_bucket: "example-com-media-archive",
+    });
+    const res = runC(root, canon);
+    const out = `${res.stdout}${res.stderr}`;
+    expect(res.status, out).toBe(0);
+    expect(out).not.toMatch(/workflow-content/);
+  });
+});

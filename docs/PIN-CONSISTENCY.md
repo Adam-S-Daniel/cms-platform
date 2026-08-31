@@ -112,6 +112,41 @@ flags the exact drifting facet. It does NOT fight a legit site difference (e.g.
 adamdaniel TRIMS the host-loop push `paths:` to dodge prod-loop co-arrival
 eviction #1892 — an `on:` change, excluded).
 
+### Two opt-in `with:` keys are exempt from the key-set compare (media archive)
+
+`checkWorkflowContentParity()`'s `withKeys` compare is an EXACT sorted-set
+match, and the canonical `examples/site` template ships two inputs
+COMMENTED OUT because adopting them is a per-site decision, not something
+every consumer should default into: `deploy-preview.yml`'s
+`media_archive_bucket` and `deploy-production.yml`'s `media_archive_bucket` +
+`platform_ref` (the private media-PDF archive, `docs/MEDIA-ARCHIVE.md`). A
+commented-out line drops out of the YAML parse entirely, so a consumer that
+follows the docs and uncomments them gains a `with:` key the canonical set
+doesn't have — and used to report `workflow-content: DRIFT`, making the
+documented opt-in unshippable by any consumer at all (jodidaniel.com had to
+revert its wiring — commit 07e5c4b).
+
+`OPTIONAL_WITH_KEYS` in `scripts/check-platform-pin-consistency.js` fixes
+that: a small, hand-maintained map from basename to the keys that basename's
+canonical template ships commented out. `structuralShape()` strips those keys
+from BOTH sides (canonical and consumer) before building `withKeys`, so
+adopting the archive no longer drifts. It is a deliberately REVIEWED list, not
+"any key commented out in the example" — deriving it from the comment text
+would let a stale `#`-prefixed line (a debugging aid, a half-finished
+feature) silently retire a real guard for every consumer at once.
+
+Exempting `platform_ref` from the compare on `deploy-production.yml` removed
+the only thing that forced it to be present alongside `media_archive_bucket`,
+so `checkOptionalInputPairing()` re-asserts that pairing directly: any job in
+a consumer's `deploy-production.yml` that sets a non-empty
+`media_archive_bucket` must also set `platform_ref`. The reusable's
+`platform_ref` input defaults to `main` — not a pin — and the
+`media_archive_bucket != ''` steps check the platform out at `platform_ref`
+to run `publish-opted-in-pdfs.sh`, so the unpaired shape would publish PDFs
+to the live site from an unpinned `main` checkout. `deploy-preview.yml`
+already passes `platform_ref` unconditionally (it isn't in that basename's
+optional list), so it needs no equivalent pairing check.
+
 ### How a stale `platform_ref` INPUT got there, and why the seeder had to change (#220)
 
 The live instance was not a hand-edit. `platform-bump.yml`'s **seeding** path
