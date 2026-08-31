@@ -268,7 +268,7 @@ verification bar; this repo's standing rule is that a green unit-lint lane is
 not evidence for a Decap-DOM change.
 
 **All five phases have shipped** — phase 1 with this document, phases 2–5 in
-v0.1.95. Each section below now records what was built and why, rather than
+v0.1.96. Each section below now records what was built and why, rather than
 what was planned.
 
 ### Phase 1 — shipped with this document
@@ -290,7 +290,7 @@ Phase 1 deliberately did **not** close the second door (§2.2). It named one
 route to publish; removing the other was phase 2, below, which has since
 shipped.
 
-### Phase 2 — one door — SHIPPED (v0.1.95)
+### Phase 2 — one door — SHIPPED (v0.1.96)
 
 `theme/admin/one-door-publish.js`, production shell only. The Status
 dropdown, the Workflow nav link and the `#/workflow` route are CSS-hidden
@@ -322,7 +322,7 @@ The route matchers are exported on `window.__oneDoorPublish` and unit-tested
 router change would move, and because there is deliberately no browser spec:
 the only served shell that loads this file is production.
 
-### Phase 3 — one honest publish button — SHIPPED (v0.1.95)
+### Phase 3 — one honest publish button — SHIPPED (v0.1.96)
 
 `theme/admin/publish-button.js` replaces Decap's split button with a
 platform-owned primary **Publish**, and CSS-hides Decap's — but only once
@@ -355,7 +355,7 @@ toolbar is `flex-wrap: nowrap` on desktop and a fifth control squeezes the
 other four at 1024 wide, and the bar is structurally incapable of covering
 anything (§2.3).
 
-### Phase 4 — a progress state that outlives the operation — SHIPPED (v0.1.95)
+### Phase 4 — a progress state that outlives the operation — SHIPPED (v0.1.96)
 
 `theme/admin/publish-progress.js` polls the entry's own pull request, which
 exists from the moment of Save, so the invisible 5–15 minutes stops being a
@@ -389,7 +389,7 @@ error with a silent one would be worse than the defect. The two literals
 must move together, and `e2e/admin-publishing-ux.test.js` is what sees it if
 they do not.
 
-### Phase 5 — collapse the vocabularies — SHIPPED (v0.1.95)
+### Phase 5 — collapse the vocabularies — SHIPPED (v0.1.96)
 
 `theme/admin/entry-status-model.js` is one derivation — four states plus
 two modifiers (§3.1) — rendered by BOTH the editor bar
