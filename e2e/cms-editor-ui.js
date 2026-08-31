@@ -126,7 +126,72 @@ async function saveEntry(page, { timeout = 60_000 } = {}) {
 // already auto-waits for the control to be actionable, which is the
 // real gate. Callers must Save first (use saveEntry) so the toolbar has
 // settled before we read the chip.
+// Publish the open entry THROUGH THE UI an editor actually uses — which is
+// now TWO different UIs depending on the shell, and getting that wrong is a
+// live regression a green unit-lint lane cannot see.
+//
+// ── Why this branches (cms-platform v0.1.97) ───────────────────────────
+// The PRODUCTION shell ships the publishing-UX phase 2 + 3 shims
+// (docs/PUBLISHING-UX.md): `one-door-publish.js` CSS-hides Decap's Status
+// dropdown, and `publish-button.js` CSS-hides Decap's split Publish control
+// and renders `#cms-publish-button` in its place, with an inline "Yes,
+// publish" confirmation instead of a dropdown menu item.
+//
+// The old body of this function did `getByRole("button", {name: /^Publish$/i})`
+// then `getByRole("menuitem", {name: /publish now/i})`. On the new shell the
+// FIRST of those still resolves — to the platform's own button, because
+// getByRole skips the CSS-hidden Decap one — so the click "succeeds", opens
+// the inline confirmation, and then the menuitem lookup finds nothing. That
+// is precisely how run 33439336337 failed: the entry was created and its PR
+// opened, then the publish leg died about two minutes in.
+//
+// So: prefer the platform button when it is on screen, and keep the Decap
+// path for every shell that has no replacement — `index-test.html` (the
+// rehearsal surface, which deliberately keeps Decap's own controls) and
+// `index-local.html` (no editorial workflow at all).
+//
+// The Status→Ready step is kept in the Decap branch only. On the production
+// shell it is not merely unnecessary, it is the SECOND DOOR phase 2 closed:
+// setting Ready applies `decap-cms/pending_publish`, which
+// `auto-merge-when-ready` fires on. Driving it there would be the test
+// exercising a route the product no longer offers.
+//
+// ── The wait is load-bearing ───────────────────────────────────────────
+// `#cms-publish-button` only renders once `publish-progress.js` has FOUND
+// the entry's `cms/<collection>/<slug>` pull request, which is one poll
+// after Save. Without a wait this races the poller and falls through to the
+// Decap branch on the very shell where Decap's control is hidden — the
+// original bug, in a new costume. PUBLISH_BUTTON_TIMEOUT_MS covers a poll
+// interval plus GitHub latency with room to spare.
+const PUBLISH_BUTTON_TIMEOUT_MS = 90_000;
+
 async function publishViaUi(page) {
+  // Is this shell the one with the platform-owned button at all? Ask for the
+  // element's PRESENCE (it is injected on load), not its enabled state.
+  const platformButton = page.locator("#cms-publish-button");
+  const hasPlatformShell = await platformButton
+    .waitFor({ state: "attached", timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (hasPlatformShell) {
+    // Wait for it to become clickable: it renders disabled while there are
+    // unsaved changes, and is absent entirely until the poller finds the PR.
+    await platformButton.waitFor({ state: "visible", timeout: PUBLISH_BUTTON_TIMEOUT_MS });
+    await page.waitForFunction(
+      () => {
+        const b = document.getElementById("cms-publish-button");
+        return Boolean(b) && !b.disabled;
+      },
+      undefined,
+      { timeout: PUBLISH_BUTTON_TIMEOUT_MS },
+    );
+    await platformButton.click();
+    // The inline confirmation, which names the URL and the ETA.
+    await page.getByRole("button", { name: /^Yes, publish$/i }).click();
+    return;
+  }
+
   const draftChip = page.getByRole("button", { name: /^Status:\s*(Draft|In review)$/i }).first();
   if (await draftChip.isVisible().catch(() => false)) {
     await draftChip.click();

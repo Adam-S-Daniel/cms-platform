@@ -109,7 +109,7 @@ bucket is created and nothing else changes.
    ```yaml
    with:
      media_archive_bucket: jodidaniel-com-media-archive
-     platform_ref: v0.1.96   # production caller only; must equal the uses:@ ref
+     platform_ref: v0.1.97   # production caller only; must equal the uses:@ ref
    ```
 
    `media_archive_bucket` (both callers) and `platform_ref` (production only)

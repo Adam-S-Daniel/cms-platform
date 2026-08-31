@@ -340,9 +340,25 @@
 
     if (p.kind === "unknown") return; // hide nothing — see plan()
 
-    if (p.kind === "busy" || p.kind === "none") {
+    if (p.kind === "busy") {
       if (p.note) disabledNote(slot, p.note);
       hideDecapPublish();
+      return;
+    }
+
+    // NOTHING TO PUBLISH — and therefore NOTHING TO HIDE.
+    //
+    // "no open PR" normally means the entry is already on the website, a
+    // state in which Decap renders no publish control either, so hiding
+    // would be a no-op. But it can also mean the poller failed to MATCH the
+    // entry's PR, and that is the one failure this shim must not compound:
+    // hiding the only route to production while offering no replacement is
+    // the outcome the header calls worse than either alone. So this branch
+    // leaves Decap's control exactly as it found it. If Decap is showing one,
+    // it is because Decap believes there is something to publish — and it is
+    // then the only working route.
+    if (p.kind === "none") {
+      if (p.note) disabledNote(slot, p.note);
       return;
     }
 

@@ -75,7 +75,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.96`** — `v0.1.0`–`v0.1.96` are all tagged GitHub
+**Current release: `v0.1.97`** — `v0.1.0`–`v0.1.97` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 That number is also carried by the two plugin manifests (`plugin.json` +
 `.claude-plugin/plugin.json`), and `release.yml` REFUSES to cut a tag whose
@@ -310,6 +310,19 @@ Three things from that work worth knowing before you touch any of it:
   single-PR endpoint carries it, and it is `null` until GitHub computes it.
   Reading it off the list leaves a merge-conflict branch that looks alive and
   can never fire.
+- **Hiding a control RETARGETS every selector that matched it by name**, and
+  that is how v0.1.96 broke every real-prod loop while 1656 pure-fs
+  assertions stayed green. `publishViaUi()` did
+  `getByRole("button", {name: /^Publish$/i})`; `getByRole` skips CSS-hidden
+  elements, so it skipped Decap's newly-hidden control and resolved to the
+  PLATFORM's `#cms-publish-button` — same accessible name, different control.
+  The click SUCCEEDED, opened the inline confirmation, and only the following
+  `publish now` menuitem lookup failed. A missing control fails loudly; a
+  silently retargeted one fails two steps later somewhere else. When a shim
+  hides a control, audit what selects it by ROLE AND NAME, not just by class
+  — and remember that the replacement is labelled with the right word for an
+  editor, which is exactly what makes it a drop-in for someone else's
+  selector. (v0.1.97, adamdaniel.ai run 33439336337.)
 
 → read `docs/PUBLISHING-UX.md` before changing `theme/admin/`'s toolbar
 shims, the status model, or any copy an editor reads. It carries the full
