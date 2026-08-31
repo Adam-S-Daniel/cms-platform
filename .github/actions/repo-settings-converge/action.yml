@@ -1,0 +1,76 @@
+name: Repo settings converge
+description: >-
+  Mint a write-scoped installation token for ONE owner and converge that
+  owner's repos onto repo-settings.yml. Extracted so the two apply lanes in
+  repo-settings-apply.yml — the ungated one for provably non-weakening plans
+  and the reviewer-gated one for everything else — run byte-identical steps.
+
+  That is the whole point of it being a composite. The two lanes differ in
+  exactly two things: whether an `environment:` gate precedes them, and
+  whether `refuse-weakening` is set. Duplicating ~25 lines of credential
+  handling across both would put the fleet's only settings-rewriting shell in
+  two places and make "they drifted" a question somebody has to keep asking.
+
+  The caller checks the repository out; this action assumes `scripts/` and
+  `e2e/package-lock.json` are present in the workspace.
+
+inputs:
+  owner:
+    description: "GitHub owner (App installation) whose token this leg mints."
+    required: true
+  probe:
+    description: >-
+      A repo under `owner` used only to resolve the installation id.
+    required: true
+  repos:
+    description: "Space-separated owner/repo list this leg may converge."
+    required: true
+  app-client-id:
+    description: "vars.REPO_SETTINGS_APP_CLIENT_ID."
+    required: true
+  app-private-key:
+    description: "secrets.REPO_SETTINGS_APP_PRIVATE_KEY."
+    required: true
+  refuse-weakening:
+    description: >-
+      "true" on the UNGATED lane. Re-derives the write-risk verdict from the
+      plan about to be applied and refuses the whole plan if any write is not
+      provably non-weakening. This is the enforcement; the workflow `if:` that
+      routed the job here is only the routing. A wrong `if:` therefore costs a
+      red job, never an unattended weakening write.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: '20'
+    - name: Install harness deps (for the yaml parser; no browsers)
+      shell: bash
+      working-directory: e2e
+      env:
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      run: npm ci
+
+    - name: Apply the manifest (write-scoped token)
+      shell: bash
+      env:
+        APP_CLIENT_ID: ${{ inputs.app-client-id }}
+        APP_PRIVATE_KEY: ${{ inputs.app-private-key }}
+        OWNER: ${{ inputs.owner }}
+        PROBE: ${{ inputs.probe }}
+        REPOS: ${{ inputs.repos }}
+        REFUSE_WEAKENING: ${{ inputs.refuse-weakening }}
+      run: |
+        set -uo pipefail
+        node scripts/mint-app-token.js --owner "$OWNER" --repo "$PROBE" \
+          --permissions administration=write > mint.log 2>&1 || {
+            echo "::error::could not mint a write token for ${OWNER}"; cat mint.log; exit 1; }
+        TOKEN=$(sed -n 's/^token=//p' "$GITHUB_OUTPUT" | tail -1)
+        args=(); for r in $REPOS; do args+=(--repo "$r"); done
+        if [ "$REFUSE_WEAKENING" = "true" ]; then args+=(--refuse-weakening); fi
+        # --yes applies, then RE-AUDITS and exits non-zero if a finding the
+        # plan meant to write is still there.
+        GH_TOKEN="$TOKEN" node scripts/audit-repo-settings.js --fix --yes "${args[@]}"

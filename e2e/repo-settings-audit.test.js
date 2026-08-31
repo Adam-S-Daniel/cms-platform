@@ -1624,3 +1624,338 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(script.ENV_FIX_FORBIDDEN).toContain("repo-settings");
   });
 });
+
+// ── write-risk classification (the gate narrowing) ──────────────────────────
+//
+// scripts/repo-settings-write-risk.js decides which convergences a human must
+// approve. Getting it wrong in one direction costs a click; getting it wrong
+// in the other performs an unattended admin write that reduced protection on a
+// production repo. So every case below is written from the second direction:
+// the question each asks is "could this write leave the repo with FEWER
+// constraints than it has now?", and anything the classifier cannot answer
+// must come back GATED.
+const RISK_PATH = path.resolve(__dirname, "../scripts/repo-settings-write-risk.js");
+function loadRisk() {
+  delete require.cache[require.resolve(RISK_PATH)];
+  return require(RISK_PATH);
+}
+// A ruleset body carrying one required_status_checks rule with `contexts`.
+function rsc(contexts, extraParams = {}) {
+  return {
+    name: "main",
+    target: "branch",
+    enforcement: "active",
+    conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+    bypass_actors: [],
+    rules: [
+      {
+        type: "required_status_checks",
+        parameters: {
+          strict_required_status_checks_policy: true,
+          do_not_enforce_on_create: false,
+          required_status_checks: contexts.map((context) => ({ context })),
+          ...extraParams,
+        },
+      },
+    ],
+  };
+}
+const verdict = (w) => loadRisk().classifyWrite(w).verdict;
+
+test.describe("repo-settings write-risk classification", () => {
+  test("the REAL outstanding drift (#310) classifies SAFE, so it applies unattended", () => {
+    // adamdaniel.ai's `main` ruleset is missing `prerelease-guard /
+    // prerelease-guard`; the manifest has it. That single item was pending
+    // from 2026-08-27 to 2026-08-31 while four runs asked a human to approve
+    // it. Adding a required check cannot reduce protection — this is exactly
+    // the case the narrowing exists for, so it is asserted on the real values
+    // rather than on a synthetic pair.
+    const live = rsc([
+      "e2e / e2e",
+      "editorial / validate-content",
+      "parity / parity",
+      "preview-media / preview-media",
+      "scan / scan",
+      "visual-regression / approve-regression",
+    ]);
+    const desired = rsc([
+      "e2e / e2e",
+      "editorial / validate-content",
+      "parity / parity",
+      "prerelease-guard / prerelease-guard",
+      "preview-media / preview-media",
+      "scan / scan",
+      "visual-regression / approve-regression",
+    ]);
+    const c = loadRisk().classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live,
+      desired,
+    });
+    expect(c.verdict).toBe("safe");
+    expect(c.reason).toContain("prerelease-guard / prerelease-guard");
+  });
+
+  test("REMOVING a required check is gated, and that is the same diff backwards", () => {
+    // The mirror of the test above, and the one that matters: if the
+    // classifier is direction-blind, both read the same and an unattended run
+    // strips a repo's required checks.
+    const six = [
+      "e2e / e2e",
+      "editorial / validate-content",
+      "parity / parity",
+      "preview-media / preview-media",
+      "scan / scan",
+      "visual-regression / approve-regression",
+    ];
+    const c = loadRisk().classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live: rsc([...six, "prerelease-guard / prerelease-guard"]),
+      desired: rsc(six),
+    });
+    expect(c.verdict).toBe("gated");
+    expect(c.reason).toMatch(/required check\(s\) removed/);
+  });
+
+  test("relaxing enforcement, adding a bypass actor, or moving conditions is gated", () => {
+    const base = rsc(["a / a"]);
+    const relaxed = { ...base, enforcement: "disabled" };
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: base, desired: relaxed }),
+    ).toBe("gated");
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: base,
+        desired: { ...base, bypass_actors: [{ actor_id: 5, actor_type: "Integration", bypass_mode: "always" }] },
+      }),
+    ).toBe("gated");
+    // …and removing one is fine: fewer ways around the rules.
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: { ...base, bypass_actors: [{ actor_id: 5, actor_type: "Integration", bypass_mode: "always" }] },
+        desired: base,
+      }),
+    ).toBe("safe");
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: base,
+        desired: {
+          ...base,
+          conditions: { ref_name: { include: ["refs/heads/nothing"], exclude: [] } },
+        },
+      }),
+    ).toBe("gated");
+  });
+
+  test("dropping a whole rule is gated; adding one is safe", () => {
+    const withChecks = rsc(["a / a"]);
+    const withChecksAndDeletion = {
+      ...withChecks,
+      rules: [...withChecks.rules, { type: "deletion" }],
+    };
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: withChecks, desired: withChecksAndDeletion }),
+    ).toBe("safe");
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: withChecksAndDeletion, desired: withChecks }),
+    ).toBe("gated");
+  });
+
+  test("a pull_request rule's parameters are ALWAYS gated — direction is not modelled there", () => {
+    // `required_approving_review_count`, the dismiss-stale flags and
+    // `allowed_merge_methods` all live here and all have a weakening
+    // direction. Rather than model five more orderings, the classifier
+    // declines to reason about the rule at all. That is deliberate, and this
+    // test is what stops someone "completing" it casually.
+    const pr = (count) => ({
+      name: "main",
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      bypass_actors: [],
+      rules: [
+        { type: "pull_request", parameters: { required_approving_review_count: count } },
+      ],
+    });
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: pr(1), desired: pr(2) }),
+    ).toBe("gated");
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: pr(2), desired: pr(1) }),
+    ).toBe("gated");
+  });
+
+  test("it FAILS CLOSED on anything it has never seen", () => {
+    // The property the whole design rests on: this is an allowlist. A ruleset
+    // key GitHub adds next year, a required_status_checks parameter nobody has
+    // modelled, an unknown write kind — every one of them must reach a human,
+    // not the ungated lane.
+    const base = rsc(["a / a"]);
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: base,
+        desired: { ...base, some_future_github_key: true },
+      }),
+    ).toBe("gated");
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: rsc(["a / a"]),
+        desired: rsc(["a / a"], { some_future_param: 3 }),
+      }),
+    ).toBe("gated");
+    expect(verdict({ kind: "who-knows", key: "x" })).toBe("gated");
+    expect(verdict(null)).toBe("gated");
+    // A context entry that is more than a bare `context` is a different
+    // assertion (an integration_id pin), so it is not covered by "additions
+    // only are safe".
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: rsc(["a / a"]),
+        desired: {
+          ...rsc(["a / a"]),
+          rules: [
+            {
+              type: "required_status_checks",
+              parameters: {
+                strict_required_status_checks_policy: true,
+                do_not_enforce_on_create: false,
+                required_status_checks: [
+                  { context: "a / a" },
+                  { context: "b / b", integration_id: 15368 },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    ).toBe("gated");
+  });
+
+  test("repo flags are allowlisted by VALUE, not by key", () => {
+    // Disabling a merge method removes a way to land code; enabling one adds
+    // one. Same key, opposite verdicts.
+    expect(
+      verdict({ kind: "flag", key: "allow_rebase_merge", live: true, desired: false }),
+    ).toBe("safe");
+    expect(
+      verdict({ kind: "flag", key: "allow_rebase_merge", live: false, desired: true }),
+    ).toBe("gated");
+    expect(
+      verdict({ kind: "flag", key: "delete_branch_on_merge", live: false, desired: true }),
+    ).toBe("safe");
+    // Cosmetic keys are deliberately absent from the list — unmodelled means
+    // gated, which costs a click and never a surprise.
+    expect(
+      verdict({ kind: "flag", key: "squash_merge_commit_title", live: "COMMIT_OR_PR_TITLE", desired: "PR_TITLE" }),
+    ).toBe("gated");
+  });
+
+  test("Actions permissions follow the same direction rule", () => {
+    expect(
+      verdict({ kind: "actions-permission", key: "sha_pinning_required", live: false, desired: true }),
+    ).toBe("safe");
+    expect(
+      verdict({ kind: "actions-permission", key: "sha_pinning_required", live: true, desired: false }),
+    ).toBe("gated");
+    expect(
+      verdict({
+        kind: "actions-permission",
+        key: "approval_policy",
+        live: "first_time_contributors",
+        desired: "all_external_contributors",
+      }),
+    ).toBe("safe");
+    expect(
+      verdict({
+        kind: "actions-permission",
+        key: "approval_policy",
+        live: "all_external_contributors",
+        desired: "first_time_contributors",
+      }),
+    ).toBe("gated");
+    // An unknown live value means the DIRECTION is unknown, not that the move
+    // is fine.
+    expect(
+      verdict({
+        kind: "actions-permission",
+        key: "approval_policy",
+        live: null,
+        desired: "all_external_contributors",
+      }),
+    ).toBe("gated");
+  });
+
+  test("creating a ruleset or an environment only ever adds", () => {
+    // GitHub enforces the UNION of a repo's rulesets, so one that does not
+    // exist yet cannot be relaxing anything by coming into existence; and
+    // buildFixPlan only ever emits an environment PUT on the CREATE path
+    // (ENV_FIX_FORBIDDEN), where the body is the manifest's own.
+    expect(verdict({ kind: "ruleset-post", name: "new", desired: rsc(["a / a"]) })).toBe("safe");
+    expect(
+      verdict({ kind: "environment-put", name: "repo-settings", desired: { reviewers: [] } }),
+    ).toBe("safe");
+  });
+
+  test("classifyPlan aggregates, and one gated write gates the whole plan", () => {
+    const risk = loadRisk();
+    const plan = [
+      {
+        repo: "o/r",
+        patchBody: { allow_rebase_merge: false },
+        flagLive: { allow_rebase_merge: true },
+        puts: [],
+        posts: [],
+        actionsPuts: [],
+        envPuts: [],
+      },
+      {
+        repo: "o/r2",
+        patchBody: { allow_rebase_merge: true },
+        flagLive: { allow_rebase_merge: false },
+        puts: [],
+        posts: [],
+        actionsPuts: [],
+        envPuts: [],
+      },
+    ];
+    const c = risk.classifyPlan(plan);
+    expect(c.writes.length).toBe(2);
+    expect(c.safe.length).toBe(1);
+    expect(c.gated.length).toBe(1);
+    expect(c.gated[0].repo).toBe("o/r2");
+  });
+
+  test("planUnfixables names what no approval can fix", () => {
+    // The other half of the noise problem: a plan can be non-empty and contain
+    // nothing this tool will write. Asking a human to approve THAT is asking
+    // for something they cannot give through this workflow.
+    const risk = loadRisk();
+    const un = risk.planUnfixables([
+      {
+        repo: "o/r",
+        manualOnly: ["default_branch"],
+        skipped: ["odd"],
+        unmanaged: ["stray"],
+        envManualOnly: ["repo-settings"],
+      },
+    ]);
+    expect(un.length).toBe(4);
+    expect(un.join("\n")).toContain("default_branch");
+    expect(un.join("\n")).toContain("repo-settings");
+    expect(risk.classifyPlan([{ repo: "o/r", manualOnly: ["default_branch"] }]).writes.length).toBe(0);
+  });
+});
