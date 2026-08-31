@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.94)
+## Version history (v0.1.0 → v0.1.95)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2040,6 +2040,40 @@ version bump is needed and cutting one would force the whole atomic edit set
   is deferred for the same reason: every shim here that touches Decap's rendered
   DOM was built against live observation, and guessing a selector is the
   brittleness to avoid.
+
+- **v0.1.95** — **the media archive's documented opt-in was unshippable by
+  any consumer, and the checker that forbade it was right to.** v0.1.93 landed
+  the private media-PDF archive with `docs/MEDIA-ARCHIVE.md` step 5 telling a
+  site to add `media_archive_bucket` (and, on the production caller,
+  `platform_ref`) to its thin deploy callers. `examples/site` ships both lines
+  COMMENTED OUT — correctly, since adopting the archive is a per-site decision —
+  and `check-platform-pin-consistency.js` compares a caller's `with:` KEY SET
+  against those canonical examples as an exact sorted-set match. Comments drop
+  out in the YAML parse, so following the docs necessarily produced
+  `workflow-content: DRIFT` on the REQUIRED `pin-consistency` check. Not a
+  misconfiguration at one site: the documented path was closed to everyone.
+  jodidaniel.com wired it, went red, and reverted (its commit `07e5c4b`); the
+  user-visible symptom was a live 404, since `_layouts/media.html` renders
+  `/media-pdfs/<key>` the moment an editor ticks `pdf_public` while nothing ever
+  copies the object out of the archive. Fixed with an explicit
+  `OPTIONAL_WITH_KEYS` table that strips both keys from BOTH sides of the
+  key-set compare, for those two basenames only. The table is deliberate and
+  reviewed rather than derived from which lines happen to be commented out in
+  the example — deriving it would let an unrelated `#` (a debugging aid, a
+  half-finished feature) silently retire a real guard with nothing to flag it.
+  The exemption removed the only thing forcing `platform_ref` to accompany
+  `media_archive_bucket` on the production caller, and that pairing is
+  load-bearing: that reusable declares `platform_ref` with `default: main`, and
+  the `media_archive_bucket != ''` steps check the platform out at that ref to
+  run `publish-opted-in-pdfs.sh` — so unpaired, a site would publish PDFs to its
+  live domain from an UNPINNED `main` checkout. `checkOptionalInputPairing()`
+  now asserts it directly, which is strictly stronger than what it replaced:
+  "Uncomment BOTH lines together" was previously enforced only as a side effect
+  of the key-set compare, and only for consumers that had *not* adopted the
+  feature. Five new tests, and a negative control per half — dropping the
+  `withKeys` filter fails exactly the two exemption tests, stubbing the pairing
+  function fails exactly the pairing test — because one control would have left
+  the other half a green light wired to nothing. #360.
 
 - **v0.1.94** — **the notice pointing at the Publish button was painted on
   top of it, and two separate guards were structurally unable to see that.**
