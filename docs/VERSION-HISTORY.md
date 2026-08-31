@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.93)
+## Version history (v0.1.0 → v0.1.94)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -2040,6 +2040,75 @@ version bump is needed and cutting one would force the whole atomic edit set
   is deferred for the same reason: every shim here that touches Decap's rendered
   DOM was built against live observation, and guessing a selector is the
   brittleness to avoid.
+
+- **v0.1.94** — **the notice pointing at the Publish button was painted on
+  top of it, and two separate guards were structurally unable to see that.**
+  `publish-step-hint.js` shipped in v0.1.92 as a `position: fixed`, top-centre,
+  `pointer-events: none` banner reading "Not published yet — click Publish,
+  then choose 'Publish now'." Measured against a live Decap 3.15.1 admin, it
+  covered 68% of the Publish control and 47% of the Status control at
+  1280x800 — the two controls its own text names. Reported from a live preview
+  session on jodidaniel.com PR #220, with a screenshot.
+
+  **Why every occlusion assertion in the repo stayed green.**
+  `e2e/ui-visibility.js`'s `expectReachable` decides "covered" with
+  `document.elementFromPoint` at the control's centre. That is the right
+  question for *can the user click it* and the wrong one for *can the user read
+  it*: a `pointer-events: none` overlay is invisible to a hit test, so the
+  button stayed clickable and the guard stayed green for as long as the banner
+  was on production. `expectNoInjectedOverlap` now asks the geometric question —
+  rectangle intersection between anything the platform injects (`id^="cms-"`
+  plus the two floating chrome links) and each named control, containment
+  exempt in both directions.
+
+  **And why the browser lane could not have caught it either.** The damage is
+  viewport-width dependent, and this spec's two `@admin-read` projects sit
+  either side of the band. Overlap of the Publish button, same session, same
+  banner: `3000x1500 → 0`, `2000x1100 → 0`, `1440x900 → 2682px2`,
+  `1280x800 → 2682px2`, `1024x768 → 2438px2`, `393x852 → 0`. A centred fixed
+  overlay clears a 3000px toolbar and sits above a wrapped phone toolbar; it
+  lands on the controls at exactly the widths a laptop uses. The new test in
+  `e2e/admin-no-occlusion.spec.js` therefore pins its own widths, against that
+  file's "deliberately does NOT pin a viewport" rule, and carries a vacuity
+  guard so it cannot pass by rendering nothing.
+
+  **The fix.** The bar is a full-width row in normal flow, inserted as the
+  toolbar's next sibling inside Decap's `EditorContainer`. Zero overlap at every
+  width measured, with no hard-coded offset, because Decap's own layout does the
+  work in both modes: on desktop `ToolbarContainer` is `position: absolute` and
+  the container carries a matching `padding-top`; on the phone layout the
+  toolbar is `position: static` and wraps. It also reports a state that had no
+  signal at all — while an entry has unsaved changes Decap renders NO publish
+  control (`renderWorkflowControls`: `!hasChanged && …`) and nothing said why.
+  The "about 5-15 minutes" clause is gated on the shell's own
+  `deploy-status-pill.js` tag, so the local and test shells — which have no
+  deploy — never make a timing promise, the honesty constraint
+  `local-save-indicator.js` already documents.
+
+  **The knowledge existed, in the wrong file.** `index-test.html`'s diagnostic
+  banner carries a comment saying it is bottom-pinned *because* Decap's toolbar
+  is `position: fixed; top: 0`. One shell knew; nothing enforced it. Two pure-fs
+  lints in `e2e/admin-329-shims.test.js` now do, for both shims.
+
+  **The lint had to PARSE, and finding that out cost one run.** The first draft
+  was `/position\s*:\s*fixed/` over the source, and it red-failed the FIXED
+  file — whose header comment explains the defect it forbids. A lint that
+  forbids a token cannot read comments. It walks acorn's AST now (string
+  literals, `style.position = "fixed"`, `setProperty("position","fixed")`),
+  which is the house AST rule in its cheapest form. Both new lints and the
+  browser guard were proved able to fail against the pre-fix file.
+
+  Also shipped: `docs/PUBLISHING-UX.md`, the wider rethink this came out of —
+  the nine overlapping notions of "published" an editor meets across four
+  systems, including the two that contradict each other (`WorkflowList`
+  hard-gates publishing on `Ready`; the entry editor's Publish dropdown has no
+  status gate at all, and setting `Status: Ready` publishes on its own via the
+  `decap-cms/pending_publish` label `auto-merge-when-ready` fires on), the
+  5-15 minutes of silence a publish spends after a 14-second toast and an
+  8-second error message that is wrong, and a staged plan to collapse it to
+  four states and two verbs. Phase 1 is what shipped; phases 2-5 are specified
+  and unbuilt, and phase 2 needs an operator decision because it removes a
+  capability. #351.
 
 - **v0.1.93** — **the archive field name, fixed before it reached a
   consumer's immutable history.** v0.1.92's media-archive publish path (#347)

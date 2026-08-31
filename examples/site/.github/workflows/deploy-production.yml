@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-production.yml@v0.1.93
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-production.yml@v0.1.94
     with:
       apex_domain: example.com
       prod_bucket: example-com-production
@@ -47,7 +47,7 @@ jobs:
       # fetches the publish script, and `platform-bump` moves it in lockstep
       # with the `uses:@` pin above -- so it must equal this file's ref.
       # media_archive_bucket: example-com-media-archive
-      # platform_ref: v0.1.93
+      # platform_ref: v0.1.94
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       PRODUCTION_CLOUDFRONT_ID: ${{ secrets.PRODUCTION_CLOUDFRONT_ID }}
