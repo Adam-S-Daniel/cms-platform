@@ -110,5 +110,6 @@ jobs:
         e2e / e2e
         visual-regression / approve-regression
         prerelease-guard / prerelease-guard
+        site-verify / site-verify
     secrets:
       CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}

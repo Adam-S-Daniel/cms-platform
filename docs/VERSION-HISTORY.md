@@ -14,6 +14,16 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED (landed 2026-09-01) — `site-verify / site-verify` is required
+(#377, sequencing step 3).** Both consumers published the context on their
+v0.1.98 bump PRs (jodidaniel.com#236 ran the real verifier, adamdaniel.ai#3464
+printed the no-op notice), so the manifest's `consumer-main` now requires it,
+the `cms-automerge-nudge.yml` template's `required_contexts` mirrors that, and
+the SEQUENCING test became the positive assertion. The live rulesets follow via
+`repo-settings-apply` (a tightening, applied unattended) or an operator
+`audit-repo-settings.js --fix --yes`; each consumer's own nudge list is
+reconciled by its next `platform-bump`.
+
 **v0.1.98 — a consumer's own post-build verifier finally runs in CI (#377).**
 jodidaniel.com ships `scripts/verify-build-artifacts.rb`, ~190 assertions over
 the BUILT site: media links resolve, the three-way category triangle agrees,
