@@ -77,6 +77,28 @@
  * how the wrap stops being auditable. An inline two-step also keeps the
  * whole interaction inside one focus context, with no trap to build.
  *
+ * ── The preview surface, and the promise this button must not make (#371) ─
+ * A PR-preview deploy serves this same production shell, and
+ * scripts/patch-preview-config.sh deliberately rewrites that admin's
+ * `backend.branch` to the PR head ref — so an editor on a preview edits a
+ * FEATURE BRANCH. cms-editorial-workflow.yml labels the resulting PR
+ * `cms/preview-only`, whose own description is "drop this content from the
+ * parent branch when it merges to main".
+ *
+ * The confirmation therefore must not name the live URL there. It used to,
+ * unconditionally: "It will appear at https://<apex>/… in about 5–15
+ * minutes" — a specific, checkable, false promise, on the one surface where
+ * the whole point is that nothing reaches the live site. It now names the
+ * destination entry-status-model.js derives, which is the preview's own
+ * branch on that surface and the site everywhere else.
+ *
+ * And the button must not DISAPPEAR on a stalled publish. `armed` used to be
+ * enough to render nothing at all ("already on its way — a second Publish
+ * would be a no-op"), which is right while the merge is actually coming and
+ * exactly wrong once it is not: #371's measured instance sat armed, green and
+ * unmerged with no control on screen. The armed branch now excludes a stall,
+ * so the editor gets a button back alongside the bar's explanation.
+ *
  * ── Failure mode ───────────────────────────────────────────────────────
  * If publish-step-hint.js's bar is absent (a Decap release that renames the
  * toolbar, a route with no editor) there is no actions slot and this shim
@@ -266,6 +288,30 @@
   // What SHOULD be in the slot right now, as a small plain object. Deriving
   // it before touching the DOM is what makes the signature comparison below
   // possible at all.
+  // entry-status-model.js owns the threshold; this reads its verdict rather
+  // than re-deriving one, so the button and the bar can never disagree about
+  // whether a publish has stalled. Absent module → false, which keeps the
+  // pre-#371 behaviour rather than inventing a failure.
+  function isStalled(facts) {
+    try {
+      var m = window.CMSEntryStatus;
+      return Boolean(m && typeof m.isStalled === "function" && m.isStalled(facts, Date.now()));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Likewise for the destination noun — one derivation, two surfaces.
+  function destination(facts) {
+    try {
+      var m = window.CMSEntryStatus;
+      if (m && typeof m.destination === "function") return m.destination(facts);
+    } catch (e) {
+      /* fall through */
+    }
+    return { noun: "the website", preview: false };
+  }
+
   function plan() {
     var p = progress();
     var state = p ? p.get() : null;
@@ -293,12 +339,33 @@
     if (!facts.hasOpenPr) return { kind: "none" };
 
     // Already on its way — a second Publish would be a no-op the editor would
-    // read as a failure.
-    if (facts.armed && !facts.checksFailed && !facts.awaitingReviewGate && !facts.mergeConflict) {
+    // read as a failure. A STALLED publish is not on its way (see the header),
+    // so it must not be swallowed here.
+    var stalled = isStalled(facts);
+    if (
+      facts.armed &&
+      !facts.checksFailed &&
+      !facts.awaitingReviewGate &&
+      !facts.mergeConflict &&
+      !stalled
+    ) {
       return { kind: "none" };
     }
 
     if (mode === "confirm") {
+      var dest = destination(facts);
+      if (dest.preview) {
+        // No URL: window.LiveURL computes the LIVE site's path, and the
+        // preview origin is not derivable from anything this shim may read.
+        // Naming the branch is the same discipline targetUrl() already
+        // applies — naming the wrong URL is worse than naming none.
+        return {
+          kind: "confirm",
+          note:
+            "Put this on " + dest.noun + "? It takes about 5–15 minutes to appear " +
+            "there. It will NOT go to the live website.",
+        };
+      }
       var url = targetUrl();
       return {
         kind: "confirm",
@@ -311,7 +378,9 @@
     return {
       kind: "publish",
       label:
-        facts.checksFailed || facts.awaitingReviewGate ? "Try publishing again" : "Publish",
+        facts.checksFailed || facts.awaitingReviewGate || stalled
+          ? "Try publishing again"
+          : "Publish",
     };
   }
 

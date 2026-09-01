@@ -201,6 +201,70 @@ Plus the platform's own posts-list pill (`Published` / `Draft` / `Scheduled`),
 which is derived from the `published` front-matter field — row 4 above, a
 different axis entirely, using one of the same words.
 
+### 2.10 On a preview environment, Publish was a silent no-op (#371)
+
+Everything in §2.8 is about the preview admin *looking* like production. This
+is the same surface failing to *work* like it, and it is the §2.7 failure class
+— "pressed Publish, nothing happened, no error, forever" — on a surface none of
+the five staged phases covered.
+
+`deploy-preview.yml` runs `scripts/patch-preview-config.sh`, which rewrites the
+preview admin's `backend.branch` to the PR's head ref. That is deliberate: an
+editor on a preview environment should edit that PR's branch. So Decap opens
+its editorial PR with `base` = a feature branch, and
+`cms-editorial-workflow.yml` labels it `cms/preview-only`.
+
+Measured instance — jodidaniel.com [#233](https://github.com/jodidaniel/jodidaniel.com/pull/233),
+created through `preview-pr220.jodidaniel.com/admin` on 2026-08-31:
+
+| | |
+|---|---|
+| head → base | `cms/media/1-fda-amicus` → `claude/issue-26-site-live-on` |
+| labels | `cms/draft`, `cms/ready`, `cms/preview-only`, `decap-cms/draft` |
+| `editorial / auto-merge-when-ready` | **success**, in 4 s, at 22:05:25 |
+| `editorial / validate-content` | **success**, at 22:06:27 |
+| `mergeable` / `mergeable_state` | `true` / **`blocked`** |
+| outcome | still open at 22:24, merged by hand by an admin |
+
+**The four-second success is the tell, and it refutes the obvious reading.**
+`auto-merge-when-ready` has a whole recovery path for a preview-only base — it
+catches `enablePullRequestAutoMerge`'s "unstable status" error, polls up to ten
+minutes for every non-self check to settle green, and then merges explicitly.
+That path takes minutes. Four seconds means the GraphQL mutation did not throw
+at all: **native auto-merge armed successfully**, which it can only do when the
+base has something to wait for. The base was protected.
+
+It was protected by `repo-settings.yml`'s `cms-feature-branches` ruleset, which
+covers `refs/heads/cms/**`, `refs/heads/claude/**`, `refs/heads/feat/**` and
+five more — and which required the status check **`validate-content`**. Nothing
+publishes that string. The consumer's thin caller declares job id `editorial`
+and `uses:` the platform reusable whose job id is `validate-content`, so the
+check run GitHub publishes is `editorial / validate-content` — which is exactly
+how `consumer-main`, twenty lines earlier in the same file, spells it.
+
+A required context nothing reports never goes green, and a branch ruleset does
+not time out. So every PR onto those refs was permanently `blocked`; auto-merge
+sat armed against a check that could not exist; and the only thing that ever
+moved one was a repository admin using the `bypass_actors` entry by hand —
+which is why this survived unnoticed. The people who could merge never saw the
+wall.
+
+Three things this cost, all of them generalisable:
+
+- **A required context is half a contract, and nothing checked the other
+  half.** `cms-automerge-nudge.test.js` locks the nudge's `required_contexts`
+  input against `consumer-main` — two lists against *each other*. Both could
+  name a context nothing publishes and that lint stays green. The missing join
+  is context-string → the workflow that would emit it, and it is now
+  `e2e/ruleset-context-publishable.test.js`.
+- **This was latent regardless of live state.** `scripts/audit-repo-settings.js
+  --fix --yes` PUTs this manifest, so an unpublishable context in it becomes an
+  unpublishable context live at the next reconcile, whatever the current drift.
+- **`armed` was believed indefinitely.** Even with the server side fixed, the
+  admin had no way to ever stop saying "Going live…", because nothing
+  distinguished "the merge is coming" from "the merge is never coming". That
+  half is §3.4 below.
+
 ---
 
 ## 3. The target model
@@ -259,6 +323,76 @@ badges were seen, and everything it offers is available per-entry in the
 collection list once the badge above exists.
 
 ---
+
+### 3.4 A publish that stops must stop saying it is in flight (#371)
+
+`armed` — a `cms/ready` label, or native auto-merge enabled — was read as "on
+its way", and believed for as long as the tab stayed open. Every failure of the
+merge machinery therefore rendered as **Going live…**, indefinitely. §2.4's
+defect was feedback that outlived the action by 0.2% of its duration; this is
+its opposite number, and it is worse, because it is confident.
+
+The signal that closes it is **positive and needs no threshold guess**: a PR
+that is armed, has at least one check run, has *no* incomplete check run,
+nothing red, no conflict and no review-gate park has **nothing left to wait
+for** — so if it is still open, the merge is not coming on its own. That is a
+fact about the PR, not an elapsed-time heuristic, and it is true whatever the
+underlying cause: the unpublishable required context of §2.10, the
+`automated-test` scoping that keeps `cms-automerge-nudge.yml` off a real
+editor's draft, or anything that replaces either.
+
+One timestamp is still recorded rather than reporting instantly, because there
+is a legitimate seconds-wide window in which the condition holds: native
+auto-merge fires a moment *after* the last check completes. `publish-progress.js`
+reports `settledSince` — when the condition first held continuously, reset on
+any change of PR or head sha — and `entry-status-model.js` applies the grace
+(`STALL_GRACE_MIN`, 3 minutes). The threshold lives in the pure module, so both
+surfaces read one verdict and the poller stays a fact-gatherer.
+
+Reporting a healthy publish as stopped is the same class of lie as reporting a
+stopped one as in flight, so both directions are tested:
+`e2e/entry-status-model.test.js` pins the badge on either side of the boundary,
+at the boundary, and for both unknowns (`settledSince` absent, `now` absent),
+where the answer must be "not stalled" — an unknown must never manufacture a
+failure report.
+
+### 3.5 On a preview, "the website" is the wrong noun
+
+An editor on a PR-preview deploy is editing a feature branch, and the
+`cms/preview-only` label's own description reads *"drop this content from the
+parent branch when it merges to main"*. So every sentence in the admin
+containing "the website" was false there — including the Publish
+confirmation's **"It will appear at https://&lt;apex&gt;/… in about 5–15
+minutes"**, a specific, checkable, false promise on the one surface whose whole
+point is that nothing reaches the live site.
+
+`entry-status-model.js` now derives the destination once (`destination(facts)`),
+and both the bar and the button name it. On a preview it is the branch, not a
+URL: the preview origin is not derivable from anything these shims may read,
+and `publish-button.js`'s existing `targetUrl()` rule already says naming the
+wrong URL is worse than naming none. `publish-progress.js` supplies the fact
+from two free signals on the `/pulls` list response it already makes — the
+`cms/preview-only` label, or `base.ref !== base.repo.default_branch` — so it
+costs no extra request and hardcodes no branch name.
+
+§2.8 measured the only thing distinguishing a preview admin from the real one
+as a 0.65rem pill in a corner. This puts it in the sentence the editor is
+already reading.
+
+**One state it deliberately does not cover.** The preview fact comes off the
+entry's own PR, so an entry with *no* open PR still reads **Live — this is on
+the website now**, which on a preview surface is the old wrong noun. Closing it
+would mean a signal that does not depend on a PR, and the cheap one —
+`location.origin !== window.CMS_SITE_ORIGIN` — is a heuristic, not a fact: a
+site served from `www.` while its `_config.yml` `url` names the apex would
+match it on production. That false positive tells an editor on the REAL site
+that publishing will not reach the live website, which is worse than the miss
+it fixes. The PR-derived signals are exact; this one is not, so it was left
+out.
+
+`e2e/entry-status-model.test.js` pins the residual explicitly (a preview whose
+base ref is unknown degrades to "the preview for this branch", never to a URL),
+so the gap is a recorded decision rather than an oversight.
 
 ## 4. Staged plan
 
@@ -520,6 +654,9 @@ with the pre-fix file and the post-fix file, in the same session.
   false-"Failed to publish" suppressor.
 - `e2e/admin-publishing-ux.test.js` / `e2e/admin-publish-routing.test.js` — the
   structural and route-matcher halves of the guard set.
+- `e2e/ruleset-context-publishable.test.js` — the §2.10 guard: every required
+  status-check context in `repo-settings.yml` must be one the workflow tree can
+  actually publish.
 - `.github/workflows/cms-editorial-workflow.yml` — `auto-merge-when-ready`,
   the job that turns a label into a live site.
 - `docs/CI-INVARIANTS.md` — the required-check topology behind the 5–15

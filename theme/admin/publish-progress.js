@@ -31,7 +31,7 @@
  * token out of localStorage — the same one deploy-status-pill.js uses. No
  * CMS_E2E_PAT, no second credential.
  *
- * ── The five facts, and where each comes from ──────────────────────────
+ * ── The facts, and where each comes from ───────────────────────────────
  *   hasOpenPr         an open PR whose head ref is cms/<collection>/<slug>
  *   armed             cms/ready or decap-cms/pending_publish on that PR, or
  *                     native auto_merge already enabled
@@ -45,6 +45,41 @@
  *                     manual environment approval — the regression-review
  *                     gate of §2.7, the failure mode that presents to an
  *                     editor as "pressed Publish, nothing happened, forever"
+ *   previewOnly       the PR's base is NOT the repo's default branch — i.e.
+ *                     this admin is a PR-preview deploy, whose config.yml
+ *                     scripts/patch-preview-config.sh rewrote to the preview
+ *                     branch. Both signals come free out of the /pulls LIST
+ *                     response, so this costs no extra request: the
+ *                     `cms/preview-only` label cms-editorial-workflow.yml
+ *                     applies, OR base.ref !== base.repo.default_branch. The
+ *                     label alone would be racy (it is applied a few seconds
+ *                     after `opened`); the branch compare alone would miss a
+ *                     site whose default branch is not what the ruleset
+ *                     protects. Neither hardcodes `main`.
+ *   settledSince      ms epoch at which this PR FIRST looked settled-but-
+ *                     unmerged, or null. See "The stall" below.
+ *
+ * ── The stall: an armed publish with nothing left to wait for (#371) ────
+ * `armed` says the PR is queued to merge itself. Nothing said whether that
+ * queue ever moves, so every failure of the merge machinery presented as
+ * "Going live…" FOREVER — honest about what it knew and, after ten minutes,
+ * indistinguishable from a lie. Measured instance: jodidaniel.com#233, armed
+ * at 22:05, every check green by 22:06, still open and unmerged twenty
+ * minutes later when a human merged it by hand.
+ *
+ * The signal is POSITIVE and needs no timer and no threshold guess: a PR that
+ * is armed, has at least one check run, has NO incomplete check run, nothing
+ * red, no conflict and no review-gate park has NOTHING LEFT TO WAIT FOR — so
+ * if it is still open, the merge is not coming on its own. That is a fact
+ * about the PR, not an elapsed-time heuristic.
+ *
+ * One timestamp is still recorded rather than reporting the stall instantly,
+ * because there is a legitimate seconds-wide window in which it holds: native
+ * auto-merge fires a moment AFTER the last check completes. `settledSince`
+ * is when the condition first held CONTINUOUSLY (reset on any change of PR or
+ * head sha, and on the condition lapsing); entry-status-model.js applies the
+ * grace period, so the threshold lives in the pure, unit-tested module and
+ * this one stays a fact-gatherer.
  *
  * `startedAt` for the ETA is the OLDEST `started_at` among the check runs
  * that have not completed — deliberately not "when this tab noticed", so a
@@ -82,6 +117,24 @@
   // still in flight and must still read as in flight.
   var ARMED_LABELS = ["cms/ready", "decap-cms/pending_publish"];
   var FAILED_CONCLUSIONS = ["failure", "timed_out", "cancelled", "action_required", "stale"];
+  // Applied by cms-editorial-workflow.yml's "Apply draft label on new PR" step
+  // to every CMS PR whose base is not `main`.
+  var PREVIEW_ONLY_LABEL = "cms/preview-only";
+
+  // When the settled-but-unmerged condition first held, and for which
+  // <pr>:<sha>. Any change of either resets it, so a re-save (Decap
+  // force-pushes the same branch) starts the clock over rather than
+  // inheriting a stall reading from the previous head.
+  var settled = { key: null, since: null };
+
+  function noteSettled(key, isSettled, now) {
+    if (!isSettled) {
+      settled = { key: null, since: null };
+      return null;
+    }
+    if (settled.key !== key) settled = { key: key, since: now };
+    return settled.since;
+  }
 
   var listeners = [];
   var state = { ready: false, facts: null, prNumber: null, prUrl: null, entry: null };
@@ -181,6 +234,9 @@
           deployState: dep ? dep.state : null,
           waitingOn: null,
           startedAt: dep && deploying ? Date.parse(dep.created_at) : null,
+          previewOnly: false,
+          baseRef: null,
+          settledSince: noteSettled(null, false, Date.now()),
         },
         prNumber: null,
         prUrl: null,
@@ -195,6 +251,17 @@
       ARMED_LABELS.some(function (name) {
         return labels.indexOf(name) !== -1;
       });
+
+    // Free out of the list response — `base.repo` is a full repository
+    // object, so `default_branch` costs nothing. OR-ing the two signals errs
+    // toward "this is a preview", which is the safe direction: the wrong
+    // answer the other way tells an editor on a preview that their change is
+    // going to the live website.
+    var baseRef = (pr.base && pr.base.ref) || null;
+    var defaultBranch = (pr.base && pr.base.repo && pr.base.repo.default_branch) || null;
+    var previewOnly =
+      labels.indexOf(PREVIEW_ONLY_LABEL) !== -1 ||
+      Boolean(baseRef && defaultBranch && baseRef !== defaultBranch);
 
     var sha = pr.head && pr.head.sha;
     var checks = sha ? await getJson(API + "/commits/" + sha + "/check-runs?per_page=100", token, "check-runs") : null;
@@ -239,6 +306,20 @@
       });
     }
 
+    // See "The stall" in the header. `runs.length` guards the window between
+    // a push and GitHub creating the check runs for it: an empty list is "not
+    // known yet", never "nothing left to wait for".
+    var settledSince = noteSettled(
+      pr.number + ":" + (sha || ""),
+      armed &&
+        runs.length > 0 &&
+        incomplete.length === 0 &&
+        !failed &&
+        !mergeConflict &&
+        !awaitingReviewGate,
+      Date.now(),
+    );
+
     var waitingOn = null;
     if (incomplete.length === 1) {
       waitingOn = "one last check (" + incomplete[0].name + ")";
@@ -257,6 +338,9 @@
         deployState: null,
         waitingOn: waitingOn,
         startedAt: startedAt,
+        previewOnly: previewOnly,
+        baseRef: baseRef,
+        settledSince: settledSince,
       },
       prNumber: pr.number,
       prUrl: pr.html_url,

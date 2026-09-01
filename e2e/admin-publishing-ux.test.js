@@ -39,6 +39,9 @@ const {
   stringLiterals,
   readsMember,
   hasBareReturnGuardOn,
+  objectKeySetsAnchoredOn,
+  ifTestsMentioning,
+  callsInsideFunction,
 } = require("./admin-shim-rules");
 
 const REPO_ROOT = path.join(__dirname, "..");
@@ -253,6 +256,88 @@ test.describe("publishing UX phase 4 — the poller's budget", () => {
       "publish-progress.js must read document.hidden and skip the tick — see its " +
         "Budget header",
     ).toBe(true);
+  });
+});
+
+test.describe("#371 — a publish that stops must stop SAYING it is in flight", () => {
+  // The three facts that turn "armed" from a promise into a checkable claim.
+  // Asserted on EVERY facts bag the poller builds, not just one: it returns a
+  // different literal on the no-open-PR path, and a fact present on only one of
+  // them is a fact half the states silently lack — `undefined` reads as false
+  // everywhere downstream, which is exactly how a missing fact hides.
+  test("publish-progress.js reports previewOnly, baseRef and settledSince on every facts bag", () => {
+    const bags = objectKeySetsAnchoredOn(admin(POLLER), "hasOpenPr");
+    expect(bags.length, "facts object literals found in publish-progress.js").toBeGreaterThan(1);
+    for (const [i, keys] of bags.entries()) {
+      for (const fact of ["previewOnly", "baseRef", "settledSince"]) {
+        expect(
+          keys.has(fact),
+          `facts bag #${i + 1} in publish-progress.js is missing \`${fact}\` — every return ` +
+            `path must carry the whole shape, or the states it omits read as false`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // "Which branch is production" is site identity, and the platform never
+  // hardcodes site identity (AGENTS.md, Conventions). The poller derives it
+  // from `base.repo.default_branch`, which rides free on the /pulls list
+  // response it already makes.
+  test("publish-progress.js does not hardcode a production branch name", () => {
+    const literals = stringLiterals(admin(POLLER));
+    expect(
+      literals.filter((v) => v === "main" || v === "refs/heads/main"),
+      "publish-progress.js must read the default branch off the PR, never assume `main`",
+    ).toEqual([]);
+  });
+
+  // The precise regression: `armed` alone used to be enough to render NOTHING
+  // ("already on its way — a second Publish would be a no-op"), which is right
+  // while the merge is coming and exactly wrong once it is not. jodidaniel.com
+  // #233 sat armed, green and unmerged with no control on screen at all.
+  test("publish-button.js never decides off `armed` without consulting the stall", () => {
+    const tests = ifTestsMentioning(admin(BUTTON), "armed");
+    expect(tests.length, "`if` statements testing `armed` in publish-button.js").toBeGreaterThan(0);
+    for (const [i, names] of tests.entries()) {
+      expect(
+        names.has("stalled"),
+        `publish-button.js decision #${i + 1} branches on \`armed\` without \`stalled\`. An ` +
+          `armed publish that has nothing left to wait for is not in flight, and hiding the ` +
+          `only control while claiming it is, is the #371 defect.`,
+      ).toBe(true);
+    }
+  });
+
+  // The confirmation used to promise the LIVE url unconditionally — on a
+  // surface (a PR-preview deploy) whose entire point is that nothing reaches
+  // the live site. Asking the shared model where this entry is going is what
+  // stops the two surfaces drifting into two answers.
+  test("publish-button.js asks the shared model where the entry is going", () => {
+    expect(
+      callsInsideFunction(admin(BUTTON), "plan").has("destination"),
+      "publish-button.js's plan() must call destination() before writing the confirmation — " +
+        "naming the live URL on a preview is a specific, checkable, false promise",
+    ).toBe(true);
+  });
+
+  // Same derivation, both surfaces: the bar and the button must not each grow
+  // their own stall threshold (docs/PUBLISHING-UX.md §2.9 is what happens when
+  // they do).
+  test("the stall threshold lives only in the pure model", () => {
+    expect(
+      callsInsideFunction(admin(BUTTON), "plan").has("isStalled"),
+      "publish-button.js's plan() must ask for the stall verdict rather than re-deriving " +
+        "a threshold of its own — two thresholds are two answers (§2.9)",
+    ).toBe(true);
+    const api = objectKeySetsAnchoredOn(admin(MODEL), "derive");
+    expect(api.length, "the exported API object literal in entry-status-model.js").toBe(1);
+    for (const name of ["isStalled", "destination", "STALL_GRACE_MIN"]) {
+      expect(
+        api[0].has(name),
+        `entry-status-model.js must export \`${name}\` — it is the one place the threshold ` +
+          `and the destination noun are derived, for both surfaces`,
+      ).toBe(true);
+    }
   });
 });
 

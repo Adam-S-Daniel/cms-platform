@@ -14,6 +14,111 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED (landed 2026-08-31) — a required status check that nothing
+publishes, and an admin that believed `armed` forever (#371).** An editor
+opening a PR-preview's `/admin`, editing an entry and pressing Publish got
+every success signal the product has — the entry saved, the PR opened,
+`cms/ready` applied, `editorial / validate-content` green — and the change
+never landed. No error, no timeout, no notice. This is §2.7's failure class
+("pressed Publish, nothing happened, no error, forever") on the one surface
+none of the five staged phases covered.
+
+**The mechanism is not the one it looks like, and the tell is four seconds.**
+A preview admin edits a feature branch on purpose
+(`scripts/patch-preview-config.sh` rewrites `backend.branch`), so its editorial
+PR is based on `claude/**` or `cms/**` and gets labelled `cms/preview-only`.
+The obvious reading — a preview-only base is unprotected, so native auto-merge
+cannot arm, and `cms-automerge-nudge.yml`'s explicit `pulls.merge` recovery is
+scoped to `labels:["automated-test"]` so it never reaches a real editor's draft
+— is the documented one, and it is not what happened here.
+`editorial / auto-merge-when-ready` concluded **success in four seconds** on
+jodidaniel.com#233. Its preview-only recovery path (catch "unstable status",
+poll up to ten minutes, merge explicitly) takes minutes. Four seconds means
+`enablePullRequestAutoMerge` did not throw at all: **auto-merge armed**, which
+it can only do when the base has something to wait for.
+
+The base was protected — by `repo-settings.yml`'s `cms-feature-branches`
+ruleset, which covers `refs/heads/cms/**`, `refs/heads/claude/**` and six more,
+and which required the status check **`validate-content`**. Nothing publishes
+that string. A consumer's thin caller declares job id `editorial` and `uses:`
+the platform reusable whose job id is `validate-content`, so GitHub publishes
+`editorial / validate-content` — which is exactly how `consumer-main`, twenty
+lines earlier in the same file, spells it. A required context nothing reports
+never goes green and a branch ruleset does not time out, so every PR onto those
+refs was permanently `mergeable_state: blocked`, with auto-merge sitting armed
+against a check that cannot exist.
+
+It was live on BOTH consumers, and this repo's own fixtures proved it: the
+2026-07-10 captures `adamdaniel.ruleset-feature.json` and
+`jodidaniel.ruleset-feature.json` both carry `{"context":"validate-content"}`.
+They are preserved as `*.DRIFTED-as-found-2026-07-10.json` and diffed by
+`repo-settings-audit.test.js` test (g), because an as-found corpus that gets
+edited whenever desired state moves stops being evidence.
+
+Four things worth keeping:
+
+- **It went unnoticed because the only people who could merge never met the
+  wall.** `bypass_actors` grants `RepositoryRole` 5 (admin) `bypass_mode:
+  always`, so every one of these PRs that ever landed was merged by hand by an
+  admin — including #233, sixteen seconds before the issue about it was filed.
+  A protection that blocks only the people without a bypass produces no signal
+  from the side that has one.
+- **A required context is half a contract and nothing checked the other half.**
+  `cms-automerge-nudge.test.js` locks the nudge's `required_contexts` against
+  `consumer-main` — two lists against *each other*; both could name a context
+  nothing publishes and it stays green. The missing join is context-string → the
+  workflow that would emit it, and it is now
+  `e2e/ruleset-context-publishable.test.js`. It computes the publishable set the
+  way GitHub names check runs (`<job>`, or `<caller job> / <called job>` for a
+  job that `uses:` a reusable), per repo, and it is red against `main` as it
+  stood: it names `cms-feature-branches` on both consumers.
+- **The defect was latent even where it was not yet live.**
+  `scripts/audit-repo-settings.js --fix --yes` PUTs this manifest, so an
+  unpublishable context in it becomes an unpublishable context live at the next
+  reconcile, whatever the current drift.
+- **`armed` was believed indefinitely, and that is a separate bug.** With the
+  server side fixed the admin still had no way to ever stop saying "Going
+  live…": nothing distinguished "the merge is coming" from "the merge is never
+  coming". `publish-progress.js` now reports `settledSince` — when the PR first
+  had NOTHING LEFT TO WAIT FOR (armed, every check complete, nothing red, no
+  conflict, no gate park) while still open — and `entry-status-model.js` turns
+  three minutes of that into **Needs attention**. The signal is positive and
+  needs no threshold guess about how long a publish "should" take; the grace
+  exists only because native auto-merge fires a moment after the last check
+  completes, and calling that a stall would be the mirror-image lie. Both
+  directions are pinned, including both unknowns (`settledSince` absent, `now`
+  absent), where the answer must be "not stalled" — an unknown must never
+  manufacture a failure report.
+
+Also in the same change: **on a preview, "the website" is the wrong noun.** The
+Publish confirmation promised "It will appear at https://&lt;apex&gt;/… in about
+5–15 minutes" unconditionally — a specific, checkable, false promise on the one
+surface whose whole point is that nothing reaches the live site.
+`entry-status-model.js` derives the destination once and both surfaces name it;
+on a preview it is the branch, not a URL, because the preview origin is not
+derivable from anything these shims may read and `targetUrl()`'s existing rule
+already says naming the wrong URL is worse than naming none. The fact costs no
+extra request: the `cms/preview-only` label and `base.repo.default_branch` both
+ride the `/pulls` list response the poller already makes, so nothing hardcodes
+`main`.
+
+And `publish-button.js` no longer renders NOTHING on a stalled publish. Its
+armed branch returned `{kind:"none"}` — right while the merge is coming, and
+exactly wrong once it is not: #233 sat armed, green and unmerged with no
+control on screen at all. `e2e/admin-publishing-ux.test.js` now asserts, by
+AST, that no decision in that file branches on `armed` without also consulting
+`stalled`. That detector needed its own fix to be worth anything: acorn-walk
+does not descend into the `property` of a non-computed `MemberExpression`, so
+`facts.armed` — the only spelling the file actually uses — was invisible to it
+and the lint passed while finding zero decisions.
+
+**What this change does NOT do, deliberately.** It does not widen
+`cms-automerge-nudge.yml` beyond `automated-test`. That scoping exists so the
+cron never merges a real editor's draft, and removing it changes what
+automation lands on a live consumer without a human — an operator's call, not a
+lint's. With the required context fixed, native auto-merge handles the
+preview-only case itself, which is the path that was meant to work all along.
+
 **v0.1.97 — the harness has to publish the way an editor does.** v0.1.96
 hid Decap's Status dropdown and its split Publish button on the production
 shell (phases 2 and 3). Every real-prod loop publishes through
