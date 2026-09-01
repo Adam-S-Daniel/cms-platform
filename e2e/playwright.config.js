@@ -302,6 +302,11 @@ const PLATFORM_META_SPECS = [
   // pin-agreement.yml reusable that delivers the check to fleet repos with no
   // harness. All platform tree; a consumer ships none of it.
   "pin-agreement.test.js",
+  // #377 — the site-verify lint: asserts the shape of the site-verify.yml
+  // reusable (work/gate split, detect-then-build wiring) and of its dictated
+  // examples/site thin caller, and EXECUTES the two bash scripts lifted out of
+  // the reusable in scratch dirs. All platform tree; a consumer ships none of it.
+  "site-verify.test.js",
   "playwright-image-drift.test.js",
   // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
   // root plugin.json + .claude-plugin/plugin.json manifests, the vendored

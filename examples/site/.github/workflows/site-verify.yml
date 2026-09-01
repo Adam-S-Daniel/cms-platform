@@ -1,0 +1,34 @@
+# Thin caller — copied into a site repo as `.github/workflows/site-verify.yml`.
+# Owns the PR trigger + run-name; delegates to the platform's reusable, which
+# builds the site and runs the site's OWN `scripts/verify-build-artifacts.rb`
+# when one exists, and prints a notice and succeeds when one does not
+# (cms-platform#377). There is nothing to configure: no inputs, no secrets.
+#
+# NO `paths-ignore`, and that is a decision, not an omission. The verifier a
+# site ships can assert over the WHOLE tree — jodidaniel.com's sweeps every
+# path for committed PDF bytes — so a PR that touches only `docs/**` is exactly
+# as able to break it as one that touches a layout. A path filter here would
+# blind the check for the ignored paths, and would also set up the
+# missing-check trap (a required context that never reports on a filtered PR)
+# the moment this context is made required, which needs a stub twin to escape.
+# Always-run is the honest filter (the prerelease-guard caller carries none
+# for the same reason); the cost is ~60-90s on a site with a verifier and
+# ~10s on one without.
+name: Site verify
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    # No `edited`: a skipped caller emits NO check-run, so an `edited` run WITHDRAWS
+    # contexts an earlier run reported green — only a new SHA restores them (#222).
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # The job name is the first half of the published context —
+  # `site-verify / site-verify` — so it must stay `site-verify`.
+  site-verify:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/site-verify.yml@v0.1.97
