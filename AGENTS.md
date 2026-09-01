@@ -369,6 +369,49 @@ collecting `Identifier` nodes cannot see `facts.armed` — the only spelling the
 shim actually uses — so it finds zero decisions and passes. Walk
 `MemberExpression` explicitly.
 
+### A consumer's own post-build verifier runs through `site-verify.yml` (#377)
+
+jodidaniel.com ships `scripts/verify-build-artifacts.rb` — ~190 assertions
+over the BUILT site (media links resolve, the category triangle agrees, the
+admin seam's anchors match built section ids, no PDF bytes are committed, the
+`pdf_public` gate withholds and publishes). Its docs cited it in six places as
+the guard for those; no workflow ran it, which is how a `pdf_public: true`
+with no file in `_site` — row 2 of the verifier's own table — reached prod.
+The consumer cannot own the workflow: workflow-SET parity flags any caller
+absent from `examples/site/` as EXTRA on a required check. So it is a platform
+seam: the `site-verify.yml` reusable plus a dictated thin caller of the same
+name, which `platform-bump` seeds into both consumers on the next bump (#315).
+
+Four decisions in it that are not obvious from the YAML:
+
+- **Convention, not configuration.** No inputs, no secrets. If the caller's
+  tree has `scripts/verify-build-artifacts.rb` the reusable builds the site
+  (`JEKYLL_ENV=production`, the deploy's build, on deploy-preview's default
+  Ruby) and runs it; otherwise it prints a `::notice::` and succeeds.
+  adamdaniel.ai has no such script and no-ops in ~10s. Generalising to a
+  non-Ruby verifier waits for a second case.
+- **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
+  (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
+  #285/#289 shape, held by `e2e/site-verify.test.js` through
+  `cancellationHazards()`. The context is `site-verify / site-verify`.
+- **The caller has NO `paths-ignore`, deliberately.** The verifier globs
+  `**/*.pdf` over the whole tree, so a docs-only PR can break it exactly as a
+  layout PR can; a filter would blind the check for the ignored paths, and
+  would arm the missing-check trap the moment the context is required (the
+  `prerelease-guard` caller carries no filter for the same reason).
+- **It is NOT required yet, and a test says so.** Adding the context to
+  `consumer-main` before both consumers publish it blocks every consumer PR on
+  a context that never arrives. Order: release → bump lands the caller →
+  confirm `site-verify / site-verify` reports on both consumers → add it to
+  `repo-settings.yml` AND reconcile each consumer's nudge `required_contexts`
+  (platform-bump does the latter from the manifest), deleting the SEQUENCING
+  test in `e2e/site-verify.test.js` in that same PR.
+
+Measured before shipping: at jodidaniel.com `main`, `bundle exec jekyll build`
++ the script gives 192 `ok`, 0 `FAIL`, exit 0, identical under `JEKYLL_ENV=
+production`; 9 `note` lines are assertion groups that do not arm while
+`site_live: false`, so coverage roughly doubles at go-live (jodidaniel#26).
+
 ## Skills ship as a marketplace bundle, not a file sync (v0.1.83)
 
 `skills/` is the canonical home of the platform skills and the only place one
