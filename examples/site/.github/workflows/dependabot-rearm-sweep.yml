@@ -28,3 +28,4 @@ jobs:
     uses: Adam-S-Daniel/cms-platform/.github/workflows/dependabot-rearm-sweep.yml@v0.1.98
     with:
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}
+      platform_ref: v0.1.98

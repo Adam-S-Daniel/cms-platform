@@ -119,6 +119,14 @@ const PLATFORM_META_SPECS = [
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
   "base-collections-guard-registry.test.js",
+  // #382 — the AST sibling of the entry above: parses every e2e/*.spec.js with
+  // spec-ast.js and fails any `getByRole(..., { name: /Status:…/ })`, the
+  // selector one-door-publish.js CSS-hid on the production shell (which is how
+  // four write specs timed out an hour into a real prod run). It polices the
+  // PLATFORM's own spec sources and is exercised in self-ci's node-unit-lints,
+  // so it belongs here rather than on the consumer lane, where it would only
+  // re-lint the same harness copy.
+  "status-dropdown-selector.test.js",
   "blog-slug-literal-lint.test.js",
   // #16 — these PLATFORM-INTERNAL specs (surfaced by the adamdaniel.ai v0.1.10
   // reconciliation, where they ran+FAILED on the consumer e2e lane) validate
@@ -137,6 +145,12 @@ const PLATFORM_META_SPECS = [
   // workflow DEFINITION (.github/workflows/parity-preview.yml); a consumer
   // ships only a thin wrapper, so it is platform-internal (self-CI only).
   "parity-preview-site-root.test.js",
+  // #383 — same file, same reason: reads BOTH platform reusable DEFINITIONS
+  // (parity-preview.yml and deploy-preview.yml) and asserts parity's
+  // Dependabot skip carries deploy-preview's own actor guard verbatim, so the
+  // two cannot drift back into "wait 20 min for a preview that is never
+  // coming, then hard-fail a required context".
+  "parity-preview-dependabot-skip.test.js",
   // The GENERAL SITE_ROOT backstop: reads EVERY PLATFORM reusable workflow
   // DEFINITION and asserts any `.cms-platform/e2e` harness run exports
   // SITE_ROOT (the realized #1815 host-loop gap). Consumers ship only thin
@@ -456,6 +470,14 @@ const PLATFORM_META_SPECS = [
   "workflow-run-name.test.js",
   "workflow-shell-glob-lint.test.js",
   "workflow-triggers.test.js",
+  // The consumer-checkout blind spot (cms-platform#303-class): reads the
+  // PLATFORM's own .github/workflows/*.yml DEFINITIONS (workflow-yaml-utils)
+  // and this repo's scripts/ directory listing to assert every
+  // `workflow_call` job that shells out to a platform-owned script does so
+  // via a `.cms-platform/scripts/…` path fed by an earlier checkout step in
+  // the same job — none of which a consumer ships in that position, so it is
+  // platform-internal, self-CI only.
+  "reusable-platform-script-checkout.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is

@@ -79,10 +79,23 @@ layout: default
   }
 </style>
 
+<!-- #328.2 — WHAT THIS SCREEN MUST NOT LOOK LIKE.
+     The bridge streams from the editor tab's Save broadcasts, so a FRESH
+     load of this tab has nothing to show — including after an ordinary
+     reload. The old copy ("Hit Save or Publish now … this preview will fill
+     in automatically") described the mechanism accurately and read, to a
+     non-technical owner who had just reloaded, as her work having vanished.
+     So the heading names the TAB rather than the content, and the last
+     sentence says outright that nothing is lost. Do not trim that sentence
+     for brevity — it is the whole point of the block, and
+     e2e/live-preview-gating-lint.test.js holds it. -->
 <div id="preview-empty-state">
-  <h2>Live preview</h2>
-  <p>Hit <code>Save</code> or <code>Publish now</code> on the entry you're
-  editing in the admin tab — this preview will fill in automatically.</p>
+  <h2>Nothing to preview in this tab yet</h2>
+  <p>Go back to the editor tab and hit <code>Save</code> (or
+  <code>Publish</code>) — this tab fills in with what you save while both tabs
+  are open.</p>
+  <p>Your saved and published content is safe; reloading this tab only clears
+  the preview, never your work.</p>
   <p class="hint">Keep this tab open while you edit.</p>
 </div>
 

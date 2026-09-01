@@ -327,48 +327,37 @@ test("CMS publish loop — host repo, target main", { tag: ["@admin-write"] }, a
     expect(pr.number, "Decap PR number").toBeGreaterThan(0);
   });
 
-  // ── 6. Drive Status: Ready via the UI dropdown ──────────────────
-  // Editorial workflow: click the "Status: Draft" button, pick
-  // "Ready" from the menu. Decap applies the `decap-cms/ready` label,
-  // which cms-editorial-workflow.yml's auto-merge-when-ready job
-  // accepts as a synonym for cms/ready and uses to enable auto-merge.
-  // This replaces an earlier `addLabel({ label: "cms/ready" })` API
-  // shortcut — the shortcut never exercised the dropdown handler that
-  // a real operator triggers, which is exactly the surface area the
-  // shim has to interoperate with.
-  await test.step("Set Status: Ready via UI dropdown", async () => {
-    await page.getByRole("button", { name: /^Status:\s*Draft$/i }).click();
-    await page.getByRole("menuitem", { name: /^Ready$/i }).click();
-    // The toolbar reflects the new status — the button text flips.
-    await expect(page.getByRole("button", { name: /^Status:\s*Ready$/i })).toBeVisible({
-      timeout: 30_000,
-    });
-  });
-
-  // ── 6b. Drive Publish → Publish Now via the UI ──────────────────
+  // ── 6. Publish through the editor's ONE Publish control ─────────
   //
-  // Click Publish → Publish Now. The chain that follows
-  // (decap-cms/pending_publish label → cms-editorial-workflow.yml
-  // maps to cms/ready → auto-merge fires → PR merges → deploy-
-  // production runs → pill spins → pill hides) takes ~1–3 min
-  // typically. We observe the chain SOLELY via the deploy-status
-  // pill in the next step — no GitHub API peeks, no waiting on
-  // Decap's local status-button transition (which lags the merge
-  // by however long the entire chain takes; an earlier 60-s wait
-  // on the "Published" flip flaked because the chain takes longer
-  // than that under any meaningful load). If the click doesn't
-  // trigger a deploy at all, the pill spinTimeoutMs in the next
-  // step gives a clean, localised failure.
-  await test.step("Click Publish → Publish Now via UI", async () => {
-    await page.getByRole("button", { name: /^Publish$/i }).click();
-    await page
-      .getByRole("menuitem", { name: /publish now/i })
-      .first()
-      .click();
+  // This spec drives PROD_ADMIN — `index.html`, the only shell that loads
+  // one-door-publish.js + publish-button.js. There, Decap's `Status: Draft`
+  // dropdown is CSS-hidden and its split Publish control is replaced by
+  // `#cms-publish-button` + an inline "Yes, publish". The two hand-rolled
+  // steps that used to live here (Status→Ready, then Publish→Publish Now)
+  // therefore selected nothing an editor can see and timed out on every run
+  // (#382; adamdaniel.ai cms-publish-loop-host 33528263986). publishViaUi()
+  // is the shell-aware helper: it presses the platform button here and keeps
+  // Decap's own dropdown path for `index-test.html` / `index-local.html`.
+  //
+  // The downstream chain is UNCHANGED, which is why nothing below moves.
+  // Decap's Status:Ready used to arm auto-merge by applying
+  // `decap-cms/pending_publish`; the platform button applies `cms/ready`
+  // instead (removing it first so the `labeled` event really fires), and
+  // cms-editorial-workflow.yml's auto-merge-when-ready accepts BOTH labels.
+  // So: label → auto-merge → PR merges → deploy-production → pill spins →
+  // pill hides, ~1–3 min typically.
+  //
+  // We observe the chain SOLELY via the deploy-status pill in the next step
+  // — no GitHub API peeks, no waiting on Decap's local status-button
+  // transition (which lags the merge by however long the whole chain takes;
+  // an earlier 60-s wait on the "Published" flip flaked because the chain
+  // takes longer than that under any meaningful load). If the publish never
+  // reached GitHub at all, the pill spinTimeoutMs in the next step gives a
+  // clean, localised failure.
+  await test.step("Publish via the editor's one Publish control (arms cms/ready)", async () => {
+    await publishViaUi(page);
     // Don't wait for any UI transition here. The pill is the
-    // ground truth for the chain's outcome. Decap closes the
-    // Publish menu synchronously; a follow-up pill spin proves
-    // the click reached the GitHub API.
+    // ground truth for the chain's outcome.
   });
 
   // ── 7. Pill is the editor-facing wait signal for "deploy complete" ──

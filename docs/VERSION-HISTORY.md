@@ -14,6 +14,133 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED — the two #328 product-copy items nobody could see were
+wrong (items 2 and 5).** Both are cases where the copy described the
+MECHANISM correctly and told a non-technical owner something false.
+
+`theme/_layouts/preview.html`'s `#preview-empty-state` said "Hit `Save` or
+`Publish now` on the entry you're editing in the admin tab — this preview will
+fill in automatically." The preview bridge streams from the editor tab's Save
+broadcasts, so a fresh load of the preview tab has none — including after an
+ordinary RELOAD, which is exactly when an owner sees this screen and reads it
+as her content having vanished. Option B from the issue: the heading now names
+the TAB ("Nothing to preview in this tab yet") rather than the content, and a
+second paragraph says outright that "Your saved and published content is safe;
+reloading this tab only clears the preview, never your work." The `<code>`
+convention and the `.hint` line are unchanged.
+
+The floating "Live Preview" button (`#live-preview-link`, in `index.html` and
+`index-local.html`) had a `title` describing only the Save mechanic — "Opens a
+new tab. Hit Save in the editor for the preview to fill in." — and an
+UNEXPLAINED show/hide rule: v0.1.94 gates it on an entry-editor route AND a
+collection `/preview/` has a real template for (`{posts, pages, projects}`), so
+it silently disappears everywhere else with nothing anywhere saying why. The
+title now carries both halves and both are true of that rule: "Live Preview —
+opens a tab that mirrors this entry each time you Save. Available while you're
+editing an entry in a section the preview can render." No `aria-label` was
+added, deliberately: the visible label is text, so the accessible name is
+already "Live Preview", and an aria-label would override it with the long
+tooltip.
+
+Both are locked in `e2e/live-preview-gating-lint.test.js` — the file that
+already asserts the gating the tooltip has to be true of — in the string-
+presence style its neighbours use. The tooltip case asserts the display toggle
+alongside the copy, so a future edit cannot loosen the gating and leave the
+promise lying; the empty-state case pins the reassurance sentence verbatim,
+because it is one "tighten the copy" edit away from being deleted as redundant
+and its absence is silent.
+
+**UNRELEASED — `parity / parity` hard-failed every Dependabot gem bump
+(#383).** `deploy-preview.yml`'s `deploy-preview` job carries
+`github.actor != 'dependabot[bot]'` — a Dependabot run cannot reach the OIDC
+role secret, and a preview exists for a human reviewer — so a Dependabot PR
+gets NO `preview-pr<N>` host, ever, by design. `parity-preview.yml` did not
+know that: `e2e/select-specs.js` classifies `Gemfile*` as render-salient
+(`RENDER_FANOUT_PATTERNS`, since a gem bump can move every rendered byte),
+which is Dependabot's entire beat, so a lockfile-only Dependabot PR selected
+specs, polled the preview host for the full ~20 minutes, and then hard-failed
+— publishing a RED `parity / parity`, a REQUIRED context. Measured on
+adamdaniel.ai#3443 (`Gemfile.lock` alone): permanently blocked until a human
+re-pushed the branch under their own name, which was the only thing that ever
+cleared it. Fixed by option 1 from the issue: the bounded preview wait and its
+"Require preview" hard-fail now carry deploy-preview's own actor guard, and a
+new step announces the decision with a `::notice::` naming Dependabot as the
+reason — a required check that silently reports green is the #371 shape, where
+nobody can tell a deliberate skip from a broken publisher. The gate job is
+untouched, so the #285/#289 shape holds: `parity` still has no `concurrency`
+and no `timeout-minutes`, still runs `if: always()` over `parity-probe`, and
+now sees a probe that SUCCEEDS rather than one that failed on a preview that
+was never coming. The human-attributed update-branch path is unchanged and
+still gets the full probe. New lint:
+`e2e/parity-preview-dependabot-skip.test.js` EXTRACTS the actor clause from
+deploy-preview.yml — the file that decides who gets a preview — and asserts
+parity-preview's preview-dependent steps carry that exact string, so renaming
+the actor on one side reds the lint until the other follows; a hard-coded bot
+name would have gone green over precisely the disagreement it exists to catch.
+Both files are parsed (`workflow-yaml-utils` → the `yaml` package), never line
+-scanned. Also corrected the stale comment above `RENDER_FANOUT_PATTERNS` in
+`e2e/select-specs.js`, which claimed "a preview is guaranteed to exist": true
+of the caller's `paths-ignore`, false of the reusable's actor guard, and that
+sentence is what made the wait look safe.
+
+**UNRELEASED — four write specs still clicked the Status dropdown one-door
+publish had hidden (#382).** v0.1.96's `theme/admin/one-door-publish.js`
+CSS-hides Decap's `Status: Draft` dropdown on the PRODUCTION shell
+(`theme/admin/index.html`) and `publish-button.js` replaces the split Publish
+control with `#cms-publish-button` + an inline "Yes, publish". `getByRole`
+skips CSS-hidden elements, so every spec still hand-rolling
+`getByRole("button", { name: /^Status:\s*Draft$/i })` against `/admin/`
+selected nothing and timed out — an hour into a real prod-mutating run, with
+the entry already created and its PR already open. v0.1.97 had made
+`publishViaUi()` shell-aware but left four callers behind:
+`cms-delete-published`, `cms-tags-lifecycle`, `cms-publish-loop` and
+`cms-preview-pr-self-contained`, all four of which open the production shell
+(`prodTarget().adminUrl` / `${PROD_HOST}/admin/`). adamdaniel.ai's scheduled
+`cms-publish-loop-host` failed on it daily (run 33528263986). Each now
+publishes through `publishViaUi(page)`. The downstream waits are unchanged
+and were re-checked one by one: Decap's Status:Ready armed
+`auto-merge-when-ready` by applying `decap-cms/pending_publish`, the platform
+button arms it with `cms/ready` (deleting the label first so the `labeled`
+event really fires), and that job's `if:` accepts both — so
+`waitForAutoMergeEnabled`, `waitForCmsPullRequest`, the belt-and-braces
+`addLabel({label:"cms/ready"})` and the deploy-pill waits all still hold.
+`cms-workflow-states.spec.js` is deliberately untouched: it drives
+`index-test.html`, the rehearsal shell that keeps Decap's own controls, which
+is the branch `publishViaUi` preserves. New lint:
+`e2e/status-dropdown-selector.test.js` (registered in `PLATFORM_META_SPECS`)
+parses every `e2e/*.spec.js` with `e2e/spec-ast.js` — acorn, never a regex,
+since this lint's own header quotes the banned selector — and fails any
+`getByRole(..., { name })` naming the Status control. Its allowlist is empty
+and measured so (`cms-workflow-states` reads the status with `getByText`), and
+a negative-control case asserts the detector still fires against
+`cms-editor-ui.js`'s legitimate Decap branch, so it cannot decay into a green
+no-op. `spec-ast.js` gained one additive fact, `getByRoleNames`, generalising
+the existing `getByRoleLinkNames`.
+
+**UNRELEASED — dependabot-auto-merge.yml / dependabot-rearm-sweep.yml fetch
+their manifest-path script from the platform (cms-platform#303-class blind
+spot).** Both reusables ran `bash scripts/check-dependabot-manifest-paths.sh`
+straight from the job's default checkout — which, for a `workflow_call` job,
+is the CALLER's tree, not the platform's. The script lives only in this
+repo's `scripts/`, so on every real Dependabot PR on both consumers the shell
+hit "No such file or directory", the `if bash …` conditional silently took
+its false branch, `safe=false` disabled auto-merge, and the job hard-failed
+with "PR touches paths outside the dependency-manifest allowlist" — for PRs
+whose diff was a lockfile alone (adamdaniel.ai run 33566180189 / PR #3465,
+live since #303). Self-CI never saw it: on THIS repo the checkout IS the
+platform, so the script was right there — the same consumer-checkout blind
+spot AGENTS.md records for the `cms-platform-secrets` skill-name incident.
+Fixed by sparse-checking the platform out to `.cms-platform/` (the
+pin-agreement.yml pattern, via new `platform_repo` / `platform_ref` inputs on
+both reusables — `github.job_workflow_sha` was tried first but reads empty
+inside a reusable-workflow job per actions/runner#2417, and this repo's
+pinned actionlint predates the `job.workflow_sha` context GitHub added
+2026-04-23 for exactly this case). New lint:
+`e2e/reusable-platform-script-checkout.test.js` asserts every `workflow_call`
+job invoking a platform-owned `scripts/…` file does so via a
+`.cms-platform/scripts/…` path fed by an earlier platform checkout in the
+same job.
+
 **UNRELEASED (landed 2026-09-01) — `site-verify / site-verify` is required
 (#377, sequencing step 3).** Both consumers published the context on their
 v0.1.98 bump PRs (jodidaniel.com#236 ran the real verifier, adamdaniel.ai#3464

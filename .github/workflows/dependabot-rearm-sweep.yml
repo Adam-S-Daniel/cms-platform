@@ -107,6 +107,8 @@ on:
         description: "List sweep candidates and the action that would be taken, without merging or re-arming anything."
         type: boolean
         default: false
+      platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
+      platform_ref: { type: string, default: main }
 
 permissions:
   contents: write
@@ -121,6 +123,22 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+
+      - name: Fetch the manifest-path allowlist script from the platform
+        # Same platform-owned-script gap as dependabot-auto-merge.yml's
+        # "Verify only manifest paths changed" step: this is a `workflow_call`
+        # job, the default checkout above brings down the CALLER's tree (a
+        # consumer site), and scripts/check-dependabot-manifest-paths.sh lives
+        # only in the platform. See that workflow's header comment for why
+        # this uses a `platform_repo` / `platform_ref` input pair (the
+        # pin-agreement.yml pattern) rather than `github.job_workflow_sha`.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          sparse-checkout: scripts/check-dependabot-manifest-paths.sh
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
 
       - name: Sweep stranded Dependabot PRs
         env:
@@ -206,7 +224,7 @@ jobs:
               continue
             fi
 
-            if ! bash scripts/check-dependabot-manifest-paths.sh \
+            if ! bash .cms-platform/scripts/check-dependabot-manifest-paths.sh \
               "origin/${base}" "dependabot-sweep/pr-${num}"; then
               echo "::warning::skip #${num} — diff touches a non-manifest path on re-check; leaving for human review"
               SKIPPED=$((SKIPPED + 1))
