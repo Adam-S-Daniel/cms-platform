@@ -10,11 +10,11 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.98)
+## Version history (v0.1.0 → v0.1.99)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**UNRELEASED — the two #328 product-copy items nobody could see were
+**v0.1.99 — the two #328 product-copy items nobody could see were
 wrong (items 2 and 5).** Both are cases where the copy described the
 MECHANISM correctly and told a non-technical owner something false.
 
@@ -50,7 +50,7 @@ promise lying; the empty-state case pins the reassurance sentence verbatim,
 because it is one "tighten the copy" edit away from being deleted as redundant
 and its absence is silent.
 
-**UNRELEASED — `parity / parity` hard-failed every Dependabot gem bump
+**v0.1.99 — `parity / parity` hard-failed every Dependabot gem bump
 (#383).** `deploy-preview.yml`'s `deploy-preview` job carries
 `github.actor != 'dependabot[bot]'` — a Dependabot run cannot reach the OIDC
 role secret, and a preview exists for a human reviewer — so a Dependabot PR
@@ -83,7 +83,7 @@ Both files are parsed (`workflow-yaml-utils` → the `yaml` package), never line
 of the caller's `paths-ignore`, false of the reusable's actor guard, and that
 sentence is what made the wait look safe.
 
-**UNRELEASED — four write specs still clicked the Status dropdown one-door
+**v0.1.99 — four write specs still clicked the Status dropdown one-door
 publish had hidden (#382).** v0.1.96's `theme/admin/one-door-publish.js`
 CSS-hides Decap's `Status: Draft` dropdown on the PRODUCTION shell
 (`theme/admin/index.html`) and `publish-button.js` replaces the split Publish
@@ -117,7 +117,7 @@ a negative-control case asserts the detector still fires against
 no-op. `spec-ast.js` gained one additive fact, `getByRoleNames`, generalising
 the existing `getByRoleLinkNames`.
 
-**UNRELEASED — dependabot-auto-merge.yml / dependabot-rearm-sweep.yml fetch
+**v0.1.99 — dependabot-auto-merge.yml / dependabot-rearm-sweep.yml fetch
 their manifest-path script from the platform (cms-platform#303-class blind
 spot).** Both reusables ran `bash scripts/check-dependabot-manifest-paths.sh`
 straight from the job's default checkout — which, for a `workflow_call` job,
@@ -141,7 +141,7 @@ job invoking a platform-owned `scripts/…` file does so via a
 `.cms-platform/scripts/…` path fed by an earlier platform checkout in the
 same job.
 
-**UNRELEASED (landed 2026-09-01) — `site-verify / site-verify` is required
+**v0.1.99 — `site-verify / site-verify` is required
 (#377, sequencing step 3).** Both consumers published the context on their
 v0.1.98 bump PRs (jodidaniel.com#236 ran the real verifier, adamdaniel.ai#3464
 printed the no-op notice), so the manifest's `consumer-main` now requires it,
