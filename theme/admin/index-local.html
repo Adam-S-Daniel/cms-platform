@@ -59,8 +59,12 @@
 <body>
   <!-- Live Preview link — see admin/index.html for rationale; hidden
        outside the entry editor (same gating as the sync script there). -->
+  <!-- The `title` says what the button does AND when it appears; both halves
+       must stay true of the sync script below (#328.5). Kept byte-identical
+       to index.html's — the two shells' buttons behave identically, and
+       e2e/live-preview-gating-lint.test.js asserts the same string on both. -->
   <a id="live-preview-link" class="floating-link" href="/preview/" target="_blank" rel="noopener"
-     title="Opens a new tab. Hit Save in the editor for the preview to fill in.">
+     title="Live Preview — opens a tab that mirrors this entry each time you Save. Available while you're editing an entry in a section the preview can render.">
     <svg viewBox="0 0 24 24"><path d="M12 5c-7 0-10 7-10 7s3 7 10 7 10-7 10-7-3-7-10-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
     Live Preview
   </a>

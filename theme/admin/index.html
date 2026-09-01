@@ -75,15 +75,25 @@
     The /preview/ page renders draft content with the real Jekyll
     layouts and is the WYSIWYG surface for editors. The link's href
     is updated on every URL hash change so it always points at the
-    collection of the entry currently open. Tip text is intentional:
-    /preview/ only updates after a Save, so editors don't sit there
-    waiting for it to fill. Hidden outside the entry editor (see the
-    sync script below).
+    collection of the entry currently open.
+
+    The `title` is the whole explanation an editor gets, so it has to
+    carry BOTH halves and both have to be TRUE of the sync script below
+    (#328.5): what the button does (opens a tab that mirrors this entry
+    on every Save — /preview/ fills from Save broadcasts, so it never
+    updates as you type) and WHEN it is there at all (only on an entry-
+    editor route, and only for a collection /preview/ has a real template
+    for — see PREVIEWABLE_COLLECTIONS). Before this the button simply
+    vanished on every other route with nothing anywhere saying why.
+    Locked, with the gating it describes, by
+    e2e/live-preview-gating-lint.test.js. The visible label is text, not
+    an icon alone, so the accessible name is already "Live Preview" and
+    no aria-label is added — one would only override it with a duplicate.
   -->
   <a id="live-preview-link" class="floating-link"
      href="/preview/"
      target="_blank" rel="noopener"
-     title="Opens a new tab. Hit Save in the editor for the preview to fill in.">
+     title="Live Preview — opens a tab that mirrors this entry each time you Save. Available while you're editing an entry in a section the preview can render.">
     <svg viewBox="0 0 24 24"><path d="M12 5c-7 0-10 7-10 7s3 7 10 7 10-7 10-7-3-7-10-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
     Live Preview
   </a>

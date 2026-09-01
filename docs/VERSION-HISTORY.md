@@ -14,6 +14,42 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED — the two #328 product-copy items nobody could see were
+wrong (items 2 and 5).** Both are cases where the copy described the
+MECHANISM correctly and told a non-technical owner something false.
+
+`theme/_layouts/preview.html`'s `#preview-empty-state` said "Hit `Save` or
+`Publish now` on the entry you're editing in the admin tab — this preview will
+fill in automatically." The preview bridge streams from the editor tab's Save
+broadcasts, so a fresh load of the preview tab has none — including after an
+ordinary RELOAD, which is exactly when an owner sees this screen and reads it
+as her content having vanished. Option B from the issue: the heading now names
+the TAB ("Nothing to preview in this tab yet") rather than the content, and a
+second paragraph says outright that "Your saved and published content is safe;
+reloading this tab only clears the preview, never your work." The `<code>`
+convention and the `.hint` line are unchanged.
+
+The floating "Live Preview" button (`#live-preview-link`, in `index.html` and
+`index-local.html`) had a `title` describing only the Save mechanic — "Opens a
+new tab. Hit Save in the editor for the preview to fill in." — and an
+UNEXPLAINED show/hide rule: v0.1.94 gates it on an entry-editor route AND a
+collection `/preview/` has a real template for (`{posts, pages, projects}`), so
+it silently disappears everywhere else with nothing anywhere saying why. The
+title now carries both halves and both are true of that rule: "Live Preview —
+opens a tab that mirrors this entry each time you Save. Available while you're
+editing an entry in a section the preview can render." No `aria-label` was
+added, deliberately: the visible label is text, so the accessible name is
+already "Live Preview", and an aria-label would override it with the long
+tooltip.
+
+Both are locked in `e2e/live-preview-gating-lint.test.js` — the file that
+already asserts the gating the tooltip has to be true of — in the string-
+presence style its neighbours use. The tooltip case asserts the display toggle
+alongside the copy, so a future edit cannot loosen the gating and leave the
+promise lying; the empty-state case pins the reassurance sentence verbatim,
+because it is one "tighten the copy" edit away from being deleted as redundant
+and its absence is silent.
+
 **UNRELEASED — `parity / parity` hard-failed every Dependabot gem bump
 (#383).** `deploy-preview.yml`'s `deploy-preview` job carries
 `github.actor != 'dependabot[bot]'` — a Dependabot run cannot reach the OIDC
