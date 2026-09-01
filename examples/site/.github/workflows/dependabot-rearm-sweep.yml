@@ -25,6 +25,6 @@ permissions:
 
 jobs:
   rearm:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/dependabot-rearm-sweep.yml@v0.1.97
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/dependabot-rearm-sweep.yml@v0.1.98
     with:
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}
