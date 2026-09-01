@@ -14,6 +14,30 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED — dependabot-auto-merge.yml / dependabot-rearm-sweep.yml fetch
+their manifest-path script from the platform (cms-platform#303-class blind
+spot).** Both reusables ran `bash scripts/check-dependabot-manifest-paths.sh`
+straight from the job's default checkout — which, for a `workflow_call` job,
+is the CALLER's tree, not the platform's. The script lives only in this
+repo's `scripts/`, so on every real Dependabot PR on both consumers the shell
+hit "No such file or directory", the `if bash …` conditional silently took
+its false branch, `safe=false` disabled auto-merge, and the job hard-failed
+with "PR touches paths outside the dependency-manifest allowlist" — for PRs
+whose diff was a lockfile alone (adamdaniel.ai run 33566180189 / PR #3465,
+live since #303). Self-CI never saw it: on THIS repo the checkout IS the
+platform, so the script was right there — the same consumer-checkout blind
+spot AGENTS.md records for the `cms-platform-secrets` skill-name incident.
+Fixed by sparse-checking the platform out to `.cms-platform/` (the
+pin-agreement.yml pattern, via new `platform_repo` / `platform_ref` inputs on
+both reusables — `github.job_workflow_sha` was tried first but reads empty
+inside a reusable-workflow job per actions/runner#2417, and this repo's
+pinned actionlint predates the `job.workflow_sha` context GitHub added
+2026-04-23 for exactly this case). New lint:
+`e2e/reusable-platform-script-checkout.test.js` asserts every `workflow_call`
+job invoking a platform-owned `scripts/…` file does so via a
+`.cms-platform/scripts/…` path fed by an earlier platform checkout in the
+same job.
+
 **UNRELEASED (landed 2026-09-01) — `site-verify / site-verify` is required
 (#377, sequencing step 3).** Both consumers published the context on their
 v0.1.98 bump PRs (jodidaniel.com#236 ran the real verifier, adamdaniel.ai#3464

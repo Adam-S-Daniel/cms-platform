@@ -456,6 +456,14 @@ const PLATFORM_META_SPECS = [
   "workflow-run-name.test.js",
   "workflow-shell-glob-lint.test.js",
   "workflow-triggers.test.js",
+  // The consumer-checkout blind spot (cms-platform#303-class): reads the
+  // PLATFORM's own .github/workflows/*.yml DEFINITIONS (workflow-yaml-utils)
+  // and this repo's scripts/ directory listing to assert every
+  // `workflow_call` job that shells out to a platform-owned script does so
+  // via a `.cms-platform/scripts/…` path fed by an earlier checkout step in
+  // the same job — none of which a consumer ships in that position, so it is
+  // platform-internal, self-CI only.
+  "reusable-platform-script-checkout.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is

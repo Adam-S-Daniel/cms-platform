@@ -2,11 +2,35 @@
 #
 # A consuming site calls this from a thin wrapper that owns the
 # `pull_request` trigger + run-name (see
-# examples/site/.github/workflows/dependabot-auto-merge.yml). No external
-# script deps. Part of the platform down-sync: it auto-merges the
-# platform-bump / gem Dependabot PRs once CI is green. Nothing site-specific
-# is hardcoded — `gh` infers the repo from the runner, and the PR fields come
-# from the caller's `pull_request` event.
+# examples/site/.github/workflows/dependabot-auto-merge.yml). Part of the
+# platform down-sync: it auto-merges the platform-bump / gem Dependabot PRs
+# once CI is green. Nothing site-specific is hardcoded — `gh` infers the repo
+# from the runner, and the PR fields come from the caller's `pull_request`
+# event.
+#
+# THE ONE PLATFORM-OWNED SCRIPT DEP: the manifest-path allowlist check lives
+# in scripts/check-dependabot-manifest-paths.sh, in THIS repo — not the
+# caller's. The job's default `actions/checkout` (no `repository:`) checks
+# out the CALLER's tree (this is a `workflow_call` job; `github.repository`
+# is the consumer at run time), so the allowlist script is not on disk unless
+# a second checkout fetches it from the platform. Sparse-checked into
+# `.cms-platform/` (a dot-dir Jekyll ignores), the same pattern
+# pin-agreement.yml / editorial-label-audit.yml / scheduled-run-health.yml
+# use for their own platform-owned scripts, via the same `platform_repo` /
+# `platform_ref` inputs those reusables declare.
+#
+# `${{ github.job_workflow_sha }}` was tried first, as a way to fetch the
+# exact commit of THIS reusable file without adding an input at all — but
+# that context path is a known dead end (actions/runner#2417: it reads empty
+# inside a reusable-workflow job). The commit SHA a reusable's OWN job steps
+# can actually read is `job.workflow_sha` (a different, separate context,
+# added 2026-04-23 for exactly this "check out my own defining file" case) —
+# but this repo's pinned actionlint (1.7.7, 2025-05-30) predates that
+# addition and fails the required lint on it. So this uses the same
+# `platform_repo` / `platform_ref` input pair pin-agreement.yml already
+# established, at the routine cost of one `with:` line in each of the two
+# examples/site thin callers (kept at the release version, same as every
+# other `platform_ref:` in that tree — see AGENTS.md #283).
 name: Dependabot auto-merge (reusable)
 
 # Flow:
@@ -32,6 +56,9 @@ name: Dependabot auto-merge (reusable)
 
 on:
   workflow_call:
+    inputs:
+      platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
+      platform_ref: { type: string, default: main }
 
 permissions:
   contents: write
@@ -46,6 +73,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+
+      - name: Fetch the manifest-path allowlist script from the platform
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          sparse-checkout: scripts/check-dependabot-manifest-paths.sh
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
 
       - name: Fetch base ref
         # BASE_REF via `env:`, never `${{ }}` inside the body: a branch name
@@ -70,8 +106,9 @@ jobs:
         # files. Dependabot doesn't touch anything else, so a diff
         # outside this list means either a misconfiguration or a
         # tampered branch — either way, refuse to auto-merge. The
-        # allowlist itself lives in scripts/check-dependabot-manifest-paths.sh
-        # — the single source shared with dependabot-rearm-sweep.yml's
+        # allowlist itself lives in the platform's scripts/check-dependabot-
+        # manifest-paths.sh (fetched into .cms-platform/ by the checkout step
+        # above) — the single source shared with dependabot-rearm-sweep.yml's
         # scheduled re-arm sweep (see AGENTS.md "Dependabot batch-strand
         # re-arm sweep"); keep both call sites in lockstep.
         #
@@ -85,7 +122,7 @@ jobs:
           BASE="origin/${BASE_REF}"
           HEAD="$HEAD_SHA"
 
-          if bash scripts/check-dependabot-manifest-paths.sh "$BASE" "$HEAD"; then
+          if bash .cms-platform/scripts/check-dependabot-manifest-paths.sh "$BASE" "$HEAD"; then
             echo "safe=true" >> "$GITHUB_OUTPUT"
           else
             echo "safe=false" >> "$GITHUB_OUTPUT"
