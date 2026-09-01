@@ -145,6 +145,12 @@ const PLATFORM_META_SPECS = [
   // workflow DEFINITION (.github/workflows/parity-preview.yml); a consumer
   // ships only a thin wrapper, so it is platform-internal (self-CI only).
   "parity-preview-site-root.test.js",
+  // #383 — same file, same reason: reads BOTH platform reusable DEFINITIONS
+  // (parity-preview.yml and deploy-preview.yml) and asserts parity's
+  // Dependabot skip carries deploy-preview's own actor guard verbatim, so the
+  // two cannot drift back into "wait 20 min for a preview that is never
+  // coming, then hard-fail a required context".
+  "parity-preview-dependabot-skip.test.js",
   // The GENERAL SITE_ROOT backstop: reads EVERY PLATFORM reusable workflow
   // DEFINITION and asserts any `.cms-platform/e2e` harness run exports
   // SITE_ROOT (the realized #1815 host-loop gap). Consumers ship only thin

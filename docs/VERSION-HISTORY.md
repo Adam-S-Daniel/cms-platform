@@ -14,6 +14,39 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED — `parity / parity` hard-failed every Dependabot gem bump
+(#383).** `deploy-preview.yml`'s `deploy-preview` job carries
+`github.actor != 'dependabot[bot]'` — a Dependabot run cannot reach the OIDC
+role secret, and a preview exists for a human reviewer — so a Dependabot PR
+gets NO `preview-pr<N>` host, ever, by design. `parity-preview.yml` did not
+know that: `e2e/select-specs.js` classifies `Gemfile*` as render-salient
+(`RENDER_FANOUT_PATTERNS`, since a gem bump can move every rendered byte),
+which is Dependabot's entire beat, so a lockfile-only Dependabot PR selected
+specs, polled the preview host for the full ~20 minutes, and then hard-failed
+— publishing a RED `parity / parity`, a REQUIRED context. Measured on
+adamdaniel.ai#3443 (`Gemfile.lock` alone): permanently blocked until a human
+re-pushed the branch under their own name, which was the only thing that ever
+cleared it. Fixed by option 1 from the issue: the bounded preview wait and its
+"Require preview" hard-fail now carry deploy-preview's own actor guard, and a
+new step announces the decision with a `::notice::` naming Dependabot as the
+reason — a required check that silently reports green is the #371 shape, where
+nobody can tell a deliberate skip from a broken publisher. The gate job is
+untouched, so the #285/#289 shape holds: `parity` still has no `concurrency`
+and no `timeout-minutes`, still runs `if: always()` over `parity-probe`, and
+now sees a probe that SUCCEEDS rather than one that failed on a preview that
+was never coming. The human-attributed update-branch path is unchanged and
+still gets the full probe. New lint:
+`e2e/parity-preview-dependabot-skip.test.js` EXTRACTS the actor clause from
+deploy-preview.yml — the file that decides who gets a preview — and asserts
+parity-preview's preview-dependent steps carry that exact string, so renaming
+the actor on one side reds the lint until the other follows; a hard-coded bot
+name would have gone green over precisely the disagreement it exists to catch.
+Both files are parsed (`workflow-yaml-utils` → the `yaml` package), never line
+-scanned. Also corrected the stale comment above `RENDER_FANOUT_PATTERNS` in
+`e2e/select-specs.js`, which claimed "a preview is guaranteed to exist": true
+of the caller's `paths-ignore`, false of the reusable's actor guard, and that
+sentence is what made the wait look safe.
+
 **UNRELEASED — four write specs still clicked the Status dropdown one-door
 publish had hidden (#382).** v0.1.96's `theme/admin/one-door-publish.js`
 CSS-hides Decap's `Status: Draft` dropdown on the PRODUCTION shell

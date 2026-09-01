@@ -220,9 +220,19 @@ const HEAVY = new Set([
 // Fanout files that change the DEPLOYED / RENDERED output — a change
 // here can alter what any page looks like, so the full local matrix
 // runs AND the parity-preview specs (which probe the deployed
-// preview-pr<N> surface) apply. Every one of these also triggers
-// deploy-preview (none are in deploy-preview.yml's paths-ignore), so a
-// preview is guaranteed to exist when parity-preview needs it.
+// preview-pr<N> surface) apply.
+//
+// A NOTE ON "so a preview will exist": this list is chosen so none of these
+// paths sits in the deploy-preview CALLER's `paths-ignore`, which is true and
+// is the only thing path selection can guarantee. It is NOT a guarantee a
+// preview exists — the deploy-preview REUSABLE also carries an actor guard
+// (`github.actor != 'dependabot[bot]'`: no OIDC role secret for Dependabot,
+// and the preview is for a human reviewer), so a Dependabot PR touching a
+// path here gets no preview however salient the diff is. `/^Gemfile/` is
+// exactly that case, and it is Dependabot's whole beat. Saying otherwise here
+// is what let parity-preview wait 20 minutes for a host that was never coming
+// and then hard-fail a REQUIRED context on adamdaniel.ai#3443 (#383);
+// parity-preview.yml now mirrors that actor guard.
 const RENDER_FANOUT_PATTERNS = [
   /^_layouts\//,
   /^_includes\//,
