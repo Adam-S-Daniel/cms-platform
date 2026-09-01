@@ -64,6 +64,7 @@ const {
   reopenForPublishedDelete,
   confirmEditorDelete,
   clickEditorDelete,
+  publishViaUi,
 } = require("./cms-editor-ui");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
@@ -294,20 +295,17 @@ test(
       });
     });
 
-    await test.step("Status:Draft → Ready (label flip → cms/ready)", async () => {
-      await page.getByRole("button", { name: /^Status:\s*Draft$/i }).click({ timeout: 30_000 });
-      await page.getByRole("menuitem", { name: /^Ready$/i }).click({ timeout: 30_000 });
-      await expect(page.getByRole("button", { name: /^Status:\s*Ready$/i })).toBeVisible({
-        timeout: 30_000,
-      });
-    });
-
-    await test.step("Publish → Publish Now (engages auto-merge)", async () => {
-      await page.getByRole("button", { name: /^Publish$/i }).click({ timeout: 30_000 });
-      await page
-        .getByRole("menuitem", { name: /publish now/i })
-        .first()
-        .click({ timeout: 30_000 });
+    // Publish THROUGH THE ONE DOOR the production shell actually offers (#382).
+    // This spec drives PROD_ADMIN — `index.html`, the only shell that loads
+    // one-door-publish.js + publish-button.js — so Decap's `Status: Draft`
+    // dropdown is CSS-hidden and `getByRole` cannot see it. The hand-rolled
+    // Status→Ready + Publish→Publish Now pair that used to live here timed out
+    // on every run for that reason. publishViaUi() picks the platform button on
+    // this shell and keeps Decap's own controls for the shells that still have
+    // them. The downstream contract is unchanged: the platform button arms
+    // `cms/ready`, which is exactly what auto-merge-when-ready fires on.
+    await test.step("Publish via the editor's one Publish control (arms cms/ready)", async () => {
+      await publishViaUi(page);
     });
 
     // -- 1b. Find the create cms/... PR Decap opened; label cms/ready.

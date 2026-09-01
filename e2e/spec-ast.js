@@ -91,6 +91,14 @@ function analyzeSpec(src) {
     calls: [], // { name, tail, args:[node], node }
     gotoArgs: [], // reconstructed string of the FIRST arg to every *.goto(...)
     getByRoleLinkNames: [], // regex source of name in getByRole("link",{name:/…/})
+    // EVERY getByRole(...) call that passes an options object with a `name`
+    // key, as { role, name, kind }. `name` is the REGEX SOURCE for a regex
+    // literal ("^Status:\\s*Draft$") and the reconstructed string for a
+    // string/template literal; `kind` says which. Generalises
+    // getByRoleLinkNames (kept as-is for its caller) so a lint about WHICH
+    // control a spec selects — status-dropdown-selector.test.js — can ask the
+    // AST instead of grepping source that may hold the token in a comment.
+    getByRoleNames: [],
     topLevelTests: [], // { title, tags:[...], node } for column-0 test()/test.skip()/test.only()
   };
 
@@ -128,12 +136,22 @@ function analyzeSpec(src) {
         if (tail === "getByRole") {
           const role = stringValue(node.arguments[0]);
           const opts = node.arguments[1];
-          if (role === "link" && opts && opts.type === "ObjectExpression") {
-            const nameProp = opts.properties.find(
-              (p) => p.key && (p.key.name === "name" || p.key.value === "name"),
-            );
-            if (nameProp && nameProp.value && nameProp.value.regex) {
-              facts.getByRoleLinkNames.push(nameProp.value.regex.pattern);
+          const nameProp =
+            opts && opts.type === "ObjectExpression"
+              ? opts.properties.find((p) => p.key && (p.key.name === "name" || p.key.value === "name"))
+              : null;
+          const nameNode = nameProp && nameProp.value;
+          if (role === "link" && nameNode && nameNode.regex) {
+            facts.getByRoleLinkNames.push(nameNode.regex.pattern);
+          }
+          if (nameNode) {
+            if (nameNode.regex) {
+              facts.getByRoleNames.push({ role, name: nameNode.regex.pattern, kind: "regex" });
+            } else {
+              const literal = stringValue(nameNode);
+              if (literal != null) {
+                facts.getByRoleNames.push({ role, name: literal, kind: "string" });
+              }
             }
           }
         }

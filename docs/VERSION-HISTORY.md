@@ -14,6 +14,40 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED — four write specs still clicked the Status dropdown one-door
+publish had hidden (#382).** v0.1.96's `theme/admin/one-door-publish.js`
+CSS-hides Decap's `Status: Draft` dropdown on the PRODUCTION shell
+(`theme/admin/index.html`) and `publish-button.js` replaces the split Publish
+control with `#cms-publish-button` + an inline "Yes, publish". `getByRole`
+skips CSS-hidden elements, so every spec still hand-rolling
+`getByRole("button", { name: /^Status:\s*Draft$/i })` against `/admin/`
+selected nothing and timed out — an hour into a real prod-mutating run, with
+the entry already created and its PR already open. v0.1.97 had made
+`publishViaUi()` shell-aware but left four callers behind:
+`cms-delete-published`, `cms-tags-lifecycle`, `cms-publish-loop` and
+`cms-preview-pr-self-contained`, all four of which open the production shell
+(`prodTarget().adminUrl` / `${PROD_HOST}/admin/`). adamdaniel.ai's scheduled
+`cms-publish-loop-host` failed on it daily (run 33528263986). Each now
+publishes through `publishViaUi(page)`. The downstream waits are unchanged
+and were re-checked one by one: Decap's Status:Ready armed
+`auto-merge-when-ready` by applying `decap-cms/pending_publish`, the platform
+button arms it with `cms/ready` (deleting the label first so the `labeled`
+event really fires), and that job's `if:` accepts both — so
+`waitForAutoMergeEnabled`, `waitForCmsPullRequest`, the belt-and-braces
+`addLabel({label:"cms/ready"})` and the deploy-pill waits all still hold.
+`cms-workflow-states.spec.js` is deliberately untouched: it drives
+`index-test.html`, the rehearsal shell that keeps Decap's own controls, which
+is the branch `publishViaUi` preserves. New lint:
+`e2e/status-dropdown-selector.test.js` (registered in `PLATFORM_META_SPECS`)
+parses every `e2e/*.spec.js` with `e2e/spec-ast.js` — acorn, never a regex,
+since this lint's own header quotes the banned selector — and fails any
+`getByRole(..., { name })` naming the Status control. Its allowlist is empty
+and measured so (`cms-workflow-states` reads the status with `getByText`), and
+a negative-control case asserts the detector still fires against
+`cms-editor-ui.js`'s legitimate Decap branch, so it cannot decay into a green
+no-op. `spec-ast.js` gained one additive fact, `getByRoleNames`, generalising
+the existing `getByRoleLinkNames`.
+
 **UNRELEASED — dependabot-auto-merge.yml / dependabot-rearm-sweep.yml fetch
 their manifest-path script from the platform (cms-platform#303-class blind
 spot).** Both reusables ran `bash scripts/check-dependabot-manifest-paths.sh`

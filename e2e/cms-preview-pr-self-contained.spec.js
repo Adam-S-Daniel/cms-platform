@@ -83,6 +83,7 @@ const {
 } = require("./github-actions-poll");
 const { seedFixtureViaPr } = require("./cms-fixture-pr");
 const { guard } = require("./base-collections-guards");
+const { publishViaUi } = require("./cms-editor-ui");
 
 // SITE_ROOT — the consuming site's repo root; the #21 guard-registry meta-proof
 // overrides it to point at a fixture.
@@ -257,14 +258,22 @@ test(
     //     expect(res.status).toBe(422); // ruleset rejection
     //   });
 
-    // ── 5. Status → Ready (drives the UI dropdown, exercising the
-    // decap-cms/ready ↔ cms/ready synonym contract) ──────────────────
-    await test.step("Set Status: Ready via UI dropdown", async () => {
-      await page.getByRole("button", { name: /^Status:\s*Draft$/i }).click();
-      await page.getByRole("menuitem", { name: /^Ready$/i }).click();
-      await expect(page.getByRole("button", { name: /^Status:\s*Ready$/i })).toBeVisible({
-        timeout: 30_000,
-      });
+    // ── 5. Publish through the editor's ONE Publish control ─────────
+    //
+    // PROD_ADMIN is `index.html`, the only shell carrying one-door-publish.js
+    // + publish-button.js: Decap's `Status: Draft` dropdown is CSS-hidden
+    // there and `getByRole` skips CSS-hidden elements, so the hand-rolled
+    // Status→Ready step that used to live here could never resolve and timed
+    // out on every run (#382). publishViaUi() is shell-aware — it presses the
+    // platform button here, and keeps Decap's dropdown for index-test.html.
+    //
+    // What the NEXT step waits on is unchanged. The old path armed
+    // auto-merge-when-ready via the `decap-cms/pending_publish` label Decap
+    // writes on Status:Ready; the platform button arms it via `cms/ready`
+    // (deleting the label first, so the `labeled` event really fires). That
+    // job's `if:` accepts either, so waitForAutoMergeEnabled still holds.
+    await test.step("Publish via the editor's one Publish control (arms cms/ready)", async () => {
+      await publishViaUi(page);
     });
 
     await test.step("Wait for auto-merge to be enabled", async () => {

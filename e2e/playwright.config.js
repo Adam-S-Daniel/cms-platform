@@ -119,6 +119,14 @@ const PLATFORM_META_SPECS = [
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
   "base-collections-guard-registry.test.js",
+  // #382 — the AST sibling of the entry above: parses every e2e/*.spec.js with
+  // spec-ast.js and fails any `getByRole(..., { name: /Status:…/ })`, the
+  // selector one-door-publish.js CSS-hid on the production shell (which is how
+  // four write specs timed out an hour into a real prod run). It polices the
+  // PLATFORM's own spec sources and is exercised in self-ci's node-unit-lints,
+  // so it belongs here rather than on the consumer lane, where it would only
+  // re-lint the same harness copy.
+  "status-dropdown-selector.test.js",
   "blog-slug-literal-lint.test.js",
   // #16 — these PLATFORM-INTERNAL specs (surfaced by the adamdaniel.ai v0.1.10
   // reconciliation, where they ran+FAILED on the consumer e2e lane) validate
