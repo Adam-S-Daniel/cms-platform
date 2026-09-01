@@ -29,8 +29,9 @@
 //   - the caller publishes exactly `site-verify / site-verify`, on the same
 //     `pull_request` types every other required-context caller uses, with NO
 //     path filter (the verifier sweeps the whole tree, so every path is
-//     salient — and a filter would set up the missing-check trap the moment
-//     the context becomes required).
+//     salient — and a filter would set up the missing-check trap now that
+//     the context is required);
+//   - the context is in `consumer-main`'s required set (sequencing step 3).
 //
 // PLATFORM-INTERNAL, registered in PLATFORM_META_SPECS: it reads this repo's
 // own workflow definitions and the examples/site templates, which a consumer
@@ -364,33 +365,23 @@ test.describe("#377 site-verify — the dictated thin caller", () => {
     );
   });
 
-  // SEQUENCING GUARD. Making `site-verify / site-verify` required before both
-  // consumers publish it blocks every consumer PR on a context that never
-  // arrives. This test reds the PR that adds it to the manifest, so that PR
-  // has to answer the question first: has the caller landed on BOTH consumers
-  // (the platform-bump PR after the release that ships it), and does the
-  // context report there? When the answer is yes, delete THIS test, add the
-  // context to `ruleset_library.consumer-main.required_status_checks`, and
-  // reconcile each consumer's cms-automerge-nudge `required_contexts` in the
-  // same change (platform-bump does the latter from the manifest).
-  test("SEQUENCING: the context is not yet required — confirm it reports on both consumers first", () => {
-    // Read through the same helper the cancellable guard uses, so this sees
-    // the manifest's real shape (`rules[].parameters.required_status_checks[]
-    // .context`) and not a key that happens not to exist. The first cut read
-    // `ruleset.required_status_checks` directly and passed on a manifest that
-    // DID require the context — measured by the negative control.
+  // Step 3 of #377's sequencing, landed 2026-09-01 after BOTH consumers
+  // published the context on their v0.1.98 bump PRs (jodidaniel.com#236,
+  // adamdaniel.ai#3464 — the verify job ran the real script on the first and
+  // printed the no-op notice on the second). Until then this file carried a
+  // SEQUENCING test that redded any PR adding the context to the manifest,
+  // because a required context nothing publishes blocks every PR forever
+  // (#371). Now the positive half holds: the context IS required, so the
+  // caller, the reusable and the ruleset cannot drift apart silently.
+  // cms-automerge-nudge.test.js holds the nudge template's list equal to the
+  // ruleset; ruleset-context-publishable.test.js holds every required context
+  // to a real publisher.
+  test("the context is required by consumer-main (sequencing step 3 landed)", () => {
     const manifest = parseYaml(fs.readFileSync(MANIFEST_PATH, "utf8")) || {};
-    const rulesetNames = Object.keys(manifest.ruleset_library || {});
-    expect(rulesetNames.length, "the manifest must have parsed to something").toBeGreaterThan(0);
-    const requiredAnywhere = rulesetNames.filter((name) =>
-      requiredContexts(manifest, name).includes(CONTEXT),
-    );
     expect(
-      requiredAnywhere,
-      `\`${CONTEXT}\` is required by ruleset(s) ${JSON.stringify(requiredAnywhere)}. Before this ` +
-        `is right: the caller must have landed on BOTH consumers via platform-bump and the ` +
-        `context must have reported there. If it has, delete this test in the same PR ` +
-        `(cms-platform#377, "Sequencing").`,
-    ).toEqual([]);
+      requiredContexts(manifest, "consumer-main"),
+      `\`${CONTEXT}\` must stay in consumer-main's required set — removing it silently ` +
+        `returns the verifier to "cited in six docs, run by nothing" (#377)`,
+    ).toContain(CONTEXT);
   });
 });

@@ -399,13 +399,16 @@ Four decisions in it that are not obvious from the YAML:
   layout PR can; a filter would blind the check for the ignored paths, and
   would arm the missing-check trap the moment the context is required (the
   `prerelease-guard` caller carries no filter for the same reason).
-- **It is NOT required yet, and a test says so.** Adding the context to
-  `consumer-main` before both consumers publish it blocks every consumer PR on
-  a context that never arrives. Order: release → bump lands the caller →
-  confirm `site-verify / site-verify` reports on both consumers → add it to
-  `repo-settings.yml` AND reconcile each consumer's nudge `required_contexts`
-  (platform-bump does the latter from the manifest), deleting the SEQUENCING
-  test in `e2e/site-verify.test.js` in that same PR.
+- **It became required only AFTER both consumers published it.** Adding a
+  context to `consumer-main` before its publisher exists blocks every consumer
+  PR on a context that never arrives (#371). So the order was: v0.1.98 release
+  → `platform-bump` seeded the caller (jodidaniel.com#236, adamdaniel.ai#3464,
+  both reported `site-verify / site-verify` green on 2026-09-01) → only then
+  the manifest entry plus the nudge template's `required_contexts` line, and
+  `e2e/site-verify.test.js`'s SEQUENCING guard flipped to its positive twin.
+  Each consumer's own nudge list catches up on its next `platform-bump`, which
+  reconciles it from the manifest (#315); until then the list is one context
+  short, which GitHub's own merge refusal covers (#284's one-release window).
 
 Measured before shipping: at jodidaniel.com `main`, `bundle exec jekyll build`
 + the script gives 192 `ok`, 0 `FAIL`, exit 0, identical under `JEKYLL_ENV=

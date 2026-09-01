@@ -19,7 +19,11 @@
  * (the `plugin-validate` required context added in v0.1.83 — the manifest
  * declares it and this fixture encodes that desired state, so live stays
  * BEHIND until a human runs `--fix --yes`; same manifest-ahead-of-live shape
- * as the delete_branch_on_merge flip above). So the anchor test locks the shipped
+ * as the delete_branch_on_merge flip above), and BOTH consumers'
+ * *.ruleset-main.json again on 2026-09-01 (the `site-verify / site-verify`
+ * required context, #377 sequencing step 3 — added only after both consumers
+ * published it on their v0.1.98 bump PRs; same manifest-ahead-of-live shape
+ * until the next reconcile). So the anchor test locks the shipped
  * manifest to "zero drift against the phase-2 desired-converged fixtures",
  * and the normalization tests lock the anti-flap rules that keep a daily
  * audit from crying wolf:
