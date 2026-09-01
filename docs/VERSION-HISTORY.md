@@ -10,11 +10,66 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.97)
+## Version history (v0.1.0 → v0.1.98)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**UNRELEASED (landed 2026-08-31) — a required status check that nothing
+**v0.1.98 — a consumer's own post-build verifier finally runs in CI (#377).**
+jodidaniel.com ships `scripts/verify-build-artifacts.rb`, ~190 assertions over
+the BUILT site: media links resolve, the three-way category triangle agrees,
+the admin seam's anchors match built section ids, the media nav label matches
+its heading, no PDF bytes are committed anywhere, and the `pdf_public` gate
+both withholds and publishes. Its docs cited it in six places as the guard for
+those. No workflow ran it — every reference was prose plus the script's own
+header — which is how a `pdf_public: true` with no file in `_site`, row 2 of
+the verifier's own table and the case `docs/CONTENT-MODEL.md` calls "better a
+loud red than a 'Download PDF' button that 404s", reached production. The
+consumer cannot fix this alone: workflow-SET parity flags any caller absent
+from `examples/site/` as `EXTRA (not platform-dictated)` on a required check.
+
+**The seam is `site-verify.yml`** — a `workflow_call`-only reusable with NO
+inputs and NO secrets, plus a dictated thin caller of the same name that
+`platform-bump` seeds into both consumers (#315). Convention, not
+configuration: if the caller's tree has `scripts/verify-build-artifacts.rb`,
+the reusable builds the site (`JEKYLL_ENV=production`, deploy-production's env,
+on deploy-preview's default Ruby — a site pins no Ruby in its lockfile, so the
+lint holds the two equal) and runs it; otherwise it prints a `::notice::` and
+succeeds. adamdaniel.ai has no such script and no-ops in ~10s. Job shape is
+the #285/#289 work/gate split: `verify` carries the wall, `site-verify` is a
+gate (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) held
+by `e2e/site-verify.test.js` through `cancellationHazards()`. The context is
+`site-verify / site-verify`.
+
+**Two departures from the issue, both measured.** The caller carries NO
+`paths-ignore`: the verifier globs `**/*.pdf` over the whole tree, so a
+docs-only PR can break it exactly as a layout PR can, a filter would blind the
+check for the ignored paths, and it would arm the missing-check trap the moment
+the context is required (the `prerelease-guard` caller carries none for the
+same reason). And the build is the deploy's build, not the plain
+`jekyll build` the issue measured with — identical assertion set under both
+today, lint-locked so they cannot drift.
+
+**The spec EXECUTES what it can.** The detect step and the gate step are bash
+scripts lifted out of the parsed YAML and run in scratch dirs: `verifier=false`
+plus a notice when the script is absent, `verifier=true` when present; the gate
+exits 0 only on `success`. Five negative controls each red exactly one test,
+and the fifth — the context added to `consumer-main` — caught a real defect in
+the first cut: the SEQUENCING test read `ruleset.required_status_checks`, a key
+that does not exist in the manifest, and passed on a manifest that DID require
+the context. It reads through the shared `requiredContexts()` helper now.
+
+**Measured at jodidaniel.com `main`:** 192 `ok`, 0 `FAIL`, exit 0, byte-identical
+under `JEKYLL_ENV=production`; 9 `note` lines are groups that do not arm while
+`site_live: false`, so coverage roughly doubles at go-live (jodidaniel#26).
+
+**NOT required yet, on purpose.** Adding `site-verify / site-verify` to
+`ruleset_library.consumer-main` before both consumers publish it blocks every
+consumer PR on a context that never arrives. Order: this release → the bump
+lands the caller → confirm the context reports on both consumers → add it to
+`repo-settings.yml` AND reconcile each consumer's nudge `required_contexts`,
+deleting the SEQUENCING test in that same PR.
+
+**Also in v0.1.98 (landed 2026-08-31) — a required status check that nothing
 publishes, and an admin that believed `armed` forever (#371).** An editor
 opening a PR-preview's `/admin`, editing an entry and pressing Publish got
 every success signal the product has — the entry saved, the PR opened,
