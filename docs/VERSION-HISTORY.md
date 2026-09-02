@@ -10,11 +10,11 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.99)
+## Version history (v0.1.0 → v0.1.100)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**UNRELEASED — `publishViaUi()` could return "success" over a silent publish
+**v0.1.100 — `publishViaUi()` could return "success" over a silent publish
 failure, and the deploy-lane diagnostic couldn't tell (#386, harness half).**
 The v0.1.99 acceptance run for #382 (adamdaniel.ai `cms-publish-loop-host`
 33573287045) went 34 minutes further than the previous failure, then died at
