@@ -467,3 +467,167 @@ test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", (
     ).toBe(true);
   });
 });
+
+// #396: the approval issue must show a reviewer WHAT changes, as a diff,
+// before it shows the full plan. "1 bypass actor(s) added" followed by two
+// full ruleset bodies in a code block is a request to re-derive the delta by
+// eye — which is the one thing the plan job already did.
+test.describe("the approval issue renders each planned write as a diff (#396)", () => {
+  const gate = () => require(GATE_ISSUE);
+  const bypassWrite = {
+    repo: "Adam-S-Daniel/adamdaniel.ai",
+    kind: "ruleset-put",
+    name: "cms-feature-branches",
+    verdict: "gated",
+    reason: 'ruleset "cms-feature-branches": 1 bypass actor(s) added: RepositoryRole#5 (always)',
+    changes: [
+      {
+        facet: "bypass_actors",
+        live: [],
+        desired: [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }],
+      },
+    ],
+  };
+  const safeWrite = {
+    repo: "jodidaniel/jodidaniel.com",
+    kind: "flag",
+    key: "allow_rebase_merge",
+    verdict: "safe",
+    reason: "repo flag `allow_rebase_merge` -> false",
+    changes: [{ facet: "allow_rebase_merge", live: true, desired: false }],
+  };
+  const body = () =>
+    gate().buildBody({
+      repo: "Adam-S-Daniel/cms-platform",
+      runUrl: "https://example.test/run/1",
+      runId: "1",
+      reviewers: ["someone"],
+      planText: "== full plan text ==",
+      docs: [{ writes: [bypassWrite, safeWrite], unfixables: [] }],
+    });
+
+  test("a gated write is a `diff` fence: an array add shows ONLY the added element", () => {
+    const b = body();
+    expect(b).toContain("```diff");
+    expect(b).toContain('+ {"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}');
+    // An empty live side is not a "- []" line: nothing was removed.
+    expect(b).not.toMatch(/^\s*- \[\]$/m);
+    expect(b).toContain("bypass actor(s) added: RepositoryRole#5 (always)");
+  });
+
+  test("a scalar change shows both sides, and safe writes are listed as applied-on-approval", () => {
+    const b = body();
+    // The fence is indented under its bullet, so the diff lines are too.
+    expect(b).toMatch(/^  - true\n  \+ false$/m);
+    expect(b).toMatch(/applied on approval/i);
+    // Ordering: what needs review comes before what rides along, and both
+    // come before the full plan.
+    const gated = b.indexOf("cms-feature-branches");
+    const safe = b.indexOf("allow_rebase_merge");
+    const full = b.indexOf("== full plan text ==");
+    expect(gated).toBeGreaterThan(-1);
+    expect(gated).toBeLessThan(safe);
+    expect(safe).toBeLessThan(full);
+  });
+
+  test("the full plan is collapsed, not the headline", () => {
+    const b = body();
+    const details = b.indexOf("<details>");
+    expect(details).toBeGreaterThan(-1);
+    expect(b.indexOf("== full plan text ==")).toBeGreaterThan(details);
+    expect(b.indexOf("```diff")).toBeLessThan(details);
+  });
+
+  test("with no plan document the gated text still renders (the older contract is not dropped)", () => {
+    const b = gate().buildBody({
+      repo: "o/r",
+      runUrl: "u",
+      runId: "1",
+      reviewers: [],
+      planText: "p",
+      gatedText: "   NEEDS-REVIEW o/r: something",
+    });
+    expect(b).toContain("NEEDS-REVIEW o/r: something");
+  });
+
+  test("renderDiff: element-level for arrays, both-sides for everything else", () => {
+    const { renderDiff } = gate();
+    expect(renderDiff({ facet: "x", live: [1, 2], desired: [2, 3] })).toEqual(["# x", "- 1", "+ 3"]);
+    expect(renderDiff({ facet: "y", live: "a", desired: "b" })).toEqual(["# y", '- "a"', '+ "b"']);
+    expect(renderDiff({ facet: "z", live: null, desired: { k: 1 } })).toEqual(["# z", '+ {"k":1}']);
+  });
+
+  test("the workflow hands the structured plan from the audit to the issue and the summary", () => {
+    const planShell = jobShell("plan");
+    expect(
+      // Same command, across a `\`-continued line.
+      /audit-repo-settings\.js --fix (?:[^\n]|\\\n)*--plan-json /.test(planShell),
+      "the plan step must ask the audit for its structured plan document",
+    ).toBe(true);
+    // The open call receives the documents as an array built from
+    // `--plan-json <file>` pairs — one per owner leg — so assert both halves:
+    // the array is built from that flag, and `open` is handed the array.
+    expect(
+      /docs\+=\(--plan-json "\$f"\)/.test(planShell),
+      "the plan documents must be collected as --plan-json pairs",
+    ).toBe(true);
+    expect(
+      /gate-approval-issue\.js open[\s\S]*?"\$\{docs\[@\]\}"/.test(planShell),
+      "the open call must pass the plan document(s) through",
+    ).toBe(true);
+    expect(
+      /gate-approval-issue\.js render[\s\S]*?GITHUB_STEP_SUMMARY/.test(planShell),
+      "the same rendering must reach the job summary, which is where the run URL lands a reviewer",
+    ).toBe(true);
+  });
+});
+
+test.describe("the rendered write answers 'what is that?' (#397 review)", () => {
+  const gate = () => require(GATE_ISSUE);
+  const write = {
+    repo: "Adam-S-Daniel/adamdaniel.ai",
+    kind: "ruleset-put",
+    name: "cms-feature-branches",
+    verdict: "gated",
+    reason: 'ruleset "cms-feature-branches": 1 bypass actor(s) added: RepositoryRole 5 = admin (bypass: always)',
+    context: {
+      id: 15756474,
+      url: "https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474",
+      target: "branch",
+      refs: ["refs/heads/cms/**", "refs/heads/claude/**"],
+    },
+    changes: [
+      {
+        facet: "bypass_actors",
+        live: [],
+        desired: [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }],
+      },
+    ],
+  };
+
+  test("a ruleset write links the ruleset and names the refs it governs", () => {
+    const lines = gate().renderWrite(write).join("\n");
+    expect(lines).toContain("[cms-feature-branches](https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474)");
+    expect(lines).toMatch(/branch ruleset .*`refs\/heads\/cms\/\*\*`, `refs\/heads\/claude\/\*\*`/);
+  });
+
+  test("a bypass-actor diff line is annotated with what the actor is", () => {
+    const lines = gate().renderDiff(write.changes[0]);
+    expect(lines).toEqual([
+      "# bypass_actors",
+      '+ {"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}   # RepositoryRole 5 = admin (bypass: always)',
+    ]);
+  });
+
+  test("a write with no context still renders (flags have no ruleset to link)", () => {
+    const lines = gate().renderWrite({
+      repo: "o/r",
+      kind: "flag",
+      key: "allow_rebase_merge",
+      verdict: "safe",
+      reason: "repo flag `allow_rebase_merge` -> false",
+      changes: [{ facet: "allow_rebase_merge", live: true, desired: false }],
+    });
+    expect(lines[0]).toBe("- **o/r** — repo flag `allow_rebase_merge` -> false");
+  });
+});

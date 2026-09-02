@@ -500,6 +500,26 @@ run cannot retract the live request — the issue carries a `<!-- run:N -->`
 marker and `close` refuses to act on an issue that names a different run. See
 `scripts/gate-approval-issue.js`.
 
+**And what they are told is a diff, not a body.** The first shape of that
+issue (#396) said `1 bypass actor(s) added` and then printed two full ruleset
+bodies under "The full plan" — a request to re-derive by eye the delta the
+plan job had already computed. The audit now writes its plan as a structured
+document (`--plan-json`: every write with its write-risk verdict, its reason,
+and the facet-level `changes` it carries — for a ruleset PUT, the same
+per-facet findings `diffRuleset` produced, plus the ruleset's id, settings
+URL and the refs it governs), the gated reason says what the actor IS
+(`RepositoryRole 5 = admin (bypass: always)` — GitHub's fixed ids are
+maintain 2, write 4, admin 5; the REST reference does not list them, the
+terraform provider's `repository_ruleset` docs do), and the issue and the job
+summary render each write as a ```` ```diff ```` fence — arrays by element, so
+an added bypass actor is one annotated `+` line — under a line that links the
+ruleset and names its refs, with gated writes first, the non-weakening ones
+that ride along on approval second, and the full audit output collapsed under
+`<details>`. The first review of #397 asked exactly those two questions
+("What is RepositoryRole#5?", "what ruleset is cms-feature-branches?"), which
+is why an id and a bare name are not enough. The `render` subcommand is the same rendering to stdout, which is
+how the run's own summary page shows it.
+
 ### Two clean-merging PRs made the classifier fail OPEN, six minutes apart
 
 The write-risk classifier merged 2026-08-31 20:31. `securityWrites` — the

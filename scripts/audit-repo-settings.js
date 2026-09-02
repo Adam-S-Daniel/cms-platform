@@ -1832,6 +1832,18 @@ function runIssueLifecycle({ findings, informational, label, dryRun, nowIso }) {
 // non-forbidden keys only), the ruleset PUTs (drifted, matched by name, full
 // library body, skipping lossy-PUT-guarded ones), the ruleset POSTs
 // (manifest-only), and everything --fix deliberately will NOT touch.
+function rulesetContext(repo, live) {
+  const id = live.id;
+  const html = live._links && live._links.html && live._links.html.href;
+  const rn = (live.conditions && live.conditions.ref_name) || {};
+  return {
+    id,
+    url: html || `https://github.com/${repo}/rules/${id}`,
+    target: live.target,
+    refs: [...(rn.include || [])].sort(),
+  };
+}
+
 function buildFixPlan(manifest, results) {
   const plan = [];
   for (const r of results) {
@@ -1888,6 +1900,20 @@ function buildFixPlan(manifest, results) {
         // gates ordinary tightenings is the daily-approval habit this whole
         // mechanism exists to end.
         desiredSorted: sortRuleset({ name, ...desired[name] }),
+        // The per-facet delta the audit already computed for this ruleset —
+        // what a reviewer is asked to approve, as opposed to `body`, which is
+        // what the API is asked to store. Carried on the plan so the issue
+        // and the log can show "bypass_actors: [] -> [...]" instead of two
+        // full bodies to diff by eye (#396).
+        changes: r.findings
+          .filter((f) => f.kind === "ruleset-drift" && f.ruleset === name)
+          .map((f) => ({ facet: f.facet, live: f.live, desired: f.desired })),
+        // WHAT this ruleset is, for the reviewer: its settings page and the
+        // refs it governs (#397 review: "I'd like to see what ruleset
+        // cms-feature-branches is"). The live body's own `_links.html` is the
+        // authoritative URL; the derived form is GitHub's stable shape for a
+        // repository ruleset, used when a capture carries no links.
+        context: rulesetContext(r.repo, liveByName.get(name)),
       });
     }
     const posts = r.findings
@@ -2068,9 +2094,14 @@ function printFixPlan(plan) {
     }
     for (const put of p.puts) {
       console.log(
-        `   PUT repos/${p.repo}/rulesets/${put.id} ("${put.name}") with the manifest body:`,
+        `   PUT repos/${p.repo}/rulesets/${put.id} ("${put.name}"):`,
       );
-      console.log(`     ${JSON.stringify(sortRuleset(put.body))}`);
+      for (const c of put.changes || []) {
+        console.log(
+          `     ${c.facet}: ${JSON.stringify(c.live)} -> ${JSON.stringify(c.desired)}`,
+        );
+      }
+      console.log(`     full body: ${JSON.stringify(sortRuleset(put.body))}`);
     }
     for (const put of p.actionsPuts || []) {
       console.log(
@@ -2112,6 +2143,53 @@ function printFixPlan(plan) {
       );
     }
   }
+}
+
+// The plan as ONE structured document — every write with its write-risk
+// verdict, its reason, and the facet-level `changes` a reviewer approves —
+// plus the unfixables. This is what crosses the job boundary to the approval
+// issue and the job summary (`--plan-json`), so those can render a diff
+// rather than re-parse the prose above. `risk` is classifyPlan(plan).
+function writeChanges(w) {
+  switch (w.kind) {
+    case "flag":
+    case "actions-permission":
+      return [{ facet: w.key, live: w.live === undefined ? null : w.live, desired: w.desired }];
+    case "security-analysis":
+      // The METHOD is the value on this surface and the live side is not read
+      // by the plan; `null` says "not known", not "was off".
+      return [{ facet: w.key, live: null, desired: w.desired }];
+    case "ruleset-put":
+      return w.changes || [];
+    case "ruleset-post":
+    case "environment-put":
+      return [{ facet: "(new)", live: null, desired: w.desired }];
+    default:
+      return [];
+  }
+}
+
+function planDocument(plan, risk) {
+  const writes = [];
+  // classifyPlan's `gated`/`safe` entries are copies of `writes` entries;
+  // match them back by position so the document keeps apply order.
+  const classified = [...(risk.gated || []), ...(risk.safe || [])];
+  for (const w of risk.writes || []) {
+    const c = classified.find(
+      (x) => x.repo === w.repo && x.kind === w.kind && x.key === w.key && x.name === w.name,
+    );
+    writes.push({
+      repo: w.repo,
+      kind: w.kind,
+      ...(w.key !== undefined ? { key: w.key } : {}),
+      ...(w.name !== undefined ? { name: w.name } : {}),
+      verdict: c ? c.verdict : "gated",
+      reason: c ? c.reason : "(unclassified write)",
+      changes: writeChanges(w),
+      ...(w.context ? { context: w.context } : {}),
+    });
+  }
+  return { writes, unfixables: planUnfixables(plan) };
 }
 
 function applyFixPlan(plan) {
@@ -2287,6 +2365,16 @@ function main() {
         `gated=${risk.gated.length} unfixable=${unfixables.length}`,
     );
     for (const g of risk.gated) console.log(`   NEEDS-REVIEW ${g.repo}: ${g.reason}`);
+    // The structured twin of the prose above, for whoever has to SHOW this
+    // plan to a human (the approval issue, the job summary). Written before
+    // any early return so a "no applicable writes" plan is documented too.
+    const planJson = arg("plan-json", "");
+    if (planJson) {
+      fs.writeFileSync(
+        path.resolve(process.cwd(), planJson),
+        JSON.stringify(planDocument(plan, risk), null, 2) + "\n",
+      );
+    }
     if (plan.length === 0) return 0;
     // A plan can be non-empty and yet contain NOTHING this tool will write —
     // a manual-only key, a fix-skipped or unmanaged ruleset, a fix-forbidden
@@ -2442,4 +2530,6 @@ module.exports = {
   buildComment,
   buildCloseComment,
   buildFixPlan,
+  printFixPlan,
+  planDocument,
 };

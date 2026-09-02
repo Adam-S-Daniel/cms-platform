@@ -204,7 +204,11 @@ jobs:
             args=(); for r in $repos; do args+=(--repo "$r"); done
             # --fix WITHOUT --yes is plan-only and exits 2 when WRITES pend.
             set +e
-            GH_TOKEN="$TOKEN" node scripts/audit-repo-settings.js --fix "${args[@]}" > plan.txt 2>&1
+            # --plan-json is the structured twin of plan.txt: every write with
+            # its verdict and facet-level changes, for the issue and summary
+            # to render as a DIFF instead of two full bodies (#396).
+            GH_TOKEN="$TOKEN" node scripts/audit-repo-settings.js --fix "${args[@]}" \
+              --plan-json "plan-${owner}.json" > plan.txt 2>&1
             rc=$?
             set -e
             {
@@ -233,6 +237,18 @@ jobs:
             if [ "$rc" = "2" ]; then pending=true
             elif [ "$rc" != "0" ]; then echo "::error::plan failed for ${owner} (exit ${rc})"; exit "$rc"; fi
           done
+          # The concise rendering ABOVE the per-owner logs is what a reviewer
+          # who followed the run URL actually needs; the <details> blocks are
+          # the audit trail.
+          if [ "${pending}" = "true" ]; then
+            docs=(); for f in plan-*.json; do docs+=(--plan-json "$f"); done
+            {
+              echo "#### What this run will change"
+              echo
+              node scripts/gate-approval-issue.js render "${docs[@]}"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "pending=${pending}" >> "$GITHUB_OUTPUT"
           echo "gate=${gate}" >> "$GITHUB_OUTPUT"
           echo "::notice::convergence pending=${pending} needs-human=${gate}"
@@ -250,12 +266,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${GATE}" = "true" ] && [ "${PENDING}" = "true" ]; then
+            docs=(); for f in plan-*.json; do docs+=(--plan-json "$f"); done
             node scripts/gate-approval-issue.js open \
               --repo "${GITHUB_REPOSITORY}" \
               --run-id "${GITHUB_RUN_ID}" \
               --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               --plan-file plan-all.txt \
-              --gated-file gated-all.txt
+              --gated-file gated-all.txt \
+              "${docs[@]}"
           else
             node scripts/gate-approval-issue.js close \
               --repo "${GITHUB_REPOSITORY}" \

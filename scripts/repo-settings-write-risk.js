@@ -102,6 +102,27 @@ const SAFE_RSC_PARAM_VALUE = {
   do_not_enforce_on_create: false,
 };
 
+// GitHub's fixed ids for `actor_type: RepositoryRole` in a ruleset's
+// bypass_actors. Only roles that can bypass are numbered (read and triage
+// cannot). Not in the REST reference; documented by the terraform provider
+// and consistent with every capture in e2e/fixtures/repo-settings (an admin
+// reads `current_user_can_bypass: always` on a ruleset whose only actor is 5).
+const REPOSITORY_ROLE_IDS = { 2: "maintain", 4: "write", 5: "admin" };
+
+// `RepositoryRole 5 = admin (bypass: always)` — what the actor IS, not just
+// its id: the #397 review asked "What is RepositoryRole#5?", and an id a
+// reviewer has to look up is not a description. An id the table does not
+// know is shown raw, never guessed.
+function describeActor(a) {
+  const type = (a && a.actor_type) || "?";
+  const id = a && a.actor_id != null ? a.actor_id : null;
+  const mode = a && a.bypass_mode ? ` (bypass: ${a.bypass_mode})` : "";
+  if (type === "OrganizationAdmin") return `OrganizationAdmin${mode}`;
+  const role = type === "RepositoryRole" && id != null ? REPOSITORY_ROLE_IDS[id] : undefined;
+  const who = id == null ? type : role ? `${type} ${id} = ${role}` : `${type} ${id}`;
+  return `${who}${mode}`;
+}
+
 function gated(reason) {
   return { verdict: "gated", reason };
 }
@@ -222,9 +243,12 @@ function classifyRulesetPut(w) {
         const added = (desired.bypass_actors || []).filter(
           (a) => !liveSet.has(JSON.stringify(canon(a))),
         );
+        // NAME the actors. "1 bypass actor(s) added" sent a reviewer to
+        // re-derive which one from a full ruleset body (#396).
         if (added.length)
           return gated(
-            `ruleset "${w.name}": ${added.length} bypass actor(s) added`,
+            `ruleset "${w.name}": ${added.length} bypass actor(s) added: ` +
+              added.map(describeActor).join(", "),
           );
         reasons.push("bypass actor(s) removed");
         break;
@@ -410,6 +434,11 @@ function planWrites(plan) {
         // sorted against unsorted and will read array ORDER as a delta — see
         // buildFixPlan's note.
         desired: put.desiredSorted || put.body,
+        // The audit's per-facet delta and the ruleset's identity (id, URL,
+        // refs), passed through untouched so the plan document can show a
+        // reviewer WHAT changes and WHERE (#396, #397). Not read here.
+        changes: put.changes,
+        context: put.context,
       });
     for (const post of p.posts || [])
       writes.push({
@@ -479,6 +508,8 @@ function planUnfixables(plan) {
 }
 
 module.exports = {
+  REPOSITORY_ROLE_IDS,
+  describeActor,
   PLAN_KNOWN_KEYS,
   PLAN_WRITE_KEYS,
   classifyWrite,
