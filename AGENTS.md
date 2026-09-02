@@ -211,14 +211,12 @@ the gem onto a consumer's live `/admin`.
 - **`e2e/` deps install via `cd e2e && npm ci`** (`e2e/package-lock.json` is tracked —
   consumers need it). The CloudFront-Function specs simulate `Fn::Sub` by substituting
   a synthetic `example.test` apex, so platform specs stay site-agnostic.
-- **AST always, never regex, for code-shape lints (Adam's standing rule).** A lint
-  that reasons about CODE STRUCTURE — which `test()` blocks exist, whether a
-  `guard(SITE_ROOT, …)` sits inside a given test's scope, which collection a
-  `page.goto` navigates — MUST parse a real AST, never regex-scan the source.
-  Regex on source is brittle: it false-matches tokens in comments/strings,
-  mis-reads across line breaks, and is BLIND to interpolation — a regex couldn't
-  see `page.goto(\`…#/collections/${CANARY.cmsCollection}\`)` (a *variable*
-  collection), which let the jodidaniel host-loop guard gap ship. Parse with
+- **AST always, never regex, for code-shape lints.** base.md now carries the
+  general rule (a lint reasoning about code SHAPE — which `test()` blocks
+  exist, whether a call sits inside another's scope, what a call's arguments
+  are — parses a real AST, never a regex or line scan) and the jodidaniel
+  host-loop `page.goto(\`…#/collections/${col}\`)` incident that motivated it,
+  so this entry keeps only this repo's implementation. Parse with
   `e2e/spec-ast.js` (acorn + acorn-walk): `analyzeSpec(src)` returns a fact bag
   (string VALUES with `${…}` placeholders, call names+args, identifiers, requires,
   Program-level `test()` blocks); the detector matches those facts, not raw text.
