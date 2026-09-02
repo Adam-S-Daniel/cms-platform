@@ -2752,7 +2752,7 @@ test.describe("the plan carries a concise per-write diff (#396)", () => {
     const { plan } = bypassActorPlan();
     const c = loadRisk().classifyPlan(plan);
     expect(c.gated.length).toBe(1);
-    expect(c.gated[0].reason).toMatch(/bypass actor\(s\) added: RepositoryRole#5 \(always\)/);
+    expect(c.gated[0].reason).toMatch(/bypass actor\(s\) added: RepositoryRole 5 = admin \(bypass: always\)/);
   });
 
   test("planDocument renders every write with its verdict, reason and changes", () => {
@@ -2815,5 +2815,71 @@ test.describe("the plan carries a concise per-write diff (#396)", () => {
     expect(put).toBeGreaterThan(-1);
     expect(lines[put + 1]).toMatch(/^     bypass_actors: \[\] -> \[\{"actor_id":5/);
     expect(lines[put + 2]).toMatch(/^     full body: \{"name":"cms-feature-branches"/);
+  });
+});
+
+// Follow-up on #397: the first diff said `RepositoryRole#5 (always)` and the
+// reviewer's reply was "What is RepositoryRole#5? And I'd like to see what
+// ruleset cms-feature-branches is". An id is not an answer; neither is a name
+// with nothing to click.
+test.describe("the plan says WHAT the actor and the ruleset are (#397 review)", () => {
+  test("describeActor decodes GitHub's fixed RepositoryRole ids", () => {
+    const { describeActor } = loadRisk();
+    expect(describeActor({ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" })).toBe(
+      "RepositoryRole 5 = admin (bypass: always)",
+    );
+    expect(describeActor({ actor_id: 4, actor_type: "RepositoryRole", bypass_mode: "pull_request" })).toBe(
+      "RepositoryRole 4 = write (bypass: pull_request)",
+    );
+    expect(describeActor({ actor_id: 2, actor_type: "RepositoryRole" })).toBe("RepositoryRole 2 = maintain");
+    // An id this table does not know is shown raw, never guessed.
+    expect(describeActor({ actor_id: 9, actor_type: "RepositoryRole" })).toBe("RepositoryRole 9");
+    expect(describeActor({ actor_id: 1, actor_type: "OrganizationAdmin", bypass_mode: "always" })).toBe(
+      "OrganizationAdmin (bypass: always)",
+    );
+    expect(describeActor({ actor_id: 123, actor_type: "Team" })).toBe("Team 123");
+  });
+
+  test("a ruleset PUT carries `context`: the live ruleset's id, its settings URL and the refs it covers", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
+      rulesets: [
+        fixture("adamdaniel.ruleset-main.json"),
+        { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] },
+      ],
+    });
+    const plan = script.buildFixPlan(manifest, [scan]);
+    const put = plan[0].puts[0];
+    expect(put.context).toEqual({
+      id: 15756474,
+      url: "https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474",
+      target: "branch",
+      refs: [
+        "refs/heads/chore/**",
+        "refs/heads/ci/**",
+        "refs/heads/claude/**",
+        "refs/heads/cms/**",
+        "refs/heads/docs/**",
+        "refs/heads/feat/**",
+        "refs/heads/fix/**",
+        "refs/heads/test/**",
+      ],
+    });
+    // …and it reaches the document the issue renders from.
+    const doc = script.planDocument(plan, loadRisk().classifyPlan(plan));
+    expect(doc.writes[0].context).toEqual(put.context);
+  });
+
+  test("the URL is derived when the live body carries no _links (older captures, other callers)", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const live = { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] };
+    delete live._links;
+    const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
+      rulesets: [fixture("adamdaniel.ruleset-main.json"), live],
+    });
+    const put = script.buildFixPlan(manifest, [scan])[0].puts[0];
+    expect(put.context.url).toBe("https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474");
   });
 });

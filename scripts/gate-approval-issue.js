@@ -42,6 +42,7 @@
 
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
+const { describeActor } = require("./repo-settings-write-risk.js");
 
 // Identifies THE approval issue among the label's issues. Same mechanism as
 // audit-repo-settings.js's drift-issue marker, deliberately a DIFFERENT string
@@ -163,14 +164,24 @@ const canon = (v) => JSON.stringify(v);
 // one `+` line, not a `-` of the old list and a `+` of the new); anything
 // else shows both sides. An absent/empty side draws nothing — nothing was
 // removed, so there is no `- []` to read.
+// A bypass actor is an opaque `{actor_id, actor_type}` pair; say what it is
+// beside it, so the reviewer is not sent to look up an id (#397 review).
+function annotate(facet, el) {
+  if (facet === "bypass_actors" && el && typeof el === "object")
+    return `   # ${describeActor(el)}`;
+  return "";
+}
+
 function renderDiff(change) {
   const lines = [`# ${change.facet}`];
-  const { live, desired } = change;
+  const { live, desired, facet } = change;
   if (Array.isArray(live) && Array.isArray(desired)) {
     const liveSet = new Set(live.map(canon));
     const desiredSet = new Set(desired.map(canon));
-    for (const el of live) if (!desiredSet.has(canon(el))) lines.push(`- ${canon(el)}`);
-    for (const el of desired) if (!liveSet.has(canon(el))) lines.push(`+ ${canon(el)}`);
+    for (const el of live)
+      if (!desiredSet.has(canon(el))) lines.push(`- ${canon(el)}${annotate(facet, el)}`);
+    for (const el of desired)
+      if (!liveSet.has(canon(el))) lines.push(`+ ${canon(el)}${annotate(facet, el)}`);
     return lines;
   }
   const absent = (v) => v === null || v === undefined;
@@ -183,6 +194,14 @@ function renderDiff(change) {
 // about, so the bullet adds only the repo.
 function renderWrite(w) {
   const out = [`- **${w.repo}** — ${w.reason}`];
+  // WHAT the ruleset is: a link to its settings page and the refs it governs.
+  if (w.context && w.context.url) {
+    const refs = (w.context.refs || []).map((r) => `\`${r}\``).join(", ");
+    out.push(
+      `  ruleset [${w.name}](${w.context.url}): ${w.context.target || "branch"} ruleset on ` +
+        (refs || "(no ref conditions)"),
+    );
+  }
   if (w.changes && w.changes.length) {
     out.push("");
     out.push("  ```diff");

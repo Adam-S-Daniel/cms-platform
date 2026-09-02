@@ -1832,6 +1832,18 @@ function runIssueLifecycle({ findings, informational, label, dryRun, nowIso }) {
 // non-forbidden keys only), the ruleset PUTs (drifted, matched by name, full
 // library body, skipping lossy-PUT-guarded ones), the ruleset POSTs
 // (manifest-only), and everything --fix deliberately will NOT touch.
+function rulesetContext(repo, live) {
+  const id = live.id;
+  const html = live._links && live._links.html && live._links.html.href;
+  const rn = (live.conditions && live.conditions.ref_name) || {};
+  return {
+    id,
+    url: html || `https://github.com/${repo}/rules/${id}`,
+    target: live.target,
+    refs: [...(rn.include || [])].sort(),
+  };
+}
+
 function buildFixPlan(manifest, results) {
   const plan = [];
   for (const r of results) {
@@ -1896,6 +1908,12 @@ function buildFixPlan(manifest, results) {
         changes: r.findings
           .filter((f) => f.kind === "ruleset-drift" && f.ruleset === name)
           .map((f) => ({ facet: f.facet, live: f.live, desired: f.desired })),
+        // WHAT this ruleset is, for the reviewer: its settings page and the
+        // refs it governs (#397 review: "I'd like to see what ruleset
+        // cms-feature-branches is"). The live body's own `_links.html` is the
+        // authoritative URL; the derived form is GitHub's stable shape for a
+        // repository ruleset, used when a capture carries no links.
+        context: rulesetContext(r.repo, liveByName.get(name)),
       });
     }
     const posts = r.findings
@@ -2168,6 +2186,7 @@ function planDocument(plan, risk) {
       verdict: c ? c.verdict : "gated",
       reason: c ? c.reason : "(unclassified write)",
       changes: writeChanges(w),
+      ...(w.context ? { context: w.context } : {}),
     });
   }
   return { writes, unfixables: planUnfixables(plan) };

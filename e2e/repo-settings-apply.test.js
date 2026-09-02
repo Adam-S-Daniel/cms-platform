@@ -581,3 +581,53 @@ test.describe("the approval issue renders each planned write as a diff (#396)", 
     ).toBe(true);
   });
 });
+
+test.describe("the rendered write answers 'what is that?' (#397 review)", () => {
+  const gate = () => require(GATE_ISSUE);
+  const write = {
+    repo: "Adam-S-Daniel/adamdaniel.ai",
+    kind: "ruleset-put",
+    name: "cms-feature-branches",
+    verdict: "gated",
+    reason: 'ruleset "cms-feature-branches": 1 bypass actor(s) added: RepositoryRole 5 = admin (bypass: always)',
+    context: {
+      id: 15756474,
+      url: "https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474",
+      target: "branch",
+      refs: ["refs/heads/cms/**", "refs/heads/claude/**"],
+    },
+    changes: [
+      {
+        facet: "bypass_actors",
+        live: [],
+        desired: [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }],
+      },
+    ],
+  };
+
+  test("a ruleset write links the ruleset and names the refs it governs", () => {
+    const lines = gate().renderWrite(write).join("\n");
+    expect(lines).toContain("[cms-feature-branches](https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474)");
+    expect(lines).toMatch(/branch ruleset .*`refs\/heads\/cms\/\*\*`, `refs\/heads\/claude\/\*\*`/);
+  });
+
+  test("a bypass-actor diff line is annotated with what the actor is", () => {
+    const lines = gate().renderDiff(write.changes[0]);
+    expect(lines).toEqual([
+      "# bypass_actors",
+      '+ {"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}   # RepositoryRole 5 = admin (bypass: always)',
+    ]);
+  });
+
+  test("a write with no context still renders (flags have no ruleset to link)", () => {
+    const lines = gate().renderWrite({
+      repo: "o/r",
+      kind: "flag",
+      key: "allow_rebase_merge",
+      verdict: "safe",
+      reason: "repo flag `allow_rebase_merge` -> false",
+      changes: [{ facet: "allow_rebase_merge", live: true, desired: false }],
+    });
+    expect(lines[0]).toBe("- **o/r** — repo flag `allow_rebase_merge` -> false");
+  });
+});

@@ -102,11 +102,25 @@ const SAFE_RSC_PARAM_VALUE = {
   do_not_enforce_on_create: false,
 };
 
-// `RepositoryRole#5 (always)` — type, id and mode are the three things a
-// reviewer needs to decide whether an actor belongs in a bypass list.
+// GitHub's fixed ids for `actor_type: RepositoryRole` in a ruleset's
+// bypass_actors. Only roles that can bypass are numbered (read and triage
+// cannot). Not in the REST reference; documented by the terraform provider
+// and consistent with every capture in e2e/fixtures/repo-settings (an admin
+// reads `current_user_can_bypass: always` on a ruleset whose only actor is 5).
+const REPOSITORY_ROLE_IDS = { 2: "maintain", 4: "write", 5: "admin" };
+
+// `RepositoryRole 5 = admin (bypass: always)` — what the actor IS, not just
+// its id: the #397 review asked "What is RepositoryRole#5?", and an id a
+// reviewer has to look up is not a description. An id the table does not
+// know is shown raw, never guessed.
 function describeActor(a) {
-  const mode = a && a.bypass_mode ? ` (${a.bypass_mode})` : "";
-  return `${(a && a.actor_type) || "?"}#${a && a.actor_id != null ? a.actor_id : "?"}${mode}`;
+  const type = (a && a.actor_type) || "?";
+  const id = a && a.actor_id != null ? a.actor_id : null;
+  const mode = a && a.bypass_mode ? ` (bypass: ${a.bypass_mode})` : "";
+  if (type === "OrganizationAdmin") return `OrganizationAdmin${mode}`;
+  const role = type === "RepositoryRole" && id != null ? REPOSITORY_ROLE_IDS[id] : undefined;
+  const who = id == null ? type : role ? `${type} ${id} = ${role}` : `${type} ${id}`;
+  return `${who}${mode}`;
 }
 
 function gated(reason) {
@@ -420,9 +434,11 @@ function planWrites(plan) {
         // sorted against unsorted and will read array ORDER as a delta — see
         // buildFixPlan's note.
         desired: put.desiredSorted || put.body,
-        // The audit's per-facet delta, passed through untouched so the plan
-        // document can show a reviewer WHAT changes (#396). Not read here.
+        // The audit's per-facet delta and the ruleset's identity (id, URL,
+        // refs), passed through untouched so the plan document can show a
+        // reviewer WHAT changes and WHERE (#396, #397). Not read here.
         changes: put.changes,
+        context: put.context,
       });
     for (const post of p.posts || [])
       writes.push({
@@ -492,6 +508,8 @@ function planUnfixables(plan) {
 }
 
 module.exports = {
+  REPOSITORY_ROLE_IDS,
+  describeActor,
   PLAN_KNOWN_KEYS,
   PLAN_WRITE_KEYS,
   classifyWrite,
