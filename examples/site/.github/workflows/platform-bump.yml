@@ -8,6 +8,6 @@ permissions:
   pull-requests: write
 jobs:
   bump:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-bump.yml@v0.1.99
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-bump.yml@v0.1.100
     secrets:
       gh_token: ${{ secrets.CMS_PLATFORM_PAT }}
