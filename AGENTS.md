@@ -1002,10 +1002,14 @@ silent no-op. The pattern was set by `dependabot-comment-sync.yml` (deleted
 skipped with a notice naming all three knobs (`CMS_PLATFORM_PAT` /
 `vars.CMS_AUTOMATION_APP_ID` / `CMS_AUTOMATION_APP_PRIVATE_KEY`), which is what
 keeps "never onboarded" distinguishable from "misconfigured". `repo-settings-apply.yml`
-carries the same shape today. Note `CMS_AUTOMATION_APP_ID` /
-`CMS_AUTOMATION_APP_PRIVATE_KEY` now have NO consumer — the passthrough in
-`scripts/set-repo-variables.sh` is kept for the next workflows-scoped job, not
-because something reads it.
+carries the same shape today, and so do `platform-bump.yml` and
+`dev-hooks-sync.yml`, which since #238 read `CMS_AUTOMATION_APP_ID` /
+`CMS_AUTOMATION_APP_PRIVATE_KEY` as the CMS automation App that replaces the
+consumer's `CMS_PLATFORM_PAT` (App → PAT → `GITHUB_TOKEN`; lint-locked by
+`e2e/app-token-platform-writers.test.js`). Whether a consumer has provisioned
+the App is exactly the thing this section says cannot be read from a session:
+look for the `::notice::Minted …` line in a bump run's log, not at the
+settings page.
 
 ## Approving `regression-review` on a render-neutral PR
 

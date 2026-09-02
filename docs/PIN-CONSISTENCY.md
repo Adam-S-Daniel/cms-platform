@@ -31,9 +31,12 @@ cms-platform reference anymore** — `platform-bump` is the single writer of the
 platform version a consumer carries, which is what makes the single-version
 invariant below structurally maintainable rather than a race this guard merely
 catches after the fact. **`platform-bump.yml`
-rewrites `.github/workflows/*` and pushes, so its token (`CMS_PLATFORM_PAT`)
-MUST carry `workflow` scope** or GitHub rejects the push (`refusing to allow …
-to update workflow … without 'workflows' permission`) — the live half of #13.
+rewrites `.github/workflows/*` and pushes, so its credential MUST carry
+`workflows: write`** or GitHub rejects the push (`refusing to allow … to update
+workflow … without 'workflows' permission`) — the live half of #13. That
+credential is the CMS automation App's per-run installation token when the
+consumer has provisioned it, else the `CMS_PLATFORM_PAT` fine-grained PAT
+(#238; the `consumer-repo-provisioning` skill has the provisioning steps).
 It also seeds any workflow caller the release newly made platform-dictated —
 copying the missing caller from `examples/site/.github/workflows/` at the new
 ref, re-pinned to it — so the workflow-set-parity check (introduced v0.1.20,

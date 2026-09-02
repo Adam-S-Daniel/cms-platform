@@ -142,11 +142,15 @@ v0.1.76 incident this rule comes from.
   EVERY version ref in one PR — `platform_ref:` + `platform.lock`, the `uses:@`
   pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:` (it resolves the
   release commit sha itself), and any composite `@<tag>` pin — so its PR passes
-  `pin-consistency` alone. It checks out with the caller PAT (`secrets.gh_token`
-  = `CMS_PLATFORM_PAT`, which MUST carry **Workflows: write** / `workflow` scope)
+  `pin-consistency` alone. It checks out with a **Workflows: write** credential
   so the workflow-file push is authorised — otherwise GitHub rejects it
   (`refusing to allow ... to update workflow ... without 'workflows' permission`).
-  Locked by `e2e/platform-bump-atomic.test.js`. It also seeds any workflow
+  Since #238 that credential resolves **App → PAT → `GITHUB_TOKEN`**: the CMS
+  automation App's per-run installation token when the consumer has
+  `vars.CMS_AUTOMATION_APP_ID` + the `app_private_key` secret (nothing to
+  rotate), else the caller PAT (`secrets.gh_token` = `CMS_PLATFORM_PAT`).
+  Locked by `e2e/platform-bump-atomic.test.js` and
+  `e2e/app-token-platform-writers.test.js`. It also seeds any workflow
   caller the release newly made platform-dictated (a file
   `examples/site/.github/workflows/` gained since the consumer's last bump),
   so the bump PR passes the workflow-set-parity check too, not just

@@ -14,5 +14,7 @@ jobs:
     with:
       platform_ref: v0.1.101
     secrets:
-      # Optional: a PAT so the sync PR triggers CI. Omit to use GITHUB_TOKEN.
+      # So the sync PR triggers CI: the CMS automation App when provisioned
+      # (vars.CMS_AUTOMATION_APP_ID + app_private_key), else the PAT (#238).
       gh_token: ${{ secrets.CMS_PLATFORM_PAT }}
+      app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}

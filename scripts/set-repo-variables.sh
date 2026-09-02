@@ -26,11 +26,11 @@
 #   PROD_PLAYGROUND_MODE = only when explicitly set (true on a throwaway sandbox
 #                          site; leave UNSET on a real prod site so the
 #                          prod-mutate loop stays in safe report-only mode).
-#   CMS_AUTOMATION_APP_ID = only when explicitly set — the workflows-scoped
-#                          GitHub App ID, for a repo with no CMS_PLATFORM_PAT.
-#                          Its only consumer was dependabot-comment-sync, which
-#                          was deleted with the pin-comment convention; the
-#                          passthrough stays for the next workflows-scoped job.
+#   CMS_AUTOMATION_APP_ID = only when explicitly set — the CMS automation
+#                          GitHub App's Client ID, read by platform-bump and
+#                          dev-hooks-sync (#238): with its private key set as a
+#                          secret, the reusables mint a per-run installation
+#                          token and CMS_PLATFORM_PAT is never read.
 #                          Deliberately a VARIABLE, not a secret, so it can be
 #                          read while troubleshooting.
 #                          The App's PRIVATE KEY is a SECRET
@@ -82,9 +82,9 @@ if [ -n "${PROD_PLAYGROUND_MODE:-}" ]; then
 fi
 
 # CMS_AUTOMATION_APP_ID is opt-in too — the second NON-DERIVED passthrough (it
-# comes from a GitHub App, not from APEX_DOMAIN). Only the comment-sync fallback
-# needs it, and only on a repo with no CMS_PLATFORM_PAT. Its companion
-# CMS_AUTOMATION_APP_PRIVATE_KEY is a SECRET, so it is not settable here.
+# comes from a GitHub App, not from APEX_DOMAIN). platform-bump + dev-hooks-sync
+# read it (#238); its companion CMS_AUTOMATION_APP_PRIVATE_KEY is a SECRET, so
+# it is not settable here.
 if [ -n "${CMS_AUTOMATION_APP_ID:-}" ]; then
   names+=(CMS_AUTOMATION_APP_ID)
   values+=("$CMS_AUTOMATION_APP_ID")
