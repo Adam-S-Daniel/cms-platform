@@ -10,11 +10,11 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.100)
+## Version history (v0.1.0 → v0.1.101)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**UNRELEASED — every admin GitHub read was answered from the browser's
+**v0.1.101 — every admin GitHub read was answered from the browser's
 HTTP cache for 60 s, so the publish bar could not see its own label land
 (#386).** Three adamdaniel.ai `cms-publish-loop-host` runs told the story in
 order. On v0.1.99 (33573287045, 33577242076) the CREATE in
