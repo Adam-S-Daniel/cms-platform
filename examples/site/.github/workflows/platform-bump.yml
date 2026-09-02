@@ -10,8 +10,9 @@ jobs:
   bump:
     uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-bump.yml@v0.1.102
     secrets:
-      # Push credential, resolved App -> PAT by the reusable (#238). Provision the
-      # App (vars.CMS_AUTOMATION_APP_ID + this secret) and the PAT is never read;
-      # until then the PAT carries the bump exactly as before.
-      gh_token: ${{ secrets.CMS_PLATFORM_PAT }}
+      # The push credential, and the ONLY one since v0.1.103: the CMS automation
+      # App's private key. With vars.CMS_AUTOMATION_APP_ID (set on this repo) the
+      # reusable mints a ~1h installation token per run with workflows:write, so
+      # there is nothing to rotate. The CMS_PLATFORM_PAT fallback is gone — this
+      # job now fails loudly if the App is not provisioned.
       app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}

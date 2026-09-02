@@ -7,7 +7,8 @@
 //   1. PUSH AUTH — the bump rewrites `.github/workflows/*` (the `uses:@` pins +
 //      `platform_ref:` inputs), so the push needs `workflows` permission. The
 //      default Actions GITHUB_TOKEN's App lacks it, so the checkout MUST use the
-//      caller's PAT (`secrets.gh_token`) as the persisted push credential.
+//      App installation token as the persisted push credential (the
+//      `secrets.gh_token` PAT fallback was removed in v0.1.103).
 //      Without it: "refusing to allow a GitHub App to ... update workflow ...
 //      without 'workflows' permission" → the whole bump fails.
 //   2. ATOMIC BUMP — the bump must move EVERY pinned reference in one PR, not
@@ -56,9 +57,9 @@ test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
     // in app-token-platform-writers.test.js (#238).
     expect(
       String(checkout.with.token),
-      "checkout MUST keep secrets.gh_token (the CMS_PLATFORM_PAT with Workflows:write) " +
+      "checkout MUST persist the App installation token (workflows:write) " +
         "in its push-credential chain — the default GITHUB_TOKEN can't push .github/workflows/* changes",
-    ).toMatch(/secrets\.gh_token/);
+    ).toMatch(/steps\.app\.outputs\.token/);
   });
 
   test("the bump step exists and resolves the latest release", () => {
@@ -92,7 +93,7 @@ test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
     expect(
       run,
       "a non-404 lookup failure must emit ::error:: naming the token to check, and exit 1",
-    ).toMatch(/::error::could not read the latest release[\s\S]{0,400}gh_token[\s\S]{0,200}exit 1/);
+    ).toMatch(/::error::could not read the latest release[\s\S]{0,400}exit 1/);
 
     // An empty tag_name (the API call itself succeeded but returned no
     // usable release) is its own distinct failure — also loud, also non-zero.
