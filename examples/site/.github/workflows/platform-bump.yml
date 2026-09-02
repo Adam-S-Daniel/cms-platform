@@ -10,4 +10,8 @@ jobs:
   bump:
     uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-bump.yml@v0.1.101
     secrets:
+      # Push credential, resolved App -> PAT by the reusable (#238). Provision the
+      # App (vars.CMS_AUTOMATION_APP_ID + this secret) and the PAT is never read;
+      # until then the PAT carries the bump exactly as before.
       gh_token: ${{ secrets.CMS_PLATFORM_PAT }}
+      app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}

@@ -20,17 +20,31 @@
  *
  * Usage:
  *   node scripts/mint-app-token.js --owner OWNER --repo REPO \
- *     --permissions administration=read[,contents=read...]
+ *     --permissions administration=read[,contents=read...] \
+ *     [--repositories REPO[,REPO...]]
  *
  * Reads APP_CLIENT_ID (the App's Client ID — GitHub accepts it as the JWT `iss`,
  * and it is the fleet convention since Adam-S-Daniel/repo-settings PR #12; the
  * legacy APP_ID is still honoured) and APP_PRIVATE_KEY. On success it writes
  * `token=<value>` to $GITHUB_OUTPUT (masking it first) and exits 0.
  *
+ * `--repositories` narrows the token to those repos (names, not slugs), the
+ * same way `permissions` narrows: GitHub rejects anything outside the
+ * installation's grant, so it can only shrink. Since #238 this script also
+ * mints the consumer push-back credential (platform-bump / dev-hooks-sync,
+ * replacing the CMS_PLATFORM_PAT fine-grained PAT), and the App behind that is
+ * installed on BOTH of an owner's repos — without the narrowing, a token minted
+ * for adamdaniel.ai would also reach cms-platform.
+ *
  * FAILS SOFT (v0.1.76 rule): a missing credential is NOT an error — it prints a
- * ::notice:: naming the EXACT knobs and exits 0 with no token, so "never
- * onboarded" stays distinguishable from "misconfigured" and the caller decides.
- * A credential that is PRESENT but broken exits non-zero: that is a real fault.
+ * ::notice:: and exits 0 with no token, so "never onboarded" stays
+ * distinguishable from "misconfigured" and the caller decides. The notice names
+ * the ENV VARS this script reads; the CALLER names its own repository knobs
+ * (`vars.REPO_SETTINGS_APP_CLIENT_ID` for repo-settings-apply,
+ * `vars.CMS_AUTOMATION_APP_ID` for the consumer push-back reusables) in its own
+ * pre-check, because a notice that names the wrong caller's knobs is worse than
+ * one that names none. A credential that is PRESENT but broken exits non-zero:
+ * that is a real fault.
  */
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -53,6 +67,22 @@ function parsePermissions(spec) {
   }
   if (!Object.keys(out).length) throw new Error("--permissions is required and must not be empty");
   return out;
+}
+
+// "a, b," -> ["a", "b"]; empty/absent -> null (no narrowing requested).
+function parseRepositories(spec) {
+  const out = String(spec || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return out.length ? out : null;
+}
+
+// The POST /app/installations/{id}/access_tokens body. Both keys can only
+// NARROW what the installation already holds; `repositories` is omitted (not
+// sent empty) when no narrowing was asked for — an empty list is not "all".
+function mintBody(permissions, repositories) {
+  return repositories ? { permissions, repositories } : { permissions };
 }
 
 const b64url = (input) =>
@@ -89,6 +119,7 @@ async function main() {
   const owner = arg("owner");
   const repo = arg("repo");
   const permissions = parsePermissions(arg("permissions"));
+  const repositories = parseRepositories(arg("repositories"));
   if (!owner || !repo) throw new Error("--owner and --repo are required");
 
   const appId = process.env.APP_CLIENT_ID || process.env.APP_ID || "";
@@ -96,10 +127,9 @@ async function main() {
   if (!appId || !privateKey) {
     // Fail SOFT and name the exact knobs.
     console.log(
-      "::notice::No GitHub App credential configured — set the repository VARIABLE " +
-        "`REPO_SETTINGS_APP_CLIENT_ID` and the repository SECRET `REPO_SETTINGS_APP_PRIVATE_KEY` " +
-        "on Adam-S-Daniel/cms-platform, and install the App on BOTH owners with " +
-        "Administration: Read and write. Skipping.",
+      "::notice::No GitHub App credential configured — APP_CLIENT_ID and APP_PRIVATE_KEY " +
+        "are not both set in this step's env. Skipping (the calling workflow names the " +
+        "repository variable / secret that feed them).",
     );
     return;
   }
@@ -109,11 +139,15 @@ async function main() {
   // The installation is per OWNER; resolving it via one of that owner's repos
   // is what lets a single App serve both owners with separate tokens.
   const install = await api(`${apiBase}/repos/${owner}/${repo}/installation`, jwt);
-  const minted = await api(`${apiBase}/app/installations/${install.id}/access_tokens`, jwt, "POST", {
-    // Scope DOWN. GitHub rejects anything the installation does not already
-    // hold, so this can never escalate — only narrow.
-    permissions,
-  });
+  // Scope DOWN. GitHub rejects anything the installation does not already
+  // hold — permissions and repositories alike — so this can never escalate,
+  // only narrow.
+  const minted = await api(
+    `${apiBase}/app/installations/${install.id}/access_tokens`,
+    jwt,
+    "POST",
+    mintBody(permissions, repositories),
+  );
   if (!minted.token) throw new Error("installation response carried no token");
 
   // Mask BEFORE the value reaches any other surface.
@@ -124,7 +158,9 @@ async function main() {
   console.log(
     `::notice::Minted a ${Object.entries(permissions)
       .map(([k, v]) => `${k}:${v}`)
-      .join(",")} installation token for ${owner}.`,
+      .join(",")} installation token for ${owner}${
+      repositories ? ` (repositories: ${repositories.join(",")})` : ""
+    }.`,
   );
 }
 
@@ -135,4 +171,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parsePermissions, appJwt };
+module.exports = { parsePermissions, parseRepositories, mintBody, appJwt };

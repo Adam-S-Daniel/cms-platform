@@ -17,7 +17,10 @@ on:
         default: main
     secrets:
       gh_token:
-        description: "Optional PAT so the sync PR can trigger CI; falls back to GITHUB_TOKEN."
+        description: "Optional PAT (CMS_PLATFORM_PAT) so the sync PR can trigger CI; the fallback when no App is provisioned."
+        required: false
+      app_private_key:
+        description: "Optional: the CMS automation GitHub App's private key (with vars.CMS_AUTOMATION_APP_ID on the caller). Wins over gh_token when set (#238)."
         required: false
 
 permissions:
@@ -35,9 +38,38 @@ jobs:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
+      # Credential for the PR, resolved App → PAT → GITHUB_TOKEN (#238). The
+      # branch push itself rides the checkout's own GITHUB_TOKEN (no workflow
+      # file is written here); what needs a non-GITHUB_TOKEN identity is the
+      # `gh pr create`, so the PR's `opened` event fires the site's CI. The
+      # script is already on disk from the platform checkout above, so this
+      # mints from `.cms-platform/scripts/` at the pinned platform_ref — and
+      # a ref that predates the script means a reusable that predates this
+      # step, so the guard below is belt-and-braces, not a live branch.
+      - name: Mint a GitHub App installation token (when the App is provisioned)
+        id: app
+        env:
+          APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
+            echo "::notice::No CMS automation App on this repo (vars.CMS_AUTOMATION_APP_ID + secrets.CMS_AUTOMATION_APP_PRIVATE_KEY) — opening the PR on the caller's gh_token (CMS_PLATFORM_PAT) instead."
+            exit 0
+          fi
+          if [ ! -f .cms-platform/scripts/mint-app-token.js ]; then
+            echo "::warning::.cms-platform/scripts/mint-app-token.js missing at this platform_ref — falling back to gh_token."
+            exit 0
+          fi
+          # Scoped DOWN: this one repo, PR write + the contents read `gh pr
+          # create` needs. No workflows permission — nothing here writes one.
+          node .cms-platform/scripts/mint-app-token.js \
+            --owner "${GITHUB_REPOSITORY%%/*}" --repo "${GITHUB_REPOSITORY#*/}" \
+            --repositories "${GITHUB_REPOSITORY#*/}" \
+            --permissions contents=read,pull_requests=write
       - name: Sync guard files and open a PR if changed
         env:
-          GH_TOKEN: ${{ secrets.gh_token || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.gh_token || github.token }}
           REF: ${{ inputs.platform_ref }}
           PLATFORM: ${{ inputs.platform_repo }}
         run: |

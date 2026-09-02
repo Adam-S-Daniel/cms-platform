@@ -40,7 +40,19 @@ on:
     inputs:
       platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
     secrets:
+      # The push-back credential, resolved App → PAT → GITHUB_TOKEN (#238):
+      #   app_private_key — the CMS automation GitHub App's private key. With
+      #     `vars.CMS_AUTOMATION_APP_ID` (a reusable reads `vars.*` from the
+      #     CALLER's repo) the mint step below turns it into a ~1 h installation
+      #     token scoped to THIS repo with contents + pull_requests + workflows:
+      #     write. No expiry to rotate, and one App installed on both owners
+      #     serves every consumer.
+      #   gh_token — the fine-grained CMS_PLATFORM_PAT this reusable took before
+      #     the App existed. Still honoured, as the fallback while a consumer
+      #     has not provisioned the App; a PAT cannot span owners, so it was
+      #     one token per consumer, each with its own expiry.
       gh_token: { required: false }
+      app_private_key: { required: false }
 
 permissions:
   contents: write
@@ -66,15 +78,65 @@ jobs:
       # inputs), so the PUSH needs `workflows` permission. The default Actions
       # GITHUB_TOKEN's GitHub App lacks it — git rejects the push with "refusing
       # to allow a GitHub App to create or update workflow ... without 'workflows'
-      # permission". Check out with the caller's PAT (CMS_PLATFORM_PAT —
-      # fine-grained Contents + PR + Workflows: write) so THAT token is what git
-      # persists as the push credential. (the live half of #13)
+      # permission". So the checkout below persists a credential that HAS it:
+      # the CMS automation App's installation token when the App is
+      # provisioned, else the caller's PAT (CMS_PLATFORM_PAT — fine-grained
+      # Contents + PR + Workflows: write). (the live half of #13, then #238)
+      #
+      # The mint runs BEFORE checkout because checkout is what persists the
+      # token — and before checkout there is no tree, so the script comes over
+      # the contents API at the release this bump targets (the same shape the
+      # bump step uses for reconcile-nudge-contexts.py), never from `main`.
+      # `${{ github.job_workflow_sha }}` would pin it to THIS file's commit but
+      # reads empty inside a reusable job (actions/runner#2417; see
+      # dependabot-auto-merge.yml). FAILS SOFT at every branch: no App → one
+      # notice naming both knobs, then the PAT path exactly as before; a
+      # present-but-broken key is the script's own loud failure.
+      - name: Mint a GitHub App installation token (when the App is provisioned)
+        id: app
+        env:
+          APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ inputs.platform_repo }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
+            echo "::notice::No CMS automation App on this repo (vars.CMS_AUTOMATION_APP_ID + secrets.CMS_AUTOMATION_APP_PRIVATE_KEY) — running on the caller's gh_token (CMS_PLATFORM_PAT) instead."
+            exit 0
+          fi
+          # `|| LATEST=""` — never a bare `|| true`: on a non-2xx `gh api` prints
+          # the raw error body to STDOUT and skips --jq, so a swallowed exit
+          # code would capture that body as the tag. The bump step re-runs
+          # this lookup with the loud 404-vs-anything-else handling (#244);
+          # here a failure only means "mint from the PAT".
+          LATEST=$(gh api "repos/$PLATFORM/releases/latest" --jq .tag_name 2>/dev/null) || LATEST=""
+          if [ -z "$LATEST" ]; then
+            echo "::warning::could not resolve the latest $PLATFORM release to fetch mint-app-token.js from — falling back to gh_token (the bump step reports the lookup failure itself)."
+            exit 0
+          fi
+          MINT="$RUNNER_TEMP/mint-app-token.js"
+          if ! gh api "repos/$PLATFORM/contents/scripts/mint-app-token.js?ref=$LATEST" \
+               -H "Accept: application/vnd.github.raw+json" > "$MINT" 2>/dev/null; then
+            echo "::warning::scripts/mint-app-token.js is not readable at $PLATFORM@$LATEST — falling back to gh_token."
+            exit 0
+          fi
+          # Scoped DOWN at mint time: this one repo, and only the three
+          # permissions the push + PR + auto-merge below need. The App itself
+          # holds nothing wider (see the consumer-repo-provisioning skill).
+          node "$MINT" --owner "${GITHUB_REPOSITORY%%/*}" --repo "${GITHUB_REPOSITORY#*/}" \
+            --repositories "${GITHUB_REPOSITORY#*/}" \
+            --permissions contents=write,pull_requests=write,workflows=write
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          token: ${{ secrets.gh_token || github.token }}
+          token: ${{ steps.app.outputs.token || secrets.gh_token || github.token }}
       - name: Bump every cms-platform reference to the latest release (atomic)
+        # `id: bump` is what the lints key on: this step and the mint step above
+        # BOTH read /releases/latest, so "the step that resolves the release" no
+        # longer identifies it.
+        id: bump
         env:
-          GH_TOKEN: ${{ secrets.gh_token || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.gh_token || github.token }}
           PLATFORM: ${{ inputs.platform_repo }}
         run: |
           set -euo pipefail
@@ -119,7 +181,7 @@ jobs:
               echo "::notice::$PLATFORM has no published release yet — nothing to bump."
               exit 0
             fi
-            echo "::error::could not read the latest release of $PLATFORM (HTTP ${REL_CODE:-unknown}) — refusing to exit green. Check the caller's gh_token (CMS_PLATFORM_PAT — expired? still granted on $PLATFORM?) or GitHub API status. A silent success here would freeze this consumer's platform version indefinitely (cms-platform#244)."
+            echo "::error::could not read the latest release of $PLATFORM (HTTP ${REL_CODE:-unknown}) — refusing to exit green. Check the credential this run resolved — the App token if the mint step minted one, else the caller's gh_token (CMS_PLATFORM_PAT — expired? still granted on $PLATFORM?) — or GitHub API status. A silent success here would freeze this consumer's platform version indefinitely (cms-platform#244)."
             exit 1
           fi
           if [ -z "$LATEST" ]; then
@@ -415,8 +477,9 @@ jobs:
           || gh pr edit "$BRANCH" --body "Bump cms-platform to $LATEST.${SEED_NOTE}"
           # Unattended landing: the bump is mechanical and CI-gated, so enable
           # auto-merge and let the site's required checks decide. Runs on the
-          # caller's PAT (gh_token) — a GITHUB_TOKEN-created PR wouldn't even
-          # trigger CI. FAIL-OPEN: if the repo hasn't enabled auto-merge (or a
+          # resolved push credential (App token, else the caller's PAT) — a
+          # GITHUB_TOKEN-created PR wouldn't even trigger CI; an App- or
+          # PAT-created one does. FAIL-OPEN: if the repo hasn't enabled auto-merge (or a
           # ruleset forbids it), the PR simply stays open for a human — the
           # pre-chaining behavior for every bump PR.
           gh pr merge --auto --squash "$BRANCH" \
@@ -432,8 +495,8 @@ jobs:
           # accrued 4 open bump PRs at once). FAIL-OPEN, same rationale as
           # the auto-merge line just above: a stale PR left open by mistake
           # is a cosmetic nuisance, never worth failing the bump. Runs on
-          # the same caller PAT (GH_TOKEN, already set for this step) as
-          # every other `gh` call here — no new token introduced.
+          # the same resolved credential (GH_TOKEN, already set for this
+          # step) as every other `gh` call here — no new token introduced.
           NEW_PR=$(gh pr view "$BRANCH" --json number --jq .number 2>/dev/null || echo "")
           if [ -n "$NEW_PR" ]; then
             mapfile -t OLD_BUMP_PRS < <(

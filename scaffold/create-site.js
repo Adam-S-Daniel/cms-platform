@@ -668,7 +668,9 @@ Next:
   5. Add GitHub secrets (exact fine-grained PAT permissions: see the
      /cms-platform:consumer-repo-provisioning skill, from the agentskills bundle):
        - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W; PAT user = reviewer of the regression-review env
-       - CMS_PLATFORM_PAT same + Workflows R/W -- for platform-bump
+       - CMS_AUTOMATION_APP_PRIVATE_KEY (+ the CMS_AUTOMATION_APP_ID variable, step 6) -- the CMS
+                          automation GitHub App; powers platform-bump + dev-hooks-sync, nothing to rotate
+       - CMS_PLATFORM_PAT same as CMS_E2E_PAT + Workflows R/W, minus Actions -- only until the App is provisioned
        - AWS_ROLE_ARN, PREVIEW_CLOUDFRONT_ID, PRODUCTION_CLOUDFRONT_ID (bootstrap stack outputs)
      Also enable Settings -> General -> Allow auto-merge.
   6. Set the repo VARIABLES the reusable workflows read via vars.* (CMS_APEX,

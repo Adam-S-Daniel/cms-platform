@@ -487,6 +487,12 @@ const PLATFORM_META_SPECS = [
   // the same job — none of which a consumer ships in that position, so it is
   // platform-internal, self-CI only.
   "reusable-platform-script-checkout.test.js",
+  // #238 — the CMS_PLATFORM_PAT → GitHub App conversion: lints the two
+  // push-back reusables (platform-bump, dev-hooks-sync) + their examples/site
+  // callers, and unit-tests scripts/mint-app-token.js. Both read platform
+  // source a consumer lane has no business re-linting.
+  "app-token-platform-writers.test.js",
+  "mint-app-token.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is
