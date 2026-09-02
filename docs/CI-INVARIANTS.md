@@ -500,6 +500,20 @@ run cannot retract the live request — the issue carries a `<!-- run:N -->`
 marker and `close` refuses to act on an issue that names a different run. See
 `scripts/gate-approval-issue.js`.
 
+**And what they are told is a diff, not a body.** The first shape of that
+issue (#396) said `1 bypass actor(s) added` and then printed two full ruleset
+bodies under "The full plan" — a request to re-derive by eye the delta the
+plan job had already computed. The audit now writes its plan as a structured
+document (`--plan-json`: every write with its write-risk verdict, its reason,
+and the facet-level `changes` it carries — for a ruleset PUT, the same
+per-facet findings `diffRuleset` produced), the gated reason names the actor
+(`RepositoryRole#5 (always)`), and the issue and the job summary render each
+write as a ```` ```diff ```` fence — arrays by element, so an added bypass
+actor is one `+` line — with gated writes first, the non-weakening ones that
+ride along on approval second, and the full audit output collapsed under
+`<details>`. The `render` subcommand is the same rendering to stdout, which is
+how the run's own summary page shows it.
+
 ### Two clean-merging PRs made the classifier fail OPEN, six minutes apart
 
 The write-risk classifier merged 2026-08-31 20:31. `securityWrites` — the

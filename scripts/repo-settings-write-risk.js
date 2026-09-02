@@ -102,6 +102,13 @@ const SAFE_RSC_PARAM_VALUE = {
   do_not_enforce_on_create: false,
 };
 
+// `RepositoryRole#5 (always)` — type, id and mode are the three things a
+// reviewer needs to decide whether an actor belongs in a bypass list.
+function describeActor(a) {
+  const mode = a && a.bypass_mode ? ` (${a.bypass_mode})` : "";
+  return `${(a && a.actor_type) || "?"}#${a && a.actor_id != null ? a.actor_id : "?"}${mode}`;
+}
+
 function gated(reason) {
   return { verdict: "gated", reason };
 }
@@ -222,9 +229,12 @@ function classifyRulesetPut(w) {
         const added = (desired.bypass_actors || []).filter(
           (a) => !liveSet.has(JSON.stringify(canon(a))),
         );
+        // NAME the actors. "1 bypass actor(s) added" sent a reviewer to
+        // re-derive which one from a full ruleset body (#396).
         if (added.length)
           return gated(
-            `ruleset "${w.name}": ${added.length} bypass actor(s) added`,
+            `ruleset "${w.name}": ${added.length} bypass actor(s) added: ` +
+              added.map(describeActor).join(", "),
           );
         reasons.push("bypass actor(s) removed");
         break;
@@ -410,6 +420,9 @@ function planWrites(plan) {
         // sorted against unsorted and will read array ORDER as a delta — see
         // buildFixPlan's note.
         desired: put.desiredSorted || put.body,
+        // The audit's per-facet delta, passed through untouched so the plan
+        // document can show a reviewer WHAT changes (#396). Not read here.
+        changes: put.changes,
       });
     for (const post of p.posts || [])
       writes.push({

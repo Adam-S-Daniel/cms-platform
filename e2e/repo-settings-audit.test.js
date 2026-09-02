@@ -2717,3 +2717,103 @@ test.describe("write-risk classification is not fooled by array order", () => {
     expect(c.safe[0].reason).toMatch(/required check\(s\) added — b \/ b/);
   });
 });
+
+// A gated write must arrive at the reviewer as a DIFF, not as a full manifest
+// body. #396: the approval issue said "1 bypass actor(s) added" and then
+// printed two 1.2 kB ruleset bodies under "The full plan", with no way to see
+// WHICH actor or WHAT else the PUT would move. The plan now carries the
+// per-facet delta the audit already computed, and the gated reason names the
+// actor.
+test.describe("the plan carries a concise per-write diff (#396)", () => {
+  function bypassActorPlan() {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
+      rulesets: [
+        fixture("adamdaniel.ruleset-main.json"),
+        { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] },
+      ],
+    });
+    return { script, plan: script.buildFixPlan(manifest, [scan]) };
+  }
+
+  test("a ruleset PUT carries `changes`: only the facets that differ, live -> desired", () => {
+    const { plan } = bypassActorPlan();
+    expect(plan[0].puts[0].changes).toEqual([
+      {
+        facet: "bypass_actors",
+        live: [],
+        desired: [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }],
+      },
+    ]);
+  });
+
+  test("the gated reason NAMES the added actor, not just a count", () => {
+    const { plan } = bypassActorPlan();
+    const c = loadRisk().classifyPlan(plan);
+    expect(c.gated.length).toBe(1);
+    expect(c.gated[0].reason).toMatch(/bypass actor\(s\) added: RepositoryRole#5 \(always\)/);
+  });
+
+  test("planDocument renders every write with its verdict, reason and changes", () => {
+    const { script, plan } = bypassActorPlan();
+    const risk = loadRisk().classifyPlan(plan);
+    const doc = script.planDocument(plan, risk);
+    expect(doc.writes.length).toBe(1);
+    expect(doc.writes[0]).toMatchObject({
+      repo: "Adam-S-Daniel/adamdaniel.ai",
+      kind: "ruleset-put",
+      name: "cms-feature-branches",
+      verdict: "gated",
+    });
+    expect(doc.writes[0].changes).toEqual(plan[0].puts[0].changes);
+    expect(doc.unfixables).toEqual([]);
+    // The document is what crosses the job boundary as JSON; it must survive it.
+    expect(JSON.parse(JSON.stringify(doc))).toEqual(doc);
+  });
+
+  test("planDocument: a flag, an actions permission and a security write each carry a one-facet change", () => {
+    const script = loadScript();
+    const plan = [
+      {
+        repo: "o/r",
+        patchBody: { allow_rebase_merge: false },
+        flagLive: { allow_rebase_merge: true },
+        actionsPuts: [
+          {
+            endpoint: "repos/o/r/actions/permissions",
+            key: "sha_pinning_required",
+            live: false,
+            body: { enabled: true, allowed_actions: "all", sha_pinning_required: true },
+          },
+        ],
+        securityWrites: [
+          { endpoint: "repos/o/r/vulnerability-alerts", method: "PUT", key: "vulnerability_alerts", desired: true },
+        ],
+      },
+    ];
+    const doc = script.planDocument(plan, loadRisk().classifyPlan(plan));
+    expect(doc.writes.map((w) => w.changes)).toEqual([
+      [{ facet: "allow_rebase_merge", live: true, desired: false }],
+      [{ facet: "sha_pinning_required", live: false, desired: true }],
+      [{ facet: "vulnerability_alerts", live: null, desired: true }],
+    ]);
+    expect(doc.writes.every((w) => w.verdict === "safe")).toBe(true);
+  });
+
+  test("printFixPlan prints the changes ABOVE the full body, so the log reads the same way the issue does", () => {
+    const { script, plan } = bypassActorPlan();
+    const lines = [];
+    const orig = console.log;
+    console.log = (...a) => lines.push(a.join(" "));
+    try {
+      script.printFixPlan(plan);
+    } finally {
+      console.log = orig;
+    }
+    const put = lines.findIndex((l) => /^   PUT repos\/Adam-S-Daniel\/adamdaniel\.ai\/rulesets\//.test(l));
+    expect(put).toBeGreaterThan(-1);
+    expect(lines[put + 1]).toMatch(/^     bypass_actors: \[\] -> \[\{"actor_id":5/);
+    expect(lines[put + 2]).toMatch(/^     full body: \{"name":"cms-feature-branches"/);
+  });
+});

@@ -57,6 +57,15 @@ function arg(name, def) {
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : def;
 }
 
+// Repeatable form: `--plan-json a.json --plan-json b.json` (one per owner leg).
+function argAll(name) {
+  const out = [];
+  process.argv.forEach((a, i) => {
+    if (a === `--${name}` && process.argv[i + 1]) out.push(process.argv[i + 1]);
+  });
+  return out;
+}
+
 function gh(endpoint, { method, fields, input } = {}) {
   const args = ["api", endpoint];
   if (method) args.push("-X", method);
@@ -141,7 +150,77 @@ function truncate(text) {
   );
 }
 
-function buildBody({ repo, runUrl, runId, reviewers, planText, gatedText }) {
+// ── rendering a plan document as a diff ────────────────────────────────────
+// The audit's `--plan-json` document: { writes: [{repo, kind, key|name,
+// verdict, reason, changes: [{facet, live, desired}]}], unfixables: [] }.
+// A reviewer decides on the DELTA, so that is what gets drawn — in a ```diff
+// fence, which GitHub colours. #396 is the motivating body: "1 bypass
+// actor(s) added" and then two full ruleset bodies to compare by eye.
+
+const canon = (v) => JSON.stringify(v);
+
+// One facet -> diff lines. Arrays diff by ELEMENT (an added bypass actor is
+// one `+` line, not a `-` of the old list and a `+` of the new); anything
+// else shows both sides. An absent/empty side draws nothing — nothing was
+// removed, so there is no `- []` to read.
+function renderDiff(change) {
+  const lines = [`# ${change.facet}`];
+  const { live, desired } = change;
+  if (Array.isArray(live) && Array.isArray(desired)) {
+    const liveSet = new Set(live.map(canon));
+    const desiredSet = new Set(desired.map(canon));
+    for (const el of live) if (!desiredSet.has(canon(el))) lines.push(`- ${canon(el)}`);
+    for (const el of desired) if (!liveSet.has(canon(el))) lines.push(`+ ${canon(el)}`);
+    return lines;
+  }
+  const absent = (v) => v === null || v === undefined;
+  if (!absent(live)) lines.push(`- ${canon(live)}`);
+  if (!absent(desired)) lines.push(`+ ${canon(desired)}`);
+  return lines;
+}
+
+// The classifier's reason already names the ruleset / flag / key it is
+// about, so the bullet adds only the repo.
+function renderWrite(w) {
+  const out = [`- **${w.repo}** — ${w.reason}`];
+  if (w.changes && w.changes.length) {
+    out.push("");
+    out.push("  ```diff");
+    for (const c of w.changes) for (const l of renderDiff(c)) out.push(`  ${l}`);
+    out.push("  ```");
+  }
+  return out;
+}
+
+// The concise section: gated writes first (the reason a human is here), then
+// the safe ones (approval applies the WHOLE plan, so they ride along), then
+// what nothing in this workflow can fix.
+function renderPlanDocs(docs) {
+  const writes = (docs || []).flatMap((d) => (d && d.writes) || []);
+  const unfixables = (docs || []).flatMap((d) => (d && d.unfixables) || []);
+  const gated = writes.filter((w) => w.verdict === "gated");
+  const safe = writes.filter((w) => w.verdict !== "gated");
+  const out = [];
+  out.push("### Needs review");
+  out.push("");
+  if (gated.length) for (const w of gated) out.push(...renderWrite(w));
+  else out.push("_(no gated write in the plan document)_");
+  if (safe.length) {
+    out.push("");
+    out.push("### Also applied on approval (non-weakening)");
+    out.push("");
+    for (const w of safe) out.push(...renderWrite(w));
+  }
+  if (unfixables.length) {
+    out.push("");
+    out.push("### Not applied by this workflow (reconcile by hand)");
+    out.push("");
+    for (const u of unfixables) out.push(`- ${u}`);
+  }
+  return out;
+}
+
+function buildBody({ repo, runUrl, runId, reviewers, planText, gatedText, docs }) {
   const mention = reviewers.length
     ? reviewers.map((r) => `@${r}`).join(", ")
     : "_(no required reviewer is configured on the environment — the apply will refuse to run until one is)_";
@@ -175,21 +254,44 @@ function buildBody({ repo, runUrl, runId, reviewers, planText, gatedText }) {
     "Most convergences apply unattended: a write that can only ADD protection —",
     "a required status check gained, a merge method disabled, a new ruleset — is",
     "applied without asking. This run planned at least one write that is not in",
-    "that category:",
+    "that category.",
     "",
-    gatedText || "_(the plan job reported no per-write detail)_",
+    ...(docs && docs.length
+      ? renderPlanDocs(docs)
+      : [gatedText || "_(the plan job reported no per-write detail)_"]),
     "",
-    "## The full plan",
+    "<details>",
+    "<summary>The full plan (audit output, every leg)</summary>",
     "",
     "```",
     truncate(planText || "(no plan captured)"),
     "```",
+    "",
+    "</details>",
     "",
     "---",
     "_Filed automatically by `repo-settings-apply` (cms-platform). It closes itself when the",
     "gate is resolved — approved, rejected, or superseded by a newer run — so an open issue",
     "here always means something is still waiting._",
   ].join("\n");
+}
+
+// FAIL LOUD on an unreadable plan document: the announce step runs only after
+// the plan step wrote one, so a missing file is a wiring bug, and an issue
+// silently reverting to the prose-only body would hide exactly the regression
+// this document exists to end.
+function readPlanDocs() {
+  return argAll("plan-json").map((f) => {
+    let doc;
+    try {
+      doc = JSON.parse(fs.readFileSync(f, "utf8"));
+    } catch (e) {
+      throw new Error(`cannot read plan document ${f}: ${e.message}`);
+    }
+    if (!doc || !Array.isArray(doc.writes))
+      throw new Error(`plan document ${f} has no writes[]`);
+    return doc;
+  });
 }
 
 function readFileOr(pathArg, fallback) {
@@ -215,8 +317,9 @@ function cmdOpen() {
   }
   const planText = readFileOr(arg("plan-file"), "(no plan captured)");
   const gatedText = readFileOr(arg("gated-file"), "");
+  const docs = readPlanDocs();
   const reviewers = reviewerLogins(repo, environment);
-  const body = buildBody({ repo, runUrl, runId, reviewers, planText, gatedText });
+  const body = buildBody({ repo, runUrl, runId, reviewers, planText, gatedText, docs });
 
   const existing = findIssue(repo, label);
   if (existing) {
@@ -295,14 +398,29 @@ function cmdClose() {
   return 0;
 }
 
+// `render` prints the concise section to stdout and touches nothing — the
+// plan job appends it to the job summary so the run URL a reviewer lands on
+// shows the same diff the issue does.
+function cmdRender() {
+  const docs = readPlanDocs();
+  if (!docs.length) {
+    console.error("gate-approval-issue render: at least one --plan-json is required");
+    return 1;
+  }
+  console.log(renderPlanDocs(docs).join("\n"));
+  return 0;
+}
+
 function main() {
   const cmd = process.argv[2];
   if (cmd === "open") return cmdOpen();
   if (cmd === "close") return cmdClose();
+  if (cmd === "render") return cmdRender();
   console.error(
-    "usage: gate-approval-issue.js <open|close> --repo <owner/repo> [--run-id N --run-url U]\n" +
+    "usage: gate-approval-issue.js <open|close|render> --repo <owner/repo> [--run-id N --run-url U]\n" +
       "                                          [--label ci] [--environment repo-settings]\n" +
-      "                                          [--plan-file F] [--gated-file F] [--reason TEXT]",
+      "                                          [--plan-file F] [--gated-file F] [--plan-json F]...\n" +
+      "                                          [--reason TEXT]",
   );
   return 1;
 }
@@ -318,4 +436,13 @@ if (require.main === module) {
   }
 }
 
-module.exports = { MARKER, TITLE, MAX_PLAN_CHARS, buildBody, truncate };
+module.exports = {
+  MARKER,
+  TITLE,
+  MAX_PLAN_CHARS,
+  buildBody,
+  truncate,
+  renderDiff,
+  renderWrite,
+  renderPlanDocs,
+};
