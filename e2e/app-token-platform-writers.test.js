@@ -16,7 +16,7 @@
 // moving. These lints lock the conversion so it cannot regress to PAT-only:
 //
 //   1. each reusable ACCEPTS the App's private key as an optional secret,
-//      `app_private_key`, next to the `gh_token` PAT it already took;
+//      `app_private_key`. The `gh_token` PAT input was REMOVED in v0.1.103;
 //   2. each MINTS an installation token from `vars.CMS_AUTOMATION_APP_ID` (a
 //      reusable reads `vars.*` from the CALLER's repo) + that secret through
 //      scripts/mint-app-token.js, scoped DOWN at mint time to the caller repo
@@ -50,7 +50,7 @@ const TEMPLATES = path.join(__dirname, "..", "examples", "site", ".github", "wor
 // The exact resolution order, whitespace-normalised: App token, then the PAT,
 // then the job's own GITHUB_TOKEN.
 const RESOLUTION = (mintId) =>
-  `\${{ steps.${mintId}.outputs.token || secrets.gh_token || github.token }}`;
+  `\${{ steps.${mintId}.outputs.token || github.token }}`;
 const norm = (s) => String(s).replace(/\s+/g, " ").trim();
 
 function load(file, job) {
@@ -73,10 +73,14 @@ for (const { file, job, wantsWorkflows } of [
   { file: "dev-hooks-sync.yml", job: "sync", wantsWorkflows: false },
 ]) {
   test.describe(`${file}: GitHub App token replaces CMS_PLATFORM_PAT (#238)`, () => {
-    test("accepts the App private key as an optional secret beside gh_token", () => {
+    test("accepts the App private key, and no longer declares the gh_token PAT", () => {
       const { wf } = load(file, job);
       const secrets = wf.on.workflow_call.secrets || {};
-      expect(secrets.gh_token, "the PAT input stays — it is the fallback").toBeTruthy();
+      expect(
+        secrets.gh_token,
+        "the gh_token PAT input was removed in v0.1.103 — declaring it again " +
+          "would reinstate a dated credential path nobody holds",
+      ).toBeUndefined();
       expect(secrets.app_private_key, "must declare secrets.app_private_key").toBeTruthy();
       expect(secrets.app_private_key.required, "the App is opt-in: required must be false").toBe(
         false,
@@ -103,13 +107,38 @@ for (const { file, job, wantsWorkflows } of [
       }
     });
 
-    test("fails SOFT when the App is not provisioned, naming both knobs", () => {
+    test("names both knobs when the App is not provisioned, at the right severity", () => {
       const { mint } = load(file, job);
-      // Both env presence checks, then the notice — a missing App is not an
-      // error, it is "run on the PAT as before".
       expect(mint.run).toMatch(/-z "\$APP_CLIENT_ID"/);
       expect(mint.run).toMatch(/-z "\$APP_PRIVATE_KEY"/);
-      expect(mint.run).toMatch(/::notice::[^\n]*CMS_AUTOMATION_APP_ID[^\n]*CMS_AUTOMATION_APP_PRIVATE_KEY/);
+      // Whatever the severity, BOTH knobs are named — that is what keeps
+      // "never onboarded" distinguishable from "misconfigured".
+      expect(mint.run).toMatch(
+        /::(error|warning)::[^\n]*CMS_AUTOMATION_APP_ID[^\n]*CMS_AUTOMATION_APP_PRIVATE_KEY/,
+      );
+      // Severity is NOT a style choice; it tracks whether the credential is
+      // load-bearing for that workflow (v0.1.103, when the gh_token PAT
+      // fallback was removed and there is nothing left to fall back TO).
+      if (wantsWorkflows) {
+        // platform-bump rewrites .github/workflows/*, which needs
+        // workflows:write. github.token does not have it and cannot be granted
+        // it, so continuing only defers the failure to an opaque
+        // "refusing to allow ... without 'workflows' permission" push
+        // rejection. Fail here, loudly, instead.
+        expect(
+          mint.run,
+          "platform-bump must ERROR and exit 1 — its credential is load-bearing",
+        ).toMatch(/::error::[^\n]*CMS_AUTOMATION_APP_ID[\s\S]{0,400}exit 1/);
+      } else {
+        // dev-hooks-sync writes no workflow file and its branch push rides
+        // checkout's own GITHUB_TOKEN. The only cost of continuing is that the
+        // sync PR fires no CI, so failing a weekly sync over it would be worse
+        // than reporting it.
+        expect(
+          mint.run,
+          "dev-hooks-sync must WARN and exit 0 — the degradation is cosmetic",
+        ).toMatch(/::warning::[^\n]*CMS_AUTOMATION_APP_ID[\s\S]{0,400}exit 0/);
+      }
     });
   });
 }
@@ -132,7 +161,7 @@ test.describe("platform-bump.yml: the App token is the push credential (#238)", 
     expect(mint.run).toMatch(/contents\/scripts\/mint-app-token\.js\?ref=/);
   });
 
-  test("checkout token AND GH_TOKEN resolve App, then PAT, then github.token", () => {
+  test("checkout token AND GH_TOKEN resolve App, then github.token — no PAT", () => {
     const { steps, mint } = load("platform-bump.yml", "bump");
     const checkout = steps.find(
       (s) => typeof s.uses === "string" && /^actions\/checkout@/.test(s.uses),
@@ -162,15 +191,19 @@ test.describe("dev-hooks-sync.yml: the App token opens the sync PR (#238)", () =
   });
 });
 
-test.describe("examples/site thin callers pass both secrets (#238)", () => {
+test.describe("examples/site thin callers pass the App key and NOT the PAT (#238)", () => {
   for (const [file, job] of [
     ["platform-bump.yml", "bump"],
     ["dev-hooks-sync.yml", "sync"],
   ]) {
-    test(`${file} forwards CMS_PLATFORM_PAT and CMS_AUTOMATION_APP_PRIVATE_KEY`, () => {
+    test(`${file} forwards CMS_AUTOMATION_APP_PRIVATE_KEY and no longer forwards a PAT`, () => {
       const caller = parseYaml(fs.readFileSync(path.join(TEMPLATES, file), "utf8"));
       const secrets = caller.jobs[job].secrets;
-      expect(norm(secrets.gh_token)).toBe("${{ secrets.CMS_PLATFORM_PAT }}");
+      expect(
+        secrets.gh_token,
+        "a template must not pass gh_token: the reusable no longer declares it, " +
+          "so a caller that does fails at startup",
+      ).toBeUndefined();
       expect(norm(secrets.app_private_key)).toBe("${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}");
     });
   }

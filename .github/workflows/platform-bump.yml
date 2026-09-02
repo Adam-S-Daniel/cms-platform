@@ -47,11 +47,17 @@ on:
       #     token scoped to THIS repo with contents + pull_requests + workflows:
       #     write. No expiry to rotate, and one App installed on both owners
       #     serves every consumer.
-      #   gh_token — the fine-grained CMS_PLATFORM_PAT this reusable took before
-      #     the App existed. Still honoured, as the fallback while a consumer
-      #     has not provisioned the App; a PAT cannot span owners, so it was
-      #     one token per consumer, each with its own expiry.
-      gh_token: { required: false }
+      #
+      # There is NO PAT fallback any more. `gh_token` (CMS_PLATFORM_PAT) was
+      # removed in v0.1.103: both consumers deleted that PAT and its repo
+      # secret once the App path was verified, and a fallback nobody holds is
+      # not a fallback — it is a second, dated credential path that has to keep
+      # being documented, rotated and reasoned about. Removing the INPUT (not
+      # just the read) is deliberate: a caller still passing it now fails at
+      # startup, loudly, instead of silently resolving to a secret that does
+      # not exist. The caller's line must therefore be dropped in the SAME
+      # commit as the pin bump — `structuralShape()` compares the caller's
+      # `secrets:` map against the template at that consumer's pinned ref.
       app_private_key: { required: false }
 
 permissions:
@@ -101,25 +107,32 @@ jobs:
           PLATFORM: ${{ inputs.platform_repo }}
         run: |
           set -euo pipefail
+          # FAIL LOUD, not soft. This credential is load-bearing here: the bump
+          # rewrites `.github/workflows/*`, which needs workflows:write, and
+          # `github.token` does not have it and cannot be granted it. Falling
+          # through would fail anyway — later, as an opaque `refusing to allow
+          # ... without 'workflows' permission` push rejection. Naming the two
+          # knobs here is the clear notice AGENTS.md asks for; continuing to a
+          # confusing failure is the silent no-op it forbids.
           if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
-            echo "::notice::No CMS automation App on this repo (vars.CMS_AUTOMATION_APP_ID + secrets.CMS_AUTOMATION_APP_PRIVATE_KEY) — running on the caller's gh_token (CMS_PLATFORM_PAT) instead."
-            exit 0
+            echo "::error::No CMS automation App on this repo. platform-bump REQUIRES it since v0.1.103 — set the vars.CMS_AUTOMATION_APP_ID variable and the CMS_AUTOMATION_APP_PRIVATE_KEY secret (see the consumer-repo-provisioning skill). The CMS_PLATFORM_PAT fallback was removed."
+            exit 1
           fi
           # `|| LATEST=""` — never a bare `|| true`: on a non-2xx `gh api` prints
           # the raw error body to STDOUT and skips --jq, so a swallowed exit
           # code would capture that body as the tag. The bump step re-runs
           # this lookup with the loud 404-vs-anything-else handling (#244);
-          # here a failure only means "mint from the PAT".
+          # here a failure means the mint cannot proceed at all.
           LATEST=$(gh api "repos/$PLATFORM/releases/latest" --jq .tag_name 2>/dev/null) || LATEST=""
           if [ -z "$LATEST" ]; then
-            echo "::warning::could not resolve the latest $PLATFORM release to fetch mint-app-token.js from — falling back to gh_token (the bump step reports the lookup failure itself)."
-            exit 0
+            echo "::error::could not resolve the latest $PLATFORM release to fetch mint-app-token.js from, and there is no PAT fallback since v0.1.103. Check GitHub API status and that $PLATFORM has a published release."
+            exit 1
           fi
           MINT="$RUNNER_TEMP/mint-app-token.js"
           if ! gh api "repos/$PLATFORM/contents/scripts/mint-app-token.js?ref=$LATEST" \
                -H "Accept: application/vnd.github.raw+json" > "$MINT" 2>/dev/null; then
-            echo "::warning::scripts/mint-app-token.js is not readable at $PLATFORM@$LATEST — falling back to gh_token."
-            exit 0
+            echo "::error::scripts/mint-app-token.js is not readable at $PLATFORM@$LATEST, and there is no PAT fallback since v0.1.103."
+            exit 1
           fi
           # Scoped DOWN at mint time: this one repo, and only the three
           # permissions the push + PR + auto-merge below need. The App itself
@@ -129,14 +142,14 @@ jobs:
             --permissions contents=write,pull_requests=write,workflows=write
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          token: ${{ steps.app.outputs.token || secrets.gh_token || github.token }}
+          token: ${{ steps.app.outputs.token || github.token }}
       - name: Bump every cms-platform reference to the latest release (atomic)
         # `id: bump` is what the lints key on: this step and the mint step above
         # BOTH read /releases/latest, so "the step that resolves the release" no
         # longer identifies it.
         id: bump
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token || secrets.gh_token || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           PLATFORM: ${{ inputs.platform_repo }}
         run: |
           set -euo pipefail
@@ -181,7 +194,7 @@ jobs:
               echo "::notice::$PLATFORM has no published release yet — nothing to bump."
               exit 0
             fi
-            echo "::error::could not read the latest release of $PLATFORM (HTTP ${REL_CODE:-unknown}) — refusing to exit green. Check the credential this run resolved — the App token if the mint step minted one, else the caller's gh_token (CMS_PLATFORM_PAT — expired? still granted on $PLATFORM?) — or GitHub API status. A silent success here would freeze this consumer's platform version indefinitely (cms-platform#244)."
+            echo "::error::could not read the latest release of $PLATFORM (HTTP ${REL_CODE:-unknown}) — refusing to exit green. Check the App installation token this run minted (the mint step above fails loudly if it could not) — or GitHub API status. A silent success here would freeze this consumer's platform version indefinitely (cms-platform#244)."
             exit 1
           fi
           if [ -z "$LATEST" ]; then

@@ -92,32 +92,29 @@ permissions**:
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
   reject its pending deployments even with `Actions: write`.
 
-## `CMS_PLATFORM_PAT` — anything that edits `.github/workflows/*` (the FALLBACK since #238)
+## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103 (kept here for repos on an older pin)
 
-> **A NEW consumer does not need this PAT at all — provision the CMS automation
-> App instead** (next section) and skip this one. Both readers below resolve
-> their credential App → PAT → `GITHUB_TOKEN`, so with
-> `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` set it is never
-> read.
+> **This PAT no longer exists as a credential path.** v0.1.103 removed the
+> `gh_token` INPUT from `platform-bump` and `dev-hooks-sync`, not just the read
+> — so a caller still passing it fails at **startup**, and the caller's line
+> must be dropped in the SAME commit as the pin bump (`structuralShape()`
+> compares the caller's `secrets:` map against the template at that consumer's
+> pinned ref). Provision the App instead; there is nothing else to set.
 >
 > **Both live consumers deleted it on 2026-09-02** — the PAT *and* the repo
 > secret — after the App path was verified on all four reader × consumer
 > combinations. Delete the secret, don't just let the PAT expire: `||` in a
 > GitHub expression falls through on *empty*, not on *invalid*, so a
-> dead-but-present value wins the fallback and 401s where an absent one
-> correctly reaches `github.token`. Both reusables declare
-> `gh_token: { required: false }`, so an unset secret is legal and the caller's
-> `secrets:` map needs no edit.
+> dead-but-present value wins a fallback and 401s.
 >
-> The old caveat that the FIRST bump to an App-capable release still needed the
-> PAT — because that bump is opened by the reusable at the consumer's OLD pin,
-> which knows only `gh_token` — is **spent**. It applied only to the two
-> consumers crossing into v0.1.102, and both have crossed. A site scaffolded
-> today pins an App-capable release whose templates already pass
-> `app_private_key`, so its first bump mints from the App.
+> Without the App on v0.1.103+, `platform-bump` **fails loudly** naming both
+> knobs — its credential is load-bearing, since the bump rewrites
+> `.github/workflows/*` and `GITHUB_TOKEN` cannot hold `workflows:write` —
+> while `dev-hooks-sync` **warns** and opens its PR on `GITHUB_TOKEN`, which
+> fires no CI.
 >
-> It stays documented for a repo still on a pre-v0.1.102 pin, and because the
-> `gh_token` input still exists.
+> This section stays only for a repo still pinned **below v0.1.103**, whose
+> reusable still declares the input.
 
 Consumed by:
 - `platform-bump` — opens the single-version bump PR that moves `platform_ref` +
@@ -216,8 +213,8 @@ gh run view <run-id> -R <owner>/<repo> --log | grep -E '::notice::(Minted|No CMS
 ```
 
 `Minted a contents:write,pull_requests:write,workflows:write installation token`
-means the App path is live and `CMS_PLATFORM_PAT` can be deleted — secret and
-PAT both, per its section above; the
+means the App path is live; on v0.1.103+ it is the ONLY path, and `No CMS
+automation App` is an ERROR there rather than a fallback notice. The
 `No CMS automation App` notice means a knob is missing. A present-but-broken
 key is a red run with `::error::Could not mint` — never a silent PAT fallback,
 so "misconfigured" stays distinguishable from "never onboarded".
@@ -375,7 +372,7 @@ platform-bump cron (a `::warning`, never a job failure).
 
 - [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Issues R/W** + **Actions R/W** + **Commit statuses R** (+ be a reviewer of the `regression-review` environment)
 - [ ] `CMS_AUTOMATION_APP_PRIVATE_KEY` (secret) + `CMS_AUTOMATION_APP_ID` (variable) — the CMS automation App, installed on this owner; powers platform-bump and dev-hooks-sync with nothing to rotate
-- [ ] ~~`CMS_PLATFORM_PAT`~~ — **not needed for a new consumer.** The App above covers it from the first bump onward; only a repo still on a pre-v0.1.102 pin needs it (`CMS_E2E_PAT`'s set **plus Workflows R/W**, minus Actions)
+- [ ] ~~`CMS_PLATFORM_PAT`~~ — **removed in v0.1.103.** Do not create it. The App above is the only push credential; only a repo pinned below v0.1.103 still has an input for it
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
 - [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` when `site-params.env` sets them)
 - [ ] Settings → General → **Allow auto-merge** = ON
