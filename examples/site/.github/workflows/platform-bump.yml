@@ -8,7 +8,7 @@ permissions:
   pull-requests: write
 jobs:
   bump:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-bump.yml@v0.1.101
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-bump.yml@v0.1.102
     secrets:
       # Push credential, resolved App -> PAT by the reusable (#238). Provision the
       # App (vars.CMS_AUTOMATION_APP_ID + this secret) and the PAT is never read;

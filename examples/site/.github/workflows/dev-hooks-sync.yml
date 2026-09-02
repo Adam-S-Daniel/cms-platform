@@ -10,9 +10,9 @@ permissions:
   pull-requests: write
 jobs:
   sync:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/dev-hooks-sync.yml@v0.1.101
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/dev-hooks-sync.yml@v0.1.102
     with:
-      platform_ref: v0.1.101
+      platform_ref: v0.1.102
     secrets:
       # So the sync PR triggers CI: the CMS automation App when provisioned
       # (vars.CMS_AUTOMATION_APP_ID + app_private_key), else the PAT (#238).
