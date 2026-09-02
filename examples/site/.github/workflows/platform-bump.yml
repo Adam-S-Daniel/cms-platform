@@ -8,7 +8,7 @@ permissions:
   pull-requests: write
 jobs:
   bump:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-bump.yml@v0.1.102
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/platform-bump.yml@v0.1.103
     secrets:
       # The push credential, and the ONLY one since v0.1.103: the CMS automation
       # App's private key. With vars.CMS_AUTOMATION_APP_ID (set on this repo) the

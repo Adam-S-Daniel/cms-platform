@@ -10,9 +10,57 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.102)
+## Version history (v0.1.0 → v0.1.103)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.103 — the `CMS_PLATFORM_PAT` fallback is removed outright; the CMS
+automation App is the only push credential (#238).** v0.1.102 made
+`platform-bump` and `dev-hooks-sync` resolve their credential App → PAT →
+`GITHUB_TOKEN`. On 2026-09-02 both consumers deleted that PAT **and its repo
+secret**, after the App path was verified on all four reader × consumer
+combinations — `platform-bump` at adamdaniel.ai run 33667817145 and
+jodidaniel.com run 33668024563, `dev-hooks-sync` at 33671492817 and 33671502277,
+each showing a real `##[notice]Minted …` line. A fallback nobody holds is not a
+fallback; it is a second, dated credential path that keeps having to be
+documented, rotated and reasoned about, which is what #238 set out to delete.
+
+The **input** goes, not just the read. A caller still passing `gh_token` now
+fails at STARTUP, loudly, instead of silently resolving to a secret that does
+not exist — so the caller's line has to be dropped in the SAME commit as the pin
+bump, because `structuralShape()` compares each caller's `secrets:` map against
+the template at that consumer's pinned ref. Splitting them fails in one
+direction or the other, the same atomicity the `app_private_key` ADDITION needed
+one release earlier.
+
+**Severity when the App is absent is deliberately not uniform**, and tracks
+whether the credential is load-bearing:
+
+- `platform-bump` **errors and exits 1**. It rewrites `.github/workflows/*`,
+  which needs `workflows:write`; `GITHUB_TOKEN` does not have it and cannot be
+  granted it, so continuing only defers the failure to an opaque `refusing to
+  allow … without 'workflows' permission` push rejection. Naming both knobs at
+  the mint step is the clear notice AGENTS.md asks for; continuing to a confusing
+  failure is the silent no-op it forbids.
+- `dev-hooks-sync` **warns and continues**. Nothing there writes a workflow file
+  and the branch push rides checkout's own `GITHUB_TOKEN`; the only cost is a
+  sync PR that fires no CI. Failing a weekly sync over a cosmetic degradation
+  would be worse than reporting it.
+
+`e2e/app-token-platform-writers.test.js` now asserts the ABSENCE of the input
+and locks that severity split so neither half drifts into the other's behaviour;
+`e2e/platform-bump-atomic.test.js` keys the checkout assertion on
+`steps.app.outputs.token`. Proven by negative control: re-adding `gh_token` to
+the reusable and the template turns three of those assertions red.
+
+Also in this release: the `CMS_E2E_PAT` permission table gained `Issues: Read and
+write` (`cms-editorial-workflow` drives editorial labels and status comments
+through the issues API, which `Pull requests: write` does not cover) and
+`Commit statuses: Read` (`repos.getCombinedStatusForRef`), and its consumer list
+was corrected from 9 to 16 — the same defect twice, since the omitted
+`cms-editorial-workflow` is exactly what needed `Issues`. `Deployments` was
+deliberately NOT added despite #238's fourth pass listing it: nothing this token
+drives touches that API. (#400, #401, #402 — R8a.)
 
 **v0.1.102 — the consumer push-back credential is minted from a GitHub App,
 so there is no PAT expiry left to rotate (#238).** `platform-bump` and
