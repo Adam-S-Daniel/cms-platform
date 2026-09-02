@@ -341,6 +341,44 @@ Three things from that work worth knowing before you touch any of it:
 shims, the status model, or any copy an editor reads. It carries the full
 inventory, the measurements, and what each phase actually built.
 
+### A spec that publishes in two entries through one page fails (#342)
+
+Decap 3.15.1 breaks the next publish after a direct hash navigation from one
+ENTRY route to another (`#/collections/a/entries/x` → `#/collections/b/entries/y`):
+the publish throws `Cannot read properties of undefined (reading 'reduce')`
+inside the bundle, nothing reaches disk, and no toast reports it — the editor
+just stays dirty. Visiting the first entry without editing it is enough to arm
+it. Opening the entry first in the session, or going list → entry, both work.
+Reproduced byte-identically with and without the platform's shims, so it is
+Decap's, not ours — https://github.com/Adam-S-Daniel/cms-platform/issues/342
+tracks it upstream (no Decap issue exists yet).
+
+An editor cannot reach it: the editor chrome renders no sidebar, and the back
+link goes to the COLLECTION route. A spec reaches it by default, because specs
+navigate with `page.goto("…#/collections/…/entries/…")`. So, for any spec that
+publishes:
+
+- **One publish per page.** A scenario that publishes a second entry gets its
+  own `test()` (Playwright's `page` fixture is per-test) or an explicit
+  `browser.newContext()`. Never drive two entry publishes through one page
+  object, even when the first entry was only visited.
+- **Between entries, route through the collection.** If one test genuinely
+  must touch two entries, `goto` the collection route (or click the
+  "← Writing in …" back link) before the second entry's route. List → entry
+  is a working path; entry → entry is the broken one.
+- **It does not present as a Decap error.** It presents as a publish that
+  "did nothing" — dirty editor, unchanged file, a downstream wait that times
+  out — and it cost two spurious failures in the #329 acceptance suite before
+  it was isolated. Read the browser console for `reading 'reduce'` before
+  debugging the publish path.
+
+No lint enforces this yet. If it bites again, the publish-path AST lint from
+https://github.com/Adam-S-Daniel/cms-platform/issues/382
+(`e2e/status-dropdown-selector.test.js`) is where a "two entry routes, one
+page, then publish" detector belongs. The
+`browser-testing` skill carries the same rule beside the other Decap-driving
+gotchas.
+
 ### A required status check nobody publishes blocks forever, silently (#371)
 
 `repo-settings.yml`'s `cms-feature-branches` required the context
