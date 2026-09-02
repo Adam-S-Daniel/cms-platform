@@ -125,6 +125,7 @@
       var res = await fetch(
         "https://api.github.com/repos/" + window.CMS_REPO + "/contents/" + gate.path,
         {
+          cache: "no-cache",
           headers: {
             Authorization: "token " + token,
             Accept: "application/vnd.github.raw+json",

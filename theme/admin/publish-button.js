@@ -241,7 +241,10 @@
   // (CREATE armed, UPDATE sat unarmed). So: with no PR in hand, ask the
   // poller to read again, and keep asking a bounded few times — refresh()
   // returns at once while a tick is already in flight, leaving the snapshot
-  // unchanged, so one unchanged read proves nothing.
+  // unchanged, so one unchanged read proves nothing. (The other half of
+  // #386 is the browser's HTTP cache answering GitHub GETs for 60 s — see
+  // publish-progress.js's header; without its `cache: "no-cache"` these
+  // re-reads would return the same stale body.)
   var REFRESH_RETRIES = 4;
   var REFRESH_RETRY_MS = 1500;
 

@@ -485,16 +485,19 @@ Three things it gets that the split button cannot:
   and done nothing. The button removes the label before adding it.
 - a **Publish that does not trust a stale snapshot** (#386). The poller
   reads the PR every 30 s and on `hashchange`, and saving an EXISTING entry
-  changes no hash — so for up to 30 s after Decap opens the PR the snapshot
-  still says "no PR", and the button used to read it once and render "could
-  not be published right now" over a PR that was there. A NEW entry never
-  hit this (its first save navigates `/new` → `entries/<slug>`, which fires
-  `hashchange`), which is exactly the CREATE-passes / UPDATE-sits-unarmed
-  split two consecutive adamdaniel.ai host-loop runs measured. With no PR in
-  hand `doPublish()` now asks the poller to re-read, a bounded few times —
-  `refresh()` returns at once while a tick is already in flight, so one
-  unchanged read proves nothing — and only then says it could not publish.
-  `e2e/publish-button-refresh.test.js` drives it in a vm sandbox.
+  changes no hash — so a Publish pressed right after Save could read the
+  snapshot from before Decap opened the PR and render "could not be
+  published right now" over a PR that was there. With no PR in hand
+  `doPublish()` now asks the poller to re-read, a bounded few times, before
+  it says so. `e2e/publish-button-refresh.test.js` drives it in a vm
+  sandbox. **The half that made this unfixable from the button alone is
+  the browser's HTTP cache:** GitHub REST answers carry `Cache-Control:
+  private, max-age=60`, a browser `fetch()` honours it, and so for a minute
+  after any GET every `refresh()` returned the same cached body — measured on
+  adamdaniel.ai run 33580693718, where the bar could not see the `cms/ready`
+  label its own click had applied for 58 s (every `/pulls` read answered in
+  1 ms). Every GitHub GET in `theme/admin/` now passes `cache: "no-cache"`;
+  `e2e/admin-github-fetch-cache.test.js` holds the line for every shim.
 
 It renders into the state bar's actions slot rather than the toolbar: the
 toolbar is `flex-wrap: nowrap` on desktop and a fifth control squeezes the

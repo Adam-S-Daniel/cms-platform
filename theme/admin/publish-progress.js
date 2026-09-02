@@ -97,6 +97,19 @@
  * Every fetch degrades to "no facts" rather than throwing — a rate limit, a
  * revoked token or an offline laptop leaves the surfaces showing their last
  * known state, never a page error.
+ *
+ * ── Why every read says `cache: "no-cache"` (#386) ────────────────────
+ * GitHub REST responses carry `Cache-Control: private, max-age=60`, and a
+ * browser fetch() honours it: for 60 s after any GET the same URL is
+ * answered from Chromium's HTTP cache without touching the network. For a
+ * poller that is fatal — every refresh() inside that minute returned the
+ * snapshot from BEFORE the label it was polling for landed, so the bar sat
+ * on "Publish" for a full minute after the PR was armed (measured:
+ * adamdaniel.ai host-loop run 33580693718, every /pulls read for 58 s
+ * answered in 1 ms). `no-cache` still lets the browser revalidate with
+ * If-None-Match, and a 304 does not count against the rate limit, so the
+ * budget above is unchanged. e2e/admin-github-fetch-cache.test.js holds
+ * the line for every shim.
  */
 (function () {
   "use strict";
@@ -162,7 +175,7 @@
   // render. Never throws.
   async function getJson(url, token, label) {
     try {
-      var res = await fetch(url, { headers: headers(token) });
+      var res = await fetch(url, { headers: headers(token), cache: "no-cache" });
       if (!res.ok) {
         console.info("[publish-progress] " + label + " HTTP " + res.status + " — skipping tick.");
         return null;
