@@ -44,10 +44,19 @@ labels, and closes canary PRs and expects their required checks (and the
 
 ## `CMS_E2E_PAT` — CMS automation + canary loops
 
-Consumed by: `cms-automerge-nudge`, `auto-resolve-newline-conflict`,
-`sweep-stale-cms-prs`, and the canary loops (`cms-publish-loop-prod` /
-`-host` / `-preview`, `cms-media-roundtrip`, `cms-preview-loops`,
-`cms-delete-published-preview`).
+Consumed by **16** of the dictated callers — the whole set, because an
+under-count here is how a permission goes missing (see `Issues` below):
+
+- **CMS automation:** `cms-automerge-nudge`, `cms-editorial-workflow`,
+  `auto-resolve-newline-conflict`, `sweep-stale-cms-prs`,
+  `regression-review-reaper`, `publish-scheduled-posts`
+- **Canary / real-prod loops:** `cms-publish-loop-prod` / `-host` / `-preview`,
+  `cms-scheduled-publish-loop`, `cms-media-roundtrip`, `cms-preview-loops`,
+  `cms-delete-published-preview`
+- **PR-triggered lanes:** `e2e-tests`, `parity-preview`, `visual-regression`
+
+Regenerate the list rather than trusting this one:
+`grep -l CMS_E2E_PAT examples/site/.github/workflows/*.yml`.
 
 **Fine-grained PAT** → *Resource owner* = the repo's owner; *Repository access*
 = **Only select repositories → this one consumer repo**; **Repository
@@ -57,10 +66,26 @@ permissions**:
 |---|---|---|
 | **Contents** | **Read and write** | create/delete branch refs — the publish-via-auto-merge **delete-recovery** branch, loop canary branches — and `sweep-stale-cms-prs --delete-branch` |
 | **Pull requests** | **Read and write** | open / label `cms/ready` / comment / close PRs and **enable auto-merge** (nudge, sweep, auto-resolve, the loops, the delete shim) |
+| **Issues** | **Read and write** | `cms-editorial-workflow` drives the editorial-workflow labels and status comments through the **issues** API — `issues.createLabel`, `issues.listComments`, `issues.createComment`, `issues.updateComment`. A PR is an issue to those endpoints, so `Pull requests: write` does NOT cover them |
 | **Actions** | **Read and write** | **read:** the loops poll `deploy-production` run status (`GET /repos/…/actions/workflows/…/runs`). **write:** `regression-review-reaper` rejects superseded review gates via `POST /repos/…/actions/runs/{id}/pending_deployments` (`state=rejected`) |
+| **Commit statuses** | **Read** | `cms-automerge-nudge` and `cms-editorial-workflow` call `repos.getCombinedStatusForRef` (`GET /repos/…/commits/{ref}/status`) to decide whether a head sha is green |
 | **Metadata** | **Read** | mandatory — auto-selected for every fine-grained PAT |
 
-**Not needed:** *Workflows* — `CMS_E2E_PAT` never edits `.github/workflows/*`.
+**Not needed:**
+
+- *Workflows* — `CMS_E2E_PAT` never edits `.github/workflows/*`. That single
+  omission is the whole reason it stays separate from `CMS_PLATFORM_PAT`.
+- *Deployments* — nothing this token drives touches the deployments API.
+  `pending_deployments` looks like it should, but it is an **Actions** endpoint
+  (`/actions/runs/{id}/pending_deployments`) and is covered by the row above;
+  `repos.createDeployment` / `createDeploymentStatus` live in `deploy-preview`
+  and `deploy-production`, which run on `GITHUB_TOKEN`, not this PAT. Verified
+  2026-09-02 by grepping every caller that receives `CMS_E2E_PAT`.
+- *Checks* — **fine-grained PATs have no Checks permission at all.** The nudge
+  does read check-runs (`checks.listForRef`); that read succeeds only because
+  all three repos are PUBLIC. The same caveat applies to `Commit statuses`,
+  which is granted above so the token does not silently depend on repo
+  visibility.
 **Also required (settings / role, not token permissions):**
 - Settings → General → **Allow auto-merge** = ON (else the nudge can't enable auto-merge).
 - The PAT's user must be a **configured reviewer of the `regression-review` environment**
@@ -330,7 +355,7 @@ platform-bump cron (a `::warning`, never a job failure).
 
 ## Quick checklist for a new consumer
 
-- [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Actions R/W** (+ be a reviewer of the `regression-review` environment)
+- [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Issues R/W** + **Actions R/W** + **Commit statuses R** (+ be a reviewer of the `regression-review` environment)
 - [ ] `CMS_AUTOMATION_APP_PRIVATE_KEY` (secret) + `CMS_AUTOMATION_APP_ID` (variable) — the CMS automation App, installed on this owner; powers platform-bump and dev-hooks-sync with nothing to rotate
 - [ ] `CMS_PLATFORM_PAT` — only until the App above is provisioned (and for the first bump to an App-capable release): same as `CMS_E2E_PAT` **plus Workflows R/W**, minus Actions
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
