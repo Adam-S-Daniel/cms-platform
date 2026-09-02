@@ -10,9 +10,56 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.101)
+## Version history (v0.1.0 → v0.1.102)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.102 — the consumer push-back credential is minted from a GitHub App,
+so there is no PAT expiry left to rotate (#238).** `platform-bump` and
+`dev-hooks-sync` are the two reusables holding a consumer's
+`.github/workflows/*` write credential, and both took it only as the
+fine-grained `CMS_PLATFORM_PAT`. A fine-grained PAT cannot span owners, so that
+was one token per consumer on its own calendar — and when one lapses the ONLY
+platform down-sync path stops, on a schedule, silently (`scheduled-run-health`
+reports it a day later by design). Both now resolve **App → PAT →
+`GITHUB_TOKEN`**: with `vars.CMS_AUTOMATION_APP_ID` and the new optional
+`app_private_key` secret, each mints a ~1 h installation token per run through
+`scripts/mint-app-token.js`, scoped down at mint time to the calling repo
+(`--repositories`, new) and to the narrowest set the job needs —
+`contents,pull_requests,workflows=write` for the bump, `contents=read,
+pull_requests=write` for dev-hooks-sync, which writes no workflow file. Absent
+the App: one `::notice::` naming both knobs, then the PAT path exactly as
+before; a present-but-broken key is a loud `::error::`, so "never onboarded"
+stays distinguishable from "misconfigured". The bump mints BEFORE checkout,
+because checkout is what persists the push credential, and fetches the script
+over the contents API at the release it targets —
+`github.job_workflow_sha` reads empty inside a reusable job
+(actions/runner#2417). Lint-locked by `e2e/app-token-platform-writers.test.js`
+(AST over the workflow YAML) and `e2e/mint-app-token.test.js`.
+
+**Measured on BOTH consumers before the release was cut.** The App is id
+`4548455`, installed on both owners, and both consumers already carried both
+knobs from the v0.1.76 comment-sync work — which no session could confirm,
+because the egress proxy 403s `/actions/variables` and `/actions/secrets`. A
+temporary probe pushed to a branch on each consumer (every consumer `push`
+trigger is `branches: [main]`, so nothing else fired) minted the real token on
+each and reported `Minted a contents:write,pull_requests:write,workflows:write
+installation token for <owner> (repositories: <repo>)`, exit 0
+(adamdaniel.ai run 33665858373, jodidaniel.com run 33665985522). Note the
+stored variable holds the NUMERIC App id, not the Client ID:
+`mint-app-token.js` reads `APP_CLIENT_ID || APP_ID` and GitHub accepts either
+as the JWT `iss`, so both spellings work and neither needs changing.
+
+**`CMS_E2E_PAT` is NOT convertible, and that is now measured rather than
+assumed.** The same probe asked the freshly minted installation token for
+`GET /repos/{owner}/{repo}` and read `permissions.push`: **`false`**, on both
+owners. Decap's GitHub backend decides login on exactly that field, so an
+installation token fails the check every real editorial spec depends on —
+#238's highest-risk open question, closed by measurement. The Decap bundle's
+`bypassWriteAccessCheckForAppTokens` is set only by the
+`aws-cognito-github-proxy` backend and reads no config key, so a plain
+`backend: github` site cannot opt in. `CMS_E2E_PAT` stays a fine-grained PAT
+on its own rotation schedule.
 
 **v0.1.101 — every admin GitHub read was answered from the browser's
 HTTP cache for 60 s, so the publish bar could not see its own label land
