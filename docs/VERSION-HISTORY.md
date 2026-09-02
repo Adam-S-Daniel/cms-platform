@@ -10,9 +10,54 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.100)
+## Version history (v0.1.0 → v0.1.101)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.101 — every admin GitHub read was answered from the browser's
+HTTP cache for 60 s, so the publish bar could not see its own label land
+(#386).** Three adamdaniel.ai `cms-publish-loop-host` runs told the story in
+order. On v0.1.99 (33573287045, 33577242076) the CREATE in
+`cms-delete-published.spec.js` published and the UPDATE of the existing
+`canary-post` entry in `cms-publish-loop.spec.js` saved, opened its PR, and
+sat on `cms/draft` until the deploy wait timed out at 2143 s — the v0.1.99
+harness never read the toolbar. On v0.1.100 (33580693718) the hardened
+`publishViaUi()` failed the CREATE leg instead, and loudly: PR #3489 "did
+not arm within 60s", with facts `hasOpenPr: true, armed: false` — while
+GitHub's own timeline showed `cms/ready` applied by the editor token at
+01:48:58, one second after the click, auto-merge armed, merged 01:51:03.
+The spec's `[trace]` response log then named the mechanism: every
+`GET /pulls?state=open` the poller made from 01:48:58.658 to 01:49:54.7
+completed in ONE millisecond (a real round trip is 150–500 ms), and the first
+genuine read at 01:49:56.7 is the tick that saw `armed` and went on to the
+`if (armed)` requests. GitHub REST responses carry `Cache-Control: private,
+max-age=60`; a browser `fetch()` honours it; so for a minute after any GET
+the poller's `refresh()` re-read the pre-label body from Chromium's cache,
+however often it was called. That is also why the UPDATE leg failed on
+v0.1.99: `publish-progress.js` re-reads on a 30 s interval and on
+`hashchange`, saving an EXISTING entry changes no hash, and a Publish pressed
+inside the cached minute read `prNumber: null` from before Decap opened the
+PR and rendered "could not be published right now" — whereas a NEW entry's
+first save navigates `/new` → `entries/<slug>`, whose `hashchange` tick was
+the first read of that URL and so went to the network. Two fixes, both
+needed. Every GitHub GET in `theme/admin/` now passes `cache: "no-cache"`
+(`publish-progress.js`, `deploy-status-pill.js`'s wrapper,
+`live-url-banner.js`, `posts-list-enhance.js` ×4, `site-gate-banner.js`);
+the browser still revalidates with `If-None-Match`, and a 304 does not count
+against the rate limit, so the pollers' budgets are unchanged.
+`e2e/admin-github-fetch-cache.test.js` drives `publish-progress.js`'s
+`refresh()` in a vm sandbox on an entry route and asserts every request opts
+out, and lints every shim with acorn: a `fetch()` with an object-literal init
+must declare `cache` or a non-GET `method`. And `publish-button.js`'s
+`doPublish()`, with no PR in its snapshot, now asks the poller to re-read up
+to four times 1.5 s apart before giving up — bounded, because `refresh()`
+returns at once while a tick is in flight and one unchanged read proves
+nothing. `e2e/publish-button-refresh.test.js` drives it through a new
+`window.__publishButton` hook: stale-then-found arms once, in-flight-then-
+found retries, genuinely-no-PR still says so and POSTs nothing, the fast
+path is unchanged. Both registered in `PLATFORM_META_SPECS`. The v0.1.100
+harness hardening stays: it is what turned a 35-minute deploy-wait timeout
+into a one-minute failure that named the PR and carried the trace.
 
 **v0.1.100 — `publishViaUi()` could return "success" over a silent publish
 failure, and the deploy-lane diagnostic couldn't tell (#386, harness half).**

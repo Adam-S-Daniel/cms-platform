@@ -230,11 +230,53 @@
     }
   }
 
+  // ── Why doPublish() re-reads before it gives up (#386) ────────────────
+  // publish-progress.js reads the entry's PR every 30 s and on `hashchange`.
+  // Saving an EXISTING entry changes no hash, so for up to 30 s after Decap
+  // opens the PR the snapshot still says "no PR" — and a Publish pressed in
+  // that window used to render "could not be published right now" over a PR
+  // that was there all along. A NEW entry never hit this: its first save
+  // navigates /new → entries/<slug>, which fires hashchange and a tick. Two
+  // consecutive adamdaniel.ai host-loop runs measured exactly that split
+  // (CREATE armed, UPDATE sat unarmed). So: with no PR in hand, ask the
+  // poller to read again, and keep asking a bounded few times — refresh()
+  // returns at once while a tick is already in flight, leaving the snapshot
+  // unchanged, so one unchanged read proves nothing. (The other half of
+  // #386 is the browser's HTTP cache answering GitHub GETs for 60 s — see
+  // publish-progress.js's header; without its `cache: "no-cache"` these
+  // re-reads would return the same stale body.)
+  var REFRESH_RETRIES = 4;
+  var REFRESH_RETRY_MS = 1500;
+
+  function readPrNumber(p) {
+    var s = p ? p.get() : null;
+    return (s && s.prNumber) || null;
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
   async function doPublish() {
     var p = progress();
-    var state = p ? p.get() : null;
-    var prNumber = state && state.prNumber;
+    var prNumber = readPrNumber(p);
     var token = p && typeof p.getToken === "function" ? p.getToken() : null;
+    if (!prNumber && token && p && typeof p.refresh === "function") {
+      mode = "busy";
+      lastError = null;
+      render();
+      for (var i = 0; i < REFRESH_RETRIES && !prNumber; i++) {
+        try {
+          await p.refresh();
+        } catch (e) {
+          /* the re-read below decides */
+        }
+        prNumber = readPrNumber(p);
+        if (!prNumber) await wait(REFRESH_RETRY_MS);
+      }
+    }
     if (!prNumber || !token) {
       lastError =
         "This could not be published right now. Try saving again, wait a few " +
@@ -262,6 +304,15 @@
     }
     render();
   }
+
+  // Test hook (e2e/publish-button-refresh.test.js drives doPublish() in a vm
+  // sandbox). Same shape as one-door-publish.js's window.__oneDoorPublish.
+  window.__publishButton = {
+    doPublish: doPublish,
+    lastError: function () {
+      return lastError;
+    },
+  };
 
   // ── Rendering ─────────────────────────────────────────────────────────
   function styleButton(b, primary) {

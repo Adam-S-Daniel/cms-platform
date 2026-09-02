@@ -75,7 +75,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.100`** — `v0.1.0`–`v0.1.100` are all tagged GitHub
+**Current release: `v0.1.101`** — `v0.1.0`–`v0.1.101` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 That number is also carried by the two plugin manifests (`plugin.json` +
 `.claude-plugin/plugin.json`), and `release.yml` REFUSES to cut a tag whose
@@ -323,6 +323,19 @@ Three things from that work worth knowing before you touch any of it:
   — and remember that the replacement is labelled with the right word for an
   editor, which is exactly what makes it a drop-in for someone else's
   selector. (v0.1.97, adamdaniel.ai run 33439336337.)
+- **A browser `fetch()` of the GitHub API is answered from the HTTP cache
+  for 60 s.** GitHub REST responses carry `Cache-Control: private,
+  max-age=60` and Chromium honours it, so an admin shim that polls a URL
+  reads the same body for a minute however often it asks — `refresh()` on
+  `publish-progress.js` returned the pre-label snapshot 28 times in a row
+  while the PR it described was already armed and merging (#386,
+  adamdaniel.ai run 33580693718: every `/pulls` read answered in 1 ms, the
+  first real one 58 s later). The tell is the timing, not the body: a
+  GitHub round trip is 150–500 ms. Every GitHub GET under `theme/admin/`
+  passes `cache: "no-cache"` (revalidation is free of rate limit) and
+  `e2e/admin-github-fetch-cache.test.js` lints the shims for it; a harness
+  that polls the page's own poller inherits the cache too, which is why a
+  60 s arm wait failed over a publish that had succeeded.
 
 → read `docs/PUBLISHING-UX.md` before changing `theme/admin/`'s toolbar
 shims, the status model, or any copy an editor reads. It carries the full

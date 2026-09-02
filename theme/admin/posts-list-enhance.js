@@ -342,6 +342,7 @@
   async function fetchSiteDeploy(token) {
     try {
       var dRes = await fetch(REST + "/deployments?environment=production&per_page=1", {
+        cache: "no-cache",
         headers: {
           Authorization: "token " + token,
           Accept: "application/vnd.github+json",
@@ -350,6 +351,7 @@
       var deps = await safeJson(dRes);
       if (!Array.isArray(deps) || !deps.length) return null;
       var sRes = await fetch(REST + "/deployments/" + deps[0].id + "/statuses?per_page=1", {
+        cache: "no-cache",
         headers: {
           Authorization: "token " + token,
           Accept: "application/vnd.github+json",
@@ -371,6 +373,7 @@
     var map = {};
     try {
       var res = await fetch(REST + "/pulls?state=open&per_page=100", {
+        cache: "no-cache",
         headers: {
           Authorization: "token " + token,
           Accept: "application/vnd.github+json",
@@ -435,6 +438,7 @@
       var pr = prBySlug[slugs[i]];
       try {
         var res = await fetch(REST + "/commits/" + pr.sha + "/check-runs?per_page=100", {
+          cache: "no-cache",
           headers: {
             Authorization: "token " + token,
             Accept: "application/vnd.github+json",

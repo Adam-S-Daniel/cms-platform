@@ -170,7 +170,12 @@
     while (attempt < 2) {
       attempt += 1;
       try {
-        var res = await fetch(url, init);
+        // `cache: "no-cache"` — GitHub answers with max-age=60 and the browser
+        // honours it, so a 30 s poll would read the same cached body twice
+        // (#386, see publish-progress.js's header). Built as a literal here,
+        // at the one real fetch, so e2e/admin-github-fetch-cache.test.js can
+        // see it; callers pass only `headers`.
+        var res = await fetch(url, { headers: init && init.headers, cache: "no-cache" });
         if (res.ok) return res;
         if (isRateLimited(res)) {
           console.warn(
