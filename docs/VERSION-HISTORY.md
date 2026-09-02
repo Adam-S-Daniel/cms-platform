@@ -14,6 +14,72 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED — `publishViaUi()` could return "success" over a silent publish
+failure, and the deploy-lane diagnostic couldn't tell (#386, harness half).**
+The v0.1.99 acceptance run for #382 (adamdaniel.ai `cms-publish-loop-host`
+33573287045) went 34 minutes further than the previous failure, then died at
+`deploy-pill.js:230`: PR #3479 (an entry UPDATE) sat open with all 32 check
+runs green and no `cms/ready` label, ever — `waitForChangeReflected` could
+only report "awaiting the merge mechanism", which is indistinguishable from a
+slow but healthy auto-merge.
+
+Root cause: `theme/admin/publish-button.js`'s `doPublish()` has two SILENT
+failure outcomes that render text into the state-bar slot and RETURN WITHOUT
+THROWING — a stale/missing `prNumber` or Decap token ("This could not be
+published right now…"), and a non-2xx response arming the PR's `cms/ready`
+label ("The website did not accept the publish just now…"). `publishViaUi()`
+clicked the confirmation and returned, unable to tell either from a real
+publish. Compounding it: the old shell-selection check waited up to 10s for
+`#cms-publish-button` to ATTACH, which itself races `publish-progress.js`'s
+poller — on an entry UPDATE the button can still be absent several seconds
+after Save because the poller hasn't found the PR's branch yet.
+
+The fix, entirely in the harness (the product-side race itself is unverified
+— the artifact that would confirm which of the two outcomes actually fired
+was unreachable from the authoring sandbox, per AGENTS.md's egress-proxy
+note):
+
+- `publishViaUi()` now selects the platform shell by reading
+  `window.__publishButtonInstalled` — set unconditionally at parse time by
+  `publish-button.js`, which loads ONLY on `index.html` — instead of racing
+  the poller's attach window.
+- Before clicking, it waits (bounded) for `window.CMSPublishProgress.get()`
+  to report `hasOpenPr && prNumber`, calling `refresh()` once to shorten the
+  wait rather than riding out the full 30s poll interval.
+- After confirming, it waits out the busy note, then checks the state-bar
+  slot's text for either silent-failure marker (`PUBLISH_NOT_READY_TEXT` /
+  `PUBLISH_REJECTED_TEXT`, kept as lowercase substrings of the shim's own
+  copy) and throws immediately, naming the PR, if either is present.
+- Absence of an error string is still not proof of success (the slot can sit
+  briefly blank between the busy note clearing and the refreshed facts
+  landing), so it then waits (bounded, with its own `refresh()` calls) for
+  `facts.armed === true` — the same fact `entry-status-model.js` and the
+  editor bar already agree defines "queued to merge itself" — and throws with
+  the PR number and last-known facts if it never arrives. A 34-minute silent
+  timeout is now a failure inside `publishViaUi()` itself, within roughly two
+  minutes, naming which of the two outcomes happened.
+- `e2e/deploy-pill.js`'s stuck-PR diagnostic (the `pr-awaiting-required-check`
+  / `pr-required-check-red` branches) now appends the PR's current labels and
+  `auto_merge` state — already fetched by `makeDeployQueueExtender`'s
+  `unmergedPrVerdict` in `e2e/github-actions-poll.js`, so this costs no extra
+  request — plus the publish toolbar's own text when the page is still on the
+  entry editor, so a run that reaches this diagnostic at all (i.e.
+  `publishViaUi`'s own check somehow missed it — a re-navigation, a retried
+  publish) still states which silent outcome it was looking at.
+- New pure-fs AST lint `e2e/publish-error-strings.test.js` (registered in
+  `PLATFORM_META_SPECS`) parses both `publishViaUi()` and `doPublish()` and
+  asserts the two marker substrings are still present in both — with two
+  negative-control fixtures proving the detector can actually fail, one for
+  each string-discovery path (an inline literal, and a reference through a
+  shared top-level `const`).
+
+Not done by this fix: the actual product-side race (why the UPDATE's publish
+never armed at all) is unconfirmed — the run artifact that would settle it
+(`host-loop-results`, adamdaniel.ai run 33573287045) was unreachable from the
+authoring sandbox. The next `cms-publish-loop-host` dispatch on adamdaniel.ai
+is the real acceptance test, and should now either succeed end-to-end or fail
+loudly and specifically instead of silently, 34 minutes later, somewhere else.
+
 **v0.1.99 — the two #328 product-copy items nobody could see were
 wrong (items 2 and 5).** Both are cases where the copy described the
 MECHANISM correctly and told a non-technical owner something false.

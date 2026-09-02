@@ -164,19 +164,91 @@ async function saveEntry(page, { timeout = 60_000 } = {}) {
 // original bug, in a new costume. PUBLISH_BUTTON_TIMEOUT_MS covers a poll
 // interval plus GitHub latency with room to spare.
 const PUBLISH_BUTTON_TIMEOUT_MS = 90_000;
+// How long to give `arm()` a chance to land the `cms/ready` label after the
+// confirmation click, before treating "not armed yet" as a hang rather than
+// ordinary GitHub latency. See "loud on the two silent outcomes" below.
+const PUBLISH_ARM_TIMEOUT_MS = 60_000;
+
+// #386 — the state-bar slot's ID (`SLOT_ID` in theme/admin/publish-button.js,
+// `ACTIONS_ID` in theme/admin/publish-step-hint.js — the two must already
+// agree, or the button would never render into the bar at all).
+const PUBLISH_SLOT_ID = "cms-publish-state-actions";
+
+// #386 — the toolbar's two SILENT publish-failure outcomes. `doPublish()` in
+// theme/admin/publish-button.js renders one of these into the state-bar slot
+// and RETURNS WITHOUT THROWING on (a) a stale/missing PR number or Decap
+// token, or (b) a non-2xx response arming the PR's `cms/ready` label — so a
+// `publishViaUi` that only clicks the confirmation and returns cannot tell a
+// real publish from either silent failure. A silent (a) on an entry UPDATE
+// (the poller's last answer predated the PR) cost 34 minutes of an unrelated
+// deploy-lane timeout before the real cause showed up at all (adamdaniel.ai
+// run 33573287045, cms-platform#386). Kept as lowercase SUBSTRINGS of
+// publish-button.js's own text, not full copies, so a cosmetic wording
+// change there doesn't false-fail this file. Lint-locked by
+// e2e/publish-error-strings.test.js, which asserts both remain present in
+// publish-button.js's doPublish().
+const PUBLISH_NOT_READY_TEXT = "could not be published right now";
+const PUBLISH_REJECTED_TEXT = "did not accept the publish just now";
+
+// Read window.CMSPublishProgress's current snapshot, or null if the module
+// (or the page) isn't there. { ready, facts, prNumber, prUrl, entry } —
+// see theme/admin/publish-progress.js's header for what each fact means.
+function publishProgressState(page) {
+  return page.evaluate(() => {
+    const p = window.CMSPublishProgress;
+    return p && typeof p.get === "function" ? p.get() : null;
+  });
+}
+
+// Ask the poller to re-fetch NOW rather than wait out its 30s interval. A
+// no-op (never throws) when the module isn't on this shell.
+function refreshPublishProgress(page) {
+  return page.evaluate(() => {
+    const p = window.CMSPublishProgress;
+    if (p && typeof p.refresh === "function") p.refresh();
+  });
+}
 
 async function publishViaUi(page) {
-  // Is this shell the one with the platform-owned button at all? Ask for the
-  // element's PRESENCE (it is injected on load), not its enabled state.
-  const platformButton = page.locator("#cms-publish-button");
-  const hasPlatformShell = await platformButton
-    .waitFor({ state: "attached", timeout: 10_000 })
-    .then(() => true)
-    .catch(() => false);
+  // Deterministic shell selection (#386) — DO NOT go back to "did
+  // #cms-publish-button attach within N seconds": that races
+  // publish-progress.js's poller. On an entry UPDATE the button can still be
+  // absent several seconds after Save because the poller hasn't found the
+  // PR yet, and the old code fell through to Decap's own control on the
+  // very shell where it's hidden-but-not-removed — the original #382
+  // failure, in a new costume.
+  //
+  // publish-button.js sets `window.__publishButtonInstalled` as the FIRST
+  // thing its IIFE does — unconditional on route, poller state or the bar
+  // being on screen — and the script is loaded ONLY by index.html (the
+  // production shell); index-test.html and index-local.html never include
+  // it. So the flag is available the instant the page has finished loading,
+  // and it says which shell this is regardless of timing.
+  const hasPlatformShell = await page.evaluate(() => Boolean(window.__publishButtonInstalled));
 
   if (hasPlatformShell) {
-    // Wait for it to become clickable: it renders disabled while there are
-    // unsaved changes, and is absent entirely until the poller finds the PR.
+    const platformButton = page.locator("#cms-publish-button");
+
+    // Wait for publish-progress.js to have FOUND this entry's open PR
+    // BEFORE clicking anything (#386 hypothesis 2): clicking while the
+    // poller's last answer predated the PR (`facts: null` or
+    // `hasOpenPr: false`, `prNumber: null`) lets `doPublish()` hit its
+    // silent `!prNumber` branch, which renders text and returns — it never
+    // throws, so the click alone can never prove anything. One manual
+    // refresh() shortens the wait instead of relying on the 30s interval.
+    await refreshPublishProgress(page);
+    await page.waitForFunction(
+      () => {
+        const p = window.CMSPublishProgress;
+        const s = p && p.get();
+        return Boolean(s && s.ready && s.facts && s.facts.hasOpenPr && s.prNumber);
+      },
+      undefined,
+      { timeout: PUBLISH_BUTTON_TIMEOUT_MS, polling: 2_000 },
+    );
+
+    // Now the button itself: it renders disabled while there are unsaved
+    // changes, and is absent entirely until render() next runs.
     await platformButton.waitFor({ state: "visible", timeout: PUBLISH_BUTTON_TIMEOUT_MS });
     await page.waitForFunction(
       () => {
@@ -189,6 +261,63 @@ async function publishViaUi(page) {
     await platformButton.click();
     // The inline confirmation, which names the URL and the ETA.
     await page.getByRole("button", { name: /^Yes, publish$/i }).click();
+
+    // ── Loud on the two silent outcomes (#386) ────────────────────────
+    // doPublish() renders a "Sending it to the website…" note into the
+    // slot while its two fetches are in flight, then either clears it (on
+    // success) or replaces it with one of the two error strings above.
+    // Wait out the busy phase before reading what's left — bounded, and
+    // deliberately NOT fatal on its own timeout: a slow render tick leaving
+    // the note past 30s doesn't mean arm() failed, so fall through to the
+    // error-text check either way; the armed-wait below is the real gate.
+    const slot = page.locator(`#${PUBLISH_SLOT_ID}`);
+    await page
+      .waitForFunction(
+        (id) => {
+          const el = document.getElementById(id);
+          return !el || !/Sending it to the website/i.test(el.textContent || "");
+        },
+        PUBLISH_SLOT_ID,
+        { timeout: 30_000 },
+      )
+      .catch(() => false); // the timeout itself is not fatal here — see comment above
+
+    const stateAfterConfirm = await publishProgressState(page);
+    const prNumber = stateAfterConfirm && stateAfterConfirm.prNumber;
+    const slotText = ((await slot.textContent().catch(() => "")) || "").toLowerCase();
+    if (slotText.includes(PUBLISH_NOT_READY_TEXT) || slotText.includes(PUBLISH_REJECTED_TEXT)) {
+      throw new Error(
+        `publishViaUi: the publish toolbar reported a silent failure for PR ` +
+          `#${prNumber != null ? prNumber : "?"}: "${(await slot.textContent().catch(() => "")).trim()}"`,
+      );
+    }
+
+    // Not an error string on screen is not proof of success either — the
+    // slot can sit briefly empty between the busy note clearing and the
+    // refreshed facts landing (doPublish() calls refresh() without
+    // awaiting it). The one fact both the button and the bar agree defines
+    // "queued to merge itself" is entry-status-model's own `armed`, so wait
+    // for THAT — with our own refresh() calls to avoid riding out the full
+    // 30s poll interval — and fail loud, naming the PR, if it never comes.
+    await page
+      .waitForFunction(
+        () => {
+          const p = window.CMSPublishProgress;
+          if (p && typeof p.refresh === "function") p.refresh();
+          const s = p && p.get();
+          return Boolean(s && s.facts && s.facts.armed === true);
+        },
+        undefined,
+        { timeout: PUBLISH_ARM_TIMEOUT_MS, polling: 2_000 },
+      )
+      .catch(async () => {
+        const info = await publishProgressState(page);
+        throw new Error(
+          `publishViaUi: PR #${prNumber != null ? prNumber : "?"} did not arm within ` +
+            `${PUBLISH_ARM_TIMEOUT_MS / 1000}s of confirming publish. Last known facts: ` +
+            `${JSON.stringify(info && info.facts)}`,
+        );
+      });
     return;
   }
 

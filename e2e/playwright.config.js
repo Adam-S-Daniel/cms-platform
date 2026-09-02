@@ -67,6 +67,13 @@ const PLATFORM_META_SPECS = [
   // platform-internal and testIgnored on a CONSUMER lane.
   "admin-shim-load-order.test.js",
   "confirm-wrap-local-backup.test.js",
+  // #386 — parses theme/admin/publish-button.js's SOURCE (doPublish()) to
+  // assert its two silent-failure strings stay byte-consistent with the
+  // markers e2e/cms-editor-ui.js's publishViaUi() checks for. Reads the
+  // platform's theme/admin SOURCE tree (absent on a consumer, which ships
+  // only the gem-rendered admin), so it is platform-internal and testIgnored
+  // on a CONSUMER lane, same shape as the two entries above.
+  "publish-error-strings.test.js",
   // #329 owner-persona fix set — same shape as admin-shim-load-order.test.js
   // right above: reads the three theme/admin shells + the five shim SOURCE
   // files (platform theme/admin tree, absent on a consumer's rendered
