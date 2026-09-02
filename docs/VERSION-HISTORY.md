@@ -14,6 +14,32 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**UNRELEASED — the one-door Publish button gave up on a snapshot the
+poller had not refreshed yet (#386).** Two consecutive adamdaniel.ai
+`cms-publish-loop-host` runs on v0.1.99 (33573287045, 33577242076) failed
+the same way: `cms-delete-published.spec.js`'s CREATE published and armed,
+`cms-publish-loop.spec.js`'s UPDATE of the existing `canary-post` entry saved
+fine, its PR opened, and the PR then sat with `cms/draft` + `decap-cms/draft`
+until the deploy wait timed out at 2143 s. The mechanism is the poller's
+cadence: `publish-progress.js` re-reads GitHub every 30 s and on
+`hashchange`. Saving an EXISTING entry changes no hash, so a Publish pressed
+within 30 s of Save reads the snapshot from BEFORE Decap opened the PR
+(`prNumber: null`), and `doPublish()` rendered "could not be published right
+now" — which the v0.1.99 harness did not read, so the spec walked on to the
+deploy wait. A NEW entry's first save navigates `/new` → `entries/<slug>`,
+firing `hashchange` and a fresh tick, which is why only the UPDATE leg ever
+failed. Fix: with no PR in hand, `doPublish()` calls `refresh()` and re-reads,
+up to four times 1.5 s apart — bounded, because `refresh()` returns at once
+while a tick is in flight and one unchanged read proves nothing — before
+giving up. `e2e/publish-button-refresh.test.js` drives `doPublish()` through
+a new `window.__publishButton` hook in a vm sandbox (scripted poller
+snapshots, recording fetch, synchronous setTimeout): stale-then-found arms
+once; in-flight-then-found retries; genuinely-no-PR still says so and POSTs
+nothing; the fast path is unchanged. Registered in `PLATFORM_META_SPECS`.
+The v0.1.100 harness hardening stays: `publishViaUi()` now waits for the
+poller itself, so the loop no longer depends on this fix to pass — but an
+editor pressing Publish right after Save did, which is why it ships.
+
 **v0.1.100 — `publishViaUi()` could return "success" over a silent publish
 failure, and the deploy-lane diagnostic couldn't tell (#386, harness half).**
 The v0.1.99 acceptance run for #382 (adamdaniel.ai `cms-publish-loop-host`

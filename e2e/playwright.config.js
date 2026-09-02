@@ -92,6 +92,7 @@ const PLATFORM_META_SPECS = [
   // Sandbox unit tests for the one-door + publish-progress ROUTE matchers.
   // Reads theme/admin sources; platform-internal for the same reason.
   "admin-publish-routing.test.js",
+  "publish-button-refresh.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.

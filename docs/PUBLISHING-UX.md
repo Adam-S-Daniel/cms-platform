@@ -483,6 +483,18 @@ Three things it gets that the split button cannot:
   — so the second Publish press, which is the most likely one in the whole
   product because it follows a "Needs attention", would have returned 200
   and done nothing. The button removes the label before adding it.
+- a **Publish that does not trust a stale snapshot** (#386). The poller
+  reads the PR every 30 s and on `hashchange`, and saving an EXISTING entry
+  changes no hash — so for up to 30 s after Decap opens the PR the snapshot
+  still says "no PR", and the button used to read it once and render "could
+  not be published right now" over a PR that was there. A NEW entry never
+  hit this (its first save navigates `/new` → `entries/<slug>`, which fires
+  `hashchange`), which is exactly the CREATE-passes / UPDATE-sits-unarmed
+  split two consecutive adamdaniel.ai host-loop runs measured. With no PR in
+  hand `doPublish()` now asks the poller to re-read, a bounded few times —
+  `refresh()` returns at once while a tick is already in flight, so one
+  unchanged read proves nothing — and only then says it could not publish.
+  `e2e/publish-button-refresh.test.js` drives it in a vm sandbox.
 
 It renders into the state bar's actions slot rather than the toolbar: the
 toolbar is `flex-wrap: nowrap` on desktop and a fifth control squeezes the
