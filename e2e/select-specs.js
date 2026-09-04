@@ -1177,14 +1177,27 @@ function pickShardCount(scope, files) {
 }
 
 // ── @parity-preview selector ─────────────────────────────────────────
-// The five @parity specs that hit the live preview-pr<N>.adamdaniel.ai
+// The @parity specs that hit the live preview-pr<N>.adamdaniel.ai
 // surface (not /admin/index-local.html). Driven by .github/workflows/
 // parity-preview.yml. The other three @parity-tagged specs
 // (cms-link-crawler / manual-walkthrough-{contributor,content-guide})
 // drive Decap's local_backend at /admin/index-local.html and self-skip
 // on any non-local TARGET — they stay covered by the normal e2e matrix.
+//
+// A SELECTED SPEC MUST BE A RUNNABLE SPEC. parity-preview.yml runs only on
+// consumers and sets SITE_ROOT, so playwright.config.js testIgnores every
+// PLATFORM_META_SPECS entry for it — and it passes the selected paths straight
+// to `npx playwright test <paths>`. Name a spec here that the config ignores
+// there and Playwright collects nothing and exits 1 with "No tests found",
+// reddening `parity / parity`, a REQUIRED context on both consumers.
+// `e2e/admin-bundle-parity.spec.js` was that spec until 2026-09-04: it is
+// registered PLATFORM_META (it reads the platform's own theme/admin tree, which
+// admin-spec-source-read-lint and the #16 recurrence guard both insist on), so
+// it never ran on a consumer — but SPEC_RULES maps `admin/**` to it, so an
+// admin-only PR selected it ALONE and hard-failed on an empty run
+// (jodidaniel.com#247). Removed from this list; the two lists are now held
+// disjoint by e2e/parity-preview-runnable-on-consumer.test.js.
 const PARITY_PREVIEW_SPECS = [
-  "e2e/admin-bundle-parity.spec.js",
   "e2e/console-clean.spec.js",
   "e2e/draft-isolation.spec.js",
   "e2e/image-alt-text.spec.js",

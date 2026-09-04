@@ -44,6 +44,13 @@ const PLATFORM_META_SPECS = [
   // platform's own self-CI (against the platform tree), not a consumer site.
   "cms-posts-list-enhance.spec.js",
   "e2e-posts-public-exclusion.test.js",
+  // KEEP LISTED. It walks `theme/admin/` in the platform tree, which
+  // admin-spec-source-read-lint.test.js forbids a consumer-lane spec from doing
+  // and platform-meta-spec-registry.test.js's #16 recurrence guard independently
+  // demands registration for — measured 2026-09-04: deleting this line reds both.
+  // The consequence is that the @parity-preview SELECTOR must not name it either;
+  // select-specs.js's PARITY_PREVIEW_SPECS says why, and
+  // e2e/parity-preview-runnable-on-consumer.test.js holds the two in agreement.
   "admin-bundle-parity.spec.js",
   // Lints every workflow in THIS repo for `${{ x && '' || y }}` — an expression
   // that silently returns `y` unconditionally. Platform-internal: a consumer has
@@ -335,6 +342,11 @@ const PLATFORM_META_SPECS = [
   // examples/site thin-caller templates, and asserts the shape of the
   // pin-agreement.yml reusable that delivers the check to fleet repos with no
   // harness. All platform tree; a consumer ships none of it.
+  // Locks "a selected spec is a RUNNABLE spec": no PARITY_PREVIEW_SPECS entry
+  // may be testIgnore'd on a consumer lane. Reasons about this config and
+  // select-specs.js — platform-internal, self-CI only, like its select-specs
+  // siblings below.
+  "parity-preview-runnable-on-consumer.test.js",
   "pin-agreement.test.js",
   // #377 — the site-verify lint: asserts the shape of the site-verify.yml
   // reusable (work/gate split, detect-then-build wiring) and of its dictated

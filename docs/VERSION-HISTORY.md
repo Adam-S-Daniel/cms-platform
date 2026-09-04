@@ -10,10 +10,56 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.105)
+## Version history (v0.1.0 → v0.1.106)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**v0.1.106 — a selected spec that the consumer lane ignores fails the
+REQUIRED `parity / parity` with "No tests found" (jodidaniel.com#247).**
+`select-specs.js`'s `PARITY_PREVIEW_SPECS` named `e2e/admin-bundle-parity.spec.js`,
+and `playwright.config.js`'s `PLATFORM_META_SPECS` named it too. The second list
+is `testIgnore`d whenever `SITE_ROOT` is set, and `parity-preview.yml` — the ONLY
+caller of that selector, and one that runs exclusively on consumers — sets
+`SITE_ROOT: ${{ github.workspace }}`. So the selector could pick a spec the
+config then removed.
+
+That is worse than dead coverage, because the reusable hands the selected paths
+straight to `npx playwright test <paths>`. With every selected path ignored,
+Playwright collects nothing and exits 1:
+
+```
+Error: No tests found.
+Make sure that arguments are regular expressions matching test files.
+```
+
+`SPEC_RULES` maps `admin/**` to that one spec, so the selection narrowed to it
+alone exactly when a PR's only preview-salient change was under `admin/**` —
+which is why a latent overlap waited for an admin-only PR to surface it. It
+surfaced on jodidaniel.com#247 (2026-09-04), a four-file PR editing `/admin`
+seam copy, whose every other check was green.
+
+**Which list gives way is decided by two guards that already existed**, and the
+opposite fix was measured first: dropping the spec from `PLATFORM_META_SPECS` so
+consumers run it reds `admin-spec-source-read-lint.test.js` (a consumer-lane
+spec must not read admin SOURCE from the platform tree, and this one walks
+`theme/admin/`) AND `platform-meta-spec-registry.test.js`'s #16 recurrence guard
+(every platform-internal spec must be registered). The whole `node-unit-lints`
+lane was run before and after: those two, and only those two, went from green to
+red. So the spec stays platform-internal and leaves the SELECTOR instead.
+
+An `admin/**`-only diff now selects zero parity-preview specs and takes the
+reusable's ALWAYS-RUN + EARLY-SKIP path — the correct verdict, since no runnable
+parity-preview spec covers the admin bundle; the `e2e` matrix still covers such
+a PR. `select-specs.test.js`'s assertion that `admin/` "still selects
+admin-bundle-parity" was the belief the bug rode on and is replaced by its
+inverse.
+
+New guard: `e2e/parity-preview-runnable-on-consumer.test.js` evaluates the real
+`playwright.config.js` in a CHILD PROCESS with `SITE_ROOT` set — the effective
+question ("would the consumer lane ignore this?"), not a diff of two arrays that
+goes blind the moment the config's regex derivation changes — and fails naming
+any `PARITY_PREVIEW_SPECS` entry it would drop. RED on the tree as it stood,
+naming exactly `e2e/admin-bundle-parity.spec.js`.
 **v0.1.105 — the collection list loses its sort dropdown and list/grid
 toggle (#409).** Both sit in the row directly above every `/admin` entry list
 and neither earns its space on either consumer; on a 393px phone the row costs
