@@ -240,6 +240,14 @@
   <script src="list-row-affordance.js" defer></script>
   <script src="single-entry-collection-shortcut.js" defer></script>
 
+  <!-- Collection-list controls trim — hides Decap's "Sort by" dropdown and
+       its list/grid view-style toggle, and collapses the row they sat in
+       when nothing else (a Filter / Group dropdown) is left in it. Neither
+       control is useful on these sites and both cost a row above the entry
+       list on a phone. NOT loaded on index-test.html: that shell has to keep
+       rendering Decap's stock collection chrome. See the file's own header. -->
+  <script src="collection-controls-trim.js" defer></script>
+
   <!-- "HTML Embed" editor component — adds a toolbar button on every
        markdown body field so authors can drop a block of raw HTML / JS /
        CSS that round-trips through rich-text and raw modes. Loads after

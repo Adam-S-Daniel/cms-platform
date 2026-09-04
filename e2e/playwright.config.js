@@ -98,6 +98,11 @@ const PLATFORM_META_SPECS = [
   // Sandbox unit tests for the one-door + publish-progress ROUTE matchers.
   // Reads theme/admin sources; platform-internal for the same reason.
   "admin-publish-routing.test.js",
+  // The collection-list controls trim: reads the theme/admin SOURCE tree (the
+  // shim plus the three shells) and vm-sandboxes the shim's pure sort-label
+  // matcher. Platform-internal for the same reason as the entry above — a
+  // consumer ships only the gem-rendered admin, not this tree.
+  "admin-collection-controls-trim.test.js",
   "publish-button-refresh.test.js",
   "admin-github-fetch-cache.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
