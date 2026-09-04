@@ -129,6 +129,14 @@
   <script src="list-row-affordance.js" defer></script>
   <script src="single-entry-collection-shortcut.js" defer></script>
 
+  <!-- Collection-list controls trim — hides Decap's "Sort by" dropdown and
+       its list/grid view-style toggle, and collapses the row they sat in
+       when nothing else (a Filter / Group dropdown) is left in it. Neither
+       control is useful on these sites and both cost a row above the entry
+       list on a phone. NOT loaded on index-test.html: that shell has to keep
+       rendering Decap's stock collection chrome. See the file's own header. -->
+  <script src="collection-controls-trim.js" defer></script>
+
   <!-- Issue #329 item 8 (LOCAL-MODE ONLY) — see the file's own header
        comment for the full rationale and the honesty constraint it
        enforces. Not loaded on index.html (has a real deploy-status-pill.js)
