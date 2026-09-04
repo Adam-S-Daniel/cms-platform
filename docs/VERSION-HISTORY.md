@@ -10,9 +10,59 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.103)
+## Version history (v0.1.0 → v0.1.104)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.104 — the back link out of a singleton file collection works again
+(#405).** `single-entry-collection-shortcut.js`, the #329 item 7 shortcut that
+skips the pointless one-item list in front of a singleton FILE collection,
+jumped on **every** arrival at the bare collection route `#/collections/<name>`.
+Leaving that collection's own entry — Decap's back link, the left arrow beside
+"Writing in <collection> collection" — lands on exactly that route, and the shim
+could not tell the two apart. So the one arrival that is an explicit instruction
+*not* to be in the entry was read as an instruction to go there, and the
+collection list became unreachable: it appeared for ~700ms and was replaced by
+the entry again, every time, with no error and nothing in the console.
+
+Reported against jodidaniel.com's Header / Hero
+(`#/collections/site_header/entries/header`) and reproduced against a local
+`decap-server` admin on a jodidaniel.com build, driving the real back link.
+Hash sampled every 200ms after the click: `#/collections/site_header` held
+through t=600ms, `#/collections/site_header/entries/header` from t=800ms — the
+`SETTLE_MS = 700` timer firing `location.replace(...)`, which is why it presents
+as a flash rather than as no navigation at all.
+
+**The transition's ORIGIN now decides.** An arrival from
+`#/collections/<name>/entries/…` — the same `<name>` — is a deliberate exit and
+is left alone; every other arrival (a fresh load, the sidebar, a different
+collection, browser history) is the arrival item 7 is about and still jumps.
+Both directions matter and both are pinned: suppressing too much silently
+un-ships item 7, suppressing too little re-traps the editor.
+
+It also settles a race that was previously managed rather than removed.
+`publish-baseline-refresh.js` (item 1) transiently sets the hash to the bare
+collection route and restores the entry ~60ms later, and the only thing stopping
+this shim from hijacking that hop was a 700ms settle delay plus a re-check that
+the hash was unchanged. That hop leaves the same collection's entry route, so
+the origin rule makes this shim **structurally** inert on it. The delay and the
+re-check both stay — they are cheap and still cover a hop the rule does not
+anticipate — but correctness no longer rests on out-racing another shim.
+
+The `/new`-link guard (a one-entry FOLDER collection is one entry away from
+having two, and must never auto-jump) is untouched and re-verified live.
+
+`e2e/single-entry-collection-shortcut.test.js` is the new guard — seven cases in
+a vm sandbox, the `admin-publish-routing.test.js` pattern, driving the shim's
+real `hashchange` listener with a captured settle timer. Written red first: the
+two back-out cases failed against the old shim while the five feature/guard cases
+passed, which is what shows the harness measures the right thing. Registered in
+`PLATFORM_META_SPECS`; the registry lint caught its absence before it was added.
+
+Worth noting what could NOT have caught this. `e2e/admin-329-shims.test.js`
+asserts the file exists, is loaded by all three shells, and still carries its
+`/new` guard — all true throughout, and all blind to a routing decision. A shim
+whose static shape is correct can still be wrong on exactly one transition.
 
 **v0.1.103 — the `CMS_PLATFORM_PAT` fallback is removed outright; the CMS
 automation App is the only push credential (#238).** v0.1.102 made

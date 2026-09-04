@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-production.yml@v0.1.103
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-production.yml@v0.1.104
     with:
       apex_domain: example.com
       prod_bucket: example-com-production
@@ -54,7 +54,7 @@ jobs:
       # publish PDFs from an unpinned checkout). That is why both lines
       # must come uncommented together, not just documented as such.
       # media_archive_bucket: example-com-media-archive
-      # platform_ref: v0.1.103
+      # platform_ref: v0.1.104
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       PRODUCTION_CLOUDFRONT_ID: ${{ secrets.PRODUCTION_CLOUDFRONT_ID }}
