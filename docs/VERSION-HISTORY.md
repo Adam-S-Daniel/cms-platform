@@ -14,7 +14,7 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**v0.1.105 — a selected spec that the consumer lane ignores fails the
+**v0.1.106 — a selected spec that the consumer lane ignores fails the
 REQUIRED `parity / parity` with "No tests found" (jodidaniel.com#247).**
 `select-specs.js`'s `PARITY_PREVIEW_SPECS` named `e2e/admin-bundle-parity.spec.js`,
 and `playwright.config.js`'s `PLATFORM_META_SPECS` named it too. The second list
@@ -60,6 +60,64 @@ question ("would the consumer lane ignore this?"), not a diff of two arrays that
 goes blind the moment the config's regex derivation changes — and fails naming
 any `PARITY_PREVIEW_SPECS` entry it would drop. RED on the tree as it stood,
 naming exactly `e2e/admin-bundle-parity.spec.js`.
+**v0.1.105 — the collection list loses its sort dropdown and list/grid
+toggle (#409).** Both sit in the row directly above every `/admin` entry list
+and neither earns its space on either consumer; on a 393px phone the row costs
+a header's worth of the first screen. The sort dropdown is the weaker of the
+two — a collection that declares no `sortable_fields` gets Decap's DEFAULTS
+(commit date, identifier field, commit author), so on jodidaniel.com it cannot
+even offer the manual `weight` order the sections are actually rendered in.
+
+`theme/admin/collection-controls-trim.js` hides both, then hides
+`CollectionControlsContainer` itself when they were all of it — without that
+last step the row still costs its own `margin-top: 22px` plus the 20px `gap`
+its parent reserves, which is 42px of nothing above the fold and most of what
+was being complained about.
+
+Three things in it worth knowing before touching it:
+
+- **It is a shim because config only covers half.** Decap's `sortable_fields:
+  []` makes the sort control never mount, and there is no equivalent for the
+  view-style toggle. That lever would also have to be repeated on every
+  collection in `config.base.yml` AND in each consumer's site-owned
+  `admin/collections.site.yml` — a per-collection opt-out a newly added
+  collection silently misses, in a file the platform does not own.
+- **The sort control is matched by its LABEL, and that is not laziness.**
+  Sort, Filter and Group are the same component (a `ControlButton` inside the
+  shared dropdown wrapper), siblings of the view-style toggle, each
+  independently optional — so "the last child" is the sort control on one
+  collection and the FILTER control on the next. Filter is configured and
+  wanted (`config.base.yml` gives posts and projects `view_filters`), so a
+  selector that cannot separate them would silently delete a control nobody
+  asked to remove. The label fails in the safe direction: a Decap copy change
+  or a non-English locale and the sort dropdown simply comes back — the same
+  degrade-safe argument `one-door-publish.js` makes for its class-substring
+  selectors.
+- **Decap renders these dropdown triggers as `<span role="button">`, not
+  `<button>`** — measured against the live 3.15.1 bundle, and the container's
+  own emotion rule targets `span[role='button']` for the same reason. The
+  shim's fallback selector was a bare `button` until that run; it would have
+  found nothing.
+
+Verified against the real bundle rather than its source, driving
+`index-test.html`'s in-browser test-repo backend: on `posts` (which has
+`view_filters`) the toggle and "Sort by" go and "Filter by" is untouched; on
+`tags` and `pages` both go and the whole row collapses, surviving Decap's
+client-side route changes. Scope is the two EDITOR shells — `index-test.html`
+keeps Decap's stock collection chrome, the same reason `one-door-publish.js`
+gives for the Status control and the board.
+
+What it costs: the #329.3 "Sort by → Order" affordance (pairing a manual-order
+`weight` field with `sortable_fields`) has no visible control any more.
+`collections.site.yml.example` and
+`e2e/collections-example-sortable-fields.test.js` are left as they are — the
+config pairing is still correct, it just has no surface until this is
+reverted.
+
+Locked by `e2e/admin-collection-controls-trim.test.js` (wiring, the label
+matcher in both directions, and the never-touch-the-filter invariant), whose
+three assertions were each confirmed to go red under a mutation of the shim
+before being trusted.
 
 **v0.1.104 — the back link out of a singleton file collection works again
 (#405).** `single-entry-collection-shortcut.js`, the #329 item 7 shortcut that
