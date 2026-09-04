@@ -80,6 +80,12 @@ const PLATFORM_META_SPECS = [
   // ${SITE_ROOT}/_site/admin), so it is platform-internal and testIgnored on
   // a CONSUMER lane.
   "admin-329-shims.test.js",
+  // The behavioural half of the #329 item 7 shim: drives
+  // theme/admin/single-entry-collection-shortcut.js in a vm sandbox to pin BOTH
+  // directions of its auto-jump (a fresh arrival still skips the one-item list;
+  // an exit from that collection's OWN entry is left alone). Reads the platform
+  // theme/admin SOURCE, so it is platform-internal exactly like the entry above.
+  "single-entry-collection-shortcut.test.js",
   // Publishing-UX staged plan, phases 2-5 (docs/PUBLISHING-UX.md §4). Reads the
   // platform's theme/admin SOURCE tree AND both render paths
   // (scripts/render-decap-config.rb + theme/lib/.../decap_config_hook.rb) —
