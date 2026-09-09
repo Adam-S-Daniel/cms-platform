@@ -73,10 +73,23 @@ jobs:
 
       - name: Install the YAML parser
         # The checker parses workflows with the `yaml` lib (anchors resolved) —
-        # NOT regex. Install it into the consumer workspace's node_modules so the
-        # script (run from the consumer root) resolves it (its loadYaml() checks
-        # cwd/node_modules). Pinned to the version the platform's e2e harness uses.
-        run: npm install --no-save --no-package-lock yaml@2.9.0
+        # NOT regex. `--prefix .cms-platform` installs it into the PLATFORM
+        # checkout, NOT the consumer root, and that placement is load-bearing:
+        # npm resolves the entire dependency tree of whatever package.json sits
+        # at its prefix, so installing at the consumer root made this guard
+        # depend on every devDependency the consumer happens to declare — and
+        # `--no-package-lock` re-resolves those ranges from the registry,
+        # bypassing the lockfile that pins them to versions known to work. One
+        # broken upstream publish then turns a REQUIRED check red on every PR.
+        # Not theoretical: decap-cms-lib-util@3.8.1 (2026-09-08) shipped
+        # unresolved pnpm `catalog:` specifiers, npm exited
+        # EUNSUPPORTEDPROTOCOL, and every adamdaniel.ai editorial PR was
+        # blocked until this step stopped reading the consumer's package.json.
+        # `.cms-platform` carries no package.json, so npm resolves `yaml` and
+        # nothing else; the script's loadYaml() already probes
+        # `<script>/../node_modules`. Pinned to the version the platform's e2e
+        # harness uses.
+        run: npm install --prefix .cms-platform --no-save --no-package-lock yaml@2.9.0
 
       - name: Check single-version pin consistency
         # Owner/repo + canonical-source default from the consumer's platform.lock

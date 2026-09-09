@@ -96,6 +96,12 @@ const PLATFORM_META_SPECS = [
   // above. Do not "tidy" it on.
   "action-pin-comment-lint.test.js",
   "auto-merge-uses-queue.test.js",
+  // The 2026-09-08 `catalog:` incident guard — asserts both platform-pin
+  // reusables install the `yaml` parser with `--prefix .cms-platform` rather
+  // than at the consumer root. Reads THIS repo's .github/workflows definitions,
+  // which a consumer does not ship in that position, so it is platform-internal
+  // and testIgnored on a CONSUMER lane.
+  "guard-yaml-install-scope.test.js",
   // #33 — platform-internal: the base_collections capability helper's unit
   // test (drives the platform's TWO fixtures) + the build-and-run meta proof
   // (builds both fixtures, subprocess-runs the guarded specs against each).
