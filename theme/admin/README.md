@@ -40,7 +40,7 @@ Jekyll build and:
    `pages`/`e2e`) before the config is written out (see AGENTS.md
    "base_collections opt-out").
 4. Injects
-   `<script>window.CMS_REPO=…;window.CMS_SITE_ORIGIN=…;window.CMS_APEX=…;window.CMS_OAUTH_BASE_URL=…;window.CMS_SITE_TITLE=…</script>`
+   `<script>window.CMS_REPO=…;window.CMS_SITE_ORIGIN=…;window.CMS_APEX=…;window.CMS_OAUTH_BASE_URL=…;window.CMS_SITE_TITLE=…;window.CMS_SITE_GATE=…;window.CMS_PRODUCTION_BRANCH=…</script>`
    into the built `admin/index*.html` **and** `admin/reviews/*.html`. The admin
    JS (and reviews dashboards) read these globals instead of hardcoded site
    identity.
@@ -58,6 +58,8 @@ hook, so no per-site or per-workflow step is needed.
 | `CMS_APEX` | host of `url` | live-url-banner, posts-list-enhance (preview-host construction), reviews dashboards |
 | `CMS_OAUTH_BASE_URL` | `cms.oauth_base_url` | the Decap config itself (`config.base.yml` backend `base_url`), reviews dashboards (OAuth login flow) |
 | `CMS_SITE_TITLE` | the site's `_config.yml` `title` | admin shell `document.title` (index.html, index-local.html), reviews dashboards `document.title` |
+| `CMS_SITE_GATE` | `cms.site_gate` (an OBJECT, serialised with `JSON.generate`; `null` when the site declares no gate) | site-gate-banner (the "the public site is in coming-soon mode" banner; inert on `null`) |
+| `CMS_PRODUCTION_BRANCH` | `backend.branch` of the config.yml the render path just wrote, read back with a real YAML parse (`""` if unreadable) — the branch the admin binds to when served UNPATCHED, i.e. from production | branch-binding-banner (compares it with the SERVED config.yml's `backend.branch`, which deploy-preview patches to the PR head, and says which branch a preview admin edits — #412; inert on `""`) |
 | `CMS_BACKEND_BRANCH` | `commit.json` `branch` — set at runtime by index.html's commit-pill script, NOT by the render inject (the deploy workflows write commit.json at deploy time: `main` on prod, the PR head ref on a preview) | publish-via-auto-merge (scopes the delete-ref matcher's multi-segment recovery to the deployed backend branch, #114); unset (no/unreadable commit.json) ⇒ multi-segment recovery is disabled (fail closed) |
 
 `config-test.yml` is domain-agnostic (local/test backend) and ships as-is.

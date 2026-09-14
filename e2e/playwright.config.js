@@ -105,6 +105,12 @@ const PLATFORM_META_SPECS = [
   // Sandbox unit tests for the one-door + publish-progress ROUTE matchers.
   // Reads theme/admin sources; platform-internal for the same reason.
   "admin-publish-routing.test.js",
+  // #412 — drives theme/admin/branch-binding-banner.js (and the gate banner's
+  // ordering beside it) in a vm sandbox, and runs scripts/patch-preview-config.sh
+  // on the theme/admin/config.base.yml template to prove the shim's reader
+  // parses what the script writes. Reads theme/admin SOURCE and scripts/;
+  // platform-internal for the same reason as every entry around it.
+  "branch-binding-banner.test.js",
   // The collection-list controls trim: reads the theme/admin SOURCE tree (the
   // shim plus the three shells) and vm-sandboxes the shim's pure sort-label
   // matcher. Platform-internal for the same reason as the entry above — a

@@ -10,9 +10,85 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.106)
+## Version history (v0.1.0 → v0.1.107)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.107 — `/admin` says which branch it is bound to, so its copy stops
+reading as being about the live site from a preview (#412).**
+`deploy-preview.yml` patches the served `admin/config.yml`
+(`scripts/patch-preview-config.sh`), so a preview's `/admin` is bound to the PR
+branch — right, and invisible: the two admins were byte-identical apart from
+that one config line, an editor reaches the preview one from the link the
+preview bot posts on every PR, and every string written for production
+("publish", "the site", "visible to the public", the gate banner's own copy)
+was read verbatim on a surface where it was false. Measured on jodidaniel.com
+2026-09-04: `curl …/admin/config.yml | grep '^  branch:'` gives `main` on the
+apex and `claude/controls-gating-label-or72js` on `preview-pr247`.
+jodidaniel.com#247 worked around it in the seam's own copy; per-field copy
+cannot carry a property of the surface, so the platform now states it once.
+
+`theme/admin/branch-binding-banner.js` (production shell only) renders, at the
+top of every screen and before login, *"You are editing the `<branch>` branch
+from a preview. Anything you save or publish here updates this preview only —
+it reaches `<apex>` when this pull request merges."*, with the pull request
+linked by its head branch. Three decisions, each with a shorter wrong
+alternative it rejects:
+
+- **Read from the config, never guessed from the hostname.** It fetches the
+  same `config.yml` Decap loads and reads `backend.branch` at the line anchor
+  the patch script writes (`^  branch:`). `e2e/branch-binding-banner.test.js`
+  runs the real script on the real template and hands the bytes to the real
+  reader, so the writer and the reader cannot drift apart unnoticed. A
+  hostname test would silently disable the banner the day a preview host is
+  renamed — the failure the banner exists to remove — so the lint forbids any
+  `location` read.
+- **Compared against a new injected global, `window.CMS_PRODUCTION_BRANCH`,
+  never a `"main"` literal.** Both render paths read `backend.branch` back off
+  the `config.yml` they have just rendered — a real YAML parse — and inject it:
+  the branch the admin binds to when that file is served unpatched. The shim
+  carries no branch name and `e2e/admin-publishing-ux.test.js` asserts it never
+  grows one. Both paths `require "date"` explicitly for the parse's
+  `permitted_classes`: Psych loads `Date` lazily, and without the require the
+  first call NameErrored into the rescue and injected `""` — measured on the
+  CLI mirror while it was written, an inert banner with nothing to say why.
+- **Unmatched means silent.** A value that is not a plain git ref name, a
+  missing line, an unreadable file, an uninjected production branch — each
+  renders nothing rather than a guess.
+
+The gate banner's copy was re-read for the same reason. It now names the
+public site by its apex (*"`<apex>` is in coming-soon mode — its visitors see
+the coming-soon page, not what has been published…"*), true from either host,
+and it anchors itself BELOW the branch banner by id so the two read in a fixed
+order whichever async read resolves first.
+
+**And a measurement the pure-fs lints could not make found that the gate
+banner had been invisible on the entry editor since v0.1.96.** Decap 3.15.1's
+`EditorContainer` is `position: absolute; top: 0; height: 100%` and
+`ToolbarContainer` is `position: absolute; top: 0`, with no positioned
+ancestor between them and `<body>` — so on the editor route both anchor to the
+viewport, not the flow, and a permanent in-flow block at body's top is painted
+over. With both banners in flow (126 px) at 1280x800 the toolbar sat at y=0,
+`elementFromPoint` at each banner's centre returned a toolbar button and the
+split-pane resizer, and the screenshot showed no banner at all; the login and
+list routes (sticky header) and the phone layout (the mobile layer makes the
+toolbar static) were fine, which is how "on every screen" shipped. The fix is
+`theme/admin/admin-notice-band.css`: each banner adds `cms-notice-band` to
+`<body>` when it renders, and under that class body is a flex column at least
+the viewport tall with `#nc-root` positioned and filling the remainder, so the
+editor's `height: 100%` resolves against a box that starts below the notices.
+Re-measured at 1280x800 on the entry editor: toolbar y=126, editor 126–800,
+Save reachable, no document scrollbar; a site with no banner never gets the
+class. `docs/PUBLISHING-UX.md` carries the table.
+
+Guards: `e2e/branch-binding-banner.test.js` (vm sandbox: both verdicts, every
+silent case, the writer↔reader lockstep, the banner order, the gate copy, the
+band class), `e2e/admin-publishing-ux.test.js` (`#412` block: no branch
+literal, no `location` read, both render paths inject the global, the class
+literal agrees across both shims and the stylesheet, the shell links it),
+`theme/spec/decap_config_hook_render_test.rb` (the hook injects the branch the
+config was rendered with, into every shell), and the existing render-parity
+lint on the injected key set. Release edit set moved to `v0.1.107`.
 
 **v0.1.106 — a selected spec that the consumer lane ignores fails the
 REQUIRED `parity / parity` with "No tests found" (jodidaniel.com#247).**

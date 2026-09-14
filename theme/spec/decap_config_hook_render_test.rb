@@ -172,6 +172,25 @@ class DecapConfigHookRenderTest < Minitest::Test
     assert_equal ["site_probe"], collection_names(rendered("config.yml"))
   end
 
+  # #412 — the branch-binding banner compares the SERVED config's
+  # backend.branch against the branch the config was RENDERED with, and it
+  # gets the latter from this injection. The value must be read off the
+  # rendered config itself (a real YAML parse, not a template literal), so the
+  # global and the file can never disagree — and it must reach every shell the
+  # identity block reaches, index*.html and reviews/*.html alike.
+  def test_injects_the_production_branch_read_from_the_rendered_config
+    with_default_external(Encoding::UTF_8) { CmsPlatformTheme::DecapConfig.run(@site) }
+    expected = rendered("config.yml").dig("backend", "branch")
+    refute_nil expected, "the rendered config.yml must carry backend.branch"
+    %w[index.html index-test.html index-local.html reviews/index.html].each do |shell|
+      html = File.read(File.join(@dest, "admin", shell), encoding: "utf-8")
+      block = html[/<script>window\.CMS_REPO=.*?<\/script>/m]
+      refute_nil block, "#{shell} must carry the injected identity block"
+      assert_includes block, "window.CMS_PRODUCTION_BRANCH=#{expected.inspect};",
+                      "#{shell} must inject the branch the config was rendered with"
+    end
+  end
+
   # Bug A lock, source-level: both templates must carry the marker EXACTLY
   # once. Fails before the fix for config-local.base.yml (0 matches, not 1).
   def test_both_base_templates_carry_exactly_one_splice_marker

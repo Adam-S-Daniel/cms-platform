@@ -1,0 +1,60 @@
+/*
+ * admin-notice-band.css — makes room for the permanent in-flow notices at
+ * the top of the production admin shell (site-gate-banner.js,
+ * branch-binding-banner.js; cms-platform#412).
+ *
+ * Both banners are blocks in normal document flow at the top of <body>,
+ * by the #329 rule: permanent chrome must never be a `position: fixed`
+ * overlay over Decap's toolbar. On the login page and the collection list
+ * that is enough — Decap's app header is `position: sticky` and the
+ * content flows below the banners.
+ *
+ * The ENTRY EDITOR is different, and this file exists because of a
+ * measurement. Decap 3.15.1's `EditorContainer` is `position: absolute;
+ * top: 0; height: 100%` and `ToolbarContainer` is `position: absolute;
+ * top: 0` inside it, and NOTHING between them and <body> is positioned —
+ * so both anchor to the viewport, not to the flow. Measured with the real
+ * bundle at 1280x800 while #412 was built: with both banners in flow at
+ * body's top (126 px), `#nc-root` began at y=126 but the toolbar sat at
+ * y=0, `elementFromPoint` at each banner's centre returned a toolbar
+ * button and the split-pane resizer, and the screenshot showed no banner
+ * at all. The site-gate banner had shipped in that state (v0.1.96): its
+ * "on every screen" held on the list and login routes and was false on
+ * the one route where an editor spends their time. At 393x852 the mobile
+ * layer (admin-mobile.css) already makes the toolbar static, so the
+ * phone was fine throughout.
+ *
+ * The fix is to give the absolute editor a positioned ancestor that
+ * starts BELOW the notices and is exactly the remaining viewport: body
+ * becomes a flex column at least the viewport tall, and `#nc-root` (the
+ * mount point Decap creates) fills whatever the notices leave. The
+ * editor's `height: 100%` then resolves against that box, so the panes
+ * keep their internal scroll and the document does not gain a scrollbar.
+ * On the list route `#nc-root`'s in-flow content is taller than the
+ * remainder, the flex item simply grows, and the sticky header behaves
+ * exactly as before. Absolutely/fixed-positioned body children (the
+ * floating links, the commit pills, the OAuth alert) are out of flow and
+ * take no part in the flex layout.
+ *
+ * Scoped to `body.cms-notice-band`, which the two banner shims add ONLY
+ * when they actually put a banner on screen — a site with no gate, served
+ * from production, gets no layout change at all. The class is never
+ * removed: with no banner in flow the flex layout is equivalent to the
+ * default, so there is nothing to undo.
+ *
+ * The rules must NOT use `!important`: `#nc-root` has no inline styles
+ * and Decap sets nothing on <body> beyond `margin: 0`, so plain
+ * specificity wins, and a lower-specificity override is what keeps the
+ * mobile layer's `!important` rules authoritative where they apply.
+ * Locked by e2e/admin-publishing-ux.test.js.
+ */
+body.cms-notice-band {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+body.cms-notice-band > #nc-root {
+  position: relative;
+  flex: 1 1 auto;
+}

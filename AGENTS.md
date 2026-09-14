@@ -75,7 +75,7 @@ same Jekyll + Decap + AWS stack and platform improvements sync **both ways**.
 Read this before changing anything here. Design: `docs/ARCHITECTURE.md`. Sync
 model: `docs/SYNC.md`.
 
-**Current release: `v0.1.106`** — `v0.1.0`–`v0.1.106` are all tagged GitHub
+**Current release: `v0.1.107`** — `v0.1.0`–`v0.1.107` are all tagged GitHub
 releases; cut a new one with `gh workflow run release.yml -f version=vX.Y.Z`.
 That number is also carried by the two plugin manifests (`plugin.json` +
 `.claude-plugin/plugin.json`), and `release.yml` REFUSES to cut a tag whose
@@ -284,6 +284,18 @@ Two rules that came out of the fix and generalise past it:
   the fixed file, whose header comment explains the defect. It parses now
   (acorn, string literals + style writes only) — the house AST rule, in its
   cheapest possible form.
+- **"In flow" is only half a placement rule — the entry editor anchors to the
+  VIEWPORT.** Decap's `EditorContainer` and `ToolbarContainer` are
+  `position: absolute; top: 0` with no positioned ancestor, so a permanent
+  in-flow block at body's top is painted OVER on the editor route at desktop
+  widths while the list, login and phone layouts show it fine — which is how
+  the gate banner shipped "on every screen" in v0.1.96 and was invisible on
+  the one screen an editor lives in until #412 measured it (1280x800:
+  `elementFromPoint` at the banner returned a toolbar button). A banner that
+  must survive the editor route adds `cms-notice-band` to `<body>`;
+  `admin-notice-band.css` then gives the editor a positioned ancestor
+  (`#nc-root`) that starts below the notices. Pure-fs lints cannot see this
+  class of bug; measure with the real bundle (`docs/PUBLISHING-UX.md` §6).
 
 **All five staged phases shipped in v0.1.96.** Both doors are now one:
 `one-door-publish.js` hides the Status dropdown, the Workflow nav link and

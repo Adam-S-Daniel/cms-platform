@@ -68,6 +68,12 @@
        old inline narrow-viewport sidebar rule. Rationale + the no-fork
        decision: docs/decisions/0003-extend-decap-for-mobile-instead-of-forking.md. -->
   <link rel="stylesheet" href="admin-mobile.css" />
+  <!-- Room for the permanent in-flow notices (site-gate-banner.js,
+       branch-binding-banner.js): Decap's entry editor is an absolute box
+       anchored to the viewport, and without this it paints OVER a banner in
+       flow at body's top — measured at 1280x800, see the file's header
+       (#412). Inert until a banner adds `cms-notice-band` to <body>. -->
+  <link rel="stylesheet" href="admin-notice-band.css" />
 </head>
 <body>
   <!--
@@ -223,11 +229,17 @@
           production (Status -> Ready, and the Workflow board).
        6. site-gate-banner.js — inert unless the site declares
           `cms.site_gate`; says so when the whole site is gated.
+       7. branch-binding-banner.js — inert on production; on a preview
+          deploy, whose served config.yml is bound to the PR branch, says
+          which branch this admin edits and where a change made here goes
+          (#412). Order-independent of 1-6 (it reads the served config, not
+          any of their state), and the gate banner sits below it by id.
 
-       2, 4, 5 and 6 are PRODUCTION-SHELL ONLY. index-test.html keeps
+       2, 4, 5, 6 and 7 are PRODUCTION-SHELL ONLY. index-test.html keeps
        Decap's real Status control and board because the editorial-workflow
        specs drive them there; index-local.html has no editorial workflow
-       at all. Both facts are asserted by e2e/admin-329-shims.test.js.
+       at all, and neither shell is ever served from a patched config.
+       Both facts are asserted by e2e/admin-publishing-ux.test.js.
   -->
   <script src="entry-status-model.js" defer></script>
   <script src="publish-progress.js" defer></script>
@@ -236,6 +248,7 @@
   <script src="publish-button.js" defer></script>
   <script src="one-door-publish.js" defer></script>
   <script src="site-gate-banner.js" defer></script>
+  <script src="branch-binding-banner.js" defer></script>
   <script src="search-scope-all.js" defer></script>
   <script src="list-row-affordance.js" defer></script>
   <script src="single-entry-collection-shortcut.js" defer></script>

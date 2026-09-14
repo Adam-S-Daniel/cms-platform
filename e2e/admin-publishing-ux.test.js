@@ -16,7 +16,10 @@
 //   5  one vocabulary  — four badges + two modifiers, derived once
 //                        (entry-status-model.js) and rendered by both the
 //                        editor bar and the collection list, plus the
-//                        site-level gate banner (site-gate-banner.js).
+//                        site-level gate banner (site-gate-banner.js) and,
+//                        since #412, the branch-binding banner
+//                        (branch-binding-banner.js) that says which branch
+//                        a preview admin is bound to.
 //
 // This is the cheap pure-fs half — no browser, no build, no network. The
 // behavioural half is e2e/admin-one-door.spec.js and the model's own unit
@@ -52,14 +55,15 @@ const POLLER = "publish-progress.js";
 const BUTTON = "publish-button.js";
 const ONE_DOOR = "one-door-publish.js";
 const GATE_BANNER = "site-gate-banner.js";
+const BRANCH_BANNER = "branch-binding-banner.js";
 
 // The shells that carry a real GitHub backend and a real deploy. Everything
 // that talks to the GitHub API or hides a Decap control is scoped here.
-const PRODUCTION_ONLY = [POLLER, BUTTON, ONE_DOOR, GATE_BANNER];
+const PRODUCTION_ONLY = [POLLER, BUTTON, ONE_DOOR, GATE_BANNER, BRANCH_BANNER];
 // The pure model is loaded everywhere, because posts-list-enhance.js runs on
 // all three shells and renders the same badges from it.
 const ALL_SHELLS_FILES = [MODEL];
-const NEW_FILES = [MODEL, POLLER, BUTTON, ONE_DOOR, GATE_BANNER];
+const NEW_FILES = [MODEL, POLLER, BUTTON, ONE_DOOR, GATE_BANNER, BRANCH_BANNER];
 
 function admin(name) {
   return fs.readFileSync(path.join(ADMIN_DIR, name), "utf8");
@@ -81,7 +85,7 @@ test.describe("publishing UX phases 2-5 — files and wiring", () => {
     expect(missing, `missing shim file(s) under theme/admin/: ${missing.join(", ")}`).toEqual([]);
   });
 
-  test("index.html loads all five, deferred", () => {
+  test("index.html loads every one of them, deferred", () => {
     const html = admin("index.html");
     for (const name of NEW_FILES) {
       const tag = scriptTag(html, name);
@@ -395,6 +399,131 @@ test.describe("publishing UX phase 5 — the site gate", () => {
           "the whole admin shell rather than degrade",
       ).toBe(true);
     }
+  });
+});
+
+test.describe("#412 — the branch binding is stated once, from the config", () => {
+  // deploy-preview.yml patches the served config.yml so a preview /admin is
+  // bound to the PR branch, and nothing on screen said so: every string
+  // written for production was read verbatim on a surface where it was
+  // false. The banner states the binding once. Three things about HOW keep
+  // it honest, and each is a lint here because each has a shorter, wrong
+  // alternative that would pass a visual check.
+
+  // The production branch is site identity, and the platform never hardcodes
+  // site identity — publish-progress.js derives it from the PR's base repo,
+  // and this shim takes it from the render paths, which read it off the
+  // config they rendered. A `"main"` literal here would be the one-line
+  // shortcut that reads right and breaks the day a site's default branch is
+  // not `main`.
+  test("branch-binding-banner.js hardcodes no production branch name", () => {
+    const literals = stringLiterals(admin(BRANCH_BANNER));
+    expect(
+      literals.filter((v) => v === "main" || v === "refs/heads/main"),
+      "branch-binding-banner.js must compare against the injected window.CMS_PRODUCTION_BRANCH, never assume `main`",
+    ).toEqual([]);
+  });
+
+  test("branch-binding-banner.js reads window.CMS_PRODUCTION_BRANCH and is inert without it", () => {
+    const src = admin(BRANCH_BANNER);
+    expect(src.includes("window.CMS_PRODUCTION_BRANCH"), "must read the injected production branch").toBe(true);
+    expect(
+      hasBareReturnGuardOn(src, "production"),
+      "must return early when no production branch was injected — a shell rendered by an older " +
+        "platform must load an inert shim, never a banner comparing against undefined",
+    ).toBe(true);
+  });
+
+  // The decision is `served backend.branch !== production`, read from the
+  // config Decap itself loads. A hostname test (`/^preview-pr\d+\./`) is the
+  // shorter alternative, and it silently disables the banner the day a
+  // preview host is renamed — which is exactly the failure this shim exists
+  // to remove. So it may not read the location at all: not for the verdict,
+  // and not to sharpen a link either, because the second use grows into the
+  // first.
+  test("branch-binding-banner.js never reads window.location — the verdict comes from the served config", () => {
+    const src = admin(BRANCH_BANNER);
+    expect(readsMember(src, "window", "location"), "no window.location read").toBe(false);
+    expect(readsMember(src, "location", "hostname"), "no location.hostname read").toBe(false);
+    expect(readsMember(src, "location", "host"), "no location.host read").toBe(false);
+    expect(readsMember(src, "location", "href"), "no location.href read").toBe(false);
+    expect(readsMember(src, "document", "location"), "no document.location read").toBe(false);
+  });
+
+  // Both render paths must inject the production branch. The parity lint
+  // asserts they inject the SAME keys, which is necessary and not sufficient:
+  // dropping the key from both stays parity-green and silently turns the
+  // banner off everywhere (the CMS_SITE_GATE reasoning, restated).
+  test("both render paths inject window.CMS_PRODUCTION_BRANCH", () => {
+    for (const p of [
+      path.join(REPO_ROOT, "scripts", "render-decap-config.rb"),
+      path.join(REPO_ROOT, "theme", "lib", "cms-platform-theme", "decap_config_hook.rb"),
+    ]) {
+      expect(
+        fs.readFileSync(p, "utf8").includes("window.CMS_PRODUCTION_BRANCH="),
+        `${path.relative(REPO_ROOT, p)} must inject window.CMS_PRODUCTION_BRANCH — parity alone ` +
+          "cannot catch both paths dropping it together",
+      ).toBe(true);
+    }
+  });
+
+  // The two banners are permanent in-flow blocks at the top of <body>, each
+  // inserted after its own async read. The gate banner places itself AFTER
+  // the branch banner when one is present, so the page reads "you are on a
+  // branch" before "the public site is gated" whichever fetch wins. That is a
+  // literal in each file naming the other's id, and two literals that must
+  // agree get the lockstep assertion (the suppressor-marker precedent).
+  test("site-gate-banner.js anchors below the branch banner by the id the branch banner declares", () => {
+    const declared = stringLiterals(admin(BRANCH_BANNER)).filter((v) => /^cms-.*banner$/.test(v));
+    expect(declared, "branch-binding-banner.js declares its banner id as a string literal").toHaveLength(1);
+    expect(
+      stringLiterals(admin(GATE_BANNER)).includes(declared[0]),
+      `site-gate-banner.js must name ${declared[0]} verbatim — it is how the gate banner finds the ` +
+        "branch banner to sit below it; behaviour is pinned in e2e/branch-binding-banner.test.js",
+    ).toBe(true);
+  });
+
+  // "In flow, not fixed" is only half a placement rule. Decap's entry editor
+  // is `position: absolute; top: 0` with no positioned ancestor, so it anchors
+  // to the VIEWPORT and paints over a block in flow at body's top — measured
+  // at 1280x800 with the real bundle while #412 was built, and the shipped
+  // gate banner had been invisible on the editor route since v0.1.96. The
+  // fix is a body class keyed to a stylesheet (admin-notice-band.css) that
+  // gives the editor a positioned ancestor starting below the notices. Three
+  // literals have to agree — the class in each shim and the selector in the
+  // CSS — and the shell has to link the sheet, or the band is reserved by
+  // nobody.
+  test("both banners reserve the notice band, and the production shell links the stylesheet for it", () => {
+    const CLASS = "cms-notice-band";
+    for (const name of [GATE_BANNER, BRANCH_BANNER]) {
+      expect(
+        stringLiterals(admin(name)).includes(CLASS),
+        `${name} must add the "${CLASS}" class to <body> when it renders — without it Decap's ` +
+          "viewport-anchored editor paints over the banner on the entry route",
+      ).toBe(true);
+    }
+    const css = admin("admin-notice-band.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(css, "admin-notice-band.css must lay body out as a flex column under the class").toMatch(
+      new RegExp(`body\\.${CLASS}\\s*\\{[^}]*display\\s*:\\s*flex[^}]*flex-direction\\s*:\\s*column`),
+    );
+    expect(css, "admin-notice-band.css must make #nc-root the editor's positioned ancestor").toMatch(
+      new RegExp(`body\\.${CLASS}\\s*>\\s*#nc-root\\s*\\{[^}]*position\\s*:\\s*relative`),
+    );
+    expect(
+      /<link\s+rel="stylesheet"\s+href="admin-notice-band\.css"/.test(admin("index.html")),
+      "index.html must link admin-notice-band.css — the class the shims add keys nothing otherwise",
+    ).toBe(true);
+  });
+
+  // The gate banner's copy has to be true from a preview admin as well as
+  // from production, and it can only be that by naming the public site
+  // rather than "the site" — the apex is the injected identity for that.
+  test("site-gate-banner.js names the public site by window.CMS_APEX", () => {
+    expect(
+      readsMember(admin(GATE_BANNER), "window", "CMS_APEX"),
+      "site-gate-banner.js must read window.CMS_APEX — its copy names the production site so that " +
+        "it stays true when read on a preview admin bound to a branch (#412)",
+    ).toBe(true);
   });
 });
 

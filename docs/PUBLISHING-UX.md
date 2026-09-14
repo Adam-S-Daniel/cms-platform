@@ -576,6 +576,90 @@ permanent while it applies, and permanent chrome that overlays is
 occlusion. (`oauth-app-restriction-detector.js` is fixed and correct to be:
 it is a transient, dismissible alert.)
 
+### The branch binding — a tenth status, stated once (#412, v0.1.107)
+
+`deploy-preview.yml` patches the served `admin/config.yml`
+(`scripts/patch-preview-config.sh`), so a preview's `/admin` is bound to the
+**PR branch** — `backend.branch` is the PR head, `site_url` the preview host.
+That is the point of a preview admin. What was missing is that nothing on
+screen said so: the two admins are byte-identical apart from that one config
+line, an editor reaches the preview one routinely (the preview bot links it
+on every PR), and every string written for production — "publish", "the
+site", "visible to the public", the gate banner above included — was read
+verbatim on a surface where it was false. Measured on jodidaniel.com,
+2026-09-04:
+
+```
+$ curl -s https://jodidaniel.com/admin/config.yml               | grep '^  branch:'
+  branch: main
+$ curl -s https://preview-pr247.jodidaniel.com/admin/config.yml | grep '^  branch:'
+  branch: claude/controls-gating-label-or72js
+```
+
+Per-field copy cannot carry this — it is a property of the surface, not of
+any field — so `theme/admin/branch-binding-banner.js` states it once, at the
+top of every screen, on the surface where it is true:
+
+> You are editing the `<branch>` branch from a preview. Anything you save or
+> publish here updates this preview only — it reaches `<apex>` when *this
+> pull request* merges.
+
+Three decisions in it, each with a shorter wrong alternative:
+
+- **The verdict is read from the config, never guessed from the hostname.**
+  The shim fetches the same `config.yml` Decap loads and reads
+  `backend.branch` at the line anchor the patch script WRITES (`^  branch:`);
+  `e2e/branch-binding-banner.test.js` runs the real script on the real
+  template and feeds the bytes to the real reader, so writer and reader
+  cannot drift apart unnoticed. A `/^preview-pr\d+\./` hostname test would be
+  shorter and would silently disable the banner the day a preview host is
+  renamed — the exact failure the banner exists to remove — so the lint
+  forbids any `location` read at all.
+- **It compares against `window.CMS_PRODUCTION_BRANCH`, a new injected
+  global, not a `"main"` literal.** Both render paths read `backend.branch`
+  back off the `config.yml` they have just rendered (a real YAML parse) and
+  inject it — the branch the admin binds to when that file is served
+  UNPATCHED. "Which branch is production" is site identity, and the shim
+  carries no branch name; `e2e/admin-publishing-ux.test.js` asserts it never
+  grows one, the way it already does for `publish-progress.js`.
+- **It renders before login.** The config is public and needs no token, so
+  an editor who follows a preview link sees which branch they are about to
+  edit before they authenticate into it.
+
+The gate banner's copy was re-read for the same reason and now names the
+public site by its apex ("`<apex>` is in coming-soon mode — its visitors see
+the coming-soon page, not what has been published…"), which is true from
+either host; the flag is read at the repository's default branch on purpose,
+because that is what the public site is built from. When both banners
+render, the branch banner is always first and the gate second, whichever
+async read resolves first (the gate banner anchors below the branch
+banner's id).
+
+**"In flow" was not enough, and the gate banner had been invisible on the
+editor route since v0.1.96.** Decap 3.15.1's `EditorContainer` is
+`position: absolute; top: 0; height: 100%` and `ToolbarContainer` is
+`position: absolute; top: 0` inside it, with NO positioned ancestor — so on
+the entry editor they anchor to the viewport, not the flow. Measured with the
+real bundle while #412 was built (both banners in flow at body's top,
+126 px):
+
+| viewport | route | banner y | toolbar y | `elementFromPoint` at the banner |
+|---|---|---|---|---|
+| 1280x800 | login, list | 0 / 64 | 126 (sticky header) | the banner |
+| 1280x800 | entry editor | 0 / 64 | **0** | a toolbar button; the split-pane resizer |
+| 393x852 | all three | 0 / 122 | 271+ (static, mobile layer) | the banner |
+
+The list and login routes and the phone were fine, which is how "on every
+screen" shipped while false on the one screen an editor lives in. The fix
+is `theme/admin/admin-notice-band.css`: each banner adds `cms-notice-band`
+to `<body>` when it renders, and under that class body is a flex column at
+least the viewport tall with `#nc-root` (Decap's mount point) positioned and
+filling the remainder — the editor's `height: 100%` resolves against that
+box, so it anchors below the notices with no document scrollbar. Re-measured
+after the fix at 1280x800 on the entry editor: toolbar y=126, editor
+126–800, Save reachable, `documentElement.scrollHeight` 800. A site with no
+banner never gets the class and sees no layout change at all.
+
 ### What is deliberately NOT covered by a browser spec
 
 Phases 2–4 load on the production shell only, and the only served shell a
@@ -665,6 +749,11 @@ with the pre-fix file and the post-fix file, in the same session.
   costs.
 - `theme/admin/site-gate-banner.js` — the site-level gate, and why it is in
   flow while the OAuth banner is fixed.
+- `theme/admin/branch-binding-banner.js` — which branch a preview admin is
+  bound to, read from the served config (#412); with
+  `theme/admin/admin-notice-band.css`, the positioned ancestor that keeps
+  Decap's viewport-anchored editor below both banners, and
+  `e2e/branch-binding-banner.test.js`, the writer↔reader lockstep test.
 - `theme/admin/publish-via-auto-merge.js` — why publishing is a label, and the
   false-"Failed to publish" suppressor.
 - `e2e/admin-publishing-ux.test.js` / `e2e/admin-publish-routing.test.js` — the
