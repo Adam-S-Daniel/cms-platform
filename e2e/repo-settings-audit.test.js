@@ -162,6 +162,14 @@ function diffAgainstFixtures(script, manifest, repo, mutate = {}) {
   };
 }
 
+function withoutBypassActors(rulesets) {
+  return rulesets.map((ruleset) => {
+    const copy = JSON.parse(JSON.stringify(ruleset));
+    delete copy.bypass_actors;
+    return copy;
+  });
+}
+
 test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures", () => {
   test("importing never runs the CLI (require.main guard)", () => {
     // Would exec gh / process.exit if the CLI ran (no gh auth in the lint lane).
@@ -206,6 +214,100 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
           `should absorb ALL live noise), got ${JSON.stringify(informational)}`,
       ).toEqual([]);
     }
+  });
+
+  test("READ-ONLY RULESETS: omitted bypass_actors on every fixture repo is UNVERIFIABLE, never fabricated drift or a write", () => {
+    const script = loadScript();
+    const risk = loadRisk();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const scans = Object.entries(LIVE).map(([repo, live]) =>
+      diffAgainstFixtures(script, manifest, repo, {
+        rulesets: withoutBypassActors(live.rulesets.map(fixture)),
+      }),
+    );
+
+    expect(scans.flatMap((scan) => scan.findings)).toEqual([]);
+    const informationals = scans.flatMap((scan) => scan.informational);
+    expect(informationals).toHaveLength(5);
+    expect(
+      informationals.every(
+        (item) =>
+          item.kind === "ruleset-field-not-visible" &&
+          item.field === "bypass_actors" &&
+          item.fixSkip !== true,
+      ),
+    ).toBe(true);
+
+    const plan = script.buildFixPlan(manifest, scans);
+    const classification = risk.classifyPlan(plan);
+    expect(plan).toEqual([]);
+    expect(classification.writes).toEqual([]);
+    expect(classification.gated).toEqual([]);
+  });
+
+  test("READ-ONLY RULESETS: hidden bypass plus a visible required-check delta plans that delta and gates the full PUT as unverifiable", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/adamdaniel.ai";
+    const feature = fixture("adamdaniel.ruleset-feature.json");
+    delete feature.bypass_actors;
+    feature.rules.find(
+      (rule) => rule.type === "required_status_checks",
+    ).parameters.required_status_checks = [];
+
+    const scan = diffAgainstFixtures(script, manifest, repo, {
+      rulesets: [fixture("adamdaniel.ruleset-main.json"), feature],
+    });
+    expect(scan.findings.map((finding) => finding.facet)).toEqual([
+      "rule:required_status_checks.required_status_checks",
+    ]);
+    expect(scan.informational).toContainEqual(
+      expect.objectContaining({
+        repo,
+        kind: "ruleset-field-not-visible",
+        ruleset: "cms-feature-branches",
+        field: "bypass_actors",
+      }),
+    );
+
+    const plan = script.buildFixPlan(manifest, [scan]);
+    expect(plan[0].skipped).toEqual([]);
+    expect(plan[0].puts).toHaveLength(1);
+    expect(plan[0].puts[0].changes).toEqual([
+      {
+        facet: "rule:required_status_checks.required_status_checks",
+        live: [],
+        desired: [{ context: "editorial / validate-content" }],
+      },
+    ]);
+    expect(plan[0].puts[0].live).not.toHaveProperty("bypass_actors");
+
+    const classification = loadRisk().classifyPlan(plan);
+    expect(classification.writes).toHaveLength(1);
+    expect(classification.gated).toHaveLength(1);
+    expect(classification.gated[0].reason).toContain(
+      "cannot verify live bypass_actors",
+    );
+  });
+
+  test("READ-ONLY RULESETS: null bypass_actors is malformed and remains unknown", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const main = fixture("cms-platform.ruleset-main.json");
+    main.bypass_actors = null;
+    const scan = diffAgainstFixtures(script, manifest, repo, { rulesets: [main] });
+
+    expect(scan.findings).toEqual([]);
+    expect(scan.informational).toContainEqual(
+      expect.objectContaining({
+        repo,
+        kind: "ruleset-field-not-visible",
+        ruleset: "main",
+        field: "bypass_actors",
+      }),
+    );
+    expect(script.normalizeRuleset(main).projected.bypass_actors).toBeNull();
   });
 
   test("(a) jodidaniel feature ruleset vs the SHARED library entry is clean (default dismissal_restriction stripped)", () => {
@@ -1038,6 +1140,17 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(script.cleanScanSummary(informational)).toBe(
       "OK — live settings match repo-settings.yml on every scanned repo.",
     );
+    const lines = [];
+    const originalLog = console.log;
+    console.log = (...args) => lines.push(args.join(" "));
+    try {
+      script.printFixPlan([], informational);
+    } finally {
+      console.log = originalLog;
+    }
+    expect(lines).toEqual([
+      "Fix plan: EMPTY — live settings already match the manifest. Nothing to apply.",
+    ]);
     // A ruleset-unknown-field informational is NOT a flag visibility problem —
     // it must not qualify either line.
     const unknownField = [
@@ -1054,6 +1167,60 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     );
     expect(script.cleanScanSummary(unknownField)).toBe(
       "OK — live settings match repo-settings.yml on every scanned repo.",
+    );
+  });
+
+  test("UNVERIFIABLE summaries and notices name hidden ruleset fields alongside hidden flags", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const degradedRepo = fixture("cms-platform.repo.json");
+    delete degradedRepo.delete_branch_on_merge;
+    const ruleset = fixture("cms-platform.ruleset-main.json");
+    delete ruleset.bypass_actors;
+    const scan = {
+      repo,
+      ...script.diffRepo({
+        repo,
+        desiredSettings: script.effectiveSettings(manifest, repo),
+        desiredRulesets: script.desiredRulesets(manifest, repo),
+        liveRepo: degradedRepo,
+        liveRulesets: [ruleset],
+      }),
+      liveRulesets: [ruleset],
+    };
+    expect(scan.findings).toEqual([]);
+
+    const okLine = script.repoOkLine(repo, 1, scan.informational);
+    expect(okLine).toContain("1 flag(s) UNVERIFIABLE (need Contents)");
+    expect(okLine).toContain("main.bypass_actors");
+    expect(okLine).toMatch(/ruleset write access/);
+
+    const summary = script.cleanScanSummary(scan.informational);
+    expect(summary).toContain(`${repo}/main.bypass_actors`);
+    expect(summary).toMatch(/UNVERIFIABLE/);
+    expect(summary).not.toContain("match repo-settings.yml on every scanned repo.");
+
+    const lines = [];
+    const originalLog = console.log;
+    console.log = (...args) => lines.push(args.join(" "));
+    try {
+      script.printReport([scan]);
+      script.printFixPlan([], scan.informational);
+    } finally {
+      console.log = originalLog;
+    }
+    const bypassNotice = lines.find(
+      (line) =>
+        line.startsWith("::notice") &&
+        line.includes("main") &&
+        line.includes("bypass_actors"),
+    );
+    expect(bypassNotice).toContain("UNVERIFIABLE");
+    expect(bypassNotice).toContain("ruleset write access");
+    expect(lines.some((line) => line.includes("ruleset-field-not-visible"))).toBe(false);
+    expect(lines).toContain(
+      "Fix plan: EMPTY — no verifiable drift found; 2 field(s) UNVERIFIABLE. Nothing to apply.",
     );
   });
 
@@ -2174,6 +2341,68 @@ function rsc(contexts, extraParams = {}) {
 const verdict = (w) => loadRisk().classifyWrite(w).verdict;
 
 test.describe("repo-settings write-risk classification", () => {
+  test("a full ruleset PUT with unobserved bypass_actors is gated even when desired is empty or omitted", () => {
+    const risk = loadRisk();
+    for (const desired of [
+      { ...rsc(["a / a"]), bypass_actors: [] },
+      (() => {
+        const body = rsc(["a / a"]);
+        delete body.bypass_actors;
+        return body;
+      })(),
+    ]) {
+      const live = rsc([]);
+      delete live.bypass_actors;
+      const result = risk.classifyWrite({
+        kind: "ruleset-put",
+        name: "main",
+        live,
+        desired,
+      });
+      expect(result.verdict).toBe("gated");
+      expect(result.reason).toContain("cannot verify live bypass_actors");
+    }
+
+    const malformed = rsc([]);
+    malformed.bypass_actors = null;
+    const malformedResult = risk.classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live: malformed,
+      desired: rsc(["a / a"]),
+    });
+    expect(malformedResult.verdict).toBe("gated");
+    expect(malformedResult.reason).toContain("cannot verify live bypass_actors");
+  });
+
+  test("visible empty bypass_actors remains a real actor-add delta, and visible removal stays safe", () => {
+    const actor = {
+      actor_id: 5,
+      actor_type: "RepositoryRole",
+      bypass_mode: "always",
+    };
+    const base = rsc(["a / a"]);
+    const withActor = { ...base, bypass_actors: [actor] };
+
+    const added = loadRisk().classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live: base,
+      desired: withActor,
+    });
+    expect(added.verdict).toBe("gated");
+    expect(added.reason).toContain("RepositoryRole 5 = admin");
+
+    const removed = loadRisk().classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live: withActor,
+      desired: base,
+    });
+    expect(removed.verdict).toBe("safe");
+    expect(removed.reason).toContain("bypass actor(s) removed");
+  });
+
   test("the REAL outstanding drift (#310) classifies SAFE, so it applies unattended", () => {
     // adamdaniel.ai's `main` ruleset is missing `prerelease-guard /
     // prerelease-guard`; the manifest has it. That single item was pending

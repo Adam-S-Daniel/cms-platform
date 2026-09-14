@@ -188,7 +188,10 @@ the gem onto a consumer's live `/admin`.
   a human `node scripts/audit-repo-settings.js --fix --yes`.** Emergency live
   flips must be ratified (PR the value in with a `# why:`) or reverted the same
   day — the daily `repo-settings-audit` workflow files a `ci` tracking issue on
-  any drift.
+  any drift. Its read-only token cannot see ruleset `bypass_actors`; see
+  `docs/CI-INVARIANTS.md` ("Read-only ruleset plans cannot verify bypass
+  actors") before interpreting an `UNVERIFIABLE` result or changing planner
+  permissions.
 - **Verify before claiming done** — run the render and the scaffolder against
   throwaway inputs; syntax-check YAML/bash/Ruby/JS. See "Verify" below.
 - **Record knowledge here (AGENTS.md) and/or in `skills/`, not only in agent
