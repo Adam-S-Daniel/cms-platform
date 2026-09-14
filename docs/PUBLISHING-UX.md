@@ -675,6 +675,67 @@ locked structurally by `e2e/admin-publishing-ux.test.js`. This is stated
 here rather than left as an apparent gap, because "there is no browser spec"
 is otherwise indistinguishable from an oversight.
 
+### Two shim hazards recorded after the phases shipped (v0.1.97)
+
+Both surfaced driving the shipped shims, not building them, and neither
+is visible to a pure-fs lint.
+
+- **`mergeable` is absent from the `/pulls` LIST response** — only the
+  single-PR endpoint carries it, and it is `null` until GitHub computes it.
+  Reading it off the list leaves a merge-conflict branch that looks alive and
+  can never fire.
+- **Hiding a control RETARGETS every selector that matched it by name**, and
+  that is how v0.1.96 broke every real-prod loop while 1656 pure-fs
+  assertions stayed green. `publishViaUi()` did
+  `getByRole("button", {name: /^Publish$/i})`; `getByRole` skips CSS-hidden
+  elements, so it skipped Decap's newly-hidden control and resolved to the
+  PLATFORM's `#cms-publish-button` — same accessible name, different control.
+  The click SUCCEEDED, opened the inline confirmation, and only the following
+  `publish now` menuitem lookup failed. A missing control fails loudly; a
+  silently retargeted one fails two steps later somewhere else. When a shim
+  hides a control, audit what selects it by ROLE AND NAME, not just by class
+  — and remember that the replacement is labelled with the right word for an
+  editor, which is exactly what makes it a drop-in for someone else's
+  selector. (v0.1.97, adamdaniel.ai run 33439336337.)
+
+### A spec that publishes in two entries through one page fails (#342)
+
+Decap 3.15.1 breaks the next publish after a direct hash navigation from one
+ENTRY route to another (`#/collections/a/entries/x` → `#/collections/b/entries/y`):
+the publish throws `Cannot read properties of undefined (reading 'reduce')`
+inside the bundle, nothing reaches disk, and no toast reports it — the editor
+just stays dirty. Visiting the first entry without editing it is enough to arm
+it. Opening the entry first in the session, or going list → entry, both work.
+Reproduced byte-identically with and without the platform's shims, so it is
+Decap's, not ours — https://github.com/Adam-S-Daniel/cms-platform/issues/342
+tracks it upstream (no Decap issue exists yet).
+
+An editor cannot reach it: the editor chrome renders no sidebar, and the back
+link goes to the COLLECTION route. A spec reaches it by default, because specs
+navigate with `page.goto("…#/collections/…/entries/…")`. So, for any spec that
+publishes:
+
+- **One publish per page.** A scenario that publishes a second entry gets its
+  own `test()` (Playwright's `page` fixture is per-test) or an explicit
+  `browser.newContext()`. Never drive two entry publishes through one page
+  object, even when the first entry was only visited.
+- **Between entries, route through the collection.** If one test genuinely
+  must touch two entries, `goto` the collection route (or click the
+  "← Writing in …" back link) before the second entry's route. List → entry
+  is a working path; entry → entry is the broken one.
+- **It does not present as a Decap error.** It presents as a publish that
+  "did nothing" — dirty editor, unchanged file, a downstream wait that times
+  out — and it cost two spurious failures in the #329 acceptance suite before
+  it was isolated. Read the browser console for `reading 'reduce'` before
+  debugging the publish path.
+
+No lint enforces this yet. If it bites again, the publish-path AST lint from
+https://github.com/Adam-S-Daniel/cms-platform/issues/382
+(`e2e/status-dropdown-selector.test.js`) is where a "two entry routes, one
+page, then publish" detector belongs. The
+`browser-testing` skill carries the same rule beside the other Decap-driving
+gotchas.
+
 ## 5. Options considered and rejected
 
 - **`publish_mode: simple`** (Save commits straight to `main`). It really

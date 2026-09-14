@@ -358,3 +358,58 @@ fleet repo actually adds the thin caller, it does not make it loud there either.
 the checker and the reusable is option 1's *mechanism*; option 1 is only
 delivered once the seven repos carry the caller and the three with a
 cms-platform `ignore` can drop it. #283 stays open for that.
+
+## A pin carries no version comment - lint-locked (2026-08-20)
+
+The managed half of `AGENTS.md` states the rule; these two specs stop it
+drifting back. Eleven PRs stripped every trailing `# vX.Y.Z (YYYY-MM-DD)` label
+fleet-wide and deleted the machinery that regenerated them, but nothing then
+ASSERTED the absence - and a convention with no verifier returns the first time
+an agent helpfully labels a SHA it just bumped, which is how the labels drifted
+out of true to begin with.
+
+- `e2e/action-pin-comment-lint.test.js` - the PLATFORM half: this repo's
+  `.github/workflows/`, the `.github/actions/*/action.yml` composites, and the
+  `examples/site` thin-caller templates. Registered in `PLATFORM_META_SPECS`.
+- `e2e/consumer-action-pin-comment-lint.test.js` - the CONSUMER half: a site's
+  own `.github` tree, where most of the fleet's pinned `uses:` lines actually
+  live. Deliberately NOT registered (the #244 lesson - registering it would
+  testIgnore it on the exact lane it exists for). Do not "tidy" it onto the list.
+
+Both drive one detector, `e2e/pin-comment-rules.js`, so they cannot drift apart.
+
+It PARSES, and that is what makes it correct rather than merely house-style
+compliant. YAML comments are outside the data model, so `YAML.parse()` drops
+them - but `YAML.parseDocument()` keeps a same-line trailing comment as
+`node.comment` (verified against `yaml` 2.9.0 for plain, quoted,
+last-line-no-newline, composite-action and flow-mapping shapes), so no lexical
+fallback is needed. A line scan would also be WRONG here: two legal shapes carry
+a version token in the VALUE - `…/e2e-tests.yml@v0.1.88` and
+`docker://alpine:3.20` - and a regex over the line flags both. The detector
+reads only the comment, so a tag-pinned own-account ref, a `./local` path and a
+`docker://` ref are inherently untouched; there is no carve-out to get wrong.
+A trailing comment that is not a version (`# zizmor: ignore[...]`) stays legal.
+
+## platform-bump moves files and one dictated input, not just pins (#315)
+
+A release can require three kinds of consumer-side change, and for a long time
+the bump made only the first: it re-pins, it SEEDS a newly-dictated thin caller,
+it RETIRES one that left the canonical set, and it RECONCILES
+`cms-automerge-nudge.yml`'s `required_contexts` from the manifest's ruleset for
+that repo. The retire and reconcile halves have to ride the bump commit —
+pin-consistency compares the consumer's workflow set against the platform at
+that consumer's OWN pinned ref, so splitting either off fails in the
+mirror-image direction (`MISSING` instead of `EXTRA`).
+
+Two things to keep straight if you touch it: "was this caller ever dictated?" is
+answered by the canonical set at the OLD ref, never by "the consumer has a file
+we don't recognise" — that distinction is what stops it deleting site-authored
+workflows — and the `required_contexts` list is DERIVED per consumer from
+`repo-settings.yml`, never copied from the template, because a consumer may map
+`main` to a different library entry.
+
+Note also that the check reporting `workflow-set: EXTRA` is
+`platform-pin-consistency / pin-consistency`, NOT `parity / parity` (that one is
+`parity-preview.yml`'s preview gate). Only the latter is in `consumer-main`'s
+required set today, so a stale or orphaned caller currently reports on an
+OPTIONAL check.
