@@ -74,6 +74,18 @@ whole design:
   syntax error, and it lands *inside* the shell's `<script>` block — so
   getting it wrong takes the whole admin down rather than degrading. A site
   with no gate injects `null` and the banner is inert.
+  **`CMS_PRODUCTION_BRANCH` (v0.1.107)** is a string again, but it is not
+  read from `_config.yml`: it is `backend.branch` of the `config.yml` the
+  render path has *just written*, read back with a real YAML parse — the
+  branch the admin binds to when that file is served unpatched, i.e. from
+  production. `deploy-preview.yml` later patches the SERVED copy to the PR
+  head, and `admin/branch-binding-banner.js` compares the two to say, on a
+  preview admin, which branch it is bound to (#412). Unreadable → `""`, and
+  the banner stays inert rather than the build failing over an advisory
+  value. Both paths `require "date"` explicitly for the parse's
+  `permitted_classes` — Psych loads it lazily, and without the require the
+  first call NameErrors into the rescue and injects `""` (measured on the
+  CLI mirror while it was written).
 - **Delete `*.base.yml`** from the output (the templates aren't published).
 
 `scripts/render-decap-config.rb` is the **deploy-time CLI mirror** of the hook

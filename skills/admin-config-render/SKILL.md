@@ -43,7 +43,10 @@ Both do, in order:
    `{{CMS_LOGO_URL}}` token-substituted from `_config.yml` (`url`, `cms.*`); then
    the site seam spliced at the `# __SITE_COLLECTIONS__` marker.
 4. **Inject `window.CMS_*`** (`CMS_REPO`, `CMS_SITE_ORIGIN`, `CMS_APEX`,
-   `CMS_OAUTH_BASE_URL`, `CMS_SITE_TITLE`) into `index*.html` AND `reviews/*.html`
+   `CMS_OAUTH_BASE_URL`, `CMS_SITE_TITLE`, the `CMS_SITE_GATE` object-or-null,
+   and `CMS_PRODUCTION_BRANCH` — `backend.branch` read back off the rendered
+   `config.yml`, which `branch-binding-banner.js` compares with the SERVED
+   copy's branch on a preview) into `index*.html` AND `reviews/*.html`
    — skipping a file only if it already *defines* the identity, not merely uses
    it. Admin chrome reads identity from these globals; never hardcode it.
 5. **Delete `*.base.yml`** from the output.

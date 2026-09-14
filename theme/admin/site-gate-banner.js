@@ -26,12 +26,43 @@
  * price for being unmissable.
  *
  * This banner is permanent while it applies. A permanent fixed overlay at
- * `top: 0` would sit on Decap's editor toolbar (itself `position: fixed;
- * top: 0`) forever — the §2.3 defect, which shipped once already and
- * covered 68% of the Publish button. So this one is a block in normal flow
- * at the top of `<body>`: it pushes the app down instead of covering it,
- * costs a banner's height of scroll, and is structurally incapable of
- * hiding a control.
+ * `top: 0` would sit on Decap's editor toolbar (itself `position: absolute;
+ * top: 0`, anchored to the viewport) forever — the §2.3 defect, which
+ * shipped once already and covered 68% of the Publish button. So this one
+ * is a block in normal flow at the top of `<body>`: it pushes the app down
+ * instead of covering it, and is structurally incapable of hiding a
+ * control.
+ *
+ * "Pushes the app down" needs one more piece, learned by measurement while
+ * #412 was built: on the ENTRY EDITOR route Decap's `EditorContainer` is
+ * `position: absolute; top: 0; height: 100%` with no positioned ancestor,
+ * so it anchors to the viewport and painted OVER this banner at 1280x800
+ * (`elementFromPoint` at the banner's centre returned the split-pane
+ * resizer; the screenshot showed no banner). The list and login routes,
+ * whose header is sticky, and the phone layout, where admin-mobile.css
+ * makes the toolbar static, were fine — which is how v0.1.96 shipped
+ * "on every screen" while it was false on the one screen an editor lives
+ * in. The banner therefore adds `cms-notice-band` to <body>, and
+ * admin-notice-band.css turns body into a flex column with `#nc-root`
+ * filling the remaining viewport, so the editor anchors below the notices.
+ *
+ * When branch-binding-banner.js (#412) has put its own banner at the top of
+ * <body> — a preview admin, bound to a PR branch — this one goes directly
+ * BELOW it, so the page reads "you are on a branch" before "the public site
+ * is gated" whichever of the two async reads resolved first. The ordering is
+ * pinned by e2e/branch-binding-banner.test.js.
+ *
+ * ── True on both surfaces ──────────────────────────────────────────────
+ * The same admin is served from production AND from every PR preview, where
+ * it is bound to the PR branch (#412). Copy written for production — "the
+ * whole site", "nothing you publish is visible to the public" — is read
+ * verbatim on the preview, where a publish changes the preview and reaches
+ * the public site only on merge. So the copy names the PUBLIC site by its
+ * apex (window.CMS_APEX) and says what its visitors see, which is true from
+ * either host; the branch banner above it says where a change made here
+ * goes. And the flag is read at the repository's default branch, on purpose:
+ * this banner describes the public site, and the default branch is what the
+ * public site is built from.
  *
  * ── Site-agnostic by construction ──────────────────────────────────────
  * The platform must never hardcode one site's identity, and "which boolean
@@ -174,12 +205,13 @@
       ].join(";") + ";";
 
     var label = gate.label || "coming-soon mode";
+    var site = window.CMS_APEX || "The public site";
     var text = document.createElement("span");
     text.style.cssText = "flex:1 1 20rem;min-width:14rem;font-weight:500;";
     text.textContent =
-      "The whole site is in " + label + " — nothing you publish is visible to " +
-      "the public yet. Everything you save and publish is kept, and it all " +
-      "appears at once when the site is switched on.";
+      site + " is in " + label + " — its visitors see the coming-soon page, " +
+      "not what has been published. Everything saved and published is kept, " +
+      "and it all appears at once when the site is switched on.";
     b.appendChild(text);
 
     if (gate.entry) {
@@ -191,7 +223,18 @@
       b.appendChild(a);
     }
 
-    document.body.insertBefore(b, document.body.firstChild);
+    // Below the branch banner when there is one (see the placement block in
+    // the header); otherwise at the very top.
+    var above = document.getElementById("cms-branch-binding-banner");
+    if (above && above.parentNode === document.body) {
+      document.body.insertBefore(b, above.nextSibling);
+    } else {
+      document.body.insertBefore(b, document.body.firstChild);
+    }
+    // Make room: Decap's entry editor is an absolute box anchored to the
+    // viewport and would paint over a block in flow at body's top — see
+    // "IN FLOW, not fixed" above. The class keys admin-notice-band.css.
+    document.body.classList.add("cms-notice-band");
   }
 
   async function refresh() {
