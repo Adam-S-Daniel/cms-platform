@@ -169,6 +169,19 @@ field (or fields) would go:
   the seam is still **append-only** (collections are spliced after the base);
   `$ref` only delivers shared-field REUSE, not base override.
 
+## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
+
+The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a
+NEUTRAL placeholder. `theme/assets/images/logo.svg` is a wordless, brand-free
+generic glyph — NEVER a specific site's mark (no "AD"/initials/wordmark). The
+render hooks default `cms.logo_url` to `<url>/assets/images/logo.svg`, and a site
+brands `/admin` by **shadowing** that gem asset with its own
+`assets/images/logo.svg` (Jekyll site files win over same-path gem files) or by
+setting `cms.logo_url`. The scaffolder seeds a "replace me" copy into every new
+site. Locked by `theme/spec/neutral_logo_test.rb` (gem asset is wordless +
+carries the override comment) and `e2e/scaffold-seeds-neutral-logo.test.js`
+(scaffold output). Don't reintroduce a brand into the gem asset.
+
 ## Site favicon (gem-shipped, brand-free — issue #325)
 
 The gem ships zero favicon references (no `<link rel="icon">` anywhere in
@@ -230,6 +243,32 @@ up — a `platform_ref` bump gets them the gem's `favicon.html` include and
 the default to work), but the fix for jodidaniel.com's own `<head>`
 (`_layouts/home.html`) is the one-line `{% include favicon.html %}` add above,
 made in that repo.
+
+## The scaffolder seeds `preview.md` + `404.html` (issue #23)
+
+The scaffolder seeds both files, and it has to (issue #23). A consuming
+site MUST expose `/preview/` (the admin "Live Preview" target) and a graceful
+`404.html`, or the admin button dead-ends on a raw S3 404 and unknown URLs 404
+ungracefully. The gem ships `theme/_layouts/preview.html` (the preview SHELL,
+with the hidden post/page/project variants the admin `preview-bridge` streams
+into) + the admin scripts, but the consuming site must provide the `/preview/`
+PAGE. `scaffold/create-site.js` seeds both (`SEED_PREVIEW` / `SEED_404`):
+`preview.md` is **front-matter only** (`layout: preview`, `permalink: /preview/`,
+`sitemap: false`) and carries **no front-matter `robots`** — the gem preview
+layout HARDCODES `<meta name="robots" content="noindex, nofollow">`, so a
+front-matter one would duplicate it (mirrors `adamdaniel.ai/preview.md`).
+`404.html` rides the gem `default` layout (which DOES render `page.robots`), so
+it carries `robots: "noindex,nofollow"` + `sitemap: false` + a home/blog link;
+copy is generic (no site identity). The `e2e/fixture-site` carries both (it
+represents a scaffolded site) and the platform lint
+`e2e/scaffold-preview-and-404.test.js` asserts the contract: (a) scaffold
+output, (b) fixture parity, (c) optional post-build proof that
+`_site/preview/index.html` renders the `data-preview-root` shell +
+`_site/404.html` exists (skips when no Jekyll toolchain — pure-fs self-CI
+lanes). **Single-page-site caveat:** per-item *live* preview is limited for a
+single-page bio (jodidaniel.com — no per-section route to drive the bridge);
+the seeded `preview.md` still gives a working `/preview/` shell + the seeded
+`404.html` a friendly not-found page.
 
 ## Seeded 404 page: self-contained and neutral, not gem-styled (issue #326)
 

@@ -1370,3 +1370,86 @@ with the prod-mutate loop, not with the lint's exit code.
   nothing today: `adamdaniel.ai`, `jodidaniel.com` and `examples/site` scan
   **0 sinks each** across 32 workflows apiece. A consumer thin caller that
   grows one is not caught here.
+
+## Editorial-workflow label audit (v0.1.6; self-heal + label-at-creation v0.1.48)
+
+Decap re-runs its editorial-workflow label migration on **every** `/admin` load
+(the persistent "Decap CMS is adding labels to N of your Editorial Workflow
+entries" dialog) when an open editorial PR (a `cms/*` branch) is **missing** its
+`decap-cms/<draft|pending_review|pending_publish>` label — repo-wide, so it
+shows on prod AND every preview deploy. Guards:
+
+- `e2e/cms-editorial-label-migration.spec.js` — drives the in-browser test-repo
+  backend; asserts the dialog is ABSENT, or gone after dismiss + 30s + reload
+  (never survives that cycle).
+- `scripts/audit-editorial-labels.js` — flags open `cms/*` PRs missing a
+  `decap-cms/<status>` label; exits non-zero with `::error::` annotations.
+  With `--fix` (the reusable's default since v0.1.48) it SELF-HEALS instead:
+  applies `decap-cms/pending_publish` when the PR carries `cms/ready` (it is
+  literally queued to publish), else `decap-cms/draft`, and only exits
+  non-zero when a fix didn't stick — a red audit now means "needs a human".
+  Motivation: the flag-only audit went red daily for a week (PR #2387,
+  2026-07) while the "adding labels…" dialog sat on prod — scheduled-run
+  failures are invisible, so detect-only was the wrong contract.
+- `.github/workflows/editorial-label-audit.yml` — reusable; consumers wire a
+  daily-cron caller (sparse-checks out just the audit script from the platform). It
+  MUST pass `--repo ${{ github.repository }}` (v0.1.16): the sparse checkout
+  leaves no git repo in `github.workspace`, so a bare `gh pr list` fails
+  `not a git repository`. Self-heal needs `pull-requests: write` from the
+  CALLER (reusable permissions are capped by the caller's grant); with only
+  `read` the fix 403s and falls back to failing loud. Lint-locked by
+  `e2e/editorial-label-audit-repo.test.js`.
+- **Label at creation (v0.1.48):** every non-Decap writer that opens a `cms/*`
+  PR applies `decap-cms/pending_publish` alongside `cms/ready` so the
+  migration never has a target in the first place — the publish-via-auto-merge
+  shim's delete-recovery PRs, `cms-fixture-pr.js` seed/remove fixture PRs, and
+  `sweep-stale-cms-prs.yml`'s two cleanup PRs. (Decap-created editorial PRs
+  label themselves.) The pre-v0.1.48 "`cms/e2e-fixture/remove-*` PRs
+  transiently red the audit — expected churn" caveat is obsolete: those PRs
+  are labelled at creation now, and the audit heals any stragglers.
+
+## A consumer's own post-build verifier runs through `site-verify.yml` (#377)
+
+jodidaniel.com ships `scripts/verify-build-artifacts.rb` — ~190 assertions
+over the BUILT site (media links resolve, the category triangle agrees, the
+admin seam's anchors match built section ids, no PDF bytes are committed, the
+`pdf_public` gate withholds and publishes). Its docs cited it in six places as
+the guard for those; no workflow ran it, which is how a `pdf_public: true`
+with no file in `_site` — row 2 of the verifier's own table — reached prod.
+The consumer cannot own the workflow: workflow-SET parity flags any caller
+absent from `examples/site/` as EXTRA on a required check. So it is a platform
+seam: the `site-verify.yml` reusable plus a dictated thin caller of the same
+name, which `platform-bump` seeds into both consumers on the next bump (#315).
+
+Four decisions in it that are not obvious from the YAML:
+
+- **Convention, not configuration.** No inputs, no secrets. If the caller's
+  tree has `scripts/verify-build-artifacts.rb` the reusable builds the site
+  (`JEKYLL_ENV=production`, the deploy's build, on deploy-preview's default
+  Ruby) and runs it; otherwise it prints a `::notice::` and succeeds.
+  adamdaniel.ai has no such script and no-ops in ~10s. Generalising to a
+  non-Ruby verifier waits for a second case.
+- **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
+  (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
+  #285/#289 shape, held by `e2e/site-verify.test.js` through
+  `cancellationHazards()`. The context is `site-verify / site-verify`.
+- **The caller has NO `paths-ignore`, deliberately.** The verifier globs
+  `**/*.pdf` over the whole tree, so a docs-only PR can break it exactly as a
+  layout PR can; a filter would blind the check for the ignored paths, and
+  would arm the missing-check trap the moment the context is required (the
+  `prerelease-guard` caller carries no filter for the same reason).
+- **It became required only AFTER both consumers published it.** Adding a
+  context to `consumer-main` before its publisher exists blocks every consumer
+  PR on a context that never arrives (#371). So the order was: v0.1.98 release
+  → `platform-bump` seeded the caller (jodidaniel.com#236, adamdaniel.ai#3464,
+  both reported `site-verify / site-verify` green on 2026-09-01) → only then
+  the manifest entry plus the nudge template's `required_contexts` line, and
+  `e2e/site-verify.test.js`'s SEQUENCING guard flipped to its positive twin.
+  Each consumer's own nudge list catches up on its next `platform-bump`, which
+  reconciles it from the manifest (#315); until then the list is one context
+  short, which GitHub's own merge refusal covers (#284's one-release window).
+
+Measured before shipping: at jodidaniel.com `main`, `bundle exec jekyll build`
++ the script gives 192 `ok`, 0 `FAIL`, exit 0, identical under `JEKYLL_ENV=
+production`; 9 `note` lines are assertion groups that do not arm while
+`site_live: false`, so coverage roughly doubles at go-live (jodidaniel#26).
