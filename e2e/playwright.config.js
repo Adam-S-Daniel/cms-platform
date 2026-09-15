@@ -200,6 +200,12 @@ const PLATFORM_META_SPECS = [
   // scripts/audit-scheduled-runs.js helpers (consumer ships only a thin
   // wrapper) — platform-internal, self-CI only.
   "scheduled-run-health.test.js",
+  // #424 — the self-resolution + currency-lane sibling: reads this repo's own
+  // reusable workflow DEFINITION (readWorkflow/parseYaml) and requires
+  // scripts/check-platform-currency.js directly. A consumer's thin caller has
+  // no scheduled-run-health.yml or scripts/ tree of its own — platform-internal,
+  // self-CI only.
+  "scheduled-run-health-self-resolve.test.js",
   // #109 — the repo-settings-as-code lints: the manifest lint reads the root
   // repo-settings.yml + scripts/audit-repo-settings.js (MANAGED_REPO_KEYS
   // SSOT) + the release.yml DEFINITION; the audit unit test additionally
