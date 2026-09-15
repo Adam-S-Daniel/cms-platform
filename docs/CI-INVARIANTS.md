@@ -141,9 +141,7 @@ per-PR checkout):
   `npm` because a major is the class that has actually needed reverting here
   (setup-node 6→7 in #179 is the incident that surfaced the need, even though
   that action lives on `github-actions` and so could only ever get the flat 7
-  days; the Decap bundle kept revertible on purpose at v0.1.66→v0.1.67), and a
-  Playwright major additionally needs a coupled `.github/ci-runner/Dockerfile`
-  edit Dependabot cannot make in the same PR.
+  days; the Decap bundle kept revertible on purpose at v0.1.66→v0.1.67).
   `semver-minor` / `semver-patch` are left undefined on the `npm` entry on
   purpose (`github-actions` cannot carry any of the three) — GitHub's
   documented precedence falls an undefined `semver-*-days` back to
