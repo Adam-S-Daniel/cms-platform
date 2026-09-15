@@ -520,6 +520,32 @@ that ride along on approval second, and the full audit output collapsed under
 is why an id and a bare name are not enough. The `render` subcommand is the same rendering to stdout, which is
 how the run's own summary page shows it.
 
+### Read-only ruleset plans cannot verify bypass actors
+
+The plan job deliberately mints `administration=read`. GitHub's
+[`GET /repos/{owner}/{repo}/rulesets/{ruleset_id}`](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset)
+omits `bypass_actors` unless the caller has repository-ruleset write access, so
+an absent field is unknown — it is not an empty actor list. Treating it as `[]`
+fabricated a daily `[] -> admin` drift on both consumer feature rulesets even
+though their live admin bypasses had not changed.
+
+The read-only audit reports the ruleset and field as `UNVERIFIABLE` and never
+plans a bypass-only write from that absence. It still plans other visible drift
+on the same ruleset; because a ruleset `PUT` replaces the full body, the
+write-risk classifier gates that plan with `cannot verify live bypass_actors`.
+The approved apply mints a write-scoped token and replans before writing.
+Approval does not expand the earlier planner token or grant lasting credential
+scope, so bypass-only drift cannot be detected by the scheduled read-only scan.
+The existing write-time `--refuse-weakening` check remains the enforcement for
+the unattended lane.
+
+For an admin-visible check without applying anything, use plan-only mode (omit
+`--yes`):
+
+```bash
+node scripts/audit-repo-settings.js --fix
+```
+
 ### Two clean-merging PRs made the classifier fail OPEN, six minutes apart
 
 The write-risk classifier merged 2026-08-31 20:31. `securityWrites` — the

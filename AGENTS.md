@@ -143,7 +143,10 @@ Self-explanatory by name: `.github/workflows/`, `scripts/`, `infrastructure/`,
 - **Repo settings/rulesets change ONLY via a `repo-settings.yml` PR plus a human
   `node scripts/audit-repo-settings.js --fix --yes`** — an emergency flip is
   ratified (PR it in with a `# why:`) or reverted the same day; the daily
-  `repo-settings-audit` files a `ci` issue on drift.
+  `repo-settings-audit` files a `ci` issue on drift. Its read-only token cannot
+  see ruleset `bypass_actors`, so an `UNVERIFIABLE` result is not empty drift —
+  read `docs/CI-INVARIANTS.md` § "Read-only ruleset plans cannot verify bypass
+  actors" before interpreting one or changing planner permissions.
 - **Verify before claiming done** — run both generators against throwaway inputs
   and syntax-check what you touched (commands: `docs/OPERATIONS.md` §Verify);
   **record knowledge in AGENTS.md, `docs/` or `skills/`, not agent memory**.

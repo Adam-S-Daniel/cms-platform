@@ -221,6 +221,15 @@ function classifyWrite(w) {
 function classifyRulesetPut(w) {
   const live = w.live || {};
   const desired = w.desired || {};
+  // GitHub omits bypass_actors from GET ruleset responses unless the token has
+  // repository-ruleset write access. A PUT replaces the full body, so no write
+  // is provably non-weakening until that field was actually observed — even
+  // when the manifest wants no bypass actors. The approved apply replans with
+  // a write-scoped token before it reaches this classifier again.
+  if (!Array.isArray(live.bypass_actors))
+    return gated(
+      `ruleset "${w.name}": cannot verify live bypass_actors before a full ruleset PUT`,
+    );
   const reasons = [];
   const keys = new Set([...Object.keys(live), ...Object.keys(desired)]);
   for (const key of keys) {

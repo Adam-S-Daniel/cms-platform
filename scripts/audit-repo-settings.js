@@ -97,9 +97,11 @@
  * stripped; a DEFAULT-valued pull_request dismissal_restriction
  * ({enabled:false,allowed_actors:[]} — org-repo noise on jodidaniel) is
  * stripped while any other value is drift; required_status_checks[].
- * integration_id is allowlist-dropped; rules / checks / bypass_actors /
- * ref_name conditions are sorted before compare; live-only rule-parameter
- * keys are informational, not drift; environment reviewers (projected from
+ * integration_id is allowlist-dropped; rules / checks / visible bypass_actors /
+ * ref_name conditions are sorted before compare; an omitted or malformed live
+ * bypass_actors field is UNVERIFIABLE information, not an invented empty list;
+ * live-only rule-parameter keys are informational, not drift; environment
+ * reviewers (projected from
  * the live `protection_rules[].reviewers[].reviewer.id` shape down to
  * {type,id}) are sorted by (type,id) before compare, and an absent
  * wait_timer/required_reviewers rule normalizes to GitHub's own defaults
@@ -505,7 +507,19 @@ function diffRuleset(repo, name, live, desired, findings, informational) {
     "conditions",
     "bypass_actors",
   ]) {
-    const l = facet === "bypass_actors" ? live[facet] || [] : live[facet];
+    if (facet === "bypass_actors" && !Array.isArray(live[facet])) {
+      informational.push({
+        repo,
+        kind: "ruleset-field-not-visible",
+        ruleset: name,
+        field: facet,
+        reason: Object.prototype.hasOwnProperty.call(live, facet)
+          ? `malformed live value ${JSON.stringify(live[facet])}`
+          : "omitted from the live ruleset response",
+      });
+      continue;
+    }
+    const l = live[facet];
     const d = facet === "bypass_actors" ? desired[facet] || [] : desired[facet];
     if (!deepEqual(l, d)) {
       findings.push({
@@ -1004,6 +1018,13 @@ function describeInformational(f) {
       `(tolerated; --fix SKIPS this ruleset — a manifest-built PUT would drop it)`
     );
   }
+  if (f.kind === "ruleset-field-not-visible") {
+    return (
+      `ruleset \`${f.ruleset}\` / \`${f.field}\`: UNVERIFIABLE — ${f.reason}; ` +
+      `GitHub returns this field only with repository ruleset write access ` +
+      `(informational, not drift; an admin-scoped \`--fix\` replans before writing)`
+    );
+  }
   if (f.kind === "security-analysis-skipped") {
     return (
       `security setting \`${f.key}\` (${f.endpoint}): SKIPPED — ${f.reason} ` +
@@ -1029,14 +1050,38 @@ function unverifiableKeys(informational) {
     .map((f) => f.key);
 }
 
-// Per-repo OK line. With nothing unverifiable the wording is UNCHANGED; with
-// any, it says how many flags went unchecked instead of implying a full match.
+// Ruleset fields omitted or malformed in the live response. Unlike an unknown
+// field, these are managed fields whose actual value was not observable.
+function unverifiableRulesetFields(informational) {
+  return (informational || [])
+    .filter((f) => f.kind === "ruleset-field-not-visible")
+    .map((f) => ({ repo: f.repo, ruleset: f.ruleset, field: f.field }));
+}
+
+function rulesetFieldList(fields, includeRepo = false) {
+  return fields
+    .map((f) => `${includeRepo ? `${f.repo}/` : ""}${f.ruleset}.${f.field}`)
+    .join(", ");
+}
+
+// Per-repo OK line. Fully verified and flag-only wording stays unchanged;
+// hidden ruleset fields use an explicitly visible-only summary and name them.
 function repoOkLine(repo, rulesetCount, informational) {
   const line = `== ${repo}: OK (flags + ${rulesetCount} ruleset(s) + actions permissions match)`;
   const keys = unverifiableKeys(informational);
-  return keys.length
-    ? `${line} — ${keys.length} flag(s) UNVERIFIABLE (need Contents)`
-    : line;
+  const fields = unverifiableRulesetFields(informational);
+  if (!fields.length)
+    return keys.length
+      ? `${line} — ${keys.length} flag(s) UNVERIFIABLE (need Contents)`
+      : line;
+  const flagPart = keys.length
+    ? `${keys.length} flag(s) UNVERIFIABLE (need Contents); `
+    : "";
+  return (
+    `== ${repo}: OK (all visible settings match) — ${flagPart}` +
+    `${fields.length} ruleset field(s) UNVERIFIABLE (need ruleset write access): ` +
+    rulesetFieldList(fields)
+  );
 }
 
 // ONE collapsed notice per repo naming every unverifiable key (it used to be a
@@ -1050,12 +1095,28 @@ function describeUnverifiable(keys) {
 }
 
 // The clean-scan summary. "match … on every scanned repo" would OVERSTATE the
-// scan whenever some flags were never visible, so qualify it then; with nothing
-// unverifiable the sentence stays byte-identical to what it has always been.
+// scan whenever flags or ruleset fields were never visible, so qualify it then;
+// with nothing unverifiable the sentence stays byte-identical.
 function cleanScanSummary(informational) {
   const keys = unverifiableKeys(informational);
-  if (!keys.length)
+  const fields = unverifiableRulesetFields(informational);
+  if (!keys.length && !fields.length)
     return "OK — live settings match repo-settings.yml on every scanned repo.";
+  if (fields.length) {
+    const parts = [];
+    if (keys.length)
+      parts.push(
+        `${keys.length} flag(s) the read-only PAT cannot see (Contents-gated merge settings)`,
+      );
+    parts.push(
+      `${fields.length} ruleset field(s) needing ruleset write access: ` +
+        rulesetFieldList(fields, true),
+    );
+    return (
+      `OK — all visible live settings match repo-settings.yml; ${parts.join("; ")} ` +
+      `— UNVERIFIABLE, not drift.`
+    );
+  }
   return (
     `OK — live settings match repo-settings.yml on every scanned repo, EXCEPT ` +
     `${keys.length} flag(s) the read-only PAT cannot see (Contents-gated merge settings) ` +
@@ -2072,10 +2133,15 @@ function buildFixPlan(manifest, results) {
   return plan;
 }
 
-function printFixPlan(plan) {
+function printFixPlan(plan, informational = []) {
   if (plan.length === 0) {
+    const unverifiableCount =
+      unverifiableKeys(informational).length +
+      unverifiableRulesetFields(informational).length;
     console.log(
-      "Fix plan: EMPTY — live settings already match the manifest. Nothing to apply.",
+      unverifiableCount
+        ? `Fix plan: EMPTY — no verifiable drift found; ${unverifiableCount} field(s) UNVERIFIABLE. Nothing to apply.`
+        : "Fix plan: EMPTY — live settings already match the manifest. Nothing to apply.",
     );
     return;
   }
@@ -2354,7 +2420,7 @@ function main() {
 
   if (fixMode) {
     const plan = buildFixPlan(manifest, results);
-    printFixPlan(plan);
+    printFixPlan(plan, informational);
     const risk = classifyPlan(plan);
     const unfixables = planUnfixables(plan);
     // ONE machine-readable line, so a caller never has to parse the prose
@@ -2522,6 +2588,7 @@ module.exports = {
   fingerprintBlock,
   extractReportedFingerprints,
   unverifiableKeys,
+  unverifiableRulesetFields,
   repoOkLine,
   describeUnverifiable,
   cleanScanSummary,
@@ -2531,5 +2598,6 @@ module.exports = {
   buildCloseComment,
   buildFixPlan,
   printFixPlan,
+  printReport,
   planDocument,
 };
