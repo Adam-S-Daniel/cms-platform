@@ -129,6 +129,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 | `docs/ADMIN-DELIVERY.md` | `theme/admin/`, a render path, `base_collections`, `field_library` `$ref`, the logo / `preview.md` / 404 seeds. |
 | `docs/CONSUMER-COMPATIBILITY.md` | an e2e spec, an org OAuth save failure, bundle parity, a nudge's contexts. |
 | `docs/PIN-CONSISTENCY.md` | pin consistency, the pin-comment lint, `platform-bump.yml`. |
+| `docs/FLEET-CALLER-CURRENCY.md` | how a fleet repo's `scheduled-run-health` caller stays current: the self-resolving checkout, the currency lane, a fleet repo's cms-platform Dependabot `ignore`. |
 | `docs/CI-INVARIANTS.md` | a required check, a scheduled workflow, the label audit, `site-verify.yml`, the webServer, a loop. |
 | `docs/E2E-PARALLELISM.md` | e2e workers, sharding, the browser install. |
 | `docs/PUBLISHING-UX.md` | what an editor sees of publish/status, or a spec that publishes. |
@@ -265,8 +266,15 @@ the NEW reusable runs the OLD sparse-checked-out script and reports **green**
 having detected nothing (2026-08-20: seven of eight a release behind, one with
 fourteen unreported failing push runs). `scripts/check-pin-agreement.js` asserts
 the two agree, via the reusable `.github/workflows/pin-agreement.yml` — **not**
-via a caller in `examples/site/.github/workflows/`. **#283 is NOT closed**: no
-fleet repo carries the caller yet.
+via a caller in `examples/site/.github/workflows/`. No fleet repo adopted it,
+and #283 was closed without a fix. **#424 removed the second reference
+instead**, for `scheduled-run-health.yml`. It checks its script out at
+`job.workflow_repository`@`job.workflow_sha`, read from `toJSON(job)` because
+actionlint does not type those yet. So `platform_ref` no longer selects the
+tree, and a currency step goes red once a caller's release has been superseded
+for more than `behind_days`. Never put `inputs.platform_ref` back into that
+checkout. Never drop a fleet repo's cms-platform Dependabot `ignore` before its
+caller deletes `platform_ref`. → `docs/FLEET-CALLER-CURRENCY.md`.
 
 ### Dependabot must not bump ANY cms-platform reference (#242, #244)
 

@@ -348,16 +348,18 @@ Two other options were on the table for #283 and are out of scope here:
   that workflow does would have nothing to act on.
 - **Removing the second reference** — having the reusable resolve its own script
   from the ref it was called at, so `platform_ref:` need not exist for these
-  callers and the skew class disappears entirely. That is the better fix if it
-  is reachable; it is a change to the reusable's contract, not a lint, and it
-  belongs in its own change with its own evidence.
+  callers and the skew class disappears entirely. This has since become
+  reachable and is what #424 chose for `scheduled-run-health.yml`: the job
+  context's `job.workflow_repository`/`job.workflow_sha` name the reusable's
+  own commit. The decision, the evidence and the rejected options are in
+  `docs/FLEET-CALLER-CURRENCY.md`.
 
-This lint makes the skew LOUD. It does not make it impossible — and until a
-fleet repo actually adds the thin caller, it does not make it loud there either.
-**Adoption is the remaining work, and it is #283's, not this page's:** shipping
-the checker and the reusable is option 1's *mechanism*; option 1 is only
-delivered once the seven repos carry the caller and the three with a
-cms-platform `ignore` can drop it. #283 stays open for that.
+This lint makes the skew LOUD. It does not make it impossible, and it was never
+adopted by a fleet repo. #283 was closed without a fix. #424 then chose to
+remove the second reference for `scheduled-run-health.yml` rather than adopt
+this lint, because a lint moves no pin: every Dependabot bump would go red and
+wait for a human. The lint stays shipped as a general check. See
+`docs/FLEET-CALLER-CURRENCY.md`.
 
 ## A pin carries no version comment - lint-locked (2026-08-20)
 

@@ -10,9 +10,11 @@
  * old script — but it does nothing for a caller that simply never bumps its
  * `uses:@` ref at all. That caller is internally consistent (nothing to
  * disagree with) and reports green forever, on an ever-older audit script,
- * because nothing was ever asking "is this still current?" GHA-bench sat on
- * cms-platform v0.1.88 while the platform moved to v0.1.106 with no lint or
- * alert noticing — the exact caller-goes-quiet failure mode this closes.
+ * because nothing was ever asking "is this still current?" Measured
+ * 2026-09-15: six fleet callers sat on cms-platform v0.1.87, both refs
+ * agreeing, while the platform moved to v0.1.107 — 20 releases, missing #313's
+ * no-recent-success lane, with no lint or alert noticing. That is the
+ * caller-goes-quiet failure mode this closes.
  *
  * ── THE RULE ──────────────────────────────────────────────────────────────
  * Given the platform release a caller is pinned to (`--ref`), list the
