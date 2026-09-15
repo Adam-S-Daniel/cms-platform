@@ -126,16 +126,24 @@ per-PR checkout):
 
   **The standing gate:** repairing this removes the last human gate on
   third-party action SHAs entering 18 reusables both production sites execute,
-  so BOTH of cms-platform's ecosystems (`github-actions` AND the `/e2e` `npm`
-  harness) carry a **graduated** minimum package age —
-  `cooldown: {default-days: 7, semver-major-days: 30}`. `default-days: 7`
+  so `.github/dependabot.yml` enforces a minimum package age on BOTH of
+  cms-platform's ecosystems (`github-actions` AND the `/e2e` `npm` harness),
+  but not the same shape: `github-actions` carries a flat
+  `cooldown: {default-days: 7}`, while the `/e2e` `npm` harness carries a
+  **graduated** `cooldown: {default-days: 7, semver-major-days: 30}`. GitHub
+  does not support per-SemVer-tier cooldown on `github-actions` at all —
+  adding `semver-major-days` there is a schema error that disables the whole
+  `updates[]` entry, not a silently-ignored key
+  (https://github.com/Adam-S-Daniel/claude-memory-map/runs/93574227209), which
+  is why the majors-only wait lives on the `npm` entry alone. `default-days: 7`
   mechanises the repo's existing cooling-off convention (GitHub's own default is
-  3 days, so 7 is a deliberate RAISE, not a floor from zero); majors wait 30
-  because a major is the class that has actually needed reverting here
-  (setup-node 6→7 in #179; the Decap bundle kept revertible on purpose at
-  v0.1.66→v0.1.67), and a Playwright major additionally needs a coupled
-  `.github/ci-runner/Dockerfile` edit Dependabot cannot make in the same PR.
-  `semver-minor` / `semver-patch` are left undefined on purpose — GitHub's
+  3 days, so 7 is a deliberate RAISE, not a floor from zero); majors wait 30 on
+  `npm` because a major is the class that has actually needed reverting here
+  (setup-node 6→7 in #179 is the incident that surfaced the need, even though
+  that action lives on `github-actions` and so could only ever get the flat 7
+  days; the Decap bundle kept revertible on purpose at v0.1.66→v0.1.67).
+  `semver-minor` / `semver-patch` are left undefined on the `npm` entry on
+  purpose (`github-actions` cannot carry any of the three) — GitHub's
   documented precedence falls an undefined `semver-*-days` back to
   `default-days`, so spelling them out would only invite the three to drift.
   Cooldown applies to **version** updates only: a security advisory bypasses it
