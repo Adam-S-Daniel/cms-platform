@@ -31,6 +31,9 @@
  * lag can never skip a failure, and the run-id dedupe keeps the double
  * coverage from double-reporting.
  *
+ * A LATER SUCCESS DOES NOT CLEAR A FAILURE: closing on recovery was replayed
+ * against 30 days of real runs and rejected — docs/HEALTH-AUDIT-CLOSE-RULE.md.
+ *
  * DEFAULT-BRANCH PUSH FAILURES ARE THE SAME BLIND SPOT (#279): the
  * `event=schedule` scan does nothing for a `push`-to-default-branch failure,
  * which is exactly as invisible — no PR to go red on, no notification.
