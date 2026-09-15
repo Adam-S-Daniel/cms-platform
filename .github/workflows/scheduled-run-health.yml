@@ -31,13 +31,52 @@
 # a human", the same contract as editorial-label-audit's fix mode. The audit
 # is itself scheduled, and its own failed runs are scheduled failures the
 # NEXT day's run reports — the watcher is watched.
+#
+# WHERE THE AUDIT SCRIPT COMES FROM (#424): a caller names the platform
+# TWICE — `uses: .../scheduled-run-health.yml@vX.Y.Z` (a dependency ref
+# Dependabot moves) and, historically, `with: platform_ref: vX.Y.Z` (an
+# input value Dependabot structurally cannot move). A half-bumped caller
+# then ran the NEW reusable against the OLD `audit-scheduled-runs.js` its
+# stale `platform_ref` sparse-checked out — an argv-scanning `flag()`
+# silently ignores a flag it doesn't know, so the job reported GREEN having
+# done none of the work the new workflow asked for. This is the exact #283
+# skew scripts/check-pin-agreement.js's header describes, and GHA-bench ran
+# with this pair unsynced from v0.1.88 to v0.1.106 with nothing noticing.
+#
+# The fix: this job now resolves its OWN repository and commit from the job
+# context (the "Resolve the platform commit this reusable was called at"
+# step, first in `jobs.audit.steps`) instead of trusting
+# `inputs.platform_ref` / `inputs.platform_repo`. Those two inputs are kept
+# — dropping an input would startup-fail every existing caller that still
+# sets one — but neither selects the checkout any more; a value that
+# disagrees with what the job resolved only produces a `::warning::`. That
+# makes the caller's `uses:@` ref the ONLY version that matters, which is
+# the one half of the pair Dependabot CAN move. Full story:
+# docs/FLEET-CALLER-CURRENCY.md.
+#
+# THE CURRENCY LANE (#424): self-resolution stops a HALF-bump from silently
+# regressing the script, but it does nothing for a caller that simply never
+# bumps `uses:@` at all — that caller is internally consistent (nothing left
+# to disagree with) and reports green forever, on an ever-older audit. The
+# "Check this caller is on a current platform release" step (last in
+# `jobs.audit.steps`) closes that gap: it goes red when the release this
+# caller is pinned to has been superseded for longer than `behind_days`, so
+# a caller nothing is moving shows up in its OWN audit instead of staying
+# silent. See docs/FLEET-CALLER-CURRENCY.md.
 name: Scheduled-run health audit (reusable)
 
 on:
   workflow_call:
     inputs:
-      platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
-      platform_ref:  { type: string, default: main }
+      # DEPRECATED (#424). Accepted so existing callers keep starting — an
+      # input GitHub Actions cannot see coming would startup-fail every one
+      # of them — but NEITHER selects the checkout any more; the job reads
+      # its own repository and commit from the job context instead (see
+      # "WHERE THE AUDIT SCRIPT COMES FROM" above). A non-empty value that
+      # disagrees with what the job resolved produces a `::warning::`, never
+      # a different checkout.
+      platform_repo: { type: string, default: "" }
+      platform_ref:  { type: string, default: "" }
       # Scan window in hours. String (not number) so thin callers can wire a
       # workflow_dispatch input straight through without type coercion.
       window_hours:  { type: string, default: "48" }
@@ -54,6 +93,17 @@ on:
       # most need this are the ones nobody would remember to flip it for.
       stale_days:    { type: string, default: "14" }
       stale_scan:    { type: boolean, default: true }
+      # THE CURRENCY LANE (#424). String for the same reason as window_hours
+      # above — a thin caller's workflow_dispatch input passes straight
+      # through with no type coercion. Default ON for the same reason
+      # push_scan is: the repos that most need this are exactly the ones
+      # nobody would remember to flip it for. 21 = the fleet's 7-day
+      # Dependabot cooldown (AGENTS.md) + up to 7 days until the next weekly
+      # Dependabot run notices a new release + 7 days to actually merge it —
+      # a caller genuinely keeping up never trips this, and one that has
+      # stopped moving does.
+      currency_scan: { type: boolean, default: true }
+      behind_days:   { type: string, default: "21" }
 
 # Reusable-workflow permissions are capped by the CALLER's grant: the caller
 # must give actions: read (list workflow runs) + issues: write (open /
@@ -68,12 +118,92 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Resolve the platform commit this reusable was called at
+        id: self
+        env:
+          # actionlint types `job` as a STRICT object that does not (yet)
+          # know about job.workflow_ref / job.workflow_sha /
+          # job.workflow_repository / job.workflow_file_path
+          # (rhysd/actionlint#647, open against both the 1.7.7 this repo
+          # pins in self-ci.yml and the latest 1.7.12) — writing
+          # `${{ job.workflow_sha }}` directly fails this repo's REQUIRED
+          # actionlint lane. `${{ toJSON(job) }}` IS fully typed (job itself
+          # is a known context), and the RUNTIME object carries these
+          # properties regardless of what actionlint's declarations know —
+          # GitHub's own contexts reference documents all four. So values
+          # reach this step only through JOB_CONTEXT (env — never
+          # interpolated into `run:`) and are read out with jq.
+          # e2e/scheduled-run-health-self-resolve.test.js locks both halves:
+          # that this step reads toJSON(job), and that no `${{ }}`
+          # expression anywhere in this file reads job.workflow_ directly.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          INPUT_PLATFORM_REF: ${{ inputs.platform_ref }}
+          INPUT_PLATFORM_REPO: ${{ inputs.platform_repo }}
+        run: |
+          # Here-strings into jq, never a pipe — a pipe into a command that
+          # can exit early is its own footgun (AGENTS.md's grep -q trap);
+          # jq reads its whole input regardless, but the here-string form
+          # costs nothing and keeps this step consistent with that rule.
+          repo=$(jq -r '.workflow_repository // ""' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB_CONTEXT")
+          wref=$(jq -r '.workflow_ref // ""' <<<"$JOB_CONTEXT")
+
+          # GitHub runs `run:` under `bash -e`, so every failure path below is
+          # an explicit `if` + `exit 1` — a bare `[[ ... ]] && ...` as the
+          # last statement of the step would only fail the step on its OWN
+          # false test, not on the condition this is actually policing.
+          if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::the job context carries no usable workflow_repository ('${repo}'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the job context carries no usable workflow_sha ('${sha}'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+          if [[ "$wref" != *"@"* ]]; then
+            echo "::error::the job context carries no usable workflow_ref ('${wref}', no '@'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+
+          # job.workflow_ref looks like
+          # "Adam-S-Daniel/cms-platform/.github/workflows/scheduled-run-health.yml@refs/tags/v0.1.108"
+          # (tag call), "...@refs/heads/main" (branch or local ./ call), or
+          # "...@<40-hex sha>" (sha call). Strip the file-path prefix, then
+          # the refs/tags|refs/heads namespace, to land on the bare ref a
+          # caller would actually recognise as its own pin.
+          ref=${wref##*@}
+          ref=${ref#refs/tags/}
+          ref=${ref#refs/heads/}
+          if ! [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::resolved ref '${ref}' (from workflow_ref '${wref}') is not safe to write to GITHUB_OUTPUT — refusing to guess."
+            exit 1
+          fi
+
+          {
+            echo "repository=$repo"
+            echo "sha=$sha"
+            echo "ref=$ref"
+          } >>"$GITHUB_OUTPUT"
+          echo "Platform commit resolved from the job context: ${repo}@${sha} (called at ${ref})"
+
+          # The deprecated inputs never select the checkout (see the header
+          # comment above `platform_repo`/`platform_ref` in `on.workflow_call.
+          # inputs`) — a caller that still sets one gets a warning naming
+          # both values, never a silently different checkout.
+          if [[ -n "$INPUT_PLATFORM_REF" && "$INPUT_PLATFORM_REF" != "$ref" && "$INPUT_PLATFORM_REF" != "$sha" ]]; then
+            echo "::warning::this caller's platform_ref ('${INPUT_PLATFORM_REF}') disagrees with the ref this workflow was called at ('${ref}') and is IGNORED — the audit script is fetched at ${sha} regardless. Delete the platform_ref: line from this caller."
+          fi
+          if [[ -n "$INPUT_PLATFORM_REPO" && "$INPUT_PLATFORM_REPO" != "$repo" ]]; then
+            echo "::warning::this caller's platform_repo ('${INPUT_PLATFORM_REPO}') disagrees with the repository this workflow was called from ('${repo}') and is IGNORED — the audit script is fetched from ${repo} regardless. Delete the platform_repo: line from this caller."
+          fi
       - name: Fetch the audit script from the platform
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: ${{ inputs.platform_repo }}
-          ref: ${{ inputs.platform_ref }}
-          sparse-checkout: scripts/audit-scheduled-runs.js
+          repository: ${{ steps.self.outputs.repository }}
+          ref: ${{ steps.self.outputs.sha }}
+          sparse-checkout: |
+            scripts/audit-scheduled-runs.js
+            scripts/check-platform-currency.js
           sparse-checkout-cone-mode: false
           path: .cms-platform
       - name: Setup Node
@@ -118,3 +248,25 @@ jobs:
           args+=(--stale-days "$AUDIT_STALE_DAYS")
           if [[ "$AUDIT_STALE_SCAN" != "true" ]]; then args+=(--no-stale-scan); fi
           node .cms-platform/scripts/audit-scheduled-runs.js "${args[@]}"
+      - name: Check this caller is on a current platform release
+        # A red here means the CALLER is behind, not that the audit above
+        # failed — this step runs AFTER it so a stale caller still gets its
+        # scheduled-run health checked either way. The next day's audit run
+        # reports THIS step's own red conclusion into the same `ci`-labelled
+        # tracking issue via the scheduled-failure lane above, so the alert
+        # reaches the existing issue channel rather than needing a new one.
+        # A non-release ref (a branch or a bare sha — e.g. this repo's own
+        # self-scheduled-run-health.yml, which calls this workflow at `./`)
+        # is SKIPPED by the script itself, not gated here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENCY_REPO: ${{ steps.self.outputs.repository }}
+          CURRENCY_REF: ${{ steps.self.outputs.ref }}
+          CURRENCY_BEHIND_DAYS: ${{ inputs.behind_days }}
+          CURRENCY_SCAN: ${{ inputs.currency_scan }}
+        run: |
+          if [[ "$CURRENCY_SCAN" != "true" ]]; then
+            echo "Currency scan disabled by the caller (currency_scan: false)."
+            exit 0
+          fi
+          node .cms-platform/scripts/check-platform-currency.js --platform-repo "$CURRENCY_REPO" --ref "$CURRENCY_REF" --behind-days "$CURRENCY_BEHIND_DAYS"

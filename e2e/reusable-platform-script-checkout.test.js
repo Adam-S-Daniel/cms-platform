@@ -48,6 +48,15 @@
 // on `pull_request` / `schedule` / `workflow_dispatch`, never `workflow_call`
 // — fall out of the `workflow_call` filter on their own; no separate
 // carve-out needed.
+//
+// SELF-RESOLVED CHECKOUTS COUNT TOO (cms-platform#424): scheduled-run-health.yml
+// no longer names the platform via a literal slug or `inputs.platform_repo` —
+// its first step resolves its OWN repository/commit from the job context, and
+// the platform checkout below it references `${{ steps.self.outputs.repository }}`
+// instead. `platformCheckoutInfo()` recognises that shape too, but ONLY when an
+// EARLIER step in the same job actually populated those outputs from
+// `${{ toJSON(job) }}` — a step merely named the right id cannot forge
+// platform-checkout status on its own.
 const { test, expect } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -66,20 +75,41 @@ function isWorkflowCall(doc) {
 
 // A step counts as "checks the platform out to .cms-platform" when it's an
 // `actions/checkout` step naming a cms-platform repository (the literal slug,
-// in any of the forms this repo's own reusables use, or the
-// `${{ inputs.platform_repo }}` expression those reusables default to that
-// slug) with `path: .cms-platform`. `sparseSet` is the file basenames a
-// `sparse-checkout:` block names (`null` when the step omits `sparse-checkout`
-// entirely, i.e. a FULL checkout — every script is present).
-function platformCheckoutInfo(step) {
+// in any of the forms this repo's own reusables use, the
+// `${{ inputs.platform_repo }}` expression those reusables used to default to
+// that slug, OR the self-resolved `${{ steps.<id>.outputs.repository }}` shape
+// — see the SELF-RESOLVED CHECKOUTS header note above) with `path:
+// .cms-platform`. `sparseSet` is the file basenames a `sparse-checkout:` block
+// names (`null` when the step omits `sparse-checkout` entirely, i.e. a FULL
+// checkout — every script is present).
+//
+// `earlierSteps` is every step BEFORE this one in the same job (in file
+// order) — needed only to validate the self-resolved shape: a
+// `steps.<id>.outputs.repository` reference names the platform ONLY when one
+// of those earlier steps has `id: <id>` and an `env` entry whose value is
+// EXACTLY `${{ toJSON(job) }}`, i.e. it actually populated that output from
+// the job context rather than from something else with the same id.
+function platformCheckoutInfo(step, earlierSteps = []) {
   if (!step || typeof step.uses !== "string") return null;
   if (!/^actions\/checkout@/.test(step.uses)) return null;
   const withObj = step.with || {};
   const repo = withObj.repository;
-  const namesPlatform =
+  const namesPlatformDirect =
     typeof repo === "string" &&
     (repo.includes("cms-platform") || repo.includes("inputs.platform_repo"));
-  if (!namesPlatform) return null;
+
+  const selfResolveMatch =
+    typeof repo === "string" &&
+    /^\$\{\{\s*steps\.([\w-]+)\.outputs\.repository\s*\}\}$/.exec(repo.trim());
+  const namesPlatformViaSelfResolve =
+    !!selfResolveMatch &&
+    earlierSteps.some((s) => {
+      if (!s || s.id !== selfResolveMatch[1]) return false;
+      const envObj = (s && s.env) || {};
+      return Object.values(envObj).some((v) => String(v).trim() === "${{ toJSON(job) }}");
+    });
+
+  if (!namesPlatformDirect && !namesPlatformViaSelfResolve) return null;
   if (withObj.path !== ".cms-platform") return null;
   const sparse = withObj["sparse-checkout"];
   if (sparse == null) return { sparseSet: null };
@@ -167,7 +197,7 @@ function findings() {
       const steps = (job && job.steps) || [];
       const checkoutsSoFar = [];
       steps.forEach((step, idx) => {
-        const checkout = platformCheckoutInfo(step);
+        const checkout = platformCheckoutInfo(step, steps.slice(0, idx));
         if (checkout) checkoutsSoFar.push(checkout);
         if (typeof step.run !== "string") return;
         for (const { scriptFile, prefixed, matchText } of invocationsIn(step.run)) {
