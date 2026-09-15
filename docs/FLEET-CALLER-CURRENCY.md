@@ -175,8 +175,15 @@ caller onto a release that has it.
   caller does four things together:
   - move `uses:@` to `vN`;
   - **delete** the `platform_ref:` line;
-  - drop the unscoped `Adam-S-Daniel/cms-platform/*` ignore where present
-    (`_agent-guidance`, `skills-evals`, `fastmail-actions`);
+  - remove every `Adam-S-Daniel/cms-platform/*` ignore the repo carries at
+    that point, **and any test that asserts it**. On `main` on 2026-09-15 that
+    was `_agent-guidance`, `skills-evals` and `fastmail-actions`.
+    [claude-memory-map#33](https://github.com/Adam-S-Daniel/claude-memory-map/pull/33)
+    adds one as an interim guard, locked by an assertion in
+    `tests/tests_dependabot_config.js`. Leaving either half behind reds that
+    repo's CI or re-exposes it to the half-bump. Read each caller repo's
+    `dependabot.yml` and config tests when Phase 2 starts, rather than
+    trusting this list;
   - give `agentskills` a `github-actions` Dependabot entry, or accept the
     currency lane as its only signal. That is a choice for the repo owner.
 
