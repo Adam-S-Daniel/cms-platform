@@ -17,5 +17,8 @@
     "pngjs": "^7.0.0",
     "serve": "^14.2.6",
     "yaml": "2.9.0"
+  },
+  "overrides": {
+    "@hapi/joi": "npm:joi@17.13.7"
   }
 }
