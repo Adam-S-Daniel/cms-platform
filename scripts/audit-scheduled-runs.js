@@ -704,27 +704,40 @@ function buildCloseComment({ windowHours, nowIso }) {
 // independently of any page limit here (observed live: adamdaniel.ai's push
 // lane reported total_count 1411, returned 1,000, and page 11 came back
 // EMPTY — a bigger page limit alone would not have collected the rest).
+// `capExhausted` is TRUE only when the loop ran every one of its `maxPages`
+// iterations and the LAST one was still a full page (it never saw a short
+// one) — i.e. the page cap, not the data running out, is what stopped it.
 function pageThroughListing(fetchPage, itemsKey, maxPages = 10) {
   const items = [];
   let totalCount = null;
+  let sawShortPage = false;
   for (let page = 1; page <= maxPages; page++) {
     const res = fetchPage(page) || {};
     const batch = res[itemsKey] || [];
     items.push(...batch);
     if (typeof res.total_count === "number") totalCount = res.total_count;
-    if (batch.length < 100) break;
+    if (batch.length < 100) {
+      sawShortPage = true;
+      break;
+    }
   }
-  return { items, totalCount };
+  return { items, totalCount, capExhausted: !sawShortPage };
 }
 
-// Pure: did a listing collect fewer items than the API's own total_count?
-// A non-numeric `totalCount` (the field absent — every runs-lane fixture in
-// this file predating #425) scores as NOT truncated, matching the pre-#425
-// behaviour exactly: the real API always sends this field, so there is no
-// live case of "missing" to guard against, and treating "missing" as
-// "unknown" would flip every existing fixture to a truncated read.
-function isListingTruncated(collectedCount, totalCount) {
-  return typeof totalCount === "number" && collectedCount < totalCount;
+// Pure: did a listing collect fewer items than the API's own total_count? A
+// NUMERIC total_count always wins — collected < total_count, full stop, even
+// when the page cap was exhausted; an exact match is NOT truncated. Only when
+// `totalCount` is non-numeric (the field absent — every runs-lane fixture in
+// this file predating #425) does `capExhausted` matter: the real API always
+// sends this field, so a missing one alone scores as NOT truncated (matches
+// the pre-#425 behaviour exactly) — UNLESS the page cap was ALSO exhausted,
+// which means full pages all the way through with still no total_count to
+// check against, and that combination IS "could not tell" (#258), never
+// "fewer failures". Defence in depth for a field the API "always" sends, same
+// reasoning as isAlertRun's belt-and-braces event filter above.
+function isListingTruncated(collectedCount, totalCount, capExhausted = false) {
+  if (typeof totalCount === "number") return collectedCount < totalCount;
+  return !!capExhausted;
 }
 
 // ── gh-backed plumbing ──────────────────────────────────────────────────────
@@ -754,13 +767,18 @@ function runsForEventEndpoint(repo, event, since, page, extraQuery = "") {
 // paginator. Returns { runs, totalCount, truncated } (#425) — `truncated` is
 // TRUE whenever the collected runs fall short of the API's own total_count,
 // whether from this loop's own page cap or the runs-list API's separate
-// 1,000-result cap for a filtered query (see pageThroughListing above).
+// 1,000-result cap for a filtered query, OR the page cap was exhausted with
+// no total_count at all to check against (see pageThroughListing above).
 function listRunsForEvent(repo, event, since, extraQuery = "") {
-  const { items, totalCount } = pageThroughListing(
+  const { items, totalCount, capExhausted } = pageThroughListing(
     (page) => JSON.parse(ghApi(runsForEventEndpoint(repo, event, since, page, extraQuery))),
     "workflow_runs",
   );
-  return { runs: items, totalCount, truncated: isListingTruncated(items.length, totalCount) };
+  return {
+    runs: items,
+    totalCount,
+    truncated: isListingTruncated(items.length, totalCount, capExhausted),
+  };
 }
 
 // All schedule-event runs created since `since`. Returns

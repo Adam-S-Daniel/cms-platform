@@ -365,6 +365,18 @@ test.describe("audit-scheduled-runs.js — listing truncation (#425)", () => {
     expect(isListingTruncated(5, null)).toBe(false);
   });
 
+  test("isListingTruncated: capExhausted is defence in depth for a MISSING total_count only", () => {
+    const { isListingTruncated } = loadScript();
+    // The page cap was exhausted (10 full pages) and there is still no
+    // total_count to check against — that IS "could not tell" (#258), not
+    // "fewer failures".
+    expect(isListingTruncated(1000, null, true)).toBe(true);
+    expect(isListingTruncated(1000, undefined, true)).toBe(true);
+    // A NUMERIC total_count always wins, even with the cap exhausted — an
+    // exact match is still NOT truncated.
+    expect(isListingTruncated(1000, 1000, true)).toBe(false);
+  });
+
   test("collected count equals total_count — NOT truncated", () => {
     const { pageThroughListing, isListingTruncated } = loadScript();
     const { items, totalCount } = pageThroughListing(() => fixturePage(3, 3), "workflow_runs");
@@ -403,6 +415,32 @@ test.describe("audit-scheduled-runs.js — listing truncation (#425)", () => {
     const { items, totalCount } = pageThroughListing(() => ({ workflow_runs: [run()] }), "workflow_runs");
     expect(totalCount).toBe(null);
     expect(isListingTruncated(items.length, totalCount)).toBe(false);
+  });
+
+  test("pageThroughListing: 10 full pages with NO total_count field — capExhausted true, TRUNCATED", () => {
+    const { pageThroughListing, isListingTruncated } = loadScript();
+    // No total_count on ANY page — the page cap is what stopped the loop,
+    // not a short page, so this must read as "could not tell", not healthy.
+    const { items, totalCount, capExhausted } = pageThroughListing(
+      () => ({ workflow_runs: Array.from({ length: 100 }, (_, i) => run({ id: i + 1 })) }),
+      "workflow_runs",
+    );
+    expect(items.length).toBe(1000);
+    expect(totalCount).toBe(null);
+    expect(capExhausted).toBe(true);
+    expect(isListingTruncated(items.length, totalCount, capExhausted)).toBe(true);
+  });
+
+  test("pageThroughListing: 10 full pages with total_count 1000 — NOT truncated even with the cap exhausted", () => {
+    const { pageThroughListing, isListingTruncated } = loadScript();
+    const { items, totalCount, capExhausted } = pageThroughListing(
+      () => fixturePage(100, 1000),
+      "workflow_runs",
+    );
+    expect(items.length).toBe(1000);
+    expect(totalCount).toBe(1000);
+    expect(capExhausted).toBe(true);
+    expect(isListingTruncated(items.length, totalCount, capExhausted)).toBe(false);
   });
 });
 

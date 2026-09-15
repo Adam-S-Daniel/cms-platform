@@ -306,8 +306,9 @@ layer:
     each other; each is reported **once** per tracking issue.
   - **A TRUNCATED listing is UNKNOWN too, not "fewer failures" (#425).**
     Collecting fewer schedule/push runs than the API's own `total_count` —
-    this loop's page cap, or the runs API's own 1,000-result cap — reds the
-    run and suppresses the auto-close through the same `done()` gate as
+    this loop's page cap, or the runs API's own 1,000-result cap, or the page
+    cap being exhausted with no `total_count` at all to check against — reds
+    the run and suppresses the auto-close through the same `done()` gate as
     `deadProbeFailed`, plus an `::error::` naming the lane and both counts.
 - **Exit-code contract:** the audit run stays GREEN when it successfully
   files/updates the alert (the issue is the channel); red means the audit
