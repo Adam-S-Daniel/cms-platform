@@ -692,6 +692,54 @@ function buildCloseComment({ windowHours, nowIso }) {
   );
 }
 
+// ── LISTING TRUNCATION (#425) ────────────────────────────────────────────────
+//
+// Pages through `fetchPage(page)` (1-indexed; returns one parsed API page),
+// collecting `itemsKey` from each and stopping at a short page or `maxPages`.
+// `fetchPage` is injected exactly like `fetchJobs` / `fetchHistory` above, so
+// the truncation decision below is unit-testable with fixture pages — no gh,
+// no network. Also surfaces the listing's own `total_count` (the last numeric
+// one seen), because a short or empty final page is NOT proof a listing is
+// complete: the runs-list API caps a FILTERED query at 1,000 results
+// independently of any page limit here (observed live: adamdaniel.ai's push
+// lane reported total_count 1411, returned 1,000, and page 11 came back
+// EMPTY — a bigger page limit alone would not have collected the rest).
+// `capExhausted` is TRUE only when the loop ran every one of its `maxPages`
+// iterations and the LAST one was still a full page (it never saw a short
+// one) — i.e. the page cap, not the data running out, is what stopped it.
+function pageThroughListing(fetchPage, itemsKey, maxPages = 10) {
+  const items = [];
+  let totalCount = null;
+  let sawShortPage = false;
+  for (let page = 1; page <= maxPages; page++) {
+    const res = fetchPage(page) || {};
+    const batch = res[itemsKey] || [];
+    items.push(...batch);
+    if (typeof res.total_count === "number") totalCount = res.total_count;
+    if (batch.length < 100) {
+      sawShortPage = true;
+      break;
+    }
+  }
+  return { items, totalCount, capExhausted: !sawShortPage };
+}
+
+// Pure: did a listing collect fewer items than the API's own total_count? A
+// NUMERIC total_count always wins — collected < total_count, full stop, even
+// when the page cap was exhausted; an exact match is NOT truncated. Only when
+// `totalCount` is non-numeric (the field absent — every runs-lane fixture in
+// this file predating #425) does `capExhausted` matter: the real API always
+// sends this field, so a missing one alone scores as NOT truncated (matches
+// the pre-#425 behaviour exactly) — UNLESS the page cap was ALSO exhausted,
+// which means full pages all the way through with still no total_count to
+// check against, and that combination IS "could not tell" (#258), never
+// "fewer failures". Defence in depth for a field the API "always" sends, same
+// reasoning as isAlertRun's belt-and-braces event filter above.
+function isListingTruncated(collectedCount, totalCount, capExhausted = false) {
+  if (typeof totalCount === "number") return collectedCount < totalCount;
+  return !!capExhausted;
+}
+
 // ── gh-backed plumbing ──────────────────────────────────────────────────────
 
 function ghApi(endpoint, { method, fields } = {}) {
@@ -716,19 +764,25 @@ function runsForEventEndpoint(repo, event, since, page, extraQuery = "") {
 // `extraQuery`, e.g. `&branch=<default_branch>`). Manual page loop (not
 // --paginate) so each page is a clean JSON document to parse. Both the
 // scheduled lane and the default-branch push lane (#279) go through this one
-// paginator.
+// paginator. Returns { runs, totalCount, truncated } (#425) — `truncated` is
+// TRUE whenever the collected runs fall short of the API's own total_count,
+// whether from this loop's own page cap or the runs-list API's separate
+// 1,000-result cap for a filtered query, OR the page cap was exhausted with
+// no total_count at all to check against (see pageThroughListing above).
 function listRunsForEvent(repo, event, since, extraQuery = "") {
-  const runs = [];
-  for (let page = 1; page <= 10; page++) {
-    const res = JSON.parse(ghApi(runsForEventEndpoint(repo, event, since, page, extraQuery)));
-    const batch = res.workflow_runs || [];
-    runs.push(...batch);
-    if (batch.length < 100) break;
-  }
-  return runs;
+  const { items, totalCount, capExhausted } = pageThroughListing(
+    (page) => JSON.parse(ghApi(runsForEventEndpoint(repo, event, since, page, extraQuery))),
+    "workflow_runs",
+  );
+  return {
+    runs: items,
+    totalCount,
+    truncated: isListingTruncated(items.length, totalCount, capExhausted),
+  };
 }
 
-// All schedule-event runs created since `since`.
+// All schedule-event runs created since `since`. Returns
+// { runs, totalCount, truncated } — see listRunsForEvent.
 function listScheduledRuns(repo, since) {
   return listRunsForEvent(repo, "schedule", since);
 }
@@ -738,6 +792,7 @@ function listScheduledRuns(repo, since) {
 // workflow has no PR to go red on either, and GitHub throws nothing beyond
 // the Actions tab when one fails. Scoped to the default branch only — a
 // push to a feature branch already has a human watching it via the PR.
+// Returns { runs, totalCount, truncated } — see listRunsForEvent.
 function listPushRuns(repo, defaultBranch, since) {
   return listRunsForEvent(repo, "push", since, `&branch=${encodeURIComponent(defaultBranch)}`);
 }
@@ -752,7 +807,9 @@ function runJobsEndpoint(repo, runId, page) {
 
 // All jobs of one run (latest attempt — the API default). Only called for runs
 // that are ALREADY alertable, so the API cost stays proportional to failures,
-// not to the whole window.
+// not to the whole window. No total_count guard (#425): GitHub caps a job
+// matrix at 256 jobs per run, two orders of magnitude below the 1,000-result
+// cap this loop could even reach, so truncation here is not a live case.
 function listRunJobs(repo, runId) {
   const jobs = [];
   for (let page = 1; page <= 10; page++) {
@@ -770,7 +827,10 @@ function getRepoMeta(repo) {
 }
 
 // Every workflow known to the repo, with its `state`. Needs `actions: read`,
-// which the reusable already grants for the runs listing.
+// which the reusable already grants for the runs listing. No total_count
+// guard (#425): measured 2026-08-17, all three repos in this family carry
+// 111 workflows combined — three orders of magnitude below the 1,000-result
+// cap this loop could even reach.
 function listWorkflows(repo) {
   const workflows = [];
   for (let page = 1; page <= 10; page++) {
@@ -902,11 +962,25 @@ function main() {
   let scheduledRuns = [];
   let stale = [];
   let staleProbeFailed = false;
+  // #425: TRUE when a lane's collected runs fell short of the API's own
+  // total_count — the same "could not tell" contract as every other
+  // ProbeFailed flag below, folded into the same done()/close-gate wiring.
+  let scheduleListingTruncated = false;
+  let pushListingTruncated = false;
   try {
     // Hoisted (it used to be inlined into filterAlertRuns): the staleness lane
     // derives its candidate workflows from this SAME list, so it costs no extra
     // listing call and can only ever judge a workflow that actually fired.
-    scheduledRuns = listScheduledRuns(repo, since);
+    const scheduleListing = listScheduledRuns(repo, since);
+    scheduledRuns = scheduleListing.runs;
+    scheduleListingTruncated = scheduleListing.truncated;
+    if (scheduleListingTruncated) {
+      console.error(
+        `::error title=Scheduled-run health::${repo} schedule-run listing is TRUNCATED — ` +
+          `collected ${scheduledRuns.length} of total_count ${scheduleListing.totalCount} run(s) ` +
+          "in the window. Treating the result as UNKNOWN, not as healthy.",
+      );
+    }
     const candidates = filterAlertRuns(scheduledRuns, since);
     const split = partitionStarvedRuns(candidates, (r) => listRunJobs(repo, r.id));
     failures = split.alertable;
@@ -922,7 +996,17 @@ function main() {
       defaultBranch = meta.default_branch;
     }
     if (!pushScanDisabled && defaultBranch) {
-      const pushCandidates = filterAlertRuns(listPushRuns(repo, defaultBranch, since), since, "push");
+      const pushListing = listPushRuns(repo, defaultBranch, since);
+      pushListingTruncated = pushListing.truncated;
+      if (pushListingTruncated) {
+        console.error(
+          `::error title=Scheduled-run health::${repo} push-run listing (event=push on ` +
+            `\`${defaultBranch}\`) is TRUNCATED — collected ${pushListing.runs.length} of ` +
+            `total_count ${pushListing.totalCount} run(s) in the window. Treating the result as ` +
+            "UNKNOWN, not as healthy.",
+        );
+      }
+      const pushCandidates = filterAlertRuns(pushListing.runs, since, "push");
       const pushSplit = partitionStarvedRuns(pushCandidates, (r) => listRunJobs(repo, r.id));
       pushFailures = pushSplit.alertable;
       pushStarved = pushSplit.suppressed;
@@ -1006,12 +1090,19 @@ function main() {
     );
   }
 
-  // An UNKNOWN dead-workflow OR push-lane answer must not read as success:
-  // the audit could not do its job, which is exactly the "red means needs a
-  // human" case. Applied to the success paths only — a real error already
-  // returns its own code.
+  // An UNKNOWN dead-workflow, push-lane, OR TRUNCATED-listing answer must not
+  // read as success: the audit could not do its job, which is exactly the
+  // "red means needs a human" case. Applied to the success paths only — a
+  // real error already returns its own code.
   const done = (code) =>
-    code === 0 && (deadProbeFailed || pushProbeFailed || staleProbeFailed) ? 1 : code;
+    code === 0 &&
+    (deadProbeFailed ||
+      pushProbeFailed ||
+      staleProbeFailed ||
+      scheduleListingTruncated ||
+      pushListingTruncated)
+      ? 1
+      : code;
 
   // Suppressed runs are not alerted on, but a systemic runner outage must not
   // become invisible — say how many, and which workflows they belong to.
@@ -1062,11 +1153,20 @@ function main() {
     // NEVER close on an unknown answer — that is the #258 bug exactly: the
     // audit closed a live alert because it could not see the dead workflows
     // (or, now, the push lane).
-    if (issue && (deadProbeFailed || pushProbeFailed || staleProbeFailed)) {
+    if (
+      issue &&
+      (deadProbeFailed ||
+        pushProbeFailed ||
+        staleProbeFailed ||
+        scheduleListingTruncated ||
+        pushListingTruncated)
+    ) {
       const unknownParts = [];
       if (deadProbeFailed) unknownParts.push("the dead-workflow check");
       if (pushProbeFailed) unknownParts.push("the push-run check");
       if (staleProbeFailed) unknownParts.push("the no-recent-success check");
+      if (scheduleListingTruncated) unknownParts.push("the schedule-run listing (truncated)");
+      if (pushListingTruncated) unknownParts.push("the push-run listing (truncated)");
       console.log(
         `::notice title=Scheduled-run health::Leaving tracking issue #${issue.number} OPEN — ` +
           `no failing runs, but ${unknownParts.join(" and ")} did not complete, so a clean ` +
@@ -1240,6 +1340,8 @@ module.exports = {
   listRunsForEvent,
   listScheduledRuns,
   listPushRuns,
+  pageThroughListing,
+  isListingTruncated,
   hiddenDeadWorkflowsBlock,
   extractReportedDeadWorkflows,
   renderDeadWorkflows,
