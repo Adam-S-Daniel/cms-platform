@@ -382,6 +382,39 @@ and three alternatives were measured:
 
 Read that doc before touching the close gate.
 
+### Dependabot config health is deliberately NOT a lane here (#429)
+
+A broken `.github/dependabot.yml` is invisible to this audit, and it stays that
+way on purpose. Four repos' Dependabot was dead for 36 days (2026-08-10 to
+2026-09-15) and nothing alerted. GitHub's verdict on the file is a **check run
+from the `dependabot` app**, not a workflow run, and it lives only on the commit
+that brought the change onto the default branch — nothing this audit reads.
+
+The detector lives in `_agent-guidance` instead: a daily sweep over both owners
+that files an issue in the affected repo. Why not a lane in
+`audit-scheduled-runs.js`:
+
+- **Reach.** A lane here reaches only callers that get bumped. #424 measured
+  seven of the nine callers stale, and only 10 of the 21 repos under the two
+  owners run this audit at all.
+- **Silence alone scores the wrong answer.** An invalid config that REPLACES a
+  valid one does not stop update jobs: this repo's own config was invalid from
+  `149755b` (2026-08-10) to `acc5df3` (2026-08-19), and Dependabot update jobs
+  still ran on 08-11 and 08-18, all `success`. A "no recent Dependabot job" lane
+  in the #313 shape would have scored that whole window healthy. The check run is
+  the first signal; silence is the second.
+- **The check sits on the merge commit.** For a merge-commit PR the `dependabot`
+  check lands on the merge commit, not on the commit `commits?path=` returns
+  (`9e44154` carries none; its merge `8ab5799` does), so a lookup that reads only
+  the path commit reports "missing" on a healthy repo.
+- **Pre-merge schema validation does not catch it either.** SchemaStore's
+  `dependabot-2.0.json` allows `cooldown.semver-major-days` for every ecosystem,
+  so it passes the files GitHub rejected.
+
+The decision, threshold and credential are recorded on #429
+(https://github.com/Adam-S-Daniel/cms-platform/issues/429#issuecomment-5687542401).
+Re-read it before adding a Dependabot lane to this audit.
+
 ## An UNAPPROVED environment gate must not hold a concurrency group (#313)
 
 `repo-settings-apply.yml` applied nothing for eleven days. Twelve consecutive
