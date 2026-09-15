@@ -358,6 +358,24 @@ wedged approval gate all reach it through the same door.
   dead-workflow ones, and are reported once per tracking issue. The close gate
   now requires all four lanes clean.
 
+### A later success does not clear a failure (2026-09-15)
+
+The close rule is "a full window passes clean", deliberately. It was replayed
+against 30 days of real runs from the audit's callers
+(`docs/HEALTH-AUDIT-CLOSE-RULE.md`, evidence in `docs/health-audit-close-rule/`)
+and three alternatives were measured:
+
+- **Let a later success of the same lane clear a failure.** Issues close a day
+  sooner (median 31h, against 55h), but 28 failures are never reported, and 31
+  if the audit starts at 15:30 instead of 13:00. That includes #279's own
+  incident: 3 of 8 reported at 13:00, none at 15:30.
+- **Let a later success only relax the close.** This files duplicates, because
+  `findTrackingIssue` reads open issues only: 19 issues against 13.
+- **Report everything and close on recovery.** Hides nothing (16 issues, 29h),
+  and was not adopted.
+
+Read that doc before touching the close gate.
+
 ## An UNAPPROVED environment gate must not hold a concurrency group (#313)
 
 `repo-settings-apply.yml` applied nothing for eleven days. Twelve consecutive
