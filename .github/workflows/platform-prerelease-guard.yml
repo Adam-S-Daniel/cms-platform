@@ -78,10 +78,23 @@ jobs:
 
       - name: Install the YAML parser
         # platform.lock is parsed with the real `yaml` lib, never a line regex
-        # (AGENTS.md). Installed into the consumer workspace so the script — run
-        # from the consumer root — resolves it. Same version the platform's e2e
-        # harness and platform-pin-consistency.yml pin.
-        run: npm install --no-save --no-package-lock yaml@2.9.0
+        # (AGENTS.md). `--prefix .cms-platform` installs it into the PLATFORM
+        # checkout, NOT the consumer root, and that placement is load-bearing:
+        # npm resolves the entire dependency tree of whatever package.json sits
+        # at its prefix, so installing at the consumer root made this guard
+        # depend on every devDependency the consumer happens to declare — and
+        # `--no-package-lock` re-resolves those ranges from the registry,
+        # bypassing the lockfile that pins them to versions known to work. One
+        # broken upstream publish then turns a REQUIRED check red on every PR.
+        # Not theoretical: decap-cms-lib-util@3.8.1 (2026-09-08) shipped
+        # unresolved pnpm `catalog:` specifiers, npm exited
+        # EUNSUPPORTEDPROTOCOL, and every adamdaniel.ai editorial PR was
+        # blocked until this step stopped reading the consumer's package.json.
+        # `.cms-platform` carries no package.json, so npm resolves `yaml` and
+        # nothing else; the script's loadYaml() already probes
+        # `<script>/../node_modules`. Same version the platform's e2e harness
+        # and platform-pin-consistency.yml pin.
+        run: npm install --prefix .cms-platform --no-save --no-package-lock yaml@2.9.0
 
       - name: Refuse a prerelease platform pin on this branch
         # Exit 1 = the pin is a prerelease (the guard's whole purpose).
