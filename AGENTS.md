@@ -98,7 +98,7 @@ same Jekyll + Decap + AWS stack and improvements sync **both ways**. Design:
 (consumer 1, the dogfood) and **jodidaniel.com** (consumer 2, a single-page
 bio).
 
-**Current release: `v0.1.107`** (`v0.1.0`–`v0.1.107` are tagged; cut one with
+**Current release: `v0.1.108`** (`v0.1.0`–`v0.1.108` are tagged; cut one with
 `gh workflow run release.yml -f version=vX.Y.Z`). The bump is ONE atomic edit in
 the release PR, before the dispatch: this line, both plugin manifests
 (`plugin.json` + `.claude-plugin/plugin.json`), the `docs/VERSION-HISTORY.md`
