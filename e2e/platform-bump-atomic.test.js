@@ -7,7 +7,8 @@
 //   1. PUSH AUTH — the bump rewrites `.github/workflows/*` (the `uses:@` pins +
 //      `platform_ref:` inputs), so the push needs `workflows` permission. The
 //      default Actions GITHUB_TOKEN's App lacks it, so the checkout MUST use the
-//      caller's PAT (`secrets.gh_token`) as the persisted push credential.
+//      App installation token as the persisted push credential (the
+//      `secrets.gh_token` PAT fallback was removed in v0.1.103).
 //      Without it: "refusing to allow a GitHub App to ... update workflow ...
 //      without 'workflows' permission" → the whole bump fails.
 //   2. ATOMIC BUMP — the bump must move EVERY pinned reference in one PR, not
@@ -24,10 +25,14 @@ const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 const wf = parseYaml(readWorkflow("platform-bump.yml"));
 const steps = wf.jobs.bump.steps;
 const checkout = steps.find((s) => typeof s.uses === "string" && /actions\/checkout/.test(s.uses));
-// Matches `gh api repos/$PLATFORM/releases/latest` (cms-platform#244) — NOT
-// `gh release view`, which this step no longer calls (see the new test
-// below locking that it stays gone).
-const runStep = steps.find((s) => typeof s.run === "string" && /releases\/latest/.test(s.run));
+// The bump step, by id. It used to be found as "the run step that reads
+// /releases/latest", but since #238 the App-token mint step ahead of it reads
+// the same endpoint (to pin the script it fetches to the release the bump
+// targets), so content no longer identifies it — `id: bump` does. The step
+// calls `gh api repos/$PLATFORM/releases/latest` (cms-platform#244), NOT
+// `gh release view`, which it no longer calls (see the test below locking that
+// it stays gone).
+const runStep = steps.find((s) => s.id === "bump");
 
 // Drop full-line `#` comments before checking that a call does NOT reappear.
 // The run script's own header comment quotes the OLD `gh release view` line
@@ -43,14 +48,18 @@ function stripBashComments(script) {
 }
 
 test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
-  test("checks out with the caller's PAT so the workflow-file push is authorised", () => {
+  test("checks out with a workflows:write credential so the workflow-file push is authorised", () => {
     expect(checkout, "an actions/checkout step must exist").toBeTruthy();
     expect(checkout.with, "checkout must pass a token").toBeTruthy();
+    // The PAT must remain in the chain: it is the fallback a consumer runs on
+    // until it provisions the App, and what the FIRST bump to an App-capable
+    // release runs on. The App-first ORDER of that chain is locked separately,
+    // in app-token-platform-writers.test.js (#238).
     expect(
       String(checkout.with.token),
-      "checkout MUST use secrets.gh_token (the CMS_PLATFORM_PAT with Workflows:write) " +
-        "as the push credential — the default GITHUB_TOKEN can't push .github/workflows/* changes",
-    ).toMatch(/secrets\.gh_token/);
+      "checkout MUST persist the App installation token (workflows:write) " +
+        "in its push-credential chain — the default GITHUB_TOKEN can't push .github/workflows/* changes",
+    ).toMatch(/steps\.app\.outputs\.token/);
   });
 
   test("the bump step exists and resolves the latest release", () => {
@@ -84,7 +93,7 @@ test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
     expect(
       run,
       "a non-404 lookup failure must emit ::error:: naming the token to check, and exit 1",
-    ).toMatch(/::error::could not read the latest release[\s\S]{0,400}gh_token[\s\S]{0,200}exit 1/);
+    ).toMatch(/::error::could not read the latest release[\s\S]{0,400}exit 1/);
 
     // An empty tag_name (the API call itself succeeded but returned no
     // usable release) is its own distinct failure — also loud, also non-zero.

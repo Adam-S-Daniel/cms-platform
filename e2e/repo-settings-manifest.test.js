@@ -165,6 +165,64 @@ test.describe("repo-settings.yml — manifest shape (#109)", () => {
     }
   });
 
+  test("every security_analysis key is a MANAGED_SECURITY_ANALYSIS_KEY (the --fix write SSOT)", () => {
+    const { MANAGED_SECURITY_ANALYSIS_KEYS } = loadScript();
+    for (const key of Object.keys(data.security_analysis_defaults || {})) {
+      expect(
+        MANAGED_SECURITY_ANALYSIS_KEYS,
+        `security_analysis_defaults.${key} is not in MANAGED_SECURITY_ANALYSIS_KEYS (scripts/audit-repo-settings.js)`,
+      ).toContain(key);
+    }
+    for (const [repo, entry] of Object.entries(data.repos)) {
+      for (const key of Object.keys((entry && entry.security_analysis) || {})) {
+        expect(
+          MANAGED_SECURITY_ANALYSIS_KEYS,
+          `repos.${repo}.security_analysis.${key} is not in MANAGED_SECURITY_ANALYSIS_KEYS`,
+        ).toContain(key);
+      }
+    }
+  });
+
+  test("security_analysis: Dependabot alerts + security updates enabled on all three", () => {
+    // Locks the desired baseline (#109 security-analysis extension, added
+    // 2026-08-31): Dependabot alerts + Dependabot security updates were
+    // measured OFF on cms-platform (GET .../dependabot/alerts -> HTTP 403
+    // "Dependabot alerts are disabled for this repository") and are declared
+    // ON here for all three repos — the audit will legitimately report drift
+    // until a human runs `--fix --yes` to converge live to this manifest.
+    const { effectiveSecurityAnalysis, loadManifest } = loadScript();
+    const manifest = loadManifest(MANIFEST_PATH);
+    for (const repo of CANONICAL_REPOS) {
+      const sa = effectiveSecurityAnalysis(manifest, repo);
+      expect(sa.vulnerability_alerts, `${repo} must enable Dependabot alerts`).toBe(true);
+      expect(
+        sa.automated_security_fixes,
+        `${repo} must enable Dependabot security updates`,
+      ).toBe(true);
+    }
+  });
+
+  test("every security_analysis leaf carries a `# why:` comment", () => {
+    const defaults = doc.get("security_analysis_defaults", true);
+    expect(mapPairs(defaults).length).toBeGreaterThan(0);
+    mapPairs(defaults).forEach((pair, i) => {
+      expect(
+        pairCommentText(pair, defaults, i),
+        `security_analysis_defaults.${pair.key} has no \`# why:\` comment`,
+      ).toMatch(/why:/);
+    });
+    const repos = doc.get("repos", true);
+    for (const repoPair of mapPairs(repos)) {
+      const sa = repoPair.value && repoPair.value.get && repoPair.value.get("security_analysis", true);
+      mapPairs(sa).forEach((pair, i) => {
+        expect(
+          pairCommentText(pair, sa, i),
+          `repos.${repoPair.key}.security_analysis.${pair.key} has no \`# why:\` comment`,
+        ).toMatch(/why:/);
+      });
+    }
+  });
+
   test("every settings leaf carries a `# why:` comment (the captured rationale)", () => {
     const defaults = doc.get("settings_defaults", true);
     mapPairs(defaults).forEach((pair, i) => {

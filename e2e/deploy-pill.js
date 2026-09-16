@@ -41,6 +41,44 @@ const { augmentTimeoutError } = require("./with-stuck-pr-diagnostic");
 const PILL_PROD = "cms-prod-status-pill";
 const PILL_PREVIEW = "cms-preview-build-pill";
 
+// theme/admin/publish-step-hint.js's `ACTIONS_ID` / publish-button.js's
+// `SLOT_ID` — the state-bar slot the platform Publish button renders its
+// busy note / error text into. Read defensively (below), never required:
+// this module stays DOM-pure everywhere else, and a page that has since
+// navigated away from the entry editor legitimately has no such element.
+const PUBLISH_STATE_SLOT_ID = "cms-publish-state-actions";
+
+// #386 — the cms PR "has not merged although its checks are green" is
+// EXACTLY the shape both a normal, still-arming merge AND the toolbar's two
+// SILENT publish-failure outcomes look like from the GitHub API alone (an
+// open PR, green checks, no `cms/ready`). Say which of the two it was: the
+// PR's current labels + `auto_merge` state (already fetched by the verdict
+// — see github-actions-poll.js's `unmergedPrVerdict`) plus, when the page is
+// still on the entry editor, the publish toolbar's own text — the same text
+// e2e/cms-editor-ui.js's `publishViaUi` now checks BEFORE this diagnostic
+// would ever run, so seeing it appear here at all means that pre-check
+// missed something (a re-navigation, a second publish attempt) rather than
+// this being the primary guard.
+function verdictArmingSummary(verdict) {
+  if (!verdict || !Array.isArray(verdict.labels)) return "";
+  const labels = verdict.labels.length ? verdict.labels.join(", ") : "(none)";
+  return ` Labels on that PR: ${labels}. auto_merge enabled: ${Boolean(verdict.autoMerge)}.`;
+}
+
+// Best-effort, never throws: the publish slot's current text, or null when
+// the page isn't on an entry route (or the bar hasn't mounted there).
+async function readPublishStateText(page) {
+  if (!page || typeof page.evaluate !== "function") return null;
+  try {
+    return await page.evaluate((id) => {
+      const el = document.getElementById(id);
+      return el ? el.textContent : null;
+    }, PUBLISH_STATE_SLOT_ID);
+  } catch (e) {
+    return null;
+  }
+}
+
 /**
  * Wait for a deploy-triggering action to be reflected on the live
  * site, with the deploy-status pill as a parallel observation.
@@ -171,6 +209,13 @@ async function waitForChangeReflected({
       typeof onBudgetExhausted === "function" && onBudgetExhausted.verdict
         ? onBudgetExhausted.verdict
         : null;
+    // #386: computed once, up front, so both PR-state branches below can use
+    // them without threading an async read through the if/else chain.
+    const armingSummary = verdictArmingSummary(verdict);
+    const publishSlotText = await readPublishStateText(page);
+    const publishSlotNote = publishSlotText
+      ? ` Publish toolbar currently reads: "${publishSlotText.trim()}"`
+      : "";
     let detail;
     if (verdict && verdict.kind === "deploy-completed-url-missing") {
       // The CONCLUSIVE #21 self-diagnosis: a deploy-production run for THIS
@@ -197,14 +242,15 @@ async function waitForChangeReflected({
       detail =
         `Waited ${elapsedS}s, but the cms PR${verdict.prNumber ? ` #${verdict.prNumber}` : ""} had NOT ` +
         `MERGED yet — ${verdict.why || "it is still waiting on its required checks / the merge mechanism"}. ` +
-        `An unmerged PR cannot have a deploy, so the deploy chain is NOT the failing leg here (#215).`;
+        `An unmerged PR cannot have a deploy, so the deploy chain is NOT the failing leg here (#215).` +
+        `${armingSummary}${publishSlotNote}`;
     } else if (verdict && verdict.kind === "pr-required-check-red") {
       // #215: same leg, sharper cause — a required check went red, so the
       // PR can never merge until it is fixed.
       detail =
         `Waited ${elapsedS}s, but the cms PR${verdict.prNumber ? ` #${verdict.prNumber}` : ""} could NOT ` +
         `MERGE — ${verdict.why || "a required check is red"}. Fix that check; the deploy chain never got ` +
-        `a chance to run (#215).`;
+        `a chance to run (#215).${armingSummary}${publishSlotNote}`;
     } else if (extensionCount > 0) {
       // We extended for a real backlog and STILL never saw the change —
       // genuinely stuck/overlong past the queue, not a mis-sized budget.

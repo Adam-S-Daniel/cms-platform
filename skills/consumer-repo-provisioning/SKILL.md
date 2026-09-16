@@ -20,9 +20,10 @@ description: >-
 # Required GitHub secrets and variables for a cms-platform consumer
 
 Set these as **Actions repository secrets** on the consumer repo
-(Settings → Secrets and variables → Actions → New repository secret). Two are
-Personal Access Tokens you create by hand; the three AWS values are emitted by
-the bootstrap stack (see the `aws-bootstrap` skill). This file is the single
+(Settings → Secrets and variables → Actions → New repository secret). One is a
+Personal Access Token you create by hand, one is a GitHub App's private key
+(with the App's ID as a repository variable), and the three AWS values are
+emitted by the bootstrap stack (see the `aws-bootstrap` skill). This file is the single
 source of truth. It is authored in `cms-platform`'s `skills/` and reaches a
 session through the `cms-platform` bundle in the `agentskills` marketplace
 (`/plugin install cms-platform@agentskills`) — nothing copies it into a consumer
@@ -43,10 +44,19 @@ labels, and closes canary PRs and expects their required checks (and the
 
 ## `CMS_E2E_PAT` — CMS automation + canary loops
 
-Consumed by: `cms-automerge-nudge`, `auto-resolve-newline-conflict`,
-`sweep-stale-cms-prs`, and the canary loops (`cms-publish-loop-prod` /
-`-host` / `-preview`, `cms-media-roundtrip`, `cms-preview-loops`,
-`cms-delete-published-preview`).
+Consumed by **16** of the dictated callers — the whole set, because an
+under-count here is how a permission goes missing (see `Issues` below):
+
+- **CMS automation:** `cms-automerge-nudge`, `cms-editorial-workflow`,
+  `auto-resolve-newline-conflict`, `sweep-stale-cms-prs`,
+  `regression-review-reaper`, `publish-scheduled-posts`
+- **Canary / real-prod loops:** `cms-publish-loop-prod` / `-host` / `-preview`,
+  `cms-scheduled-publish-loop`, `cms-media-roundtrip`, `cms-preview-loops`,
+  `cms-delete-published-preview`
+- **PR-triggered lanes:** `e2e-tests`, `parity-preview`, `visual-regression`
+
+Regenerate the list rather than trusting this one:
+`grep -l CMS_E2E_PAT examples/site/.github/workflows/*.yml`.
 
 **Fine-grained PAT** → *Resource owner* = the repo's owner; *Repository access*
 = **Only select repositories → this one consumer repo**; **Repository
@@ -56,17 +66,55 @@ permissions**:
 |---|---|---|
 | **Contents** | **Read and write** | create/delete branch refs — the publish-via-auto-merge **delete-recovery** branch, loop canary branches — and `sweep-stale-cms-prs --delete-branch` |
 | **Pull requests** | **Read and write** | open / label `cms/ready` / comment / close PRs and **enable auto-merge** (nudge, sweep, auto-resolve, the loops, the delete shim) |
+| **Issues** | **Read and write** | `cms-editorial-workflow` drives the editorial-workflow labels and status comments through the **issues** API — `issues.createLabel`, `issues.listComments`, `issues.createComment`, `issues.updateComment`. A PR is an issue to those endpoints, so `Pull requests: write` does NOT cover them |
 | **Actions** | **Read and write** | **read:** the loops poll `deploy-production` run status (`GET /repos/…/actions/workflows/…/runs`). **write:** `regression-review-reaper` rejects superseded review gates via `POST /repos/…/actions/runs/{id}/pending_deployments` (`state=rejected`) |
+| **Commit statuses** | **Read** | `cms-automerge-nudge` and `cms-editorial-workflow` call `repos.getCombinedStatusForRef` (`GET /repos/…/commits/{ref}/status`) to decide whether a head sha is green |
 | **Metadata** | **Read** | mandatory — auto-selected for every fine-grained PAT |
 
-**Not needed:** *Workflows* — `CMS_E2E_PAT` never edits `.github/workflows/*`.
+**Not needed:**
+
+- *Workflows* — `CMS_E2E_PAT` never edits `.github/workflows/*`. That single
+  omission is the whole reason it stays separate from `CMS_PLATFORM_PAT`.
+- *Deployments* — nothing this token drives touches the deployments API.
+  `pending_deployments` looks like it should, but it is an **Actions** endpoint
+  (`/actions/runs/{id}/pending_deployments`) and is covered by the row above;
+  `repos.createDeployment` / `createDeploymentStatus` live in `deploy-preview`
+  and `deploy-production`, which run on `GITHUB_TOKEN`, not this PAT. Verified
+  2026-09-02 by grepping every caller that receives `CMS_E2E_PAT`.
+- *Checks* — **fine-grained PATs have no Checks permission at all.** The nudge
+  does read check-runs (`checks.listForRef`); that read succeeds only because
+  all three repos are PUBLIC. The same caveat applies to `Commit statuses`,
+  which is granted above so the token does not silently depend on repo
+  visibility.
 **Also required (settings / role, not token permissions):**
 - Settings → General → **Allow auto-merge** = ON (else the nudge can't enable auto-merge).
 - The PAT's user must be a **configured reviewer of the `regression-review` environment**
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
   reject its pending deployments even with `Actions: write`.
 
-## `CMS_PLATFORM_PAT` — anything that edits `.github/workflows/*`
+## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103 (kept here for repos on an older pin)
+
+> **This PAT no longer exists as a credential path.** v0.1.103 removed the
+> `gh_token` INPUT from `platform-bump` and `dev-hooks-sync`, not just the read
+> — so a caller still passing it fails at **startup**, and the caller's line
+> must be dropped in the SAME commit as the pin bump (`structuralShape()`
+> compares the caller's `secrets:` map against the template at that consumer's
+> pinned ref). Provision the App instead; there is nothing else to set.
+>
+> **Both live consumers deleted it on 2026-09-02** — the PAT *and* the repo
+> secret — after the App path was verified on all four reader × consumer
+> combinations. Delete the secret, don't just let the PAT expire: `||` in a
+> GitHub expression falls through on *empty*, not on *invalid*, so a
+> dead-but-present value wins a fallback and 401s.
+>
+> Without the App on v0.1.103+, `platform-bump` **fails loudly** naming both
+> knobs — its credential is load-bearing, since the bump rewrites
+> `.github/workflows/*` and `GITHUB_TOKEN` cannot hold `workflows:write` —
+> while `dev-hooks-sync` **warns** and opens its PR on `GITHUB_TOKEN`, which
+> fires no CI.
+>
+> This section stays only for a repo still pinned **below v0.1.103**, whose
+> reusable still declares the input.
 
 Consumed by:
 - `platform-bump` — opens the single-version bump PR that moves `platform_ref` +
@@ -105,42 +153,81 @@ permission.
 
 > `platform-bump` hard-needs this PAT — issue cms-platform#13.
 
-## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the workflows-scoped App (NO CONSUMER TODAY)
+## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the CMS automation App (replaces `CMS_PLATFORM_PAT`, #238)
 
-> **Dormant since 2026-08-20 — do not provision this for a new consumer.** Its
-> only reader was `dependabot-comment-sync.yml`, deleted with the pin-comment
-> convention. Nothing in the tree reads either knob now
-> (`repo-settings-apply.yml` uses a *different* App, `REPO_SETTINGS_APP_*`).
-> The `scripts/set-repo-variables.sh` passthrough and this section are kept
-> for the next workflows-scoped job that needs a non-PAT credential; until
-> then, setting them accomplishes nothing. Retire or re-point them the next
-> time this area is touched.
+A **GitHub App** whose installation token does `CMS_PLATFORM_PAT`'s job. Since
+cms-platform#238 the two reusables that hold that credential — `platform-bump`
+and `dev-hooks-sync` — resolve their push-back credential **App → PAT →
+`GITHUB_TOKEN`**: when both knobs below are set on the consumer, the reusable
+mints a ~1 h installation token per run (`scripts/mint-app-token.js`, pure node
++ stdlib `crypto`, fetched from the platform at the release the bump targets)
+and `CMS_PLATFORM_PAT` is never read. When they are not, the PAT carries the
+job exactly as before, after one `::notice::` naming both knobs.
 
-A **GitHub App** credential pair that carries the same `workflows` permission
-`CMS_PLATFORM_PAT` does, for a repo that has **no PAT of its own**. That is
-exactly **cms-platform itself**: `CMS_PLATFORM_PAT` lives in the *consumers*,
-so the platform repo could ship a workflows-editing reusable to consumers and
-never run it on its own Dependabot PRs. The consuming workflow minted a
-short-lived **installation token** from the App when no PAT was configured — in
-pure node + the stdlib `crypto` module (`scripts/mint-app-token.js`),
-deliberately not a new marketplace action (repo policy prefers built-ins, and a
-new action would itself owe the 7-day cooling-off).
+Why an App and not another PAT: a fine-grained PAT cannot span owners, so the
+PAT was one token per consumer, and each expired on its own calendar — taking
+the ONLY platform down-sync path with it, on a schedule, silently
+(`scheduled-run-health` reports it a day late by design). An installation token
+is minted per run and expires in an hour; **one App installed on both owners
+serves every consumer, and nothing is left to rotate.**
 
-**The ID is a repository VARIABLE, not a secret** — deliberately, so it can be
-read while troubleshooting. Only the private key is a secret:
+**Create it once (account-level, by hand):**
 
-| Knob | Kind | Where the workflow reads it |
+1. https://github.com/settings/apps/new — name it something that says what it
+   is FOR and trips no scanner keyword (`cms-platform-automation` is fine;
+   never `…-secrets`/`…-token`/`…-key`, see AGENTS.md "A name you choose
+   becomes data a scanner reads"). Uncheck *Webhook → Active*. **Repository
+   permissions: Contents: Read and write · Pull requests: Read and write ·
+   Workflows: Read and write** (Metadata: Read is implied). Nothing else — in
+   particular NOT Administration: that is the separate `REPO_SETTINGS_*` App,
+   and the two stay separate on purpose so no single key can both rewrite repo
+   settings and push to production (#238, question 1).
+2. *Install App* on **each owner** — `Adam-S-Daniel` (select `adamdaniel.ai`
+   and `cms-platform`) and the `jodidaniel` org (select `jodidaniel.com`). An
+   org install needs an org owner; there is no separate approval step of the
+   kind the org OAuth App needed (#26/#27) — the installer IS the approver.
+3. *Generate a private key* (a `.pem` download). Note the **Client ID** on the
+   App's *General* page — the JWT issuer `mint-app-token.js` uses; the numeric
+   App ID is honoured too.
+
+**Then per consumer** — the ID is a repository VARIABLE, not a secret,
+deliberately, so it can be read while troubleshooting; only the key is a secret:
+
+| Knob | Kind | Set with |
 |---|---|---|
-| `CMS_AUTOMATION_APP_ID` | Actions repository **variable** (Variables tab) | *(nothing today)* — a `workflow_call`'d reusable reads `vars.*` from the **CALLER's** repo, so there is no input to plumb |
-| `CMS_AUTOMATION_APP_PRIVATE_KEY` | Actions repository **secret** | *(nothing today)* — was passed to the reusable as the `app_private_key` secret input |
+| `CMS_AUTOMATION_APP_ID` | Actions repository **variable** | `gh variable set CMS_AUTOMATION_APP_ID --body <client-id> -R <owner>/<repo>` (or `CMS_AUTOMATION_APP_ID=<client-id>` in `site-params.env` + `scripts/set-repo-variables.sh`) |
+| `CMS_AUTOMATION_APP_PRIVATE_KEY` | Actions repository **secret** | `gh secret set CMS_AUTOMATION_APP_PRIVATE_KEY -R <owner>/<repo> < app.pem` |
 
-**App permissions** (Repository permissions on the App itself, installed on both
-resource owners): **Contents: Read and write**, **Pull requests: Read and
-write**, **Workflows: Read and write**.
+A reusable reads `vars.*` from the **caller's** repo, so the variable needs no
+plumbing; the key reaches the reusable as its `app_private_key` secret input,
+which the `examples/site` callers pass. **That `secrets:` line has to ride a
+platform-bump** — `check-platform-pin-consistency.js`'s `structuralShape()`
+compares each caller's `secrets:` map against the template at the consumer's
+pinned ref, so a consumer adding the line ahead of its bump reports DRIFT on
+`platform-pin-consistency / pin-consistency`. Set the two knobs first (a no-op
+until the reusable reads them), let the bump land the caller line, then verify:
 
-**The PAT always WON when present.** The reusable resolved ONE effective push
-credential — PAT first, minted App token second — so a consumer that already
-has `CMS_PLATFORM_PAT` never needed either knob.
+```bash
+gh workflow run platform-bump.yml -R <owner>/<repo>      # expect "already on vX.Y.Z"
+gh run view <run-id> -R <owner>/<repo> --log | grep -E '::notice::(Minted|No CMS automation App)'
+```
+
+`Minted a contents:write,pull_requests:write,workflows:write installation token`
+means the App path is live; on v0.1.103+ it is the ONLY path, and `No CMS
+automation App` is an ERROR there rather than a fallback notice. The
+`No CMS automation App` notice means a knob is missing. A present-but-broken
+key is a red run with `::error::Could not mint` — never a silent PAT fallback,
+so "misconfigured" stays distinguishable from "never onboarded".
+
+**What the token can and cannot do.** It is scoped DOWN at mint time to the one
+repo the job runs in (`--repositories`) and to `contents=write,
+pull_requests=write,workflows=write` for the bump, `contents=read,
+pull_requests=write` for dev-hooks-sync — the App's own grant is the ceiling,
+never the token. Commits keep their explicit `cms-platform-bot@users.noreply.
+github.com` identity (both reusables set it); the PR and the auto-merge arm
+are attributed to `<app-slug>[bot]`. A PR opened by an App token fires the
+site's CI exactly as a PAT-opened one does — that is why `GITHUB_TOKEN` was
+never enough here.
 
 **Deliberately NOT used for the `dependabot-rearm-sweep` merge path.** That
 sweep keeps the built-in `github.token`, and the reason is a
@@ -154,6 +241,17 @@ fire all three prod loops onto the shared `prod-mutating-loop` concurrency
 group, which **drops a co-arriving sibling** — a cancelled loop as the price of
 a pin bump. So the App is for the **push-back** credential only.
 
+**Not (yet) a replacement for `CMS_E2E_PAT`.** That token is written verbatim
+into Decap's browser session (`e2e/decap-pat.js`), and Decap's GitHub backend
+gates login on `GET /repos/{owner}/{repo}` reporting `permissions.push` for the
+token's identity — unmeasured for an installation token; `regression-review-
+reaper` must act as a configured **reviewer** of the `regression-review`
+environment, a role only a person or team can hold; and
+`auto-resolve-newline-conflict.js` allowlists PR authors by user login. Each of
+those needs a live measurement with a real App key before the swap, so
+`CMS_E2E_PAT` stays a PAT and is rotated on its calendar. The analysis is in
+cms-platform#238.
+
 > Related, and worth stating because the opposite claim was recorded here for a
 > while: **`GITHUB_TOKEN` CAN merge a workflow-file PR.** PR #182 (31 changed
 > files, all under `.github/workflows/`) merged as `github-actions[bot]` 3 s
@@ -161,14 +259,6 @@ a pin bump. So the App is for the **push-back** credential only.
 > workflow files without the `workflows` permission (hence this App), and
 > `enablePullRequestAutoMerge` **from the schedule context** — the discriminator
 > there is the EVENT CONTEXT, not the token class.
-
-**Failure mode — soft, and self-describing.** The pattern worth keeping: with
-neither a PAT nor the App pair, the job logged a `::notice::` naming **all
-three** knobs and exited cleanly, so "never onboarded" stayed distinguishable
-from "misconfigured", and it never redded a Dependabot PR. A failed *mint* was
-likewise a `::warning::` plus an empty token, falling through to the same clean
-skip. Any future credential-dependent job owes the same shape
-(`scripts/mint-app-token.js` implements it).
 
 ## AWS deploy secrets (from the bootstrap stack outputs)
 
@@ -197,7 +287,7 @@ bash <cms-platform>/scripts/set-repo-variables.sh        # add --dry-run to prev
 | `PREVIEW_BUCKET` | `<prefix>-previews` (apex, dots→hyphens) | `visual-regression` (S3 steps no-op if unset) |
 | `AWS_REGION` | `${AWS_REGION:-us-east-1}` | `visual-regression` |
 | `PROD_PLAYGROUND_MODE` | **opt-in** (`site-params.env`) | `cms-publish-loop-prod`, `cms-media-roundtrip` |
-| `CMS_AUTOMATION_APP_ID` | **opt-in** (`site-params.env`) | *nothing today* — dormant since comment-sync was deleted; see its section above |
+| `CMS_AUTOMATION_APP_ID` | **opt-in** (`site-params.env`) | `platform-bump`, `dev-hooks-sync` — the App's Client ID; with the `CMS_AUTOMATION_APP_PRIVATE_KEY` secret it retires `CMS_PLATFORM_PAT` (see its section above) |
 
 The last two are the only **non-derived** entries — everything else comes from
 `APEX_DOMAIN`, so the setter pushes these two only when `site-params.env`
@@ -280,9 +370,9 @@ platform-bump cron (a `::warning`, never a job failure).
 
 ## Quick checklist for a new consumer
 
-- [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Actions R/W** (+ be a reviewer of the `regression-review` environment)
-- [ ] `CMS_PLATFORM_PAT` — same **plus Workflows R/W**; powers platform-bump and dev-hooks-sync
-- [ ] ~~`CMS_AUTOMATION_APP_PRIVATE_KEY`~~ — **skip: dormant.** Its only reader (comment-sync) was deleted 2026-08-20; nothing reads it or the `CMS_AUTOMATION_APP_ID` variable today
+- [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Issues R/W** + **Actions R/W** + **Commit statuses R** (+ be a reviewer of the `regression-review` environment)
+- [ ] `CMS_AUTOMATION_APP_PRIVATE_KEY` (secret) + `CMS_AUTOMATION_APP_ID` (variable) — the CMS automation App, installed on this owner; powers platform-bump and dev-hooks-sync with nothing to rotate
+- [ ] ~~`CMS_PLATFORM_PAT`~~ — **removed in v0.1.103.** Do not create it. The App above is the only push credential; only a repo pinned below v0.1.103 still has an input for it
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
-- [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` opt-in)
+- [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` when `site-params.env` sets them)
 - [ ] Settings → General → **Allow auto-merge** = ON

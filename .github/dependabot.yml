@@ -51,10 +51,64 @@ updates:
     # Same graduated wait, same reason: the e2e harness under /e2e is not
     # platform-internal — BOTH consumers check it out and execute it, so a bad
     # Playwright major reaches production CI the same way a bad action SHA
-    # would. A Playwright major additionally REQUIRES a coupled
-    # .github/ci-runner/Dockerfile bump (the playwright-image-drift guard), and
-    # Dependabot cannot make both edits in one PR — 30 days is room to do it
-    # deliberately rather than in a red-CI scramble.
+    # would. Playwright is the test RUNNER for the whole ~126-file suite, not
+    # one dependency among many, so a major here is the class that most needs
+    # deliberate handling rather than a red-CI scramble — 30 days is that room.
+    # (An earlier version of this comment additionally claimed a Playwright
+    # major requires a coupled .github/ci-runner/Dockerfile bump, citing the
+    # playwright-image-drift guard. That coupling does not exist anywhere in
+    # the fleet — measured 2026-08-31: no .github/ci-runner/ or root
+    # package-lock.json in this repo, no .github/ci-runner/Dockerfile in
+    # either consumer, and scaffold/create-site.js seeds neither. Don't
+    # reintroduce it on the strength of this comment's own prior wording.)
+    #
+    # GROUPING — collapses a security batch into one PR (#118-122 postmortem).
+    # A batch of Dependabot PRs opened together can strand indefinitely:
+    # GitHub auto-disables auto-merge the moment the FIRST PR in the batch
+    # merges, and every later merge in the batch also leaves the rest
+    # genuinely behind main, which re-arming alone (dependabot-rearm-sweep.yml)
+    # cannot fix by itself — it re-arms, it does not un-strand a PR whose base
+    # has moved. One PR has nothing for that failure mode to act on.
+    #
+    # applies-to: security-updates ONLY, deliberately not version updates.
+    # Version updates keep their per-package cooldown graduation above and
+    # stay individually revertible — packages graduate out of cooldown at
+    # different times, so grouping them would fight the very cooldown this
+    # block sits next to. Security advisories bypass cooldown by GitHub's
+    # spec (see the cooldown comment above), so they are the ones that
+    # actually DO arrive as a simultaneous batch — exactly the batch that
+    # strands under #118-122's mechanism.
+    #
+    # @playwright/test is excluded from the group on purpose, not swept in
+    # with everything else: it is the test RUNNER for the entire /e2e suite
+    # (~126 spec files) that BOTH consumer sites check out and execute in
+    # their own production CI — the same blast-radius argument the major-bump
+    # wait above is built on. Inside a group, one bad Playwright security bump
+    # reds the ONE grouped PR and blocks every other security fix riding in
+    # it; excluded, a bad Playwright bump costs one extra ungrouped PR while
+    # the rest of the group still lands unattended.
+    #
+    # This is a groups: block and NOT the repo-level "Grouped security
+    # updates" UI toggle — verified 2026-08-31 against GitHub's REST docs for
+    # repos and for org/enterprise code-security configurations: grouped
+    # security updates has NO REST endpoint at either level (absent from the
+    # security_and_analysis object, and code-security configurations are
+    # org-only anyway — unreachable for a user-account fleet repo). It is the
+    # one Dependabot setting that structurally CANNOT be declared as code, so
+    # flipping it in the UI would reintroduce exactly the undeclared-live-
+    # value class repo-settings.yml exists to prevent: no # why:, no drift
+    # detection, nothing for the daily audit to see. GitHub's own settings
+    # page states that a repo's dependabot.yml group rules override the
+    # toggle — so this block is both the as-code path AND the one that wins.
+    #
+    # github-actions above stays UNGROUPED on purpose: 12 pinned third-party
+    # SHAs rarely alert together, so grouping buys little there, and being
+    # able to isolate a single bad action SHA is worth more than saving one PR.
     cooldown:
       default-days: 7
       semver-major-days: 30
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+        exclude-patterns: ["@playwright/test"]

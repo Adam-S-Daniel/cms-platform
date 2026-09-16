@@ -209,6 +209,16 @@ If the UI looks broken, suspect (in order): `delete:` flag on the collection, mi
 
 The route-mocked unit specs (`publish-via-auto-merge-browser.spec.js`) exercise the shim's internal contract without Decap. Those CAN call `__callMerge` directly because that's their entire reason for existing. The real-network specs must not.
 
+### One publish per page (Decap 3.15.1, cms-platform#342)
+
+Navigating by hash straight from one ENTRY route to another and then publishing fails inside Decap: `Cannot read properties of undefined (reading 'reduce')` in the console, no toast, the editor stays dirty, the file is unchanged. Visiting the first entry without editing it is enough to trigger it; opening the entry first in the session, and list → entry, both work. The admin UI never offers entry → entry navigation (no sidebar in the editor; the back link goes to the collection), so only specs hit it — and specs hit it by default, because they `page.goto` entry routes. Reproduced identically with and without the platform's admin shims, so it is Decap's bug; https://github.com/Adam-S-Daniel/cms-platform/issues/342 tracks it upstream.
+
+- **Give each publish its own page:** a separate `test()` (the `page` fixture is per-test) or an explicit `browser.newContext()`. Never publish two entries through one page object.
+- **If one test must touch two entries, go via the collection route** (or the "← Writing in …" back link) between them — never entry → entry.
+- **Recognise the symptom:** a publish that "did nothing" and a downstream wait that times out. Read the console before debugging the publish path; this produced two spurious failures in the #329 acceptance suite before it was isolated, and the fix was one session per scenario.
+
+No lint enforces this yet. If it bites again, the publish-path AST lint from https://github.com/Adam-S-Daniel/cms-platform/issues/382 (`e2e/status-dropdown-selector.test.js`) is where a detector belongs.
+
 ### UI-driven cleanup + `test.afterAll()` harness safety net
 
 Real-network specs that mutate prod state (write to a `_e2e/` canary, flip a `published:` flag, delete a fixture) need cleanup that's both UI-driven AND deterministic. Two failure modes pull in opposite directions:

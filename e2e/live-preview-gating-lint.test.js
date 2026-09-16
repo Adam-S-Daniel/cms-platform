@@ -25,7 +25,29 @@ const { test, expect } = require("./base");
 // working only while the anchor stays in the DOM. React is untouched
 // either way: the anchor is our own static shell markup, not Decap's.
 
+// It also carries the two #328 PRODUCT-COPY locks for this surface, because
+// this is the file that already knows the show/hide rule the copy has to be
+// true of:
+//
+//   #328.5 — the floating button's `title`. It vanished on every non-editor
+//     route with nothing anywhere explaining why, and its old tip described
+//     only the Save mechanic. The title must now say what the button DOES and
+//     WHEN it is available, and both halves must stay true of the gating
+//     asserted above.
+//   #328.2 — /preview/'s empty state. The bridge streams from the editor
+//     tab's Save broadcasts, so a fresh load of the preview tab (an ordinary
+//     RELOAD included) has nothing to show. The old copy described that
+//     accurately and read, to a non-technical owner who had just reloaded, as
+//     her content having vanished. The reassurance sentence is the fix, so it
+//     is the thing worth locking: it is one "tighten the copy" edit away from
+//     being deleted as redundant, and its absence is silent.
 const ADMIN_SRC = path.join(__dirname, "..", "theme", "admin");
+const PREVIEW_LAYOUT = path.join(__dirname, "..", "theme", "_layouts", "preview.html");
+
+// The button's tooltip, byte-identical on both live shells.
+const LIVE_PREVIEW_TITLE =
+  "Live Preview — opens a tab that mirrors this entry each time you Save. " +
+  "Available while you're editing an entry in a section the preview can render.";
 // index-test.html ships NO Live Preview button (test-repo backend — no
 // live site to preview), so only the two shells that carry the anchor.
 const SHELLS = ["index.html", "index-local.html"];
@@ -67,6 +89,85 @@ test.describe("Live Preview button — editor-only + previewable-collection gati
       "the Reviews button must stay always-visible — only the Live Preview " +
         "button is editor-scoped (the reviews dashboard is useful on every route)",
     ).not.toContain("getElementById('reviews-link')");
+  });
+});
+
+test.describe("Live Preview button — the tooltip explains what it does and when (#328.5)", () => {
+  for (const shell of SHELLS) {
+    test(`${shell}: #live-preview-link carries the explanatory title`, () => {
+      const src = fs.readFileSync(path.join(ADMIN_SRC, shell), "utf8");
+      expect(
+        src,
+        `${shell}'s Live Preview button must carry the title that says what it does AND when ` +
+          `it appears. Without the second half the button silently vanishes on every non-editor ` +
+          `route and on every collection /preview/ cannot render, with nothing anywhere saying ` +
+          `why (#328.5). Keep it byte-identical across shells.`,
+      ).toContain(`title="${LIVE_PREVIEW_TITLE}"`);
+      // The title claims availability is conditional; that claim is only true
+      // while the gating above is what actually decides. Asserted together so
+      // a future edit cannot loosen one and leave the other lying.
+      expect(
+        src,
+        `${shell}: the title promises the button appears only while editing a previewable ` +
+          `entry — so the display toggle it describes must still be there`,
+      ).toContain(DISPLAY_TOGGLE_SRC);
+    });
+  }
+
+  test("the visible label is text, so no aria-label is needed or added", () => {
+    // The anchor's accessible name comes from its own text ("Live Preview")
+    // next to the decorative svg. An aria-label would OVERRIDE that name with
+    // the long title, which is worse for a screen reader, not better — so its
+    // absence here is a decision, recorded so nobody "fixes" it.
+    for (const shell of SHELLS) {
+      const src = fs.readFileSync(path.join(ADMIN_SRC, shell), "utf8");
+      const anchorIdx = src.indexOf('id="live-preview-link"');
+      expect(anchorIdx, `${shell} carries the anchor`).toBeGreaterThan(-1);
+      const anchor = src.slice(anchorIdx, src.indexOf("</a>", anchorIdx));
+      expect(anchor, `${shell}: the anchor keeps its visible "Live Preview" text`).toContain(
+        "Live Preview",
+      );
+      expect(
+        anchor,
+        `${shell}: no aria-label — it would override the visible label with the tooltip`,
+      ).not.toContain("aria-label");
+    }
+  });
+});
+
+test.describe("/preview/ empty state says nothing was lost (#328.2)", () => {
+  const src = () => fs.readFileSync(PREVIEW_LAYOUT, "utf8");
+
+  test("the reassurance sentence is present, verbatim", () => {
+    expect(
+      src().replace(/\s+/g, " "),
+      "theme/_layouts/preview.html's #preview-empty-state must say outright that nothing is " +
+        "lost. A reload of the preview tab shows this screen — the bridge only streams from " +
+        "the editor's Save broadcasts, so a fresh load has none — and the previous copy read " +
+        "to a non-technical owner as her content having vanished (#328.2). This sentence IS " +
+        "the fix; do not trim it as redundant.",
+    ).toContain(
+      "Your saved and published content is safe; reloading this tab only clears the preview, " +
+        "never your work.",
+    );
+  });
+
+  test("the heading names the TAB, not the content", () => {
+    expect(
+      src(),
+      'the heading must not be a bare "Live preview" over an empty screen — it has to say ' +
+        "that it is THIS TAB that has nothing yet (#328.2)",
+    ).toContain("<h2>Nothing to preview in this tab yet</h2>");
+  });
+
+  test("the <code> convention and the .hint line survive", () => {
+    const html = src();
+    const block = html.slice(
+      html.indexOf('<div id="preview-empty-state">'),
+      html.indexOf("</div>", html.indexOf('<div id="preview-empty-state">')),
+    );
+    expect(block, "Save is still styled as a <code> control name").toContain("<code>Save</code>");
+    expect(block, "the .hint line is still the last, quietest line").toContain('<p class="hint">');
   });
 });
 

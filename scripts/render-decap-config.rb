@@ -25,6 +25,10 @@
 #   site_root : dir with _config.yml (+ optional vendored admin/)   (default ".")
 #   build_dir : Jekyll output dir whose admin/ is finalized (default "<site_root>/_site")
 require 'yaml'
+# `Date` is named in production_branch's permitted_classes — see the hook's
+# note on the same require (measured: without it this script injected "").
+require 'date'
+require 'json'
 require 'uri'
 require 'fileutils'
 # Shared field_library $ref resolver — the SINGLE source of truth, also
@@ -139,6 +143,29 @@ render.call(File.join(admin_src, 'config.base.yml'), File.join(admin_out, 'confi
 lb = File.join(admin_src, 'config-local.base.yml')
 render.call(lb, File.join(admin_out, 'config-local.yml')) if File.exist?(lb)
 
+# `cms.site_gate` (OPTIONAL) — see decap_config_hook.rb's matching block: the
+# site-level publish gate a site may declare, read by admin/site-gate-banner.js.
+# to_json, NOT inspect — Ruby's Hash#inspect is not valid JavaScript.
+gate = cms['site_gate']
+gate_js = gate.nil? ? 'null' : JSON.generate(gate)
+
+# The branch the config was RENDERED with (`backend.branch` of the config.yml
+# written above, read back with a real YAML parse) — see decap_config_hook.rb's
+# matching block. deploy-preview.yml patches the SERVED copy to the PR branch;
+# admin/branch-binding-banner.js (#412) compares the two. "" when unreadable,
+# which leaves the banner inert rather than failing the render.
+def production_branch(config_path)
+  doc = YAML.safe_load(
+    File.read(config_path, encoding: 'utf-8'),
+    aliases: true, permitted_classes: [Date, Time, Symbol],
+  )
+  branch = doc.is_a?(Hash) ? doc.dig('backend', 'branch') : nil
+  branch.is_a?(String) ? branch : ''
+rescue StandardError
+  ''
+end
+prod_branch = production_branch(File.join(admin_out, 'config.yml'))
+
 # 2. inject window.CMS_* into the built admin HTML shells (read by admin/*.js
 #    and admin/reviews/*.html). Both the Decap shells (index*.html) and the
 #    visual-regression review dashboards (reviews/index.html, reviews/health.html)
@@ -146,7 +173,7 @@ render.call(lb, File.join(admin_out, 'config-local.yml')) if File.exist?(lb)
 #    CMS_REPO, APEX_DOMAIN from CMS_APEX, OAUTH_URL from CMS_OAUTH_BASE_URL,
 #    document.title from CMS_SITE_TITLE (the site's _config.yml `title`) —
 #    instead of hardcoding it, so the platform stays site-agnostic.
-js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};</script>}
+js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};</script>}
 shells = Dir.glob(File.join(admin_out, 'index*.html')) +
          Dir.glob(File.join(admin_out, 'reviews', '*.html'))
 shells.each do |h|

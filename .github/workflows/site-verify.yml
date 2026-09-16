@@ -1,0 +1,120 @@
+# Site verify (reusable) — run a consumer's OWN post-build verifier in CI.
+#
+# THE GAP (#377). jodidaniel.com ships `scripts/verify-build-artifacts.rb`, a
+# pure-Ruby check over the BUILT site: media links resolve, the three-way
+# category triangle agrees, the admin seam's anchors match built section ids,
+# no PDF bytes are committed, and the `pdf_public` gate withholds and publishes
+# correctly. Its own docs cite it in six places as the guard for those. No
+# workflow ran it. A `pdf_public: true` with no file in `_site` — row 2 of the
+# verifier's own table, the case its docs call "better a loud red than a
+# 'Download PDF' button that 404s" — shipped to production, because the loud
+# red existed only on a developer's shell.
+#
+# WHY THIS IS A PLATFORM SEAM AND NOT A CONSUMER WORKFLOW. The consumer cannot
+# own a `verify-build.yml`: check-platform-pin-consistency.js's workflow-SET
+# parity flags any caller absent from `examples/site/` as `workflow-set: EXTRA`
+# on a REQUIRED check. So the reusable lives here and the thin caller is
+# platform-dictated, which is also what lets `platform-bump.yml` seed it into
+# every consumer on the next bump (#315).
+#
+# CONVENTION, NOT CONFIGURATION. There are NO inputs. If the caller's tree has
+# `scripts/verify-build-artifacts.rb`, this builds the site and runs it;
+# otherwise it prints a notice and succeeds. adamdaniel.ai has no such script
+# today, so it no-ops there in ~10s. Nothing for a consumer to misconfigure.
+# Generalising to a non-Ruby verifier is deliberately out of scope: Jekyll
+# guarantees Ruby, and there is exactly one such script in the fleet.
+#
+# JOB SHAPE, dictated by e2e/required-context-cancellable.test.js's four causes
+# rather than by taste. The `verify` job does the work and carries the wall;
+# the `site-verify` job is a GATE — `needs: verify`, `if: always()`, no
+# `timeout-minutes`, no `concurrency` — that translates the work job's result
+# into the one context a ruleset can name. A job GitHub kills at its wall
+# reports `cancelled`, and a cancelled required context blocks a merge with no
+# override (#285 / #289). Same shape `e2e-tests.yml` uses for `e2e / e2e`.
+#
+# SEQUENCING (the part that can block every consumer's PRs). This context is
+# NOT in `ruleset_library.consumer-main.required_status_checks` yet, on
+# purpose. Adding it before both consumers publish it blocks every PR on a
+# context that never arrives. Order: release + bump so the caller lands →
+# confirm `site-verify / site-verify` reports on both consumers → only then add
+# it to repo-settings.yml AND reconcile each consumer's cms-automerge-nudge
+# `required_contexts` (consumer-automerge-nudge-contexts.test.js holds the two
+# equal; platform-bump reconciles them from the manifest).
+name: Site verify (reusable)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # The WORK job. Everything that can take time or fail for a build reason
+  # lives here, under a wall — its conclusion is required by nothing.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # The CALLER's tree: the site whose verifier and build are under test.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Detect the site's verifier
+        id: detect
+        # Presence is the whole contract. A site that has no verifier is not
+        # wrong, it has nothing to verify; a site that has one runs it. The
+        # path is fixed by convention so there is no input to get wrong.
+        run: |
+          set -euo pipefail
+          if [ -f scripts/verify-build-artifacts.rb ]; then
+            echo "verifier=true" >> "$GITHUB_OUTPUT"
+            echo "scripts/verify-build-artifacts.rb present — building the site and running it."
+          else
+            echo "verifier=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=site-verify::No scripts/verify-build-artifacts.rb in this repo — nothing to verify (this is not an error)."
+          fi
+
+      - name: Set up Ruby
+        if: steps.detect.outputs.verifier == 'true'
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b
+        with:
+          # Tracks deploy-preview.yml's `ruby_version` default, so the tree
+          # this verifies is built by the same Ruby that builds the deploys.
+          # e2e/site-verify.test.js holds the two equal.
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: Build the site
+        if: steps.detect.outputs.verifier == 'true'
+        env:
+          # The verifier asserts on what SHIPS. deploy-production.yml builds
+          # under `production`, so this does too.
+          JEKYLL_ENV: production
+        run: bundle exec jekyll build
+
+      - name: Run the site's verifier
+        if: steps.detect.outputs.verifier == 'true'
+        # The script's own contract: `ok`/`FAIL` per assertion, exit 1 on any
+        # FAIL. Its output is the finding; nothing here re-summarises it.
+        run: ruby scripts/verify-build-artifacts.rb
+
+  # The GATE. This is the job a ruleset names (`site-verify / site-verify`
+  # through the dictated caller). It carries NO `timeout-minutes` and NO
+  # `concurrency`: being unkillable-at-a-wall is its entire job. `if: always()`
+  # so a failed or cancelled `verify` still produces a RED here rather than a
+  # skip that hangs the PR on "Waiting for status to be reported".
+  site-verify:
+    needs: verify
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on the verify job
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        run: |
+          set -euo pipefail
+          echo "verify job result: ${VERIFY_RESULT}"
+          if [ "${VERIFY_RESULT}" != "success" ]; then
+            echo "::error::The site's post-build verifier did not succeed (${VERIFY_RESULT}) — see the verify job above for the failing assertion(s)."
+            exit 1
+          fi
+          echo "Site verifier passed (or the site has none)."

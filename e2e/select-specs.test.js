@@ -646,12 +646,28 @@ test.describe("selectParityPreviewSpecs — render-only fanout (#1723 follow-up)
     expect(selected).toContain("e2e/image-alt-text.spec.js");
   });
 
-  test("admin/ change still selects admin-bundle-parity via its SPEC_RULE (deployed surface)", () => {
-    // admin/ IS deployed, so admin-bundle-parity must still run — and
-    // admin/ triggers deploy-preview, so a preview will exist.
-    expect(selectParityPreviewSpecs(["admin/index.html"])).toContain(
-      "e2e/admin-bundle-parity.spec.js",
-    );
+  test("an admin/-only change selects NO parity-preview spec, so the probe early-skips", () => {
+    // This assertion used to say the opposite — that `admin/` selects
+    // e2e/admin-bundle-parity.spec.js "via its SPEC_RULE (deployed surface)",
+    // because admin/ is deployed and a preview will exist. Both halves are
+    // true and the conclusion still did not follow: that spec is registered in
+    // playwright.config.js's PLATFORM_META_SPECS (it reads the platform's own
+    // theme/admin tree, which admin-spec-source-read-lint forbids a
+    // consumer-lane spec from doing), and parity-preview.yml — the ONLY caller
+    // of this selector — always sets SITE_ROOT. So the config testIgnored the
+    // spec on the only lane that could ever select it.
+    //
+    // Selecting it ALONE, which is exactly what an admin-only diff did, left
+    // `npx playwright test <path>` nothing to collect: exit 1, "No tests
+    // found", and a red `parity / parity` — a REQUIRED context on both
+    // consumers. Latent since the spec joined PLATFORM_META_SPECS; it surfaced
+    // the first time a PR changed admin/ and nothing else (jodidaniel.com#247,
+    // 2026-09-04).
+    //
+    // The correct verdict for an admin-only diff is this selector's own
+    // early-skip: no RUNNABLE parity-preview spec covers the admin bundle, so
+    // there is nothing to probe. The e2e matrix still covers such a PR.
+    expect(selectParityPreviewSpecs(["admin/index.html"])).toEqual([]);
   });
 
   test("a mixed render + test-infra change still fans out (render wins)", () => {

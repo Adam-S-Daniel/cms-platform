@@ -126,16 +126,24 @@ per-PR checkout):
 
   **The standing gate:** repairing this removes the last human gate on
   third-party action SHAs entering 18 reusables both production sites execute,
-  so BOTH of cms-platform's ecosystems (`github-actions` AND the `/e2e` `npm`
-  harness) carry a **graduated** minimum package age —
-  `cooldown: {default-days: 7, semver-major-days: 30}`. `default-days: 7`
+  so `.github/dependabot.yml` enforces a minimum package age on BOTH of
+  cms-platform's ecosystems (`github-actions` AND the `/e2e` `npm` harness),
+  but not the same shape: `github-actions` carries a flat
+  `cooldown: {default-days: 7}`, while the `/e2e` `npm` harness carries a
+  **graduated** `cooldown: {default-days: 7, semver-major-days: 30}`. GitHub
+  does not support per-SemVer-tier cooldown on `github-actions` at all —
+  adding `semver-major-days` there is a schema error that disables the whole
+  `updates[]` entry, not a silently-ignored key
+  (https://github.com/Adam-S-Daniel/claude-memory-map/runs/93574227209), which
+  is why the majors-only wait lives on the `npm` entry alone. `default-days: 7`
   mechanises the repo's existing cooling-off convention (GitHub's own default is
-  3 days, so 7 is a deliberate RAISE, not a floor from zero); majors wait 30
-  because a major is the class that has actually needed reverting here
-  (setup-node 6→7 in #179; the Decap bundle kept revertible on purpose at
-  v0.1.66→v0.1.67), and a Playwright major additionally needs a coupled
-  `.github/ci-runner/Dockerfile` edit Dependabot cannot make in the same PR.
-  `semver-minor` / `semver-patch` are left undefined on purpose — GitHub's
+  3 days, so 7 is a deliberate RAISE, not a floor from zero); majors wait 30 on
+  `npm` because a major is the class that has actually needed reverting here
+  (setup-node 6→7 in #179 is the incident that surfaced the need, even though
+  that action lives on `github-actions` and so could only ever get the flat 7
+  days; the Decap bundle kept revertible on purpose at v0.1.66→v0.1.67).
+  `semver-minor` / `semver-patch` are left undefined on the `npm` entry on
+  purpose (`github-actions` cannot carry any of the three) — GitHub's
   documented precedence falls an undefined `semver-*-days` back to
   `default-days`, so spelling them out would only invite the three to drift.
   Cooldown applies to **version** updates only: a security advisory bypasses it
@@ -304,6 +312,12 @@ layer:
     `<!-- dead-workflows: … -->` block keyed by file basename, kept strictly
     separate from `<!-- run-ids: … -->` so the two channels cannot clobber
     each other; each is reported **once** per tracking issue.
+  - **A TRUNCATED listing is UNKNOWN too, not "fewer failures" (#425).**
+    Collecting fewer schedule/push runs than the API's own `total_count` —
+    this loop's page cap, or the runs API's own 1,000-result cap, or the page
+    cap being exhausted with no `total_count` at all to check against — reds
+    the run and suppresses the auto-close through the same `done()` gate as
+    `deadProbeFailed`, plus an `::error::` naming the lane and both counts.
 - **Exit-code contract:** the audit run stays GREEN when it successfully
   files/updates the alert (the issue is the channel); red means the audit
   ITSELF is broken (API/permission failure) — same "red needs a human"
@@ -358,6 +372,57 @@ wedged approval gate all reach it through the same door.
   dead-workflow ones, and are reported once per tracking issue. The close gate
   now requires all four lanes clean.
 
+### A later success does not clear a failure (2026-09-15)
+
+The close rule is "a full window passes clean", deliberately. It was replayed
+against 30 days of real runs from the audit's callers
+(`docs/HEALTH-AUDIT-CLOSE-RULE.md`, evidence in `docs/health-audit-close-rule/`)
+and three alternatives were measured:
+
+- **Let a later success of the same lane clear a failure.** Issues close a day
+  sooner (median 31h, against 55h), but 28 failures are never reported, and 31
+  if the audit starts at 15:30 instead of 13:00. That includes #279's own
+  incident: 3 of 8 reported at 13:00, none at 15:30.
+- **Let a later success only relax the close.** This files duplicates, because
+  `findTrackingIssue` reads open issues only: 19 issues against 13.
+- **Report everything and close on recovery.** Hides nothing (16 issues, 29h),
+  and was not adopted.
+
+Read that doc before touching the close gate.
+
+### Dependabot config health is deliberately NOT a lane here (#429)
+
+A broken `.github/dependabot.yml` is invisible to this audit, and it stays that
+way on purpose. Four repos' Dependabot was dead for 36 days (2026-08-10 to
+2026-09-15) and nothing alerted. GitHub's verdict on the file is a **check run
+from the `dependabot` app**, not a workflow run, and it lives only on the commit
+that brought the change onto the default branch — nothing this audit reads.
+
+The detector lives in `_agent-guidance` instead: a daily sweep over both owners
+that files an issue in the affected repo. Why not a lane in
+`audit-scheduled-runs.js`:
+
+- **Reach.** A lane here reaches only callers that get bumped. #424 measured
+  seven of the nine callers stale, and only 10 of the 21 repos under the two
+  owners run this audit at all.
+- **Silence alone scores the wrong answer.** An invalid config that REPLACES a
+  valid one does not stop update jobs: this repo's own config was invalid from
+  `149755b` (2026-08-10) to `acc5df3` (2026-08-19), and Dependabot update jobs
+  still ran on 08-11 and 08-18, all `success`. A "no recent Dependabot job" lane
+  in the #313 shape would have scored that whole window healthy. The check run is
+  the first signal; silence is the second.
+- **The check sits on the merge commit.** For a merge-commit PR the `dependabot`
+  check lands on the merge commit, not on the commit `commits?path=` returns
+  (`9e44154` carries none; its merge `8ab5799` does), so a lookup that reads only
+  the path commit reports "missing" on a healthy repo.
+- **Pre-merge schema validation does not catch it either.** SchemaStore's
+  `dependabot-2.0.json` allows `cooldown.semver-major-days` for every ecosystem,
+  so it passes the files GitHub rejected.
+
+The decision, threshold and credential are recorded on #429
+(https://github.com/Adam-S-Daniel/cms-platform/issues/429#issuecomment-5687542401).
+Re-read it before adding a Dependabot lane to this audit.
+
 ## An UNAPPROVED environment gate must not hold a concurrency group (#313)
 
 `repo-settings-apply.yml` applied nothing for eleven days. Twelve consecutive
@@ -386,8 +451,12 @@ concurrency and a run waiting on a gate look alike from the outside; only the
 jobs list tells them apart.** Check it before believing either.
 
 The invariant: **a job that can WAIT ON A HUMAN gets no workflow-level
-concurrency group.** Scope the group to the job that actually writes, and let
-newest win.
+concurrency group.** Scope the group to the job that actually writes, PER
+INDEPENDENT UNIT OF WORK, and let newest win.
+
+That middle clause was missing for four days and cost a second outage — see
+"The sequel: a constant group across a matrix" below. Read both halves before
+touching this block.
 
 - `plan` is read-only and carries no group. Un-grouping it is what makes a wedged
   gate VISIBLE — every run plans and publishes its summary instead of dying
@@ -413,6 +482,188 @@ group" — `repo-settings-apply` publishes no required context. The shared lesso
 is narrower and worse: `cancel-in-progress: false` retains exactly one pending
 run, so anything that can occupy a group indefinitely converts every later run
 into a silent, job-less cancellation.
+
+### The sequel: a constant group across a MATRIX is the same bug, renamed
+
+The fix above moved the group off the workflow and onto `apply` — and left the
+group name a CONSTANT. `apply` is a two-leg matrix (one per owner, because an
+installation token is per owner), and **a job-level `concurrency` block applies
+to each matrix leg separately**, so both legs joined one group and
+`cancel-in-progress: true` had one kill the other within a second. Every run.
+Winner non-deterministic.
+
+Measured over the four runs after the #313 fix landed:
+
+| run | `Adam-S-Daniel` leg | `jodidaniel` leg |
+|---|---|---|
+| [33123351877](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33123351877) | parked at the gate ~22h, reaped by the next run | killed in <1s |
+| [33259840589](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33259840589) | parked at the gate ~23h, reaped by the next run | killed in <1s |
+| [33318291358](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33318291358) | killed in <1s | approved → `Fix plan: EMPTY` |
+| [33420951576](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33420951576) | killed in <1s | approved → `Fix plan: EMPTY` |
+
+The fleet's only real drift — adamdaniel.ai's `main` ruleset missing
+`prerelease-guard / prerelease-guard`, [#310](https://github.com/Adam-S-Daniel/cms-platform/issues/310)
+— lives on the `Adam-S-Daniel` leg. It was never applied once across those four
+days, so the daily plan found it again every morning and asked again. **A human
+approved, twice, and both approvals landed on the leg with nothing to do.**
+
+Two things generalise past this workflow:
+
+- **A constant `concurrency.group` on a matrix job serialises the matrix.** If
+  the legs are independent work — and a per-owner credential leg is about as
+  independent as work gets — interpolate the axis: `group: <name>-${{ matrix.owner }}`.
+- **The run CONCLUSION lies about it.** Run 33420951576 concluded `cancelled`
+  though its approved leg succeeded, which is also why
+  [#319](https://github.com/Adam-S-Daniel/cms-platform/issues/319) reported
+  "no successful run in its last 15 scheduled runs" — true, and for a reason the
+  conclusion could not name. Read the JOBS, again.
+
+`e2e/repo-settings-apply.test.js` now asserts the group interpolates
+`matrix.owner` on BOTH lanes, and that assertion was proven red by restoring the
+constant.
+
+### The third layer: a gate nobody can refuse is not a control
+
+The four approvals above are the real lesson, and it is not about concurrency.
+A gate that fires every morning on routine, already-reviewed tightenings trains
+the reviewer to click, and a reviewer who clicks is not reviewing. The
+indistinguishability is the damage: the one request that mattered looked exactly
+like the ninety that did not.
+
+So the gate was narrowed to the writes where a human's judgement can change the
+outcome. `scripts/repo-settings-write-risk.js` classifies every planned write:
+
+- **Applied unattended** (cannot reduce protection): a required status check
+  ADDED, a merge method DISABLED, `sha_pinning_required` turned on, a fork-PR
+  approval policy made MORE restrictive, a ruleset created (GitHub enforces the
+  union, so a new one only adds), an environment created from the manifest.
+- **Sent to a human**: a required check removed, a bypass actor added,
+  enforcement relaxed, ref conditions moved, a rule dropped, any `pull_request`
+  parameter change (`required_approving_review_count` and `allowed_merge_methods`
+  both have a weakening direction and neither is modelled), and — the property
+  the design rests on — **anything unrecognised**. It is an ALLOWLIST. A ruleset
+  key GitHub adds next year is gated, not blessed.
+
+Two properties make that safe, and both are load-bearing:
+
+1. **Fail closed, always.** A false GATED costs one click. A false SAFE is an
+   unattended admin write that weakened a production repo. The module is written
+   as though only the second exists.
+2. **Enforced at WRITE time, not routing time.** The ungated lane passes
+   `--refuse-weakening`, which re-derives the verdict from the plan it is about
+   to apply and refuses the whole plan if anything is gated-class. A wrong
+   workflow `if:` therefore costs a red job, never an unattended weakening
+   write. Same shape as the read/write token split: incapable, not trusted.
+
+**And when a human IS needed, they are told.** An `environment:` gate is
+invisible unless you are watching the Actions tab — part of why #313's run #9
+sat unapproved for ten days. The plan job now opens an assigned tracking issue
+naming the run, the approval URL, the configured reviewers and the specific
+writes that need a look; it is closed again the moment the gate resolves, and a
+later run that needs no approval closes a stale one as a backstop. A superseded
+run cannot retract the live request — the issue carries a `<!-- run:N -->`
+marker and `close` refuses to act on an issue that names a different run. See
+`scripts/gate-approval-issue.js`.
+
+**And what they are told is a diff, not a body.** The first shape of that
+issue (#396) said `1 bypass actor(s) added` and then printed two full ruleset
+bodies under "The full plan" — a request to re-derive by eye the delta the
+plan job had already computed. The audit now writes its plan as a structured
+document (`--plan-json`: every write with its write-risk verdict, its reason,
+and the facet-level `changes` it carries — for a ruleset PUT, the same
+per-facet findings `diffRuleset` produced, plus the ruleset's id, settings
+URL and the refs it governs), the gated reason says what the actor IS
+(`RepositoryRole 5 = admin (bypass: always)` — GitHub's fixed ids are
+maintain 2, write 4, admin 5; the REST reference does not list them, the
+terraform provider's `repository_ruleset` docs do), and the issue and the job
+summary render each write as a ```` ```diff ```` fence — arrays by element, so
+an added bypass actor is one annotated `+` line — under a line that links the
+ruleset and names its refs, with gated writes first, the non-weakening ones
+that ride along on approval second, and the full audit output collapsed under
+`<details>`. The first review of #397 asked exactly those two questions
+("What is RepositoryRole#5?", "what ruleset is cms-feature-branches?"), which
+is why an id and a bare name are not enough. The `render` subcommand is the same rendering to stdout, which is
+how the run's own summary page shows it.
+
+### Read-only ruleset plans cannot verify bypass actors
+
+The plan job deliberately mints `administration=read`. GitHub's
+[`GET /repos/{owner}/{repo}/rulesets/{ruleset_id}`](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset)
+omits `bypass_actors` unless the caller has repository-ruleset write access, so
+an absent field is unknown — it is not an empty actor list. Treating it as `[]`
+fabricated a daily `[] -> admin` drift on both consumer feature rulesets even
+though their live admin bypasses had not changed.
+
+The read-only audit reports the ruleset and field as `UNVERIFIABLE` and never
+plans a bypass-only write from that absence. It still plans other visible drift
+on the same ruleset; because a ruleset `PUT` replaces the full body, the
+write-risk classifier gates that plan with `cannot verify live bypass_actors`.
+The approved apply mints a write-scoped token and replans before writing.
+Approval does not expand the earlier planner token or grant lasting credential
+scope, so bypass-only drift cannot be detected by the scheduled read-only scan.
+The existing write-time `--refuse-weakening` check remains the enforcement for
+the unattended lane.
+
+For an admin-visible check without applying anything, use plan-only mode (omit
+`--yes`):
+
+```bash
+node scripts/audit-repo-settings.js --fix
+```
+
+### Two clean-merging PRs made the classifier fail OPEN, six minutes apart
+
+The write-risk classifier merged 2026-08-31 20:31. `securityWrites` — the
+Dependabot vulnerability-alerts / automated-security-fixes surface (#355) —
+merged at 20:25, six minutes earlier, on a branch cut before it. Git merged
+both cleanly (different regions of `audit-repo-settings.js`), self-CI was green
+on each, and the result was a hole in the one module whose entire contract is
+failing closed:
+
+`planWrites()` iterated a HARDCODED list of plan buckets, so security writes
+were invisible to it. Two consequences, and the second is the bad one:
+
+- a plan of ONLY security writes counted `writes=0`, took the "no applicable
+  writes" path, exited 0, and never applied — silently, with the daily audit
+  left reporting drift nothing would ever converge;
+- a plan mixing one safe ruleset write with a security **DELETE** counted
+  `gated=0` and routed to the **ungated** lane, which would have disabled a
+  repo's security alerts with nobody asked.
+
+The manifest declares both keys `true` (enabling), so nothing was actually
+weakened — the exposure was the shape, not an incident.
+
+**The generalisable part is not "remember securityWrites."** It is that an
+allowlist over a data structure someone else owns fails open by default, and
+that neither PR could have caught it alone: each was correct against the tree
+it was written on. Two things now hold the line, and both are in
+`e2e/repo-settings-audit.test.js`:
+
+- **A cross-check that PARSES `buildFixPlan`'s own `plan.push({...})`** (acorn,
+  per the house AST rule — the subject is which properties an object literal
+  carries) and fails if any key is one `repo-settings-write-risk.js` has not
+  been taught. Proven by reverting the classifier to its pre-fix state: the
+  test reds. A new managed surface now cannot land without either a
+  `classifyWrite` case or an explicit entry on the unfixable/metadata lists.
+- **An unrecognised bucket classifies as GATED at runtime**, and counts as a
+  write, so even a surface added without running these lints routes to a human
+  instead of vanishing. An EMPTY unknown bucket is still not a write — content
+  is what gates, or every plan would need an approval forever.
+
+### A plan can be non-empty and have nothing to apply
+
+Separate defect, same "asked a human for nothing" family. `buildFixPlan` emits an
+entry when a repo has ANY finding, including the four kinds `--fix --yes`
+refuses to write: a manual-only key (`default_branch`), a fix-skipped ruleset
+(lossy PUT, below), an unmanaged live ruleset, a fix-forbidden environment. That
+exited 2 — "changes pending" — which asked for an approval that could not
+accomplish anything, and then went red on the post-apply re-audit when the
+finding was, necessarily, still there.
+
+Plan-only now exits 0 when there are no applicable WRITES, printing what needs
+manual reconciliation; and the post-apply re-audit separates a finding the plan
+meant to write (a real apply failure) from one this tool declines to write
+(already reported, already tracked).
 
 ### The second layer: a lossy PUT is refused, and that is correct
 
@@ -1184,3 +1435,86 @@ with the prod-mutate loop, not with the lint's exit code.
   nothing today: `adamdaniel.ai`, `jodidaniel.com` and `examples/site` scan
   **0 sinks each** across 32 workflows apiece. A consumer thin caller that
   grows one is not caught here.
+
+## Editorial-workflow label audit (v0.1.6; self-heal + label-at-creation v0.1.48)
+
+Decap re-runs its editorial-workflow label migration on **every** `/admin` load
+(the persistent "Decap CMS is adding labels to N of your Editorial Workflow
+entries" dialog) when an open editorial PR (a `cms/*` branch) is **missing** its
+`decap-cms/<draft|pending_review|pending_publish>` label — repo-wide, so it
+shows on prod AND every preview deploy. Guards:
+
+- `e2e/cms-editorial-label-migration.spec.js` — drives the in-browser test-repo
+  backend; asserts the dialog is ABSENT, or gone after dismiss + 30s + reload
+  (never survives that cycle).
+- `scripts/audit-editorial-labels.js` — flags open `cms/*` PRs missing a
+  `decap-cms/<status>` label; exits non-zero with `::error::` annotations.
+  With `--fix` (the reusable's default since v0.1.48) it SELF-HEALS instead:
+  applies `decap-cms/pending_publish` when the PR carries `cms/ready` (it is
+  literally queued to publish), else `decap-cms/draft`, and only exits
+  non-zero when a fix didn't stick — a red audit now means "needs a human".
+  Motivation: the flag-only audit went red daily for a week (PR #2387,
+  2026-07) while the "adding labels…" dialog sat on prod — scheduled-run
+  failures are invisible, so detect-only was the wrong contract.
+- `.github/workflows/editorial-label-audit.yml` — reusable; consumers wire a
+  daily-cron caller (sparse-checks out just the audit script from the platform). It
+  MUST pass `--repo ${{ github.repository }}` (v0.1.16): the sparse checkout
+  leaves no git repo in `github.workspace`, so a bare `gh pr list` fails
+  `not a git repository`. Self-heal needs `pull-requests: write` from the
+  CALLER (reusable permissions are capped by the caller's grant); with only
+  `read` the fix 403s and falls back to failing loud. Lint-locked by
+  `e2e/editorial-label-audit-repo.test.js`.
+- **Label at creation (v0.1.48):** every non-Decap writer that opens a `cms/*`
+  PR applies `decap-cms/pending_publish` alongside `cms/ready` so the
+  migration never has a target in the first place — the publish-via-auto-merge
+  shim's delete-recovery PRs, `cms-fixture-pr.js` seed/remove fixture PRs, and
+  `sweep-stale-cms-prs.yml`'s two cleanup PRs. (Decap-created editorial PRs
+  label themselves.) The pre-v0.1.48 "`cms/e2e-fixture/remove-*` PRs
+  transiently red the audit — expected churn" caveat is obsolete: those PRs
+  are labelled at creation now, and the audit heals any stragglers.
+
+## A consumer's own post-build verifier runs through `site-verify.yml` (#377)
+
+jodidaniel.com ships `scripts/verify-build-artifacts.rb` — ~190 assertions
+over the BUILT site (media links resolve, the category triangle agrees, the
+admin seam's anchors match built section ids, no PDF bytes are committed, the
+`pdf_public` gate withholds and publishes). Its docs cited it in six places as
+the guard for those; no workflow ran it, which is how a `pdf_public: true`
+with no file in `_site` — row 2 of the verifier's own table — reached prod.
+The consumer cannot own the workflow: workflow-SET parity flags any caller
+absent from `examples/site/` as EXTRA on a required check. So it is a platform
+seam: the `site-verify.yml` reusable plus a dictated thin caller of the same
+name, which `platform-bump` seeds into both consumers on the next bump (#315).
+
+Four decisions in it that are not obvious from the YAML:
+
+- **Convention, not configuration.** No inputs, no secrets. If the caller's
+  tree has `scripts/verify-build-artifacts.rb` the reusable builds the site
+  (`JEKYLL_ENV=production`, the deploy's build, on deploy-preview's default
+  Ruby) and runs it; otherwise it prints a `::notice::` and succeeds.
+  adamdaniel.ai has no such script and no-ops in ~10s. Generalising to a
+  non-Ruby verifier waits for a second case.
+- **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
+  (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
+  #285/#289 shape, held by `e2e/site-verify.test.js` through
+  `cancellationHazards()`. The context is `site-verify / site-verify`.
+- **The caller has NO `paths-ignore`, deliberately.** The verifier globs
+  `**/*.pdf` over the whole tree, so a docs-only PR can break it exactly as a
+  layout PR can; a filter would blind the check for the ignored paths, and
+  would arm the missing-check trap the moment the context is required (the
+  `prerelease-guard` caller carries no filter for the same reason).
+- **It became required only AFTER both consumers published it.** Adding a
+  context to `consumer-main` before its publisher exists blocks every consumer
+  PR on a context that never arrives (#371). So the order was: v0.1.98 release
+  → `platform-bump` seeded the caller (jodidaniel.com#236, adamdaniel.ai#3464,
+  both reported `site-verify / site-verify` green on 2026-09-01) → only then
+  the manifest entry plus the nudge template's `required_contexts` line, and
+  `e2e/site-verify.test.js`'s SEQUENCING guard flipped to its positive twin.
+  Each consumer's own nudge list catches up on its next `platform-bump`, which
+  reconciles it from the manifest (#315); until then the list is one context
+  short, which GitHub's own merge refusal covers (#284's one-release window).
+
+Measured before shipping: at jodidaniel.com `main`, `bundle exec jekyll build`
++ the script gives 192 `ok`, 0 `FAIL`, exit 0, identical under `JEKYLL_ENV=
+production`; 9 `note` lines are assertion groups that do not arm while
+`site_live: false`, so coverage roughly doubles at go-live (jodidaniel#26).

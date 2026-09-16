@@ -14,7 +14,14 @@
 #   - still reads the SITE-OWNED seam (admin/collections.site.yml) from the
 #     site source, never the gem.
 # No-op for sites with neither a gem-shipped nor a vendored admin/config.base.yml.
+require "json"
 require "uri"
+require "yaml"
+# `Date` is named in production_branch's permitted_classes. Psych loads it
+# lazily, so without this require the first call NameErrors into the rescue
+# and injects "" — an inert banner, with nothing anywhere saying why.
+# Measured while writing it: the CLI mirror did exactly that.
+require "date"
 require "fileutils"
 # Shared field_library $ref resolver — the SINGLE source of truth, also
 # required by scripts/render-decap-config.rb, so the two render paths expand
@@ -120,11 +127,33 @@ module CmsPlatformTheme
       lb = File.join(src, "config-local.base.yml")
       render.call(lb, File.join(out, "config-local.yml")) if File.exist?(lb)
 
+      # `cms.site_gate` (OPTIONAL) — the site-level publish gate, if the site
+      # has one. jodidaniel.com ships coming-soon behind `site_live` in
+      # `_data/settings.yml`, and while that is false an editor can save,
+      # publish, watch the deploy succeed and see nothing on the site. The
+      # platform must not hardcode which boolean that is (it is site
+      # identity), so the site declares it and admin/site-gate-banner.js
+      # reads it. A site with no gate injects `null` and the banner is inert.
+      # Serialised with to_json, NOT inspect: Ruby's Hash#inspect emits
+      # `{"a"=>1}`, which is a syntax error in JavaScript.
+      gate = cms["site_gate"]
+      gate_js = gate.nil? ? "null" : JSON.generate(gate)
+
+      # The branch the config was RENDERED with — `backend.branch` of the
+      # config.yml written above, read back with a real YAML parse so the
+      # global and the file cannot disagree. deploy-preview.yml later patches
+      # the SERVED copy to the PR branch (scripts/patch-preview-config.sh), and
+      # admin/branch-binding-banner.js (#412) compares the two to say, on a
+      # preview admin, which branch it is bound to. Injected as a string; an
+      # unreadable config yields "" and the banner stays inert rather than
+      # failing the build over a value that is only advisory.
+      prod_branch = production_branch(File.join(out, "config.yml"))
+
       # Inject the SAME window.CMS_* identity globals as scripts/render-decap-config.rb
       # into BOTH the Decap shells (index*.html) AND the review dashboards
       # (reviews/*.html). Kept in lockstep with the script by
       # e2e/decap-config-render-parity.test.js — update both or the lint fails.
-      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};</script>}
+      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};</script>}
       shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html"))
       shells.each do |h|
         s = File.read(h, encoding: "utf-8")
@@ -136,6 +165,20 @@ module CmsPlatformTheme
         File.write(h, s.sub(/<head>/i, "<head>\n#{js}"))
       end
       Dir.glob(File.join(out, "*.base.yml")).each { |f| File.delete(f) }
+    end
+
+    # `backend.branch` of a rendered Decap config, or "" when it cannot be
+    # read. Mirrored by scripts/render-decap-config.rb (parity-locked by
+    # e2e/decap-config-render-parity.test.js on the injected key set).
+    def self.production_branch(config_path)
+      doc = YAML.safe_load(
+        File.read(config_path, encoding: "utf-8"),
+        aliases: true, permitted_classes: [Date, Time, Symbol],
+      )
+      branch = doc.is_a?(Hash) ? doc.dig("backend", "branch") : nil
+      branch.is_a?(String) ? branch : ""
+    rescue StandardError
+      ""
     end
   end
 end

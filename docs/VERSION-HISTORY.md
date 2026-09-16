@@ -10,9 +10,905 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.93)
+## Version history (v0.1.0 → v0.1.107)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.107 — `/admin` says which branch it is bound to, so its copy stops
+reading as being about the live site from a preview (#412).**
+`deploy-preview.yml` patches the served `admin/config.yml`
+(`scripts/patch-preview-config.sh`), so a preview's `/admin` is bound to the PR
+branch — right, and invisible: the two admins were byte-identical apart from
+that one config line, an editor reaches the preview one from the link the
+preview bot posts on every PR, and every string written for production
+("publish", "the site", "visible to the public", the gate banner's own copy)
+was read verbatim on a surface where it was false. Measured on jodidaniel.com
+2026-09-04: `curl …/admin/config.yml | grep '^  branch:'` gives `main` on the
+apex and `claude/controls-gating-label-or72js` on `preview-pr247`.
+jodidaniel.com#247 worked around it in the seam's own copy; per-field copy
+cannot carry a property of the surface, so the platform now states it once.
+
+`theme/admin/branch-binding-banner.js` (production shell only) renders, at the
+top of every screen and before login, *"You are editing the `<branch>` branch
+from a preview. Anything you save or publish here updates this preview only —
+it reaches `<apex>` when this pull request merges."*, with the pull request
+linked by its head branch. Three decisions, each with a shorter wrong
+alternative it rejects:
+
+- **Read from the config, never guessed from the hostname.** It fetches the
+  same `config.yml` Decap loads and reads `backend.branch` at the line anchor
+  the patch script writes (`^  branch:`). `e2e/branch-binding-banner.test.js`
+  runs the real script on the real template and hands the bytes to the real
+  reader, so the writer and the reader cannot drift apart unnoticed. A
+  hostname test would silently disable the banner the day a preview host is
+  renamed — the failure the banner exists to remove — so the lint forbids any
+  `location` read.
+- **Compared against a new injected global, `window.CMS_PRODUCTION_BRANCH`,
+  never a `"main"` literal.** Both render paths read `backend.branch` back off
+  the `config.yml` they have just rendered — a real YAML parse — and inject it:
+  the branch the admin binds to when that file is served unpatched. The shim
+  carries no branch name and `e2e/admin-publishing-ux.test.js` asserts it never
+  grows one. Both paths `require "date"` explicitly for the parse's
+  `permitted_classes`: Psych loads `Date` lazily, and without the require the
+  first call NameErrored into the rescue and injected `""` — measured on the
+  CLI mirror while it was written, an inert banner with nothing to say why.
+- **Unmatched means silent.** A value that is not a plain git ref name, a
+  missing line, an unreadable file, an uninjected production branch — each
+  renders nothing rather than a guess.
+
+The gate banner's copy was re-read for the same reason. It now names the
+public site by its apex (*"`<apex>` is in coming-soon mode — its visitors see
+the coming-soon page, not what has been published…"*), true from either host,
+and it anchors itself BELOW the branch banner by id so the two read in a fixed
+order whichever async read resolves first.
+
+**And a measurement the pure-fs lints could not make found that the gate
+banner had been invisible on the entry editor since v0.1.96.** Decap 3.15.1's
+`EditorContainer` is `position: absolute; top: 0; height: 100%` and
+`ToolbarContainer` is `position: absolute; top: 0`, with no positioned
+ancestor between them and `<body>` — so on the editor route both anchor to the
+viewport, not the flow, and a permanent in-flow block at body's top is painted
+over. With both banners in flow (126 px) at 1280x800 the toolbar sat at y=0,
+`elementFromPoint` at each banner's centre returned a toolbar button and the
+split-pane resizer, and the screenshot showed no banner at all; the login and
+list routes (sticky header) and the phone layout (the mobile layer makes the
+toolbar static) were fine, which is how "on every screen" shipped. The fix is
+`theme/admin/admin-notice-band.css`: each banner adds `cms-notice-band` to
+`<body>` when it renders, and under that class body is a flex column at least
+the viewport tall with `#nc-root` positioned and filling the remainder, so the
+editor's `height: 100%` resolves against a box that starts below the notices.
+Re-measured at 1280x800 on the entry editor: toolbar y=126, editor 126–800,
+Save reachable, no document scrollbar; a site with no banner never gets the
+class. `docs/PUBLISHING-UX.md` carries the table.
+
+Guards: `e2e/branch-binding-banner.test.js` (vm sandbox: both verdicts, every
+silent case, the writer↔reader lockstep, the banner order, the gate copy, the
+band class), `e2e/admin-publishing-ux.test.js` (`#412` block: no branch
+literal, no `location` read, both render paths inject the global, the class
+literal agrees across both shims and the stylesheet, the shell links it),
+`theme/spec/decap_config_hook_render_test.rb` (the hook injects the branch the
+config was rendered with, into every shell), and the existing render-parity
+lint on the injected key set. Release edit set moved to `v0.1.107`.
+
+**v0.1.106 — a selected spec that the consumer lane ignores fails the
+REQUIRED `parity / parity` with "No tests found" (jodidaniel.com#247).**
+`select-specs.js`'s `PARITY_PREVIEW_SPECS` named `e2e/admin-bundle-parity.spec.js`,
+and `playwright.config.js`'s `PLATFORM_META_SPECS` named it too. The second list
+is `testIgnore`d whenever `SITE_ROOT` is set, and `parity-preview.yml` — the ONLY
+caller of that selector, and one that runs exclusively on consumers — sets
+`SITE_ROOT: ${{ github.workspace }}`. So the selector could pick a spec the
+config then removed.
+
+That is worse than dead coverage, because the reusable hands the selected paths
+straight to `npx playwright test <paths>`. With every selected path ignored,
+Playwright collects nothing and exits 1:
+
+```
+Error: No tests found.
+Make sure that arguments are regular expressions matching test files.
+```
+
+`SPEC_RULES` maps `admin/**` to that one spec, so the selection narrowed to it
+alone exactly when a PR's only preview-salient change was under `admin/**` —
+which is why a latent overlap waited for an admin-only PR to surface it. It
+surfaced on jodidaniel.com#247 (2026-09-04), a four-file PR editing `/admin`
+seam copy, whose every other check was green.
+
+**Which list gives way is decided by two guards that already existed**, and the
+opposite fix was measured first: dropping the spec from `PLATFORM_META_SPECS` so
+consumers run it reds `admin-spec-source-read-lint.test.js` (a consumer-lane
+spec must not read admin SOURCE from the platform tree, and this one walks
+`theme/admin/`) AND `platform-meta-spec-registry.test.js`'s #16 recurrence guard
+(every platform-internal spec must be registered). The whole `node-unit-lints`
+lane was run before and after: those two, and only those two, went from green to
+red. So the spec stays platform-internal and leaves the SELECTOR instead.
+
+An `admin/**`-only diff now selects zero parity-preview specs and takes the
+reusable's ALWAYS-RUN + EARLY-SKIP path — the correct verdict, since no runnable
+parity-preview spec covers the admin bundle; the `e2e` matrix still covers such
+a PR. `select-specs.test.js`'s assertion that `admin/` "still selects
+admin-bundle-parity" was the belief the bug rode on and is replaced by its
+inverse.
+
+New guard: `e2e/parity-preview-runnable-on-consumer.test.js` evaluates the real
+`playwright.config.js` in a CHILD PROCESS with `SITE_ROOT` set — the effective
+question ("would the consumer lane ignore this?"), not a diff of two arrays that
+goes blind the moment the config's regex derivation changes — and fails naming
+any `PARITY_PREVIEW_SPECS` entry it would drop. RED on the tree as it stood,
+naming exactly `e2e/admin-bundle-parity.spec.js`.
+**v0.1.105 — the collection list loses its sort dropdown and list/grid
+toggle (#409).** Both sit in the row directly above every `/admin` entry list
+and neither earns its space on either consumer; on a 393px phone the row costs
+a header's worth of the first screen. The sort dropdown is the weaker of the
+two — a collection that declares no `sortable_fields` gets Decap's DEFAULTS
+(commit date, identifier field, commit author), so on jodidaniel.com it cannot
+even offer the manual `weight` order the sections are actually rendered in.
+
+`theme/admin/collection-controls-trim.js` hides both, then hides
+`CollectionControlsContainer` itself when they were all of it — without that
+last step the row still costs its own `margin-top: 22px` plus the 20px `gap`
+its parent reserves, which is 42px of nothing above the fold and most of what
+was being complained about.
+
+Three things in it worth knowing before touching it:
+
+- **It is a shim because config only covers half.** Decap's `sortable_fields:
+  []` makes the sort control never mount, and there is no equivalent for the
+  view-style toggle. That lever would also have to be repeated on every
+  collection in `config.base.yml` AND in each consumer's site-owned
+  `admin/collections.site.yml` — a per-collection opt-out a newly added
+  collection silently misses, in a file the platform does not own.
+- **The sort control is matched by its LABEL, and that is not laziness.**
+  Sort, Filter and Group are the same component (a `ControlButton` inside the
+  shared dropdown wrapper), siblings of the view-style toggle, each
+  independently optional — so "the last child" is the sort control on one
+  collection and the FILTER control on the next. Filter is configured and
+  wanted (`config.base.yml` gives posts and projects `view_filters`), so a
+  selector that cannot separate them would silently delete a control nobody
+  asked to remove. The label fails in the safe direction: a Decap copy change
+  or a non-English locale and the sort dropdown simply comes back — the same
+  degrade-safe argument `one-door-publish.js` makes for its class-substring
+  selectors.
+- **Decap renders these dropdown triggers as `<span role="button">`, not
+  `<button>`** — measured against the live 3.15.1 bundle, and the container's
+  own emotion rule targets `span[role='button']` for the same reason. The
+  shim's fallback selector was a bare `button` until that run; it would have
+  found nothing.
+
+Verified against the real bundle rather than its source, driving
+`index-test.html`'s in-browser test-repo backend: on `posts` (which has
+`view_filters`) the toggle and "Sort by" go and "Filter by" is untouched; on
+`tags` and `pages` both go and the whole row collapses, surviving Decap's
+client-side route changes. Scope is the two EDITOR shells — `index-test.html`
+keeps Decap's stock collection chrome, the same reason `one-door-publish.js`
+gives for the Status control and the board.
+
+What it costs: the #329.3 "Sort by → Order" affordance (pairing a manual-order
+`weight` field with `sortable_fields`) has no visible control any more.
+`collections.site.yml.example` and
+`e2e/collections-example-sortable-fields.test.js` are left as they are — the
+config pairing is still correct, it just has no surface until this is
+reverted.
+
+Locked by `e2e/admin-collection-controls-trim.test.js` (wiring, the label
+matcher in both directions, and the never-touch-the-filter invariant), whose
+three assertions were each confirmed to go red under a mutation of the shim
+before being trusted.
+
+**v0.1.104 — the back link out of a singleton file collection works again
+(#405).** `single-entry-collection-shortcut.js`, the #329 item 7 shortcut that
+skips the pointless one-item list in front of a singleton FILE collection,
+jumped on **every** arrival at the bare collection route `#/collections/<name>`.
+Leaving that collection's own entry — Decap's back link, the left arrow beside
+"Writing in <collection> collection" — lands on exactly that route, and the shim
+could not tell the two apart. So the one arrival that is an explicit instruction
+*not* to be in the entry was read as an instruction to go there, and the
+collection list became unreachable: it appeared for ~700ms and was replaced by
+the entry again, every time, with no error and nothing in the console.
+
+Reported against jodidaniel.com's Header / Hero
+(`#/collections/site_header/entries/header`) and reproduced against a local
+`decap-server` admin on a jodidaniel.com build, driving the real back link.
+Hash sampled every 200ms after the click: `#/collections/site_header` held
+through t=600ms, `#/collections/site_header/entries/header` from t=800ms — the
+`SETTLE_MS = 700` timer firing `location.replace(...)`, which is why it presents
+as a flash rather than as no navigation at all.
+
+**The transition's ORIGIN now decides.** An arrival from
+`#/collections/<name>/entries/…` — the same `<name>` — is a deliberate exit and
+is left alone; every other arrival (a fresh load, the sidebar, a different
+collection, browser history) is the arrival item 7 is about and still jumps.
+Both directions matter and both are pinned: suppressing too much silently
+un-ships item 7, suppressing too little re-traps the editor.
+
+It also settles a race that was previously managed rather than removed.
+`publish-baseline-refresh.js` (item 1) transiently sets the hash to the bare
+collection route and restores the entry ~60ms later, and the only thing stopping
+this shim from hijacking that hop was a 700ms settle delay plus a re-check that
+the hash was unchanged. That hop leaves the same collection's entry route, so
+the origin rule makes this shim **structurally** inert on it. The delay and the
+re-check both stay — they are cheap and still cover a hop the rule does not
+anticipate — but correctness no longer rests on out-racing another shim.
+
+The `/new`-link guard (a one-entry FOLDER collection is one entry away from
+having two, and must never auto-jump) is untouched and re-verified live.
+
+`e2e/single-entry-collection-shortcut.test.js` is the new guard — seven cases in
+a vm sandbox, the `admin-publish-routing.test.js` pattern, driving the shim's
+real `hashchange` listener with a captured settle timer. Written red first: the
+two back-out cases failed against the old shim while the five feature/guard cases
+passed, which is what shows the harness measures the right thing. Registered in
+`PLATFORM_META_SPECS`; the registry lint caught its absence before it was added.
+
+Worth noting what could NOT have caught this. `e2e/admin-329-shims.test.js`
+asserts the file exists, is loaded by all three shells, and still carries its
+`/new` guard — all true throughout, and all blind to a routing decision. A shim
+whose static shape is correct can still be wrong on exactly one transition.
+
+**v0.1.103 — the `CMS_PLATFORM_PAT` fallback is removed outright; the CMS
+automation App is the only push credential (#238).** v0.1.102 made
+`platform-bump` and `dev-hooks-sync` resolve their credential App → PAT →
+`GITHUB_TOKEN`. On 2026-09-02 both consumers deleted that PAT **and its repo
+secret**, after the App path was verified on all four reader × consumer
+combinations — `platform-bump` at adamdaniel.ai run 33667817145 and
+jodidaniel.com run 33668024563, `dev-hooks-sync` at 33671492817 and 33671502277,
+each showing a real `##[notice]Minted …` line. A fallback nobody holds is not a
+fallback; it is a second, dated credential path that keeps having to be
+documented, rotated and reasoned about, which is what #238 set out to delete.
+
+The **input** goes, not just the read. A caller still passing `gh_token` now
+fails at STARTUP, loudly, instead of silently resolving to a secret that does
+not exist — so the caller's line has to be dropped in the SAME commit as the pin
+bump, because `structuralShape()` compares each caller's `secrets:` map against
+the template at that consumer's pinned ref. Splitting them fails in one
+direction or the other, the same atomicity the `app_private_key` ADDITION needed
+one release earlier.
+
+**Severity when the App is absent is deliberately not uniform**, and tracks
+whether the credential is load-bearing:
+
+- `platform-bump` **errors and exits 1**. It rewrites `.github/workflows/*`,
+  which needs `workflows:write`; `GITHUB_TOKEN` does not have it and cannot be
+  granted it, so continuing only defers the failure to an opaque `refusing to
+  allow … without 'workflows' permission` push rejection. Naming both knobs at
+  the mint step is the clear notice AGENTS.md asks for; continuing to a confusing
+  failure is the silent no-op it forbids.
+- `dev-hooks-sync` **warns and continues**. Nothing there writes a workflow file
+  and the branch push rides checkout's own `GITHUB_TOKEN`; the only cost is a
+  sync PR that fires no CI. Failing a weekly sync over a cosmetic degradation
+  would be worse than reporting it.
+
+`e2e/app-token-platform-writers.test.js` now asserts the ABSENCE of the input
+and locks that severity split so neither half drifts into the other's behaviour;
+`e2e/platform-bump-atomic.test.js` keys the checkout assertion on
+`steps.app.outputs.token`. Proven by negative control: re-adding `gh_token` to
+the reusable and the template turns three of those assertions red.
+
+Also in this release: the `CMS_E2E_PAT` permission table gained `Issues: Read and
+write` (`cms-editorial-workflow` drives editorial labels and status comments
+through the issues API, which `Pull requests: write` does not cover) and
+`Commit statuses: Read` (`repos.getCombinedStatusForRef`), and its consumer list
+was corrected from 9 to 16 — the same defect twice, since the omitted
+`cms-editorial-workflow` is exactly what needed `Issues`. `Deployments` was
+deliberately NOT added despite #238's fourth pass listing it: nothing this token
+drives touches that API. (#400, #401, #402 — R8a.)
+
+**v0.1.102 — the consumer push-back credential is minted from a GitHub App,
+so there is no PAT expiry left to rotate (#238).** `platform-bump` and
+`dev-hooks-sync` are the two reusables holding a consumer's
+`.github/workflows/*` write credential, and both took it only as the
+fine-grained `CMS_PLATFORM_PAT`. A fine-grained PAT cannot span owners, so that
+was one token per consumer on its own calendar — and when one lapses the ONLY
+platform down-sync path stops, on a schedule, silently (`scheduled-run-health`
+reports it a day later by design). Both now resolve **App → PAT →
+`GITHUB_TOKEN`**: with `vars.CMS_AUTOMATION_APP_ID` and the new optional
+`app_private_key` secret, each mints a ~1 h installation token per run through
+`scripts/mint-app-token.js`, scoped down at mint time to the calling repo
+(`--repositories`, new) and to the narrowest set the job needs —
+`contents,pull_requests,workflows=write` for the bump, `contents=read,
+pull_requests=write` for dev-hooks-sync, which writes no workflow file. Absent
+the App: one `::notice::` naming both knobs, then the PAT path exactly as
+before; a present-but-broken key is a loud `::error::`, so "never onboarded"
+stays distinguishable from "misconfigured". The bump mints BEFORE checkout,
+because checkout is what persists the push credential, and fetches the script
+over the contents API at the release it targets —
+`github.job_workflow_sha` reads empty inside a reusable job
+(actions/runner#2417). Lint-locked by `e2e/app-token-platform-writers.test.js`
+(AST over the workflow YAML) and `e2e/mint-app-token.test.js`.
+
+**Measured on BOTH consumers before the release was cut.** The App is id
+`4548455`, installed on both owners, and both consumers already carried both
+knobs from the v0.1.76 comment-sync work — which no session could confirm,
+because the egress proxy 403s `/actions/variables` and `/actions/secrets`. A
+temporary probe pushed to a branch on each consumer (every consumer `push`
+trigger is `branches: [main]`, so nothing else fired) minted the real token on
+each and reported `Minted a contents:write,pull_requests:write,workflows:write
+installation token for <owner> (repositories: <repo>)`, exit 0
+(adamdaniel.ai run 33665858373, jodidaniel.com run 33665985522). Note the
+stored variable holds the NUMERIC App id, not the Client ID:
+`mint-app-token.js` reads `APP_CLIENT_ID || APP_ID` and GitHub accepts either
+as the JWT `iss`, so both spellings work and neither needs changing.
+
+**`CMS_E2E_PAT` is NOT convertible, and that is now measured rather than
+assumed.** The same probe asked the freshly minted installation token for
+`GET /repos/{owner}/{repo}` and read `permissions.push`: **`false`**, on both
+owners. Decap's GitHub backend decides login on exactly that field, so an
+installation token fails the check every real editorial spec depends on —
+#238's highest-risk open question, closed by measurement. The Decap bundle's
+`bypassWriteAccessCheckForAppTokens` is set only by the
+`aws-cognito-github-proxy` backend and reads no config key, so a plain
+`backend: github` site cannot opt in. `CMS_E2E_PAT` stays a fine-grained PAT
+on its own rotation schedule.
+
+**v0.1.101 — every admin GitHub read was answered from the browser's
+HTTP cache for 60 s, so the publish bar could not see its own label land
+(#386).** Three adamdaniel.ai `cms-publish-loop-host` runs told the story in
+order. On v0.1.99 (33573287045, 33577242076) the CREATE in
+`cms-delete-published.spec.js` published and the UPDATE of the existing
+`canary-post` entry in `cms-publish-loop.spec.js` saved, opened its PR, and
+sat on `cms/draft` until the deploy wait timed out at 2143 s — the v0.1.99
+harness never read the toolbar. On v0.1.100 (33580693718) the hardened
+`publishViaUi()` failed the CREATE leg instead, and loudly: PR #3489 "did
+not arm within 60s", with facts `hasOpenPr: true, armed: false` — while
+GitHub's own timeline showed `cms/ready` applied by the editor token at
+01:48:58, one second after the click, auto-merge armed, merged 01:51:03.
+The spec's `[trace]` response log then named the mechanism: every
+`GET /pulls?state=open` the poller made from 01:48:58.658 to 01:49:54.7
+completed in ONE millisecond (a real round trip is 150–500 ms), and the first
+genuine read at 01:49:56.7 is the tick that saw `armed` and went on to the
+`if (armed)` requests. GitHub REST responses carry `Cache-Control: private,
+max-age=60`; a browser `fetch()` honours it; so for a minute after any GET
+the poller's `refresh()` re-read the pre-label body from Chromium's cache,
+however often it was called. That is also why the UPDATE leg failed on
+v0.1.99: `publish-progress.js` re-reads on a 30 s interval and on
+`hashchange`, saving an EXISTING entry changes no hash, and a Publish pressed
+inside the cached minute read `prNumber: null` from before Decap opened the
+PR and rendered "could not be published right now" — whereas a NEW entry's
+first save navigates `/new` → `entries/<slug>`, whose `hashchange` tick was
+the first read of that URL and so went to the network. Two fixes, both
+needed. Every GitHub GET in `theme/admin/` now passes `cache: "no-cache"`
+(`publish-progress.js`, `deploy-status-pill.js`'s wrapper,
+`live-url-banner.js`, `posts-list-enhance.js` ×4, `site-gate-banner.js`);
+the browser still revalidates with `If-None-Match`, and a 304 does not count
+against the rate limit, so the pollers' budgets are unchanged.
+`e2e/admin-github-fetch-cache.test.js` drives `publish-progress.js`'s
+`refresh()` in a vm sandbox on an entry route and asserts every request opts
+out, and lints every shim with acorn: a `fetch()` with an object-literal init
+must declare `cache` or a non-GET `method`. And `publish-button.js`'s
+`doPublish()`, with no PR in its snapshot, now asks the poller to re-read up
+to four times 1.5 s apart before giving up — bounded, because `refresh()`
+returns at once while a tick is in flight and one unchanged read proves
+nothing. `e2e/publish-button-refresh.test.js` drives it through a new
+`window.__publishButton` hook: stale-then-found arms once, in-flight-then-
+found retries, genuinely-no-PR still says so and POSTs nothing, the fast
+path is unchanged. Both registered in `PLATFORM_META_SPECS`. The v0.1.100
+harness hardening stays: it is what turned a 35-minute deploy-wait timeout
+into a one-minute failure that named the PR and carried the trace.
+
+**v0.1.100 — `publishViaUi()` could return "success" over a silent publish
+failure, and the deploy-lane diagnostic couldn't tell (#386, harness half).**
+The v0.1.99 acceptance run for #382 (adamdaniel.ai `cms-publish-loop-host`
+33573287045) went 34 minutes further than the previous failure, then died at
+`deploy-pill.js:230`: PR #3479 (an entry UPDATE) sat open with all 32 check
+runs green and no `cms/ready` label, ever — `waitForChangeReflected` could
+only report "awaiting the merge mechanism", which is indistinguishable from a
+slow but healthy auto-merge.
+
+Root cause: `theme/admin/publish-button.js`'s `doPublish()` has two SILENT
+failure outcomes that render text into the state-bar slot and RETURN WITHOUT
+THROWING — a stale/missing `prNumber` or Decap token ("This could not be
+published right now…"), and a non-2xx response arming the PR's `cms/ready`
+label ("The website did not accept the publish just now…"). `publishViaUi()`
+clicked the confirmation and returned, unable to tell either from a real
+publish. Compounding it: the old shell-selection check waited up to 10s for
+`#cms-publish-button` to ATTACH, which itself races `publish-progress.js`'s
+poller — on an entry UPDATE the button can still be absent several seconds
+after Save because the poller hasn't found the PR's branch yet.
+
+The fix, entirely in the harness (the product-side race itself is unverified
+— the artifact that would confirm which of the two outcomes actually fired
+was unreachable from the authoring sandbox, per AGENTS.md's egress-proxy
+note):
+
+- `publishViaUi()` now selects the platform shell by reading
+  `window.__publishButtonInstalled` — set unconditionally at parse time by
+  `publish-button.js`, which loads ONLY on `index.html` — instead of racing
+  the poller's attach window.
+- Before clicking, it waits (bounded) for `window.CMSPublishProgress.get()`
+  to report `hasOpenPr && prNumber`, calling `refresh()` once to shorten the
+  wait rather than riding out the full 30s poll interval.
+- After confirming, it waits out the busy note, then checks the state-bar
+  slot's text for either silent-failure marker (`PUBLISH_NOT_READY_TEXT` /
+  `PUBLISH_REJECTED_TEXT`, kept as lowercase substrings of the shim's own
+  copy) and throws immediately, naming the PR, if either is present.
+- Absence of an error string is still not proof of success (the slot can sit
+  briefly blank between the busy note clearing and the refreshed facts
+  landing), so it then waits (bounded, with its own `refresh()` calls) for
+  `facts.armed === true` — the same fact `entry-status-model.js` and the
+  editor bar already agree defines "queued to merge itself" — and throws with
+  the PR number and last-known facts if it never arrives. A 34-minute silent
+  timeout is now a failure inside `publishViaUi()` itself, within roughly two
+  minutes, naming which of the two outcomes happened.
+- `e2e/deploy-pill.js`'s stuck-PR diagnostic (the `pr-awaiting-required-check`
+  / `pr-required-check-red` branches) now appends the PR's current labels and
+  `auto_merge` state — already fetched by `makeDeployQueueExtender`'s
+  `unmergedPrVerdict` in `e2e/github-actions-poll.js`, so this costs no extra
+  request — plus the publish toolbar's own text when the page is still on the
+  entry editor, so a run that reaches this diagnostic at all (i.e.
+  `publishViaUi`'s own check somehow missed it — a re-navigation, a retried
+  publish) still states which silent outcome it was looking at.
+- New pure-fs AST lint `e2e/publish-error-strings.test.js` (registered in
+  `PLATFORM_META_SPECS`) parses both `publishViaUi()` and `doPublish()` and
+  asserts the two marker substrings are still present in both — with two
+  negative-control fixtures proving the detector can actually fail, one for
+  each string-discovery path (an inline literal, and a reference through a
+  shared top-level `const`).
+
+Not done by this fix: the actual product-side race (why the UPDATE's publish
+never armed at all) is unconfirmed — the run artifact that would settle it
+(`host-loop-results`, adamdaniel.ai run 33573287045) was unreachable from the
+authoring sandbox. The next `cms-publish-loop-host` dispatch on adamdaniel.ai
+is the real acceptance test, and should now either succeed end-to-end or fail
+loudly and specifically instead of silently, 34 minutes later, somewhere else.
+
+**v0.1.99 — the two #328 product-copy items nobody could see were
+wrong (items 2 and 5).** Both are cases where the copy described the
+MECHANISM correctly and told a non-technical owner something false.
+
+`theme/_layouts/preview.html`'s `#preview-empty-state` said "Hit `Save` or
+`Publish now` on the entry you're editing in the admin tab — this preview will
+fill in automatically." The preview bridge streams from the editor tab's Save
+broadcasts, so a fresh load of the preview tab has none — including after an
+ordinary RELOAD, which is exactly when an owner sees this screen and reads it
+as her content having vanished. Option B from the issue: the heading now names
+the TAB ("Nothing to preview in this tab yet") rather than the content, and a
+second paragraph says outright that "Your saved and published content is safe;
+reloading this tab only clears the preview, never your work." The `<code>`
+convention and the `.hint` line are unchanged.
+
+The floating "Live Preview" button (`#live-preview-link`, in `index.html` and
+`index-local.html`) had a `title` describing only the Save mechanic — "Opens a
+new tab. Hit Save in the editor for the preview to fill in." — and an
+UNEXPLAINED show/hide rule: v0.1.94 gates it on an entry-editor route AND a
+collection `/preview/` has a real template for (`{posts, pages, projects}`), so
+it silently disappears everywhere else with nothing anywhere saying why. The
+title now carries both halves and both are true of that rule: "Live Preview —
+opens a tab that mirrors this entry each time you Save. Available while you're
+editing an entry in a section the preview can render." No `aria-label` was
+added, deliberately: the visible label is text, so the accessible name is
+already "Live Preview", and an aria-label would override it with the long
+tooltip.
+
+Both are locked in `e2e/live-preview-gating-lint.test.js` — the file that
+already asserts the gating the tooltip has to be true of — in the string-
+presence style its neighbours use. The tooltip case asserts the display toggle
+alongside the copy, so a future edit cannot loosen the gating and leave the
+promise lying; the empty-state case pins the reassurance sentence verbatim,
+because it is one "tighten the copy" edit away from being deleted as redundant
+and its absence is silent.
+
+**v0.1.99 — `parity / parity` hard-failed every Dependabot gem bump
+(#383).** `deploy-preview.yml`'s `deploy-preview` job carries
+`github.actor != 'dependabot[bot]'` — a Dependabot run cannot reach the OIDC
+role secret, and a preview exists for a human reviewer — so a Dependabot PR
+gets NO `preview-pr<N>` host, ever, by design. `parity-preview.yml` did not
+know that: `e2e/select-specs.js` classifies `Gemfile*` as render-salient
+(`RENDER_FANOUT_PATTERNS`, since a gem bump can move every rendered byte),
+which is Dependabot's entire beat, so a lockfile-only Dependabot PR selected
+specs, polled the preview host for the full ~20 minutes, and then hard-failed
+— publishing a RED `parity / parity`, a REQUIRED context. Measured on
+adamdaniel.ai#3443 (`Gemfile.lock` alone): permanently blocked until a human
+re-pushed the branch under their own name, which was the only thing that ever
+cleared it. Fixed by option 1 from the issue: the bounded preview wait and its
+"Require preview" hard-fail now carry deploy-preview's own actor guard, and a
+new step announces the decision with a `::notice::` naming Dependabot as the
+reason — a required check that silently reports green is the #371 shape, where
+nobody can tell a deliberate skip from a broken publisher. The gate job is
+untouched, so the #285/#289 shape holds: `parity` still has no `concurrency`
+and no `timeout-minutes`, still runs `if: always()` over `parity-probe`, and
+now sees a probe that SUCCEEDS rather than one that failed on a preview that
+was never coming. The human-attributed update-branch path is unchanged and
+still gets the full probe. New lint:
+`e2e/parity-preview-dependabot-skip.test.js` EXTRACTS the actor clause from
+deploy-preview.yml — the file that decides who gets a preview — and asserts
+parity-preview's preview-dependent steps carry that exact string, so renaming
+the actor on one side reds the lint until the other follows; a hard-coded bot
+name would have gone green over precisely the disagreement it exists to catch.
+Both files are parsed (`workflow-yaml-utils` → the `yaml` package), never line
+-scanned. Also corrected the stale comment above `RENDER_FANOUT_PATTERNS` in
+`e2e/select-specs.js`, which claimed "a preview is guaranteed to exist": true
+of the caller's `paths-ignore`, false of the reusable's actor guard, and that
+sentence is what made the wait look safe.
+
+**v0.1.99 — four write specs still clicked the Status dropdown one-door
+publish had hidden (#382).** v0.1.96's `theme/admin/one-door-publish.js`
+CSS-hides Decap's `Status: Draft` dropdown on the PRODUCTION shell
+(`theme/admin/index.html`) and `publish-button.js` replaces the split Publish
+control with `#cms-publish-button` + an inline "Yes, publish". `getByRole`
+skips CSS-hidden elements, so every spec still hand-rolling
+`getByRole("button", { name: /^Status:\s*Draft$/i })` against `/admin/`
+selected nothing and timed out — an hour into a real prod-mutating run, with
+the entry already created and its PR already open. v0.1.97 had made
+`publishViaUi()` shell-aware but left four callers behind:
+`cms-delete-published`, `cms-tags-lifecycle`, `cms-publish-loop` and
+`cms-preview-pr-self-contained`, all four of which open the production shell
+(`prodTarget().adminUrl` / `${PROD_HOST}/admin/`). adamdaniel.ai's scheduled
+`cms-publish-loop-host` failed on it daily (run 33528263986). Each now
+publishes through `publishViaUi(page)`. The downstream waits are unchanged
+and were re-checked one by one: Decap's Status:Ready armed
+`auto-merge-when-ready` by applying `decap-cms/pending_publish`, the platform
+button arms it with `cms/ready` (deleting the label first so the `labeled`
+event really fires), and that job's `if:` accepts both — so
+`waitForAutoMergeEnabled`, `waitForCmsPullRequest`, the belt-and-braces
+`addLabel({label:"cms/ready"})` and the deploy-pill waits all still hold.
+`cms-workflow-states.spec.js` is deliberately untouched: it drives
+`index-test.html`, the rehearsal shell that keeps Decap's own controls, which
+is the branch `publishViaUi` preserves. New lint:
+`e2e/status-dropdown-selector.test.js` (registered in `PLATFORM_META_SPECS`)
+parses every `e2e/*.spec.js` with `e2e/spec-ast.js` — acorn, never a regex,
+since this lint's own header quotes the banned selector — and fails any
+`getByRole(..., { name })` naming the Status control. Its allowlist is empty
+and measured so (`cms-workflow-states` reads the status with `getByText`), and
+a negative-control case asserts the detector still fires against
+`cms-editor-ui.js`'s legitimate Decap branch, so it cannot decay into a green
+no-op. `spec-ast.js` gained one additive fact, `getByRoleNames`, generalising
+the existing `getByRoleLinkNames`.
+
+**v0.1.99 — dependabot-auto-merge.yml / dependabot-rearm-sweep.yml fetch
+their manifest-path script from the platform (cms-platform#303-class blind
+spot).** Both reusables ran `bash scripts/check-dependabot-manifest-paths.sh`
+straight from the job's default checkout — which, for a `workflow_call` job,
+is the CALLER's tree, not the platform's. The script lives only in this
+repo's `scripts/`, so on every real Dependabot PR on both consumers the shell
+hit "No such file or directory", the `if bash …` conditional silently took
+its false branch, `safe=false` disabled auto-merge, and the job hard-failed
+with "PR touches paths outside the dependency-manifest allowlist" — for PRs
+whose diff was a lockfile alone (adamdaniel.ai run 33566180189 / PR #3465,
+live since #303). Self-CI never saw it: on THIS repo the checkout IS the
+platform, so the script was right there — the same consumer-checkout blind
+spot AGENTS.md records for the `cms-platform-secrets` skill-name incident.
+Fixed by sparse-checking the platform out to `.cms-platform/` (the
+pin-agreement.yml pattern, via new `platform_repo` / `platform_ref` inputs on
+both reusables — `github.job_workflow_sha` was tried first but reads empty
+inside a reusable-workflow job per actions/runner#2417, and this repo's
+pinned actionlint predates the `job.workflow_sha` context GitHub added
+2026-04-23 for exactly this case). New lint:
+`e2e/reusable-platform-script-checkout.test.js` asserts every `workflow_call`
+job invoking a platform-owned `scripts/…` file does so via a
+`.cms-platform/scripts/…` path fed by an earlier platform checkout in the
+same job.
+
+**v0.1.99 — `site-verify / site-verify` is required
+(#377, sequencing step 3).** Both consumers published the context on their
+v0.1.98 bump PRs (jodidaniel.com#236 ran the real verifier, adamdaniel.ai#3464
+printed the no-op notice), so the manifest's `consumer-main` now requires it,
+the `cms-automerge-nudge.yml` template's `required_contexts` mirrors that, and
+the SEQUENCING test became the positive assertion. The live rulesets follow via
+`repo-settings-apply` (a tightening, applied unattended) or an operator
+`audit-repo-settings.js --fix --yes`; each consumer's own nudge list is
+reconciled by its next `platform-bump`.
+
+**v0.1.98 — a consumer's own post-build verifier finally runs in CI (#377).**
+jodidaniel.com ships `scripts/verify-build-artifacts.rb`, ~190 assertions over
+the BUILT site: media links resolve, the three-way category triangle agrees,
+the admin seam's anchors match built section ids, the media nav label matches
+its heading, no PDF bytes are committed anywhere, and the `pdf_public` gate
+both withholds and publishes. Its docs cited it in six places as the guard for
+those. No workflow ran it — every reference was prose plus the script's own
+header — which is how a `pdf_public: true` with no file in `_site`, row 2 of
+the verifier's own table and the case `docs/CONTENT-MODEL.md` calls "better a
+loud red than a 'Download PDF' button that 404s", reached production. The
+consumer cannot fix this alone: workflow-SET parity flags any caller absent
+from `examples/site/` as `EXTRA (not platform-dictated)` on a required check.
+
+**The seam is `site-verify.yml`** — a `workflow_call`-only reusable with NO
+inputs and NO secrets, plus a dictated thin caller of the same name that
+`platform-bump` seeds into both consumers (#315). Convention, not
+configuration: if the caller's tree has `scripts/verify-build-artifacts.rb`,
+the reusable builds the site (`JEKYLL_ENV=production`, deploy-production's env,
+on deploy-preview's default Ruby — a site pins no Ruby in its lockfile, so the
+lint holds the two equal) and runs it; otherwise it prints a `::notice::` and
+succeeds. adamdaniel.ai has no such script and no-ops in ~10s. Job shape is
+the #285/#289 work/gate split: `verify` carries the wall, `site-verify` is a
+gate (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) held
+by `e2e/site-verify.test.js` through `cancellationHazards()`. The context is
+`site-verify / site-verify`.
+
+**Two departures from the issue, both measured.** The caller carries NO
+`paths-ignore`: the verifier globs `**/*.pdf` over the whole tree, so a
+docs-only PR can break it exactly as a layout PR can, a filter would blind the
+check for the ignored paths, and it would arm the missing-check trap the moment
+the context is required (the `prerelease-guard` caller carries none for the
+same reason). And the build is the deploy's build, not the plain
+`jekyll build` the issue measured with — identical assertion set under both
+today, lint-locked so they cannot drift.
+
+**The spec EXECUTES what it can.** The detect step and the gate step are bash
+scripts lifted out of the parsed YAML and run in scratch dirs: `verifier=false`
+plus a notice when the script is absent, `verifier=true` when present; the gate
+exits 0 only on `success`. Five negative controls each red exactly one test,
+and the fifth — the context added to `consumer-main` — caught a real defect in
+the first cut: the SEQUENCING test read `ruleset.required_status_checks`, a key
+that does not exist in the manifest, and passed on a manifest that DID require
+the context. It reads through the shared `requiredContexts()` helper now.
+
+**Measured at jodidaniel.com `main`:** 192 `ok`, 0 `FAIL`, exit 0, byte-identical
+under `JEKYLL_ENV=production`; 9 `note` lines are groups that do not arm while
+`site_live: false`, so coverage roughly doubles at go-live (jodidaniel#26).
+
+**NOT required yet, on purpose.** Adding `site-verify / site-verify` to
+`ruleset_library.consumer-main` before both consumers publish it blocks every
+consumer PR on a context that never arrives. Order: this release → the bump
+lands the caller → confirm the context reports on both consumers → add it to
+`repo-settings.yml` AND reconcile each consumer's nudge `required_contexts`,
+deleting the SEQUENCING test in that same PR.
+
+**Also in v0.1.98 (landed 2026-08-31) — a required status check that nothing
+publishes, and an admin that believed `armed` forever (#371).** An editor
+opening a PR-preview's `/admin`, editing an entry and pressing Publish got
+every success signal the product has — the entry saved, the PR opened,
+`cms/ready` applied, `editorial / validate-content` green — and the change
+never landed. No error, no timeout, no notice. This is §2.7's failure class
+("pressed Publish, nothing happened, no error, forever") on the one surface
+none of the five staged phases covered.
+
+**The mechanism is not the one it looks like, and the tell is four seconds.**
+A preview admin edits a feature branch on purpose
+(`scripts/patch-preview-config.sh` rewrites `backend.branch`), so its editorial
+PR is based on `claude/**` or `cms/**` and gets labelled `cms/preview-only`.
+The obvious reading — a preview-only base is unprotected, so native auto-merge
+cannot arm, and `cms-automerge-nudge.yml`'s explicit `pulls.merge` recovery is
+scoped to `labels:["automated-test"]` so it never reaches a real editor's draft
+— is the documented one, and it is not what happened here.
+`editorial / auto-merge-when-ready` concluded **success in four seconds** on
+jodidaniel.com#233. Its preview-only recovery path (catch "unstable status",
+poll up to ten minutes, merge explicitly) takes minutes. Four seconds means
+`enablePullRequestAutoMerge` did not throw at all: **auto-merge armed**, which
+it can only do when the base has something to wait for.
+
+The base was protected — by `repo-settings.yml`'s `cms-feature-branches`
+ruleset, which covers `refs/heads/cms/**`, `refs/heads/claude/**` and six more,
+and which required the status check **`validate-content`**. Nothing publishes
+that string. A consumer's thin caller declares job id `editorial` and `uses:`
+the platform reusable whose job id is `validate-content`, so GitHub publishes
+`editorial / validate-content` — which is exactly how `consumer-main`, twenty
+lines earlier in the same file, spells it. A required context nothing reports
+never goes green and a branch ruleset does not time out, so every PR onto those
+refs was permanently `mergeable_state: blocked`, with auto-merge sitting armed
+against a check that cannot exist.
+
+It was live on BOTH consumers, and this repo's own fixtures proved it: the
+2026-07-10 captures `adamdaniel.ruleset-feature.json` and
+`jodidaniel.ruleset-feature.json` both carry `{"context":"validate-content"}`.
+They are preserved as `*.DRIFTED-as-found-2026-07-10.json` and diffed by
+`repo-settings-audit.test.js` test (g), because an as-found corpus that gets
+edited whenever desired state moves stops being evidence.
+
+Four things worth keeping:
+
+- **It went unnoticed because the only people who could merge never met the
+  wall.** `bypass_actors` grants `RepositoryRole` 5 (admin) `bypass_mode:
+  always`, so every one of these PRs that ever landed was merged by hand by an
+  admin — including #233, sixteen seconds before the issue about it was filed.
+  A protection that blocks only the people without a bypass produces no signal
+  from the side that has one.
+- **A required context is half a contract and nothing checked the other half.**
+  `cms-automerge-nudge.test.js` locks the nudge's `required_contexts` against
+  `consumer-main` — two lists against *each other*; both could name a context
+  nothing publishes and it stays green. The missing join is context-string → the
+  workflow that would emit it, and it is now
+  `e2e/ruleset-context-publishable.test.js`. It computes the publishable set the
+  way GitHub names check runs (`<job>`, or `<caller job> / <called job>` for a
+  job that `uses:` a reusable), per repo, and it is red against `main` as it
+  stood: it names `cms-feature-branches` on both consumers.
+- **The defect was latent even where it was not yet live.**
+  `scripts/audit-repo-settings.js --fix --yes` PUTs this manifest, so an
+  unpublishable context in it becomes an unpublishable context live at the next
+  reconcile, whatever the current drift.
+- **`armed` was believed indefinitely, and that is a separate bug.** With the
+  server side fixed the admin still had no way to ever stop saying "Going
+  live…": nothing distinguished "the merge is coming" from "the merge is never
+  coming". `publish-progress.js` now reports `settledSince` — when the PR first
+  had NOTHING LEFT TO WAIT FOR (armed, every check complete, nothing red, no
+  conflict, no gate park) while still open — and `entry-status-model.js` turns
+  three minutes of that into **Needs attention**. The signal is positive and
+  needs no threshold guess about how long a publish "should" take; the grace
+  exists only because native auto-merge fires a moment after the last check
+  completes, and calling that a stall would be the mirror-image lie. Both
+  directions are pinned, including both unknowns (`settledSince` absent, `now`
+  absent), where the answer must be "not stalled" — an unknown must never
+  manufacture a failure report.
+
+Also in the same change: **on a preview, "the website" is the wrong noun.** The
+Publish confirmation promised "It will appear at https://&lt;apex&gt;/… in about
+5–15 minutes" unconditionally — a specific, checkable, false promise on the one
+surface whose whole point is that nothing reaches the live site.
+`entry-status-model.js` derives the destination once and both surfaces name it;
+on a preview it is the branch, not a URL, because the preview origin is not
+derivable from anything these shims may read and `targetUrl()`'s existing rule
+already says naming the wrong URL is worse than naming none. The fact costs no
+extra request: the `cms/preview-only` label and `base.repo.default_branch` both
+ride the `/pulls` list response the poller already makes, so nothing hardcodes
+`main`.
+
+And `publish-button.js` no longer renders NOTHING on a stalled publish. Its
+armed branch returned `{kind:"none"}` — right while the merge is coming, and
+exactly wrong once it is not: #233 sat armed, green and unmerged with no
+control on screen at all. `e2e/admin-publishing-ux.test.js` now asserts, by
+AST, that no decision in that file branches on `armed` without also consulting
+`stalled`. That detector needed its own fix to be worth anything: acorn-walk
+does not descend into the `property` of a non-computed `MemberExpression`, so
+`facts.armed` — the only spelling the file actually uses — was invisible to it
+and the lint passed while finding zero decisions.
+
+**What this change does NOT do, deliberately.** It does not widen
+`cms-automerge-nudge.yml` beyond `automated-test`. That scoping exists so the
+cron never merges a real editor's draft, and removing it changes what
+automation lands on a live consumer without a human — an operator's call, not a
+lint's. With the required context fixed, native auto-merge handles the
+preview-only case itself, which is the path that was meant to work all along.
+
+**v0.1.97 — the harness has to publish the way an editor does.** v0.1.96
+hid Decap's Status dropdown and its split Publish button on the production
+shell (phases 2 and 3). Every real-prod loop publishes through
+`publishViaUi()` in `e2e/cms-editor-ui.js`, whose body was
+`Status -> Ready -> Publish -> "Publish now"`. The first prod-mutate dispatch
+after the bump failed about two minutes in
+([adamdaniel.ai run 33439336337](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/33439336337)):
+the entry was created and its PR opened, then the publish leg died.
+
+**The interesting part is HOW it failed, because it is the shape that
+defeats the obvious guard.** It did not fail to find a control — that would
+have been loud and immediate. `getByRole("button", { name: /^Publish$/i })`
+skips CSS-hidden elements, so it skipped Decap's hidden control and resolved
+to the PLATFORM's own `#cms-publish-button` instead. The click succeeded, the
+inline confirmation opened, and only then did the `publish now` MENUITEM
+lookup find nothing. One selector silently retargeted onto a different
+control with the same accessible name.
+
+Two things this cost, worth keeping:
+
+- **Hiding a control retargets every selector that matched it by NAME.**
+  The replacement was deliberately labelled "Publish" because that is the
+  right word for an editor; that is exactly what made it a drop-in for a
+  test selector aiming at something else. When a shim hides a control, audit
+  what selects it by role and name, not just what selects it by class.
+- **A green unit-lint lane is not evidence for a Decap-DOM change** — the
+  standing rule in AGENTS.md's definition of done, demonstrated again. 1656
+  pure-fs assertions passed over this. The live loop is what found it, which
+  is precisely why the loop is the acceptance test for these repos.
+
+Fixed by branching `publishViaUi()`: it drives `#cms-publish-button` plus its
+"Yes, publish" confirmation where that exists, and keeps the Decap
+Status→Ready→Publish-now path for `index-test.html` (the rehearsal surface,
+which deliberately keeps Decap's own controls) and `index-local.html` (no
+editorial workflow). The wait before clicking is load-bearing: the platform
+button only renders once `publish-progress.js` has found the entry's PR, one
+poll after Save, so without it the helper races the poller and falls through
+to the Decap branch on the very shell where Decap's control is hidden — the
+same bug in a new costume.
+
+Also hardened in the same change: `publish-button.js` no longer hides Decap's
+control on its "nothing to publish" branch. That branch normally means the
+entry is already live, where Decap renders no control anyway — but it is also
+what a FAILED PR match looks like, and hiding the only route to production
+while offering no replacement is the outcome that file's own header calls
+worse than either alone.
+
+
+**Why this is v0.1.96 and not v0.1.95, which its own PR said.** Two release
+PRs were in flight at once, and both claimed `v0.1.95`: this one and #362 (the
+PDF publication workflow). #362 merged and cut the tag ~40 seconds before this
+work's merge landed on top of it, so `v0.1.95` points at `09a2c55` — an
+ancestor of the merge that carries none of the five shims below — while `main`'s
+manifests already read `0.1.95`. The dispatch for this work then failed on the
+existing tag, which is the only reason it was caught before two consumers had
+been bumped to a release that did not contain it.
+
+A published release tag is what every consumer pins by, so it was NOT moved.
+The version was rolled forward instead: the whole atomic edit set went to
+`v0.1.96` and the tag was cut from the merge that has both changes.
+
+**The generalisable bit: the "Current release" line in AGENTS.md, the two
+plugin manifests and the tag are only consistent because a HUMAN keeps them
+so** — nothing serialises two concurrent release PRs, and `release.yml`'s
+manifest-skew guard compares the dispatched version against the manifests in
+the tree, which both PRs satisfied independently. Before dispatching a
+release, re-read `main`'s current version rather than the one your branch
+bumped from, and check `git ls-remote --tags origin` for the tag you are about
+to cut.
+
+**v0.1.96 — the publishing-UX staged plan, phases 2 through 5
+(docs/PUBLISHING-UX.md §4).** Phase 1 shipped the in-flow state bar with that
+document. This is the remaining four, and the through-line is that an editor
+on these sites met NINE overlapping notions of "published" across four
+systems, in three vocabularies for three states, with the two most
+consequential — the six required checks and the manual `regression-review`
+gate — invisible to them entirely.
+
+- **Phase 2, one door (`theme/admin/one-door-publish.js`, production shell
+  only).** Setting `Status: Ready` publishes on this platform: Decap writes
+  `decap-cms/pending_publish` and `auto-merge-when-ready` fires on exactly
+  that label. So there were two doors to production and only one was
+  labelled — and the two surfaces offering the unlabelled one contradict each
+  other, the Workflow board hard-gating publishing on Ready
+  (`WorkflowList.requestPublish` alerts and returns) while the entry editor's
+  dropdown has no status gate at all. The Status control, the Workflow nav
+  link and the `#/workflow` route are now closed on production, CSS-hidden
+  and redirected (never `removeChild` — the React re-mount fight loop that
+  wedged the editor at commit 503365a). **This removes a capability rather
+  than fixing a defect**, which is why the plan staged it behind an operator
+  decision; the decision was taken and is recorded in the doc. Cost:
+  `pending_review` is unreachable from the production editor, which nothing
+  on this platform consumes, and the label audit keys on `decap-cms/*`
+  generally so `decap-cms/draft` still satisfies it.
+- **Phase 3, one button (`theme/admin/publish-button.js`).** Decap's Publish
+  is a split button whose menu item is the only thing that publishes — click
+  it once, see the menu, click away, and you have published nothing with no
+  error — and it VANISHES entirely while there are unsaved changes, because
+  Decap renders it only under `!hasChanged`. Replaced with a real button that
+  confirms with the URL and the ETA and that says *why* when it cannot act.
+  Possible because publishing here is already "add a label to a PR": public
+  REST on one side, public DOM on the other. Forwarding the click was
+  implemented and rejected under #329.2 (it does not publish, and raises a
+  page error).
+- **A re-publish must REMOVE the label before adding it.**
+  `auto-merge-when-ready` fires on the `labeled` EVENT, and GitHub emits none
+  for a label already present. So the second Publish press — the most likely
+  one in the whole product, because it follows a "Needs attention" — would
+  have returned 200 and armed nothing, with the button reporting success over
+  a publish that never restarted.
+- **Phase 4, a progress state that outlives the operation
+  (`theme/admin/publish-progress.js`).** The old feedback for a 5–15 minute
+  action was a 14-second toast, then Decap's red "Failed to publish" for 8s —
+  which is FALSE, provoked by the deliberate 422 `publish-via-auto-merge.js`
+  returns so Decap never deletes the head ref (#80 layer 9) — and then
+  nothing at all, because `deploy-status-pill.js` polls Deployments and
+  `deploy-production` registers one only AFTER the merge. The poller reads
+  the entry's own PR from Save onwards. The `regression-review` park is
+  detected POSITIVELY: GitHub sets a workflow run's status to `waiting`
+  exactly and only while it is pending a manual environment approval.
+- **The false toast is suppressed by a matcher that requires BOTH halves** —
+  Decap's failure wording AND the marker string our own 422 body carries — so
+  a REAL publish failure is never eaten. Replacing a misleading error with a
+  silent one would be worse than the defect. `e2e/admin-publishing-ux.test.js`
+  asserts the two literals still move together; each is individually fine, so
+  nothing else could see them drift apart.
+- **Phase 5, one vocabulary (`theme/admin/entry-status-model.js`).** Four
+  badges plus two modifiers, derived once and rendered by both the editor bar
+  and the collection list. The modifiers (Hidden, Scheduled) stay OUT of the
+  badge because Live and Hidden are simultaneously true for an entry that is
+  merged, deployed and rendering nowhere — the §2.6 trap where "Published"
+  the toggle and "Publish" the button differ by one letter and sit a screen
+  apart. The posts-list pill's separate `Published / Draft / Scheduled`
+  wording is retired. The module is PURE — no DOM, no network, `now` is a
+  parameter — which is what makes all 22 of its unit tests run in a Node vm
+  sandbox with no browser and no wall-clock dependency.
+- **Precedence in that model is load-bearing: stopped outranks in-flight.** A
+  PR whose checks failed is still *armed*, so an in-flight-first ordering
+  spins "Going live…" forever over a publish that stopped ten minutes ago.
+  Proved able to fail: inverting the two blocks reds 4 of the 22 tests.
+- **A site-level gate banner (`theme/admin/site-gate-banner.js`) and a new
+  injected global, `window.CMS_SITE_GATE`.** jodidaniel.com ships coming-soon
+  behind `site_live` in `_data/settings.yml`, and while that is false an
+  editor can save, publish, watch the deploy succeed and see nothing — with
+  no notice anywhere in `/admin`. The platform must not hardcode which
+  boolean that is, so a site declares `cms.site_gate` and BOTH render paths
+  inject it (`scripts/render-decap-config.rb` and the gem's
+  `decap_config_hook.rb`, parity-locked). Serialised with `JSON.generate`,
+  NOT Ruby's `inspect` — `{"a"=>1}` is a JS syntax error and would take the
+  whole shell down rather than degrade. A site with no gate injects `null`
+  and the shim is inert.
+- **Three defects found in self-review before merge, all of the same family —
+  a write on the steady state.** The button rebuilt its own slot at 2 Hz,
+  which drops a click when a node is replaced between mousedown and mouseup;
+  the hiding shims re-asserted their styles unconditionally, firing an
+  `attributes` mutation inside the subtree `publish-step-hint.js`'s observer
+  watches; and `mergeConflict` was read from the `/pulls` LIST response,
+  which does not carry `mergeable` at all, so that branch could never fire.
+  All three are the compare-before-write discipline this directory already
+  documents, applied to three new places.
+
 
 **SHIPPED IN v0.1.89 (landed 2026-08-20, unreleased at the time) — the action
 pin comment is retired fleet-wide, and a cross-repo composite is now
@@ -2040,6 +2936,109 @@ version bump is needed and cutting one would force the whole atomic edit set
   is deferred for the same reason: every shim here that touches Decap's rendered
   DOM was built against live observation, and guessing a selector is the
   brittleness to avoid.
+
+- **v0.1.95** — **the media archive's documented opt-in was unshippable by
+  any consumer, and the checker that forbade it was right to.** v0.1.93 landed
+  the private media-PDF archive with `docs/MEDIA-ARCHIVE.md` step 5 telling a
+  site to add `media_archive_bucket` (and, on the production caller,
+  `platform_ref`) to its thin deploy callers. `examples/site` ships both lines
+  COMMENTED OUT — correctly, since adopting the archive is a per-site decision —
+  and `check-platform-pin-consistency.js` compares a caller's `with:` KEY SET
+  against those canonical examples as an exact sorted-set match. Comments drop
+  out in the YAML parse, so following the docs necessarily produced
+  `workflow-content: DRIFT` on the REQUIRED `pin-consistency` check. Not a
+  misconfiguration at one site: the documented path was closed to everyone.
+  jodidaniel.com wired it, went red, and reverted (its commit `07e5c4b`); the
+  user-visible symptom was a live 404, since `_layouts/media.html` renders
+  `/media-pdfs/<key>` the moment an editor ticks `pdf_public` while nothing ever
+  copies the object out of the archive. Fixed with an explicit
+  `OPTIONAL_WITH_KEYS` table that strips both keys from BOTH sides of the
+  key-set compare, for those two basenames only. The table is deliberate and
+  reviewed rather than derived from which lines happen to be commented out in
+  the example — deriving it would let an unrelated `#` (a debugging aid, a
+  half-finished feature) silently retire a real guard with nothing to flag it.
+  The exemption removed the only thing forcing `platform_ref` to accompany
+  `media_archive_bucket` on the production caller, and that pairing is
+  load-bearing: that reusable declares `platform_ref` with `default: main`, and
+  the `media_archive_bucket != ''` steps check the platform out at that ref to
+  run `publish-opted-in-pdfs.sh` — so unpaired, a site would publish PDFs to its
+  live domain from an UNPINNED `main` checkout. `checkOptionalInputPairing()`
+  now asserts it directly, which is strictly stronger than what it replaced:
+  "Uncomment BOTH lines together" was previously enforced only as a side effect
+  of the key-set compare, and only for consumers that had *not* adopted the
+  feature. Five new tests, and a negative control per half — dropping the
+  `withKeys` filter fails exactly the two exemption tests, stubbing the pairing
+  function fails exactly the pairing test — because one control would have left
+  the other half a green light wired to nothing. #360.
+
+- **v0.1.94** — **the notice pointing at the Publish button was painted on
+  top of it, and two separate guards were structurally unable to see that.**
+  `publish-step-hint.js` shipped in v0.1.92 as a `position: fixed`, top-centre,
+  `pointer-events: none` banner reading "Not published yet — click Publish,
+  then choose 'Publish now'." Measured against a live Decap 3.15.1 admin, it
+  covered 68% of the Publish control and 47% of the Status control at
+  1280x800 — the two controls its own text names. Reported from a live preview
+  session on jodidaniel.com PR #220, with a screenshot.
+
+  **Why every occlusion assertion in the repo stayed green.**
+  `e2e/ui-visibility.js`'s `expectReachable` decides "covered" with
+  `document.elementFromPoint` at the control's centre. That is the right
+  question for *can the user click it* and the wrong one for *can the user read
+  it*: a `pointer-events: none` overlay is invisible to a hit test, so the
+  button stayed clickable and the guard stayed green for as long as the banner
+  was on production. `expectNoInjectedOverlap` now asks the geometric question —
+  rectangle intersection between anything the platform injects (`id^="cms-"`
+  plus the two floating chrome links) and each named control, containment
+  exempt in both directions.
+
+  **And why the browser lane could not have caught it either.** The damage is
+  viewport-width dependent, and this spec's two `@admin-read` projects sit
+  either side of the band. Overlap of the Publish button, same session, same
+  banner: `3000x1500 → 0`, `2000x1100 → 0`, `1440x900 → 2682px2`,
+  `1280x800 → 2682px2`, `1024x768 → 2438px2`, `393x852 → 0`. A centred fixed
+  overlay clears a 3000px toolbar and sits above a wrapped phone toolbar; it
+  lands on the controls at exactly the widths a laptop uses. The new test in
+  `e2e/admin-no-occlusion.spec.js` therefore pins its own widths, against that
+  file's "deliberately does NOT pin a viewport" rule, and carries a vacuity
+  guard so it cannot pass by rendering nothing.
+
+  **The fix.** The bar is a full-width row in normal flow, inserted as the
+  toolbar's next sibling inside Decap's `EditorContainer`. Zero overlap at every
+  width measured, with no hard-coded offset, because Decap's own layout does the
+  work in both modes: on desktop `ToolbarContainer` is `position: absolute` and
+  the container carries a matching `padding-top`; on the phone layout the
+  toolbar is `position: static` and wraps. It also reports a state that had no
+  signal at all — while an entry has unsaved changes Decap renders NO publish
+  control (`renderWorkflowControls`: `!hasChanged && …`) and nothing said why.
+  The "about 5-15 minutes" clause is gated on the shell's own
+  `deploy-status-pill.js` tag, so the local and test shells — which have no
+  deploy — never make a timing promise, the honesty constraint
+  `local-save-indicator.js` already documents.
+
+  **The knowledge existed, in the wrong file.** `index-test.html`'s diagnostic
+  banner carries a comment saying it is bottom-pinned *because* Decap's toolbar
+  is `position: fixed; top: 0`. One shell knew; nothing enforced it. Two pure-fs
+  lints in `e2e/admin-329-shims.test.js` now do, for both shims.
+
+  **The lint had to PARSE, and finding that out cost one run.** The first draft
+  was `/position\s*:\s*fixed/` over the source, and it red-failed the FIXED
+  file — whose header comment explains the defect it forbids. A lint that
+  forbids a token cannot read comments. It walks acorn's AST now (string
+  literals, `style.position = "fixed"`, `setProperty("position","fixed")`),
+  which is the house AST rule in its cheapest form. Both new lints and the
+  browser guard were proved able to fail against the pre-fix file.
+
+  Also shipped: `docs/PUBLISHING-UX.md`, the wider rethink this came out of —
+  the nine overlapping notions of "published" an editor meets across four
+  systems, including the two that contradict each other (`WorkflowList`
+  hard-gates publishing on `Ready`; the entry editor's Publish dropdown has no
+  status gate at all, and setting `Status: Ready` publishes on its own via the
+  `decap-cms/pending_publish` label `auto-merge-when-ready` fires on), the
+  5-15 minutes of silence a publish spends after a 14-second toast and an
+  8-second error message that is wrong, and a staged plan to collapse it to
+  four states and two verbs. Phase 1 is what shipped; phases 2-5 are specified
+  and unbuilt, and phase 2 needs an operator decision because it removes a
+  capability. #351.
 
 - **v0.1.93** — **the archive field name, fixed before it reached a
   consumer's immutable history.** v0.1.92's media-archive publish path (#347)

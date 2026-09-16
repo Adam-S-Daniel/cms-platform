@@ -336,6 +336,114 @@ test.describe("audit-scheduled-runs.js — pure helpers", () => {
   });
 });
 
+// ── LISTING TRUNCATION (#425) ───────────────────────────────────────────────
+//
+// A short (or empty) final page used to be read as "we got everything" — but
+// the runs-list API caps a FILTERED query at 1,000 results independently of
+// this loop's own 10-page limit, and returns a short page there too (observed
+// live: adamdaniel.ai's push lane reported total_count 1411, returned 1,000,
+// page 11 came back EMPTY — a bigger page limit alone would not have fixed
+// it). pageThroughListing's `fetchPage` is injected exactly like
+// partitionStarvedRuns' `fetchJobs` / findStaleWorkflows' `fetchHistory`
+// above, so every fixture below is a plain object — no gh, no network, no
+// clock.
+test.describe("audit-scheduled-runs.js — listing truncation (#425)", () => {
+  function fixturePage(runCount, totalCount) {
+    return {
+      workflow_runs: Array.from({ length: runCount }, (_, i) => run({ id: i + 1 })),
+      total_count: totalCount,
+    };
+  }
+
+  test("isListingTruncated is a pure predicate: only a NUMERIC shortfall counts", () => {
+    const { isListingTruncated } = loadScript();
+    expect(isListingTruncated(5, 5)).toBe(false);
+    expect(isListingTruncated(5, 6)).toBe(true);
+    // A non-numeric total_count is never trusted as a shortfall — it is
+    // "we don't know", handled by the fixture-compat test below.
+    expect(isListingTruncated(5, "6")).toBe(false);
+    expect(isListingTruncated(5, null)).toBe(false);
+  });
+
+  test("isListingTruncated: capExhausted is defence in depth for a MISSING total_count only", () => {
+    const { isListingTruncated } = loadScript();
+    // The page cap was exhausted (10 full pages) and there is still no
+    // total_count to check against — that IS "could not tell" (#258), not
+    // "fewer failures".
+    expect(isListingTruncated(1000, null, true)).toBe(true);
+    expect(isListingTruncated(1000, undefined, true)).toBe(true);
+    // A NUMERIC total_count always wins, even with the cap exhausted — an
+    // exact match is still NOT truncated.
+    expect(isListingTruncated(1000, 1000, true)).toBe(false);
+  });
+
+  test("collected count equals total_count — NOT truncated", () => {
+    const { pageThroughListing, isListingTruncated } = loadScript();
+    const { items, totalCount } = pageThroughListing(() => fixturePage(3, 3), "workflow_runs");
+    expect(items.length).toBe(3);
+    expect(isListingTruncated(items.length, totalCount)).toBe(false);
+  });
+
+  test("hits the 10-page cap while total_count says more than 1,000 — TRUNCATED", () => {
+    const { pageThroughListing, isListingTruncated } = loadScript();
+    // Every one of the 10 allowed pages comes back FULL (100 runs) — the loop
+    // never sees a short page, so only comparing against total_count catches
+    // this; a bigger page cap alone would not.
+    const { items, totalCount } = pageThroughListing(() => fixturePage(100, 1500), "workflow_runs");
+    expect(items.length).toBe(1000);
+    expect(totalCount).toBe(1500);
+    expect(isListingTruncated(items.length, totalCount)).toBe(true);
+  });
+
+  test("the API's OWN 1,000 cap returns an EMPTY page 11 while total_count says more — TRUNCATED (observed live)", () => {
+    const { pageThroughListing, isListingTruncated } = loadScript();
+    // Reproduces the exact live observation in #425: total_count 1411,
+    // 1,000 returned, page 11 EMPTY. maxPages is raised to 11 here purely to
+    // exercise that page — production's own loop caps at 10 regardless.
+    const { items, totalCount } = pageThroughListing(
+      (page) => (page <= 10 ? fixturePage(100, 1411) : fixturePage(0, 1411)),
+      "workflow_runs",
+      11,
+    );
+    expect(items.length).toBe(1000);
+    expect(totalCount).toBe(1411);
+    expect(isListingTruncated(items.length, totalCount)).toBe(true);
+  });
+
+  test("a total_count-less fixture (every pre-#425 runs-lane test in this file) is NOT scored as truncated", () => {
+    const { pageThroughListing, isListingTruncated } = loadScript();
+    const { items, totalCount } = pageThroughListing(() => ({ workflow_runs: [run()] }), "workflow_runs");
+    expect(totalCount).toBe(null);
+    expect(isListingTruncated(items.length, totalCount)).toBe(false);
+  });
+
+  test("pageThroughListing: 10 full pages with NO total_count field — capExhausted true, TRUNCATED", () => {
+    const { pageThroughListing, isListingTruncated } = loadScript();
+    // No total_count on ANY page — the page cap is what stopped the loop,
+    // not a short page, so this must read as "could not tell", not healthy.
+    const { items, totalCount, capExhausted } = pageThroughListing(
+      () => ({ workflow_runs: Array.from({ length: 100 }, (_, i) => run({ id: i + 1 })) }),
+      "workflow_runs",
+    );
+    expect(items.length).toBe(1000);
+    expect(totalCount).toBe(null);
+    expect(capExhausted).toBe(true);
+    expect(isListingTruncated(items.length, totalCount, capExhausted)).toBe(true);
+  });
+
+  test("pageThroughListing: 10 full pages with total_count 1000 — NOT truncated even with the cap exhausted", () => {
+    const { pageThroughListing, isListingTruncated } = loadScript();
+    const { items, totalCount, capExhausted } = pageThroughListing(
+      () => fixturePage(100, 1000),
+      "workflow_runs",
+    );
+    expect(items.length).toBe(1000);
+    expect(totalCount).toBe(1000);
+    expect(capExhausted).toBe(true);
+    expect(isListingTruncated(items.length, totalCount, capExhausted)).toBe(false);
+  });
+});
+
 /*
  * RUNNER STARVATION: GitHub reports the RUN as `failure` when its job(s) were
  * cancelled before a runner was ever assigned, so BAD_CONCLUSIONS (a RUN-level
@@ -1131,6 +1239,46 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
     ).toBe(false);
     expect(out).toContain("Nothing new");
     expect(code, out).toBe(0);
+  });
+
+  // ── listing truncation (#425): SAME close-gate discipline, a THIRD reason ──
+  //
+  // Every helper test above can be correct in isolation while main() still
+  // closes a live alert, because the decision to close lives in main()'s
+  // gate, not in isListingTruncated. This drives the real CLI end to end so a
+  // wiring regression (the gate compiling without the new term) cannot ship
+  // unnoticed a third time.
+  test("a TRUNCATED schedule-run listing must NOT close the tracking issue, and must red the audit (#425)", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      // The stub matches by substring, not by page, so every page of the
+      // schedule listing gets this SAME short/empty page back — total_count
+      // says 5 were out there, so a 0-item collection is UNKNOWN, not clean.
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [], total_count: 5 })],
+      // Push lane stays genuinely clean (total_count 0, 0 collected) so this
+      // test isolates the schedule-lane truncation, not a second one.
+      ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [], total_count: 0 })],
+      ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
+      [
+        "has",
+        "issues?state=open&labels=",
+        JSON.stringify([{ number: 7, body: `${MARKER}\nprevious alert` }]),
+      ],
+      ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
+    ]);
+
+    const { code, out } = runAudit(dir);
+    expect(
+      closeCalls(log),
+      `THE #425 BUG: closed the alert on a TRUNCATED schedule-run listing:\n${out}`,
+    ).toEqual([]);
+    expect(out).toContain("Leaving tracking issue #7 OPEN");
+    expect(out).toMatch(/schedule-run listing is TRUNCATED/);
+    expect(out).toContain("the schedule-run listing (truncated)");
+    // An audit that could not tell whether the window was clean must go RED —
+    // the same "could not tell is never health" contract as every other
+    // ProbeFailed flag.
+    expect(code, out).toBe(1);
   });
 });
 

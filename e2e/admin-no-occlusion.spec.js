@@ -20,7 +20,7 @@
  * Every new admin screen should add its key controls here.
  */
 const { test, expect } = require("./base");
-const { expectReachable } = require("./ui-visibility");
+const { expectReachable, expectNoInjectedOverlap } = require("./ui-visibility");
 const { openMediaLibrary, MEDIA_LIBRARY_TOP_SELECTOR } = require("./cms-editor-ui");
 
 const SEED_POST_SLUG = "2026-04-25-replacement-test-post-1";
@@ -101,6 +101,99 @@ test.describe(
         page.getByRole("button", { name: /Delete .*entry/i }).first(),
         "editor Delete button",
       );
+    });
+
+    // ── The legibility half of "occluded" ────────────────────────────────
+    //
+    // Every other assertion in this file is a HIT test. That question —
+    // "can the user click it" — is the one an overlay carrying
+    // `pointer-events: none` answers YES to while sitting straight over the
+    // control's label.
+    //
+    // `theme/admin/publish-step-hint.js` shipped exactly that: a fixed,
+    // top-centre, pointer-events-none notice which covered 68% of the Publish
+    // button and 47% of the Status control its own text was telling the
+    // editor to use. It reached production and was reported from a
+    // screenshot. Nothing in this repo could see it, for TWO independent
+    // reasons, and the test below is shaped by both:
+    //
+    //   1. `elementFromPoint` returns the button straight through a
+    //      pointer-events-none banner, so every hit test stayed green.
+    //      → hence `expectNoInjectedOverlap`, which compares rectangles.
+    //
+    //   2. The damage was viewport-width dependent, and this spec's two
+    //      `@admin-read` projects sit either side of the failing band.
+    //      Measured against a live Decap 3.15.1, overlap in px2 of the
+    //      Publish button by that fixed overlay:
+    //
+    //        3000x1500 → 0      ← chromium-desktop-3k runs here
+    //        2000x1100 → 0
+    //        1440x900  → 2682   (68% of the control)
+    //        1280x800  → 2682   (68%)
+    //        1024x768  → 2438
+    //        393x852   → 0      ← webkit-iphone16 runs here
+    //
+    //      A centred fixed overlay clears a 3000px toolbar and sits above a
+    //      wrapped phone toolbar; it lands on the controls only at ordinary
+    //      laptop widths — which is to say, on every machine either of this
+    //      site's two editors actually uses. So this ONE test pins its own
+    //      viewports, against the file header's "deliberately does NOT pin a
+    //      viewport" rule, because here that rule is what hid the bug.
+    const OVERLAP_PROBE_WIDTHS = [1024, 1280, 1440, 2000];
+    const TOOLBAR_CONTROLS = {
+      "editor Save button": 'button[class*="SaveButton"]',
+      "editor Status control": '[class*="StatusButton"]',
+      "editor Publish control": '[class*="PublishButton"]',
+      "editor Delete button": 'button[class*="DeleteButton"]',
+    };
+
+    test("entry editor — no injected element paints over a toolbar control", async ({
+      page,
+    }) => {
+      const native = page.viewportSize();
+      await login(page);
+
+      // A draft, not the seeded published post: the editorial-workflow
+      // toolbar (Status + Publish + the platform's publish-state bar) only
+      // exists for an entry with unpublished changes. `tags` is used for the
+      // same reason cms-editorial-workflow.spec.js uses it — two short
+      // fields, no datetime/markdown widget to fight, and it is part of the
+      // platform-owned config-test.yml on every consumer (that file is
+      // copied verbatim into the built admin, so `cms.base_collections`
+      // never filters it away).
+      await page.goto("/admin/index-test.html#/collections/tags/new");
+      const nameField = page.getByLabel(/^Name$/);
+      await expect(nameField).toBeVisible({ timeout: 60_000 });
+      await nameField.fill("Occlusion probe tag");
+      await page.getByRole("button", { name: /^save$/i }).first().click();
+
+      // The Publish dropdown trigger only renders once the draft is saved
+      // clean (decap-cms-core EditorToolbar: `!hasChanged && …`).
+      await expect(page.locator('[class*="PublishButton"]').first()).toBeVisible({
+        timeout: 30_000,
+      });
+
+      const widths = [...OVERLAP_PROBE_WIDTHS, native && native.width].filter(Boolean);
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: native ? native.height : 900 });
+        // Let the toolbar reflow (it wraps below Decap's own breakpoint).
+        await expect(page.locator('[class*="PublishButton"]').first()).toBeVisible({
+          timeout: 15_000,
+        });
+
+        // Vacuity guard, re-checked at each width: if the platform's
+        // publish-state bar stopped rendering, the overlap assertion would
+        // pass for the wrong reason and this test would certify nothing.
+        await expect(
+          page.locator("#cms-publish-state"),
+          `at ${width}px the publish-state bar must render on a saved draft — ` +
+            "without it the overlap assertion below passes vacuously",
+        ).toBeVisible({ timeout: 15_000 });
+
+        await expectNoInjectedOverlap(page, TOOLBAR_CONTROLS);
+      }
+
+      if (native) await page.setViewportSize(native);
     });
 
     test("editorial workflow board — New control and columns are reachable", async ({ page }) => {

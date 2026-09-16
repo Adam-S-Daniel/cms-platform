@@ -8,14 +8,22 @@
  * under e2e/fixtures/repo-settings/ are REAL API responses captured
  * 2026-07-10 (gh api repos/<r> and .../rulesets/<id>; ruleset ids 17169281,
  * 13985217, 15756474, 17032014, 17032043) — EXCEPT cms-platform.repo.json
- * (delete_branch_on_merge flipped true) and jodidaniel.ruleset-main.json
+ * (delete_branch_on_merge flipped true), BOTH consumers'
+ * *.ruleset-feature.json (the #371 required-context spelling flipped from the
+ * unpublishable `validate-content` to `editorial / validate-content`; the
+ * as-found captures moved to *.ruleset-feature.DRIFTED-as-found-2026-07-10.json
+ * — see test (g)) and jodidaniel.ruleset-main.json
  * (now the phase-2 CONVERGED shape onto consumer-main; the as-found capture
  * moved to jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json), both
  * updated 2026-07-22 for #172 phase 2, and cms-platform.ruleset-main.json
  * (the `plugin-validate` required context added in v0.1.83 — the manifest
  * declares it and this fixture encodes that desired state, so live stays
  * BEHIND until a human runs `--fix --yes`; same manifest-ahead-of-live shape
- * as the delete_branch_on_merge flip above). So the anchor test locks the shipped
+ * as the delete_branch_on_merge flip above), and BOTH consumers'
+ * *.ruleset-main.json again on 2026-09-01 (the `site-verify / site-verify`
+ * required context, #377 sequencing step 3 — added only after both consumers
+ * published it on their v0.1.98 bump PRs; same manifest-ahead-of-live shape
+ * until the next reconcile). So the anchor test locks the shipped
  * manifest to "zero drift against the phase-2 desired-converged fixtures",
  * and the normalization tests lock the anti-flap rules that keep a daily
  * audit from crying wolf:
@@ -154,6 +162,14 @@ function diffAgainstFixtures(script, manifest, repo, mutate = {}) {
   };
 }
 
+function withoutBypassActors(rulesets) {
+  return rulesets.map((ruleset) => {
+    const copy = JSON.parse(JSON.stringify(ruleset));
+    delete copy.bypass_actors;
+    return copy;
+  });
+}
+
 test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures", () => {
   test("importing never runs the CLI (require.main guard)", () => {
     // Would exec gh / process.exit if the CLI ran (no gh auth in the lint lane).
@@ -198,6 +214,100 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
           `should absorb ALL live noise), got ${JSON.stringify(informational)}`,
       ).toEqual([]);
     }
+  });
+
+  test("READ-ONLY RULESETS: omitted bypass_actors on every fixture repo is UNVERIFIABLE, never fabricated drift or a write", () => {
+    const script = loadScript();
+    const risk = loadRisk();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const scans = Object.entries(LIVE).map(([repo, live]) =>
+      diffAgainstFixtures(script, manifest, repo, {
+        rulesets: withoutBypassActors(live.rulesets.map(fixture)),
+      }),
+    );
+
+    expect(scans.flatMap((scan) => scan.findings)).toEqual([]);
+    const informationals = scans.flatMap((scan) => scan.informational);
+    expect(informationals).toHaveLength(5);
+    expect(
+      informationals.every(
+        (item) =>
+          item.kind === "ruleset-field-not-visible" &&
+          item.field === "bypass_actors" &&
+          item.fixSkip !== true,
+      ),
+    ).toBe(true);
+
+    const plan = script.buildFixPlan(manifest, scans);
+    const classification = risk.classifyPlan(plan);
+    expect(plan).toEqual([]);
+    expect(classification.writes).toEqual([]);
+    expect(classification.gated).toEqual([]);
+  });
+
+  test("READ-ONLY RULESETS: hidden bypass plus a visible required-check delta plans that delta and gates the full PUT as unverifiable", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/adamdaniel.ai";
+    const feature = fixture("adamdaniel.ruleset-feature.json");
+    delete feature.bypass_actors;
+    feature.rules.find(
+      (rule) => rule.type === "required_status_checks",
+    ).parameters.required_status_checks = [];
+
+    const scan = diffAgainstFixtures(script, manifest, repo, {
+      rulesets: [fixture("adamdaniel.ruleset-main.json"), feature],
+    });
+    expect(scan.findings.map((finding) => finding.facet)).toEqual([
+      "rule:required_status_checks.required_status_checks",
+    ]);
+    expect(scan.informational).toContainEqual(
+      expect.objectContaining({
+        repo,
+        kind: "ruleset-field-not-visible",
+        ruleset: "cms-feature-branches",
+        field: "bypass_actors",
+      }),
+    );
+
+    const plan = script.buildFixPlan(manifest, [scan]);
+    expect(plan[0].skipped).toEqual([]);
+    expect(plan[0].puts).toHaveLength(1);
+    expect(plan[0].puts[0].changes).toEqual([
+      {
+        facet: "rule:required_status_checks.required_status_checks",
+        live: [],
+        desired: [{ context: "editorial / validate-content" }],
+      },
+    ]);
+    expect(plan[0].puts[0].live).not.toHaveProperty("bypass_actors");
+
+    const classification = loadRisk().classifyPlan(plan);
+    expect(classification.writes).toHaveLength(1);
+    expect(classification.gated).toHaveLength(1);
+    expect(classification.gated[0].reason).toContain(
+      "cannot verify live bypass_actors",
+    );
+  });
+
+  test("READ-ONLY RULESETS: null bypass_actors is malformed and remains unknown", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const main = fixture("cms-platform.ruleset-main.json");
+    main.bypass_actors = null;
+    const scan = diffAgainstFixtures(script, manifest, repo, { rulesets: [main] });
+
+    expect(scan.findings).toEqual([]);
+    expect(scan.informational).toContainEqual(
+      expect.objectContaining({
+        repo,
+        kind: "ruleset-field-not-visible",
+        ruleset: "main",
+        field: "bypass_actors",
+      }),
+    );
+    expect(script.normalizeRuleset(main).projected.bypass_actors).toBeNull();
   });
 
   test("(a) jodidaniel feature ruleset vs the SHARED library entry is clean (default dismissal_restriction stripped)", () => {
@@ -330,6 +440,54 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       "rule:required_status_checks",
     ]);
     expect(findings.length).toBe(5);
+  });
+
+  // #371. The as-found captures are the EVIDENCE that the defect was live on
+  // both consumers, not merely latent in the manifest — so they are kept, and
+  // diffed, rather than quietly overwritten. Same rule as (d): an as-found
+  // corpus that gets edited every time desired state moves stops being
+  // evidence.
+  //
+  // What they show: `cms-feature-branches` required the context
+  // `validate-content`, which nothing publishes. A consumer's thin caller
+  // declares job id `editorial` and `uses:` the platform reusable whose job id
+  // is `validate-content`, so the check run GitHub actually reports is
+  // `editorial / validate-content`. A required context that never reports never
+  // goes green and a branch ruleset does not time out, so every PR onto
+  // `cms/**`, `claude/**`, `feat/**`, … was permanently `mergeable_state:
+  // blocked` — which is why an editor publishing from a PR-preview admin (whose
+  // editorial PR is based on exactly those refs) got every success signal and
+  // no merge, ever. Measured on jodidaniel.com#233.
+  //
+  // Only an admin's `bypass_actors` entry ever moved one, which is why it went
+  // unnoticed: the people who could merge never met the wall.
+  test("(g) the as-found feature rulesets carry EXACTLY the #371 required-context skew", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    for (const [repo, file] of [
+      ["Adam-S-Daniel/adamdaniel.ai", "adamdaniel.ruleset-feature.DRIFTED-as-found-2026-07-10.json"],
+      ["jodidaniel/jodidaniel.com", "jodidaniel.ruleset-feature.DRIFTED-as-found-2026-07-10.json"],
+    ]) {
+      const asFound = fixture(file);
+      expect(
+        asFound.rules.find((r) => r.type === "required_status_checks").parameters
+          .required_status_checks,
+        `${file} must preserve the unpublishable context as captured`,
+      ).toEqual([{ context: "validate-content" }]);
+
+      const { projected } = script.normalizeRuleset(asFound);
+      const desired = script.sortRuleset({
+        name: "cms-feature-branches",
+        ...manifest.ruleset_library["cms-feature-branches"],
+      });
+      const findings = [];
+      const informational = [];
+      script.diffRuleset(repo, "cms-feature-branches", projected, desired, findings, informational);
+      expect(
+        findings.map((f) => f.facet),
+        `${repo}: the as-found capture must differ from the fixed manifest in exactly one facet`,
+      ).toEqual(["rule:required_status_checks.required_status_checks"]);
+    }
   });
 
   test("(e) an unmanaged live ruleset is detected (and never auto-deleted)", () => {
@@ -982,6 +1140,17 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(script.cleanScanSummary(informational)).toBe(
       "OK — live settings match repo-settings.yml on every scanned repo.",
     );
+    const lines = [];
+    const originalLog = console.log;
+    console.log = (...args) => lines.push(args.join(" "));
+    try {
+      script.printFixPlan([], informational);
+    } finally {
+      console.log = originalLog;
+    }
+    expect(lines).toEqual([
+      "Fix plan: EMPTY — live settings already match the manifest. Nothing to apply.",
+    ]);
     // A ruleset-unknown-field informational is NOT a flag visibility problem —
     // it must not qualify either line.
     const unknownField = [
@@ -998,6 +1167,60 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     );
     expect(script.cleanScanSummary(unknownField)).toBe(
       "OK — live settings match repo-settings.yml on every scanned repo.",
+    );
+  });
+
+  test("UNVERIFIABLE summaries and notices name hidden ruleset fields alongside hidden flags", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const degradedRepo = fixture("cms-platform.repo.json");
+    delete degradedRepo.delete_branch_on_merge;
+    const ruleset = fixture("cms-platform.ruleset-main.json");
+    delete ruleset.bypass_actors;
+    const scan = {
+      repo,
+      ...script.diffRepo({
+        repo,
+        desiredSettings: script.effectiveSettings(manifest, repo),
+        desiredRulesets: script.desiredRulesets(manifest, repo),
+        liveRepo: degradedRepo,
+        liveRulesets: [ruleset],
+      }),
+      liveRulesets: [ruleset],
+    };
+    expect(scan.findings).toEqual([]);
+
+    const okLine = script.repoOkLine(repo, 1, scan.informational);
+    expect(okLine).toContain("1 flag(s) UNVERIFIABLE (need Contents)");
+    expect(okLine).toContain("main.bypass_actors");
+    expect(okLine).toMatch(/ruleset write access/);
+
+    const summary = script.cleanScanSummary(scan.informational);
+    expect(summary).toContain(`${repo}/main.bypass_actors`);
+    expect(summary).toMatch(/UNVERIFIABLE/);
+    expect(summary).not.toContain("match repo-settings.yml on every scanned repo.");
+
+    const lines = [];
+    const originalLog = console.log;
+    console.log = (...args) => lines.push(args.join(" "));
+    try {
+      script.printReport([scan]);
+      script.printFixPlan([], scan.informational);
+    } finally {
+      console.log = originalLog;
+    }
+    const bypassNotice = lines.find(
+      (line) =>
+        line.startsWith("::notice") &&
+        line.includes("main") &&
+        line.includes("bypass_actors"),
+    );
+    expect(bypassNotice).toContain("UNVERIFIABLE");
+    expect(bypassNotice).toContain("ruleset write access");
+    expect(lines.some((line) => line.includes("ruleset-field-not-visible"))).toBe(false);
+    expect(lines).toContain(
+      "Fix plan: EMPTY — no verifiable drift found; 2 field(s) UNVERIFIABLE. Nothing to apply.",
     );
   });
 
@@ -1622,5 +1845,1270 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       prevent_self_review: false,
     });
     expect(script.ENV_FIX_FORBIDDEN).toContain("repo-settings");
+  });
+
+  // ── Security-analysis surface (a FIFTH managed surface: Dependabot alerts +
+  // Dependabot security updates, own GET/PUT/DELETE endpoint PER KEY where the
+  // HTTP METHOD — not the request body — carries the enable/disable value;
+  // added 2026-08-31). No live capture of these two endpoints was possible
+  // from this sandbox (same "no gh/network access" constraint the hand-built
+  // environments fixtures above note), so the fetch-path tests below drive
+  // `fetchSecurityAnalysis` through `fakeApi` against the documented response
+  // shapes (204-empty / 404 / 403 / the 200-JSON {enabled,paused} form) rather
+  // than a literal live-captured JSON file. ─────────────────────────────────
+
+  test("fetchSecurityAnalysis: an empty (204) body on both endpoints maps to {enabled:true}", () => {
+    // The vulnerability-alerts endpoint's documented "enabled" response has
+    // NO JSON body at all — an HTTP 204. fakeApi's function-route form
+    // returns its value VERBATIM (never JSON.stringified), which is what
+    // lets a route simulate a truly empty stdout string.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    const out = script.fetchSecurityAnalysis(repo, null, api);
+    expect(out.vulnerabilityAlerts).toEqual({ enabled: true });
+    expect(out.automatedSecurityFixes).toEqual({ enabled: true });
+  });
+
+  test("fetchSecurityAnalysis: automated-security-fixes' 200 JSON {enabled,paused} shape maps to {enabled} (paused is read but never carried through)", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: {
+        enabled: false,
+        paused: false,
+      },
+    });
+    const out = script.fetchSecurityAnalysis(repo, null, api);
+    expect(out.automatedSecurityFixes).toEqual({ enabled: false });
+  });
+
+  test("fetchSecurityAnalysis: a 404 on vulnerability-alerts maps to {enabled:false} — DRIFT, never a throw", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => {
+        const e = new Error("gh: HTTP 404 Not Found");
+        e.stderr = "HTTP 404";
+        throw e;
+      },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    let out;
+    expect(() => {
+      out = script.fetchSecurityAnalysis(repo, null, api);
+    }).not.toThrow();
+    expect(out.vulnerabilityAlerts).toEqual({ enabled: false });
+  });
+
+  test("fetchSecurityAnalysis: a 403 on vulnerability-alerts is an operational SKIP, not a throw", () => {
+    // GUARD: this is the departure from "a GitHub 404 means not authorized" —
+    // see fetchSecurityAnalysisKey's header comment for why a 404 here is
+    // safe to read as "genuinely disabled" (fetchActionsPermissions has
+    // already proven Administration:Read on this token/repo earlier in the
+    // same fetchLive call). A 403 gets the DIFFERENT, informational-skip
+    // treatment: the read-only PATs predate this surface, so a scope gap is
+    // expected on day one and must not take the whole scan down.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => {
+        const e = new Error(
+          "gh: HTTP 403 Resource not accessible by personal access token",
+        );
+        e.stderr = "HTTP 403";
+        throw e;
+      },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    let out;
+    expect(() => {
+      out = script.fetchSecurityAnalysis(repo, null, api);
+    }).not.toThrow();
+    expect(out.vulnerabilityAlerts.skipped).toBe(true);
+    expect(out.vulnerabilityAlerts.reason).toMatch(/vulnerability-alerts/);
+    expect(out.vulnerabilityAlerts.reason).toMatch(/403/);
+  });
+
+  test("fetchSecurityAnalysis: any OTHER error (e.g. HTTP 500) propagates unchanged, never swallowed", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => {
+        const e = new Error("gh: HTTP 500 Internal Server Error");
+        e.stderr = "HTTP 500";
+        throw e;
+      },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    expect(() => script.fetchSecurityAnalysis(repo, null, api)).toThrow(/500/);
+  });
+
+  test("fetchSecurityAnalysis: a non-empty non-JSON body is a guarded operational error, not a raw SyntaxError", () => {
+    // Locks the JSON.parse guard: a genuinely malformed body must name the
+    // endpoint in a clear error, never bubble up a bare "Unexpected token" it
+    // would take a stack trace to attribute to this endpoint.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => "not json",
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    let threw;
+    try {
+      script.fetchSecurityAnalysis(repo, null, api);
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeInstanceOf(Error);
+    expect(threw).not.toBeInstanceOf(SyntaxError);
+    expect(threw.message).toContain("vulnerability-alerts");
+  });
+
+  test("fetchSecurityAnalysis: a parsed JSON body with no boolean `enabled` is an operational failure, never a silent {enabled:true} default", () => {
+    // The {enabled:true} default is legitimate ONLY for the empty/204 shape
+    // (handled before JSON.parse ever runs) — a body that DID parse but
+    // carries no boolean `enabled` is an unexpected shape and must fail loud.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: { some: "unexpected shape" },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    expect(() => script.fetchSecurityAnalysis(repo, null, api)).toThrow(
+      /vulnerability-alerts/,
+    );
+  });
+
+  test("fetchSecurityAnalysis: a self-raised shape error whose BODY contains \"Not Found\" still throws — it is never re-read as {enabled:false}", () => {
+    // REGRESSION GUARD. The unexpected-shape error interpolates the raw
+    // response body into its message, and the catch below it status-matches on
+    // /HTTP 404|Not Found/i. Untagged, a success body merely CONTAINING that
+    // text would be caught by this function's OWN error and silently downgraded
+    // to `{enabled:false}` — reporting "Dependabot alerts are off" for a repo
+    // whose alerts were never actually read. The shapeError tag is what keeps a
+    // failure this module raised out of the transport-status matching.
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: { message: "Not Found" },
+      [`repos/${repo}/automated-security-fixes`]: () => "",
+    });
+    expect(() => script.fetchSecurityAnalysis(repo, null, api)).toThrow(
+      /unexpected JSON shape/,
+    );
+  });
+
+  test("diffSecurityAnalysis: a repo already at the desired baseline yields NO findings and NO informationals", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const desired = {
+      vulnerability_alerts: true,
+      automated_security_fixes: true,
+    };
+    const live = {
+      vulnerabilityAlerts: { enabled: true },
+      automatedSecurityFixes: { enabled: true },
+    };
+    const findings = [];
+    const informational = [];
+    script.diffSecurityAnalysis(repo, desired, live, findings, informational);
+    expect(findings).toEqual([]);
+    expect(informational).toEqual([]);
+  });
+
+  test("diffSecurityAnalysis: a live false against desired true is exactly one endpoint-tagged security-analysis-drift finding", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const desired = {
+      vulnerability_alerts: true,
+      automated_security_fixes: true,
+    };
+    const live = {
+      vulnerabilityAlerts: { enabled: false },
+      automatedSecurityFixes: { enabled: true },
+    };
+    const findings = [];
+    const informational = [];
+    script.diffSecurityAnalysis(repo, desired, live, findings, informational);
+    expect(findings).toEqual([
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        live: false,
+        desired: true,
+      },
+    ]);
+    expect(informational).toEqual([]);
+  });
+
+  test("diffSecurityAnalysis: a {skipped:true} live entry is ONE security-analysis-skipped informational and ZERO findings", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const desired = {
+      vulnerability_alerts: true,
+      automated_security_fixes: true,
+    };
+    const live = {
+      vulnerabilityAlerts: {
+        skipped: true,
+        reason:
+          "vulnerability-alerts returned HTTP 403 — the read token lacks this surface",
+      },
+      automatedSecurityFixes: { enabled: true },
+    };
+    const findings = [];
+    const informational = [];
+    script.diffSecurityAnalysis(repo, desired, live, findings, informational);
+    expect(findings).toEqual([]);
+    expect(informational).toEqual([
+      {
+        repo,
+        kind: "security-analysis-skipped",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        reason:
+          "vulnerability-alerts returned HTTP 403 — the read token lacks this surface",
+        fixSkip: true,
+      },
+    ]);
+  });
+
+  // buildFixPlan ordering + methods — THE DEPENDENCY-ORDER REGRESSION GUARD:
+  // Dependabot security updates require Dependabot alerts to already be on,
+  // so an ENABLE must land vulnerability_alerts BEFORE automated_security_
+  // fixes, and a DISABLE must land automated_security_fixes BEFORE
+  // vulnerability_alerts (undo the dependent feature first). Both cases below
+  // deliberately feed the findings array in the OPPOSITE order from what
+  // buildFixPlan must emit, so a regression that just preserved input order
+  // (instead of enforcing the real dependency) would fail this test.
+  test("buildFixPlan: security-analysis ENABLE order is vulnerability_alerts THEN automated_security_fixes (the dependency-order regression guard)", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "automated_security_fixes",
+        endpoint: script.AUTOMATED_SECURITY_FIXES_ENDPOINT,
+        live: false,
+        desired: true,
+      },
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        live: false,
+        desired: true,
+      },
+    ];
+    const plan = script.buildFixPlan(manifest, [
+      { repo, findings, informational: [], liveRepo: {}, liveRulesets: [] },
+    ]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].securityWrites).toEqual([
+      {
+        endpoint: `repos/${repo}/vulnerability-alerts`,
+        method: "PUT",
+        key: "vulnerability_alerts",
+        desired: true,
+      },
+      {
+        endpoint: `repos/${repo}/automated-security-fixes`,
+        method: "PUT",
+        key: "automated_security_fixes",
+        desired: true,
+      },
+    ]);
+  });
+
+  test("buildFixPlan: security-analysis DISABLE order is automated_security_fixes THEN vulnerability_alerts (the dependency-order regression guard, reversed)", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        live: true,
+        desired: false,
+      },
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "automated_security_fixes",
+        endpoint: script.AUTOMATED_SECURITY_FIXES_ENDPOINT,
+        live: true,
+        desired: false,
+      },
+    ];
+    const plan = script.buildFixPlan(manifest, [
+      { repo, findings, informational: [], liveRepo: {}, liveRulesets: [] },
+    ]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].securityWrites).toEqual([
+      {
+        endpoint: `repos/${repo}/automated-security-fixes`,
+        method: "DELETE",
+        key: "automated_security_fixes",
+        desired: false,
+      },
+      {
+        endpoint: `repos/${repo}/vulnerability-alerts`,
+        method: "DELETE",
+        key: "vulnerability_alerts",
+        desired: false,
+      },
+    ]);
+  });
+
+  test("describeFinding: security-analysis-drift names the key and the endpoint", () => {
+    const script = loadScript();
+    const line = script.describeFinding({
+      repo: "o/r",
+      kind: "security-analysis-drift",
+      key: "vulnerability_alerts",
+      endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+      live: false,
+      desired: true,
+    });
+    expect(line).toContain("vulnerability_alerts");
+    expect(line).toContain(script.VULNERABILITY_ALERTS_ENDPOINT);
+    expect(line).toContain("false");
+    expect(line).toContain("true");
+  });
+
+  test("describeInformational: security-analysis-skipped reads as an OPERATIONAL skip, never as drift", () => {
+    const script = loadScript();
+    const line = script.describeInformational({
+      repo: "o/r",
+      kind: "security-analysis-skipped",
+      key: "vulnerability_alerts",
+      endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+      reason:
+        "vulnerability-alerts returned HTTP 403 — the read token lacks this surface",
+      fixSkip: true,
+    });
+    expect(line).toMatch(/SKIPPED/);
+    expect(line).toMatch(/OPERATIONAL skip/);
+    expect(line).toMatch(/NOT drift/);
+    // A real drift line always carries the live -> desired arrow; the skip
+    // line must not, or it would read as an (unresolved) drift finding.
+    expect(line).not.toContain("->");
+  });
+
+  test("loadManifest hard-fails on a non-boolean security_analysis_defaults value", () => {
+    // These two endpoints are enable/disable only (PUT vs. DELETE with no
+    // body) — a string value has no PUT payload to carry it, so a typo like
+    // `"true"` (a truthy STRING, not the boolean) must fail loudly at load
+    // time rather than silently reach buildFixPlan's `f.desired ? "PUT" :
+    // "DELETE"` truthiness check and coerce to the same outcome by accident.
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo: {}",
+        "security_analysis_defaults:",
+        '  vulnerability_alerts: "true"',
+        "",
+      ].join("\n"),
+    );
+    expect(() => script.loadManifest(manifestPath)).toThrow(
+      /security_analysis_defaults\.vulnerability_alerts must be a boolean/,
+    );
+  });
+
+  test("loadManifest hard-fails on an undeclared repos.<repo>.security_analysis key", () => {
+    const script = loadScript();
+    const manifestPath = writeManifest(
+      [
+        "version: 1",
+        "repos:",
+        "  Owner/Repo:",
+        "    security_analysis:",
+        "      grouped_security_updates: true",
+        "",
+      ].join("\n"),
+    );
+    expect(() => script.loadManifest(manifestPath)).toThrow(
+      /repos\.Owner\/Repo\.security_analysis\.grouped_security_updates is not a MANAGED_SECURITY_ANALYSIS_KEY/,
+    );
+  });
+
+  // ── fetchLive gating (mirrors the two existing environments-gating tests
+  // above — same backward-compatibility shape, one surface further out): a
+  // NEW positional arg defaulting to [] must never break an existing 3- or
+  // 4-arg fetchLive call, so fakeApi's closed route map (throws "unrouted
+  // endpoint" on anything not listed) is the proof the fetch is genuinely
+  // conditional and not merely "usually empty". ────────────────────────────
+  test("fetchLive: NO security-analysis call is made when desiredSecurityKeys is omitted/empty (no wasted calls, no break on old call sites)", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/adamdaniel.ai";
+    const api = fakeApi({
+      [`repos/${repo}`]: fixture("adamdaniel.repo.json"),
+      [`repos/${repo}/rulesets?per_page=100`]: [],
+      [`repos/${repo}/actions/permissions`]: fixture(
+        "adamdaniel.actions-permissions.json",
+      ),
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        fixture("adamdaniel.fork-pr-approval.json"),
+      // Deliberately NO route for vulnerability-alerts / automated-security-
+      // fixes — if fetchLive called either anyway, fakeApi's "unrouted
+      // endpoint" throw catches it, exactly like the environments-gating
+      // test this one mirrors.
+    });
+    let live;
+    expect(() => {
+      live = script.fetchLive(repo, null, api, []);
+    }).not.toThrow();
+    expect(live.liveSecurityAnalysis).toEqual({});
+  });
+
+  test("fetchLive: WITH desiredSecurityKeys, both endpoints are called and bundled as liveSecurityAnalysis", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const api = fakeApi({
+      [`repos/${repo}`]: fixture("cms-platform.repo.json"),
+      [`repos/${repo}/rulesets?per_page=100`]: [],
+      [`repos/${repo}/actions/permissions`]: fixture(
+        "cms-platform.actions-permissions.json",
+      ),
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        fixture("cms-platform.fork-pr-approval.json"),
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: { enabled: true },
+    });
+    const live = script.fetchLive(
+      repo,
+      null,
+      api,
+      [],
+      ["vulnerability_alerts", "automated_security_fixes"],
+    );
+    expect(live.liveSecurityAnalysis).toEqual({
+      vulnerabilityAlerts: { enabled: true },
+      automatedSecurityFixes: { enabled: true },
+    });
+  });
+});
+
+// ── write-risk classification (the gate narrowing) ──────────────────────────
+//
+// scripts/repo-settings-write-risk.js decides which convergences a human must
+// approve. Getting it wrong in one direction costs a click; getting it wrong
+// in the other performs an unattended admin write that reduced protection on a
+// production repo. So every case below is written from the second direction:
+// the question each asks is "could this write leave the repo with FEWER
+// constraints than it has now?", and anything the classifier cannot answer
+// must come back GATED.
+const RISK_PATH = path.resolve(__dirname, "../scripts/repo-settings-write-risk.js");
+function loadRisk() {
+  delete require.cache[require.resolve(RISK_PATH)];
+  return require(RISK_PATH);
+}
+// A ruleset body carrying one required_status_checks rule with `contexts`.
+function rsc(contexts, extraParams = {}) {
+  return {
+    name: "main",
+    target: "branch",
+    enforcement: "active",
+    conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+    bypass_actors: [],
+    rules: [
+      {
+        type: "required_status_checks",
+        parameters: {
+          strict_required_status_checks_policy: true,
+          do_not_enforce_on_create: false,
+          required_status_checks: contexts.map((context) => ({ context })),
+          ...extraParams,
+        },
+      },
+    ],
+  };
+}
+const verdict = (w) => loadRisk().classifyWrite(w).verdict;
+
+test.describe("repo-settings write-risk classification", () => {
+  test("a full ruleset PUT with unobserved bypass_actors is gated even when desired is empty or omitted", () => {
+    const risk = loadRisk();
+    for (const desired of [
+      { ...rsc(["a / a"]), bypass_actors: [] },
+      (() => {
+        const body = rsc(["a / a"]);
+        delete body.bypass_actors;
+        return body;
+      })(),
+    ]) {
+      const live = rsc([]);
+      delete live.bypass_actors;
+      const result = risk.classifyWrite({
+        kind: "ruleset-put",
+        name: "main",
+        live,
+        desired,
+      });
+      expect(result.verdict).toBe("gated");
+      expect(result.reason).toContain("cannot verify live bypass_actors");
+    }
+
+    const malformed = rsc([]);
+    malformed.bypass_actors = null;
+    const malformedResult = risk.classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live: malformed,
+      desired: rsc(["a / a"]),
+    });
+    expect(malformedResult.verdict).toBe("gated");
+    expect(malformedResult.reason).toContain("cannot verify live bypass_actors");
+  });
+
+  test("visible empty bypass_actors remains a real actor-add delta, and visible removal stays safe", () => {
+    const actor = {
+      actor_id: 5,
+      actor_type: "RepositoryRole",
+      bypass_mode: "always",
+    };
+    const base = rsc(["a / a"]);
+    const withActor = { ...base, bypass_actors: [actor] };
+
+    const added = loadRisk().classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live: base,
+      desired: withActor,
+    });
+    expect(added.verdict).toBe("gated");
+    expect(added.reason).toContain("RepositoryRole 5 = admin");
+
+    const removed = loadRisk().classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live: withActor,
+      desired: base,
+    });
+    expect(removed.verdict).toBe("safe");
+    expect(removed.reason).toContain("bypass actor(s) removed");
+  });
+
+  test("the REAL outstanding drift (#310) classifies SAFE, so it applies unattended", () => {
+    // adamdaniel.ai's `main` ruleset is missing `prerelease-guard /
+    // prerelease-guard`; the manifest has it. That single item was pending
+    // from 2026-08-27 to 2026-08-31 while four runs asked a human to approve
+    // it. Adding a required check cannot reduce protection — this is exactly
+    // the case the narrowing exists for, so it is asserted on the real values
+    // rather than on a synthetic pair.
+    const live = rsc([
+      "e2e / e2e",
+      "editorial / validate-content",
+      "parity / parity",
+      "preview-media / preview-media",
+      "scan / scan",
+      "visual-regression / approve-regression",
+    ]);
+    const desired = rsc([
+      "e2e / e2e",
+      "editorial / validate-content",
+      "parity / parity",
+      "prerelease-guard / prerelease-guard",
+      "preview-media / preview-media",
+      "scan / scan",
+      "visual-regression / approve-regression",
+    ]);
+    const c = loadRisk().classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live,
+      desired,
+    });
+    expect(c.verdict).toBe("safe");
+    expect(c.reason).toContain("prerelease-guard / prerelease-guard");
+  });
+
+  test("REMOVING a required check is gated, and that is the same diff backwards", () => {
+    // The mirror of the test above, and the one that matters: if the
+    // classifier is direction-blind, both read the same and an unattended run
+    // strips a repo's required checks.
+    const six = [
+      "e2e / e2e",
+      "editorial / validate-content",
+      "parity / parity",
+      "preview-media / preview-media",
+      "scan / scan",
+      "visual-regression / approve-regression",
+    ];
+    const c = loadRisk().classifyWrite({
+      kind: "ruleset-put",
+      name: "main",
+      live: rsc([...six, "prerelease-guard / prerelease-guard"]),
+      desired: rsc(six),
+    });
+    expect(c.verdict).toBe("gated");
+    expect(c.reason).toMatch(/required check\(s\) removed/);
+  });
+
+  test("relaxing enforcement, adding a bypass actor, or moving conditions is gated", () => {
+    const base = rsc(["a / a"]);
+    const relaxed = { ...base, enforcement: "disabled" };
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: base, desired: relaxed }),
+    ).toBe("gated");
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: base,
+        desired: { ...base, bypass_actors: [{ actor_id: 5, actor_type: "Integration", bypass_mode: "always" }] },
+      }),
+    ).toBe("gated");
+    // …and removing one is fine: fewer ways around the rules.
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: { ...base, bypass_actors: [{ actor_id: 5, actor_type: "Integration", bypass_mode: "always" }] },
+        desired: base,
+      }),
+    ).toBe("safe");
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: base,
+        desired: {
+          ...base,
+          conditions: { ref_name: { include: ["refs/heads/nothing"], exclude: [] } },
+        },
+      }),
+    ).toBe("gated");
+  });
+
+  test("dropping a whole rule is gated; adding one is safe", () => {
+    const withChecks = rsc(["a / a"]);
+    const withChecksAndDeletion = {
+      ...withChecks,
+      rules: [...withChecks.rules, { type: "deletion" }],
+    };
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: withChecks, desired: withChecksAndDeletion }),
+    ).toBe("safe");
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: withChecksAndDeletion, desired: withChecks }),
+    ).toBe("gated");
+  });
+
+  test("a pull_request rule's parameters are ALWAYS gated — direction is not modelled there", () => {
+    // `required_approving_review_count`, the dismiss-stale flags and
+    // `allowed_merge_methods` all live here and all have a weakening
+    // direction. Rather than model five more orderings, the classifier
+    // declines to reason about the rule at all. That is deliberate, and this
+    // test is what stops someone "completing" it casually.
+    const pr = (count) => ({
+      name: "main",
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      bypass_actors: [],
+      rules: [
+        { type: "pull_request", parameters: { required_approving_review_count: count } },
+      ],
+    });
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: pr(1), desired: pr(2) }),
+    ).toBe("gated");
+    expect(
+      verdict({ kind: "ruleset-put", name: "main", live: pr(2), desired: pr(1) }),
+    ).toBe("gated");
+  });
+
+  test("it FAILS CLOSED on anything it has never seen", () => {
+    // The property the whole design rests on: this is an allowlist. A ruleset
+    // key GitHub adds next year, a required_status_checks parameter nobody has
+    // modelled, an unknown write kind — every one of them must reach a human,
+    // not the ungated lane.
+    const base = rsc(["a / a"]);
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: base,
+        desired: { ...base, some_future_github_key: true },
+      }),
+    ).toBe("gated");
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: rsc(["a / a"]),
+        desired: rsc(["a / a"], { some_future_param: 3 }),
+      }),
+    ).toBe("gated");
+    expect(verdict({ kind: "who-knows", key: "x" })).toBe("gated");
+    expect(verdict(null)).toBe("gated");
+    // A context entry that is more than a bare `context` is a different
+    // assertion (an integration_id pin), so it is not covered by "additions
+    // only are safe".
+    expect(
+      verdict({
+        kind: "ruleset-put",
+        name: "main",
+        live: rsc(["a / a"]),
+        desired: {
+          ...rsc(["a / a"]),
+          rules: [
+            {
+              type: "required_status_checks",
+              parameters: {
+                strict_required_status_checks_policy: true,
+                do_not_enforce_on_create: false,
+                required_status_checks: [
+                  { context: "a / a" },
+                  { context: "b / b", integration_id: 15368 },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    ).toBe("gated");
+  });
+
+  test("repo flags are allowlisted by VALUE, not by key", () => {
+    // Disabling a merge method removes a way to land code; enabling one adds
+    // one. Same key, opposite verdicts.
+    expect(
+      verdict({ kind: "flag", key: "allow_rebase_merge", live: true, desired: false }),
+    ).toBe("safe");
+    expect(
+      verdict({ kind: "flag", key: "allow_rebase_merge", live: false, desired: true }),
+    ).toBe("gated");
+    expect(
+      verdict({ kind: "flag", key: "delete_branch_on_merge", live: false, desired: true }),
+    ).toBe("safe");
+    // Cosmetic keys are deliberately absent from the list — unmodelled means
+    // gated, which costs a click and never a surprise.
+    expect(
+      verdict({ kind: "flag", key: "squash_merge_commit_title", live: "COMMIT_OR_PR_TITLE", desired: "PR_TITLE" }),
+    ).toBe("gated");
+  });
+
+  test("Actions permissions follow the same direction rule", () => {
+    expect(
+      verdict({ kind: "actions-permission", key: "sha_pinning_required", live: false, desired: true }),
+    ).toBe("safe");
+    expect(
+      verdict({ kind: "actions-permission", key: "sha_pinning_required", live: true, desired: false }),
+    ).toBe("gated");
+    expect(
+      verdict({
+        kind: "actions-permission",
+        key: "approval_policy",
+        live: "first_time_contributors",
+        desired: "all_external_contributors",
+      }),
+    ).toBe("safe");
+    expect(
+      verdict({
+        kind: "actions-permission",
+        key: "approval_policy",
+        live: "all_external_contributors",
+        desired: "first_time_contributors",
+      }),
+    ).toBe("gated");
+    // An unknown live value means the DIRECTION is unknown, not that the move
+    // is fine.
+    expect(
+      verdict({
+        kind: "actions-permission",
+        key: "approval_policy",
+        live: null,
+        desired: "all_external_contributors",
+      }),
+    ).toBe("gated");
+  });
+
+  test("creating a ruleset or an environment only ever adds", () => {
+    // GitHub enforces the UNION of a repo's rulesets, so one that does not
+    // exist yet cannot be relaxing anything by coming into existence; and
+    // buildFixPlan only ever emits an environment PUT on the CREATE path
+    // (ENV_FIX_FORBIDDEN), where the body is the manifest's own.
+    expect(verdict({ kind: "ruleset-post", name: "new", desired: rsc(["a / a"]) })).toBe("safe");
+    expect(
+      verdict({ kind: "environment-put", name: "repo-settings", desired: { reviewers: [] } }),
+    ).toBe("safe");
+  });
+
+  test("classifyPlan aggregates, and one gated write gates the whole plan", () => {
+    const risk = loadRisk();
+    const plan = [
+      {
+        repo: "o/r",
+        patchBody: { allow_rebase_merge: false },
+        flagLive: { allow_rebase_merge: true },
+        puts: [],
+        posts: [],
+        actionsPuts: [],
+        envPuts: [],
+      },
+      {
+        repo: "o/r2",
+        patchBody: { allow_rebase_merge: true },
+        flagLive: { allow_rebase_merge: false },
+        puts: [],
+        posts: [],
+        actionsPuts: [],
+        envPuts: [],
+      },
+    ];
+    const c = risk.classifyPlan(plan);
+    expect(c.writes.length).toBe(2);
+    expect(c.safe.length).toBe(1);
+    expect(c.gated.length).toBe(1);
+    expect(c.gated[0].repo).toBe("o/r2");
+  });
+
+  test("planUnfixables names what no approval can fix", () => {
+    // The other half of the noise problem: a plan can be non-empty and contain
+    // nothing this tool will write. Asking a human to approve THAT is asking
+    // for something they cannot give through this workflow.
+    const risk = loadRisk();
+    const un = risk.planUnfixables([
+      {
+        repo: "o/r",
+        manualOnly: ["default_branch"],
+        skipped: ["odd"],
+        unmanaged: ["stray"],
+        envManualOnly: ["repo-settings"],
+      },
+    ]);
+    expect(un.length).toBe(4);
+    expect(un.join("\n")).toContain("default_branch");
+    expect(un.join("\n")).toContain("repo-settings");
+    expect(risk.classifyPlan([{ repo: "o/r", manualOnly: ["default_branch"] }]).writes.length).toBe(0);
+  });
+});
+
+// ── the classifier must know every bucket the plan can carry ────────────────
+//
+// This is the guard that was missing, and its absence was measured rather than
+// imagined. `scripts/repo-settings-write-risk.js` merged on 2026-08-31 at
+// 20:31; `securityWrites` (#355, Dependabot vulnerability alerts + automated
+// security fixes) merged at 20:25 — six minutes earlier, on a branch cut before
+// it. Both files merged CLEAN because they touch different regions, and every
+// lint stayed green. But planWrites() iterated a hardcoded list of buckets, so
+// security writes were invisible to it, which meant:
+//
+//   - a plan of ONLY security writes counted writes=0, took the "no applicable
+//     writes" path, exited 0, and never applied — silently; and
+//   - a plan mixing one safe ruleset write with a security DELETE counted
+//     gated=0 and routed to the UNGATED lane, which would have disabled a
+//     repo's security alerts with nobody asked.
+//
+// The second is a fail-OPEN in the module whose entire contract is failing
+// closed. So the fix is not just "teach it about securityWrites" — it is this
+// test, which reads buildFixPlan's OWN plan.push() and fails the moment a new
+// bucket appears that the classifier has not been taught.
+//
+// AST, not regex (the house rule): the subject is which properties a specific
+// object literal carries, which is a question about code STRUCTURE.
+const acorn = require("acorn");
+const walk = require("acorn-walk");
+
+test.describe("write-risk classifier vs. the real fix plan", () => {
+  function planPushKeys() {
+    const src = fs.readFileSync(SCRIPT_PATH, "utf8");
+    const ast = acorn.parse(src, { ecmaVersion: "latest" });
+    const found = [];
+    walk.simple(ast, {
+      CallExpression(n) {
+        const c = n.callee;
+        if (
+          c.type === "MemberExpression" &&
+          c.object &&
+          c.object.name === "plan" &&
+          c.property &&
+          c.property.name === "push" &&
+          n.arguments[0] &&
+          n.arguments[0].type === "ObjectExpression"
+        ) {
+          for (const p of n.arguments[0].properties) {
+            const k = p.key && (p.key.name || p.key.value);
+            if (k) found.push(k);
+          }
+        }
+      },
+    });
+    return found;
+  }
+
+  test("every key buildFixPlan emits is one the classifier knows", () => {
+    const keys = planPushKeys();
+    // Non-vacuity: if the AST walk stops finding the call, this test would
+    // otherwise pass over an empty list forever.
+    expect(
+      keys.length,
+      "found no plan.push({...}) in audit-repo-settings.js — the walk is broken, " +
+        "not the code under test",
+    ).toBeGreaterThan(5);
+    const known = loadRisk().PLAN_KNOWN_KEYS;
+    const unknown = keys.filter((k) => !known.has(k));
+    expect(
+      unknown,
+      `buildFixPlan emits ${JSON.stringify(unknown)}, which scripts/repo-settings-write-risk.js ` +
+        "has never been taught. A bucket the classifier cannot see is a write the UNGATED " +
+        "lane would apply unexamined. Add it to PLAN_WRITE_KEYS (and a classifyWrite case) " +
+        "or to the unfixable/metadata lists, in the SAME PR that adds the surface.",
+    ).toEqual([]);
+  });
+
+  test("an unrecognised bucket is GATED, not skipped", () => {
+    // The structural half: even with the cross-check above, a bucket added
+    // without running these lints must still fail closed at runtime.
+    const risk = loadRisk();
+    const c = risk.classifyPlan([{ repo: "o/r", someFutureSurface: [{ x: 1 }] }]);
+    expect(c.writes.length, "an unknown bucket must COUNT as a write").toBe(1);
+    expect(c.gated.length).toBe(1);
+    expect(c.gated[0].reason).toMatch(/not known to the write-risk classifier/);
+    // …but an EMPTY unknown bucket is not a write and must not gate anything,
+    // or every plan would need a human forever.
+    expect(risk.classifyPlan([{ repo: "o/r", someFutureSurface: [] }]).writes.length).toBe(0);
+  });
+
+  test("security analysis: enabling is safe, DISABLING needs a human", () => {
+    const risk = loadRisk();
+    const enable = risk.classifyPlan([
+      {
+        repo: "o/r",
+        securityWrites: [
+          { key: "vulnerability_alerts", desired: true, method: "PUT" },
+          { key: "automated_security_fixes", desired: true, method: "PUT" },
+        ],
+      },
+    ]);
+    expect(enable.gated).toEqual([]);
+    expect(enable.safe.length).toBe(2);
+
+    const disable = risk.classifyPlan([
+      {
+        repo: "o/r",
+        securityWrites: [
+          { key: "vulnerability_alerts", desired: false, method: "DELETE" },
+        ],
+      },
+    ]);
+    expect(disable.safe).toEqual([]);
+    expect(disable.gated.length).toBe(1);
+    expect(disable.gated[0].reason).toMatch(/DISABLED/);
+  });
+
+  test("a security write mixed with a safe write still gates the whole plan", () => {
+    // The exact shape that would have slipped through: one write the
+    // classifier likes, one it never saw.
+    const risk = loadRisk();
+    const c = risk.classifyPlan([
+      {
+        repo: "o/r",
+        patchBody: { allow_rebase_merge: false },
+        flagLive: { allow_rebase_merge: true },
+        securityWrites: [
+          { key: "automated_security_fixes", desired: false, method: "DELETE" },
+        ],
+      },
+    ]);
+    expect(c.writes.length).toBe(2);
+    expect(c.safe.length).toBe(1);
+    expect(c.gated.length).toBe(1);
+  });
+});
+
+// ── the classifier must compare like with like ─────────────────────────────
+//
+// MEASURED on the first real run of the ungated lane
+// (https://github.com/Adam-S-Daniel/cms-platform/actions/runs/33437449511):
+// `cms-feature-branches` came back NEEDS-REVIEW on BOTH consumers with the
+// reason "`conditions` differs" — on two repos whose conditions were
+// identical. The real delta was a bypass actor.
+//
+// Cause: normalizeRuleset SORTS the live side (rules by type, contexts by
+// context, bypass actors, and the ref_name globs), while the manifest lists
+// them in whatever order a human wrote them — and repo-settings.yml writes
+// this ruleset's include list as cms, claude, feat, fix, chore, test, ci,
+// docs. Comparing sorted against unsorted makes array ORDER read as a
+// difference, so the walk hits `conditions` first and returns before it ever
+// reaches the key that actually changed.
+//
+// It failed CLOSED, so nothing was waved through. But a classifier that gates
+// ordinary tightenings on array order recreates the daily-approval habit this
+// whole mechanism exists to end, and it reports the wrong reason while doing
+// it. buildFixPlan therefore hands the classifier `desiredSorted` — the
+// manifest body under the same normalization the live side already went
+// through — and `body` stays raw because that is what gets PUT.
+test.describe("write-risk classification is not fooled by array order", () => {
+  test("a bypass-actor add is named as such, not as a `conditions` diff", () => {
+    const script = loadScript();
+    const risk = loadRisk();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    // The real incident, reproduced: `cms-feature-branches` is the one library
+    // entry that declares a bypass actor, and live carries none — so the
+    // manifest is ADDING one. (Live-has / manifest-hasn't is the mirror case
+    // and is safe: fewer ways around the rules.)
+    const scan = diffAgainstFixtures(
+      script,
+      manifest,
+      "Adam-S-Daniel/adamdaniel.ai",
+      {
+        rulesets: [
+          fixture("adamdaniel.ruleset-main.json"),
+          { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] },
+        ],
+      },
+    );
+    const plan = script.buildFixPlan(manifest, [scan]);
+    expect(plan.length).toBe(1);
+    expect(plan[0].puts.length).toBe(1);
+    expect(plan[0].puts[0].name).toBe("cms-feature-branches");
+    // The seam itself: the classifier's desired side must be normalized the
+    // same way the live side is.
+    expect(
+      plan[0].puts[0].desiredSorted,
+      "buildFixPlan must hand the classifier a normalized desired body",
+    ).toEqual(script.sortRuleset(plan[0].puts[0].body));
+
+    const c = risk.classifyPlan(plan);
+    expect(c.gated.length, "removing a bypass actor is safe; ADDING one is not").toBe(1);
+    expect(
+      c.gated[0].reason,
+      "the reason must name the key that actually changed — a wrong reason sends a " +
+        "human to look at the wrong thing",
+    ).toMatch(/bypass actor/);
+    expect(c.gated[0].reason).not.toMatch(/`conditions` differs/);
+  });
+
+  test("array order alone is never a delta", () => {
+    // The direct form of the same property, at the level the bug lived.
+    const risk = loadRisk();
+    const sorted = {
+      name: "main",
+      target: "branch",
+      enforcement: "active",
+      conditions: {
+        ref_name: { include: ["refs/heads/a/**", "refs/heads/b/**"], exclude: [] },
+      },
+      bypass_actors: [],
+      rules: [
+        { type: "deletion" },
+        {
+          type: "required_status_checks",
+          parameters: {
+            strict_required_status_checks_policy: true,
+            do_not_enforce_on_create: false,
+            required_status_checks: [{ context: "a / a" }],
+          },
+        },
+      ],
+    };
+    // Same ruleset, human-written order, plus ONE added required check.
+    const scrambled = JSON.parse(JSON.stringify(sorted));
+    scrambled.conditions.ref_name.include = ["refs/heads/b/**", "refs/heads/a/**"];
+    scrambled.rules.reverse();
+    scrambled.rules.find(
+      (r) => r.type === "required_status_checks",
+    ).parameters.required_status_checks = [{ context: "b / b" }, { context: "a / a" }];
+
+    const plan = [
+      {
+        repo: "o/r",
+        puts: [
+          {
+            name: "main",
+            live: sorted,
+            body: scrambled,
+            desiredSorted: loadScript().sortRuleset(scrambled),
+          },
+        ],
+      },
+    ];
+    const c = risk.classifyPlan(plan);
+    expect(c.gated, "only the ADDED check differs; order must not gate").toEqual([]);
+    expect(c.safe.length).toBe(1);
+    expect(c.safe[0].reason).toMatch(/required check\(s\) added — b \/ b/);
+  });
+});
+
+// A gated write must arrive at the reviewer as a DIFF, not as a full manifest
+// body. #396: the approval issue said "1 bypass actor(s) added" and then
+// printed two 1.2 kB ruleset bodies under "The full plan", with no way to see
+// WHICH actor or WHAT else the PUT would move. The plan now carries the
+// per-facet delta the audit already computed, and the gated reason names the
+// actor.
+test.describe("the plan carries a concise per-write diff (#396)", () => {
+  function bypassActorPlan() {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
+      rulesets: [
+        fixture("adamdaniel.ruleset-main.json"),
+        { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] },
+      ],
+    });
+    return { script, plan: script.buildFixPlan(manifest, [scan]) };
+  }
+
+  test("a ruleset PUT carries `changes`: only the facets that differ, live -> desired", () => {
+    const { plan } = bypassActorPlan();
+    expect(plan[0].puts[0].changes).toEqual([
+      {
+        facet: "bypass_actors",
+        live: [],
+        desired: [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }],
+      },
+    ]);
+  });
+
+  test("the gated reason NAMES the added actor, not just a count", () => {
+    const { plan } = bypassActorPlan();
+    const c = loadRisk().classifyPlan(plan);
+    expect(c.gated.length).toBe(1);
+    expect(c.gated[0].reason).toMatch(/bypass actor\(s\) added: RepositoryRole 5 = admin \(bypass: always\)/);
+  });
+
+  test("planDocument renders every write with its verdict, reason and changes", () => {
+    const { script, plan } = bypassActorPlan();
+    const risk = loadRisk().classifyPlan(plan);
+    const doc = script.planDocument(plan, risk);
+    expect(doc.writes.length).toBe(1);
+    expect(doc.writes[0]).toMatchObject({
+      repo: "Adam-S-Daniel/adamdaniel.ai",
+      kind: "ruleset-put",
+      name: "cms-feature-branches",
+      verdict: "gated",
+    });
+    expect(doc.writes[0].changes).toEqual(plan[0].puts[0].changes);
+    expect(doc.unfixables).toEqual([]);
+    // The document is what crosses the job boundary as JSON; it must survive it.
+    expect(JSON.parse(JSON.stringify(doc))).toEqual(doc);
+  });
+
+  test("planDocument: a flag, an actions permission and a security write each carry a one-facet change", () => {
+    const script = loadScript();
+    const plan = [
+      {
+        repo: "o/r",
+        patchBody: { allow_rebase_merge: false },
+        flagLive: { allow_rebase_merge: true },
+        actionsPuts: [
+          {
+            endpoint: "repos/o/r/actions/permissions",
+            key: "sha_pinning_required",
+            live: false,
+            body: { enabled: true, allowed_actions: "all", sha_pinning_required: true },
+          },
+        ],
+        securityWrites: [
+          { endpoint: "repos/o/r/vulnerability-alerts", method: "PUT", key: "vulnerability_alerts", desired: true },
+        ],
+      },
+    ];
+    const doc = script.planDocument(plan, loadRisk().classifyPlan(plan));
+    expect(doc.writes.map((w) => w.changes)).toEqual([
+      [{ facet: "allow_rebase_merge", live: true, desired: false }],
+      [{ facet: "sha_pinning_required", live: false, desired: true }],
+      [{ facet: "vulnerability_alerts", live: null, desired: true }],
+    ]);
+    expect(doc.writes.every((w) => w.verdict === "safe")).toBe(true);
+  });
+
+  test("printFixPlan prints the changes ABOVE the full body, so the log reads the same way the issue does", () => {
+    const { script, plan } = bypassActorPlan();
+    const lines = [];
+    const orig = console.log;
+    console.log = (...a) => lines.push(a.join(" "));
+    try {
+      script.printFixPlan(plan);
+    } finally {
+      console.log = orig;
+    }
+    const put = lines.findIndex((l) => /^   PUT repos\/Adam-S-Daniel\/adamdaniel\.ai\/rulesets\//.test(l));
+    expect(put).toBeGreaterThan(-1);
+    expect(lines[put + 1]).toMatch(/^     bypass_actors: \[\] -> \[\{"actor_id":5/);
+    expect(lines[put + 2]).toMatch(/^     full body: \{"name":"cms-feature-branches"/);
+  });
+});
+
+// Follow-up on #397: the first diff said `RepositoryRole#5 (always)` and the
+// reviewer's reply was "What is RepositoryRole#5? And I'd like to see what
+// ruleset cms-feature-branches is". An id is not an answer; neither is a name
+// with nothing to click.
+test.describe("the plan says WHAT the actor and the ruleset are (#397 review)", () => {
+  test("describeActor decodes GitHub's fixed RepositoryRole ids", () => {
+    const { describeActor } = loadRisk();
+    expect(describeActor({ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" })).toBe(
+      "RepositoryRole 5 = admin (bypass: always)",
+    );
+    expect(describeActor({ actor_id: 4, actor_type: "RepositoryRole", bypass_mode: "pull_request" })).toBe(
+      "RepositoryRole 4 = write (bypass: pull_request)",
+    );
+    expect(describeActor({ actor_id: 2, actor_type: "RepositoryRole" })).toBe("RepositoryRole 2 = maintain");
+    // An id this table does not know is shown raw, never guessed.
+    expect(describeActor({ actor_id: 9, actor_type: "RepositoryRole" })).toBe("RepositoryRole 9");
+    expect(describeActor({ actor_id: 1, actor_type: "OrganizationAdmin", bypass_mode: "always" })).toBe(
+      "OrganizationAdmin (bypass: always)",
+    );
+    expect(describeActor({ actor_id: 123, actor_type: "Team" })).toBe("Team 123");
+  });
+
+  test("a ruleset PUT carries `context`: the live ruleset's id, its settings URL and the refs it covers", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
+      rulesets: [
+        fixture("adamdaniel.ruleset-main.json"),
+        { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] },
+      ],
+    });
+    const plan = script.buildFixPlan(manifest, [scan]);
+    const put = plan[0].puts[0];
+    expect(put.context).toEqual({
+      id: 15756474,
+      url: "https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474",
+      target: "branch",
+      refs: [
+        "refs/heads/chore/**",
+        "refs/heads/ci/**",
+        "refs/heads/claude/**",
+        "refs/heads/cms/**",
+        "refs/heads/docs/**",
+        "refs/heads/feat/**",
+        "refs/heads/fix/**",
+        "refs/heads/test/**",
+      ],
+    });
+    // …and it reaches the document the issue renders from.
+    const doc = script.planDocument(plan, loadRisk().classifyPlan(plan));
+    expect(doc.writes[0].context).toEqual(put.context);
+  });
+
+  test("the URL is derived when the live body carries no _links (older captures, other callers)", () => {
+    const script = loadScript();
+    const manifest = script.loadManifest(MANIFEST_PATH);
+    const live = { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] };
+    delete live._links;
+    const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
+      rulesets: [fixture("adamdaniel.ruleset-main.json"), live],
+    });
+    const put = script.buildFixPlan(manifest, [scan])[0].puts[0];
+    expect(put.context.url).toBe("https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474");
   });
 });

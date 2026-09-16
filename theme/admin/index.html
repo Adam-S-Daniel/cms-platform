@@ -68,6 +68,12 @@
        old inline narrow-viewport sidebar rule. Rationale + the no-fork
        decision: docs/decisions/0003-extend-decap-for-mobile-instead-of-forking.md. -->
   <link rel="stylesheet" href="admin-mobile.css" />
+  <!-- Room for the permanent in-flow notices (site-gate-banner.js,
+       branch-binding-banner.js): Decap's entry editor is an absolute box
+       anchored to the viewport, and without this it paints OVER a banner in
+       flow at body's top — measured at 1280x800, see the file's header
+       (#412). Inert until a banner adds `cms-notice-band` to <body>. -->
+  <link rel="stylesheet" href="admin-notice-band.css" />
 </head>
 <body>
   <!--
@@ -75,15 +81,25 @@
     The /preview/ page renders draft content with the real Jekyll
     layouts and is the WYSIWYG surface for editors. The link's href
     is updated on every URL hash change so it always points at the
-    collection of the entry currently open. Tip text is intentional:
-    /preview/ only updates after a Save, so editors don't sit there
-    waiting for it to fill. Hidden outside the entry editor (see the
-    sync script below).
+    collection of the entry currently open.
+
+    The `title` is the whole explanation an editor gets, so it has to
+    carry BOTH halves and both have to be TRUE of the sync script below
+    (#328.5): what the button does (opens a tab that mirrors this entry
+    on every Save — /preview/ fills from Save broadcasts, so it never
+    updates as you type) and WHEN it is there at all (only on an entry-
+    editor route, and only for a collection /preview/ has a real template
+    for — see PREVIEWABLE_COLLECTIONS). Before this the button simply
+    vanished on every other route with nothing anywhere saying why.
+    Locked, with the gating it describes, by
+    e2e/live-preview-gating-lint.test.js. The visible label is text, not
+    an icon alone, so the accessible name is already "Live Preview" and
+    no aria-label is added — one would only override it with a duplicate.
   -->
   <a id="live-preview-link" class="floating-link"
      href="/preview/"
      target="_blank" rel="noopener"
-     title="Opens a new tab. Hit Save in the editor for the preview to fill in.">
+     title="Live Preview — opens a tab that mirrors this entry each time you Save. Available while you're editing an entry in a section the preview can render.">
     <svg viewBox="0 0 24 24"><path d="M12 5c-7 0-10 7-10 7s3 7 10 7 10-7 10-7-3-7-10-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
     Live Preview
   </a>
@@ -174,8 +190,11 @@
          prior value can silently strand an unpublished edit. Remounts the
          entry (a hash round-trip) after a publish to refresh it.
       2. publish-step-hint.js              — #329.2: the toolbar's one
-         obvious "Publish" control is a dropdown trigger, not a button.
-         Shows an unmissable "not published yet" notice while it's present.
+         obvious "Publish" control is a dropdown trigger, not a button, and
+         a SAVED entry is not a published one. Renders the publish-state bar
+         (#cms-publish-state) directly under the toolbar, IN FLOW — it began
+         life as a fixed top-centre overlay and covered the very controls it
+         named (see that file's PLACEMENT block, and docs/PUBLISHING-UX.md).
       3. search-scope-all.js               — #329.4: the sidebar search box
          is labelled "Search all" but can silently scope to the current
          collection. Rewrites a scoped search route to the all-collections
@@ -189,11 +208,58 @@
          entry — never for a folder collection, which always keeps its
          "+ New" link reachable.
   -->
+
+  <!-- Publishing UX (docs/PUBLISHING-UX.md, staged plan phases 2-5).
+       ORDER IS LOAD-BEARING, and `defer` preserves document order:
+
+       1. entry-status-model.js — pure, no DOM, no network. The single
+          derivation of "is this on the website?" (four badges + two
+          modifiers) that BOTH the editor bar and the collection list
+          render, which is what stops them drifting back into three
+          vocabularies for three states. Must precede every consumer.
+       2. publish-progress.js — polls the entry's own PR, so the 5-15
+          minutes between Publish and the deploy stops being a silence.
+          Must precede publish-button.js, which reads its PR number.
+       3. publish-step-hint.js — the state bar, and the host of the
+          actions slot the Publish button renders into.
+       4. publish-button.js — the platform-owned Publish button; hides
+          Decap's split button ONLY once its own replacement is on
+          screen. Must follow publish-step-hint.js.
+       5. one-door-publish.js — closes the second, unlabelled route to
+          production (Status -> Ready, and the Workflow board).
+       6. site-gate-banner.js — inert unless the site declares
+          `cms.site_gate`; says so when the whole site is gated.
+       7. branch-binding-banner.js — inert on production; on a preview
+          deploy, whose served config.yml is bound to the PR branch, says
+          which branch this admin edits and where a change made here goes
+          (#412). Order-independent of 1-6 (it reads the served config, not
+          any of their state), and the gate banner sits below it by id.
+
+       2, 4, 5, 6 and 7 are PRODUCTION-SHELL ONLY. index-test.html keeps
+       Decap's real Status control and board because the editorial-workflow
+       specs drive them there; index-local.html has no editorial workflow
+       at all, and neither shell is ever served from a patched config.
+       Both facts are asserted by e2e/admin-publishing-ux.test.js.
+  -->
+  <script src="entry-status-model.js" defer></script>
+  <script src="publish-progress.js" defer></script>
   <script src="publish-baseline-refresh.js" defer></script>
   <script src="publish-step-hint.js" defer></script>
+  <script src="publish-button.js" defer></script>
+  <script src="one-door-publish.js" defer></script>
+  <script src="site-gate-banner.js" defer></script>
+  <script src="branch-binding-banner.js" defer></script>
   <script src="search-scope-all.js" defer></script>
   <script src="list-row-affordance.js" defer></script>
   <script src="single-entry-collection-shortcut.js" defer></script>
+
+  <!-- Collection-list controls trim — hides Decap's "Sort by" dropdown and
+       its list/grid view-style toggle, and collapses the row they sat in
+       when nothing else (a Filter / Group dropdown) is left in it. Neither
+       control is useful on these sites and both cost a row above the entry
+       list on a phone. NOT loaded on index-test.html: that shell has to keep
+       rendering Decap's stock collection chrome. See the file's own header. -->
+  <script src="collection-controls-trim.js" defer></script>
 
   <!-- "HTML Embed" editor component — adds a toolbar button on every
        markdown body field so authors can drop a block of raw HTML / JS /

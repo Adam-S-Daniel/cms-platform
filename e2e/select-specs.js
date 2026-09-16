@@ -220,9 +220,19 @@ const HEAVY = new Set([
 // Fanout files that change the DEPLOYED / RENDERED output — a change
 // here can alter what any page looks like, so the full local matrix
 // runs AND the parity-preview specs (which probe the deployed
-// preview-pr<N> surface) apply. Every one of these also triggers
-// deploy-preview (none are in deploy-preview.yml's paths-ignore), so a
-// preview is guaranteed to exist when parity-preview needs it.
+// preview-pr<N> surface) apply.
+//
+// A NOTE ON "so a preview will exist": this list is chosen so none of these
+// paths sits in the deploy-preview CALLER's `paths-ignore`, which is true and
+// is the only thing path selection can guarantee. It is NOT a guarantee a
+// preview exists — the deploy-preview REUSABLE also carries an actor guard
+// (`github.actor != 'dependabot[bot]'`: no OIDC role secret for Dependabot,
+// and the preview is for a human reviewer), so a Dependabot PR touching a
+// path here gets no preview however salient the diff is. `/^Gemfile/` is
+// exactly that case, and it is Dependabot's whole beat. Saying otherwise here
+// is what let parity-preview wait 20 minutes for a host that was never coming
+// and then hard-fail a REQUIRED context on adamdaniel.ai#3443 (#383);
+// parity-preview.yml now mirrors that actor guard.
 const RENDER_FANOUT_PATTERNS = [
   /^_layouts\//,
   /^_includes\//,
@@ -1167,14 +1177,27 @@ function pickShardCount(scope, files) {
 }
 
 // ── @parity-preview selector ─────────────────────────────────────────
-// The five @parity specs that hit the live preview-pr<N>.adamdaniel.ai
+// The @parity specs that hit the live preview-pr<N>.adamdaniel.ai
 // surface (not /admin/index-local.html). Driven by .github/workflows/
 // parity-preview.yml. The other three @parity-tagged specs
 // (cms-link-crawler / manual-walkthrough-{contributor,content-guide})
 // drive Decap's local_backend at /admin/index-local.html and self-skip
 // on any non-local TARGET — they stay covered by the normal e2e matrix.
+//
+// A SELECTED SPEC MUST BE A RUNNABLE SPEC. parity-preview.yml runs only on
+// consumers and sets SITE_ROOT, so playwright.config.js testIgnores every
+// PLATFORM_META_SPECS entry for it — and it passes the selected paths straight
+// to `npx playwright test <paths>`. Name a spec here that the config ignores
+// there and Playwright collects nothing and exits 1 with "No tests found",
+// reddening `parity / parity`, a REQUIRED context on both consumers.
+// `e2e/admin-bundle-parity.spec.js` was that spec until 2026-09-04: it is
+// registered PLATFORM_META (it reads the platform's own theme/admin tree, which
+// admin-spec-source-read-lint and the #16 recurrence guard both insist on), so
+// it never ran on a consumer — but SPEC_RULES maps `admin/**` to it, so an
+// admin-only PR selected it ALONE and hard-failed on an empty run
+// (jodidaniel.com#247). Removed from this list; the two lists are now held
+// disjoint by e2e/parity-preview-runnable-on-consumer.test.js.
 const PARITY_PREVIEW_SPECS = [
-  "e2e/admin-bundle-parity.spec.js",
   "e2e/console-clean.spec.js",
   "e2e/draft-isolation.spec.js",
   "e2e/image-alt-text.spec.js",

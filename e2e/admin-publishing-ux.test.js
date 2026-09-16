@@ -1,0 +1,600 @@
+// @lane: local — pure-fs static invariants on the publishing-UX staged plan (phases 2-5).
+//
+// docs/PUBLISHING-UX.md §4 stages the fix for a product in which an editor
+// meets NINE overlapping notions of "published" across four systems. Phase 1
+// shipped the state bar; phases 2-5 are:
+//
+//   2  one door        — hide the Status dropdown and the Workflow board on
+//                        the PRODUCTION shell, so Publish is the only route
+//                        to production (one-door-publish.js);
+//   3  one button      — replace Decap's split Publish control with a
+//                        platform-owned button (publish-button.js);
+//   4  a real progress state — poll the entry's own PR so the invisible
+//                        5-15 minutes stops being a silence
+//                        (publish-progress.js), and suppress Decap's false
+//                        "Failed to publish" toast;
+//   5  one vocabulary  — four badges + two modifiers, derived once
+//                        (entry-status-model.js) and rendered by both the
+//                        editor bar and the collection list, plus the
+//                        site-level gate banner (site-gate-banner.js) and,
+//                        since #412, the branch-binding banner
+//                        (branch-binding-banner.js) that says which branch
+//                        a preview admin is bound to.
+//
+// This is the cheap pure-fs half — no browser, no build, no network. The
+// behavioural half is e2e/admin-one-door.spec.js and the model's own unit
+// tests in e2e/entry-status-model.test.js (which are the ones that can
+// actually exercise the logic, and were proved able to fail by inverting the
+// model's precedence).
+//
+// Registered in PLATFORM_META_SPECS: it reads the platform's theme/admin
+// SOURCE tree and BOTH render paths (scripts/render-decap-config.rb and the
+// gem hook), none of which a consumer has in that position — the same
+// reasoning that registers admin-shim-load-order.test.js and
+// admin-329-shims.test.js.
+const fs = require("node:fs");
+const path = require("node:path");
+const { test, expect } = require("./base");
+const {
+  fixedPositionEvidence,
+  hasCssDisplayNoneHide,
+  removeChildReceivers,
+  stringLiterals,
+  readsMember,
+  hasBareReturnGuardOn,
+  objectKeySetsAnchoredOn,
+  ifTestsMentioning,
+  callsInsideFunction,
+} = require("./admin-shim-rules");
+
+const REPO_ROOT = path.join(__dirname, "..");
+const ADMIN_DIR = path.join(REPO_ROOT, "theme", "admin");
+
+const MODEL = "entry-status-model.js";
+const POLLER = "publish-progress.js";
+const BUTTON = "publish-button.js";
+const ONE_DOOR = "one-door-publish.js";
+const GATE_BANNER = "site-gate-banner.js";
+const BRANCH_BANNER = "branch-binding-banner.js";
+
+// The shells that carry a real GitHub backend and a real deploy. Everything
+// that talks to the GitHub API or hides a Decap control is scoped here.
+const PRODUCTION_ONLY = [POLLER, BUTTON, ONE_DOOR, GATE_BANNER, BRANCH_BANNER];
+// The pure model is loaded everywhere, because posts-list-enhance.js runs on
+// all three shells and renders the same badges from it.
+const ALL_SHELLS_FILES = [MODEL];
+const NEW_FILES = [MODEL, POLLER, BUTTON, ONE_DOOR, GATE_BANNER, BRANCH_BANNER];
+
+function admin(name) {
+  return fs.readFileSync(path.join(ADMIN_DIR, name), "utf8");
+}
+
+// Mirrors admin-329-shims.test.js / admin-shim-load-order.test.js.
+function scriptTag(html, basename) {
+  const re = new RegExp(
+    `<script\\s+src="${basename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"([^>]*)>\\s*</script>`,
+  );
+  const m = re.exec(html);
+  if (!m) return null;
+  return { index: m.index, defer: /\bdefer\b/.test(m[1]) };
+}
+
+test.describe("publishing UX phases 2-5 — files and wiring", () => {
+  test("every new shim exists under theme/admin/", () => {
+    const missing = NEW_FILES.filter((n) => !fs.existsSync(path.join(ADMIN_DIR, n)));
+    expect(missing, `missing shim file(s) under theme/admin/: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  test("index.html loads every one of them, deferred", () => {
+    const html = admin("index.html");
+    for (const name of NEW_FILES) {
+      const tag = scriptTag(html, name);
+      expect(tag, `index.html must load <script src="${name}">`).not.toBeNull();
+      expect(tag.defer, `index.html: ${name} must be deferred`).toBe(true);
+    }
+  });
+
+  // ORDER IS LOAD-BEARING, and `defer` executes in document order. Each of
+  // these three is a real dependency, not a tidiness preference:
+  //   - the model is what the poller's consumers derive words from;
+  //   - publish-button.js reads the poller's PR number, so a button that
+  //     loaded first would render its "nothing to publish" branch and hide
+  //     Decap's control with no working replacement behind it;
+  //   - the button renders INTO the slot publish-step-hint.js creates.
+  test("index.html loads them in dependency order", () => {
+    const html = admin("index.html");
+    const at = (n) => scriptTag(html, n).index;
+    expect(at(MODEL), `${MODEL} must load before ${POLLER}`).toBeLessThan(at(POLLER));
+    expect(at(MODEL), `${MODEL} must load before publish-step-hint.js`).toBeLessThan(
+      at("publish-step-hint.js"),
+    );
+    expect(at(MODEL), `${MODEL} must load before posts-list-enhance.js`).toBeLessThan(
+      at("posts-list-enhance.js"),
+    );
+    expect(at(POLLER), `${POLLER} must load before ${BUTTON}`).toBeLessThan(at(BUTTON));
+    expect(
+      at("publish-step-hint.js"),
+      `publish-step-hint.js must load before ${BUTTON} — the button renders into the slot the bar creates`,
+    ).toBeLessThan(at(BUTTON));
+  });
+
+  // The scope IS the contract, so assert the negative directly rather than
+  // trusting nobody copies a tag across (the local-save-indicator.js
+  // precedent in admin-329-shims.test.js).
+  //
+  //   index-test.html  is the REHEARSAL surface: cms-editorial-workflow.spec.js
+  //                    and cms-workflow-states.spec.js drive Decap's REAL
+  //                    Status control and board there, and hiding them would
+  //                    delete the coverage that tells us Decap still behaves
+  //                    the way one-door-publish.js assumes.
+  //   index-local.html has no editorial workflow at all (config-local.base.yml
+  //                    sets no publish_mode), so there is no PR to poll, no
+  //                    Status control to hide and no board to close.
+  test("the other two shells load ONLY the pure model, never the GitHub-talking shims", () => {
+    for (const shell of ["index-local.html", "index-test.html"]) {
+      const html = admin(shell);
+      for (const name of ALL_SHELLS_FILES) {
+        expect(scriptTag(html, name), `${shell} must load ${name}`).not.toBeNull();
+      }
+      for (const name of PRODUCTION_ONLY) {
+        expect(
+          scriptTag(html, name),
+          `${shell} must NOT load ${name} — it is scoped to the production shell ` +
+            "(see this spec's scope note; index-test.html must keep exercising Decap's " +
+            "own Status control and board, and index-local.html has no editorial workflow)",
+        ).toBeNull();
+      }
+    }
+  });
+});
+
+test.describe("publishing UX phases 2-5 — house rules for an admin shim", () => {
+  // No admin shim may paint a fixed overlay over the editor toolbar. This is
+  // the measured rule from §2.3: publish-step-hint.js's first version was a
+  // fixed top-centre notice and it covered 68% of the Publish button and 47%
+  // of the Status control at 1280x800 on Decap 3.15.1 — while staying
+  // invisible to the hit-test occlusion guard, because `pointer-events: none`
+  // makes an overlay transparent to elementFromPoint.
+  //
+  // site-gate-banner.js is the one most at risk of it: it is PERMANENT chrome,
+  // and the obvious implementation is a fixed bar pinned to the top, which is
+  // exactly where Decap's own toolbar lives.
+  for (const name of NEW_FILES) {
+    test(`${name} renders in flow — no position:fixed`, () => {
+      expect(
+        fixedPositionEvidence(admin(name)),
+        `${name} must not paint a position:fixed overlay — every one of these renders ` +
+          "over the editor toolbar's own fixed position. See docs/PUBLISHING-UX.md §2.3.",
+      ).toEqual([]);
+    });
+  }
+
+  // Public API on both sides is this directory's house style: the GitHub REST
+  // API and the DOM, never window.CMS internals and never Decap's Redux store.
+  // A store reference survives a Decap upgrade silently — it does not throw,
+  // it just reads undefined — which is the worst failure mode available.
+  for (const name of NEW_FILES) {
+    test(`${name} touches no Decap internal store`, () => {
+      expect(
+        /\b(getState|dispatch)\b/i.test(admin(name)),
+        `${name} must use only public DOM + REST — no Decap Redux internals`,
+      ).toBe(false);
+    });
+  }
+
+  // CSS-hide, never removeChild. Decap is React-driven and re-mounts elements
+  // it owns when it finds them missing, which the observer then re-removes —
+  // a fight loop that wedged the editor mid-flow on the failed prod-mutate and
+  // host-loop runs at commit 503365a. `display:none` leaves the node where
+  // React expects it, and React does not observe inline styles.
+  for (const name of [ONE_DOOR, BUTTON]) {
+    test(`${name} hides Decap's control with CSS, never by removing it`, () => {
+      const src = admin(name);
+      expect(
+        hasCssDisplayNoneHide(src),
+        `${name} must hide via el.style.setProperty("display","none",…) — the ` +
+          "native-preview-href.js idiom",
+      ).toBe(true);
+      // Removing a node the shim ITSELF created is fine; removing one React
+      // owns is the fight loop. So the lint asks which object is emptied.
+      const receivers = removeChildReceivers(src);
+      const foreign = receivers.filter((r) => r !== "slot");
+      expect(
+        foreign,
+        `${name} may only removeChild from its OWN container (\`slot\`), never from a ` +
+          "Decap-owned node — React re-mounts what it owns and the observer re-removes it, " +
+          "which is the fight loop that wedged the editor at commit 503365a",
+      ).toEqual([]);
+    });
+  }
+});
+
+test.describe("publishing UX phase 4 — the false-failure toast suppressor", () => {
+  // publish-via-auto-merge.js hands Decap a DELIBERATE 422 (a 2xx would make
+  // Decap delete the head ref and close the still-open PR — #80 layer 9), and
+  // Decap's catch then flashes "Failed to publish" over a publish that is in
+  // fact under way. The suppressor removes ONLY that toast, and it identifies
+  // it by the marker string this same file put in the 422 body.
+  //
+  // So the two literals must stay in lockstep. If someone edits the 422 copy
+  // and not the matcher, the suppressor silently stops matching and the false
+  // error comes back — with every pure-fs lint green, because each literal is
+  // individually fine. THIS is the assertion that sees it.
+  test("the suppressor's marker is a substring of the 422 body it must match", () => {
+    const src = admin("publish-via-auto-merge.js");
+    const literals = stringLiterals(src);
+    const marker = "Queued for auto-merge via the cms/ready label";
+    expect(
+      literals.includes(marker),
+      "publish-via-auto-merge.js must declare the SUPPRESS_MARKER literal verbatim",
+    ).toBe(true);
+    const carriers = literals.filter((l) => l !== marker && l.includes(marker));
+    expect(
+      carriers.length,
+      "the synthetic 422's message must still CONTAIN the suppressor's marker — " +
+        "otherwise the suppressor matches nothing and Decap's false " +
+        '"Failed to publish" error returns',
+    ).toBeGreaterThan(0);
+  });
+
+  // The other half of the same contract: the matcher must ALSO require
+  // Decap's failure wording, so it can never eat a REAL publish failure.
+  // Replacing a misleading error with a silent one would be worse than the
+  // defect it fixes.
+  test("the suppressor also requires Decap's own failure wording", () => {
+    expect(
+      /failed to publish/i.test(admin("publish-via-auto-merge.js")),
+      "the suppressor must match on Decap's failure wording AND the marker, never the " +
+        "marker alone — a real failure must still be shown",
+    ).toBe(true);
+  });
+});
+
+test.describe("publishing UX phase 4 — the poller's budget", () => {
+  // An admin left open in a background tab must not spend the editor's GitHub
+  // rate limit polling an entry nobody is looking at. The guard is a real
+  // read of document.hidden, not a comment promising one.
+  test("publish-progress.js skips a tick while the tab is hidden", () => {
+    expect(
+      readsMember(admin(POLLER), "document", "hidden"),
+      "publish-progress.js must read document.hidden and skip the tick — see its " +
+        "Budget header",
+    ).toBe(true);
+  });
+});
+
+test.describe("#371 — a publish that stops must stop SAYING it is in flight", () => {
+  // The three facts that turn "armed" from a promise into a checkable claim.
+  // Asserted on EVERY facts bag the poller builds, not just one: it returns a
+  // different literal on the no-open-PR path, and a fact present on only one of
+  // them is a fact half the states silently lack — `undefined` reads as false
+  // everywhere downstream, which is exactly how a missing fact hides.
+  test("publish-progress.js reports previewOnly, baseRef and settledSince on every facts bag", () => {
+    const bags = objectKeySetsAnchoredOn(admin(POLLER), "hasOpenPr");
+    expect(bags.length, "facts object literals found in publish-progress.js").toBeGreaterThan(1);
+    for (const [i, keys] of bags.entries()) {
+      for (const fact of ["previewOnly", "baseRef", "settledSince"]) {
+        expect(
+          keys.has(fact),
+          `facts bag #${i + 1} in publish-progress.js is missing \`${fact}\` — every return ` +
+            `path must carry the whole shape, or the states it omits read as false`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // "Which branch is production" is site identity, and the platform never
+  // hardcodes site identity (AGENTS.md, Conventions). The poller derives it
+  // from `base.repo.default_branch`, which rides free on the /pulls list
+  // response it already makes.
+  test("publish-progress.js does not hardcode a production branch name", () => {
+    const literals = stringLiterals(admin(POLLER));
+    expect(
+      literals.filter((v) => v === "main" || v === "refs/heads/main"),
+      "publish-progress.js must read the default branch off the PR, never assume `main`",
+    ).toEqual([]);
+  });
+
+  // The precise regression: `armed` alone used to be enough to render NOTHING
+  // ("already on its way — a second Publish would be a no-op"), which is right
+  // while the merge is coming and exactly wrong once it is not. jodidaniel.com
+  // #233 sat armed, green and unmerged with no control on screen at all.
+  test("publish-button.js never decides off `armed` without consulting the stall", () => {
+    const tests = ifTestsMentioning(admin(BUTTON), "armed");
+    expect(tests.length, "`if` statements testing `armed` in publish-button.js").toBeGreaterThan(0);
+    for (const [i, names] of tests.entries()) {
+      expect(
+        names.has("stalled"),
+        `publish-button.js decision #${i + 1} branches on \`armed\` without \`stalled\`. An ` +
+          `armed publish that has nothing left to wait for is not in flight, and hiding the ` +
+          `only control while claiming it is, is the #371 defect.`,
+      ).toBe(true);
+    }
+  });
+
+  // The confirmation used to promise the LIVE url unconditionally — on a
+  // surface (a PR-preview deploy) whose entire point is that nothing reaches
+  // the live site. Asking the shared model where this entry is going is what
+  // stops the two surfaces drifting into two answers.
+  test("publish-button.js asks the shared model where the entry is going", () => {
+    expect(
+      callsInsideFunction(admin(BUTTON), "plan").has("destination"),
+      "publish-button.js's plan() must call destination() before writing the confirmation — " +
+        "naming the live URL on a preview is a specific, checkable, false promise",
+    ).toBe(true);
+  });
+
+  // Same derivation, both surfaces: the bar and the button must not each grow
+  // their own stall threshold (docs/PUBLISHING-UX.md §2.9 is what happens when
+  // they do).
+  test("the stall threshold lives only in the pure model", () => {
+    expect(
+      callsInsideFunction(admin(BUTTON), "plan").has("isStalled"),
+      "publish-button.js's plan() must ask for the stall verdict rather than re-deriving " +
+        "a threshold of its own — two thresholds are two answers (§2.9)",
+    ).toBe(true);
+    const api = objectKeySetsAnchoredOn(admin(MODEL), "derive");
+    expect(api.length, "the exported API object literal in entry-status-model.js").toBe(1);
+    for (const name of ["isStalled", "destination", "STALL_GRACE_MIN"]) {
+      expect(
+        api[0].has(name),
+        `entry-status-model.js must export \`${name}\` — it is the one place the threshold ` +
+          `and the destination noun are derived, for both surfaces`,
+      ).toBe(true);
+    }
+  });
+});
+
+test.describe("publishing UX phase 5 — the site gate", () => {
+  // The platform must never hardcode one site's identity, and "which boolean
+  // gates this site" is identity. A site with no gate — adamdaniel.ai, every
+  // scaffolded site — must get a completely inert shim, not a banner about a
+  // setting it does not have.
+  test("site-gate-banner.js is inert unless the site declares a gate", () => {
+    const src = admin(GATE_BANNER);
+    expect(
+      src.includes("window.CMS_SITE_GATE"),
+      "site-gate-banner.js must read the injected window.CMS_SITE_GATE",
+    ).toBe(true);
+    expect(
+      hasBareReturnGuardOn(src, "gate"),
+      "site-gate-banner.js must return early when no gate is declared — a site " +
+        "without one must load an inert shim, never a banner about a setting it has not got",
+    ).toBe(true);
+  });
+
+  // Both render paths must inject the global. decap-config-render-parity.test.js
+  // asserts the two paths inject the SAME keys, which is necessary and not
+  // sufficient: dropping the key from BOTH stays parity-green and silently
+  // turns the banner off everywhere.
+  test("both render paths inject window.CMS_SITE_GATE", () => {
+    const paths = [
+      path.join(REPO_ROOT, "scripts", "render-decap-config.rb"),
+      path.join(REPO_ROOT, "theme", "lib", "cms-platform-theme", "decap_config_hook.rb"),
+    ];
+    for (const p of paths) {
+      expect(
+        fs.readFileSync(p, "utf8").includes("window.CMS_SITE_GATE="),
+        `${path.relative(REPO_ROOT, p)} must inject window.CMS_SITE_GATE — parity alone ` +
+          "cannot catch both paths dropping it together",
+      ).toBe(true);
+    }
+  });
+
+  // Ruby's Hash#inspect emits `{"a"=>1}`, which is a SYNTAX ERROR in
+  // JavaScript — and it would land inside the shell's <script> block, taking
+  // the whole admin down rather than degrading. Every other injected global is
+  // a string, where .inspect happens to be valid JS, so this is the one key
+  // where the file's own established idiom is wrong.
+  test("the gate is serialised as JSON, never with Ruby's inspect", () => {
+    for (const p of [
+      path.join(REPO_ROOT, "scripts", "render-decap-config.rb"),
+      path.join(REPO_ROOT, "theme", "lib", "cms-platform-theme", "decap_config_hook.rb"),
+    ]) {
+      const src = fs.readFileSync(p, "utf8");
+      expect(
+        /gate_js\s*=\s*gate\.nil\?\s*\?\s*['"]null['"]\s*:\s*JSON\.generate\(gate\)/.test(src),
+        `${path.relative(REPO_ROOT, p)} must build the gate global with JSON.generate — ` +
+          "Ruby's Hash#inspect emits `{\"a\"=>1}`, a JS syntax error that would break " +
+          "the whole admin shell rather than degrade",
+      ).toBe(true);
+    }
+  });
+});
+
+test.describe("#412 — the branch binding is stated once, from the config", () => {
+  // deploy-preview.yml patches the served config.yml so a preview /admin is
+  // bound to the PR branch, and nothing on screen said so: every string
+  // written for production was read verbatim on a surface where it was
+  // false. The banner states the binding once. Three things about HOW keep
+  // it honest, and each is a lint here because each has a shorter, wrong
+  // alternative that would pass a visual check.
+
+  // The production branch is site identity, and the platform never hardcodes
+  // site identity — publish-progress.js derives it from the PR's base repo,
+  // and this shim takes it from the render paths, which read it off the
+  // config they rendered. A `"main"` literal here would be the one-line
+  // shortcut that reads right and breaks the day a site's default branch is
+  // not `main`.
+  test("branch-binding-banner.js hardcodes no production branch name", () => {
+    const literals = stringLiterals(admin(BRANCH_BANNER));
+    expect(
+      literals.filter((v) => v === "main" || v === "refs/heads/main"),
+      "branch-binding-banner.js must compare against the injected window.CMS_PRODUCTION_BRANCH, never assume `main`",
+    ).toEqual([]);
+  });
+
+  test("branch-binding-banner.js reads window.CMS_PRODUCTION_BRANCH and is inert without it", () => {
+    const src = admin(BRANCH_BANNER);
+    expect(src.includes("window.CMS_PRODUCTION_BRANCH"), "must read the injected production branch").toBe(true);
+    expect(
+      hasBareReturnGuardOn(src, "production"),
+      "must return early when no production branch was injected — a shell rendered by an older " +
+        "platform must load an inert shim, never a banner comparing against undefined",
+    ).toBe(true);
+  });
+
+  // The decision is `served backend.branch !== production`, read from the
+  // config Decap itself loads. A hostname test (`/^preview-pr\d+\./`) is the
+  // shorter alternative, and it silently disables the banner the day a
+  // preview host is renamed — which is exactly the failure this shim exists
+  // to remove. So it may not read the location at all: not for the verdict,
+  // and not to sharpen a link either, because the second use grows into the
+  // first.
+  test("branch-binding-banner.js never reads window.location — the verdict comes from the served config", () => {
+    const src = admin(BRANCH_BANNER);
+    expect(readsMember(src, "window", "location"), "no window.location read").toBe(false);
+    expect(readsMember(src, "location", "hostname"), "no location.hostname read").toBe(false);
+    expect(readsMember(src, "location", "host"), "no location.host read").toBe(false);
+    expect(readsMember(src, "location", "href"), "no location.href read").toBe(false);
+    expect(readsMember(src, "document", "location"), "no document.location read").toBe(false);
+  });
+
+  // Both render paths must inject the production branch. The parity lint
+  // asserts they inject the SAME keys, which is necessary and not sufficient:
+  // dropping the key from both stays parity-green and silently turns the
+  // banner off everywhere (the CMS_SITE_GATE reasoning, restated).
+  test("both render paths inject window.CMS_PRODUCTION_BRANCH", () => {
+    for (const p of [
+      path.join(REPO_ROOT, "scripts", "render-decap-config.rb"),
+      path.join(REPO_ROOT, "theme", "lib", "cms-platform-theme", "decap_config_hook.rb"),
+    ]) {
+      expect(
+        fs.readFileSync(p, "utf8").includes("window.CMS_PRODUCTION_BRANCH="),
+        `${path.relative(REPO_ROOT, p)} must inject window.CMS_PRODUCTION_BRANCH — parity alone ` +
+          "cannot catch both paths dropping it together",
+      ).toBe(true);
+    }
+  });
+
+  // The two banners are permanent in-flow blocks at the top of <body>, each
+  // inserted after its own async read. The gate banner places itself AFTER
+  // the branch banner when one is present, so the page reads "you are on a
+  // branch" before "the public site is gated" whichever fetch wins. That is a
+  // literal in each file naming the other's id, and two literals that must
+  // agree get the lockstep assertion (the suppressor-marker precedent).
+  test("site-gate-banner.js anchors below the branch banner by the id the branch banner declares", () => {
+    const declared = stringLiterals(admin(BRANCH_BANNER)).filter((v) => /^cms-.*banner$/.test(v));
+    expect(declared, "branch-binding-banner.js declares its banner id as a string literal").toHaveLength(1);
+    expect(
+      stringLiterals(admin(GATE_BANNER)).includes(declared[0]),
+      `site-gate-banner.js must name ${declared[0]} verbatim — it is how the gate banner finds the ` +
+        "branch banner to sit below it; behaviour is pinned in e2e/branch-binding-banner.test.js",
+    ).toBe(true);
+  });
+
+  // "In flow, not fixed" is only half a placement rule. Decap's entry editor
+  // is `position: absolute; top: 0` with no positioned ancestor, so it anchors
+  // to the VIEWPORT and paints over a block in flow at body's top — measured
+  // at 1280x800 with the real bundle while #412 was built, and the shipped
+  // gate banner had been invisible on the editor route since v0.1.96. The
+  // fix is a body class keyed to a stylesheet (admin-notice-band.css) that
+  // gives the editor a positioned ancestor starting below the notices. Three
+  // literals have to agree — the class in each shim and the selector in the
+  // CSS — and the shell has to link the sheet, or the band is reserved by
+  // nobody.
+  test("both banners reserve the notice band, and the production shell links the stylesheet for it", () => {
+    const CLASS = "cms-notice-band";
+    for (const name of [GATE_BANNER, BRANCH_BANNER]) {
+      expect(
+        stringLiterals(admin(name)).includes(CLASS),
+        `${name} must add the "${CLASS}" class to <body> when it renders — without it Decap's ` +
+          "viewport-anchored editor paints over the banner on the entry route",
+      ).toBe(true);
+    }
+    const css = admin("admin-notice-band.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(css, "admin-notice-band.css must lay body out as a flex column under the class").toMatch(
+      new RegExp(`body\\.${CLASS}\\s*\\{[^}]*display\\s*:\\s*flex[^}]*flex-direction\\s*:\\s*column`),
+    );
+    expect(css, "admin-notice-band.css must make #nc-root the editor's positioned ancestor").toMatch(
+      new RegExp(`body\\.${CLASS}\\s*>\\s*#nc-root\\s*\\{[^}]*position\\s*:\\s*relative`),
+    );
+    expect(
+      /<link\s+rel="stylesheet"\s+href="admin-notice-band\.css"/.test(admin("index.html")),
+      "index.html must link admin-notice-band.css — the class the shims add keys nothing otherwise",
+    ).toBe(true);
+  });
+
+  // The gate banner's copy has to be true from a preview admin as well as
+  // from production, and it can only be that by naming the public site
+  // rather than "the site" — the apex is the injected identity for that.
+  test("site-gate-banner.js names the public site by window.CMS_APEX", () => {
+    expect(
+      readsMember(admin(GATE_BANNER), "window", "CMS_APEX"),
+      "site-gate-banner.js must read window.CMS_APEX — its copy names the production site so that " +
+        "it stays true when read on a preview admin bound to a branch (#412)",
+    ).toBe(true);
+  });
+});
+
+test.describe("publishing UX phase 3 — the harness publishes the way an editor does", () => {
+  // THE REGRESSION THIS EXISTS FOR, measured on adamdaniel.ai run 33439336337.
+  //
+  // Every real-prod loop publishes through publishViaUi() in
+  // e2e/cms-editor-ui.js, whose old body was Status -> Ready -> Publish ->
+  // "Publish now". Phase 2 hides the Status control and phase 3 hides Decap's
+  // split Publish button on the PRODUCTION shell — and the old body did not
+  // simply fail to find a control, which would have been loud. It found the
+  // WRONG one: `getByRole("button", {name: /^Publish$/i})` skips the
+  // CSS-hidden Decap control and resolves to the platform's own button, so
+  // the click "succeeded", opened the inline confirmation, and only then did
+  // the `publish now` MENUITEM lookup find nothing. The entry was created,
+  // its PR opened, and the publish leg died about two minutes in.
+  //
+  // Nothing pure-fs could see that, and the unit-lint lane was green
+  // throughout. This is the cheap guard that the helper still knows both
+  // shells exist.
+  test("publishViaUi drives the platform Publish button, not only Decap's menu", () => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, "e2e", "cms-editor-ui.js"), "utf8");
+    expect(
+      src.includes("cms-publish-button"),
+      "publishViaUi() must drive #cms-publish-button on the production shell — Decap's " +
+        "split control is CSS-hidden there, and getByRole resolves the name 'Publish' to " +
+        "the platform's button instead, so the old Decap-only path fails at the menuitem",
+    ).toBe(true);
+    expect(
+      /Yes, publish/.test(src),
+      "publishViaUi() must confirm through the platform button's inline confirmation",
+    ).toBe(true);
+    expect(
+      /publish now/i.test(src),
+      "publishViaUi() must KEEP the Decap path for index-test.html and index-local.html, " +
+        "which have no platform button",
+    ).toBe(true);
+  });
+});
+
+test.describe("publishing UX phase 5 — one vocabulary, two surfaces", () => {
+  // The §2.9 defect this whole phase exists to end: three vocabularies for
+  // three states. Both surfaces must read their words from the shared model
+  // rather than spelling them out, or they drift apart again the first time
+  // one of them is edited alone.
+  for (const [file, why] of [
+    ["publish-step-hint.js", "the editor bar"],
+    ["posts-list-enhance.js", "the collection list"],
+  ]) {
+    test(`${file} derives its words from the shared model`, () => {
+      expect(
+        admin(file).includes("CMSEntryStatus"),
+        `${file} (${why}) must render window.CMSEntryStatus's derivation, not its own ` +
+          "hand-written status words — see docs/PUBLISHING-UX.md §2.9",
+      ).toBe(true);
+    });
+  }
+
+  // The old pill read Published / Draft / Scheduled, which mixed the
+  // "is it on the website" axis with the front-matter axis under one word
+  // (§2.6). The badge is now the former and the modifiers are the latter.
+  test("the collection list no longer hardcodes the retired pill vocabulary", () => {
+    const src = admin("posts-list-enhance.js");
+    expect(
+      /label:\s*"Published"/.test(src) === false || src.includes("SHORT_LABELS"),
+      "posts-list-enhance.js must render the shared SHORT_LABELS, not a local " +
+        "Published/Draft/Scheduled table",
+    ).toBe(true);
+    expect(
+      src.includes("MODIFIER_LABELS"),
+      "posts-list-enhance.js must take the modifier words from the shared model too",
+    ).toBe(true);
+  });
+});

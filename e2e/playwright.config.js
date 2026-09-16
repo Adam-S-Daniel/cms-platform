@@ -44,6 +44,13 @@ const PLATFORM_META_SPECS = [
   // platform's own self-CI (against the platform tree), not a consumer site.
   "cms-posts-list-enhance.spec.js",
   "e2e-posts-public-exclusion.test.js",
+  // KEEP LISTED. It walks `theme/admin/` in the platform tree, which
+  // admin-spec-source-read-lint.test.js forbids a consumer-lane spec from doing
+  // and platform-meta-spec-registry.test.js's #16 recurrence guard independently
+  // demands registration for — measured 2026-09-04: deleting this line reds both.
+  // The consequence is that the @parity-preview SELECTOR must not name it either;
+  // select-specs.js's PARITY_PREVIEW_SPECS says why, and
+  // e2e/parity-preview-runnable-on-consumer.test.js holds the two in agreement.
   "admin-bundle-parity.spec.js",
   // Lints every workflow in THIS repo for `${{ x && '' || y }}` — an expression
   // that silently returns `y` unconditionally. Platform-internal: a consumer has
@@ -67,12 +74,50 @@ const PLATFORM_META_SPECS = [
   // platform-internal and testIgnored on a CONSUMER lane.
   "admin-shim-load-order.test.js",
   "confirm-wrap-local-backup.test.js",
+  // #386 — parses theme/admin/publish-button.js's SOURCE (doPublish()) to
+  // assert its two silent-failure strings stay byte-consistent with the
+  // markers e2e/cms-editor-ui.js's publishViaUi() checks for. Reads the
+  // platform's theme/admin SOURCE tree (absent on a consumer, which ships
+  // only the gem-rendered admin), so it is platform-internal and testIgnored
+  // on a CONSUMER lane, same shape as the two entries above.
+  "publish-error-strings.test.js",
   // #329 owner-persona fix set — same shape as admin-shim-load-order.test.js
   // right above: reads the three theme/admin shells + the five shim SOURCE
   // files (platform theme/admin tree, absent on a consumer's rendered
   // ${SITE_ROOT}/_site/admin), so it is platform-internal and testIgnored on
   // a CONSUMER lane.
   "admin-329-shims.test.js",
+  // The behavioural half of the #329 item 7 shim: drives
+  // theme/admin/single-entry-collection-shortcut.js in a vm sandbox to pin BOTH
+  // directions of its auto-jump (a fresh arrival still skips the one-item list;
+  // an exit from that collection's OWN entry is left alone). Reads the platform
+  // theme/admin SOURCE, so it is platform-internal exactly like the entry above.
+  "single-entry-collection-shortcut.test.js",
+  // Publishing-UX staged plan, phases 2-5 (docs/PUBLISHING-UX.md §4). Reads the
+  // platform's theme/admin SOURCE tree AND both render paths
+  // (scripts/render-decap-config.rb + theme/lib/.../decap_config_hook.rb) —
+  // none of which a consumer has in that position — so it is platform-internal
+  // and testIgnored on a CONSUMER lane, exactly like the two entries above.
+  "admin-publishing-ux.test.js",
+  // Pure-Node vm-sandbox unit tests for theme/admin/entry-status-model.js, the
+  // shared four-badge derivation. Reads the platform theme/admin SOURCE.
+  "entry-status-model.test.js",
+  // Sandbox unit tests for the one-door + publish-progress ROUTE matchers.
+  // Reads theme/admin sources; platform-internal for the same reason.
+  "admin-publish-routing.test.js",
+  // #412 — drives theme/admin/branch-binding-banner.js (and the gate banner's
+  // ordering beside it) in a vm sandbox, and runs scripts/patch-preview-config.sh
+  // on the theme/admin/config.base.yml template to prove the shim's reader
+  // parses what the script writes. Reads theme/admin SOURCE and scripts/;
+  // platform-internal for the same reason as every entry around it.
+  "branch-binding-banner.test.js",
+  // The collection-list controls trim: reads the theme/admin SOURCE tree (the
+  // shim plus the three shells) and vm-sandboxes the shim's pure sort-label
+  // matcher. Platform-internal for the same reason as the entry above — a
+  // consumer ships only the gem-rendered admin, not this tree.
+  "admin-collection-controls-trim.test.js",
+  "publish-button-refresh.test.js",
+  "admin-github-fetch-cache.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.
@@ -113,6 +158,14 @@ const PLATFORM_META_SPECS = [
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
   "base-collections-guard-registry.test.js",
+  // #382 — the AST sibling of the entry above: parses every e2e/*.spec.js with
+  // spec-ast.js and fails any `getByRole(..., { name: /Status:…/ })`, the
+  // selector one-door-publish.js CSS-hid on the production shell (which is how
+  // four write specs timed out an hour into a real prod run). It polices the
+  // PLATFORM's own spec sources and is exercised in self-ci's node-unit-lints,
+  // so it belongs here rather than on the consumer lane, where it would only
+  // re-lint the same harness copy.
+  "status-dropdown-selector.test.js",
   "blog-slug-literal-lint.test.js",
   // #16 — these PLATFORM-INTERNAL specs (surfaced by the adamdaniel.ai v0.1.10
   // reconciliation, where they ran+FAILED on the consumer e2e lane) validate
@@ -131,6 +184,12 @@ const PLATFORM_META_SPECS = [
   // workflow DEFINITION (.github/workflows/parity-preview.yml); a consumer
   // ships only a thin wrapper, so it is platform-internal (self-CI only).
   "parity-preview-site-root.test.js",
+  // #383 — same file, same reason: reads BOTH platform reusable DEFINITIONS
+  // (parity-preview.yml and deploy-preview.yml) and asserts parity's
+  // Dependabot skip carries deploy-preview's own actor guard verbatim, so the
+  // two cannot drift back into "wait 20 min for a preview that is never
+  // coming, then hard-fail a required context".
+  "parity-preview-dependabot-skip.test.js",
   // The GENERAL SITE_ROOT backstop: reads EVERY PLATFORM reusable workflow
   // DEFINITION and asserts any `.cms-platform/e2e` harness run exports
   // SITE_ROOT (the realized #1815 host-loop gap). Consumers ship only thin
@@ -147,6 +206,12 @@ const PLATFORM_META_SPECS = [
   // scripts/audit-scheduled-runs.js helpers (consumer ships only a thin
   // wrapper) — platform-internal, self-CI only.
   "scheduled-run-health.test.js",
+  // #424 — the self-resolution + currency-lane sibling: reads this repo's own
+  // reusable workflow DEFINITION (readWorkflow/parseYaml) and requires
+  // scripts/check-platform-currency.js directly. A consumer's thin caller has
+  // no scheduled-run-health.yml or scripts/ tree of its own — platform-internal,
+  // self-CI only.
+  "scheduled-run-health-self-resolve.test.js",
   // #109 — the repo-settings-as-code lints: the manifest lint reads the root
   // repo-settings.yml + scripts/audit-repo-settings.js (MANAGED_REPO_KEYS
   // SSOT) + the release.yml DEFINITION; the audit unit test additionally
@@ -188,6 +253,11 @@ const PLATFORM_META_SPECS = [
   "required-context-cancellable.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
+  // #371 — joins repo-settings.yml's required-context strings to the workflow
+  // tree that would have to publish them. Reads the platform's own
+  // repo-settings.yml, .github/workflows/ and examples/site/ — none of which a
+  // consumer has — so it is platform-internal and testIgnored on a CONSUMER lane.
+  "ruleset-context-publishable.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN
   // cms-media-roundtrip + cms-publish-loop-prod-mutate spec sources + the media
   // workflow's timeout-minutes; platform-internal, self-CI only.
@@ -235,6 +305,14 @@ const PLATFORM_META_SPECS = [
   // dependabot-* reusable is called by a local self-* caller (a consumer
   // ships only thin wrappers) — platform-internal, self-CI only.
   "dependabot-dogfood.test.js",
+  // Reads THIS repo's own .github/dependabot.yml by literal path — a
+  // consumer's dependabot.yml is a different file with legitimately
+  // different groups, so this is platform-internal, self-CI only. Guards
+  // that every `groups.<name>` key (and every `applies-to` value) is one
+  // Dependabot actually recognises — an unrecognised key is silently
+  // ignored, not rejected, which would quietly reopen the #118-122
+  // batch-strand risk with nothing going red.
+  "dependabot-groups.test.js",
   "dependabot-skip.test.js",
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
@@ -282,7 +360,17 @@ const PLATFORM_META_SPECS = [
   // examples/site thin-caller templates, and asserts the shape of the
   // pin-agreement.yml reusable that delivers the check to fleet repos with no
   // harness. All platform tree; a consumer ships none of it.
+  // Locks "a selected spec is a RUNNABLE spec": no PARITY_PREVIEW_SPECS entry
+  // may be testIgnore'd on a consumer lane. Reasons about this config and
+  // select-specs.js — platform-internal, self-CI only, like its select-specs
+  // siblings below.
+  "parity-preview-runnable-on-consumer.test.js",
   "pin-agreement.test.js",
+  // #377 — the site-verify lint: asserts the shape of the site-verify.yml
+  // reusable (work/gate split, detect-then-build wiring) and of its dictated
+  // examples/site thin caller, and EXECUTES the two bash scripts lifted out of
+  // the reusable in scratch dirs. All platform tree; a consumer ships none of it.
+  "site-verify.test.js",
   "playwright-image-drift.test.js",
   // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
   // root plugin.json + .claude-plugin/plugin.json manifests, the vendored
@@ -432,6 +520,20 @@ const PLATFORM_META_SPECS = [
   "workflow-run-name.test.js",
   "workflow-shell-glob-lint.test.js",
   "workflow-triggers.test.js",
+  // The consumer-checkout blind spot (cms-platform#303-class): reads the
+  // PLATFORM's own .github/workflows/*.yml DEFINITIONS (workflow-yaml-utils)
+  // and this repo's scripts/ directory listing to assert every
+  // `workflow_call` job that shells out to a platform-owned script does so
+  // via a `.cms-platform/scripts/…` path fed by an earlier checkout step in
+  // the same job — none of which a consumer ships in that position, so it is
+  // platform-internal, self-CI only.
+  "reusable-platform-script-checkout.test.js",
+  // #238 — the CMS_PLATFORM_PAT → GitHub App conversion: lints the two
+  // push-back reusables (platform-bump, dev-hooks-sync) + their examples/site
+  // callers, and unit-tests scripts/mint-app-token.js. Both read platform
+  // source a consumer lane has no business re-linting.
+  "app-token-platform-writers.test.js",
+  "mint-app-token.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is

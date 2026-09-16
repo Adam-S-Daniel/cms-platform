@@ -180,8 +180,26 @@ jobs:
           # e2e/playwright-install-bounded.test.js.)
           final-timeout-seconds: '900'
 
+      # A DEPENDABOT PR HAS NO PREVIEW, BY DESIGN — so it must not wait for one
+      # and must not be failed for its absence (#383). deploy-preview.yml's
+      # `deploy-preview` job carries `github.actor != 'dependabot[bot]'`
+      # because Dependabot runs cannot reach the OIDC role secret and the
+      # preview exists for a human reviewer. But select-specs.js classifies
+      # `Gemfile*` as render-salient (RENDER_FANOUT_PATTERNS — a gem bump can
+      # move every rendered byte), so a lockfile-only Dependabot PR selected
+      # specs, waited the full ~20 min for a host that was never going to
+      # exist, and hard-failed `parity / parity` — a REQUIRED context.
+      # Measured: adamdaniel.ai#3443 (Gemfile.lock only) stayed blocked until a
+      # human re-pushed the branch under their own name, which is the only
+      # thing that ever cleared it. The human-attributed update-branch path
+      # still gets the full probe, so nothing is weakened: the surface a
+      # reviewer actually looks at is still gated exactly as before.
+      #
+      # The clause below is BYTE-IDENTICAL to deploy-preview.yml's, and
+      # e2e/parity-preview-dependabot-skip.test.js extracts it from that file
+      # and asserts these steps carry it, so the two cannot drift apart again.
       - name: Wait for the preview surface (bounded)
-        if: steps.select.outputs.count != '0'
+        if: steps.select.outputs.count != '0' && github.actor != 'dependabot[bot]'
         id: preview
         # deploy-preview is a different workflow so we can't `needs:` it.
         # Poll the preview host with a generous bound (~20 min), then
@@ -207,7 +225,7 @@ jobs:
           echo "host=${host}" >> "$GITHUB_OUTPUT"
 
       - name: Require preview (hard-fail if unreachable on a salient PR)
-        if: ${{ steps.select.outputs.count != '0' && steps.preview.outputs.reachable != 'true' }}
+        if: ${{ steps.select.outputs.count != '0' && steps.preview.outputs.reachable != 'true' && github.actor != 'dependabot[bot]' }}
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           CMS_APEX: ${{ inputs.apex }}
@@ -216,6 +234,20 @@ jobs:
           echo "::error title=parity-preview::${msg}"
           echo "$msg" | tee /tmp/parity-preview.log
           exit 1
+
+      # The positive half: SAY the gate was satisfied without a preview, and
+      # why. A silently-skipped required check is the shape #371 is about — a
+      # context nobody can explain reads either as broken or as ignorable.
+      # This step is what makes `parity / parity` green here a decision rather
+      # than an accident. The spec-run step below is skipped on its own
+      # `reachable == 'true'` condition, which is empty when the wait never
+      # ran, so the probe reaches the end and succeeds.
+      - name: Dependabot PR — preview gate satisfied without a preview
+        if: ${{ steps.select.outputs.count != '0' && github.actor == 'dependabot[bot]' }}
+        run: |
+          set -euo pipefail
+          msg="Dependabot PRs never get a preview environment (deploy-preview.yml skips them: no OIDC role secret, and the preview is for a human reviewer). This diff is parity-salient, but there is no preview surface to probe, so the preview wait and its hard-fail are skipped and this gate reports satisfied. A human-attributed push to the same branch — including the update-branch path — gets the full probe. See cms-platform#383."
+          echo "::notice title=parity-preview::${msg}"
 
       - name: Run @parity-preview specs
         if: ${{ steps.select.outputs.count != '0' && steps.preview.outputs.reachable == 'true' }}

@@ -139,6 +139,7 @@
     if (!token) return; // not signed in → degrade to current origin
     fetchInFlight = true;
     fetch(REST + "/pulls?state=open&per_page=100", {
+      cache: "no-cache",
       headers: {
         Authorization: "token " + token,
         Accept: "application/vnd.github+json",

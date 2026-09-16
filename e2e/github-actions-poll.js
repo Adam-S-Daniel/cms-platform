@@ -689,10 +689,33 @@ function makeDeployQueueExtender({
   };
   // #215: the PR-state verdict, or null when there is no PR info or the PR
   // HAS merged — in which case the caller keeps today's 'no-deploy-fired'.
+  //
+  // #386: "all checks green, awaiting the merge mechanism" is exactly the
+  // shape a publish that armed correctly but is stuck on GitHub's own merge
+  // queue produces — and it is ALSO exactly what a `doPublish()` that never
+  // armed at all (the toolbar's two silent failure outcomes, see
+  // e2e/cms-editor-ui.js's PUBLISH_NOT_READY_TEXT/PUBLISH_REJECTED_TEXT)
+  // looks like from here: an open PR with green checks and no `cms/ready`.
+  // Carrying the PR's own LABELS and `auto_merge` state on the verdict lets
+  // the caller's failure message say which one it was, instead of the two
+  // reading as one 34-minute mystery (adamdaniel.ai run 33573287045).
+  // Already fetched — `pr` is the single-PR GET response, which carries both
+  // fields for free — so this costs no extra request.
+  const labelNames = (p) =>
+    Array.isArray(p && p.labels) ? p.labels.map((l) => (l && l.name) || l) : [];
   const unmergedPrVerdict = async (pr) => {
     if (!pr || pr.merged || pr.merged_at) return null;
     const prNumber = pr.number;
-    const awaiting = (why) => ({ kind: "pr-awaiting-required-check", realMiss: false, prNumber, why });
+    const labels = labelNames(pr);
+    const autoMerge = Boolean(pr.auto_merge);
+    const awaiting = (why) => ({
+      kind: "pr-awaiting-required-check",
+      realMiss: false,
+      prNumber,
+      why,
+      labels,
+      autoMerge,
+    });
     let runs;
     try {
       runs = await fetchCheckRuns(pr.head && pr.head.sha);
@@ -715,6 +738,8 @@ function makeDeployQueueExtender({
         realMiss: false,
         prNumber,
         why: `PR #${prNumber} cannot merge: check "${red.name}" concluded ${red.conclusion}`,
+        labels,
+        autoMerge,
       };
     }
     return awaiting(

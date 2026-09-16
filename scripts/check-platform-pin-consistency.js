@@ -532,7 +532,36 @@ function stableStringify(v) {
 // a drift here means the reusable is called WRONG (the sweep startup_failure:
 // the caller dropped the now-required `secrets: CMS_E2E_PAT:` map). Comments +
 // formatting drop out via the YAML parse.
-function structuralShape(text) {
+// Two `with:` inputs are DELIBERATELY OPT-IN per site, and the canonical
+// examples/site template ships them commented out:
+//   deploy-preview.yml    → media_archive_bucket
+//   deploy-production.yml → media_archive_bucket, platform_ref
+// Adopting the private media archive is a PER-SITE decision
+// (docs/MEDIA-ARCHIVE.md) — a site with no archive bucket must deploy EXACTLY
+// as before, which is why the template comments the lines out rather than
+// shipping a default. But `withKeys` below is an EXACT sorted-set match, and a
+// commented-out line drops out of the YAML parse entirely — so a consumer that
+// follows the docs and uncomments them gains a `with:` key the canonical set
+// doesn't have, and reports `workflow-content: DRIFT` on the REQUIRED
+// pin-consistency check. That made the documented opt-in unshippable by ANY
+// consumer at all (jodidaniel.com had to revert its wiring — commit
+// 07e5c4b). So both keys are stripped from BOTH sides (canonical AND
+// consumer) before the compare, for the basename that ships them commented
+// out.
+//
+// This is a DELIBERATE, REVIEWED list — never "any key commented out in the
+// example." Deriving it from the comment text would let a stale `#`-prefixed
+// line silently retire a real guard: comment something out for an unrelated
+// reason (a debugging aid, a half-finished feature) and its key would stop
+// being checked everywhere, with nothing to flag that it happened. A key
+// lands here by someone editing THIS file, never as a side effect of editing
+// the example.
+const OPTIONAL_WITH_KEYS = {
+  "deploy-preview.yml": ["media_archive_bucket"],
+  "deploy-production.yml": ["media_archive_bucket", "platform_ref"],
+};
+
+function structuralShape(text, basename = null) {
   const YAML = loadYaml();
   // The version suffix is part of the version. A consumer validating a fix can
   // be pinned at a PRERELEASE (`v0.1.89-rc.1`) while the canonical examples/site
@@ -545,11 +574,14 @@ function structuralShape(text) {
   const obj = YAML.parse(normalized) || {};
   const jobs = obj.jobs || {};
   const shape = { permissions: obj.permissions || null, jobs: {} };
+  const optional = (basename && OPTIONAL_WITH_KEYS[basename]) || [];
   for (const [jn, job] of Object.entries(jobs)) {
     const j = job || {};
     shape.jobs[jn] = {
       uses: j.uses || null,
-      withKeys: Object.keys((j.with && typeof j.with === "object" && j.with) || {}).sort(),
+      withKeys: Object.keys((j.with && typeof j.with === "object" && j.with) || {})
+        .filter((k) => !optional.includes(k))
+        .sort(),
       secrets: j.secrets || null,
       permissions: j.permissions || null,
     };
@@ -608,8 +640,8 @@ function checkWorkflowContentParity() {
     let canon;
     let cons;
     try {
-      canon = structuralShape(fs.readFileSync(path.join(canonicalDir, name), "utf8"));
-      cons = structuralShape(fs.readFileSync(consumerFile, "utf8"));
+      canon = structuralShape(fs.readFileSync(path.join(canonicalDir, name), "utf8"), name);
+      cons = structuralShape(fs.readFileSync(consumerFile, "utf8"), name);
     } catch (e) {
       violations.push({
         file: `.github/workflows/${name}`,
@@ -633,6 +665,58 @@ function checkWorkflowContentParity() {
         `normalized/masked/excluded before compare; this flags a CALL-INTERFACE drift: a changed ` +
         `uses target, a missing/extra with: key, a drifted secrets: map (the sweep ` +
         `startup_failure class), or changed permissions).`,
+    });
+  }
+}
+
+// ── media_archive_bucket ⇒ platform_ref pairing (production caller only) ─────
+// The exemption above removes `platform_ref` from the workflow-content
+// key-set compare on `deploy-production.yml`, which was the ONLY thing that
+// forced it to be present alongside `media_archive_bucket` — so the pairing
+// has to be asserted explicitly, or it stops being enforced at all.
+//
+// Why the pairing matters: `.github/workflows/deploy-production.yml`'s
+// reusable declares `platform_ref` with `default: main` (its own
+// `on.workflow_call.inputs.platform_ref`) — not a pin, `main` itself. The
+// `media_archive_bucket != ''` steps check the platform out at `platform_ref`
+// and run `publish-opted-in-pdfs.sh` from that checkout. So a production
+// caller that sets `media_archive_bucket` WITHOUT also setting `platform_ref`
+// publishes PDFs to the LIVE site using an UNPINNED `main` checkout of the
+// platform — every push runs whatever the publish script happens to be on
+// `main` at that instant, not the release the rest of the caller is pinned
+// to. This is exactly why the canonical example's comment says "Uncomment
+// BOTH lines together."
+function checkOptionalInputPairing() {
+  const file = path.join(ROOT, ".github", "workflows", "deploy-production.yml");
+  if (!fs.existsSync(file)) return; // no production caller here → nothing to pair
+  let doc;
+  try {
+    doc = YAML.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return; // malformed YAML is already reported by the main workflow scan above
+  }
+  if (!doc || typeof doc !== "object" || !doc.jobs || typeof doc.jobs !== "object") return;
+  checked += 1;
+  for (const [jobName, job] of Object.entries(doc.jobs)) {
+    const w = job && typeof job === "object" ? job.with : null;
+    if (!w || typeof w !== "object") continue;
+    const bucket = w.media_archive_bucket;
+    const hasBucket = typeof bucket === "string" && bucket.trim() !== "";
+    if (!hasBucket) continue; // bucket unset/empty → opt-in not adopted, nothing to pair
+    const ref = w.platform_ref;
+    const hasRef = typeof ref === "string" && ref.trim() !== "";
+    if (hasRef) continue; // paired correctly
+    violations.push({
+      file: ".github/workflows/deploy-production.yml",
+      kind: "workflow-content: media_archive_bucket without platform_ref",
+      found: `job \`${jobName}\` sets media_archive_bucket: ${JSON.stringify(bucket)} with no platform_ref`,
+      expected: "platform_ref: <same ref as the uses:@ pin> alongside media_archive_bucket",
+      detail:
+        `the reusable's platform_ref input DEFAULTS TO 'main', and the media_archive_bucket != '' ` +
+        `steps check the platform out at platform_ref to run publish-opted-in-pdfs.sh -- so as configured, ` +
+        `this job would publish archived PDFs to the live site from an UNPINNED main checkout of the ` +
+        `platform. Fix: add platform_ref: set to the same ref as this job's uses:@ pin (see the canonical ` +
+        `example's "Uncomment BOTH lines together" comment).`,
     });
   }
 }
@@ -743,6 +827,7 @@ if (RUN_AS_CLI) {
   checkGemfileLock();
   checkWorkflowSetParity();
   checkWorkflowContentParity();
+  checkOptionalInputPairing();
   checkMediaProbeSentinel();
 
   // ── Report ──────────────────────────────────────────────────────────────────

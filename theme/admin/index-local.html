@@ -59,8 +59,12 @@
 <body>
   <!-- Live Preview link — see admin/index.html for rationale; hidden
        outside the entry editor (same gating as the sync script there). -->
+  <!-- The `title` says what the button does AND when it appears; both halves
+       must stay true of the sync script below (#328.5). Kept byte-identical
+       to index.html's — the two shells' buttons behave identically, and
+       e2e/live-preview-gating-lint.test.js asserts the same string on both. -->
   <a id="live-preview-link" class="floating-link" href="/preview/" target="_blank" rel="noopener"
-     title="Opens a new tab. Hit Save in the editor for the preview to fill in.">
+     title="Live Preview — opens a tab that mirrors this entry each time you Save. Available while you're editing an entry in a section the preview can render.">
     <svg viewBox="0 0 24 24"><path d="M12 5c-7 0-10 7-10 7s3 7 10 7 10-7 10-7-3-7-10-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
     Live Preview
   </a>
@@ -111,11 +115,27 @@
        rationale for all five shims (each documents its own contract in its
        own header comment). Loaded here too for parity across all three
        admin shells. -->
+
+  <!-- The shared publish-status vocabulary (docs/PUBLISHING-UX.md §3.1).
+       Pure module, no DOM and no network — posts-list-enhance.js reads it
+       to render the same four badges + two modifiers the production
+       editor bar renders. The POLLER and the publish button that go with
+       it on production are deliberately absent here: this shell has no
+       editorial-workflow pull request to poll. -->
+  <script src="entry-status-model.js" defer></script>
   <script src="publish-baseline-refresh.js" defer></script>
   <script src="publish-step-hint.js" defer></script>
   <script src="search-scope-all.js" defer></script>
   <script src="list-row-affordance.js" defer></script>
   <script src="single-entry-collection-shortcut.js" defer></script>
+
+  <!-- Collection-list controls trim — hides Decap's "Sort by" dropdown and
+       its list/grid view-style toggle, and collapses the row they sat in
+       when nothing else (a Filter / Group dropdown) is left in it. Neither
+       control is useful on these sites and both cost a row above the entry
+       list on a phone. NOT loaded on index-test.html: that shell has to keep
+       rendering Decap's stock collection chrome. See the file's own header. -->
+  <script src="collection-controls-trim.js" defer></script>
 
   <!-- Issue #329 item 8 (LOCAL-MODE ONLY) — see the file's own header
        comment for the full rationale and the honesty constraint it
