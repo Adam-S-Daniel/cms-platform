@@ -124,7 +124,7 @@ test.describe("#424 scheduled-run-health.yml — reusable shape", () => {
       default: "",
     });
     expect(inputs.currency_scan).toEqual({ type: "boolean", default: true });
-    expect(inputs.behind_days).toEqual({ type: "string", default: "21" });
+    expect(inputs.behind_days).toEqual({ type: "string", default: "14" });
   });
 
   test("the currency step runs AFTER the audit step, is fed steps.self.outputs + inputs.behind_days via env, and gates on CURRENCY_SCAN in shell", () => {

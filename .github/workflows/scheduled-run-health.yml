@@ -97,13 +97,20 @@ on:
       # above — a thin caller's workflow_dispatch input passes straight
       # through with no type coercion. Default ON for the same reason
       # push_scan is: the repos that most need this are exactly the ones
-      # nobody would remember to flip it for. 21 = the fleet's 7-day
-      # Dependabot cooldown (AGENTS.md) + up to 7 days until the next weekly
-      # Dependabot run notices a new release + 7 days to actually merge it —
-      # a caller genuinely keeping up never trips this, and one that has
-      # stopped moving does.
+      # nobody would remember to flip it for.
+      #
+      # 14 = up to 7 days until the next weekly Dependabot run notices a new
+      # release + 7 days to merge the PR it opens. NO cooldown is in that
+      # sum: a cms-platform release is this account's own code, so a caller
+      # repo exempts it with
+      # `cooldown: exclude: ["Adam-S-Daniel/cms-platform/*"]` while
+      # third-party actions keep the fleet's 7-day wait, and the two consumer
+      # sites never waited at all — platform-bump.yml adopts a release as
+      # soon as it is cut. So this window measures delivery latency, never a
+      # deliberate wait; a caller genuinely keeping up never trips it, and one
+      # that has stopped moving does. See docs/FLEET-CALLER-CURRENCY.md.
       currency_scan: { type: boolean, default: true }
-      behind_days:   { type: string, default: "21" }
+      behind_days:   { type: string, default: "14" }
 
 # Reusable-workflow permissions are capped by the CALLER's grant: the caller
 # must give actions: read (list workflow runs) + issues: write (open /
