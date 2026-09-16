@@ -82,14 +82,28 @@ Three details carry weight:
   disagrees with the resolved one produces a `::warning::` asking for the line
   to be deleted.
 
-### 2. Dependabot moves the one ref, inside the fleet's cooldown
+### 2. Dependabot moves the one ref, with no cooldown in its way
 
-With one ref per caller, the `github-actions` ecosystem is sufficient:
+With one ref per caller, the `github-actions` ecosystem is sufficient, and a
+cms-platform release reaches a caller as soon as Dependabot next runs:
 
-- it honours the fleet's `cooldown: default-days: 7`, so a release is at least
-  7 days old before the PR opens;
-- the repos that already run a `dependabot-auto-merge` workflow land it
+- **the caller repo exempts cms-platform from the cooldown** —
+  `cooldown: exclude: ["Adam-S-Daniel/cms-platform/*"]` — so its bump PR opens
+  on the next run, while every third-party action keeps the fleet's 7-day
+  wait. `exclude` takes precedence over `include`, and an excluded dependency
+  updates immediately
+  ([Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference));
+- **the two consumer sites never waited at all** — `platform-bump.yml` adopts
+  a release as soon as it is cut, and both ignore cms-platform in Dependabot
+  entirely (#242, #244);
+- the repos that already run a `dependabot-auto-merge` workflow land the PR
   without a human.
+
+The cooldown exists for third-party code this account does not control. A
+cms-platform release is this account's own, gated by its own required checks
+and its own release process, so holding one back buys nothing — it only
+lengthens the window in which a caller keeps running an audit the platform has
+already fixed.
 
 No new credential, workflow or writer is introduced. What each repo needs
 before this works is listed under "Rollout" below.
@@ -101,8 +115,11 @@ looks up the platform's releases and finds the first stable release newer than
 the one the caller is pinned to. If that release was published more than
 `behind_days` ago, the step fails.
 
-- **The default is 21 days**: the 7-day cooldown, plus up to 7 days until
-  Dependabot's next weekly run, plus 7 days for the PR to merge.
+- **The default is 14 days**: up to 7 days until Dependabot's next weekly run
+  notices the release, plus 7 days for that PR to merge. No cooldown is in
+  that sum — see above. A repo wanting tighter delivery can move its
+  `github-actions` schedule to `interval: daily`; the trade is more
+  third-party bump PRs, so that is a per-repo call.
 - **A non-release ref is skipped.** A branch or a SHA, such as cms-platform's
   own self-caller at `main`, has no release to compare against.
 - **The red run reaches the existing alert channel.** The step runs after the
@@ -159,8 +176,9 @@ caller onto a release that has it.
 
 ## Rollout
 
-- **Phase 0 — done 2026-09-15, awaiting merge.** Every stale caller moves to
-  `v0.1.106` (the newest release past the cooldown), both refs in one commit,
+- **Phase 0 — done and merged 2026-09-15.** Every stale caller moved to
+  `v0.1.106` (then the newest release past the cooldown that still applied to
+  these repos; it no longer applies — see §2), both refs in one commit,
   with GHA-bench's half-bump repaired:
   [GHA-bench#76](https://github.com/Adam-S-Daniel/GHA-bench/pull/76),
   [_agent-guidance#134](https://github.com/Adam-S-Daniel/_agent-guidance/pull/134),
@@ -169,10 +187,12 @@ caller onto a release that has it.
   [claude-memory-map#32](https://github.com/Adam-S-Daniel/claude-memory-map/pull/32),
   [repo-settings#36](https://github.com/Adam-S-Daniel/repo-settings/pull/36) (private),
   [agentskills#155](https://github.com/Adam-S-Daniel/agentskills/pull/155).
-- **Phase 1 — this change**, shipped in the next cms-platform release (call it
-  `vN`).
-- **Phase 2 — once `vN` has cleared the 7-day cooldown.** One commit per fleet
-  caller does four things together:
+- **Phase 1 — this mechanism**, merged 2026-09-15 in
+  [#431](https://github.com/Adam-S-Daniel/cms-platform/pull/431) and reaching
+  callers in the next cms-platform release (call it `vN`).
+- **Phase 2 — as soon as `vN` is released.** Nothing waits: these commits are
+  written by hand, and a cms-platform release is exempt from the cooldown
+  either way (§2). One commit per fleet caller does five things together:
   - move `uses:@` to `vN`;
   - **delete** the `platform_ref:` line;
   - remove every `Adam-S-Daniel/cms-platform/*` ignore the repo carries at
@@ -184,13 +204,19 @@ caller onto a release that has it.
     repo's CI or re-exposes it to the half-bump. Read each caller repo's
     `dependabot.yml` and config tests when Phase 2 starts, rather than
     trusting this list;
-  - give `agentskills` a `github-actions` Dependabot entry, or accept the
-    currency lane as its only signal. That is a choice for the repo owner.
+  - **add the cooldown exemption** to the same `github-actions` entry:
+    `cooldown: exclude: ["Adam-S-Daniel/cms-platform/*"]`. Every fleet caller
+    carries `cooldown: default-days: 7` today, which is exactly what would
+    otherwise hold the next release back;
+  - give `agentskills` a `github-actions` Dependabot entry carrying that same
+    `exclude`, or accept the currency lane as its only signal. That is a
+    choice for the repo owner.
 
   The ignore must go in the **same** commit that removes `platform_ref`, never
   before. Dropped earlier, it re-exposes a two-ref caller to the half-bump.
-  GHA-bench needs no ignore change, and once Dependabot delivers `vN` its
-  leftover `platform_ref` line is inert and only produces the warning.
+  GHA-bench has no ignore to remove, only the cooldown exemption to add, and
+  once Dependabot delivers `vN` its leftover `platform_ref` line is inert and
+  only produces the warning.
   Whether Dependabot actually runs in the four zero-run repos is
   [claude-memory-map#31](https://github.com/Adam-S-Daniel/claude-memory-map/issues/31)'s
   to settle. Until it does, the currency lane is what

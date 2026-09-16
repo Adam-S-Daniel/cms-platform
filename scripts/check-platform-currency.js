@@ -22,10 +22,14 @@
  * pin ("firstNewer"). If none exists, the caller is current. If one exists,
  * measure how long it has been out — from ITS OWN publish date, not from the
  * latest release's — and go red only once that age exceeds `--behind-days`
- * (default 21 = the fleet's 7-day Dependabot cooldown + up to 7 days until
- * the next weekly Dependabot run notices a new release + 7 days to actually
- * merge it, per AGENTS.md). A caller genuinely keeping up never trips this; a
- * caller that has stopped moving does, in its OWN scheduled audit.
+ * (default 14 = up to 7 days until the next weekly Dependabot run notices a
+ * new release + 7 days to merge the PR it opens). NO cooldown is in that sum:
+ * a cms-platform release is this account's own code, so a caller repo exempts
+ * it from the fleet's 7-day Dependabot cooldown with
+ * `cooldown: exclude: ["Adam-S-Daniel/cms-platform/*"]`, and platform-bump.yml
+ * adopts a release for the two consumer sites as soon as it is cut (see
+ * docs/FLEET-CALLER-CURRENCY.md). A caller genuinely keeping up never trips
+ * this; a caller that has stopped moving does, in its OWN scheduled audit.
  *
  * Draft releases, GitHub-flagged prereleases, and tags with a semver
  * prerelease suffix (`-rc.1`) are never candidates — an RC existing is not a
@@ -45,7 +49,7 @@
  *                     being checked.
  *   --ref             required, non-empty; the ref the CALLER is pinned to
  *                     (a release tag, a branch, or a sha).
- *   --behind-days     optional, default 21, must match ^\d+$.
+ *   --behind-days     optional, default 14, must match ^\d+$.
  *   --releases-file   optional; a JSON array of GitHub release objects, used
  *                     INSTEAD of calling `gh`. Exists so a caller with the
  *                     releases already in hand (or a test) never needs `gh`
@@ -296,7 +300,7 @@ function main(argv, deps = {}) {
   }
   if (!ref) return cannotRun("--ref REF is required and must be non-empty");
 
-  let behindDays = 21;
+  let behindDays = 14;
   if (behindDaysRaw !== undefined) {
     if (!/^\d+$/.test(behindDaysRaw)) {
       return cannotRun(`--behind-days "${behindDaysRaw}" must match ^\\d+$`);
