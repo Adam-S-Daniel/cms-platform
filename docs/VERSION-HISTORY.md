@@ -10,9 +10,108 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.107)
+## Version history (v0.1.0 → v0.1.108)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.108 — a fleet caller takes the platform version from the job context,
+and a caller that stops moving goes red (#424).**
+Nine repos call `scheduled-run-health.yml`. Until this release only the two
+consumer sites ever moved, because `platform-bump` owns their pins; the other
+seven named the platform version TWICE — `uses: …@vX.Y.Z` and
+`with: platform_ref: vX.Y.Z` — and Dependabot's `github-actions` ecosystem can
+move only the first. Measured 2026-09-15 from the remote (`gh repo list` for
+both owners, then every default branch's `.github/workflows/*` through the
+contents API, refs parsed with the `yaml` package): six sat on `v0.1.87`,
+twenty releases behind, and GHA-bench was half-bumped at `uses:@v0.1.106` with
+`platform_ref: v0.1.87` — so its audit passed `--stale-days` and
+`--no-stale-scan` to a v0.1.87 script that knows neither flag, skipped #313's
+no-recent-success lane, and reported GREEN. #283 diagnosed this on 2026-08-20,
+shipped the pin-agreement lint (#296) that no fleet repo ever adopted, and was
+closed without a fix.
+
+**The reusable now names its own version**, which is #283's option 3 and was
+unreachable when #283 was written. GitHub's job context carries
+`job.workflow_repository`, `job.workflow_sha` and `job.workflow_ref`
+([actions/runner#4335](https://github.com/actions/runner/pull/4335), merged
+2026-04-10, shipped from runner v2.334.0), and inside a reusable workflow they
+describe the REUSABLE's file rather than the caller's. So `jobs.audit` resolves
+its own repository and commit and checks the audit script out there: the
+caller's `uses:@` ref becomes the only version that matters, and a Dependabot
+bump of that one ref is atomic by construction. The skew class is removed, not
+detected.
+
+Three details are decisions, not accidents. It reads `toJSON(job)` in shell
+with `jq` rather than `${{ job.workflow_sha }}`, because actionlint types `job`
+as a STRICT object that does not carry those four properties — at the 1.7.7
+this repo pins and at the latest 1.7.12
+([rhysd/actionlint#647](https://github.com/rhysd/actionlint/issues/647)) — so
+the direct form reds the REQUIRED actionlint lane; reading it in shell also
+gives the step somewhere to validate each value. An empty or malformed
+`workflow_*` fails the step loudly instead of falling back to a guessed ref,
+because a guess is the silent-green failure the issue is about. And
+`platform_ref` / `platform_repo` are still ACCEPTED, defaulting to `""`, but
+neither selects the checkout any more: removing an input would startup-fail
+every existing caller on the very bump that delivers this change, silencing the
+audit it repairs. A disagreeing value now produces a `::warning::` naming both
+values and asking for the line to be deleted. Proven live before merge on run
+35019665472 — a dry-run dispatch of the self-caller on the PR branch, whose job
+context named `…/scheduled-run-health.yml@refs/heads/<branch>`, the reusable's
+own file and not the calling `self-scheduled-run-health.yml`, with the script
+checked out at that exact sha.
+
+**Self-resolution does nothing for a caller that never bumps at all** — that
+caller is internally consistent and reports green forever on an ever-older
+script. So `scripts/check-platform-currency.js` runs as the job's last step: it
+lists the platform's releases, finds the LOWEST release that supersedes the
+caller's pin, and fails once that release has been available longer than
+`behind_days`. It runs AFTER the audit, so a stale caller still gets audited,
+and the next day's audit reports the red scheduled run into the same
+`ci`-labelled tracking issue — the alert reaches the existing channel rather
+than needing a new one. A non-release ref (a branch or a sha, such as this
+repo's own self-caller at `main`) is skipped, drafts and prereleases are never
+candidates, and a fetch failure exits 2 printing only `gh exited <status>`,
+never a response body. It lives in the reusable rather than in a central sweep
+so that every caller reports on itself: no list of callers to maintain, a
+private caller's finding stays in that private repo, and it fires however the
+caller got stuck.
+
+**`behind_days` is 14, and no cooldown is in that sum.** The fleet's 7-day
+Dependabot cooldown is for third-party code this account does not control; a
+cms-platform release is this account's own, gated by its own required checks,
+so holding one back only lengthens the window in which a caller runs an audit
+the platform has already repaired. A caller repo exempts it with
+`cooldown: exclude: ["Adam-S-Daniel/cms-platform/*"]`, which Dependabot opens
+immediately while every third-party action keeps the 7-day wait, and the two
+consumer sites never waited at all because `platform-bump` adopts a release as
+soon as it is cut. 14 = up to 7 days until the next weekly Dependabot run
+notices the release + 7 days to merge the PR it opens. The decision, the
+measured fleet state and every rejected option (the lint alone, extending
+`platform-bump`, a bot syncing `platform_ref` on Dependabot branches, a
+composite action, an OIDC claim, a central sweep) are in the new
+`docs/FLEET-CALLER-CURRENCY.md`; `AGENTS.md` and `docs/PIN-CONSISTENCY.md`
+point at it.
+
+Adopting this takes one commit per fleet caller, and it can be written the day
+this release is cut: move `uses:@` to it, DELETE the `platform_ref:` line, and
+in the same commit — never earlier — remove whatever
+`Adam-S-Daniel/cms-platform/*` Dependabot `ignore` that repo carries plus any
+test asserting it, and add the cooldown exemption. Dropping the ignore before
+the caller names the version once re-exposes it to the half-bump; leaving an
+asserting test behind reds that repo's CI.
+
+Also in this release: the platform-pin guards' `npm install` is scoped with
+`--prefix .cms-platform` so it stops resolving into a caller's own tree and
+installing that caller's entire dependency tree (#415, with
+`e2e/guard-yaml-install-scope.test.js` locking both halves); the audit's run
+listing treats a truncated page walk as UNKNOWN rather than clean, with
+defence in depth for a missing `total_count` (#425); the health audit's
+close rule is written down, so a later success no longer reads as a reason to
+close a tracking issue (#426); `@hapi/joi` is overridden with maintained `joi`
+in the e2e harness (Dependabot alert #14, #428); `repo-settings` stops asking
+for repeated approvals when a ruleset's bypass actors are invisible to a
+read-only token (#418); and `AGENTS.md` is trimmed under Codex's 32 KiB
+project-doc budget (#419).
 
 **v0.1.107 — `/admin` says which branch it is bound to, so its copy stops
 reading as being about the live site from a preview (#412).**
