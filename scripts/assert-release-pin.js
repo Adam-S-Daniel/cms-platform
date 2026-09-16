@@ -65,11 +65,13 @@ function cannotRun(msg) {
 //
 // The candidate list is DELIBERATELY identical to
 // check-platform-pin-consistency.js's loadYaml(), because the two guards run in
-// the same lane off the same single `npm install --no-save yaml`. That install
-// lands in the CONSUMER workspace (the cwd), not beside this script under
-// `.cms-platform/scripts/`, so plain `require("yaml")` — the script's own
-// node_modules chain — does not find it and the guard would exit 2 on every
-// real run. If one list changes, change both.
+// the same lane off the same single `npm install yaml`. The workflows install
+// it with `--prefix .cms-platform` — deliberately NOT the consumer root, whose
+// package.json would drag the consumer's whole dependency tree into a guard
+// that needs one parser — so it lands in `.cms-platform/node_modules` and
+// candidate 1 (plain `require("yaml")`, this script's own node_modules chain)
+// resolves it. The cwd-relative candidates below stay for a run made from a
+// consumer root that already carries `yaml`. If one list changes, change both.
 function loadYaml() {
   const candidates = [
     undefined, // standard node resolution (script's own node_modules chain)
