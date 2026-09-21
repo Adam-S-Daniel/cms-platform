@@ -247,6 +247,28 @@ class TestCrossPostReusable:
         )
         assert "inputs.mastodon_instance" in str(step.get("if", ""))
 
+    def test_every_step_after_detect_except_the_notice_is_configured_gated(self):
+        # The header comment promises that leaving BOTH legs at their default
+        # makes the job "do nothing else" after detect + the notice step —
+        # so every step that runs after detect, other than the notice step
+        # itself, must be gated on at least one leg being configured. Without
+        # this, Await/Verify still ran (and waited on a real prod deploy) on
+        # an unconfigured site, contradicting the header.
+        configured_guard = "inputs.mastodon_instance != '' || inputs.substack"
+        steps = list(_iter_steps(self.data))
+        detect_index = next(i for i, s in enumerate(steps) if s.get("id") == "detect")
+        for step in steps[detect_index + 1 :]:
+            if step.get("name") == "Cross-posting not configured":
+                continue
+            if_expr = str(step.get("if", ""))
+            assert configured_guard in if_expr, (
+                f"step {step.get('name')!r} runs after detect but its `if:` "
+                f"({if_expr!r}) does not guard on ({configured_guard}) — an "
+                "unconfigured site (mastodon_instance: '' and substack: "
+                "false) would still run it, contradicting the header comment's "
+                "promise that an unconfigured run does nothing else"
+            )
+
 
 class TestCrossPostTemplate:
     """`examples/site/.github/workflows/cross-post.yml` — the thin caller."""
@@ -285,8 +307,28 @@ class TestCrossPostTemplate:
         assert visibility["options"] == ["public", "unlisted", "direct"]
         assert visibility["default"] == "public"
 
-    def test_permissions_minimal_contents_read(self):
-        assert self.data["permissions"] == {"contents": "read"}
+    def test_permissions_are_contents_and_actions_read(self):
+        # A reusable's requested permissions are CAPPED by the caller's own
+        # `permissions:` block — GitHub rejects the call outright ("requesting
+        # 'actions: read', but is only allowed 'actions: none'") if the
+        # template doesn't grant everything the reusable declares. The
+        # reusable declares actions:read for await-prod-deploy, so the
+        # template must too (mirrors cms-media-roundtrip.yml's template).
+        assert self.data["permissions"] == {"contents": "read", "actions": "read"}
+
+    def test_permissions_are_a_superset_of_the_reusable_s(self):
+        reusable = _load_yaml(CROSS_POST_REUSABLE)
+        reusable_perms = reusable["permissions"]
+        template_perms = self.data["permissions"]
+        missing = {
+            k: v for k, v in reusable_perms.items() if template_perms.get(k) != v
+        }
+        assert missing == {}, (
+            f"reusable requests permissions {reusable_perms} but the template "
+            f"only grants {template_perms} — missing/mismatched: {missing}. A "
+            "workflow_call reusable is capped by its caller's permissions, so "
+            "an under-grant here fails the call at job setup."
+        )
 
     def test_single_job_calls_the_platform_reusable(self):
         jobs = self.data["jobs"]

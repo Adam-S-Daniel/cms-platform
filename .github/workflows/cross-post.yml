@@ -160,21 +160,29 @@ jobs:
         run: echo "::notice::cross-posting is not configured for this site"
 
       - name: Await production deploy
-        if: steps.detect.outputs.changed == 'true' && github.event_name == 'push'
+        if: >-
+          steps.detect.outputs.changed == 'true' && github.event_name == 'push' &&
+          (inputs.mastodon_instance != '' || inputs.substack)
         uses: ./.cms-platform/.github/actions/await-prod-deploy
         with:
           prod-url: ${{ inputs.prod_url }}
 
       - name: Verify the post URLs are live
-        if: steps.detect.outputs.changed == 'true'
+        if: >-
+          steps.detect.outputs.changed == 'true' &&
+          (inputs.mastodon_instance != '' || inputs.substack)
         run: python3 .cms-platform/scripts/cross_post/cross_post.py verify-live
 
       - name: Render status, Substack Markdown, and job summary
-        if: steps.detect.outputs.changed == 'true' && inputs.substack
+        if: >-
+          steps.detect.outputs.changed == 'true' && inputs.substack &&
+          (inputs.mastodon_instance != '' || inputs.substack)
         run: python3 .cms-platform/scripts/cross_post/cross_post.py render
 
       - name: Upload Substack Markdown
-        if: steps.detect.outputs.changed == 'true' && inputs.substack
+        if: >-
+          steps.detect.outputs.changed == 'true' && inputs.substack &&
+          (inputs.mastodon_instance != '' || inputs.substack)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: cross-post-${{ github.run_id }}
@@ -182,7 +190,9 @@ jobs:
           retention-days: 30
 
       - name: Post to Mastodon
-        if: steps.detect.outputs.changed == 'true' && inputs.mastodon_instance != ''
+        if: >-
+          steps.detect.outputs.changed == 'true' && inputs.mastodon_instance != '' &&
+          (inputs.mastodon_instance != '' || inputs.substack)
         env:
           MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
           MASTODON_INSTANCE: ${{ inputs.mastodon_instance }}

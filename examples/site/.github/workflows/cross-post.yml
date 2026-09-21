@@ -58,6 +58,11 @@ on:
 
 permissions:
   contents: read
+  # actions:read is what the called reusable needs for await-prod-deploy to
+  # query this commit's deploy-production run — a workflow_call reusable is
+  # capped by the CALLER's permissions, so it must be granted here too (see
+  # examples/site/.github/workflows/cms-media-roundtrip.yml).
+  actions: read
 
 jobs:
   cross-post:
