@@ -27,7 +27,7 @@ const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
 // (v-prefixed) and the examples/site template pins by
 // e2e/examples-site-pins-current.test.js — the release PR moves all of them
 // together.
-const PLATFORM_VERSION = "v0.1.108";
+const PLATFORM_VERSION = "v0.1.109";
 
 function parseArgs(argv) {
   const out = { _: [] };

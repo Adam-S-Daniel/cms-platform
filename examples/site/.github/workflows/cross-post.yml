@@ -66,7 +66,7 @@ permissions:
 
 jobs:
   cross-post:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/cross-post.yml@v0.1.108
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/cross-post.yml@v0.1.109
     with:
       prod_url: https://example.com
       mastodon_instance: ""
@@ -74,6 +74,6 @@ jobs:
       post_path: ${{ inputs.post_path || '' }}
       dry_run: ${{ inputs.dry_run || false }}
       visibility: ${{ inputs.visibility || 'public' }}
-      platform_ref: v0.1.108
+      platform_ref: v0.1.109
     secrets:
       MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
