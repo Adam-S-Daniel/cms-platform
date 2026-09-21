@@ -10,9 +10,44 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.108)
+## Version history (v0.1.0 → v0.1.109)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.109 — automated cross-posting to Mastodon + Substack Markdown (#442).**
+Ported from adamdaniel.ai's site-local prototype (`scripts/cross_post/cross_post.py`
++ its own `cross-post.yml`, 88 pytest tests): a new `cross-post.yml` reusable
++ thin-caller template detects a newly-published `_posts/*.md` (from a push's
+before/after diff, or a `post_path` dispatch input for a backfill/re-run),
+waits for the production deploy to actually be live, verifies the post's
+public URL serves a 200, then optionally posts a Mastodon status
+(idempotent — dedupes against the account's recent statuses, carries an
+`Idempotency-Key`) and optionally renders a Substack-ready Markdown draft
+(job summary + `cross-post-<run_id>` artifact; Substack has no publish API,
+so that leg is always paste-by-hand). Both legs are off by default
+(`mastodon_instance: ""`, `substack: false`) — a site that adopts the caller
+before wiring either gets one `::notice::` and nothing else. Fixture posts
+(`test_fixture: true`, an `e2e-`-slugged, or the prod-loop `2099-*` canaries)
+are skipped by the script itself and, redundantly, by the caller's `paths:`
+exclusion, which saves the run entirely rather than paying for a
+detect-and-skip.
+
+`await-prod-deploy` is invoked by the LOCAL path the platform checkout
+produces (`./.cms-platform/.github/actions/await-prod-deploy`), never a
+remote `Adam-S-Daniel/cms-platform/.github/actions/await-prod-deploy@<ref>`
+— a consumer enforcing `sha_pinning_required` rejects a cross-repository
+composite pinned by tag outright ("all actions must be pinned to a
+full-length commit SHA"), and a composite is deliberately never
+SHA-pinned-with-a-comment fleet-wide (`docs/PIN-CONSISTENCY.md`). The
+platform's own prod-mutating loop reusables already sidestep this the same
+way; `cross-post.yml` follows their shape rather than reinventing one.
+
+`scripts/cross_post/`'s pytest suite (104 tests, including a new
+`test_workflow_shape.py` that lint-locks the reusable's inputs/secret/
+permissions/pins/no-inline-interpolation and the template's trigger/inputs/
+`with:`-keys/secrets map) runs in a new `python-unit-tests` job in
+`self-ci.yml` — deliberately NOT one of the four required contexts, so
+adding it cannot itself gate a merge. Full writeup: `docs/CROSS-POSTING.md`.
 
 **v0.1.108 — a fleet caller takes the platform version from the job context,
 and a caller that stops moving goes red (#424).**

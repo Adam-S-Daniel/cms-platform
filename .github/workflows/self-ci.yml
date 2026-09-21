@@ -19,6 +19,8 @@
 #                                                      (hard-fail)
 #   4. claude plugin validate over this repo's plugin ROOT (hard-fail)
 #   5. cfn-lint over the CloudFormation templates      (advisory, soft-fail)
+#   6. python-unit-tests: scripts/cross_post's pytest suite (hard-fail, but
+#      NOT one of the four REQUIRED contexts — see the job for why)
 #
 # NOT RUN HERE (needs a browser / a built Jekyll site / AWS — covered by the
 # e2e reusable + dogfood/consumer CI, not by a unit-speed PR gate):
@@ -350,3 +352,34 @@ jobs:
             exit 0
           fi
           cfn-lint "${present[@]}"
+
+  # ── 6. python-unit-tests — scripts/cross_post's pytest suite ─────────────
+  # cross_post.py (cms-platform#442) is the one platform-owned script with a
+  # pytest suite instead of a node *.test.js lint, so it gets its own job
+  # rather than folding into node-unit-lints. Deliberately NOT one of the
+  # four required contexts (repo-settings.yml's `platform-main` ruleset names
+  # actionlint / ruby-theme-specs / node-unit-lints / plugin-validate only) —
+  # adding a fifth required context is a repo-settings decision, not
+  # something this job should make unilaterally by existing. No
+  # `concurrency:` block for the same reason every job in this file carries
+  # none (see the file-level comment above); this job just also happens not
+  # to need one, since it publishes no required status context at all.
+  python-unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      # pytest 9.1.1 (2026-06-19) and PyYAML 6.0.3 (2025-09-25) — each the
+      # newest release at least 7 days old as of pinning (2026-09-21), same
+      # pins adamdaniel.ai's retired cross-post-tests.yml carried.
+      - name: Install test dependencies
+        run: python3 -m pip install --user 'pytest==9.1.1' 'pyyaml==6.0.3'
+
+      - name: Run cross_post tests
+        run: python3 -m pytest scripts/cross_post -q
