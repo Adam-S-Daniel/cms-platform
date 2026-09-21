@@ -1,0 +1,196 @@
+# Reusable: cross-post a newly-published blog post to Mastodon, and render a
+# Substack-ready Markdown draft as a job-summary section + run artifact.
+#
+# Ported from adamdaniel.ai's site-local prototype (cms-platform#442) — the
+# dogfood site ran this as its own `.github/workflows/cross-post.yml` +
+# `scripts/cross_post/cross_post.py` first; this reusable + the thin caller
+# in `examples/site/.github/workflows/cross-post.yml` are what it becomes
+# once every consuming site can share the one script.
+#
+# A consuming site calls this from a thin wrapper that owns the push /
+# workflow_dispatch triggers, the `paths:` fixture exclusion, and the
+# run-name (see examples/site/.github/workflows/cross-post.yml).
+# `scripts/cross_post/cross_post.py` lives in THIS repo, so the job checks
+# the platform out into `.cms-platform/` (the same dot-dir every other
+# reusable that needs a platform-owned script or composite uses) and runs
+# the script from there, against the SITE's own checked-out `_posts/` and
+# `_config.yml` (the site checkout stays at the workspace root).
+#
+# BOTH LEGS ARE OPTIONAL, INDEPENDENTLY:
+#   - `mastodon_instance: ""` (the default) skips the Mastodon leg with an
+#     `::warning::` from cross_post.py itself (no token to post with either).
+#   - `substack: false` (the default) skips rendering/uploading the
+#     Substack-ready Markdown — Substack has no publish API, so that leg is
+#     ALWAYS paste-by-hand from the job summary or the uploaded artifact;
+#     `substack: true` only controls whether this workflow bothers producing
+#     the draft at all.
+#   When a caller leaves BOTH at their default (unconfigured), the job
+#   prints one `::notice::` right after detect and does nothing else for
+#   that push — a site that adopts this reusable before wiring either leg
+#   gets a harmless no-op run, not a fistful of green-but-pointless steps.
+#
+# FIXTURE EXCLUSION happens in the THIN CALLER's `paths:` (the prod-loop
+# `2099-*` canaries and `*-e2e-*` specs) — cross_post.py's own `detect`
+# subcommand skips `test_fixture`/`e2e-`-slugged posts on its own, so nothing
+# here re-implements that; excluding the paths in the caller just saves the
+# run entirely rather than paying for a detect-and-skip.
+#
+# AWAIT-PROD-DEPLOY IS INVOKED BY LOCAL PATH, NEVER A REMOTE `owner/repo/
+# .github/actions/<name>@<ref>` `uses:`. A consumer repo can enforce
+# `sha_pinning_required` on its actions-permissions policy, which GitHub
+# applies to every `uses:` INCLUDING a composite from another repository —
+# measured: a `uses: Adam-S-Daniel/cms-platform/.github/actions/
+# await-prod-deploy@v0.1.108` line fails job setup outright ("All actions
+# must be pinned to a full-length commit SHA"), and a composite is
+# deliberately never SHA-pinned+comment-tagged any more (see
+# `docs/PIN-CONSISTENCY.md` and `e2e/template-pin-rules.js`). The platform's
+# own loop reusables that call `await-prod-deploy` (cms-publish-loop-prod.yml,
+# cms-publish-loop-host.yml, cms-media-roundtrip.yml,
+# cms-scheduled-publish-loop.yml) all sidestep this the same way: check the
+# platform out into `.cms-platform/` and reference its composite by the
+# LOCAL path that checkout produces (`./.cms-platform/.github/actions/
+# await-prod-deploy`), which needs no pin at all because it never crosses a
+# repository boundary. This workflow follows that exact shape.
+#
+# CONCURRENCY: `cross-post` is not a required status context on any
+# `consumer-main`-shaped branch ruleset (it runs post-merge or on manual
+# dispatch and never gates a PR), so the "no `concurrency` on a
+# required-context publisher" rule (AGENTS.md, "A cancelled required check
+# blocks the merge") does not apply here — a workflow-level group that
+# serialises cross-post runs instead of racing two pushes against the same
+# Mastodon account is safe to keep.
+name: Cross-post (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      prod_url:
+        description: >-
+          Deployed production URL (scheme included, no trailing slash), e.g.
+          https://example.com. Passed straight through to await-prod-deploy's
+          `prod-url` on a push run.
+        type: string
+        required: true
+      mastodon_instance:
+        description: >-
+          Mastodon instance base URL (e.g. https://hachyderm.io). Empty (the
+          default) skips the Mastodon leg entirely.
+        type: string
+        default: ""
+      substack:
+        description: >-
+          Render the Substack-ready Markdown draft and upload it (plus the
+          job-summary section). Substack has no publish API — this only
+          controls whether the draft is produced; posting it is always
+          paste-by-hand.
+        type: boolean
+        default: false
+      post_path:
+        description: >-
+          Path of one `_posts/*.md` to cross-post (backfill or a manual
+          re-run). Used on `workflow_dispatch`-shaped callers; ignored on a
+          push (the push diff drives detection instead).
+        type: string
+        default: ""
+      dry_run:
+        description: 'Log what would be posted to Mastodon; post nothing.'
+        type: boolean
+        default: false
+      visibility:
+        description: 'Mastodon post visibility (public / unlisted / direct).'
+        type: string
+        default: public
+      platform_repo:
+        description: "owner/name of the platform repo holding cross_post.py."
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the script from (pin to the same ref as this workflow's `uses:`)."
+        type: string
+        default: main
+    secrets:
+      MASTODON_ACCESS_TOKEN:
+        required: false
+
+# contents:read for the two checkouts; actions:read is what lets the
+# await-prod-deploy composite query this commit's deploy-production run
+# (mirrors cms-media-roundtrip.yml / cms-publish-loop-host.yml, the other
+# reusables that call the same composite).
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: cross-post
+  cancel-in-progress: false
+
+jobs:
+  cross-post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout site
+        # fetch-depth: 0 so github.event.before resolves for the diff below.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Checkout platform scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+
+      - name: Detect newly published posts
+        id: detect
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          POST_PATH: ${{ inputs.post_path }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            python3 .cms-platform/scripts/cross_post/cross_post.py detect --before "$BEFORE" --after "$AFTER"
+          else
+            python3 .cms-platform/scripts/cross_post/cross_post.py detect --post "$POST_PATH"
+          fi
+
+      - name: Cross-posting not configured
+        if: inputs.mastodon_instance == '' && inputs.substack == false
+        run: echo "::notice::cross-posting is not configured for this site"
+
+      - name: Await production deploy
+        if: steps.detect.outputs.changed == 'true' && github.event_name == 'push'
+        uses: ./.cms-platform/.github/actions/await-prod-deploy
+        with:
+          prod-url: ${{ inputs.prod_url }}
+
+      - name: Verify the post URLs are live
+        if: steps.detect.outputs.changed == 'true'
+        run: python3 .cms-platform/scripts/cross_post/cross_post.py verify-live
+
+      - name: Render status, Substack Markdown, and job summary
+        if: steps.detect.outputs.changed == 'true' && inputs.substack
+        run: python3 .cms-platform/scripts/cross_post/cross_post.py render
+
+      - name: Upload Substack Markdown
+        if: steps.detect.outputs.changed == 'true' && inputs.substack
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cross-post-${{ github.run_id }}
+          path: cross-post-out/
+          retention-days: 30
+
+      - name: Post to Mastodon
+        if: steps.detect.outputs.changed == 'true' && inputs.mastodon_instance != ''
+        env:
+          MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
+          MASTODON_INSTANCE: ${{ inputs.mastodon_instance }}
+          VISIBILITY: ${{ inputs.visibility }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--instance "$MASTODON_INSTANCE" --visibility "$VISIBILITY")
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 .cms-platform/scripts/cross_post/cross_post.py post-mastodon "${args[@]}"

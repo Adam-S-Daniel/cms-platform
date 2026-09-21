@@ -24,6 +24,19 @@ const { test, expect } = require("./base");
 const TEMPLATES = path.join(__dirname, "..", "examples", "site", ".github", "workflows");
 const ALLOWED_PATS = new Set(["CMS_E2E_PAT", "CMS_PLATFORM_PAT"]);
 
+// Secrets that end in `_TOKEN` (so the lexical detector below would otherwise
+// catch them) but are NOT a GitHub PAT and so are outside this guard's scope
+// entirely — the consolidation directive this file locks is about GitHub API
+// auth, not every credential a template might reference. Each entry needs its
+// own justification, same bar as a new ALLOWED_PAT would need.
+//
+//   MASTODON_ACCESS_TOKEN — cross-post.yml's (cms-platform#442) app token for
+//   posting to a site's OWN Mastodon account (scope write:statuses only, see
+//   docs/CROSS-POSTING.md). It authenticates Mastodon's API, never GitHub's,
+//   so it has nothing to consolidate onto CMS_E2E_PAT/CMS_PLATFORM_PAT — both
+//   of those are fine-grained GitHub PATs and neither can stand in for it.
+const NON_PAT_SERVICE_TOKENS = new Set(["MASTODON_ACCESS_TOKEN"]);
+
 // Every `secrets.<NAME>` reference whose NAME looks like a PAT (ends in _PAT or
 // _TOKEN, or contains PAT), across all template files. Returns Map<name, files[]>.
 function patSecretRefs() {
@@ -34,6 +47,7 @@ function patSecretRefs() {
     for (const m of text.matchAll(/secrets\.([A-Z0-9_]+)/g)) {
       const name = m[1];
       if (!/PAT|_TOKEN$/.test(name) || name === "GITHUB_TOKEN") continue;
+      if (NON_PAT_SERVICE_TOKENS.has(name)) continue;
       if (!out.has(name)) out.set(name, []);
       if (!out.get(name).includes(f)) out.get(name).push(f);
     }

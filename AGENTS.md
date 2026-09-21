@@ -133,6 +133,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 | `docs/CI-INVARIANTS.md` | a required check, a scheduled workflow, the label audit, `site-verify.yml`, the webServer, a loop. |
 | `docs/E2E-PARALLELISM.md` | e2e workers, sharding, the browser install. |
 | `docs/PUBLISHING-UX.md` | what an editor sees of publish/status, or a spec that publishes. |
+| `docs/CROSS-POSTING.md` | `cross-post.yml`, `scripts/cross_post/cross_post.py`, Mastodon dedupe, the Substack paste-by-hand leg. |
 | `docs/CONTRIBUTING.md` | the definition of done, self-CI lanes, porting a workflow, the AST-lint rule. |
 | `docs/OPERATIONS.md` | approving a gate, dispatching a loop, reading a failed run, verifying and linting locally. |
 | `docs/VERSION-HISTORY.md` | whether something was already fixed. |

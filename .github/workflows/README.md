@@ -54,6 +54,36 @@ platform repo out into `.cms-platform/` (a dot-dir Jekyll ignores). **Pin
 | `AWS_ROLE_ARN` | ✓ | OIDC role to assume |
 | `PREVIEW_CLOUDFRONT_ID` | | falls back to the raw S3 website endpoint when empty |
 
+## `cross-post.yml`
+
+Detects a newly-published `_posts/*.md`, waits for it to actually be live on
+production, then optionally posts a Mastodon status and/or renders a
+Substack-ready Markdown draft (job summary + run artifact — Substack has no
+publish API, so that leg is always paste-by-hand). Full write-up, including
+the dedupe/idempotency model and why `await-prod-deploy` is invoked by a
+LOCAL checked-out path rather than a remote pin (a `sha_pinning_required`
+consumer rejects the latter): `docs/CROSS-POSTING.md`.
+
+| Input | Required | Default | Notes |
+|---|---|---|---|
+| `prod_url` | ✓ | — | e.g. `https://example.com`; fed to `await-prod-deploy` on a push |
+| `mastodon_instance` | | `""` | e.g. `https://hachyderm.io`; empty skips the Mastodon leg |
+| `substack` | | `false` | render + upload the Substack Markdown draft |
+| `post_path` | | `""` | one `_posts/*.md` for a `workflow_dispatch`-shaped caller (backfill/re-run) |
+| `dry_run` | | `false` | log what would post to Mastodon; post nothing |
+| `visibility` | | `public` | Mastodon post visibility (`public` / `unlisted` / `direct`) |
+| `platform_repo` | | `Adam-S-Daniel/cms-platform` | where `cross_post.py` lives |
+| `platform_ref` | | `main` | pin to the `uses:` ref |
+
+| Secret | Required | Notes |
+|---|---|---|
+| `MASTODON_ACCESS_TOKEN` | | app token scoped `write:statuses` only; unset skips the Mastodon leg with a `::warning::` |
+
+With both `mastodon_instance` and `substack` left at their defaults, a run
+detects the post, prints one `::notice::`, and does nothing else — the
+caller template's own defaults, so a freshly-adopted site gets a harmless
+no-op.
+
 ## Permissions
 
 Reusable workflows are capped by the **caller's** `GITHUB_TOKEN` permissions, so
