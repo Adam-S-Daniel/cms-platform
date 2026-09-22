@@ -187,7 +187,49 @@ or a response body — an error is `HTTP <status>` only.
 
 ## Activating LinkedIn for a site
 
-<!-- activation steps recorded during adamdaniel.ai's activation -->
+These are the steps adamdaniel.ai was activated with on 2026-09-22 (tracking
+issue https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3776). Only the
+profile owner can do them. The token goes straight from the LinkedIn page
+into a GitHub secret. It is never pasted into chat, a log or a file.
+
+1. **Create a LinkedIn Company Page** if the owner has none. A developer app
+   cannot exist without one: LinkedIn says "API products available to
+   individual developers must have a default page associated with them". On
+   linkedin.com, open **For Business**, then **Create a Company Page**, then
+   **Company**. Set the site URL as the website. The page is only the app's
+   anchor, and posts still go to the member's own profile.
+2. **Create the developer app** at
+   https://www.linkedin.com/developers/apps/new. Pick the page from step 1
+   and upload any square logo.
+3. **Verify the app against the page.** On the app's **Settings** tab, choose
+   **Verify**, then **Generate URL**. Open that URL as the page's super admin
+   and confirm.
+4. **Add the two self-serve products** on the **Products** tab: **Share on
+   LinkedIn** grants `w_member_social`, and **Sign In with LinkedIn using
+   OpenID Connect** grants `openid profile`. Neither needs a review. The
+   **Auth** tab should then list all three scopes.
+5. **Mint the token** with the portal's generator,
+   https://www.linkedin.com/developers/tools/oauth/token-generator. Pick the
+   app, tick `openid`, `profile` and `w_member_social`, and approve. The
+   token lives 60 days. The workflow needs neither the app's client secret
+   nor a refresh token; a plain app is never issued one.
+6. **Store the token and its mint date** from the owner's terminal. The first
+   command prompts for the value:
+
+   ```bash
+   gh secret set LINKEDIN_ACCESS_TOKEN -R <owner>/<site>
+   gh variable set LINKEDIN_TOKEN_MINTED -R <owner>/<site> --body YYYY-MM-DD
+   ```
+
+7. **Turn the leg on** in the site's thin caller: set `linkedin: true`. The
+   `linkedin_token_minted`, `targets` and `LINKEDIN_ACCESS_TOKEN` lines are
+   already in the template.
+8. **Dry-run it.** Dispatch the caller with `dry_run: true` and
+   `targets: linkedin`. A green run proves the token works, because the
+   member id is resolved from `/v2/userinfo`. It also prints the commentary
+   and card the leg would post, and it posts nothing. The first real post is
+   the next newly published one; LinkedIn has no private or unlisted
+   visibility to smoke-test against.
 
 ## Rotating the LinkedIn token
 
@@ -198,7 +240,25 @@ refuses to post from day 60 (no request is made); the weekly scheduled run
 goes red from day 50, on purpose, so the fleet's scheduled-run-health audit
 files an issue while there is still time.
 
-<!-- activation steps recorded during adamdaniel.ai's activation -->
+To rotate:
+
+1. Mint a new token with the generator, as in step 5 above. Use the same app
+   and the same three scopes.
+2. Overwrite both values:
+
+   ```bash
+   gh secret set LINKEDIN_ACCESS_TOKEN -R <owner>/<site>
+   gh variable set LINKEDIN_TOKEN_MINTED -R <owner>/<site> --body YYYY-MM-DD
+   ```
+
+3. Dispatch the caller with `dry_run: true` and `targets: linkedin` to prove
+   the new token. A green run confirms it.
+
+The weekly run goes green again on its next schedule, and scheduled-run-health
+closes its issue after a clean window. If a post was refused while the token
+was dead, re-post it with a dispatch naming that `post_path`, plus
+`targets: linkedin` and `dry_run: false`. Check the profile first: a refused
+post made no request, but a 5xx one may have landed.
 
 ## The default is a no-op, on purpose
 
