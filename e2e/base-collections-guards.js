@@ -225,6 +225,16 @@ const ADMIN_WRITE_GUARDS = {
     reason:
       'consumer opts out of the "posts" collection via cms.base_collections — the preview prod-mutation parity loop waits for the Posts sidebar link and publishes a post, absent on a base_collections:[] bio (#33) (#21)',
   },
+  // ── production-shell test in an otherwise index-test.html spec (CLASS F) ──
+  // PER-TEST guard: only the preview-hostname test calls guard(); the file's
+  // other tests drive index-test.html (fixed config-test.yml, NOT subject to the
+  // keep-list) and keep running on an opted-out consumer.
+  "cms-editorial-workflow.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — the preview-hostname test loads the PRODUCTION admin shell (/admin/index.html → rendered config.yml) and waits for the Posts sidebar link that never renders; the index-test.html tests in this file still run (#33)',
+  },
   "cms-scheduled-publish-loop.spec.js": {
     collections: ["posts"],
     mode: "any",
