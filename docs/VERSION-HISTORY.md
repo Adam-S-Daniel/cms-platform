@@ -14,6 +14,33 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**v0.1.110 — LinkedIn cross-posting leg (#442).**
+`cross-post.yml` gains a third, off-by-default leg: `linkedin: true` shares
+each newly-published post to the token owner's LinkedIn profile as an
+article card (`POST /rest/posts` with `content.article`; the post's
+`featured_image` is uploaded through `/rest/images?action=initializeUpload`
+as the card's thumbnail, and any failure there only drops the thumbnail).
+The commentary is LinkedIn "little text", so the title and excerpt are
+backslash-escaped and tags become `{hashtag|\#|Word}` templates; every
+`/rest` call pins `LinkedIn-Version` to the `LINKEDIN_API_VERSION` constant
+(`202609`), and a sunset version's HTTP 426 names the constant to bump.
+LinkedIn has no dedupe, so the leg is one-shot by construction — it only
+fires when detect sees a post newly published, never retries (a 5xx or a
+dropped connection MAY have posted, and the error says to check the profile
+first), and a new `targets` input (`all` / `mastodon` / `linkedin` /
+`substack`, a dispatch choice in the template) re-runs exactly one leg so a
+retry of one cannot double-post another. The member token lives 60 days and
+cannot be refreshed, so the template adds a weekly `schedule` whose run ONLY
+checks the token's age from `vars.LINKEDIN_TOKEN_MINTED`: red from day 50 so
+the fleet's scheduled-run-health audit files an issue in time; the posting
+leg warns from day 50 and refuses to post (no request) from day 60. New
+secret `LINKEDIN_ACCESS_TOKEN` (optional; unset skips the leg with a
+`::warning::`), exempted from `consumer-pat-secrets-lint` as a non-GitHub
+service token. As with Mastodon, no token, `Authorization` header or
+response body is ever printed. `scripts/cross_post/`'s suite grows from 106
+to 195 tests (new `test_linkedin.py`, plus CLI and workflow-shape cases).
+Full writeup: `docs/CROSS-POSTING.md` "LinkedIn leg".
+
 **v0.1.109 — automated cross-posting to Mastodon + Substack Markdown (#442).**
 Ported from adamdaniel.ai's site-local prototype (`scripts/cross_post/cross_post.py`
 + its own `cross-post.yml`, 88 pytest tests): a new `cross-post.yml` reusable

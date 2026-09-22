@@ -35,7 +35,14 @@ const ALLOWED_PATS = new Set(["CMS_E2E_PAT", "CMS_PLATFORM_PAT"]);
 //   docs/CROSS-POSTING.md). It authenticates Mastodon's API, never GitHub's,
 //   so it has nothing to consolidate onto CMS_E2E_PAT/CMS_PLATFORM_PAT — both
 //   of those are fine-grained GitHub PATs and neither can stand in for it.
-const NON_PAT_SERVICE_TOKENS = new Set(["MASTODON_ACCESS_TOKEN"]);
+//
+//   LINKEDIN_ACCESS_TOKEN — cross-post.yml's (cms-platform#442) member access
+//   token for sharing a post to the token owner's OWN LinkedIn profile: a
+//   60-day 3-legged-OAuth token with scopes `openid profile w_member_social`
+//   (see docs/CROSS-POSTING.md). It authenticates LinkedIn's API, never
+//   GitHub's, so like the Mastodon token it has nothing to consolidate onto
+//   CMS_E2E_PAT/CMS_PLATFORM_PAT.
+const NON_PAT_SERVICE_TOKENS = new Set(["MASTODON_ACCESS_TOKEN", "LINKEDIN_ACCESS_TOKEN"]);
 
 // Every `secrets.<NAME>` reference whose NAME looks like a PAT (ends in _PAT or
 // _TOKEN, or contains PAT), across all template files. Returns Map<name, files[]>.

@@ -1,5 +1,6 @@
-# Reusable: cross-post a newly-published blog post to Mastodon, and render a
-# Substack-ready Markdown draft as a job-summary section + run artifact.
+# Reusable: cross-post a newly-published blog post to Mastodon and LinkedIn,
+# and render a Substack-ready Markdown draft as a job-summary section + run
+# artifact.
 #
 # Ported from adamdaniel.ai's site-local prototype (cms-platform#442) — the
 # dogfood site ran this as its own `.github/workflows/cross-post.yml` +
@@ -16,18 +17,37 @@
 # the script from there, against the SITE's own checked-out `_posts/` and
 # `_config.yml` (the site checkout stays at the workspace root).
 #
-# BOTH LEGS ARE OPTIONAL, INDEPENDENTLY:
-#   - `mastodon_instance: ""` (the default) skips the Mastodon leg with an
-#     `::warning::` from cross_post.py itself (no token to post with either).
+# ALL THREE LEGS ARE OPTIONAL, INDEPENDENTLY:
+#   - `mastodon_instance: ""` (the default) skips the Mastodon leg entirely
+#     (and with the instance set but no token, cross_post.py skips it with an
+#     `::warning::`).
+#   - `linkedin: false` (the default) skips the LinkedIn leg; with it on but
+#     no LINKEDIN_ACCESS_TOKEN, cross_post.py skips it with an `::warning::`.
 #   - `substack: false` (the default) skips rendering/uploading the
 #     Substack-ready Markdown — Substack has no publish API, so that leg is
 #     ALWAYS paste-by-hand from the job summary or the uploaded artifact;
 #     `substack: true` only controls whether this workflow bothers producing
 #     the draft at all.
-#   When a caller leaves BOTH at their default (unconfigured), the job
+#   When a caller leaves ALL THREE at their default (unconfigured), the job
 #   prints one `::notice::` right after detect and does nothing else for
-#   that push — a site that adopts this reusable before wiring either leg
+#   that push — a site that adopts this reusable before wiring any leg
 #   gets a harmless no-op run, not a fistful of green-but-pointless steps.
+#
+# LINKEDIN IS ONE-SHOT BY CONSTRUCTION. Unlike Mastodon, LinkedIn's posts API
+# has no idempotency key and no cheap "did I already share this URL" lookup,
+# so cross_post.py never retries a LinkedIn POST (a 5xx or a dropped
+# connection MAY have posted) and the leg only ever fires on the push that
+# first publishes a post, or on a dispatch. `targets` (all / mastodon /
+# linkedin / substack) limits a manual re-run to the one leg that failed, so
+# re-running Mastodon cannot double-post to LinkedIn, and vice versa.
+#
+# ON A SCHEDULE the job only checks the LinkedIn token's age (a member token
+# lives 60 days and cannot be refreshed without re-consent): detect is
+# skipped, so every later step's `steps.detect.outputs.changed == 'true'`
+# guard is false, and `check-linkedin-token` runs when `linkedin: true` —
+# red from day 50, so the fleet's scheduled-run-health audit files an issue
+# while there is still time to rotate. With `linkedin: false` a scheduled run
+# is a no-op.
 #
 # FIXTURE EXCLUSION happens in the THIN CALLER's `paths:` (the prod-loop
 # `2099-*` canaries and `*-e2e-*` specs) — cross_post.py's own `detect`
@@ -85,6 +105,27 @@ on:
           paste-by-hand.
         type: boolean
         default: false
+      linkedin:
+        description: >-
+          Post an article share to the token owner's LinkedIn profile (needs
+          the LINKEDIN_ACCESS_TOKEN secret). Also turns on the weekly
+          token-age check when the caller runs on a schedule.
+        type: boolean
+        default: false
+      linkedin_token_minted:
+        description: >-
+          The date the LinkedIn token was minted, YYYY-MM-DD, from the
+          caller's `vars.LINKEDIN_TOKEN_MINTED`. Drives the expiry warnings
+          (the token lives 60 days).
+        type: string
+        default: ""
+      targets:
+        description: >-
+          Which leg(s) to run: one of all / mastodon / linkedin / substack.
+          Limits a manual re-run to one leg so re-running a failed leg cannot
+          double-post another (LinkedIn has no dedupe).
+        type: string
+        default: all
       post_path:
         description: >-
           Path of one `_posts/*.md` to cross-post (backfill or a manual
@@ -93,7 +134,7 @@ on:
         type: string
         default: ""
       dry_run:
-        description: 'Log what would be posted to Mastodon; post nothing.'
+        description: 'Log what would be posted to Mastodon and LinkedIn; post nothing.'
         type: boolean
         default: false
       visibility:
@@ -110,6 +151,8 @@ on:
         default: main
     secrets:
       MASTODON_ACCESS_TOKEN:
+        required: false
+      LINKEDIN_ACCESS_TOKEN:
         required: false
 
 # contents:read for the two checkouts; actions:read is what lets the
@@ -144,6 +187,7 @@ jobs:
 
       - name: Detect newly published posts
         id: detect
+        if: github.event_name != 'schedule'
         env:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
@@ -155,14 +199,25 @@ jobs:
             python3 .cms-platform/scripts/cross_post/cross_post.py detect --post "$POST_PATH"
           fi
 
+      - name: Check LinkedIn token age
+        # Schedule-only: the caller's weekly cron exists for this step alone.
+        # Red from day 50 of the token's 60-day life, so the fleet's
+        # scheduled-run-health audit files an issue before the token dies.
+        if: github.event_name == 'schedule' && inputs.linkedin
+        env:
+          LINKEDIN_TOKEN_MINTED: ${{ inputs.linkedin_token_minted }}
+        run: python3 .cms-platform/scripts/cross_post/cross_post.py check-linkedin-token
+
       - name: Cross-posting not configured
-        if: inputs.mastodon_instance == '' && inputs.substack == false
+        if: >-
+          github.event_name != 'schedule' && inputs.mastodon_instance == '' &&
+          inputs.substack == false && inputs.linkedin == false
         run: echo "::notice::cross-posting is not configured for this site"
 
       - name: Await production deploy
         if: >-
           steps.detect.outputs.changed == 'true' && github.event_name == 'push' &&
-          (inputs.mastodon_instance != '' || inputs.substack)
+          (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)
         uses: ./.cms-platform/.github/actions/await-prod-deploy
         with:
           prod-url: ${{ inputs.prod_url }}
@@ -170,19 +225,21 @@ jobs:
       - name: Verify the post URLs are live
         if: >-
           steps.detect.outputs.changed == 'true' &&
-          (inputs.mastodon_instance != '' || inputs.substack)
+          (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)
         run: python3 .cms-platform/scripts/cross_post/cross_post.py verify-live
 
       - name: Render status, Substack Markdown, and job summary
         if: >-
           steps.detect.outputs.changed == 'true' && inputs.substack &&
-          (inputs.mastodon_instance != '' || inputs.substack)
+          (inputs.targets == 'all' || inputs.targets == 'substack') &&
+          (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)
         run: python3 .cms-platform/scripts/cross_post/cross_post.py render
 
       - name: Upload Substack Markdown
         if: >-
           steps.detect.outputs.changed == 'true' && inputs.substack &&
-          (inputs.mastodon_instance != '' || inputs.substack)
+          (inputs.targets == 'all' || inputs.targets == 'substack') &&
+          (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: cross-post-${{ github.run_id }}
@@ -192,7 +249,8 @@ jobs:
       - name: Post to Mastodon
         if: >-
           steps.detect.outputs.changed == 'true' && inputs.mastodon_instance != '' &&
-          (inputs.mastodon_instance != '' || inputs.substack)
+          (inputs.targets == 'all' || inputs.targets == 'mastodon') &&
+          (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)
         env:
           MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
           MASTODON_INSTANCE: ${{ inputs.mastodon_instance }}
@@ -204,3 +262,22 @@ jobs:
             args+=(--dry-run)
           fi
           python3 .cms-platform/scripts/cross_post/cross_post.py post-mastodon "${args[@]}"
+
+      - name: Post to LinkedIn
+        # One-shot: LinkedIn has no dedupe and cross_post.py never retries, so
+        # re-running a failed leg goes through a `targets: linkedin` dispatch
+        # after checking the profile — never a whole-run re-run.
+        if: >-
+          steps.detect.outputs.changed == 'true' && inputs.linkedin &&
+          (inputs.targets == 'all' || inputs.targets == 'linkedin') &&
+          (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)
+        env:
+          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+          LINKEDIN_TOKEN_MINTED: ${{ inputs.linkedin_token_minted }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 .cms-platform/scripts/cross_post/cross_post.py post-linkedin "${args[@]}"

@@ -57,20 +57,26 @@ platform repo out into `.cms-platform/` (a dot-dir Jekyll ignores). **Pin
 ## `cross-post.yml`
 
 Detects a newly-published `_posts/*.md`, waits for it to actually be live on
-production, then optionally posts a Mastodon status and/or renders a
-Substack-ready Markdown draft (job summary + run artifact — Substack has no
-publish API, so that leg is always paste-by-hand). Full write-up, including
-the dedupe/idempotency model and why `await-prod-deploy` is invoked by a
-LOCAL checked-out path rather than a remote pin (a `sha_pinning_required`
-consumer rejects the latter): `docs/CROSS-POSTING.md`.
+production, then optionally posts a Mastodon status, shares it to LinkedIn
+as an article card, and/or renders a Substack-ready Markdown draft (job
+summary + run artifact — Substack has no publish API, so that leg is always
+paste-by-hand). On a caller's weekly `schedule` it only checks the LinkedIn
+token's age (red from day 50 of 60). Full write-up, including the
+dedupe/idempotency model (Mastodon dedupes; LinkedIn is one-shot, never
+retried, re-run one leg with `targets`) and why `await-prod-deploy` is
+invoked by a LOCAL checked-out path rather than a remote pin (a
+`sha_pinning_required` consumer rejects the latter): `docs/CROSS-POSTING.md`.
 
 | Input | Required | Default | Notes |
 |---|---|---|---|
 | `prod_url` | ✓ | — | e.g. `https://example.com`; fed to `await-prod-deploy` on a push |
 | `mastodon_instance` | | `""` | e.g. `https://hachyderm.io`; empty skips the Mastodon leg |
+| `linkedin` | | `false` | share to the token owner's LinkedIn profile; also enables the scheduled token-age check |
+| `linkedin_token_minted` | | `""` | `YYYY-MM-DD` the LinkedIn token was minted, from the caller's `vars.LINKEDIN_TOKEN_MINTED` |
 | `substack` | | `false` | render + upload the Substack Markdown draft |
+| `targets` | | `all` | `all` / `mastodon` / `linkedin` / `substack` — re-run one leg without double-posting another |
 | `post_path` | | `""` | one `_posts/*.md` for a `workflow_dispatch`-shaped caller (backfill/re-run) |
-| `dry_run` | | `false` | log what would post to Mastodon; post nothing |
+| `dry_run` | | `false` | log what would post to Mastodon and LinkedIn; post nothing |
 | `visibility` | | `public` | Mastodon post visibility (`public` / `unlisted` / `direct`) |
 | `platform_repo` | | `Adam-S-Daniel/cms-platform` | where `cross_post.py` lives |
 | `platform_ref` | | `main` | pin to the `uses:` ref |
@@ -78,8 +84,9 @@ consumer rejects the latter): `docs/CROSS-POSTING.md`.
 | Secret | Required | Notes |
 |---|---|---|
 | `MASTODON_ACCESS_TOKEN` | | app token scoped `profile` + `write:statuses` (`profile` is what the dedupe's `verify_credentials` call needs); unset skips the Mastodon leg with a `::warning::` |
+| `LINKEDIN_ACCESS_TOKEN` | | 60-day member token scoped `openid profile w_member_social`; unset skips the LinkedIn leg with a `::warning::` |
 
-With both `mastodon_instance` and `substack` left at their defaults, a run
+With `mastodon_instance`, `linkedin` and `substack` all left at their defaults, a run
 detects the post, prints one `::notice::`, and does nothing else — the
 caller template's own defaults, so a freshly-adopted site gets a harmless
 no-op.
