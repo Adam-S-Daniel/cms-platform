@@ -150,5 +150,32 @@ test.describe(
         .soft(toolbarStrip, "Editor toolbar ARIA drifted (draft-state control strip)")
         .toMatchAriaSnapshot({ name: "editor-toolbar.aria.yml" });
     });
+
+    test("dirty editor shows one native unsaved status and one save instruction", async ({
+      page,
+    }) => {
+      await loadDraftEditor(page);
+
+      const titleField = page.getByLabel(/^Title$/);
+      await titleField.fill("Replacement test post with an unsaved title edit");
+
+      const unsaved = page.getByText(/^Unsaved changes$/i);
+      const saveInstruction = page.getByText(/^Save your changes to enable Publish\.$/);
+      await expect(unsaved).toHaveCount(1);
+      await expect(saveInstruction).toHaveCount(1);
+      await expect(page.locator("#cms-publish-state-badge")).toHaveText("");
+
+      const save = page.getByRole("button", { name: /^save$/i }).first();
+      await expect(save).toBeEnabled();
+      await expect(page.getByRole("button", { name: /^publish$/i })).toHaveCount(0);
+      await save.click();
+
+      await expect(save).toBeDisabled({ timeout: 30_000 });
+      await expect(unsaved).toHaveCount(0);
+      await expect(saveInstruction).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^publish$/i }).first()).toBeVisible({
+        timeout: 30_000,
+      });
+    });
   },
 );

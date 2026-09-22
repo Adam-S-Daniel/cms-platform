@@ -35,7 +35,7 @@
  *
  * Stateful sources (read inside `live-url-derive.js`):
  *   - `<input id="title-field-N">` — title text
- *   - `<input id="slug-field-N">` — explicit URL slug (optional)
+ *   - `<input id="slug-field-N">` — editable explicit URL slug (optional)
  *   - `<input id="name-field-N">` — for tags (label is the slug source)
  *   - `<input id="permalink-field-N">` — for pages
  *   - `<button role="switch">` inside the Published field's
@@ -259,17 +259,26 @@
     // Label span — same styling whether or not the row is wrapped in an
     // anchor. Color stays even on the anchor case (the outer anchor uses
     // `color:inherit` so children render their own colors).
-    var labelHTML =
-      "<span style=\"font-weight:600;color:#8ab0e8;text-transform:uppercase;letter-spacing:0.08em;font-size:0.7rem;font-family:'SF Mono','Fira Code',monospace;\">View page on site:</span>";
-
     var nextHTML;
+    var liveURL = data.url ? previewAwareURL(data.url) : null;
+    var labelHost =
+      (window.CMSHostname && window.CMSHostname.fromURL(liveURL || data.url)) ||
+      (window.CMSHostname && window.CMSHostname.current()) ||
+      "this address";
+    var safeHost = String(labelHost).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+    var labelHTML =
+      "<span style=\"font-weight:600;color:#8ab0e8;text-transform:uppercase;letter-spacing:0.08em;font-size:0.7rem;font-family:'SF Mono','Fira Code',monospace;\">View page on " +
+      safeHost +
+      ":</span>";
     if (data.published === false) {
       // No destination → render plain spans, no anchor. An anchor with
       // no href would be misleading; the row is informational here.
       nextHTML = labelHTML + ' <span style="font-style:italic;">Not yet published.</span>';
     } else if (!data.url) {
       nextHTML =
-        labelHTML + ' <span style="font-style:italic;">Set a title or slug to see the URL.</span>';
+        labelHTML + ' <span style="font-style:italic;">Set a title to see the URL.</span>';
     } else {
       // Live URL state: wrap the *entire row* in a single anchor so any
       // click in the banner opens the live URL. The URL span keeps the
@@ -278,7 +287,6 @@
       // clickable surface. data-testid is the contract e2e tests assert
       // on. When the entry is an unmerged editorial-workflow draft the
       // host is the per-PR preview env (it 404s on prod until merge).
-      var liveURL = previewAwareURL(data.url);
       var safeURL = String(liveURL).replace(/[<>"']/g, function (c) {
         return { "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
       });

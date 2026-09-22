@@ -54,8 +54,8 @@ hook, so no per-site or per-workflow step is needed.
 | Global | From | Used by |
 |---|---|---|
 | `CMS_REPO` | `cms.repository` | deploy-status-pill, publish-via-auto-merge, live-url-banner, posts-list-enhance, oauth-app-restriction-detector, reviews dashboards |
-| `CMS_SITE_ORIGIN` | `url` | posts-list-enhance |
-| `CMS_APEX` | host of `url` | live-url-banner, posts-list-enhance (preview-host construction), reviews dashboards |
+| `CMS_SITE_ORIGIN` | `url` | site-hostname (canonical publishing destination), posts-list-enhance, publish-button |
+| `CMS_APEX` | host of `url` | site-hostname fallback, live-url-banner (preview-aware URL construction), posts-list-enhance (preview-host construction), reviews dashboards |
 | `CMS_OAUTH_BASE_URL` | `cms.oauth_base_url` | the Decap config itself (`config.base.yml` backend `base_url`), reviews dashboards (OAuth login flow) |
 | `CMS_SITE_TITLE` | the site's `_config.yml` `title` | admin shell `document.title` (index.html, index-local.html), reviews dashboards `document.title` |
 | `CMS_SITE_GATE` | `cms.site_gate` (an OBJECT, serialised with `JSON.generate`; `null` when the site declares no gate) | site-gate-banner (the "the public site is in coming-soon mode" banner; inert on `null`) |
@@ -63,6 +63,13 @@ hook, so no per-site or per-workflow step is needed.
 | `CMS_BACKEND_BRANCH` | `commit.json` `branch` — set at runtime by index.html's commit-pill script, NOT by the render inject (the deploy workflows write commit.json at deploy time: `main` on prod, the PR head ref on a preview) | publish-via-auto-merge (scopes the delete-ref matcher's multi-segment recovery to the deployed backend branch, #114); unset (no/unreadable commit.json) ⇒ multi-segment recovery is disabled (fail closed) |
 
 `config-test.yml` is domain-agnostic (local/test backend) and ships as-is.
+
+Field hints owned by the platform use the literal `{{CMS_CURRENT_HOST}}` token.
+It deliberately survives both Ruby render paths: preview deploys retain the
+canonical injected globals while serving the admin from a different host.
+`site-hostname.js` replaces the token only inside Decap `ControlHint` nodes,
+using the current routed hostname. Copy about the canonical publishing
+destination continues to use `CMS_SITE_ORIGIN`/`CMS_APEX`.
 
 ## Runtime override globals (test seams)
 

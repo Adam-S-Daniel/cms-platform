@@ -447,7 +447,9 @@
         pill: prodPill,
         label: "Publishing",
         kind: "prod",
-        environmentLabel: "production",
+        environmentLabel: window.CMSHostname
+          ? window.CMSHostname.canonical()
+          : "the published destination",
         fetchFn: function () {
           return fetchLatestStatusForEnvironment(token, "production");
         },
@@ -465,7 +467,9 @@
         pill: previewPill,
         label: "Preview build",
         kind: "preview",
-        environmentLabel: "preview-pr-<N>",
+        environmentLabel: window.CMSHostname
+          ? window.CMSHostname.current()
+          : "the preview destination",
         fetchFn: function () {
           return fetchLatestPreviewStatus(token);
         },

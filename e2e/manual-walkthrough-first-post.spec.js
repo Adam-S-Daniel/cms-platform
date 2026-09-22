@@ -2,7 +2,7 @@
 /*
  * C3 — End-to-end "first post" walkthrough that mirrors what a brand-new
  * contributor would actually do in the admin: open the editor, fill a
- * title + slug + body, attach a featured image, save, mark ready, watch
+ * title + slug + body, attach a featured image, save, publish, watch
  * it publish, then verify the rendered post on the public URL.
  *
  * allowed: literal slug used for known fixture (the e2e-first-post-sim
@@ -246,7 +246,7 @@ test.describe(
         });
       });
 
-      // ── Step 3: Fill title, slug, body ──────────────────────────────
+      // ── Step 3: Fill title, slug, and body ──────────────────────────
       await measure("03-fill-title-slug-body", PER_STEP_BUDGET_MS, async () => {
         const titleField = page.getByLabel(/^Title$/);
         await titleField.fill(SMOKE_TITLE);
@@ -269,7 +269,7 @@ test.describe(
           section: "First post walkthrough",
           step: "C3.3",
           title: "Fill in the post fields",
-          body: "Type a Title (the page heading), set a URL Slug (the path under `/blog/`), and write the Body. The slug is the only field with a constraint — keep it lowercase + hyphens so the public URL stays clean.",
+          body: "Type a Title (the page heading), set a URL Slug (the path under `/blog/`), and write the Body. Keep the slug lowercase with hyphens so the public URL stays clean.",
         });
       });
 

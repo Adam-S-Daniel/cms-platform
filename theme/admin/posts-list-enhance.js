@@ -574,8 +574,9 @@
       deployStateWord =
         '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">' + deployStateWord + "</a>";
     }
+    var deployHost = window.CMSHostname ? window.CMSHostname.canonical() : "Published destination";
     var deployHtml = deploy
-      ? "site " + deployStateWord + " " + esc(timeAgo(deploy.at))
+      ? esc(deployHost) + " " + deployStateWord + " " + esc(timeAgo(deploy.at))
       : '<span style="color:#8c959f">sign in for deploy / PR data</span>';
     var nextHTML =
       '<strong style="color:#24292f">Posts</strong>' +
@@ -674,7 +675,10 @@
         waitingOn: null,
         startedAt: null,
       },
-      { now: Date.now(), contact: window.CMS_SUPPORT_CONTACT || null },
+      Object.assign(
+        { now: Date.now(), contact: window.CMS_SUPPORT_CONTACT || null },
+        window.CMSHostname ? window.CMSHostname.options() : {},
+      ),
     );
     // The modifiers come from the summary text, which is the only place
     // this list can read the entry's own front matter from — Decap exposes
@@ -736,11 +740,15 @@
         '<a href="' +
           esc(pub) +
           '" target="_blank" rel="noopener" ' +
-          'title="Open the published post">published ↗</a>',
+          'title="Open the post on ' +
+          esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") +
+          '">published ↗</a>',
       );
     } else if (pub) {
       bits.push(
-        '<span title="Live once published" style="color:#8c959f">' +
+        '<span title="Available on ' +
+          esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") +
+          ' once published" style="color:#8c959f">' +
           esc("/blog/" + urlSlug(card.slug) + "/") +
           "</span>",
       );
@@ -785,7 +793,9 @@
           '/files" target="_blank" rel="noopener" title="GitHub diff ' +
           "(Files changed) of the merged PR #" +
           esc(publishedPr.number) +
-          ' that published the live version">view published changes</a>',
+          ' that published the version on ' +
+          esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") +
+          '">view published changes</a>',
       );
     }
 
@@ -819,8 +829,9 @@
       } else {
         bits.push(
           '<span style="color:#8c959f" title="Set Published to ON to ' +
-            "render this draft at the per-PR preview URL — the preview " +
-            "env mirrors production's publish semantics, so a " +
+            "render this draft at preview-pr" + esc(pr.number) + "." + esc(window.CMS_APEX) +
+            " — that address uses the same publish rules as " +
+            esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") + ", so a " +
             'Published-OFF entry is built nowhere">draft — Published OFF</span>',
         );
       }

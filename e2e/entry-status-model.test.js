@@ -93,7 +93,7 @@ test.describe("entry-status-model — the four badges", () => {
     const m = loadModel();
     const got = m.derive(facts({ merged: true, deployState: "in_progress" }), { now: NOW });
     expect(got.badge).toBe(m.BADGE.GOING_LIVE);
-    expect(got.waitingOn).toMatch(/website/i);
+    expect(got.waitingOn).toMatch(/published destination/i);
   });
 
   // Each of the four stopping conditions independently, because each one
@@ -141,7 +141,7 @@ test.describe("entry-status-model — the four badges", () => {
     });
     expect(got.detail).toContain("Adam");
     const generic = m.derive(facts({ hasOpenPr: true, checksFailed: true }), { now: NOW });
-    expect(generic.detail).toMatch(/whoever looks after this website/i);
+    expect(generic.detail).toMatch(/whoever looks after the published destination/i);
   });
 });
 
@@ -349,8 +349,10 @@ test.describe("entry-status-model — the stall (#371)", () => {
 
   test("a stall on the live site names the site, not a branch", () => {
     const m = loadModel();
-    const got = m.derive(armedAndSettled(GRACE + MIN), { now: NOW, contact: "Adam" });
-    expect(got.detail).toMatch(/the website did not take the update/);
+    const got = m.derive(armedAndSettled(GRACE + MIN), {
+      now: NOW, contact: "Adam", canonicalHostname: "example.com",
+    });
+    expect(got.detail).toMatch(/example\.com did not take the update/);
     expect(got.detail).toMatch(/Adam/);
     expect(got.detail).not.toMatch(/preview/i);
   });
@@ -365,53 +367,60 @@ test.describe("entry-status-model — the stall (#371)", () => {
         baseRef: "claude/issue-26-site-live-on",
         settledSince: NOW - GRACE - MIN,
       }),
-      { now: NOW, contact: "Adam" },
+      {
+        now: NOW,
+        contact: "Adam",
+        currentHostname: "preview-pr0.example.com",
+        canonicalHostname: "example.com",
+      },
     );
     expect(got.badge).toBe(m.BADGE.NEEDS_ATTENTION);
     expect(got.detail).toMatch(/claude\/issue-26-site-live-on/);
-    expect(got.detail).toMatch(/does not reach the live website/);
+    expect(got.detail).toMatch(/does not reach example\.com/);
     expect(got.detail).toMatch(/nothing you typed has been lost/i);
-    expect(got.waitingOn).toMatch(/live website/);
+    expect(got.waitingOn).toMatch(/preview-pr0\.example\.com.*example\.com/);
   });
 });
 
 test.describe("entry-status-model — the destination (#371)", () => {
-  test("with no preview fact the words are unchanged", () => {
+  test("production copy names the canonical hostname", () => {
     const m = loadModel();
-    expect(m.destination(facts())).toEqual({ noun: "the website", preview: false });
-    expect(m.derive(facts(), { now: NOW }).detail).toBe("This is on the website now.");
-    expect(m.derive(facts({ hasOpenPr: true }), { now: NOW }).detail).toMatch(
-      /not on the website yet/,
-    );
+    const options = { now: NOW, currentHostname: "example.com", canonicalHostname: "example.com" };
+    expect(m.destination(facts(), options)).toEqual({ noun: "example.com", canonical: "example.com", preview: false });
+    expect(m.derive(facts(), options).detail).toBe("This is on example.com now.");
+    expect(m.derive(facts({ hasOpenPr: true }), options).detail).toMatch(/not on example\.com yet/);
   });
 
   test("a preview names its own branch and never promises the live site", () => {
     const m = loadModel();
-    const dest = m.destination(facts({ previewOnly: true, baseRef: "claude/x" }));
+    const options = { now: NOW, currentHostname: "preview-pr0.example.com", canonicalHostname: "example.com" };
+    const dest = m.destination(facts({ previewOnly: true, baseRef: "claude/x" }), options);
     expect(dest.preview).toBe(true);
-    expect(dest.noun).toMatch(/claude\/x/);
+    expect(dest.noun).toBe("preview-pr0.example.com");
 
     const going = m.derive(
       facts({ hasOpenPr: true, armed: true, previewOnly: true, baseRef: "claude/x" }),
-      { now: NOW },
+      options,
     );
     expect(going.badge).toBe(m.BADGE.GOING_LIVE);
-    expect(going.detail).toMatch(/claude\/x/);
-    expect(going.detail).toMatch(/not going to the live website/);
+    expect(going.detail).toMatch(/preview-pr0\.example\.com/);
+    expect(going.detail).toMatch(/not going to example\.com/);
 
     const draft = m.derive(
       facts({ hasOpenPr: true, previewOnly: true, baseRef: "claude/x" }),
-      { now: NOW },
+      options,
     );
     expect(draft.badge).toBe(m.BADGE.DRAFT);
-    expect(draft.detail).toMatch(/will not go to the live website/);
+    expect(draft.detail).toMatch(/will not go to example\.com/);
   });
 
   // A preview whose base ref we somehow do not know must still not claim the
   // live site — the honest degradation is a vaguer noun, never a wrong one.
   test("a preview with no known branch degrades to a vague noun, not a wrong one", () => {
     const m = loadModel();
-    const dest = m.destination(facts({ previewOnly: true, baseRef: null }));
+    const dest = m.destination(facts({ previewOnly: true, baseRef: null }), {
+      currentHostname: "example.com", canonicalHostname: "example.com",
+    });
     expect(dest.preview).toBe(true);
     expect(dest.noun).toBe("the preview for this branch");
   });

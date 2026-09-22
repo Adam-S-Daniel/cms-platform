@@ -75,7 +75,9 @@
         "Draft-restore is off — Decap's local backup was unreliable and could " +
           "silently drop your changes. Your work is saved by Save and by autosave " +
           "(on tab-close and after a short idle) onto this entry's PR branch — " +
-          "nothing goes live until you Publish.",
+          "nothing reaches " +
+          (window.CMSHostname ? window.CMSHostname.current() : "the publishing destination") +
+          " until you Publish.",
       );
       return false;
     }

@@ -48,9 +48,8 @@ const { pruneSitemapUrls } = require("./sitemap-prune");
 //   site routing, so it doesn't have a sibling test here. Re-enable
 //   that test when the Pages collection's public route ships.
 
-const REPO_ROOT = path.join(__dirname, "..");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, ".."); // #33 base_collections guard root
-const POSTS_DIR = path.join(REPO_ROOT, "_posts");
+const POSTS_DIR = path.join(SITE_ROOT, "_posts");
 
 const SMOKE_TITLE = "E2E Publish Flow Smoke";
 const SMOKE_SLUG = "e2e-publish-flow-smoke";
@@ -75,8 +74,8 @@ function removeSmokePost() {
   // build would normally wipe it, but the playwright webServer only
   // builds once at startup.
   for (const dir of [
-    path.join(REPO_ROOT, "_site", "blog", SMOKE_SLUG),
-    path.join(REPO_ROOT, "_site", "tags", SMOKE_TAG_SLUG),
+    path.join(SITE_ROOT, "_site", "blog", SMOKE_SLUG),
+    path.join(SITE_ROOT, "_site", "tags", SMOKE_TAG_SLUG),
   ]) {
     if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -87,7 +86,7 @@ function removeSmokePost() {
   // runs in the SAME e2e-admin job, shares this `_site/`, walks the
   // sitemap, and fails on the orphaned 404 — so keep the sitemap
   // consistent with what's actually on disk.
-  const sitemap = path.join(REPO_ROOT, "_site", "sitemap.xml");
+  const sitemap = path.join(SITE_ROOT, "_site", "sitemap.xml");
   if (fs.existsSync(sitemap)) {
     const xml = fs.readFileSync(sitemap, "utf8");
     const cleaned = pruneSitemapUrls(xml, [`/blog/${SMOKE_SLUG}/`, `/tags/${SMOKE_TAG_SLUG}/`]);
@@ -99,7 +98,7 @@ function rebuildSite() {
   // Quiet build into the same `_site/` the playwright webServer is
   // serving from, so the new post becomes reachable at /blog/<slug>/
   // without needing to restart `npx serve`.
-  jekyllBuild({ cwd: REPO_ROOT });
+  jekyllBuild({ cwd: SITE_ROOT });
 }
 
 test.describe(
@@ -138,10 +137,11 @@ test.describe(
       await expect(titleField).toBeVisible({ timeout: 60_000 });
       await titleField.fill(SMOKE_TITLE);
 
-      // The slug field auto-derives from title; explicitly set it so the
-      // post lands at a predictable URL even if the slugify algorithm
-      // changes between Decap versions.
+      // Set the editable path explicitly so this end-to-end publish test remains
+      // deterministic if Decap's title-to-slug conversion changes.
       const slugField = page.getByLabel(/^URL Slug/);
+      await expect(slugField).toBeVisible();
+      await expect(slugField).toBeEditable();
       await slugField.fill(SMOKE_SLUG);
 
       // Decap's markdown widget defaults to rich-text mode. The
@@ -171,7 +171,7 @@ test.describe(
         section: "Marking ready and publishing",
         step: "6.1",
         title: "Filled-out post ready to publish",
-        body: "Title, slug, body, tags, and the Published toggle are all set. In editorial workflow mode (production), the toolbar shows **Save** and a separate Status dropdown; clicking Save opens a PR in draft. Setting the dropdown to **Ready** is what triggers the auto-merge.",
+        body: "Title, URL Slug, body, tags, and the Published toggle are all set. In production, select **Save**, then select **Publish** to put the post on the configured website.",
       });
 
       // Decap's split publish button: open menu, pick "Publish now".

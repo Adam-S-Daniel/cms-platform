@@ -104,7 +104,9 @@
         toast(
           "Publishing in the background — auto-merge will land this when " +
             "the required CI checks finish (~5–15 min). You can close this " +
-            "tab; the entry goes live automatically. Decap may flash a " +
+            "tab; the entry appears on " +
+            (window.CMSHostname ? window.CMSHostname.current() : "the publishing destination") +
+            " automatically. Decap may flash a " +
             "publish error here — it is safe to ignore.",
         );
         // Return a synthetic NON-2xx (422), NOT a success. A 2xx makes

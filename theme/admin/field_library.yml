@@ -79,7 +79,7 @@ field_library:
       label: Published
       widget: boolean
       default: false
-      hint: "ON = goes live on the next deploy. Leave OFF to schedule a future publish via the Publish Date below."
+      hint: "Turn on to show this content on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below."
     - name: publish_date
       label: Publish Date
       widget: datetime
@@ -87,4 +87,4 @@ field_library:
       date_format: "YYYY-MM-DD"
       time_format: "HH:mm"
       format: "YYYY-MM-DD HH:mm:ss ZZ"
-      hint: "Optional. Future date/time to auto-publish. Only honoured when Published above is OFF — if Published is ON, it goes live immediately and this is ignored."
+      hint: "Optional. Choose a future date and time to publish this content automatically on {{CMS_CURRENT_HOST}}. Only honored when Published is off."

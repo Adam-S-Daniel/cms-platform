@@ -213,7 +213,7 @@ test.describe(
         section: "Editing a post",
         step: "3.1",
         title: "The Posts edit form",
-        body: "The Posts edit form renders every field declared in `admin/config.yml`: Title, URL Slug, Date, Excerpt, Tags, Featured Image, Published, Publish Date, and the Body markdown editor. Edits are saved as a draft until you flip Status to Ready — a Save in the local backend writes straight to `_posts/`, but in production it opens a PR.",
+        body: "The Posts edit form renders every field declared in `admin/config.yml`: Title, URL Slug, Date, Excerpt, Tags, Featured Image, Published, Publish Date, and the Body markdown editor. Select **Save** to keep your changes, then **Publish** to put them on the configured website.",
       });
 
       // Every declared label from the Posts schema in admin/config.yml
@@ -243,6 +243,10 @@ test.describe(
           `Label for "${labelText}" should be visible in the editor`,
         ).toBeVisible({ timeout: 5_000 });
       }
+
+      const slugField = page.getByLabel(/^URL Slug/);
+      await expect(slugField).toBeVisible();
+      await expect(slugField).toBeEditable();
 
       // Form has more than just the Title input — guards against the
       // "Title rendered but everything else missing" failure mode. The

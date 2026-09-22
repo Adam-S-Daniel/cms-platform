@@ -4,6 +4,7 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
 const { fileReady } = require("./fs-poll");
+const { guard } = require("./base-collections-guards");
 
 // Verifies the contributor capability "Schedule a Post for future publishing":
 //
@@ -19,6 +20,7 @@ const { fileReady } = require("./fs-poll");
 //      without needing to run a cron-driven Action live.
 
 const REPO_ROOT = path.join(__dirname, "..");
+const SITE_ROOT = process.env.SITE_ROOT || REPO_ROOT;
 const POSTS_DIR = path.join(REPO_ROOT, "_posts");
 const PUBLISH_SCRIPT = path.join(REPO_ROOT, "scripts", "publish_scheduled_posts.py");
 const WORKFLOW_FILE = path.join(REPO_ROOT, ".github", "workflows", "publish-scheduled-posts.yml");
@@ -43,6 +45,8 @@ test.describe(
   // Runs on chromium-desktop-3k only. See playwright.config.js.
   { tag: ["@admin-write"] },
   () => {
+    test.skip(...guard(SITE_ROOT, "cms-scheduled-post.spec.js"));
+
     test.describe.configure({ mode: "serial", timeout: 240_000 });
 
     test.beforeAll(() => removeSmokePost());

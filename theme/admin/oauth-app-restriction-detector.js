@@ -163,15 +163,18 @@
 
     var orgLabel = o ? "The <strong>" + escapeHTML(o) + "</strong> organization" : "Your organization";
 
+    var siteHost = escapeHTML(
+      window.CMSHostname ? window.CMSHostname.canonical() : "the published destination",
+    );
     var msgHTML =
       '<div style="flex:1;min-width:0;">' +
       '<div style="font-weight:700;margin-bottom:0.2rem;">Saving is blocked — the CMS OAuth App needs org approval</div>' +
       "<div>" +
       orgLabel +
-      " has <strong>OAuth App access restrictions</strong> enabled, and this site's " +
+      " has <strong>OAuth App access restrictions</strong> enabled, and " + siteHost + "'s " +
       "CMS OAuth App hasn't been approved. You can sign in and browse, but " +
       "<strong>saves and publishes will fail</strong> until an <strong>org owner</strong> " +
-      "approves the app's Client ID (it's in the site's oauth-proxy stack) at " +
+      "approves the app's Client ID (it's in " + siteHost + "'s oauth-proxy stack) at " +
       linkHTML +
       "." +
       "</div>" +
