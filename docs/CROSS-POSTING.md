@@ -101,7 +101,7 @@ tags/featured_image) alongside it.
 ## Creating the Mastodon app token
 
 On your Mastodon instance (e.g. `hachyderm.io`): **Preferences → Development
-→ New application**. Grant it **`write:statuses` only** — no other scope is
+→ New application**. Grant it **`profile` and `write:statuses`** — `profile` only lets the dedupe step read the account's own id via `verify_credentials` (a `write:statuses`-only token gets a 403 there; measured 2026-09-22); no other scope is
 needed, and the workflow never reads or writes anything else on the account.
 Copy the generated access token into the site repo's **`MASTODON_ACCESS_TOKEN`**
 Actions secret. Until the secret exists, `cross-post.yml` still runs to
