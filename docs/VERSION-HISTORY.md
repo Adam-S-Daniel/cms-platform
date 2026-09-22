@@ -10,11 +10,24 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.110)
+## Version history (v0.1.0 → v0.1.111)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**v0.1.111 — the Mastodon dedupe needs read:statuses; a refused lookup now fails the leg (#442).**
+**v0.1.111 — the Mastodon dedupe needs read:statuses; a refused lookup now fails the leg (#442); the preview-hostname editor test is guarded for base_collections opt-outs (#33).**
+The second fix unblocks jodidaniel.com's bump, whose required `e2e / e2e` went
+red on v0.1.110 (jodidaniel/jodidaniel.com run 35792558914). The cause was
+v0.1.110's new test "preview editor names its preview and canonical hosts in
+the UI" (#446). It loads the production admin shell `/admin/index.html`,
+whose rendered `config.yml` honours `cms.base_collections`, and it waits for a
+Posts link that a posts-less consumer never renders. The test now carries the
+#33 registry guard (#453). The file's `index-test.html` tests keep running.
+The drift lint that should have caught it also gains a new class, CLASS F: a
+test that reaches a function navigating `/admin/index.html` and waiting for
+or routing to a base collection must be guarded. It is AST-based and was red
+against the unguarded spec.
+
+The Mastodon half (#454):
 `_find_existing_status`'s duplicate-post lookup (`GET
 /api/v1/accounts/{id}/statuses`) needs the `read:statuses` scope when called
 with a user token, but the token minted per v0.1.110's guidance carried only
