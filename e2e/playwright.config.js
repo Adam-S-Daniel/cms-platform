@@ -99,6 +99,8 @@ const PLATFORM_META_SPECS = [
   // none of which a consumer has in that position — so it is platform-internal
   // and testIgnored on a CONSUMER lane, exactly like the two entries above.
   "admin-publishing-ux.test.js",
+  // Runtime copy/UI checks plus parsed platform Decap config contracts.
+  "editor-publishing-copy.test.js",
   // Pure-Node vm-sandbox unit tests for theme/admin/entry-status-model.js, the
   // shared four-badge derivation. Reads the platform theme/admin SOURCE.
   "entry-status-model.test.js",

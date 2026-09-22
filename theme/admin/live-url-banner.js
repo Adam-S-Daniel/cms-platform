@@ -35,7 +35,9 @@
  *
  * Stateful sources (read inside `live-url-derive.js`):
  *   - `<input id="title-field-N">` — title text
- *   - `<input id="slug-field-N">` — explicit URL slug (optional)
+ *   - `<input id="slug-field-N">` — explicit URL slug (optional). Posts keep
+ *     this input in Decap's tree so saved explicit slugs still drive the URL,
+ *     while this script hides its whole field container from editors.
  *   - `<input id="name-field-N">` — for tags (label is the slug source)
  *   - `<input id="permalink-field-N">` — for pages
  *   - `<button role="switch">` inside the Published field's
@@ -65,6 +67,67 @@
   // loaded before this script (see admin/index*.html ordering).
   function compute() {
     return window.LiveURL ? window.LiveURL.compute() : null;
+  }
+
+  // Posts retain the optional string slug in the schema and DOM because an
+  // existing front-matter slug can differ from both the title and filename,
+  // and live-url-derive.js must keep reading that exact value. Decap's hidden
+  // widget is filtered out of the editor tree entirely, which would erase the
+  // only public-DOM source for that URL. Hide the field's own wrapper instead,
+  // scoped to the Posts route so a site collection's unrelated slug field
+  // remains editable.
+  var hiddenPostSlug = null;
+
+  function restorePostSlug() {
+    if (!hiddenPostSlug) return;
+    var node = hiddenPostSlug.node;
+    if (node && node.style) {
+      if (hiddenPostSlug.display) {
+        node.style.setProperty("display", hiddenPostSlug.display, hiddenPostSlug.priority);
+      } else {
+        node.style.removeProperty("display");
+      }
+    }
+    hiddenPostSlug = null;
+  }
+
+  function syncPostSlugVisibility() {
+    var collection = window.LiveURL && window.LiveURL.getCollection
+      ? window.LiveURL.getCollection()
+      : null;
+    var field = null;
+    if (collection === "posts") {
+      field = document.querySelector(
+        'input[id^="slug-field"], textarea[id^="slug-field"]',
+      );
+    }
+
+    var container = null;
+    for (var node = field, depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+      if (
+        typeof node.className === "string" &&
+        node.className.indexOf("ControlContainer") !== -1
+      ) {
+        container = node;
+        break;
+      }
+    }
+
+    if (hiddenPostSlug && hiddenPostSlug.node !== container) restorePostSlug();
+    if (!container) return;
+    if (!hiddenPostSlug) {
+      hiddenPostSlug = {
+        node: container,
+        display: container.style.getPropertyValue("display"),
+        priority: container.style.getPropertyPriority("display"),
+      };
+    }
+    if (
+      container.style.getPropertyValue("display") !== "none" ||
+      container.style.getPropertyPriority("display") !== "important"
+    ) {
+      container.style.setProperty("display", "none", "important");
+    }
   }
 
   // ── open-PR lookup (preview-vs-prod origin) ──────────────────────
@@ -247,6 +310,7 @@
   var lastHTML = null;
 
   function render() {
+    syncPostSlugVisibility();
     var banner = ensureBanner();
     if (!banner) return;
     var data = compute();
@@ -269,7 +333,7 @@
       nextHTML = labelHTML + ' <span style="font-style:italic;">Not yet published.</span>';
     } else if (!data.url) {
       nextHTML =
-        labelHTML + ' <span style="font-style:italic;">Set a title or slug to see the URL.</span>';
+        labelHTML + ' <span style="font-style:italic;">Set a title to see the URL.</span>';
     } else {
       // Live URL state: wrap the *entire row* in a single anchor so any
       // click in the banner opens the live URL. The URL span keeps the

@@ -48,9 +48,8 @@ const { pruneSitemapUrls } = require("./sitemap-prune");
 //   site routing, so it doesn't have a sibling test here. Re-enable
 //   that test when the Pages collection's public route ships.
 
-const REPO_ROOT = path.join(__dirname, "..");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, ".."); // #33 base_collections guard root
-const POSTS_DIR = path.join(REPO_ROOT, "_posts");
+const POSTS_DIR = path.join(SITE_ROOT, "_posts");
 
 const SMOKE_TITLE = "E2E Publish Flow Smoke";
 const SMOKE_SLUG = "e2e-publish-flow-smoke";
@@ -75,8 +74,8 @@ function removeSmokePost() {
   // build would normally wipe it, but the playwright webServer only
   // builds once at startup.
   for (const dir of [
-    path.join(REPO_ROOT, "_site", "blog", SMOKE_SLUG),
-    path.join(REPO_ROOT, "_site", "tags", SMOKE_TAG_SLUG),
+    path.join(SITE_ROOT, "_site", "blog", SMOKE_SLUG),
+    path.join(SITE_ROOT, "_site", "tags", SMOKE_TAG_SLUG),
   ]) {
     if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -87,7 +86,7 @@ function removeSmokePost() {
   // runs in the SAME e2e-admin job, shares this `_site/`, walks the
   // sitemap, and fails on the orphaned 404 — so keep the sitemap
   // consistent with what's actually on disk.
-  const sitemap = path.join(REPO_ROOT, "_site", "sitemap.xml");
+  const sitemap = path.join(SITE_ROOT, "_site", "sitemap.xml");
   if (fs.existsSync(sitemap)) {
     const xml = fs.readFileSync(sitemap, "utf8");
     const cleaned = pruneSitemapUrls(xml, [`/blog/${SMOKE_SLUG}/`, `/tags/${SMOKE_TAG_SLUG}/`]);
@@ -99,7 +98,7 @@ function rebuildSite() {
   // Quiet build into the same `_site/` the playwright webServer is
   // serving from, so the new post becomes reachable at /blog/<slug>/
   // without needing to restart `npx serve`.
-  jekyllBuild({ cwd: REPO_ROOT });
+  jekyllBuild({ cwd: SITE_ROOT });
 }
 
 test.describe(
@@ -136,13 +135,15 @@ test.describe(
 
       const titleField = page.getByLabel(/^Title$/);
       await expect(titleField).toBeVisible({ timeout: 60_000 });
-      await titleField.fill(SMOKE_TITLE);
 
-      // The slug field auto-derives from title; explicitly set it so the
-      // post lands at a predictable URL even if the slugify algorithm
-      // changes between Decap versions.
-      const slugField = page.getByLabel(/^URL Slug/);
-      await slugField.fill(SMOKE_SLUG);
+      // The URL is derived from Title. Editors should not have a second,
+      // technical path field to keep in sync with it.
+      await expect(page.getByLabel(/^URL Slug/)).toHaveCount(0);
+      await expect(page.getByRole("textbox", { name: /slug/i })).toHaveCount(0);
+      await expect(
+        page.locator('input[id^="slug-field"], textarea[id^="slug-field"]').first(),
+      ).toBeHidden();
+      await titleField.fill(SMOKE_TITLE);
 
       // Decap's markdown widget defaults to rich-text mode. The
       // contentEditable surface accepts plain typed text, which is good
@@ -171,7 +172,7 @@ test.describe(
         section: "Marking ready and publishing",
         step: "6.1",
         title: "Filled-out post ready to publish",
-        body: "Title, slug, body, tags, and the Published toggle are all set. In editorial workflow mode (production), the toolbar shows **Save** and a separate Status dropdown; clicking Save opens a PR in draft. Setting the dropdown to **Ready** is what triggers the auto-merge.",
+        body: "Title, body, tags, and the Published toggle are all set. The website path is generated from the Title. In production, select **Save**, then select **Publish** to put the post on the website.",
       });
 
       // Decap's split publish button: open menu, pick "Publish now".
@@ -196,7 +197,6 @@ test.describe(
       const written = fs.readFileSync(postPath, "utf8");
       expect(written).toMatch(/^---/);
       expect(written).toContain(`title: ${SMOKE_TITLE}`);
-      expect(written).toContain(`slug: ${SMOKE_SLUG}`);
       expect(written).toContain("published: true");
 
       // ── Rebuild Jekyll so /blog/<slug>/ is in `_site/` ────────────────

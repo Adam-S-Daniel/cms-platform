@@ -2,7 +2,7 @@
 /*
  * C3 — End-to-end "first post" walkthrough that mirrors what a brand-new
  * contributor would actually do in the admin: open the editor, fill a
- * title + slug + body, attach a featured image, save, mark ready, watch
+ * title + body, attach a featured image, save, publish, watch
  * it publish, then verify the rendered post on the public URL.
  *
  * allowed: literal slug used for known fixture (the e2e-first-post-sim
@@ -242,19 +242,14 @@ test.describe(
           section: "First post walkthrough",
           step: "C3.2",
           title: "Open the New Post form",
-          body: "Click **Posts** in the left sidebar, then **New Post**. The form mounts with empty fields for Title, URL Slug, Date, Excerpt, Body, Tags, Featured Image, Published, and Publish Date.",
+          body: "Click **Posts** in the left sidebar, then **New Post**. The form mounts with empty fields for Title, Date, Excerpt, Body, Tags, Featured Image, Published, and Publish Date. The website path is generated from the Title.",
         });
       });
 
-      // ── Step 3: Fill title, slug, body ──────────────────────────────
-      await measure("03-fill-title-slug-body", PER_STEP_BUDGET_MS, async () => {
+      // ── Step 3: Fill title and body ─────────────────────────────────
+      await measure("03-fill-title-body", PER_STEP_BUDGET_MS, async () => {
         const titleField = page.getByLabel(/^Title$/);
         await titleField.fill(SMOKE_TITLE);
-
-        // Explicit slug so the post lands at a predictable URL — the
-        // auto-derive can drift between Decap versions.
-        const slugField = page.getByLabel(/^URL Slug/);
-        await slugField.fill(SMOKE_SLUG);
 
         // Decap's markdown widget defaults to rich-text mode. The
         // contentEditable surface accepts plain typed text, which is
@@ -269,7 +264,7 @@ test.describe(
           section: "First post walkthrough",
           step: "C3.3",
           title: "Fill in the post fields",
-          body: "Type a Title (the page heading), set a URL Slug (the path under `/blog/`), and write the Body. The slug is the only field with a constraint — keep it lowercase + hyphens so the public URL stays clean.",
+          body: "Type a Title (the page heading) and write the Body. The editor generates the website path from the Title, so there is no separate URL field to maintain.",
         });
       });
 

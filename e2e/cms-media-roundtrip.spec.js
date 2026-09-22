@@ -266,9 +266,8 @@ test(
       });
     });
 
-    await test.step("Fill Title, URL Slug, Date (2099-12-31), Body", async () => {
+    await test.step("Fill Title, Date (2099-12-31), Body", async () => {
       await page.getByRole("textbox", { name: /^Title$/i }).fill(title);
-      await page.getByLabel(/^URL Slug/).fill(slug);
       await page.getByLabel(/^Date/).fill(`${EPHEMERAL_DATE}T00:00`);
       const bodyEditor = page.locator('[role="textbox"][contenteditable="true"]').last();
       await bodyEditor.click();

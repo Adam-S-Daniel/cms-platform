@@ -477,7 +477,8 @@ Three things it gets that the split button cannot:
 - a confirmation naming the URL and the ETA, inline in the state bar rather
   than as a modal or a `window.confirm` (which is already wrapped, for
   Decap's backup dialog, by `confirm-wrap-local-backup.js`);
-- a disabled state that says *why* (unsaved changes) instead of vanishing;
+- a disabled state that stays visible while the state bar says *why* once
+  (unsaved changes), instead of vanishing;
 - a **re-publish that actually re-publishes**. `auto-merge-when-ready` fires
   on the `labeled` EVENT, and GitHub emits none for a label already present
   — so the second Publish press, which is the most likely one in the whole

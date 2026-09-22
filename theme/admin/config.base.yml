@@ -152,11 +152,11 @@ collections:
         required: true
         hint: "The post headline — make it compelling"
 
+      # Keep this as a string so legacy stored slugs remain in the DOM for
+      # exact URL derivation; live-url-banner.js hides its Posts-only wrapper.
       - name: slug
-        label: URL Slug
         widget: string
         required: false
-        hint: "URL path segment (leave blank to auto-generate from title). Must match any existing published URL to avoid breaking inbound links."
 
       - name: date
         label: Date
@@ -192,7 +192,7 @@ collections:
         label: Published
         widget: boolean
         default: false
-        hint: "ON = goes live on the next deploy. Leave OFF to schedule a future publish via the Publish Date below — the scheduled-posts workflow flips this toggle on when the date arrives."
+        hint: "Turn on to show this post on the website when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below."
 
       - name: publish_date
         label: Publish Date
@@ -201,7 +201,7 @@ collections:
         date_format: "YYYY-MM-DD"
         time_format: "HH:mm"
         format: "YYYY-MM-DD HH:mm:ss ZZ"
-        hint: "Optional. Future date/time (UTC) to auto-publish this post. Only honoured when Published above is OFF — if Published is ON, the post goes live immediately and this field is ignored."
+        hint: "Optional. Choose a future date and time (UTC) to publish this post automatically. Only honored when Published is off."
 
       # Hidden, non-editor-facing marker for E2E canary / automated-test
       # fixtures (issue #1042). `widget: hidden` keeps it out of the edit
@@ -346,7 +346,7 @@ collections:
         label: Published
         widget: boolean
         default: false
-        hint: "ON = page goes live on the next deploy. Leave OFF to keep it as a draft."
+        hint: "Turn on to show this page on the website when you select Publish. Leave off to keep it as a draft."
 
       - name: body
         label: Content

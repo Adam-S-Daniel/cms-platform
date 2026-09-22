@@ -99,6 +99,12 @@ const ADMIN_WRITE_GUARDS = {
     reason:
       'consumer opts out of the "posts" collection via cms.base_collections — no Posts editor to drive the create→build→browse publish loop (#33)',
   },
+  "cms-scheduled-post.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — no Posts editor to create a scheduled post (#33)',
+  },
   "cms-posts-list-runtime.spec.js": {
     collections: ["posts"],
     mode: "any",

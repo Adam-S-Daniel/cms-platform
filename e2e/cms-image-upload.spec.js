@@ -104,9 +104,6 @@ test.describe(
       await expect(titleField).toBeVisible({ timeout: 60_000 });
       await titleField.fill(SMOKE_TITLE);
 
-      const slugField = page.getByLabel(/^URL Slug/);
-      await slugField.fill(SMOKE_SLUG);
-
       const bodyEditor = page.locator('[role="textbox"][contenteditable="true"]').last();
       await bodyEditor.waitFor({ timeout: 30_000 });
       await bodyEditor.click();

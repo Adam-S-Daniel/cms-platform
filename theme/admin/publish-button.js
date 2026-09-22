@@ -10,9 +10,9 @@
  * silently disappears, with no explanation (docs/PUBLISHING-UX.md §2.5).
  *
  * This shim CSS-hides that control and renders a plain button in its place:
- * one click, one confirmation, one outcome. And when it cannot be used it
- * stays on screen and says WHY, which is the half a vanishing control can
- * never do.
+ * one click, one confirmation, one outcome. When it cannot be used it stays
+ * on screen, while the state bar says why once; a vanishing control can do
+ * neither.
  *
  * ── Why replacing is safer than driving ────────────────────────────────
  * Forwarding a click into Decap's dropdown was implemented and tested
@@ -371,10 +371,7 @@
     if (mode === "busy") return { kind: "busy", note: "Sending it to the website…" };
 
     if (hasUnsavedChanges()) {
-      return {
-        kind: "disabled",
-        note: "Save your changes first — then this button will put them on the website.",
-      };
+      return { kind: "disabled" };
     }
 
     // NOT YET KNOWN. This is the one branch that must not hide Decap's
@@ -483,7 +480,6 @@
     }
 
     if (p.kind === "disabled") {
-      disabledNote(slot, p.note);
       var disabled = document.createElement("button");
       disabled.id = BUTTON_ID;
       disabled.type = "button";

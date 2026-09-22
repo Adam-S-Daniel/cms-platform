@@ -14,7 +14,7 @@ const { guard } = require("./base-collections-guards");
 // HTML on the live site, with surrounding markdown still rendered as
 // markdown.
 //
-//   1. Drive admin/index-local.html to create a post (Title, Slug, Body
+//   1. Drive admin/index-local.html to create a post (Title, Body
 //      filler) and Save through Decap. Local backend writes the file
 //      under _posts/.
 //   2. Patch the saved file to include the sentinel-wrapped
@@ -94,7 +94,7 @@ test.describe(
   test("post body with html-embed sentinel block → wrapper div renders, surrounding markdown still renders", async ({
     page,
   }) => {
-    // ── Drive the admin: open New Post, fill Title / Slug / Body ─────
+    // ── Drive the admin: open New Post, fill Title / Body ─────────
     await page.goto("/admin/index-local.html");
     await page.getByRole("button", { name: /login/i }).click();
     await page.getByRole("link", { name: /^posts$/i }).waitFor({ timeout: 30_000 });
@@ -103,9 +103,6 @@ test.describe(
     const titleField = page.getByLabel(/^Title$/);
     await expect(titleField).toBeVisible({ timeout: 60_000 });
     await titleField.fill(SMOKE_TITLE);
-
-    const slugField = page.getByLabel(/^URL Slug/);
-    await slugField.fill(SMOKE_SLUG);
 
     const bodyEditor = page.locator('[role="textbox"][contenteditable="true"]').last();
     await bodyEditor.waitFor({ timeout: 30_000 });

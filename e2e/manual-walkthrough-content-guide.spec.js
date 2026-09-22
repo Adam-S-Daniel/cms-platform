@@ -243,7 +243,7 @@ const PROBES = {
     "Four collections sidebar: cms-smoke already asserts Posts/Tags/Projects/Pages links render after login; reuse that probe under captureStep here in a follow-up.",
   ),
   "write-a-blog-post": deferProbe(
-    "Posts schema fields (Title, Date, Body, URL Slug, Excerpt, Tags, Featured Image, Published, Publish Date): cms-smoke covers most via label assertions; this section's runtime probe should re-cite the guide's promise per field.",
+    "Posts schema fields (Title, Date, Body, Excerpt, Tags, Featured Image, Published, Publish Date): cms-smoke covers most via label assertions; this section's runtime probe should re-cite the guide's promise per field.",
   ),
   "save-review-publish": deferProbe(
     "Editorial workflow + status vs. published table: cms-editorial-workflow asserts the PR-label translation, but no probe binds it back to this guide section. Wire one in a follow-up.",

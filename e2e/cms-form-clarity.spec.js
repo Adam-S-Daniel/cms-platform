@@ -68,13 +68,12 @@ function hintFor(cfg, collectionName, fieldName) {
 const PROD_HINTS = {
   posts: {
     title: "The post headline — make it compelling",
-    slug: "URL path segment (leave blank to auto-generate from title). Must match any existing published URL to avoid breaking inbound links.",
     excerpt: "A short summary shown in post listings and meta tags (≤ 160 chars recommended)",
     featured_image: "Displayed as the post hero image and in social sharing cards",
     published:
-      "ON = goes live on the next deploy. Leave OFF to schedule a future publish via the Publish Date below — the scheduled-posts workflow flips this toggle on when the date arrives.",
+      "Turn on to show this post on the website when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below.",
     publish_date:
-      "Optional. Future date/time (UTC) to auto-publish this post. Only honoured when Published above is OFF — if Published is ON, the post goes live immediately and this field is ignored.",
+      "Optional. Choose a future date and time (UTC) to publish this post automatically. Only honored when Published is off.",
     body: "Full post content. Supports Markdown, images, code blocks, and HTML embeds (toolbar → 'HTML Embed' button — drops a block of raw HTML / JS / CSS that round-trips between rich-text and raw modes). For a real-layout preview that updates on every Save, open /preview/?collection=posts in a second browser tab and snap it next to the editor.",
   },
   tags: {
@@ -93,7 +92,8 @@ const PROD_HINTS = {
     title: "The page heading — also used as the browser tab title",
     permalink:
       "The URL path the page lives at. Convention is /pages/<slug>/, but you can use any path. Must start and end with a slash.",
-    published: "ON = page goes live on the next deploy. Leave OFF to keep it as a draft.",
+    published:
+      "Turn on to show this page on the website when you select Publish. Leave off to keep it as a draft.",
     body: "Page content. For a real-layout preview that updates on every Save, open /preview/?collection=pages in a second tab.",
   },
 };

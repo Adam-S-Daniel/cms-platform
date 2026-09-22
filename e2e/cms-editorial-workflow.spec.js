@@ -1,6 +1,7 @@
 // @lane: local — drives the in-browser test-repo backend; never touches real GitHub
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
+const YAML = require("yaml");
 
 // Editorial-workflow + GitHub-style backend e2e coverage.
 //
@@ -53,16 +54,17 @@ Wow, a post
 // (top-level keys → folders, leaf objects → `{ content }`). We
 // seed exactly the file under test plus the empty collection
 // folders so the dashboard renders without 404 noise.
-function buildSeed() {
+function buildSeed({ postContent = SEED_POST_CONTENT } = {}) {
   return {
     repoFiles: {
       _posts: {
         "2026-04-25-replacement-test-post-1.md": {
-          content: SEED_POST_CONTENT,
+          content: postContent,
         },
       },
       _tags: {},
       _projects: {},
+      _notes: {},
       pages: {},
     },
     // No open editorial-workflow drafts — entry is fully published,
@@ -72,8 +74,8 @@ function buildSeed() {
   };
 }
 
-async function loadAdmin(page) {
-  const seed = buildSeed();
+async function loadAdmin(page, options) {
+  const seed = buildSeed(options);
   // Run BEFORE any document scripts — Decap reads window.repoFiles
   // at backend-initialise time. addInitScript fires on each new
   // browsing context; serialised JSON keeps the data stable.
@@ -146,7 +148,7 @@ test.describe(
         section: "Editing a post",
         step: "3.2",
         title: "Open an existing post in the editorial workflow",
-        body: "Editorial workflow mode loads the existing entry into a fully editable form. Every widget — Title, Slug, Date, Body, Tags, Featured Image — is enabled (no read-only state) and the toolbar shows a Status dropdown plus a Delete published entry button.",
+        body: "Editorial workflow mode loads the existing entry into a fully editable form. Every editor-facing widget — Title, Date, Body, Tags, Featured Image — is enabled, while the website path remains managed automatically.",
       });
 
       // ── Per-widget disabled-style audit ───────────────────────────────
@@ -251,6 +253,77 @@ test.describe(
           { timeout: 30_000 },
         )
         .toContain(NEW_TITLE);
+    });
+
+    test("editing a title preserves an existing explicit website path", async ({ page }) => {
+      const explicitSlug = "kept-explicit-website-path";
+      const postContent = SEED_POST_CONTENT.replace("slug: ''", `slug: ${explicitSlug}`);
+      await loadAdmin(page, { postContent });
+      await page.goto(`/admin/index-test.html#/collections/posts/entries/${SEED_POST_SLUG}`);
+
+      const titleField = page.getByLabel(/^Title$/);
+      await expect(titleField).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByRole("textbox", { name: /slug/i })).toHaveCount(0);
+      await expect(
+        page.locator('input[id^="slug-field"], textarea[id^="slug-field"]').first(),
+      ).toBeHidden();
+
+      const editedTitle = "A completely different replacement title";
+      await titleField.fill(editedTitle);
+      await expect(page.getByTestId("cms-live-url-banner-link")).toHaveAttribute(
+        "href",
+        new RegExp(`/blog/${explicitSlug}/$`),
+      );
+      await page.getByRole("button", { name: /^save$/i }).first().click();
+
+      let saved = null;
+      await expect
+        .poll(
+          async () => {
+            saved = await page.evaluate(
+              (slug) =>
+                window.repoFilesUnpublished?.[`posts/${slug}`]?.diffs?.[0]?.content || null,
+              SEED_POST_SLUG,
+            );
+            return saved;
+          },
+          { timeout: 30_000 },
+        )
+        .toContain(editedTitle);
+      const frontMatter = saved.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      expect(frontMatter, "saved entry should retain YAML front matter").not.toBeNull();
+      expect(YAML.parse(frontMatter[1]).slug).toBe(explicitSlug);
+    });
+
+    test("hiding the Posts path does not hide a custom collection's slug field", async ({
+      page,
+    }) => {
+      await page.route("**/admin/config-test.yml", async (route) => {
+        const response = await route.fetch();
+        const original = await response.text();
+        const customCollection = `
+  - name: notes
+    label: Notes
+    label_singular: Note
+    folder: _notes
+    create: true
+    slug: "{{slug}}"
+    fields:
+      - { name: title, label: Title, widget: string, required: true }
+      - { name: slug, label: Custom URL Slug, widget: string, required: false }
+      - { name: body, label: Body, widget: markdown, required: true }
+`;
+        await route.fulfill({ response, body: original + customCollection });
+      });
+
+      await loadAdmin(page);
+      await page.goto("/admin/index-test.html#/collections/notes/new");
+
+      const customSlug = page.getByRole("textbox", {
+        name: /^Custom URL Slug(?: \(optional\))?$/i,
+      });
+      await expect(customSlug).toBeVisible({ timeout: 60_000 });
+      await expect(customSlug).toBeEditable();
     });
 
     // ── Create-new through the workflow ────────────────────────────────

@@ -161,10 +161,10 @@
   // every shell that does not load it.
   var FALLBACK = {
     unsaved: {
-      label: "Unsaved changes",
-      detail:
-        "Click Save first — the Publish button only appears once your changes " +
-        "are saved.",
+      // Decap already renders its native UNSAVED CHANGES status in the
+      // toolbar. Repeating it here creates two status badges for one fact.
+      label: "",
+      detail: "Save your changes to enable Publish.",
     },
     draft: {
       label: "Draft — only you can see this",
@@ -342,7 +342,12 @@
     setStyle(el, "color", tone.fg);
     setStyle(el, "border-bottom", "1px solid " + tone.rule);
 
-    setText(document.getElementById(BADGE_ID), view.label);
+    var badge = document.getElementById(BADGE_ID);
+    setText(badge, view.label);
+    // Keep the badge node stable for saved-state transitions, but do not
+    // render an empty pill beside Decap's native UNSAVED CHANGES status.
+    // setStyle compares before writing so the observer cannot feed itself.
+    setStyle(badge, "display", view.label ? "inline-block" : "none");
     setText(document.getElementById(TEXT_ID), view.detail);
     setText(document.getElementById(MODIFIERS_ID), view.modifiers.join(" · "));
 
