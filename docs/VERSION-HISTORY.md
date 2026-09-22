@@ -10,7 +10,7 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.109)
+## Version history (v0.1.0 → v0.1.110)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
@@ -39,7 +39,19 @@ secret `LINKEDIN_ACCESS_TOKEN` (optional; unset skips the leg with a
 service token. As with Mastodon, no token, `Authorization` header or
 response body is ever printed. `scripts/cross_post/`'s suite grows from 106
 to 195 tests (new `test_linkedin.py`, plus CLI and workflow-shape cases).
-Full writeup: `docs/CROSS-POSTING.md` "LinkedIn leg".
+Full writeup: `docs/CROSS-POSTING.md` "LinkedIn leg", plus the activation and
+rotation runbooks recorded from adamdaniel.ai's activation.
+
+Validated on adamdaniel.ai through prerelease `v0.1.110-rc.2`, with dry-run
+dispatches from a smoke branch. The first had no token and skipped with the
+warning (run 35779643480). The second used Adam's real token: `/v2/userinfo`
+resolved the member and the card rendered (run 35791214711). No live post was
+made: both existing posts were already on LinkedIn, and the API has no
+unlisted visibility. So the first real POST, and the `sub`-derived author URN
+with it, is the next newly published post. Also in this release:
+cms-platform#445 (the Mastodon token needs `profile` + `write:statuses`) and
+cms-platform#446 (the editor-publishing copy, previously shipped only as
+`v0.1.110-rc.1`), plus dependency bumps #448 and #449.
 
 **v0.1.109 — automated cross-posting to Mastodon + Substack Markdown (#442).**
 Ported from adamdaniel.ai's site-local prototype (`scripts/cross_post/cross_post.py`
