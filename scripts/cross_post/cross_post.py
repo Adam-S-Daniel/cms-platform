@@ -451,6 +451,14 @@ def _find_existing_status(instance: str, headers: dict, transport, account_id: s
         "?limit=40&exclude_replies=true&exclude_reblogs=true"
     )
     status_code, body = transport("GET", url, headers, None)
+    if status_code in (401, 403):
+        print(
+            f"::error::Mastodon dedupe lookup refused (HTTP {status_code}): the token needs "
+            "the read:statuses scope (profile + read:statuses + write:statuses; see "
+            'docs/CROSS-POSTING.md "Creating the Mastodon app token"); not posting without a '
+            "duplicate check"
+        )
+        raise SystemExit(1)
     if status_code != 200:
         print(
             f"::warning::Mastodon dedupe lookup failed (HTTP {status_code}); "

@@ -83,7 +83,7 @@ invoked by a LOCAL checked-out path rather than a remote pin (a
 
 | Secret | Required | Notes |
 |---|---|---|
-| `MASTODON_ACCESS_TOKEN` | | app token scoped `profile` + `write:statuses` (`profile` is what the dedupe's `verify_credentials` call needs); unset skips the Mastodon leg with a `::warning::` |
+| `MASTODON_ACCESS_TOKEN` | | app token scoped `profile` + `read:statuses` + `write:statuses` (`profile` is what the dedupe's `verify_credentials` call needs, `read:statuses` is what the duplicate-post lookup needs); unset skips the Mastodon leg with a `::warning::` |
 | `LINKEDIN_ACCESS_TOKEN` | | 60-day member token scoped `openid profile w_member_social`; unset skips the LinkedIn leg with a `::warning::` |
 
 With `mastodon_instance`, `linkedin` and `substack` all left at their defaults, a run
