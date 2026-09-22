@@ -7,8 +7,9 @@ parser") and assert the structural contract that
 `examples/site/.github/workflows/cross-post.yml` (the thin-caller template)
 must hold: `workflow_call` inputs/secrets, minimal permissions, concurrency,
 pinned third-party `uses:` refs, the platform-ref self-consistency of the
-template's pin, no unsafe `${{ }}` interpolation into `run:` blocks, and that
-the Mastodon token only ever travels through one step's `env:`.
+template's pin, no unsafe `${{ }}` interpolation into `run:` blocks, that
+the Mastodon and LinkedIn tokens each only ever travel through one step's
+`env:`, the schedule-only token-age check, and the per-leg `targets` gating.
 
 This is the platform-side sibling of adamdaniel.ai's (now-retired)
 `scripts/cross_post/tests/test_workflow_shape.py`, which asserted the SITE
@@ -80,6 +81,28 @@ def _iter_steps(data: dict[str, Any]):
     for job in data["jobs"].values():
         for step in job.get("steps", []) or []:
             yield step
+
+
+CONFIGURED_GUARD = "inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin"
+
+
+def _step_named(data: dict[str, Any], name: str) -> dict[str, Any]:
+    matches = [s for s in _iter_steps(data) if s.get("name") == name]
+    assert len(matches) == 1, f"expected exactly one step named {name!r}, found {len(matches)}"
+    return matches[0]
+
+
+def _steps_referencing(data: dict[str, Any], needle: str):
+    """(step, in_run, in_with, in_env) for every step whose run/with/env mentions `needle`."""
+    found = []
+    for step in _iter_steps(data):
+        in_run = needle in (step.get("run") or "")
+        in_with = any(needle in str(v) for v in (step.get("with") or {}).values())
+        in_env = any(needle in str(v) for v in (step.get("env") or {}).values())
+        in_if = needle in str(step.get("if", ""))
+        if in_run or in_with or in_env or in_if:
+            found.append((step, in_run, in_with, in_env))
+    return found
 
 
 class TestCrossPostReusable:
@@ -254,11 +277,15 @@ class TestCrossPostReusable:
         # itself, must be gated on at least one leg being configured. Without
         # this, Await/Verify still ran (and waited on a real prod deploy) on
         # an unconfigured site, contradicting the header.
-        configured_guard = "inputs.mastodon_instance != '' || inputs.substack"
+        configured_guard = CONFIGURED_GUARD
         steps = list(_iter_steps(self.data))
         detect_index = next(i for i, s in enumerate(steps) if s.get("id") == "detect")
         for step in steps[detect_index + 1 :]:
             if step.get("name") == "Cross-posting not configured":
+                continue
+            if step.get("name") == "Check LinkedIn token age":
+                # Schedule-only; gated on inputs.linkedin itself (asserted in
+                # test_token_age_check_runs_only_on_schedule_with_linkedin_on).
                 continue
             if_expr = str(step.get("if", ""))
             assert configured_guard in if_expr, (
@@ -268,6 +295,108 @@ class TestCrossPostReusable:
                 "false) would still run it, contradicting the header comment's "
                 "promise that an unconfigured run does nothing else"
             )
+
+    # --- LinkedIn leg, targets, schedule -------------------------------------
+
+    def test_linkedin_input_is_boolean_default_false(self):
+        linkedin = self.data[True]["workflow_call"]["inputs"]["linkedin"]
+        assert linkedin["type"] == "boolean"
+        assert linkedin["default"] is False
+        assert "LinkedIn" in linkedin["description"]
+
+    def test_linkedin_token_minted_input_is_string_default_empty(self):
+        minted = self.data[True]["workflow_call"]["inputs"]["linkedin_token_minted"]
+        assert minted["type"] == "string"
+        assert minted["default"] == ""
+        assert "YYYY-MM-DD" in minted["description"]
+
+    def test_targets_input_is_string_default_all(self):
+        targets = self.data[True]["workflow_call"]["inputs"]["targets"]
+        assert targets["type"] == "string"
+        assert targets["default"] == "all"
+        for leg in ("all", "mastodon", "linkedin", "substack"):
+            assert leg in targets["description"]
+
+    def test_linkedin_access_token_secret_is_optional(self):
+        secrets = self.data[True]["workflow_call"]["secrets"]
+        assert secrets["LINKEDIN_ACCESS_TOKEN"]["required"] is False
+
+    def test_linkedin_token_referenced_exactly_once_and_only_under_env(self):
+        refs = _steps_referencing(self.data, "secrets.LINKEDIN_ACCESS_TOKEN")
+        assert len(refs) == 1, (
+            "expected exactly one step referencing secrets.LINKEDIN_ACCESS_TOKEN, "
+            f"found {len(refs)}"
+        )
+        step, in_run, in_with, in_env = refs[0]
+        assert step.get("name") == "Post to LinkedIn"
+        assert in_env is True
+        assert in_run is False
+        assert in_with is False
+
+    def test_detect_is_skipped_on_schedule(self):
+        detect = next(step for step in _iter_steps(self.data) if step.get("id") == "detect")
+        assert "github.event_name != 'schedule'" in str(detect.get("if", ""))
+
+    def test_token_age_check_runs_only_on_schedule_with_linkedin_on(self):
+        step = _step_named(self.data, "Check LinkedIn token age")
+        if_expr = str(step.get("if", ""))
+        assert "github.event_name == 'schedule'" in if_expr
+        assert "inputs.linkedin" in if_expr
+        assert "check-linkedin-token" in step["run"]
+        assert step["env"] == {"LINKEDIN_TOKEN_MINTED": "${{ inputs.linkedin_token_minted }}"}
+
+    def test_every_other_step_after_detect_waits_on_detect_changed(self):
+        # On a schedule detect is skipped, so `changed` is empty and every
+        # posting step stays off: the weekly run only checks the token age.
+        steps = list(_iter_steps(self.data))
+        detect_index = next(i for i, s in enumerate(steps) if s.get("id") == "detect")
+        for step in steps[detect_index + 1 :]:
+            if step.get("name") in ("Cross-posting not configured", "Check LinkedIn token age"):
+                continue
+            assert "steps.detect.outputs.changed == 'true'" in str(step.get("if", "")), step.get(
+                "name"
+            )
+
+    def test_not_configured_notice_needs_all_three_legs_off_and_no_schedule(self):
+        if_expr = str(_step_named(self.data, "Cross-posting not configured").get("if", ""))
+        assert "inputs.mastodon_instance == ''" in if_expr
+        assert "inputs.substack == false" in if_expr
+        assert "inputs.linkedin == false" in if_expr
+        assert "github.event_name != 'schedule'" in if_expr
+
+    @pytest.mark.parametrize(
+        "name, leg",
+        [
+            ("Render status, Substack Markdown, and job summary", "substack"),
+            ("Upload Substack Markdown", "substack"),
+            ("Post to Mastodon", "mastodon"),
+            ("Post to LinkedIn", "linkedin"),
+        ],
+    )
+    def test_each_leg_is_gated_on_targets(self, name, leg):
+        if_expr = str(_step_named(self.data, name).get("if", ""))
+        assert f"(inputs.targets == 'all' || inputs.targets == '{leg}')" in if_expr
+
+    def test_linkedin_step_gated_on_inputs_linkedin_and_configured(self):
+        step = _step_named(self.data, "Post to LinkedIn")
+        if_expr = str(step.get("if", ""))
+        assert "steps.detect.outputs.changed == 'true' && inputs.linkedin &&" in if_expr
+        assert CONFIGURED_GUARD in if_expr
+
+    def test_linkedin_step_env_and_run(self):
+        step = _step_named(self.data, "Post to LinkedIn")
+        assert step["env"] == {
+            "LINKEDIN_ACCESS_TOKEN": "${{ secrets.LINKEDIN_ACCESS_TOKEN }}",
+            "LINKEDIN_TOKEN_MINTED": "${{ inputs.linkedin_token_minted }}",
+            "DRY_RUN": "${{ inputs.dry_run }}",
+        }
+        assert "post-linkedin" in step["run"]
+        assert "--dry-run" in step["run"]
+        assert '"$DRY_RUN" = "true"' in step["run"]
+
+    def test_linkedin_step_runs_after_mastodon(self):
+        names = [s.get("name") for s in _iter_steps(self.data)]
+        assert names.index("Post to LinkedIn") == names.index("Post to Mastodon") + 1
 
 
 class TestCrossPostTemplate:
@@ -382,3 +511,42 @@ class TestCrossPostTemplate:
             assert FULL_SHA_RE.match(ref), f"uses ref is not a full 40-char sha: {value}"
             after_at = raw_line.split("@", 1)[-1]
             assert "#" not in after_at, f"trailing comment on uses line: {raw_line!r}"
+
+    # --- LinkedIn leg, targets, schedule -------------------------------------
+
+    def test_weekly_schedule_trigger(self):
+        schedule = self.data[True]["schedule"]
+        assert schedule == [{"cron": "23 6 * * 1"}]
+
+    def test_run_name_has_a_schedule_branch(self):
+        run_name = self.data["run-name"]
+        assert "github.event_name == 'schedule'" in run_name
+        assert "format('scheduled — {0}', github.event.schedule)" in run_name
+        assert "format('push — {0} @{1}', github.ref_name, github.actor)" in run_name
+        assert "format('manual — @{0}', github.actor)" in run_name
+
+    def test_workflow_dispatch_targets_input(self):
+        targets = self.data[True]["workflow_dispatch"]["inputs"]["targets"]
+        assert targets["type"] == "choice"
+        assert targets["options"] == ["all", "mastodon", "linkedin", "substack"]
+        assert targets["default"] == "all"
+
+    def test_with_block_leaves_linkedin_off_and_forwards_minted_and_targets(self):
+        (job,) = self.data["jobs"].values()
+        with_block = job["with"]
+        assert with_block["linkedin"] is False
+        assert with_block["linkedin_token_minted"] == "${{ vars.LINKEDIN_TOKEN_MINTED || '' }}"
+        assert with_block["targets"] == "${{ inputs.targets || 'all' }}"
+
+    def test_with_keys_are_all_reusable_inputs(self):
+        (job,) = self.data["jobs"].values()
+        reusable_inputs = _load_yaml(CROSS_POST_REUSABLE)[True]["workflow_call"]["inputs"]
+        unknown = set(job["with"]) - set(reusable_inputs)
+        assert unknown == set(), f"template passes inputs the reusable does not declare: {unknown}"
+
+    def test_secrets_map_forwards_both_tokens(self):
+        (job,) = self.data["jobs"].values()
+        assert job["secrets"] == {
+            "MASTODON_ACCESS_TOKEN": "${{ secrets.MASTODON_ACCESS_TOKEN }}",
+            "LINKEDIN_ACCESS_TOKEN": "${{ secrets.LINKEDIN_ACCESS_TOKEN }}",
+        }

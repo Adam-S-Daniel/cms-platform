@@ -143,3 +143,45 @@ def test_cli_post_mastodon_no_token(tmp_path, monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "MASTODON_ACCESS_TOKEN is not set" in captured.out
+
+
+def test_cli_post_linkedin_no_token(tmp_path, monkeypatch, capsys):
+    (tmp_path / "_config.yml").write_text(CONFIG_TEXT, encoding="utf-8")
+    path = make_post_file(
+        tmp_path,
+        "2026-01-01-linkedin-post.md",
+        ["title: LinkedIn Post", "published: true"],
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LINKEDIN_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("LINKEDIN_TOKEN_MINTED", raising=False)
+    out_dir = tmp_path / "out"
+
+    cross_post.main(["detect", "--post", path, "--out", str(out_dir)])
+    rc = cross_post.main(["post-linkedin", "--out", str(out_dir)])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "::warning::LinkedIn leg skipped: LINKEDIN_ACCESS_TOKEN is not set" in captured.out
+    assert not (out_dir / "linkedin-post.linkedin.json").exists()
+
+
+def test_cli_check_linkedin_token_fresh_with_today(monkeypatch, capsys):
+    monkeypatch.setenv("LINKEDIN_TOKEN_MINTED", "2026-09-01")
+    rc = cross_post.main(["check-linkedin-token", "--today", "2026-09-22"])
+    assert rc == 0
+    assert "::notice::LinkedIn access token is 21 days old; expires in 39 days" in capsys.readouterr().out
+
+
+def test_cli_check_linkedin_token_expired_with_today(monkeypatch, capsys):
+    monkeypatch.setenv("LINKEDIN_TOKEN_MINTED", "2026-07-01")
+    rc = cross_post.main(["check-linkedin-token", "--today", "2026-09-22"])
+    assert rc == 1
+    assert "::error::LinkedIn access token expired (minted 2026-07-01, 83 days ago)" in capsys.readouterr().out
+
+
+def test_cli_check_linkedin_token_unset(monkeypatch, capsys):
+    monkeypatch.delenv("LINKEDIN_TOKEN_MINTED", raising=False)
+    rc = cross_post.main(["check-linkedin-token", "--today", "2026-09-22"])
+    assert rc == 1
+    assert "::error::LINKEDIN_TOKEN_MINTED is not set" in capsys.readouterr().out
