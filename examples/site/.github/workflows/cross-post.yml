@@ -17,7 +17,7 @@
 #                            Substack has no publish API, so posting it is
 #                            always paste-by-hand.
 #
-# `secrets: MASTODON_ACCESS_TOKEN` — an app token scoped to `write:statuses`
+# `secrets: MASTODON_ACCESS_TOKEN` — an app token scoped to `profile` + `write:statuses`
 # ONLY (see docs/CROSS-POSTING.md for how to mint one). Optional: with the
 # secret unset, the Mastodon leg is skipped with an `::warning::` rather than
 # failing the run.

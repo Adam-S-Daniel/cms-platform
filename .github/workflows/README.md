@@ -77,7 +77,7 @@ consumer rejects the latter): `docs/CROSS-POSTING.md`.
 
 | Secret | Required | Notes |
 |---|---|---|
-| `MASTODON_ACCESS_TOKEN` | | app token scoped `write:statuses` only; unset skips the Mastodon leg with a `::warning::` |
+| `MASTODON_ACCESS_TOKEN` | | app token scoped `profile` + `write:statuses` (`profile` is what the dedupe's `verify_credentials` call needs); unset skips the Mastodon leg with a `::warning::` |
 
 With both `mastodon_instance` and `substack` left at their defaults, a run
 detects the post, prints one `::notice::`, and does nothing else — the
