@@ -21,10 +21,10 @@
 #                            Substack has no publish API, so posting it is
 #                            always paste-by-hand.
 #
-# `secrets: MASTODON_ACCESS_TOKEN` — an app token scoped to `profile` + `write:statuses`
-# ONLY (see docs/CROSS-POSTING.md for how to mint one). Optional: with the
-# secret unset, the Mastodon leg is skipped with an `::warning::` rather than
-# failing the run.
+# `secrets: MASTODON_ACCESS_TOKEN` — an app token scoped to `profile` +
+# `read:statuses` + `write:statuses` ONLY (see docs/CROSS-POSTING.md for how to
+# mint one). Optional: with the secret unset, the Mastodon leg is skipped with
+# an `::warning::` rather than failing the run.
 #
 # `secrets: LINKEDIN_ACCESS_TOKEN` + variable `vars.LINKEDIN_TOKEN_MINTED` —
 # a 60-day member token (scopes `openid profile w_member_social`) and the

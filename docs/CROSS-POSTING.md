@@ -116,9 +116,17 @@ Before posting, `post-mastodon` resolves the account (`verify_credentials`)
 and scans its 40 most recent original statuses for a link to the post's URL;
 a match is reported as `already-posted` and nothing is sent, so a manual
 re-run or a `main` push that re-detects a post cannot double-post. Each POST
-also carries an `Idempotency-Key` derived from a SHA-256 of the post URL. If
-the dedupe lookup itself fails (a non-200 response), the run prints a warning
-and posts anyway rather than silently skipping a real post.
+also carries an `Idempotency-Key` derived from a SHA-256 of the post URL —
+but Mastodon only honors that header for about an hour, so it is not a
+substitute for the duplicate-post lookup on a re-run outside that window. If
+the lookup itself is refused with HTTP 401 or 403 — meaning the token lacks
+`read:statuses` — the run now prints an `::error::` and exits without posting
+that post, or any later post in the same run: see "Creating the Mastodon app
+token" below. Before v0.1.111, a `write:statuses`-only token made every
+lookup come back 403, and that 403 was silently swallowed as a warning
+followed by posting anyway, so the duplicate check never actually ran. Any
+other lookup failure (5xx, a `0` from a network error, 404, and so on) still
+only warns and posts anyway.
 
 ## Substack is paste-by-hand — there's no publish API
 
@@ -132,8 +140,18 @@ tags/featured_image) alongside it.
 ## Creating the Mastodon app token
 
 On your Mastodon instance (e.g. `hachyderm.io`): **Preferences → Development
-→ New application**. Grant it **`profile` and `write:statuses`** — `profile` only lets the dedupe step read the account's own id via `verify_credentials` (a `write:statuses`-only token gets a 403 there; measured 2026-09-22); no other scope is
-needed, and the workflow never reads or writes anything else on the account.
+→ New application**. Grant it **`profile`, `read:statuses`, and
+`write:statuses`** — `profile` lets the dedupe step read the account's own id
+via `verify_credentials` (a token missing it gets a 403 there; measured
+2026-09-22), `read:statuses` lets that same step list the account's recent
+statuses to check for a duplicate post, and `write:statuses` lets it actually
+post. No other scope is needed, and the workflow never reads or writes
+anything else on the account. Before v0.1.111 only `profile` and
+`write:statuses` were required, but the dedupe lookup needs `read:statuses`
+too (see "Dedupe / idempotency" above) — a `write:statuses`-only token made
+that lookup 403 and the run silently posted anyway, without ever checking for
+a duplicate.
+
 Copy the generated access token into the site repo's **`MASTODON_ACCESS_TOKEN`**
 Actions secret. Until the secret exists, `cross-post.yml` still runs to
 completion (detect/verify/render/upload all happen when `substack: true`) —

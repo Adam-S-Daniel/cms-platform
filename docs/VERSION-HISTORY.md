@@ -14,6 +14,22 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
+**v0.1.111 — the Mastodon dedupe needs read:statuses; a refused lookup now fails the leg (#442).**
+`_find_existing_status`'s duplicate-post lookup (`GET
+/api/v1/accounts/{id}/statuses`) needs the `read:statuses` scope when called
+with a user token, but the token minted per v0.1.110's guidance carried only
+`profile` + `write:statuses`, so the lookup always came back 403 and the
+existing non-200 handling silently warned and posted anyway — the duplicate
+check never actually ran. `_find_existing_status` now treats a 401 or 403
+specially: it prints an `::error::` naming the missing scope and raises
+`SystemExit(1)`, so nothing is posted for that post or any later post in the
+run; every other non-200 (5xx, a `0` from a network error, 404, and so on)
+keeps the old warn-and-post-anyway behavior. The required scopes are now
+`profile` + `read:statuses` + `write:statuses` everywhere they're documented.
+`scripts/cross_post/`'s suite grows from 195 to 197 tests. Full writeup:
+`docs/CROSS-POSTING.md` "Creating the Mastodon app token" and "Dedupe /
+idempotency".
+
 **v0.1.110 — LinkedIn cross-posting leg (#442).**
 `cross-post.yml` gains a third, off-by-default leg: `linkedin: true` shares
 each newly-published post to the token owner's LinkedIn profile as an

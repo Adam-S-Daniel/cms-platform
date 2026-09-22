@@ -31,9 +31,9 @@ const ALLOWED_PATS = new Set(["CMS_E2E_PAT", "CMS_PLATFORM_PAT"]);
 // own justification, same bar as a new ALLOWED_PAT would need.
 //
 //   MASTODON_ACCESS_TOKEN — cross-post.yml's (cms-platform#442) app token for
-//   posting to a site's OWN Mastodon account (scopes profile + write:statuses, see
-//   docs/CROSS-POSTING.md). It authenticates Mastodon's API, never GitHub's,
-//   so it has nothing to consolidate onto CMS_E2E_PAT/CMS_PLATFORM_PAT — both
+//   posting to a site's OWN Mastodon account (scopes profile + read:statuses +
+//   write:statuses, see docs/CROSS-POSTING.md). It authenticates Mastodon's API,
+//   never GitHub's, so it has nothing to consolidate onto CMS_E2E_PAT/CMS_PLATFORM_PAT — both
 //   of those are fine-grained GitHub PATs and neither can stand in for it.
 //
 //   LINKEDIN_ACCESS_TOKEN — cross-post.yml's (cms-platform#442) member access
