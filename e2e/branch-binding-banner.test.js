@@ -164,6 +164,10 @@ function sandboxFor({ production, config, status = 200, gate = null, siteLive = 
       CMS_APEX: "example.test",
       CMS_SITE_ORIGIN: "https://example.test",
       CMS_SITE_GATE: gate,
+      CMSHostname: {
+        canonical: () => "example.test",
+        current: () => "preview-pr9999.example.test",
+      },
     },
     document,
     URL,

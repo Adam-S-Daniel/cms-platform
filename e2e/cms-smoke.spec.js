@@ -193,9 +193,7 @@ test.describe(
     // collection — it can't catch a Posts schema regression. Open a Posts
     // entry and assert every declared field's input is actually rendered with
     // a non-zero box AND a measurable contrast against its background.
-    test("Posts edit form: every editor-facing field renders with visible content", async ({
-      page,
-    }) => {
+    test("Posts edit form: every declared field renders with visible content", async ({ page }) => {
       await page.goto("/admin/index-local.html");
       await page.getByRole("button", { name: /login/i }).click();
       await page.getByRole("link", { name: /^posts$/i }).waitFor({ timeout: 30_000 });
@@ -215,11 +213,11 @@ test.describe(
         section: "Editing a post",
         step: "3.1",
         title: "The Posts edit form",
-        body: "The Posts edit form shows the fields an editor needs: Title, Date, Excerpt, Tags, Featured Image, Published, Publish Date, and Body. The website path is managed automatically. Select **Save** to keep your changes, then **Publish** to put them on the website.",
+        body: "The Posts edit form renders every field declared in `admin/config.yml`: Title, URL Slug, Date, Excerpt, Tags, Featured Image, Published, Publish Date, and the Body markdown editor. Select **Save** to keep your changes, then **Publish** to put them on the configured website.",
       });
 
-      // Every editor-facing label from the Posts schema should appear in the
-      // rendered form. Decap doesn't always wire
+      // Every declared label from the Posts schema in admin/config.yml
+      // should appear in the rendered form. Decap doesn't always wire
       // <label for> to inputs (image widget, list widget, markdown editor
       // are unlabelled inputs with a sibling heading), so we check for the
       // label *text* rather than label-input association — same coverage
@@ -227,6 +225,7 @@ test.describe(
       // widgets that don't expose accessible names.
       for (const labelText of [
         "Title",
+        "URL Slug",
         "Date",
         "Excerpt",
         "Tags",
@@ -245,18 +244,13 @@ test.describe(
         ).toBeVisible({ timeout: 5_000 });
       }
 
-      await expect(
-        page.getByLabel(/^URL Slug/),
-        "URL Slug is implementation detail and must not be editable",
-      ).toHaveCount(0);
-      await expect(page.getByRole("textbox", { name: /slug/i })).toHaveCount(0);
-      await expect(
-        page.locator('input[id^="slug-field"], textarea[id^="slug-field"]').first(),
-      ).toBeHidden();
+      const slugField = page.getByLabel(/^URL Slug/);
+      await expect(slugField).toBeVisible();
+      await expect(slugField).toBeEditable();
 
       // Form has more than just the Title input — guards against the
       // "Title rendered but everything else missing" failure mode. The
-      // Posts schema exposes title, date, excerpt, tags, published and
+      // Posts schema declares title, slug, date, excerpt, tags, published,
       // publish_date as input/textarea-flavoured fields — at least 4 of
       // these should be on the page even after Decap's hidden-checkbox
       // and shadow-tree quirks.

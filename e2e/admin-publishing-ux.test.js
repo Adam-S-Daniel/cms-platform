@@ -515,14 +515,18 @@ test.describe("#412 — the branch binding is stated once, from the config", () 
     ).toBe(true);
   });
 
-  // The gate banner's copy has to be true from a preview admin as well as
-  // from production, and it can only be that by naming the public site
-  // rather than "the site" — the apex is the injected identity for that.
-  test("site-gate-banner.js names the public site by window.CMS_APEX", () => {
+  // The gate banner always describes the canonical destination, including
+  // when read from a preview. The shared hostname helper owns that identity.
+  test("site-gate-banner.js names the canonical host through CMSHostname", () => {
+    const src = admin(GATE_BANNER);
     expect(
-      readsMember(admin(GATE_BANNER), "window", "CMS_APEX"),
-      "site-gate-banner.js must read window.CMS_APEX — its copy names the production site so that " +
-        "it stays true when read on a preview admin bound to a branch (#412)",
+      readsMember(src, "window", "CMSHostname"),
+      "site-gate-banner.js must read the shared CMSHostname identity",
+    ).toBe(true);
+    expect(
+      callsInsideFunction(src, "render").has("canonical"),
+      "site-gate-banner.js render() must call CMSHostname.canonical() so preview copy still names " +
+        "the configured publishing destination (#412)",
     ).toBe(true);
   });
 });

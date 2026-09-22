@@ -150,15 +150,16 @@
   // without a `published` field (jodidaniel.com's nine section collections,
   // every file collection) must not acquire a modifier they have no control
   // over.
-  function modifiersFor(facts, now) {
+  function modifiersFor(facts, now, options) {
     var f = facts || {};
+    var host = (options && options.currentHostname) || "this address";
     var out = [];
     if (f.published === false) {
       out.push({
         key: "hidden",
         label: MODIFIER_LABELS.hidden,
         detail:
-          "You have this switched off, so it will not show on the website even " +
+          "You have this switched off, so it will not show on " + host + " even " +
           "once it is live. Turn “Published” on to show it.",
       });
     }
@@ -167,7 +168,7 @@
       out.push({
         key: "scheduled",
         label: MODIFIER_LABELS.scheduled + " for " + formatDate(when),
-        detail: "This appears on the website automatically on " + formatDate(when) + ".",
+        detail: "This appears on " + host + " automatically on " + formatDate(when) + ".",
       });
     }
     return out;
@@ -212,11 +213,19 @@
   // "the website" is a lie on a preview surface (see the header). Naming the
   // branch rather than inventing a preview URL follows publish-button.js's
   // targetUrl() rule: naming the wrong URL would be worse than naming none.
-  function destination(facts) {
+  function destination(facts, options) {
     var f = facts || {};
-    if (!f.previewOnly) return { noun: "the website", preview: false };
+    var opts = options || {};
+    var canonical = opts.canonicalHostname || "the published destination";
+    if (!f.previewOnly) return { noun: canonical, canonical: canonical, preview: false };
+    var current = opts.currentHostname;
+    var previewNoun =
+      current && current !== canonical
+        ? current
+        : "the preview for " + (f.baseRef ? "“" + f.baseRef + "”" : "this branch");
     return {
-      noun: "the preview for " + (f.baseRef ? "“" + f.baseRef + "”" : "this branch"),
+      noun: previewNoun,
+      canonical: canonical,
       preview: true,
     };
   }
@@ -227,16 +236,17 @@
   // the contact is named instead; `contact` comes from the site's own
   // window.CMS_SUPPORT_CONTACT, falling back to a generic noun rather than
   // to a broken link.
-  function attentionCopy(facts, contact, stalled) {
+  function attentionCopy(facts, contact, stalled, dest) {
     var f = facts || {};
-    var who = contact || "whoever looks after this website";
+    var host = dest.canonical;
+    var who = contact || "whoever looks after " + host;
     // Ordered before the generic fallback but AFTER every specific cause: a
     // PR is only ever `settled` when none of those hold, so the ordering here
     // is documentation rather than arbitration.
     if (f.mergeConflict) {
       return {
         detail:
-          "This was edited in two places at once, so the website could not work " +
+          "This was edited in two places at once, so " + dest.noun + " could not work " +
           "out which version to use. Ask " + who + " to sort it out — nothing you " +
           "typed has been lost.",
         waitingOn: "a person to resolve two conflicting edits",
@@ -261,9 +271,9 @@
     if (f.deployState === "failure" || f.deployState === "error") {
       return {
         detail:
-          "The website update did not finish. Nothing you typed has been lost. " +
+          "The update to " + dest.noun + " did not finish. Nothing you typed has been lost. " +
           "Ask " + who + " to take a look.",
-        waitingOn: "the website update, which did not finish",
+        waitingOn: "the update to " + dest.noun + ", which did not finish",
       };
     }
     if (stalled) {
@@ -274,15 +284,15 @@
           detail:
             "Everything passed, but this was edited on a preview of " +
             (f.baseRef ? "“" + f.baseRef + "”" : "another branch") +
-            ", and a change made on a preview does not reach the live website " +
-            "on its own. Nothing you typed has been lost — ask " + who +
-            " to put it on the live website.",
-          waitingOn: "a person to move this from the preview to the live website",
+            ", and a change made there does not reach " + host +
+            " on its own. Nothing you typed has been lost — ask " + who +
+            " to put it on " + host + ".",
+          waitingOn: "a person to move this from " + dest.noun + " to " + host,
         };
       }
       return {
         detail:
-          "Every check passed, but the website did not take the update. Nothing " +
+          "Every check passed, but " + host + " did not take the update. Nothing " +
           "you typed has been lost — ask " + who + " to finish putting it live.",
         waitingOn: "a person to finish putting this live",
       };
@@ -307,8 +317,8 @@
     var opts = options || {};
     var now = isFiniteNumber(opts.now) ? opts.now : null;
     var contact = opts.contact || null;
-    var modifiers = modifiersFor(f, now);
-    var dest = destination(f);
+    var modifiers = modifiersFor(f, now, opts);
+    var dest = destination(f, opts);
 
     // A stall is a stopped publish (see the header): the merge had everything
     // it needed and did not happen, so believing `armed` past that point is
@@ -323,7 +333,7 @@
       stalled;
 
     if (stopped) {
-      var copy = attentionCopy(f, contact, stalled);
+      var copy = attentionCopy(f, contact, stalled, dest);
       return {
         badge: BADGE.NEEDS_ATTENTION,
         label: "Needs attention",
@@ -341,7 +351,7 @@
     if (inFlight) {
       var mins = remainingMinutes(f, now);
       var waiting = f.merged
-        ? "the website to finish updating"
+        ? dest.noun + " to finish updating"
         : f.waitingOn || "the automatic safety checks to finish";
       return {
         badge: BADGE.GOING_LIVE,
@@ -349,7 +359,7 @@
         detail:
           "This is on its way to " + dest.noun + ". It is waiting for " + waiting + ". " +
           "You can close this tab — it carries on without you." +
-          (dest.preview ? " It is not going to the live website." : ""),
+          (dest.preview ? " It is not going to " + dest.canonical + "." : ""),
         waitingOn: waiting,
         minutesLeft: mins,
         modifiers: modifiers,
@@ -363,7 +373,7 @@
         detail:
           "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
           "put it on " + dest.noun + "." +
-          (dest.preview ? " It will not go to the live website." : ""),
+          (dest.preview ? " It will not go to " + dest.canonical + "." : ""),
         waitingOn: null,
         minutesLeft: null,
         modifiers: modifiers,

@@ -114,7 +114,7 @@
   }
 
   function productionSite() {
-    return window.CMS_APEX || window.CMS_SITE_ORIGIN || "the live site";
+    return window.CMSHostname ? window.CMSHostname.canonical() : "the published destination";
   }
 
   function render(branch) {
@@ -160,7 +160,8 @@
     text.appendChild(code);
     text.appendChild(
       document.createTextNode(
-        " branch from a preview. Anything you save or publish here updates this preview only — " +
+        " branch on " + (window.CMSHostname ? window.CMSHostname.current() : "this preview") +
+          ". Anything you save or publish here updates that address only — " +
           "it reaches " + productionSite() + " when ",
       ),
     );

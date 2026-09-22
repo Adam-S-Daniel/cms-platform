@@ -131,12 +131,12 @@ const PROBES = [
   },
   {
     match: ["editing a post", "entry form", "posts edit"],
-    name: "Posts edit form has all 8 documented fields",
+    name: "Posts edit form has all 9 documented fields",
     async run(page, ctx) {
       // Manual claims: "The Posts edit form renders every field declared
-      // in admin/config.yml: Title, Date, Excerpt, Tags,
+      // in admin/config.yml: Title, URL Slug, Date, Excerpt, Tags,
       // Featured Image, Published, Publish Date, and the Body markdown
-      // editor." That's 8 documented affordances — same list locked in
+      // editor." That's 9 documented affordances — same list locked in
       // by `e2e/cms-field-targeting.spec.js` and the canary test in
       // `e2e/cms-smoke.spec.js`.
       await page.goto("/admin/index-local.html");
@@ -150,6 +150,7 @@ const PROBES = [
 
       const documentedLabels = [
         "Title",
+        "URL Slug",
         "Date",
         "Excerpt",
         "Tags",
@@ -165,14 +166,14 @@ const PROBES = [
           .first();
         await expect(
           labelLocator,
-          `Manual section §${ctx.section} (line ${ctx.line}) → documented field "${label}" not rendered in the Posts edit form. The manual lists 8 fields (Title, Date, Excerpt, Tags, Featured Image, Published, Publish Date, Body); update the manual section if "${label}" was intentionally removed from admin/config.yml.`,
+          `Manual section §${ctx.section} (line ${ctx.line}) → documented field "${label}" not rendered in the Posts edit form. The manual lists 9 fields (Title, URL Slug, Date, Excerpt, Tags, Featured Image, Published, Publish Date, Body); update the manual section if "${label}" was intentionally removed from admin/config.yml.`,
         ).toBeVisible({ timeout: 5_000 });
       }
       await captureStep(page, {
         section: "Manual probe — entry form",
         step: `c1-${ctx.line}`,
         title: `Posts edit form fields present (manual line ${ctx.line})`,
-        body: "C1 runtime probe: confirms each of the 8 editor-facing fields documented in the Editing a post section of the manual (Title, Date, Excerpt, Tags, Featured Image, Published, Publish Date, Body) is still rendered when opening a post, while the website path remains managed automatically.",
+        body: "C1 runtime probe: confirms each of the 9 fields documented in the Editing a post section of the manual (Title, URL Slug, Date, Excerpt, Tags, Featured Image, Published, Publish Date, Body) is still rendered when opening a post.",
       });
     },
   },

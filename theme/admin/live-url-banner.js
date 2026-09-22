@@ -35,9 +35,7 @@
  *
  * Stateful sources (read inside `live-url-derive.js`):
  *   - `<input id="title-field-N">` — title text
- *   - `<input id="slug-field-N">` — explicit URL slug (optional). Posts keep
- *     this input in Decap's tree so saved explicit slugs still drive the URL,
- *     while this script hides its whole field container from editors.
+ *   - `<input id="slug-field-N">` — editable explicit URL slug (optional)
  *   - `<input id="name-field-N">` — for tags (label is the slug source)
  *   - `<input id="permalink-field-N">` — for pages
  *   - `<button role="switch">` inside the Published field's
@@ -67,67 +65,6 @@
   // loaded before this script (see admin/index*.html ordering).
   function compute() {
     return window.LiveURL ? window.LiveURL.compute() : null;
-  }
-
-  // Posts retain the optional string slug in the schema and DOM because an
-  // existing front-matter slug can differ from both the title and filename,
-  // and live-url-derive.js must keep reading that exact value. Decap's hidden
-  // widget is filtered out of the editor tree entirely, which would erase the
-  // only public-DOM source for that URL. Hide the field's own wrapper instead,
-  // scoped to the Posts route so a site collection's unrelated slug field
-  // remains editable.
-  var hiddenPostSlug = null;
-
-  function restorePostSlug() {
-    if (!hiddenPostSlug) return;
-    var node = hiddenPostSlug.node;
-    if (node && node.style) {
-      if (hiddenPostSlug.display) {
-        node.style.setProperty("display", hiddenPostSlug.display, hiddenPostSlug.priority);
-      } else {
-        node.style.removeProperty("display");
-      }
-    }
-    hiddenPostSlug = null;
-  }
-
-  function syncPostSlugVisibility() {
-    var collection = window.LiveURL && window.LiveURL.getCollection
-      ? window.LiveURL.getCollection()
-      : null;
-    var field = null;
-    if (collection === "posts") {
-      field = document.querySelector(
-        'input[id^="slug-field"], textarea[id^="slug-field"]',
-      );
-    }
-
-    var container = null;
-    for (var node = field, depth = 0; node && depth < 8; depth++, node = node.parentElement) {
-      if (
-        typeof node.className === "string" &&
-        node.className.indexOf("ControlContainer") !== -1
-      ) {
-        container = node;
-        break;
-      }
-    }
-
-    if (hiddenPostSlug && hiddenPostSlug.node !== container) restorePostSlug();
-    if (!container) return;
-    if (!hiddenPostSlug) {
-      hiddenPostSlug = {
-        node: container,
-        display: container.style.getPropertyValue("display"),
-        priority: container.style.getPropertyPriority("display"),
-      };
-    }
-    if (
-      container.style.getPropertyValue("display") !== "none" ||
-      container.style.getPropertyPriority("display") !== "important"
-    ) {
-      container.style.setProperty("display", "none", "important");
-    }
   }
 
   // ── open-PR lookup (preview-vs-prod origin) ──────────────────────
@@ -310,7 +247,6 @@
   var lastHTML = null;
 
   function render() {
-    syncPostSlugVisibility();
     var banner = ensureBanner();
     if (!banner) return;
     var data = compute();
@@ -323,10 +259,19 @@
     // Label span — same styling whether or not the row is wrapped in an
     // anchor. Color stays even on the anchor case (the outer anchor uses
     // `color:inherit` so children render their own colors).
-    var labelHTML =
-      "<span style=\"font-weight:600;color:#8ab0e8;text-transform:uppercase;letter-spacing:0.08em;font-size:0.7rem;font-family:'SF Mono','Fira Code',monospace;\">View page on site:</span>";
-
     var nextHTML;
+    var liveURL = data.url ? previewAwareURL(data.url) : null;
+    var labelHost =
+      (window.CMSHostname && window.CMSHostname.fromURL(liveURL || data.url)) ||
+      (window.CMSHostname && window.CMSHostname.current()) ||
+      "this address";
+    var safeHost = String(labelHost).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+    var labelHTML =
+      "<span style=\"font-weight:600;color:#8ab0e8;text-transform:uppercase;letter-spacing:0.08em;font-size:0.7rem;font-family:'SF Mono','Fira Code',monospace;\">View page on " +
+      safeHost +
+      ":</span>";
     if (data.published === false) {
       // No destination → render plain spans, no anchor. An anchor with
       // no href would be misleading; the row is informational here.
@@ -342,7 +287,6 @@
       // clickable surface. data-testid is the contract e2e tests assert
       // on. When the entry is an unmerged editorial-workflow draft the
       // host is the per-PR preview env (it 404s on prod until merge).
-      var liveURL = previewAwareURL(data.url);
       var safeURL = String(liveURL).replace(/[<>"']/g, function (c) {
         return { "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
       });

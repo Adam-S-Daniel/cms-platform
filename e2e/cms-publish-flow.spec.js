@@ -135,15 +135,14 @@ test.describe(
 
       const titleField = page.getByLabel(/^Title$/);
       await expect(titleField).toBeVisible({ timeout: 60_000 });
-
-      // The URL is derived from Title. Editors should not have a second,
-      // technical path field to keep in sync with it.
-      await expect(page.getByLabel(/^URL Slug/)).toHaveCount(0);
-      await expect(page.getByRole("textbox", { name: /slug/i })).toHaveCount(0);
-      await expect(
-        page.locator('input[id^="slug-field"], textarea[id^="slug-field"]').first(),
-      ).toBeHidden();
       await titleField.fill(SMOKE_TITLE);
+
+      // Set the editable path explicitly so this end-to-end publish test remains
+      // deterministic if Decap's title-to-slug conversion changes.
+      const slugField = page.getByLabel(/^URL Slug/);
+      await expect(slugField).toBeVisible();
+      await expect(slugField).toBeEditable();
+      await slugField.fill(SMOKE_SLUG);
 
       // Decap's markdown widget defaults to rich-text mode. The
       // contentEditable surface accepts plain typed text, which is good
@@ -172,7 +171,7 @@ test.describe(
         section: "Marking ready and publishing",
         step: "6.1",
         title: "Filled-out post ready to publish",
-        body: "Title, body, tags, and the Published toggle are all set. The website path is generated from the Title. In production, select **Save**, then select **Publish** to put the post on the website.",
+        body: "Title, URL Slug, body, tags, and the Published toggle are all set. In production, select **Save**, then select **Publish** to put the post on the configured website.",
       });
 
       // Decap's split publish button: open menu, pick "Publish now".
@@ -197,6 +196,7 @@ test.describe(
       const written = fs.readFileSync(postPath, "utf8");
       expect(written).toMatch(/^---/);
       expect(written).toContain(`title: ${SMOKE_TITLE}`);
+      expect(written).toContain(`slug: ${SMOKE_SLUG}`);
       expect(written).toContain("published: true");
 
       // ── Rebuild Jekyll so /blog/<slug>/ is in `_site/` ────────────────

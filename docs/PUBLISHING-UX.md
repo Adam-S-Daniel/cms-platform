@@ -366,11 +366,12 @@ confirmation's **"It will appear at https://&lt;apex&gt;/… in about 5–15
 minutes"**, a specific, checkable, false promise on the one surface whose whole
 point is that nothing reaches the live site.
 
-`entry-status-model.js` now derives the destination once (`destination(facts)`),
-and both the bar and the button name it. On a preview it is the branch, not a
-URL: the preview origin is not derivable from anything these shims may read,
-and `publish-button.js`'s existing `targetUrl()` rule already says naming the
-wrong URL is worse than naming none. `publish-progress.js` supplies the fact
+`entry-status-model.js` now derives the destination once (`destination(facts,
+options)`), and both the bar and the button name it. `site-hostname.js` supplies
+the browser's current hostname and the configured canonical hostname. On a
+preview, the former names where this publish goes and the latter names where
+it does not go. When both hosts are the same, the model keeps the honest branch
+description rather than inventing a preview URL. `publish-progress.js` supplies the fact
 from two free signals on the `/pulls` list response it already makes — the
 `cms/preview-only` label, or `base.ref !== base.repo.default_branch` — so it
 costs no extra request and hardcodes no branch name.
@@ -379,20 +380,15 @@ costs no extra request and hardcodes no branch name.
 as a 0.65rem pill in a corner. This puts it in the sentence the editor is
 already reading.
 
-**One state it deliberately does not cover.** The preview fact comes off the
-entry's own PR, so an entry with *no* open PR still reads **Live — this is on
-the website now**, which on a preview surface is the old wrong noun. Closing it
-would mean a signal that does not depend on a PR, and the cheap one —
-`location.origin !== window.CMS_SITE_ORIGIN` — is a heuristic, not a fact: a
-site served from `www.` while its `_config.yml` `url` names the apex would
-match it on production. That false positive tells an editor on the REAL site
-that publishing will not reach the live website, which is worse than the miss
-it fixes. The PR-derived signals are exact; this one is not, so it was left
-out.
+`e2e/entry-status-model.test.js` pins the fallback explicitly: a preview-only
+entry encountered on the canonical host degrades to "the preview for this
+branch", never to a guessed URL.
 
-`e2e/entry-status-model.test.js` pins the residual explicitly (a preview whose
-base ref is unknown degrades to "the preview for this branch", never to a URL),
-so the gap is a recorded decision rather than an oversight.
+The preview fact still comes from the entry's open pull request. With no open
+PR, `publish-progress.js` reports `previewOnly: false`, so a steady Live entry
+opened from a preview admin is described with the canonical hostname. The
+browser hostname alone cannot prove that the entry belongs to a preview-only
+workflow, so the model does not infer that state.
 
 ## 4. Staged plan
 

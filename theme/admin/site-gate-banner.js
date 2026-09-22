@@ -205,13 +205,13 @@
       ].join(";") + ";";
 
     var label = gate.label || "coming-soon mode";
-    var site = window.CMS_APEX || "The public site";
+    var site = window.CMSHostname ? window.CMSHostname.canonical() : "The published destination";
     var text = document.createElement("span");
     text.style.cssText = "flex:1 1 20rem;min-width:14rem;font-weight:500;";
     text.textContent =
       site + " is in " + label + " — its visitors see the coming-soon page, " +
       "not what has been published. Everything saved and published is kept, " +
-      "and it all appears at once when the site is switched on.";
+      "and it all appears at once when " + site + " is switched on.";
     b.appendChild(text);
 
     if (gate.entry) {

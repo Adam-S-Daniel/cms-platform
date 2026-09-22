@@ -71,11 +71,12 @@ collections:
         label: Title
         widget: string
         required: true
-      # Keep this as a string so legacy stored slugs remain in the DOM for
-      # exact URL derivation; live-url-banner.js hides its Posts-only wrapper.
+      # Keep this editable so legacy stored slugs remain available for exact URL derivation.
       - name: slug
+        label: URL Slug
         widget: string
         required: false
+        hint: "URL path on {{CMS_CURRENT_HOST}} (leave blank to generate it from the title). Keep an existing value unchanged so saved links continue to work."
       - name: date
         label: Date
         widget: datetime
@@ -101,7 +102,7 @@ collections:
         label: Published
         widget: boolean
         default: false
-        hint: "Turn on to show this post on the website when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below."
+        hint: "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below."
       - name: publish_date
         label: Publish Date
         widget: datetime
@@ -109,7 +110,7 @@ collections:
         date_format: "YYYY-MM-DD"
         time_format: "HH:mm"
         format: "YYYY-MM-DD HH:mm:ss ZZ"
-        hint: "Optional. Choose a future date and time (UTC) to publish this post automatically. Only honored when Published is off."
+        hint: "Optional. Choose a future date and time (UTC) to publish this post automatically on {{CMS_CURRENT_HOST}}. Only honored when Published is off."
       # Hidden marker for E2E/automated-test fixtures — see admin/config.yml.
       - name: test_fixture
         label: Automated test fixture
@@ -217,7 +218,7 @@ collections:
         label: Published
         widget: boolean
         default: false
-        hint: "Turn on to show this page on the website when you select Publish. Leave off to keep it as a draft."
+        hint: "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft."
       - name: body
         label: Content
         widget: markdown

@@ -112,7 +112,7 @@ test.describe(
       fs.copyFileSync(FIXTURE_PNG, path.join(uploadDirAbs, "inline-image.png"));
       const inlineImageMd = `![inline image](${uploadPublicPath()})`;
 
-      // ── Drive the admin: open New Post, fill Title / Body ─────────
+      // ── Drive the admin: open New Post, fill Title / Slug / Body ─────
       await page.goto("/admin/index-local.html");
       await page.getByRole("button", { name: /login/i }).click();
       await page.getByRole("link", { name: /^posts$/i }).waitFor({ timeout: 30_000 });
@@ -121,6 +121,9 @@ test.describe(
       const titleField = page.getByLabel(/^Title$/);
       await expect(titleField).toBeVisible({ timeout: 60_000 });
       await titleField.fill(SMOKE_TITLE);
+
+      const slugField = page.getByLabel(/^URL Slug/);
+      await slugField.fill(SMOKE_SLUG);
 
       // The body widget supports two modes (`admin/config.yml`:
       // `body.modes: [rich_text, raw]`). Rich-text mode treats typed text

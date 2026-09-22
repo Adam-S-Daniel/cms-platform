@@ -1,6 +1,7 @@
 // @lane: local — drives the in-browser test-repo backend; never touches real GitHub
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
+const { publishedSwitch } = require("./cms-editor-ui");
 const YAML = require("yaml");
 
 // Editorial-workflow + GitHub-style backend e2e coverage.
@@ -30,6 +31,9 @@ const YAML = require("yaml");
 
 const SEED_POST_SLUG = "2026-04-25-replacement-test-post-1";
 const SEED_POST_TITLE = "Replacement test post 1";
+const RESERVED_PREVIEW_ORIGIN = "https://preview-pr0.example.com";
+const RESERVED_CANONICAL_HOST = "example.com";
+const PREVIEW_PROBE_BRANCH = "preview-hostname-browser-probe";
 
 // Front matter intentionally mirrors the real entry the bug was
 // reported against — empty-string `slug`, `excerpt`, `featured_image`,
@@ -64,7 +68,6 @@ function buildSeed({ postContent = SEED_POST_CONTENT } = {}) {
       },
       _tags: {},
       _projects: {},
-      _notes: {},
       pages: {},
     },
     // No open editorial-workflow drafts — entry is fully published,
@@ -101,6 +104,76 @@ async function loadAdmin(page, options) {
   await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({
     timeout: 30_000,
   });
+}
+
+function asTestRepoConfig(source, shellOrigin) {
+  const config = YAML.parse(source) || {};
+  config.backend = { name: "test-repo", branch: PREVIEW_PROBE_BRANCH };
+  config.publish_mode = "editorial_workflow";
+  config.site_url = shellOrigin;
+  config.display_url = shellOrigin;
+  delete config.local_backend;
+  return YAML.stringify(config);
+}
+
+function replaceInjectedCanonicalHost(html) {
+  return html
+    .replace(
+      /window\.CMS_SITE_ORIGIN=(?:"(?:[^"\\]|\\.)*"|null);/,
+      'window.CMS_SITE_ORIGIN="https://example.com";',
+    )
+    .replace(
+      /window\.CMS_APEX=(?:"(?:[^"\\]|\\.)*"|null);/,
+      `window.CMS_APEX="${RESERVED_CANONICAL_HOST}";`,
+    );
+}
+
+async function loadPreviewProductionAdmin(page, baseURL) {
+  const target = (process.env.TARGET || "local").toLowerCase();
+  const local = target === "local";
+  const shellOrigin = local ? RESERVED_PREVIEW_ORIGIN : new URL(baseURL).origin;
+
+  if (local) {
+    const upstreamOrigin = new URL(baseURL).origin;
+    await page.route(`${RESERVED_PREVIEW_ORIGIN}/**`, async (route) => {
+      const requested = new URL(route.request().url());
+      const upstream = new URL(requested.pathname + requested.search, upstreamOrigin);
+      const response = await route.fetch({ url: upstream.href });
+      if (requested.pathname === "/admin/config.yml") {
+        const body = asTestRepoConfig(await response.text(), shellOrigin);
+        await route.fulfill({ response, body });
+      } else if (requested.pathname === "/admin/index.html") {
+        const body = replaceInjectedCanonicalHost(await response.text());
+        await route.fulfill({ response, body });
+      } else {
+        await route.fulfill({ response });
+      }
+    });
+  } else {
+    await page.route("**/admin/config.yml", async (route) => {
+      const response = await route.fetch();
+      const body = asTestRepoConfig(await response.text(), shellOrigin);
+      await route.fulfill({ response, body });
+    });
+  }
+
+  const seed = buildSeed();
+  await page.addInitScript((seedJson) => {
+    const parsed = JSON.parse(seedJson);
+    window.repoFiles = parsed.repoFiles;
+    window.repoFilesUnpublished = parsed.repoFilesUnpublished;
+  }, JSON.stringify(seed));
+
+  await page.goto(`${shellOrigin}/admin/index.html`);
+  await page.getByRole("button", { name: /login/i }).click();
+  await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.goto(
+    `${shellOrigin}/admin/index.html#/collections/posts/entries/${SEED_POST_SLUG}`,
+  );
+  await expect(page.getByLabel(/^Title$/)).toBeVisible({ timeout: 60_000 });
+  return { shellOrigin, currentHost: new URL(shellOrigin).hostname };
 }
 
 test.describe(
@@ -148,7 +221,7 @@ test.describe(
         section: "Editing a post",
         step: "3.2",
         title: "Open an existing post in the editorial workflow",
-        body: "Editorial workflow mode loads the existing entry into a fully editable form. Every editor-facing widget — Title, Date, Body, Tags, Featured Image — is enabled, while the website path remains managed automatically.",
+        body: "Editorial workflow mode loads the existing entry into a fully editable form. Every widget — Title, URL Slug, Date, Body, Tags, Featured Image — is enabled.",
       });
 
       // ── Per-widget disabled-style audit ───────────────────────────────
@@ -263,10 +336,12 @@ test.describe(
 
       const titleField = page.getByLabel(/^Title$/);
       await expect(titleField).toBeVisible({ timeout: 60_000 });
-      await expect(page.getByRole("textbox", { name: /slug/i })).toHaveCount(0);
-      await expect(
-        page.locator('input[id^="slug-field"], textarea[id^="slug-field"]').first(),
-      ).toBeHidden();
+      const slugField = page.getByRole("textbox", {
+        name: /^URL Slug(?: \(optional\))?$/i,
+      });
+      await expect(slugField).toBeVisible();
+      await expect(slugField).toBeEditable();
+      await expect(slugField).toHaveValue(explicitSlug);
 
       const editedTitle = "A completely different replacement title";
       await titleField.fill(editedTitle);
@@ -295,35 +370,67 @@ test.describe(
       expect(YAML.parse(frontMatter[1]).slug).toBe(explicitSlug);
     });
 
-    test("hiding the Posts path does not hide a custom collection's slug field", async ({
-      page,
-    }) => {
-      await page.route("**/admin/config-test.yml", async (route) => {
-        const response = await route.fetch();
-        const original = await response.text();
-        const customCollection = `
-  - name: notes
-    label: Notes
-    label_singular: Note
-    folder: _notes
-    create: true
-    slug: "{{slug}}"
-    fields:
-      - { name: title, label: Title, widget: string, required: true }
-      - { name: slug, label: Custom URL Slug, widget: string, required: false }
-      - { name: body, label: Body, widget: markdown, required: true }
-`;
-        await route.fulfill({ response, body: original + customCollection });
-      });
+    test("preview editor names its preview and canonical hosts in the UI", async (
+      { page, baseURL },
+      testInfo,
+    ) => {
+      test.skip(
+        (process.env.TARGET || "local").toLowerCase() === "prod",
+        "hostname preview contract requires a preview origin",
+      );
 
-      await loadAdmin(page);
-      await page.goto("/admin/index-test.html#/collections/notes/new");
+      const { currentHost } = await loadPreviewProductionAdmin(page, baseURL);
+      const identity = await page.evaluate(() => ({
+        current: window.CMSHostname.current(),
+        canonical: window.CMSHostname.canonical(),
+      }));
+      expect(identity.current).toBe(currentHost);
+      if ((process.env.TARGET || "local").toLowerCase() === "local") {
+        expect(identity.current).toBe("preview-pr0.example.com");
+        expect(identity.canonical).toBe(RESERVED_CANONICAL_HOST);
+      }
 
-      const customSlug = page.getByRole("textbox", {
-        name: /^Custom URL Slug(?: \(optional\))?$/i,
+      const slugField = page.getByRole("textbox", {
+        name: /^URL Slug(?: \(optional\))?$/i,
       });
-      await expect(customSlug).toBeVisible({ timeout: 60_000 });
-      await expect(customSlug).toBeEditable();
+      await expect(slugField).toBeVisible();
+      await expect(slugField).toBeEditable();
+      const slugControl = slugField.locator(
+        'xpath=ancestor::div[contains(@class,"ControlContainer")][1]',
+      );
+      await expect(slugControl).toContainText(`URL path on ${currentHost}`);
+
+      const published = publishedSwitch(page);
+      const publishedControl = published.locator(
+        'xpath=ancestor::div[contains(@class,"ControlContainer")][1]',
+      );
+      await expect(publishedControl).toContainText(
+        `Turn on to show this post on ${currentHost} when you select Publish.`,
+      );
+
+      const publishDate = page.getByLabel(/^Publish Date/);
+      const publishDateControl = publishDate.locator(
+        'xpath=ancestor::div[contains(@class,"ControlContainer")][1]',
+      );
+      await expect(publishDateControl).toContainText(
+        `publish this post automatically on ${currentHost}`,
+      );
+
+      const liveURL = page.getByTestId("cms-live-url-banner-link");
+      await expect(liveURL).toBeVisible();
+      await expect(liveURL).toContainText(currentHost);
+
+      const previewWarning = page.locator("#cms-branch-binding-banner");
+      await expect(previewWarning).toBeVisible();
+      await expect(previewWarning).toContainText(currentHost);
+      await expect(previewWarning).toContainText(identity.canonical);
+
+      const screenshot = testInfo.outputPath("preview-hostname-editor.png");
+      await page.screenshot({ path: screenshot, fullPage: true });
+      await testInfo.attach("preview hostname editor", {
+        path: screenshot,
+        contentType: "image/png",
+      });
     });
 
     // ── Create-new through the workflow ────────────────────────────────

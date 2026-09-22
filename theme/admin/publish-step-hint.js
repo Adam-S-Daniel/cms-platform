@@ -169,8 +169,9 @@
     draft: {
       label: "Draft — only you can see this",
       detail: HAS_REAL_DEPLOY
-        ? "This is a draft — it is not on the website yet. To put it on the " +
-          "website: click Publish. It then takes about 5–15 minutes to appear."
+        ? "This is a draft — it is not on " +
+          (window.CMSHostname ? window.CMSHostname.current() : "this address") +
+          " yet. Click Publish to put it there. It then takes about 5–15 minutes to appear."
         : "This is a draft — it is not published yet. To publish it, click Publish.",
     },
   };
@@ -225,6 +226,8 @@
       var derived = model.derive(snapshot.facts, {
         now: Date.now(),
         contact: window.CMS_SUPPORT_CONTACT || null,
+        currentHostname: window.CMSHostname && window.CMSHostname.current(),
+        canonicalHostname: window.CMSHostname && window.CMSHostname.canonical(),
       });
       // "Live" with no toolbar publish control and no open PR is the steady
       // state of an entry nobody is publishing. Showing a green bar on every

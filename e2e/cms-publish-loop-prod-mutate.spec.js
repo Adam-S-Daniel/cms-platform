@@ -78,7 +78,7 @@
  *
  * Flow:
  *   1. Create a born-published ephemeral post via the Decap "+ New Post"
- *      UI (Title + Date 2099-12-31 + Body + Published ON),
+ *      UI (Title + URL Slug + Date 2099-12-31 + Body + Published ON),
  *      Save → Status:Ready → Publish Now → cms/posts/<dated-slug> PR.
  *   2. Label cms/ready (belt-and-braces) → auto-merge → deploy-production.
  *   3. Assert /blog/<slug>/ serves 200 with this run's marker.
@@ -254,8 +254,13 @@ test(
       });
     });
 
-    await test.step("Fill Title, Date (2099-12-31), Body", async () => {
+    await test.step("Fill Title, URL Slug, Date (2099-12-31), Body", async () => {
       await page.getByRole("textbox", { name: /^Title$/i }).fill(title);
+
+      // Explicit slug so the on-disk file slug (and thus the cms branch +
+      // public URL) is deterministic and carries the runId. Decap's
+      // `{{year}}-{{month}}-{{day}}-{{slug}}` template prepends the date.
+      await page.getByLabel(/^URL Slug/).fill(slug);
 
       // Future date so the post serves only because `_config.yml` sets
       // `future: true` (the same mechanism the retired 2099 canaries

@@ -10,19 +10,19 @@ const ADMIN = path.join(ROOT, "theme", "admin");
 const CONFIGS = ["config.base.yml", "config-local.base.yml", "config-test.yml"];
 
 const POST_PUBLISHED_HINT =
-  "Turn on to show this post on the website when you select Publish. " +
+  "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. " +
   "Leave off to keep it as a draft or schedule it with Publish Date below.";
 const POST_DATE_HINT =
-  "Optional. Choose a future date and time (UTC) to publish this post automatically. " +
+  "Optional. Choose a future date and time (UTC) to publish this post automatically on {{CMS_CURRENT_HOST}}. " +
   "Only honored when Published is off.";
 const PAGE_PUBLISHED_HINT =
-  "Turn on to show this page on the website when you select Publish. " +
+  "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. " +
   "Leave off to keep it as a draft.";
 const CONTENT_PUBLISHED_HINT =
-  "Turn on to show this content on the website when you select Publish. " +
+  "Turn on to show this content on {{CMS_CURRENT_HOST}} when you select Publish. " +
   "Leave off to keep it as a draft or schedule it with Publish Date below.";
 const CONTENT_DATE_HINT =
-  "Optional. Choose a future date and time to publish this content automatically. " +
+  "Optional. Choose a future date and time to publish this content automatically on {{CMS_CURRENT_HOST}}. " +
   "Only honored when Published is off.";
 
 class FakeStyle {
@@ -185,58 +185,6 @@ function loadEditorCopy() {
   return { doc, intervals };
 }
 
-function loadSlugVisibility(initialCollection) {
-  let collectionName = initialCollection;
-  let hashHandler = null;
-  const doc = {
-    body: {},
-    querySelector(selector) {
-      return selector.includes('id^="slug-field"') ? slug : null;
-    },
-    querySelectorAll() {
-      return [];
-    },
-    getElementById() {
-      return null;
-    },
-    addEventListener() {},
-  };
-  const container = new FakeElement("div", doc);
-  container.className = "css-123-ControlContainer";
-  const inner = new FakeElement("div", doc);
-  const slug = new FakeElement("input", doc);
-  container.appendChild(inner);
-  inner.appendChild(slug);
-
-  const sandbox = {
-    window: {
-      CMS_REPO: "owner/repo",
-      LiveURL: {
-        getCollection: () => collectionName,
-      },
-      addEventListener(name, handler) {
-        if (name === "hashchange") hashHandler = handler;
-      },
-    },
-    document: doc,
-    MutationObserver: class {
-      observe() {}
-    },
-    requestAnimationFrame(fn) {
-      fn();
-    },
-  };
-  vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(path.join(ADMIN, "live-url-banner.js"), "utf8"), sandbox);
-  return {
-    container,
-    navigate(nextCollection) {
-      collectionName = nextCollection;
-      hashHandler();
-    },
-  };
-}
-
 function collection(config, name) {
   return (config.collections || []).find((item) => item && item.name === name);
 }
@@ -265,25 +213,18 @@ test.describe("editor publishing copy", () => {
     expect(badge.style.writeCount, "steady renders must not feed the observer").toBe(badgeWrites);
   });
 
-  test("only the Posts slug wrapper is hidden, and it is restored after navigation", () => {
-    const posts = loadSlugVisibility("posts");
-    expect(posts.container.style.getPropertyValue("display")).toBe("none");
-    expect(posts.container.style.getPropertyPriority("display")).toBe("important");
-    posts.navigate("notes");
-    expect(posts.container.style.getPropertyValue("display")).toBe("");
-
-    const notes = loadSlugVisibility("notes");
-    expect(notes.container.style.getPropertyValue("display")).toBe("");
-  });
 });
 
 test.describe("Decap publishing fields", () => {
   for (const configName of CONFIGS) {
-    test(`${configName} hides the preserved post slug and carries the concise hints`, () => {
+    test(`${configName} keeps the post slug editable and carries hostname-aware hints`, () => {
       const config = YAML.parse(fs.readFileSync(path.join(ADMIN, configName), "utf8"));
       const posts = collection(config, "posts");
       const slug = field(posts, "slug");
-      expect(slug).toEqual({ name: "slug", widget: "string", required: false });
+      expect(slug.widget).toBe("string");
+      expect(slug.required).toBe(false);
+      expect(slug.label).toBe("URL Slug");
+      expect(slug.hint).toContain("{{CMS_CURRENT_HOST}}");
       expect(field(posts, "published").hint).toBe(POST_PUBLISHED_HINT);
       expect(field(posts, "publish_date").hint).toBe(POST_DATE_HINT);
       expect(field(collection(config, "pages"), "published").hint).toBe(PAGE_PUBLISHED_HINT);

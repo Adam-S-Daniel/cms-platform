@@ -194,6 +194,9 @@ test.describe(
       await expect(titleField).toBeVisible({ timeout: 60_000 });
       await titleField.fill(TITLE);
 
+      const slugField = page.getByLabel(/^URL Slug/);
+      await slugField.fill(SLUG);
+
       // Pin the date so the on-disk filename is deterministic. The
       // widget is `<input type="datetime-local">` — accepts
       // YYYY-MM-DDTHH:mm. The collection's `slug:` template renders this

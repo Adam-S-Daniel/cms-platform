@@ -298,7 +298,8 @@
     } catch (err) {
       mode = "";
       lastError =
-        "The website did not accept the publish just now (" +
+        ((window.CMSHostname && window.CMSHostname.current()) || "The destination") +
+        " did not accept the publish just now (" +
         (err && err.message ? err.message : "unknown error") +
         "). Nothing you typed has been lost — press Publish again in a moment.";
     }
@@ -356,11 +357,17 @@
   function destination(facts) {
     try {
       var m = window.CMSEntryStatus;
-      if (m && typeof m.destination === "function") return m.destination(facts);
+      if (m && typeof m.destination === "function") {
+        return m.destination(facts, window.CMSHostname ? window.CMSHostname.options() : {});
+      }
     } catch (e) {
       /* fall through */
     }
-    return { noun: "the website", preview: false };
+    return {
+      noun: window.CMSHostname ? window.CMSHostname.current() : "the destination",
+      canonical: window.CMSHostname ? window.CMSHostname.canonical() : "the published destination",
+      preview: false,
+    };
   }
 
   function plan() {
@@ -368,7 +375,9 @@
     var state = p ? p.get() : null;
     var facts = state && state.ready ? state.facts : null;
 
-    if (mode === "busy") return { kind: "busy", note: "Sending it to the website…" };
+    if (mode === "busy") {
+      return { kind: "busy", note: "Sending it to " + destination(facts || {}).noun + "…" };
+    }
 
     if (hasUnsavedChanges()) {
       return { kind: "disabled" };
@@ -411,15 +420,15 @@
           kind: "confirm",
           note:
             "Put this on " + dest.noun + "? It takes about 5–15 minutes to appear " +
-            "there. It will NOT go to the live website.",
+            "there. It will NOT go to " + dest.canonical + ".",
         };
       }
       var url = targetUrl();
       return {
         kind: "confirm",
         note: url
-          ? "Put this on the website? It will appear at " + url + " in about 5–15 minutes."
-          : "Put this on the website? It takes about 5–15 minutes to appear.",
+          ? "Put this on " + dest.noun + "? It will appear at " + url + " in about 5–15 minutes."
+          : "Put this on " + dest.noun + "? It takes about 5–15 minutes to appear.",
       };
     }
 
