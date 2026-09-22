@@ -43,6 +43,18 @@
 //                  against it: preview_path, a field-hint snapshot (hintFor /
 //                  PROD_HINTS / hint:), findCollection(cfg,'<base>'), or
 //                  hasAdminCollection(siteRoot,'<base>') for a named base.
+//         CLASS F  production-shell sidebar wait / route — a FUNCTION or test()
+//                  callback that navigates the PRODUCTION shell /admin/index.html
+//                  (rendered config.yml → honours base_collections; template
+//                  literals like `${shellOrigin}/admin/index.html` included) AND,
+//                  in that same scope, waits for a base sidebar link or routes to
+//                  #/collections/<base>. Scope-local, and its guard is checked
+//                  PER TEST: every test() that reaches such a scope (directly or
+//                  via a named helper) must carry its own guard or sit in a
+//                  describe that guards — a guard elsewhere in the file does not
+//                  count. This closed the gap that let cms-editorial-workflow's
+//                  preview-hostname test ship unguarded: its file ALSO loads
+//                  index-test.html, which CLASS B exempts wholesale.
 //
 //       A spec whose admin shell is index-test.html (config-test.yml is FIXED —
 //       NOT subject to the base_collections keep-list deletion) is NOT flagged by
@@ -56,7 +68,14 @@ const { test, expect } = require("./base");
 const reg = require("./base-collections-guards");
 const cap = require("./site-capabilities");
 const walk = require("acorn-walk");
-const { analyzeSpec, subtreeHasCall, parse, stringValue } = require("./spec-ast");
+const {
+  analyzeSpec,
+  analyzeNode,
+  subtreeHasCall,
+  parse,
+  stringValue,
+  calleeName,
+} = require("./spec-ast");
 
 const HARNESS = __dirname;
 const FULL = path.join(HARNESS, "fixture-site");
@@ -260,7 +279,148 @@ function baseCollectionClasses(src) {
     if (liveSidebarWait || liveCollectionRoute) classes.push("live-admin-base-collection");
   }
 
+  // CLASS F — production-shell (/admin/index.html) base-collection dependence,
+  // detected per FUNCTION scope (see productionShellScopes below).
+  if (productionShellScopes(f.ast).length) classes.push(PROD_SHELL_CLASS);
+
   return classes;
+}
+
+// ── CLASS F: production admin shell, scope-local ─────────────────────────
+//
+// `/admin/index.html` is the PRODUCTION Decap shell: it loads the RENDERED
+// config.yml, which honours a consumer's cms.base_collections keep-list, so a
+// base sidebar link / #/collections/<base> route never renders on a consumer
+// that drops it (jodidaniel.com: run 35792558914, the preview-hostname test in
+// cms-editorial-workflow.spec.js waiting on /^posts$/). CLASS B cannot see this:
+// it keys on index-local.html and exempts any file that also loads
+// index-test.html. So CLASS F is SCOPE-local: a function whose own subtree both
+// navigates the production shell AND waits on/routes to a base collection.
+// Matching `/admin/index.html` exactly (end, `#` or `?` next) keeps
+// index-test.html / index-local.html out — a spec that only drives the fixed
+// config-test.yml shell is never flagged.
+const PROD_SHELL_CLASS = "production-shell-base-collection";
+const PROD_SHELL_RE = /\/admin\/index\.html(?:$|[#?])/;
+const GUARD_PREDICATE_TAILS = [
+  "guard",
+  "shouldSkip",
+  "hasAdminCollection",
+  "keepsBaseCollection",
+  "isSinglePageConsumer",
+];
+const TEST_CALLS = new Set(["test", "test.only"]);
+
+const isFunctionNode = (n) =>
+  !!n &&
+  (n.type === "FunctionDeclaration" ||
+    n.type === "FunctionExpression" ||
+    n.type === "ArrowFunctionExpression");
+
+// Does THIS subtree itself load the production shell AND depend on a base
+// collection (sidebar-link wait or #/collections/<base> route)?
+function scopeDependsOnProductionShellBase(node) {
+  const f = analyzeNode(node);
+  if (!f.gotoArgs.some((s) => PROD_SHELL_RE.test(s))) return false;
+  const sidebarWait = NAV_BASE.some((c) => f.getByRoleLinkNames.includes(`^${c}$`));
+  const route = ALL_BASE.some((c) =>
+    f.strings.some((s) => new RegExp(`#/collections/${c}\\b`).test(s)),
+  );
+  return sidebarWait || route;
+}
+
+// Every function node in the file whose own subtree carries the dependence.
+function productionShellScopes(ast) {
+  const out = [];
+  walk.full(ast, (n) => {
+    if (isFunctionNode(n) && scopeDependsOnProductionShellBase(n)) out.push(n);
+  });
+  return out;
+}
+
+// Does a scope apply a recognized base_collections self-skip — a test.skip()
+// plus a guard()/shouldSkip()/keepsBaseCollection()/hasAdminCollection()/
+// isSinglePageConsumer() call, both inside THIS scope (the scoped analogue of
+// appliesBaseCollectionGuard's file-level directGuard/registryGuard)?
+function scopeHasGuard(node) {
+  return (
+    subtreeHasCall(node, (c) => c.name === "test.skip") &&
+    subtreeHasCall(node, (c) => GUARD_PREDICATE_TAILS.includes(c.tail))
+  );
+}
+
+// A describe() callback guards its tests when one of its OWN statements is a
+// guarded test.skip(...) or a test.beforeEach/beforeAll(...) whose body guards.
+function describeGuards(describeCall) {
+  const fn = describeCall.arguments.find(isFunctionNode);
+  if (!fn || !fn.body || fn.body.type !== "BlockStatement") return false;
+  return fn.body.body.some((stmt) => {
+    const e = stmt.type === "ExpressionStatement" ? stmt.expression : null;
+    if (!e || e.type !== "CallExpression") return false;
+    const name = calleeName(e.callee);
+    if (name === "test.skip") return scopeHasGuard(e);
+    if (name === "test.beforeEach" || name === "test.beforeAll") return scopeHasGuard(e);
+    return false;
+  });
+}
+
+// The titles of every test() that REACHES a CLASS F scope — its callback
+// carries the dependence itself or calls a named helper that does (transitively)
+// — but is NOT guarded by its own callback or an enclosing describe. Empty ⇒
+// every production-shell base-collection path skips on an opted-out consumer.
+function productionShellGuardGaps(src) {
+  const ast = parse(src);
+
+  // Named helpers: `function f() {}` and `const f = () => {}` / function exprs.
+  const helpers = new Map();
+  walk.full(ast, (n) => {
+    if (n.type === "FunctionDeclaration" && n.id) helpers.set(n.id.name, n);
+    if (
+      n.type === "VariableDeclarator" &&
+      n.id &&
+      n.id.type === "Identifier" &&
+      isFunctionNode(n.init)
+    ) {
+      helpers.set(n.id.name, n.init);
+    }
+  });
+  // Fixpoint: a helper is dependent if it carries the dependence itself or
+  // calls a dependent helper by name.
+  const dependent = new Set();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [name, fn] of helpers) {
+      if (dependent.has(name)) continue;
+      if (
+        scopeDependsOnProductionShellBase(fn) ||
+        subtreeHasCall(fn, (c) => dependent.has(c.name))
+      ) {
+        dependent.add(name);
+        grew = true;
+      }
+    }
+  }
+
+  const gaps = [];
+  walk.fullAncestor(ast, (n, _state, ancestors) => {
+    if (n.type !== "CallExpression" || !TEST_CALLS.has(calleeName(n.callee))) return;
+    const cb = n.arguments.find(isFunctionNode);
+    if (!cb) return;
+    const reaches =
+      scopeDependsOnProductionShellBase(cb) || subtreeHasCall(cb, (c) => dependent.has(c.name));
+    if (!reaches) return;
+    if (scopeHasGuard(cb)) return;
+    const enclosingDescribeGuards = ancestors.some(
+      (a) =>
+        a !== n &&
+        a.type === "CallExpression" &&
+        /^test\.describe(\.|$)/.test(calleeName(a.callee) || "") &&
+        describeGuards(a),
+    );
+    if (enclosingDescribeGuards) return;
+    gaps.push(stringValue(n.arguments[0]) || "(unnamed test)");
+  });
+  return gaps;
 }
 
 // Back-compat alias — the original narrow predicate is now CLASS A∪B of the
@@ -453,8 +613,21 @@ test.describe("#33 base_collections guard registry — no silent drift", () => {
     const allow = new Set(Object.keys(NON_GUARDED));
     const offenders = [];
     for (const { name, classes, src } of flaggedConsumerSpecs()) {
-      if (registered.has(name)) continue; // group-2 registry guard
       if (allow.has(name)) continue; // documented exception
+      // CLASS F is guarded PER TEST, so neither a registry entry nor a guard
+      // elsewhere in the file covers an unguarded production-shell test.
+      if (classes.includes(PROD_SHELL_CLASS)) {
+        const gaps = productionShellGuardGaps(src);
+        if (gaps.length) {
+          offenders.push({
+            name,
+            classes: [...classes, ...gaps.map((t) => `unguarded test: "${t.slice(0, 70)}"`)],
+          });
+          continue;
+        }
+        if (classes.length === 1) continue; // its only dependence is guarded per test
+      }
+      if (registered.has(name)) continue; // group-2 registry guard
       if (appliesBaseCollectionGuard(src)) continue; // direct inline self-skip
       offenders.push({ name, classes });
     }
@@ -532,6 +705,84 @@ test.describe("#33 base_collections guard registry — no silent drift", () => {
           `would skip a real test on a single-page consumer)`,
       ).toEqual([]);
     }
+  });
+
+  // CLASS F anchor: the spec whose preview-hostname test loads the PRODUCTION
+  // shell (/admin/index.html) and waits on /^posts$/ must stay flagged, so the
+  // drift gate keeps checking that its guard stays in place.
+  test("detector flags the production-shell class (the cms-editorial-workflow gap)", () => {
+    const src = fs.readFileSync(path.join(HARNESS, "cms-editorial-workflow.spec.js"), "utf8");
+    expect(
+      baseCollectionClasses(src),
+      "cms-editorial-workflow.spec.js navigates `${shellOrigin}/admin/index.html` and waits " +
+        "for the Posts sidebar link — the detector MUST flag it (" + PROD_SHELL_CLASS + ")",
+    ).toContain(PROD_SHELL_CLASS);
+  });
+
+  // CLASS F precision + per-test guard scoping, on synthetic sources, so each
+  // boundary is pinned independently of how the real specs happen to be written.
+  const HELPER = (shell, link) => `
+    async function loadShell(page, origin) {
+      await page.goto(\`\${origin}${shell}\`);
+      await expect(page.getByRole("link", { name: /^${link}$/i })).toBeVisible();
+    }`;
+  test.describe("CLASS F (production shell) boundaries", () => {
+    test("an index-test.html-only spec is NOT flagged", () => {
+      const src = `${HELPER("/admin/index-test.html", "posts")}
+        test("t", async ({ page }) => { await loadShell(page, ""); });`;
+      expect(baseCollectionClasses(src)).toEqual([]);
+    });
+
+    test("a production-shell wait on a NON-base link is NOT flagged", () => {
+      const src = `${HELPER("/admin/index.html", "settings")}
+        test("t", async ({ page }) => { await loadShell(page, ""); });`;
+      expect(baseCollectionClasses(src)).toEqual([]);
+    });
+
+    test("a #/collections/<base> route on the production shell IS flagged", () => {
+      const src = `test("t", async ({ page }) => {
+        await page.goto("/admin/index.html#/collections/pages/new");
+      });`;
+      expect(baseCollectionClasses(src)).toContain(PROD_SHELL_CLASS);
+      expect(productionShellGuardGaps(src)).toEqual(["t"]);
+    });
+
+    test("a test reaching an unguarded helper (even transitively) is a gap", () => {
+      const src = `${HELPER("/admin/index.html", "posts")}
+        const outer = async (page) => loadShell(page, "x");
+        test.describe("d", () => {
+          test("reaches", async ({ page }) => { await outer(page); });
+          test("unrelated", async ({ page }) => { await page.goto("/admin/index-test.html"); });
+        });`;
+      expect(baseCollectionClasses(src)).toContain(PROD_SHELL_CLASS);
+      expect(productionShellGuardGaps(src)).toEqual(["reaches"]);
+    });
+
+    test("a guard in a SIBLING test does not cover the reaching test", () => {
+      const src = `${HELPER("/admin/index.html", "posts")}
+        test("guarded sibling", async () => {
+          test.skip(...guard(SITE_ROOT, "x.spec.js"));
+        });
+        test("reaches", async ({ page }) => { await loadShell(page, ""); });`;
+      expect(productionShellGuardGaps(src)).toEqual(["reaches"]);
+    });
+
+    test("an inline guard in the reaching test, or a describe-level guard, covers it", () => {
+      const inline = `${HELPER("/admin/index.html", "posts")}
+        test("reaches", async ({ page }) => {
+          test.skip(...guard(SITE_ROOT, "x.spec.js"));
+          await loadShell(page, "");
+        });`;
+      expect(productionShellGuardGaps(inline)).toEqual([]);
+      const describeLevel = `${HELPER("/admin/index.html", "posts")}
+        test.describe("d", () => {
+          test.beforeEach(() => {
+            test.skip(!cap.keepsBaseCollection(SITE_ROOT, "posts"), "no posts (#33)");
+          });
+          test("reaches", async ({ page }) => { await loadShell(page, ""); });
+        });`;
+      expect(productionShellGuardGaps(describeLevel)).toEqual([]);
+    });
   });
 
   // The allowlist must not rot: every NON_GUARDED entry must still EXIST, still

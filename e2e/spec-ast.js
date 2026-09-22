@@ -78,11 +78,15 @@ function calleeTail(name) {
   return name == null ? null : name.split(".").pop();
 }
 
-function analyzeSpec(src) {
-  const ast = parse(src);
-
+// The per-node fact walk, factored out of analyzeSpec so a lint can ask the
+// same questions of ONE function/test subtree (scope-local facts) that it asks
+// of a whole file — e.g. "does THIS helper both load the production admin
+// shell AND wait for the Posts sidebar link?" (base-collections-guard-
+// registry.test.js, CLASS F). `topLevelTests` is Program-only, so it stays
+// empty here; analyzeSpec fills it.
+function analyzeNode(root) {
   const facts = {
-    ast,
+    ast: root,
     strings: [], // every static-ish string value (Literal / TemplateLiteral / concat)
     identifiers: new Set(), // every Identifier name referenced
     memberProps: new Set(), // every non-computed MemberExpression property (e.g. publicPath)
@@ -102,7 +106,7 @@ function analyzeSpec(src) {
     topLevelTests: [], // { title, tags:[...], node } for column-0 test()/test.skip()/test.only()
   };
 
-  walk.full(ast, (node) => {
+  walk.full(root, (node) => {
     switch (node.type) {
       case "Identifier":
         facts.identifiers.add(node.name);
@@ -161,6 +165,13 @@ function analyzeSpec(src) {
         break;
     }
   });
+
+  return facts;
+}
+
+function analyzeSpec(src) {
+  const ast = parse(src);
+  const facts = analyzeNode(ast);
 
   // Top-level test() / test.skip() / test.only() calls — i.e. ExpressionStatement
   // children of the Program whose call is `test(...)` or `test.<modifier>(...)`.
@@ -227,6 +238,7 @@ function subtreeStrings(node) {
 module.exports = {
   parse,
   analyzeSpec,
+  analyzeNode,
   stringValue,
   calleeName,
   calleeTail,
