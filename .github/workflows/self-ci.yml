@@ -206,41 +206,34 @@ jobs:
   # browser. `npm ci` with PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 installs the test
   # runner but no ~100MB browser binaries. Hard-fail.
   #
-  # SHARDED, 3 WAYS (cms-platform#461), measured against a single job at
-  # PW_WORKERS 100%/150% and against the un-sharded, un-cached baseline —
-  # table + run ids in docs/E2E-PARALLELISM.md#node-unit-lints-self-ci. Native
-  # `--shard=i/N` (not a hand-grouped split — docs/E2E-PARALLELISM.md's
-  # "Measured: --shard cannot balance this suite" is about the BROWSER suite's
-  # 5 ms–49 s per-test spread; these pure-fs lints don't have that spread, and
-  # `--list --shard=i/3` on the DENY-filtered 2112-test set confirmed an exact
-  # 704/704/704 split) splits the WORK; a separate GATE job (`node-unit-lints`,
-  # no `name:` override, so its job id IS the required context) reports the
-  # one status a ruleset can name. This is the same work/gate split
-  # `site-verify.yml` and `e2e-tests.yml`'s `e2e` job use, for the same reason:
-  # e2e/required-context-cancellable.test.js requires that NO job publishing a
-  # required context carry a `timeout-minutes` (cms-platform#289) — a matrix
-  # job here would need one abandoned mid-run to avoid a wedged shard, which
-  # is exactly what would make the required context `cancelled`. So the wall
-  # lives on `node-unit-lints-shard`, which nothing requires, and the gate
-  # carries none.
-  node-unit-lints-shard:
-    strategy:
-      # One red shard must not cancel its siblings — a cancelled sibling would
-      # hide whatever it was about to report and read as infrastructure noise
-      # instead of a second failing lint. Same reasoning as e2e-tests.yml's
-      # `project` matrix.
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
+  # PARALLELISM (cms-platform#461): PW_WORKERS=100% raises resolveWorkers()'s
+  # default of 50% of the runner's 4 vCPUs (2 workers) to 4. Four shapes were
+  # measured with the browser-download cache above already in place — job-wall
+  # averages over 2-3 samples each, table + run ids in
+  # docs/E2E-PARALLELISM.md#node-unit-lints-self-ci:
+  #
+  #     V0 unchanged (2 workers)                    64.0 s
+  #     V1 PW_WORKERS=100% (this)                   58.7 s  <- chosen
+  #     V2 PW_WORKERS=150%                          60.0 s
+  #     V3 3-way --shard at 100%, behind a gate      61.7 s (52-76 s spread)
+  #
+  # V3 was tried too — Playwright's native `--shard`, not a hand-grouped split
+  # (docs/E2E-PARALLELISM.md's "Measured: --shard cannot balance this suite" is
+  # about the BROWSER suite's 5 ms-49 s per-test spread; these pure-fs lints
+  # don't have that spread, and `--list --shard=i/3` on the DENY-filtered
+  # 2112-test set confirmed an exact 704/704/704 split), behind the same
+  # work/gate split `site-verify.yml` and `e2e-tests.yml`'s `e2e` job use so no
+  # job publishing the required context carries a `timeout-minutes`
+  # (cms-platform#289). It lost on the numbers that matter here: each shard
+  # re-pays the ~15-20 s fixed cost (checkout, setup-node, npm ci, cache
+  # restore) that splitting 42 s of test time three ways barely covers, and one
+  # of three samples caught GitHub staggering the three runners' allocation by
+  # ~36 s, landing WORSE than doing nothing (76 s). Simpler and faster on
+  # average wins: one job, higher worker count, no matrix/gate wiring, no
+  # extra runner-minutes, no allocation-stagger exposure.
+  node-unit-lints:
     runs-on: ubuntu-latest
     env:
-      # `matrix.shard` bound here, not interpolated straight into the `run:`
-      # body below — e2e/workflow-injection-lint.test.js treats a `matrix.*`
-      # (or `env.*`) expression substituted into a code body as the same
-      # laundering shape a `github.event.*` one is, and `env:` is the fix it
-      # names. Harmless with a literal `[1, 2, 3]` list, but the lint is
-      # structural, not dataflow, and enforces the shape categorically.
-      SHARD: ${{ matrix.shard }}
       # No browser, no built site, no network — the lint specs are pure-fs.
       TARGET: prod
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
@@ -250,12 +243,8 @@ jobs:
       # 92855380065) before running lints that never launch a browser. Pin it to the
       # one project this lane runs. Locked by e2e/engine-scope-lint.test.js.
       PW_PROJECT: chromium-light
-      # 100% (4 workers = the runner's vCPU count) measured marginally faster
-      # than 150% (6 workers) on THIS shard size (docs/E2E-PARALLELISM.md's
-      # 150% finding was measured on the ~660-test browser project jobs, a
-      # different shape): V1 (100%, unsharded) averaged ~41 s of "Run pure-fs
-      # harness lints" over 3 samples vs V2 (150%, unsharded) ~45 s — see
-      # docs/E2E-PARALLELISM.md#node-unit-lints-self-ci for the full table.
+      # See the PARALLELISM block above the job — measured the best of four
+      # shapes on this runner size and spec mix.
       PW_WORKERS: '100%'
     steps:
       - name: Checkout
@@ -279,8 +268,7 @@ jobs:
       # pins @playwright/test, which pins the exact browser BUILD the self-heal
       # checks for, so the key below is exact: a hit restores precisely what this
       # run needs, a miss just falls back to the self-heal downloading it, same as
-      # today. Each shard keeps this step: all three still need the same browser
-      # build, and actions/cache tolerates concurrent restores/saves of one key.
+      # today.
       - name: Cache Playwright browsers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -296,9 +284,6 @@ jobs:
         # hermetic pure-fs lint. Building the allowlist by exclusion means a
         # newly-added pure-fs lint is picked up automatically; a new build-
         # dependent one is the only thing that ever needs adding to DENY.
-        # `--shard=<matrix.shard>/3` partitions the resulting spec list
-        # natively — see the job-level comment above for why a hand-grouped
-        # split is not used here.
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -314,43 +299,8 @@ jobs:
             echo "No pure-fs *.test.js lints matched" >&2
             exit 1
           fi
-          echo "Running ${#specs[@]} pure-fs lint spec file(s), shard ${SHARD}/3."
-          # TEMPORARY, cms-platform#461 gate-failure proof: force shard 2 red
-          # on purpose (act is unavailable in this session — no reachable
-          # Docker daemon) so a REAL CI run demonstrates the gate reads a
-          # failed shard and reddens `node-unit-lints`, and that shards 1/3
-          # still run to completion under fail-fast: false. Reverted in the
-          # very next commit.
-          if [ "${SHARD}" = "2" ]; then
-            echo "::error::deliberate cms-platform#461 gate-failure proof — not a real lint failure"
-            exit 1
-          fi
-          npx playwright test --project=chromium-light --reporter=line --shard="${SHARD}/3" "${specs[@]}"
-
-  # The GATE. This is the job repo-settings.yml's `platform-main` ruleset
-  # names (`node-unit-lints`, no `name:` override — the job id IS the
-  # context). It carries NO `timeout-minutes` and NO `concurrency`: being
-  # unkillable-at-a-wall is its entire job (cms-platform#285 / #289). `if:
-  # always()` so a failed or cancelled shard still produces a RED here rather
-  # than a skip that hangs the PR on "Waiting for status to be reported".
-  # Same shape as `site-verify.yml`'s `site-verify` job and `e2e-tests.yml`'s
-  # `e2e` job.
-  node-unit-lints:
-    needs: node-unit-lints-shard
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Gate on the shard matrix
-        env:
-          SHARD_RESULT: ${{ needs.node-unit-lints-shard.result }}
-        run: |
-          set -euo pipefail
-          echo "node-unit-lints-shard matrix result: ${SHARD_RESULT}"
-          if [ "${SHARD_RESULT}" != "success" ]; then
-            echo "::error::At least one node-unit-lints shard did not succeed (${SHARD_RESULT}) — see the shard jobs above."
-            exit 1
-          fi
-          echo "Every node-unit-lints shard passed."
+          echo "Running ${#specs[@]} pure-fs lint spec file(s)."
+          npx playwright test --project=chromium-light --reporter=line "${specs[@]}"
 
   # ── 4. claude plugin validate — this repo's own plugin ROOT ──────────────
   # This repo's ROOT is a plugin root: `agentskills` publishes `cms-platform`
