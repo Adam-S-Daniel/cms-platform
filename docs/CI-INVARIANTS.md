@@ -371,6 +371,15 @@ wedged approval gate all reach it through the same door.
   (`<!-- stale-workflows: … -->`), kept strictly separate from the run-id and
   dead-workflow ones, and are reported once per tracking issue. The close gate
   now requires all four lanes clean.
+- **A success already in the audit's own 48h window listing decides the
+  verdict without ever calling the per-workflow history endpoint; a history
+  listing that omits a window run newer than its own oldest run is a stale
+  snapshot and scores UNKNOWN (`probeFailed`), never stale.** The history call
+  runs strictly after the window listing, so it can only ever hold MORE recent
+  runs than the window already returned — never fewer — and twice in
+  production it came back an old snapshot instead, contradicting a success the
+  window listing already held: false stale findings on jodidaniel.com#264 and
+  on adamdaniel.ai (2026-09-10).
 
 ### A later success does not clear a failure (2026-09-15)
 
