@@ -13,6 +13,10 @@
  * Parsed with the `yaml` lib (anchors) per AGENTS.md — never regex over
  * raw text for structure.
  */
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { test, expect } = require("./base");
 const { readWorkflow, parseYaml, jobs } = require("./workflow-yaml-utils");
 
@@ -304,5 +308,335 @@ test.describe("sweep-stale-cms-prs reaps ephemeral `_posts/` orphans (#224)", ()
           `(\`) || ${varName}=""\`) so a missing directory yields empty, not an error body (#130)`,
       ).toMatch(new RegExp(`\\)\\s*\\|\\|\\s*${varName}=""`));
     }
+  });
+});
+
+// ── Retiring stale scheduled-publish PRs that only flip loop fixtures ────────
+//
+// adamdaniel.ai's cms-scheduled-publish-loop failed daily from 2026-09-08
+// (adamdaniel.ai #3589 / issue #3591): a required check went red on the
+// scheduler's `cms/posts/scheduled-publish-<run_id>` PR for an unrelated
+// reason, it never merged, and two days later the ephemeral `_posts/` sweep
+// above deleted the PR's only fixture file from main — turning it into a
+// permanent modify/delete CONFLICTING PR that nothing ever retired. Because
+// `cms/posts/scheduled-publish-` is also the REAL scheduler's prefix for
+// genuine editor-scheduled posts (see the NOTE on the `_posts/` orphan sweep
+// step), it can never join TEST_ONLY_PATTERNS — a new step instead classifies
+// by DIFF CONTENT: a PR is retirable only when every changed file matches the
+// loop's own per-run fixture shape.
+//
+// These tests EXECUTE the step's real `run:` script (extracted from the
+// parsed workflow, never re-typed) via `bash -c`, with a stub `gh` first on
+// PATH — mirrors the ghStubDir technique in scheduled-run-health.test.js
+// (around lines 899-935), extended here to also answer `gh pr list` and log
+// `gh pr close`. No network, no sleeps: "old" vs "young" is a fixed past ISO
+// timestamp vs. now-minus-1-hour computed at test time.
+test.describe("sweep-stale-cms-prs retires stale scheduled-publish PRs by diff content", () => {
+  const SWEEP = "sweep-stale-cms-prs.yml";
+  const RETIRE_STEP_NAME = "Retire stale scheduled-publish PRs that only flip loop fixtures";
+  const THRESHOLD_HOURS = 6;
+  const OLD_ISO = "2020-01-01T00:00:00Z";
+  // 1h old — younger than the 6h threshold.
+  const youngIso = () => new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+  function retireStep() {
+    const doc = parseYaml(readWorkflow(SWEEP));
+    const sweepJob = doc.jobs.sweep;
+    const step = (sweepJob.steps || []).find((s) => s && s.name === RETIRE_STEP_NAME);
+    return step;
+  }
+
+  // A `gh` stub answering exactly the three calls this step makes:
+  // `pr list` (canned PRs, one compact JSON line each — matching gh's real
+  // `--jq` output, which is compact-per-result, not pretty-printed jq(1)
+  // default), `api .../pulls/<n>/files` (canned filenames, one per line, or a
+  // forced non-zero-exit "Not Found" body written to STDOUT — real `gh api`
+  // relays an HTTP error body to stdout on failure, which is exactly the
+  // #130 trap the step's `|| files=""` guards against), and `pr close`
+  // (logged only).
+  function ghStubDir({ prs, files }) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gh-retire-stub-"));
+    const log = path.join(dir, "calls.jsonl");
+    const cfgFile = path.join(dir, "cfg.json");
+    fs.writeFileSync(cfgFile, JSON.stringify({ prs, files }));
+    const bin = path.join(dir, "gh");
+    fs.writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(argv) + "\\n");
+const cfg = JSON.parse(fs.readFileSync(${JSON.stringify(cfgFile)}, "utf8"));
+
+if (argv[0] === "pr" && argv[1] === "list") {
+  for (const pr of cfg.prs) {
+    process.stdout.write(JSON.stringify(pr) + "\\n");
+  }
+  process.exit(0);
+}
+
+if (argv[0] === "api") {
+  const endpoint = argv[1] || "";
+  const m = endpoint.match(/pulls\\/(\\d+)\\/files/);
+  if (m) {
+    const entry = cfg.files[m[1]];
+    if (entry === undefined || entry === null) {
+      // Emulates a real 404: gh relays the error body to STDOUT and exits
+      // non-zero (#130) — never an empty stdout with a clean exit.
+      process.stdout.write(JSON.stringify({ message: "Not Found" }));
+      process.exit(1);
+    }
+    process.stdout.write(entry);
+    process.exit(0);
+  }
+  console.error("gh stub: no api route for " + endpoint);
+  process.exit(1);
+}
+
+if (argv[0] === "pr" && argv[1] === "close") {
+  process.exit(0);
+}
+
+console.error("gh stub: no route for " + argv.join(" "));
+process.exit(1);
+`,
+    );
+    fs.chmodSync(bin, 0o755);
+    return { dir, log };
+  }
+
+  function callsOf(log) {
+    if (!fs.existsSync(log)) return [];
+    return fs
+      .readFileSync(log, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  }
+
+  // `gh pr close "$num" --delete-branch --comment "..."` → argv[2] is the
+  // PR number being closed.
+  function closedPrNumbers(log) {
+    return callsOf(log)
+      .filter((argv) => argv[0] === "pr" && argv[1] === "close")
+      .map((argv) => argv[2]);
+  }
+
+  function deletedBranch(log, num) {
+    return callsOf(log).some(
+      (argv) =>
+        argv[0] === "pr" &&
+        argv[1] === "close" &&
+        argv[2] === num &&
+        argv.includes("--delete-branch"),
+    );
+  }
+
+  function runRetireStep({ dryRun, stubDir }) {
+    const step = retireStep();
+    expect(step, `${SWEEP} must have a step named "${RETIRE_STEP_NAME}"`).toBeTruthy();
+    const script = String((step && step.run) || "");
+    expect(script, `${RETIRE_STEP_NAME} must be a run: script`).toBeTruthy();
+    const res = spawnSync("bash", ["-c", script], {
+      encoding: "utf8",
+      env: {
+        PATH: `${stubDir}${path.delimiter}${process.env.PATH}`,
+        GH_TOKEN: "stub-token",
+        GH_REPO: "o/r",
+        DRY_RUN: dryRun,
+        THRESHOLD_HOURS: String(THRESHOLD_HOURS),
+      },
+    });
+    return { code: res.status, out: `${res.stdout || ""}${res.stderr || ""}` };
+  }
+
+  function pr({ number, headRefName, createdAt, labels = [] }) {
+    return { number, headRefName, createdAt, labels: labels.map((name) => ({ name })) };
+  }
+
+  const FIXTURE_ONLY = "_posts/2099-12-31-e2e-scheduled-publish-1788859173294.md";
+  const REAL_POST = "_posts/2026-10-01-real-post.md";
+
+  test("(a) old PR, fixture-only diff → closed with --delete-branch", () => {
+    const num = "101";
+    const { dir, log } = ghStubDir({
+      prs: [
+        pr({
+          number: 101,
+          headRefName: "cms/posts/scheduled-publish-1788859173294",
+          createdAt: OLD_ISO,
+        }),
+      ],
+      files: { [num]: `${FIXTURE_ONLY}\n` },
+    });
+    try {
+      const { code, out } = runRetireStep({ dryRun: "false", stubDir: dir });
+      expect(code, out).toBe(0);
+      expect(closedPrNumbers(log)).toEqual([num]);
+      expect(deletedBranch(log, num)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("(b) old PR, fixture + real post → NOT closed (mixed content)", () => {
+    const num = "102";
+    const { dir, log } = ghStubDir({
+      prs: [
+        pr({ number: 102, headRefName: "cms/posts/scheduled-publish-abc", createdAt: OLD_ISO }),
+      ],
+      files: { [num]: `${FIXTURE_ONLY}\n${REAL_POST}\n` },
+    });
+    try {
+      const { code, out } = runRetireStep({ dryRun: "false", stubDir: dir });
+      expect(code, out).toBe(0);
+      expect(closedPrNumbers(log)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("(c) old PR, real post only → NOT closed", () => {
+    const num = "103";
+    const { dir, log } = ghStubDir({
+      prs: [
+        pr({ number: 103, headRefName: "cms/posts/scheduled-publish-def", createdAt: OLD_ISO }),
+      ],
+      files: { [num]: `${REAL_POST}\n` },
+    });
+    try {
+      const { code, out } = runRetireStep({ dryRun: "false", stubDir: dir });
+      expect(code, out).toBe(0);
+      expect(closedPrNumbers(log)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("(d) young PR, fixture-only → NOT closed (too new)", () => {
+    const num = "104";
+    const { dir, log } = ghStubDir({
+      prs: [
+        pr({
+          number: 104,
+          headRefName: "cms/posts/scheduled-publish-ghi",
+          createdAt: youngIso(),
+        }),
+      ],
+      files: { [num]: `${FIXTURE_ONLY}\n` },
+    });
+    try {
+      const { code, out } = runRetireStep({ dryRun: "false", stubDir: dir });
+      expect(code, out).toBe(0);
+      expect(closedPrNumbers(log)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("(e) old fixture-only PR with `keep` label → NOT closed", () => {
+    const num = "105";
+    const { dir, log } = ghStubDir({
+      prs: [
+        pr({
+          number: 105,
+          headRefName: "cms/posts/scheduled-publish-jkl",
+          createdAt: OLD_ISO,
+          labels: ["keep"],
+        }),
+      ],
+      files: { [num]: `${FIXTURE_ONLY}\n` },
+    });
+    try {
+      const { code, out } = runRetireStep({ dryRun: "false", stubDir: dir });
+      expect(code, out).toBe(0);
+      expect(closedPrNumbers(log)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("(f) files fetch fails → NOT closed (fail closed on missing evidence)", () => {
+    const num = "106";
+    const { dir, log } = ghStubDir({
+      prs: [
+        pr({ number: 106, headRefName: "cms/posts/scheduled-publish-mno", createdAt: OLD_ISO }),
+      ],
+      files: { [num]: null },
+    });
+    try {
+      const { code, out } = runRetireStep({ dryRun: "false", stubDir: dir });
+      expect(code, out).toBe(0);
+      expect(closedPrNumbers(log)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("(g) DRY_RUN=true with an otherwise-retirable PR → NOT closed", () => {
+    const num = "107";
+    const { dir, log } = ghStubDir({
+      prs: [
+        pr({ number: 107, headRefName: "cms/posts/scheduled-publish-pqr", createdAt: OLD_ISO }),
+      ],
+      files: { [num]: `${FIXTURE_ONLY}\n` },
+    });
+    try {
+      const { code, out } = runRetireStep({ dryRun: "true", stubDir: dir });
+      expect(code, out).toBe(0);
+      expect(closedPrNumbers(log)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("(h) headRefName off the prefix (unexpected search result) → NOT closed", () => {
+    const num = "108";
+    const { dir, log } = ghStubDir({
+      prs: [pr({ number: 108, headRefName: "cms/posts/some-other-branch", createdAt: OLD_ISO })],
+      files: { [num]: `${FIXTURE_ONLY}\n` },
+    });
+    try {
+      const { code, out } = runRetireStep({ dryRun: "false", stubDir: dir });
+      expect(code, out).toBe(0);
+      expect(closedPrNumbers(log)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("structural: the step sits after Tier 1 and before the _posts/ content sweep", () => {
+    const doc = parseYaml(readWorkflow(SWEEP));
+    const steps = doc.jobs.sweep.steps || [];
+    const tier1Idx = steps.findIndex((s) => s && s.name === "Sweep stale Decap-managed PRs");
+    const retireIdx = steps.findIndex((s) => s && s.name === RETIRE_STEP_NAME);
+    // Same "step that lists _posts via the contents API" identification the
+    // `_posts/` orphan-sweep describe block above uses (findPostSweepStep) —
+    // reimplemented locally rather than imported since that helper is scoped
+    // to its own describe block.
+    const postSweepIdx = steps.findIndex((s) =>
+      /contents\/_posts/.test(String((s && s.run) || "")),
+    );
+    expect(
+      tier1Idx,
+      `${SWEEP} must have the "Sweep stale Decap-managed PRs" step`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      retireIdx,
+      `${SWEEP} must have the "${RETIRE_STEP_NAME}" step`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      postSweepIdx,
+      `${SWEEP} must have a step that lists _posts via the contents API`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(retireIdx, `${RETIRE_STEP_NAME} must run after Tier 1`).toBeGreaterThan(tier1Idx);
+    expect(retireIdx, `${RETIRE_STEP_NAME} must run before the _posts/ content sweep`).toBeLessThan(
+      postSweepIdx,
+    );
+  });
+
+  test("the new step carries no `if:` gate (honours DRY_RUN internally, like Tier 1)", () => {
+    const step = retireStep();
+    expect(step.if, `${RETIRE_STEP_NAME} must not be step-gated by inputs.dry_run`).toBeFalsy();
   });
 });
