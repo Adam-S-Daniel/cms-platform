@@ -217,14 +217,16 @@ jobs:
       # 92855380065) before running lints that never launch a browser. Pin it to the
       # one project this lane runs. Locked by e2e/engine-scope-lint.test.js.
       PW_PROJECT: chromium-light
-      # MEASUREMENT V1 (cms-platform#461): PW_WORKERS overrides
+      # MEASUREMENT V2 (cms-platform#461): PW_WORKERS overrides
       # resolveWorkers() in playwright.config.js, which otherwise defaults to
       # 50% of the runner's 4 vCPUs (2 workers) — measured 57 s of "Run
       # pure-fs harness lints" on a cache miss (job 107641619807), 46-49 s on a
-      # cache hit (run 36004123542). 100% (4 workers) is the first of two
-      # worker counts being measured against that baseline before picking a
-      # final shape; see docs/E2E-PARALLELISM.md#node-unit-lints-self-ci.
-      PW_WORKERS: '100%'
+      # cache hit (run 36004123542). 150% (6 workers) is docs/E2E-PARALLELISM.md's
+      # measured setting for e2e-tests.yml's project jobs on the same 4-vCPU
+      # runner; this measures it against 100% (V1, run 36005064648: 33-44 s)
+      # before picking a final shape; see
+      # docs/E2E-PARALLELISM.md#node-unit-lints-self-ci.
+      PW_WORKERS: '150%'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
