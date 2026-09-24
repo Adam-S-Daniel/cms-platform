@@ -205,6 +205,32 @@ jobs:
   # single project (`chromium-light`) runs each lint once without launching any
   # browser. `npm ci` with PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 installs the test
   # runner but no ~100MB browser binaries. Hard-fail.
+  #
+  # PARALLELISM (cms-platform#461): PW_WORKERS=100% raises resolveWorkers()'s
+  # default of 50% of the runner's 4 vCPUs (2 workers) to 4. Four shapes were
+  # measured with the browser-download cache above already in place — job-wall
+  # averages over 2-3 samples each, table + run ids in
+  # docs/E2E-PARALLELISM.md#node-unit-lints-self-ci:
+  #
+  #     V0 unchanged (2 workers)                    64.0 s
+  #     V1 PW_WORKERS=100% (this)                   58.7 s  <- chosen
+  #     V2 PW_WORKERS=150%                          60.0 s
+  #     V3 3-way --shard at 100%, behind a gate      61.7 s (52-76 s spread)
+  #
+  # V3 was tried too — Playwright's native `--shard`, not a hand-grouped split
+  # (docs/E2E-PARALLELISM.md's "Measured: --shard cannot balance this suite" is
+  # about the BROWSER suite's 5 ms-49 s per-test spread; these pure-fs lints
+  # don't have that spread, and `--list --shard=i/3` on the DENY-filtered
+  # 2112-test set confirmed an exact 704/704/704 split), behind the same
+  # work/gate split `site-verify.yml` and `e2e-tests.yml`'s `e2e` job use so no
+  # job publishing the required context carries a `timeout-minutes`
+  # (cms-platform#289). It lost on the numbers that matter here: each shard
+  # re-pays the ~15-20 s fixed cost (checkout, setup-node, npm ci, cache
+  # restore) that splitting 42 s of test time three ways barely covers, and one
+  # of three samples caught GitHub staggering the three runners' allocation by
+  # ~36 s, landing WORSE than doing nothing (76 s). Simpler and faster on
+  # average wins: one job, higher worker count, no matrix/gate wiring, no
+  # extra runner-minutes, no allocation-stagger exposure.
   node-unit-lints:
     runs-on: ubuntu-latest
     env:
@@ -217,6 +243,9 @@ jobs:
       # 92855380065) before running lints that never launch a browser. Pin it to the
       # one project this lane runs. Locked by e2e/engine-scope-lint.test.js.
       PW_PROJECT: chromium-light
+      # See the PARALLELISM block above the job — measured the best of four
+      # shapes on this runner size and spec mix.
+      PW_WORKERS: '100%'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -229,6 +258,22 @@ jobs:
       - name: Install harness deps (no browser binaries)
         working-directory: e2e
         run: npm ci
+
+      # `npx playwright test` below launches install-browsers-on-miss.js as
+      # globalSetup, which downloads chromium (+ FFmpeg + the headless shell)
+      # into ~/.cache/ms-playwright every run: this lane's `npm ci` sets
+      # PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 and installs no browser at all, so the
+      # self-heal always finds it missing (~10 s, measured job 107641619807) — a
+      # pure download, no apt/`--with-deps` to cache around. e2e/package-lock.json
+      # pins @playwright/test, which pins the exact browser BUILD the self-heal
+      # checks for, so the key below is exact: a hit restores precisely what this
+      # run needs, a miss just falls back to the self-heal downloading it, same as
+      # today.
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-light-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
 
       - name: Run pure-fs harness lints
         working-directory: e2e

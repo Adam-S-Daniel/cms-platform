@@ -555,3 +555,134 @@ still name exactly `e2e / e2e`. Per-job artifacts and failure-comment markers
 are project-scoped (`playwright-report-<project>`,
 `e2e-failure-summary-<project>`) — jobs sharing either would clobber each other,
 and a marker that names the project says which one went red before you open a log.
+
+## node-unit-lints (self-ci)
+
+`self-ci.yml`'s `node-unit-lints` job runs the e2e harness's pure-fs lints
+(`*.test.js`, no browser, no build) as one of the platform's four REQUIRED
+`platform-main` contexts. cms-platform#461 measured whether it could be made
+faster the same way `e2e-tests.yml` was — more workers, or sharding — after
+first adding a cache for the ~10 s browser-download self-heal the job pays on
+every run regardless (`e2e/install-browsers-on-miss.js`'s globalSetup checks
+for chromium even though this lane never launches a browser; `npm ci` runs
+with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so a self-heal miss is guaranteed
+without it).
+
+**Baseline, measured on PR #461's own head before any worker/shard change**
+(run 36004123542, job 107647791690): a cache MISS measured 57 s of "Run
+pure-fs harness lints" (job wall 71 s), `Running 2112 tests using 2 workers`
+appearing ~16 s after the step starts (the download). A same-commit rerun
+(job 107648819120) measured the cache HIT case the branch would see on every
+push after the first: 46 s step / 62 s job wall.
+
+**Four shapes measured, all with the cache in place, 2-3 samples each** (`gh
+run view <id> --json jobs` for job/step timestamps; `gh api
+.../jobs/<id>/logs | grep -E 'Running .* workers|Cache restored|Cache not
+found'` for worker count + cache-hit confirmation):
+
+| variant | change | run id | step samples (s) | job-wall samples (s) | job-wall avg (s) |
+|---|---|---|---|---|---|
+| V0 | cache only (PR head, cache hit) | 36004123542 (jobs 107648819120, 107649399495) | 46, 49 | 62, 66 | 64.0 |
+| V1 | + `PW_WORKERS: '100%'` (4 workers) | 36005064648 (jobs 107650999867, 107651505530, 107653313074) | 33, 44, 45 | 51, 63, 62 | 58.7 |
+| V2 | + `PW_WORKERS: '150%'` (6 workers) | 36005428781 (jobs 107652240070, 107652803523, 107653324243) | 49, 36, 49 | 64, 53, 63 | 60.0 |
+| V3 | 3-way `--shard` at 100%, behind a `node-unit-lints` gate job | 36006324455 (3 reruns) | max-shard: 28-42 (per sample) | 76, 57, 52 (first-shard-start → gate-complete) | 61.7 |
+
+V1 and V2 are drop-in `PW_WORKERS` changes to the single job; each rerun is a
+fresh sample of the same commit. V3 restructures the job: `node-unit-lints-
+shard` is a 3-way matrix (`strategy.fail-fast: false`, native `--shard=i/3` —
+confirmed locally with `--list --shard=1/3|2/3|3/3` against the DENY-filtered
+148-spec, 2112-test set: exactly 704/704/704) at the same 100% worker setting,
+and `node-unit-lints` becomes a GATE job (`needs: node-unit-lints-shard`, `if:
+always()`, no `timeout-minutes`, no `concurrency` — e2e/required-context-
+cancellable.test.js requires this shape of any job publishing a required
+context, the same one `site-verify.yml` and `e2e-tests.yml`'s `e2e` job use)
+that reads `needs.node-unit-lints-shard.result` and fails unless it is
+`success`. V3's "job-wall" column is the required context's real latency:
+from the first shard's start to the gate job's completion, since that is what
+actually gates a merge.
+
+**Decision: V1 (single job, `PW_WORKERS: '100%'`).** It has the best average
+(58.7 s vs V0's 64.0 s, V2's 60.0 s, V3's 61.7 s) and is the simplest of the
+three changes — one job, one env var, no matrix, no gate wiring, no extra
+runner-minutes. V3 was measured and rejected: splitting ~40 s of test time
+three ways is largely eaten by each shard re-paying its own ~15-20 s fixed
+cost (checkout, setup-node, `npm ci`, cache restore), and one of three
+samples caught GitHub staggering the three runners' allocation by ~36 s,
+landing WORSE than doing nothing at all (76 s job-wall vs V0's 64 s average).
+The same lesson this file's "Where the remaining time actually goes" section
+drew about sharding the browser suite applies here at a smaller scale: fixed
+per-job cost and allocation variance eat the gain faster than the math on
+paper suggests. 150% (V2), this file's setting for `e2e-tests.yml`'s
+mixed pure-fs/browser project jobs, is not obviously better than 100% on
+THIS job's shape (2112 short pure-fs tests, no per-test wait time) — a
+different worker/job-shape combination needs its own measurement, not a
+number carried over from a different lane.
+
+**V3's gate mechanism was still proven correct on real CI before being
+discarded**, because no Docker daemon was reachable in the session that did
+this work (`act` needs one; see "act learnings" below) — a temporary commit
+(cms-platform#461, since reverted) re-applied the V3 shape with
+`node-unit-lints-shard (2)` forced to fail on purpose. Run 36007114424
+confirmed all three structural properties: shard 2 failed (job
+107658017763), shards 1 and 3 still ran to completion and passed (jobs
+107658017748, 107658017932 — `fail-fast: false` holding), and the gate job
+(107658289737) read the non-success matrix result and reported the required
+context `node-unit-lints` as `FAILURE` — not `cancelled`, not stuck on
+"Waiting for status to be reported". The very next commit reverted to the
+chosen V1 shape.
+
+**Re-measuring:** same commands as the section above, against
+`self-ci.yml`'s `node-unit-lints` job id (and `node-unit-lints-shard` if a
+sharded variant is tried again). `gh run rerun <run-id> --job <job-id>`
+reruns one job in place for an additional same-commit sample; `gh run rerun
+<run-id>` (no `--job`) reruns every job, needed to get a fresh V3 sample
+because its runner-allocation stagger is a property of the whole matrix
+launch, not of one job.
+
+### act learnings (from this measurement session)
+
+The task called for validating the shard+gate wiring with `nektos/act`
+(`act pull_request -W .github/workflows/self-ci.yml -j <job>`) before
+pushing each variant. It could not be used in this session:
+
+- `docker` was not on `PATH`, and `/usr/bin/docker` (present via a symlink)
+  resolved to `/mnt/wsl/docker-desktop/cli-tools/usr/bin/docker` — a
+  **broken** symlink, because this WSL distro had no active Docker Desktop
+  WSL integration mounted at `/mnt/wsl/docker-desktop` at all (not merely "not
+  running" — the mount point itself was absent). `act`'s own error surfaced
+  this correctly: `failed to connect to the docker API at
+  unix:///var/run/docker.sock: ... no such file or directory`.
+- No alternative container runtime (`podman`, `nerdctl`, `finch`, `colima`)
+  was present either, so there was no fallback inner loop available at all in
+  this environment — this is an environment gap, not a workflow-authoring one.
+- **Fallback used instead, and it covered the same ground `act` would have
+  for THIS change:** (1) `actionlint` plus the repo's own AST-based workflow
+  lints (`e2e/required-context-cancellable.test.js`,
+  `e2e/engine-scope-lint.test.js`, `e2e/workflow-injection-lint.test.js`) run
+  locally against every variant before each push — these parse the YAML
+  structurally and would catch a malformed matrix/gate shape, a missing
+  `fail-fast: false`, a `timeout-minutes` on the wrong job, or (caught for
+  real, see below) an unsafe expression interpolation. (2) `--shard`
+  partitioning was verified locally with `--list --shard=i/3` against the
+  exact spec list the job builds. (3) The gate's own bash was dry-run locally
+  with synthetic `SHARD_RESULT=success|failure|cancelled` inputs before the
+  first push, confirming exit 0/1/1. (4) The gate's real behavior — a failed
+  shard reddening the required context without ever reporting `cancelled` or
+  hanging — was proven on a REAL run (36007114424, see above) with a
+  temporary deliberately-failing commit, since that is the one thing neither
+  `act` nor a local dry-run can actually confirm (GitHub's own scheduling and
+  status-reporting behavior).
+- **One correctness bug this fallback loop caught that a pure timing focus
+  would have missed:** the first V3 draft interpolated `${{ matrix.shard }}`
+  directly into the `run:` script body (`--shard=${{ matrix.shard }}/3` and an
+  echo line). `e2e/workflow-injection-lint.test.js` reds on ANY `matrix.*` (or
+  `env.*`) expression substituted into a code body — categorically, not by
+  dataflow — because that is the same laundering shape an attacker-controlled
+  `github.event.*` interpolation would take, and the lint does not special-
+  case "but this one is a hardcoded `[1, 2, 3]` list". Fix: bind it to a
+  job-level `SHARD` env var and reference `"${SHARD}"` in the script instead.
+  Worth carrying forward: any new matrix job in this repo needs its matrix
+  values read back through `env:`, never spliced into a `run:`/`with.script`
+  body directly, and the repo's own lint suite catches this locally in
+  seconds — the same category of check `act` would only catch by actually
+  executing the step and observing behavior, not by parsing the YAML shape.
