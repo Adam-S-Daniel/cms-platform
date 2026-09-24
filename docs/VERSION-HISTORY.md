@@ -10,9 +10,25 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.111)
+## Version history (v0.1.0 → v0.1.112)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.112 — the sweep retires a scheduled-publish PR that only flips a loop fixture (#460); the stale lane trusts the window listing (#459); node-unit-lints caches browsers (#461).**
+adamdaniel.ai's `cms-scheduled-publish-loop` failed every day from 2026-09-08
+(adamdaniel.ai issue #3591). Its fixture PR #3589 never merged while
+`prerelease-guard` was red on every PR (the `decap-cms-lib-util@3.8.1` npm
+break, fixed in c1d04ca). Then the `_posts/` orphan sweep deleted the fixture
+from main, leaving a permanent modify/delete conflict. The scheduler's stacking
+guard and the loop's preflight both refuse while any
+`cms/posts/scheduled-publish-*` PR is open, and nothing retired one, because
+that prefix is shared with real scheduled posts. `sweep-stale-cms-prs.yml` now
+closes such a PR once it is older than the threshold, but only when EVERY
+changed file is `_posts/2099-12-31-e2e-scheduled-publish-<n>.md`. It runs before
+the orphan step and fails closed on a missing file list. #459 stops the
+no-recent-success lane from alerting on a stale history snapshot when the
+window listing holds a recent success (jodidaniel/jodidaniel.com#264). #461 is
+CI-only.
 
 **v0.1.111 — the Mastodon dedupe needs read:statuses; a refused lookup now fails the leg (#442); the preview-hostname editor test is guarded for base_collections opt-outs (#33).**
 The second fix unblocks jodidaniel.com's bump, whose required `e2e / e2e` went
