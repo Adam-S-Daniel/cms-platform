@@ -254,6 +254,132 @@ jobs:
 
           echo "::notice::Sweep complete. DRY_RUN=${DRY_RUN}"
 
+      - name: Retire stale scheduled-publish PRs that only flip loop fixtures
+        # adamdaniel.ai's cms-scheduled-publish-loop failed daily from
+        # 2026-09-08 onward (adamdaniel.ai PR #3589 / issue #3591).
+        # Chain: the loop seeds `_posts/2099-12-31-e2e-scheduled-publish-
+        # <runId>.md`; the real scheduler (publish-scheduled-posts.yml) opens
+        # a `cms/posts/scheduled-publish-<run_id>` PR flipping
+        # `published: false -> true` on it; a required check went red for an
+        # unrelated reason and #3589 never merged; two days later the
+        # `_posts/` orphan sweep below deleted the fixture from main, turning
+        # #3589 into a permanent modify/delete CONFLICTING PR that nothing
+        # ever retires. Both the real scheduler's stacking guard AND this
+        # loop's own preflight (`e2e/cms-scheduled-publish-loop.spec.js`,
+        # "Preflight — no open scheduled-publish PR") refuse to proceed while
+        # ANY open `cms/posts/scheduled-publish-*` PR exists, so one
+        # abandoned PR permanently deadlocks every later run.
+        #
+        # WHY CLASSIFY BY DIFF CONTENT, NOT BRANCH PREFIX. Unlike Tier 1/3's
+        # TEST_ONLY_PATTERNS safelist, `cms/posts/scheduled-publish-` can
+        # NEVER be added there: the NOTE on the `_posts/` orphan step below
+        # spells out that the real scheduler uses this exact prefix for
+        # genuine editor-scheduled posts, so a prefix-only rule would close a
+        # real queued-content PR right along with an abandoned fixture-only
+        # one. Instead this step inspects what each PR actually changed: only
+        # a PR whose files are ALL shaped like the loop's own per-run fixture
+        # is retirable. A real post never carries that name — it is the same
+        # never-human-authored prefix the `_posts/` orphan step already
+        # deletes with no label gate.
+        #
+        # ORDER. This step runs BEFORE "Sweep stale ephemeral loop `_posts/`
+        # + upload orphans left on main" so a stale PR is retired (its branch
+        # deleted) BEFORE that step deletes the fixture file the PR points
+        # at — retiring first means there is no window where the file is
+        # gone but the PR (now permanently CONFLICTING) still lingers open.
+        #
+        # No `if: ${{ !inputs.dry_run }}` step gate here — unlike the two
+        # PR-creating steps below, this step only ever closes something that
+        # already exists, so it honours DRY_RUN internally (Tier 1's
+        # pattern), letting a dry-run dispatch list candidates same as Tier 1.
+        env:
+          GH_TOKEN: ${{ secrets.CMS_E2E_PAT }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          THRESHOLD_HOURS: ${{ inputs.threshold_hours || 6 }}
+        run: |
+          set -euo pipefail
+          THRESHOLD_TS=$(date -u -d "${THRESHOLD_HOURS} hours ago" +%s)
+          echo "::notice::Retiring stale scheduled-publish PRs that only flip loop fixtures, > ${THRESHOLD_HOURS}h. DRY_RUN=${DRY_RUN}"
+
+          gh pr list \
+            --state open \
+            --search "head:cms/posts/scheduled-publish-" \
+            --limit 1000 \
+            --json number,headRefName,createdAt,labels \
+            --jq '.[]' | while read -r pr_json; do
+            num=$(echo "$pr_json" | jq -r '.number')
+            branch=$(echo "$pr_json" | jq -r '.headRefName')
+            created=$(echo "$pr_json" | jq -r '.createdAt')
+            created_ts=$(date -u -d "$created" +%s)
+            has_keep=$(echo "$pr_json" | jq -r '[.labels[].name] | contains(["keep"])')
+
+            # Belt-and-braces: re-verify the branch prefix client-side, same
+            # guard as Tier 1 — never act on a PR `gh pr list --search`
+            # returned unexpectedly.
+            case "$branch" in
+              cms/posts/scheduled-publish-*) ;;
+              *)
+                echo "::warning::skip #${num} [${branch}] — branch prefix is not cms/posts/scheduled-publish- (search returned an unexpected result)"
+                continue
+                ;;
+            esac
+
+            if [ "$has_keep" = "true" ]; then
+              echo "skip #${num} [${branch}] — has 'keep' label"
+              continue
+            fi
+
+            if [ "$created_ts" -ge "$THRESHOLD_TS" ]; then
+              echo "skip #${num} [${branch}] — only $(( ($(date -u +%s) - created_ts) / 60 )) min old"
+              continue
+            fi
+
+            age_h=$(( ($(date -u +%s) - created_ts) / 3600 ))
+
+            # `|| files=""` sits OUTSIDE the command substitution — same
+            # #130 lesson as the `_posts/` orphan step below: `gh api`
+            # relays its HTTP error BODY to stdout on a non-2xx response, so
+            # a fallback bound INSIDE the `$( )` would let a failed fetch
+            # silently masquerade as a (bogus) filename list instead of the
+            # empty string the fail-closed check below depends on.
+            files=$(gh api "/repos/${GH_REPO}/pulls/${num}/files?per_page=100" --paginate --jq '.[].filename') || files=""
+
+            if [ -z "$files" ]; then
+              echo "::warning::skip #${num} [${branch}] — failed to fetch changed files (fail closed: never close on missing evidence)"
+              continue
+            fi
+
+            # Classify by DIFF CONTENT, not branch prefix — see the header
+            # comment. EVERY changed file must match the loop's own per-run
+            # fixture shape. Fed via a here-string (`<<<`), NOT piped into
+            # `grep -q`: a pipe into a command that exits at its first match
+            # is a race under `pipefail` once the payload crosses the pipe
+            # buffer (the writer can take SIGPIPE mid-write and a present
+            # marker reads as absent) — never pipe into an early-exiting
+            # command.
+            all_fixture=true
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              if [[ ! "$f" =~ ^_posts/2099-12-31-e2e-scheduled-publish-[0-9]+\.md$ ]]; then
+                all_fixture=false
+                break
+              fi
+            done <<<"$files"
+
+            if [ "$all_fixture" != "true" ]; then
+              echo "skip #${num} [${branch}] — carries non-fixture content (real scheduled post); left for an editor"
+              continue
+            fi
+
+            echo "close #${num} [${branch}] — ${age_h}h old, only flips loop fixture(s)"
+            if [ "$DRY_RUN" != "true" ]; then
+              gh pr close "$num" --delete-branch --comment \
+                "Closed by sweep-stale-cms-prs.yml — this PR has been open for ${age_h}h, longer than the ${THRESHOLD_HOURS}h threshold, and only flips \`published\` on the scheduled-publish loop's own per-run e2e fixture(s), which publish no real content. An open scheduled-publish PR makes both the scheduler's stacking guard and the loop's preflight refuse every later run. Add the \`keep\` label and reopen if this was deliberate." \
+                || echo "::warning::failed to close #${num} (might already be closed or merged)"
+            fi
+          done
+
       - name: Sweep stale `_e2e/canary-delete-*` fixtures left on main
         # The throw-away delete fixtures `_e2e/canary-delete-<runId>.md`
         # should be created and removed within a single test run. A
@@ -355,7 +481,10 @@ jobs:
         # editor-scheduled posts — safelisting it would let this sweep close a
         # real queued-content PR and delete its branch. Those branches are
         # handled by that loop's own `if: always()` cleanup, which skips any
-        # branch with an open PR.
+        # branch with an open PR. The open-PR case itself — a PR that never
+        # merges and would otherwise deadlock every later run — is what the
+        # earlier "Retire stale scheduled-publish PRs that only flip loop
+        # fixtures" step exists to close, by diff content rather than prefix.
         # A crashed run that died before its existence-only-delete afterAll
         # leaks at most ONE inert, uniquely-named orphan of each — never a
         # corrupt shared baseline. This tier mirrors the `_e2e/canary-delete-*`
