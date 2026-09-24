@@ -230,6 +230,22 @@ jobs:
         working-directory: e2e
         run: npm ci
 
+      # `npx playwright test` below launches install-browsers-on-miss.js as
+      # globalSetup, which downloads chromium (+ FFmpeg + the headless shell)
+      # into ~/.cache/ms-playwright every run: this lane's `npm ci` sets
+      # PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 and installs no browser at all, so the
+      # self-heal always finds it missing (~10 s, measured job 107641619807) — a
+      # pure download, no apt/`--with-deps` to cache around. e2e/package-lock.json
+      # pins @playwright/test, which pins the exact browser BUILD the self-heal
+      # checks for, so the key below is exact: a hit restores precisely what this
+      # run needs, a miss just falls back to the self-heal downloading it, same as
+      # today.
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-light-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+
       - name: Run pure-fs harness lints
         working-directory: e2e
         # Explicit DENY list of the build-/repo-dependent specs (they need a
