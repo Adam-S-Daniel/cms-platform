@@ -1459,4 +1459,107 @@ test.describe("audit-scheduled-runs.js — no-recent-success lane (#313)", () =>
     expect(step.run).toContain('args+=(--stale-days "$AUDIT_STALE_DAYS")');
     expect(step.run).toMatch(/if \[\[ "\$AUDIT_STALE_SCAN" != "true" \]\]; then args\+=\(--no-stale-scan\); fi/);
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // THE HISTORY LISTING CAN LIE. Twice in production the per-workflow
+  // `fetchHistory` call — fired seconds after the window listing above —
+  // returned a stale snapshot that contradicted a recent success the window
+  // listing already held: jodidaniel.com#264, 2026-09-23
+  // (`editorial-label-audit.yml`, "last succeeded 19 day(s) ago" while it had
+  // succeeded daily) and adamdaniel.ai, 2026-09-10 (`cms-automerge-nudge.yml`,
+  // "24 day(s) ago" while succeeding ~7x/day). Both were false stale findings.
+  // These lock the two rules that close it: a window success decides the
+  // verdict without ever calling fetchHistory, and a history that omits a
+  // window run newer than its own oldest run is scored UNKNOWN, not stale.
+  // ───────────────────────────────────────────────────────────────────────
+
+  test("REGRESSION jodidaniel.com#264 — a recent WINDOW success decides the verdict; fetchHistory is never called", () => {
+    const { findStaleWorkflows } = loadScript();
+    const window = [run("success", 1, { id: "window-success" })];
+    // The measured shape: a per-workflow history call that comes back a
+    // ~3-week-old snapshot, aged 19..38 days, none of it overlapping the
+    // recent success the window listing already holds.
+    const staleHistory = Array.from({ length: 20 }, (_, i) =>
+      run("success", 19 + i, { id: `stale-history-${i}` }),
+    );
+    let fetchHistoryCalls = 0;
+    const r = findStaleWorkflows(
+      window,
+      () => {
+        fetchHistoryCalls++;
+        return staleHistory;
+      },
+      NOW,
+      14,
+    );
+    expect(r.stale, "a recent window success must never be overridden by a stale history").toEqual(
+      [],
+    );
+    expect(r.probeFailed).toBe(false);
+    expect(
+      fetchHistoryCalls,
+      "the window listing is ground truth — nothing left for a second call to usefully contradict",
+    ).toBe(0);
+  });
+
+  test("a history that omits a window run newer than its own oldest run is a stale snapshot — UNKNOWN, never stale", () => {
+    const { findStaleWorkflows } = loadScript();
+    // No success anywhere in the window, so the short-circuit does not apply
+    // and fetchHistory is consulted.
+    const window = [run("cancelled", 0, { id: "window-0" }), run("cancelled", 1, { id: "window-1" })];
+    // Older than both window runs, and sharing none of their ids — a wedged
+    // snapshot, not a frequent cron outrunning STALE_SCAN_RUNS.
+    const history = Array.from({ length: 18 }, (_, i) =>
+      run("cancelled", 3 + i, { id: `history-${i}` }),
+    );
+    const r = findStaleWorkflows(window, () => history, NOW, 14);
+    expect(r.stale, "an inconsistent snapshot must never become a finding").toEqual([]);
+    expect(r.probeFailed, "…but it must not read as healthy either").toBe(true);
+  });
+
+  test("a frequent cron outrunning STALE_SCAN_RUNS does not trip the consistency check", () => {
+    // 30 window runs inside the 48h window, newest-first; history keeps only
+    // the newest 20 (same ids) — exactly what a */90m cron does against a
+    // 20-run per-workflow history call. The 10 oldest window runs are absent
+    // from history, but they are OLDER than history's own oldest run, so
+    // their absence is legitimate and must not throw.
+    const { findStaleWorkflows } = loadScript();
+    const window = Array.from({ length: 30 }, (_, i) =>
+      run("cancelled", (i * 1.9) / 29, { id: `cron-${i}` }),
+    );
+    const history = window.slice(0, 20);
+    const r = findStaleWorkflows(window, () => history, NOW, 14);
+    expect(r.probeFailed, "an outrun history must not read as UNKNOWN").toBe(false);
+    expect(r.stale, "20 cancelled runs with no success is still a genuine stale finding").toHaveLength(
+      1,
+    );
+  });
+
+  test("a window success OLDER than --stale-days does not short-circuit — the verdict still comes from history", () => {
+    const { findStaleWorkflows } = loadScript();
+    const windowSuccess = run("success", 1.5, { id: "window-success-old" });
+    const window = [windowSuccess];
+    const history = [
+      windowSuccess,
+      run("cancelled", 0.5, { id: "history-cancelled-0" }),
+      run("cancelled", 0.2, { id: "history-cancelled-1" }),
+    ];
+    let fetchHistoryCalls = 0;
+    const r = findStaleWorkflows(
+      window,
+      () => {
+        fetchHistoryCalls++;
+        return history;
+      },
+      NOW,
+      1,
+    );
+    expect(
+      fetchHistoryCalls,
+      "a window success outside --stale-days is not ground truth for health — history still decides",
+    ).toBe(1);
+    expect(r.probeFailed).toBe(false);
+    expect(r.stale).toHaveLength(1);
+    expect(r.stale[0].reason).toMatch(/last succeeded 1 day\(s\) ago/);
+  });
 });
