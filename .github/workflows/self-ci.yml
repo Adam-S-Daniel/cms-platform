@@ -315,6 +315,16 @@ jobs:
             exit 1
           fi
           echo "Running ${#specs[@]} pure-fs lint spec file(s), shard ${SHARD}/3."
+          # TEMPORARY, cms-platform#461 gate-failure proof: force shard 2 red
+          # on purpose (act is unavailable in this session — no reachable
+          # Docker daemon) so a REAL CI run demonstrates the gate reads a
+          # failed shard and reddens `node-unit-lints`, and that shards 1/3
+          # still run to completion under fail-fast: false. Reverted in the
+          # very next commit.
+          if [ "${SHARD}" = "2" ]; then
+            echo "::error::deliberate cms-platform#461 gate-failure proof — not a real lint failure"
+            exit 1
+          fi
           npx playwright test --project=chromium-light --reporter=line --shard="${SHARD}/3" "${specs[@]}"
 
   # The GATE. This is the job repo-settings.yml's `platform-main` ruleset
