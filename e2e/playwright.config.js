@@ -317,6 +317,11 @@ const PLATFORM_META_SPECS = [
   // batch-strand risk with nothing going red.
   "dependabot-groups.test.js",
   "dependabot-skip.test.js",
+  // #458 — reads the platform's OWN dependabot-rearm-sweep.yml /
+  // self-dependabot-rearm.yml workflow DEFINITIONS and executes the
+  // reusable's own sweep-step run: script via `bash -c`; platform-internal,
+  // self-CI only.
+  "dependabot-rearm-refresh-identity.test.js",
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
   "deploy-preview-cms-slug.test.js",
