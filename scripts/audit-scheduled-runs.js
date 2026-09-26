@@ -189,6 +189,31 @@ const SELF_EVIDENCING_CRON_STATES = ["disabled_inactivity"];
 // fetched for the lane above — no extra listing call, and, more importantly, no
 // cadence false positive: a workflow is only ever judged on a day it actually
 // fired, so a weekly cron is never scored against a daily threshold.
+//
+// THE HISTORY CALL CAN LIE (found twice in production): the per-workflow
+// listing (`fetchHistory`, a SEPARATE API call fired after the window listing
+// above) came back a ~3-week-old snapshot while the window listing already
+// held a recent success of the SAME workflow — jodidaniel.com#264, 2026-09-23
+// (`editorial-label-audit.yml` read "last succeeded 19 day(s) ago" while it had
+// succeeded daily, newest success the day before) and adamdaniel.ai, 2026-09-10
+// (`cms-automerge-nudge.yml` read "24 day(s) ago" while succeeding ~7x/day).
+// Both were false STALE findings from trusting a listing that contradicted
+// ground truth the audit already held. Two rules close it, neither of which
+// touches `staleVerdict` itself:
+//   1. WINDOW SUCCESS SHORT-CIRCUITS. If the window listing itself already
+//      shows a recent success for a candidate, that workflow is not stale and
+//      `fetchHistory` is never called for it — the window listing is ground
+//      truth (fetched moments before this lane runs), so there is nothing for
+//      a second, later call to usefully contradict.
+//   2. A HISTORY THAT OMITS A WINDOW RUN NEWER THAN ITS OWN OLDEST RUN IS A
+//      STALE SNAPSHOT, NOT EVIDENCE OF STALENESS. `fetchHistory` runs strictly
+//      after the window listing, so it can only ever contain MORE recent runs,
+//      never fewer — any window run at least as new as the history's oldest
+//      run must appear in it. A window run OLDER than the history's oldest run
+//      may legitimately be missing (a frequent cron can fire more than
+//      `STALE_SCAN_RUNS` times inside the 48h window) and is not checked. A
+//      violation throws, which the caller (findStaleWorkflows) routes into the
+//      existing probeFailed path — "could not tell", never "stale".
 const STALE_SCAN_RUNS = 20;
 // A workflow with fewer than this many scheduled runs on record has not had
 // time to establish a no-success streak — a brand-new cron whose first run is
@@ -427,6 +452,43 @@ function staleVerdict(history, nowMs, staleDays) {
   };
 }
 
+// THE per-workflow HISTORY LISTING is fetched strictly AFTER the window
+// listing (`fetchHistory` runs inside findStaleWorkflows, seconds later), so
+// it can only ever contain MORE recent runs than the window listing already
+// holds — never fewer. A window run whose timestamp is at least as new as the
+// history's own OLDEST run therefore has to appear in it; if it does not, the
+// history is a stale/inconsistent snapshot, not evidence the workflow stopped
+// succeeding (jodidaniel.com#264, adamdaniel.ai 2026-09-10 — see the lane
+// header comment above). A window run OLDER than the history's oldest run may
+// legitimately be missing — a frequent cron can fire more than
+// `STALE_SCAN_RUNS` times inside the 48h window — so only newer-or-equal
+// window runs are checked. A no-op on an empty history: `staleVerdict` already
+// scores that as non-stale, so there is nothing here to contradict.
+function assertHistoryCoversWindow(history, windowRuns) {
+  const list = Array.isArray(history) ? history : [];
+  if (list.length === 0) return;
+  const historyIds = new Set(list.map((r) => r && r.id));
+  let oldestHistoryAt = null;
+  for (const r of list) {
+    const at = String((r && (r.run_started_at || r.created_at)) || "");
+    if (!at) continue;
+    if (oldestHistoryAt === null || at < oldestHistoryAt) oldestHistoryAt = at;
+  }
+  for (const w of windowRuns || []) {
+    if (!w) continue;
+    const at = String(w.run_started_at || w.created_at || "");
+    if (!at) continue;
+    // Older than the history's own reach — legitimately absent.
+    if (oldestHistoryAt !== null && at < oldestHistoryAt) continue;
+    if (!historyIds.has(w.id)) {
+      throw new Error(
+        `history listing omits scheduled run ${w.id} (${at}) that the window listing ` +
+          "returned — a stale snapshot, not evidence of staleness",
+      );
+    }
+  }
+}
+
 // Stale workflows among those that fired in the window. `fetchHistory` is
 // injected so the lane is unit-testable without gh. A probe error does NOT
 // report the workflow — unlike the starvation and dead-workflow splits, whose
@@ -434,13 +496,37 @@ function staleVerdict(history, nowMs, staleDays) {
 // history we could not read would be a false alert. It sets probeFailed
 // instead, which suppresses the auto-close and reds the audit: the
 // "could not tell" contract, routed to the honest side for this lane.
+//
+// Two rules run before/around the `staleVerdict` call — see the lane header
+// comment for why: (1) a candidate whose OWN window runs already show a
+// recent success is judged from that, never from `fetchHistory` — ground
+// truth already in hand, one fewer API call; (2) otherwise `fetchHistory` is
+// called and its result is checked against the window runs
+// (`assertHistoryCoversWindow`) before it is trusted — a history that omits a
+// window run newer than its own oldest run throws, which lands in the catch
+// below exactly like any other probe failure.
 function findStaleWorkflows(scheduledRuns, fetchHistory, nowMs, staleDays) {
   const stale = [];
   let probeFailed = false;
+  const windowRunsByWorkflow = new Map();
+  for (const r of scheduledRuns || []) {
+    if (!r || !r.workflow_id) continue;
+    if (!windowRunsByWorkflow.has(r.workflow_id)) windowRunsByWorkflow.set(r.workflow_id, []);
+    windowRunsByWorkflow.get(r.workflow_id).push(r);
+  }
   for (const candidate of staleCandidates(scheduledRuns)) {
+    const windowRuns = windowRunsByWorkflow.get(candidate.workflow_id) || [];
+    const windowSuccessAt = lastSuccessAt(windowRuns);
+    if (windowSuccessAt !== null) {
+      const ageDays = (nowMs - Date.parse(windowSuccessAt)) / 86400000;
+      // Ground truth already says "not stale".
+      if (Number.isFinite(ageDays) && ageDays <= staleDays) continue;
+    }
     let verdict;
     try {
-      verdict = staleVerdict(fetchHistory(candidate), nowMs, staleDays);
+      const history = fetchHistory(candidate);
+      assertHistoryCoversWindow(history, windowRuns);
+      verdict = staleVerdict(history, nowMs, staleDays);
     } catch (e) {
       probeFailed = true;
       console.error(
@@ -1325,6 +1411,7 @@ module.exports = {
   staleCandidates,
   lastSuccessAt,
   staleVerdict,
+  assertHistoryCoversWindow,
   findStaleWorkflows,
   workflowRunHistoryEndpoint,
   hiddenStaleWorkflowsBlock,

@@ -40,3 +40,11 @@ jobs:
     uses: ./.github/workflows/dependabot-rearm-sweep.yml
     with:
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}
+    # #458: lets the sweep refresh a BEHIND workflow-file PR itself (see the
+    # reusable's header). Consumers' thin callers don't pass this yet — a
+    # deliberate follow-up, not an oversight (adding it there would make the
+    # next consumer bump report workflow-content drift, since
+    # check-platform-pin-consistency.js compares callers' `secrets:` maps
+    # byte-for-byte).
+    secrets:
+      app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}

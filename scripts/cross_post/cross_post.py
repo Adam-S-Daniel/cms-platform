@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-"""Cross-post newly published blog posts to Mastodon and Substack.
+"""Cross-post newly published blog posts to Mastodon, LinkedIn and Substack.
 
 Pure-ish module (stdlib + PyYAML only) that:
 
   * detects which `_posts/*.md` files were *newly* published between two
     git shas (or were given explicitly via ``--post``),
   * renders a Mastodon status and a Substack-ready Markdown body for each,
-  * verifies the post is live at its public URL, and
+  * verifies the post is live at its public URL,
   * posts the status to Mastodon (idempotently, skipping duplicates),
+  * shares the post to the token owner's LinkedIn profile as an article card
+    (one-shot: LinkedIn has no dedupe, so a failure is never retried), and
+  * checks the LinkedIn token's age for a weekly scheduled run,
 
 via a small CLI (``python3 scripts/cross_post/cross_post.py <subcommand>``).
 
 No network calls happen anywhere except inside the real ``urllib_transport``
-/ CLI ``fetch`` functions -- every function that talks HTTP takes an
-injectable callable so tests can supply a fake.
+/ ``linkedin_transport`` / CLI ``fetch`` functions -- every function that
+talks HTTP takes an injectable callable so tests can supply a fake.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import datetime
 import hashlib
 import json
 import os
@@ -447,6 +451,14 @@ def _find_existing_status(instance: str, headers: dict, transport, account_id: s
         "?limit=40&exclude_replies=true&exclude_reblogs=true"
     )
     status_code, body = transport("GET", url, headers, None)
+    if status_code in (401, 403):
+        print(
+            f"::error::Mastodon dedupe lookup refused (HTTP {status_code}): the token needs "
+            "the read:statuses scope (profile + read:statuses + write:statuses; see "
+            'docs/CROSS-POSTING.md "Creating the Mastodon app token"); not posting without a '
+            "duplicate check"
+        )
+        raise SystemExit(1)
     if status_code != 200:
         print(
             f"::warning::Mastodon dedupe lookup failed (HTTP {status_code}); "
@@ -529,7 +541,336 @@ def post_mastodon(
 
 
 # --------------------------------------------------------------------------
-# 13. CLI
+# 13. LinkedIn: commentary, token age, post_linkedin
+# --------------------------------------------------------------------------
+
+# LinkedIn's versioned REST API (YYYYMM). A sunset version answers HTTP 426;
+# bump this constant when that happens.
+LINKEDIN_API_VERSION = "202609"
+LINKEDIN_API = "https://api.linkedin.com"
+# A member access token from LinkedIn's 3-legged OAuth flow lives 60 days and
+# cannot be refreshed without re-consent, so the weekly check goes red at 50.
+LINKEDIN_TOKEN_WARN_DAYS = 50
+LINKEDIN_TOKEN_LIFETIME_DAYS = 60
+
+_LITTLE_TEXT_RESERVED = "\\|{}@[]()<>#*_~"
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ROTATE_HINT = 'rotate it — see docs/CROSS-POSTING.md "Rotating the LinkedIn token"'
+
+
+def little_text_escape(text: str) -> str:
+    """Backslash-escape every LinkedIn "little text" reserved character.
+
+    Iterating per character escapes the backslash itself exactly once, before
+    any escape this function introduces could be re-escaped.
+    """
+    return "".join("\\" + ch if ch in _LITTLE_TEXT_RESERVED else ch for ch in text)
+
+
+def linkedin_hashtag(tag: str) -> str:
+    """`{hashtag|\\#|Word}` little-text hashtag template, or "" for a tag with no alphanumerics."""
+    plain = _hashtag(tag)
+    if not plain:
+        return ""
+    return "{hashtag|\\#|" + plain[1:] + "}"
+
+
+def _linkedin_hashtags(tags: list[str]) -> list[str]:
+    seen: list[str] = []
+    for tag in tags:
+        h = linkedin_hashtag(tag)
+        if h and h not in seen:
+            seen.append(h)
+    return seen
+
+
+def linkedin_commentary(post: dict, max_chars: int = 2900) -> str:
+    """Title, excerpt and hashtags as escaped little text; no URL (the article card carries it)."""
+    title = little_text_escape(post.get("title", ""))
+    excerpt = post.get("excerpt") or ""
+    hashtag_line = " ".join(_linkedin_hashtags(post.get("tags") or []))
+
+    def build(excerpt_text: str, include_hashtags: bool) -> str:
+        parts = [title]
+        if excerpt_text:
+            parts.append(little_text_escape(excerpt_text))
+        if include_hashtags and hashtag_line:
+            parts.append(hashtag_line)
+        return "\n\n".join(parts)
+
+    current = excerpt
+    commentary = build(current, True)
+    while len(commentary) > max_chars and current:
+        stripped = current[:-1].rstrip() if current.endswith("…") else current
+        words = stripped.split(" ")
+        current = "" if len(words) <= 1 else " ".join(words[:-1]) + "…"
+        commentary = build(current, True)
+
+    if len(commentary) > max_chars:
+        commentary = build("", False)
+
+    return commentary
+
+
+def linkedin_token_age(minted, today: datetime.date) -> int | None:
+    """Days since `minted` (YYYY-MM-DD); None when it is empty or unparseable."""
+    text = str(minted or "").strip()
+    if not _ISO_DATE_RE.match(text):
+        return None
+    try:
+        minted_date = datetime.datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return (today - minted_date).days
+
+
+def _token_expired_message(minted: str, age: int) -> str:
+    return f"::error::LinkedIn access token expired (minted {minted}, {age} days ago); {_ROTATE_HINT}"
+
+
+def _token_expiring_message(level: str, minted: str, age: int) -> str:
+    remaining = LINKEDIN_TOKEN_LIFETIME_DAYS - age
+    return (
+        f"::{level}::LinkedIn access token expires in {remaining} day(s) "
+        f"(minted {minted}); {_ROTATE_HINT}"
+    )
+
+
+def check_linkedin_token(minted, today: datetime.date) -> int:
+    """Weekly token-age check. Red from day 50 on purpose, so scheduled-run-health files an issue."""
+    age = linkedin_token_age(minted, today)
+    if age is None:
+        print(
+            "::error::LINKEDIN_TOKEN_MINTED is not set (or not YYYY-MM-DD); set it to the date "
+            "the LinkedIn token was minted — "
+            'see docs/CROSS-POSTING.md "Rotating the LinkedIn token"'
+        )
+        return 1
+    minted = str(minted).strip()
+    if age >= LINKEDIN_TOKEN_LIFETIME_DAYS:
+        print(_token_expired_message(minted, age))
+        return 1
+    if age >= LINKEDIN_TOKEN_WARN_DAYS:
+        print(_token_expiring_message("error", minted, age))
+        return 1
+    remaining = LINKEDIN_TOKEN_LIFETIME_DAYS - age
+    print(f"::notice::LinkedIn access token is {age} days old; expires in {remaining} days")
+    return 0
+
+
+def linkedin_transport(method: str, url: str, headers: dict, data: bytes | None):
+    """Real HTTP transport for the LinkedIn leg: (status, lowercased headers, body)."""
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            resp_headers = {k.lower(): v for k, v in response.headers.items()}
+            return response.status, resp_headers, response.read()
+    except urllib.error.HTTPError as err:
+        resp_headers = {k.lower(): v for k, v in (err.headers or {}).items()}
+        return err.code, resp_headers, err.read()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return 0, {}, b""
+
+
+def _linkedin_rest_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "LinkedIn-Version": LINKEDIN_API_VERSION,
+        "X-Restli-Protocol-Version": "2.0.0",
+        "Content-Type": "application/json",
+    }
+
+
+def _linkedin_rejected_token() -> None:
+    print(f"::error::LinkedIn token rejected (HTTP 401): expired or revoked; {_ROTATE_HINT}")
+
+
+def _resolve_linkedin_author(token: str, transport) -> str:
+    status_code, _, body = transport(
+        "GET", f"{LINKEDIN_API}/v2/userinfo", {"Authorization": f"Bearer {token}"}, None
+    )
+    if status_code == 401:
+        _linkedin_rejected_token()
+        raise SystemExit(1)
+    if status_code != 200:
+        print(f"::error::LinkedIn userinfo lookup failed: HTTP {status_code}")
+        raise SystemExit(1)
+    try:
+        sub = json.loads(body.decode("utf-8")).get("sub")
+    except (ValueError, AttributeError):
+        sub = None
+    if not sub:
+        print("::error::LinkedIn userinfo lookup failed: HTTP 200 without a member id")
+        raise SystemExit(1)
+    return f"urn:li:person:{sub}"
+
+
+def _is_linkedin_https_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and (host == "linkedin.com" or host.endswith(".linkedin.com"))
+
+
+def _upload_linkedin_thumbnail(image_url: str, author: str, token: str, transport, slug: str):
+    """Upload the featured image; return its image URN, or None (with a warning) on any failure."""
+
+    def skipped(reason: str):
+        print(f"::warning::LinkedIn thumbnail upload skipped for {slug}: {reason}")
+        return None
+
+    if urlparse(image_url).scheme not in ("http", "https"):
+        return skipped("featured_image is not an http(s) URL")
+
+    status_code, _, image_bytes = transport("GET", image_url, {}, None)
+    if status_code != 200:
+        return skipped(f"HTTP {status_code}")
+
+    payload = json.dumps({"initializeUploadRequest": {"owner": author}}).encode("utf-8")
+    status_code, _, body = transport(
+        "POST",
+        f"{LINKEDIN_API}/rest/images?action=initializeUpload",
+        _linkedin_rest_headers(token),
+        payload,
+    )
+    if status_code != 200:
+        return skipped(f"HTTP {status_code}")
+    try:
+        value = json.loads(body.decode("utf-8")).get("value") or {}
+        upload_url = value.get("uploadUrl") or ""
+        image_urn = value.get("image") or ""
+    except (ValueError, AttributeError):
+        upload_url = image_urn = ""
+    if not upload_url or not image_urn:
+        return skipped(f"HTTP {status_code} without an uploadUrl/image")
+    if not _is_linkedin_https_url(upload_url):
+        # The upload PUT carries the bearer token: never send it off LinkedIn.
+        return skipped(f"HTTP {status_code} with an upload URL outside https://*.linkedin.com")
+
+    status_code, _, _ = transport(
+        "PUT",
+        upload_url,
+        {"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"},
+        image_bytes,
+    )
+    if status_code not in (200, 201):
+        return skipped(f"HTTP {status_code}")
+    return image_urn
+
+
+def _report_linkedin_post_error(slug: str, status_code: int) -> None:
+    if status_code == 401:
+        _linkedin_rejected_token()
+    elif status_code == 426:
+        print(
+            f"::error::LinkedIn rejected LinkedIn-Version {LINKEDIN_API_VERSION} (HTTP 426): "
+            "the API version is sunset; bump LINKEDIN_API_VERSION in cross_post.py"
+        )
+    elif status_code == 0 or status_code >= 500:
+        print(
+            f"::error::LinkedIn POST for {slug} returned HTTP {status_code}; it MAY have posted. "
+            "Check the profile before re-dispatching with targets=linkedin"
+        )
+    else:
+        print(f"::error::LinkedIn POST failed for {slug}: HTTP {status_code}")
+
+
+def post_linkedin(
+    posts,
+    token: str | None,
+    transport,
+    minted: str = "",
+    today: datetime.date | None = None,
+    dry_run: bool = False,
+    out_dir=None,
+) -> list[dict]:
+    """Share each post to the token owner's profile as an article. Never retried: no dedupe exists."""
+    if not token:
+        print("::warning::LinkedIn leg skipped: LINKEDIN_ACCESS_TOKEN is not set")
+        return [{"slug": post["slug"], "skipped": "no-token"} for post in posts]
+
+    if today is not None:
+        age = linkedin_token_age(minted, today)
+        if age is None:
+            print("::warning::LINKEDIN_TOKEN_MINTED is not set; cannot warn before the token expires")
+        elif age >= LINKEDIN_TOKEN_LIFETIME_DAYS:
+            print(_token_expired_message(str(minted).strip(), age))
+            raise SystemExit(1)
+        elif age >= LINKEDIN_TOKEN_WARN_DAYS:
+            print(_token_expiring_message("warning", str(minted).strip(), age))
+
+    author = _resolve_linkedin_author(token, transport)
+
+    results: list[dict] = []
+    failed_slugs: list[str] = []
+
+    for post in posts:
+        slug = post["slug"]
+        commentary = linkedin_commentary(post)
+        article = {
+            "source": post["url"],
+            "title": str(post.get("title", ""))[:400],
+            "description": str(post.get("excerpt") or "")[:4000],
+        }
+
+        if dry_run:
+            print(f"::group::LinkedIn post (dry run) for {slug}")
+            print(commentary)
+            print(f"article: {json.dumps(article)}")
+            print("::endgroup::")
+            results.append({"slug": slug, "dry_run": True})
+            continue
+
+        image_url = post.get("featured_image") or ""
+        if image_url:
+            image_urn = _upload_linkedin_thumbnail(image_url, author, token, transport, slug)
+            if image_urn:
+                article["thumbnail"] = image_urn
+
+        payload = json.dumps(
+            {
+                "author": author,
+                "commentary": commentary,
+                "visibility": "PUBLIC",
+                "distribution": {
+                    "feedDistribution": "MAIN_FEED",
+                    "targetEntities": [],
+                    "thirdPartyDistributionChannels": [],
+                },
+                "content": {"article": article},
+                "lifecycleState": "PUBLISHED",
+                "isReshareDisabledByAuthor": False,
+            }
+        ).encode("utf-8")
+        status_code, headers, _ = transport(
+            "POST", f"{LINKEDIN_API}/rest/posts", _linkedin_rest_headers(token), payload
+        )
+
+        if status_code == 201:
+            urn = headers.get("x-restli-id", "")
+            if not urn:
+                print(f"::warning::LinkedIn POST for {slug} returned HTTP 201 without x-restli-id")
+            url = f"https://www.linkedin.com/feed/update/{urn}/"
+            print(f"Posted: {url}")
+            if out_dir:
+                out_path = Path(out_dir)
+                out_path.mkdir(parents=True, exist_ok=True)
+                (out_path / f"{slug}.linkedin.json").write_text(
+                    json.dumps({"urn": urn, "url": url}, indent=2) + "\n", encoding="utf-8"
+                )
+            results.append({"slug": slug, "urn": urn, "url": url})
+        else:
+            _report_linkedin_post_error(slug, status_code)
+            failed_slugs.append(slug)
+            results.append({"slug": slug, "error": status_code})
+
+    if failed_slugs:
+        raise SystemExit(1)
+
+    return results
+
+
+# --------------------------------------------------------------------------
+# 14. CLI
 # --------------------------------------------------------------------------
 
 
@@ -657,11 +998,51 @@ def _cmd_post_mastodon(argv: list[str]) -> int:
     return 0
 
 
+def _utc_today() -> datetime.date:
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def _cmd_post_linkedin(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="cross_post post-linkedin")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--out", default="cross-post-out")
+    ns = parser.parse_args(argv)
+
+    out_dir = Path(ns.out)
+    posts = json.loads((out_dir / "posts.json").read_text(encoding="utf-8"))
+
+    post_linkedin(
+        posts,
+        os.environ.get("LINKEDIN_ACCESS_TOKEN", ""),
+        linkedin_transport,
+        minted=os.environ.get("LINKEDIN_TOKEN_MINTED", ""),
+        today=_utc_today(),
+        dry_run=ns.dry_run,
+        out_dir=out_dir,
+    )
+    return 0
+
+
+def _cmd_check_linkedin_token(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="cross_post check-linkedin-token")
+    parser.add_argument(
+        "--today",
+        type=datetime.date.fromisoformat,
+        default=None,
+        help="YYYY-MM-DD to measure the age against (default: today, UTC)",
+    )
+    ns = parser.parse_args(argv)
+    today = ns.today if ns.today is not None else _utc_today()
+    return check_linkedin_token(os.environ.get("LINKEDIN_TOKEN_MINTED", ""), today)
+
+
 _SUBCOMMANDS = {
     "detect": _cmd_detect,
     "render": _cmd_render,
     "verify-live": _cmd_verify_live,
     "post-mastodon": _cmd_post_mastodon,
+    "post-linkedin": _cmd_post_linkedin,
+    "check-linkedin-token": _cmd_check_linkedin_token,
 }
 
 

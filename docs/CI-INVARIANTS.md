@@ -53,12 +53,19 @@ per-PR checkout):
   update workflow `.github/workflows/deploy-preview.yml` without `workflows`
   permission (enablePullRequestAutoMerge)", job 93416787884, after that run had
   already passed the mergeable gate, `checks_ok` and the manifest re-check for
-  both PRs). **The discriminator is EVENT CONTEXT, not token class.** The old
-  header's premise — that `GITHUB_TOKEN` cannot merge workflow-file PRs — is
-  **FALSE and must not be re-derived**: PR #182 merged 31 changed files, ALL
-  under `.github/workflows/`, by `github-actions[bot]` 3 s after its last
-  required check went green (native auto-merge armed from the `pull_request`
-  event); PR #193 is a second instance. **Counters + exit code:** a failed merge
+  both PRs). **#458 correction — the discriminator is `behind_by > 0` on a
+  workflow-file diff, not event context.** #182's successful merge was of an
+  UP-TO-DATE PR (`behind_by=0`), and #458 (PR #450, runs 35868793028 /
+  36006683129) reproduced the identical "without `workflows` permission"
+  refusal on `updatePullRequestBranch`, not just `enablePullRequestAutoMerge` —
+  so it is not the schedule event that's refused, it's any GITHUB_TOKEN write
+  that would have to synthesize `.github/workflows/*` content GitHub can't find
+  in a commit Dependabot pushed. The old header's premise — that `GITHUB_TOKEN`
+  cannot merge workflow-file PRs — is **FALSE and must not be re-derived**: PR
+  #182 merged 31 changed files, ALL under `.github/workflows/`, by
+  `github-actions[bot]` 3 s after its last required check went green (native
+  auto-merge armed from the `pull_request` event); PR #193 is a second
+  instance. **Counters + exit code:** a failed merge
   or re-arm used to increment NOTHING, so the 2026-08-10 run printed
   `merged=0 re-armed=0 skipped=0` after failing twice, and a month of
   `skipped=2 / merged=0` read as success. A PR that can be neither merged nor
@@ -85,12 +92,51 @@ per-PR checkout):
   exists to permit. A refreshed PR deliberately does NOT then get `--auto`: the
   refresh invalidates the checks this run verified, so it lands on the NEXT
   sweep, and `UPDATED` is a success outcome that never trips the non-zero exit.
-  (The ruleset reports `strict_required_status_checks_policy: false` and
-  `GET /branches/main/protection` is 403 to these tokens, so classic protection's
-  "Require branches to be up to date" is the only remaining explanation —
-  enforced, but not readable anywhere the sweep can see.) This also explains the
-  ORIGINAL #121/#122 six-day strand better than "auto-merge was disabled" alone
-  ever did.
+  (**#458 correction:** it is NOT classic branch protection — there is none.
+  `GET /repos/.../branches/main/protection` returns 404 "Branch not protected"
+  to an ADMIN token, not the earlier-assumed 403. An admin viewer reads #450
+  `mergeable_state: clean` at `behind_by=35` the same moment the sweep's
+  GITHUB_TOKEN reads `blocked` on the identical PR — BLOCKED really is
+  viewer-scoped, but by CAPABILITY: resolving a behind workflow-file PR would
+  write content GitHub can't find in a Dependabot commit, which it refuses to
+  any identity without `workflows` permission. GITHUB_TOKEN never holds it; an
+  admin token does, so it reads `clean`.) This also explains the ORIGINAL
+  #121/#122 six-day strand better than "auto-merge was disabled" alone ever
+  did.
+
+  **A stale workflow-file PR needs a `workflows`-capable identity (#458).**
+  The mechanism above means NO GITHUB_TOKEN path — direct merge, branch
+  refresh, or auto-merge re-arm — can ever resolve a BEHIND PR that touches
+  `.github/workflows/`: every one of them would have to write workflow-file
+  content Dependabot never pushed, and GITHUB_TOKEN can never hold the
+  `workflows` permission that write requires. `dependabot-rearm-sweep.yml`
+  therefore mints a short-lived CMS automation App token
+  (`scripts/mint-app-token.js`, scoped to exactly
+  `contents=write,pull_requests=write,workflows=write`) and uses it — ONLY for
+  `gh pr update-branch`, never for the merge path (see "Why the sweep
+  deliberately KEEPS `github.token`" below: an App-attributed merge would fire
+  push workflows, including the prod loops, that a branch push cannot reach).
+  Without the App configured (`vars.CMS_AUTOMATION_APP_ID` +
+  `secrets.app_private_key`, wired from the caller's
+  `secrets.CMS_AUTOMATION_APP_PRIVATE_KEY`), the refresh still runs on
+  GITHUB_TOKEN — degraded, not skipped — but a GITHUB_TOKEN-pushed refresh
+  fires **no** workflow runs at all (GITHUB_TOKEN-authored pushes don't
+  trigger new runs), so the refreshed head's required checks may never report
+  and the PR sits `UPDATED` indefinitely; a `::warning::` says so every time.
+  The FAILED path for a still-unresolvable behind + workflow-file PR names the
+  human action: comment `` @dependabot rebase `` on the PR (Dependabot pushes a
+  fresh head; the `pull_request`-context auto-merge job re-arms on it and it
+  lands on green). The sweep does not post that comment itself —
+  `@dependabot rebase` from `github-actions[bot]` is rejected by Dependabot
+  ("only users with push access"), so it can only be named in the warning for
+  a human to type. **Only `self-dependabot-rearm.yml` (this repo's own
+  caller) passes `secrets.app_private_key` today.** Consumers'
+  `examples/site/.github/workflows/dependabot-rearm-sweep.yml` thin caller
+  does not yet — adding a `secrets:` map there would make the next consumer
+  bump report workflow-content drift, since
+  `check-platform-pin-consistency.js` compares callers' `secrets:` maps
+  against the template byte-for-byte. Consumer adoption is a deliberate
+  follow-up, not an oversight.
 
   **Why the sweep deliberately KEEPS `github.token` on the merge path.** A
   `GITHUB_TOKEN`-attributed merge fires **no push workflows** here — verified:
@@ -371,6 +417,15 @@ wedged approval gate all reach it through the same door.
   (`<!-- stale-workflows: … -->`), kept strictly separate from the run-id and
   dead-workflow ones, and are reported once per tracking issue. The close gate
   now requires all four lanes clean.
+- **A success already in the audit's own 48h window listing decides the
+  verdict without ever calling the per-workflow history endpoint; a history
+  listing that omits a window run newer than its own oldest run is a stale
+  snapshot and scores UNKNOWN (`probeFailed`), never stale.** The history call
+  runs strictly after the window listing, so it can only ever hold MORE recent
+  runs than the window already returned — never fewer — and twice in
+  production it came back an old snapshot instead, contradicting a success the
+  window listing already held: false stale findings on jodidaniel.com#264 and
+  on adamdaniel.ai (2026-09-10).
 
 ### A later success does not clear a failure (2026-09-15)
 

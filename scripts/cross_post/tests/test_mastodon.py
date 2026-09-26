@@ -198,6 +198,38 @@ def test_post_mastodon_dedupe_lookup_failure_warns_and_still_posts(capsys):
     assert "Service Unavailable body text with secrets" not in captured.out
 
 
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_post_mastodon_dedupe_lookup_refused_raises_and_stops_posting(status_code, capsys):
+    post1 = make_post(slug="post-one", url="https://adamdaniel.ai/blog/post-one/")
+    post2 = make_post(slug="post-two", url="https://adamdaniel.ai/blog/post-two/")
+    instance = "https://mastodon.example"
+    transport = FakeTransport(
+        {
+            ("GET", f"{instance}/api/v1/accounts/verify_credentials"): verify_credentials_response(),
+            (
+                "GET",
+                f"{instance}/api/v1/accounts/123/statuses?limit=40&exclude_replies=true&exclude_reblogs=true",
+            ): (status_code, b"Forbidden body text with a fake-secret-value"),
+        }
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        cross_post.post_mastodon([post1, post2], instance, "secret-token", transport)
+    assert exc_info.value.code == 1
+
+    assert all(c["method"] != "POST" for c in transport.calls)
+
+    captured = capsys.readouterr()
+    expected = (
+        f"::error::Mastodon dedupe lookup refused (HTTP {status_code}): the token needs the "
+        "read:statuses scope (profile + read:statuses + write:statuses; see "
+        'docs/CROSS-POSTING.md "Creating the Mastodon app token"); not posting without a '
+        "duplicate check"
+    )
+    assert expected in captured.out
+    assert "Forbidden body text with a fake-secret-value" not in captured.out
+    assert "secret-token" not in captured.out
+
+
 def test_post_mastodon_dry_run_makes_no_post_request():
     post = make_post()
     instance = "https://mastodon.example"

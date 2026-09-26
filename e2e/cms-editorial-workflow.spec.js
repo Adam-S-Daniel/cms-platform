@@ -3,6 +3,10 @@ const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
 const { publishedSwitch } = require("./cms-editor-ui");
 const YAML = require("yaml");
+const path = require("node:path");
+const { guard } = require("./base-collections-guards");
+// SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source signal).
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
 // Editorial-workflow + GitHub-style backend e2e coverage.
 //
@@ -378,6 +382,9 @@ test.describe(
         (process.env.TARGET || "local").toLowerCase() === "prod",
         "hostname preview contract requires a preview origin",
       );
+      // The production shell renders config.yml, which honours the consumer's
+      // cms.base_collections keep-list — no Posts link on an opted-out site.
+      test.skip(...guard(SITE_ROOT, "cms-editorial-workflow.spec.js"));
 
       const { currentHost } = await loadPreviewProductionAdmin(page, baseURL);
       const identity = await page.evaluate(() => ({

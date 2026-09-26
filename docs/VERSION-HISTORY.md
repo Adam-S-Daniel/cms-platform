@@ -10,9 +10,93 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.109)
+## Version history (v0.1.0 → v0.1.112)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.112 — the sweep retires a scheduled-publish PR that only flips a loop fixture (#460); the stale lane trusts the window listing (#459); node-unit-lints caches browsers (#461).**
+adamdaniel.ai's `cms-scheduled-publish-loop` failed every day from 2026-09-08
+(adamdaniel.ai issue #3591). Its fixture PR #3589 never merged while
+`prerelease-guard` was red on every PR (the `decap-cms-lib-util@3.8.1` npm
+break, fixed in c1d04ca). Then the `_posts/` orphan sweep deleted the fixture
+from main, leaving a permanent modify/delete conflict. The scheduler's stacking
+guard and the loop's preflight both refuse while any
+`cms/posts/scheduled-publish-*` PR is open, and nothing retired one, because
+that prefix is shared with real scheduled posts. `sweep-stale-cms-prs.yml` now
+closes such a PR once it is older than the threshold, but only when EVERY
+changed file is `_posts/2099-12-31-e2e-scheduled-publish-<n>.md`. It runs before
+the orphan step and fails closed on a missing file list. #459 stops the
+no-recent-success lane from alerting on a stale history snapshot when the
+window listing holds a recent success (jodidaniel/jodidaniel.com#264). #461 is
+CI-only.
+
+**v0.1.111 — the Mastodon dedupe needs read:statuses; a refused lookup now fails the leg (#442); the preview-hostname editor test is guarded for base_collections opt-outs (#33).**
+The second fix unblocks jodidaniel.com's bump, whose required `e2e / e2e` went
+red on v0.1.110 (jodidaniel/jodidaniel.com run 35792558914). The cause was
+v0.1.110's new test "preview editor names its preview and canonical hosts in
+the UI" (#446). It loads the production admin shell `/admin/index.html`,
+whose rendered `config.yml` honours `cms.base_collections`, and it waits for a
+Posts link that a posts-less consumer never renders. The test now carries the
+#33 registry guard (#453). The file's `index-test.html` tests keep running.
+The drift lint that should have caught it also gains a new class, CLASS F: a
+test that reaches a function navigating `/admin/index.html` and waiting for
+or routing to a base collection must be guarded. It is AST-based and was red
+against the unguarded spec.
+
+The Mastodon half (#454):
+`_find_existing_status`'s duplicate-post lookup (`GET
+/api/v1/accounts/{id}/statuses`) needs the `read:statuses` scope when called
+with a user token, but the token minted per v0.1.110's guidance carried only
+`profile` + `write:statuses`, so the lookup always came back 403 and the
+existing non-200 handling silently warned and posted anyway — the duplicate
+check never actually ran. `_find_existing_status` now treats a 401 or 403
+specially: it prints an `::error::` naming the missing scope and raises
+`SystemExit(1)`, so nothing is posted for that post or any later post in the
+run; every other non-200 (5xx, a `0` from a network error, 404, and so on)
+keeps the old warn-and-post-anyway behavior. The required scopes are now
+`profile` + `read:statuses` + `write:statuses` everywhere they're documented.
+`scripts/cross_post/`'s suite grows from 195 to 197 tests. Full writeup:
+`docs/CROSS-POSTING.md` "Creating the Mastodon app token" and "Dedupe /
+idempotency".
+
+**v0.1.110 — LinkedIn cross-posting leg (#442).**
+`cross-post.yml` gains a third, off-by-default leg: `linkedin: true` shares
+each newly-published post to the token owner's LinkedIn profile as an
+article card (`POST /rest/posts` with `content.article`; the post's
+`featured_image` is uploaded through `/rest/images?action=initializeUpload`
+as the card's thumbnail, and any failure there only drops the thumbnail).
+The commentary is LinkedIn "little text", so the title and excerpt are
+backslash-escaped and tags become `{hashtag|\#|Word}` templates; every
+`/rest` call pins `LinkedIn-Version` to the `LINKEDIN_API_VERSION` constant
+(`202609`), and a sunset version's HTTP 426 names the constant to bump.
+LinkedIn has no dedupe, so the leg is one-shot by construction — it only
+fires when detect sees a post newly published, never retries (a 5xx or a
+dropped connection MAY have posted, and the error says to check the profile
+first), and a new `targets` input (`all` / `mastodon` / `linkedin` /
+`substack`, a dispatch choice in the template) re-runs exactly one leg so a
+retry of one cannot double-post another. The member token lives 60 days and
+cannot be refreshed, so the template adds a weekly `schedule` whose run ONLY
+checks the token's age from `vars.LINKEDIN_TOKEN_MINTED`: red from day 50 so
+the fleet's scheduled-run-health audit files an issue in time; the posting
+leg warns from day 50 and refuses to post (no request) from day 60. New
+secret `LINKEDIN_ACCESS_TOKEN` (optional; unset skips the leg with a
+`::warning::`), exempted from `consumer-pat-secrets-lint` as a non-GitHub
+service token. As with Mastodon, no token, `Authorization` header or
+response body is ever printed. `scripts/cross_post/`'s suite grows from 106
+to 195 tests (new `test_linkedin.py`, plus CLI and workflow-shape cases).
+Full writeup: `docs/CROSS-POSTING.md` "LinkedIn leg", plus the activation and
+rotation runbooks recorded from adamdaniel.ai's activation.
+
+Validated on adamdaniel.ai through prerelease `v0.1.110-rc.2`, with dry-run
+dispatches from a smoke branch. The first had no token and skipped with the
+warning (run 35779643480). The second used Adam's real token: `/v2/userinfo`
+resolved the member and the card rendered (run 35791214711). No live post was
+made: both existing posts were already on LinkedIn, and the API has no
+unlisted visibility. So the first real POST, and the `sub`-derived author URN
+with it, is the next newly published post. Also in this release:
+cms-platform#445 (the Mastodon token needs `profile` + `write:statuses`) and
+cms-platform#446 (the editor-publishing copy, previously shipped only as
+`v0.1.110-rc.1`), plus dependency bumps #448 and #449.
 
 **v0.1.109 — automated cross-posting to Mastodon + Substack Markdown (#442).**
 Ported from adamdaniel.ai's site-local prototype (`scripts/cross_post/cross_post.py`

@@ -331,7 +331,9 @@ test("scheduled-publish loop — draft seeds, scheduler flips it live via PR + a
       open.map((pr) => `#${pr.number} (${pr.head.ref})`),
       `an open ${SCHEDULED_PUBLISH_BRANCH_PREFIX}* PR is already in flight — the ` +
         `scheduler's stacking guard will refuse to open another, so this loop cannot ` +
-        `validate anything. Let it auto-merge (it carries cms/ready) or close it, then re-run.`,
+        `validate anything. Let it auto-merge (it carries cms/ready) or close it, then re-run. ` +
+        `A PR whose only change is a loop fixture is retired automatically by the daily ` +
+        `sweep-stale-cms-prs run once it is older than that sweep's threshold.`,
     ).toEqual([]);
   });
 
