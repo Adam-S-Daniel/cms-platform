@@ -399,7 +399,8 @@
 
   async function fetchOpenPrBySlug(token) {
     var map = {};
-    var tips = await fetchBranchTips(token);
+    // In parallel with the /pulls read below; awaited only once it is needed.
+    var tipsReady = fetchBranchTips(token);
     try {
       var res = await fetch(REST + "/pulls?state=open&per_page=100", {
         cache: "no-cache",
@@ -410,6 +411,7 @@
       });
       var prs = await safeJson(res);
       if (!Array.isArray(prs)) return map;
+      var tips = await tipsReady;
       prs.forEach(function (pr) {
         var ref = (pr.head && pr.head.ref) || "";
         // Decap editorial-workflow branches: cms/posts/<slug> (the
