@@ -36,7 +36,9 @@
  *   armed             cms/ready or decap-cms/pending_publish on that PR, or
  *                     native auto_merge already enabled
  *   merged            the PR merged; the deploy is the only step left
- *   checksFailed      any check run on the head sha concluded failure /
+ *   checksFailed      any check run on the BRANCH TIP (git ref, not the
+ *                     PR list's lagging head.sha — adamdaniel.ai#3857)
+ *                     concluded failure /
  *                     timed_out / cancelled  (cancelled counts: a cancelled
  *                     REQUIRED context blocks the merge and nothing
  *                     overrides it — docs/CI-INVARIANTS.md, #1815/#285/#289)
@@ -87,10 +89,11 @@
  * timestamp, which would cost an extra timeline request per tick.
  *
  * ── Budget ─────────────────────────────────────────────────────────────
- * At most five GitHub requests per 30 s tick, and only while the tab is
- * VISIBLE and the route is an entry route. That is ~600/hour against an
+ * At most six GitHub requests per 30 s tick, and only while the tab is
+ * VISIBLE and the route is an entry route. That is ~720/hour against an
  * authenticated 5000/hour budget, alongside deploy-status-pill.js's own
- * ~480. A hidden tab polls nothing: an admin left open in a background tab
+ * ~480. The sixth is the branch-ref read (see `checksFailed` above): a
+ * correct verdict is worth one small request. A hidden tab polls nothing: an admin left open in a background tab
  * overnight must not spend the editor's rate limit on an entry nobody is
  * looking at.
  *
@@ -220,6 +223,16 @@
     return ref.indexOf("cms/" + entry.collection + "/") === 0 && ref.slice(-entry.slug.length) === entry.slug;
   }
 
+  // A branch name as a URL path: each `/`-separated segment encoded on its
+  // own, so `cms/posts/<slug>` stays three path segments rather than one
+  // `%2F` blob the git refs endpoint does not resolve.
+  function refPath(ref) {
+    return String(ref || "")
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/");
+  }
+
   // ── Fact gathering ────────────────────────────────────────────────────
   async function gather(token, entry) {
     var prs = await getJson(API + "/pulls?state=open&per_page=100", token, "open pulls");
@@ -276,7 +289,16 @@
       labels.indexOf(PREVIEW_ONLY_LABEL) !== -1 ||
       Boolean(baseRef && defaultBranch && baseRef !== defaultBranch);
 
-    var sha = pr.head && pr.head.sha;
+    // The commit whose checks decide the verdict is the BRANCH TIP, read off
+    // the git ref — not `pr.head.sha`. GitHub updates a PR's head sha
+    // asynchronously after a push while the ref moves at once, so right after
+    // Save → Publish the list still names the PREVIOUS commit, whose checks may
+    // have failed: adamdaniel.ai#3857 read eb9ffb8's failures for over a minute
+    // after 60716fc landed and told the editor "a safety check did not pass"
+    // for a publish that was under way. A failed ref read falls back to the
+    // list's sha, which is exactly the behaviour before this read existed.
+    var tip = await getJson(API + "/git/ref/heads/" + refPath(pr.head && pr.head.ref), token, "branch ref");
+    var sha = (tip && tip.object && tip.object.sha) || (pr.head && pr.head.sha);
     var checks = sha ? await getJson(API + "/commits/" + sha + "/check-runs?per_page=100", token, "check-runs") : null;
     var runs = checks && Array.isArray(checks.check_runs) ? checks.check_runs : [];
 
