@@ -25,6 +25,7 @@ const ALLOWED_GROUP_KEYS = [
   "update-types",
 ];
 const ALLOWED_APPLIES_TO_VALUES = ["version-updates", "security-updates"];
+const ALLOWED_UPDATE_TYPES = ["major", "minor", "patch"];
 
 // PLATFORM-ONLY: reads THIS repo's own `.github/dependabot.yml` by literal
 // path — a consumer's dependabot.yml is a different file with different
@@ -149,14 +150,88 @@ test.describe("dependabot.yml groups: every key is one Dependabot actually honou
     ).toBe(true);
   });
 
+  test("the github-actions entry groups minor+patch version updates, never major", () => {
+    const doc = parseTarget();
+    const updates = Array.isArray(doc && doc.updates) ? doc.updates : [];
+    const entry = updates.find(
+      (u) => u && u["package-ecosystem"] === "github-actions" && u.directory === "/",
+    );
+
+    expect(
+      entry,
+      `${TARGET_PATH}: expected an 'updates[]' entry with 'package-ecosystem: github-actions' ` +
+        `and 'directory: "/"' — none found.`,
+    ).toBeTruthy();
+
+    const groups =
+      entry && typeof entry.groups === "object" && entry.groups !== null
+        ? Object.entries(entry.groups)
+        : [];
+
+    const minorPatch = groups.filter(([, g]) => {
+      const types = g && Array.isArray(g["update-types"]) ? [...g["update-types"]].sort() : [];
+      return (
+        g &&
+        g["applies-to"] === "version-updates" &&
+        types.length === 2 &&
+        types[0] === "minor" &&
+        types[1] === "patch"
+      );
+    });
+    expect(
+      minorPatch.length > 0,
+      `${TARGET_PATH}: the github-actions '/' entry must declare a group with ` +
+        `'applies-to: version-updates' and 'update-types' of exactly [minor, patch]. WHY: ` +
+        `Dependabot opened 2-4 github-actions PRs at once in 8 of 11 weekly runs (2026-06-03 to ` +
+        `2026-09-22); once the first merges every later PR is behind main and strands ` +
+        `(see AGENTS.md, "Dependabot batch-strand re-arm sweep"). Removing the group fails ` +
+        `SILENTLY: Dependabot reverts to one PR per action and nothing goes red.`,
+    ).toBe(true);
+
+    for (const [groupName, g] of groups) {
+      const types = g && Array.isArray(g["update-types"]) ? g["update-types"] : [];
+      expect(
+        types.includes("major"),
+        `${TARGET_PATH}: github-actions group '${groupName}' includes 'major' in 'update-types'. ` +
+          `Majors stay individual PRs so a bad one is revertible alone (the setup-node 6->7 ` +
+          `revert, #179); grouping them would land a major inside a batch.`,
+      ).toBe(false);
+    }
+  });
+
+  test("every group's update-types values are ones Dependabot recognises", () => {
+    const groups = eachGroup(parseTarget()).filter(({ group }) =>
+      Object.prototype.hasOwnProperty.call(group, "update-types"),
+    );
+
+    for (const { ecosystem, directory, groupName, group } of groups) {
+      const types = group["update-types"];
+      expect(
+        Array.isArray(types),
+        `${TARGET_PATH}: group '${groupName}' under package-ecosystem '${ecosystem}' directory ` +
+          `'${directory}' sets 'update-types' to a non-list value.`,
+      ).toBe(true);
+      for (const t of types) {
+        expect(
+          ALLOWED_UPDATE_TYPES.includes(t),
+          `${TARGET_PATH}: group '${groupName}' under package-ecosystem '${ecosystem}' directory ` +
+            `'${directory}' lists update-type '${t}', which Dependabot does not recognise. ` +
+            `Recognised values are: ${ALLOWED_UPDATE_TYPES.join(", ")}.`,
+        ).toBe(true);
+      }
+    }
+  });
+
   // Deliberately NOT asserted: the exact `patterns` value, or that
   // `@playwright/test` sits in `exclude-patterns`. Both are policy
   // judgments, not correctness properties — they're explained at length in
-  // the comment above the `groups:` block in .github/dependabot.yml, and
-  // grouping github-actions too, or reconsidering the Playwright exclusion,
-  // are legitimate future tuning decisions. Pinning either here would turn
-  // a policy call into a fight with CI. This suite only guards that (a)
-  // every group key Dependabot is ever handed is one it actually honours,
-  // and (b) the npm /e2e entry has SOME group covering security updates —
-  // never which packages that group names.
+  // the comments in .github/dependabot.yml, and reconsidering the Playwright
+  // exclusion is a legitimate future tuning decision. github-actions is now
+  // grouped for minor+patch only; this suite pins that shape (and that no
+  // github-actions group swallows majors) but not `patterns`. Pinning either
+  // here would turn a policy call into a fight with CI. This suite guards
+  // that (a) every group key Dependabot is ever handed is one it actually
+  // honours, (b) the npm /e2e entry has SOME group covering security
+  // updates, and (c) the github-actions minor+patch group exists — never
+  // which packages a group names.
 });
