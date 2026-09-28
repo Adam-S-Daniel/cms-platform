@@ -131,6 +131,9 @@ const PLATFORM_META_SPECS = [
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
   "slug-pin.test.js",
+  // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
+  // the run links and the confirmation copy; platform-internal likewise.
+  "publish-status-links.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.

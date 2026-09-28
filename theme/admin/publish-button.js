@@ -133,6 +133,12 @@
   // Same discipline as publish-step-hint.js's compare-before-write, for the
   // same reason — the steady state must mutate nothing.
   var renderedSignature = null;
+  // The plan() kind currently in the slot, or null with no slot. Read by
+  // publish-step-hint.js, which drops the Draft sentence ("…Click Publish to
+  // put it on …") while the confirmation asks the same question beside it.
+  // What is RENDERED, not `mode`: `mode` can stay "confirm" while plan() shows
+  // something else (unsaved edits, an armed PR).
+  var renderedKind = null;
 
   function q(sel, root) {
     try {
@@ -315,6 +321,15 @@
     },
   };
 
+  // Read by publish-step-hint.js — see `renderedKind`. "busy" counts too:
+  // "Click Publish" under "Sending it to …" tells the editor to do what they
+  // just did.
+  window.CMSPublishButton = {
+    isConfirming: function () {
+      return renderedKind === "confirm" || renderedKind === "busy";
+    },
+  };
+
   // ── Rendering ─────────────────────────────────────────────────────────
   function styleButton(b, primary) {
     b.style.cssText =
@@ -447,10 +462,12 @@
       // No bar on this route — see "Failure mode". Nothing rendered means
       // nothing hidden, and the signature resets so the next bar rebuilds.
       renderedSignature = null;
+      renderedKind = null;
       return;
     }
 
     var p = plan();
+    renderedKind = p.kind;
     var signature = JSON.stringify([p, lastError]);
     if (signature === renderedSignature && slot.firstChild) {
       // Steady state: mutate nothing. In particular do NOT replace the button

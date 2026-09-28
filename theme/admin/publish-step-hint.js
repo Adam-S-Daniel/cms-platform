@@ -234,10 +234,20 @@
       // such entry is noise, not information — the bar earns its row only
       // when there is something to say.
       if (derived.badge === "live" && !derived.modifiers.length) return null;
+      // The Draft sentence ends "Click Publish to put it on <site>", and
+      // publish-button.js's confirmation beside it asks "Put this on <site>?".
+      // Both at once say the same thing twice, so the sentence steps aside
+      // while the question (or the send it leads to) is on screen.
+      var asking =
+        derived.badge === "draft" &&
+        window.CMSPublishButton &&
+        typeof window.CMSPublishButton.isConfirming === "function" &&
+        window.CMSPublishButton.isConfirming();
       return {
         state: derived.badge,
         label: derived.label,
-        detail: derived.detail,
+        detail: asking ? "" : derived.detail,
+        detailLink: asking ? null : derived.detailLink || null,
         modifiers: derived.modifiers.map(function (m) {
           return m.label;
         }),
@@ -314,6 +324,38 @@
     if (el.style.getPropertyValue(prop) !== value) el.style.setProperty(prop, value);
   }
 
+  // The detail sentence, with at most one phrase linked to a workflow run
+  // (entry-status-model.js's `detailLink`, which only ever carries a
+  // github.com URL). Same compare-before-write rule as setText(): the nodes
+  // are rebuilt only when the sentence or the link changes, and the link is
+  // built from text nodes, never markup — the phrase can hold a check name.
+  var DETAIL_SIG_ATTR = "data-detail-sig";
+
+  function setDetail(el, text, link) {
+    if (!el) return;
+    var at = link && link.text && link.href ? text.indexOf(link.text) : -1;
+    var sig = at === -1 ? text : text + "\n" + link.href;
+    if (el.getAttribute(DETAIL_SIG_ATTR) === sig) return;
+    el.setAttribute(DETAIL_SIG_ATTR, sig);
+    if (at === -1) {
+      while (el.firstChild) el.removeChild(el.firstChild);
+      setText(el, text);
+      return;
+    }
+    while (el.firstChild) el.removeChild(el.firstChild);
+    var a = document.createElement("a");
+    a.setAttribute("href", link.href);
+    // A new tab: following it must not unload the editor.
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+    a.style.cssText = "color:inherit;text-decoration:underline;";
+    a.textContent = link.text;
+    if (at > 0) el.appendChild(document.createTextNode(text.slice(0, at)));
+    el.appendChild(a);
+    var rest = text.slice(at + link.text.length);
+    if (rest) el.appendChild(document.createTextNode(rest));
+  }
+
   function render() {
     if (!document.body) return;
     var view = currentView();
@@ -351,7 +393,10 @@
     // render an empty pill beside Decap's native UNSAVED CHANGES status.
     // setStyle compares before writing so the observer cannot feed itself.
     setStyle(badge, "display", view.label ? "inline-block" : "none");
-    setText(document.getElementById(TEXT_ID), view.detail);
+    var text = document.getElementById(TEXT_ID);
+    setDetail(text, view.detail, view.detailLink);
+    // An empty sentence gives its flex room back to the confirmation.
+    setStyle(text, "display", view.detail ? "" : "none");
     setText(document.getElementById(MODIFIERS_ID), view.modifiers.join(" · "));
 
     if (el.getAttribute("data-state") !== view.state) el.setAttribute("data-state", view.state);

@@ -58,6 +58,14 @@ test.describe("entry-status-model — checks in plain English, as x of y", () =>
     }
   });
 
+  test("the plain-English 'x of y' phrase is the one linked to the check run (#473 + #3857)", () => {
+    const m = loadModel();
+    const url = "https://github.com/owner/repo/actions/runs/1";
+    const got = m.derive(armed({ checks: { total: 9, pending: ["e2e"] }, checksUrl: url }), { now: NOW });
+    expect(got.detailLink).toEqual({ text: got.waitingOn, href: url });
+    expect(got.detail).toContain(got.detailLink.text);
+  });
+
   test("an unknown check gets a generic plain name, not its id", () => {
     const m = loadModel();
     const got = m.derive(armed({ checks: { total: 3, pending: ["some-new-job"] } }), { now: NOW });

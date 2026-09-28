@@ -281,12 +281,26 @@
     };
   }
 
+  // ── The run link ──────────────────────────────────────────────────────
+  // One phrase in the sentence may link to the check's workflow run
+  // (`checksUrl`, found by publish-progress.js). It is for whoever the editor
+  // asks for help, so the sentence still names that person; the link only
+  // saves them the hunt. The URL comes off a check run a GitHub App wrote, so
+  // nothing but an https://github.com/ URL is ever handed to an href.
+  var GITHUB_URL = /^https:\/\/github\.com\//;
+
+  function checksLink(url, text) {
+    if (typeof url !== "string" || !GITHUB_URL.test(url) || !text) return null;
+    return { text: text, href: url };
+  }
+
   // ── Needs-attention copy ──────────────────────────────────────────────
   // Every branch names ONE thing a non-technical person can actually do.
   // A raw Actions URL is not an action for this audience (§4 phase 4), so
   // the contact is named instead; `contact` comes from the site's own
   // window.CMS_SUPPORT_CONTACT, falling back to a generic noun rather than
-  // to a broken link.
+  // to a broken link. The failed-check branch also links "did not pass" to
+  // the run (see "The run link"), for the person the editor asks.
   function attentionCopy(facts, contact, stalled, dest) {
     var f = facts || {};
     var host = dest.canonical;
@@ -317,6 +331,7 @@
           "One of the automatic safety checks did not pass, so this has not gone " +
           "live. Nothing you typed has been lost. Ask " + who + " to take a look.",
         waitingOn: "an automatic safety check that did not pass",
+        link: checksLink(f.checksUrl, "did not pass"),
       };
     }
     if (f.deployState === "failure" || f.deployState === "error") {
@@ -389,6 +404,7 @@
         badge: BADGE.NEEDS_ATTENTION,
         label: "Needs attention",
         detail: copy.detail,
+        detailLink: copy.link || null,
         waitingOn: copy.waitingOn,
         minutesLeft: null,
         modifiers: modifiers,
@@ -419,6 +435,11 @@
           "This is on its way to " + dest.noun + ". It is waiting for " + waiting + ". " +
           "You can close this tab — it carries on without you." +
           (dest.preview ? " It is not going to " + dest.canonical + "." : ""),
+        // Checks phase only: once merged, `waiting` is the deploy, not a check.
+        // Links `waiting` — the phrase actually in `detail` — not the raw
+        // `waitingOn` fact, which the poller no longer sets (it reports
+        // `checks` and the words are made here).
+        detailLink: f.merged ? null : checksLink(f.checksUrl, waiting),
         waitingOn: waiting,
         minutesLeft: mins,
         modifiers: modifiers,
@@ -433,6 +454,7 @@
           "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
           "put it on " + dest.noun + "." +
           (dest.preview ? " It will not go to " + dest.canonical + "." : ""),
+        detailLink: null,
         waitingOn: null,
         minutesLeft: null,
         modifiers: modifiers,
@@ -443,6 +465,7 @@
       badge: BADGE.LIVE,
       label: "Live",
       detail: "This is on " + dest.noun + " now.",
+      detailLink: null,
       waitingOn: null,
       minutesLeft: null,
       modifiers: modifiers,

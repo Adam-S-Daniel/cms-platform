@@ -273,7 +273,7 @@ test.describe("#371 — a publish that stops must stop SAYING it is in flight", 
     const bags = objectKeySetsAnchoredOn(admin(POLLER), "hasOpenPr");
     expect(bags.length, "facts object literals found in publish-progress.js").toBeGreaterThan(1);
     for (const [i, keys] of bags.entries()) {
-      for (const fact of ["previewOnly", "baseRef", "settledSince"]) {
+      for (const fact of ["previewOnly", "baseRef", "settledSince", "checksUrl"]) {
         expect(
           keys.has(fact),
           `facts bag #${i + 1} in publish-progress.js is missing \`${fact}\` — every return ` +

@@ -526,6 +526,21 @@ Four details worth keeping:
 - **A hidden tab polls nothing.** An admin left open overnight in a
   background tab must not spend the editor's rate limit on an entry nobody
   is looking at.
+- **The sentence links to the run (unreleased).** "did not pass" links to
+  the failed check's workflow run, and the "It is waiting for …" phrase to
+  the running one (one run's page when the running checks share a run, else
+  the PR's Checks tab). The poller reads the URL off the check-runs response
+  it already fetches (`checksUrl`, no extra request); the model links only an
+  `https://github.com/` URL, because a check run's `details_url` is whatever
+  the app that wrote it chose. The sentence still names a person to ask: the
+  link is for that person. The deploy phase after the merge is not linked.
+- **The Draft sentence steps aside for the confirmation (unreleased).**
+  "…Click Publish to put it on <site>." beside publish-button.js's "Put
+  this on <site>? …" says the same thing twice, so the bar hides the Draft
+  sentence while the confirmation (or the send it leads to) is on screen,
+  and restores it on Cancel. The bar asks `window.CMSPublishButton` what is
+  rendered, not what `mode` is set to. `e2e/publish-status-links.test.js`
+  covers both.
 
 Also in this phase: Decap's misleading post-publish error toast is
 suppressed — the one the shim's deliberate 422 provokes. The matcher

@@ -60,6 +60,9 @@
  *                     protects. Neither hardcodes `main`.
  *   settledSince      ms epoch at which this PR FIRST looked settled-but-
  *                     unmerged, or null. See "The stall" below.
+ *   checksUrl         the workflow run behind a failed check, else behind the
+ *                     running ones, or null. Free out of the check-runs read
+ *                     this tick already makes. See checksUrlFor().
  *
  * ── The stall: an armed publish with nothing left to wait for (#371) ────
  * `armed` says the PR is queued to merge itself. Nothing said whether that
@@ -247,6 +250,38 @@
       .join("/");
   }
 
+  // ── The run behind the sentence ───────────────────────────────────────
+  // Where the bar links "did not pass" / "waiting for one last check".
+  // A failed check wins: that is the run somebody has to open. Otherwise the
+  // running checks — one workflow run's page when they all belong to one,
+  // else the PR's Checks tab, which lists them all. For an Actions check,
+  // `details_url` is the job inside its workflow run; `html_url` (always on
+  // github.com) is the fallback for a check some other app wrote.
+  // entry-status-model.js re-checks the origin before anything reaches an href.
+  var GITHUB_URL = /^https:\/\/github\.com\//;
+  var WORKFLOW_RUN_URL = /^(https:\/\/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+)(?:\/|$)/;
+
+  function runLink(r) {
+    if (r && GITHUB_URL.test(r.details_url || "")) return r.details_url;
+    if (r && GITHUB_URL.test(r.html_url || "")) return r.html_url;
+    return null;
+  }
+
+  function checksUrlFor(pr, failedRuns, incomplete) {
+    if (failedRuns.length) return runLink(failedRuns[0]);
+    if (!incomplete.length) return null;
+    if (incomplete.length === 1) return runLink(incomplete[0]);
+    var runUrls = incomplete.map(function (r) {
+      var m = WORKFLOW_RUN_URL.exec(r.details_url || "");
+      return m ? m[1] : null;
+    });
+    var one = runUrls.every(function (u) {
+      return u && u === runUrls[0];
+    });
+    if (one) return runUrls[0];
+    return pr.html_url ? pr.html_url + "/checks" : null;
+  }
+
   // ── Fact gathering ────────────────────────────────────────────────────
   async function gather(token, entry) {
     var prs = await getJson(API + "/pulls?state=open&per_page=100", token, "open pulls");
@@ -296,6 +331,7 @@
           previewOnly: false,
           baseRef: null,
           settledSince: noteSettled(null, false, now),
+          checksUrl: null,
         },
         prNumber: null,
         prUrl: null,
@@ -335,9 +371,10 @@
     var checks = sha ? await getJson(API + "/commits/" + sha + "/check-runs?per_page=100", token, "check-runs") : null;
     var runs = checks && Array.isArray(checks.check_runs) ? checks.check_runs : [];
 
-    var failed = runs.some(function (r) {
+    var failedRuns = runs.filter(function (r) {
       return r.status === "completed" && FAILED_CONCLUSIONS.indexOf(r.conclusion) !== -1;
     });
+    var failed = failedRuns.length > 0;
 
     var incomplete = runs.filter(function (r) {
       return r.status !== "completed";
@@ -417,6 +454,7 @@
         previewOnly: previewOnly,
         baseRef: baseRef,
         settledSince: settledSince,
+        checksUrl: checksUrlFor(pr, failedRuns, incomplete),
       },
       prNumber: pr.number,
       prUrl: pr.html_url,
