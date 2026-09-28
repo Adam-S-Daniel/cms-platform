@@ -160,6 +160,11 @@
        same URL as the banner. -->
   <script src="live-url-derive.js" defer></script>
 
+  <!-- Pins an empty URL Slug on Save (Decap preSave) so a later title edit
+       cannot move a post's address — adamdaniel.ai#3857. Reads
+       window.LiveURL.slugify at save time. -->
+  <script src="slug-pin.js" defer></script>
+
   <!-- "View page on site:" banner — see admin/index.html for rationale.
        Loads after live-url-derive.js, before native-preview-href.js. -->
   <script src="live-url-banner.js" defer></script>

@@ -15,6 +15,7 @@
 # `feed_exclude: true` must NOT mint a per-tag /tags/<slug>/feed.xml.
 
 # ── Minimal Jekyll stubs (defined before the require so the guard passes) ────
+require_relative 'support/jekyll_slugify'
 module Jekyll
   # FeedPage subclasses this and calls `process(@name)` + reads `site.source`.
   class Page
@@ -29,9 +30,9 @@ module Jekyll
   end
 
   module Utils
-    # Mirror slugify's "default" mode well enough for these fixtures.
+    # Jekyll's "default" mode — the shared, golden-tested port.
     def self.slugify(name)
-      name.to_s.downcase.gsub(/[^a-z0-9]+/, '-').sub(/\A-+/, '').sub(/-+\z/, '')
+      SpecJekyllSlugify.slugify(name.to_s)
     end
   end
 end

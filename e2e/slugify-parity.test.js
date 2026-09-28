@@ -27,6 +27,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const acorn = require("acorn");
+const walk = require("acorn-walk");
 const { test, expect } = require("./base");
 const { slugify: nodeSlugify } = require("./public-content");
 
@@ -51,42 +53,55 @@ function loadBrowserSlugify() {
   return sandbox.window.LiveURL.slugify;
 }
 
-// The battery of inputs that exercise every transformation rule. Each entry
-// is [input, canonicalExpectedSlug].
-const CASES = [
-  ["replacement-test-post-1", "replacement-test-post-1"],
-  ["e2e-prod-mutate-1779995015867", "e2e-prod-mutate-1779995015867"],
-  ["Already-Has-Capitals", "already-has-capitals"],
-  // The exact #1815 regression: curly quotes are stripped, not kept.
-  [
-    'quoting-anthropic-opus-4-8-safety-"somewhat-less-robust"',
-    "quoting-anthropic-opus-4-8-safety-somewhat-less-robust",
-  ],
-  [
-    "quoting-anthropic-opus-4-8-safety-“somewhat-less-robust”",
-    "quoting-anthropic-opus-4-8-safety-somewhat-less-robust",
-  ],
-  // Em-dash, ampersand, parentheses, accents, trailing period, dot-in-title.
-  ["Design — Build & Ship", "design-build-ship"],
-  ["Café (2026) edition.", "caf-2026-edition"],
-  ["my-post-with-dots.in.title", "my-post-with-dots-in-title"],
-  ["  leading and trailing  ", "leading-and-trailing"],
-  ["multiple---dashes___and   spaces", "multiple-dashes-and-spaces"],
-];
+// The expected outputs are NOT written by hand. They come from the real
+// Jekyll::Utils.slugify (default mode) via scripts/generate-slugify-golden.rb,
+// and e2e/jekyll-slugify-oracle.test.js re-checks the file against each
+// consuming site's own Jekyll. The hand-written table this replaced pinned
+// "Café (2026) edition." -> "caf-2026-edition", which is not what Jekyll does
+// ("café-2026-edition"): a test locking a divergence in rather than out.
+const GOLDEN = JSON.parse(fs.readFileSync(path.join(__dirname, "jekyll-slugify-golden.json"), "utf8"));
 
-test.describe("slugify cross-runtime parity (#1815)", () => {
-  test("Node (public-content.js) and browser (live-url-derive.js) slugify agree on every case", () => {
-    const browserSlugify = loadBrowserSlugify();
-    for (const [input, expected] of CASES) {
-      const fromNode = nodeSlugify(input);
-      const fromBrowser = browserSlugify(input);
-      expect(fromNode, `public-content.js slugify(${JSON.stringify(input)})`).toBe(expected);
-      expect(fromBrowser, `live-url-derive.js slugify(${JSON.stringify(input)})`).toBe(expected);
-      expect(
-        fromBrowser,
-        `slugify drift: Node and browser disagree on ${JSON.stringify(input)}`,
-      ).toBe(fromNode);
+test.describe("every JS slugify is Jekyll's, case for case (golden from the real Jekyll)", () => {
+  test("the golden file is a real Jekyll run, with the edge cases that matter", () => {
+    expect(GOLDEN.generated_by).toBe("scripts/generate-slugify-golden.rb");
+    expect(GOLDEN.mode).toBe("default");
+    const inputs = GOLDEN.cases.map(([i]) => i);
+    // Non-ASCII letters, Greek final sigma, non-decimal numerals — each
+    // caught a real divergence in a hand-rolled port.
+    for (const must of ["Café Notes", "ΟΔΟΣ", "Ⅻ roman numeral", "İstanbul", "日本語のタイトル"]) {
+      expect(inputs, `golden corpus must cover ${must}`).toContain(must);
     }
+  });
+
+  test("Node (public-content.js) and browser (live-url-derive.js) match Jekyll on every golden case", () => {
+    const browserSlugify = loadBrowserSlugify();
+    for (const [input, expected] of GOLDEN.cases) {
+      expect(nodeSlugify(input), `public-content.js slugify(${JSON.stringify(input)})`).toBe(expected);
+      expect(browserSlugify(input), `live-url-derive.js slugify(${JSON.stringify(input)})`).toBe(expected);
+    }
+  });
+
+  test("cms-preview-url.spec.js keeps no private slugify — it uses public-content.js's", () => {
+    const src = fs.readFileSync(path.join(__dirname, "cms-preview-url.spec.js"), "utf8");
+    const ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "script" });
+    let ownCopy = false;
+    walk.simple(ast, {
+      FunctionDeclaration(n) {
+        if (n.id && n.id.name === "slugify") ownCopy = true;
+      },
+      VariableDeclarator(n) {
+        if (
+          n.id.type === "Identifier" &&
+          n.id.name === "slugify" &&
+          n.init &&
+          /Function/.test(n.init.type)
+        ) {
+          ownCopy = true;
+        }
+      },
+    });
+    expect(ownCopy, "cms-preview-url.spec.js must import slugify from ./public-content").toBe(false);
+    expect(src).toMatch(/require\(["']\.\/public-content["']\)/);
   });
 
   test("posts-list-enhance.js reuses LiveURL.slugify (no hand-rolled date-strip-only URL)", () => {

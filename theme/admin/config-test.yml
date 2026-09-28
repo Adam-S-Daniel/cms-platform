@@ -88,7 +88,7 @@ collections:
         label: URL Slug
         widget: string
         required: false
-        hint: "URL path on {{CMS_CURRENT_HOST}} (leave blank to generate it from the title). Keep an existing value unchanged so saved links continue to work."
+        hint: "URL path on {{CMS_CURRENT_HOST}}. Filled in for you the first time you save, so changing the title later does not move the page. Changing this moves the page to a new address and breaks links people have saved."
       - name: date
         label: Date
         widget: datetime

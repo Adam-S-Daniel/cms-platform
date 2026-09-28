@@ -78,11 +78,15 @@ def parse_post(text: str) -> tuple[dict, str]:
 
 
 def slugify(name: str) -> str:
-    """Jekyll-style slugify: lowercase; non letter/digit/mark runs -> '-'; trim edges."""
+    """Port of Jekyll::Utils.slugify, "default" mode: runs of anything that is
+    not a letter (L*), a mark (M*) or a DECIMAL digit (Nd) become '-', edges are
+    trimmed, and it is lowercased per character (Ruby's downcase has no Greek
+    final-sigma rule). Tested case for case against the real Jekyll in
+    e2e/jekyll-slugify-golden.json. Not a slug library: those transliterate."""
     chars = []
     for ch in name:
         category = unicodedata.category(ch)
-        if category[0] in ("L", "N", "M"):
+        if category[0] in ("L", "M") or category == "Nd":
             chars.append(ch.lower())
         else:
             chars.append("-")

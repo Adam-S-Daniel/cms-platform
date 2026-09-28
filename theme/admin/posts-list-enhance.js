@@ -369,8 +369,38 @@
     }
   }
 
+  // Every draft branch's TIP sha, keyed by full ref, in ONE request. A PR's
+  // `head.sha` in the /pulls list lags a push (GitHub updates it
+  // asynchronously; the ref moves at once), so right after a re-save the
+  // list names the previous commit — and if that one's checks failed, the
+  // chip would say "Needs attention" for a publish already under way
+  // (adamdaniel.ai#3857). Any failure returns {} and every row keeps the
+  // list's sha, which is the behavior before this read existed.
+  async function fetchBranchTips(token) {
+    var tips = {};
+    try {
+      var res = await fetch(REST + "/git/matching-refs/heads/cms/posts/", {
+        cache: "no-cache",
+        headers: {
+          Authorization: "token " + token,
+          Accept: "application/vnd.github+json",
+        },
+      });
+      var refs = await safeJson(res);
+      if (!Array.isArray(refs)) return tips;
+      refs.forEach(function (r) {
+        if (r && r.ref && r.object && r.object.sha) tips[r.ref] = r.object.sha;
+      });
+    } catch {
+      /* degrade */
+    }
+    return tips;
+  }
+
   async function fetchOpenPrBySlug(token) {
     var map = {};
+    // In parallel with the /pulls read below; awaited only once it is needed.
+    var tipsReady = fetchBranchTips(token);
     try {
       var res = await fetch(REST + "/pulls?state=open&per_page=100", {
         cache: "no-cache",
@@ -381,6 +411,7 @@
       });
       var prs = await safeJson(res);
       if (!Array.isArray(prs)) return map;
+      var tips = await tipsReady;
       prs.forEach(function (pr) {
         var ref = (pr.head && pr.head.ref) || "";
         // Decap editorial-workflow branches: cms/posts/<slug> (the
@@ -398,7 +429,7 @@
           map[mm[1]] = {
             number: pr.number,
             url: pr.html_url,
-            sha: (pr.head && pr.head.sha) || null,
+            sha: tips["refs/heads/" + ref] || (pr.head && pr.head.sha) || null,
             armed:
               Boolean(pr.auto_merge) ||
               labels.indexOf("cms/ready") !== -1 ||
@@ -978,6 +1009,10 @@
     var cards = collectCards();
     if (cards.length) reorderFixturesLast(cards);
   }
+
+  // Test hook (e2e/posts-list-branch-tip.test.js), the same shape as
+  // publish-button.js's window.__publishButton.
+  window.__postsListEnhance = { fetchOpenPrBySlug: fetchOpenPrBySlug };
 
   window.addEventListener("hashchange", onRoute);
   new MutationObserver(function () {

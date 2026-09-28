@@ -24,6 +24,7 @@
 # trailing slash) lands — and it re-reds automatically if the bug ever comes
 # back in a different guise.
 
+require_relative 'support/jekyll_slugify'
 require "minitest/autorun"
 
 # ---------------------------------------------------------------------------
@@ -32,10 +33,10 @@ require "minitest/autorun"
 # Liquid interpreter — just enough to prove/disprove this one bug.
 # ---------------------------------------------------------------------------
 module MiniLiquid
-  # Mirror Jekyll::Utils.slugify's default mode: downcase, collapse every run
-  # of non [a-z0-9] characters to a single dash, strip leading/trailing dashes.
+  # Jekyll::Utils.slugify's default mode — the shared, golden-tested port
+  # (support/jekyll_slugify.rb).
   def self.slugify(value)
-    value.to_s.downcase.gsub(/[^a-z0-9]+/, "-").sub(/\A-+/, "").sub(/-+\z/, "")
+    SpecJekyllSlugify.slugify(value.to_s)
   end
 
   # relative_url prepends site.baseurl (empty on these sites) and then, per

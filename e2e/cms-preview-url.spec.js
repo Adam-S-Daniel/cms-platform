@@ -3,6 +3,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
 const cap = require("./site-capabilities");
+// The harness's one Node port of Jekyll's slugify (golden-tested in
+// slugify-parity.test.js) — never a private copy here.
+const { slugify } = require("./public-content");
 
 // SITE_ROOT-aware resolution. The Posts preview_path is read from the
 // RENDERED Decap config the gem's render hook emits to
@@ -25,12 +28,6 @@ const RENDERED_CONFIG = path.join(SITE_ROOT, "_site", "admin", "config.yml");
 // reachable at its computed URL.
 const POSTS_PREVIEW_PATH = `preview_path: "/blog/{{slug}}/"`;
 
-function slugify(s) {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 function parseFrontMatter(filepath) {
   const src = fs.readFileSync(filepath, "utf8");

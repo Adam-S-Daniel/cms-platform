@@ -44,6 +44,26 @@ def test_slugify_collapses_non_word_runs_and_strips_edges():
     assert cross_post.slugify("  Hello, World!! ") == "hello-world"
 
 
+def test_slugify_matches_real_jekyll_on_every_golden_case():
+    """Expected values come from the REAL Jekyll::Utils.slugify, via
+    scripts/generate-slugify-golden.rb -> e2e/jekyll-slugify-golden.json, the
+    same file the admin's and the e2e harness's JS ports are tested against.
+    Jekyll keeps letters, marks and DECIMAL digits only ("Ⅻ" and "½" are
+    dropped) and has no Greek final-sigma rule ("ΟΔΟΣ" -> "οδοσ")."""
+    import json
+    from pathlib import Path
+
+    golden = json.loads(
+        (Path(__file__).resolve().parents[3] / "e2e" / "jekyll-slugify-golden.json").read_text("utf-8")
+    )
+    mismatches = [
+        (given, want, cross_post.slugify(given))
+        for given, want in golden["cases"]
+        if cross_post.slugify(given) != want
+    ]
+    assert mismatches == []
+
+
 def test_slug_for_derives_from_filename_when_no_front_matter_slug():
     path = "_posts/2026-05-28-quoting-anthropic-opus-4-8-safety-“somewhat-less-robust”.md"
     assert (

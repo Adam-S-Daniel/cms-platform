@@ -121,6 +121,16 @@ const PLATFORM_META_SPECS = [
   "admin-collection-controls-trim.test.js",
   "publish-button-refresh.test.js",
   "admin-github-fetch-cache.test.js",
+  // adamdaniel.ai#3857 — vm-sandbox the theme/admin SOURCE (publish-progress.js,
+  // posts-list-enhance.js, slug-pin.js + live-url-derive.js), which a consumer
+  // does not have; same reason as the two entries above.
+  "publish-progress-branch-tip.test.js",
+  "publish-progress-post-merge.test.js",
+  "live-url-banner-follows-poller.test.js",
+  "entry-status-model-progress.test.js",
+  "admin-publish-duration-copy.test.js",
+  "posts-list-branch-tip.test.js",
+  "slug-pin.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",

@@ -36,7 +36,9 @@
  *   armed             cms/ready or decap-cms/pending_publish on that PR, or
  *                     native auto_merge already enabled
  *   merged            the PR merged; the deploy is the only step left
- *   checksFailed      any check run on the head sha concluded failure /
+ *   checksFailed      any check run on the BRANCH TIP (git ref, not the
+ *                     PR list's lagging head.sha — adamdaniel.ai#3857)
+ *                     concluded failure /
  *                     timed_out / cancelled  (cancelled counts: a cancelled
  *                     REQUIRED context blocks the merge and nothing
  *                     overrides it — docs/CI-INVARIANTS.md, #1815/#285/#289)
@@ -84,16 +86,25 @@
  * grace period, so the threshold lives in the pure, unit-tested module and
  * this one stays a fact-gatherer.
  *
- * `startedAt` for the ETA is the OLDEST `started_at` among the check runs
- * that have not completed — deliberately not "when this tab noticed", so a
+ * `startedAt` for the ETA is the OLDEST `started_at` among ALL the check
+ * runs on the tip — deliberately not "when this tab noticed", so a
  * reload mid-flight does not restart the estimate, and not the label's own
  * timestamp, which would cost an extra timeline request per tick.
  *
  * ── Budget ─────────────────────────────────────────────────────────────
- * At most five GitHub requests per 30 s tick, and only while the tab is
- * VISIBLE and the route is an entry route. That is ~600/hour against an
- * authenticated 5000/hour budget, alongside deploy-status-pill.js's own
- * ~480. A hidden tab polls nothing: an admin left open in a background tab
+ * At most five GitHub requests per 30 s tick (open PR: pulls, branch ref,
+ * check-runs, pull, workflow runs; no open PR: pulls, merged pulls,
+ * deployments, deployment statuses), and only while the tab is VISIBLE and
+ * the route is an entry route. That is ~600/hour against an authenticated
+ * 5000/hour budget, alongside deploy-status-pill.js's own ~480.
+ *
+ * ── After the merge (adamdaniel.ai#3857) ──────────────────────────────
+ * Once the PR merges it is no longer open, and deploy-production registers
+ * its deployment a few seconds later. In that window the newest production
+ * deployment is the PREVIOUS one, state `success`, so the entry read as Live
+ * and the bar — which hides a plain Live — vanished mid-publish. The entry's
+ * own most recent merged PR is now read on this path, and "going live" holds
+ * until a production deployment covering the merge has succeeded. A hidden tab polls nothing: an admin left open in a background tab
  * overnight must not spend the editor's rate limit on an entry nobody is
  * looking at.
  *
@@ -136,6 +147,12 @@
   // Applied by cms-editorial-workflow.yml's "Apply draft label on new PR" step
   // to every CMS PR whose base is not `main`.
   var PREVIEW_ONLY_LABEL = "cms/preview-only";
+  // How long after a merge a production deploy that has not picked it up
+  // still reads as "on its way" rather than as the older reading (Live).
+  // Deploys start within seconds of a merge and take under a minute
+  // (measured: adamdaniel.ai#3857 merged 13:40:14, deploy 13:40:14–13:40:46),
+  // so 30 minutes only ever expires on a deploy chain that is broken.
+  var MERGE_WATCH_MS = 30 * 60 * 1000;
 
   // When the settled-but-unmerged condition first held, and for which
   // <pr>:<sha>. Any change of either resets it, so a re-save (Decap
@@ -223,6 +240,16 @@
     return ref.indexOf("cms/" + entry.collection + "/") === 0 && ref.slice(-entry.slug.length) === entry.slug;
   }
 
+  // A branch name as a URL path: each `/`-separated segment encoded on its
+  // own, so `cms/posts/<slug>` stays three path segments rather than one
+  // `%2F` blob the git refs endpoint does not resolve.
+  function refPath(ref) {
+    return String(ref || "")
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/");
+  }
+
   // ── The run behind the sentence ───────────────────────────────────────
   // Where the bar links "did not pass" / "waiting for one last check".
   // A failed check wins: that is the run somebody has to open. Otherwise the
@@ -265,26 +292,45 @@
     })[0];
 
     if (!pr) {
-      // No open PR. Either it merged and is live/deploying, or it was never
-      // saved as a draft. deploy-status-pill.js owns the production
-      // deployment, so read it here only to distinguish "deploying" from
-      // "live" — one request, and only on this branch.
-      var dep = await latestProductionStatus(token);
-      var deploying = dep && (dep.state === "in_progress" || dep.state === "queued" || dep.state === "pending");
+      // No open PR. Either it merged and is deploying (or about to), or it is
+      // live, or it was never saved as a draft. See "After the merge" in the
+      // header for why the entry's own merged PR is read here.
+      var merge = await recentMerge(token, entry);
+      var dep = await latestProductionDeployment(token);
+      var depState = dep ? dep.state : null;
+      var now = Date.now();
+      var deploying = depState === "in_progress" || depState === "queued" || depState === "pending";
+      var startedAt = dep && deploying ? dep.createdAt : null;
+      var inFlight = Boolean(deploying);
+      if (merge && now - merge.mergedAt < MERGE_WATCH_MS) {
+        // A deployment covers the merge if it IS the merge commit, or was
+        // created after it (deploys run per push to the default branch, in
+        // order, so a later one carries this commit too).
+        var covers = dep && (dep.sha === merge.sha || dep.createdAt >= merge.mergedAt);
+        if (!covers) {
+          // Merged, and production has not started on it yet: the bar used
+          // to read the PREVIOUS deploy's `success` here and go blank.
+          inFlight = true;
+          depState = "pending";
+          startedAt = merge.mergedAt;
+        } else if (deploying) {
+          startedAt = merge.mergedAt;
+        }
+      }
       return {
         facts: {
           hasOpenPr: false,
           armed: false,
-          merged: Boolean(deploying),
+          merged: inFlight,
           checksFailed: false,
           mergeConflict: false,
           awaitingReviewGate: false,
-          deployState: dep ? dep.state : null,
+          deployState: depState,
           waitingOn: null,
-          startedAt: dep && deploying ? Date.parse(dep.created_at) : null,
+          startedAt: inFlight ? startedAt : null,
           previewOnly: false,
           baseRef: null,
-          settledSince: noteSettled(null, false, Date.now()),
+          settledSince: noteSettled(null, false, now),
           checksUrl: null,
         },
         prNumber: null,
@@ -312,7 +358,16 @@
       labels.indexOf(PREVIEW_ONLY_LABEL) !== -1 ||
       Boolean(baseRef && defaultBranch && baseRef !== defaultBranch);
 
-    var sha = pr.head && pr.head.sha;
+    // The commit whose checks decide the verdict is the BRANCH TIP, read off
+    // the git ref — not `pr.head.sha`. GitHub updates a PR's head sha
+    // asynchronously after a push while the ref moves at once, so right after
+    // Save → Publish the list still names the PREVIOUS commit, whose checks may
+    // have failed: adamdaniel.ai#3857 read eb9ffb8's failures for over a minute
+    // after 60716fc landed and told the editor "a safety check did not pass"
+    // for a publish that was under way. A failed ref read falls back to the
+    // list's sha, which is exactly the behavior before this read existed.
+    var tip = await getJson(API + "/git/ref/heads/" + refPath(pr.head && pr.head.ref), token, "branch ref");
+    var sha = (tip && tip.object && tip.object.sha) || (pr.head && pr.head.sha);
     var checks = sha ? await getJson(API + "/commits/" + sha + "/check-runs?per_page=100", token, "check-runs") : null;
     var runs = checks && Array.isArray(checks.check_runs) ? checks.check_runs : [];
 
@@ -324,10 +379,24 @@
     var incomplete = runs.filter(function (r) {
       return r.status !== "completed";
     });
+    // The ETA clock starts at the FIRST check to start, completed ones
+    // included: that is when this commit's run of checks began, and it does
+    // not jump later each time an early check finishes.
     var startedAt = null;
-    incomplete.forEach(function (r) {
+    runs.forEach(function (r) {
       var t = Date.parse(r.started_at || "");
       if (!isNaN(t) && (startedAt === null || t < startedAt)) startedAt = t;
+    });
+
+    // One entry per WORKFLOW, not per job: "e2e / project (chromium-laptop)"
+    // and nine siblings are one check to an editor. The key is the caller job
+    // id before " / "; entry-status-model.js turns it into words (#3857).
+    var groups = [];
+    var pendingGroups = [];
+    runs.forEach(function (r) {
+      var key = String(r.name || "").split(" / ")[0];
+      if (groups.indexOf(key) === -1) groups.push(key);
+      if (r.status !== "completed" && pendingGroups.indexOf(key) === -1) pendingGroups.push(key);
     });
 
     // `mergeable` is NOT in the /pulls LIST response — only the single-PR
@@ -370,13 +439,6 @@
       Date.now(),
     );
 
-    var waitingOn = null;
-    if (incomplete.length === 1) {
-      waitingOn = "one last check (" + incomplete[0].name + ")";
-    } else if (incomplete.length > 1) {
-      waitingOn = incomplete.length + " automatic safety checks to finish";
-    }
-
     return {
       facts: {
         hasOpenPr: true,
@@ -386,7 +448,8 @@
         mergeConflict: mergeConflict,
         awaitingReviewGate: awaitingReviewGate,
         deployState: null,
-        waitingOn: waitingOn,
+        waitingOn: null,
+        checks: { total: groups.length, pending: pendingGroups },
         startedAt: startedAt,
         previewOnly: previewOnly,
         baseRef: baseRef,
@@ -398,12 +461,30 @@
     };
   }
 
-  async function latestProductionStatus(token) {
+  // The entry's most recent MERGED PR, or null. Head-filtered, so one small
+  // request; newest first, so a slug reused after a delete finds its latest.
+  async function recentMerge(token, entry) {
+    var owner = String(REPO || "").split("/")[0];
+    var prs = await getJson(
+      API + "/pulls?state=closed&head=" + encodeURIComponent(owner + ":" + branchFor(entry)) + "&per_page=5",
+      token,
+      "closed pulls",
+    );
+    if (!Array.isArray(prs)) return null;
+    for (var i = 0; i < prs.length; i++) {
+      var t = Date.parse(prs[i].merged_at || "");
+      if (!isNaN(t)) return { mergedAt: t, sha: prs[i].merge_commit_sha || null };
+    }
+    return null;
+  }
+
+  // The newest production deployment and its latest state, or null.
+  async function latestProductionDeployment(token) {
     var deps = await getJson(API + "/deployments?environment=production&per_page=1", token, "deployments");
     if (!Array.isArray(deps) || !deps.length) return null;
     var st = await getJson(API + "/deployments/" + deps[0].id + "/statuses?per_page=1", token, "deployment statuses");
     if (!Array.isArray(st) || !st.length) return null;
-    return st[0];
+    return { sha: deps[0].sha || null, createdAt: Date.parse(deps[0].created_at || ""), state: st[0].state };
   }
 
   // ── Loop ──────────────────────────────────────────────────────────────

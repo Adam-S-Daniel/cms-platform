@@ -278,6 +278,11 @@
        toolbar override below. MUST load before either consumer. -->
   <script src="live-url-derive.js" defer></script>
 
+  <!-- Pins an empty URL Slug on Save (Decap preSave) so a later title edit
+       cannot move a post's address — adamdaniel.ai#3857. Reads
+       window.LiveURL.slugify at save time. -->
+  <script src="slug-pin.js" defer></script>
+
   <!-- "View page on site:" banner above the entry form. Reads form
        state from the DOM and renders a link (or placeholder when
        Published is OFF / no slug yet). Restored in #1042 — a past

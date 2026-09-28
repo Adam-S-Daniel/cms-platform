@@ -103,7 +103,7 @@
         }
         toast(
           "Publishing in the background — auto-merge will land this when " +
-            "the required CI checks finish (~5–15 min). You can close this " +
+            "the automatic safety checks finish (about 5 minutes). You can close this " +
             "tab; the entry appears on " +
             (window.CMSHostname ? window.CMSHostname.current() : "the publishing destination") +
             " automatically. Decap may flash a " +
@@ -126,8 +126,8 @@
           JSON.stringify({
             message:
               "Queued for auto-merge via the cms/ready label — this entry " +
-              "publishes automatically when the required CI checks pass " +
-              "(~5–15 min). Decap shows this as an error, but the publish is " +
+              "goes live on its own once the automatic safety checks pass " +
+              "(about 5 minutes). Decap shows this as an error, but the publish is " +
               "already in progress; you can close this tab.",
           }),
           { status: 422, headers: { "Content-Type": "application/json" } },
@@ -256,7 +256,7 @@
 
         toast(
           "Removing in the background — auto-merge will land this delete when " +
-            "the required CI checks finish (~5–15 min). You can close this " +
+            "the automatic safety checks finish (about 5 minutes). You can close this " +
             "tab; the entry comes down automatically.",
         );
         // Synthetic success so Decap's UI proceeds as if the ref moved.

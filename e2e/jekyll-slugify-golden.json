@@ -1,0 +1,175 @@
+{
+  "generated_by": "scripts/generate-slugify-golden.rb",
+  "jekyll_version": "4.4.1",
+  "mode": "default",
+  "cases": [
+    [
+      "Introducing GHA-bench",
+      "introducing-gha-bench"
+    ],
+    [
+      "Quoting Anthropic: Opus 4.8 Safety “somewhat less robust”",
+      "quoting-anthropic-opus-4-8-safety-somewhat-less-robust"
+    ],
+    [
+      "Quoting Simon Willison on Unlocking Coding Agents’ Potential",
+      "quoting-simon-willison-on-unlocking-coding-agents-potential"
+    ],
+    [
+      "Hello, World!!",
+      "hello-world"
+    ],
+    [
+      "  leading and trailing  ",
+      "leading-and-trailing"
+    ],
+    [
+      "---dashes---",
+      "dashes"
+    ],
+    [
+      "a--b__c",
+      "a-b-c"
+    ],
+    [
+      "under_score",
+      "under-score"
+    ],
+    [
+      "C++ & C#",
+      "c-c"
+    ],
+    [
+      "AI/ML: 2026",
+      "ai-ml-2026"
+    ],
+    [
+      "1.5 release",
+      "1-5-release"
+    ],
+    [
+      "O’Reilly’s “quotes”",
+      "o-reilly-s-quotes"
+    ],
+    [
+      "tab\tseparated\nnewline",
+      "tab-separated-newline"
+    ],
+    [
+      "emoji 🚀 launch",
+      "emoji-launch"
+    ],
+    [
+      "",
+      ""
+    ],
+    [
+      "   ",
+      ""
+    ],
+    [
+      "Café Notes",
+      "café-notes"
+    ],
+    [
+      "Naïve résumé",
+      "naïve-résumé"
+    ],
+    [
+      "Ümlaut—em dash",
+      "ümlaut-em-dash"
+    ],
+    [
+      "ÅNGSTRÖM",
+      "ångström"
+    ],
+    [
+      "Straße",
+      "straße"
+    ],
+    [
+      "İstanbul",
+      "i̇stanbul"
+    ],
+    [
+      "ǅ digraph",
+      "ǆ-digraph"
+    ],
+    [
+      "ﬁ ligature",
+      "ﬁ-ligature"
+    ],
+    [
+      "日本語のタイトル",
+      "日本語のタイトル"
+    ],
+    [
+      "Σίσυφος",
+      "σίσυφος"
+    ],
+    [
+      "ΟΔΟΣ",
+      "οδοσ"
+    ],
+    [
+      "٣ arabic-indic digit",
+      "٣-arabic-indic-digit"
+    ],
+    [
+      "Ⅻ roman numeral",
+      "roman-numeral"
+    ],
+    [
+      "½ price",
+      "price"
+    ],
+    [
+      "x² squared",
+      "x-squared"
+    ],
+    [
+      "é combining",
+      "é-combining"
+    ],
+    [
+      "replacement-test-post-1",
+      "replacement-test-post-1"
+    ],
+    [
+      "e2e-prod-mutate-1779995015867",
+      "e2e-prod-mutate-1779995015867"
+    ],
+    [
+      "Already-Has-Capitals",
+      "already-has-capitals"
+    ],
+    [
+      "quoting-anthropic-opus-4-8-safety-\"somewhat-less-robust\"",
+      "quoting-anthropic-opus-4-8-safety-somewhat-less-robust"
+    ],
+    [
+      "quoting-anthropic-opus-4-8-safety-“somewhat-less-robust”",
+      "quoting-anthropic-opus-4-8-safety-somewhat-less-robust"
+    ],
+    [
+      "Design — Build & Ship",
+      "design-build-ship"
+    ],
+    [
+      "Café (2026) edition.",
+      "café-2026-edition"
+    ],
+    [
+      "my-post-with-dots.in.title",
+      "my-post-with-dots-in-title"
+    ],
+    [
+      "multiple---dashes___and   spaces",
+      "multiple-dashes-and-spaces"
+    ],
+    [
+      "2026-09-28-quoting-simon-willison-on-coding-agents",
+      "2026-09-28-quoting-simon-willison-on-coding-agents"
+    ]
+  ]
+}

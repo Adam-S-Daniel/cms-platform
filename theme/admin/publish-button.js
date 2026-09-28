@@ -434,7 +434,7 @@
         return {
           kind: "confirm",
           note:
-            "Put this on " + dest.noun + "? It takes about 5–15 minutes to appear " +
+            "Put this on " + dest.noun + "? It takes about 5 minutes to appear " +
             "there. It will NOT go to " + dest.canonical + ".",
         };
       }
@@ -442,8 +442,8 @@
       return {
         kind: "confirm",
         note: url
-          ? "Put this on " + dest.noun + "? It will appear at " + url + " in about 5–15 minutes."
-          : "Put this on " + dest.noun + "? It takes about 5–15 minutes to appear.",
+          ? "Put this on " + dest.noun + "? It will appear at " + url + " in about 5 minutes."
+          : "Put this on " + dest.noun + "? It takes about 5 minutes to appear.",
       };
     }
 
