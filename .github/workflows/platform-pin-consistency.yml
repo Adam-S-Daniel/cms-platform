@@ -89,7 +89,7 @@ jobs:
         # nothing else; the script's loadYaml() already probes
         # `<script>/../node_modules`. Pinned to the version the platform's e2e
         # harness uses.
-        run: npm install --prefix .cms-platform --no-save --no-package-lock yaml@2.9.0
+        run: npm install --prefix .cms-platform --no-save --no-package-lock yaml@2.9.1
 
       - name: Check single-version pin consistency
         # Owner/repo + canonical-source default from the consumer's platform.lock

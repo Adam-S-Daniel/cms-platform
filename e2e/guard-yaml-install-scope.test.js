@@ -6,7 +6,7 @@
  * Regression test for the 2026-09-08 incident.
  *
  * Both reusables used to install `yaml` with a plain
- * `npm install --no-save --no-package-lock yaml@2.9.0`, run from the
+ * `npm install --no-save --no-package-lock yaml@2.9.1`, run from the
  * CONSUMER repo root (no `--prefix`). npm resolves the ENTIRE dependency
  * tree of whatever `package.json` sits at its prefix, so an install at the
  * consumer root doesn't just fetch `yaml` — it re-resolves every
@@ -48,7 +48,7 @@ const { readWorkflow, runScripts } = require("./workflow-yaml-utils");
 const WORKFLOWS = ["platform-prerelease-guard.yml", "platform-pin-consistency.yml"];
 
 // e2e/package.json's own `yaml` devDependency is the single source of truth
-// for the pinned version — read it rather than hardcoding "2.9.0" a second
+// for the pinned version — read it rather than hardcoding "2.9.1" a second
 // time, so the workflows' pin and the harness's pin cannot silently diverge.
 const PINNED_YAML_VERSION = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "package.json"), "utf8"),

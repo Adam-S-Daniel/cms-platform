@@ -130,7 +130,7 @@ jobs:
 
       - name: Install selector dep (yaml) for the early-skip gate
         working-directory: .cms-platform/e2e
-        run: npm install --no-save --no-audit --no-fund yaml@2.9.0
+        run: npm install --no-save --no-audit --no-fund yaml@2.9.1
 
       - name: Select applicable @parity specs
         id: select

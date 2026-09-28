@@ -111,7 +111,7 @@ jobs:
         # have nothing to do with pins. Naming the prefix explicitly stops the
         # walk; the script's own resolver looks in `<script>/../node_modules`,
         # which is exactly where this puts it.
-        run: npm install --prefix .cms-platform --no-save --no-audit --no-fund yaml@2.9.0
+        run: npm install --prefix .cms-platform --no-save --no-audit --no-fund yaml@2.9.1
       - name: Check pin agreement
         # `inputs.*` reaches the script through env, never interpolated into the
         # `run:` body: a rendered command is echoed to the log, and the shell

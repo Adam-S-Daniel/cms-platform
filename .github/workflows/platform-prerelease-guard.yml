@@ -94,7 +94,7 @@ jobs:
         # nothing else; the script's loadYaml() already probes
         # `<script>/../node_modules`. Same version the platform's e2e harness
         # and platform-pin-consistency.yml pin.
-        run: npm install --prefix .cms-platform --no-save --no-package-lock yaml@2.9.0
+        run: npm install --prefix .cms-platform --no-save --no-package-lock yaml@2.9.1
 
       - name: Refuse a prerelease platform pin on this branch
         # Exit 1 = the pin is a prerelease (the guard's whole purpose).
