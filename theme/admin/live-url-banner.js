@@ -178,6 +178,20 @@
       });
   }
 
+  // The open PR for the entry on screen per publish-progress.js, which
+  // re-reads it every 30 s: a number, null for "no open PR", or undefined
+  // when the poller is absent (shells that do not load it) or has not yet
+  // answered for THIS entry. The one-shot lookup below never refreshes, so
+  // after a publish merged the link stayed on the torn-down preview host
+  // until a reload (adamdaniel.ai#3857); the poller's answer wins when it has
+  // one.
+  function pollerPrNumber(slug) {
+    var p = window.CMSPublishProgress;
+    var snap = p && typeof p.get === "function" ? p.get() : null;
+    if (!snap || !snap.ready || !snap.entry || snap.entry.slug !== slug) return undefined;
+    return snap.prNumber == null ? null : snap.prNumber;
+  }
+
   // Swap the production URL's host for the per-PR preview host when the
   // open entry has an editorial-workflow PR; otherwise return the URL
   // unchanged (the post is genuinely on the current origin).
@@ -185,13 +199,16 @@
     if (!prodUrl) return prodUrl;
     var slug = currentEntrySlug();
     if (!slug) return prodUrl; // new / unsaved entry → no PR yet
-    adoptCache();
-    if (!prBySlug) {
-      fetchOpenPrs(); // one-shot; scheduleRender() fires on resolve
-      return prodUrl;
+    var n = pollerPrNumber(slug);
+    if (n === undefined) {
+      adoptCache();
+      if (!prBySlug) {
+        fetchOpenPrs(); // one-shot; scheduleRender() fires on resolve
+        return prodUrl;
+      }
+      n = prBySlug[slug];
+      if (n == null) n = prBySlug[stripDate(slug)];
     }
-    var n = prBySlug[slug];
-    if (n == null) n = prBySlug[stripDate(slug)];
     if (n == null) return prodUrl; // no open PR → genuinely live on prod
     try {
       var u = new URL(prodUrl);
@@ -332,5 +349,12 @@
   document.addEventListener("change", scheduleRender, true);
   // Hash changes navigate between entries — refresh the banner.
   window.addEventListener("hashchange", scheduleRender);
+  // publish-progress.js loads BEFORE this script on every shell that has it
+  // (all `defer`, document order), so it is already defined here.
+  if (window.CMSPublishProgress && typeof window.CMSPublishProgress.subscribe === "function") {
+    window.CMSPublishProgress.subscribe(scheduleRender);
+  }
+  // Test hook (e2e/live-url-banner-follows-poller.test.js).
+  window.__liveUrlBanner = { previewAwareURL: previewAwareURL };
   scheduleRender();
 })();

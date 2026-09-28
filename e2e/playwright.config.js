@@ -126,6 +126,7 @@ const PLATFORM_META_SPECS = [
   // does not have; same reason as the two entries above.
   "publish-progress-branch-tip.test.js",
   "publish-progress-post-merge.test.js",
+  "live-url-banner-follows-poller.test.js",
   "posts-list-branch-tip.test.js",
   "slug-pin.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
