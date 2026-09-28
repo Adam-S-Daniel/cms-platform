@@ -1,4 +1,4 @@
-// Shared vm-sandbox harness for publish-progress.js behavioural tests.
+// Shared vm-sandbox harness for publish-progress.js behavioral tests.
 //
 // Loads the REAL theme/admin/publish-progress.js with a scripted fetch (a URL
 // router over canned JSON) and an injected clock, so no test touches the

@@ -365,7 +365,7 @@
     // have failed: adamdaniel.ai#3857 read eb9ffb8's failures for over a minute
     // after 60716fc landed and told the editor "a safety check did not pass"
     // for a publish that was under way. A failed ref read falls back to the
-    // list's sha, which is exactly the behaviour before this read existed.
+    // list's sha, which is exactly the behavior before this read existed.
     var tip = await getJson(API + "/git/ref/heads/" + refPath(pr.head && pr.head.ref), token, "branch ref");
     var sha = (tip && tip.object && tip.object.sha) || (pr.head && pr.head.sha);
     var checks = sha ? await getJson(API + "/commits/" + sha + "/check-runs?per_page=100", token, "check-runs") : null;

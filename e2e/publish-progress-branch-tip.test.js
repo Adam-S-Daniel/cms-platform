@@ -1,4 +1,4 @@
-// @lane: local — pure-Node behavioural test for publish-progress.js (vm sandbox, scripted fetch)
+// @lane: local — pure-Node behavioral test for publish-progress.js (vm sandbox, scripted fetch)
 /*
  * publish-progress.js must judge the checks of the commit the entry's branch
  * is ACTUALLY on, not of the `head.sha` the /pulls LIST reports.

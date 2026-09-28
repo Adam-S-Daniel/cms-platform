@@ -1,4 +1,4 @@
-// @lane: local — pure-Node behavioural test for slug-pin.js (vm sandbox, real live-url-derive.js)
+// @lane: local — pure-Node behavioral test for slug-pin.js (vm sandbox, real live-url-derive.js)
 /*
  * A post's public address is `/blog/<slug>/`, where Jekyll takes <slug> from
  * the front-matter `slug:` if set, else from the FILE NAME. Decap names the

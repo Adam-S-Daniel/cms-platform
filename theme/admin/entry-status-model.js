@@ -137,7 +137,7 @@
 
   // How much longer until LIVE, in whole minutes, or null when we cannot tell
   // (no start time) or the estimate has run out (see `overran`). Returning
-  // null is REQUIRED behaviour, not a gap: a made-up number here would be the
+  // null is REQUIRED behavior, not a gap: a made-up number here would be the
   // §2.4 defect in a new costume. Before the merge the remaining trip is the
   // rest of the checks PLUS the deploy; after it, the deploy alone.
   function remainingMinutes(facts, now) {

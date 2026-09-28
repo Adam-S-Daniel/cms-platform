@@ -1,4 +1,4 @@
-// @lane: local — pure-Node behavioural test for posts-list-enhance.js (vm sandbox, scripted fetch)
+// @lane: local — pure-Node behavioral test for posts-list-enhance.js (vm sandbox, scripted fetch)
 /*
  * The collection list's status chip must judge each draft by the checks of
  * the commit its branch is ACTUALLY on — the same fix publish-progress.js got

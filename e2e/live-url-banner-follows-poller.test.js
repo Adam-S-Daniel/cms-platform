@@ -1,4 +1,4 @@
-// @lane: local — pure-Node behavioural test for live-url-banner.js (vm sandbox)
+// @lane: local — pure-Node behavioral test for live-url-banner.js (vm sandbox)
 /*
  * The "View page on site" link must switch from the per-PR preview host to
  * the production host when the entry's PR closes, WITHOUT a reload.

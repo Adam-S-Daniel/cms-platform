@@ -1,4 +1,4 @@
-// @lane: local — pure-Node behavioural test for publish-progress.js (vm sandbox, scripted fetch, fixed clock)
+// @lane: local — pure-Node behavioral test for publish-progress.js (vm sandbox, scripted fetch, fixed clock)
 /*
  * Between the moment an entry's PR merges and the moment production has
  * deployed it, the editor bar must keep saying "Going live…". It used to go

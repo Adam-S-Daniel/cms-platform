@@ -47,7 +47,7 @@
  * default slugify that slugify-parity.test.js locks against the Node copy and
  * a canonical table. A third copy here would be a third thing to drift. It is
  * read at SAVE time, not at load, so script order cannot break it; if it is
- * missing the shim does nothing, and the editor gets the old behaviour rather
+ * missing the shim does nothing, and the editor gets the old behavior rather
  * than a Save that throws.
  *
  * ── Scope ──────────────────────────────────────────────────────────────

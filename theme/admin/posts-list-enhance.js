@@ -375,7 +375,7 @@
   // list names the previous commit — and if that one's checks failed, the
   // chip would say "Needs attention" for a publish already under way
   // (adamdaniel.ai#3857). Any failure returns {} and every row keeps the
-  // list's sha, which is the behaviour before this read existed.
+  // list's sha, which is the behavior before this read existed.
   async function fetchBranchTips(token) {
     var tips = {};
     try {
