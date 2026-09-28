@@ -146,13 +146,17 @@ test.describe("entry-status-model — the four badges", () => {
 });
 
 test.describe("entry-status-model — the ETA", () => {
-  test("counts down from the nominal check duration once a start time is known", () => {
+  // The countdown is to LIVE — the rest of the checks plus the deploy —
+  // not to the merge (#3857). Nominals are measured; see
+  // entry-status-model-progress.test.js for the numbers.
+  test("counts down from the nominal checks + deploy duration once a start time is known", () => {
     const m = loadModel();
-    const got = m.derive(facts({ hasOpenPr: true, armed: true, startedAt: NOW - 4 * MIN }), {
+    const got = m.derive(facts({ hasOpenPr: true, armed: true, startedAt: NOW - 2 * MIN }), {
       now: NOW,
     });
-    expect(got.minutesLeft).toBe(m.CHECKS_NOMINAL_MIN - 4);
-    expect(got.label).toContain(String(m.CHECKS_NOMINAL_MIN - 4));
+    const want = m.CHECKS_NOMINAL_MIN + m.DEPLOY_NOMINAL_MIN - 2;
+    expect(got.minutesLeft).toBe(want);
+    expect(got.label).toContain(String(want));
   });
 
   test("uses the shorter deploy nominal once the PR has merged", () => {
@@ -161,23 +165,25 @@ test.describe("entry-status-model — the ETA", () => {
     expect(got.minutesLeft).toBe(m.DEPLOY_NOMINAL_MIN);
   });
 
-  // An ETA that reaches zero and keeps counting reads as broken, and a
-  // NEGATIVE one reads as nonsense. It floors at 1 and keeps saying "about".
-  test("floors at one minute rather than going to zero or negative", () => {
+  // An ETA that reaches zero and keeps counting reads as broken, and one
+  // that sits on "1 minute left" for ten minutes reads as a lie (#3857). Past
+  // the estimate it says so instead of giving a number.
+  test("never goes to zero or negative: past the estimate it gives no number", () => {
     const m = loadModel();
     const got = m.derive(facts({ hasOpenPr: true, armed: true, startedAt: NOW - 90 * MIN }), {
       now: NOW,
     });
-    expect(got.minutesLeft).toBe(1);
+    expect(got.minutesLeft).toBeNull();
+    expect(got.label).toMatch(/longer than usual/);
   });
 
   // The honest degradation. With no start time there is no number to give,
   // and inventing one would be the §2.4 defect in a new costume.
-  test("with no start time it gives the range, not a made-up number", () => {
+  test("with no start time it gives the typical duration, not a made-up countdown", () => {
     const m = loadModel();
     const got = m.derive(facts({ hasOpenPr: true, armed: true }), { now: NOW });
     expect(got.minutesLeft).toBeNull();
-    expect(got.label).toContain("5–15");
+    expect(got.label).toContain(m.TYPICAL_PHRASE);
   });
 });
 

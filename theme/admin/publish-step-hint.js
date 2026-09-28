@@ -171,7 +171,7 @@
       detail: HAS_REAL_DEPLOY
         ? "This is a draft — it is not on " +
           (window.CMSHostname ? window.CMSHostname.current() : "this address") +
-          " yet. Click Publish to put it there. It then takes about 5–15 minutes to appear."
+          " yet. Click Publish to put it there. It then takes about 5 minutes to appear."
         : "This is a draft — it is not published yet. To publish it, click Publish.",
     },
   };

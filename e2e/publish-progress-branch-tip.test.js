@@ -67,7 +67,7 @@ test.describe("publish-progress.js reads the branch tip, not the PR list's laggi
     let { api } = load(routes);
     await api.refresh();
     expect(api.get().facts.checksFailed).toBe(false);
-    expect(api.get().facts.waitingOn).toBe("one last check (e2e / e2e)");
+    expect(api.get().facts.checks).toEqual({ total: 1, pending: ["e2e"] });
 
     routes[`${API}/commits/${NEW}/check-runs?per_page=100`] = { check_runs: [FAILED_RUN] };
     ({ api } = load(routes));
@@ -90,5 +90,33 @@ test.describe("publish-progress.js reads the branch tip, not the PR list's laggi
     await api.refresh();
     expect(calls).toContain(`${API}/commits/${OLD}/check-runs?per_page=100`);
     expect(api.get().facts.checksFailed).toBe(true);
+  });
+
+  test("checks are grouped by workflow (a browser matrix is one check) and the clock starts at the first", async () => {
+    const routes = baseRoutes();
+    routes[`${API}/git/ref/heads/cms/posts/2026-09-28-hello`] = { object: { sha: NEW } };
+    const run = (name, status, started) => ({
+      name,
+      status,
+      conclusion: status === "completed" ? "success" : null,
+      started_at: started,
+    });
+    routes[`${API}/commits/${NEW}/check-runs?per_page=100`] = {
+      check_runs: [
+        run("e2e / project (chromium-laptop)", "completed", "2026-09-28T13:35:14Z"),
+        run("e2e / project (webkit-iphone16)", "in_progress", "2026-09-28T13:35:15Z"),
+        run("e2e / e2e", "queued", null),
+        run("parity / parity-probe", "in_progress", "2026-09-28T13:35:15Z"),
+        run("site-verify / verify", "completed", "2026-09-28T13:35:10Z"),
+        run("scan / scan", "completed", "2026-09-28T13:35:12Z"),
+      ],
+    };
+    const { api } = load(routes);
+    await api.refresh();
+    const f = api.get().facts;
+    expect(f.checks).toEqual({ total: 4, pending: ["e2e", "parity"] });
+    expect(f.startedAt, "the earliest start of ANY check, completed ones included").toBe(
+      Date.parse("2026-09-28T13:35:10Z"),
+    );
   });
 });

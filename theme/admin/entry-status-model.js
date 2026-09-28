@@ -81,15 +81,17 @@
     NEEDS_ATTENTION: "needs-attention",
   };
 
-  // Nominal durations for the ETA. Both are measured properties of this
-  // platform's chain, not guesses: the six required checks run ~5-15 min
-  // (docs/CI-INVARIANTS.md), and deploy-production is ~1-2 min after the
-  // merge. CHECKS_NOMINAL_MIN sits at the low-middle of that range on
-  // purpose — an ETA that runs out and keeps counting reads as broken, so
-  // `remainingMinutes` floors at 1 and the copy says "about", never a
-  // countdown to zero.
-  var CHECKS_NOMINAL_MIN = 12;
-  var DEPLOY_NOMINAL_MIN = 2;
+  // Nominal durations for the ETA, MEASURED on the 15 most recent merged
+  // cms/* PRs on adamdaniel.ai (#3841-#3857, 2026-09-28): first check start →
+  // merged, median 3.9 min (p80 5.0); merged → production deployed, median
+  // 0.67 min (p80 0.72); the whole trip, median 4.6 min (p80 5.5, max 6.3).
+  // The old figures (12 + 2, from a "5-15 min" guess) put the first reading
+  // near three times the truth, and counted down to the MERGE rather than to
+  // the page being live (#3857). A countdown that runs past zero reads as
+  // broken, so an overrun says "taking a little longer than usual" instead.
+  var CHECKS_NOMINAL_MIN = 4;
+  var DEPLOY_NOMINAL_MIN = 1;
+  var TYPICAL_PHRASE = "usually about " + (CHECKS_NOMINAL_MIN + DEPLOY_NOMINAL_MIN) + " minutes";
   var MS_PER_MIN = 60 * 1000;
   // How long "nothing left to wait for, still not merged" has to hold before
   // it is a stall rather than the ordinary few seconds between the last check
@@ -133,16 +135,65 @@
     return (now - startedAt) / MS_PER_MIN;
   }
 
-  // How much longer, in whole minutes, or null when we genuinely cannot
-  // tell. Returning null is REQUIRED behaviour, not a gap: the caller
-  // renders the honest "about 5-15 minutes" range in that case, and a made-up
-  // number here would be the §2.4 defect in a new costume.
+  // How much longer until LIVE, in whole minutes, or null when we cannot tell
+  // (no start time) or the estimate has run out (see `overran`). Returning
+  // null is REQUIRED behaviour, not a gap: a made-up number here would be the
+  // §2.4 defect in a new costume. Before the merge the remaining trip is the
+  // rest of the checks PLUS the deploy; after it, the deploy alone.
   function remainingMinutes(facts, now) {
     var f = facts || {};
-    var nominal = f.merged ? DEPLOY_NOMINAL_MIN : CHECKS_NOMINAL_MIN;
     var elapsed = elapsedMinutes(f.startedAt, now);
     if (elapsed === null) return null;
-    return Math.max(1, Math.round(nominal - elapsed));
+    var nominal = f.merged ? DEPLOY_NOMINAL_MIN : CHECKS_NOMINAL_MIN + DEPLOY_NOMINAL_MIN;
+    var left = Math.round(nominal - elapsed);
+    return left >= 1 ? left : null;
+  }
+
+  function overran(facts, now) {
+    return elapsedMinutes((facts || {}).startedAt, now) !== null && remainingMinutes(facts, now) === null;
+  }
+
+  // ── The checks, in words ──────────────────────────────────────────────
+  // Keyed by the part of a check's name before " / " — the caller JOB id each
+  // consumer's thin caller dictates (examples/site/.github/workflows), so one
+  // workflow's matrix of jobs is ONE check to the editor. The value names
+  // what the check does, in words the editor already uses; a raw id such as
+  // "e2e / e2e" in the bar was #3857's complaint.
+  var CHECK_NAMES = {
+    e2e: "the test that the site works on phones, tablets and computers",
+    parity: "the check that the preview page loads without errors",
+    "preview-media": "the check that images show on the preview",
+    "site-verify": "the check that the finished site is complete",
+    "visual-regression": "the check for unexpected changes to how pages look",
+    editorial: "the check that the post's details are filled in correctly",
+    scan: "the scan for passwords or keys pasted in by mistake",
+    "prerelease-guard": "the check that the site's tools are a finished release",
+    reap: "a housekeeping step",
+    preview: "building the preview",
+    "auto-merge": "the automatic publish step",
+  };
+  var UNKNOWN_CHECK = "an automatic safety check";
+
+  function checkName(key) {
+    return Object.prototype.hasOwnProperty.call(CHECK_NAMES, key) ? CHECK_NAMES[key] : UNKNOWN_CHECK;
+  }
+
+  function joinNames(names) {
+    if (names.length <= 1) return names.join("");
+    return names.slice(0, -1).join(", ") + ", and " + names[names.length - 1];
+  }
+
+  // What an in-flight, not-yet-merged publish is waiting on, as "x of y".
+  function waitingOnChecks(checks) {
+    var total = checks.total || 0;
+    var pending = Array.isArray(checks.pending) ? checks.pending : [];
+    if (!total) return "the automatic safety checks to start";
+    if (!pending.length) return "all " + total + " automatic safety checks passed; now putting it live";
+    var names = pending.map(checkName);
+    if (pending.length === 1) {
+      return "the last of " + total + " automatic safety checks (" + names[0] + ")";
+    }
+    return pending.length + " of " + total + " automatic safety checks to finish (" + joinNames(names) + ")";
   }
 
   // ── Modifiers ─────────────────────────────────────────────────────────
@@ -352,10 +403,18 @@
       var mins = remainingMinutes(f, now);
       var waiting = f.merged
         ? dest.noun + " to finish updating"
-        : f.waitingOn || "the automatic safety checks to finish";
+        : f.checks
+          ? waitingOnChecks(f.checks)
+          : f.waitingOn || "the automatic safety checks to finish";
+      var when =
+        mins !== null
+          ? "about " + mins + " minute" + (mins === 1 ? "" : "s") + " left"
+          : overran(f, now)
+            ? "taking a little longer than usual"
+            : TYPICAL_PHRASE;
       return {
         badge: BADGE.GOING_LIVE,
-        label: mins === null ? "Going live… (about 5–15 minutes)" : "Going live… (about " + mins + " minute" + (mins === 1 ? "" : "s") + " left)",
+        label: "Going live… (" + when + ")",
         detail:
           "This is on its way to " + dest.noun + ". It is waiting for " + waiting + ". " +
           "You can close this tab — it carries on without you." +
@@ -396,6 +455,8 @@
     SHORT_LABELS: SHORT_LABELS,
     BADGE_COLORS: BADGE_COLORS,
     CHECKS_NOMINAL_MIN: CHECKS_NOMINAL_MIN,
+    CHECK_NAMES: CHECK_NAMES,
+    TYPICAL_PHRASE: TYPICAL_PHRASE,
     DEPLOY_NOMINAL_MIN: DEPLOY_NOMINAL_MIN,
     STALL_GRACE_MIN: STALL_GRACE_MIN,
     derive: derive,

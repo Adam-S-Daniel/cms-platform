@@ -83,8 +83,8 @@
  * grace period, so the threshold lives in the pure, unit-tested module and
  * this one stays a fact-gatherer.
  *
- * `startedAt` for the ETA is the OLDEST `started_at` among the check runs
- * that have not completed — deliberately not "when this tab noticed", so a
+ * `startedAt` for the ETA is the OLDEST `started_at` among ALL the check
+ * runs on the tip — deliberately not "when this tab noticed", so a
  * reload mid-flight does not restart the estimate, and not the label's own
  * timestamp, which would cost an extra timeline request per tick.
  *
@@ -342,10 +342,24 @@
     var incomplete = runs.filter(function (r) {
       return r.status !== "completed";
     });
+    // The ETA clock starts at the FIRST check to start, completed ones
+    // included: that is when this commit's run of checks began, and it does
+    // not jump later each time an early check finishes.
     var startedAt = null;
-    incomplete.forEach(function (r) {
+    runs.forEach(function (r) {
       var t = Date.parse(r.started_at || "");
       if (!isNaN(t) && (startedAt === null || t < startedAt)) startedAt = t;
+    });
+
+    // One entry per WORKFLOW, not per job: "e2e / project (chromium-laptop)"
+    // and nine siblings are one check to an editor. The key is the caller job
+    // id before " / "; entry-status-model.js turns it into words (#3857).
+    var groups = [];
+    var pendingGroups = [];
+    runs.forEach(function (r) {
+      var key = String(r.name || "").split(" / ")[0];
+      if (groups.indexOf(key) === -1) groups.push(key);
+      if (r.status !== "completed" && pendingGroups.indexOf(key) === -1) pendingGroups.push(key);
     });
 
     // `mergeable` is NOT in the /pulls LIST response — only the single-PR
@@ -388,13 +402,6 @@
       Date.now(),
     );
 
-    var waitingOn = null;
-    if (incomplete.length === 1) {
-      waitingOn = "one last check (" + incomplete[0].name + ")";
-    } else if (incomplete.length > 1) {
-      waitingOn = incomplete.length + " automatic safety checks to finish";
-    }
-
     return {
       facts: {
         hasOpenPr: true,
@@ -404,7 +411,8 @@
         mergeConflict: mergeConflict,
         awaitingReviewGate: awaitingReviewGate,
         deployState: null,
-        waitingOn: waitingOn,
+        waitingOn: null,
+        checks: { total: groups.length, pending: pendingGroups },
         startedAt: startedAt,
         previewOnly: previewOnly,
         baseRef: baseRef,
