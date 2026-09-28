@@ -89,11 +89,19 @@
  * timestamp, which would cost an extra timeline request per tick.
  *
  * ── Budget ─────────────────────────────────────────────────────────────
- * At most six GitHub requests per 30 s tick, and only while the tab is
- * VISIBLE and the route is an entry route. That is ~720/hour against an
- * authenticated 5000/hour budget, alongside deploy-status-pill.js's own
- * ~480. The sixth is the branch-ref read (see `checksFailed` above): a
- * correct verdict is worth one small request. A hidden tab polls nothing: an admin left open in a background tab
+ * At most five GitHub requests per 30 s tick (open PR: pulls, branch ref,
+ * check-runs, pull, workflow runs; no open PR: pulls, merged pulls,
+ * deployments, deployment statuses), and only while the tab is VISIBLE and
+ * the route is an entry route. That is ~600/hour against an authenticated
+ * 5000/hour budget, alongside deploy-status-pill.js's own ~480.
+ *
+ * ── After the merge (adamdaniel.ai#3857) ──────────────────────────────
+ * Once the PR merges it is no longer open, and deploy-production registers
+ * its deployment a few seconds later. In that window the newest production
+ * deployment is the PREVIOUS one, state `success`, so the entry read as Live
+ * and the bar — which hides a plain Live — vanished mid-publish. The entry's
+ * own most recent merged PR is now read on this path, and "going live" holds
+ * until a production deployment covering the merge has succeeded. A hidden tab polls nothing: an admin left open in a background tab
  * overnight must not spend the editor's rate limit on an entry nobody is
  * looking at.
  *
@@ -136,6 +144,12 @@
   // Applied by cms-editorial-workflow.yml's "Apply draft label on new PR" step
   // to every CMS PR whose base is not `main`.
   var PREVIEW_ONLY_LABEL = "cms/preview-only";
+  // How long after a merge a production deploy that has not picked it up
+  // still reads as "on its way" rather than as the older reading (Live).
+  // Deploys start within seconds of a merge and take under a minute
+  // (measured: adamdaniel.ai#3857 merged 13:40:14, deploy 13:40:14–13:40:46),
+  // so 30 minutes only ever expires on a deploy chain that is broken.
+  var MERGE_WATCH_MS = 30 * 60 * 1000;
 
   // When the settled-but-unmerged condition first held, and for which
   // <pr>:<sha>. Any change of either resets it, so a re-save (Decap
@@ -243,26 +257,45 @@
     })[0];
 
     if (!pr) {
-      // No open PR. Either it merged and is live/deploying, or it was never
-      // saved as a draft. deploy-status-pill.js owns the production
-      // deployment, so read it here only to distinguish "deploying" from
-      // "live" — one request, and only on this branch.
-      var dep = await latestProductionStatus(token);
-      var deploying = dep && (dep.state === "in_progress" || dep.state === "queued" || dep.state === "pending");
+      // No open PR. Either it merged and is deploying (or about to), or it is
+      // live, or it was never saved as a draft. See "After the merge" in the
+      // header for why the entry's own merged PR is read here.
+      var merge = await recentMerge(token, entry);
+      var dep = await latestProductionDeployment(token);
+      var depState = dep ? dep.state : null;
+      var now = Date.now();
+      var deploying = depState === "in_progress" || depState === "queued" || depState === "pending";
+      var startedAt = dep && deploying ? dep.createdAt : null;
+      var inFlight = Boolean(deploying);
+      if (merge && now - merge.mergedAt < MERGE_WATCH_MS) {
+        // A deployment covers the merge if it IS the merge commit, or was
+        // created after it (deploys run per push to the default branch, in
+        // order, so a later one carries this commit too).
+        var covers = dep && (dep.sha === merge.sha || dep.createdAt >= merge.mergedAt);
+        if (!covers) {
+          // Merged, and production has not started on it yet: the bar used
+          // to read the PREVIOUS deploy's `success` here and go blank.
+          inFlight = true;
+          depState = "pending";
+          startedAt = merge.mergedAt;
+        } else if (deploying) {
+          startedAt = merge.mergedAt;
+        }
+      }
       return {
         facts: {
           hasOpenPr: false,
           armed: false,
-          merged: Boolean(deploying),
+          merged: inFlight,
           checksFailed: false,
           mergeConflict: false,
           awaitingReviewGate: false,
-          deployState: dep ? dep.state : null,
+          deployState: depState,
           waitingOn: null,
-          startedAt: dep && deploying ? Date.parse(dep.created_at) : null,
+          startedAt: inFlight ? startedAt : null,
           previewOnly: false,
           baseRef: null,
-          settledSince: noteSettled(null, false, Date.now()),
+          settledSince: noteSettled(null, false, now),
         },
         prNumber: null,
         prUrl: null,
@@ -382,12 +415,30 @@
     };
   }
 
-  async function latestProductionStatus(token) {
+  // The entry's most recent MERGED PR, or null. Head-filtered, so one small
+  // request; newest first, so a slug reused after a delete finds its latest.
+  async function recentMerge(token, entry) {
+    var owner = String(REPO || "").split("/")[0];
+    var prs = await getJson(
+      API + "/pulls?state=closed&head=" + encodeURIComponent(owner + ":" + branchFor(entry)) + "&per_page=5",
+      token,
+      "closed pulls",
+    );
+    if (!Array.isArray(prs)) return null;
+    for (var i = 0; i < prs.length; i++) {
+      var t = Date.parse(prs[i].merged_at || "");
+      if (!isNaN(t)) return { mergedAt: t, sha: prs[i].merge_commit_sha || null };
+    }
+    return null;
+  }
+
+  // The newest production deployment and its latest state, or null.
+  async function latestProductionDeployment(token) {
     var deps = await getJson(API + "/deployments?environment=production&per_page=1", token, "deployments");
     if (!Array.isArray(deps) || !deps.length) return null;
     var st = await getJson(API + "/deployments/" + deps[0].id + "/statuses?per_page=1", token, "deployment statuses");
     if (!Array.isArray(st) || !st.length) return null;
-    return st[0];
+    return { sha: deps[0].sha || null, createdAt: Date.parse(deps[0].created_at || ""), state: st[0].state };
   }
 
   // ── Loop ──────────────────────────────────────────────────────────────
