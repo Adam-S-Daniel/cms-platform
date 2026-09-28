@@ -121,6 +121,12 @@ const PLATFORM_META_SPECS = [
   "admin-collection-controls-trim.test.js",
   "publish-button-refresh.test.js",
   "admin-github-fetch-cache.test.js",
+  // adamdaniel.ai#3857 — vm-sandbox the theme/admin SOURCE (publish-progress.js,
+  // posts-list-enhance.js, slug-pin.js + live-url-derive.js), which a consumer
+  // does not have; same reason as the two entries above.
+  "publish-progress-branch-tip.test.js",
+  "posts-list-branch-tip.test.js",
+  "slug-pin.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.

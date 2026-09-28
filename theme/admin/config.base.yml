@@ -88,9 +88,13 @@ collections:
     folder: _posts
     create: true
     delete: true
-    # Decap auto-derives `{{slug}}` from the `slug` field if present, falling
-    # back to `title`. The YYYY-MM-DD prefix is required by Jekyll's `_posts/`
-    # collection. The native "View Live" toolbar anchor is CSS-hidden at
+    # `{{slug}}` here is Decap's slugified IDENTIFIER field (`title`), NOT the
+    # `slug` field (verified in the decap-cms@3.15.1 bundle's slugFormatter), so
+    # the file is named from the title at the first save and never renamed.
+    # The public address comes from the front-matter `slug`, which
+    # admin/slug-pin.js fills on Save when it is empty — so a later title edit
+    # cannot move the page (adamdaniel.ai#3857). The YYYY-MM-DD prefix is
+    # required by Jekyll's `_posts/` collection. The native "View Live" toolbar anchor is CSS-hidden at
     # runtime by admin/native-preview-href.js so the date-prefix divergence
     # between this template and Jekyll's `permalink: /blog/:slug/` is moot.
     slug: "{{year}}-{{month}}-{{day}}-{{slug}}"
@@ -157,7 +161,7 @@ collections:
         label: URL Slug
         widget: string
         required: false
-        hint: "URL path on {{CMS_CURRENT_HOST}} (leave blank to generate it from the title). Keep an existing value unchanged so saved links continue to work."
+        hint: "URL path on {{CMS_CURRENT_HOST}}. Filled in for you the first time you save, so changing the title later does not move the page. Changing this moves the page to a new address and breaks links people have saved."
 
       - name: date
         label: Date

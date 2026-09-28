@@ -69,7 +69,7 @@ const PROD_HINTS = {
   posts: {
     title: "The post headline — make it compelling",
     slug:
-      "URL path on {{CMS_CURRENT_HOST}} (leave blank to generate it from the title). Keep an existing value unchanged so saved links continue to work.",
+      "URL path on {{CMS_CURRENT_HOST}}. Filled in for you the first time you save, so changing the title later does not move the page. Changing this moves the page to a new address and breaks links people have saved.",
     excerpt: "A short summary shown in post listings and meta tags (≤ 160 chars recommended)",
     featured_image: "Displayed as the post hero image and in social sharing cards",
     published:
