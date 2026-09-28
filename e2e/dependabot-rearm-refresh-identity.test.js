@@ -47,6 +47,15 @@ const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 
 const REUSABLE = "dependabot-rearm-sweep.yml";
 const CALLER = "self-dependabot-rearm.yml";
+const CONSUMER_TEMPLATE = path.resolve(
+  __dirname,
+  "..",
+  "examples",
+  "site",
+  ".github",
+  "workflows",
+  "dependabot-rearm-sweep.yml",
+);
 const SWEEP_STEP_NAME = "Sweep stranded Dependabot PRs";
 
 function reusableDoc() {
@@ -117,6 +126,17 @@ test.describe("dependabot-rearm-sweep.yml — App-token refresh shape (#458)", (
     const job = doc.jobs.rearm;
     expect(job.secrets, "self-dependabot-rearm.yml's rearm job has no secrets: map").toBeTruthy();
     expect(job.secrets.app_private_key).toBe("${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}");
+  });
+
+  test("the consumer template's rearm job passes secrets.app_private_key from secrets.CMS_AUTOMATION_APP_PRIVATE_KEY, a key the reusable declares", () => {
+    const doc = parseYaml(fs.readFileSync(CONSUMER_TEMPLATE, "utf8"));
+    const job = doc.jobs.rearm;
+    expect(job.secrets, "the consumer template's rearm job has no secrets: map").toBeTruthy();
+    expect(job.secrets.app_private_key).toBe("${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}");
+    const declared = Object.keys(reusableDoc().on.workflow_call.secrets || {});
+    for (const key of Object.keys(job.secrets)) {
+      expect(declared, `the reusable declares no secret "${key}"`).toContain(key);
+    }
   });
 });
 
