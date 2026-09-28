@@ -66,11 +66,22 @@
     return el ? el.value : null;
   }
 
+  // Jekyll::Utils.slugify, "default" mode — a PORT, tested case for case
+  // against the real Jekyll (e2e/jekyll-slugify-golden.json,
+  // slugify-parity.test.js): runs of anything that is not a letter, a mark or a
+  // decimal digit become "-", one leading/trailing "-" is dropped, then it is
+  // lowercased. Unicode letters are KEPT ("Café" → "café"), as Jekyll keeps
+  // them. Lowercasing is per code point because Ruby's String#downcase has no
+  // Greek final-sigma rule and a whole-string JS toLowerCase() does ("ΟΔΟΣ":
+  // Jekyll "οδοσ", toLowerCase "οδος"). Do not reach for a slug library: those
+  // transliterate ("café" → "cafe"), which is not what Jekyll serves.
   function slugify(s) {
-    return String(s || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
+    var hyphenated = String(s == null ? "" : s)
+      .replace(/[^\p{M}\p{L}\p{Nd}]+/gu, "-")
+      .replace(/^-|-$/g, "");
+    return Array.from(hyphenated, function (ch) {
+      return ch.toLowerCase();
+    }).join("");
   }
 
   // null = no Published toggle in this schema → treat as always live.

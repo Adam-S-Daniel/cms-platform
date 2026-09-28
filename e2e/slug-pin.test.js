@@ -158,9 +158,9 @@ test.describe("slug-pin.js pins a post's address at save (#3857)", () => {
     expect(out.get("slug")).toBe("café-notes");
   });
 
-  test("a NEW post's slug is the admin's own slugify of the title (what the banner and checks derive)", async () => {
+  test("a NEW post's slug is Jekyll's slug of the title — accented letters kept, as Jekyll keeps them", async () => {
     const out = await runPreSave(entry({ newRecord: true, data: { title: "Café Notes" } }));
-    expect(out.get("slug")).toBe("caf-notes");
+    expect(out.get("slug")).toBe("café-notes");
   });
 
   test("a whitespace-only slug counts as empty", async () => {

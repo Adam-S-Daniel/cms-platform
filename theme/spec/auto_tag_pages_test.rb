@@ -12,11 +12,10 @@
 
 require_relative '../lib/cms-platform-theme/auto_tag_pages'
 
-# Mirror Jekyll::Utils.slugify's "default" mode for our test fixtures
-# (lowercase, non-alphanumeric runs collapsed to a single dash, trimmed).
-SLUGIFY = lambda { |name|
-  name.to_s.downcase.gsub(/[^a-z0-9]+/, '-').sub(/\A-+/, '').sub(/-+\z/, '')
-}
+# Jekyll::Utils.slugify's "default" mode without loading Jekyll — the shared,
+# golden-tested port (support/jekyll_slugify.rb).
+require_relative 'support/jekyll_slugify'
+SLUGIFY = ->(name) { SpecJekyllSlugify.slugify(name.to_s) }
 
 @failures = []
 
