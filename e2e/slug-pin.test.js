@@ -50,32 +50,64 @@ function entry({ collection = "posts", newRecord = false, slug = "", data = {} }
   return new IMap({ collection, newRecord, slug, data: new IMap(data) });
 }
 
-/** Load both shims; `withLiveUrl: false` simulates live-url-derive.js failing to load. */
-function load({ withLiveUrl = true, registerThrows = false } = {}) {
+/**
+ * Load both shims. `withLiveUrl: false` simulates live-url-derive.js failing
+ * to load. `head` answers the new-post address probe: a status number, "throw",
+ * or "hang" (never answers until aborted). `timerFires` makes the probe's
+ * timeout fire at once (for the "hang" case); by default it never fires, so
+ * no test depends on the clock.
+ */
+function load({ withLiveUrl = true, registerThrows = false, head = 404, timerFires = false } = {}) {
   const registered = [];
+  const inputListeners = [];
+  const heads = [];
   const sandbox = {
     window: {
-      location: { hash: "" },
+      location: { hash: "#/collections/posts/new", origin: "https://example.com" },
       CMS: {
         registerEventListener(ev) {
           if (registerThrows) throw new Error("Invalid event name");
           registered.push(ev);
         },
       },
+      addEventListener() {},
     },
-    document: { querySelector: () => null },
+    document: {
+      querySelector: () => null,
+      addEventListener(type, fn) {
+        if (type === "input") inputListeners.push(fn);
+      },
+    },
     setInterval: (fn) => {
       fn();
       return 1;
     },
     clearInterval() {},
+    setTimeout: (fn) => {
+      if (timerFires) queueMicrotask(fn);
+      return 1;
+    },
+    clearTimeout() {},
+    AbortController,
+    fetch: (url, init) => {
+      heads.push({ url: String(url), method: init && init.method });
+      if (head === "throw") return Promise.reject(new Error("offline"));
+      if (head === "hang") {
+        return new Promise((_, reject) => {
+          init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      }
+      return Promise.resolve({ ok: head >= 200 && head < 300, status: head });
+    },
     console: { info() {}, warn() {} },
   };
   vm.createContext(sandbox);
   if (withLiveUrl) vm.runInContext(LIVE_URL_DERIVE, sandbox);
   vm.runInContext(SLUG_PIN, sandbox);
   const preSave = registered.filter((e) => e.name === "preSave");
-  return { preSave, hook: sandbox.window.__slugPin };
+  // What the editor typing into the URL Slug field looks like to the shim.
+  const typeSlug = () => inputListeners.forEach((fn) => fn({ target: { id: "slug-field-3" } }));
+  return { preSave, hook: sandbox.window.__slugPin, heads, typeSlug, sandbox };
 }
 
 async function runPreSave(e, opts) {
@@ -117,14 +149,30 @@ test.describe("slug-pin.js pins a post's address at save (#3857)", () => {
     expect(out.get("slug")).toBe("quoting-simon-willison-on-coding-agents");
   });
 
+  test("an EXISTING post's file slug is written VERBATIM — an accented file name keeps its live address", async () => {
+    // Decap's default slug encoding is `unicode`, so a title "Café Notes"
+    // names the file `…-café-notes`, and normalize_empty_slug.rb makes Jekyll
+    // serve it at /blog/café-notes/. Re-slugifying to ASCII ("caf-notes")
+    // would MOVE a live page on its next save.
+    const out = await runPreSave(entry({ slug: "2026-01-02-café-notes", data: { title: "Café Notes", slug: "" } }));
+    expect(out.get("slug")).toBe("café-notes");
+  });
+
+  test("a NEW post's slug is the admin's own slugify of the title (what the banner and checks derive)", async () => {
+    const out = await runPreSave(entry({ newRecord: true, data: { title: "Café Notes" } }));
+    expect(out.get("slug")).toBe("caf-notes");
+  });
+
   test("a whitespace-only slug counts as empty", async () => {
     const out = await runPreSave(entry({ slug: "2026-01-02-hi-there", data: { title: "x", slug: "   " } }));
     expect(out.get("slug")).toBe("hi-there");
   });
 
   test("an explicit slug is never touched", async () => {
+    const { preSave, typeSlug } = load();
+    typeSlug(); // the editor typed it on this new post
     const e = entry({ newRecord: true, data: { title: "New Title", slug: "my-chosen-address" } });
-    expect(await runPreSave(e)).toBeUndefined();
+    expect(await preSave[0].handler({ entry: e })).toBeUndefined();
     const e2 = entry({ slug: "2026-01-02-old", data: { title: "New Title", slug: "kept" } });
     expect(await runPreSave(e2)).toBeUndefined();
   });
@@ -159,15 +207,73 @@ test.describe("slug-pin.js pins a post's address at save (#3857)", () => {
     expect(() => load({ registerThrows: true })).not.toThrow();
   });
 
-  test("the pinned slug is what the cms-preview-url contract derives — the #3857 check now passes", async () => {
-    // cms-preview-url.spec.js derives slugify(fm.slug || fm.title) and expects
-    // it to be served; Jekyll serves front-matter slug, else the file name.
+  test("the #3857 post: after the pin, the checks' derivation equals the address Jekyll serves", async () => {
+    // cms-preview-url.spec.js derives slugify(fm.slug || fm.title). Jekyll
+    // serves the front-matter slug when set (normalize_empty_slug.rb fills an
+    // empty one from the file name). Before the pin these two disagreed —
+    // title-derived vs file-derived — and that disagreement was the 404.
     const { hook } = load();
     const fileSlug = "2026-09-28-quoting-simon-willison-on-coding-agents";
     const title = "Quoting Simon Willison on Unlocking Coding Agents’ Potential";
+    const jekyllBefore = fileSlug.replace(/^\d{4}-\d{2}-\d{2}-/, "");
+    expect(hook.slugify(title), "the pre-fix disagreement this test exists for").not.toBe(jekyllBefore);
     const out = await runPreSave(entry({ slug: fileSlug, data: { title, slug: "" } }));
-    const contract = hook.slugify(out.get("slug") || title);
-    const jekyllServes = out.get("slug"); // front-matter slug wins in Jekyll
-    expect(contract).toBe(jekyllServes);
+    expect(hook.slugify(out.get("slug") || title)).toBe(jekyllBefore);
+  });
+
+  // ── adversarial-review findings ─────────────────────────────────────────
+  test("Duplicate: a new post carrying a COPIED slug gets its own, from its title", async () => {
+    // Decap's Duplicate copies every field, the pinned slug included, into a
+    // new record on the plain /new route. Keeping it would put the copy at
+    // the original's address.
+    const out = await runPreSave(entry({ newRecord: true, data: { title: "A Different Title", slug: "the-original" } }));
+    expect(out.get("slug")).toBe("a-different-title");
+  });
+
+  test("a slug the editor TYPED on this new post is kept", async () => {
+    const { preSave, typeSlug } = load();
+    typeSlug();
+    const out = await preSave[0].handler({
+      entry: entry({ newRecord: true, data: { title: "A Title", slug: "my-typed-address" } }),
+    });
+    expect(out).toBeUndefined();
+  });
+
+  test("typing on a DIFFERENT screen does not count for this new post", async () => {
+    const { preSave, typeSlug, sandbox } = load();
+    sandbox.window.location.hash = "#/collections/posts/entries/2026-01-02-the-original";
+    typeSlug();
+    sandbox.window.location.hash = "#/collections/posts/new";
+    const out = await preSave[0].handler({
+      entry: entry({ newRecord: true, data: { title: "A Title", slug: "the-original" } }),
+    });
+    expect(out.get("slug")).toBe("a-title");
+  });
+
+  test("a new post whose address is ALREADY a live page is not pinned onto it", async () => {
+    // A same-title post: before this shim, Decap's -1 file suffix kept the two
+    // apart on the same day. Pinning the bare title slug would collide.
+    const { preSave, heads } = load({ head: 200 });
+    const out = await preSave[0].handler({ entry: entry({ newRecord: true, data: { title: "Hello" } }) });
+    expect(heads).toEqual([{ url: "https://example.com/blog/hello/", method: "HEAD" }]);
+    expect(out).toBeUndefined();
+  });
+
+  test("the address probe failing, or hanging, never blocks Save — it pins", async () => {
+    let { preSave } = load({ head: "throw" });
+    expect((await preSave[0].handler({ entry: entry({ newRecord: true, data: { title: "Hello" } }) })).get("slug")).toBe(
+      "hello",
+    );
+    ({ preSave } = load({ head: "hang", timerFires: true }));
+    expect((await preSave[0].handler({ entry: entry({ newRecord: true, data: { title: "Hello" } }) })).get("slug")).toBe(
+      "hello",
+    );
+  });
+
+  test("an EXISTING post is never probed — its address is already its file name", async () => {
+    const { preSave, heads } = load({ head: 200 });
+    const out = await preSave[0].handler({ entry: entry({ slug: "2026-01-02-hello", data: { title: "x", slug: "" } }) });
+    expect(out.get("slug")).toBe("hello");
+    expect(heads).toEqual([]);
   });
 });
