@@ -10,9 +10,17 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.116)
+## Version history (v0.1.0 → v0.1.117)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.117 — a quotation post's Substack draft renders as a Note.**
+When a post's first block (after any heading) is a blockquote,
+`<slug>.substack.html` now holds the bold title, the quote and the post URL,
+the layout the owner pasted by hand as a Substack Note for the 2026-09-28
+Simon Willison post, instead of the full article. Locked by
+`scripts/cross_post/tests/test_render.py`; documented in
+`docs/CROSS-POSTING.md`.
 
 **v0.1.116 — `<link rel="me">` for each cross-post profile.**
 A site lists its cross-post profiles under `_config.yml` `cross_post.profiles`
