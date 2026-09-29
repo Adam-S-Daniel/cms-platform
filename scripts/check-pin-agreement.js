@@ -99,7 +99,7 @@ function loadYaml() {
     "Cannot resolve the `yaml` parser. This check PARSES workflows (a regex cannot see an " +
       "aliased value, and GitHub has allowed YAML anchors in workflows since 2025-09-18), so " +
       "the package is not optional. Install it next to this script — " +
-      "`npm install --no-save yaml@2.9.0` in the directory this file's parent lives in — or " +
+      "`npm install --no-save yaml@2.9.1` in the directory this file's parent lives in — or " +
       "run the check through the platform's pin-agreement reusable workflow, which does that " +
       "for you.",
   );
