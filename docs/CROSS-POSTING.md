@@ -150,6 +150,32 @@ Before v0.1.115 the first paragraph went out as raw Markdown, and the
 **A new target lands only with its row in this table, its own renderer if
 the plain excerpt does not fit, and a test on a Markdown-heavy post.**
 
+## `<link rel="me">` for each profile (v0.1.116)
+
+List the profiles the site cross-posts to in `_config.yml`:
+
+```yaml
+cross_post:
+  profiles:
+    mastodon: https://hachyderm.io/@you
+    linkedin: https://www.linkedin.com/in/you
+    substack: https://you.substack.com
+```
+
+The theme's `default.html` renders one `<link rel="me" href="...">` per
+non-blank entry in `<head>`, ordered by target name, through
+`_includes/rel-me.html` and the `rel_me_urls` filter
+(`theme/lib/cms-platform-theme/rel_me_filter.rb`). Nothing renders when the
+key is absent. A value that is not an absolute `https://` URL fails the
+build, naming the key. A site with its own `<head>` (jodidaniel.com's home
+layout) adds `{% include rel-me.html %}` itself.
+
+`rel="me"` is how Mastodon verifies a profile link: add the site's URL as a
+profile metadata field on the Mastodon account, and once the page links back
+with `rel="me"` the field shows as verified. The profiles map is separate
+from the workflow's `mastodon_instance` / `linkedin` inputs, because Jekyll
+cannot read a workflow's inputs.
+
 ## Substack is paste-by-hand — there's no publish API
 
 After a run with `substack: true`, download the `cross-post-<run_id>`
