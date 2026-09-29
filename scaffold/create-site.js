@@ -27,7 +27,7 @@ const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
 // (v-prefixed) and the examples/site template pins by
 // e2e/examples-site-pins-current.test.js — the release PR moves all of them
 // together.
-const PLATFORM_VERSION = "v0.1.115";
+const PLATFORM_VERSION = "v0.1.116";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -348,6 +348,15 @@ keep_files:
 cms:
   repository: ${owner}/${repo}
   oauth_base_url: ""
+
+# Profiles this site cross-posts to. Each becomes a <link rel="me"> in <head>
+# (the theme's rel-me.html), which lets Mastodon mark the site as verified on
+# the profile. Values must be absolute https:// URLs; leave unset for none.
+# cross_post:
+#   profiles:
+#     mastodon: https://mastodon.example/@you
+#     linkedin: https://www.linkedin.com/in/you
+#     substack: https://you.substack.com
 
 collections:
   projects: { output: false, permalink: /projects/:slug/ }

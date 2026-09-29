@@ -1,0 +1,9 @@
+{%- comment -%}
+  <link rel="me"> for each profile in _config.yml `cross_post.profiles`
+  (Mastodon, LinkedIn, Substack, ...), so those profiles can verify this site.
+  The rel_me_urls filter validates each URL; nothing renders when none is set.
+{%- endcomment -%}
+{%- assign _rel_me_urls = site.cross_post.profiles | rel_me_urls -%}
+{%- for _rel_me_url in _rel_me_urls %}
+  <link rel="me" href="{{ _rel_me_url | escape }}">
+{%- endfor -%}
