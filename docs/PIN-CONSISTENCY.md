@@ -115,6 +115,35 @@ flags the exact drifting facet. It does NOT fight a legit site difference (e.g.
 adamdaniel TRIMS the host-loop push `paths:` to dodge prod-loop co-arrival
 eviction #1892 — an `on:` change, excluded).
 
+### `platform-bump` reconciles `secrets:` maps in the bump commit
+
+Because the canonical template is read at the consumer's OWN `platform_ref`, a
+release that changes a caller's `secrets:` map fails `workflow-content: DRIFT`
+on the bump PR itself — v0.1.113 (#467) added `app_private_key` to the
+`dependabot-rearm-sweep` template, and both v0.1.114 bump PRs
+(adamdaniel.ai#3891, jodidaniel.com#281) failed until the map was hand-added.
+`platform-bump` now runs `scripts/reconcile-caller-secrets.js` at the new ref
+over every caller the consumer already has, in the same commit as the pin
+rewrite:
+
+- drift is decided with this checker's own `structuralShape()`, so
+  "reconciled" means exactly "this guard agrees";
+- keys the template gained are added (with the template's comments), keys it
+  dropped are removed, changed values take the template's; a map the template
+  no longer has is deleted, and `secrets: inherit` or a flow map is replaced
+  by the template's block;
+- the write is a splice of the `secrets:` lines only (re-serializing the
+  parsed document would reformat most callers), so the consumer's comments
+  and formatting elsewhere survive; the result is re-parsed and must match the
+  template's map and leave everything else unchanged, or the file is left
+  alone and reported `MANUAL`.
+
+A `MANUAL` result (a flow-style job, an anchored or aliased map) or a skipped
+pass (inputs unreadable at the new ref) puts a `:warning:` in the bump PR body;
+this guard still catches the stale map, so fix it by hand in that PR. Tests:
+`e2e/platform-bump-secrets-reconcile.test.js`, which runs the reconciler
+against a synthetic consumer and then this checker over the result.
+
 ### Two opt-in `with:` keys are exempt from the key-set compare (media archive)
 
 `checkWorkflowContentParity()`'s `withKeys` compare is an EXACT sorted-set

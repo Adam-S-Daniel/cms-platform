@@ -176,28 +176,34 @@ v0.1.76 incident this rule comes from.
   push) now fires at most one loop, and the shared group queues any remaining
   cron/dispatch time-overlap rather than evicting it. Still: do consumer bumps,
   THEN let the loops settle before dispatching a validation loop.
-- **A release that changes an `examples/site` caller's `secrets:` map REQUIRES
-  the matching consumer edit in the SAME bump PR.** The pin-consistency guard's
-  workflow-CONTENT parity check compares each job's `secrets:` map **WHOLE,
-  including VALUES** (`stableStringify(a.secrets) !== stableStringify(b.secrets)`)
-  and **symmetrically** — a key the canonical template gained and the consumer
-  lacks fails exactly like a key the consumer has and the template dropped. And
-  the canonical template it compares against is checked out at the **CONSUMER's
-  own `platform_ref`**, i.e. the NEW ref the bump PR is introducing, so the
-  mismatch surfaces **first on the bump PR itself**, not later. So the pin
-  rewrite alone is not enough: add the new `secrets:` line to the consumer's
-  caller in the same commit. The live instance was v0.1.76's
-  `dependabot-comment-sync` caller gaining
-  `app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}` (harmless when
-  the secret is unset — an unset secret is an empty string and the reusable then
-  skipped cleanly). That caller has since been DELETED along with the
-  pin-comment convention, which makes it the other half of the same lesson: a
-  release that REMOVES a dictated caller obliges every consumer to delete its
-  thin caller in the same commit as the `platform_ref` bump, or workflow-set
-  parity reports EXTRA and reds the bump PR (same shape as the v0.1.83 skills
-  transport removal). This is the same class of drift that let jodidaniel's sweep
-  caller silently lose its `CMS_E2E_PAT` map and `startup_failure` for weeks —
-  only caught earlier, at the bump.
+- **A release that changes an `examples/site` caller's `secrets:` map is
+  reconciled BY `platform-bump`, in the bump commit.** The pin-consistency
+  guard's workflow-CONTENT parity check compares each job's `secrets:` map
+  **WHOLE, including VALUES** (`stableStringify(a.secrets) !==
+  stableStringify(b.secrets)`) and **symmetrically**, against the template at
+  the **CONSUMER's own `platform_ref`** — i.e. the NEW ref the bump PR
+  introduces — so a mismatch surfaces first on the bump PR itself, and the fix
+  cannot be split into its own PR. `platform-bump` therefore runs
+  `scripts/reconcile-caller-secrets.js` (fetched at the new ref, beside the
+  checker whose `structuralShape()` it reuses) over every existing caller:
+  keys the template gained are added with the template's comments, keys it
+  dropped are removed, changed values take the template's; the consumer's own
+  comments and formatting are kept, and the result is re-parsed before it is
+  saved. The PR body names each reconciled job. **Before this (v0.1.113 →
+  v0.1.114) it was a hand edit:** #467 added `app_private_key` to the
+  `dependabot-rearm-sweep` template, and both bump PRs (adamdaniel.ai#3891,
+  jodidaniel.com#281) failed `workflow-content: DRIFT ... secrets: map` until
+  it was added by hand. **When it still needs a hand edit:** the PR body
+  carries a `:warning:` naming a `secrets:` map that could NOT be reconciled
+  (a flow-style job, an anchored map — the run log's `MANUAL` line says which),
+  or the bump targets a release older than the script. Then add or drop the
+  `secrets:` lines in the same bump PR, exactly as the template has them.
+  The same lesson covers a release that REMOVES a dictated caller: workflow-set
+  parity reports EXTRA unless the thin caller is deleted in the same commit as
+  the `platform_ref` bump, which `platform-bump` now does too (#315). This is
+  the class of drift that let jodidaniel's sweep caller silently lose its
+  `CMS_E2E_PAT` map and `startup_failure` for weeks — now caught, and fixed,
+  at the bump.
 - **v0.1.76 also changes 9 workflow callers' `pull_request` types** (dropping
   `edited` — #222 part 2), so both consumers' bump PRs carry that 9-file edit
   alongside the pin rewrite. **`deploy-preview.yml` is the ONE exception and
