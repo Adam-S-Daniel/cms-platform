@@ -430,12 +430,52 @@ def test_mastodon_status_for_a_quote_post_has_no_markdown():
 
 def test_substack_html_renders_the_transformed_markdown():
     post = {"url": "https://adamdaniel.ai/blog/q/", "title": "Q & A"}
-    html = cross_post.substack_html(post, WILLISON_BODY + "\n[rel](/about/)\n")
+    html = cross_post.substack_html(post, "An **essay** with a [rel](/about/) link.\n\n> A quote.\n")
     assert "<title>Q &amp; A</title>" in html
+    assert "<strong>essay</strong>" in html
     assert "<blockquote>" in html
     assert '<a href="https://adamdaniel.ai/about/">rel</a>' in html
     assert '<a href="https://adamdaniel.ai/blog/q/">adamdaniel.ai</a>' in html
-    assert "&gt; The more" not in html
+
+
+# A quotation post (its first block is a blockquote) renders as the Substack
+# Note the owner posted by hand for the 2026-09-28 Simon Willison post: bold
+# title, the quote, then the post URL. The attribution line and the
+# "Originally published at" header are left out; the link card carries both.
+
+
+def _html_body(page: str) -> str:
+    return page.split("<body>\n", 1)[1].split("</body>", 1)[0]
+
+
+def test_substack_html_for_a_quote_post_matches_the_note_layout():
+    post = {"url": "https://adamdaniel.ai/blog/q/", "title": "Quoting S & W"}
+    html = cross_post.substack_html(post, WILLISON_BODY)
+    assert "<title>Quoting S &amp; W</title>" in html
+    assert _html_body(html) == (
+        "<p><strong>Quoting S &amp; W</strong></p>\n"
+        "<blockquote>\n"
+        "<p>The more time I spend working with coding agents, the more convinced I am"
+        " that they make software engineering even harder.</p>\n"
+        "<p>We can do amazing things with them, but unlocking their full potential"
+        " requires extraordinary discipline and knowledge.</p>\n"
+        "</blockquote>\n"
+        '<p><a href="https://adamdaniel.ai/blog/q/">https://adamdaniel.ai/blog/q/</a></p>\n'
+    )
+
+
+def test_substack_html_quote_post_absolutizes_links_inside_the_quote():
+    post = {"url": "https://adamdaniel.ai/blog/q/", "title": "Q"}
+    html = cross_post.substack_html(post, "> See [this](/about/).\n\nAfter.\n")
+    assert '<a href="https://adamdaniel.ai/about/">this</a>' in html
+    assert "After." not in html
+
+
+def test_substack_html_quote_post_skips_a_leading_heading():
+    post = {"url": "https://adamdaniel.ai/blog/q/", "title": "Q"}
+    html = cross_post.substack_html(post, "## Heading\n\n> Quoted.\n")
+    assert "<blockquote>\n<p>Quoted.</p>\n</blockquote>" in html
+    assert "Heading" not in _html_body(html)
 
 
 def test_render_writes_substack_html(tmp_path):

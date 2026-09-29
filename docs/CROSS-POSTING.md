@@ -139,6 +139,7 @@ A post is Markdown; no target accepts it. Checked 2026-09-29:
 | LinkedIn | article `description` | Plain text | [Posts API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api) |
 | Substack | subtitle | Plain text | Substack editor |
 | Substack | body | Rich text. Pasted Markdown is **not** converted | [DownStack guide](https://downstack.app/blog/markdown-to-substack-complete-guide/) |
+| Substack | Note | Rich text from pasted rendered HTML (copied out of a browser) or the editor's formatting controls. Pasted Markdown or HTML source shows literally | Substack editor, checked by the owner 2026-09-29 |
 
 So the excerpt that feeds the first four is rendered from a real Markdown
 parse (`markdown-it-py`) to plain text: inline markup dropped (a link keeps
@@ -187,6 +188,14 @@ The render step also writes `<slug>.status.txt` (the Mastodon status) and
 `<slug>.meta.json` (title/subtitle/url/slug/date/tags/featured_image)
 alongside it. The HTML is rendered as CommonMark, so kramdown-only syntax
 (attribute lists, footnotes) may differ from the site.
+
+A **quotation post** (its first block, after any heading, is a blockquote)
+renders `<slug>.substack.html` in the layout of a Substack Note instead of
+the full article (v0.1.117): the title in bold, the quote, and the post URL,
+which Substack turns into a link card. The attribution line after the quote
+and the "Originally published at" header are left out, since the card
+carries both. This matches the Note posted by hand for the 2026-09-28 Simon
+Willison post. Any other post still renders as the full article.
 
 ## Creating the Mastodon app token
 
