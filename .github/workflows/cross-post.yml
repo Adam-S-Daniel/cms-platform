@@ -246,7 +246,15 @@ jobs:
           path: cross-post-out/
           retention-days: 30
 
+      # A failed Mastodon leg must not skip LinkedIn. Every later step's
+      # `if:` carries GitHub's implicit `success()`, so on a red Mastodon step
+      # (adamdaniel.ai run 36430252461: a revoked token's 401) LinkedIn never
+      # ran. continue-on-error keeps the job green for LinkedIn's gate while
+      # every EARLIER gate (deploy landed, URL live) still blocks it; the
+      # "Fail if the Mastodon leg failed" step below turns the run red again.
       - name: Post to Mastodon
+        id: mastodon
+        continue-on-error: true
         if: >-
           steps.detect.outputs.changed == 'true' && inputs.mastodon_instance != '' &&
           (inputs.targets == 'all' || inputs.targets == 'mastodon') &&
@@ -281,3 +289,9 @@ jobs:
             args+=(--dry-run)
           fi
           python3 .cms-platform/scripts/cross_post/cross_post.py post-linkedin "${args[@]}"
+
+      - name: Fail if the Mastodon leg failed
+        if: ${{ !cancelled() && steps.mastodon.outcome == 'failure' }}
+        run: |
+          echo "::error::The Mastodon leg failed (see its step above). Re-run it alone with a targets: mastodon dispatch; the other legs are not affected."
+          exit 1

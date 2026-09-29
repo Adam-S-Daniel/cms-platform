@@ -192,6 +192,12 @@ profile through LinkedIn's versioned REST API:
   a post newly published (or on a dispatch naming one), and it never retries.
   A dispatch's `targets` input limits a re-run to one leg, so re-running a
   failed Mastodon post cannot double-post to LinkedIn and vice versa.
+- **A failed Mastodon leg does not skip LinkedIn.** Before v0.1.114 a red
+  Mastodon step (adamdaniel.ai run 36430252461, a revoked token's HTTP 401)
+  skipped LinkedIn through GitHub's implicit `success()`, and the post never
+  reached either network. The Mastodon step now carries `continue-on-error`,
+  LinkedIn still waits on every earlier gate (deploy landed, URL live), and a
+  final `Fail if the Mastodon leg failed` step turns the run red afterward.
 - **No retry on 5xx.** A 5xx or a dropped connection (`HTTP 0`) MAY have
   created the post; the error says so and asks you to check the profile
   before re-dispatching with `targets=linkedin`. The leg carries on with the
