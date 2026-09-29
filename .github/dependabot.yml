@@ -41,9 +41,27 @@ updates:
     # package ecosystem 'github-actions'") that disables the whole
     # `updates[]` entry, not a silently-ignored key.
     # dependabot/dependabot-core#14628 is the open upstream request to add
-    # the support; until it lands, this stays flat.
+    # the support; until it lands, this stays flat. The group below does not
+    # interact with cooldown: each release still waits its own 7 days before
+    # it is eligible, and the group PR only collects those that have.
     cooldown:
       default-days: 7
+    # GROUPING — minor+patch version updates collapse into ONE PR, majors do
+    # not. Measured 2026-09-28: in 8 of the 11 weekly runs that opened any
+    # github-actions PR since 2026-06-03, Dependabot opened 2-4 at once (2026-06-30: 4;
+    # 2026-09-22: ruby/setup-ruby + aws-actions/configure-aws-credentials), so
+    # the #118-122 batch-strand (see the npm block below) is the NORMAL case
+    # here, not a rarity: once the first merges every later PR is behind main,
+    # and a behind PR touching .github/workflows/* cannot be refreshed by
+    # GITHUB_TOKEN (cms-platform#467 mitigates that with an App-token
+    # refresh). Majors stay individual PRs so a bad one is revertible alone
+    # (the setup-node 6->7 revert, #179). No `patterns` narrowing: "*" is
+    # every action.
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: npm
     directory: "/e2e"
     schedule:
@@ -85,7 +103,7 @@ updates:
     # their own production CI — the same blast-radius argument the major-bump
     # wait above is built on. Inside a group, one bad Playwright security bump
     # reds the ONE grouped PR and blocks every other security fix riding in
-    # it; excluded, a bad Playwright bump costs one extra ungrouped PR while
+    # it; excluded, a bad Playwright bump costs one extra separate PR while
     # the rest of the group still lands unattended.
     #
     # This is a groups: block and NOT the repo-level "Grouped security
@@ -101,9 +119,9 @@ updates:
     # page states that a repo's dependabot.yml group rules override the
     # toggle — so this block is both the as-code path AND the one that wins.
     #
-    # github-actions above stays UNGROUPED on purpose: 12 pinned third-party
-    # SHAs rarely alert together, so grouping buys little there, and being
-    # able to isolate a single bad action SHA is worth more than saving one PR.
+    # github-actions above groups minor+patch VERSION updates (measured
+    # batches of 2-4 PRs) and leaves majors individual, for #179-style
+    # isolation of one bad bump; this block's security group is separate.
     cooldown:
       default-days: 7
       semver-major-days: 30

@@ -224,6 +224,21 @@ per-PR checkout):
   batch-strand exposure applies to every consumer that calls
   `dependabot-auto-merge.yml`.
 
+**github-actions minor+patch updates are grouped (2026-09).** The batch is the
+normal case for github-actions, not a rarity: in 8 of the 11 weekly Dependabot
+runs since 2026-06-03 it opened 2-4 PRs at once (2026-06-30: 4; 2026-09-22:
+`ruby/setup-ruby` + `aws-actions/configure-aws-credentials`), and every later
+PR is behind `main` once the first merges. `.github/dependabot.yml` therefore
+declares an `actions-minor-patch` group (`applies-to: version-updates`,
+`update-types: [minor, patch]`), so one PR carries the batch and nothing is left
+to strand. **Majors stay individual PRs** so a bad one is revertible alone (the
+setup-node 6->7 revert, #179); never add `major` to that group.
+`cooldown.default-days: 7` is untouched and unaffected: each release still waits
+its own 7 days, and the group only collects what has cleared it.
+`e2e/dependabot-groups.test.js` pins the group's shape (not its `patterns`).
+The App-token refresh in cms-platform#467 remains the mitigation for a PR that
+still ends up behind.
+
 ## Silent-failure alerting: the scheduled-run health audit (v0.1.57, push lane #279)
 
 Two lanes fail SILENTLY — neither an `event=schedule` failure nor a
