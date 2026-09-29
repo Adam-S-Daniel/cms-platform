@@ -10,9 +10,20 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.114)
+## Version history (v0.1.0 → v0.1.115)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.115 — cross-post sends each target plain text or HTML, never raw Markdown.**
+The 2026-09-28 LinkedIn post (adamdaniel.ai run 36615868857) read
+`> The more time … > > We can do …`: the excerpt was the first Markdown
+paragraph with its whitespace collapsed, and none of the targets renders
+Markdown. Excerpts now come from a `markdown-it-py` parse rendered to plain
+text, with a blockquote's paragraphs wrapped in straight double quotes, as
+the owner hand-edited that post. Substack gets `<slug>.substack.html` to paste
+as rich text, since its editor shows pasted Markdown literally. The reusable
+installs pinned `markdown-it-py`/`mdurl`/`pyyaml` after `setup-python`.
+`docs/CROSS-POSTING.md` has the per-target format table.
 
 **v0.1.114 — a failed Mastodon leg no longer skips LinkedIn in `cross-post.yml`.**
 adamdaniel.ai run 36430252461 (2026-09-28) published a post whose Mastodon

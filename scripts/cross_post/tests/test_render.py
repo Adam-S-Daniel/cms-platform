@@ -361,3 +361,95 @@ def test_render_summary_contains_substack_markdown(tmp_path):
     expected_substack = cross_post.substack_markdown(post, "Body content.\n")
     assert expected_substack in summary_text
     assert "<details>" in summary_text
+
+
+# --- excerpts are plain text: every target renders none of Markdown --------
+# LinkedIn little text, Mastodon statuses and Substack's subtitle field all
+# show Markdown syntax literally (adamdaniel.ai's 2026-09-28 LinkedIn post
+# read "> The more time ... > > We can ...").
+
+WILLISON_BODY = (
+    "> The more time I spend working with coding agents, the more convinced I am"
+    " that they make software engineering even harder.\n"
+    ">\n"
+    "> We can do amazing things with them, but unlocking their full potential"
+    " requires extraordinary discipline and knowledge.\n"
+    "\n"
+    "\\- [Simon Willison](https://simonwillison.net/2026/Sep/24/harder/)\n"
+)
+
+WILLISON_EXCERPT = (
+    "\"The more time I spend working with coding agents, the more convinced I am"
+    " that they make software engineering even harder.\n\n"
+    "We can do amazing things with them, but unlocking their full potential"
+    " requires extraordinary discipline and knowledge.\""
+)
+
+
+def test_first_block_blockquote_becomes_quoted_plain_paragraphs():
+    post = cross_post.describe_post(
+        "_posts/2026-09-28-q.md", make_post(["title: T"], body=WILLISON_BODY), settings()
+    )
+    assert post["excerpt"] == WILLISON_EXCERPT
+
+
+def test_first_paragraph_inline_markup_is_stripped():
+    body = "This has **bold**, _italic_, `code`, a [link](https://example.com) and \\*stars\\*.\n"
+    post = cross_post.describe_post("_posts/2026-01-01-t.md", make_post(["title: T"], body=body), settings())
+    assert post["excerpt"] == "This has bold, italic, code, a link and *stars*."
+
+
+def test_first_paragraph_skips_leading_html_and_images():
+    body = '<div class="x">embed</div>\n\n![alt](/a.png)\n\nReal text.\n'
+    post = cross_post.describe_post("_posts/2026-01-01-t.md", make_post(["title: T"], body=body), settings())
+    assert post["excerpt"] == "Real text."
+
+
+def test_first_block_list_becomes_bullets():
+    body = "- one\n- two **2**\n\nAfter.\n"
+    post = cross_post.describe_post("_posts/2026-01-01-t.md", make_post(["title: T"], body=body), settings())
+    assert post["excerpt"] == "• one\n• two 2"
+
+
+def test_front_matter_excerpt_markdown_is_stripped():
+    text = make_post(["title: T", "excerpt: 'A **bold** [claim](https://example.com).'"])
+    post = cross_post.describe_post("_posts/2026-01-01-t.md", text, settings())
+    assert post["excerpt"] == "A bold claim."
+
+
+def test_mastodon_status_for_a_quote_post_has_no_markdown():
+    post = cross_post.describe_post(
+        "_posts/2026-09-28-q.md", make_post(["title: Q"], body=WILLISON_BODY), settings()
+    )
+    status = cross_post.mastodon_status(post)
+    assert status == f"Q\n\n{WILLISON_EXCERPT}\n\n{post['url']}"
+
+
+# --- Substack: its editor does not convert pasted Markdown ----------------
+
+
+def test_substack_html_renders_the_transformed_markdown():
+    post = {"url": "https://adamdaniel.ai/blog/q/", "title": "Q & A"}
+    html = cross_post.substack_html(post, WILLISON_BODY + "\n[rel](/about/)\n")
+    assert "<title>Q &amp; A</title>" in html
+    assert "<blockquote>" in html
+    assert '<a href="https://adamdaniel.ai/about/">rel</a>' in html
+    assert '<a href="https://adamdaniel.ai/blog/q/">adamdaniel.ai</a>' in html
+    assert "&gt; The more" not in html
+
+
+def test_render_writes_substack_html(tmp_path):
+    post = {
+        "path": "_posts/2026-01-01-t.md",
+        "slug": "my-post",
+        "title": "My Post",
+        "url": "https://adamdaniel.ai/blog/my-post/",
+        "date": "2026-01-01",
+        "excerpt": "An excerpt.",
+        "tags": [],
+        "featured_image": "",
+    }
+    out_dir = tmp_path / "out"
+    cross_post.render([post], out_dir, lambda p: "Body **content**.\n", max_chars=500)
+    html_file = out_dir / "my-post.substack.html"
+    assert html_file.read_text(encoding="utf-8") == cross_post.substack_html(post, "Body **content**.\n")

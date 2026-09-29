@@ -406,6 +406,21 @@ class TestCrossPostReusable:
         names = [s.get("name") for s in _iter_steps(self.data)]
         assert names.index("Post to LinkedIn") == names.index("Post to Mastodon") + 1
 
+    def test_python_deps_are_installed_pinned_before_detect(self):
+        # cross_post.py imports markdown_it (plain-text excerpts, Substack HTML)
+        # and yaml; the runner's system python has neither guaranteed, and
+        # Ubuntu's system pip refuses installs (PEP 668), so setup-python first.
+        steps = list(_iter_steps(self.data))
+        names = [s.get("name") for s in steps]
+        setup = _step_named(self.data, "Set up Python")
+        assert setup["uses"].startswith("actions/setup-python@")
+        install = _step_named(self.data, "Install cross-post dependencies")
+        for pin in ("'markdown-it-py==4.2.0'", "'mdurl==0.1.2'", "'pyyaml==6.0.3'"):
+            assert pin in install["run"], pin
+        assert "if" not in install and "if" not in setup
+        detect = names.index("Detect newly published posts")
+        assert names.index("Set up Python") < names.index("Install cross-post dependencies") < detect
+
     # --- A failed leg must not skip the next one (adamdaniel.ai run 36430252461)
 
     def test_mastodon_failure_does_not_skip_linkedin(self):

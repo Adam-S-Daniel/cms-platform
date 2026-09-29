@@ -98,7 +98,7 @@ same Jekyll + Decap + AWS stack and improvements sync **both ways**. Design:
 (consumer 1, the dogfood) and **jodidaniel.com** (consumer 2, a single-page
 bio).
 
-**Current release: `v0.1.114`** (`v0.1.0`–`v0.1.114` are tagged; cut one with
+**Current release: `v0.1.115`** (`v0.1.0`–`v0.1.115` are tagged; cut one with
 `gh workflow run release.yml -f version=vX.Y.Z`). The bump is ONE atomic edit in
 the release PR, before the dispatch: this line, both plugin manifests
 (`plugin.json` + `.claude-plugin/plugin.json`), the `docs/VERSION-HISTORY.md`
@@ -249,6 +249,15 @@ PR #134). The `skills-sync.yml` transport, its `platform-drift-guard.yml`
 companion, the issue #83 destination-presence gate and the `.repo-local`
 carve-out were **deleted** in v0.1.83; an adopting consumer deletes both thin
 callers in the bump commit. → `docs/SYNC.md`.
+
+## Every cross-post target gets text in ITS format, never raw Markdown
+
+Mastodon statuses, LinkedIn's "little text" and Substack's subtitle are plain
+text, and Substack's editor does not convert pasted Markdown: the 2026-09-28
+LinkedIn post showed `> quote > > quote` verbatim. `cross_post.py` renders
+excerpts from a real Markdown parse (`markdown-it-py`) and the Substack draft
+as HTML. **A new posting target lands only with its text format researched,
+written up in `docs/CROSS-POSTING.md`, and tested on a Markdown-heavy post.**
 
 ## Single-version pin consistency guard (anti-skew, #29)
 
