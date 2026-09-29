@@ -25,9 +25,12 @@
 # deleted, not rewritten to a tag at which its reusable no longer exists. And it
 # RECONCILES one dictated INPUT inside a caller that already exists —
 # `cms-automerge-nudge.yml`'s `required_contexts`, derived from the manifest's
-# ruleset for THIS repo. Both have to ride the bump commit, because
-# pin-consistency compares the consumer's workflow set against the platform at
-# that consumer's OWN pinned ref: split either off into its own PR and it fails
+# ruleset for THIS repo. And it RECONCILES every existing caller's per-job
+# `secrets:` map with the template at the new ref (keys added, dropped or
+# changed; comments kept) — the one call-interface facet the seed pass never
+# reached (v0.1.113's `app_private_key`). All of these have to ride the bump
+# commit, because pin-consistency compares the consumer against the platform
+# at that consumer's OWN pinned ref: split one off into its own PR and it fails
 # in the mirror-image direction instead.
 #
 # (Previously this bumped ONLY `platform_ref:` and left the `uses:@` pins + the
@@ -461,6 +464,66 @@ jobs:
             fi
           fi
 
+          # RECONCILE each existing caller's per-job `secrets:` map with the
+          # template at $LATEST. v0.1.113 (#467) added `app_private_key` to the
+          # dependabot-rearm-sweep template and nothing moved it: both v0.1.114
+          # bump PRs (adamdaniel.ai#3891, jodidaniel.com#281) failed
+          # `workflow-content: DRIFT ... secrets: map` until it was hand-added.
+          # pin-consistency compares the map whole, against the template at the
+          # consumer's OWN ref, so this rides the bump commit like the passes
+          # above. The script decides drift with the checker's own
+          # structuralShape() (fetched beside it), writes a splice of the
+          # `secrets:` lines only, and re-parses the result before saving.
+          # Seeded callers already match; retired ones are gone.
+          SECRETS_NOTE=""
+          SECRETS_TOOLS="${RUNNER_TEMP:-/tmp}/secrets-reconcile"
+          rm -rf "$SECRETS_TOOLS"
+          mkdir -p "$SECRETS_TOOLS/scripts" "$SECRETS_TOOLS/canonical"
+          SECRETS_READY=1
+          if [ "${#DICTATED[@]}" -eq 0 ]; then SECRETS_READY=0; fi
+          if ! gh api "repos/$PLATFORM/contents/scripts/reconcile-caller-secrets.js?ref=$LATEST" \
+               -H "Accept: application/vnd.github.raw+json" \
+               > "$SECRETS_TOOLS/scripts/reconcile-caller-secrets.js" 2>/dev/null; then
+            SECRETS_READY=0
+          fi
+          if ! gh api "repos/$PLATFORM/contents/scripts/check-platform-pin-consistency.js?ref=$LATEST" \
+               -H "Accept: application/vnd.github.raw+json" \
+               > "$SECRETS_TOOLS/scripts/check-platform-pin-consistency.js" 2>/dev/null; then
+            SECRETS_READY=0
+          fi
+          for name in "${DICTATED[@]}"; do
+            if [ ! -f ".github/workflows/$name" ]; then continue; fi
+            if ! gh api "repos/$PLATFORM/contents/examples/site/.github/workflows/$name?ref=$LATEST" \
+                 -H "Accept: application/vnd.github.raw+json" > "$SECRETS_TOOLS/canonical/$name" 2>/dev/null; then
+              SECRETS_READY=0
+            fi
+          done
+          # Into the tools dir, never the consumer root: npm resolves the whole
+          # tree of whatever package.json sits at its prefix (the same reason
+          # platform-pin-consistency.yml installs into `.cms-platform`).
+          if [ "$SECRETS_READY" = 1 ] \
+             && npm install --prefix "$SECRETS_TOOLS" --no-save --no-package-lock yaml@2.9.1 >/dev/null 2>&1; then
+            set +e
+            SECRETS_OUT=$(node "$SECRETS_TOOLS/scripts/reconcile-caller-secrets.js" \
+              --canonical-dir "$SECRETS_TOOLS/canonical" --workflows-dir .github/workflows)
+            SECRETS_RC=$?
+            set -e
+            printf '%s\n' "$SECRETS_OUT"
+            SECRETS_UPDATED=$(sed -n 's/^UPDATED //p' <<<"$SECRETS_OUT" | paste -sd ';' -)
+            if [ -n "$SECRETS_UPDATED" ]; then
+              SECRETS_NOTE=" Reconciled thin-caller \`secrets:\` maps with the template: ${SECRETS_UPDATED//;/; }."
+            fi
+            if [ "$SECRETS_RC" -ne 0 ]; then
+              # Fail soft, like the required_contexts pass: pin-consistency
+              # still catches a stale map, and the PR body says where to look.
+              SECRETS_NOTE="${SECRETS_NOTE} :warning: some \`secrets:\` maps could NOT be reconciled automatically (see the platform-bump run log) — align them with examples/site at $LATEST before merging."
+              echo "::warning::secrets reconciliation exited $SECRETS_RC — see the MANUAL lines above"
+            fi
+          else
+            echo "::warning::could not fetch the secrets reconciler, its checker, the canonical callers, or the yaml parser at $LATEST — skipping the secrets: reconciliation"
+            SECRETS_NOTE=" :warning: the \`secrets:\` map reconciliation was skipped (inputs unreadable at $LATEST) — check each caller's \`secrets:\` by hand."
+          fi
+
           # git diff --quiet alone is blind to a brand-new UNTRACKED file (a
           # seeded caller, or a first-adoption platform.lock) — it only compares
           # tracked content. Fold in `git status --porcelain` so an add-only
@@ -483,7 +546,7 @@ jobs:
           if [ "${#RETIRED[@]}" -gt 0 ]; then
             SEED_NOTE="${SEED_NOTE} Retired de-dictated workflow caller(s): ${RETIRED[*]}."
           fi
-          SEED_NOTE="${SEED_NOTE}${CONTEXT_NOTE}"
+          SEED_NOTE="${SEED_NOTE}${CONTEXT_NOTE}${SECRETS_NOTE}"
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
             --title "Bump cms-platform to $LATEST" \
             --body "Atomic single-version bump of every cms-platform reference (\`platform_ref:\` + \`platform.lock\`, the \`uses:@\` reusable-workflow pins, the \`cms-platform-theme\` Gemfile \`tag:\`, and \`Gemfile.lock\` \`tag:\` + \`revision:\`) to $LATEST. The pin-consistency guard (#29) passes on this PR alone.${SEED_NOTE}" \

@@ -301,7 +301,7 @@ test.describe("platform-bump reusable — reconciles dictated caller inputs (#31
     }
     expect(script).toMatch(/CONTEXT_NOTE=/);
     expect(script, "and the note must actually reach the PR body").toMatch(
-      /SEED_NOTE="\$\{SEED_NOTE\}\$\{CONTEXT_NOTE\}"/,
+      /SEED_NOTE="\$\{SEED_NOTE\}\$\{CONTEXT_NOTE\}/,
     );
   });
 
