@@ -423,8 +423,10 @@ jobs:
       # pytest 9.1.1 (2026-06-19) and PyYAML 6.0.3 (2025-09-25) — each the
       # newest release at least 7 days old as of pinning (2026-09-21), same
       # pins adamdaniel.ai's retired cross-post-tests.yml carried.
+      # markdown-it-py 4.2.0 (2026-05-07) and mdurl 0.1.2 (2022-08-14), pinned
+      # 2026-09-29, match cross-post.yml's runtime install.
       - name: Install test dependencies
-        run: python3 -m pip install --user 'pytest==9.1.1' 'pyyaml==6.0.3'
+        run: python3 -m pip install --user 'pytest==9.1.1' 'pyyaml==6.0.3' 'markdown-it-py==4.2.0' 'mdurl==0.1.2'
 
       - name: Run cross_post tests
         run: python3 -m pytest scripts/cross_post -q

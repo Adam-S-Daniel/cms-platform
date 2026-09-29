@@ -128,14 +128,39 @@ followed by posting anyway, so the duplicate check never actually ran. Any
 other lookup failure (5xx, a `0` from a network error, 404, and so on) still
 only warns and posts anyway.
 
+## Text formats by target — none of them renders Markdown
+
+A post is Markdown; no target accepts it. Checked 2026-09-29:
+
+| Target | Field | Format | Source |
+|---|---|---|---|
+| Mastodon | `status` | Plain text. Links count as 23 characters; `#word` becomes a hashtag and `@word` a mention | [statuses API](https://docs.joinmastodon.org/methods/statuses/), [posting](https://docs.joinmastodon.org/user/posting/) |
+| LinkedIn | `commentary` | "little text": plain text, reserved characters `\|{}@[]()<>#*_~` backslash-escaped | [little text format](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/little-text-format) |
+| LinkedIn | article `description` | Plain text | [Posts API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api) |
+| Substack | subtitle | Plain text | Substack editor |
+| Substack | body | Rich text. Pasted Markdown is **not** converted | [DownStack guide](https://downstack.app/blog/markdown-to-substack-complete-guide/) |
+
+So the excerpt that feeds the first four is rendered from a real Markdown
+parse (`markdown-it-py`) to plain text: inline markup dropped (a link keeps
+its text), soft breaks joined, images and raw HTML dropped, a list as `•`
+lines, and a blockquote as its paragraphs wrapped in straight double quotes.
+Before v0.1.115 the first paragraph went out as raw Markdown, and the
+2026-09-28 LinkedIn post read `> The more time … > > We can do …`.
+
+**A new target lands only with its row in this table, its own renderer if
+the plain excerpt does not fit, and a test on a Markdown-heavy post.**
+
 ## Substack is paste-by-hand — there's no publish API
 
-After a run with `substack: true`, open the job summary (the render step
-appends a section there) or download the `cross-post-<run_id>` artifact from
-the run's page, copy the `<slug>.substack.md` content, and paste it into a
-new Substack draft manually. The render step also writes `<slug>.status.txt`
-(the Mastodon status) and `<slug>.meta.json` (title/subtitle/url/slug/date/
-tags/featured_image) alongside it.
+After a run with `substack: true`, download the `cross-post-<run_id>`
+artifact from the run's page, open `<slug>.substack.html` in a browser,
+select all, copy, and paste into a new Substack draft: Substack keeps the
+formatting of pasted rich text but shows pasted Markdown literally. The
+`<slug>.substack.md` source (also in the job summary) is kept for reference.
+The render step also writes `<slug>.status.txt` (the Mastodon status) and
+`<slug>.meta.json` (title/subtitle/url/slug/date/tags/featured_image)
+alongside it. The HTML is rendered as CommonMark, so kramdown-only syntax
+(attribute lists, footnotes) may differ from the site.
 
 ## Creating the Mastodon app token
 

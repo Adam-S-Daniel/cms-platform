@@ -185,6 +185,18 @@ jobs:
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
 
+      # cross_post.py parses Markdown with markdown-it-py (plain-text excerpts
+      # for Mastodon/LinkedIn, the Substack HTML draft) and YAML with PyYAML.
+      # Ubuntu's system pip refuses installs (PEP 668), hence setup-python.
+      # Pins: newest release at least 7 days old as of 2026-09-29.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Install cross-post dependencies
+        run: python3 -m pip install --user 'markdown-it-py==4.2.0' 'mdurl==0.1.2' 'pyyaml==6.0.3'
+
       - name: Detect newly published posts
         id: detect
         if: github.event_name != 'schedule'

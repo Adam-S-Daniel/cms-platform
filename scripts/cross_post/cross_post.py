@@ -25,6 +25,7 @@ import argparse
 import dataclasses
 import datetime
 import hashlib
+import html
 import json
 import os
 import re
@@ -38,6 +39,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import yaml
+from markdown_it import MarkdownIt
 
 # --------------------------------------------------------------------------
 # Lexical tokens (fences, embed markers, link syntax) -- regex is fine here,
@@ -220,23 +222,118 @@ def _collapse_ws(text: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
-def _first_paragraph(body: str) -> str:
-    text = _EMBED_RE.sub("", body)
-    for para in re.split(r"\n\s*\n", text.strip()):
-        para = para.strip()
-        if not para or para.startswith("#"):
+# Every cross-post target shows Markdown syntax literally: Mastodon statuses
+# and LinkedIn's "little text" are plain text, and Substack's subtitle field
+# is plain text too. So an excerpt is rendered from a real Markdown parse to
+# plain paragraphs, never passed through as Markdown. A blockquote becomes its
+# paragraphs wrapped in straight double quotes, matching how the owner
+# hand-edited the 2026-09-28 LinkedIn post.
+_MD = MarkdownIt("commonmark", {"html": True})
+_SKIPPED_BLOCKS = {"heading_open", "html_block", "hr"}
+
+
+def _inline_plain(inline_token) -> str:
+    """Text of an inline token: markup dropped, soft breaks as spaces, images and HTML dropped."""
+    out: list[str] = []
+    skip_depth = 0
+    for child in inline_token.children or []:
+        if child.type == "image":
             continue
-        return _collapse_ws(para)
-    return ""
+        if child.type in ("text", "code_inline") and not skip_depth:
+            out.append(child.content)
+        elif child.type == "softbreak":
+            out.append(" ")
+        elif child.type == "hardbreak":
+            out.append("\n")
+    lines = [_collapse_ws(line) for line in "".join(out).split("\n")]
+    return "\n".join(line for line in lines if line)
+
+
+def _blocks_plain(tokens) -> list[str]:
+    """Top-level blocks of a token stream as plain-text paragraphs, in order."""
+    blocks: list[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.nesting == 1:
+            depth, j = 1, i + 1
+            while depth:
+                depth += tokens[j].nesting
+                j += 1
+            inner = tokens[i + 1 : j - 1]
+            if tok.type == "blockquote_open":
+                quoted = _blocks_plain(inner)
+                if quoted:
+                    quoted[0] = '"' + quoted[0]
+                    quoted[-1] = quoted[-1] + '"'
+                blocks.extend(quoted)
+            elif tok.type in ("bullet_list_open", "ordered_list_open"):
+                items = []
+                k = 0
+                while k < len(inner):
+                    if inner[k].type == "list_item_open":
+                        d, m = 1, k + 1
+                        while d:
+                            d += inner[m].nesting
+                            m += 1
+                        text = "\n".join(_blocks_plain(inner[k + 1 : m - 1]))
+                        if text:
+                            items.append("\u2022 " + text)
+                        k = m
+                    else:
+                        k += 1
+                if items:
+                    blocks.append("\n".join(items))
+            elif tok.type == "paragraph_open":
+                text = _inline_plain(inner[0]) if inner else ""
+                if text:
+                    blocks.append(text)
+            i = j
+        else:
+            if tok.type in ("fence", "code_block") and tok.content.strip():
+                blocks.append(tok.content.strip())
+            i += 1
+    return blocks
+
+
+def _first_block_tokens(tokens):
+    """Tokens of the first top-level block worth excerpting (headings, raw HTML, rules skipped)."""
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.nesting == 1:
+            depth, j = 1, i + 1
+            while depth:
+                depth += tokens[j].nesting
+                j += 1
+            block = tokens[i:j]
+            if tok.type not in _SKIPPED_BLOCKS and _blocks_plain(block):
+                return block
+            i = j
+        else:
+            if tok.type not in _SKIPPED_BLOCKS and _blocks_plain([tok]):
+                return [tok]
+            i += 1
+    return []
+
+
+def markdown_to_plain(markdown: str) -> str:
+    """Markdown to plain text: paragraphs separated by a blank line, no markup."""
+    return "\n\n".join(_blocks_plain(_MD.parse(markdown)))
+
+
+def _first_paragraph(body: str) -> str:
+    tokens = _MD.parse(_EMBED_RE.sub("", body))
+    return "\n\n".join(_blocks_plain(_first_block_tokens(tokens)))
 
 
 def _excerpt_for(meta: dict, body: str) -> str:
     excerpt = meta.get("excerpt")
     if excerpt:
-        return _collapse_ws(str(excerpt))
+        return markdown_to_plain(str(excerpt))
     description = meta.get("description")
     if description:
-        return _collapse_ws(str(description))
+        return markdown_to_plain(str(description))
     return _first_paragraph(body)
 
 
@@ -344,6 +441,20 @@ def substack_markdown(post: dict, body: str) -> str:
     return f"{header}\n\n{transformed}\n"
 
 
+def substack_html(post: dict, body: str) -> str:
+    """The Substack draft as a standalone HTML page.
+
+    Substack's editor does not convert pasted Markdown, so the draft is pasted
+    as rich text: open this file in a browser, select all, copy, paste.
+    """
+    title = html.escape(str(post.get("title", "")))
+    rendered = _MD.render(substack_markdown(post, body))
+    return (
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\">"
+        f"<title>{title}</title></head>\n<body>\n{rendered}</body></html>\n"
+    )
+
+
 # --------------------------------------------------------------------------
 # 10. render
 # --------------------------------------------------------------------------
@@ -376,6 +487,9 @@ def render(posts, out_dir, read_body, max_chars, summary_path=None) -> None:
 
         (out_dir / f"{slug}.status.txt").write_text(status, encoding="utf-8")
         (out_dir / f"{slug}.substack.md").write_text(substack, encoding="utf-8")
+        (out_dir / f"{slug}.substack.html").write_text(
+            substack_html(post, body), encoding="utf-8"
+        )
         (out_dir / f"{slug}.meta.json").write_text(
             json.dumps(meta, indent=2) + "\n", encoding="utf-8"
         )

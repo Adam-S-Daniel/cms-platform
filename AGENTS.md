@@ -250,6 +250,15 @@ companion, the issue #83 destination-presence gate and the `.repo-local`
 carve-out were **deleted** in v0.1.83; an adopting consumer deletes both thin
 callers in the bump commit. → `docs/SYNC.md`.
 
+## Every cross-post target gets text in ITS format, never raw Markdown
+
+Mastodon statuses, LinkedIn's "little text" and Substack's subtitle are plain
+text, and Substack's editor does not convert pasted Markdown: the 2026-09-28
+LinkedIn post showed `> quote > > quote` verbatim. `cross_post.py` renders
+excerpts from a real Markdown parse (`markdown-it-py`) and the Substack draft
+as HTML. **A new posting target lands only with its text format researched,
+written up in `docs/CROSS-POSTING.md`, and tested on a Markdown-heavy post.**
+
 ## Single-version pin consistency guard (anti-skew, #29)
 
 A consumer names the platform version in many places (`uses:@ref` pins,

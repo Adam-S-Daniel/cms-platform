@@ -640,3 +640,17 @@ def test_error_body_with_fake_secret_is_never_printed(capsys):
         assert "FAKE-SECRET-abc123" not in stream
         assert TOKEN not in stream
         assert "Bearer" not in stream
+
+
+def test_linkedin_commentary_for_a_quote_post_has_no_markdown():
+    # adamdaniel.ai 2026-09-28: the post text read "> The more ... > > We can".
+    text = (
+        "---\ntitle: Q\n---\n"
+        "> First quoted paragraph.\n>\n> Second quoted paragraph.\n"
+    )
+    post = cross_post.describe_post(
+        "_posts/2026-09-28-q.md", text, cross_post.site_settings('url: "https://adamdaniel.ai"\npermalink: /blog/:slug/\n')
+    )
+    assert cross_post.linkedin_commentary(post) == (
+        "Q\n\n\"First quoted paragraph.\n\nSecond quoted paragraph.\""
+    )
