@@ -10,9 +10,17 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.115)
+## Version history (v0.1.0 → v0.1.116)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.116 — `<link rel="me">` for each cross-post profile.**
+A site lists its cross-post profiles under `_config.yml` `cross_post.profiles`
+(mastodon, linkedin, substack, ...), and the theme's `default.html` head renders
+one `<link rel="me">` per non-blank entry through `_includes/rel-me.html`, so
+Mastodon can verify the site on the profile. The `rel_me_urls` filter fails the
+build on any value that is not an absolute `https://` URL. Locked by
+`theme/spec/rel_me_filter_test.rb`; documented in `docs/CROSS-POSTING.md`.
 
 **v0.1.115 — cross-post sends each target plain text or HTML, never raw Markdown.**
 The 2026-09-28 LinkedIn post (adamdaniel.ai run 36615868857) read
