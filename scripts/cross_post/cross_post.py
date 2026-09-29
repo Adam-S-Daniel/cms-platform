@@ -423,12 +423,12 @@ def _strip_blank_edges(text: str) -> str:
     return "\n".join(lines)
 
 
-def substack_markdown(post: dict, body: str) -> str:
+def _substack_body(post: dict, body: str) -> str:
+    """The post body with embeds replaced and site-relative links made absolute."""
     url = post.get("url", "")
     parsed = urlparse(url)
     host = parsed.netloc
     site_root = f"{parsed.scheme}://{host}" if parsed.scheme else host
-    header = f"*Originally published at [{host}]({url}).*"
 
     embed_replacement = f"*[Interactive version of this section on {host}]({url})*"
     transformed = _EMBED_RE.sub(lambda m: embed_replacement, body)
@@ -436,19 +436,42 @@ def substack_markdown(post: dict, body: str) -> str:
     transformed = _HTML_ATTR_RE.sub(
         lambda m: f'{m.group(1)}="{site_root}{m.group(2)}"', transformed
     )
-    transformed = _strip_blank_edges(transformed)
+    return _strip_blank_edges(transformed)
 
-    return f"{header}\n\n{transformed}\n"
+
+def substack_markdown(post: dict, body: str) -> str:
+    url = post.get("url", "")
+    host = urlparse(url).netloc
+    header = f"*Originally published at [{host}]({url}).*"
+    return f"{header}\n\n{_substack_body(post, body)}\n"
+
+
+def _quote_note_html(post: dict, body: str) -> str | None:
+    """A quotation post as the Substack Note the owner posts by hand.
+
+    Bold title, the quote, the post URL; None when the post's first block is
+    not a blockquote. Everything after the quote (the attribution line) is
+    left out, since the link card Substack builds from the URL carries it.
+    """
+    block = _first_block_tokens(_MD.parse(_substack_body(post, body)))
+    if not block or block[0].type != "blockquote_open":
+        return None
+    title = html.escape(str(post.get("title", "")))
+    url = html.escape(str(post.get("url", "")))
+    quote = _MD.renderer.render(block, _MD.options, {})
+    return f"<p><strong>{title}</strong></p>\n{quote}<p><a href=\"{url}\">{url}</a></p>\n"
 
 
 def substack_html(post: dict, body: str) -> str:
     """The Substack draft as a standalone HTML page.
 
     Substack's editor does not convert pasted Markdown, so the draft is pasted
-    as rich text: open this file in a browser, select all, copy, paste.
+    as rich text: open this file in a browser, select all, copy, paste. A
+    quotation post renders in the Note layout (_quote_note_html); any other
+    post renders as the full article.
     """
     title = html.escape(str(post.get("title", "")))
-    rendered = _MD.render(substack_markdown(post, body))
+    rendered = _quote_note_html(post, body) or _MD.render(substack_markdown(post, body))
     return (
         "<!doctype html>\n<html><head><meta charset=\"utf-8\">"
         f"<title>{title}</title></head>\n<body>\n{rendered}</body></html>\n"
