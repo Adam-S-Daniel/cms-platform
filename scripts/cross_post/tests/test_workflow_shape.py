@@ -287,6 +287,10 @@ class TestCrossPostReusable:
                 # Schedule-only; gated on inputs.linkedin itself (asserted in
                 # test_token_age_check_runs_only_on_schedule_with_linkedin_on).
                 continue
+            if step.get("name") == "Fail if the Mastodon leg failed":
+                # Runs only when the (already gated) Mastodon step ran and
+                # failed; asserted in test_a_swallowed_mastodon_failure_still_fails_the_job.
+                continue
             if_expr = str(step.get("if", ""))
             assert configured_guard in if_expr, (
                 f"step {step.get('name')!r} runs after detect but its `if:` "
@@ -351,7 +355,11 @@ class TestCrossPostReusable:
         steps = list(_iter_steps(self.data))
         detect_index = next(i for i, s in enumerate(steps) if s.get("id") == "detect")
         for step in steps[detect_index + 1 :]:
-            if step.get("name") in ("Cross-posting not configured", "Check LinkedIn token age"):
+            if step.get("name") in (
+                "Cross-posting not configured",
+                "Check LinkedIn token age",
+                "Fail if the Mastodon leg failed",
+            ):
                 continue
             assert "steps.detect.outputs.changed == 'true'" in str(step.get("if", "")), step.get(
                 "name"
@@ -397,6 +405,40 @@ class TestCrossPostReusable:
     def test_linkedin_step_runs_after_mastodon(self):
         names = [s.get("name") for s in _iter_steps(self.data)]
         assert names.index("Post to LinkedIn") == names.index("Post to Mastodon") + 1
+
+    # --- A failed leg must not skip the next one (adamdaniel.ai run 36430252461)
+
+    def test_mastodon_failure_does_not_skip_linkedin(self):
+        # A step's `if:` without a status function gets an implicit
+        # `success()`, so a red Mastodon leg (a revoked token's 401) used to
+        # skip LinkedIn outright. Mastodon swallows its own failure so the
+        # LinkedIn step's implicit success() still sees a green job; the
+        # failure is re-raised by the step after the last leg.
+        step = _step_named(self.data, "Post to Mastodon")
+        assert step.get("id") == "mastodon"
+        assert step.get("continue-on-error") is True
+
+    def test_linkedin_step_keeps_the_implicit_success_gate(self):
+        # LinkedIn must still NOT run when an earlier gate failed (the deploy
+        # never landed, the URL is not live) — only a Mastodon failure is
+        # tolerated, and that one is absorbed by continue-on-error above.
+        if_expr = str(_step_named(self.data, "Post to LinkedIn").get("if", ""))
+        for fn in ("always()", "!cancelled()", "failure()"):
+            assert fn not in if_expr, f"LinkedIn `if:` must not use {fn}"
+
+    def test_only_the_mastodon_step_swallows_its_failure(self):
+        swallowing = [s.get("name") for s in _iter_steps(self.data) if s.get("continue-on-error")]
+        assert swallowing == ["Post to Mastodon"]
+
+    def test_a_swallowed_mastodon_failure_still_fails_the_job(self):
+        steps = list(_iter_steps(self.data))
+        names = [s.get("name") for s in steps]
+        step = _step_named(self.data, "Fail if the Mastodon leg failed")
+        assert names.index("Fail if the Mastodon leg failed") > names.index("Post to LinkedIn")
+        if_expr = str(step.get("if", ""))
+        assert "!cancelled()" in if_expr
+        assert "steps.mastodon.outcome == 'failure'" in if_expr
+        assert "exit 1" in step["run"]
 
 
 class TestCrossPostTemplate:

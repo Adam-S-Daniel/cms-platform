@@ -10,9 +10,18 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.113)
+## Version history (v0.1.0 → v0.1.114)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.114 — a failed Mastodon leg no longer skips LinkedIn in `cross-post.yml`.**
+adamdaniel.ai run 36430252461 (2026-09-28) published a post whose Mastodon
+leg failed with HTTP 401, and LinkedIn was skipped: a step `if:` with no
+status function gets GitHub's implicit `success()`. The post reached neither
+network. Post to Mastodon now carries `continue-on-error` (`id: mastodon`),
+LinkedIn still waits on every earlier gate, and a final `Fail if the Mastodon
+leg failed` step turns the run red. Locked by
+`scripts/cross_post/tests/test_workflow_shape.py`.
 
 **v0.1.113 — the admin's publish status tells the truth end to end, a post's URL is pinned on save, and every slugify is Jekyll's (#475); the bar links its checks to their run (#473); the rearm sweep refreshes stale workflow-file Dependabot PRs (#467).**
 One real publish on adamdaniel.ai (adamdaniel.ai#3857, 2026-09-28) hit five
