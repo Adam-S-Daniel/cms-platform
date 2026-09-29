@@ -10,9 +10,22 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.117)
+## Version history (v0.1.0 → v0.1.118)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.118 — `platform-bump` reconciles thin-caller `secrets:` maps.**
+v0.1.113 (#467) added `app_private_key` to the `dependabot-rearm-sweep`
+template and nothing moved it into consumers, so both v0.1.114 bump PRs
+(adamdaniel.ai#3891, jodidaniel.com#281) failed `workflow-content: DRIFT ...
+secrets: map` until it was added by hand. `platform-bump` now runs
+`scripts/reconcile-caller-secrets.js` at the new ref, in the bump commit: keys
+the template gained are added, dropped keys removed, changed values updated,
+with the consumer's comments kept; anything it cannot splice safely is left
+alone and flagged in the PR body. It takes effect from the first bump run by a
+`platform-bump` caller pinned at v0.1.118 or later (#491). Locked by
+`e2e/platform-bump-secrets-reconcile.test.js`; documented in
+`docs/PIN-CONSISTENCY.md`.
 
 **v0.1.117 — a quotation post's Substack draft renders as a Note.**
 When a post's first block (after any heading) is a blockquote,
