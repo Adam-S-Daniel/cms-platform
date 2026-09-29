@@ -129,14 +129,27 @@ per-PR checkout):
   lands on green). The sweep does not post that comment itself —
   `@dependabot rebase` from `github-actions[bot]` is rejected by Dependabot
   ("only users with push access"), so it can only be named in the warning for
-  a human to type. **Only `self-dependabot-rearm.yml` (this repo's own
-  caller) passes `secrets.app_private_key` today.** Consumers'
-  `examples/site/.github/workflows/dependabot-rearm-sweep.yml` thin caller
-  does not yet — adding a `secrets:` map there would make the next consumer
-  bump report workflow-content drift, since
-  `check-platform-pin-consistency.js` compares callers' `secrets:` maps
-  against the template byte-for-byte. Consumer adoption is a deliberate
-  follow-up, not an oversight.
+  a human to type. Both this repo's own caller (`self-dependabot-rearm.yml`)
+  and the consumer thin-caller template
+  (`examples/site/.github/workflows/dependabot-rearm-sweep.yml`) pass
+  `secrets.app_private_key` from `secrets.CMS_AUTOMATION_APP_PRIVATE_KEY`, but
+  an existing consumer caller only gains it by hand.
+
+  **Rollout runbook (consumer template -> consumers).**
+  `check-platform-pin-consistency.js` compares each consumer caller's
+  `secrets:` map against the template AT THE CONSUMER'S PINNED REF, and
+  `platform-bump.yml` never edits an existing caller (it only seeds wholly
+  missing ones), so the change reaches a consumer only like this:
+  (a) cut a release containing the template change;
+  (b) when platform-bump opens each consumer's bump PR, add to that PR's
+  branch, in `.github/workflows/dependabot-rearm-sweep.yml` under the `rearm`
+  job (sibling of `with:`), `    secrets:` / `      app_private_key: ${{
+  secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}` (precedent: #238,
+  `dev-hooks-sync.yml`'s `app_private_key`) — adding it earlier, or without
+  the bump, reports workflow-content drift against the older pinned template;
+  (c) the consumer needs `vars.CMS_AUTOMATION_APP_ID` plus the secret
+  `CMS_AUTOMATION_APP_PRIVATE_KEY` (both current consumers have them); without
+  them the sweep prints a `::notice::` and behaves as before, never a failure.
 
   **Why the sweep deliberately KEEPS `github.token` on the merge path.** A
   `GITHUB_TOKEN`-attributed merge fires **no push workflows** here — verified:

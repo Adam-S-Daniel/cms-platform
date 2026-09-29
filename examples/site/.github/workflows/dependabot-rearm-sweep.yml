@@ -29,3 +29,9 @@ jobs:
     with:
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}
       platform_ref: v0.1.113
+    secrets:
+      # Optional. The CMS automation App's private key (with
+      # vars.CMS_AUTOMATION_APP_ID set on this repo). Without it a BEHIND
+      # workflow-file Dependabot PR cannot be refreshed by the sweep
+      # (GITHUB_TOKEN can never write workflow files) and needs a human.
+      app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
