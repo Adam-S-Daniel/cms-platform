@@ -10,9 +10,26 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.119)
+## Version history (v0.1.0 → v0.1.120)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.120 — the e2e install caches apt's `.deb`s, and the admin projects run as 3 shards.**
+Over 700 consumer e2e project jobs the apt archive fetch was 2 s at the median and
+1558 s at the max (`azure.archive.ubuntu.com` at ~83-100 KB/s); one webkit lane's
+130 MB took 25 min 58 s, kept adamdaniel.ai canary PR #3921 from merging, and
+failed host-loop run 36750741941 at its 40-minute budget. The
+`install-playwright-browsers` composite now restores apt's downloaded `.deb`s from
+`actions/cache` before the unchanged (unbounded, retried) apt phase, so a hit
+fetches nothing; only a default-branch run saves. New reusable
+`warm-e2e-apt-cache.yml` (thin caller: daily `schedule` + `workflow_dispatch`)
+seeds every engine `ci-matrix.js --engines` lists; `platform-bump` seeds the caller.
+`e2e-tests.yml` splits `chromium-desktop-3k` and `webkit-iphone16` into three
+`--shard` jobs each (14 jobs, named `project (<slot>)`); `e2e / e2e` stays the only
+required context. Validated on both consumers: cache-hit gate 218 → 158 s
+(adamdaniel.ai) and 165 → 142 s (jodidaniel.com) median, against a 225 / 492 /
+1662 s and 166 / 219 / 598 s median / p90 / max baseline, for ~28% more runner
+time (#503). Measurements and rejected alternatives: `docs/E2E-PARALLELISM.md`.
 
 **v0.1.119 — `ci-watcher-loops` covers Claude Code's watcher time limits.**
 Claude Code 2.1.285 stops a background `Bash` command at its `timeout`
