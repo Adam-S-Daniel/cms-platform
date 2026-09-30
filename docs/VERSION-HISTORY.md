@@ -10,9 +10,21 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.118)
+## Version history (v0.1.0 → v0.1.119)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.119 — `ci-watcher-loops` covers Claude Code's watcher time limits.**
+Claude Code 2.1.285 stops a background `Bash` command at its `timeout`
+(default 30 min, max 2 h), and a `Monitor` expires at 30 min at most, so a
+host-loop run (`timeout-minutes: 150`) can outlast any single watcher. The
+skill now says to pass `timeout` explicitly, to treat a stop notice as "re-check
+the run" rather than "the run finished", and to re-arm a single-run watcher; it
+is scoped to Claude Code, since another harness has its own limits.
+`docs/OPERATIONS.md` points to it. Limits measured on 2.1.285 (#497, #498,
+#501). Also: `docs/` records that the consumer rearm-sweep secrets rollout is
+automated since v0.1.118 (#499); this repo's own `skills.lock` re-pin and
+skills-bootstrap SessionStart hook (#484, #496); a dev-dependency bump (#500).
 
 **v0.1.118 — `platform-bump` reconciles thin-caller `secrets:` maps.**
 v0.1.113 (#467) added `app_private_key` to the `dependabot-rearm-sweep`
