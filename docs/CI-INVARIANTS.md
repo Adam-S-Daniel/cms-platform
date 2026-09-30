@@ -132,24 +132,28 @@ per-PR checkout):
   a human to type. Both this repo's own caller (`self-dependabot-rearm.yml`)
   and the consumer thin-caller template
   (`examples/site/.github/workflows/dependabot-rearm-sweep.yml`) pass
-  `secrets.app_private_key` from `secrets.CMS_AUTOMATION_APP_PRIVATE_KEY`, but
-  an existing consumer caller only gains it by hand.
+  `secrets.app_private_key` from `secrets.CMS_AUTOMATION_APP_PRIVATE_KEY`, and
+  an existing consumer caller gains it in the platform-bump commit (see the
+  runbook below).
 
   **Rollout runbook (consumer template -> consumers).**
   `check-platform-pin-consistency.js` compares each consumer caller's
-  `secrets:` map against the template AT THE CONSUMER'S PINNED REF, and
-  `platform-bump.yml` never edits an existing caller (it only seeds wholly
-  missing ones), so the change reaches a consumer only like this:
-  (a) cut a release containing the template change;
-  (b) when platform-bump opens each consumer's bump PR, add to that PR's
-  branch, in `.github/workflows/dependabot-rearm-sweep.yml` under the `rearm`
-  job (sibling of `with:`), `    secrets:` / `      app_private_key: ${{
-  secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}` (precedent: #238,
-  `dev-hooks-sync.yml`'s `app_private_key`) — adding it earlier, or without
-  the bump, reports workflow-content drift against the older pinned template;
-  (c) the consumer needs `vars.CMS_AUTOMATION_APP_ID` plus the secret
-  `CMS_AUTOMATION_APP_PRIVATE_KEY` (both current consumers have them); without
-  them the sweep prints a `::notice::` and behaves as before, never a failure.
+  `secrets:` map against the template AT THE CONSUMER'S PINNED REF, so a
+  template change must ride the bump that moves the pin. Since v0.1.118
+  (cms-platform#491) `platform-bump.yml` does that itself: it runs
+  `scripts/reconcile-caller-secrets.js` over every caller the consumer already
+  has, in the same commit as the pin rewrite (`docs/PIN-CONSISTENCY.md`,
+  "`platform-bump` reconciles `secrets:` maps in the bump commit"). This
+  template change was the case that motivated it: the v0.1.114 bump PRs failed
+  `workflow-content: DRIFT` until the map was hand-added, and both consumers
+  have passed `app_private_key` since. So: (a) cut a release containing the
+  template change; (b) let platform-bump open each consumer's bump PR and read
+  its body — a `:warning:` naming a `MANUAL` result means the reconciler left
+  that caller alone (flow-style job, anchored or aliased map), and only then is
+  a hand-edit needed, in that PR; (c) the consumer needs
+  `vars.CMS_AUTOMATION_APP_ID` plus the secret `CMS_AUTOMATION_APP_PRIVATE_KEY`
+  (both current consumers have them); without them the sweep prints a
+  `::notice::` and behaves as before, never a failure.
 
   **Why the sweep deliberately KEEPS `github.token` on the merge path.** A
   `GITHUB_TOKEN`-attributed merge fires **no push workflows** here — verified:

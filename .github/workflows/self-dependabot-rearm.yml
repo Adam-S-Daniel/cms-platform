@@ -43,8 +43,8 @@ jobs:
     # #458: lets the sweep refresh a BEHIND workflow-file PR itself (see the
     # reusable's header). The consumer thin-caller template
     # (examples/site/.github/workflows/dependabot-rearm-sweep.yml) passes it
-    # too; it reaches each consumer via a release plus a hand-edit of that
-    # consumer's platform-bump PR, because platform-bump never edits an
-    # existing caller (docs/CI-INVARIANTS.md).
+    # too; it reaches each consumer in the platform-bump commit
+    # (cms-platform#491 reconciles callers' `secrets:` maps;
+    # docs/CI-INVARIANTS.md).
     secrets:
       app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
