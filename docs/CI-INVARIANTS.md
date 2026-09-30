@@ -926,6 +926,8 @@ The full e2e/Playwright matrix is ported. Two shapes:
 - **Reusable + thin caller** (caller in `examples/site/.github/workflows/`):
   `e2e-tests`, `cms-publish-loop-preview`, `cms-delete-published-preview`,
   `cms-preview-loops` (workflow_dispatch); `canary-prod` (schedule + dispatch);
+  `warm-e2e-apt-cache` (schedule + dispatch; seeds the apt `.deb` cache the
+  e2e lanes restore — default-branch-only saves, see docs/E2E-PARALLELISM.md);
   `parity-preview`, `preview-media` (pull_request, always-run + early-skip — the
   reusable's selector/salient-detector IS the skip, so the caller has NO `paths:`
   to avoid the required-check missing-check trap). Each checks the platform out

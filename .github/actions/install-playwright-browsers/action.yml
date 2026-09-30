@@ -51,8 +51,27 @@ description: >-
   Typical runs are unaffected: the download bound is a large multiple of
   a healthy download, so it never trips on a healthy mirror.
 
-  Bash only — no transitive `uses:` (clean for the SHA-pin convention;
-  mirrors await-prod-deploy / cms-recursion-gate).
+  APT .DEB CACHE (measured 2026-09-30, docs/E2E-PARALLELISM.md "The apt
+  tail, and the .deb cache that removes it"). The bound/retry split above
+  keeps a slow mirror from turning a lane RED; it cannot make one fast. Over
+  700 consumer project jobs the archive FETCH was 2 s at the median and 1558 s
+  at the max — every stall was azure.archive.ubuntu.com at ~83-100 KB/s, and
+  webkit's 114-130 MB payload is the most exposed (adamdaniel.ai job
+  110018693124: "Fetched 130 MB in 25min 58s", which kept canary PR #3921 from
+  merging and failed host-loop run 36750741941 at its 40-minute budget). So
+  the composite restores apt's downloaded `.deb`s from actions/cache, copies
+  them into /var/cache/apt/archives, and apt — still unbounded, still retried,
+  still waiting on the dpkg lock — finds every archive already on disk and
+  fetches nothing. apt verifies each cached file against the signed index it
+  just fetched, so a stale or corrupt entry is re-downloaded, never installed.
+  Only the caller's DEFAULT BRANCH saves (a PR-scoped entry is invisible to
+  every other PR); consumers seed it daily with warm-e2e-apt-cache.yml, and
+  the loops that already run on main seed chromium as a side effect. Every
+  cache step is fail-open: a miss, a failed restore or a failed save is
+  exactly today's mirror fetch.
+
+  Bash, plus `actions/cache/restore` + `actions/cache/save` pinned to a full
+  SHA (the fleet SHA-pin convention; no other transitive `uses:`).
 
 inputs:
   browser:
@@ -122,9 +141,89 @@ inputs:
     required: false
     default: '1200'
 
+  apt-deb-cache:
+    description: >-
+      'true' (default) restores apt's downloaded `.deb`s from actions/cache
+      before the apt phase, so a hit makes `install-deps` fetch nothing from the
+      Ubuntu archive ("Need to get 0 B/<n> MB"). Only a run on the caller's
+      DEFAULT BRANCH saves; pull-request runs restore only (see the "APT .DEB
+      CACHE" block in the header). 'false' skips all of it.
+    required: false
+    default: 'true'
+
 runs:
   using: composite
   steps:
+    # ── APT .DEB CACHE (restore half) ── see the header's "APT .DEB CACHE" block.
+    # The key names everything that decides WHICH .debs apt wants: the runner
+    # image (ImageOS + ImageVersion — the preinstalled package set apt diffs
+    # against), the engine (its dependency list) and the Playwright version (the
+    # list's source). The restore falls back to the newest entry for the same
+    # engine + Playwright, then the same engine, because a neighbouring image
+    # version's .debs are still nearly all valid: apt checks every cached file
+    # against the freshly-fetched index and downloads only what differs
+    # (measured: a 20260920 entry on a 20260927 runner left 4.3 MB of 130 MB
+    # to fetch).
+    - name: Key the apt .deb cache
+      id: debkey
+      if: ${{ inputs.apt-deb-cache == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PW_INSTALL_BROWSER: ${{ inputs.browser }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        set -uo pipefail
+        pwv="$(node -p 'require("playwright-core/package.json").version' 2>/dev/null || echo unknown)"
+        engine_prefix="playwright-apt-debs-v1-${ImageOS:-unknown}-${PW_INSTALL_BROWSER}-"
+        prefix="${engine_prefix}pw${pwv}-"
+        {
+          echo "engine-prefix=${engine_prefix}"
+          echo "prefix=${prefix}"
+          echo "key=${prefix}${ImageVersion:-unknown}"
+          echo "dir=${HOME}/.cache/playwright-apt-debs"
+        } >> "$GITHUB_OUTPUT"
+        # SAVE only from the caller's default branch. A pull-request run's cache
+        # is scoped to that PR and unreadable by every other PR, and a `cms/*`
+        # canary branch gets ONE e2e run — so a PR-scoped save protects nobody
+        # while spending ~0.2 GB of the repo's 10 GB cache budget per PR. A
+        # `schedule` payload carries no `repository`, but GitHub only ever runs a
+        # schedule on the default branch, so that event counts as it.
+        save=false
+        if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ] \
+          || { [ -n "$DEFAULT_BRANCH" ] && [ "${GITHUB_REF:-}" = "refs/heads/${DEFAULT_BRANCH}" ]; }; then
+          save=true
+        fi
+        echo "save=${save}" >> "$GITHUB_OUTPUT"
+        echo "apt .deb cache key: ${prefix}${ImageVersion:-unknown} (save on a miss: ${save})"
+
+    - name: Restore apt .debs
+      id: debrestore
+      if: ${{ inputs.apt-deb-cache == 'true' }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ steps.debkey.outputs.dir }}
+        key: ${{ steps.debkey.outputs.key }}
+        restore-keys: |
+          ${{ steps.debkey.outputs.prefix }}
+          ${{ steps.debkey.outputs.engine-prefix }}
+
+    - name: Seed apt's archive from the restored .debs
+      if: ${{ inputs.apt-deb-cache == 'true' }}
+      shell: bash
+      env:
+        DEB_DIR: ${{ steps.debkey.outputs.dir }}
+      run: |
+        set -uo pipefail
+        mkdir -p "$DEB_DIR"
+        printf 'APT::Keep-Downloaded-Packages "true";\nBinary::apt-get::APT::Keep-Downloaded-Packages "true";\n' \
+          | sudo tee /etc/apt/apt.conf.d/99-playwright-keep-debs >/dev/null || echo "::warning::could not write the keep-debs drop-in"
+        n="$(find "$DEB_DIR" -maxdepth 1 -name '*.deb' | wc -l)"
+        echo "restored .debs: ${n} ($(du -sh "$DEB_DIR" | cut -f1))"
+        if [ "$n" -gt 0 ]; then
+          sudo cp -n "$DEB_DIR"/*.deb /var/cache/apt/archives/ || echo "::warning::could not seed /var/cache/apt/archives; apt will fetch from the mirror"
+        fi
+
     # apt must WAIT for the dpkg lock, not fail on it. A GitHub-hosted runner runs
     # its own background apt (unattended-upgrades / apt-daily) for the first minute
     # or so after boot, and `playwright install-deps` shells out to apt-get
@@ -283,3 +382,39 @@ runs:
         run_phase download "install (browser download)" || exit 1
 
         echo "playwright install complete."
+
+    # ── APT .DEB CACHE (save half) ── default branch only, and only when the
+    # restore was not an EXACT hit (an exact key already holds this image's set).
+    # The saved set is PRUNED to the package versions actually installed now, so
+    # an entry seeded from an older image's fallback does not carry that image's
+    # superseded .debs forward forever.
+    - name: Collect apt .debs for the cache
+      if: ${{ inputs.apt-deb-cache == 'true' && steps.debkey.outputs.save == 'true' && steps.debrestore.outputs.cache-hit != 'true' }}
+      shell: bash
+      env:
+        DEB_DIR: ${{ steps.debkey.outputs.dir }}
+      run: |
+        set -uo pipefail
+        rm -rf "$DEB_DIR" && mkdir -p "$DEB_DIR"
+        kept=0
+        while IFS= read -r deb; do
+          pkg="$(dpkg-deb -f "$deb" Package 2>/dev/null)" || continue
+          ver="$(dpkg-deb -f "$deb" Version 2>/dev/null)" || continue
+          arch="$(dpkg-deb -f "$deb" Architecture 2>/dev/null)" || continue
+          q="$pkg"; [ "$arch" = "all" ] || q="${pkg}:${arch}"
+          if [ "$(dpkg-query -W -f='${Version}' "$q" 2>/dev/null)" = "$ver" ]; then
+            cp -n "$deb" "$DEB_DIR"/ && kept=$((kept + 1))
+          fi
+        done < <(find /var/cache/apt/archives -maxdepth 1 -name '*.deb')
+        echo "caching ${kept} installed .debs ($(du -sh "$DEB_DIR" | cut -f1))"
+
+    # Fail-open: a save that loses a race to a parallel lane ("another job may
+    # be creating this cache") or hits a cache-service error costs the NEXT run
+    # a mirror fetch, never this run its result.
+    - name: Save apt .debs
+      if: ${{ inputs.apt-deb-cache == 'true' && steps.debkey.outputs.save == 'true' && steps.debrestore.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ steps.debkey.outputs.dir }}
+        key: ${{ steps.debkey.outputs.key }}

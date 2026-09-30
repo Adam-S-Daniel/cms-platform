@@ -389,7 +389,7 @@
     });
 
     // One entry per WORKFLOW, not per job: "e2e / project (chromium-laptop)"
-    // and nine siblings are one check to an editor. The key is the caller job
+    // and its thirteen siblings are one check to an editor. The key is the caller job
     // id before " / "; entry-status-model.js turns it into words (#3857).
     var groups = [];
     var pendingGroups = [];

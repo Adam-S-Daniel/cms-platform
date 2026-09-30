@@ -349,9 +349,11 @@ weeks. → `docs/CI-INVARIANTS.md` before changing `scheduled-run-health.yml` or
 
 ## E2E parallelism — one CI job per Playwright project (v0.1.68-v0.1.70)
 
-`e2e-tests.yml` runs one CI job per Playwright project, backed by
-counter-intuitive worker-count and browser-install measurements that are easy to
-undo. → `docs/E2E-PARALLELISM.md`.
+`e2e-tests.yml` runs one CI job per Playwright project (the two admin projects
+as three `--shard` jobs each), and the install restores apt's `.deb`s from a
+cache only the default branch saves (consumers seed it daily with
+`warm-e2e-apt-cache.yml`). All of it rests on counter-intuitive worker-count,
+shard and apt measurements that are easy to undo. → `docs/E2E-PARALLELISM.md`.
 
 ## E2E local webServer: decap readiness + :4000 crash resilience
 

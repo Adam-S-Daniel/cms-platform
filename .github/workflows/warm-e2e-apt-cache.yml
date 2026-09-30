@@ -1,0 +1,143 @@
+# Reusable SEEDER for the e2e lanes' apt `.deb` cache.
+#
+# WHY THIS EXISTS (measured 2026-09-30 — docs/E2E-PARALLELISM.md, "The apt
+# tail, and the .deb cache that removes it"). The install-playwright-browsers
+# composite restores apt's downloaded `.deb`s from actions/cache so a slow
+# azure.archive.ubuntu.com cannot stall a lane (one webkit lane fetched 130 MB
+# in 25 min 58 s, kept canary PR #3921 from merging, and failed the host loop
+# at its 40-minute budget). But the composite SAVES only on the caller's
+# default branch: a pull-request run's cache is scoped to that PR and invisible
+# to every other PR, and a `cms/*` canary branch gets exactly one e2e run, so a
+# PR-scoped save would protect nobody. Something has to run the install on the
+# default branch for every engine the e2e matrix uses. The loops that already
+# run on main seed chromium as a side effect; nothing on main ever installs
+# firefox or webkit. This workflow is that something.
+#
+# WHAT IT DOES: one job per engine the e2e matrix installs — the list comes
+# from `node e2e/ci-matrix.js --engines`, the same source the matrix is
+# derived from, so a project on a new engine is warmed without editing this
+# file. Each job runs ONLY the composite's apt phase (`deps-only: "true"`; the
+# browser download is not cached and is not the slow half), which restores the
+# newest entry, lets apt fetch whatever the current runner image still needs,
+# and saves under this image's exact key. No tests, no site checkout, no
+# secrets: the default token's `contents: read` is all it needs (actions/cache
+# authenticates with the runner's own cache token, not GITHUB_TOKEN).
+#
+# WHERE THE COMPOSITE COMES FROM: the job resolves its OWN repository + commit
+# from the job context (the scheduled-run-health.yml pattern, #424), so a
+# caller names the platform exactly once — its `uses:@` pin — and cannot
+# half-bump into running a new workflow against an old composite.
+#
+# A consumer calls this from a thin caller on `schedule` (daily) +
+# `workflow_dispatch` (examples/site/.github/workflows/warm-e2e-apt-cache.yml).
+# It is NOT a required check. A red run means tomorrow's PRs may fetch from the
+# mirror again, which is exactly the pre-cache behavior — scheduled-run-health
+# reports it like any other scheduled failure.
+name: Warm e2e apt cache (reusable)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  engines:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      engines: ${{ steps.list.outputs.engines }}
+      repository: ${{ steps.self.outputs.repository }}
+      sha: ${{ steps.self.outputs.sha }}
+    steps:
+      - name: Resolve the platform commit this reusable was called at
+        id: self
+        env:
+          # toJSON(job), never `job.workflow_*` in an expression: actionlint does
+          # not know those properties yet (rhysd/actionlint#647) and would fail
+          # the REQUIRED actionlint lane. Same shape as scheduled-run-health.yml.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          repo=$(jq -r '.workflow_repository // ""' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB_CONTEXT")
+          if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::the job context carries no usable workflow_repository ('${repo}'); refusing to guess which platform commit to run."
+            exit 1
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the job context carries no usable workflow_sha ('${sha}'); refusing to guess which platform commit to run."
+            exit 1
+          fi
+          {
+            echo "repository=$repo"
+            echo "sha=$sha"
+          } >>"$GITHUB_OUTPUT"
+          echo "Platform commit resolved from the job context: ${repo}@${sha}"
+
+      - name: Checkout platform (e2e harness)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ steps.self.outputs.repository }}
+          ref: ${{ steps.self.outputs.sha }}
+          sparse-checkout: |
+            e2e
+          path: .cms-platform
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: Install harness deps (no browser binaries)
+        working-directory: .cms-platform/e2e
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci
+
+      - name: List the engines the e2e matrix installs
+        id: list
+        working-directory: .cms-platform/e2e
+        run: |
+          set -euo pipefail
+          engines="$(node ci-matrix.js --engines)"
+          echo "engines=${engines}"
+          echo "engines=${engines}" >> "$GITHUB_OUTPUT"
+
+  warm:
+    needs: engines
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(needs.engines.outputs.engines) }}
+    runs-on: ubuntu-latest
+    # apt is deliberately unbounded inside the composite (a killed apt orphans
+    # apt-get on the dpkg lock — job 92989057569), so this job timeout is its
+    # only backstop. 45 min outlasts the worst stall measured (25 min 58 s).
+    timeout-minutes: 45
+    steps:
+      - name: Checkout platform (composite + e2e harness)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ needs.engines.outputs.repository }}
+          ref: ${{ needs.engines.outputs.sha }}
+          sparse-checkout: |
+            .github/actions
+            e2e
+          path: .cms-platform
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: Install harness deps (no browser binaries)
+        working-directory: .cms-platform/e2e
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci
+
+      - name: Warm the apt .deb cache for this engine
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: ${{ matrix.engine }}
+          deps-only: "true"
