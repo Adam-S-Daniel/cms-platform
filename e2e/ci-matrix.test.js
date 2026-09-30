@@ -3,11 +3,13 @@
  * stay in lockstep, and every Playwright project must have exactly one CI job.
  *
  * WHY THIS EXISTS
- * `.github/workflows/e2e-tests.yml` runs one job per project via a STATIC
- * `matrix.project` list, because a dynamic matrix would cost an extra
- * checkout-and-node job on the critical path. Static means it can drift: add a
- * project and the list doesn't grow — and a project with no job would SILENTLY
- * STOP RUNNING. That is the one failure mode of this design a red test has to
+ * `.github/workflows/e2e-tests.yml` runs one job per project (per SHARD, for
+ * an admin project) via a STATIC `matrix.include` list, because a dynamic
+ * matrix would cost an extra checkout-and-node job on the critical path.
+ * Static means it can drift: add a project (or change ADMIN_SHARDS) and the
+ * list doesn't follow — and a project or shard with no job would SILENTLY
+ * STOP RUNNING. The list is read from the PARSED workflow (the `yaml` package
+ * via workflow-yaml-utils), never a line scan. That is the one failure mode of this design a red test has to
  * catch, so it is asserted here (single source + structural lint, per AGENTS.md).
  *
  * Platform-internal: reads the platform's own reusable workflow definition and
@@ -18,7 +20,15 @@ const { test, expect } = require("@playwright/test");
 const { execFileSync, spawnSync } = require("node:child_process");
 const path = require("node:path");
 const { parseYaml, readWorkflow } = require("./workflow-yaml-utils");
-const { CI_WORKERS, projectNames, engineFor, workers, isAdminProject } = require("./ci-matrix");
+const {
+  CI_WORKERS,
+  ADMIN_SHARDS,
+  projectNames,
+  matrixEntries,
+  engineFor,
+  workers,
+  isAdminProject,
+} = require("./ci-matrix");
 const config = require("./playwright.config.js");
 
 const WORKFLOW = "e2e-tests.yml";
@@ -28,12 +38,30 @@ function workflow() {
   return parseYaml(readWorkflow(WORKFLOW));
 }
 
-test("e2e-tests.yml matrix.project matches node ci-matrix.js --list exactly", () => {
+test("e2e-tests.yml matrix.include matches node ci-matrix.js --matrix exactly", () => {
+  const matrix = workflow().jobs.project.strategy.matrix;
+  expect(Object.keys(matrix), "the matrix is ONLY an include list (no cross-product axis)").toEqual(["include"]);
   expect(
-    workflow().jobs.project.strategy.matrix.project,
-    "e2e-tests.yml's matrix.project must equal the Playwright project list — a " +
-      "project with no matrix entry would silently stop running in CI",
-  ).toEqual(projectNames());
+    matrix.include,
+    "e2e-tests.yml's matrix.include must equal ci-matrix.js's matrixEntries() — a " +
+      "project or shard with no matrix entry would silently stop running in CI",
+  ).toEqual(matrixEntries());
+});
+
+test("every project runs: public ones once, admin ones as ADMIN_SHARDS complete shards", () => {
+  const entries = matrixEntries();
+  expect([...new Set(entries.map((e) => e.project))]).toEqual(projectNames());
+  expect(new Set(entries.map((e) => e.slot)).size, "slots must be unique").toBe(entries.length);
+  expect(ADMIN_SHARDS, "a 1-way shard is no shard").toBeGreaterThan(1);
+  for (const p of config.projects) {
+    const shards = entries.filter((e) => e.project === p.name).map((e) => e.shard);
+    if (isAdminProject(p)) {
+      // Every shard 1..N exactly once — a missing index drops 1/N of the tests.
+      expect(shards).toEqual(Array.from({ length: ADMIN_SHARDS }, (_, i) => `${i + 1}/${ADMIN_SHARDS}`));
+    } else {
+      expect(shards, `${p.name} is a public project and runs unsharded`).toEqual([""]);
+    }
+  }
 });
 
 test("every project is listed once and declares an engine", () => {
@@ -62,6 +90,9 @@ test("the matrix does not fail fast (a red project must not cancel its siblings)
 test("each job derives its engine, workers, and --project from ci-matrix.js", () => {
   const job = workflow().jobs.project;
   expect(job.env.PW_PROJECT).toBe("${{ matrix.project }}");
+  expect(job.env.PW_SHARD, "the shard reaches the script via env, never `${{ }}` in run:").toBe(
+    "${{ matrix.shard }}",
+  );
 
   // The engine is DERIVED (never a hand-written project→engine map) in its own
   // step, whose output feeds the install. Two steps rather than one because the
@@ -90,20 +121,23 @@ test("each job derives its engine, workers, and --project from ci-matrix.js", ()
   expect(run.env.WORKERS_INPUT).toBe("${{ inputs.workers }}");
   expect(run.run).toContain("node ci-matrix.js --workers");
   expect(run.run).toContain('--project="$PW_PROJECT"');
+  // An empty PW_SHARD must pass NO --shard at all (an unsharded public project).
+  expect(run.run).toContain('if [ -n "${PW_SHARD:-}" ]; then shard_args=(--shard="$PW_SHARD"); fi');
+  expect(run.run).toContain('"${shard_args[@]}"');
 });
 
-test("per-project artifacts and failure-comment markers are project-scoped", () => {
+test("per-job artifacts and failure-comment markers are slot-scoped", () => {
   const steps = workflow().jobs.project.steps;
   const upload = steps.find((s) => String(s.uses || "").includes("upload-artifact"));
-  expect(upload.with.name, "upload-artifact v4+ errors on duplicate names").toContain(
-    "${{ matrix.project }}",
+  expect(upload.with.name, "upload-artifact v4+ errors on duplicate names — two shards share a project").toContain(
+    "${{ matrix.slot }}",
   );
 
   const comments = steps.filter((s) => String(s.uses || "").includes("post-failure-comment"));
   expect(comments.length).toBe(2);
   for (const step of comments) {
     expect(step.with.marker, "jobs sharing a marker would clobber each other").toContain(
-      "${{ matrix.project }}",
+      "${{ matrix.slot }}",
     );
   }
 });
@@ -124,8 +158,9 @@ test("the required `e2e` context is a gate over the whole matrix", () => {
   expect(env.MATRIX_RESULT).toBe("${{ needs.project.result }}");
 });
 
-test("ci-matrix.js CLI: --list/--engine/--workers, and a loud failure on a typo", () => {
+test("ci-matrix.js CLI: --list/--engine/--workers/--matrix, and a loud failure on a typo", () => {
   const cli = (...args) => execFileSync("node", [CI_MATRIX_JS, ...args], { encoding: "utf8" });
+  expect(JSON.parse(cli("--matrix"))).toEqual(matrixEntries());
 
   expect(cli("--list").trim().split("\n")).toEqual(projectNames());
   expect(cli("--workers").trim()).toBe(CI_WORKERS);

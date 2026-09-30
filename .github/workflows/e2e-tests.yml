@@ -9,17 +9,21 @@
 #
 #   cd .cms-platform/e2e && npm ci, then the install-playwright-browsers
 #   composite for this project's <engine> (bounded + retried — see its header)
-#   npx playwright test --project=<project>
+#   npx playwright test --project=<project> [--shard=<i>/<n> for an admin project]
 #
-# PARALLELISM — one job per Playwright PROJECT, one required check:
+# PARALLELISM — one job per Playwright PROJECT (an admin project: one per shard),
+# one required check:
 #   * The `project` matrix runs each of playwright.config.js's projects on its
 #     own 4-vCPU runner, so the suite's wall clock is its slowest PROJECT rather
 #     than the sum of all of them. The matrix list, each job's browser engine,
 #     and each job's worker count all come from `e2e/ci-matrix.js`, which
 #     derives them from the config — nothing is hand-tuned here.
-#   * `--shard` is deliberately NOT used: it balances by test COUNT while this
-#     suite's per-test durations span 5 ms → 49 s (a measured 4-way shard put
-#     71% of the work in one shard).
+#   * `--shard` is used ONLY within the two ADMIN projects (3 jobs each), which
+#     are the whole critical path once the apt tail is cached. Sharding the
+#     whole suite stays rejected — it balances by test COUNT while per-test
+#     durations span 5 ms → 90 s (a measured 4-way shard put 71% of the work in
+#     one shard) — but inside one admin project the tests are of similar
+#     weight: measured 40-72 s per shard vs ~150 s unsharded.
 #   * Workers are raised to 150% of the runner's vCPUs (6 on a 4-vCPU box)
 #     because Playwright's 50% default is too few once a job runs a single
 #     project — much of a project's time is spent WAITING (Decap boot, editor
@@ -120,11 +124,15 @@ jobs:
   # Each job builds/serves the site and runs exactly one project, installing
   # only that project's browser engine.
   #
-  # The list below MUST equal `node e2e/ci-matrix.js --list` — that module is the
-  # single source of truth (it reads playwright.config.js's own projects) and
-  # `e2e/ci-matrix.test.js` fails the platform's CI if the two drift. A project
-  # missing from this list would SILENTLY STOP RUNNING, which is the one way
-  # this design can break; an unknown name here fails loudly at run time.
+  # The `include` list below MUST equal `node e2e/ci-matrix.js --matrix` — that
+  # module is the single source of truth (it reads playwright.config.js's own
+  # projects and expands each admin project into ADMIN_SHARDS shards) and
+  # `e2e/ci-matrix.test.js` parses this file and fails the platform's CI if the
+  # two drift. A project (or a shard) missing from this list would SILENTLY
+  # STOP RUNNING, which is the one way this design can break; an unknown name
+  # here fails loudly at run time. `slot` is each job's unique name: artifact
+  # names and failure-comment markers key on it, because two shards of one
+  # project would otherwise clobber each other's.
   #
   # `fail-fast: false` so one red project doesn't cancel the others: a cancelled
   # sibling hides the second bug and reads as infrastructure noise.
@@ -132,23 +140,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project:
-          - chromium-desktop-3k
-          - webkit-iphone16
-          - chromium-desktop-1080
-          - chromium-laptop
-          - chromium-mobile
-          - firefox-desktop
-          - webkit-tablet
-          - chromium-large-text
-          - chromium-light
-          - chromium-forced-colors
+        include:
+          - { project: chromium-desktop-3k, shard: "1/3", slot: chromium-desktop-3k-shard-1-of-3 }
+          - { project: chromium-desktop-3k, shard: "2/3", slot: chromium-desktop-3k-shard-2-of-3 }
+          - { project: chromium-desktop-3k, shard: "3/3", slot: chromium-desktop-3k-shard-3-of-3 }
+          - { project: webkit-iphone16, shard: "1/3", slot: webkit-iphone16-shard-1-of-3 }
+          - { project: webkit-iphone16, shard: "2/3", slot: webkit-iphone16-shard-2-of-3 }
+          - { project: webkit-iphone16, shard: "3/3", slot: webkit-iphone16-shard-3-of-3 }
+          - { project: chromium-desktop-1080, shard: "", slot: chromium-desktop-1080 }
+          - { project: chromium-laptop, shard: "", slot: chromium-laptop }
+          - { project: chromium-mobile, shard: "", slot: chromium-mobile }
+          - { project: firefox-desktop, shard: "", slot: firefox-desktop }
+          - { project: webkit-tablet, shard: "", slot: webkit-tablet }
+          - { project: chromium-large-text, shard: "", slot: chromium-large-text }
+          - { project: chromium-light, shard: "", slot: chromium-light }
+          - { project: chromium-forced-colors, shard: "", slot: chromium-forced-colors }
     runs-on: ubuntu-latest
     env:
       # Read by the install step, the suite step, and (so the browser self-heal
       # can't re-download the engines this job deliberately skipped)
       # e2e/install-browsers-on-miss.js.
       PW_PROJECT: ${{ matrix.project }}
+      # The `--shard` value for an admin-project job ("1/3"…), "" otherwise.
+      # Read back through env, never spliced into `run:` (workflow-injection-lint).
+      PW_SHARD: ${{ matrix.shard }}
       # Site identity → the parameterized central helpers (e2e/base.js,
       # e2e/cms-host.js). See the workflow header for the env contract.
       TARGET: ${{ inputs.target }}
@@ -275,7 +290,10 @@ jobs:
           PW_WORKERS="${WORKERS_INPUT:-$(node ci-matrix.js --workers)}"
           export PW_WORKERS
           echo "project=$PW_PROJECT workers=${PW_WORKERS:-<playwright default>}"
-          npx playwright test --project="$PW_PROJECT" --reporter=list 2>&1 | tee /tmp/playwright-output.log
+          shard_args=()
+          if [ -n "${PW_SHARD:-}" ]; then shard_args=(--shard="$PW_SHARD"); fi
+          echo "shard=${PW_SHARD:-<none>}"
+          npx playwright test --project="$PW_PROJECT" "${shard_args[@]}" --reporter=list 2>&1 | tee /tmp/playwright-output.log
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
@@ -283,7 +301,7 @@ jobs:
         with:
           # Project-scoped: upload-artifact v4+ errors on a duplicate name,
           # and every matrix job uploads.
-          name: playwright-report-${{ matrix.project }}
+          name: playwright-report-${{ matrix.slot }}
           # Local lane reports under <site>/e2e; preview/prod under the
           # platform checkout. Upload both globs; if-no-files-found: ignore
           # makes the absent one a no-op. test-results/ carries the failure
@@ -313,8 +331,8 @@ jobs:
         with:
           mode: post
           log-file: /tmp/playwright-output.log
-          marker: e2e-failure-summary-${{ matrix.project }}
-          title: E2E tests (${{ matrix.project }})
+          marker: e2e-failure-summary-${{ matrix.slot }}
+          title: E2E tests (${{ matrix.slot }})
           pr-number: ${{ inputs.pr_number }}
 
       - name: Resolve failure summary on success
@@ -332,8 +350,8 @@ jobs:
         uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: resolve
-          marker: e2e-failure-summary-${{ matrix.project }}
-          title: E2E tests (${{ matrix.project }})
+          marker: e2e-failure-summary-${{ matrix.slot }}
+          title: E2E tests (${{ matrix.slot }})
           pr-number: ${{ inputs.pr_number }}
 
   # ── The single required status context ────────────────────────────
