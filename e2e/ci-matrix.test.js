@@ -212,3 +212,11 @@ function loadWorkers(env) {
   const { w } = JSON.parse(r.stdout);
   return w === null ? undefined : w;
 }
+
+test("--engines is the de-duplicated engine set the matrix installs (the apt seeder's matrix)", () => {
+  const { engines } = require("./ci-matrix");
+  const expected = [...new Set(projectNames().map(engineFor))].sort();
+  expect(engines()).toEqual(expected);
+  const out = execFileSync("node", [CI_MATRIX_JS, "--engines"], { encoding: "utf8" }).trim();
+  expect(JSON.parse(out)).toEqual(expected);
+});

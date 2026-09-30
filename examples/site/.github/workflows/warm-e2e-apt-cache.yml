@@ -1,0 +1,35 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/warm-e2e-apt-cache.yml`. Owns the `schedule` +
+# `workflow_dispatch` triggers + run-name; delegates to the platform's
+# reusable, which re-seeds the apt `.deb` cache the e2e lanes restore from.
+#
+# Why it exists: the e2e composite saves that cache only on the default branch
+# (a PR-scoped entry is invisible to every other PR), and nothing else on the
+# default branch installs every engine the e2e matrix uses. Without this caller
+# the firefox/webkit lanes fetch ~50-130 MB from the Ubuntu mirror on every PR
+# — the fetch that, on a slow mirror day, took 26 minutes and failed a prod
+# loop. Not a required check; a failed run only means the next PRs fetch from
+# the mirror, which scheduled-run-health reports like any scheduled failure.
+#
+# Dispatch it once by hand right after adopting it (or after a Playwright
+# bump) so the first entries exist before the next cron.
+name: Warm e2e apt cache
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # Daily, off-peak and ahead of the day's PR traffic. Runner images roll
+    # roughly weekly; a daily run re-keys the entry within a day of a rollout
+    # and keeps it well inside actions/cache's 7-day idle eviction.
+    - cron: '37 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/warm-e2e-apt-cache.yml@v0.1.118

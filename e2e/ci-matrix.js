@@ -35,6 +35,8 @@
  *   node ci-matrix.js --list                 # one project name per line
  *   node ci-matrix.js --engine   <project>   # chromium | firefox | webkit
  *   node ci-matrix.js --workers              # the CI worker count
+ *   node ci-matrix.js --engines              # JSON array of the engines the matrix installs
+ *                                            #   (warm-e2e-apt-cache.yml's matrix)
  *
  * Exits non-zero on an unknown project, so a typo in the workflow matrix fails
  * before any test runs instead of silently testing nothing.
@@ -96,7 +98,14 @@ function workers() {
   return CI_WORKERS;
 }
 
-module.exports = { CI_WORKERS, isAdminProject, projectNames, engineFor, workers };
+// Every engine some project job installs, de-duplicated and sorted. The apt
+// cache seeder (warm-e2e-apt-cache.yml) warms exactly this set, so a project on
+// a new engine is warmed the day it lands instead of when someone remembers.
+function engines() {
+  return [...new Set(projectNames().map(engineFor))].sort();
+}
+
+module.exports = { CI_WORKERS, isAdminProject, projectNames, engineFor, workers, engines };
 
 if (require.main === module) {
   const [flag, name] = process.argv.slice(2);
@@ -104,10 +113,11 @@ if (require.main === module) {
     "--list": () => projectNames().join("\n"),
     "--engine": () => engineFor(name),
     "--workers": () => workers(),
+    "--engines": () => JSON.stringify(engines()),
   };
   try {
     if (!actions[flag]) {
-      throw new Error("usage: ci-matrix.js --list | --engine <project> | --workers");
+      throw new Error("usage: ci-matrix.js --list | --engine <project> | --workers | --engines");
     }
     console.log(actions[flag]());
   } catch (e) {

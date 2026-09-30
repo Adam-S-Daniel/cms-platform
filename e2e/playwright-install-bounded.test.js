@@ -338,3 +338,102 @@ test("the composite never interpolates its inputs into the shell command", () =>
     "the install script needs its inputs passed as env",
   ).toBeGreaterThan(3);
 });
+
+// ── The apt .deb cache (docs/E2E-PARALLELISM.md, "The apt tail, and the .deb
+// cache that removes it") ─────────────────────────────────────────────────────
+// Over 700 consumer project jobs the archive FETCH was 2 s at the median and
+// 1558 s at the max; one webkit lane's 26-minute fetch kept canary PR #3921 from
+// merging and failed the host loop. The cache removes the fetch without touching
+// the apt invariants above, and it only helps if the DEFAULT branch saves it (a
+// PR-scoped entry is invisible to every other PR; a canary branch gets one run).
+function compositeSteps() {
+  return parseYaml(fs.readFileSync(COMPOSITE_ACTION, "utf8")).runs.steps;
+}
+
+test("the .deb cache is restored and seeded BEFORE the apt phase, never around it", () => {
+  const steps = compositeSteps();
+  const idx = (pred, what) => {
+    const i = steps.findIndex(pred);
+    expect(i, `the composite has no ${what} step`).toBeGreaterThanOrEqual(0);
+    return i;
+  };
+  const restore = idx((s) => /^actions\/cache\/restore@[0-9a-f]{40}$/.test(String(s.uses || "")), "actions/cache/restore");
+  const seed = idx((s) => /\/var\/cache\/apt\/archives/.test(String(s.run || "")) && /sudo cp/.test(String(s.run || "")), "seed");
+  const apt = idx((s) => /npx playwright install-deps/.test(String(s.run || "")), "apt");
+  const save = idx((s) => /^actions\/cache\/save@[0-9a-f]{40}$/.test(String(s.uses || "")), "actions/cache/save");
+  expect(restore).toBeLessThan(seed);
+  expect(seed, "the archive must be seeded before apt looks at it").toBeLessThan(apt);
+  expect(save, "the save runs after apt has installed").toBeGreaterThan(apt);
+  // The restore falls back to the newest entry for the same engine + Playwright,
+  // then the same engine: a neighbouring runner image's .debs are nearly all
+  // still valid (measured: 4.3 MB of 130 MB left to fetch across a rotation).
+  const keys = String(steps[restore].with["restore-keys"]).trim().split("\n").map((l) => l.trim());
+  expect(keys).toEqual(["${{ steps.debkey.outputs.prefix }}", "${{ steps.debkey.outputs.engine-prefix }}"]);
+  // Fail-open everywhere: a failed cache step must never fail the lane.
+  expect(steps[save]["continue-on-error"]).toBe(true);
+  expect(String(steps[seed].run), "a failed seed must fall back to the mirror, not fail").toMatch(/\|\| echo "::warning::/);
+});
+
+test("only the caller's DEFAULT branch saves the .deb cache", () => {
+  const steps = compositeSteps();
+  const key = steps.find((s) => s.id === "debkey");
+  expect(key, "the key step (id: debkey) decides whether this run saves").toBeTruthy();
+  expect(key.env.DEFAULT_BRANCH).toBe("${{ github.event.repository.default_branch }}");
+  const run = String(key.run);
+  expect(run).toContain('"${GITHUB_REF:-}" = "refs/heads/${DEFAULT_BRANCH}"');
+  // A schedule payload carries no `repository`; GitHub only runs schedules on the
+  // default branch, so that event must count as it or the seeder never saves.
+  expect(run).toContain('"${GITHUB_EVENT_NAME:-}" = "schedule"');
+  expect(run).toContain('echo "save=${save}" >> "$GITHUB_OUTPUT"');
+  // The key names what decides WHICH .debs apt wants.
+  for (const part of ["${ImageOS", "${ImageVersion", "${PW_INSTALL_BROWSER}", "pw${pwv}"]) {
+    expect(run, `the cache key must include ${part}`).toContain(part);
+  }
+  for (const s of steps.filter((st) => /^(Collect|Save) apt/.test(String(st.name)))) {
+    expect(String(s.if), `${s.name} must be gated on the default-branch decision`).toContain(
+      "steps.debkey.outputs.save == 'true'",
+    );
+    expect(String(s.if), `${s.name} must skip an exact hit (the entry already exists)`).toContain(
+      "steps.debrestore.outputs.cache-hit != 'true'",
+    );
+  }
+});
+
+const SEEDER = "warm-e2e-apt-cache.yml";
+
+test("the seeder warms every matrix engine, apt phase only, with no secrets", () => {
+  const wf = parseYaml(fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", SEEDER), "utf8"));
+  const on = wf.on || wf[true];
+  expect(Object.keys(on)).toEqual(["workflow_call"]);
+  expect(on.workflow_call == null || on.workflow_call.secrets == null, "the seeder takes no secrets").toBe(true);
+  // actions/cache authenticates with the runner's own cache token, so the
+  // default token needs nothing beyond read access.
+  expect(wf.permissions).toEqual({ contents: "read" });
+
+  const list = wf.jobs.engines.steps.find((s) => s.id === "list");
+  expect(String(list.run), "the engine list must come from ci-matrix.js, never a hand-written array").toContain(
+    "node ci-matrix.js --engines",
+  );
+  const warm = wf.jobs.warm;
+  expect(warm.strategy.matrix.engine).toBe("${{ fromJSON(needs.engines.outputs.engines) }}");
+  expect(warm.strategy["fail-fast"]).toBe(false);
+  const step = warm.steps.find((s) => String(s.uses || "").includes(COMPOSITE_REF));
+  expect(step.with.browser).toBe("${{ matrix.engine }}");
+  expect(String(step.with["deps-only"]), "the browser download is not cached; warm apt only").toBe("true");
+  for (const [id, job] of Object.entries(wf.jobs)) {
+    expect(job["timeout-minutes"], `${id} needs a job timeout (apt's only backstop)`).toBeGreaterThan(0);
+  }
+});
+
+test("the seeder's thin caller runs daily and on demand, never on a PR", () => {
+  const caller = parseYaml(
+    fs.readFileSync(path.join(__dirname, "..", "examples", "site", ".github", "workflows", SEEDER), "utf8"),
+  );
+  const on = caller.on || caller[true];
+  expect(Object.keys(on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+  expect(on.schedule.length).toBe(1);
+  expect(caller.permissions).toEqual({ contents: "read" });
+  expect(String(caller.jobs.warm.uses)).toMatch(
+    new RegExp(`^Adam-S-Daniel/cms-platform/\\.github/workflows/${SEEDER.replace(".", "\\.")}@v\\d+\\.\\d+\\.\\d+$`),
+  );
+});
