@@ -1,15 +1,21 @@
 # How the e2e suite is parallelised (and the measurements behind it)
 
 `.github/workflows/e2e-tests.yml` runs the Playwright suite as **one CI job per
-Playwright project**, each installing only its own browser engine and running at
-150% of the runner's vCPUs. This page records what was measured, why the obvious
-alternatives lose, and how to re-measure.
+Playwright project** — except the two admin projects, which run as three
+`--shard` jobs each — every job installing only its own browser engine (from an
+apt `.deb` cache seeded on the default branch) and running at 150% of the
+runner's vCPUs. This page records what was measured, why the obvious
+alternatives lose, and how to re-measure. The two newest sections, [The apt
+tail, and the .deb cache that removes it](#the-apt-tail-and-the-deb-cache-that-removes-it-2026-09-30)
+and [Revisited: a 3-way shard of the admin projects only](#revisited-a-3-way-shard-of-the-admin-projects-only-2026-09-30),
+supersede the "stop here" conclusion further down.
 
-The machinery: **`e2e/ci-matrix.js`** (the matrix list, each job's engine, and
-the worker count — all derived from `playwright.config.js`) and
-**`e2e/ci-matrix.test.js`** (fails the platform's CI if the workflow's static
-`matrix.project` drifts from the real project list — the one way this design can
-silently stop running a project).
+The machinery: **`e2e/ci-matrix.js`** (the matrix entries, each job's engine,
+the admin-project shard count, and the worker count — all derived from
+`playwright.config.js`) and **`e2e/ci-matrix.test.js`** (parses the workflow and
+fails the platform's CI if its static `matrix.include` drifts from
+`matrixEntries()` — the one way this design can silently stop running a project
+or a shard).
 
 ## The baseline it replaced
 
@@ -110,7 +116,10 @@ The last shard gets 71% of the work. Even *within* the public-page projects
 alone (303 s), `--shard=i/2` measured 121 / 183.
 
 **Therefore:** the split is by `--project`, which needs no duration bookkeeping
-at all.
+at all. (This is about sharding the WHOLE suite, and it still holds. Sharding
+*within* the two admin projects is a different shape and was measured
+separately in 2026-09 — see [Revisited: a 3-way shard of the admin projects
+only](#revisited-a-3-way-shard-of-the-admin-projects-only-2026-09-30).)
 
 ## Rejected: hand-grouped lanes
 
@@ -142,7 +151,13 @@ locally to get the frames back.
 39 s of `apt-get` + 19 s of downloads. Caching `~/.cache/ms-playwright` would
 only remove the 19 s (minus cache-restore time), and cannot touch the apt half.
 Installing **one** engine per job removes most of both, needs no cache key, and
-cannot go stale. `e2e/install-browsers-on-miss.js` reads `PW_PROJECT` so the
+cannot go stale.
+
+**Re-measured 2026-09-30, still rejected.** Over 700 consumer project jobs (the
+last 35 e2e runs on each consumer) the browser-download phase was **9.5 s at the
+median, 11 s at p90 and 17 s at the max**, with **zero** download retries. There
+is no tail here to remove. The slow half was, and is, apt — which the `.deb`
+cache below now addresses. `e2e/install-browsers-on-miss.js` reads `PW_PROJECT` so the
 runtime self-heal checks only the engines in play — otherwise it would
 re-download the ones the scoped install just skipped.
 
@@ -279,6 +294,146 @@ and retries while the apt phase is retried but never wrapped in `timeout`.
 case is bounded only by the job's own `timeout-minutes`** — and in the
 observed case the second attempt would have finished in the usual minute.
 
+## The apt tail, and the .deb cache that removes it (2026-09-30)
+
+The bound/retry work above stops a slow mirror from turning a lane RED. It
+cannot make one fast, and by September the slow mirror was the gate's tail.
+
+**Measured** — the last 35 e2e runs on each consumer (700 project jobs), with
+each job's install step split from its log into `apt-get update`, the archive
+fetch (`Need to get` → `Fetched`), dpkg, and the browser download:
+
+| phase | median | p90 | max |
+|---|---|---|---|
+| install step (whole) | 26-27 s | 48-50 s | **1583 s** |
+| `apt-get update` (index) | 6 s | 11 s | 28 s |
+| apt archive **fetch** | 2 s | 12-15 s | **1558 s** |
+| dpkg unpack/configure | 6 s | 14 s | 63 s |
+| browser download | 9.5 s | 11 s | 17 s |
+
+Payload per engine: chromium 32-35 MB, firefox 49-52 MB, **webkit 114-130 MB**.
+Every one of the 17 lanes over 80 s of install was the archive fetch from
+`azure.archive.ubuntu.com` at ~83-100 KB/s, and they cluster: the last six
+adamdaniel.ai runs of 2026-09-30 (17:35-18:27Z) ALL stalled, gates 380-1662 s.
+`e2e / e2e` wall clock: adamdaniel.ai **225 / 492 / 1662 s** (median / p90 /
+max), jodidaniel.com **166 / 219 / 598 s**.
+
+**What it cost.** adamdaniel.ai run 36753770616, job 110018693124
+(`webkit-tablet`): `Fetched 130 MB in 25min 58s (83.2 kB/s)`, attempt 1, no
+retry, then 48 s of tests. Its canary PR #3921 could not merge until the gate
+reported, so scheduled host-loop run 36750741941 (job 110008498285) failed at
+its 40-minute budget in `waitForChangeReflected` — a green suite, a red prod
+loop, three workflows from the cause. That is the same coupling the 2026-08-07
+incident above describes, and the fetch is its entire mechanism.
+
+**The design.** `.github/actions/install-playwright-browsers` restores apt's
+downloaded `.deb`s from `actions/cache`, copies them into
+`/var/cache/apt/archives`, and then runs the apt phase exactly as before —
+unbounded, retried, waiting on the dpkg lock. apt finds every archive already
+on disk ("Need to get 0 B/32.1 MB") and fetches nothing; it still verifies each
+file against the signed index it just fetched, so a stale or corrupt entry is
+re-downloaded, never installed. None of the apt invariants above move: nothing
+is killed, nothing is bounded, nothing new takes the lock.
+
+- **Key:** `playwright-apt-debs-v1-<ImageOS>-<engine>-pw<version>-<ImageVersion>`
+  — the runner image decides what apt diffs against, the engine and Playwright
+  version decide the package list. The restore falls back to the newest entry
+  for the same engine + Playwright, then the same engine. Measured across an
+  image rotation: a `20260920.314.1` entry restored on a `20260927.320.1`
+  runner left **4.3 MB of 130 MB** to fetch.
+- **Only the default branch saves.** A pull-request run's cache entry is scoped
+  to that PR and unreadable by every other PR — and 18 of the 21 `cms/*` canary
+  branches in the sample got exactly **one** e2e run. A PR-scoped save would
+  protect nobody while spending ~0.2 GB of the repo's 10 GB cache budget per PR
+  (adamdaniel.ai opens ~26 a day). The saved set is pruned to the versions
+  actually installed, so it does not accrete superseded `.deb`s across images.
+- **Seeding:** the loops that already run on main seed chromium as a side
+  effect; nothing on main installs firefox or webkit. So consumers call
+  **`warm-e2e-apt-cache.yml`** daily (+ `workflow_dispatch`): one job per engine
+  from `node e2e/ci-matrix.js --engines`, apt phase only (`deps-only`), no
+  tests, no secrets, `contents: read`. Cost: three ~40 s jobs a day per
+  consumer on a hit, or a mirror fetch's worth on the day an image rotates.
+  Cache footprint: ~215 MB per consumer (one entry per engine per image).
+- **Fail-open everywhere:** a miss, a failed restore, a failed seed or a failed
+  save is exactly the pre-cache mirror fetch.
+
+**Validated** on real CI, consumer draft PRs pointed at the branch commit
+(adamdaniel.ai run 36762325363, 7 attempts; jodidaniel.com run 36763337967, 6
+attempts; the first attempt of each is the miss that populated the cache):
+
+| | adamdaniel.ai gate | jodidaniel.com gate |
+|---|---|---|
+| baseline (35 runs, v0.1.117-118) | 225 / 492 / 1662 s | 166 / 219 / 598 s |
+| cache MISS, same afternoon | 434 s (a 352 s fetch) | **1486 s** (a ~22 min fetch) |
+| cache HIT (n=6 / n=5) | **218 / 249 / 257 s** | **165 / 168 / 170 s** |
+
+On a hit the install step is 26-28 s at the median (restore ~1.5 s, update
+6 s, dpkg 6-14 s, download ~5-10 s) — about the same as a healthy baseline
+install, which is the point: the median barely moves, the tail disappears.
+The misses in the table are the live control: the mirror was slow that
+afternoon, and only the cached lanes did not notice.
+
+## Rejected: the official Playwright container (2026-09-30)
+
+Running each project job in `mcr.microsoft.com/playwright:v1.63.0-noble`
+(digest-pinned) would remove apt and the download entirely. Measured on a
+10-wide probe matrix: **"Initialize containers" 24-40 s, median 27 s** — the
+same as today's healthy install (26 s), so the typical run gains nothing, and a
+956 MB (compressed) pull from MCR is a tail of its own. It also does not fit the
+local lane: the image ships no ruby, gcc, make, sudo or gh (the lane needs
+Ruby + Bundler, and native gems build on a bundler-cache miss — apt again), its
+Node is 24 against the harness's 20, and inside a container
+`${{ github.workspace }}` renders the HOST path, which breaks the `SITE_ROOT`
+wiring `e2e/loop-site-root-lint.test.js` locks. (The adamdaniel-only GHCR
+`ci-runner` image was dropped from the platform port for the same kind of
+reason — see docs/CI-INVARIANTS.md.) The `.deb` cache removes the same tail for
+a fraction of the change.
+
+## Revisited: a 3-way shard of the admin projects only (2026-09-30)
+
+"Where the remaining time actually goes" below priced sharding and stopped.
+Two things changed, and one part of that argument was wrong.
+
+**What changed.** `chromium-desktop-3k` grew from 104 s to **~151 s** of tests
+and now ties `webkit-iphone16` (~150 s) as adamdaniel.ai's pole; every public
+project is ≤ 50 s. In the 35-run sample those two projects ended last in 31 of
+35 adamdaniel.ai runs and 34 of 35 jodidaniel.com runs — with the apt tail
+cached, they are the whole critical path.
+
+**What was wrong.** Sharding only the admin projects is **14 jobs, not 20**,
+and it adds **no** dimension to any consumer's required check: the matrix is an
+`include` list behind the same aggregating `e2e` gate, so rulesets and the
+`e2e-required-stub` still name exactly `e2e / e2e`, and consumers change
+nothing. The count-balance objection is real for the whole suite and is
+measured, not assumed, here: within one admin project the tests are of similar
+weight, apart from webkit's ~90 s `cms-link-crawler` crawl.
+
+**Measured** (the `.deb` cache plus `--shard=i/3` of each admin project;
+adamdaniel.ai run 36763299356, jodidaniel.com run 36764818854, 6 attempts each,
+first attempt the cache miss):
+
+| | adamdaniel.ai | jodidaniel.com |
+|---|---|---|
+| gate, cache hit, 10 jobs (above) | 218 / 249 / 257 s | 165 / 168 / 170 s |
+| **gate, cache hit, 14 jobs** (n=5 each) | **158 / 162 / 163 s** | **142 / 189 / 208 s** |
+| admin shard suites | 40-72 s (vs 120-146 s whole) | 17-60 s (vs 72-98 s whole) |
+| runner-seconds per run | 1054 → **1357 (+29%)** | 910 → **1158 (+27%)** |
+| tests | shard sums equal the unsharded totals (116 = 39+39+38; 70 = 28+19+23) | (101 = 35+33+33; 64 = 28+18+18) |
+
+jodidaniel.com's p90/max is one attempt whose runners allocated late; its
+median is the honest figure. **Why 3, not 2:** modelled from per-test
+durations, a 2-way split leaves webkit-iphone16's crawl in shard 1 finishing at
+~139 s — no better than unsharded — so 2-way was not worth measuring; 3-way puts
+the new pole at the crawl's shard (~72 s of tests). **Why not the public
+projects:** they are not the pole, and each shard re-pays the ~45 s fixed
+per-job cost. The rule is derived — `isAdminProject` × `ADMIN_SHARDS` in
+`e2e/ci-matrix.js` — never a per-project table, and a shard with no matrix
+entry is a red `ci-matrix.test.js`.
+
+**Re-check before changing it:** if a public project's suite ever exceeds the
+slowest admin shard, the pole has moved and the shard count buys nothing more;
+if an admin shard's suite exceeds ~100 s, consider `ADMIN_SHARDS = 4`.
+
 ## Rejected: skipping tests per diff
 
 `e2e/select-specs.js` can narrow the suite to a diff's salient specs, and the
@@ -311,6 +466,12 @@ one-file mistake goes RED.
 
 Revisit only if the project list starts changing often enough that the two-file
 edit is real friction. It has changed twice in the platform's life.
+
+(`warm-e2e-apt-cache.yml` DOES derive its engine matrix from a setup job
+running `node e2e/ci-matrix.js --engines`. That is the same trade made the other
+way for a different job: the seeder is off every critical path and gates
+nothing, so the serial job costs nobody a wait, while a static engine list
+there would be one more thing to forget when a project changes engine.)
 
 ## Isolation bugs that parallelism exposed
 
@@ -452,6 +613,10 @@ wall clock with every job still fast.
 
 ## Where the remaining time actually goes (and why to stop here)
 
+> **Superseded (2026-09-30)** by [Revisited: a 3-way shard of the admin projects
+> only](#revisited-a-3-way-shard-of-the-admin-projects-only-2026-09-30). The
+> numbers below are v0.1.70-71 and are kept as the record of that decision.
+
 Every lane of adamdaniel.ai's v0.1.70 bump PR (run 31184726404), split into the
 two parts that matter:
 
@@ -527,6 +692,11 @@ gh api repos/<owner>/<repo>/actions/runs/<run-id>/jobs \
 
 # per-test durations for one project job
 gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs | grep -E '✓|✘'
+
+# apt split inside the install step: fetch size and time, and whether the
+# .deb cache hit ("Need to get 0 B/<n> MB") or which entry it restored
+gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs \
+  | grep -E 'Need to get|Fetched|Cache restored from key|restored \.debs|apt \.deb cache key'
 ```
 
 To try a different worker count without cutting a release, pass the reusable's
@@ -552,9 +722,10 @@ The required status context is **unchanged**: the matrix sits behind an
 aggregating `e2e` gate job (`needs: project`, `if: always()`, fails on any
 non-success matrix result), so rulesets and the `e2e-required-stub` companion
 still name exactly `e2e / e2e`. Per-job artifacts and failure-comment markers
-are project-scoped (`playwright-report-<project>`,
-`e2e-failure-summary-<project>`) — jobs sharing either would clobber each other,
-and a marker that names the project says which one went red before you open a log.
+are slot-scoped (`playwright-report-<slot>`, `e2e-failure-summary-<slot>`,
+where a slot is the project name or `<project>-shard-<i>-of-<n>`) — jobs sharing
+either would clobber each other, and a marker that names the project and shard
+says which one went red before you open a log.
 
 ## node-unit-lints (self-ci)
 
