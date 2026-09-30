@@ -87,6 +87,33 @@ done
 
 If STEP1 fires but STEP2 never does, you know the trigger broke. If STEP2 fires but STEP3 never does, you know the run is wedged (or the watcher is). Without per-step events, you'd just have "the watcher hasn't reported anything" and no way to localise the fault.
 
+The `Monitor` running this chain expires after 30 min at most, so for a host loop (over an hour per iteration) expect STEP3 to come from a re-armed watcher — see [Every watcher has a time limit](#every-watcher-has-a-time-limit--size-it-and-re-arm-it).
+
+## Every watcher has a time limit — size it, and re-arm it
+
+Both watcher tools stop on their own clock, whether or not the run they watch has finished:
+
+- **`Bash run_in_background`**: stops at its `timeout` — default 30 min, max 2 h (since Claude Code [2.1.285](https://github.com/anthropics/claude-code/releases/tag/v2.1.285)). Claude is notified when it is stopped.
+- **`Monitor`**: expires after `timeout_ms` — default 5 min, **capped at 30 min** (a larger value is capped; the start notice says "expires in 30m").
+
+A host-loop run (`cms-publish-loop-host.yml`, `timeout-minutes: 150`, over an hour per iteration) can outlast a single `Monitor` and even the 2 h Bash maximum, so its watch spans several watchers.
+
+- **Always pass `timeout` explicitly** on a background watcher, sized past the run's expected duration (e.g. `timeout: 7200000` for anything longer than ~25 min). For a `Monitor`, pass `timeout_ms: 1800000` and expect to re-arm.
+- **A stop notice is not a completion.** When a watcher is stopped at its limit (Bash: status `killed`, "stopped after reaching its background time limit"; Monitor: "expired after 30m"), the watched run may still be going, and the watcher's trailing `echo` never ran. Re-query before concluding anything: `gh run view "$RUN" --json status,conclusion`. Re-arm if it is still running.
+- **Re-arm a single-run watcher, not the whole chain.** Capture `RUN` once (see [the fix](#the-fix-split-the-assignment)), then re-arm a watcher that polls only that `RUN`. Don't re-dispatch, and don't re-run the STEP1/STEP2 parts of the multi-step example.
+
+```bash
+# Re-armable single-run watcher — RUN was captured once, earlier.
+# Start with Bash run_in_background + timeout: 7200000; on the stop notice,
+# re-check status, and start this same watcher again if still running.
+until [ "$(gh run view "$RUN" --json status --jq .status 2>/dev/null)" = "completed" ]; do
+  sleep 60
+done
+echo "DONE run=$RUN conclusion=$(gh run view "$RUN" --json conclusion --jq .conclusion 2>/dev/null)"
+```
+
+Verified 2026-09-30 on Claude Code 2.1.285: a default-timeout Bash watcher (`sleep 7200`) was killed at ~30 min with output ending `[killed]`, and a 60-min `Monitor` expired at 30 min.
+
 ## When poll intervals matter
 
 - Remote API polling (`gh run view`, `gh pr view`): 60 s is the right floor. GitHub's secondary rate-limit will start throttling at ~80 reqs/min for a single token, and there's no value in tighter polling for a workflow that takes ≥5 min.
@@ -104,4 +131,4 @@ If STEP1 fires but STEP2 never does, you know the trigger broke. If STEP2 fires 
 
 - The pitfall surfaced on 2026-05-06 while watching `cms-publish-loop-host.yml` after fixes #222 + #227 landed; the chained-capture bug left an agent blind for ~30 minutes.
 - Agent-side memory: `~/.claude/projects/<project>/memory/feedback_chained_bash_capture_pitfall.md`
-- Tooling: `Monitor` (preferred for multi-step), `Bash run_in_background` (preferred for single-event), `TaskStop` to kill a hung watcher.
+- Tooling: `Monitor` (preferred for multi-step), `Bash run_in_background` (preferred for single-event), `TaskStop` to kill a hung watcher. Both watcher tools stop at a time limit — see [Every watcher has a time limit](#every-watcher-has-a-time-limit--size-it-and-re-arm-it).
