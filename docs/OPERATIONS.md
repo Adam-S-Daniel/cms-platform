@@ -108,7 +108,7 @@ its `deploy-production` finish, verify the SERVED asset, then dispatch.
 
 Watching such a run from a Claude Code session outlasts a single watcher:
 background Bash stops at its `timeout` (default 30 min, max 2 h, since 2.1.285)
-and `Monitor` at 30 min. **Pass `timeout` explicitly and re-arm on the stop
+and `Monitor` at 30 min; another agent harness has its own limits. **Pass `timeout` explicitly and re-arm on the stop
 notice**, re-checking `gh run view "$RUN" --json status,conclusion` first (a
 stop is not a completion). See the `ci-watcher-loops` skill
 (`skills/ci-watcher-loops/SKILL.md`).
