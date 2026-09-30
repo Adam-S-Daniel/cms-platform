@@ -137,6 +137,10 @@ jobs:
   # `fail-fast: false` so one red project doesn't cancel the others: a cancelled
   # sibling hides the second bug and reads as infrastructure noise.
   project:
+    # Named by slot so a check reads `e2e / project (chromium-laptop)` or
+    # `e2e / project (chromium-desktop-3k-shard-1-of-3)`, not the default
+    # rendering of every `include` field.
+    name: project (${{ matrix.slot }})
     strategy:
       fail-fast: false
       matrix:

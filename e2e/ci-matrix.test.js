@@ -83,6 +83,12 @@ test("every project job runs at the same measured worker count", () => {
   expect(projectNames().slice(0, admin.length).sort()).toEqual([...admin].sort());
 });
 
+test("each job's check name is keyed on matrix.slot", () => {
+  // Without a `name:`, an `include` matrix renders every field into the check
+  // name: `project (chromium-laptop, , chromium-laptop)`.
+  expect(workflow().jobs.project.name).toBe("project (${{ matrix.slot }})");
+});
+
 test("the matrix does not fail fast (a red project must not cancel its siblings)", () => {
   expect(workflow().jobs.project.strategy["fail-fast"]).toBe(false);
 });
