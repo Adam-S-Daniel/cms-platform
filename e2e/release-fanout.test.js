@@ -11,7 +11,7 @@ const { parseYaml, allStrings } = require("./workflow-yaml-utils");
 //
 // The fail-open shape is the load-bearing part: a missing token, a failed
 // dispatch, or a repo without auto-merge must degrade to the PRE-chaining
-// behavior (weekly cron / human merge) via ::warning — never fail the
+// behavior (human merge / hand dispatch) via ::warning — never fail the
 // release job or the bump job. Losing that property would let a consumer
 // outage (or an expired PAT) block cutting releases at all.
 
@@ -40,6 +40,28 @@ test.describe("release → bump chaining", () => {
     expect(s, "failed-dispatch path must warn and continue").toMatch(
       /::warning::platform-bump dispatch failed/,
     );
+  });
+
+  test("failed-dispatch warnings name the exact hand re-dispatch command", () => {
+    const s = strings(RELEASE);
+    expect(s, "warnings must give the hand-dispatch command (no cron backstop)").toMatch(
+      /dispatch by hand: gh workflow run platform-bump\.yml -R \$\{repo\}/,
+    );
+    expect(s, "no weekly-cron promise may remain").not.toMatch(/weekly/i);
+  });
+
+  test("the template platform-bump caller has no schedule, only workflow_dispatch", () => {
+    const caller = parseYaml(
+      fs.readFileSync(
+        path.join(__dirname, "..", "examples", "site", ".github", "workflows", "platform-bump.yml"),
+        "utf8",
+      ),
+    );
+    // js-yaml/yaml may surface `on:` as the string key "on" or boolean true.
+    const on = caller.on ?? caller[true];
+    expect(on, "caller must have an on: block").toBeTruthy();
+    expect(Object.keys(on)).toContain("workflow_dispatch");
+    expect(Object.keys(on), "weekly backstop removed: releases dispatch it").not.toContain("schedule");
   });
 
   test("platform-bump enables auto-merge on the bump PR, fail-open", () => {
