@@ -10,9 +10,17 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.120)
+## Version history (v0.1.0 → v0.1.121)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.121 — cross-post detects non-ASCII post paths and stops double-quoting quotations.**
+`cross_post.py detect` parsed `git diff --name-status`, whose default `core.quotePath`
+C-quotes a non-ASCII path, so adamdaniel.ai's post *Quoting Anthropic’s Thariq Shihipar*
+(a `’` in its filename) read as missing and was silently never cross-posted — every leg
+skipped, run 36885515169 green. Detect now parses `git diff -z` and fails loudly when
+a listed path cannot be read. A blockquote already carrying its own quotation marks is
+no longer wrapped in straight quotes too (`"“…”"` on Mastodon and LinkedIn) (#507).
 
 **v0.1.120 — the e2e install caches apt's `.deb`s, and the admin projects run as 3 shards.**
 Over 700 consumer e2e project jobs the apt archive fetch was 2 s at the median and
