@@ -393,6 +393,29 @@ def test_first_block_blockquote_becomes_quoted_plain_paragraphs():
     assert post["excerpt"] == WILLISON_EXCERPT
 
 
+def test_blockquote_already_in_curly_quotes_is_not_double_wrapped():
+    body = "> “what I see is context”\n\nAfter.\n"
+    post = cross_post.describe_post("_posts/2026-10-01-q.md", make_post(["title: Q"], body=body), settings())
+    assert post["excerpt"] == "“what I see is context”"
+    # Every target reads post["excerpt"]: Mastodon, the LinkedIn little text, and the article card.
+    assert cross_post.mastodon_status(post) == f"Q\n\n“what I see is context”\n\n{post['url']}"
+    assert "“what I see is context”" in cross_post.linkedin_commentary(post)
+    assert '"“' not in cross_post.linkedin_commentary(post)
+
+
+def test_blockquote_already_in_straight_quotes_is_not_double_wrapped():
+    body = '> "already quoted"\n\nAfter.\n'
+    post = cross_post.describe_post("_posts/2026-10-01-q.md", make_post(["title: Q"], body=body), settings())
+    assert post["excerpt"] == '"already quoted"'
+
+
+def test_unquoted_blockquote_is_still_wrapped_in_straight_quotes():
+    post = cross_post.describe_post(
+        "_posts/2026-10-01-q.md", make_post(["title: Q"], body="> plain words\n\nAfter.\n"), settings()
+    )
+    assert post["excerpt"] == '"plain words"'
+
+
 def test_first_paragraph_inline_markup_is_stripped():
     body = "This has **bold**, _italic_, `code`, a [link](https://example.com) and \\*stars\\*.\n"
     post = cross_post.describe_post("_posts/2026-01-01-t.md", make_post(["title: T"], body=body), settings())

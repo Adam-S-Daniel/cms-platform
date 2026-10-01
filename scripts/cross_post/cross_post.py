@@ -233,7 +233,9 @@ def _collapse_ws(text: str) -> str:
 # is plain text too. So an excerpt is rendered from a real Markdown parse to
 # plain paragraphs, never passed through as Markdown. A blockquote becomes its
 # paragraphs wrapped in straight double quotes, matching how the owner
-# hand-edited the 2026-09-28 LinkedIn post.
+# hand-edited the 2026-09-28 LinkedIn post, unless the quoted text already opens
+# with a quotation mark and closes with one (curly or straight), which would
+# double them.
 _MD = MarkdownIt("commonmark", {"html": True})
 _SKIPPED_BLOCKS = {"heading_open", "html_block", "hr"}
 
@@ -269,7 +271,9 @@ def _blocks_plain(tokens) -> list[str]:
             inner = tokens[i + 1 : j - 1]
             if tok.type == "blockquote_open":
                 quoted = _blocks_plain(inner)
-                if quoted:
+                if quoted and not (
+                    quoted[0].startswith(("“", '"')) and quoted[-1].endswith(("”", '"'))
+                ):
                     quoted[0] = '"' + quoted[0]
                     quoted[-1] = quoted[-1] + '"'
                 blocks.extend(quoted)
