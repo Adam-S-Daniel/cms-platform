@@ -216,7 +216,9 @@ def test_empty_before_returns_empty():
 def test_detect_from_git_with_fake_run_finds_newly_published():
     before_sha = "before123"
     after_sha = "after456"
-    diff_stdout = "A\t_posts/2026-01-01-added.md\nM\t_posts/2026-01-02-flipped.md\nM\t_posts/2026-01-03-edited.md\n"
+    diff_stdout = (
+        "A\0_posts/2026-01-01-added.md\0M\0_posts/2026-01-02-flipped.md\0M\0_posts/2026-01-03-edited.md\0"
+    )
     show_map = {
         (after_sha, "_posts/2026-01-01-added.md"): make_post(["title: Added", "published: true"]),
         (before_sha, "_posts/2026-01-02-flipped.md"): make_post(["title: Flip", "published: false"]),
@@ -259,3 +261,59 @@ def test_detect_from_git_integration_with_real_git_repo(tmp_path):
 
     result = cross_post.detect_from_git(before_sha, after_sha, run=run_in_repo)
     assert result == ["_posts/2026-01-01-added.md"]
+
+
+def test_detect_from_git_asks_for_nul_separated_output():
+    fake = FakeRun(diff_stdout="", show_map={})
+    cross_post.detect_from_git("before123", "after456", run=fake)
+    assert "-z" in fake.calls[0]
+
+
+def test_detect_from_git_returns_unquoted_non_ascii_path():
+    after_sha = "after456"
+    path = "_posts/2026-10-01-quoting-anthropic’s-thariq-shihipar.md"
+    fake = FakeRun(
+        diff_stdout=f"A\0{path}\0",
+        show_map={(after_sha, path): make_post(["title: Q", "published: true"])},
+    )
+    assert cross_post.detect_from_git("before123", after_sha, run=fake) == [path]
+
+
+def test_detect_from_git_fails_loud_when_listed_path_is_unreadable(capsys):
+    path = "_posts/2026-10-01-gone.md"
+    fake = FakeRun(diff_stdout=f"A\0{path}\0", show_map={})
+    with pytest.raises(SystemExit):
+        cross_post.detect_from_git("before123", "after456", run=fake)
+    assert path in capsys.readouterr().out
+
+
+def test_detect_from_git_real_repo_non_ascii_filename(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    (repo / "README.md").write_text("x\n", encoding="utf-8")
+    git("add", "README.md")
+    git("commit", "-q", "-m", "base")
+    before_sha = git("rev-parse", "HEAD")
+
+    rel = "_posts/2026-10-01-quoting-anthropic’s-x.md"
+    (repo / "_posts").mkdir()
+    (repo / rel).write_text(make_post(["title: Q", "published: true"]), encoding="utf-8")
+    git("add", "--", rel)
+    git("commit", "-q", "-m", "add post")
+    after_sha = git("rev-parse", "HEAD")
+
+    def run_in_repo(cmd, capture_output=True, text=True, **kwargs):
+        return subprocess.run(cmd, cwd=repo, capture_output=capture_output, text=text, **kwargs)
+
+    assert cross_post.detect_from_git(before_sha, after_sha, run=run_in_repo) == [rel]

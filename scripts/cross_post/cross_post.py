@@ -183,10 +183,13 @@ def detect_from_git(before_sha, after_sha, run=subprocess.run) -> list[str]:
     if not before_sha or set(before_sha) == {"0"}:
         return []
 
+    # -z: without it core.quotePath C-quotes a non-ASCII path ("_posts/...\342\200\231s-x.md"),
+    # which `git show <sha>:<path>` cannot find, so the post would be silently skipped.
     result = run(
         [
             "git",
             "diff",
+            "-z",
             "--name-status",
             "--no-renames",
             "--diff-filter=AM",
@@ -199,14 +202,17 @@ def detect_from_git(before_sha, after_sha, run=subprocess.run) -> list[str]:
         text=True,
     )
 
+    # --no-renames + --diff-filter=AM make every record exactly STATUS NUL PATH NUL.
+    fields = result.stdout.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
     newly: list[str] = []
-    for line in result.stdout.splitlines():
-        line = line.strip("\n")
-        if not line.strip():
-            continue
-        status, _, path = line.partition("\t")
+    for status, path in zip(fields[0::2], fields[1::2]):
         status = status.strip()
         after_text = _git_show(run, after_sha, path)
+        if after_text is None:
+            print(f"::error::git diff listed {path} as added or modified, but git show cannot read it at {after_sha}")
+            raise SystemExit(1)
         before_text = None if status == "A" else _git_show(run, before_sha, path)
         if newly_published(before_text, after_text, path):
             newly.append(path)
