@@ -15,8 +15,11 @@ How platform changes reach sites, and how site-side improvements get back.
 Cut a release on `cms-platform` (Actions → **Cut release**, `workflow_dispatch`
 with a `vX.Y.Z` input) → the release job **immediately dispatches each
 consumer's `platform-bump` workflow** (fail-open: a missing/expired
-`BUMP_DISPATCH_<CONSUMER>` secret or a failed dispatch just leaves that site to
-its weekly Monday-07:00-UTC cron, the pre-chaining behavior) → each bump PR
+`BUMP_DISPATCH_<CONSUMER>` secret or a failed dispatch only warns, naming the
+`gh workflow run platform-bump.yml -R <owner>/<repo>` to re-dispatch by hand;
+the consumer caller has no weekly cron, since the audit of 2026-10-01 found it
+never bumped anything: 17 jodidaniel.com and 18 adamdaniel.ai scheduled runs,
+all no-ops) → each bump PR
 enables **auto-merge** and lands as soon as the site's required checks go
 green → deploy-production takes it live. The release cut stays a deliberate
 human decision; everything after it is mechanical. (Both the dispatch fan-out
@@ -71,8 +74,8 @@ produced four more with DIFFERENT from-versions per file in the same batch
 single-version pin invariant below (#29) already exists to catch.
 **adamdaniel.ai #1900** was closed with reasoning that generalizes verbatim:
 "a piecemeal bump to v0.1.6 would now fail the platform-pin-consistency
-guard." The class had gone quiet since only because `platform-bump` (cron +
-release-dispatch) reliably beats Dependabot's weekly run to each release — a
+guard." The class had gone quiet since only because `platform-bump`
+(release-dispatch) reliably beats Dependabot's weekly run to each release — a
 timing accident, not a guarantee, as `adamdaniel.ai#3076` (above) shows once
 a stale PR is left open long enough.
 

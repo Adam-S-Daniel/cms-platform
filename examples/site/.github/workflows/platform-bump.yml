@@ -1,7 +1,8 @@
 name: Platform bump
 on:
-  schedule:
-    - cron: "0 7 * * 1"
+  # No schedule: cms-platform's release.yml dispatches this the moment a release
+  # is cut (its chained down-sync). If that dispatch fails, re-run it by hand:
+  # `gh workflow run platform-bump.yml -R <owner>/<repo>`.
   workflow_dispatch:
 permissions:
   contents: write

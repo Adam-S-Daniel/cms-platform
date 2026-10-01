@@ -129,14 +129,16 @@ jobs:
           fi
 
       # Chained down-sync: dispatch each consumer's platform-bump the moment
-      # the release exists, instead of waiting for its weekly cron (Mondays
-      # 07:00 UTC — up to six days of latency between "decided" and "bump PR
-      # exists"). Reuses the cron's exact entry point (`workflow_dispatch` on
-      # the consumer's platform-bump.yml caller), so consumers need no changes.
+      # the release exists. This is the ONLY automatic trigger: the consumer
+      # caller has no weekly cron (the backstop never bumped anything — audit
+      # 2026-10-01). Uses `workflow_dispatch` on the consumer's
+      # platform-bump.yml caller.
       #
-      # FAIL-OPEN by design: a missing/expired token or a failed dispatch
-      # degrades to exactly the pre-chaining behavior (the cron picks the
-      # release up) — warnings, never a job failure. Fine-grained PATs are
+      # FAIL-OPEN by design: a missing/expired token or a failed dispatch is a
+      # warning, never a job failure, so a consumer outage cannot block cutting
+      # a release. With no cron behind it, that consumer stays on the old
+      # version until someone re-dispatches by hand — the `::warning::` names
+      # the exact command. Fine-grained PATs are
       # minted per RESOURCE OWNER, so each consumer owner supplies its own
       # secret: Actions read+write on that one repo, nothing else.
       # A prerelease is validated on ONE consumer PR, pinned by hand. Dispatching
@@ -155,13 +157,13 @@ jobs:
           dispatch() {
             repo="$1" token="$2"
             if [ -z "$token" ]; then
-              echo "::warning::no bump-dispatch token for ${repo} — its weekly platform-bump cron will pick up ${VERSION}."
+              echo "::warning::no bump-dispatch token for ${repo} — it is NOT bumped to ${VERSION} (no cron backstop); dispatch by hand: gh workflow run platform-bump.yml -R ${repo}"
               return 0
             fi
             if GH_TOKEN="$token" gh workflow run platform-bump.yml -R "$repo"; then
               echo "::notice::dispatched platform-bump in ${repo} for ${VERSION}."
             else
-              echo "::warning::platform-bump dispatch failed for ${repo} — its weekly cron will pick up ${VERSION}."
+              echo "::warning::platform-bump dispatch failed for ${repo} — it is NOT bumped to ${VERSION} (no cron backstop); re-dispatch by hand: gh workflow run platform-bump.yml -R ${repo}"
             fi
           }
           dispatch "Adam-S-Daniel/adamdaniel.ai"   "$TOKEN_ADAMDANIEL_AI"

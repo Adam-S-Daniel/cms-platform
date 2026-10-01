@@ -165,7 +165,7 @@ jobs:
           # "no release yet" success as the one genuinely benign case (a
           # brand-new platform repo with nothing tagged). A consumer could
           # freeze at its current platform version indefinitely while every
-          # weekly cron run reported success — `scheduled-run-health.yml`
+          # scheduled or dispatched run reported success — `scheduled-run-health.yml`
           # only alerts on RED scheduled runs, so a silent green no-op is
           # invisible to it.
           #

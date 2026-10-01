@@ -137,7 +137,7 @@ v0.1.76 incident this rule comes from.
 - **Keep BOTH consumers on the same version.** A platform-infra-only release
   (e.g. a test-harness fix) is still worth bumping both, so they never skew —
   the pin-consistency guard is per-repo, but lockstep across repos is the design.
-- **`platform-bump.yml`** automates step 2 on a schedule/dispatch and is now an
+- **`platform-bump.yml`** automates step 2 and is dispatched by `release.yml` the moment a release is cut (no cron; re-dispatch by hand if that failed) and is now an
   **atomic single-version bump** (issue #13 **resolved**, v0.1.23): it rewrites
   EVERY version ref in one PR — `platform_ref:` + `platform.lock`, the `uses:@`
   pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:` (it resolves the
