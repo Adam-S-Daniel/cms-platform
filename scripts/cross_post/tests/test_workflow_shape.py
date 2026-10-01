@@ -464,10 +464,9 @@ class TestCrossPostReusable:
 
     # --- Cross-post watcher (Claude routine) fire ----------------------------
 
-    def test_watcher_routine_id_input_is_string_default_empty(self):
-        wid = self.data[True]["workflow_call"]["inputs"]["watcher_routine_id"]
-        assert wid["type"] == "string"
-        assert wid["default"] == ""
+    def test_watcher_routine_id_is_not_a_workflow_call_input(self):
+        # Read from the caller's `vars` instead, so no consumer `with:` drift.
+        assert "watcher_routine_id" not in self.data[True]["workflow_call"]["inputs"]
 
     def test_watcher_secret_is_optional(self):
         secrets = self.data[True]["workflow_call"]["secrets"]
@@ -489,7 +488,8 @@ class TestCrossPostReusable:
         assert "github.event_name == 'push'" in if_expr
         assert "github.event_name == 'schedule' && failure()" in if_expr
         assert CONFIGURED_GUARD in if_expr
-        assert "inputs.watcher_routine_id != ''" in if_expr
+        assert "vars.CROSS_POST_WATCHER_ROUTINE_ID != ''" in if_expr
+        assert "inputs.watcher_routine_id" not in if_expr
         # The watcher's own backfills are dispatches; firing on one would loop.
         assert "workflow_dispatch" not in if_expr
         assert "steps.detect.outputs.changed" not in if_expr
@@ -505,7 +505,7 @@ class TestCrossPostReusable:
 
     def test_watcher_step_passes_routine_id_via_env_and_builds_json_with_jq(self):
         step = _step_named(self.data, WATCHER_STEP)
-        assert step["env"]["ROUTINE_ID"] == "${{ inputs.watcher_routine_id }}"
+        assert step["env"]["ROUTINE_ID"] == "${{ vars.CROSS_POST_WATCHER_ROUTINE_ID }}"
         assert "jq -n" in step["run"] and "--arg" in step["run"]
         assert "%{http_code}" in step["run"]
         assert "--fail-with-body" not in step["run"]
@@ -664,9 +664,6 @@ class TestCrossPostTemplate:
             "CLAUDE_ROUTINE_CROSSPOSTWATCHER": "${{ secrets.CLAUDE_ROUTINE_CROSSPOSTWATCHER }}",
         }
 
-    def test_watcher_routine_id_comes_from_a_repo_variable_and_is_a_reusable_input(self):
+    def test_template_does_not_carry_a_watcher_with_key(self):
         (job,) = self.data["jobs"].values()
-        assert (
-            job["with"]["watcher_routine_id"]
-            == "${{ vars.CROSS_POST_WATCHER_ROUTINE_ID || '' }}"
-        )
+        assert "watcher_routine_id" not in job["with"]

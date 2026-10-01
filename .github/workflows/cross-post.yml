@@ -55,9 +55,12 @@
 # found nothing, since detect missing a post is the bug class the watcher
 # exists to catch — and on a scheduled run whose LinkedIn token-age check
 # failed. NEVER on `workflow_dispatch`: the watcher's own backfills are
-# dispatches, so firing there would loop. It needs `watcher_routine_id` (the
-# routine id, not a secret) and the CLAUDE_ROUTINE_CROSSPOSTWATCHER secret
-# (the bearer token); with the secret unset it warns and exits 0. The API
+# dispatches, so firing there would loop. It needs the CALLER repo's variable
+# `vars.CROSS_POST_WATCHER_ROUTINE_ID` (the routine id, not a secret; `vars`
+# in a reusable resolves to the caller's variables, so no `with:` input is
+# needed) and the CLAUDE_ROUTINE_CROSSPOSTWATCHER secret (the bearer token);
+# with the variable unset nothing fires, with the secret unset it warns and
+# exits 0. The API
 # response body is never logged. See docs/CROSS-POSTING.md.
 #
 # FIXTURE EXCLUSION happens in the THIN CALLER's `paths:` (the prod-loop
@@ -160,13 +163,6 @@ on:
         description: "Tag/sha of the platform repo to fetch the script from (pin to the same ref as this workflow's `uses:`)."
         type: string
         default: main
-      watcher_routine_id:
-        description: >-
-          Claude Code routine id (`trig_...`, not a secret) of the cross-post
-          watcher, fired after every push run of a configured site and after
-          a failed scheduled token check. Empty (the default) fires nothing.
-        type: string
-        default: ""
     secrets:
       MASTODON_ACCESS_TOKEN:
         required: false
@@ -335,13 +331,13 @@ jobs:
       # token-age check failed; a workflow_dispatch never does (loop).
       - name: Fire the cross-post watcher
         if: >-
-          ${{ !cancelled() && inputs.watcher_routine_id != '' &&
+          ${{ !cancelled() && vars.CROSS_POST_WATCHER_ROUTINE_ID != '' &&
           ((github.event_name == 'push' &&
           (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)) ||
           (github.event_name == 'schedule' && failure())) }}
         env:
           ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_CROSSPOSTWATCHER }}
-          ROUTINE_ID: ${{ inputs.watcher_routine_id }}
+          ROUTINE_ID: ${{ vars.CROSS_POST_WATCHER_ROUTINE_ID }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_SHA: ${{ github.sha }}
           DETECT_CHANGED: ${{ steps.detect.outputs.changed }}

@@ -401,7 +401,8 @@ last, so it never masks the step that turns a swallowed Mastodon failure red.
 
 - Secret `CLAUDE_ROUTINE_CROSSPOSTWATCHER`: the routine's bearer token.
 - Repository variable `CROSS_POST_WATCHER_ROUTINE_ID`: the routine id. The
-  thin caller forwards it as `watcher_routine_id`.
+  The reusable reads it directly (`vars` in a reusable workflow resolves to
+  the caller repo's variables), so the thin caller has no `with:` key for it.
 
 **Fail-open.** With the variable unset nothing fires. With the id set but the
 secret empty, the step prints a `::warning::` and exits 0. A non-2xx response
