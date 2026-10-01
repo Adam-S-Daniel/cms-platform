@@ -10,9 +10,20 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.121)
+## Version history (v0.1.0 → v0.1.122)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.122 — cross-post fires the Cross-post watcher routine; platform-bump drops its weekly cron.**
+After every push run on a site with a configured leg, and after a failed weekly LinkedIn
+token check, the reusable `cross-post.yml` fires the Claude Code "Cross-post watcher"
+routine through its API trigger (secret `CLAUDE_ROUTINE_CROSSPOSTWATCHER`, forwarded by
+the thin caller; routine id from the caller's `vars.CROSS_POST_WATCHER_ROUTINE_ID`). It
+never fires on `workflow_dispatch`, so the watcher's backfills cannot loop (#509). The
+thin `platform-bump` caller drops its `0 7 * * 1` schedule: an audit of all 35 scheduled
+runs across both consumers found none ever bumped anything, the release-time dispatch
+always had; `release.yml`'s fail-open warnings now name the consumer left behind and
+the re-dispatch command (#510).
 
 **v0.1.121 — cross-post detects non-ASCII post paths and stops double-quoting quotations.**
 `cross_post.py detect` parsed `git diff --name-status`, whose default `core.quotePath`
