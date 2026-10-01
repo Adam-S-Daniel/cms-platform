@@ -49,6 +49,17 @@
 # while there is still time to rotate. With `linkedin: false` a scheduled run
 # is a no-op.
 #
+# CROSS-POST WATCHER: the final step fires a Claude Code routine (an agent that
+# audits the cross-posts, backfills and notifies) through its HTTP API. It
+# fires on EVERY push run of a site with a leg configured — even when detect
+# found nothing, since detect missing a post is the bug class the watcher
+# exists to catch — and on a scheduled run whose LinkedIn token-age check
+# failed. NEVER on `workflow_dispatch`: the watcher's own backfills are
+# dispatches, so firing there would loop. It needs `watcher_routine_id` (the
+# routine id, not a secret) and the CLAUDE_ROUTINE_CROSSPOSTWATCHER secret
+# (the bearer token); with the secret unset it warns and exits 0. The API
+# response body is never logged. See docs/CROSS-POSTING.md.
+#
 # FIXTURE EXCLUSION happens in the THIN CALLER's `paths:` (the prod-loop
 # `2099-*` canaries and `*-e2e-*` specs) — cross_post.py's own `detect`
 # subcommand skips `test_fixture`/`e2e-`-slugged posts on its own, so nothing
@@ -149,10 +160,19 @@ on:
         description: "Tag/sha of the platform repo to fetch the script from (pin to the same ref as this workflow's `uses:`)."
         type: string
         default: main
+      watcher_routine_id:
+        description: >-
+          Claude Code routine id (`trig_...`, not a secret) of the cross-post
+          watcher, fired after every push run of a configured site and after
+          a failed scheduled token check. Empty (the default) fires nothing.
+        type: string
+        default: ""
     secrets:
       MASTODON_ACCESS_TOKEN:
         required: false
       LINKEDIN_ACCESS_TOKEN:
+        required: false
+      CLAUDE_ROUTINE_CROSSPOSTWATCHER:
         required: false
 
 # contents:read for the two checkouts; actions:read is what lets the
@@ -307,3 +327,52 @@ jobs:
         run: |
           echo "::error::The Mastodon leg failed (see its step above). Re-run it alone with a targets: mastodon dispatch; the other legs are not affected."
           exit 1
+
+      # Fires the watcher routine. `!cancelled()` (not the implicit success())
+      # so it runs after a red leg too, and it sits last so it never masks the
+      # step above that turns a swallowed Mastodon failure red. Push runs fire
+      # whether or not detect found a post; a schedule run fires only when the
+      # token-age check failed; a workflow_dispatch never does (loop).
+      - name: Fire the cross-post watcher
+        if: >-
+          ${{ !cancelled() && inputs.watcher_routine_id != '' &&
+          ((github.event_name == 'push' &&
+          (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)) ||
+          (github.event_name == 'schedule' && failure())) }}
+        env:
+          ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_CROSSPOSTWATCHER }}
+          ROUTINE_ID: ${{ inputs.watcher_routine_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+          DETECT_CHANGED: ${{ steps.detect.outputs.changed }}
+          DETECT_COUNT: ${{ steps.detect.outputs.count }}
+        run: |
+          if [ -z "$ROUTINE_TOKEN" ]; then
+            echo "::warning::cross-post watcher is not wired: the CLAUDE_ROUTINE_CROSSPOSTWATCHER secret is empty"
+            exit 0
+          fi
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          text=$(jq -rn \
+            --arg repo "$GITHUB_REPOSITORY" --arg event "$EVENT_NAME" \
+            --arg url "$run_url" --arg sha "$HEAD_SHA" \
+            --arg changed "${DETECT_CHANGED:-not run}" --arg count "${DETECT_COUNT:-n/a}" \
+            '"Cross-post run finished. Repository: \($repo). Event: \($event). Run: \($url). Head sha: \($sha). Detect changed: \($changed). Detect post count: \($count)."')
+          body=$(jq -n --arg text "$text" '{text: $text}')
+          resp=$(mktemp)
+          status=$(curl -sS -o "$resp" -w '%{http_code}' -X POST \
+            "https://api.anthropic.com/v1/claude_code/routines/$ROUTINE_ID/fire" \
+            -H "Authorization: Bearer $ROUTINE_TOKEN" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "Content-Type: application/json" \
+            -d "$body") || status="curl-failed"
+          case "$status" in
+            2??)
+              session=$(jq -r '[.. | strings | select(startswith("https://claude.ai/"))] | first // empty' "$resp" 2>/dev/null || true)
+              echo "::notice::cross-post watcher fired (HTTP $status) ${session}"
+              ;;
+            *)
+              echo "::error::cross-post watcher fire failed (HTTP $status)"
+              exit 1
+              ;;
+          esac

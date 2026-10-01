@@ -378,6 +378,38 @@ lint-locks this: it asserts the reusable's text never contains
 `Adam-S-Daniel/cms-platform/.github/actions/` and that the local path is
 actually used.
 
+## Cross-post watcher (Claude routine)
+
+The reusable's last step, "Fire the cross-post watcher", fires a Claude Code
+routine: an agent that audits the cross-posts, backfills what is missing and
+notifies. The routine id is `trig_013iDZwBZ5mY5zcAayas6ASW`; its page is
+https://claude.ai/code/routines/trig_013iDZwBZ5mY5zcAayas6ASW.
+
+**When it fires**
+
+- Every `push` run of a site with at least one leg configured, whether or not
+  detect found a post. Detect missing a post is the bug class the watcher
+  exists to catch, so the fire cannot depend on `detect`'s output.
+- A scheduled run whose weekly LinkedIn token-age check failed.
+- **Never on `workflow_dispatch`.** The watcher backfills by dispatching this
+  workflow; firing on a dispatch would loop.
+
+The step uses `!cancelled()`, so it also runs after a failed leg, and it is
+last, so it never masks the step that turns a swallowed Mastodon failure red.
+
+**Wiring (per site)**
+
+- Secret `CLAUDE_ROUTINE_CROSSPOSTWATCHER`: the routine's bearer token.
+- Repository variable `CROSS_POST_WATCHER_ROUTINE_ID`: the routine id. The
+  thin caller forwards it as `watcher_routine_id`.
+
+**Fail-open.** With the variable unset nothing fires. With the id set but the
+secret empty, the step prints a `::warning::` and exits 0. A non-2xx response
+fails the step with the HTTP status code only; the response body is never
+logged. The message sent carries the repository, event, run URL, head sha and
+detect's `changed`/`count` outputs, with no secrets or personal data. The API
+allows 30 fires per hour per routine.
+
 ## Testing
 
 `scripts/cross_post/cross_post.py` is stdlib + PyYAML only, and every

@@ -83,6 +83,7 @@ def _iter_steps(data: dict[str, Any]):
             yield step
 
 
+WATCHER_STEP = "Fire the cross-post watcher"
 CONFIGURED_GUARD = "inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin"
 
 
@@ -291,6 +292,10 @@ class TestCrossPostReusable:
                 # Runs only when the (already gated) Mastodon step ran and
                 # failed; asserted in test_a_swallowed_mastodon_failure_still_fails_the_job.
                 continue
+            if step.get("name") == WATCHER_STEP:
+                # Fires on every configured push run, detect or not; asserted
+                # in the watcher tests below.
+                continue
             if_expr = str(step.get("if", ""))
             assert configured_guard in if_expr, (
                 f"step {step.get('name')!r} runs after detect but its `if:` "
@@ -359,6 +364,7 @@ class TestCrossPostReusable:
                 "Cross-posting not configured",
                 "Check LinkedIn token age",
                 "Fail if the Mastodon leg failed",
+                WATCHER_STEP,
             ):
                 continue
             assert "steps.detect.outputs.changed == 'true'" in str(step.get("if", "")), step.get(
@@ -454,6 +460,55 @@ class TestCrossPostReusable:
         assert "!cancelled()" in if_expr
         assert "steps.mastodon.outcome == 'failure'" in if_expr
         assert "exit 1" in step["run"]
+
+
+    # --- Cross-post watcher (Claude routine) fire ----------------------------
+
+    def test_watcher_routine_id_input_is_string_default_empty(self):
+        wid = self.data[True]["workflow_call"]["inputs"]["watcher_routine_id"]
+        assert wid["type"] == "string"
+        assert wid["default"] == ""
+
+    def test_watcher_secret_is_optional(self):
+        secrets = self.data[True]["workflow_call"]["secrets"]
+        assert secrets["CLAUDE_ROUTINE_CROSSPOSTWATCHER"]["required"] is False
+
+    def test_watcher_step_is_last_so_it_runs_after_every_posting_step(self):
+        steps = list(_iter_steps(self.data))
+        names = [s.get("name") for s in steps]
+        assert names[-1] == WATCHER_STEP
+        assert names.index(WATCHER_STEP) > names.index("Fail if the Mastodon leg failed")
+
+    def test_watcher_step_runs_after_failures_but_not_when_cancelled(self):
+        if_expr = str(_step_named(self.data, WATCHER_STEP).get("if", ""))
+        assert "!cancelled()" in if_expr
+        assert "always()" not in if_expr
+
+    def test_watcher_step_fires_on_push_and_failed_schedule_never_dispatch(self):
+        if_expr = str(_step_named(self.data, WATCHER_STEP).get("if", ""))
+        assert "github.event_name == 'push'" in if_expr
+        assert "github.event_name == 'schedule' && failure()" in if_expr
+        assert CONFIGURED_GUARD in if_expr
+        assert "inputs.watcher_routine_id != ''" in if_expr
+        # The watcher's own backfills are dispatches; firing on one would loop.
+        assert "workflow_dispatch" not in if_expr
+        assert "steps.detect.outputs.changed" not in if_expr
+
+    def test_watcher_token_referenced_exactly_once_and_only_under_env(self):
+        refs = _steps_referencing(self.data, "secrets.CLAUDE_ROUTINE_CROSSPOSTWATCHER")
+        assert len(refs) == 1
+        step, in_run, in_with, in_env = refs[0]
+        assert step.get("name") == WATCHER_STEP
+        assert in_env is True
+        assert in_run is False
+        assert in_with is False
+
+    def test_watcher_step_passes_routine_id_via_env_and_builds_json_with_jq(self):
+        step = _step_named(self.data, WATCHER_STEP)
+        assert step["env"]["ROUTINE_ID"] == "${{ inputs.watcher_routine_id }}"
+        assert "jq -n" in step["run"] and "--arg" in step["run"]
+        assert "%{http_code}" in step["run"]
+        assert "--fail-with-body" not in step["run"]
 
 
 class TestCrossPostTemplate:
@@ -601,9 +656,17 @@ class TestCrossPostTemplate:
         unknown = set(job["with"]) - set(reusable_inputs)
         assert unknown == set(), f"template passes inputs the reusable does not declare: {unknown}"
 
-    def test_secrets_map_forwards_both_tokens(self):
+    def test_secrets_map_forwards_all_secrets(self):
         (job,) = self.data["jobs"].values()
         assert job["secrets"] == {
             "MASTODON_ACCESS_TOKEN": "${{ secrets.MASTODON_ACCESS_TOKEN }}",
             "LINKEDIN_ACCESS_TOKEN": "${{ secrets.LINKEDIN_ACCESS_TOKEN }}",
+            "CLAUDE_ROUTINE_CROSSPOSTWATCHER": "${{ secrets.CLAUDE_ROUTINE_CROSSPOSTWATCHER }}",
         }
+
+    def test_watcher_routine_id_comes_from_a_repo_variable_and_is_a_reusable_input(self):
+        (job,) = self.data["jobs"].values()
+        assert (
+            job["with"]["watcher_routine_id"]
+            == "${{ vars.CROSS_POST_WATCHER_ROUTINE_ID || '' }}"
+        )

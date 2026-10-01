@@ -32,6 +32,11 @@
 # LinkedIn for a site" and "Rotating the LinkedIn token"). With the secret
 # unset the LinkedIn leg is skipped with an `::warning::`.
 #
+# `secrets: CLAUDE_ROUTINE_CROSSPOSTWATCHER` + variable
+# `vars.CROSS_POST_WATCHER_ROUTINE_ID` — the bearer token and id of the Claude
+# routine fired after every push run and after a failed scheduled token check
+# (never on a dispatch). Both optional: unset, nothing fires.
+#
 # A SITE THAT LEAVES THE DEFAULTS ABOVE UNCHANGED gets a harmless no-op run
 # on every post push: `cross-post.yml` prints one `::notice::` (cross-posting
 # is not configured for this site) and does nothing else.
@@ -100,6 +105,8 @@ jobs:
       visibility: ${{ inputs.visibility || 'public' }}
       targets: ${{ inputs.targets || 'all' }}
       platform_ref: v0.1.121
+      watcher_routine_id: ${{ vars.CROSS_POST_WATCHER_ROUTINE_ID || '' }}
     secrets:
       MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
       LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+      CLAUDE_ROUTINE_CROSSPOSTWATCHER: ${{ secrets.CLAUDE_ROUTINE_CROSSPOSTWATCHER }}
