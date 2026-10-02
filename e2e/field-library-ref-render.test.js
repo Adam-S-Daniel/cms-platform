@@ -87,6 +87,7 @@ const REF_SEAM = [
   '      - $ref: "#/field_library/body_markdown"',
   '      - $ref: "#/field_library/image_widget"',
   '      - $ref: "#/field_library/published_pair"',
+  '      - $ref: "#/field_library/archived_pdf_fields"',
   "",
 ].join("\n");
 
@@ -128,6 +129,9 @@ test.describe("field_library $ref render (issue #5 GOAL 2)", () => {
       "image",
       "published",
       "publish_date",
+      "pdf_archive_file",
+      "pdf_public",
+      "pdf_label",
     ]);
 
     const body = articles.fields.find((f) => f.name === "body");
@@ -142,6 +146,26 @@ test.describe("field_library $ref render (issue #5 GOAL 2)", () => {
     const publishDate = articles.fields.find((f) => f.name === "publish_date");
     expect(publishDate.widget).toBe("datetime");
     expect(publishDate.format).toBe("YYYY-MM-DD HH:mm:ss ZZ");
+
+    const archiveFile = articles.fields.find((f) => f.name === "pdf_archive_file");
+    expect(archiveFile.widget).toBe("string");
+    expect(archiveFile.required).toBe(false);
+    expect(archiveFile.pattern).toEqual(["[.]pdf$", "Must be a PDF file name (.pdf)"]);
+    expect(new RegExp(archiveFile.pattern[0]).test("report.pdf")).toBe(true);
+    expect(new RegExp(archiveFile.pattern[0]).test("report.txt")).toBe(false);
+    expect(new RegExp(archiveFile.pattern[0]).test("reportxpdf")).toBe(false);
+
+    const pdfPublic = articles.fields.find((f) => f.name === "pdf_public");
+    expect(pdfPublic.widget).toBe("boolean");
+    expect(pdfPublic.required).toBe(false);
+    expect(pdfPublic.default).toBe(false);
+    expect(pdfPublic.label).toContain("{{CMS_CURRENT_HOST}}");
+    expect(pdfPublic.hint).toContain("{{CMS_CURRENT_HOST}}");
+
+    const pdfLabel = articles.fields.find((f) => f.name === "pdf_label");
+    expect(pdfLabel.widget).toBe("string");
+    expect(pdfLabel.required).toBe(false);
+    expect(pdfLabel.hint).toContain("{{CMS_CURRENT_HOST}}");
   });
 
   test("the platform base collections + verbatim-locked base lines are unchanged by $ref expansion", () => {

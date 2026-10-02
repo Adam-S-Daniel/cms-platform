@@ -34,18 +34,26 @@ const armed = (o) =>
 test.describe("entry-status-model — checks in plain English, as x of y", () => {
   test("one check left: names what it does, never its job id, and says 'of y'", () => {
     const m = loadModel();
-    const got = m.derive(armed({ checks: { total: 9, pending: ["e2e"] } }), { now: NOW });
+    const got = m.derive(armed({ checks: { total: 9, pending: ["e2e"] } }), {
+      now: NOW,
+      currentHostname: "example.com",
+      canonicalHostname: "example.com",
+    });
     expect(got.detail).not.toMatch(/e2e/);
     expect(got.waitingOn).toBe(
-      "the last of 9 automatic safety checks (the test that the site works on phones, tablets and computers)",
+      "the last of 9 automatic safety checks (the check that example.com works on phones, tablets and computers)",
     );
   });
 
   test("several left: 'n of y', with each one named", () => {
     const m = loadModel();
-    const got = m.derive(armed({ checks: { total: 9, pending: ["e2e", "parity"] } }), { now: NOW });
+    const got = m.derive(armed({ checks: { total: 9, pending: ["e2e", "parity"] } }), {
+      now: NOW,
+      currentHostname: "example.net",
+      canonicalHostname: "example.net",
+    });
     expect(got.waitingOn).toBe(
-      "2 of 9 automatic safety checks to finish (the test that the site works on phones, tablets and " +
+      "2 of 9 automatic safety checks to finish (the check that example.net works on phones, tablets and " +
         "computers, and the check that the preview page loads without errors)",
     );
   });
@@ -55,6 +63,34 @@ test.describe("entry-status-model — checks in plain English, as x of y", () =>
     for (const [key, name] of Object.entries(m.CHECK_NAMES)) {
       expect(name, key).not.toMatch(/\b(e2e|ci|job|workflow|parity|regression|lint|gitleaks|playwright)\b/i);
       expect(name.length, key).toBeGreaterThan(8);
+    }
+  });
+
+  test("site-wide checks name the production or preview destination supplied to the pure model", () => {
+    const m = loadModel();
+    const productionOptions = {
+      now: NOW,
+      currentHostname: "example.com",
+      canonicalHostname: "example.com",
+    };
+    const previewOptions = {
+      now: NOW,
+      currentHostname: "preview-pr42.example.net",
+      canonicalHostname: "example.net",
+    };
+    const checks = ["e2e", "site-verify", "prerelease-guard"];
+
+    for (const key of checks) {
+      const production = m.derive(armed({ checks: { total: 9, pending: [key] } }), productionOptions);
+      expect(production.waitingOn, key).toContain("example.com");
+      expect(production.waitingOn, key).not.toMatch(/\b(e2e|test|tools?|release|updated site)\b/i);
+
+      const preview = m.derive(
+        armed({ previewOnly: true, baseRef: "feature/pdf", checks: { total: 9, pending: [key] } }),
+        previewOptions,
+      );
+      expect(preview.waitingOn, key).toContain("preview-pr42.example.net");
+      expect(preview.waitingOn, key).not.toContain("example.net's");
     }
   });
 

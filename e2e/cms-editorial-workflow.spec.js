@@ -38,6 +38,10 @@ const SEED_POST_TITLE = "Replacement test post 1";
 const RESERVED_PREVIEW_ORIGIN = "https://preview-pr0.example.com";
 const RESERVED_CANONICAL_HOST = "example.com";
 const PREVIEW_PROBE_BRANCH = "preview-hostname-browser-probe";
+const PDF_FIELD_NAMES = ["pdf_archive_file", "pdf_public", "pdf_label"];
+const AUTHORED_HOST_TOKEN = "Authored {{CMS_CURRENT_HOST}}";
+const PDF_ARCHIVE_HINT =
+  'Optional. Enter the PDF file name from the private media archive, for example "example-article.pdf". Leave blank when there is no archived copy. The site maintainer adds files to the private archive separately.';
 
 // Front matter intentionally mirrors the real entry the bug was
 // reported against — empty-string `slug`, `excerpt`, `featured_image`,
@@ -118,6 +122,98 @@ function asTestRepoConfig(source, shellOrigin) {
   config.display_url = shellOrigin;
   delete config.local_backend;
   return YAML.stringify(config);
+}
+
+function archivedPdfCollection(source) {
+  const config = YAML.parse(source) || {};
+  return (
+    (config.collections || []).find((collection) => {
+      const names = new Set((collection.fields || []).map((field) => field && field.name));
+      return collection.folder && PDF_FIELD_NAMES.every((name) => names.has(name));
+    }) || null
+  );
+}
+
+function seedFileTree(filePath, content) {
+  const root = {};
+  const parts = filePath.split("/").filter(Boolean);
+  let cursor = root;
+  for (const part of parts.slice(0, -1)) {
+    cursor[part] = {};
+    cursor = cursor[part];
+  }
+  cursor[parts.at(-1)] = { content };
+  return root;
+}
+
+async function loadPreviewPdfEditor(page, baseURL, configSource, collection) {
+  const upstreamURL = new URL(baseURL);
+  const local =
+    (process.env.TARGET || "local").toLowerCase() === "local" ||
+    ["localhost", "127.0.0.1"].includes(upstreamURL.hostname);
+  const shellOrigin = local ? RESERVED_PREVIEW_ORIGIN : upstreamURL.origin;
+
+  await page.route("**/*", async (route) => {
+    if (["GET", "HEAD"].includes(route.request().method())) {
+      await route.fallback();
+    } else {
+      await route.abort();
+    }
+  });
+
+  if (local) {
+    const upstreamOrigin = upstreamURL.origin;
+    await page.route(`${RESERVED_PREVIEW_ORIGIN}/**`, async (route) => {
+      const requested = new URL(route.request().url());
+      if (!["GET", "HEAD"].includes(route.request().method())) {
+        await route.abort();
+        return;
+      }
+      const upstream = new URL(requested.pathname + requested.search, upstreamOrigin);
+      const response = await route.fetch({ url: upstream.href });
+      if (requested.pathname === "/admin/config.yml") {
+        await route.fulfill({
+          response,
+          body: asTestRepoConfig(configSource, shellOrigin),
+        });
+      } else if (requested.pathname === "/admin/index.html") {
+        await route.fulfill({ response, body: replaceInjectedCanonicalHost(await response.text()) });
+      } else {
+        await route.fulfill({ response });
+      }
+    });
+  } else {
+    await page.route("**/admin/config.yml", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, body: asTestRepoConfig(configSource, shellOrigin) });
+    });
+  }
+
+  const slug = "pdf-fields-probe";
+  const content = [
+    "---",
+    "title: PDF fields probe",
+    "pdf_archive_file: example-article.pdf",
+    `pdf_label: "${AUTHORED_HOST_TOKEN}"`,
+    "---",
+    "",
+  ].join("\n");
+  const extension = collection.extension || "md";
+  const repoFiles = seedFileTree(`${collection.folder}/${slug}.${extension}`, content);
+  await page.addInitScript((seedJson) => {
+    window.repoFiles = JSON.parse(seedJson);
+    window.repoFilesUnpublished = [];
+  }, JSON.stringify(repoFiles));
+
+  await page.goto(`${shellOrigin}/admin/index.html`);
+  await page.getByRole("button", { name: /login/i }).click();
+  await expect(page.locator(`a[href="#/collections/${collection.name}"]`)).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.goto(
+    `${shellOrigin}/admin/index.html#/collections/${collection.name}/entries/${slug}`,
+  );
+  return { currentHost: new URL(shellOrigin).hostname };
 }
 
 function replaceInjectedCanonicalHost(html) {
@@ -435,6 +531,80 @@ test.describe(
       const screenshot = testInfo.outputPath("preview-hostname-editor.png");
       await page.screenshot({ path: screenshot, fullPage: true });
       await testInfo.attach("preview hostname editor", {
+        path: screenshot,
+        contentType: "image/png",
+      });
+    });
+
+    test("opted-in archived PDF fields render host-specific copy and stay private by default", async (
+      { page, baseURL },
+      testInfo,
+    ) => {
+      const configResponse = await page.request.get("/admin/config.yml");
+      expect(configResponse.ok(), "rendered /admin/config.yml should be readable").toBe(true);
+      const configSource = await configResponse.text();
+      const collection = archivedPdfCollection(configSource);
+      test.skip(
+        !collection,
+        "rendered config does not opt a collection into archived_pdf_fields",
+      );
+
+      const { currentHost } = await loadPreviewPdfEditor(
+        page,
+        baseURL,
+        configSource,
+        collection,
+      );
+
+      const archiveFile = page.getByRole("textbox", {
+        name: /^Archived PDF \(file name in the private archive\)(?: \(optional\))?$/i,
+      });
+      await expect(archiveFile).toBeVisible({ timeout: 60_000 });
+      await expect(archiveFile).toHaveValue("example-article.pdf");
+      const archiveControl = archiveFile.locator(
+        'xpath=ancestor::div[contains(@class,"ControlContainer")][1]',
+      );
+      await expect(archiveControl).toContainText(PDF_ARCHIVE_HINT);
+
+      const publicPdf = page
+        .getByRole("switch", {
+          name: new RegExp(
+            `^Publish this PDF on ${currentHost.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: \\(optional\\))?$`,
+            "i",
+          ),
+        })
+        .first();
+      await expect(publicPdf).toBeVisible();
+      await expect(publicPdf, "archived PDFs should default to private").toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      const publicControl = publicPdf.locator(
+        'xpath=ancestor::div[contains(@class,"ControlContainer")][1]',
+      );
+      await expect(publicControl).toContainText(
+        `Leave OFF unless you have permission to republish this document — for example, you or your organization own the rights, it is in the public domain, or the publisher has given permission. While OFF, the PDF stays in the private archive: no download button appears and the file is not available on ${currentHost}.`,
+      );
+
+      const buttonLabel = page.getByRole("textbox", {
+        name: /^PDF Button Label(?: \(optional\))?$/i,
+      });
+      await expect(buttonLabel).toBeVisible();
+      await expect(buttonLabel).toHaveValue(AUTHORED_HOST_TOKEN);
+      const buttonLabelControl = buttonLabel.locator(
+        'xpath=ancestor::div[contains(@class,"ControlContainer")][1]',
+      );
+      await expect(buttonLabelControl).toContainText(
+        `Optional. Leave blank to use the default "Download PDF". Set this only to override that default. This button appears only when "Publish this PDF on ${currentHost}" is ON.`,
+      );
+      await expect(buttonLabel).toHaveValue(
+        AUTHORED_HOST_TOKEN,
+        "runtime hostname replacement must not rewrite editor-authored field values",
+      );
+
+      const screenshot = testInfo.outputPath("archived-pdf-fields.png");
+      await page.screenshot({ path: screenshot, fullPage: true });
+      await testInfo.attach("archived PDF fields", {
         path: screenshot,
         contentType: "image/png",
       });

@@ -159,23 +159,25 @@
   // workflow's matrix of jobs is ONE check to the editor. The value names
   // what the check does, in words the editor already uses; a raw id such as
   // "e2e / e2e" in the bar was #3857's complaint.
+  var DESTINATION_TOKEN = "{{destination}}";
   var CHECK_NAMES = {
-    e2e: "the test that the site works on phones, tablets and computers",
+    e2e: "the check that {{destination}} works on phones, tablets and computers",
     parity: "the check that the preview page loads without errors",
     "preview-media": "the check that images show on the preview",
-    "site-verify": "the check that the finished site is complete",
+    "site-verify": "the check that {{destination}} has every page and file it needs",
     "visual-regression": "the check for unexpected changes to how pages look",
     editorial: "the check that the post's details are filled in correctly",
     scan: "the scan for passwords or keys pasted in by mistake",
-    "prerelease-guard": "the check that the site's tools are a finished release",
+    "prerelease-guard": "the check that publishing to {{destination}} is ready to use",
     reap: "a housekeeping step",
     preview: "building the preview",
     "auto-merge": "the automatic publish step",
   };
   var UNKNOWN_CHECK = "an automatic safety check";
 
-  function checkName(key) {
-    return Object.prototype.hasOwnProperty.call(CHECK_NAMES, key) ? CHECK_NAMES[key] : UNKNOWN_CHECK;
+  function checkName(key, destinationName) {
+    var name = Object.prototype.hasOwnProperty.call(CHECK_NAMES, key) ? CHECK_NAMES[key] : UNKNOWN_CHECK;
+    return name.split(DESTINATION_TOKEN).join(destinationName || "the destination");
   }
 
   function joinNames(names) {
@@ -184,12 +186,14 @@
   }
 
   // What an in-flight, not-yet-merged publish is waiting on, as "x of y".
-  function waitingOnChecks(checks) {
+  function waitingOnChecks(checks, destinationName) {
     var total = checks.total || 0;
     var pending = Array.isArray(checks.pending) ? checks.pending : [];
     if (!total) return "the automatic safety checks to start";
     if (!pending.length) return "all " + total + " automatic safety checks passed; now putting it live";
-    var names = pending.map(checkName);
+    var names = pending.map(function (key) {
+      return checkName(key, destinationName);
+    });
     if (pending.length === 1) {
       return "the last of " + total + " automatic safety checks (" + names[0] + ")";
     }
@@ -420,7 +424,7 @@
       var waiting = f.merged
         ? dest.noun + " to finish updating"
         : f.checks
-          ? waitingOnChecks(f.checks)
+          ? waitingOnChecks(f.checks, dest.noun)
           : f.waitingOn || "the automatic safety checks to finish";
       var when =
         mins !== null

@@ -1,5 +1,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
+const acorn = require("acorn");
+const walk = require("acorn-walk");
 const { test, expect } = require("./base");
 
 // Locks in the robustness behaviours of admin/deploy-status-pill.js:
@@ -17,15 +20,78 @@ const { test, expect } = require("./base");
 //      status.id (which changes per state event), so a state revert
 //      success → in_progress on a re-publish triggers a fresh render.
 //
-// These are pure-text invariants on the IIFE's source. The actual
-// runtime exercise lives in cms-publish-loop.spec.js (lifecycle
-// captureStep) — this lightweight unit test catches structural
-// regressions without spinning up a browser.
+// Most robustness checks inspect the IIFE source; destination wording runs
+// the script in a VM, and the call-shape invariant parses a real AST. The full
+// runtime exercise lives in cms-publish-loop.spec.js (lifecycle captureStep).
 
 const SCRIPT = path.join(__dirname, "..", "theme", "admin", "deploy-status-pill.js");
 
 function readScript() {
   return fs.readFileSync(SCRIPT, "utf8");
+}
+
+async function renderDestinationPills() {
+  const pills = {};
+  const toolbar = {
+    firstChild: null,
+    insertBefore(node) {
+      pills[node.id] = node;
+      this.firstChild = this.firstChild || node;
+    },
+    appendChild(node) {
+      pills[node.id] = node;
+      this.firstChild = this.firstChild || node;
+    },
+  };
+  const responses = {
+    "https://api.github.com/repos/owner/repo/deployments?environment=production&per_page=1": [{ id: 11 }],
+    "https://api.github.com/repos/owner/repo/deployments/11/statuses?per_page=1": [
+      { id: 101, state: "in_progress", log_url: "https://github.com/owner/repo/actions/runs/101" },
+    ],
+    "https://api.github.com/repos/owner/repo/deployments?per_page=20": [
+      { id: 22, environment: "preview-pr-42" },
+    ],
+    "https://api.github.com/repos/owner/repo/deployments/22/statuses?per_page=1": [
+      { id: 202, state: "failure", log_url: "https://github.com/owner/repo/actions/runs/202" },
+    ],
+  };
+  const sandbox = {
+    window: {
+      CMS_REPO: "owner/repo",
+      CMSHostname: {
+        canonical: () => "example.com",
+        current: () => "preview-pr42.example.com",
+      },
+    },
+    document: {
+      readyState: "complete",
+      body: {},
+      querySelector: () => toolbar,
+      getElementById: (id) => pills[id] || null,
+      createElement: () => ({ style: {}, setAttribute() {} }),
+      addEventListener() {},
+    },
+    localStorage: { getItem: () => JSON.stringify({ token: "fixture" }) },
+    MutationObserver: class {
+      observe() {}
+    },
+    fetch: async (url) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => responses[String(url)],
+    }),
+    setInterval() {},
+    setTimeout,
+    console: { info() {}, warn() {} },
+    Date,
+    JSON,
+    Promise,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(readScript(), sandbox);
+  await new Promise(setImmediate);
+  return pills;
 }
 
 test.describe("deploy-status-pill: robustness invariants", () => {
@@ -96,5 +162,41 @@ test.describe("deploy-status-pill: robustness invariants", () => {
       src,
       "missing console.info diagnostic — devtools wouldn't show that polling is alive when both pills are hidden",
     ).toMatch(/console\.info[\s\S]{0,200}?no deployment yet/i);
+  });
+
+  test("production and preview states name the destination in plain update wording", async () => {
+    const pills = await renderDestinationPills();
+    const prod = pills["cms-prod-status-pill"];
+    const preview = pills["cms-preview-build-pill"];
+
+    expect(prod.innerHTML).toContain("Updating example.com");
+    expect(prod.title).toBe("View publishing details for example.com");
+    expect(preview.innerHTML).toContain("Update to preview-pr42.example.com did not finish");
+    expect(preview.title).toBe("View why the update to preview-pr42.example.com did not finish");
+    expect(`${prod.title} ${preview.title}`).not.toMatch(/\b(deploy|run|log)\b/i);
+  });
+
+  test("pollOne passes its resolved environment label into every renderPill call", () => {
+    const ast = acorn.parse(readScript(), { ecmaVersion: "latest", sourceType: "script" });
+    let pollOne = null;
+    walk.simple(ast, {
+      FunctionDeclaration(node) {
+        if (node.id && node.id.name === "pollOne") pollOne = node;
+      },
+    });
+    expect(pollOne, "missing pollOne function").toBeTruthy();
+
+    const calls = [];
+    walk.simple(pollOne.body, {
+      CallExpression(node) {
+        if (node.callee.type === "Identifier" && node.callee.name === "renderPill") calls.push(node);
+      },
+    });
+    expect(calls.length, "pollOne must render both the empty and fresh status paths").toBe(2);
+    for (const call of calls) {
+      const destinationArg = call.arguments.at(-1);
+      expect(destinationArg && destinationArg.type).toBe("Identifier");
+      expect(destinationArg.name).toBe("envLabel");
+    }
   });
 });

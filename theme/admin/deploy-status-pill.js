@@ -38,10 +38,10 @@
  *
  *   1. Per-pill `lastSuccessfulPollAt` timestamps. If a pill is
  *      currently visible AND its last successful poll is older than
- *      STALE_THRESHOLD_MS (5 min), the pill flips to amber with
- *      "(status stale — last poll <ago>)" instead of disappearing
- *      silently. The href stays linked to the last-known run so an
- *      editor can still drill into the in-flight deploy.
+ *      STALE_THRESHOLD_MS (5 min), the pill flips to amber and says
+ *      its details may be out of date instead of disappearing silently.
+ *      The href stays linked to the last-known run so an editor can still
+ *      open the update details.
  *
  *   2. Single-retry helper around fetch. Network errors and
  *      non-2xx-non-rate-limit responses retry once with a short
@@ -270,40 +270,48 @@
   // ── Pill rendering ───────────────────────────────────────────────
   // Render the pill for a fresh poll result.
   // - `state` falsy or "success" → hide.
-  // - in_progress / queued / pending → blue spinner + "<label>…"
-  // - failure / error → red "⚠ <label> failed — view logs"
-  function renderPill(pill, label, state, logUrl) {
+  // - in_progress / queued / pending → blue spinner + "Updating <destination>…"
+  // - failure / error → red "⚠ Update to <destination> did not finish"
+  function renderPill(pill, state, logUrl, destination) {
     if (!pill) return;
     if (!state || state === "success") {
       pill.style.display = "none";
       return;
     }
     pill.href = logUrl || "https://github.com/" + REPO + "/actions";
+    var dest = destination || "the published destination";
 
     if (state === "in_progress" || state === "queued" || state === "pending") {
       pill.style.color = "#0969da";
       pill.style.borderColor = "#0969da";
-      pill.title = "Click to view the in-flight deploy run";
-      // eslint-disable-next-line no-unsanitized/property -- static SVG markup; `label` is a hardcoded constant ("Publishing" / "Preview build"), never user input.
+      pill.title = "View publishing details for " + dest;
+      // eslint-disable-next-line no-unsanitized/property -- the SVG markup is static and the destination is HTML-escaped before interpolation.
       pill.innerHTML =
         '<svg width="10" height="10" viewBox="0 0 24 24" style="vertical-align:-1px;margin-right:0.4em" aria-hidden="true">' +
         '<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="40 20" stroke-linecap="round">' +
         '<animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1.2s" repeatCount="indefinite"/>' +
         "</circle></svg>" +
-        "<span>" +
-        label +
+        "<span>Updating " +
+        escapeHtml(dest) +
         "…</span>";
       pill.style.display = "";
     } else if (state === "failure" || state === "error") {
       pill.style.color = "#cf222e";
       pill.style.borderColor = "#cf222e";
-      pill.title = "Click to view the failed deploy run";
-      // eslint-disable-next-line no-unsanitized/property -- static markup; `label` is a hardcoded constant, never user input.
-      pill.innerHTML = "<span>⚠ " + label + " failed — view logs</span>";
+      pill.title = "View why the update to " + dest + " did not finish";
+      // eslint-disable-next-line no-unsanitized/property -- the surrounding markup is static and the destination is HTML-escaped before interpolation.
+      pill.innerHTML =
+        "<span>⚠ Update to " + escapeHtml(dest) + " did not finish — view details</span>";
       pill.style.display = "";
     } else {
       pill.style.display = "none";
     }
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+    });
   }
 
   // Format a millisecond age into a compact "5m ago" / "1h ago" form
@@ -319,24 +327,22 @@
     return days + "d ago";
   }
 
-  // Flip a currently-visible pill to the amber "stale" state when
+  // Flip a currently-visible pill to the amber "out of date" state when
   // polling has been broken for >STALE_THRESHOLD_MS. The pill keeps
-  // its href so the editor can still drill into the last-known run.
-  function renderStalePill(pill, label, lastPollAt, nowMs) {
+  // its href so the editor can still open the last-known update.
+  function renderStalePill(pill, destination, lastPollAt, nowMs) {
     if (!pill) return;
+    var dest = destination || "the published destination";
     pill.style.color = "#9a6700";
     pill.style.borderColor = "#d4a72c";
     pill.title =
-      "Polling for " +
-      label +
-      " status hasn't succeeded recently — " +
-      "the displayed state may be out of date. Click to view the last-known run.";
-    // eslint-disable-next-line no-unsanitized/property -- static markup; `label` is a hardcoded constant and `formatAgo` returns a numeric-derived time string, never user input.
+      "Publishing details for " + dest + " may be out of date. View the last update.";
+    // eslint-disable-next-line no-unsanitized/property -- the destination is HTML-escaped and formatAgo returns a numeric-derived time string.
     pill.innerHTML =
       '<span aria-hidden="true" style="margin-right:0.35em">⚠</span>' +
-      "<span>" +
-      label +
-      " (status stale — last poll " +
+      "<span>Update to " +
+      escapeHtml(dest) +
+      " (details may be out of date — last refreshed " +
       formatAgo(lastPollAt, nowMs) +
       ")</span>";
     pill.style.display = "";
@@ -445,7 +451,6 @@
     if (prodPill) {
       var prodResult = await pollOne({
         pill: prodPill,
-        label: "Publishing",
         kind: "prod",
         environmentLabel: window.CMSHostname
           ? window.CMSHostname.canonical()
@@ -458,14 +463,18 @@
       if (prodResult === null) {
         // Permanent failure (rate limit / network) — see if we should
         // flip a visible pill to amber.
-        applyStaleIfNeeded(prodPill, "Publishing", lastSuccessfulPollAt.prod, now);
+        applyStaleIfNeeded(
+          prodPill,
+          window.CMSHostname ? window.CMSHostname.canonical() : "the published destination",
+          lastSuccessfulPollAt.prod,
+          now,
+        );
       }
     }
 
     if (previewPill) {
       var previewResult = await pollOne({
         pill: previewPill,
-        label: "Preview build",
         kind: "preview",
         environmentLabel: window.CMSHostname
           ? window.CMSHostname.current()
@@ -476,7 +485,12 @@
         now: now,
       });
       if (previewResult === null) {
-        applyStaleIfNeeded(previewPill, "Preview build", lastSuccessfulPollAt.preview, now);
+        applyStaleIfNeeded(
+          previewPill,
+          window.CMSHostname ? window.CMSHostname.current() : "the preview destination",
+          lastSuccessfulPollAt.preview,
+          now,
+        );
       }
     }
   }
@@ -486,7 +500,6 @@
   //   null  — permanent fetch failure (caller should consider stale)
   async function pollOne(args) {
     var pill = args.pill;
-    var label = args.label;
     var kind = args.kind;
     var envLabel = args.environmentLabel;
     var fetchFn = args.fetchFn;
@@ -518,7 +531,7 @@
       console.info(
         "[deploy-status-pill] no deployment yet for " + envLabel + " — pill hidden, will re-poll.",
       );
-      renderPill(pill, label, null, null);
+      renderPill(pill, null, null, envLabel);
       lastSeenStatusIds[kind] = null;
       lastSuccessfulPollAt[kind] = now;
       return true;
@@ -526,7 +539,7 @@
     var statusId = s.status.id;
     if (statusId !== lastSeenStatusIds[kind]) {
       lastSeenStatusIds[kind] = statusId;
-      renderPill(pill, label, s.status.state, s.status.log_url);
+      renderPill(pill, s.status.state, s.status.log_url, envLabel);
     }
     lastSuccessfulPollAt[kind] = now;
     return true;
@@ -534,14 +547,14 @@
 
   // If the pill is currently visible AND it's been longer than
   // STALE_THRESHOLD_MS since we last had a successful poll, swap it
-  // into the amber "(status stale — last poll <ago>)" view. Editors
+  // into the amber "details may be out of date" view. Editors
   // get a visible signal that polling is broken instead of staring at
   // a frozen spinner that's secretly disconnected from reality.
-  function applyStaleIfNeeded(pill, label, lastPollAt, now) {
+  function applyStaleIfNeeded(pill, destination, lastPollAt, now) {
     if (!isPillVisible(pill)) return;
     if (!lastPollAt) return; // never had a successful poll → nothing to mark stale
     if (now - lastPollAt < STALE_THRESHOLD_MS) return;
-    renderStalePill(pill, label, lastPollAt, now);
+    renderStalePill(pill, destination, lastPollAt, now);
   }
 
   // Decap re-renders the toolbar on entry switches and form mutations.

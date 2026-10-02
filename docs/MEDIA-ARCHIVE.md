@@ -26,11 +26,12 @@ Three rules encode that, and they are the whole design:
 |---|---|---|
 | Bucket (CloudFormation) | `infrastructure/bootstrap/template.yaml` → `MediaArchiveBucket` | cms-platform |
 | Deploy-time publish script | **`scripts/publish-opted-in-pdfs.sh`** | cms-platform |
+| Reusable editor fields | `theme/admin/field_library.yml` → `archived_pdf_fields` | cms-platform |
 | Production wiring | `.github/workflows/deploy-production.yml` → *Publish opted-in archived PDFs* | cms-platform |
 | Preview wiring | `.github/workflows/deploy-preview.yml` → same step | cms-platform |
 | Upload / list / presign helper | `scripts/media-archive.sh` | **the site repo** |
 | Render a PDF from an article | `scripts/archive-article-pdf.py` | **the site repo** |
-| Content model + editor fields | `docs/CONTENT-MODEL.md`, "Archived PDFs" | **the site repo** |
+| Content model + collection opt-in | `docs/CONTENT-MODEL.md` + `admin/collections.site.yml` `$ref` | **the site repo** |
 
 ## Setting up the S3 bucket (one time, per site)
 
@@ -145,7 +146,9 @@ bash scripts/media-archive.sh link 1-fda-amicus.pdf 900   # presigned URL, 15 mi
 
 Objects live under the `media-pdfs/` prefix. Then set the entry's
 **Archived PDF** field in `/admin` to that file name, and leave **Publish this
-PDF on the public website** unticked unless we may lawfully republish it.
+PDF on `<current host>`** unticked unless we may lawfully republish it. The
+label names the routed admin host at runtime; the reusable field definition
+stays site-neutral.
 
 ## What happens at deploy time
 

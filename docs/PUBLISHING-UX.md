@@ -376,6 +376,11 @@ from two free signals on the `/pulls` list response it already makes — the
 `cms/preview-only` label, or `base.ref !== base.repo.default_branch` — so it
 costs no extra request and hardcodes no branch name.
 
+The deploy-status pill and Posts-list summary follow the same rule. A production
+update names the canonical hostname; a preview update names the current preview
+hostname. Their visible labels and help text describe publishing and updates,
+while workflow names, job ids and deployment states remain internal diagnostics.
+
 §2.8 measured the only thing distinguishing a preview admin from the real one
 as a 0.65rem pill in a corner. This puts it in the sentence the editor is
 already reading.

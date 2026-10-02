@@ -83,4 +83,27 @@ test.describe("posts-list-enhance.js reads draft branch tips, not the PR list's 
     ({ hook } = load({ [PULLS]: [PR] }));
     expect((await hook.fetchOpenPrBySlug("t0k3n"))["2026-09-28-hello"].sha).toBe(OLD);
   });
+
+  test("the header names the published destination with plain publishing copy", () => {
+    const { hook } = load({});
+    expect(typeof hook.publishingSummaryHTML).toBe("function");
+    expect(typeof hook.publishingBarCopy).toBe("function");
+
+    const summary = hook.publishingSummaryHTML(
+      {
+        state: "success",
+        at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+        url: "https://github.com/owner/repo/actions/runs/1",
+      },
+      "example.com",
+    );
+    expect(summary).toContain("example.com");
+    expect(summary).toContain("updated");
+    expect(summary).not.toMatch(/\bdeployed\b/i);
+
+    const copy = hook.publishingBarCopy();
+    expect(copy.signedOut).toBe("Sign in to see publishing details");
+    expect(copy.refreshTitle).toBe("Refresh latest edits and publishing details");
+    expect(`${copy.signedOut} ${copy.refreshTitle}`).not.toMatch(/\b(deploy|PR)\b/);
+  });
 });
