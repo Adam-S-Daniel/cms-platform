@@ -442,6 +442,11 @@ run the *same* coverage faster, not to run less of it. Selection trades coverage
 for speed and adds a "did the selector miss something?" failure mode; the
 project matrix needs no such trade.
 
+A 2026-10 proposal to route content-only PRs to a focused lane would have
+reversed this. It was shelved before implementation; the measurements, design
+and live defects it turned up are in
+[`CONTENT-PUBLISH-LATENCY.md`](CONTENT-PUBLISH-LATENCY.md).
+
 ## Rejected: generating the matrix from a setup job
 
 `matrix.project` in `e2e-tests.yml` is a STATIC list, kept honest by
