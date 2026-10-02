@@ -74,7 +74,7 @@ export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
 changes when someone with that site's AWS credentials runs the deploy, so a
 proxy fix can be merged, released and bumped everywhere while the old code
 keeps signing people in. Each site's daily **OAuth proxy build probe**
-(`oauth-proxy-build.yml`, below) goes red when that happens
+(`oauth-proxy-build.yml`, below) goes red when that happens to `lambda.py`
 ([#518](https://github.com/Adam-S-Daniel/cms-platform/issues/518)).
 
 After any release that changes `oauth-proxy/`, for each site:
@@ -118,6 +118,9 @@ so two releases can serve the same handler. `scripts/probe-oauth-proxy-build.js`
 does the comparison against the `lambda.py` of the release the site is pinned
 to, credential-free, and the dictated caller `oauth-proxy-build.yml` runs it
 daily.
+It sees only `lambda.py`: a release that changes nothing but `template.yaml` or
+`deploy.sh` (a route, a timeout, a parameter default) still needs the redeploy
+above, and the probe keeps saying `current` until someone runs it.
 A red run is a scheduled failure, so it lands on the site's `ci` tracking issue
 through `scheduled-run-health`, which also notices the probe going quiet.
 
