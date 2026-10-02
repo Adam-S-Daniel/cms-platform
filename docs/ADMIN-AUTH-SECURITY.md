@@ -99,6 +99,45 @@ the GitHub OAuth App's callback URL do not change. If the deploy **widens** the
 scope the live proxy was requesting, each editor is asked to re-authorize the
 app once.
 
+### Deploying without touching the credentials
+
+`deploy.sh` passes `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the
+environment on every run. A `site-params.env` that still holds the example's
+`xxxx…` placeholders, or a secret that has since been rotated, therefore
+**overwrites the live secret**, and every sign-in then fails at the code
+exchange. One consumer's local file held placeholders when v0.1.124 was
+deployed (2026-10-02).
+
+To change only the code, `AllowedOrigins` or the scope, leave both credentials
+out: SAM keeps a stack's existing value for every parameter it is not given.
+
+```bash
+cd ~/repos/cms-platform/oauth-proxy        # checked out at the release tag
+sam build --template-file template.yaml --region us-east-1
+sam deploy --template-file .aws-sam/build/template.yaml \
+  --stack-name <prefix>-oauth-proxy --region us-east-1 \
+  --capabilities CAPABILITY_IAM --resolve-s3 --no-execute-changeset \
+  --parameter-overrides "AllowedOrigins=https://<apex>,https://preview-*.<apex>" \
+    "GitHubScope=repo,user,workflow" "FunctionName=<prefix>-oauth-proxy"
+```
+
+`--no-execute-changeset` stops at the change set, so it can be read first
+(`aws cloudformation describe-change-set --change-set-name <arn>`):
+
+- `OAuthHttpApi` and `OAuthProxyFunction` are `Modify` with `Replacement:
+  False` — the API URL does not move;
+- the function's `Environment` change is caused by `AllowedOrigins` and
+  `GitHubScope` only. A `ParameterReference` naming `GitHubClientSecret` means
+  the secret is about to change.
+
+Then `aws cloudformation execute-change-set --change-set-name <arn>` and
+`aws cloudformation wait stack-update-complete --stack-name <prefix>-oauth-proxy`.
+
+To learn whether a local file's secret is the live one without printing
+either, compare hashes: the deployed value is the function's
+`GITHUB_CLIENT_SECRET` environment variable
+(`aws lambda get-function-configuration`).
+
 ### Which proxy is a site running?
 
 No credentials needed — ask the proxy:
