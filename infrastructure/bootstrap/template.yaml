@@ -517,8 +517,9 @@ Resources:
   #   img-src     GitHub avatars; blob:/data: for media Decap reads through
   #               the API.
   #   media-src   the dashboards' preview-pr<N> regression.mp4.
-  # The Report-Only copy leaves out frame-ancestors: browsers ignore it there
-  # (and say so in the console), and it is enforced either way.
+  # The Report-Only copy leaves out frame-ancestors only because it is
+  # already enforced by the Content-Security-Policy header in both modes, so
+  # reporting it as well would add nothing.
   AdminResponseHeadersPolicy:
     Type: AWS::CloudFront::ResponseHeadersPolicy
     Properties:

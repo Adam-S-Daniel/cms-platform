@@ -181,6 +181,11 @@ The full `/admin` policy, and why each part is there:
 
 A new third-party script, stylesheet or `fetch` target under `theme/admin/`
 needs a matching source in the template, or it breaks once a site enforces.
+Decap's preview pane is a `srcdoc` iframe, and a `srcdoc` document inherits
+the `/admin` policy, so a third-party image, script or iframe inside an
+entry's body (an HTML Embed, a hotlinked image) previews blank once a site
+enforces, while the published page still shows it. An iframe that loads a
+same-origin URL such as `/assets/tools/<slug>/` gets that page's own policy.
 
 It narrows where a script can quietly send what it reads; it cannot stop a
 script that navigates the page away, and the GitHub API it must allow is
