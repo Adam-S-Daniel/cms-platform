@@ -19,6 +19,12 @@ const OVERRIDE_CONFIG = path.join(TMP, "config-override.yml");
 const EMPTY_OVERRIDE_CONFIG = path.join(TMP, "config-empty-override.yml");
 const FAKE_APP_MONITOR_ID = "11111111-2222-3333-4444-555555555555";
 const FAKE_IDENTITY_POOL = "us-east-1:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+// The gem-shipped client (#517); analytics-rum-client-vendored.test.js holds
+// its bytes to this record.
+const RUM_CLIENT = JSON.parse(
+  fs.readFileSync(path.join(REPO_ROOT, "theme/assets/js/aws-rum-web/provenance.json"), "utf8"),
+);
+const RUM_CLIENT_SRC = `'/assets/js/aws-rum-web/cwr-${RUM_CLIENT.version}.js'`;
 
 function runBuild({ env, configOverride, destination }) {
   const configs = ["_config.yml"];
@@ -101,7 +107,10 @@ test.describe("CloudWatch RUM include", () => {
     expect(html).toContain("AwsRumClient");
     expect(html).toContain(FAKE_APP_MONITOR_ID);
     expect(html).toContain(FAKE_IDENTITY_POOL);
-    expect(html).toContain("client.rum.us-east-1.amazonaws.com");
+    // Loaded from the site's own origin, at the exact vendored version —
+    // never from AWS's floating client.rum.<region> path.
+    expect(html).toContain(RUM_CLIENT_SRC);
+    expect(html).not.toContain("client.rum.");
   });
 
   test("snippet skips RUM init for automated browsers (navigator.webdriver)", () => {
@@ -127,7 +136,7 @@ test.describe("CloudWatch RUM include", () => {
   test("silent when JEKYLL_ENV=production but app_monitor_id is empty", () => {
     const html = readIndex(PROD_NO_ID_DEST);
     expect(html).not.toContain("AwsRumClient");
-    expect(html).not.toContain("client.rum.");
+    expect(html).not.toContain("aws-rum-web/cwr-");
   });
 
   test("silent when app_monitor_id is set but JEKYLL_ENV is not production", () => {

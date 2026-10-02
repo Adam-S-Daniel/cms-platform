@@ -30,7 +30,9 @@ cms:
 ## What it ships
 
 - `_layouts/`, `_includes/` — merged in by Jekyll's theme support.
-- `assets/` — `css/main.css`, `js/marked.min.js`, a **neutral, wordless
+- `assets/` — `css/main.css`, `js/marked.min.js`, the CloudWatch RUM client
+  `js/aws-rum-web/cwr-<version>.js` (vendored, hash-locked; see
+  `docs/ADMIN-AUTH-SECURITY.md`), a **neutral, wordless
   placeholder** `images/logo.svg`, plus an empty `widgets/` directory (reserved
   for future Decap custom-widget assets; unused today). Site-uploaded media
   (Decap's `media_folder`) lives in the consuming SITE, not the gem.

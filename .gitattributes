@@ -4,3 +4,8 @@
 _e2e/*.md text eol=lf
 e2e/fixture-site/_e2e/*.md text eol=lf
 e2e/fixture-site-singlepage/**/*.md text eol=lf
+
+# The vendored CloudWatch RUM client is hash-locked against the bytes AWS
+# serves (e2e/analytics-rum-client-vendored.test.js); never let a checkout
+# rewrite its line endings.
+theme/assets/js/aws-rum-web/cwr-*.js -text

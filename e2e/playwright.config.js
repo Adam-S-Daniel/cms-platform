@@ -144,6 +144,9 @@ const PLATFORM_META_SPECS = [
   // (already-populated) admin/collections.site.yml, not this reference file.
   "collections-example-sortable-fields.test.js",
   "analytics-cloudwatch-rum.test.js",
+  // #517 — hashes theme/assets/js/aws-rum-web/ and vm-runs the RUM include
+  // from theme/_includes SOURCE; a consumer has the gem, not this tree.
+  "analytics-rum-client-vendored.test.js",
   // The "a pin carries no version comment" gate (2026-08-20). Reads THIS repo's
   // .github/workflows + .github/actions composite definitions and the
   // examples thin-caller TEMPLATES — none of which a consumer ships in that

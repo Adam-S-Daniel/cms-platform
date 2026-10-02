@@ -1,0 +1,8 @@
+{
+  "package": "aws-rum-web",
+  "version": "1.25.0",
+  "file": "cwr-1.25.0.js",
+  "source": "https://client.rum.us-east-1.amazonaws.com/1.25.0/cwr.js",
+  "sha384": "SwPO6UJJlIttXx3e5RJ1NyY+RIHl5bMm/fOxFyW6EvoUFsqQcA3VxrGqjbfRdnT0",
+  "license": "Apache-2.0 (LICENSE, NOTICE and LICENSE-THIRD-PARTY beside it, copied unchanged from the aws-rum-web 1.25.0 npm package)"
+}
