@@ -63,6 +63,11 @@ repo = cms['repository'] or abort 'render-decap-config: _config.yml needs cms.re
 oauth = cms['oauth_base_url'] || ''
 apex  = url.empty? ? '' : URI(url).host.to_s.sub(/\Awww\./, '')
 logo  = cms['logo_url'] || (url.empty? ? '' : "#{url}/assets/images/logo.svg")
+# `cms.admin_origin` (OPTIONAL, #517) — the origin the editor is served from
+# when it is not the site's own, e.g. https://admin.example.com. Unset = the
+# same origin as the site. Lowercased, no trailing slash, so the admin JS can
+# compare it to location.origin as is. Mirrored by decap_config_hook.rb.
+admin_origin = cms['admin_origin'].to_s.strip.sub(%r{/+\z}, '').downcase
 
 tokens = {
   'CMS_REPO' => repo, 'CMS_OAUTH_BASE_URL' => oauth, 'CMS_SITE_URL' => url,
@@ -173,7 +178,9 @@ prod_branch = production_branch(File.join(admin_out, 'config.yml'))
 #    CMS_REPO, APEX_DOMAIN from CMS_APEX, OAUTH_URL from CMS_OAUTH_BASE_URL,
 #    document.title from CMS_SITE_TITLE (the site's _config.yml `title`) —
 #    instead of hardcoding it, so the platform stays site-agnostic.
-js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};</script>}
+#    CMS_ADMIN_ORIGIN tells admin/site-hostname.js when this tab is the
+#    separate admin origin, so public-site URLs come from CMS_SITE_ORIGIN.
+js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_ADMIN_ORIGIN=#{admin_origin.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};</script>}
 shells = Dir.glob(File.join(admin_out, 'index*.html')) +
          Dir.glob(File.join(admin_out, 'reviews', '*.html'))
 shells.each do |h|

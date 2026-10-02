@@ -14,7 +14,23 @@
     }
   }
 
+  // On the separate admin origin (`cms.admin_origin`, #517) this tab is the
+  // editor, not the site: public URLs and "on <host>" copy come from the
+  // configured site origin. Everywhere else (the site's own origin, a
+  // preview-prN admin) the tab's origin IS the site it edits.
+  function onAdminOrigin() {
+    return Boolean(window.CMS_ADMIN_ORIGIN) && window.CMS_ADMIN_ORIGIN === window.location.origin;
+  }
+
+  function publicOrigin() {
+    if (onAdminOrigin() && hostname(window.CMS_SITE_ORIGIN)) {
+      return new URL(String(window.CMS_SITE_ORIGIN)).origin;
+    }
+    return window.location.origin;
+  }
+
   function current() {
+    if (onAdminOrigin() && hostname(window.CMS_SITE_ORIGIN)) return hostname(window.CMS_SITE_ORIGIN);
     return window.location.hostname || hostname(window.location.href) || "this address";
   }
 
@@ -60,6 +76,7 @@
   window.CMSHostname = {
     current: current,
     canonical: canonical,
+    publicOrigin: publicOrigin,
     fromURL: hostname,
     options: options,
   };

@@ -40,7 +40,7 @@ Jekyll build and:
    `pages`/`e2e`) before the config is written out (see AGENTS.md
    "base_collections opt-out").
 4. Injects
-   `<script>window.CMS_REPO=…;window.CMS_SITE_ORIGIN=…;window.CMS_APEX=…;window.CMS_OAUTH_BASE_URL=…;window.CMS_SITE_TITLE=…;window.CMS_SITE_GATE=…;window.CMS_PRODUCTION_BRANCH=…</script>`
+   `<script>window.CMS_REPO=…;window.CMS_SITE_ORIGIN=…;window.CMS_ADMIN_ORIGIN=…;window.CMS_APEX=…;window.CMS_OAUTH_BASE_URL=…;window.CMS_SITE_TITLE=…;window.CMS_SITE_GATE=…;window.CMS_PRODUCTION_BRANCH=…</script>`
    into the built `admin/index*.html` **and** `admin/reviews/*.html`. The admin
    JS (and reviews dashboards) read these globals instead of hardcoded site
    identity.
@@ -55,6 +55,7 @@ hook, so no per-site or per-workflow step is needed.
 |---|---|---|
 | `CMS_REPO` | `cms.repository` | deploy-status-pill, publish-via-auto-merge, live-url-banner, posts-list-enhance, oauth-app-restriction-detector, reviews dashboards |
 | `CMS_SITE_ORIGIN` | `url` | site-hostname (canonical publishing destination), posts-list-enhance, publish-button |
+| `CMS_ADMIN_ORIGIN` | `cms.admin_origin`, lowercased, no trailing slash (`""` when unset) — the editor's own origin when it is not the site's (#517) | site-hostname (`publicOrigin()`, and `current()` names the site, not the admin host), live-url-derive (live URLs), index.html / index-local.html (hide Live Preview, whose `/preview/` tab is out of reach of a cross-origin Save broadcast); inert on `""` and on any other origin, so a preview admin is unchanged |
 | `CMS_APEX` | host of `url` | site-hostname fallback, live-url-banner (preview-aware URL construction), posts-list-enhance (preview-host construction), reviews dashboards |
 | `CMS_OAUTH_BASE_URL` | `cms.oauth_base_url` | the Decap config itself (`config.base.yml` backend `base_url`), reviews dashboards (OAuth login flow) |
 | `CMS_SITE_TITLE` | the site's `_config.yml` `title` | admin shell `document.title` (index.html, index-local.html), reviews dashboards `document.title` |
@@ -68,7 +69,7 @@ Field hints owned by the platform use the literal `{{CMS_CURRENT_HOST}}` token.
 It deliberately survives both Ruby render paths: preview deploys retain the
 canonical injected globals while serving the admin from a different host.
 `site-hostname.js` replaces the token only inside Decap `ControlHint` nodes,
-using the current routed hostname. Copy about the canonical publishing
+using the current routed hostname (the site's, on a separate admin origin). Copy about the canonical publishing
 destination continues to use `CMS_SITE_ORIGIN`/`CMS_APEX`.
 
 ## Runtime override globals (test seams)
