@@ -22,6 +22,13 @@ is a stack parameter — nothing is hardcoded to a specific domain.
   `preview-cms-<slug>.<apex>`) via string ops, since CloudFront Functions can't
   read stack params at runtime.
 - **oauth-proxy `FunctionName`** is a parameter (keep unique per site).
+- **`AdminDomainName`** (bootstrap, optional, default empty = off) puts the
+  editor on its own host, e.g. `admin.<apex>`: a separate CloudFront
+  distribution, certificate and DNS record serve only `/admin/` from the
+  production bucket's REST endpoint (the **admin-site** function), with a
+  script-free page for every miss, and the **admin-redirect** function on the
+  production distribution sends `/admin` there. Opt-in runbook:
+  `docs/ADMIN-AUTH-SECURITY.md`.
 - **Security headers** (bootstrap, #515): both distributions attach
   `<prefix>-baseline-headers` (HSTS, `nosniff`, `Referrer-Policy`,
   `frame-ancestors 'self'`), and an `/admin/*` behavior attaches

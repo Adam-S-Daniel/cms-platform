@@ -128,6 +128,10 @@
       // preview.html's variants — e2e/live-preview-gating-lint.test.js
       // locks both.
       var PREVIEWABLE_COLLECTIONS = { posts: true, pages: true, projects: true };
+      // On a separate admin origin (cms.admin_origin, #517) /preview/ is a
+      // public page on another origin, which this tab's same-origin Save
+      // broadcasts cannot reach — so it could never fill. Hidden there.
+      var ADMIN_ORIGIN = !!window.CMS_ADMIN_ORIGIN && location.origin === window.CMS_ADMIN_ORIGIN;
       function updateHref() {
         var h = location.hash || '';
         var m = /#\/collections\/([^\/]+)/.exec(h);
@@ -141,7 +145,7 @@
         // flex; the anchor stays in the DOM (link crawler + native-view
         // -live specs address it by id/href, not visibility).
         var editing = /^#\/collections\/[^\/]+\/(entries\/|new(\?|$))/.test(h);
-        link.style.display = editing && PREVIEWABLE_COLLECTIONS[col] ? '' : 'none';
+        link.style.display = editing && PREVIEWABLE_COLLECTIONS[col] && !ADMIN_ORIGIN ? '' : 'none';
       }
       window.addEventListener('hashchange', updateHref);
       updateHref();
