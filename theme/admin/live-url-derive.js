@@ -114,7 +114,9 @@
   function compute() {
     var collection = getCollection();
     if (!collection || !ROUTABLE_COLLECTIONS[collection]) return null;
-    var origin = window.location.origin;
+    // The public site's origin — not this tab's when the editor has its own
+    // (#517). site-hostname.js loads first in every shell.
+    var origin = window.CMSHostname ? window.CMSHostname.publicOrigin() : window.location.origin;
 
     if (collection === "pages") {
       var permalink = readField("permalink");

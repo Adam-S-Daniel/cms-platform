@@ -65,7 +65,8 @@ whole design:
 - **Inject `window.CMS_*` globals** into the admin shells (`index*.html`) AND the
   reviews dashboards (`reviews/*.html`) — skipping a file only if it already
   *defines* the identity, not merely uses it.
-  `CMS_REPO` / `CMS_SITE_ORIGIN` / `CMS_APEX` / `CMS_OAUTH_BASE_URL` /
+  `CMS_REPO` / `CMS_SITE_ORIGIN` / `CMS_ADMIN_ORIGIN` (#517, `""` unless
+  `cms.admin_origin` is set) / `CMS_APEX` / `CMS_OAUTH_BASE_URL` /
   `CMS_SITE_TITLE` are strings; **`CMS_SITE_GATE` (v0.1.96) is an OBJECT or
   `null`** — the site-level publish gate a site optionally declares as
   `cms.site_gate`, read by `admin/site-gate-banner.js`. It is the one global
@@ -282,6 +283,16 @@ lanes). **Single-page-site caveat:** per-item *live* preview is limited for a
 single-page bio (jodidaniel.com — no per-section route to drive the bridge);
 the seeded `preview.md` still gives a working `/preview/` shell + the seeded
 `404.html` a friendly not-found page.
+
+## The admin host's own not-found page (#517)
+
+`theme/admin/not-found.html` is not the site's 404. It is what a site that
+serves its editor from its own origin (`AdminDomainName`, see
+`docs/ADMIN-AUTH-SECURITY.md`) answers every miss on that host with, so it
+shares an origin with the editor's tokens: plain HTML, no script, no style, no
+external resource, no layout or include, and no `window.CMS_*` injection (the
+render paths only touch `index*.html` and `reviews/*.html`).
+`theme/spec/admin_not_found_page_test.rb` parses it against an allowlist.
 
 ## Seeded 404 page: self-contained and neutral, not gem-styled (issue #326)
 

@@ -62,6 +62,11 @@ export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
   complete a sign-in; that is a valid choice for a site that does not use them.
 - `www.<apex>` serves the same `/admin` on the production distribution but is a
   different origin; list it only if editors really sign in there.
+- A site that serves its editor from its own origin (below) lists that origin
+  **instead of** the apex: `https://admin.<apex>,https://preview-*.<apex>`.
+  Leaving the apex in lets a script on any public page open the sign-in popup
+  itself and, for an editor who has already authorized the app (GitHub then
+  skips the consent screen), receive a token.
 - A bare `*`, an `http://` origin, or an entry with a path is invalid.
   `deploy.sh` refuses to deploy it, and a proxy that somehow ends up with no
   valid entry answers 500 instead of signing anyone in.
@@ -141,7 +146,7 @@ sam deploy --template-file .aws-sam/build/template.yaml \
   --stack-name <prefix>-oauth-proxy --region us-east-1 \
   --capabilities CAPABILITY_IAM --resolve-s3 --no-execute-changeset \
   --parameter-overrides "AllowedOrigins=https://<apex>,https://preview-*.<apex>" \
-    "GitHubScope=repo,user,workflow" "FunctionName=<prefix>-oauth-proxy"
+    "GitHubScope=repo,read:user,workflow" "FunctionName=<prefix>-oauth-proxy"
 ```
 
 `--no-execute-changeset` stops at the change set, so it can be read first
@@ -261,17 +266,360 @@ the probe shows deploys trailing releases by more than a release cycle.
 ## The token at rest
 
 Once issued, the token sits in `localStorage`, readable by every script on the
-origin, and it is an OAuth App token: scope `repo,user,workflow`, every
-repository the editor can reach, no expiry. A script that should not be there
+origin, and it is an OAuth App token: scope `repo,user,workflow` (or
+`repo,read:user,workflow` from a proxy deployed after #516), every repository
+the editor can reach, no expiry. A script that should not be there
 is therefore expensive. What was weighed:
 
 | Measure | Status | Why |
 |---|---|---|
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
-| Security headers | Deferred — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | CloudFront serves none. HSTS, `nosniff` and `frame-ancestors` are cheap; a CSP for `/admin` has to live with Decap's `new Function` and inline styles. Needs a bootstrap-stack deploy per site and a live publish loop to prove it. |
-| Narrower permissions | Deferred — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516) | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. |
-| A separate origin for the editor | Deferred — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517) | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). Moving `/admin` to its own host takes the token out of their reach, and moves a URL most of the e2e harness depends on. |
+| Security headers | **In the template, not yet deployed** — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | Both distributions send HSTS, `nosniff`, `Referrer-Policy` and same-origin framing once a site redeploys its bootstrap stack; `/admin/*` adds a CSP, Report-Only until `AdminCspMode=enforce`. Decap's `new Function` and the per-site inline scripts keep `script-src` loose; the gain is `connect-src`, `object-src`, `base-uri` and `frame-ancestors`. See [Security headers](#security-headers) below. |
+| Narrower permissions | Evaluated, spike pending — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516); `read:user` replaces `user` in the proxy's default scope | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. The source evaluation, the minimal permission set and the spike kit are in [GitHub App sign-in](#github-app-sign-in-516) below. |
+| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); off until a site follows the runbook below | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
+
+## Serving the editor from its own origin (opt-in, #517)
+
+Off by default: with the bootstrap stack's `AdminDomainName` empty, no admin
+resource exists and the production distribution is exactly what it was. With
+it set, `/admin/` and `/admin/reviews/` are served from `admin.<apex>` by a
+**separate CloudFront distribution**, and the apex only redirects there.
+
+| Request | Answer |
+|---|---|
+| `admin.<apex>/admin/…` (a clean path) | the same `admin/` objects from the production bucket; a path ending in `/` gets its `index.html` |
+| `admin.<apex>/admin`, `admin.<apex>/admin/reviews` | 302 to the `/` form (the REST origin has no index document of its own) |
+| `admin.<apex>/admin/…` with a `%`-escape, a `.`/`..` segment, a `//`, or any character outside `[A-Za-z0-9._-]` | bare 404 with no body; reaches neither S3 nor the apex |
+| `admin.<apex>/` | 302 to `admin.<apex>/admin/` |
+| `GET admin.<apex>/<anything else>` | 302 to the same path and query on `<apex>`; never reaches S3 |
+| `HEAD admin.<apex>/<anything else>` | served (with the same `index.html` mapping): no body runs, and `slug-pin.js` probes `/blog/<slug>/` same-origin |
+| a miss on `admin.<apex>` (S3 403 or 404) | `/admin/not-found.html` as a 404: plain HTML from the gem, no script, no style, no external resource |
+| `<apex>/admin…`, `www.<apex>/admin…` | 302 to the same path and query on `admin.<apex>` (the browser keeps the `#/…` fragment) |
+
+Why a distribution of its own, and not an alias on the production one (the
+first version of this change): a distribution's `CustomErrorResponses` cannot
+vary by host, and viewer functions do not run for the error-page fetch, so a
+missing `admin.<apex>/admin/<x>` was answered with the public `/404.html`, RUM
+client included, on the admin origin. Any public-page script could open such a
+URL in a same-site iframe or a popup and read the tokens through it.
+
+How the admin distribution keeps that from happening:
+
+- **Origin: the production bucket's REST endpoint**
+  (`ProductionBucket.RegionalDomainName`), read anonymously. The bucket is
+  already world-readable through `ProductionBucketPolicy`, so this needs no
+  origin access control and no change to that retained policy; it reads
+  nothing the website endpoint does not already serve to anyone. What it
+  changes is the error path: the REST endpoint has no website `ErrorDocument`,
+  so a missing key is S3's own XML error (`403 AccessDenied` for an anonymous
+  reader without `s3:ListBucket`), never an HTML page from the site.
+- **Errors**: 403 and 404 map to `/admin/not-found.html` with status 404.
+  `theme/spec/admin_not_found_page_test.rb` parses that page and fails on any
+  element or attribute outside a short allowlist. If the page is itself
+  missing (a site that deployed the stack before bumping the gem), CloudFront
+  returns "the status code that CloudFront received from the origin that
+  contains the custom error pages"
+  ([AWS](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/GeneratingCustomErrorResponses.html))
+  — here S3's 403 for the page. That the body is then S3's XML error is
+  inferred (it is all the REST endpoint returns for a missing key), not stated
+  by AWS and not observed live.
+- **One cache behavior**, guarded by the `admin-site` viewer-request function
+  (`AdminSiteFunction`); `GET`/`HEAD` only; `CachingDisabled`, because the
+  site's deploy invalidates only the production distribution; no origin
+  request policy, so no viewer query string reaches S3.
+- **Paths**: CloudFront normalizes a path (dot segments, `//`) only to choose
+  a cache behavior and then "sends the raw URI path to the origin"
+  ([AWS](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/DownloadDistValuesCacheBehavior.html#path-normalization)).
+  AWS does not say whether the function sees the raw or the normalized path,
+  so the function assumes neither: it forwards only a path matching
+  `/admin(/<segment>)*` where no segment starts with a dot, and sets the
+  request's URI to the value it checked. Case variants (`/Admin/`) and a
+  prefix that is not a segment (`/administrator`, `/admin.html`,
+  `/admin%2f…`) are not `/admin/` and go to the apex like any public path. The
+  function does not read the `Host` header: only `admin.<apex>` and the
+  distribution's own `*.cloudfront.net` name reach it. A trailing-dot host
+  (`admin.<apex>.`) is a different origin in the browser, holding no tokens
+  and not in `ALLOWED_ORIGINS`; which distribution CloudFront picks for it was
+  not tested.
+- **Certificate and DNS**: its own ACM certificate, DNS-validated in the
+  site's hosted zone in us-east-1 (the region CloudFront requires, and the
+  region the bootstrap stack already deploys its certificates in), so opting
+  in or out never touches `ProductionCertificate`; its own Route53 A-alias.
+  `admin.<apex>` then exists as a name, so the `*.<apex>` wildcard record no
+  longer answers for it, and CloudFront "sends the request to the distribution
+  with the more specific name match"
+  ([AWS](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/CNAMEs.html#alternate-domain-names-restrictions)),
+  so the preview distribution never serves the admin host.
+- **Headers**: its one behavior attaches `<prefix>-admin-headers`, the same
+  policy as the apex's `/admin/*` behavior (see [Security headers](#security-headers)):
+  HSTS, `nosniff`, `frame-ancestors 'self'` and the admin CSP, Report-Only
+  until `AdminCspMode=enforce`. Opting in drops none of them. `'self'` there
+  is `admin.<apex>`; the apex and its subdomains are listed by name.
+
+On the production distribution the only change is the `admin-redirect`
+viewer-request function (`ApexAdminRedirectFunction`) on its default
+behavior and on its `/admin/*` behavior (#515's headers behavior). Any cache behavior added there that can match `/admin` must carry
+the same association; `e2e/admin-host-router.test.js` checks every behavior.
+
+The site side: `cms.admin_origin` (injected as `window.CMS_ADMIN_ORIGIN`; on
+that origin `site-hostname.js` and `live-url-derive.js` build public URLs and
+"on `<host>`" copy from `url`), and `ALLOWED_ORIGINS`. Tests:
+`e2e/admin-host-router.test.js` runs both functions (including that they never
+bounce a request between the hosts) and checks the template's shape and that an
+un-opted stack deploys exactly what it did before;
+`theme/spec/admin_not_found_page_test.rb` checks the error page.
+
+### What it closes, and what it does not
+
+**Closed**, once the runbook below is finished (old tokens revoked, apex out of
+`ALLOWED_ORIGINS`): a script running on a public page of the production site
+(the RUM client, an HTML embed rendered on a published page, any include a
+site adds) can no longer read an editor's token from storage, open the
+sign-in popup and receive one, or get a page of its choosing rendered on the
+admin origin.
+
+**Not closed:**
+
+- **Content rendered inside the editor.** Decap draws the markdown preview
+  pane in a same-origin frame, and the platform leaves Decap's
+  `sanitize_preview` at its default (`false`), so an HTML embed
+  (`editor-component-html-embed.js`) with an event-handler attribute, such as
+  an `<img onerror>`, runs in the admin origin when the entry is opened;
+  `<script>` tags do not (they arrive through `innerHTML`). Anyone who can put
+  content on a `cms/*` branch reaches every editor who opens it. Not verified
+  in a browser here.
+- **Per-PR preview admins are unchanged.** `preview-prN.<apex>` and
+  `preview-cms-<slug>.<apex>` each serve their admin next to that build's
+  public pages. Preview builds run with `JEKYLL_ENV=preview`, so they load no
+  RUM client; but `/preview/` loads `marked` from unpkg with no integrity
+  hash, and a draft's HTML embed is a real `<script>` on its rendered page. A
+  token from a sign-in on a preview admin sits beside both. Drop the preview
+  entry from `ALLOWED_ORIGINS` to refuse those sign-ins.
+- **The admin objects are still in the production bucket under `admin/`.**
+  The apex no longer serves them for `/admin` or `/admin/…`. A path that only
+  looks like one to S3 (for example `/admin%2Findex.html`) is not matched by
+  the redirect and goes to the website endpoint; whether S3 then decodes it
+  and serves the shell on the apex was not tested. If it does, that copy can
+  neither sign in (the apex is out of `ALLOWED_ORIGINS`) nor use the old
+  tokens (revoked). The S3 website and REST endpoints serve the same objects
+  on `amazonaws.com` origins, which hold no tokens.
+- **Live Preview is hidden on the admin origin.** `/preview/` fills from a
+  same-origin `BroadcastChannel`, and it stays on the public site: it is a
+  public page that loads `marked` from unpkg without an integrity hash and,
+  in production, the RUM client. Decap's own preview pane still works.
+  Bringing the button back needs a cross-origin transport (`postMessage` to a
+  window the editor opened), which is not built.
+- **Framing and CSP need the bootstrap redeploy.** `frame-ancestors 'self'`
+  and the admin CSP reach `admin.<apex>` only once the stack carrying #515 is
+  deployed, and the CSP only reports until `AdminCspMode=enforce`; with its
+  `'unsafe-inline'` and `'unsafe-eval'` it does not stop the preview-pane
+  embed above.
+- **Tokens issued before the cut-over.** They stay in the apex's
+  `localStorage` (`decap-cms-user`, `gh_reviews_token`), readable by every
+  apex script, and the editor on its new origin cannot clear another origin's
+  storage. They are harmless only once revoked: step 7 of the runbook is not
+  optional. A script-free clean-up on the apex (a `Clear-Site-Data: "storage"`
+  header on the apex `/admin` redirect) was considered and not built: it
+  cannot name the two keys, so it would wipe all of the apex's storage
+  (including the RUM opt-out and the share row's remembered host) on every
+  visit to an old `/admin` bookmark, and once the tokens are revoked there is
+  nothing left for it to protect. An editor who wants the dead entries gone
+  clears the apex's site data in the browser.
+- **The e2e harness is unchanged.** Local lanes serve one origin, preview
+  lanes drive preview admins, and the prod lanes go to `<apex>/admin/` and
+  follow the 302: every spec seeds tokens with `page.addInitScript` (which
+  runs on whatever origin the page lands on), and every `page.route` pattern
+  is a host-agnostic glob. Admin-bundle parity fetches `<apex>/admin/…` with
+  redirects followed, so it compares the same bytes. None of this has run
+  against an opted-in site yet: the first prod loop after cut-over is the
+  proof.
+
+### Runbook, per site
+
+Needs a release carrying this change, bumped into the site (`platform.lock`),
+and deployed, so `admin/not-found.html` is in the production bucket before the
+admin distribution exists. Run from the site repo with that site's AWS
+credentials. Deploy the proxy as "Deploying without touching the credentials"
+(above) describes, so a stale `site-params.env` cannot overwrite its secret.
+
+```bash
+# 0. The name is free (expect []), and the error page is live (expect 200)
+aws route53 list-resource-record-sets --hosted-zone-id <zone-id> \
+  --query "ResourceRecordSets[?Name=='admin.<apex>.']"
+curl -s -o /dev/null -w '%{http_code}\n' "https://<apex>/admin/not-found.html"
+
+# 1. Site PR: _config.yml gains, under cms:
+#      admin_origin: https://admin.<apex>
+#    Merge and let it deploy. It is inert until the host serves the admin.
+
+# 2. Deploy the proxy accepting BOTH origins during the switch:
+#      AllowedOrigins=https://<apex>,https://admin.<apex>,https://preview-*.<apex>
+
+# 3. Add ADMIN_DOMAIN=admin.<apex> to infrastructure/site-params.env (every
+#    later bootstrap redeploy needs it too, or the admin host is removed),
+#    then redeploy the bootstrap stack the way docs/MEDIA-ARCHIVE.md step 3
+#    does for that site: a live apex keeps CREATE_APEX_DNS_RECORDS=true (a
+#    redeploy without it DELETES the apex records), and STACK_NAME must name
+#    the bootstrap stack, not the proxy's. A new certificate is validated and
+#    a new distribution deployed: allow several minutes.
+bash infrastructure/bootstrap/deploy.sh
+
+# 4. Verify with GET (curl -I sends HEAD, which the admin host serves on purpose)
+hdr() { curl -s -o /dev/null -D - "$1" | grep -i -E '^(HTTP|location|content-type)'; }
+hdr "https://<apex>/admin/"                    # 302, location: https://admin.<apex>/admin/
+hdr "https://www.<apex>/admin/reviews/?q=a%26b" # 302, location keeps ?q=a%26b as sent
+hdr "https://admin.<apex>/admin/"              # 200, text/html
+hdr "https://admin.<apex>/admin/reviews"       # 302, location: https://admin.<apex>/admin/reviews/
+hdr "https://admin.<apex>/admin/nope.html"     # 404, text/html
+curl -s "https://admin.<apex>/admin/nope.html" | grep -c '<script'   # 0
+# a dot segment sent raw: 404 (or a 302 to the apex, if CloudFront hands the
+# function the normalized path), never 200
+curl -s -o /dev/null -w '%{http_code}\n' --path-as-is "https://admin.<apex>/admin/../404.html"
+hdr "https://admin.<apex>/blog/"               # 302, location: https://<apex>/blog/
+hdr "https://admin.<apex>/"                    # 302, location: https://admin.<apex>/admin/
+curl -s "https://admin.<apex>/admin/" | grep -o 'window.CMS_ADMIN_ORIGIN="[^"]*"'
+echo | openssl s_client -connect admin.<apex>:443 -servername admin.<apex> 2>/dev/null \
+  | openssl x509 -noout -ext subjectAltName    # admin.<apex> only
+
+# 5. One real sign-in at https://admin.<apex>/admin/ and one at /admin/reviews/;
+#    open a published post: "View page on site" names https://<apex>/...
+
+# 6. Deploy the proxy again with the apex out of its list:
+#      AllowedOrigins=https://admin.<apex>,https://preview-*.<apex>
+```
+
+7. **Revoke every token issued before the cut-over.** On the site's GitHub
+   OAuth App (Settings → Developer settings → OAuth Apps → the app, or the
+   owning organization's settings for an org-owned app) use **Revoke all user
+   tokens**. Every editor then signs in once on `admin.<apex>`; there is
+   nothing to carry over, since `localStorage` belongs to an origin. This
+   signs out every session of that app, preview admins included, and anything
+   else using a token the app issued. If an app owner is not available, each
+   editor revokes the app at `https://github.com/settings/applications`
+   instead, which covers only that editor. Until one of these is done, the
+   old tokens are valid (OAuth App tokens do not expire) and readable by apex
+   scripts.
+
+If step 3 fails with "One or more aliases specified for the distribution
+includes an incorrectly configured DNS record that points to another
+CloudFront distribution", CloudFront resolved `admin.<apex>` through the
+`*.<apex>` wildcard to the preview distribution
+([AWS](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/troubleshooting-distributions.html#troubleshoot-incorrectly-configured-DNS-record-error)).
+The stack rolls back with nothing changed. Whether CloudFront applies that
+check here was not tested. A way through that should work but is also
+untested: create any record of another type at `admin.<apex>` first (for
+example a `TXT`), so the name exists and the wildcard no longer answers for it,
+wait out the wildcard's TTL, rerun step 3, and delete the placeholder after.
+
+**Rollback**: put the apex back in `AllowedOrigins` and deploy the proxy, then
+remove `ADMIN_DOMAIN` and rerun step 3 (the admin distribution, certificate,
+record and both functions go; the production certificate is untouched). The
+redirects are 302s, so no browser keeps them. `cms.admin_origin` can stay: it
+is inert while the editor is served from the apex. Editors sign in again on the
+apex.
+
+## Security headers
+
+`infrastructure/bootstrap/template.yaml` attaches two response headers
+policies, `<prefix>-baseline-headers` on each distribution's default behavior
+and `<prefix>-admin-headers` on an `/admin/*` behavior that is otherwise a
+copy of the default (same origin, cache policy and functions;
+`e2e/cloudfront-security-headers.test.js` holds them equal). A site serving
+its editor from its own origin (#517, above) also sends `<prefix>-admin-headers`
+on every response of `admin.<apex>`; its apex `/admin/*` then only redirects,
+so run the checks below against `admin.<apex>/admin/` instead.
+
+| Header | Everywhere | `/admin/*` |
+|---|---|---|
+| `Strict-Transport-Security` | `max-age=31536000` (`HstsMaxAgeSeconds`); `includeSubDomains` / `preload` only with `HstsScope` | same |
+| `X-Content-Type-Options` | `nosniff` | same |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | same |
+| `X-Frame-Options` | `SAMEORIGIN` | same |
+| `Content-Security-Policy` | `frame-ancestors 'self'` | report-only: `frame-ancestors 'self'`; enforce: the full policy |
+| `Content-Security-Policy-Report-Only` | — | report-only: the full policy; enforce: absent |
+
+Nothing frames these pages from another origin: Decap's preview pane is a
+`srcdoc` iframe inside `/admin`, embedded tools are same-origin
+`/assets/tools/` iframes, the live preview is a separate tab, and the
+visual-regression harness navigates top-level. A site that wants another
+origin to embed its pages has to widen `frame-ancestors` first.
+
+The full `/admin` policy, and why each part is there:
+
+- `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com` — Decap
+  (SRI-pinned) calls `new Function`; the shells' inline scripts carry
+  per-site `window.CMS_*`, so a hash would differ per site and render path.
+- `style-src 'self' 'unsafe-inline'` — Decap injects inline styles.
+- `connect-src 'self' https://<apex> https://*.<apex> https://api.github.com
+  https://www.githubstatus.com` — no bare `https:`. The subdomains cover the
+  dashboards' `preview-pr<N>` `regression.json`; githubstatus.com is Decap's
+  status probe. The OAuth proxy is absent on purpose: sign-in is a popup and
+  `postMessage`, which `connect-src` does not govern. If #516 adds a token
+  refresh `fetch` to the proxy, its origin has to be added.
+- `img-src 'self' data: blob: https://<apex> https://*.<apex>
+  https://avatars.githubusercontent.com`, `media-src 'self' blob:
+  https://<apex> https://*.<apex>` (the dashboards' `regression.mp4`),
+  `font-src 'self' data:`, `frame-src 'self'`, `default-src 'self'`.
+- `object-src 'none'`, `base-uri 'none'` (no shell has a `<base>`).
+
+A new third-party script, stylesheet or `fetch` target under `theme/admin/`
+needs a matching source in the template, or it breaks once a site enforces.
+Decap's preview pane is a `srcdoc` iframe, and a `srcdoc` document inherits
+the `/admin` policy, so a third-party image, script or iframe inside an
+entry's body (an HTML Embed, a hotlinked image) previews blank once a site
+enforces, while the published page still shows it. An iframe that loads a
+same-origin URL such as `/assets/tools/<slug>/` gets that page's own policy.
+
+It narrows where a script can quietly send what it reads; it cannot stop a
+script that navigates the page away, and the GitHub API it must allow is
+itself writable. There is no reporting endpoint: Report-Only violations
+appear only in the browser console, as `[Report Only] Refused to …`.
+`/admin/index-local.html` is a local-development shell talking to
+`decap-server` on `localhost`; through CloudFront an enforced policy blocks
+that, which changes nothing a deployed site uses.
+
+### Rolling it out, per site
+
+1. Redeploy the bootstrap stack from the site repo once its bump PR naming
+   the release is merged. A live apex must keep `CREATE_APEX_DNS_RECORDS=true`
+   (in `site-params.env` or the wrapper), or the update deletes its apex and
+   `www` records:
+
+   ```bash
+   cd ~/repos/<site> && git checkout main && git pull
+   bash infrastructure/bootstrap/deploy.sh   # ADMIN_CSP_MODE unset = report-only
+   ```
+
+2. Check the headers on production and on one live preview host (no
+   invalidation is needed; the policy applies to cached responses too):
+
+   ```bash
+   for u in https://<apex>/ https://<apex>/admin/ https://<apex>/admin/reviews/ \
+            https://preview-pr<N>.<apex>/ https://preview-pr<N>.<apex>/admin/ \
+            https://preview-pr<N>.<apex>/admin/reviews/; do
+     echo "== $u"
+     curl -sI "$u" | grep -i -E '^(strict-transport-security|x-content-type-options|referrer-policy|x-frame-options|content-security-policy)'
+   done
+   ```
+
+   `/` shows five headers; each `/admin/` URL also shows
+   `content-security-policy-report-only`.
+3. Do an editor round-trip with the browser console open on `/admin/`: sign
+   in, open and edit an entry, watch the preview pane, upload an image and
+   open the media library, save, publish; then sign in on `/admin/reviews/`
+   and `/admin/reviews/health.html`, and repeat on a preview admin. Every
+   `[Report Only]` line is a source the policy is missing: fix the template
+   before enforcing.
+4. Enforce: add `export ADMIN_CSP_MODE="enforce"` to
+   `infrastructure/site-params.env` (the wrapper sources it, and a later
+   redeploy without it goes back to report-only), run
+   `bash infrastructure/bootstrap/deploy.sh` again, and repeat step 2:
+   `content-security-policy` now carries the full policy and the Report-Only
+   header is gone.
+5. Drive `gh workflow run cms-publish-loop-prod.yml --repo <owner>/<repo>`
+   green (the definition of done in `AGENTS.md`). To back out, redeploy with
+   `ADMIN_CSP_MODE=report-only`.
 
 ## Rules that follow
 
@@ -292,3 +640,251 @@ is therefore expensive. What was weighed:
   uses `event.origin` as a reply target before checking it.
 - **`oauth-proxy/` changes are not live until deployed and probed** — say which
   sites were probed, and with what result, when reporting the change done.
+
+## GitHub App sign-in (#516)
+
+Status: **evaluated from source, not yet measured.** Nothing below has run
+with a real `ghu_` token; the spike at the end is what decides it.
+
+**Sources.** `decap-cms@3.15.1` (the version all three shells pin) was published
+2026-07-24 and bundles `decap-cms-backend-github@3.8.0`,
+`decap-cms-lib-auth@3.2.1` and `decap-cms-core@3.17.1`: each is the floor of
+its caret range and the newest release before that date, and the strings cited
+below were cross-checked in `dist/decap-cms.js`. `backend-github/` below means
+that package's `src/`. Permissions come from GitHub's *Permissions required for
+GitHub Apps* table (its user-access-token column), read 2026-10-02.
+
+### Every GitHub call made with the editor's token
+
+Decap (`backend: github`, REST — `use_graphql` is unset,
+`backend-github/implementation.tsx:134`):
+
+| Call | Where | App permission |
+|---|---|---|
+| `GET /user` | `implementation.tsx:217-232`; also both dashboards (`reviews/index.html:384`, `reviews/health.html:423`) | none — any user token |
+| `GET /users/{login}` (PR author name) | `API.ts:633-644` | none — public |
+| `GET /repos/{o}/{r}`, reading `permissions.push` — **the sign-in write check** | `API.ts:292-304`, called from `implementation.tsx:363-378` on every sign-in and reload | Metadata: read |
+| `GET /pulls`, `GET /pulls/{n}/commits` | `API.ts:550-568`, `619-631` | Pull requests: read |
+| `POST /pulls`, `PATCH /pulls/{n}` | `API.ts:1349-1386` | Pull requests: write |
+| `PUT /issues/{n}/labels` (editorial status) | `API.ts:1011-1016`, `1181-1189` | Pull requests: write **or** Issues: write |
+| `PUT /pulls/{n}/merge` | `API.ts:1388-1408` | Contents: write |
+| `POST /git/blobs`, `/git/trees`, `/git/commits` — entries **and media uploads** (`persistMedia`, `implementation.tsx:561-577` → `persistFiles`, `API.ts:947-969`) | `API.ts:1432-1447`, `1519-1546` | Contents: write |
+| `POST`/`PATCH`/`DELETE /git/refs` | `API.ts:1242-1265`, `1294-1345` | Contents: write; Workflows: write only if the ref change touches `.github/workflows/` |
+| `GET /git/blobs`, `/git/trees/{ref}:{dir}`, `/branches/{b}`, `/compare/{a}...{b}`, `/commits?path=` | `API.ts:690-760`, `971-992`, `1089-1106`, `1267-1277` | Contents: read |
+| `GET /commits/{sha}/status` (`preview_context`) | `API.ts:931-945` | Commit statuses: read |
+| `GET /search/issues`, `PATCH /issues/{n}` (notes cleanup on publish/delete) | `API.ts:1802-1828`, `1960-1983` | search: none; PATCH: Pull requests or Issues write |
+
+The notes calls are dormant: notes default off (`decap-cms-core`
+`actions/config.ts:244-245`; `config.base.yml` sets no `editor:`), so the
+search finds nothing, and both calls sit in a `try/catch`. The
+`refs/meta/_decap_cms` metadata branch (`API.ts:430-505`) is reached only by the
+legacy label migration.
+
+The platform (`theme/admin/`):
+
+| Call | Where | App permission |
+|---|---|---|
+| `GET /pulls?state=…`, `GET /pulls/{n}` | `live-url-banner.js:141`, `publish-progress.js:287,409,469`, `posts-list-enhance.js:405`, `reviews/index.html:443` | Pull requests: read |
+| `GET /git/ref/…`, `/git/matching-refs/heads/cms/posts/`, `/contents/{path}` | `publish-progress.js:369`, `posts-list-enhance.js:382`, `site-gate-banner.js:156` | Contents: read |
+| `GET /commits/{sha}/check-runs` | `publish-progress.js:371`, `posts-list-enhance.js:471` | Checks: read |
+| `GET /actions/runs?…`, `/actions/workflows/{f}/runs`, `GET …/pending_deployments` | `publish-progress.js:421`, `reviews/index.html:402,431`, `reviews/health.html:440` | Actions: read |
+| `POST /actions/runs/{id}/pending_deployments` — **approve / reject** | `reviews/index.html:558,587` | **Deployments: write** |
+| `GET /deployments`, `/deployments/{id}/statuses` | `deploy-status-pill.js:224-260`, `publish-progress.js:483-485`, `posts-list-enhance.js:344-353` | Deployments: read |
+| `POST`/`DELETE /issues/{n}/labels` (`cms/ready`) | `publish-button.js:222-233`, `publish-via-auto-merge.js:93,250` | Pull requests: write or Issues: write |
+| `POST /git/refs`, `POST /pulls` (delete recovery) | `publish-via-auto-merge.js:208-226` | Contents: write, Pull requests: write |
+| GraphQL `history { associatedPullRequests }` on `main` | `posts-list-enhance.js:280-310` | Contents + Pull requests: read (GraphQL has no published table; a gap answers HTTP 200 with an `errors` entry such as *Resource not accessible by integration*, and the shim then drops dates and PR links without a console error) |
+
+Called by nothing: a `delete-via-pr.yml` dispatch (removed —
+`publish-via-auto-merge.js:58-63`, `e2e/decap-pat.js:19-27`; the issue's list is
+stale there), enabling auto-merge (the `cms/ready` label makes
+`cms-editorial-workflow.yml` do it with its own credential), `PATCH /user`,
+`/user/emails`. The only `PUT /user` in the bundle is GoTrue's, used by the
+`git-gateway` backend.
+
+### Where a GitHub App behaves differently
+
+1. **The write check.** Decap signs in only when `GET /repos/{o}/{r}` reports
+   `permissions.push` (`API.ts:299`); `bypassWriteAccessCheckForAppTokens` is a
+   class field no config key sets (`implementation.tsx:89,377`). #238 measured
+   an *installation* token: `false`. A user token acts as the user, but GitHub
+   does not document whether `permissions` then reports the user's role or the
+   App's grant. The closest evidence is favorable: the e2e loops already sign
+   Decap in with a fine-grained PAT (`e2e/decap-pat.js`).
+2. **Approving a deployment needs Deployments: write**, in both the App and the
+   fine-grained-PAT tables. `skills/consumer-repo-provisioning/SKILL.md` calls
+   it an Actions endpoint; GitHub's tables disagree. The approver must still be
+   a required reviewer of the environment, and a user token acts as that user.
+3. **`scope` is not a GitHub App authorize parameter.** The proxy keeps sending
+   `&scope=`; GitHub is expected to ignore it.
+4. **`workflow`'s stated reason is gone**: the dispatch it was added for no
+   longer exists (above), and Decap's ref writes carry content only: new commits sit on `main`'s tip or on
+   the branch's merge base (`editorialWorkflowGit`, `API.ts:1030-1087`;
+   `rebaseBranch`, `1165-1180`). The App below has no Workflows permission, so
+   the spike measures whether anything still needs it.
+
+**Minimal permission set:** Metadata read, Contents read/write, Pull requests
+read/write, Commit statuses read, Checks read, Actions read, Deployments
+read/write. Not Issues, Workflows, Administration, or any account permission.
+It is `oauth-proxy/github-app-manifest.json`, locked by `test_lambda.py`.
+
+### Token expiry
+
+Decap's GitHub backend has no refresh flow: `lib-auth`'s `refresh()`
+(`netlify-auth.js:132-161`) is never called by `backend-github`, and any failure
+restoring a stored user logs the editor out (`decap-cms-core`
+`actions/auth.ts:56-76`). After expiry every call fails until a reload; on
+reload `currentUser` parses the 401 body without checking `res.ok`
+(`implementation.tsx:220-226`), the write check throws, and Decap shows its
+*Repo not found … ensure the organization has granted access* text
+(`implementation.tsx:363-374`) above the login button. Misleading, not broken.
+The dashboards already handle 401 (`reviews/index.html:301-305`).
+
+| | Expiring (8 h) | Expiry off |
+|---|---|---|
+| A leaked token is good for | at most 8 h | until revoked |
+| Repo and permission limits | yes | yes |
+| Editor cost | one *Login with GitHub* click per working day (no consent screen once authorized) | none |
+
+A refresh token must never reach the browser: it lives six months and mints new
+access tokens. The proxy hands over `access_token` alone and drops
+`refresh_token` and `expires_in` (`_exchange_code`;
+`TestGitHubAppTokenResponse`).
+
+**Recommendation: expiring.** Fall back to expiry off only if spike step 11
+shows an unsaved edit lost across a re-login.
+
+### Org-owned consumers (#26) and the restriction detector
+
+OAuth App access restrictions apply to OAuth Apps only. Under a GitHub App the
+gate is the **installation**: an org owner installs the App on the org and
+picks the site repo, so the installer is the approver, as with the automation
+App. Members then authorize it at their first sign-in. The failure moves from
+"signs in, cannot save" to "cannot sign in": with no installation the token
+reaches nothing in the org, and the write check fails with the same misleading
+text as an expired token.
+
+`oauth-app-restriction-detector.js` matches GitHub's *OAuth App access
+restrictions* message, which an App never produces, so it stays inert. Keep it
+while any site signs in through an OAuth App. A login-screen hint for the
+missing-installation case is the right replacement once the spike shows the
+exact error; it is not built yet. A user-owned App can be installed on another
+account only if it is public, so the org consumer's App belongs to the org.
+
+### One App or two
+
+**Do not reuse the CMS automation App (#238).**
+
+- A user token holds the intersection of the App's permissions and the user's,
+  on every repo the App is installed on. The automation App has Workflows:
+  write (the one permission the sign-in token must not carry) and is installed
+  on `cms-platform` as well, so an editor who can write there would carry that
+  too.
+- It lacks Actions, Checks, Commit statuses and Deployments. Adding them widens
+  what its private key, a repo secret on every consumer
+  (`CMS_AUTOMATION_APP_PRIVATE_KEY`), can mint: deployment approvals included.
+  `mint-app-token.js` narrows each run's token; the key holder can mint the
+  full set.
+- The sign-in App's client secret lives in each site's Lambda environment.
+  Sharing one App ties a Lambda leak and a repo-secret leak to the same
+  identity and the same rotation.
+
+**Use a second App, one per site** (`<prefix>-cms-signin`): no private key (the
+web flow needs only the client id and secret), no webhook, installed on the one
+site repo. One per site, because the proxy sends no `redirect_uri`, so GitHub
+returns every sign-in to the App's *first* callback URL; one App per site
+mirrors today's one OAuth App per site and needs no proxy change.
+
+### Go/no-go, and the risks the spike must retire
+
+**Go for the spike. No rollout until it passes.** Ranked:
+
+1. Decap's write check with a `ghu_` token. If `permissions.push` is `false`,
+   sign-in fails and Decap 3.15.1 has no switch for it: **no-go**.
+2. Approving a deployment with the user token.
+3. Label writes on PRs with Pull requests: write and no Issues permission.
+4. Save, media upload, publish and delete end to end.
+5. The posts-list GraphQL query.
+6. A re-login after expiry restoring an unsaved edit.
+7. Anything refusing for lack of Workflows.
+8. The org install path, on the org-owned consumer.
+
+### The spike
+
+It runs on a **throwaway PR's preview admin** of a user-owned consumer, not on
+a scratch repo: the dashboards need the site's own workflows and
+`regression-review` environment, and a preview admin's backend branch is the PR
+head (`scripts/patch-preview-config.sh`), so saves, publishes and deletes land on
+the throwaway branch, never on `main`.
+
+Setup, owner only:
+
+1. Create the App at <https://github.com/settings/apps/new> with the values in
+   `oauth-proxy/github-app-manifest.json` (callback `https://<apex>/` for now;
+   *Expire user authorization tokens* left on; webhook inactive; "Only on this
+   account"). Generate a client secret. Do not generate a private key.
+   Fill the form by hand; do **not** register it through GitHub's manifest
+   flow. That flow always generates a private key, and it redirects to the
+   manifest's `redirect_url` (the public site, where access logs and RUM
+   record the URL) with a one-hour `code` that
+   `POST /app-manifests/{code}/conversions` exchanges, with no credentials,
+   for the private key and the client secret.
+2. Install it on the site repo only.
+3. Deploy a separate spike proxy from this branch:
+
+   ```bash
+   cd ~/repos/cms-platform && git fetch origin \
+     && git checkout --detach origin/feat/github-app-signin-evaluation
+   read -rs GITHUB_CLIENT_SECRET   # the App's client secret; not echoed
+   ( export GITHUB_CLIENT_SECRET STACK_NAME=<prefix>-oauth-proxy-app-spike \
+       GITHUB_CLIENT_ID=<app-client-id> ALLOWED_ORIGINS='https://preview-*.<apex>' \
+       GITHUB_ORG=<owner> GITHUB_REPO=<repo>
+     bash oauth-proxy/deploy.sh )
+   ```
+
+4. Set the App's callback URL to the `CallbackEndpoint` the deploy printed.
+5. In the site repo, on a branch `spike/github-app-signin`, set
+   `cms.oauth_base_url` in `_config.yml` to the printed `ApiUrl`, open a PR and
+   wait for `https://preview-pr<N>.<apex>`.
+
+Checklist, all on that preview:
+
+| # | Do | Pass |
+|---|---|---|
+| 1 | `/admin/` → *Login with GitHub* | GitHub's page names the App and its repository permissions; the collections load. *"Your GitHub user account does not have access to this repo"* is risk 1: stop, no-go. |
+| 2 | Console: `u = JSON.parse(localStorage['decap-cms-user']); [u.token.slice(0, 4), Object.keys(u)]` | `ghu_`, and no `refresh_token` key |
+| 3 | Console: `fetch('https://api.github.com/repos/<owner>/<another-private-repo>', {headers: {Authorization: 'token ' + u.token}}).then(r => r.status)` | `404`: the token cannot see a repo the App is not installed on |
+| 4 | New entry → Save | a `cms/…` PR opens against `spike/github-app-signin` with `decap-cms/draft` |
+| 5 | Add an image to it → Save | the image is in the PR's diff |
+| 6 | Move it to Ready | the label changes; no error toast |
+| 7 | Publish | the PR merges into the spike branch, or is labeled `cms/ready` by the shim; no *workflows* refusal anywhere |
+| 8 | Posts list and the deploy pill; then in the console: `fetch('https://api.github.com/graphql', {method: 'POST', headers: {Authorization: 'bearer ' + u.token}, body: JSON.stringify({query: '{repository(owner:"<owner>",name:"<repo>"){ref(qualifiedName:"refs/heads/main"){target{... on Commit{history(first:1){nodes{committedDate associatedPullRequests(first:1){nodes{number}}}}}}}}}'})}).then(r => r.json())` | dates, PR links and a pill state render, and the response has `data` and no `errors` key. GraphQL reports a permission gap as HTTP 200 with `errors`, not as a 401, so the status code alone proves nothing. |
+| 9 | `/admin/reviews/` and `/admin/reviews/health.html` → sign in | waiting runs and the health table load |
+| 10 | Approve the spike PR's parked `regression-review` gate, if any | *Regression approved*, and the run moves on. A 403 is risk 2. |
+| 11 | Open the entry, type without saving; in a terminal revoke the token: `curl -u <app-client-id> -X DELETE https://api.github.com/applications/<app-client-id>/token -d '{"access_token":"<token from step 2>"}'` (the client secret is the password); Save; reload; sign in again | the Save fails, and after signing in again Decap offers the unsaved edit back |
+| 12 | Delete the spike entry from the posts list | the file leaves the spike branch |
+| 13 | On the org-owned consumer: an org owner creates the same App under the org and installs it; repeat 1–3 there | sign-in works, no *OAuth App access restrictions* banner |
+
+Teardown: close the PR and delete `spike/github-app-signin`;
+`aws cloudformation delete-stack --stack-name <prefix>-oauth-proxy-app-spike`;
+revoke the App at <https://github.com/settings/apps/authorizations>, or keep it
+for the rollout.
+
+### The interim step: `read:user` instead of `user`
+
+The proxy's default scope is now `repo,read:user,workflow` in `lambda.py`,
+`template.yaml` and `deploy.sh` (`TestScopeLockstep`). Nothing in Decap or the
+platform writes the profile; the tables above list every `/user` call, and
+each is a `GET`. **It is not live until each site's proxy is redeployed** (see
+[A release does not deploy the proxy](#a-release-does-not-deploy-the-proxy)),
+then confirmed by one real sign-in:
+
+```bash
+curl -s -o /dev/null -D - "$base/prod/auth" | grep -i '^location:'
+# expect scope=repo%2Cread%3Auser%2Cworkflow
+```
+
+Then sign out of `/admin`, sign in, and in the console:
+`fetch('https://api.github.com/user', {headers: {Authorization: 'token ' + JSON.parse(localStorage['decap-cms-user']).token}}).then(r => r.headers.get('x-oauth-scopes'))`
+should print `read:user, repo, workflow`. If it still says `user`, revoke the
+OAuth App at <https://github.com/settings/applications>, sign in once more,
+then save a draft and open `/admin/reviews/`.

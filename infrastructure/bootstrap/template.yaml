@@ -7,7 +7,9 @@ Description: >
     1. S3 bucket for CloudFormation/SAM deployment artifacts
     2. ACM wildcard certificate *.<apex> + CloudFront distribution
        serving every preview-prN.<apex> subdomain off one bucket
-    3. ACM certificate + CloudFront distribution for the apex (production)
+    3. ACM certificate + CloudFront distribution for the apex (production),
+       plus, only when AdminDomainName is set, a certificate + distribution
+       serving the editor from its own host
     4. Route53 DNS records for preview wildcard and production domains
     5. GitHub OIDC identity provider in AWS IAM
     6. IAM role for GitHub Actions (assumed via OIDC — no long-lived keys)
@@ -106,10 +108,60 @@ Parameters:
       apex/www A-records would otherwise collide with existing records or
       silently repoint a live domain.)
 
+  AdminDomainName:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z0-9-]+(\\.[a-z0-9-]+)+$"
+    Description: >
+      OPTIONAL host that serves the Decap editor on its own origin, e.g.
+      `admin.<apex>` (cms-platform#517). Leave EMPTY and nothing in this stack
+      changes. When set, the stack adds a certificate, a CloudFront
+      distribution and a Route53 A-alias for this host (serving only /admin/
+      out of the production bucket), and a function on the production
+      distribution that redirects /admin on the apex and www here. It must be
+      a name inside HostedZoneId's zone with no record of its own yet. The
+      site sets the same origin as `cms.admin_origin` in _config.yml.
+      See docs/ADMIN-AUTH-SECURITY.md.
+  HstsMaxAgeSeconds:
+    Type: Number
+    Default: 31536000
+    MinValue: 0
+    Description: >
+      max-age of the Strict-Transport-Security header both distributions send
+      (default one year). Lower it first if the site might ever need to serve
+      plain HTTP again; 0 tells browsers to forget an earlier policy.
+
+  HstsScope:
+    Type: String
+    Default: "this-host-only"
+    AllowedValues: ["this-host-only", "include-subdomains", "include-subdomains-preload"]
+    Description: >
+      Whether Strict-Transport-Security also covers every subdomain of the
+      host that sent it (includeSubDomains), and asks to be hard-coded into
+      browsers (preload). Both commit hosts this stack does not serve, such
+      as other services under the apex, and preload is close to permanent,
+      so the default covers only the host that answered.
+
+  AdminCspMode:
+    Type: String
+    Default: "report-only"
+    AllowedValues: ["report-only", "enforce"]
+    Description: >
+      How /admin/* sends its Content-Security-Policy. 'report-only' (the
+      default) sends the full policy as Content-Security-Policy-Report-Only,
+      so a violation is logged to the browser console and nothing is
+      blocked, while frame-ancestors stays enforced. 'enforce' sends the full
+      policy as Content-Security-Policy. Flip it only after an editor
+      round-trip shows no violations (docs/ADMIN-AUTH-SECURITY.md).
+
 Conditions:
   ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
   ShouldCreateApexDnsRecords: !Equals [!Ref CreateApexDnsRecords, "true"]
   ShouldCreateMediaArchive: !Not [!Equals [!Ref MediaArchiveBucketName, ""]]
+  HasAdminDomain: !Not [!Equals [!Ref AdminDomainName, ""]]
+  HstsIncludesSubdomains: !Not [!Equals [!Ref HstsScope, "this-host-only"]]
+  HstsPreloads: !Equals [!Ref HstsScope, "include-subdomains-preload"]
+  AdminCspEnforced: !Equals [!Ref AdminCspMode, "enforce"]
 
 Resources:
 
@@ -430,6 +482,95 @@ Resources:
           }
         }
 
+  # ── Response headers policies (cms-platform#515) ─────────────────────────
+  #
+  # S3 website hosting sends no security headers, so CloudFront adds them.
+  # A cache behavior takes ONE policy, so the /admin/* policy repeats the
+  # baseline and adds the admin CSP. Both policies serve both distributions;
+  # names derive from ResourcePrefix because they are unique per account
+  # (and an account holds at most 20 custom response headers policies).
+  #
+  # frame-ancestors 'self' / X-Frame-Options SAMEORIGIN: nothing frames these
+  # pages from another origin. Decap's preview pane is a srcdoc iframe inside
+  # /admin, embedded tool pages use same-origin /assets/tools/ iframes, the
+  # live preview is a separate tab on a BroadcastChannel, and the
+  # visual-regression harness navigates top-level.
+  BaselineResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ResourcePrefix}-baseline-headers"
+        Comment: "HSTS, nosniff, referrer policy, same-origin framing (cms-platform#515)"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: !Ref HstsMaxAgeSeconds
+            IncludeSubdomains: !If [HstsIncludesSubdomains, true, false]
+            Preload: !If [HstsPreloads, true, false]
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          FrameOptions:
+            FrameOption: SAMEORIGIN
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "frame-ancestors 'self'"
+            Override: true
+
+  # The admin CSP, built from what theme/admin actually loads:
+  #   script-src  Decap from unpkg (SRI-pinned in the shells); 'unsafe-eval'
+  #               because the bundle calls `new Function`; 'unsafe-inline'
+  #               because both render paths inject per-site window.CMS_*
+  #               into inline scripts, so a hash would differ per site and
+  #               per render and would have to be redeployed on every bump.
+  #   style-src   Decap injects inline styles.
+  #   connect-src the GitHub API, githubstatus.com (Decap's status probe),
+  #               and the apex + its subdomains (commit.json, config.yml, the
+  #               dashboards' preview-pr<N> regression.json). The OAuth proxy
+  #               is NOT here: sign-in is a popup plus postMessage, which
+  #               connect-src does not govern, so no per-site parameter.
+  #   img-src     GitHub avatars; blob:/data: for media Decap reads through
+  #               the API.
+  #   media-src   the dashboards' preview-pr<N> regression.mp4.
+  # The Report-Only copy leaves out frame-ancestors only because it is
+  # already enforced by the Content-Security-Policy header in both modes, so
+  # reporting it as well would add nothing.
+  AdminResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ResourcePrefix}-admin-headers"
+        Comment: "Baseline headers plus the /admin Content-Security-Policy (cms-platform#515)"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: !Ref HstsMaxAgeSeconds
+            IncludeSubdomains: !If [HstsIncludesSubdomains, true, false]
+            Preload: !If [HstsPreloads, true, false]
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          FrameOptions:
+            FrameOption: SAMEORIGIN
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: !If
+              - AdminCspEnforced
+              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+              - "frame-ancestors 'self'"
+            Override: true
+        CustomHeadersConfig: !If
+          - AdminCspEnforced
+          - !Ref AWS::NoValue
+          - Items:
+              - Header: Content-Security-Policy-Report-Only
+                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'"
+                Override: true
+
   # ── CloudFront distribution for preview-pr*.<apex> ───────────────────────
   #
   # Uses the S3 website endpoint as a custom origin (not OAC) so that S3
@@ -454,6 +595,7 @@ Resources:
           TargetOriginId: s3-website
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+          ResponseHeadersPolicyId: !Ref BaselineResponseHeadersPolicy
           AllowedMethods: [GET, HEAD, OPTIONS]
           CachedMethods: [GET, HEAD]
           Compress: true
@@ -462,6 +604,25 @@ Resources:
               FunctionARN: !GetAtt PreviewRouterFunction.FunctionARN
             - EventType: viewer-response
               FunctionARN: !GetAtt PreviewLocationFixerFunction.FunctionARN
+        # Identical to DefaultCacheBehavior except for the headers policy. A
+        # behavior is chosen from the viewer's path before the router rewrites
+        # it, so this matches /admin/* on every preview host, and it must
+        # carry the same functions or preview /admin stops routing
+        # (e2e/cloudfront-security-headers.test.js holds the two equal).
+        CacheBehaviors:
+          - PathPattern: /admin/*
+            TargetOriginId: s3-website
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt PreviewRouterFunction.FunctionARN
+              - EventType: viewer-response
+                FunctionARN: !GetAtt PreviewLocationFixerFunction.FunctionARN
         Origins:
           - Id: s3-website
             DomainName: !Sub "${PreviewBucketName}.s3-website-${AWS::Region}.amazonaws.com"
@@ -540,6 +701,55 @@ Resources:
         - DomainName: !Sub "www.${ProductionDomainName}"
           HostedZoneId: !Ref HostedZoneId
 
+  # ── CloudFront Function: send /admin on the apex to the admin host ───────
+  #
+  # Exists only when AdminDomainName is set (cms-platform#517), on the
+  # production distribution. /admin and /admin/* on the apex, www (or the
+  # distribution's own cloudfront.net name) get a 302 to the same path and
+  # query on the admin host; every other path is untouched. The match is the
+  # exact complement of what AdminSiteFunction sends back here, so the two
+  # cannot bounce a request between them.
+  #
+  # The query string is rejoined verbatim the way AWS's own redirect example
+  # does; the fragment (Decap's #/collections/... route) never reaches
+  # CloudFront and the browser carries it across the redirect. 302, not 301:
+  # a browser caches a 301 indefinitely, which would outlive a rollback.
+  ApexAdminRedirectFunction:
+    Type: AWS::CloudFront::Function
+    Condition: HasAdminDomain
+    Properties:
+      Name: !Sub "${AWS::StackName}-admin-redirect"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: "302 /admin and /admin/* on the public site to the admin host"
+        Runtime: cloudfront-js-2.0
+      # `!Sub` bakes the admin host in; the body has no other `${`.
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          if (uri === '/admin' || uri.indexOf('/admin/') === 0) {
+            return redirect('https://${AdminDomainName}' + uri, request.querystring);
+          }
+          return request;
+        }
+
+        function redirect(target, querystring) {
+          var parts = [];
+          for (var name in querystring) {
+            var param = querystring[name];
+            var values = param.multiValue ? param.multiValue : [param];
+            for (var i = 0; i < values.length; i++) {
+              parts.push(values[i].value === '' ? name : name + '=' + values[i].value);
+            }
+          }
+          return {
+            statusCode: 302,
+            statusDescription: 'Found',
+            headers: { location: { value: target + (parts.length ? '?' + parts.join('&') : '') } }
+          };
+        }
+
   # ── CloudFront distribution for <apex> (production) ──────────────────────
   #
   # Uses the S3 website endpoint as a custom origin (not OAC) so that S3
@@ -565,9 +775,36 @@ Resources:
           TargetOriginId: s3-website
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          ResponseHeadersPolicyId: !Ref BaselineResponseHeadersPolicy
           AllowedMethods: [GET, HEAD, OPTIONS]
           CachedMethods: [GET, HEAD]
           Compress: true
+          # Opt-in admin origin (#517). Any cache behavior that matches /admin
+          # paths must carry this same association, or the apex /admin
+          # requests it matches are served here instead of redirected.
+          FunctionAssociations: !If
+            - HasAdminDomain
+            - - EventType: viewer-request
+                FunctionARN: !GetAtt ApexAdminRedirectFunction.FunctionARN
+            - !Ref "AWS::NoValue"
+        # Identical to DefaultCacheBehavior except for the headers policy
+        # (e2e/cloudfront-security-headers.test.js holds the two equal),
+        # including the opt-in admin redirect (#517): without it the apex
+        # would keep serving /admin/* instead of redirecting it.
+        CacheBehaviors:
+          - PathPattern: /admin/*
+            TargetOriginId: s3-website
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            FunctionAssociations: !If
+              - HasAdminDomain
+              - - EventType: viewer-request
+                  FunctionARN: !GetAtt ApexAdminRedirectFunction.FunctionARN
+              - !Ref "AWS::NoValue"
         Origins:
           - Id: s3-website
             DomainName: !Sub "${ProductionBucketName}.s3-website-${AWS::Region}.amazonaws.com"
@@ -609,6 +846,183 @@ Resources:
       Type: A
       AliasTarget:
         DNSName: !GetAtt ProductionDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  # ── The editor on its own origin (opt-in, #517) ──────────────────────────
+  #
+  # Everything below exists only when AdminDomainName is set. The editor keeps
+  # GitHub tokens in localStorage, which every script on its origin can read,
+  # so the admin host must never return a document that runs a public page's
+  # script (the RUM client, an editor's HTML embed, a site's own includes).
+  # It is its own distribution rather than an alias on the production one
+  # because a distribution's CustomErrorResponses cannot vary by host: as an
+  # alias, a missing /admin/<x> was answered with the public /404.html, RUM
+  # and all, on the admin origin.
+  #
+  # Its own certificate, so opting in or out never replaces
+  # ProductionCertificate. Must be in us-east-1 for CloudFront.
+  AdminCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: HasAdminDomain
+    Properties:
+      DomainName: !Ref AdminDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref AdminDomainName
+          HostedZoneId: !Ref HostedZoneId
+
+  # Viewer-request on AdminDistribution. Its origin is the bucket's REST
+  # endpoint, which (unlike the website endpoint) resolves no index document,
+  # so this function does that part too:
+  #
+  #   GET/HEAD /admin/<segments>[/]  → served; a trailing / maps to index.html,
+  #                                    an extensionless last segment (/admin,
+  #                                    /admin/reviews) gets a 302 to its / form
+  #   GET/HEAD /admin/<anything else> → 404, no body: a %-escape, a dot
+  #                                    segment, a // or a character outside
+  #                                    [A-Za-z0-9._-] never reaches S3 (and is
+  #                                    not sent to the apex, which would only
+  #                                    send it back)
+  #   GET /                          → 302 to /admin/ on this host
+  #   GET any other path             → 302 to the same path and query on the
+  #                                    apex; never reaches the origin
+  #   HEAD any other path            → served, with the same index mapping:
+  #                                    slug-pin.js probes /blog/<slug>/
+  #                                    same-origin with HEAD, and a HEAD
+  #                                    response has no body to run
+  #
+  # A segment may not START with a dot, which excludes `.` and `..`. Paths
+  # are case-sensitive, as S3 keys are: /Admin/ goes to the apex, where it is
+  # an ordinary missing page. The host is not inspected; only the admin host
+  # (and this distribution's cloudfront.net name) reach this function.
+  AdminSiteFunction:
+    Type: AWS::CloudFront::Function
+    Condition: HasAdminDomain
+    Properties:
+      Name: !Sub "${AWS::StackName}-admin-site"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: "Serve only /admin/ on the admin host, with index documents; send every other GET to the apex"
+        Runtime: cloudfront-js-2.0
+      # `!Sub` bakes both hosts in; the body has no other `${`.
+      FunctionCode: !Sub |
+        var ADMIN_PATH = /^\/admin(\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*\/?$/;
+
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          if (uri === '/admin' || uri.indexOf('/admin/') === 0) {
+            if (!ADMIN_PATH.test(uri)) return { statusCode: 404, statusDescription: 'Not Found' };
+            if (uri.charAt(uri.length - 1) === '/') {
+              request.uri = uri + 'index.html';
+              return request;
+            }
+            if (uri.slice(uri.lastIndexOf('/') + 1).indexOf('.') === -1) {
+              return redirect('https://${AdminDomainName}' + uri + '/', request.querystring);
+            }
+            request.uri = uri;  // pin the value just checked
+            return request;
+          }
+          if (request.method === 'HEAD') {
+            if (uri.charAt(uri.length - 1) === '/') request.uri = uri + 'index.html';
+            return request;
+          }
+          if (uri === '/') return redirect('https://${AdminDomainName}/admin/', {});
+          return redirect('https://${ProductionDomainName}' + uri, request.querystring);
+        }
+
+        function redirect(target, querystring) {
+          var parts = [];
+          for (var name in querystring) {
+            var param = querystring[name];
+            var values = param.multiValue ? param.multiValue : [param];
+            for (var i = 0; i < values.length; i++) {
+              parts.push(values[i].value === '' ? name : name + '=' + values[i].value);
+            }
+          }
+          return {
+            statusCode: 302,
+            statusDescription: 'Found',
+            headers: { location: { value: target + (parts.length ? '?' + parts.join('&') : '') } }
+          };
+        }
+
+  # The origin is the production bucket's REST endpoint, read anonymously:
+  # ProductionBucketPolicy already grants public s3:GetObject, so this needs
+  # no OAC and no change to that (retained) policy, and confidentiality is no
+  # different from the website endpoint. What the REST endpoint changes is
+  # the error path: it has no website ErrorDocument, so a missing key is S3's
+  # own XML error (403 for an anonymous reader without s3:ListBucket), never
+  # an HTML page from the site. No origin request policy, so no viewer query
+  # string reaches S3 (whose REST API reads some, such as versionId).
+  #
+  # CachingDisabled: the deploy invalidates only ProductionDistribution, and
+  # an editor must never get a stale admin bundle; the admin is small and
+  # used by a handful of people.
+  AdminDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasAdminDomain
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "Editor for ${ProductionDomainName} on its own origin"
+        Aliases:
+          - !Ref AdminDomainName
+        ViewerCertificate:
+          AcmCertificateArn: !Ref AdminCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        DefaultCacheBehavior:
+          TargetOriginId: s3-rest
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # The same admin policy the apex's /admin/* behavior sends (#515):
+          # HSTS, nosniff, frame-ancestors 'self' and the admin CSP, so
+          # opting in never drops a header the editor had on the apex. It
+          # also covers the not-found page and the HEAD responses.
+          ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt AdminSiteFunction.FunctionARN
+        Origins:
+          - Id: s3-rest
+            DomainName: !GetAtt ProductionBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        HttpVersion: http2and3
+        # A miss is answered by a static page shipped in the gem that runs no
+        # script and loads nothing. CloudFront fetches it from the origin
+        # directly (AdminSiteFunction does not run for that fetch). If it is
+        # missing too (a site that deployed this before bumping the gem),
+        # CloudFront returns the status S3 gave for the page, with S3's XML
+        # error: still no HTML from the site.
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /admin/not-found.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: /admin/not-found.html
+            ErrorCachingMinTTL: 0
+
+  # Not gated on CreateApexDnsRecords: the admin host is a new name, so it
+  # neither repoints nor collides with a live record. As a name of its own it
+  # takes precedence over the *.<apex> preview wildcard record, and
+  # CloudFront sends a request for it to the distribution with the more
+  # specific alias, this one, not to PreviewDistribution's *.<apex>.
+  AdminDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasAdminDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref AdminDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt AdminDistribution.DomainName
         HostedZoneId: Z2FDTNDATAQYW2
 
   # ── GitHub OIDC identity provider ─────────────────────────────────────────
@@ -901,6 +1315,11 @@ Outputs:
   ProductionDistributionDomain:
     Description: "CloudFront domain name for the production distribution"
     Value: !GetAtt ProductionDistribution.DomainName
+
+  AdminURL:
+    Description: "HTTPS URL of the editor on its own origin (set as cms.admin_origin plus /admin/)"
+    Condition: HasAdminDomain
+    Value: !Sub "https://${AdminDomainName}/admin/"
 
   MediaArchiveBucketName:
     Description: >

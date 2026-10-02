@@ -184,7 +184,7 @@ Self-explanatory by name: `.github/workflows/`, `scripts/`, `infrastructure/`,
   drift.
 - **`GITHUB_SCOPE` is lockstepped across `oauth-proxy/lambda.py`,
   `oauth-proxy/template.yaml` and `oauth-proxy/deploy.sh`**
-  (`repo,user,workflow`); de-identified prose uses `<apex>`, `*.<apex>`,
+  (`repo,read:user,workflow`; `test_lambda.py` locks it); de-identified prose uses `<apex>`, `*.<apex>`,
   `<prefix>`, `<owner>/<repo>`, `<your-site>`.
 - **`e2e/` deps install via `cd e2e && npm ci`** (`e2e/package-lock.json` is
   tracked); CloudFront-Function specs simulate `Fn::Sub` with a synthetic

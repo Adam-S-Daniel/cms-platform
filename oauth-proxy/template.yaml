@@ -36,12 +36,12 @@ Parameters:
 
   GitHubScope:
     Type: String
-    Default: "repo,user,workflow"
+    Default: "repo,read:user,workflow"
     Description: >
-      GitHub OAuth scopes requested by the CMS. `workflow` is required
-      by the publish-via-auto-merge shim's "Delete published entry"
-      recovery (it dispatches `delete-via-pr.yml` and the dispatch
-      endpoint 404s on tokens that lack the `workflow` scope).
+      GitHub OAuth scopes requested by the CMS. `read:user` (not `user`):
+      the admin reads the profile and never writes it. `workflow` stays
+      until the GitHub App spike in docs/ADMIN-AUTH-SECURITY.md shows
+      nothing needs it. Ignored when the client id is a GitHub App's.
 
   StageName:
     Type: String
