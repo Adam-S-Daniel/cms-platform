@@ -37,6 +37,10 @@ PRODUCTION_BUCKET="${PRODUCTION_BUCKET:-${RESOURCE_PREFIX}-production}"
 # existing site a new bucket on its next bootstrap redeploy, which nobody asked
 # for. Set it to opt in; see docs/MEDIA-ARCHIVE.md.
 MEDIA_ARCHIVE_BUCKET="${MEDIA_ARCHIVE_BUCKET:-}"
+# OPTIONAL editor host on its own origin, e.g. admin.<apex> (#517). Unset = off;
+# a redeploy WITHOUT it removes a host that was set. See
+# docs/ADMIN-AUTH-SECURITY.md.
+ADMIN_DOMAIN="${ADMIN_DOMAIN:-}"
 PREVIEW_DOMAIN="${PREVIEW_DOMAIN:-*.${APEX_DOMAIN}}"
 STACK_NAME="${STACK_NAME:-${RESOURCE_PREFIX}-bootstrap}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
@@ -98,7 +102,8 @@ aws cloudformation deploy \
   "CreateApexDnsRecords=${CREATE_APEX_DNS_RECORDS:-false}" \
   "HostedZoneId=${HOSTED_ZONE_ID}" \
   "PreviewDomainName=${PREVIEW_DOMAIN}" \
-  "MediaArchiveBucketName=${MEDIA_ARCHIVE_BUCKET}"
+  "MediaArchiveBucketName=${MEDIA_ARCHIVE_BUCKET}" \
+  "AdminDomainName=${ADMIN_DOMAIN}"
 
 # ── Fetch outputs ──────────────────────────────────────────────────────────
 info "Fetching stack outputs…"

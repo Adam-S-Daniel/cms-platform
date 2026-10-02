@@ -7,7 +7,8 @@ Description: >
     1. S3 bucket for CloudFormation/SAM deployment artifacts
     2. ACM wildcard certificate *.<apex> + CloudFront distribution
        serving every preview-prN.<apex> subdomain off one bucket
-    3. ACM certificate + CloudFront distribution for the apex (production)
+    3. ACM certificate + CloudFront distribution for the apex (production),
+       optionally also answering for a separate admin host (AdminDomainName)
     4. Route53 DNS records for preview wildcard and production domains
     5. GitHub OIDC identity provider in AWS IAM
     6. IAM role for GitHub Actions (assumed via OIDC — no long-lived keys)
@@ -106,10 +107,27 @@ Parameters:
       apex/www A-records would otherwise collide with existing records or
       silently repoint a live domain.)
 
+  AdminDomainName:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z0-9-]+(\\.[a-z0-9-]+)+$"
+    Description: >
+      OPTIONAL host that serves the Decap editor on its own origin, e.g.
+      `admin.<apex>` (cms-platform#517). Leave EMPTY and nothing in this stack
+      changes. When set, the production distribution and its certificate also
+      answer for this host, a Route53 A-alias points it at that distribution,
+      and AdminHostRouterFunction keeps /admin/ and the public site on
+      separate origins: /admin on the apex or www redirects here, and any
+      other path here redirects to the apex. It must be a name inside
+      HostedZoneId's zone with no record of its own yet. The site sets the
+      same origin as `cms.admin_origin` in _config.yml.
+      See docs/ADMIN-AUTH-SECURITY.md.
+
 Conditions:
   ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
   ShouldCreateApexDnsRecords: !Equals [!Ref CreateApexDnsRecords, "true"]
   ShouldCreateMediaArchive: !Not [!Equals [!Ref MediaArchiveBucketName, ""]]
+  HasAdminDomain: !Not [!Equals [!Ref AdminDomainName, ""]]
 
 Resources:
 
@@ -524,8 +542,11 @@ Resources:
 
   # ── ACM certificate for production domain ─────────────────────────────────
   #
-  # Covers both the apex (<apex>) and www subdomain. Must be in
-  # us-east-1 for CloudFront. DNS validation via Route53.
+  # Covers both the apex (<apex>) and www subdomain, plus AdminDomainName
+  # when set. Must be in us-east-1 for CloudFront. DNS validation via Route53.
+  # Adding or removing the admin host changes the SANs, which REPLACES this
+  # certificate (a new one is issued and validated before the distribution
+  # moves to it); with AdminDomainName empty the properties are unchanged.
   #
   ProductionCertificate:
     Type: AWS::CertificateManager::Certificate
@@ -533,12 +554,86 @@ Resources:
       DomainName: !Ref ProductionDomainName
       SubjectAlternativeNames:
         - !Sub "www.${ProductionDomainName}"
+        - !If [HasAdminDomain, !Ref AdminDomainName, !Ref "AWS::NoValue"]
       ValidationMethod: DNS
       DomainValidationOptions:
         - DomainName: !Ref ProductionDomainName
           HostedZoneId: !Ref HostedZoneId
         - DomainName: !Sub "www.${ProductionDomainName}"
           HostedZoneId: !Ref HostedZoneId
+        - !If
+          - HasAdminDomain
+          - DomainName: !Ref AdminDomainName
+            HostedZoneId: !Ref HostedZoneId
+          - !Ref "AWS::NoValue"
+
+  # ── CloudFront Function: keep /admin/ and the public site apart (opt-in) ──
+  #
+  # Exists only when AdminDomainName is set (cms-platform#517). The editor
+  # keeps GitHub tokens in localStorage, which every script on its origin can
+  # read, so the admin host must never render a public page (the RUM client,
+  # an editor's HTML embed, a site's own includes) and the apex must never
+  # render the editor:
+  #
+  #   admin host, /admin or /admin/*   → served (same objects, same paths)
+  #   admin host, /                    → 302 to /admin/ on the admin host
+  #   admin host, any other path       → 302 to the same path on the apex
+  #   admin host, HEAD on any path     → served: a HEAD carries no body to
+  #                                      run, and slug-pin.js probes
+  #                                      /blog/<slug>/ same-origin with it
+  #   apex / www, /admin or /admin/*   → 302 to the same path on the admin host
+  #   apex / www, anything else        → untouched
+  #
+  # Redirects keep the query string, rejoined verbatim the way AWS's own
+  # redirect example does; the fragment (Decap's #/collections/... route)
+  # never reaches CloudFront and the browser carries it across the redirect.
+  # 302, not 301: a browser caches a 301 indefinitely, which would outlive a
+  # rollback of this parameter.
+  #
+  # CustomErrorResponses still apply on the admin host: a missing /admin/
+  # object is answered with the public /404.html, on the admin origin.
+  # docs/ADMIN-AUTH-SECURITY.md lists that as residual exposure.
+  AdminHostRouterFunction:
+    Type: AWS::CloudFront::Function
+    Condition: HasAdminDomain
+    Properties:
+      Name: !Sub "${AWS::StackName}-admin-host-router"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: "Serve /admin only on the admin host; send every other admin-host path to the apex"
+        Runtime: cloudfront-js-2.0
+      # `!Sub` bakes both hosts in; the body has no other `${`.
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          var host = request.headers.host ? request.headers.host.value.toLowerCase() : '';
+          var uri = request.uri;
+          var isAdminPath = uri === '/admin' || uri.indexOf('/admin/') === 0;
+          if (host === '${AdminDomainName}') {
+            if (isAdminPath || request.method === 'HEAD') return request;
+            if (uri === '/') return redirect('${AdminDomainName}', '/admin/', {});
+            return redirect('${ProductionDomainName}', uri, request.querystring);
+          }
+          if (isAdminPath) return redirect('${AdminDomainName}', uri, request.querystring);
+          return request;
+        }
+
+        function redirect(host, uri, querystring) {
+          var parts = [];
+          for (var name in querystring) {
+            var param = querystring[name];
+            var values = param.multiValue ? param.multiValue : [param];
+            for (var i = 0; i < values.length; i++) {
+              parts.push(values[i].value === '' ? name : name + '=' + values[i].value);
+            }
+          }
+          var query = parts.length ? '?' + parts.join('&') : '';
+          return {
+            statusCode: 302,
+            statusDescription: 'Found',
+            headers: { location: { value: 'https://' + host + uri + query } }
+          };
+        }
 
   # ── CloudFront distribution for <apex> (production) ──────────────────────
   #
@@ -557,6 +652,7 @@ Resources:
         Aliases:
           - !Ref ProductionDomainName
           - !Sub "www.${ProductionDomainName}"
+          - !If [HasAdminDomain, !Ref AdminDomainName, !Ref "AWS::NoValue"]
         ViewerCertificate:
           AcmCertificateArn: !Ref ProductionCertificate
           SslSupportMethod: sni-only
@@ -568,6 +664,16 @@ Resources:
           AllowedMethods: [GET, HEAD, OPTIONS]
           CachedMethods: [GET, HEAD]
           Compress: true
+          # Opt-in admin origin (#517). Any cache behavior that matches /admin
+          # paths must carry this same association, or apex /admin requests
+          # it matches skip the redirect. With the admin host set, only that
+          # host serves /admin/*, so a response headers policy on an /admin/*
+          # behavior is in effect the admin host's policy.
+          FunctionAssociations: !If
+            - HasAdminDomain
+            - - EventType: viewer-request
+                FunctionARN: !GetAtt AdminHostRouterFunction.FunctionARN
+            - !Ref "AWS::NoValue"
         Origins:
           - Id: s3-website
             DomainName: !Sub "${ProductionBucketName}.s3-website-${AWS::Region}.amazonaws.com"
@@ -606,6 +712,21 @@ Resources:
     Properties:
       HostedZoneId: !Ref HostedZoneId
       Name: !Sub "www.${ProductionDomainName}"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ProductionDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  # ── Route53 alias for the admin host (opt-in, #517) ──────────────────────
+  # Not gated on CreateApexDnsRecords: the admin host is a new name, so it
+  # neither repoints nor collides with a live record. It takes precedence over
+  # the *.<apex> preview wildcard, which would otherwise answer for it.
+  AdminDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasAdminDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref AdminDomainName
       Type: A
       AliasTarget:
         DNSName: !GetAtt ProductionDistribution.DomainName
@@ -901,6 +1022,11 @@ Outputs:
   ProductionDistributionDomain:
     Description: "CloudFront domain name for the production distribution"
     Value: !GetAtt ProductionDistribution.DomainName
+
+  AdminURL:
+    Description: "HTTPS URL of the editor on its own origin (set as cms.admin_origin plus /admin/)"
+    Condition: HasAdminDomain
+    Value: !Sub "https://${AdminDomainName}/admin/"
 
   MediaArchiveBucketName:
     Description: >
