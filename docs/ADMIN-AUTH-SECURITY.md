@@ -140,13 +140,14 @@ is therefore expensive. What was weighed:
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
 | Security headers | Deferred — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | CloudFront serves none. HSTS, `nosniff` and `frame-ancestors` are cheap; a CSP for `/admin` has to live with Decap's `new Function` and inline styles. Needs a bootstrap-stack deploy per site and a live publish loop to prove it. |
 | Narrower permissions | Deferred — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516) | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. |
-| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); off until a site follows the runbook below | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). On its own host the editor's tokens are out of their reach. |
+| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); off until a site follows the runbook below | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). On its own host the editor's tokens are out of their reach, **except** through the public `/404.html`, which the admin host still serves for any missing `/admin/` path (see "What it does not cover"). |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
 
 ## Serving the editor from its own origin (opt-in, #517)
 
 Off by default. With it on, `/admin/` and `/admin/reviews/` are served from
-`admin.<apex>` and nothing public is:
+`admin.<apex>`, and no public page is, apart from the public `/404.html` (the
+first item under "What it does not cover"):
 
 | Request | Answer |
 |---|---|
@@ -174,8 +175,16 @@ What it does **not** cover, as of this change:
   window the editor opened), which is not built.
 - **A missing `/admin/` file is answered with the public `/404.html` on the
   admin origin** (the distribution's custom error response cannot vary by
-  host), so a mistyped admin URL runs that page's scripts, RUM included, next
-  to the token.
+  host, and the bucket's own website `ErrorDocument` is the same page), so
+  that page's scripts, RUM included, run next to the token. This is not only
+  a mistyped URL: any script on a public page can open
+  `admin.<apex>/admin/<anything-missing>` in an iframe (same-site, so its
+  storage is not partitioned, and nothing sends `frame-ancestors` yet) or a
+  popup, and so reach the token through the very scripts this change is meant
+  to keep away from it. Until the admin host answers a miss with a page that
+  runs no script (a second distribution with its own error response, or an
+  admin-host policy from #515 that blocks those scripts), opting in narrows
+  the exposure but does not close it.
 - **The editor's own content still runs in the admin origin.** Decap renders
   the markdown preview pane in a same-origin frame and the platform leaves
   Decap's `sanitize_preview` at its default (`false`), so an HTML embed
