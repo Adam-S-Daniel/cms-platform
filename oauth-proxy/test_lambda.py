@@ -537,6 +537,42 @@ class TestScopeLockstep(unittest.TestCase):
         self.assertNotIn("user", scopes)
 
 
+class TestGitHubAppManifest(unittest.TestCase):
+    """
+    github-app-manifest.json is the #516 spike's sign-in App. Its permissions
+    are the minimal set derived in docs/ADMIN-AUTH-SECURITY.md; widening one
+    (Workflows, Issues, Administration, any user permission) is a decision
+    for that doc first, not a quiet edit here.
+    """
+
+    MINIMAL = {
+        "metadata": "read",
+        "contents": "write",
+        "pull_requests": "write",
+        "statuses": "read",
+        "checks": "read",
+        "actions": "read",
+        "deployments": "write",
+    }
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "github-app-manifest.json")
+        with open(path, encoding="utf-8") as f:
+            self.manifest = json.load(f)
+
+    def test_requests_exactly_the_minimal_permissions(self):
+        self.assertEqual(self.manifest["default_permissions"], self.MINIMAL)
+
+    def test_receives_no_events(self):
+        self.assertFalse(self.manifest["hook_attributes"]["active"])
+        self.assertEqual(self.manifest["default_events"], [])
+
+    def test_carries_placeholders_not_a_site_identity(self):
+        self.assertEqual(self.manifest["callback_urls"], ["<oauth_base_url>/prod/callback"])
+        self.assertEqual(self.manifest["url"], "https://<apex>")
+        self.assertEqual(self.manifest["redirect_url"], "https://<apex>/")
+
+
 class TestRequestCookies(unittest.TestCase):
     def test_payload_2_0_cookies_list(self):
         event = {"cookies": ["a=1", f"{STATE_COOKIE}={GOOD_STATE}"]}
