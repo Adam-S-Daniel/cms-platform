@@ -23,9 +23,11 @@ is a stack parameter — nothing is hardcoded to a specific domain.
   read stack params at runtime.
 - **oauth-proxy `FunctionName`** is a parameter (keep unique per site).
 - **`AdminDomainName`** (bootstrap, optional, default empty = off) puts the
-  editor on its own host, e.g. `admin.<apex>`: the production distribution,
-  certificate and DNS answer for it and the **admin-host-router** CloudFront
-  Function keeps `/admin/` on that host only. Opt-in runbook:
+  editor on its own host, e.g. `admin.<apex>`: a separate CloudFront
+  distribution, certificate and DNS record serve only `/admin/` from the
+  production bucket's REST endpoint (the **admin-site** function), with a
+  script-free page for every miss, and the **admin-redirect** function on the
+  production distribution sends `/admin` there. Opt-in runbook:
   `docs/ADMIN-AUTH-SECURITY.md`.
 
 ## Deploying

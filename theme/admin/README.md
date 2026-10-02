@@ -43,7 +43,10 @@ Jekyll build and:
    `<script>window.CMS_REPO=…;window.CMS_SITE_ORIGIN=…;window.CMS_ADMIN_ORIGIN=…;window.CMS_APEX=…;window.CMS_OAUTH_BASE_URL=…;window.CMS_SITE_TITLE=…;window.CMS_SITE_GATE=…;window.CMS_PRODUCTION_BRANCH=…</script>`
    into the built `admin/index*.html` **and** `admin/reviews/*.html`. The admin
    JS (and reviews dashboards) read these globals instead of hardcoded site
-   identity.
+   identity. `not-found.html` is deliberately outside both globs: it is the
+   opt-in admin host's answer to every miss (#517), shares an origin with the
+   tokens, and must stay plain, script-free HTML
+   (`theme/spec/admin_not_found_page_test.rb`).
 5. Deletes the `*.base.yml` templates from the build output.
 
 The theme gem (see `../theme`) wires this in as a Jekyll `:site, :post_write`

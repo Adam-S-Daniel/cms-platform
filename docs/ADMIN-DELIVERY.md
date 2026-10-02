@@ -284,6 +284,16 @@ single-page bio (jodidaniel.com — no per-section route to drive the bridge);
 the seeded `preview.md` still gives a working `/preview/` shell + the seeded
 `404.html` a friendly not-found page.
 
+## The admin host's own not-found page (#517)
+
+`theme/admin/not-found.html` is not the site's 404. It is what a site that
+serves its editor from its own origin (`AdminDomainName`, see
+`docs/ADMIN-AUTH-SECURITY.md`) answers every miss on that host with, so it
+shares an origin with the editor's tokens: plain HTML, no script, no style, no
+external resource, no layout or include, and no `window.CMS_*` injection (the
+render paths only touch `index*.html` and `reviews/*.html`).
+`theme/spec/admin_not_found_page_test.rb` parses it against an allowlist.
+
 ## Seeded 404 page: self-contained and neutral, not gem-styled (issue #326)
 
 `404.html` is, and always was, **site-owned** — the scaffolder seeds it
