@@ -1,0 +1,114 @@
+# OAuth proxy build probe (reusable) — is the site's live sign-in proxy the
+# build its platform pin says it should be? (#518)
+#
+# THE GAP. The proxy Lambda reaches AWS only when someone runs
+# `bash oauth-proxy/deploy.sh` with the site's credentials. A platform release
+# and the consumer bump that follows never touch it, so a merged proxy fix can
+# stay un-live indefinitely — true on both consumers when this landed — and
+# nothing reported it.
+#
+# WHAT THIS DOES. Reads the site's `cms.oauth_base_url`, checks out the
+# platform at the commit this reusable was called at, and runs
+# scripts/probe-oauth-proxy-build.js against the live proxy with no
+# credentials. It compares the handler digest /prod/health reports with the
+# digest of that commit's oauth-proxy/lambda.py. Only `current` is green; a
+# stale proxy, one that predates build reporting, and an unreachable or
+# unexpected answer are all red, each with its own message (the script's
+# header has the table).
+#
+# HOW A RED SURFACES. The thin caller runs on a daily `schedule`, so a red run
+# is an `event=schedule` failure, which scheduled-run-health.yml files on the
+# site's `ci` tracking issue. The same audit's no-recent-success and
+# dead-workflow lanes notice a probe that stops running or is disabled.
+#
+# WHICH RELEASE IS "PINNED". The one the caller's `uses:@` names, resolved
+# from the job context the way scheduled-run-health.yml does it (#424), so
+# the script, the handler it hashes and this workflow are one commit and
+# cannot skew. pin-consistency holds that ref equal to platform.lock's, which
+# is what the delegating oauth-proxy/deploy.sh wrapper deploys.
+name: OAuth proxy build probe (reusable)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve the platform commit this reusable was called at
+        id: self
+        env:
+          # job.workflow_* through toJSON(job), never directly: actionlint does
+          # not type them yet (scheduled-run-health.yml has the full story).
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          repo=$(jq -r '.workflow_repository // ""' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB_CONTEXT")
+          wref=$(jq -r '.workflow_ref // ""' <<<"$JOB_CONTEXT")
+          ref=${wref##*@}
+          ref=${ref#refs/tags/}
+          ref=${ref#refs/heads/}
+          if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$sha" =~ ^[0-9a-f]{40}$ && "$ref" =~ ^[A-Za-z0-9._/+-]{1,100}$ ]]; then
+            echo "::error::the job context does not name the platform commit this workflow was called at; refusing to guess"
+            exit 1
+          fi
+          {
+            echo "repository=$repo"
+            echo "sha=$sha"
+            echo "ref=$ref"
+          } >>"$GITHUB_OUTPUT"
+          echo "Pinned platform release: $ref ($sha)"
+
+      - name: Check out the site's config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          sparse-checkout: _config.yml
+          sparse-checkout-cone-mode: false
+          path: site
+          persist-credentials: false
+
+      - name: Read the proxy URL
+        id: site
+        working-directory: site
+        run: |
+          set -euo pipefail
+          base=$(ruby -rdate -ryaml -e 'c = YAML.safe_load(File.read("_config.yml"), permitted_classes: [Date, Time], aliases: true) || {}; puts((c["cms"] || {})["oauth_base_url"].to_s)')
+          # The script validates the URL in full; this only keeps a stray
+          # newline or quote out of GITHUB_OUTPUT.
+          if ! [[ "$base" =~ ^https://[A-Za-z0-9.:/_-]+$ ]]; then
+            echo "::error::_config.yml has no https cms.oauth_base_url, so there is no proxy to probe"
+            exit 1
+          fi
+          echo "oauth_base_url=$base" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the probe and the pinned proxy handler
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ steps.self.outputs.repository }}
+          ref: ${{ steps.self.outputs.sha }}
+          sparse-checkout: |
+            scripts/probe-oauth-proxy-build.js
+            oauth-proxy/lambda.py
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: Probe the live proxy's build
+        env:
+          PROXY_BASE_URL: ${{ steps.site.outputs.oauth_base_url }}
+          PINNED_RELEASE: ${{ steps.self.outputs.ref }}
+        run: |
+          node .cms-platform/scripts/probe-oauth-proxy-build.js \
+            --base-url "$PROXY_BASE_URL" \
+            --platform-dir .cms-platform \
+            --pinned-release "$PINNED_RELEASE"
