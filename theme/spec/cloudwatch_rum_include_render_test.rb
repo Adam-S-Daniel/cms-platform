@@ -7,6 +7,8 @@
 # loader on a production build with an app monitor configured and nothing
 # otherwise, prints the configured values into it, and loads the client from
 # the gem-shipped file at the exact version provenance.json records (#517).
+# It also renders _layouts/default.html, which every page layout chains to, to
+# see that the layout puts the loader in <head>.
 # What the loader then does in a browser (the webdriver and opt-out gates, the
 # one same-origin <script> it inserts) is e2e/analytics-rum-client-vendored.test.js,
 # which runs the rendered body in a node:vm sandbox.
@@ -17,7 +19,9 @@
 # and renders it with the page's context, which is what render_include does
 # with the two variables Jekyll provides here (`site`, `jekyll.environment`).
 # The one Jekyll filter the include uses, relative_url, is stood in for below;
-# any other filter fails the render (strict_filters).
+# any other filter fails the render (strict_filters). The layout render also
+# stands in for Jekyll's include tag, jekyll-seo-tag's seo tag and the theme's
+# cachebust filter.
 
 require "minitest/autorun"
 require "json"
@@ -38,6 +42,41 @@ module RelativeUrlStandIn
     "#{@context["site"]["baseurl"]}#{input}"
   end
 end
+
+LAYOUT = File.join(THEME, "_layouts", "default.html")
+
+# Jekyll's include tag, for the layout render: parses the named file under
+# _includes and renders it in the page's context. Only the RUM include is
+# under test; every other include renders empty.
+class IncludeStandIn < Liquid::Tag
+  def initialize(tag_name, markup, parse_context)
+    super
+    @name = markup.strip
+  end
+
+  def render(context)
+    return "" unless @name == "analytics/cloudwatch-rum.html"
+
+    Liquid::Template.parse(File.read(INCLUDE, encoding: "utf-8"), error_mode: :strict).render!(context)
+  end
+end
+
+# jekyll-seo-tag's {% seo %}: not under test.
+class SeoStandIn < Liquid::Tag
+  def render(_context)
+    ""
+  end
+end
+
+# The theme's cachebust filter: not under test.
+module CachebustStandIn
+  def cachebust(input)
+    input
+  end
+end
+
+Liquid::Template.register_tag("include", IncludeStandIn)
+Liquid::Template.register_tag("seo", SeoStandIn)
 
 class CloudwatchRumIncludeRenderTest < Minitest::Test
   def render_include(env:, rum:, baseurl: "")
@@ -91,6 +130,27 @@ class CloudwatchRumIncludeRenderTest < Minitest::Test
 
   def test_production_without_a_rum_block_renders_nothing
     assert_equal "", render_include(env: "production", rum: nil).strip
+  end
+
+  def render_layout(env:)
+    site = { "baseurl" => "", "analytics" => { "cloudwatch_rum" => configured } }
+    template = Liquid::Template.parse(File.read(LAYOUT, encoding: "utf-8"), error_mode: :strict)
+    template.render!(
+      { "site" => site, "jekyll" => { "environment" => env }, "page" => {}, "content" => "" },
+      filters: [RelativeUrlStandIn, CachebustStandIn],
+      strict_filters: true
+    )
+  end
+
+  # Every page layout chains to default.html, so this is what puts the
+  # loader on a built page at all.
+  def test_the_default_layout_puts_the_loader_in_the_head
+    html = render_layout(env: "production")
+    head = html[%r{<head>.*</head>}m]
+    refute_nil head, html
+    assert_includes head, "window.AwsRumClient"
+    assert_includes head, "'#{client_path}'"
+    refute_includes render_layout(env: "development"), "AwsRumClient"
   end
 
   def test_a_configured_monitor_outside_production_renders_nothing
