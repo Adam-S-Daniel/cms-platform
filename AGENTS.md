@@ -127,7 +127,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 | `docs/ARCHITECTURE.md` | the two-repo design, end to end. |
 | `docs/SYNC.md` | what syncs to a consumer, or drift. |
 | `docs/ADMIN-DELIVERY.md` | `theme/admin/`, a render path, `base_collections`, `field_library` `$ref`, the logo / `preview.md` / 404 seeds. |
-| `docs/ADMIN-AUTH-SECURITY.md` | sign-in, `oauth-proxy/` (a release does NOT deploy it), a `message` listener, the Decap SRI hash. |
+| `docs/ADMIN-AUTH-SECURITY.md` | sign-in, `oauth-proxy/` (a release does NOT deploy it; each site's daily `oauth-proxy-build` probe goes red until someone does), a `message` listener, the Decap SRI hash. |
 | `docs/CONSUMER-COMPATIBILITY.md` | an e2e spec, an org OAuth save failure, bundle parity, a nudge's contexts. |
 | `docs/PIN-CONSISTENCY.md` | pin consistency, the pin-comment lint, `platform-bump.yml`. |
 | `docs/FLEET-CALLER-CURRENCY.md` | how a fleet repo's `scheduled-run-health` caller stays current: the self-resolving checkout, the currency lane, a fleet repo's cms-platform Dependabot `ignore`. |

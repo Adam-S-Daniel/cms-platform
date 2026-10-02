@@ -9,3 +9,8 @@ e2e/fixture-site-singlepage/**/*.md text eol=lf
 # serves (e2e/analytics-rum-client-vendored.test.js); never let a checkout
 # rewrite its line endings.
 theme/assets/js/aws-rum-web/cwr-*.js -text
+
+# The OAuth proxy reports sha256(lambda.py) from /prod/health, and the build
+# probe compares it with the same digest of a CI checkout (#518). Pin LF so a
+# CRLF checkout on a deploying workstation cannot read as a different build.
+oauth-proxy/lambda.py text eol=lf

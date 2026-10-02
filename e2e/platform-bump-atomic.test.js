@@ -328,3 +328,92 @@ test.describe("platform-bump reusable — reconciles dictated caller inputs (#31
     ).toMatch(/sorted\(verified\) != sorted\(contexts\)/);
   });
 });
+
+test.describe("platform-bump reusable — seeds a missing delegating deploy wrapper (#518)", () => {
+  // jodidaniel.com was scaffolded at v0.1.0, before the wrappers existed
+  // (v0.1.29), and nothing delivered them later, so it has neither. The bump
+  // seeds a wholly-missing one. This EXECUTES the loop, lifted out of the run
+  // script, in a scratch repo with a stub `gh` on PATH.
+  const os = require("node:os");
+  const { spawnSync } = require("node:child_process");
+
+  function seedLoop() {
+    const lines = runStep.run.split("\n");
+    const start = lines.findIndex((l) => l.trim() === "SEEDED_WRAPPERS=()");
+    expect(start, "the run script must declare SEEDED_WRAPPERS=()").toBeGreaterThan(-1);
+    const indent = lines[start].match(/^\s*/)[0];
+    const end = lines.findIndex((l, i) => i > start && l === `${indent}done`);
+    expect(end, "the wrapper loop must close with `done` at its own indent").toBeGreaterThan(start);
+    return lines.slice(start, end + 1).join("\n");
+  }
+
+  function runLoop({ existing = {}, unreadable = [] }) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bump-wrappers-"));
+    const bin = path.join(dir, "bin");
+    const work = path.join(dir, "work");
+    fs.mkdirSync(bin);
+    fs.mkdirSync(work);
+    for (const [rel, body] of Object.entries(existing)) {
+      fs.mkdirSync(path.join(work, path.dirname(rel)), { recursive: true });
+      fs.writeFileSync(path.join(work, rel), body);
+    }
+    // Stub gh: base64 of "WRAPPER <path>" for a contents call at v9.9.9;
+    // fails (as a 404 would) for a path listed in UNREADABLE.
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      [
+        "#!/usr/bin/env bash",
+        'for u in $UNREADABLE; do [[ "$2" == *"/contents/$u.delegating?"* ]] && exit 1; done',
+        '[[ "$2" =~ ^repos/example/platform/contents/(.+)\\.delegating\\?ref=v9\\.9\\.9$ ]] || exit 1',
+        'printf "WRAPPER %s\\n" "${BASH_REMATCH[1]}" | base64',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const res = spawnSync("bash", ["-euo", "pipefail", "-c", `${seedLoop()}\necho "seeded=\${SEEDED_WRAPPERS[*]}"`], {
+      cwd: work,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PLATFORM: "example/platform", LATEST: "v9.9.9", UNREADABLE: unreadable.join(" ") },
+    });
+    return { res, work, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  }
+
+  test("a missing wrapper is written from <path>.delegating at $LATEST, executable", () => {
+    const { res, work, cleanup } = runLoop({});
+    try {
+      expect(res.status, res.stderr).toBe(0);
+      for (const rel of ["oauth-proxy/deploy.sh", "infrastructure/bootstrap/deploy.sh"]) {
+        expect(fs.readFileSync(path.join(work, rel), "utf8")).toBe(`WRAPPER ${rel}\n`);
+        expect(fs.statSync(path.join(work, rel)).mode & 0o111).not.toBe(0);
+      }
+      expect(res.stdout).toContain("seeded=oauth-proxy/deploy.sh infrastructure/bootstrap/deploy.sh");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("an existing wrapper is left byte-for-byte alone", () => {
+    const { res, work, cleanup } = runLoop({ existing: { "oauth-proxy/deploy.sh": "SITE-OWNED\n" } });
+    try {
+      expect(res.status, res.stderr).toBe(0);
+      expect(fs.readFileSync(path.join(work, "oauth-proxy/deploy.sh"), "utf8")).toBe("SITE-OWNED\n");
+      expect(res.stdout).toContain("seeded=infrastructure/bootstrap/deploy.sh");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("an unreadable template warns and seeds nothing for that path, without failing the bump", () => {
+    const { res, work, cleanup } = runLoop({ unreadable: ["oauth-proxy/deploy.sh"] });
+    try {
+      expect(res.status, res.stderr).toBe(0);
+      expect(fs.existsSync(path.join(work, "oauth-proxy/deploy.sh"))).toBe(false);
+      expect(res.stdout).toMatch(/::warning::could not read oauth-proxy\/deploy\.sh\.delegating/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("the PR body names the seeded wrappers", () => {
+    expect(runStep.run).toMatch(/Seeded missing delegating deploy wrapper\(s\): \$\{SEEDED_WRAPPERS\[\*\]\}/);
+  });
+});

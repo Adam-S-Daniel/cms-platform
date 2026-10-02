@@ -6,6 +6,7 @@ No AWS credentials required — all GitHub API calls are mocked.
 """
 
 import ast
+import hashlib
 import importlib
 import json
 import os
@@ -118,6 +119,30 @@ class TestHealthCheck(_Base):
     def test_root(self):
         resp = handler_module.handler(_event("/"), None)
         self.assertEqual(resp["statusCode"], 200)
+
+    def test_health_keeps_its_original_fields(self):
+        # Additive only: anything that read the old body still finds its keys.
+        body = json.loads(handler_module.handler(_event("/prod/health"), None)["body"])
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["service"], "cms-oauth-proxy")
+
+    def test_health_reports_the_digest_of_the_running_handler(self):
+        # The digest the build probe compares: sha256 of lambda.py's bytes,
+        # computed from the file the handler was loaded from (#518).
+        with open(handler_module.__file__, "rb") as source:
+            expected = hashlib.sha256(source.read()).hexdigest()
+        body = json.loads(handler_module.handler(_event("/prod/health"), None)["body"])
+        self.assertEqual(body["handler_sha256"], expected)
+
+    def test_health_reports_the_release_deploy_sh_passed(self):
+        with patch.object(handler_module, "PLATFORM_RELEASE", "v9.9.9"):
+            body = json.loads(handler_module.handler(_event("/prod/health"), None)["body"])
+        self.assertEqual(body["release"], "v9.9.9")
+
+    def test_health_release_is_empty_when_not_deployed_with_one(self):
+        with patch.object(handler_module, "PLATFORM_RELEASE", ""):
+            body = json.loads(handler_module.handler(_event("/prod/health"), None)["body"])
+        self.assertEqual(body["release"], "")
 
 
 class TestAuthRedirect(_Base):
