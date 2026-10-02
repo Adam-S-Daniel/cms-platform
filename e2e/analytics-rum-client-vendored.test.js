@@ -13,7 +13,13 @@
 //
 // What fails here: an edit to the vendored bytes that provenance.json does not
 // record (the hash), a version bump that leaves the file name or the include
-// behind, and an include that loads the client from anywhere but that file.
+// behind, an include that loads the client from anywhere but that file, and a
+// loader that runs in an automated browser or on an opted-out device.
+//
+// The Liquid around the loader (production only, only with an app monitor,
+// the values printed into it) is rendered through real Liquid by
+// theme/spec/cloudwatch_rum_include_render_test.rb; this file substitutes
+// those values from a fixed table and does not evaluate the `if`.
 const { test, expect } = require("./base");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -63,7 +69,7 @@ function renderedLoader() {
 }
 
 // Run the loader against a hand-built browser and return what it did.
-function boot() {
+function boot({ search = "", webdriver = false, stored = {} } = {}) {
   const inserted = [];
   const head = {
     getElementsByTagName: () => [],
@@ -71,10 +77,10 @@ function boot() {
       inserted.push({ el, ref });
     },
   };
-  const storage = new Map();
+  const storage = new Map(Object.entries(stored));
   const win = {
-    location: { search: "" },
-    navigator: { webdriver: false },
+    location: { search },
+    navigator: { webdriver },
     localStorage: {
       getItem: (k) => (storage.has(k) ? storage.get(k) : null),
       setItem: (k, v) => storage.set(k, String(v)),
@@ -88,7 +94,7 @@ function boot() {
   };
   win.window = win;
   vm.runInNewContext(renderedLoader(), win);
-  return { win, inserted };
+  return { win, inserted, storage };
 }
 
 function sha384(file) {
@@ -135,5 +141,25 @@ test.describe("CloudWatch RUM client is the gem-shipped, hash-locked release", (
     expect(win.AwsRumClient.c.endpoint).toBe(`https://dataplane.rum.${REGION}.amazonaws.com`);
     expect(win.AwsRumClient.c.identityPoolId).toBe(POOL);
     expect(fs.readFileSync(INCLUDE, "utf8")).not.toContain("client.rum.");
+  });
+
+  test("an automated browser (navigator.webdriver) loads no client", () => {
+    // Keeps CI's Playwright traffic out of real-user metrics.
+    const { win, inserted } = boot({ webdriver: true });
+    expect(inserted).toHaveLength(0);
+    expect(win.AwsRumClient).toBeUndefined();
+  });
+
+  test("?rum=off opts the device out until ?rum=on", () => {
+    const off = boot({ search: "?rum=off" });
+    expect(off.inserted).toHaveLength(0);
+    expect(off.storage.get("rum-opt-out")).toBe("1");
+
+    const later = boot({ stored: { "rum-opt-out": "1" } });
+    expect(later.inserted).toHaveLength(0);
+
+    const on = boot({ search: "?rum=on", stored: { "rum-opt-out": "1" } });
+    expect(on.inserted).toHaveLength(1);
+    expect(on.storage.has("rum-opt-out")).toBe(false);
   });
 });

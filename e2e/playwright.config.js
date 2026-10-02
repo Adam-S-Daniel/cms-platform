@@ -143,7 +143,6 @@ const PLATFORM_META_SPECS = [
   // SOURCE template; meaningless on a consumer, which owns its own
   // (already-populated) admin/collections.site.yml, not this reference file.
   "collections-example-sortable-fields.test.js",
-  "analytics-cloudwatch-rum.test.js",
   // #517 — hashes theme/assets/js/aws-rum-web/ and vm-runs the RUM include
   // from theme/_includes SOURCE; a consumer has the gem, not this tree.
   "analytics-rum-client-vendored.test.js",
