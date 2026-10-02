@@ -99,6 +99,45 @@ the GitHub OAuth App's callback URL do not change. If the deploy **widens** the
 scope the live proxy was requesting, each editor is asked to re-authorize the
 app once.
 
+### Deploying without touching the credentials
+
+`deploy.sh` passes `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the
+environment on every run. A `site-params.env` that still holds the example's
+`xxxx…` placeholders, or a secret that has since been rotated, therefore
+**overwrites the live secret**, and every sign-in then fails at the code
+exchange. One consumer's local file held placeholders when v0.1.124 was
+deployed (2026-10-02).
+
+To change only the code, `AllowedOrigins` or the scope, leave both credentials
+out: SAM keeps a stack's existing value for every parameter it is not given.
+
+```bash
+cd ~/repos/cms-platform/oauth-proxy        # checked out at the release tag
+sam build --template-file template.yaml --region us-east-1
+sam deploy --template-file .aws-sam/build/template.yaml \
+  --stack-name <prefix>-oauth-proxy --region us-east-1 \
+  --capabilities CAPABILITY_IAM --resolve-s3 --no-execute-changeset \
+  --parameter-overrides "AllowedOrigins=https://<apex>,https://preview-*.<apex>" \
+    "GitHubScope=repo,read:user,workflow" "FunctionName=<prefix>-oauth-proxy"
+```
+
+`--no-execute-changeset` stops at the change set, so it can be read first
+(`aws cloudformation describe-change-set --change-set-name <arn>`):
+
+- `OAuthHttpApi` and `OAuthProxyFunction` are `Modify` with `Replacement:
+  False` — the API URL does not move;
+- the function's `Environment` change is caused by `AllowedOrigins` and
+  `GitHubScope` only. A `ParameterReference` naming `GitHubClientSecret` means
+  the secret is about to change.
+
+Then `aws cloudformation execute-change-set --change-set-name <arn>` and
+`aws cloudformation wait stack-update-complete --stack-name <prefix>-oauth-proxy`.
+
+To learn whether a local file's secret is the live one without printing
+either, compare hashes: the deployed value is the function's
+`GITHUB_CLIENT_SECRET` environment variable
+(`aws lambda get-function-configuration`).
+
 ### Which proxy is a site running?
 
 No credentials needed — ask the proxy:
@@ -134,10 +173,109 @@ is therefore expensive. What was weighed:
 | Measure | Status | Why |
 |---|---|---|
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
-| Security headers | Deferred — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | CloudFront serves none. HSTS, `nosniff` and `frame-ancestors` are cheap; a CSP for `/admin` has to live with Decap's `new Function` and inline styles. Needs a bootstrap-stack deploy per site and a live publish loop to prove it. |
+| Security headers | **In the template, not yet deployed** — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | Both distributions send HSTS, `nosniff`, `Referrer-Policy` and same-origin framing once a site redeploys its bootstrap stack; `/admin/*` adds a CSP, Report-Only until `AdminCspMode=enforce`. Decap's `new Function` and the per-site inline scripts keep `script-src` loose; the gain is `connect-src`, `object-src`, `base-uri` and `frame-ancestors`. See [Security headers](#security-headers) below. |
 | Narrower permissions | Evaluated, spike pending — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516); `read:user` replaces `user` in the proxy's default scope | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. The source evaluation, the minimal permission set and the spike kit are in [GitHub App sign-in](#github-app-sign-in-516) below. |
 | A separate origin for the editor | Deferred — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517) | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). Moving `/admin` to its own host takes the token out of their reach, and moves a URL most of the e2e harness depends on. |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
+
+## Security headers
+
+`infrastructure/bootstrap/template.yaml` attaches two response headers
+policies, `<prefix>-baseline-headers` on each distribution's default behavior
+and `<prefix>-admin-headers` on an `/admin/*` behavior that is otherwise a
+copy of the default (same origin, cache policy and functions;
+`e2e/cloudfront-security-headers.test.js` holds them equal).
+
+| Header | Everywhere | `/admin/*` |
+|---|---|---|
+| `Strict-Transport-Security` | `max-age=31536000` (`HstsMaxAgeSeconds`); `includeSubDomains` / `preload` only with `HstsScope` | same |
+| `X-Content-Type-Options` | `nosniff` | same |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | same |
+| `X-Frame-Options` | `SAMEORIGIN` | same |
+| `Content-Security-Policy` | `frame-ancestors 'self'` | report-only: `frame-ancestors 'self'`; enforce: the full policy |
+| `Content-Security-Policy-Report-Only` | — | report-only: the full policy; enforce: absent |
+
+Nothing frames these pages from another origin: Decap's preview pane is a
+`srcdoc` iframe inside `/admin`, embedded tools are same-origin
+`/assets/tools/` iframes, the live preview is a separate tab, and the
+visual-regression harness navigates top-level. A site that wants another
+origin to embed its pages has to widen `frame-ancestors` first.
+
+The full `/admin` policy, and why each part is there:
+
+- `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com` — Decap
+  (SRI-pinned) calls `new Function`; the shells' inline scripts carry
+  per-site `window.CMS_*`, so a hash would differ per site and render path.
+- `style-src 'self' 'unsafe-inline'` — Decap injects inline styles.
+- `connect-src 'self' https://<apex> https://*.<apex> https://api.github.com
+  https://www.githubstatus.com` — no bare `https:`. The subdomains cover the
+  dashboards' `preview-pr<N>` `regression.json`; githubstatus.com is Decap's
+  status probe. The OAuth proxy is absent on purpose: sign-in is a popup and
+  `postMessage`, which `connect-src` does not govern. If #516 adds a token
+  refresh `fetch` to the proxy, its origin has to be added.
+- `img-src 'self' data: blob: https://<apex> https://*.<apex>
+  https://avatars.githubusercontent.com`, `media-src 'self' blob:
+  https://<apex> https://*.<apex>` (the dashboards' `regression.mp4`),
+  `font-src 'self' data:`, `frame-src 'self'`, `default-src 'self'`.
+- `object-src 'none'`, `base-uri 'none'` (no shell has a `<base>`).
+
+A new third-party script, stylesheet or `fetch` target under `theme/admin/`
+needs a matching source in the template, or it breaks once a site enforces.
+Decap's preview pane is a `srcdoc` iframe, and a `srcdoc` document inherits
+the `/admin` policy, so a third-party image, script or iframe inside an
+entry's body (an HTML Embed, a hotlinked image) previews blank once a site
+enforces, while the published page still shows it. An iframe that loads a
+same-origin URL such as `/assets/tools/<slug>/` gets that page's own policy.
+
+It narrows where a script can quietly send what it reads; it cannot stop a
+script that navigates the page away, and the GitHub API it must allow is
+itself writable. There is no reporting endpoint: Report-Only violations
+appear only in the browser console, as `[Report Only] Refused to …`.
+`/admin/index-local.html` is a local-development shell talking to
+`decap-server` on `localhost`; through CloudFront an enforced policy blocks
+that, which changes nothing a deployed site uses.
+
+### Rolling it out, per site
+
+1. Redeploy the bootstrap stack from the site repo once its bump PR naming
+   the release is merged. A live apex must keep `CREATE_APEX_DNS_RECORDS=true`
+   (in `site-params.env` or the wrapper), or the update deletes its apex and
+   `www` records:
+
+   ```bash
+   cd ~/repos/<site> && git checkout main && git pull
+   bash infrastructure/bootstrap/deploy.sh   # ADMIN_CSP_MODE unset = report-only
+   ```
+
+2. Check the headers on production and on one live preview host (no
+   invalidation is needed; the policy applies to cached responses too):
+
+   ```bash
+   for u in https://<apex>/ https://<apex>/admin/ https://<apex>/admin/reviews/ \
+            https://preview-pr<N>.<apex>/ https://preview-pr<N>.<apex>/admin/ \
+            https://preview-pr<N>.<apex>/admin/reviews/; do
+     echo "== $u"
+     curl -sI "$u" | grep -i -E '^(strict-transport-security|x-content-type-options|referrer-policy|x-frame-options|content-security-policy)'
+   done
+   ```
+
+   `/` shows five headers; each `/admin/` URL also shows
+   `content-security-policy-report-only`.
+3. Do an editor round-trip with the browser console open on `/admin/`: sign
+   in, open and edit an entry, watch the preview pane, upload an image and
+   open the media library, save, publish; then sign in on `/admin/reviews/`
+   and `/admin/reviews/health.html`, and repeat on a preview admin. Every
+   `[Report Only]` line is a source the policy is missing: fix the template
+   before enforcing.
+4. Enforce: add `export ADMIN_CSP_MODE="enforce"` to
+   `infrastructure/site-params.env` (the wrapper sources it, and a later
+   redeploy without it goes back to report-only), run
+   `bash infrastructure/bootstrap/deploy.sh` again, and repeat step 2:
+   `content-security-policy` now carries the full policy and the Report-Only
+   header is gone.
+5. Drive `gh workflow run cms-publish-loop-prod.yml --repo <owner>/<repo>`
+   green (the definition of done in `AGENTS.md`). To back out, redeploy with
+   `ADMIN_CSP_MODE=report-only`.
 
 ## Rules that follow
 

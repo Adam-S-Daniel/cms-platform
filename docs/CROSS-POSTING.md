@@ -397,6 +397,18 @@ https://claude.ai/code/routines/trig_013iDZwBZ5mY5zcAayas6ASW.
 The step uses `!cancelled()`, so it also runs after a failed leg, and it is
 last, so it never masks the step that turns a swallowed Mastodon failure red.
 
+**What it does with Substack.** Substack has no publish API, so the owner
+still pastes the draft by hand. The watcher verifies the paste itself: it
+reads the owner's public profile feed,
+`https://substack.com/api/v1/reader/feed/profile/311451833`. A Note whose
+first line equals the post's title (after quote and whitespace
+normalization), or an item that contains the post's URL, dated on or after the
+post's commit, ticks the ledger issue's Substack box with that item's link.
+The watcher closes the ledger once every configured leg is ticked. It also
+sweeps every open ledger, whatever its age, so a late paste closes on the
+next fire. The routine's Claude environment allows `substack.com` for this
+(`_agent-guidance`'s `docs/reference/network-allowlist-claude-environments.txt`).
+
 **Wiring (per site)**
 
 - Secret `CLAUDE_ROUTINE_CROSSPOSTWATCHER`: the routine's bearer token.
