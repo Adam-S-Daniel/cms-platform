@@ -80,6 +80,12 @@ module CmsPlatformTheme
       apex  = url.empty? ? "" : URI(url).host.to_s.sub(/\Awww\./, "")
       logo  = cms["logo_url"] || (url.empty? ? "" : "#{url}/assets/images/logo.svg")
       title = (site.config["title"] || "").to_s
+      # `cms.admin_origin` (OPTIONAL, #517) — the origin the editor is served
+      # from when it is not the site's own, e.g. https://admin.example.com.
+      # Unset = the same origin as the site. Lowercased, no trailing slash, so
+      # the admin JS can compare it to location.origin as is. Mirrored by
+      # render-decap-config.rb.
+      admin_origin = cms["admin_origin"].to_s.strip.sub(%r{/+\z}, "").downcase
       tokens = { "CMS_REPO" => repo, "CMS_OAUTH_BASE_URL" => oauth,
                  "CMS_SITE_URL" => url, "CMS_DISPLAY_URL" => url, "CMS_LOGO_URL" => logo }
 
@@ -153,7 +159,7 @@ module CmsPlatformTheme
       # into BOTH the Decap shells (index*.html) AND the review dashboards
       # (reviews/*.html). Kept in lockstep with the script by
       # e2e/decap-config-render-parity.test.js — update both or the lint fails.
-      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};</script>}
+      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_ADMIN_ORIGIN=#{admin_origin.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};</script>}
       shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html"))
       shells.each do |h|
         s = File.read(h, encoding: "utf-8")

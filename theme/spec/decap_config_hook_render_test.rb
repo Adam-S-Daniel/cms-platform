@@ -191,6 +191,29 @@ class DecapConfigHookRenderTest < Minitest::Test
     end
   end
 
+  # #517 — `cms.admin_origin` reaches every shell as window.CMS_ADMIN_ORIGIN,
+  # lowercased with any trailing slash dropped so admin/site-hostname.js can compare it to
+  # location.origin. Unset (every site that has not opted in) injects "".
+  def injected_block(shell)
+    html = File.read(File.join(@dest, "admin", shell), encoding: "utf-8")
+    html[/<script>window\.CMS_REPO=.*?<\/script>/m]
+  end
+
+  def test_injects_an_empty_admin_origin_when_unset
+    with_default_external(Encoding::UTF_8) { CmsPlatformTheme::DecapConfig.run(@site) }
+    %w[index.html index-test.html index-local.html reviews/index.html reviews/health.html].each do |shell|
+      assert_includes injected_block(shell), 'window.CMS_ADMIN_ORIGIN="";', shell
+    end
+  end
+
+  def test_injects_the_configured_admin_origin_lowercased_without_a_trailing_slash
+    @site.config["cms"]["admin_origin"] = "https://Admin.example.test/"
+    with_default_external(Encoding::UTF_8) { CmsPlatformTheme::DecapConfig.run(@site) }
+    %w[index.html reviews/index.html].each do |shell|
+      assert_includes injected_block(shell), 'window.CMS_ADMIN_ORIGIN="https://admin.example.test";', shell
+    end
+  end
+
   # Bug A lock, source-level: both templates must carry the marker EXACTLY
   # once. Fails before the fix for config-local.base.yml (0 matches, not 1).
   def test_both_base_templates_carry_exactly_one_splice_marker

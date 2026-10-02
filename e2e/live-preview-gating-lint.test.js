@@ -57,7 +57,8 @@ const SHELLS = ["index.html", "index-local.html"];
 // locks the mechanism, not a paraphrase of it).
 const EDITOR_ROUTE_RE_SRC = "(entries\\/|new(\\?|$))";
 const PREVIEWABLE_MAP_SRC = "{ posts: true, pages: true, projects: true }";
-const DISPLAY_TOGGLE_SRC = "link.style.display = editing && PREVIEWABLE_COLLECTIONS[col] ? '' : 'none'";
+const DISPLAY_TOGGLE_SRC =
+  "link.style.display = editing && PREVIEWABLE_COLLECTIONS[col] && !ADMIN_ORIGIN ? '' : 'none'";
 
 test.describe("Live Preview button — editor-only + previewable-collection gating", () => {
   for (const shell of SHELLS) {
@@ -190,7 +191,7 @@ function extractSyncScript(html) {
   return html.slice(scriptOpen + "<script>".length, scriptClose);
 }
 
-function runSyncScript(src, hash) {
+function runSyncScript(src, hash, { origin = "https://example.com", adminOrigin } = {}) {
   const link = { href: "", style: { display: "" } };
   const listeners = [];
   const sandbox = {
@@ -200,11 +201,12 @@ function runSyncScript(src, hash) {
       },
     },
     window: {
+      CMS_ADMIN_ORIGIN: adminOrigin,
       addEventListener(evt, fn) {
         listeners.push([evt, fn]);
       },
     },
-    location: { hash },
+    location: { hash, origin },
   };
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox);
@@ -233,6 +235,22 @@ test.describe("Live Preview button — behavioral proof", () => {
         expect(linkNew.style.display, `${col}/new also has a real /preview/ template`).toBe("");
       });
     }
+
+    // #517 — on a separate admin origin /preview/ is on the public site, out
+    // of reach of this tab's same-origin Save broadcasts, so it never fills.
+    test(`${shell}: hides the button on the configured admin origin, and only there`, () => {
+      const adminOrigin = "https://admin.example.com";
+      const onAdmin = runSyncScript(script, "#/collections/posts/entries/foo", {
+        origin: adminOrigin,
+        adminOrigin,
+      });
+      expect(onAdmin.style.display, "a /preview/ tab on another origin can never fill").toBe("none");
+      const onPreview = runSyncScript(script, "#/collections/posts/entries/foo", {
+        origin: "https://preview-pr7.example.com",
+        adminOrigin,
+      });
+      expect(onPreview.style.display, "a preview admin keeps its same-origin /preview/").toBe("");
+    });
 
     test(`${shell}: hides the button on a previewable collection's LIST route (not editing)`, () => {
       const link = runSyncScript(script, "#/collections/posts");

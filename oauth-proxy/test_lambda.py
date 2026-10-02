@@ -5,6 +5,7 @@ Run locally with:  python -m pytest test_lambda.py -v
 No AWS credentials required — all GitHub API calls are mocked.
 """
 
+import ast
 import importlib
 import json
 import os
@@ -13,6 +14,8 @@ import sys
 import unittest
 import urllib.parse
 from unittest.mock import MagicMock, patch
+
+import yaml
 
 # Set required env vars before importing the handler
 os.environ.setdefault("GITHUB_CLIENT_ID", "test_client_id")
@@ -137,6 +140,16 @@ class TestAuthRedirect(_Base):
         # required scopes survive any future edits.
         self.assertIn("repo", location)
         self.assertIn("workflow", location)
+
+    def test_requests_read_user_not_the_profile_write_scope(self):
+        # The admin reads GET /user and never writes the profile, so the
+        # read/write `user` scope is not requested (#516).
+        query = urllib.parse.urlparse(
+            handler_module.handler(_event("/auth"), None)["headers"]["Location"]
+        ).query
+        scopes = urllib.parse.parse_qs(query)["scope"][0].split(",")
+        self.assertIn("read:user", scopes)
+        self.assertNotIn("user", scopes)
 
     def test_proxy_forces_scope_ignoring_cms_request(self):
         # Decap CMS hardcodes `repo,user` in its OAuth request. The
@@ -418,6 +431,146 @@ class TestCallbackClearsCookie(_Base):
         resp = handler_module.handler(_event_v1("/callback", {"code": "code"}), None)
         self.assertEqual(resp["headers"]["Set-Cookie"], CLEARED_COOKIE)
         self.assertNotIn("cookies", resp)
+
+
+class TestGitHubAppTokenResponse(_Base):
+    """
+    A GitHub App's client id goes through the same web flow, but with token
+    expiry on, GitHub's answer also carries a refresh token and expiry fields
+    (docs: "Generating a user access token for a GitHub App"). Decap has no
+    refresh flow, so the browser gets the access token and nothing else.
+    """
+
+    # Low-entropy fixture values; real ones start ghu_ / ghr_.
+    ACCESS = "ghu_TEST-ACCESS-VALUE"  # nosec B105  # fixture value, not a secret
+    REFRESH = "ghr_TEST-REFRESH-VALUE"  # nosec B105  # fixture value, not a secret
+
+    def _app_response(self):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "access_token": self.ACCESS,
+                "expires_in": 28800,
+                "refresh_token": self.REFRESH,
+                "refresh_token_expires_in": 15897600,
+                "scope": "",
+                "token_type": "bearer",  # nosec B105  # OAuth token_type literal
+            }
+        ).encode("utf-8")
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        return mock_resp
+
+    def _callback(self):
+        return _event(
+            "/callback", {"code": "code", "state": GOOD_STATE}, cookies={STATE_COOKIE: GOOD_STATE}
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_page_carries_only_the_access_token(self, mock_urlopen):
+        mock_urlopen.return_value = self._app_response()
+        with self.assertLogs(level="INFO") as logs:
+            resp = handler_module.handler(self._callback(), None)
+        self.assertEqual(resp["statusCode"], 200)
+        body = resp["body"]
+        # The exact payload Decap receives: token and provider, nothing more.
+        self.assertIn(
+            "var payload  = "
+            + handler_module._js_literal({"token": self.ACCESS, "provider": "github"})
+            + ";",
+            body,
+        )
+        for leaked in (self.REFRESH, "refresh_token", "expires_in", "28800"):
+            self.assertNotIn(leaked, body)
+        self.assertNotIn(self.REFRESH, "\n".join(logs.output))
+
+
+class TestScopeLockstep(unittest.TestCase):
+    """
+    GITHUB_SCOPE has three homes: the Lambda's fallback, the SAM parameter's
+    Default and deploy.sh's default (AGENTS.md). A deploy uses deploy.sh's;
+    the others are what an operator reads. They must agree.
+    """
+
+    HERE = os.path.dirname(os.path.abspath(__file__))
+
+    def _lambda_default(self) -> str:
+        # The second argument of os.environ.get("GITHUB_SCOPE", ...), from the AST.
+        with open(os.path.join(self.HERE, "lambda.py"), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and len(node.args) == 2
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "GITHUB_SCOPE"
+            ):
+                return node.args[1].value
+        self.fail("lambda.py has no os.environ.get('GITHUB_SCOPE', <default>)")
+
+    def _template_default(self) -> str:
+        class _CfnLoader(yaml.SafeLoader):
+            pass
+
+        # !Ref / !Sub / !GetAtt: the values are irrelevant here.
+        _CfnLoader.add_multi_constructor("!", lambda loader, suffix, node: None)
+        with open(os.path.join(self.HERE, "template.yaml"), encoding="utf-8") as f:
+            template = yaml.load(f, Loader=_CfnLoader)  # nosec B506  # SafeLoader subclass
+        return template["Parameters"]["GitHubScope"]["Default"]
+
+    def _deploy_default(self) -> str:
+        # A shell default expansion is one lexical token; bash has no AST here.
+        with open(os.path.join(self.HERE, "deploy.sh"), encoding="utf-8") as f:
+            found = re.findall(r'^GITHUB_SCOPE="\$\{GITHUB_SCOPE:-([^}]*)\}"$', f.read(), re.M)
+        self.assertEqual(len(found), 1, "deploy.sh must set GITHUB_SCOPE's default exactly once")
+        return found[0]
+
+    def test_three_defaults_agree(self):
+        self.assertEqual(self._lambda_default(), self._template_default())
+        self.assertEqual(self._lambda_default(), self._deploy_default())
+
+    def test_default_reads_the_profile_without_writing_it(self):
+        scopes = self._deploy_default().split(",")
+        self.assertIn("read:user", scopes)
+        self.assertNotIn("user", scopes)
+
+
+class TestGitHubAppManifest(unittest.TestCase):
+    """
+    github-app-manifest.json is the #516 spike's sign-in App. Its permissions
+    are the minimal set derived in docs/ADMIN-AUTH-SECURITY.md; widening one
+    (Workflows, Issues, Administration, any user permission) is a decision
+    for that doc first, not a quiet edit here.
+    """
+
+    MINIMAL = {
+        "metadata": "read",
+        "contents": "write",
+        "pull_requests": "write",
+        "statuses": "read",
+        "checks": "read",
+        "actions": "read",
+        "deployments": "write",
+    }
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "github-app-manifest.json")
+        with open(path, encoding="utf-8") as f:
+            self.manifest = json.load(f)
+
+    def test_requests_exactly_the_minimal_permissions(self):
+        self.assertEqual(self.manifest["default_permissions"], self.MINIMAL)
+
+    def test_receives_no_events(self):
+        self.assertFalse(self.manifest["hook_attributes"]["active"])
+        self.assertEqual(self.manifest["default_events"], [])
+
+    def test_carries_placeholders_not_a_site_identity(self):
+        self.assertEqual(self.manifest["callback_urls"], ["<oauth_base_url>/prod/callback"])
+        self.assertEqual(self.manifest["url"], "https://<apex>")
+        self.assertEqual(self.manifest["redirect_url"], "https://<apex>/")
 
 
 class TestRequestCookies(unittest.TestCase):

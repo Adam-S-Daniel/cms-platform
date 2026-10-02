@@ -22,6 +22,22 @@ is a stack parameter — nothing is hardcoded to a specific domain.
   `preview-cms-<slug>.<apex>`) via string ops, since CloudFront Functions can't
   read stack params at runtime.
 - **oauth-proxy `FunctionName`** is a parameter (keep unique per site).
+- **`AdminDomainName`** (bootstrap, optional, default empty = off) puts the
+  editor on its own host, e.g. `admin.<apex>`: a separate CloudFront
+  distribution, certificate and DNS record serve only `/admin/` from the
+  production bucket's REST endpoint (the **admin-site** function), with a
+  script-free page for every miss, and the **admin-redirect** function on the
+  production distribution sends `/admin` there. Opt-in runbook:
+  `docs/ADMIN-AUTH-SECURITY.md`.
+- **Security headers** (bootstrap, #515): both distributions attach
+  `<prefix>-baseline-headers` (HSTS, `nosniff`, `Referrer-Policy`,
+  `frame-ancestors 'self'`), and an `/admin/*` behavior attaches
+  `<prefix>-admin-headers`, which adds a Content-Security-Policy.
+  `AdminCspMode` (`ADMIN_CSP_MODE`, default `report-only`), `HstsMaxAgeSeconds`
+  (`HSTS_MAX_AGE_SECONDS`, default one year) and `HstsScope` (`HSTS_SCOPE`,
+  default `this-host-only`) tune them; the rollout runbook is in
+  `docs/ADMIN-AUTH-SECURITY.md`. An account holds at most 20 custom response
+  headers policies, two per site.
 
 ## Deploying
 
@@ -61,7 +77,7 @@ source of truth and a platform fix flows to every consumer on the next
 `platform_ref` bump (no fork to keep in sync). The site runs them exactly as above
 (`bash oauth-proxy/deploy.sh`), no platform checkout needed.
 
-The OAuth wrapper adopts the platform default scope **`repo,user,workflow`**.
+The OAuth wrapper adopts the platform default scope **`repo,read:user,workflow`**.
 ⚠️ If a redeploy **widens** the scope your live GitHub OAuth App was authorized
 with, the OAuth App owner must **manually re-consent** (re-authorize the app)
 once — GitHub requires that human step; it can't be automated.

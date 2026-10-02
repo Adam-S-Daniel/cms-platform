@@ -678,7 +678,7 @@ Next:
   4. Deploy infra (one-time, shared AWS account):
        set -a; source infrastructure/site-params.env; set +a
        bash infrastructure/bootstrap/deploy.sh   # committed delegating wrapper
-       bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,user,workflow)
+       bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,read:user,workflow)
   5. Add GitHub secrets (exact fine-grained PAT permissions: see the
      /cms-platform:consumer-repo-provisioning skill, from the agentskills bundle):
        - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W; PAT user = reviewer of the regression-review env

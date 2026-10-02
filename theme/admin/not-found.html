@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!--
+  The admin host's answer to a miss (cms-platform#517, AdminDistribution's
+  CustomErrorResponses). It shares an origin with the editor's GitHub tokens,
+  so it must stay inert: no script, no event-handler attribute, no style, no
+  external resource, nothing rendered by Jekyll or the admin render hooks.
+  theme/spec/admin_not_found_page_test.rb parses it and enforces that.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>Not found</title>
+</head>
+<body>
+<h1>Not found</h1>
+<p>There is nothing at this address in the editor.</p>
+<p><a href="/admin/">Open the editor</a></p>
+</body>
+</html>
