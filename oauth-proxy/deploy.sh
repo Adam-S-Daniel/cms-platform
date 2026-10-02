@@ -81,7 +81,17 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-info "Deploying stack: ${STACK_NAME} to ${AWS_REGION}"
+# ── The release this build comes from (#518) ─────────────────────────────
+# /prod/health reports it so a person can name the live build. It is read
+# from this checkout, never from the environment: the release tag when HEAD
+# is exactly one (the delegating wrapper clones at platform.lock's tag),
+# otherwise the commit. The probe compares the handler digest, not this.
+if ! PROXY_RELEASE="$(git -C "$SCRIPT_DIR" describe --tags --exact-match HEAD 2>/dev/null)"; then
+  PROXY_RELEASE="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null)" || PROXY_RELEASE="unknown"
+fi
+[[ "$PROXY_RELEASE" =~ ^[A-Za-z0-9._/+-]{1,100}$ ]] || PROXY_RELEASE="unknown"
+
+info "Deploying stack: ${STACK_NAME} to ${AWS_REGION} (platform ${PROXY_RELEASE})"
 
 # ── sam build ────────────────────────────────────────────────────────────
 info "Building SAM application…"
@@ -104,6 +114,7 @@ DEPLOY_ARGS=(
   "AllowedOrigins=${ALLOWED_ORIGINS}"
   "GitHubScope=${GITHUB_SCOPE}"
   "FunctionName=${FUNCTION_NAME}"
+  "PlatformRelease=${PROXY_RELEASE}"
 )
 
 # Resolve S3 bucket for artifacts (SAM managed or pre-existing)

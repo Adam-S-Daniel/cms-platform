@@ -53,6 +53,14 @@ Parameters:
     Default: "cms-oauth-proxy"
     Description: "Lambda function name; keep unique per site, e.g. example-com-oauth-proxy"
 
+  PlatformRelease:
+    Type: String
+    Default: "unknown"
+    AllowedPattern: "^[A-Za-z0-9._/+-]{1,100}$"
+    Description: >
+      The cms-platform tag (or commit) this proxy was deployed from. deploy.sh
+      sets it and /health reports it, so a person can name the live build.
+
 Globals:
   Function:
     Runtime: python3.12
@@ -64,6 +72,7 @@ Globals:
         GITHUB_CLIENT_SECRET: !Ref GitHubClientSecret
         ALLOWED_ORIGINS:      !Ref AllowedOrigins
         GITHUB_SCOPE:         !Ref GitHubScope
+        PLATFORM_RELEASE:     !Ref PlatformRelease
 
 Resources:
 

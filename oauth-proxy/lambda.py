@@ -20,6 +20,7 @@ Cost model (AWS free tier covers typical personal-blog usage):
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import html
 import json
@@ -70,6 +71,18 @@ HTTP_TIMEOUT_SECONDS = 10
 # host-only cookie, so a sibling subdomain cannot plant one.
 STATE_COOKIE = "__Host-cms-oauth-state"
 STATE_MAX_AGE_SECONDS = 600
+
+# Which build is live, for /health (#518). A platform release and the consumer
+# bump that follows never redeploy this Lambda, so scripts/probe-oauth-proxy-
+# build.js compares HANDLER_SHA256 with the same digest of the lambda.py the
+# site is pinned to. The digest is of this file as deployed, computed here
+# rather than passed in, so it describes the code that is actually running.
+# PLATFORM_RELEASE is the tag (or commit) deploy.sh deployed from; it names
+# the build for a human, and the probe never compares it, because most
+# releases do not change this file.
+PLATFORM_RELEASE = os.environ.get("PLATFORM_RELEASE", "")
+with open(__file__, "rb") as _handler_source:
+    HANDLER_SHA256 = hashlib.sha256(_handler_source.read()).hexdigest()
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -552,7 +565,14 @@ def handler(event: dict, context) -> dict:  # noqa: ANN001
         return {
             "statusCode": 200,
             "headers": {"Content-Type": "application/json", **_cors_headers(origin)},
-            "body": json.dumps({"status": "ok", "service": "cms-oauth-proxy"}),
+            "body": json.dumps(
+                {
+                    "status": "ok",
+                    "service": "cms-oauth-proxy",
+                    "release": PLATFORM_RELEASE,
+                    "handler_sha256": HANDLER_SHA256,
+                }
+            ),
         }
 
     return {
