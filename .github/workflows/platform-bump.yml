@@ -347,6 +347,28 @@ jobs:
             printf 'seeded %d newly platform-dictated workflow(s): %s\n' "${#SEEDED[@]}" "${SEEDED[*]}"
           fi
 
+          # Seed the two DELEGATING deploy wrappers a consumer lacks (#518).
+          # scaffold/create-site.js emits them into every new site, but they
+          # arrived in v0.1.29 and nothing delivered them to a site scaffolded
+          # earlier: jodidaniel.com (scaffolded at v0.1.0) has neither, so its
+          # OAuth proxy could only be deployed from a hand-made platform
+          # checkout, not from the release its platform.lock names. Same rule as
+          # the callers above: only a wholly-MISSING file is seeded. A wrapper
+          # reads platform.lock when it runs, so it has no pin to stamp.
+          SEEDED_WRAPPERS=()
+          for rel in oauth-proxy/deploy.sh infrastructure/bootstrap/deploy.sh; do
+            if [ -e "$rel" ]; then continue; fi
+            if wrapper=$(gh api "repos/$PLATFORM/contents/$rel.delegating?ref=$LATEST" --jq '.content' 2>/dev/null) \
+              && [ -n "$wrapper" ]; then
+              mkdir -p "$(dirname "$rel")"
+              base64 -d <<<"$wrapper" > "$rel"
+              chmod 0755 "$rel"
+              SEEDED_WRAPPERS+=("$rel")
+            else
+              echo "::warning::could not read $rel.delegating at $LATEST; $rel was not seeded"
+            fi
+          done
+
           # RETIRE a caller that LEFT the canonical set (#315) — the symmetric
           # counterpart of the seeding above, and the half that was missing.
           #
@@ -545,6 +567,9 @@ jobs:
           fi
           if [ "${#RETIRED[@]}" -gt 0 ]; then
             SEED_NOTE="${SEED_NOTE} Retired de-dictated workflow caller(s): ${RETIRED[*]}."
+          fi
+          if [ "${#SEEDED_WRAPPERS[@]}" -gt 0 ]; then
+            SEED_NOTE="${SEED_NOTE} Seeded missing delegating deploy wrapper(s): ${SEEDED_WRAPPERS[*]}."
           fi
           SEED_NOTE="${SEED_NOTE}${CONTEXT_NOTE}${SECRETS_NOTE}"
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \

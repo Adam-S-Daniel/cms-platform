@@ -43,6 +43,10 @@ ref, re-pinned to it — so the workflow-set-parity check (introduced v0.1.20,
 #54) also passes on the bump PR alone. Observed live: v0.1.54 added
 `dependabot-rearm-sweep.yml` and both consumers' bump PRs failed pin-consistency
 with `workflow-set: MISSING (platform-dictated)` until hand-fixed.
+It seeds a missing `oauth-proxy/deploy.sh` or `infrastructure/bootstrap/deploy.sh`
+delegating wrapper the same way (#518): the scaffolder emits both, but a site
+scaffolded before v0.1.29 never received them. Nothing checks for them, so
+this is delivery only, never a red.
 
 `scripts/check-platform-pin-consistency.js` (platform-owned, Node, needs only the
 repo's `yaml` lib) makes them all agree:
