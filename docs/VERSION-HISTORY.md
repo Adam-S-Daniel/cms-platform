@@ -10,9 +10,25 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.123)
+## Version history (v0.1.0 → v0.1.124)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.124 — the admin sign-in checks who it is talking to, and the Decap bundle carries an integrity hash.**
+The OAuth proxy's callback page used to answer the `authorizing:github` handshake from any
+window and address the token to whichever origin asked; it now releases the token only to the
+window that opened it, and only when that origin matches `ALLOWED_ORIGINS` — a real allowlist
+of `https://` origins, where `*` inside one host label covers per-PR preview hosts and a bare
+`*` is refused. The proxy also mints `state` itself, pins it in a `__Host-` cookie and checks
+it before contacting GitHub, and serves its pages `no-store` under a nonce CSP. The Reviews and
+Health dashboards accept a login message only from the proxy's origin and the popup they
+opened. All three admin shells load `decap-cms` with a Subresource Integrity hash. The proxy's
+pytest suite, which no CI lane ran, joins `python-unit-tests`, and a new lint runs the callback
+page's script to prove who receives the token (#520). **The `oauth-proxy/` half is live on a
+site only after that site redeploys the proxy** — a consumer bump moves the dashboards and the
+hash, not the Lambda; steps, the `ALLOWED_ORIGINS` value a site with preview admins needs, and
+a credential-free probe are in `docs/ADMIN-AUTH-SECURITY.md`. Also in this release: the shelved
+content-publish-latency design is recorded in `docs/CONTENT-PUBLISH-LATENCY.md` (#513).
 
 **v0.1.123 — shared PDF fields stay consistent, and publishing status names the site being updated.**
 The field library now offers one opt-in archived-PDF group: the private file name, explicit public
