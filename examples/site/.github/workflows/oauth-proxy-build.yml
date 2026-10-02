@@ -1,0 +1,26 @@
+name: OAuth proxy build probe
+# Daily, credential-free check that this site's live OAuth proxy runs the
+# handler from the platform release platform.lock pins (cms-platform#518). A
+# platform bump never redeploys the proxy, so a red run here means "run
+# `bash oauth-proxy/deploy.sh`"; its message says whether the proxy is stale,
+# predates build reporting (and whether it has the sign-in state check), or
+# could not be read. A red scheduled run reaches the `ci` tracking issue
+# through scheduled-run-health.yml, like every other scheduled failure.
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+     || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # Daily, off-peak offset minute. The proxy only changes on a deploy, so
+    # a day of lag (plus GitHub's cron delay) is fine.
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/oauth-proxy-build.yml@v0.1.124

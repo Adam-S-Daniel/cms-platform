@@ -395,6 +395,10 @@ const PLATFORM_META_SPECS = [
   // examples/site thin caller, and EXECUTES the two bash scripts lifted out of
   // the reusable in scratch dirs. All platform tree; a consumer ships none of it.
   "site-verify.test.js",
+  // #518 — the OAuth proxy build probe: runs scripts/probe-oauth-proxy-build.js
+  // against canned answers, reads oauth-proxy/lambda.py's digest, and lints the
+  // oauth-proxy-build.yml reusable + its examples/site caller. Platform tree only.
+  "probe-oauth-proxy-build.test.js",
   "playwright-image-drift.test.js",
   // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
   // root plugin.json + .claude-plugin/plugin.json manifests, the vendored
