@@ -160,7 +160,7 @@ is therefore expensive. What was weighed:
 
   ```bash
   v=X.Y.Z; d=theme/assets/js/aws-rum-web
-  curl -sS -o "$d/cwr-$v.js" "https://client.rum.us-east-1.amazonaws.com/$v/cwr.js"
+  curl -fsS -o "$d/cwr-$v.js" "https://client.rum.us-east-1.amazonaws.com/$v/cwr.js"
   openssl dgst -sha384 -binary "$d/cwr-$v.js" | openssl base64 -A
   npm pack "aws-rum-web@$v" && tar xzf "aws-rum-web-$v.tgz" -C "$d" --strip-components=1 \
     package/LICENSE package/NOTICE package/LICENSE-THIRD-PARTY
