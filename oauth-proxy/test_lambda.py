@@ -5,6 +5,7 @@ Run locally with:  python -m pytest test_lambda.py -v
 No AWS credentials required — all GitHub API calls are mocked.
 """
 
+import ast
 import importlib
 import json
 import os
@@ -13,6 +14,8 @@ import sys
 import unittest
 import urllib.parse
 from unittest.mock import MagicMock, patch
+
+import yaml
 
 # Set required env vars before importing the handler
 os.environ.setdefault("GITHUB_CLIENT_ID", "test_client_id")
@@ -137,6 +140,16 @@ class TestAuthRedirect(_Base):
         # required scopes survive any future edits.
         self.assertIn("repo", location)
         self.assertIn("workflow", location)
+
+    def test_requests_read_user_not_the_profile_write_scope(self):
+        # The admin reads GET /user and never writes the profile, so the
+        # read/write `user` scope is not requested (#516).
+        query = urllib.parse.urlparse(
+            handler_module.handler(_event("/auth"), None)["headers"]["Location"]
+        ).query
+        scopes = urllib.parse.parse_qs(query)["scope"][0].split(",")
+        self.assertIn("read:user", scopes)
+        self.assertNotIn("user", scopes)
 
     def test_proxy_forces_scope_ignoring_cms_request(self):
         # Decap CMS hardcodes `repo,user` in its OAuth request. The
@@ -470,6 +483,58 @@ class TestGitHubAppTokenResponse(_Base):
         for leaked in (self.REFRESH, "refresh_token", "expires_in", "28800"):
             self.assertNotIn(leaked, body)
         self.assertNotIn(self.REFRESH, "\n".join(logs.output))
+
+
+class TestScopeLockstep(unittest.TestCase):
+    """
+    GITHUB_SCOPE has three homes: the Lambda's fallback, the SAM parameter's
+    Default and deploy.sh's default (AGENTS.md). A deploy uses deploy.sh's;
+    the others are what an operator reads. They must agree.
+    """
+
+    HERE = os.path.dirname(os.path.abspath(__file__))
+
+    def _lambda_default(self) -> str:
+        # The second argument of os.environ.get("GITHUB_SCOPE", ...), from the AST.
+        with open(os.path.join(self.HERE, "lambda.py"), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and len(node.args) == 2
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "GITHUB_SCOPE"
+            ):
+                return node.args[1].value
+        self.fail("lambda.py has no os.environ.get('GITHUB_SCOPE', <default>)")
+
+    def _template_default(self) -> str:
+        class _CfnLoader(yaml.SafeLoader):
+            pass
+
+        # !Ref / !Sub / !GetAtt: the values are irrelevant here.
+        _CfnLoader.add_multi_constructor("!", lambda loader, suffix, node: None)
+        with open(os.path.join(self.HERE, "template.yaml"), encoding="utf-8") as f:
+            template = yaml.load(f, Loader=_CfnLoader)  # nosec B506  # SafeLoader subclass
+        return template["Parameters"]["GitHubScope"]["Default"]
+
+    def _deploy_default(self) -> str:
+        # A shell default expansion is one lexical token; bash has no AST here.
+        with open(os.path.join(self.HERE, "deploy.sh"), encoding="utf-8") as f:
+            found = re.findall(r'^GITHUB_SCOPE="\$\{GITHUB_SCOPE:-([^}]*)\}"$', f.read(), re.M)
+        self.assertEqual(len(found), 1, "deploy.sh must set GITHUB_SCOPE's default exactly once")
+        return found[0]
+
+    def test_three_defaults_agree(self):
+        self.assertEqual(self._lambda_default(), self._template_default())
+        self.assertEqual(self._lambda_default(), self._deploy_default())
+
+    def test_default_reads_the_profile_without_writing_it(self):
+        scopes = self._deploy_default().split(",")
+        self.assertIn("read:user", scopes)
+        self.assertNotIn("user", scopes)
 
 
 class TestRequestCookies(unittest.TestCase):

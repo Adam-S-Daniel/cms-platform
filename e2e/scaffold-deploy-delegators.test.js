@@ -49,12 +49,12 @@ test.describe("scaffolder delivers OAuth-proxy + bootstrap as delegating wrapper
     });
   }
 
-  test("oauth delegator adopts the platform default OAuth scope (repo,user,workflow) — no narrowed fork", () => {
+  test("oauth delegator adopts the platform default OAuth scope (repo,read:user,workflow) — no narrowed fork", () => {
     const body = fs.readFileSync(path.join(target, "oauth-proxy/deploy.sh"), "utf8");
     // It must NOT hardcode a narrower scope; the platform deploy.sh defaults to
-    // repo,user,workflow. (A fork's GITHUB_SCOPE=repo,user is exactly the drift
-    // #69 eliminates.) The wrapper mentions the default scope for the operator.
-    expect(body).toMatch(/repo,user,workflow/);
+    // repo,read:user,workflow. (A fork's GITHUB_SCOPE=repo,user is exactly the
+    // drift #69 eliminates.) The wrapper mentions the default scope for the operator.
+    expect(body).toMatch(/repo,read:user,workflow/);
     expect(body, "oauth delegator must not pin a narrower scope").not.toMatch(/GITHUB_SCOPE=.?repo,user[^,]/);
   });
 

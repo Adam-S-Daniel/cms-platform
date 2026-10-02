@@ -29,7 +29,7 @@ FUNCTION_NAME="${FUNCTION_NAME:-${STACK_NAME}}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 SAM_S3_BUCKET="${SAM_S3_BUCKET:-}"
 ALLOWED_ORIGINS="${ALLOWED_ORIGINS:?set ALLOWED_ORIGINS, e.g. https://example.com}"
-GITHUB_SCOPE="${GITHUB_SCOPE:-repo,user,workflow}"
+GITHUB_SCOPE="${GITHUB_SCOPE:-repo,read:user,workflow}"
 # Repo identity for the Next-Steps backend snippet (already in site-params.env).
 GITHUB_ORG="${GITHUB_ORG:-Adam-S-Daniel}"
 GITHUB_REPO="${GITHUB_REPO:-<repo>}"

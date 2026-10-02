@@ -38,17 +38,17 @@ logger.setLevel(logging.INFO)
 GITHUB_CLIENT_ID = os.environ["GITHUB_CLIENT_ID"]
 GITHUB_CLIENT_SECRET = os.environ["GITHUB_CLIENT_SECRET"]
 # Scope requested from GitHub:
-#   - `repo`     read/write repo contents (PRs, labels, content API)
-#   - `user`     basic user info for Decap's "Logged in as ..." UI
-#   - `workflow` dispatch GitHub Actions workflows. REQUIRED by the
-#                publish-via-auto-merge.js shim's "Delete published
-#                entry" recovery path: when the user clicks Delete on
-#                a published post, Decap calls DELETE /contents/{path};
-#                main's branch ruleset rejects with 422; the shim
-#                catches the 422 and dispatches `delete-via-pr.yml` —
-#                that POST returns 404 if the token lacks `workflow`.
-#                Without it, the Delete button silently does nothing.
-GITHUB_SCOPE = os.environ.get("GITHUB_SCOPE", "repo,user,workflow")
+#   - `repo`      read/write repo contents (PRs, labels, content API)
+#   - `read:user` GET /user for Decap's "Logged in as ..." UI and the
+#                 dashboards. Nothing in the admin writes the profile, so
+#                 the read/write `user` scope is not requested (#516).
+#   - `workflow`  kept for now. It was added for a delete-via-pr.yml
+#                 dispatch that publish-via-auto-merge.js no longer makes;
+#                 whether anything still needs it is measured by the
+#                 GitHub App spike in docs/ADMIN-AUTH-SECURITY.md.
+# A GitHub App's client id ignores `scope`: its token carries the App's
+# permissions instead.
+GITHUB_SCOPE = os.environ.get("GITHUB_SCOPE", "repo,read:user,workflow")
 # Origins of the CMS windows allowed to receive the token: a comma-separated
 # list of `https://` origins, e.g. https://example.com. `*` is allowed inside a
 # host label so per-PR preview hosts need one entry, e.g.
@@ -365,7 +365,7 @@ def handle_auth(origin: str | None, v2: bool) -> dict:
     """
     Step 1 — redirect the browser to GitHub's OAuth consent screen.
 
-    The CMS passes ?provider=github&scope=repo,user (Sveltia/Decap convention).
+    The CMS passes ?provider=github&scope=repo (Decap 3.15.1's default).
     We generate the `state` ourselves, send it to GitHub, and remember it in a
     short-lived cookie; /callback accepts a code only when GitHub echoes back
     the value in that cookie (CSRF / login-fixation protection). A `state` the
@@ -376,12 +376,10 @@ def handle_auth(origin: str | None, v2: bool) -> dict:
         return _misconfigured_response(origin)
 
     state = secrets.token_urlsafe(32)
-    # IGNORE the CMS's scope param. Decap CMS hardcodes `repo,user` in
-    # its OAuth request; that's missing `workflow`, which the shim
-    # (admin/publish-via-auto-merge.js) needs to dispatch the
-    # delete-via-pr workflow. Force the proxy's GITHUB_SCOPE so the
-    # token GitHub issues has every scope the admin actually exercises,
-    # not just the subset Decap thinks it needs.
+    # IGNORE the CMS's scope param. Decap 3.15.1 asks for `repo` alone
+    # (its `auth_scope`, default `repo`), which lacks the scopes in
+    # GITHUB_SCOPE. Force the proxy's GITHUB_SCOPE so the token GitHub
+    # issues has every scope the admin exercises, not just Decap's subset.
     scope = GITHUB_SCOPE
 
     github_auth_url = (

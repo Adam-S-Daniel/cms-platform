@@ -20,7 +20,7 @@
 #      .cms-platform/oauth-proxy/deploy.sh (sam build + deploy of the platform
 #      template under THIS site's stack name).
 #
-# Default GitHub OAuth scope is `repo,user,workflow` (the platform default).
+# Default GitHub OAuth scope is `repo,read:user,workflow` (the platform default).
 # IMPORTANT: if a redeploy WIDENS the scope your live OAuth App was authorized
 # with, the OAuth App owner must MANUALLY re-consent (re-authorize the app)
 # once — that is a human step GitHub requires; it cannot be automated.
@@ -89,6 +89,6 @@ success "Platform checked out — deploying $PLATFORM_TEMPLATE under stack ${STA
 
 # ── Delegate to the platform's oauth-proxy deploy.sh ───────────────────────
 # It cd's into its own dir, sam build/deploy's ./template.yaml under STACK_NAME
-# (defaults FUNCTION_NAME=STACK_NAME, GITHUB_SCOPE=repo,user,workflow), and
+# (defaults FUNCTION_NAME=STACK_NAME, GITHUB_SCOPE=repo,read:user,workflow), and
 # prints the ApiUrl to put in _config.yml cms.oauth_base_url.
 exec bash "$PLATFORM_DEPLOY"
