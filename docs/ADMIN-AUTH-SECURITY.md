@@ -210,7 +210,7 @@ The platform (`theme/admin/`):
 | `GET /deployments`, `/deployments/{id}/statuses` | `deploy-status-pill.js:224-260`, `publish-progress.js:483-485`, `posts-list-enhance.js:344-353` | Deployments: read |
 | `POST`/`DELETE /issues/{n}/labels` (`cms/ready`) | `publish-button.js:222-233`, `publish-via-auto-merge.js:93,250` | Pull requests: write or Issues: write |
 | `POST /git/refs`, `POST /pulls` (delete recovery) | `publish-via-auto-merge.js:208-226` | Contents: write, Pull requests: write |
-| GraphQL `history { associatedPullRequests }` on `main` | `posts-list-enhance.js:280-310` | Contents + Pull requests: read (GraphQL has no published table; a gap answers 401) |
+| GraphQL `history { associatedPullRequests }` on `main` | `posts-list-enhance.js:280-310` | Contents + Pull requests: read (GraphQL has no published table; a gap answers HTTP 200 with an `errors` entry such as *Resource not accessible by integration*, and the shim then drops dates and PR links without a console error) |
 
 Called by nothing: a `delete-via-pr.yml` dispatch (removed —
 `publish-via-auto-merge.js:58-63`, `e2e/decap-pat.js:19-27`; the issue's list is
@@ -340,6 +340,12 @@ Setup, owner only:
    `oauth-proxy/github-app-manifest.json` (callback `https://<apex>/` for now;
    *Expire user authorization tokens* left on; webhook inactive; "Only on this
    account"). Generate a client secret. Do not generate a private key.
+   Fill the form by hand; do **not** register it through GitHub's manifest
+   flow. That flow always generates a private key, and it redirects to the
+   manifest's `redirect_url` (the public site, where access logs and RUM
+   record the URL) with a one-hour `code` that
+   `POST /app-manifests/{code}/conversions` exchanges, with no credentials,
+   for the private key and the client secret.
 2. Install it on the site repo only.
 3. Deploy a separate spike proxy from this branch:
 
@@ -369,7 +375,7 @@ Checklist, all on that preview:
 | 5 | Add an image to it → Save | the image is in the PR's diff |
 | 6 | Move it to Ready | the label changes; no error toast |
 | 7 | Publish | the PR merges into the spike branch, or is labeled `cms/ready` by the shim; no *workflows* refusal anywhere |
-| 8 | Posts list and the deploy pill | dates, PR links and a pill state render; no 401 from `api.github.com/graphql` in the console |
+| 8 | Posts list and the deploy pill; then in the console: `fetch('https://api.github.com/graphql', {method: 'POST', headers: {Authorization: 'bearer ' + u.token}, body: JSON.stringify({query: '{repository(owner:"<owner>",name:"<repo>"){ref(qualifiedName:"refs/heads/main"){target{... on Commit{history(first:1){nodes{committedDate associatedPullRequests(first:1){nodes{number}}}}}}}}}'})}).then(r => r.json())` | dates, PR links and a pill state render, and the response has `data` and no `errors` key. GraphQL reports a permission gap as HTTP 200 with `errors`, not as a 401, so the status code alone proves nothing. |
 | 9 | `/admin/reviews/` and `/admin/reviews/health.html` → sign in | waiting runs and the health table load |
 | 10 | Approve the spike PR's parked `regression-review` gate, if any | *Regression approved*, and the run moves on. A 403 is risk 2. |
 | 11 | Open the entry, type without saving; in a terminal revoke the token: `curl -u <app-client-id> -X DELETE https://api.github.com/applications/<app-client-id>/token -d '{"access_token":"<token from step 2>"}'` (the client secret is the password); Save; reload; sign in again | the Save fails, and after signing in again Decap offers the unsaved edit back |
