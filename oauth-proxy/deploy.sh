@@ -19,6 +19,12 @@
 #   export GITHUB_CLIENT_SECRET=your_client_secret
 #   bash deploy.sh
 #
+# Credentials (#518): both set replaces the stack's values. Both unset (or
+# empty) on an update keeps the values the stack already has, so a code or
+# AllowedOrigins change never needs the secret. A new stack needs both. One of
+# the two set, or a placeholder (the lines above, or the example file's all-x
+# values), is refused before anything touches AWS.
+#
 # Cost: $0.00/month under AWS free tier (1M Lambda + 1M API Gateway requests).
 # =============================================================================
 
@@ -49,9 +55,28 @@ error() {
   exit 1
 }
 
-# ── Validate required env vars ────────────────────────────────────────────
-[[ -z "${GITHUB_CLIENT_ID:-}" ]] && error "GITHUB_CLIENT_ID is not set"
-[[ -z "${GITHUB_CLIENT_SECRET:-}" ]] && error "GITHUB_CLIENT_SECRET is not set"
+# ── Validate the OAuth App credentials (#518) ─────────────────────────────
+# Deploying a placeholder overwrites the live client secret and breaks every
+# sign-in, so refuse the shapes this repo ships as examples: the all-x values
+# in infrastructure/site-params.example.env and the Usage lines above. Never
+# print a credential's value.
+is_placeholder() {
+  [[ "$1" =~ ^x+$ || "$1" == "your_client_id" || "$1" == "your_client_secret" ]]
+}
+for cred_var in GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET; do
+  if [[ -n "${!cred_var:-}" ]] && is_placeholder "${!cred_var}"; then
+    error "${cred_var} is still the example placeholder, which would overwrite the live credential and break every sign-in. Set it to the OAuth App's real value, or leave both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET unset (or empty) to keep the deployed stack's credentials."
+  fi
+done
+if [[ -n "${GITHUB_CLIENT_ID:-}" && -n "${GITHUB_CLIENT_SECRET:-}" ]]; then
+  CREDENTIAL_MODE="set"
+elif [[ -z "${GITHUB_CLIENT_ID:-}" && -z "${GITHUB_CLIENT_SECRET:-}" ]]; then
+  CREDENTIAL_MODE="keep"
+else
+  only_set="GITHUB_CLIENT_SECRET"
+  [[ -n "${GITHUB_CLIENT_ID:-}" ]] && only_set="GITHUB_CLIENT_ID"
+  error "Only ${only_set} is set. Set both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to replace the stack's credentials, or leave both unset (or empty) to keep the ones it has."
+fi
 
 # The proxy refuses every login when ALLOWED_ORIGINS has no valid entry, so
 # catch a bad value here instead of deploying a proxy nobody can sign in to.
@@ -76,6 +101,33 @@ for raw_entry in "${ORIGIN_ENTRIES[@]}"; do
   VALID_ORIGINS=$((VALID_ORIGINS + 1))
 done
 [[ "$VALID_ORIGINS" -gt 0 ]] || error "ALLOWED_ORIGINS has no origin. Set it to e.g. https://example.com,https://preview-*.example.com"
+
+# ── Keep the stack's credentials only on an update (#518) ─────────────────
+# sam deploy sends every parameter missing from --parameter-overrides as
+# UsePreviousValue on an UPDATE and drops it on a CREATE, so "keep" works only
+# when the stack exists. Decide that here, the way sam does: a missing stack
+# (or one stuck in REVIEW_IN_PROGRESS, which sam treats as missing) needs both
+# credentials, and any other failure stops the deploy rather than guess.
+if [[ "$CREDENTIAL_MODE" == "keep" ]]; then
+  if STACK_STATUS="$(aws cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" \
+    --region "$AWS_REGION" \
+    --query 'Stacks[0].StackStatus' \
+    --output text 2>&1)"; then
+    if [[ -z "$STACK_STATUS" || "$STACK_STATUS" == "None" || "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ]]; then
+      error "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are unset, and stack ${STACK_NAME} has no deployed credentials to keep. Set both to create it."
+    fi
+    [[ "$STACK_STATUS" =~ ^[A-Z_]+$ ]] \
+      || error "Could not read the status of stack ${STACK_NAME} in ${AWS_REGION}, so the credentials cannot be kept safely. Re-run, or set both credentials."
+  elif [[ "$STACK_STATUS" == *"Stack with id ${STACK_NAME} does not exist"* ]]; then
+    error "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are unset, and stack ${STACK_NAME} does not exist in ${AWS_REGION}. Set both to create it."
+  else
+    error "Could not tell whether stack ${STACK_NAME} exists in ${AWS_REGION}, so the credentials cannot be kept safely. Check the AWS session and network, then re-run."
+  fi
+  info "Credentials: keeping the stack's existing credentials (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are unset)"
+else
+  info "Credentials: setting credentials from the environment (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET)"
+fi
 
 # ── Move to script directory ──────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -109,13 +161,18 @@ DEPLOY_ARGS=(
   --capabilities CAPABILITY_IAM
   --no-confirm-changeset
   --parameter-overrides
-  "GitHubClientId=${GITHUB_CLIENT_ID}"
-  "GitHubClientSecret=${GITHUB_CLIENT_SECRET}"
   "AllowedOrigins=${ALLOWED_ORIGINS}"
   "GitHubScope=${GITHUB_SCOPE}"
   "FunctionName=${FUNCTION_NAME}"
   "PlatformRelease=${PROXY_RELEASE}"
 )
+# Omitted in "keep" mode, so CloudFormation keeps the stack's current values.
+if [[ "$CREDENTIAL_MODE" == "set" ]]; then
+  DEPLOY_ARGS+=(
+    "GitHubClientId=${GITHUB_CLIENT_ID}"
+    "GitHubClientSecret=${GITHUB_CLIENT_SECRET}"
+  )
+fi
 
 # Resolve S3 bucket for artifacts (SAM managed or pre-existing)
 if [[ -n "$SAM_S3_BUCKET" ]]; then
