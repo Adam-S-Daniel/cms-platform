@@ -22,8 +22,9 @@
 # Credentials (#518): both set replaces the stack's values. Both unset (or
 # empty) on an update keeps the values the stack already has, so a code or
 # AllowedOrigins change never needs the secret. A new stack needs both. One of
-# the two set, or a placeholder (the lines above, or the example file's all-x
-# values), is refused before anything touches AWS.
+# the two set, a placeholder (the lines above, or the example file's all-x
+# values), or a value with surrounding whitespace is refused before anything
+# touches AWS.
 #
 # Cost: $0.00/month under AWS free tier (1M Lambda + 1M API Gateway requests).
 # =============================================================================
@@ -64,6 +65,11 @@ is_placeholder() {
   [[ "$1" =~ ^x+$ || "$1" == "your_client_id" || "$1" == "your_client_secret" ]]
 }
 for cred_var in GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET; do
+  # A real id or secret never has surrounding whitespace, and a blank-looking
+  # " " would otherwise count as set and replace the live value.
+  if [[ "${!cred_var:-}" =~ ^[[:space:]]|[[:space:]]$ ]]; then
+    error "${cred_var} starts or ends with whitespace, which would overwrite the live credential with a value GitHub rejects. Remove the whitespace, or make both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET empty to keep the deployed stack's credentials."
+  fi
   if [[ -n "${!cred_var:-}" ]] && is_placeholder "${!cred_var}"; then
     error "${cred_var} is still the example placeholder, which would overwrite the live credential and break every sign-in. Set it to the OAuth App's real value, or leave both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET unset (or empty) to keep the deployed stack's credentials."
   fi

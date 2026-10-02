@@ -14,6 +14,8 @@
 //     either credential parameter, so CloudFormation keeps the stack's values;
 //   - both unset and no stack (or one sam treats as missing): refused, no sam;
 //   - exactly one set: refused, no stub runs;
+//   - a credential with surrounding whitespace (a blank-looking " "): refused,
+//     no stub runs;
 //   - both set: both parameters are passed, as before;
 //   - the stack-existence check failing: refused, no sam.
 //
@@ -221,6 +223,21 @@ test("both unset and the existence check fails: refused, sam never runs, the aws
   expect(r.out).not.toContain("STUB-ERROR-TEXT");
   expect(r.calls.filter((c) => c.tool === "sam")).toEqual([]);
 });
+
+for (const [label, creds, name] of [
+  ["a blank-looking id and secret", { GITHUB_CLIENT_ID: " ", GITHUB_CLIENT_SECRET: " " }, "GITHUB_CLIENT_ID"],
+  ["a secret with a trailing newline", { GITHUB_CLIENT_ID: FAKE_ID, GITHUB_CLIENT_SECRET: `${FAKE_SECRET}\n` }, "GITHUB_CLIENT_SECRET"],
+  ["a placeholder id with a trailing carriage return", { GITHUB_CLIENT_ID: `${X_ID}\r`, GITHUB_CLIENT_SECRET: FAKE_SECRET }, "GITHUB_CLIENT_ID"],
+]) {
+  test(`refuses ${label} before any aws or sam call`, () => {
+    const r = runDeploy({ ...creds, STUB_STACK: "exists" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain(`${name} starts or ends with whitespace`);
+    expect(r.calls).toEqual([]);
+    expect(r.out).not.toContain(FAKE_SECRET);
+    expect(r.out).not.toContain(X_ID);
+  });
+}
 
 for (const [label, creds, setName] of [
   ["only the id", { GITHUB_CLIENT_ID: FAKE_ID }, "GITHUB_CLIENT_ID"],

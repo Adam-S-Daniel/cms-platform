@@ -125,6 +125,7 @@ value. It stops before deploying when:
 
 - either credential is a placeholder: all `x` as in the example file, or
   `your_client_id` / `your_client_secret`;
+- either credential starts or ends with whitespace (a `" "` is not empty);
 - only one of the two is set;
 - both are unset and the stack does not exist yet: a new stack needs both;
 - it cannot tell whether the stack exists (an expired session, no network).
