@@ -106,13 +106,17 @@ No credentials needed — ask the proxy:
 ```bash
 base=$(ruby -ryaml -e 'puts YAML.load_file("_config.yml").dig("cms", "oauth_base_url")')
 curl -s -o /dev/null -D - "$base/prod/auth" | grep -i -E '^(set-cookie|location):'
-curl -s -o /dev/null -w '%{http_code}\n' "$base/prod/callback?code=x&state=y"
+curl -s "$base/prod/callback?code=x&state=y" | grep -o '<code>[^<]*</code>'
 ```
 
 | Answer | Meaning |
 |---|---|
-| a `set-cookie: __Host-cms-oauth-state=…` line whose value equals `state=` in `location:`, and `400` from the second command | the hardened proxy is live |
-| no `set-cookie` line; the callback page says GitHub rejected the code | the proxy predates the `state` and origin checks — redeploy |
+| a `set-cookie: __Host-cms-oauth-state=…` line whose value equals `state=` in `location:`, and `This sign-in could not be verified.` from the second command | the hardened proxy is live |
+| no `set-cookie` line, an empty `state=`, and `The code passed is incorrect or expired.` — the proxy took the code to GitHub without checking `state` | the proxy predates the `state` and origin checks — redeploy |
+
+Read the page's message, not the status code: both builds answer the second
+request with HTTP 400, one because the proxy refused it and the other because
+GitHub did.
 
 The origin check cannot be probed without completing a real sign-in; the cookie
 is the marker, because both checks shipped in the same build. Finish with one
