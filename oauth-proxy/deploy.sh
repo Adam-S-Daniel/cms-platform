@@ -53,6 +53,30 @@ error() {
 [[ -z "${GITHUB_CLIENT_ID:-}" ]] && error "GITHUB_CLIENT_ID is not set"
 [[ -z "${GITHUB_CLIENT_SECRET:-}" ]] && error "GITHUB_CLIENT_SECRET is not set"
 
+# The proxy refuses every login when ALLOWED_ORIGINS has no valid entry, so
+# catch a bad value here instead of deploying a proxy nobody can sign in to.
+# Same grammar as _origin_patterns in lambda.py: https:// origins, optional
+# port, `*` allowed inside a host label but never in the last two labels.
+ORIGIN_RE='^https://[a-z0-9*-]+(\.[a-z0-9*-]+)+(:[0-9]{1,5})?$'
+VALID_ORIGINS=0
+IFS=',' read -r -a ORIGIN_ENTRIES <<<"$ALLOWED_ORIGINS"
+for raw_entry in "${ORIGIN_ENTRIES[@]}"; do
+  entry="${raw_entry#"${raw_entry%%[![:space:]]*}"}"
+  entry="${entry%"${entry##*[![:space:]]}"}"
+  [[ -z "$entry" ]] && continue
+  entry="$(printf '%s' "${entry%/}" | tr '[:upper:]' '[:lower:]')"
+  host="${entry#https://}"
+  host="${host%%:*}"
+  last_label="${host##*.}"
+  second_label="${host%.*}"
+  second_label="${second_label##*.}"
+  if [[ ! "$entry" =~ $ORIGIN_RE || "$last_label$second_label" == *'*'* ]]; then
+    error "ALLOWED_ORIGINS entry '${entry}' is not valid. Use comma-separated https:// origins, e.g. https://example.com,https://preview-*.example.com ('*' only inside a host label, never in the last two)."
+  fi
+  VALID_ORIGINS=$((VALID_ORIGINS + 1))
+done
+[[ "$VALID_ORIGINS" -gt 0 ]] || error "ALLOWED_ORIGINS has no origin. Set it to e.g. https://example.com,https://preview-*.example.com"
+
 # ── Move to script directory ──────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"

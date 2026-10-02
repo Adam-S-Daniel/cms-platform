@@ -4,9 +4,12 @@ Sveltia CMS / Decap CMS OAuth Proxy — AWS Lambda handler.
 Implements the two-leg GitHub OAuth flow required by any Netlify CMS-compatible
 content management system:
 
-  GET /auth      → redirect the browser to GitHub's OAuth consent page
-  GET /callback  → exchange the authorisation code for an access token,
-                   then post it back to the CMS window via postMessage
+  GET /auth      → mint a one-time `state`, remember it in a cookie, and
+                   redirect the browser to GitHub's OAuth consent page
+  GET /callback  → verify `state` against that cookie, exchange the
+                   authorisation code for an access token, then post it back
+                   to the CMS window via postMessage (only to an opener whose
+                   origin is in ALLOWED_ORIGINS)
 
 Cost model (AWS free tier covers typical personal-blog usage):
   • Lambda:       1 M requests / month free; ~$0.20 per additional 1 M
@@ -17,10 +20,13 @@ Cost model (AWS free tier covers typical personal-blog usage):
 
 from __future__ import annotations
 
+import hmac
 import html
 import json
 import logging
 import os
+import re
+import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,8 +49,12 @@ GITHUB_CLIENT_SECRET = os.environ["GITHUB_CLIENT_SECRET"]
 #                that POST returns 404 if the token lacks `workflow`.
 #                Without it, the Delete button silently does nothing.
 GITHUB_SCOPE = os.environ.get("GITHUB_SCOPE", "repo,user,workflow")
-# Allowed origins for the postMessage call (comma-separated list of CMS URLs).
-# Set to * during initial setup, then tighten to your site origin, e.g. https://example.com
+# Origins of the CMS windows allowed to receive the token: a comma-separated
+# list of `https://` origins, e.g. https://example.com. `*` is allowed inside a
+# host label so per-PR preview hosts need one entry, e.g.
+# https://preview-*.example.com (it matches within ONE label, never across a
+# dot). The callback page releases the token only to a matching opener; if no
+# entry is valid, /auth and /callback refuse to run (see _origin_patterns).
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://example.com")
 
 # GitHub OAuth endpoints (constant — never derived from user input).
@@ -55,40 +65,168 @@ GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"  # noqa: S105  
 USER_AGENT = "cms-oauth-proxy/1.0"
 HTTP_TIMEOUT_SECONDS = 10
 
+# One-time `state` binding a /callback to the /auth that started it. The
+# `__Host-` prefix makes browsers accept it only as a Secure, Path=/,
+# host-only cookie, so a sibling subdomain cannot plant one.
+STATE_COOKIE = "__Host-cms-oauth-state"
+STATE_MAX_AGE_SECONDS = 600
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+# One ALLOWED_ORIGINS entry: an https origin with an optional port. `*` may
+# stand in for part of a host label.
+_ORIGIN_ENTRY = re.compile(r"https://[a-z0-9*-]+(?:\.[a-z0-9*-]+)+(?::[0-9]{1,5})?")
+
+
+def _valid_origin_entry(entry: str) -> bool:
+    if not _ORIGIN_ENTRY.fullmatch(entry):
+        return False
+    host = entry.removeprefix("https://").partition(":")[0]
+    # No wildcard in the last two labels: `https://*.com`, `https://example.*`.
+    return "*" not in ".".join(host.split(".")[-2:])
+
+
+def _origin_patterns(raw: str) -> list[str]:
+    """
+    Turn the ALLOWED_ORIGINS string into regex SOURCE strings, one per valid
+    entry. Invalid entries are logged and dropped, never guessed at.
+
+    The grammar is deliberately tiny: lowercase `https://` origins whose host
+    labels use only [a-z0-9-] plus `*`, and `*` is refused in the last two
+    labels (so `https://*.com` and `https://example.*` cannot widen the list to
+    a whole TLD). Every entry therefore draws on the alphabet [a-z0-9.*:/-],
+    which means the SAME regex source string means the same thing to Python's
+    re.fullmatch and to JavaScript's new RegExp('^(?:' + src + ')$') — the
+    callback page re-uses these sources in the browser, so the two engines must
+    never disagree about which origin matches.
+    """
+    patterns: list[str] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        entry = entry.removesuffix("/").lower()
+        if not _valid_origin_entry(entry):
+            logger.error("Ignoring invalid ALLOWED_ORIGINS entry: %r", entry)
+            continue
+        # `.` is literal; `*` matches within one label and never crosses a dot.
+        patterns.append(entry.replace(".", "\\.").replace("*", "[a-z0-9-]+"))
+    return patterns
+
+
+ALLOWED_ORIGIN_PATTERNS = _origin_patterns(ALLOWED_ORIGINS)
+
+
+def _origin_allowed(origin: str | None, patterns: list[str] | None = None) -> bool:
+    if not origin:
+        return False
+    if patterns is None:
+        patterns = ALLOWED_ORIGIN_PATTERNS
+    return any(re.fullmatch(pattern, origin) for pattern in patterns)
+
 
 def _cors_headers(origin: str | None = None) -> dict[str, str]:
-    """Return minimal CORS headers."""
-    allowed = ALLOWED_ORIGINS.split(",")
-    effective_origin = (
-        origin if (origin is not None and (origin in allowed or "*" in allowed)) else allowed[0]
-    )
-    return {
-        "Access-Control-Allow-Origin": effective_origin,
+    """Return minimal CORS headers; the origin is echoed only if allowed."""
+    headers = {
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
     }
+    if _origin_allowed(origin):
+        headers["Access-Control-Allow-Origin"] = origin
+    return headers
+
+
+def _is_v2_event(event: dict) -> bool:
+    """True for an API Gateway HTTP API payload-2.0 event."""
+    return event.get("version") == "2.0" or "rawPath" in event
+
+
+def _request_cookies(event: dict) -> dict[str, str]:
+    """
+    Cookies sent with the request, across both API Gateway payload formats:
+    2.0 delivers `cookies` (a list of "name=value"); 1.0 delivers a
+    `Cookie` header ("; "-separated).
+    """
+    pairs = list(event.get("cookies") or [])
+    for name, value in (event.get("headers") or {}).items():
+        if name.lower() == "cookie":
+            pairs.extend(value.split(";"))
+    cookies: dict[str, str] = {}
+    for pair in pairs:
+        name, sep, value = pair.strip().partition("=")
+        if sep and name:
+            cookies.setdefault(name, value)
+    return cookies
+
+
+def _state_cookie(value: str, max_age: int) -> str:
+    # SameSite=Lax, not Strict: GitHub sends the browser back to /callback as a
+    # cross-site top-level GET navigation, and Strict would withhold the cookie
+    # on exactly that request.
+    return f"{STATE_COOKIE}={value}; Path=/; Max-Age={max_age}; Secure; HttpOnly; SameSite=Lax"
+
+
+def _with_cookie(response: dict, cookie: str, v2: bool) -> dict:
+    """Attach a Set-Cookie value in the shape the payload format expects."""
+    if v2:
+        response.setdefault("cookies", []).append(cookie)
+    else:
+        response["headers"]["Set-Cookie"] = cookie
+    return response
 
 
 def _redirect(location: str, origin: str | None = None) -> dict:
     return {
         "statusCode": 302,
-        "headers": {"Location": location, **_cors_headers(origin)},
+        # no-store: the response sets the one-time state cookie.
+        "headers": {"Location": location, "Cache-Control": "no-store", **_cors_headers(origin)},
         "body": "",
     }
 
 
-def _html_response(body: str, status: int = 200, origin: str | None = None) -> dict:
+def _html_response(
+    body: str, status: int = 200, origin: str | None = None, nonce: str | None = None
+) -> dict:
+    # `nonce` must be the one embedded in the body's <script nonce=...>; pages
+    # without a script (the error page) just get a fresh, unused one.
+    nonce = nonce or secrets.token_urlsafe(16)
     return {
         "statusCode": status,
         "headers": {
             "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": (
+                f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            ),
             **_cors_headers(origin),
         },
         "body": body,
     }
+
+
+# json.dumps already \u-escapes U+2028/U+2029 (ensure_ascii); they are listed
+# so the guarantee does not hinge on that default.
+_JS_ESCAPES = str.maketrans(
+    {
+        "<": "\\u003c",
+        ">": "\\u003e",
+        "&": "\\u0026",
+        "\u2028": "\\u2028",
+        "\u2029": "\\u2029",
+    }
+)
+
+
+def _js_literal(value) -> str:
+    """
+    Serialize `value` as a JavaScript literal that is safe inside a <script>
+    element: no `</script>`, `<!--` or line-terminator can survive it.
+    """
+    return json.dumps(value).translate(_JS_ESCAPES)
 
 
 def _error_page(message: str) -> str:
@@ -119,20 +257,25 @@ def _error_page(message: str) -> str:
 </html>"""
 
 
-def _success_page(token: str, provider: str = "github") -> str:
+def _success_page(token: str, nonce: str, provider: str = "github") -> str:
     """
     The postMessage pattern used by Netlify CMS / Decap CMS / Sveltia CMS.
 
     1. The CMS window opens this page as a popup.
     2. On load, this page sends "authorizing:<provider>" to the opener.
     3. The opener (CMS) replies with a message to confirm it's listening.
-    4. This page replies with the success payload containing the access token.
+    4. This page checks that the reply came from the window that opened it AND
+       that the window's origin is in ALLOWED_ORIGINS, then answers with the
+       success payload containing the access token, addressed to that origin.
     5. The CMS closes the popup and stores the token.
+
+    `nonce` must match the Content-Security-Policy sent with the page.
     """
-    # Never embed the token directly in page source via f-string interpolation
-    # without escaping — use a JSON-encoded JS literal instead.
-    token_json = json.dumps({"token": token, "provider": provider})
-    provider_json = json.dumps(provider)
+    # Never embed a value in the page source without escaping — use a
+    # JSON-encoded JS literal that cannot close the <script> element instead.
+    token_json = _js_literal({"token": token, "provider": provider})
+    provider_json = _js_literal(provider)
+    origins_json = _js_literal(ALLOWED_ORIGIN_PATTERNS)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -154,20 +297,32 @@ def _success_page(token: str, provider: str = "github") -> str:
     <div class="dot"></div>
     <p style="margin-top:1rem;font-size:0.8rem;color:#8ab0e8;">Completing authorisation…</p>
   </div>
-  <script>
+  <script nonce="{nonce}">
     (function () {{
       'use strict';
 
       var provider = {provider_json};
       var payload  = {token_json};
+      var allowedOrigins = {origins_json}.map(function (src) {{
+        return new RegExp('^(?:' + src + ')$');
+      }});
+
+      function originAllowed(origin) {{
+        return typeof origin === 'string' &&
+          allowedOrigins.some(function (re) {{ return re.test(origin); }});
+      }}
 
       function receiveMessage(event) {{
+        // The token goes only to the window that opened this popup, and only
+        // when that window is one of the configured CMS origins.
+        if (event.source !== window.opener) return;
+        if (!originAllowed(event.origin)) return;
         // Only accept the handshake message from the CMS
         if (event.data !== ('authorizing:' + provider)) return;
 
         window.removeEventListener('message', receiveMessage, false);
 
-        // Reply with the token payload
+        // Reply with the token payload, addressed to the verified origin
         window.opener.postMessage(
           'authorization:' + provider + ':success:' + JSON.stringify(payload),
           event.origin
@@ -176,7 +331,10 @@ def _success_page(token: str, provider: str = "github") -> str:
 
       window.addEventListener('message', receiveMessage, false);
 
-      // Initiate the handshake — tell the CMS window we are authorizing
+      // Initiate the handshake — tell the CMS window we are authorizing.
+      // '*' is deliberate: this message carries no secret, and a popup cannot
+      // read a cross-origin opener's origin to address it. The CMS's reply is
+      // what gets checked, above, before anything sensitive is sent.
       if (window.opener) {{
         window.opener.postMessage('authorizing:' + provider, '*');
       }} else {{
@@ -189,18 +347,35 @@ def _success_page(token: str, provider: str = "github") -> str:
 </html>"""
 
 
+def _misconfigured_response(origin: str | None) -> dict:
+    # Fail closed and loudly: with no valid origin the callback page could not
+    # release the token to anyone, so refuse before any redirect or exchange.
+    logger.error("ALLOWED_ORIGINS has no valid origin; refusing the request")
+    return _html_response(
+        _error_page("OAuth proxy is misconfigured: ALLOWED_ORIGINS has no valid origin."),
+        status=500,
+        origin=origin,
+    )
+
+
 # ── Route handlers ───────────────────────────────────────────────────────────
 
 
-def handle_auth(params: dict, origin: str | None) -> dict:
+def handle_auth(origin: str | None, v2: bool) -> dict:
     """
     Step 1 — redirect the browser to GitHub's OAuth consent screen.
 
     The CMS passes ?provider=github&scope=repo,user (Sveltia/Decap convention).
-    We forward the `state` parameter through so GitHub echoes it back in the
-    callback (CSRF protection).
+    We generate the `state` ourselves, send it to GitHub, and remember it in a
+    short-lived cookie; /callback accepts a code only when GitHub echoes back
+    the value in that cookie (CSRF / login-fixation protection). A `state` the
+    client supplies is ignored — Decap sends none, and one we did not mint
+    could not be checked against anything.
     """
-    state = params.get("state", "")
+    if not ALLOWED_ORIGIN_PATTERNS:
+        return _misconfigured_response(origin)
+
+    state = secrets.token_urlsafe(32)
     # IGNORE the CMS's scope param. Decap CMS hardcodes `repo,user` in
     # its OAuth request; that's missing `workflow`, which the shim
     # (admin/publish-via-auto-merge.js) needs to dispatch the
@@ -217,20 +392,52 @@ def handle_auth(params: dict, origin: str | None) -> dict:
         "&allow_signup=false"
     )
 
-    logger.info(
-        "Redirecting to GitHub OAuth (state=%s)", state[:8] + "…" if len(state) > 8 else state
+    logger.info("Redirecting to GitHub OAuth")
+    return _with_cookie(
+        _redirect(github_auth_url, origin), _state_cookie(state, STATE_MAX_AGE_SECONDS), v2
     )
-    return _redirect(github_auth_url, origin)
 
 
-def handle_callback(params: dict, origin: str | None) -> dict:
+def _state_verified(params: dict, cookies: dict[str, str]) -> bool:
+    state = params.get("state", "")
+    expected = cookies.get(STATE_COOKIE, "")
+    if not state or not expected:
+        return False
+    return hmac.compare_digest(state.encode("utf-8"), expected.encode("utf-8"))
+
+
+def handle_callback(params: dict, origin: str | None, cookies: dict[str, str], v2: bool) -> dict:
     """
     Step 2 — exchange the authorisation code for an access token.
 
     GitHub redirects here with ?code=…&state=… after user consent.
     We POST to GitHub's token endpoint and return an HTML page that
     uses postMessage to hand the token back to the CMS popup.
+
+    Every response, success or error, clears the state cookie: it is single use.
     """
+    response = _exchange_code(params, origin, cookies)
+    return _with_cookie(response, _state_cookie("", 0), v2)
+
+
+def _exchange_code(params: dict, origin: str | None, cookies: dict[str, str]) -> dict:
+    if not ALLOWED_ORIGIN_PATTERNS:
+        return _misconfigured_response(origin)
+
+    # Before anything else — and before any call to GitHub — prove this
+    # callback belongs to an /auth this browser started.
+    if not _state_verified(params, cookies):
+        logger.warning(
+            "Callback state check failed (state param present=%s, cookie present=%s)",
+            bool(params.get("state")),
+            bool(cookies.get(STATE_COOKIE)),
+        )
+        return _html_response(
+            _error_page("This sign-in could not be verified. Close this window and start again."),
+            status=400,
+            origin=origin,
+        )
+
     code = params.get("code", "")
     error = params.get("error", "")
 
@@ -296,7 +503,8 @@ def handle_callback(params: dict, origin: str | None) -> dict:
         )
 
     logger.info("Token exchange successful (token length=%d)", len(access_token))
-    return _html_response(_success_page(access_token), origin=origin)
+    nonce = secrets.token_urlsafe(16)
+    return _html_response(_success_page(access_token, nonce), origin=origin, nonce=nonce)
 
 
 # ── Lambda entry point ───────────────────────────────────────────────────────
@@ -331,11 +539,13 @@ def handler(event: dict, context) -> dict:  # noqa: ANN001
             "body": "",
         }
 
+    v2 = _is_v2_event(event)
+
     if path.endswith("/auth"):
-        return handle_auth(params, origin)
+        return handle_auth(origin, v2)
 
     if path.endswith("/callback"):
-        return handle_callback(params, origin)
+        return handle_callback(params, origin, _request_cookies(event), v2)
 
     # Health check
     if path.endswith("/health") or path in ("", "/"):

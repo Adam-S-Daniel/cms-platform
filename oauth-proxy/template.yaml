@@ -28,8 +28,11 @@ Parameters:
     Type: String
     Default: "https://example.com"
     Description: >
-      Comma-separated list of CMS origins allowed to receive the token
-      via postMessage.  Set to '*' during initial testing only.
+      Comma-separated list of https:// origins whose CMS window may receive
+      the token via postMessage, e.g. https://example.com. A '*' may stand in
+      for part of a host label (never the last two labels), so per-PR preview
+      hosts need one entry: https://example.com,https://preview-*.example.com.
+      With no valid entry the proxy refuses every login.
 
   GitHubScope:
     Type: String
@@ -110,16 +113,10 @@ Resources:
     Properties:
       StageName: !Ref StageName
       Description: "Sveltia CMS OAuth Proxy API"
-      CorsConfiguration:
-        AllowOrigins:
-          - !Ref AllowedOrigins
-        AllowMethods:
-          - GET
-          - OPTIONS
-        AllowHeaders:
-          - Content-Type
-          - X-Requested-With
-        MaxAge: 300
+      # No CorsConfiguration: nothing fetches this API cross-origin (/auth and
+      # /callback are popup navigations), a multi-entry or wildcard
+      # AllowedOrigins is not a valid single CORS origin, and the Lambda is the
+      # one place that enforces the allowlist.
 
   # ── CloudWatch Log Group (30 day retention to keep costs near zero) ──────
   OAuthProxyLogGroup:

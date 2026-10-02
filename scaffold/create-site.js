@@ -246,7 +246,12 @@ async function main() {
     sub(fs.readFileSync(path.join(PLATFORM_ROOT, "infrastructure/site-params.example.env"), "utf8"))
       .replace(/^export GITHUB_REPO=.*$/m, `export GITHUB_REPO="${repo}"`)
       .replace(/^export APEX_DOMAIN=.*$/m, `export APEX_DOMAIN="${domain}"`)
-      .replace(/^export ALLOWED_ORIGINS=.*$/m, `export ALLOWED_ORIGINS="https://${domain}"`)
+      // A scaffolded site ships per-PR preview admins on preview-*.<domain>; each is its own
+      // origin, so the OAuth proxy must allow them or they cannot sign in.
+      .replace(
+        /^export ALLOWED_ORIGINS=.*$/m,
+        `export ALLOWED_ORIGINS="https://${domain},https://preview-*.${domain}"`
+      )
       .replace(/^export STACK_NAME=.*$/m, `export STACK_NAME="${prefix}-oauth-proxy"`)
   );
   write(

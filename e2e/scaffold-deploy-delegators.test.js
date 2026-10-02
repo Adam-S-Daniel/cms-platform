@@ -58,6 +58,17 @@ test.describe("scaffolder delivers OAuth-proxy + bootstrap as delegating wrapper
     expect(body, "oauth delegator must not pin a narrower scope").not.toMatch(/GITHUB_SCOPE=.?repo,user[^,]/);
   });
 
+  test("site-params.env lets the apex AND the per-PR preview admins sign in through the proxy", () => {
+    // The proxy hands the GitHub token only to a window whose origin is in
+    // ALLOWED_ORIGINS. Each preview admin (preview-prN.<domain>) is its own
+    // origin, so a scaffolded site lists them with one wildcard-label entry or
+    // its previews could not sign in.
+    const body = fs.readFileSync(path.join(target, "infrastructure/site-params.env"), "utf8");
+    const line = body.split("\n").find((l) => l.startsWith("export ALLOWED_ORIGINS="));
+    expect(line, "scaffolded site-params.env must carry an ALLOWED_ORIGINS line").toBeDefined();
+    expect(line).toBe('export ALLOWED_ORIGINS="https://test.local,https://preview-*.test.local"');
+  });
+
   test("does NOT vendor the OAuth proxy sources (lambda.py / template.yaml / test_lambda.py)", () => {
     for (const f of ["oauth-proxy/lambda.py", "oauth-proxy/template.yaml", "oauth-proxy/test_lambda.py"]) {
       expect(

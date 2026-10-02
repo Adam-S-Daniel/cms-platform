@@ -14,6 +14,13 @@ const { test, expect } = require("./base");
 // suite covers — drift here turns "passes locally" into "broken in prod
 // next Tuesday".
 //
+// Subresource Integrity: an exact version still trusts unpkg to serve the
+// bytes it served when the pin was reviewed, and this bundle runs with the
+// editor's GitHub token in reach. So every Decap `<script>` tag also carries
+// `integrity="sha384-…"` plus `crossorigin="anonymous"` (SRI needs a CORS
+// fetch), and every shell pinning the same version carries the SAME hash, so a
+// version bump that recomputes it in one shell cannot leave another unchecked.
+//
 // Audit finding #5: the Sveltia bundle silently dropped editorial-workflow
 // support, so any reference to `sveltia-cms` is also forbidden.
 //
@@ -27,6 +34,20 @@ function adminHtmlFiles() {
     .readdirSync(ADMIN_DIR)
     .filter((f) => /^index.*\.html$/.test(f))
     .map((f) => path.join(ADMIN_DIR, f));
+}
+
+// The opening `<script …>` tags that load Decap from unpkg. Comments are
+// stripped first so prose about a tag is never mistaken for one.
+function decapScriptTags(html) {
+  const live = html.replace(/<!--[\s\S]*?-->/g, "");
+  return [...live.matchAll(/<script\b[^>]*\bsrc="https:\/\/unpkg\.com\/decap-cms[^"]*"[^>]*>/g)].map(
+    (m) => m[0],
+  );
+}
+
+function attr(tag, name) {
+  const m = new RegExp(`\\b${name}="([^"]*)"`).exec(tag);
+  return m ? m[1] : null;
 }
 
 test.describe("admin/index*.html bundle invariants", () => {
@@ -52,6 +73,21 @@ test.describe("admin/index*.html bundle invariants", () => {
       }
     });
 
+    test(`${label}: every decap-cms script tag carries SRI (sha384 + crossorigin)`, () => {
+      const tags = decapScriptTags(fs.readFileSync(file, "utf8"));
+      expect(tags.length, `${label} should load the decap-cms bundle from unpkg`).toBeGreaterThan(0);
+      for (const tag of tags) {
+        expect(
+          attr(tag, "integrity"),
+          `${label}: ${tag} must carry integrity="sha384-<64 base64 chars>"`,
+        ).toMatch(/^sha384-[A-Za-z0-9+/]{64}$/);
+        expect(
+          attr(tag, "crossorigin"),
+          `${label}: ${tag} must carry crossorigin="anonymous" — SRI needs a CORS request`,
+        ).toBe("anonymous");
+      }
+    });
+
     test(`${label}: no sveltia-cms reference remains`, () => {
       const html = fs.readFileSync(file, "utf8");
       // Sveltia 0.158 silently dropped editorial-workflow support and
@@ -62,4 +98,24 @@ test.describe("admin/index*.html bundle invariants", () => {
       );
     });
   }
+
+  test("shells pinning the same decap-cms version carry the same integrity hash", () => {
+    const hashesByVersion = new Map();
+    for (const file of adminHtmlFiles()) {
+      for (const tag of decapScriptTags(fs.readFileSync(file, "utf8"))) {
+        const version = /decap-cms@(\d+\.\d+\.\d+)\//.exec(attr(tag, "src") || "")?.[1];
+        if (!version) continue;
+        const seen = hashesByVersion.get(version) || new Map();
+        seen.set(path.relative(REPO_ROOT, file), attr(tag, "integrity"));
+        hashesByVersion.set(version, seen);
+      }
+    }
+    expect(hashesByVersion.size, "no shell pins an exact decap-cms version").toBeGreaterThan(0);
+    for (const [version, byFile] of hashesByVersion) {
+      expect(
+        new Set(byFile.values()).size,
+        `decap-cms@${version} has different integrity values across shells: ${JSON.stringify([...byFile])}`,
+      ).toBe(1);
+    }
+  });
 });

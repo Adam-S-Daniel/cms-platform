@@ -106,8 +106,9 @@ them REQUIRED:
    is not ours to delete — so `--strict`'s only green path is removing a file we
    must keep.
 5. **cfn-lint** over the CloudFormation templates (advisory, `continue-on-error`).
-6. **python-unit-tests** — `python3 -m pytest scripts/cross_post -q` (hard-fail,
-   but deliberately NOT required — `repo-settings.yml`'s `platform-main` ruleset
+6. **python-unit-tests** — `python3 -m pytest scripts/cross_post oauth-proxy -q`
+   (the cross-post suite plus the OAuth proxy's `oauth-proxy/test_lambda.py`;
+   hard-fail, but deliberately NOT required — `repo-settings.yml`'s `platform-main` ruleset
    names only the four lanes above; adding a fifth required context is a
    `repo-settings.yml` decision, not something a new lane should make by merely
    existing).
