@@ -73,7 +73,9 @@ export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
 `platform-bump` moves a consumer's pins. It does not touch AWS. The Lambda only
 changes when someone with that site's AWS credentials runs the deploy, so a
 proxy fix can be merged, released and bumped everywhere while the old code
-keeps signing people in ([#518](https://github.com/Adam-S-Daniel/cms-platform/issues/518) tracks detecting that).
+keeps signing people in. Each site's daily **OAuth proxy build probe**
+(`oauth-proxy-build.yml`, below) goes red when that happens
+([#518](https://github.com/Adam-S-Daniel/cms-platform/issues/518)).
 
 After any release that changes `oauth-proxy/`, for each site:
 
@@ -85,8 +87,9 @@ cd ~/repos/<site> && git checkout main && git pull
 bash oauth-proxy/deploy.sh
 ```
 
-A site with no `oauth-proxy/deploy.sh` wrapper deploys from a platform checkout
-at the release tag instead:
+`platform-bump` seeds the wrapper (and the bootstrap one) into a site that has
+none. Until that bump lands, a site with no `oauth-proxy/deploy.sh` wrapper
+deploys from a platform checkout at the release tag instead:
 
 ```bash
 cd ~/repos/cms-platform && git fetch --tags && git checkout vX.Y.Z
@@ -97,11 +100,47 @@ cd ~/repos/cms-platform && git fetch --tags && git checkout vX.Y.Z
 It is an in-place stack update: the API Gateway URL, `cms.oauth_base_url` and
 the GitHub OAuth App's callback URL do not change. If the deploy **widens** the
 scope the live proxy was requesting, each editor is asked to re-authorize the
-app once.
+app once. Then dispatch the site's `oauth-proxy-build` workflow and confirm it
+says `current`.
 
 ### Which proxy is a site running?
 
-No credentials needed — ask the proxy:
+`/prod/health` reports the build. `release` is the tag (or commit) `deploy.sh`
+deployed from, and `handler_sha256` is the sha256 of the deployed `lambda.py`,
+computed by the Lambda from its own file:
+
+```json
+{"status": "ok", "service": "cms-oauth-proxy", "release": "vX.Y.Z", "handler_sha256": "<64 hex>"}
+```
+
+Compare the digest, not the release: most releases do not change `lambda.py`,
+so two releases can serve the same handler. `scripts/probe-oauth-proxy-build.js`
+does the comparison against the `lambda.py` of the release the site is pinned
+to, credential-free, and the dictated caller `oauth-proxy-build.yml` runs it
+daily.
+A red run is a scheduled failure, so it lands on the site's `ci` tracking issue
+through `scheduled-run-health`, which also notices the probe going quiet.
+
+| Outcome | Exit | Meaning |
+|---|---|---|
+| `current` | 0 | the live handler is the pinned release's |
+| `stale` | 1 | the live handler differs; the message names the live and pinned releases. Redeploy. |
+| `predates` | 1 | no `handler_sha256`, or no health route at all: the proxy is older than build reporting. The message also says whether it has the sign-in `state` check, from the cookie marker below. Redeploy. |
+| `unreachable` | 2 | the request failed; the build is unknown |
+| `unexpected` | 2 | any other answer (a redirect, which is never followed; a non-JSON or oversized body; a malformed digest; a 404 from something that does not redirect `/prod/auth` to GitHub) |
+
+To run it by hand from a site checkout:
+
+```bash
+ref=$(awk '$1=="platform_ref:" {print $2}' platform.lock)
+git clone --quiet --depth 1 --branch "$ref" https://github.com/Adam-S-Daniel/cms-platform.git /path/to/scratch/cms-platform
+base=$(ruby -ryaml -e 'puts YAML.load_file("_config.yml").dig("cms", "oauth_base_url")')
+node /path/to/scratch/cms-platform/scripts/probe-oauth-proxy-build.js \
+  --base-url "$base" --platform-dir /path/to/scratch/cms-platform --pinned-release "$ref"
+```
+
+The manual probe still works on any build, including one that predates the
+health fields:
 
 ```bash
 base=$(ruby -ryaml -e 'puts YAML.load_file("_config.yml").dig("cms", "oauth_base_url")')
@@ -122,6 +161,41 @@ The origin check cannot be probed without completing a real sign-in; the cookie
 is the marker, because both checks shipped in the same build. Finish with one
 real sign-in on `/admin`, one on `/admin/reviews/`, and one on a preview admin
 if the site lists the preview entry.
+
+### Should CI deploy the proxy? Not yet (decided 2026-10-02)
+
+[#518](https://github.com/Adam-S-Daniel/cms-platform/issues/518) asked whether
+proxy deploys should run from CI with the site's deploy role instead of from a
+workstation. **Decision: no, for now.** Deploys stay a manual step, and the
+build probe makes a missed one visible within a day.
+
+- **The role could, on paper.** The bootstrap stack's `<prefix>-github-actions`
+  role already grants CloudFormation on `stack/<prefix>-*`, Lambda on
+  `function:<prefix>-*`, IAM role management and `iam:PassRole` on
+  `role/<prefix>-*`, API Gateway on `/apis/*`, and log groups under
+  `/aws/lambda/<prefix>-*`: every service `deploy.sh` uses.
+- **But not as the proxy is deployed today.** The proxy's `STACK_NAME` is set
+  per site in `site-params.env`, independently of the bootstrap
+  `ResourcePrefix`, and nothing makes the first start with the second; outside
+  that prefix every call is denied. `deploy.sh` also defaults to
+  `sam deploy --resolve-s3`, which creates SAM's own managed stack and bucket,
+  outside the role entirely. A CI deploy needs both fixed first.
+- **The secret need not reach CI.** An in-place update can keep the stack's
+  current `GitHubClientSecret` (both live stacks were updated that way on
+  2026-10-02), but `deploy.sh` refuses to run without one today, so CI would
+  first need a "keep the stack's value" path in `deploy.sh`.
+- **It widens what a branch can do to sign-in.** The role trusts
+  `repo:<owner>/<repo>:*`, so any workflow on any branch of the site repo can
+  assume it. Adding the proxy deploy to that role puts the code that issues
+  every editor's token one pushed workflow away. Deploying from CI should wait
+  for a trust condition narrowed to an approved `environment:`, which is a
+  bootstrap change and a per-site redeploy.
+- **The cost of staying manual is now bounded.** The harm in #518 was that a
+  stale proxy was invisible. With the probe red until someone redeploys, a
+  release that changes `oauth-proxy/` is a known, tracked step.
+
+Revisit when #516 settles whether the proxy stays an OAuth App proxy, or if
+the probe shows deploys trailing releases by more than a release cycle.
 
 ## The token at rest
 
