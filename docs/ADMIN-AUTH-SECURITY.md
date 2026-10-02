@@ -82,7 +82,8 @@ After any release that changes `oauth-proxy/`, for each site:
 ```bash
 # 1. the site's bump PR is merged, so platform.lock names the new release
 cd ~/repos/<site> && git checkout main && git pull
-# 2. infrastructure/site-params.env carries the ALLOWED_ORIGINS you intend
+# 2. infrastructure/site-params.env carries the ALLOWED_ORIGINS you intend, and
+#    GITHUB_CLIENT_ID/SECRET empty to keep the live credentials (see below)
 # 3. deploy (the wrapper checks the platform out at platform.lock's ref)
 bash oauth-proxy/deploy.sh
 ```
@@ -105,15 +106,32 @@ says `current`.
 
 ### Deploying without touching the credentials
 
-`deploy.sh` passes `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the
-environment on every run. A `site-params.env` that still holds the example's
-`xxxx…` placeholders, or a secret that has since been rotated, therefore
-**overwrites the live secret**, and every sign-in then fails at the code
-exchange. One consumer's local file held placeholders when v0.1.124 was
-deployed (2026-10-02).
+A `site-params.env` that still holds the example's `xxxx…` placeholders, or a
+secret that has since been rotated, **overwrites the live secret** when its
+credentials are deployed, and every sign-in then fails at the code exchange.
+One consumer's local file held placeholders when v0.1.124 was deployed
+(2026-10-02).
 
-To change only the code, `AllowedOrigins` or the scope, leave both credentials
-out: SAM keeps a stack's existing value for every parameter it is not given.
+To change only the code, `AllowedOrigins` or the scope, **leave both
+credentials unset and run `deploy.sh`**: empty the two lines in
+`site-params.env` (`export GITHUB_CLIENT_ID=""`,
+`export GITHUB_CLIENT_SECRET=""`) and deploy as above. `deploy.sh` then checks
+that the stack exists and deploys without either credential parameter, and
+CloudFormation keeps the stack's values: `sam deploy` sends every template
+parameter it is not given as `UsePreviousValue` on an update. It prints
+`keeping the stack's existing credentials`; with both set it prints
+`setting credentials from the environment` instead. It never prints either
+value. It stops before deploying when:
+
+- either credential is a placeholder: all `x` as in the example file, or
+  `your_client_id` / `your_client_secret`;
+- only one of the two is set;
+- both are unset and the stack does not exist yet: a new stack needs both;
+- it cannot tell whether the stack exists (an expired session, no network).
+
+**The careful path** stops at the change set so it can be read before
+anything changes. It is the same deploy by hand, with the credentials left out
+of `--parameter-overrides`:
 
 ```bash
 cd ~/repos/cms-platform/oauth-proxy        # checked out at the release tag
@@ -224,8 +242,8 @@ build probe makes a missed one visible within a day.
   outside the role entirely. A CI deploy needs both fixed first.
 - **The secret need not reach CI.** An in-place update can keep the stack's
   current `GitHubClientSecret` (both live stacks were updated that way on
-  2026-10-02), but `deploy.sh` refuses to run without one today, so CI would
-  first need a "keep the stack's value" path in `deploy.sh`.
+  2026-10-02), and `deploy.sh` does that when both credentials are unset
+  (see "Deploying without touching the credentials").
 - **It widens what a branch can do to sign-in.** The role trusts
   `repo:<owner>/<repo>:*`, so any workflow on any branch of the site repo can
   assume it. Adding the proxy deploy to that role puts the code that issues

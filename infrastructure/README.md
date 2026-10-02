@@ -31,9 +31,13 @@ cp infrastructure/site-params.example.env infrastructure/site-params.env
 set -a; source infrastructure/site-params.env; set +a
 
 bash infrastructure/bootstrap/deploy.sh     # once per account+site
-bash oauth-proxy/deploy.sh                   # needs GITHUB_CLIENT_ID/SECRET
+bash oauth-proxy/deploy.sh                   # first deploy needs GITHUB_CLIENT_ID/SECRET
 bash infrastructure/rum/deploy.sh            # optional analytics
 ```
+
+A later `oauth-proxy/deploy.sh` with both credentials empty keeps the stack's
+live ones ([docs/ADMIN-AUTH-SECURITY.md](../docs/ADMIN-AUTH-SECURITY.md),
+"Deploying without touching the credentials").
 
 Copy the stack outputs (`RoleArn` → `AWS_ROLE_ARN` secret; CloudFront ids;
 RUM `AppMonitorId`/`IdentityPoolId` → `_config.yml`) as printed by each script.
