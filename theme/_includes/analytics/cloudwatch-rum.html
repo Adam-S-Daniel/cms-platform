@@ -29,13 +29,18 @@
     if (localStorage.getItem("rum-opt-out") === "1") return;
   } catch (e) { /* localStorage unavailable; fall through */ }
 
-  // Original RUM SDK loader (unchanged).
+  // Original RUM SDK loader, unchanged except for the script URL: the
+  // client is the exact aws-rum-web release shipped in this gem
+  // (assets/js/aws-rum-web/, hash-locked by
+  // e2e/analytics-rum-client-vendored.test.js) and served from the site's
+  // own origin, not from AWS's floating 1.x path. The region still picks
+  // the data plane endpoint below.
   (function(n,i,v,r,s,c,x,z){x=window.AwsRumClient={q:[],n:n,i:i,v:v,r:r,c:c};window[n]=function(c,p){x.q.push({c:c,p:p});};z=document.createElement('script');z.async=true;z.src=s;document.head.insertBefore(z,document.head.getElementsByTagName('script')[0]);})(
     'cwr',
     '{{ _rum.app_monitor_id }}',
     '1.0.0',
     '{{ _region }}',
-    'https://client.rum.{{ _region }}.amazonaws.com/1.x/cwr.js',
+    '{{ '/assets/js/aws-rum-web/cwr-1.25.0.js' | relative_url }}',
     {
       sessionSampleRate: 1,
       identityPoolId: "{{ _rum.identity_pool_id }}",

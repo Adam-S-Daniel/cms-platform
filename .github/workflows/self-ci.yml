@@ -180,6 +180,14 @@ jobs:
           # keeping this lane to a few seconds.
           ruby-version: '3.2'
 
+      # The one exception: cloudwatch_rum_include_render_test.rb renders the
+      # RUM include through real Liquid (#517), since what it locks is how the
+      # template engine evaluates the include's `if`. Liquid 4 is the major
+      # Jekyll 4 depends on (`~> 4.0`); 4.0.4 (2023-01-11) is the newest 4.x
+      # and has no runtime dependencies.
+      - name: Install Liquid
+        run: gem install liquid --version 4.0.4 --no-document
+
       - name: Run theme specs
         run: |
           set -euo pipefail

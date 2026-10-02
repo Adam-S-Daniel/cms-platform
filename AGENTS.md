@@ -149,7 +149,7 @@ Self-explanatory by name: `.github/workflows/`, `scripts/`, `infrastructure/`,
 |---|---|
 | `theme/` | the `cms-platform-theme` Jekyll **gem** (gemspec at `theme/`, so the gem root is `theme/`): layouts/includes/assets/plugins, the Decap render hook (`lib/cms-platform-theme/decap_config_hook.rb`), the `admin/` UI |
 | `theme/admin/` | Decap base config (`*.base.yml`) + admin JS/HTML/CSS (read `window.CMS_*`) + `reviews/` dashboards; ships INSIDE the gem (v0.1.4+). Sites own only `admin/collections.site.yml`. |
-| `theme/spec/` | plain-ruby theme unit tests (`ruby theme/spec/<name>_test.rb`, stdlib `minitest/autorun`), excluded from `spec.files` |
+| `theme/spec/` | plain-ruby theme unit tests (`ruby theme/spec/<name>_test.rb`, `minitest/autorun`, no bundle; `liquid` 4.0.4 the one gem), excluded from `spec.files` |
 
 ## Conventions (do not break)
 

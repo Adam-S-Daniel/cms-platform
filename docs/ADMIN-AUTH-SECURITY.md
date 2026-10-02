@@ -276,7 +276,7 @@ is therefore expensive. What was weighed:
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
 | Security headers | **In the template, not yet deployed** — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | Both distributions send HSTS, `nosniff`, `Referrer-Policy` and same-origin framing once a site redeploys its bootstrap stack; `/admin/*` adds a CSP, Report-Only until `AdminCspMode=enforce`. Decap's `new Function` and the per-site inline scripts keep `script-src` loose; the gain is `connect-src`, `object-src`, `base-uri` and `frame-ancestors`. See [Security headers](#security-headers) below. |
 | Narrower permissions | Evaluated, spike pending — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516); `read:user` replaces `user` in the proxy's default scope | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. The source evaluation, the minimal permission set and the spike kit are in [GitHub App sign-in](#github-app-sign-in-516) below. |
-| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); off until a site follows the runbook below | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
+| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); off until a site follows the runbook below | Public pages share the origin, and so do their scripts. The CloudWatch RUM client is no longer fetched from AWS: the gem ships the exact release and pages load it from the site's own origin (rule below), which takes the RUM CDN out of the page but not the client out of the token's reach. Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
 
 ## Serving the editor from its own origin (opt-in, #517)
@@ -634,6 +634,31 @@ that, which changes nothing a deployed site uses.
   ```
 
   A wrong hash does not degrade: Decap does not load at all.
+- **Bumping the CloudWatch RUM client means re-vendoring it**, never pointing
+  `theme/_includes/analytics/cloudwatch-rum.html` back at AWS. The gem ships it
+  as `theme/assets/js/aws-rum-web/cwr-<version>.js`; the version is in the file
+  name because production caches assets for a day, and `provenance.json` beside
+  it records version, source URL and sha384, which
+  `e2e/analytics-rum-client-vendored.test.js` holds the bytes to:
+
+  ```bash
+  v=X.Y.Z; d=theme/assets/js/aws-rum-web
+  curl -fsS -o "$d/cwr-$v.js" "https://client.rum.us-east-1.amazonaws.com/$v/cwr.js"
+  openssl dgst -sha384 -binary "$d/cwr-$v.js" | openssl base64 -A
+  npm pack "aws-rum-web@$v" && tar xzf "aws-rum-web-$v.tgz" -C "$d" --strip-components=1 \
+    package/LICENSE package/NOTICE package/LICENSE-THIRD-PARTY
+  ```
+
+  Then `git rm` the old `cwr-*.js` and move `provenance.json` and the include's
+  path to the new version. The npm package carries no browser bundle, so the
+  CDN is the only source of these bytes; cross-check them against
+  `/<major>.x/cwr.js` while `$v` is the newest release, and fetch from
+  `us-east-1`, the only region whose client host resolves. **Never cross a
+  major version without reading its changelog**: 2.x and 3.x change defaults,
+  and 3.x turns on session replay. Loading the CDN copy with `integrity` +
+  `crossorigin` instead does not work: the CDN does not vary its cache on
+  `Origin`, so `Access-Control-Allow-Origin` comes back only when the request
+  that filled a POP's cache sent one, and a real browser blocked the tag.
 - **A new script on `/admin` is same-origin, shipped in the gem**, or it carries
   an exact version and an integrity hash.
 - **A new `message` listener checks `origin` and `source` first**, and never

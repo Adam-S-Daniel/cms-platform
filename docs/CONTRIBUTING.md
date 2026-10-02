@@ -94,7 +94,10 @@ plain PR). It runs six FAST lanes on `pull_request` + `push` to `main`, four of
 them REQUIRED:
 
 1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail; REQUIRED).
-2. **ruby-theme-specs** — `theme/spec/*_test.rb` (hard-fail; REQUIRED).
+2. **ruby-theme-specs** — `theme/spec/*_test.rb`, each run with plain `ruby`, no
+   bundle (hard-fail; REQUIRED). The one gem the lane installs is `liquid` 4.0.4,
+   for `cloudwatch_rum_include_render_test.rb`, which renders the RUM include
+   through real Liquid; every other spec stubs the Liquid/Jekyll surface it touches.
 3. **node-unit-lints** — the pure-fs `e2e/*.test.js` lints, selected by an
    exclusion DENY list (build-/repo-dependent specs are denied; a new pure-fs
    lint is picked up automatically). Run with `TARGET=prod` +
