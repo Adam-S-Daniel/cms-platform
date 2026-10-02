@@ -1,0 +1,21 @@
+{
+  "name": "<prefix>-cms-signin",
+  "url": "https://<apex>",
+  "description": "Signs editors in to /admin on <apex> (#516 spike). User tokens only: no webhook, and no installation token is ever minted.",
+  "public": false,
+  "callback_urls": ["<oauth_base_url>/prod/callback"],
+  "redirect_url": "https://<apex>/",
+  "request_oauth_on_install": false,
+  "setup_on_update": false,
+  "hook_attributes": { "url": "https://<apex>/", "active": false },
+  "default_events": [],
+  "default_permissions": {
+    "metadata": "read",
+    "contents": "write",
+    "pull_requests": "write",
+    "statuses": "read",
+    "checks": "read",
+    "actions": "read",
+    "deployments": "write"
+  }
+}

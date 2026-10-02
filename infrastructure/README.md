@@ -70,7 +70,7 @@ source of truth and a platform fix flows to every consumer on the next
 `platform_ref` bump (no fork to keep in sync). The site runs them exactly as above
 (`bash oauth-proxy/deploy.sh`), no platform checkout needed.
 
-The OAuth wrapper adopts the platform default scope **`repo,user,workflow`**.
+The OAuth wrapper adopts the platform default scope **`repo,read:user,workflow`**.
 ⚠️ If a redeploy **widens** the scope your live GitHub OAuth App was authorized
 with, the OAuth App owner must **manually re-consent** (re-authorize the app)
 once — GitHub requires that human step; it can't be automated.
