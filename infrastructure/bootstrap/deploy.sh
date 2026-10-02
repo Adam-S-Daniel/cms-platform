@@ -46,6 +46,11 @@ STACK_NAME="${STACK_NAME:-${RESOURCE_PREFIX}-bootstrap}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 CREATE_OIDC_PROVIDER="${CREATE_OIDC_PROVIDER:-true}"
 HOSTED_ZONE_ID="${HOSTED_ZONE_ID:-}"
+# Security headers (cms-platform#515); defaults match the template's. See
+# docs/ADMIN-AUTH-SECURITY.md before widening HSTS_SCOPE or enforcing the CSP.
+HSTS_MAX_AGE_SECONDS="${HSTS_MAX_AGE_SECONDS:-31536000}"
+HSTS_SCOPE="${HSTS_SCOPE:-this-host-only}"
+ADMIN_CSP_MODE="${ADMIN_CSP_MODE:-report-only}"
 
 # ── Colour output ──────────────────────────────────────────────────────────
 BLUE='\033[0;34m'
@@ -71,6 +76,7 @@ cd "$SCRIPT_DIR"
 
 info "Deploying stack: ${STACK_NAME} to ${AWS_REGION}"
 info "Create OIDC provider: ${CREATE_OIDC_PROVIDER}"
+info "Admin CSP mode: ${ADMIN_CSP_MODE}; HSTS: max-age=${HSTS_MAX_AGE_SECONDS}, ${HSTS_SCOPE}"
 
 # ── Auto-detect Route53 hosted zone if not specified ───────────────────────
 if [[ -z "$HOSTED_ZONE_ID" ]]; then
@@ -103,7 +109,10 @@ aws cloudformation deploy \
   "HostedZoneId=${HOSTED_ZONE_ID}" \
   "PreviewDomainName=${PREVIEW_DOMAIN}" \
   "MediaArchiveBucketName=${MEDIA_ARCHIVE_BUCKET}" \
-  "AdminDomainName=${ADMIN_DOMAIN}"
+  "AdminDomainName=${ADMIN_DOMAIN}" \
+  "HstsMaxAgeSeconds=${HSTS_MAX_AGE_SECONDS}" \
+  "HstsScope=${HSTS_SCOPE}" \
+  "AdminCspMode=${ADMIN_CSP_MODE}"
 
 # ── Fetch outputs ──────────────────────────────────────────────────────────
 info "Fetching stack outputs…"

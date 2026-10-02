@@ -431,6 +431,9 @@ const PLATFORM_META_SPECS = [
   // cms-platform#517 — the opt-in admin host: reads the same bootstrap
   // template and the theme/admin shells, so self-CI only for the same reason.
   "admin-host-router.test.js",
+  // cms-platform#515 — the same template's response headers policies; the
+  // same platform-owned posture as preview-custom-error-response above.
+  "cloudfront-security-headers.test.js",
   "preview-deploy-superset.test.js",
   "prod-mutate-fixture.test.js",
   "public-content.test.js",

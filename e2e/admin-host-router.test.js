@@ -102,6 +102,10 @@ function deployedAs(template, hasAdmin) {
     ShouldCreateOIDCProvider: true,
     ShouldCreateApexDnsRecords: true,
     ShouldCreateMediaArchive: true,
+    // #515's header conditions, at their parameter defaults.
+    HstsIncludesSubdomains: false,
+    HstsPreloads: false,
+    AdminCspEnforced: false,
   };
   const resources = {};
   for (const [name, res] of Object.entries(template.Resources)) {
@@ -440,6 +444,17 @@ test.describe("bootstrap template wiring for the admin origin (#517)", () => {
     );
     expect(b).not.toHaveProperty("OriginRequestPolicyId");
     expect(b.ViewerProtocolPolicy).toBe("redirect-to-https");
+  });
+
+  test("(a) the admin host sends the same admin headers policy as the apex's /admin/* (frame-ancestors, CSP)", () => {
+    const on = deployedAs(template, true).Resources;
+    const adminBehavior = on.AdminDistribution.Properties.DistributionConfig.DefaultCacheBehavior;
+    const apexAdmin = (on.ProductionDistribution.Properties.DistributionConfig.CacheBehaviors || []).find(
+      (b) => b.PathPattern === "/admin/*",
+    );
+    expect(adminBehavior.ResponseHeadersPolicyId).toEqual({ Ref: "AdminResponseHeadersPolicy" });
+    expect(apexAdmin, "the apex /admin/* behavior #515 added").toBeDefined();
+    expect(adminBehavior.ResponseHeadersPolicyId).toEqual(apexAdmin.ResponseHeadersPolicyId);
   });
 
   test("(a) 403 and 404 are answered with the gem's script-free page, as a 404", () => {

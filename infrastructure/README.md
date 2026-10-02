@@ -29,6 +29,15 @@ is a stack parameter — nothing is hardcoded to a specific domain.
   script-free page for every miss, and the **admin-redirect** function on the
   production distribution sends `/admin` there. Opt-in runbook:
   `docs/ADMIN-AUTH-SECURITY.md`.
+- **Security headers** (bootstrap, #515): both distributions attach
+  `<prefix>-baseline-headers` (HSTS, `nosniff`, `Referrer-Policy`,
+  `frame-ancestors 'self'`), and an `/admin/*` behavior attaches
+  `<prefix>-admin-headers`, which adds a Content-Security-Policy.
+  `AdminCspMode` (`ADMIN_CSP_MODE`, default `report-only`), `HstsMaxAgeSeconds`
+  (`HSTS_MAX_AGE_SECONDS`, default one year) and `HstsScope` (`HSTS_SCOPE`,
+  default `this-host-only`) tune them; the rollout runbook is in
+  `docs/ADMIN-AUTH-SECURITY.md`. An account holds at most 20 custom response
+  headers policies, two per site.
 
 ## Deploying
 

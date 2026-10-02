@@ -122,12 +122,46 @@ Parameters:
       a name inside HostedZoneId's zone with no record of its own yet. The
       site sets the same origin as `cms.admin_origin` in _config.yml.
       See docs/ADMIN-AUTH-SECURITY.md.
+  HstsMaxAgeSeconds:
+    Type: Number
+    Default: 31536000
+    MinValue: 0
+    Description: >
+      max-age of the Strict-Transport-Security header both distributions send
+      (default one year). Lower it first if the site might ever need to serve
+      plain HTTP again; 0 tells browsers to forget an earlier policy.
+
+  HstsScope:
+    Type: String
+    Default: "this-host-only"
+    AllowedValues: ["this-host-only", "include-subdomains", "include-subdomains-preload"]
+    Description: >
+      Whether Strict-Transport-Security also covers every subdomain of the
+      host that sent it (includeSubDomains), and asks to be hard-coded into
+      browsers (preload). Both commit hosts this stack does not serve, such
+      as other services under the apex, and preload is close to permanent,
+      so the default covers only the host that answered.
+
+  AdminCspMode:
+    Type: String
+    Default: "report-only"
+    AllowedValues: ["report-only", "enforce"]
+    Description: >
+      How /admin/* sends its Content-Security-Policy. 'report-only' (the
+      default) sends the full policy as Content-Security-Policy-Report-Only,
+      so a violation is logged to the browser console and nothing is
+      blocked, while frame-ancestors stays enforced. 'enforce' sends the full
+      policy as Content-Security-Policy. Flip it only after an editor
+      round-trip shows no violations (docs/ADMIN-AUTH-SECURITY.md).
 
 Conditions:
   ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
   ShouldCreateApexDnsRecords: !Equals [!Ref CreateApexDnsRecords, "true"]
   ShouldCreateMediaArchive: !Not [!Equals [!Ref MediaArchiveBucketName, ""]]
   HasAdminDomain: !Not [!Equals [!Ref AdminDomainName, ""]]
+  HstsIncludesSubdomains: !Not [!Equals [!Ref HstsScope, "this-host-only"]]
+  HstsPreloads: !Equals [!Ref HstsScope, "include-subdomains-preload"]
+  AdminCspEnforced: !Equals [!Ref AdminCspMode, "enforce"]
 
 Resources:
 
@@ -448,6 +482,95 @@ Resources:
           }
         }
 
+  # ── Response headers policies (cms-platform#515) ─────────────────────────
+  #
+  # S3 website hosting sends no security headers, so CloudFront adds them.
+  # A cache behavior takes ONE policy, so the /admin/* policy repeats the
+  # baseline and adds the admin CSP. Both policies serve both distributions;
+  # names derive from ResourcePrefix because they are unique per account
+  # (and an account holds at most 20 custom response headers policies).
+  #
+  # frame-ancestors 'self' / X-Frame-Options SAMEORIGIN: nothing frames these
+  # pages from another origin. Decap's preview pane is a srcdoc iframe inside
+  # /admin, embedded tool pages use same-origin /assets/tools/ iframes, the
+  # live preview is a separate tab on a BroadcastChannel, and the
+  # visual-regression harness navigates top-level.
+  BaselineResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ResourcePrefix}-baseline-headers"
+        Comment: "HSTS, nosniff, referrer policy, same-origin framing (cms-platform#515)"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: !Ref HstsMaxAgeSeconds
+            IncludeSubdomains: !If [HstsIncludesSubdomains, true, false]
+            Preload: !If [HstsPreloads, true, false]
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          FrameOptions:
+            FrameOption: SAMEORIGIN
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "frame-ancestors 'self'"
+            Override: true
+
+  # The admin CSP, built from what theme/admin actually loads:
+  #   script-src  Decap from unpkg (SRI-pinned in the shells); 'unsafe-eval'
+  #               because the bundle calls `new Function`; 'unsafe-inline'
+  #               because both render paths inject per-site window.CMS_*
+  #               into inline scripts, so a hash would differ per site and
+  #               per render and would have to be redeployed on every bump.
+  #   style-src   Decap injects inline styles.
+  #   connect-src the GitHub API, githubstatus.com (Decap's status probe),
+  #               and the apex + its subdomains (commit.json, config.yml, the
+  #               dashboards' preview-pr<N> regression.json). The OAuth proxy
+  #               is NOT here: sign-in is a popup plus postMessage, which
+  #               connect-src does not govern, so no per-site parameter.
+  #   img-src     GitHub avatars; blob:/data: for media Decap reads through
+  #               the API.
+  #   media-src   the dashboards' preview-pr<N> regression.mp4.
+  # The Report-Only copy leaves out frame-ancestors only because it is
+  # already enforced by the Content-Security-Policy header in both modes, so
+  # reporting it as well would add nothing.
+  AdminResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ResourcePrefix}-admin-headers"
+        Comment: "Baseline headers plus the /admin Content-Security-Policy (cms-platform#515)"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: !Ref HstsMaxAgeSeconds
+            IncludeSubdomains: !If [HstsIncludesSubdomains, true, false]
+            Preload: !If [HstsPreloads, true, false]
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          FrameOptions:
+            FrameOption: SAMEORIGIN
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: !If
+              - AdminCspEnforced
+              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+              - "frame-ancestors 'self'"
+            Override: true
+        CustomHeadersConfig: !If
+          - AdminCspEnforced
+          - !Ref AWS::NoValue
+          - Items:
+              - Header: Content-Security-Policy-Report-Only
+                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'"
+                Override: true
+
   # ── CloudFront distribution for preview-pr*.<apex> ───────────────────────
   #
   # Uses the S3 website endpoint as a custom origin (not OAC) so that S3
@@ -472,6 +595,7 @@ Resources:
           TargetOriginId: s3-website
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+          ResponseHeadersPolicyId: !Ref BaselineResponseHeadersPolicy
           AllowedMethods: [GET, HEAD, OPTIONS]
           CachedMethods: [GET, HEAD]
           Compress: true
@@ -480,6 +604,25 @@ Resources:
               FunctionARN: !GetAtt PreviewRouterFunction.FunctionARN
             - EventType: viewer-response
               FunctionARN: !GetAtt PreviewLocationFixerFunction.FunctionARN
+        # Identical to DefaultCacheBehavior except for the headers policy. A
+        # behavior is chosen from the viewer's path before the router rewrites
+        # it, so this matches /admin/* on every preview host, and it must
+        # carry the same functions or preview /admin stops routing
+        # (e2e/cloudfront-security-headers.test.js holds the two equal).
+        CacheBehaviors:
+          - PathPattern: /admin/*
+            TargetOriginId: s3-website
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt PreviewRouterFunction.FunctionARN
+              - EventType: viewer-response
+                FunctionARN: !GetAtt PreviewLocationFixerFunction.FunctionARN
         Origins:
           - Id: s3-website
             DomainName: !Sub "${PreviewBucketName}.s3-website-${AWS::Region}.amazonaws.com"
@@ -632,6 +775,7 @@ Resources:
           TargetOriginId: s3-website
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          ResponseHeadersPolicyId: !Ref BaselineResponseHeadersPolicy
           AllowedMethods: [GET, HEAD, OPTIONS]
           CachedMethods: [GET, HEAD]
           Compress: true
@@ -643,6 +787,24 @@ Resources:
             - - EventType: viewer-request
                 FunctionARN: !GetAtt ApexAdminRedirectFunction.FunctionARN
             - !Ref "AWS::NoValue"
+        # Identical to DefaultCacheBehavior except for the headers policy
+        # (e2e/cloudfront-security-headers.test.js holds the two equal),
+        # including the opt-in admin redirect (#517): without it the apex
+        # would keep serving /admin/* instead of redirecting it.
+        CacheBehaviors:
+          - PathPattern: /admin/*
+            TargetOriginId: s3-website
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            FunctionAssociations: !If
+              - HasAdminDomain
+              - - EventType: viewer-request
+                  FunctionARN: !GetAtt ApexAdminRedirectFunction.FunctionARN
+              - !Ref "AWS::NoValue"
         Origins:
           - Id: s3-website
             DomainName: !Sub "${ProductionBucketName}.s3-website-${AWS::Region}.amazonaws.com"
@@ -817,8 +979,11 @@ Resources:
           AllowedMethods: [GET, HEAD]
           CachedMethods: [GET, HEAD]
           Compress: true
-          # An admin-only response headers policy (#515 / PR #546's admin
-          # CSP) attaches here, as ResponseHeadersPolicyId.
+          # The same admin policy the apex's /admin/* behavior sends (#515):
+          # HSTS, nosniff, frame-ancestors 'self' and the admin CSP, so
+          # opting in never drops a header the editor had on the apex. It
+          # also covers the not-found page and the HEAD responses.
+          ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt AdminSiteFunction.FunctionARN
