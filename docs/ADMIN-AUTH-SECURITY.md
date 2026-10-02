@@ -62,6 +62,11 @@ export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
   complete a sign-in; that is a valid choice for a site that does not use them.
 - `www.<apex>` serves the same `/admin` on the production distribution but is a
   different origin; list it only if editors really sign in there.
+- A site that serves its editor from its own origin (below) lists that origin
+  **instead of** the apex: `https://admin.<apex>,https://preview-*.<apex>`.
+  Leaving the apex in lets a script on any public page open the sign-in popup
+  itself and, for an editor who has already authorized the app (GitHub then
+  skips the consent screen), receive a token.
 - A bare `*`, an `http://` origin, or an entry with a path is invalid.
   `deploy.sh` refuses to deploy it, and a proxy that somehow ends up with no
   valid entry answers 500 instead of signing anyone in.
@@ -135,8 +140,125 @@ is therefore expensive. What was weighed:
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
 | Security headers | Deferred — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | CloudFront serves none. HSTS, `nosniff` and `frame-ancestors` are cheap; a CSP for `/admin` has to live with Decap's `new Function` and inline styles. Needs a bootstrap-stack deploy per site and a live publish loop to prove it. |
 | Narrower permissions | Deferred — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516) | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. |
-| A separate origin for the editor | Deferred — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517) | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). Moving `/admin` to its own host takes the token out of their reach, and moves a URL most of the e2e harness depends on. |
+| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); off until a site follows the runbook below | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). On its own host the editor's tokens are out of their reach. |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
+
+## Serving the editor from its own origin (opt-in, #517)
+
+Off by default. With it on, `/admin/` and `/admin/reviews/` are served from
+`admin.<apex>` and nothing public is:
+
+| Request | Answer |
+|---|---|
+| `admin.<apex>/admin…` | the same `admin/` objects, at the same paths |
+| `admin.<apex>/` | 302 to `admin.<apex>/admin/` |
+| `admin.<apex>/<anything else>` | 302 to the same path and query on `<apex>` |
+| `HEAD admin.<apex>/<anything>` | served: no body runs, and `slug-pin.js` probes `/blog/<slug>/` same-origin |
+| `<apex>/admin…`, `www.<apex>/admin…` | 302 to the same path and query on `admin.<apex>` (the browser keeps the `#/…` fragment) |
+
+The pieces: the bootstrap stack's `AdminDomainName` parameter (alias, SAN,
+Route53 record and the `admin-host-router` CloudFront Function on the
+production distribution), the site's `cms.admin_origin` (injected as
+`window.CMS_ADMIN_ORIGIN`; on that origin `site-hostname.js` and
+`live-url-derive.js` build public URLs and "on `<host>`" copy from `url`), and
+`ALLOWED_ORIGINS`. Tests: `e2e/admin-host-router.test.js` runs the function
+and checks that an un-opted stack deploys exactly what it did before.
+
+What it does **not** cover, as of this change:
+
+- **Live Preview is hidden on the admin origin.** `/preview/` fills from a
+  same-origin `BroadcastChannel`, and it stays on the public site: it is a
+  public page that loads `marked` from unpkg without an integrity hash and,
+  in production, the RUM client. Decap's own preview pane still works.
+  Bringing the button back needs a cross-origin transport (`postMessage` to a
+  window the editor opened), which is not built.
+- **A missing `/admin/` file is answered with the public `/404.html` on the
+  admin origin** (the distribution's custom error response cannot vary by
+  host), so a mistyped admin URL runs that page's scripts, RUM included, next
+  to the token.
+- **The editor's own content still runs in the admin origin.** Decap renders
+  the markdown preview pane in a same-origin frame and the platform leaves
+  Decap's `sanitize_preview` at its default (`false`), so an HTML embed
+  (`editor-component-html-embed.js`) with an event-handler attribute, such as
+  an `<img onerror>`, executes there when the entry is opened. `<script>`
+  tags do not (they arrive through `innerHTML`). Anyone who can put content on
+  a `cms/*` branch reaches every editor who opens it. Not verified in a
+  browser here.
+- **Per-PR preview admins are unchanged.** `preview-prN.<apex>` and
+  `preview-cms-<slug>.<apex>` each serve their admin next to that build's
+  public pages. Preview builds run with `JEKYLL_ENV=preview`, so they load no
+  RUM client; but `/preview/` loads `marked` from unpkg with no integrity
+  hash, and a draft's HTML embed is a real `<script>` on its rendered page. A
+  token from a sign-in on a preview admin sits beside both. Drop the preview
+  entry from `ALLOWED_ORIGINS` to refuse those sign-ins.
+- **The e2e harness is unchanged.** Local lanes serve one origin, preview
+  lanes drive preview admins, and the prod lanes go to `<apex>/admin/` and
+  follow the 302: every spec seeds tokens with `page.addInitScript` (which
+  runs on whatever origin the page lands on), and every `page.route` pattern
+  is a host-agnostic glob. Admin-bundle parity fetches
+  `<apex>/admin/…` with redirects followed, so it compares the same bytes.
+  None of this has run against an opted-in site yet: the first prod loop
+  after cut-over is the proof.
+
+### Runbook, per site
+
+Needs a release carrying this change, bumped into the site (`platform.lock`).
+Run from the site repo with that site's AWS credentials.
+
+```bash
+# 0. The name is free (expect [])
+aws route53 list-resource-record-sets --hosted-zone-id <zone-id> \
+  --query "ResourceRecordSets[?Name=='admin.<apex>.']"
+
+# 1. Site PR: _config.yml gains, under cms:
+#      admin_origin: https://admin.<apex>
+#    Merge and let it deploy. It is inert until the host serves the admin.
+
+# 2. Proxy accepts BOTH origins during the switch. Edit it in
+#    infrastructure/site-params.env (the deploy wrapper sources that file, so
+#    it wins over an exported value), then deploy:
+#      ALLOWED_ORIGINS="https://<apex>,https://admin.<apex>,https://preview-*.<apex>"
+bash oauth-proxy/deploy.sh
+
+# 3. Add ADMIN_DOMAIN=admin.<apex> to infrastructure/site-params.env (every
+#    later bootstrap redeploy needs it too, or the host is turned off), then
+#    redeploy the bootstrap stack the way docs/MEDIA-ARCHIVE.md step 3 does for
+#    that site: a live apex keeps CREATE_APEX_DNS_RECORDS=true (a redeploy
+#    without it DELETES the apex records), and STACK_NAME must name the
+#    bootstrap stack, not the proxy's. The production certificate is replaced
+#    (new SAN): allow several minutes.
+bash infrastructure/bootstrap/deploy.sh
+
+# 4. Verify with GET (curl -I sends HEAD, which the admin host serves on purpose)
+hdr() { curl -s -o /dev/null -D - "$1" | grep -i -E '^(HTTP|location)'; }
+hdr "https://<apex>/admin/"                    # 302, location: https://admin.<apex>/admin/
+hdr "https://www.<apex>/admin/reviews/?q=a%26b" # 302, location keeps ?q=a%26b as sent
+hdr "https://admin.<apex>/admin/"              # 200
+hdr "https://admin.<apex>/blog/"               # 302, location: https://<apex>/blog/
+hdr "https://admin.<apex>/"                    # 302, location: https://admin.<apex>/admin/
+curl -s "https://admin.<apex>/admin/" | grep -o 'window.CMS_ADMIN_ORIGIN="[^"]*"'
+echo | openssl s_client -connect admin.<apex>:443 -servername admin.<apex> 2>/dev/null \
+  | openssl x509 -noout -ext subjectAltName    # lists admin.<apex>
+
+# 5. One real sign-in at https://admin.<apex>/admin/ and one at /admin/reviews/;
+#    open a published post: "View page on site" names https://<apex>/...
+
+# 6. Take the apex out of the proxy's list in site-params.env, then deploy:
+#      ALLOWED_ORIGINS="https://admin.<apex>,https://preview-*.<apex>"
+bash oauth-proxy/deploy.sh
+```
+
+7. **Every editor signs in again**: `localStorage` belongs to an origin, so
+   nothing carries over. The old tokens are still in the apex's storage,
+   readable by its scripts and valid (OAuth App tokens do not expire), so each
+   editor also revokes the app at `https://github.com/settings/applications`
+   before signing in on the new host.
+
+**Rollback**: put the apex back in `ALLOWED_ORIGINS` and deploy the proxy,
+then remove `ADMIN_DOMAIN` and rerun step 3 (the alias, record and function go;
+the certificate is replaced again). The redirects are 302s, so no browser keeps
+them. `cms.admin_origin` can stay: it is inert while the editor is served from
+the apex. Editors sign in again on the apex.
 
 ## Rules that follow
 
