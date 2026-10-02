@@ -132,4 +132,27 @@ class FieldLibraryResolutionTest < Minitest::Test
     publish_date = lib["published_pair"].find { |f| f["name"] == "publish_date" }
     assert_equal "YYYY-MM-DD HH:mm:ss ZZ", publish_date["format"]
   end
+
+  def test_real_packaged_library_carries_the_archived_pdf_field_contract
+    lib = FL.load_library(REAL_LIBRARY_PATH)
+    fields = lib.fetch("archived_pdf_fields")
+
+    assert_kind_of Array, fields
+    assert_equal %w[pdf_archive_file pdf_public pdf_label], fields.map { |field| field["name"] }
+
+    archive_file, publish, label = fields
+    assert_equal "string", archive_file["widget"]
+    assert_equal false, archive_file["required"]
+    assert_equal ["[.]pdf$", "Must be a PDF file name (.pdf)"], archive_file["pattern"]
+
+    assert_equal "boolean", publish["widget"]
+    assert_equal false, publish["required"]
+    assert_equal false, publish["default"]
+    assert_includes publish["label"], "{{CMS_CURRENT_HOST}}"
+    assert_includes publish["hint"], "{{CMS_CURRENT_HOST}}"
+
+    assert_equal "string", label["widget"]
+    assert_equal false, label["required"]
+    assert_includes label["hint"], "{{CMS_CURRENT_HOST}}"
+  end
 end

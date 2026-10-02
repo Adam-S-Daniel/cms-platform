@@ -579,6 +579,31 @@
   // below and live-url-banner.js use.
   var lastBarHTML = null;
 
+  function publishingBarCopy() {
+    return {
+      signedOut: "Sign in to see publishing details",
+      refreshTitle: "Refresh latest edits and publishing details",
+    };
+  }
+
+  function publishingStateWord(state) {
+    if (state === "success") return "updated";
+    if (state === "failure" || state === "error") return "update did not finish";
+    if (state === "in_progress" || state === "queued" || state === "pending") return "updating";
+    return "publishing details";
+  }
+
+  function publishingSummaryHTML(deploy, destination) {
+    var copy = publishingBarCopy();
+    if (!deploy) return '<span style="color:#8c959f">' + copy.signedOut + "</span>";
+    var stateWord = publishingStateWord(deploy.state);
+    if (deploy.url) {
+      stateWord =
+        '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">' + stateWord + "</a>";
+    }
+    return esc(destination) + " " + stateWord + " " + esc(timeAgo(deploy.at));
+  }
+
   function ensureBar(cards, fixtureCount) {
     var ul = listUl(cards);
     if (!ul || !ul.parentNode) return;
@@ -594,21 +619,9 @@
     var deploy =
       (memCache && memCache.siteDeploy) ||
       (readCache() && readCache().data && readCache().data.siteDeploy);
-    // The state word itself ("deployed" / "failure" / …) carries the link to
-    // the Actions run — no separate "· run ↗" suffix.
-    var deployStateWord = deploy
-      ? deploy.state === "success"
-        ? "deployed"
-        : esc(deploy.state)
-      : "";
-    if (deploy && deploy.url) {
-      deployStateWord =
-        '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">' + deployStateWord + "</a>";
-    }
     var deployHost = window.CMSHostname ? window.CMSHostname.canonical() : "Published destination";
-    var deployHtml = deploy
-      ? esc(deployHost) + " " + deployStateWord + " " + esc(timeAgo(deploy.at))
-      : '<span style="color:#8c959f">sign in for deploy / PR data</span>';
+    var deployHtml = publishingSummaryHTML(deploy, deployHost);
+    var copy = publishingBarCopy();
     var nextHTML =
       '<strong style="color:#24292f">Posts</strong>' +
       '<label title="The E2E canary fixtures are hidden by default. ' +
@@ -618,8 +631,9 @@
       " /> Show automated-test posts (" +
       fixtureCount +
       ")</label>" +
-      '<button type="button" id="cms-ple-refresh" title="Re-fetch ' +
-      'last-edited / PR / deploy data">↻ Refresh</button>' +
+      '<button type="button" id="cms-ple-refresh" title="' +
+      copy.refreshTitle +
+      '">↻ Refresh</button>' +
       '<span id="cms-ple-deploy">' +
       deployHtml +
       "</span>";
@@ -1012,7 +1026,11 @@
 
   // Test hook (e2e/posts-list-branch-tip.test.js), the same shape as
   // publish-button.js's window.__publishButton.
-  window.__postsListEnhance = { fetchOpenPrBySlug: fetchOpenPrBySlug };
+  window.__postsListEnhance = {
+    fetchOpenPrBySlug: fetchOpenPrBySlug,
+    publishingBarCopy: publishingBarCopy,
+    publishingSummaryHTML: publishingSummaryHTML,
+  };
 
   window.addEventListener("hashchange", onRoute);
   new MutationObserver(function () {

@@ -3,6 +3,7 @@
   "use strict";
 
   var TOKEN = "{{CMS_CURRENT_HOST}}";
+  var OWNED_CONTROL_SELECTORS = ['[class*="ControlHint"]', '[class*="FieldLabel"]'];
 
   function hostname(value) {
     if (value === null || value === undefined || String(value).trim() === "") return null;
@@ -25,14 +26,22 @@
     return { currentHostname: current(), canonicalHostname: canonical() };
   }
 
-  function replaceOwnedHintTokens(root) {
+  function ownedControlFor(node) {
+    if (!node || !node.closest) return null;
+    for (var i = 0; i < OWNED_CONTROL_SELECTORS.length; i += 1) {
+      var control = node.closest(OWNED_CONTROL_SELECTORS[i]);
+      if (control) return control;
+    }
+    return null;
+  }
+
+  function replaceOwnedControlTokens(root) {
     if (!root || !root.querySelectorAll) return;
     var controls = [];
-    if (root.matches && root.matches('[class*="ControlHint"]')) controls.push(root);
-    Array.prototype.push.apply(
-      controls,
-      root.querySelectorAll('[class*="ControlHint"]'),
-    );
+    OWNED_CONTROL_SELECTORS.forEach(function (selector) {
+      if (root.matches && root.matches(selector)) controls.push(root);
+      Array.prototype.push.apply(controls, root.querySelectorAll(selector));
+    });
     controls.forEach(function (control) {
       var walker = document.createTreeWalker(control, NodeFilter.SHOW_TEXT);
       var node;
@@ -45,7 +54,7 @@
   }
 
   function localize(root) {
-    replaceOwnedHintTokens(root);
+    replaceOwnedControlTokens(root);
   }
 
   window.CMSHostname = {
@@ -60,14 +69,14 @@
     new MutationObserver(function (records) {
       records.forEach(function (record) {
         if (record.type === "characterData" && record.target.parentElement) {
-          var changedHint = record.target.parentElement.closest('[class*="ControlHint"]');
-          if (changedHint) replaceOwnedHintTokens(changedHint);
+          var changedControl = ownedControlFor(record.target.parentElement);
+          if (changedControl) replaceOwnedControlTokens(changedControl);
         }
         Array.prototype.forEach.call(record.addedNodes || [], function (node) {
           if (node.nodeType === 1) localize(node);
           if (node.nodeType === 3 && node.parentElement) {
-            var hint = node.parentElement.closest('[class*="ControlHint"]');
-            if (hint) replaceOwnedHintTokens(hint);
+            var control = ownedControlFor(node.parentElement);
+            if (control) replaceOwnedControlTokens(control);
           }
         });
       });

@@ -10,9 +10,18 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.122)
+## Version history (v0.1.0 → v0.1.123)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.123 — shared PDF fields stay consistent, and publishing status names the site being updated.**
+The field library now offers one opt-in archived-PDF group: the private file name, explicit public
+switch and optional button label travel together when a site schema references it. Its public-PDF
+labels and help text resolve the current admin hostname, so production names the canonical site
+while a preview names that preview. The same destination rule now reaches the remaining publishing
+surfaces: update pills, the Posts-list summary and automatic-check descriptions name the actual
+production or preview host. Refresh and sign-in hints use plain publishing language. The pure
+entry-status model still receives those hostnames as options and does not read browser state.
 
 **v0.1.122 — cross-post fires the Cross-post watcher routine; platform-bump drops its weekly cron.**
 After every push run on a site with a configured leg, and after a failed weekly LinkedIn

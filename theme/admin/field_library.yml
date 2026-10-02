@@ -88,3 +88,27 @@ field_library:
       time_format: "HH:mm"
       format: "YYYY-MM-DD HH:mm:ss ZZ"
       hint: "Optional. Choose a future date and time to publish this content automatically on {{CMS_CURRENT_HOST}}. Only honored when Published is off."
+
+  # A private-archive file name, its explicit publishing-permission gate, and
+  # the optional public button label — a LIST of THREE fields. Uploading or
+  # otherwise placing a file in the private archive never opens the gate:
+  # pdf_public defaults false, and a consuming site's publish machinery must
+  # keep that file private while the toggle is off.
+  archived_pdf_fields:
+    - name: pdf_archive_file
+      label: "Archived PDF (file name in the private archive)"
+      widget: string
+      required: false
+      pattern: ['[.]pdf$', 'Must be a PDF file name (.pdf)']
+      hint: "Optional. Enter the PDF file name from the private media archive, for example \"example-article.pdf\". Leave blank when there is no archived copy. The site maintainer adds files to the private archive separately."
+    - name: pdf_public
+      label: "Publish this PDF on {{CMS_CURRENT_HOST}}"
+      widget: boolean
+      required: false
+      default: false
+      hint: "Leave OFF unless you have permission to republish this document — for example, you or your organization own the rights, it is in the public domain, or the publisher has given permission. While OFF, the PDF stays in the private archive: no download button appears and the file is not available on {{CMS_CURRENT_HOST}}."
+    - name: pdf_label
+      label: "PDF Button Label"
+      widget: string
+      required: false
+      hint: "Optional. Leave blank to use the default \"Download PDF\". Set this only to override that default. This button appears only when \"Publish this PDF on {{CMS_CURRENT_HOST}}\" is ON."

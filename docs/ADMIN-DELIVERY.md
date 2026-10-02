@@ -135,7 +135,9 @@ field (or fields) would go:
   the gem next to `config.base.yml`, packaged by the `admin/**/*` glob). It
   defines `body_markdown` (markdown body, modes rich_text+raw), `published_pair`
   (the published + publish_date pair — a **list** of 2 fields), `date_widget`,
-  `image_widget` (flat-public_folder contract). The datetime `format:` token
+  `image_widget` (flat-public_folder contract), and `archived_pdf_fields`
+  (private-archive file name + permission toggle + optional button label). The
+  datetime `format:` token
   (`"YYYY-MM-DD HH:mm:ss ZZ"`) is copied **verbatim** from `config.base.yml`
   (the dayjs/INVALID-DATE cross-engine contract) — keep them in lockstep.
 - **Resolved at RENDER time, in BOTH paths.** The shared resolver
@@ -168,6 +170,17 @@ field (or fields) would go:
   (a site overriding/reordering a base collection's fields) is deferred. Today
   the seam is still **append-only** (collections are spliced after the base);
   `$ref` only delivers shared-field REUSE, not base override.
+
+`archived_pdf_fields` is a list-valued ref, so a site opts in with one field
+list item and receives `pdf_archive_file`, `pdf_public`, then `pdf_label` in
+that order. The archive name stays optional and accepts only a `.pdf` suffix;
+the publishing toggle stays optional and defaults to `false`. Its reusable copy
+is deliberately site-neutral. The suffix pattern is written `[.]pdf$`,
+equivalent to `\.pdf$` without carrying a backslash through the resolved seam's
+replacement-string splice. `{{CMS_CURRENT_HOST}}` survives both render paths
+inside labels and hints, then `site-hostname.js` replaces it with the routed
+admin hostname only inside Decap's own `FieldLabel` and `ControlHint` nodes.
+Authored content is outside that narrow mutation surface.
 
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 

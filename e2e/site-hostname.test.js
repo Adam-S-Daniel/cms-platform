@@ -39,7 +39,7 @@ test("all admin shells load hostname identity before copy consumers", () => {
   }
 });
 
-test("runtime token replacement is limited to owned Decap hint nodes", () => {
+test("runtime token replacement is limited to owned Decap field labels and hint nodes", () => {
   function element(className, text) {
     let value = text;
     const textNode = { nodeType: 3, parentElement: null, writes: 0 };
@@ -55,6 +55,7 @@ test("runtime token replacement is limited to owned Decap hint nodes", () => {
       parentElement: null,
       matches(selector) {
         if (selector.includes("ControlHint")) return className.includes("ControlHint");
+        if (selector.includes("FieldLabel")) return className.includes("FieldLabel");
         if (selector.includes("ControlContainer")) return className.includes("ControlContainer");
         return false;
       },
@@ -84,11 +85,13 @@ test("runtime token replacement is limited to owned Decap hint nodes", () => {
     return el;
   }
   const hint = element("css-abc-ControlHint", "Show on {{CMS_CURRENT_HOST}}");
+  const label = element("css-abc-FieldLabel", "Publish on {{CMS_CURRENT_HOST}}");
   const authored = element("css-abc-ControlContainer", "");
   const authoredContent = element("css-abc-RichText", "Authored {{CMS_CURRENT_HOST}}");
   authored.appendChild(authoredContent);
   const body = element("body", "");
   body.appendChild(hint);
+  body.appendChild(label);
   body.appendChild(authored);
   const document = {
     readyState: "complete",
@@ -119,8 +122,10 @@ test("runtime token replacement is limited to owned Decap hint nodes", () => {
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(SRC, "utf8"), sandbox);
   expect(hint.textNode.nodeValue).toBe("Show on preview-pr0.example.com");
+  expect(label.textNode.nodeValue).toBe("Publish on preview-pr0.example.com");
   expect(authoredContent.textNode.nodeValue).toBe("Authored {{CMS_CURRENT_HOST}}");
   expect(hint.textNode.writes).toBe(1);
+  expect(label.textNode.writes).toBe(1);
 
   hint.textNode.nodeValue = "Again on {{CMS_CURRENT_HOST}}";
   const writesBeforeObserver = hint.textNode.writes;
@@ -136,4 +141,11 @@ test("runtime token replacement is limited to owned Decap hint nodes", () => {
   const addedWrites = addedHint.textNode.writes;
   observerCallback([{ type: "childList", target: addedHint, addedNodes: [addedHint.textNode] }]);
   expect(addedHint.textNode.writes).toBe(addedWrites);
+
+  const addedLabel = element("css-def-FieldLabel", "Added label on {{CMS_CURRENT_HOST}}");
+  observerCallback([{ type: "childList", target: addedLabel, addedNodes: [addedLabel.textNode] }]);
+  expect(addedLabel.textNode.nodeValue).toBe("Added label on preview-pr0.example.com");
+  const addedLabelWrites = addedLabel.textNode.writes;
+  observerCallback([{ type: "childList", target: addedLabel, addedNodes: [addedLabel.textNode] }]);
+  expect(addedLabel.textNode.writes).toBe(addedLabelWrites);
 });
