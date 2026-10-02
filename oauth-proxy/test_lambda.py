@@ -420,6 +420,58 @@ class TestCallbackClearsCookie(_Base):
         self.assertNotIn("cookies", resp)
 
 
+class TestGitHubAppTokenResponse(_Base):
+    """
+    A GitHub App's client id goes through the same web flow, but with token
+    expiry on, GitHub's answer also carries a refresh token and expiry fields
+    (docs: "Generating a user access token for a GitHub App"). Decap has no
+    refresh flow, so the browser gets the access token and nothing else.
+    """
+
+    # Low-entropy fixture values; real ones start ghu_ / ghr_.
+    ACCESS = "ghu_TEST-ACCESS-VALUE"  # nosec B105  # fixture value, not a secret
+    REFRESH = "ghr_TEST-REFRESH-VALUE"  # nosec B105  # fixture value, not a secret
+
+    def _app_response(self):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "access_token": self.ACCESS,
+                "expires_in": 28800,
+                "refresh_token": self.REFRESH,
+                "refresh_token_expires_in": 15897600,
+                "scope": "",
+                "token_type": "bearer",  # nosec B105  # OAuth token_type literal
+            }
+        ).encode("utf-8")
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        return mock_resp
+
+    def _callback(self):
+        return _event(
+            "/callback", {"code": "code", "state": GOOD_STATE}, cookies={STATE_COOKIE: GOOD_STATE}
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_page_carries_only_the_access_token(self, mock_urlopen):
+        mock_urlopen.return_value = self._app_response()
+        with self.assertLogs(level="INFO") as logs:
+            resp = handler_module.handler(self._callback(), None)
+        self.assertEqual(resp["statusCode"], 200)
+        body = resp["body"]
+        # The exact payload Decap receives: token and provider, nothing more.
+        self.assertIn(
+            "var payload  = "
+            + handler_module._js_literal({"token": self.ACCESS, "provider": "github"})
+            + ";",
+            body,
+        )
+        for leaked in (self.REFRESH, "refresh_token", "expires_in", "28800"):
+            self.assertNotIn(leaked, body)
+        self.assertNotIn(self.REFRESH, "\n".join(logs.output))
+
+
 class TestRequestCookies(unittest.TestCase):
     def test_payload_2_0_cookies_list(self):
         event = {"cookies": ["a=1", f"{STATE_COOKIE}={GOOD_STATE}"]}

@@ -495,6 +495,9 @@ def _exchange_code(params: dict, origin: str | None, cookies: dict[str, str]) ->
         logger.error("Token error from GitHub: %s", description)
         return _html_response(_error_page(description), status=400, origin=origin)
 
+    # Only `access_token` reaches the page. A GitHub App with expiring tokens
+    # also returns `refresh_token` (a six-month credential) and `expires_in`;
+    # Decap has no refresh flow, so both are dropped here, never sent on.
     access_token = token_data.get("access_token", "")
     if not access_token:
         logger.error("GitHub response contained no access_token: %s", list(token_data.keys()))
