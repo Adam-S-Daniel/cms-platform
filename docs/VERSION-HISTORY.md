@@ -10,9 +10,30 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.124)
+## Version history (v0.1.0 → v0.1.125)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.125 — the editor's token gets less to fear: security headers, an opt-in admin origin, a same-origin RUM client, and a probe that names the live proxy build.**
+Both CloudFront distributions in the bootstrap stack attach a response headers policy (HSTS,
+`nosniff`, `Referrer-Policy`, same-origin framing), and `/admin/*` adds a
+Content-Security-Policy that is sent Report-Only until a site sets `AdminCspMode=enforce`
+(#546). A site can serve the editor from its own host by setting `AdminDomainName` and
+`cms.admin_origin`: a separate distribution over the bucket's REST endpoint that serves only
+`/admin/`, answers a miss with a script-free page and sends every other GET back to the apex;
+it is off by default (#549). The CloudWatch RUM client is now the exact `aws-rum-web` 1.25.0
+bundle, shipped in the gem and loaded from the site's own origin, because the RUM CDN's CORS
+behavior rules out an integrity hash; the include's render test, which no lane ran, now runs
+through real Liquid in `ruby-theme-specs` (#551). The OAuth proxy's `/prod/health` reports its
+release and a digest of the deployed handler, a dictated daily `oauth-proxy-build` caller goes
+red when a site's live proxy is not the one its `platform.lock` pins, `platform-bump` seeds a
+missing delegating deploy wrapper, and `oauth-proxy/deploy.sh` refuses placeholder credentials
+and keeps the stack's own when none are given (#547). The proxy's default scope narrows from
+`user` to `read:user`, and `docs/ADMIN-AUTH-SECURITY.md` records the GitHub App sign-in
+evaluation with its spike checklist (#548). **After the bump alone, only the RUM client changes
+on a site.** The headers need a bootstrap-stack deploy, the scope and the build report need a
+proxy redeploy (the new probe is red until then), and the admin origin is opt-in; each runbook
+is in `docs/ADMIN-AUTH-SECURITY.md`.
 
 **v0.1.124 — the admin sign-in checks who it is talking to, and the Decap bundle carries an integrity hash.**
 The OAuth proxy's callback page used to answer the `authorizing:github` handshake from any
