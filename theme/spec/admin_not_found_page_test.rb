@@ -7,8 +7,10 @@
 # The page is served on the same origin as the editor's GitHub tokens, so it
 # must not be able to run anything or pull anything in. Rather than search the
 # text for things that look dangerous, the test PARSES the page (REXML, stdlib;
-# the page is written as well-formed polyglot HTML so an XML parse sees the
-# same tree a browser builds) and checks every node against an allowlist:
+# the page is written as well-formed polyglot HTML) and checks every node
+# against an allowlist. An XML parse is not an HTML parse: a comment opened
+# as `<!-->` or a doctype with an internal subset hides markup from XML that a
+# browser runs, so those node shapes are rejected too. Elements:
 # known inert elements only, a handful of attributes, and one same-origin link.
 # Anything not listed fails, so a new <script>, onload=, style=, <link>,
 # <meta http-equiv=refresh> or off-origin href cannot slip in under a name
@@ -77,8 +79,18 @@ class AdminNotFoundPageTest < Minitest::Test
         node.attributes.each_attribute do |attr|
           found << "<#{node.name} #{attr.expanded_name}>" unless allowed.include?(attr.expanded_name)
         end
-      when REXML::Text, REXML::Comment, REXML::DocType, REXML::XMLDecl
+      when REXML::Text
         next
+      when REXML::DocType
+        # A browser ends the doctype token at its first ">", so an internal
+        # subset (`<!DOCTYPE html [<!-- > <script>…</script> -->]>`) that XML
+        # reads as a comment is markup to HTML. Only the bare `html` doctype.
+        found << "DOCTYPE #{node}" unless node.name == "html" && node.external_id.nil? && node.children.empty?
+      when REXML::Comment
+        # `<!-->` and `<!--->` close an HTML comment on the spot, so a
+        # `<script>` XML sees inside the comment is live markup to a browser.
+        # (`--!>`, the other HTML-only ending, is already an XML parse error.)
+        found << "comment opening #{node.string[0, 2].inspect}" if node.string.start_with?(">", "->")
       else
         found << node.class.name # CDATA, processing instruction, entity declaration...
       end
@@ -115,6 +127,12 @@ class AdminNotFoundPageTest < Minitest::Test
       %(<html><head><meta http-equiv="refresh" content="0;url=https://example.com/" /></head></html>),
       %(<html><body><p style="background:url(https://example.com/x)">x</p></body></html>),
       %(<html><body><img src="https://example.com/x.png" /></body></html>),
+      # Well-formed XML whose only <script> is inside a comment or doctype as
+      # XML reads it, but live markup as a browser's HTML parser reads it.
+      %(<html><body><!--><script>x()</script>--></body></html>),
+      %(<html><body><!---><script>x()</script>--></body></html>),
+      %(<!DOCTYPE html [<!-- > <script>x()</script> -->]>\n<html><body></body></html>),
+      %(<?xml version="1.0"?>\n<html><body></body></html>),
     ].each do |html|
       offending = offenders(REXML::Document.new(html))
       refute_empty offending, "the allowlist failed to reject: #{html}"
