@@ -135,7 +135,7 @@ is therefore expensive. What was weighed:
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
 | Security headers | Deferred — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | CloudFront serves none. HSTS, `nosniff` and `frame-ancestors` are cheap; a CSP for `/admin` has to live with Decap's `new Function` and inline styles. Needs a bootstrap-stack deploy per site and a live publish loop to prove it. |
 | Narrower permissions | Deferred — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516) | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. |
-| A separate origin for the editor | Deferred — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517) | Public pages share the origin, and so do their scripts (the CloudWatch RUM client is loaded from a floating `1.x` path). Moving `/admin` to its own host takes the token out of their reach, and moves a URL most of the e2e harness depends on. |
+| A separate origin for the editor | Deferred — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517) | Public pages share the origin, and so do their scripts. The CloudWatch RUM client is no longer fetched from AWS: the gem ships the exact release and pages load it from the site's own origin (rule below). That takes the RUM CDN out of the page, not the token out of reach: the client, and anything an editor embeds, still runs beside `/admin`'s storage. Moving `/admin` to its own host does that ([PR #549](https://github.com/Adam-S-Daniel/cms-platform/pull/549)), and moves a URL most of the e2e harness depends on. |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
 
 ## Rules that follow
@@ -151,6 +151,31 @@ is therefore expensive. What was weighed:
   ```
 
   A wrong hash does not degrade: Decap does not load at all.
+- **Bumping the CloudWatch RUM client means re-vendoring it**, never pointing
+  `theme/_includes/analytics/cloudwatch-rum.html` back at AWS. The gem ships it
+  as `theme/assets/js/aws-rum-web/cwr-<version>.js`; the version is in the file
+  name because production caches assets for a day, and `provenance.json` beside
+  it records version, source URL and sha384, which
+  `e2e/analytics-rum-client-vendored.test.js` holds the bytes to:
+
+  ```bash
+  v=X.Y.Z; d=theme/assets/js/aws-rum-web
+  curl -sS -o "$d/cwr-$v.js" "https://client.rum.us-east-1.amazonaws.com/$v/cwr.js"
+  openssl dgst -sha384 -binary "$d/cwr-$v.js" | openssl base64 -A
+  npm pack "aws-rum-web@$v" && tar xzf "aws-rum-web-$v.tgz" -C "$d" --strip-components=1 \
+    package/LICENSE package/NOTICE package/LICENSE-THIRD-PARTY
+  ```
+
+  Then `git rm` the old `cwr-*.js` and move `provenance.json` and the include's
+  path to the new version. The npm package carries no browser bundle, so the
+  CDN is the only source of these bytes; cross-check them against
+  `/<major>.x/cwr.js` while `$v` is the newest release, and fetch from
+  `us-east-1`, the only region whose client host resolves. **Never cross a
+  major version without reading its changelog**: 2.x and 3.x change defaults,
+  and 3.x turns on session replay. Loading the CDN copy with `integrity` +
+  `crossorigin` instead does not work: the CDN does not vary its cache on
+  `Origin`, so `Access-Control-Allow-Origin` comes back only when the request
+  that filled a POP's cache sent one, and a real browser blocked the tag.
 - **A new script on `/admin` is same-origin, shipped in the gem**, or it carries
   an exact version and an integrity hash.
 - **A new `message` listener checks `origin` and `source` first**, and never
