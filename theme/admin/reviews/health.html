@@ -264,6 +264,10 @@
     const REPO_NAME = REPO_PARTS[1] || '';
     const API = 'https://api.github.com';
     const OAUTH_URL = (window.CMS_OAUTH_BASE_URL || '') + '/prod/auth';
+    // The login popup is served by the OAuth proxy, so a login message is only
+    // genuine if it comes from that origin AND from the popup window this page
+    // opened — never from any other window that can postMessage here.
+    const OAUTH_ORIGIN = new URL(OAUTH_URL, window.location.href).origin;
     // Same key the reviews dashboard uses — sign-in there carries over.
     const TOKEN_KEY = 'gh_reviews_token';
     const CACHE_PREFIX = 'gh_health_cache:';
@@ -356,6 +360,8 @@
       setTimeout(() => el.classList.remove('visible'), duration || 3000);
     }
 
+    let authHandler = null;
+
     document.getElementById('login-btn').addEventListener('click', () => {
       const w = 600, h = 700;
       const left = (screen.width - w) / 2;
@@ -367,12 +373,14 @@
       // reviews dashboard. The OAuth proxy popup won't release the
       // token until it sees the opener echo back its
       // "authorizing:<provider>" message.
-      window.addEventListener('message', function handler(e) {
+      if (authHandler) window.removeEventListener('message', authHandler);
+      authHandler = function handler(e) {
+        if (e.origin !== OAUTH_ORIGIN || e.source !== popup) return;
         const data = e.data;
         if (typeof data !== 'string') return;
 
         if (data === 'authorizing:github') {
-          if (popup && !popup.closed) popup.postMessage(data, e.origin);
+          if (popup && !popup.closed) popup.postMessage(data, OAUTH_ORIGIN);
           return;
         }
 
@@ -396,7 +404,8 @@
         setToken(token);
         if (popup && !popup.closed) popup.close();
         init();
-      });
+      };
+      window.addEventListener('message', authHandler);
     });
 
     document.getElementById('refresh-btn').addEventListener('click', () => {

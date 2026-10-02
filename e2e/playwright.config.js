@@ -412,6 +412,14 @@ const PLATFORM_META_SPECS = [
   // #16 — pure-Node unit tests for scripts/preflight-oauth.js (the org-owner
   // go-live OAuth-restriction preflight CLI). Reads the platform scripts/ tree.
   "preflight-oauth.test.js",
+  // Renders the OAuth proxy's callback page from oauth-proxy/lambda.py (python3)
+  // and runs its inline script in a node:vm sandbox to prove the token reaches
+  // only a configured opener origin. Reads the platform's oauth-proxy/ source,
+  // which a consumer vendors none of (scaffold-deploy-delegators.test.js), so it
+  // is platform-internal: testIgnored on a CONSUMER lane, run by self-CI's
+  // node-unit-lints. The registry's detector does not key off oauth-proxy/, so
+  // this entry is the ONLY thing keeping it off a consumer.
+  "oauth-proxy-callback-page.test.js",
   "preview-bot-comment.test.js",
   "preview-config-patch.spec.js",
   // cms-platform#324 — reads infrastructure/bootstrap/template.yaml (the

@@ -19,8 +19,9 @@
 #                                                      (hard-fail)
 #   4. claude plugin validate over this repo's plugin ROOT (hard-fail)
 #   5. cfn-lint over the CloudFormation templates      (advisory, soft-fail)
-#   6. python-unit-tests: scripts/cross_post's pytest suite (hard-fail, but
-#      NOT one of the four REQUIRED contexts — see the job for why)
+#   6. python-unit-tests: scripts/cross_post's and oauth-proxy's pytest suites
+#      (hard-fail, but NOT one of the four REQUIRED contexts — see the job for
+#      why)
 #
 # NOT RUN HERE (needs a browser / a built Jekyll site / AWS — covered by the
 # e2e reusable + dogfood/consumer CI, not by a unit-speed PR gate):
@@ -398,11 +399,13 @@ jobs:
           fi
           cfn-lint "${present[@]}"
 
-  # ── 6. python-unit-tests — scripts/cross_post's pytest suite ─────────────
-  # cross_post.py (cms-platform#442) is the one platform-owned script with a
-  # pytest suite instead of a node *.test.js lint, so it gets its own job
-  # rather than folding into node-unit-lints. Deliberately NOT one of the
-  # four required contexts (repo-settings.yml's `platform-main` ruleset names
+  # ── 6. python-unit-tests — the pytest suites (cross_post + oauth-proxy) ──
+  # cross_post.py (cms-platform#442) and the OAuth proxy's lambda.py are the
+  # platform-owned Python with pytest suites instead of a node *.test.js lint,
+  # so they get their own job rather than folding into node-unit-lints.
+  # oauth-proxy/test_lambda.py used to run nowhere in CI, though it guards the
+  # login popup's token handoff. Deliberately NOT one of the four required
+  # contexts (repo-settings.yml's `platform-main` ruleset names
   # actionlint / ruby-theme-specs / node-unit-lints / plugin-validate only) —
   # adding a fifth required context is a repo-settings decision, not
   # something this job should make unilaterally by existing. No
@@ -428,5 +431,5 @@ jobs:
       - name: Install test dependencies
         run: python3 -m pip install --user 'pytest==9.1.1' 'pyyaml==6.0.3' 'markdown-it-py==4.2.0' 'mdurl==0.1.2'
 
-      - name: Run cross_post tests
-        run: python3 -m pytest scripts/cross_post -q
+      - name: Run cross_post and oauth-proxy tests
+        run: python3 -m pytest scripts/cross_post oauth-proxy -q
