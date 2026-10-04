@@ -157,12 +157,13 @@ permission.
 
 A **GitHub App** whose installation token does `CMS_PLATFORM_PAT`'s job. Since
 cms-platform#238 the two reusables that hold that credential — `platform-bump`
-and `dev-hooks-sync` — resolve their push-back credential **App → PAT →
-`GITHUB_TOKEN`**: when both knobs below are set on the consumer, the reusable
-mints a ~1 h installation token per run (`scripts/mint-app-token.js`, pure node
-+ stdlib `crypto`, fetched from the platform at the release the bump targets)
-and `CMS_PLATFORM_PAT` is never read. When they are not, the PAT carries the
-job exactly as before, after one `::notice::` naming both knobs.
+and `dev-hooks-sync` — take their push-back credential from the App: when both
+knobs below are set on the consumer, the reusable mints a ~1 h installation
+token per run (`scripts/mint-app-token.js`, pure node + stdlib `crypto`,
+fetched from the platform at the release the bump targets). There is no PAT
+fallback since v0.1.103: without the App, `platform-bump` fails with an
+`::error::` naming both knobs, and `dev-hooks-sync` warns and opens its PR as
+`GITHUB_TOKEN`, which fires no CI.
 
 Why an App and not another PAT: a fine-grained PAT cannot span owners, so the
 PAT was one token per consumer, and each expired on its own calendar — taking

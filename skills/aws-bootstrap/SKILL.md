@@ -129,7 +129,7 @@ aws cloudformation list-change-sets --stack-name "${STACK_NAME}" \
 CloudFormation rolled back and deleted the ACM cert. The cert has `DeletionPolicy: Retain` to prevent this. If it happens:
 1. Check `aws acm list-certificates --region us-east-1` for the cert status
 2. Re-run the deploy — the cert will be re-created and DNS-validated via Route53
-3. CloudFront creation waits on its `DependsOn` certificate
+3. CloudFront creation waits on the certificate its `!Ref` names (an implicit dependency; the template carries no explicit one)
 
 ### `NoSuchOriginRequestPolicy`
 The `CORS-S3Origin` managed origin request policy doesn't exist in all accounts. It is not used — S3 website custom origins don't need it.
