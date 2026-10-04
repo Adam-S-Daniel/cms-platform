@@ -4,8 +4,22 @@
 code, workflow, ruleset or consumer change was made. This page is the record to
 resume from: what was measured, the design the review arrived at, the
 constraints a revival has to respect, and the defects found along the way that
-are still live. Everything below was verified against cms-platform v0.1.122 on
-2026-10-01; `main` at v0.1.123 does not touch any file named here.
+are still live.
+
+**Verification boundary.** The measurements, design and constraints below were
+taken against cms-platform v0.1.122 on 2026-10-01. They are a historical record
+of that tree, not a description of whatever `main` holds when you read this.
+Later releases did touch files named here: v0.1.123
+([#512](https://github.com/Adam-S-Daniel/cms-platform/pull/512)) re-pinned every
+caller under `examples/site/.github/workflows/`, and v0.1.125
+([#547](https://github.com/Adam-S-Daniel/cms-platform/pull/547)) taught
+`platform-bump.yml` to seed missing delegating deploy wrappers. On 2026-10-03,
+against `main` at v0.1.125 (`0c3b80c`), constraint 1 (`structuralShape()` still
+excludes `on:`, and the bump still never edits an existing caller's `on:`
+block), constraint 3 (`site_live: false`) and every row of the defect table were
+re-checked by reading the source, and still hold; nothing was built or run. The
+baseline timings and the other constraints were not re-measured; re-check them
+before relying on them.
 
 Reviving this **reverses a recorded decision**:
 [Rejected: skipping tests per diff](E2E-PARALLELISM.md#rejected-skipping-tests-per-diff).
@@ -19,7 +33,7 @@ working images and embeds, no unintended horizontal scroll) instead of the full
 E2E matrix. Templates, styles, scripts and publishing/test machinery keep the
 full matrix. The aim is wall clock from PR creation to the post being live.
 
-## Measured baseline
+## Measured baseline (2026-10-01, historical)
 
 One real 3-line post,
 [adamdaniel.ai PR 3941](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/3941):
@@ -142,15 +156,19 @@ Proven on PR 3941: diffing the two `_site` trees gave exactly the new post,
 
 ## Defects found that outlive the shelving
 
-None was fixed. Each stands on its own, with or without the lane.
+None was fixed as of 2026-10-03. Each stands on its own, with or without the
+lane, and each has its own tracker in the owning repository, where its fix and
+evidence belong
+([cms-platform#529](https://github.com/Adam-S-Daniel/cms-platform/issues/529)
+groups them).
 
-| Defect | Where | Effect |
-|---|---|---|
-| Quoted paths reach the salience check | `visual-regression.yml` `detect`, `e2e/detect-changed-pages.js` | A salient file with a non-ASCII name reads as non-salient. Harmless so far only because the affected names were under `_posts/`. |
-| Site verifier is mostly unarmed | jodidaniel.com `scripts/verify-build-artifacts.rb` | With the gate closed, most assertion groups print "did NOT run"; they run only on a tree with `site_live: true`. |
-| Site verify is a no-op | adamdaniel.ai `site-verify` | The site has no verifier script, so the required check succeeds in about 7 s without building. |
-| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolls the whole page on a phone, and an author cannot fix it from the CMS. |
-| Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. |
+| Defect | Where | Effect | Tracker |
+|---|---|---|---|
+| Quoted paths reach the salience check | `visual-regression.yml` `detect`, `e2e/detect-changed-pages.js` | A salient file with a non-ASCII name reads as non-salient. Harmless so far only because the affected names were under `_posts/`. | [cms-platform#539](https://github.com/Adam-S-Daniel/cms-platform/issues/539) |
+| Site verifier is mostly unarmed | jodidaniel.com `scripts/verify-build-artifacts.rb` | With the gate closed, most assertion groups print "did NOT run"; they run only on a tree with `site_live: true`. | [jodidaniel.com#306](https://github.com/jodidaniel/jodidaniel.com/issues/306) |
+| Site verify is a no-op | adamdaniel.ai `site-verify` | The site has no verifier script, so the required check succeeds in about 7 s without building. | [adamdaniel.ai#3970](https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3970) |
+| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolls the whole page on a phone, and an author cannot fix it from the CMS. | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
+| Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
 
 Also noted: neither consumer has a `tests/` directory, though jodidaniel.com's
 deploy callers already list `tests/**`.

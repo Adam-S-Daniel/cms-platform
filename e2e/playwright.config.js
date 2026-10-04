@@ -158,6 +158,10 @@ const PLATFORM_META_SPECS = [
   // list for the same cms-platform#244 reason as the three consumer specs named
   // above. Do not "tidy" it on.
   "action-pin-comment-lint.test.js",
+  // cms-platform#538 — the byte budget for THIS repo's AGENTS.md. On a
+  // consumer lane `..` is the site root, so it would measure the consumer's
+  // own AGENTS.md against a budget chosen for this one.
+  "agents-md-size.test.js",
   "auto-merge-uses-queue.test.js",
   // The 2026-09-08 `catalog:` incident guard — asserts both platform-pin
   // reusables install the `yaml` parser with `--prefix .cms-platform` rather
