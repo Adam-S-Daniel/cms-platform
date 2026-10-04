@@ -120,14 +120,27 @@ test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
     // Resolves the release tag -> commit sha (deref annotated) for the revision.
     expect(run, "must resolve the release tag's commit sha").toMatch(/git\/refs\/tags/);
     expect(run, "must dereference annotated tags").toMatch(/object\.type/);
-    // Reads the OLD revision and rewrites it -> the new one.
-    expect(run, "must read + rewrite the Gemfile.lock git revision").toMatch(/revision:/);
-    expect(run, "must operate on Gemfile.lock").toMatch(/Gemfile\.lock/);
-    // Touches the .github/workflows tree (the uses:@ / platform_ref: pins).
-    expect(run, "must rewrite the .github/workflows pins").toMatch(/\.github\/workflows/);
-    // Moves the version string AND the commit sha.
-    expect(run, "must substitute the new version string").toMatch(/LATEST/);
-    expect(run, "must substitute the new commit sha").toMatch(/NEW_SHA/);
+    // The pins (and the Gemfile.lock revision, via --new-sha) are moved by
+    // scripts/rewrite-platform-pins.js, fetched at the release being bumped to
+    // and handed the old ref, the new ref and the new commit (#530).
+    const script = stripBashComments(run);
+    expect(script).toMatch(/contents\/scripts\/rewrite-platform-pins\.js\?ref=\$LATEST/);
+    expect(script).toMatch(
+      /node "\$PIN_TOOLS\/scripts\/rewrite-platform-pins\.js" \\\n\s*--root \. --slug "\$PLATFORM" --from "\$CUR" --to "\$LATEST" --new-sha "\$NEW_SHA"/,
+    );
+    // A rewrite that fails must fail the step, never leave a half-moved tree
+    // to be committed.
+    expect(script).toMatch(/if ! node "\$PIN_TOOLS\/scripts\/rewrite-platform-pins\.js"[\s\S]{0,300}exit 1/);
+  });
+
+  test("no text-wide version replace survives (#530)", () => {
+    // `s/\Q$ENV{CUR}\E/$ENV{LATEST}/g` over whole files re-dated every comment
+    // naming the current version (jodidaniel/jodidaniel.com#303). Only the
+    // seeding stamp below may still edit a file as text, and it is anchored
+    // to the platform slug and a line-leading `platform_ref:`.
+    const script = stripBashComments(runStep.run);
+    expect(script).not.toMatch(/\\Q\$ENV\{CUR\}\\E/);
+    expect(script).not.toMatch(/\\Q\$ENV\{OLD_SHA\}\\E/);
   });
 
   test("opens the bump PR", () => {
