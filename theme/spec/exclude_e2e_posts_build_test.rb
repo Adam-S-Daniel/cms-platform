@@ -8,6 +8,8 @@ require 'minitest/autorun'
 require 'fileutils'
 require 'tmpdir'
 require 'yaml'
+require 'rexml/document'
+require 'rexml/parsers/pullparser'
 require 'jekyll'
 require 'jekyll-sitemap'
 require_relative '../lib/cms-platform-theme/exclude_e2e_posts'
@@ -27,6 +29,8 @@ Liquid::Template.register_tag('seo', FixtureBuildSeoStandIn)
 
 class ExcludeE2EPostsBuildTest < Minitest::Test
   ROOT = File.expand_path('../..', __dir__)
+  # Editor markers already set sitemap: false. The flag-only tests below,
+  # rather than these editor cases, catch removal of the hook's sitemap stamp.
   EDITOR_MARKERS = { 'robots' => 'noindex,nofollow', 'sitemap' => false, 'test_fixture' => true }.freeze
   EDITOR_SLUGS = {
     'editor-stamped-fixture' => 'e2e-editor-stamped',
@@ -72,6 +76,8 @@ class ExcludeE2EPostsBuildTest < Minitest::Test
       FileUtils.mkdir_p(File.dirname(destination))
       FileUtils.cp(File.join(ROOT, 'theme', '_includes', include), destination)
     end
+    # Use the fixture site's custom Atom template, mirroring the production
+    # /feed.xml replacement for jekyll-feed.
     FileUtils.cp(File.join(ROOT, 'e2e', 'fixture-site', 'feed.xml'), File.join(source, 'feed.xml'))
 
     POSTS.each do |filename, data|
@@ -142,6 +148,65 @@ class ExcludeE2EPostsBuildTest < Minitest::Test
     PUBLIC_SLUGS.each { |slug| assert_includes content, "/blog/#{slug}/" }
   end
 
+  def absolute_post_url(slug, property = :url)
+    "#{@site.config.fetch('url')}#{post(slug).public_send(property)}"
+  end
+
+  def assert_public_feed_entries_only(path = 'feed.xml')
+    feed = REXML::Document.new(output(path))
+    namespaces = { 'atom' => 'http://www.w3.org/2005/Atom' }
+    links = REXML::XPath.match(feed, '/atom:feed/atom:entry/atom:link', namespaces)
+    ids = REXML::XPath.match(feed, '/atom:feed/atom:entry/atom:id', namespaces)
+    assert_equal PUBLIC_SLUGS.map { |slug| absolute_post_url(slug) }.sort,
+                 links.map { |element| element.attributes['href'] }.sort
+    # Atom IDs use post.id, which can differ from the final permalink/slug.
+    assert_equal PUBLIC_SLUGS.map { |slug| absolute_post_url(slug, :id) }.sort,
+                 ids.map(&:text).sort
+  end
+
+  def assert_public_sitemap_posts_only(fixture_slugs: FIXTURE_SLUGS)
+    sitemap = REXML::Document.new(output('sitemap.xml'))
+    namespaces = { 'sitemap' => 'http://www.sitemaps.org/schemas/sitemap/0.9' }
+    urls = REXML::XPath.match(sitemap, '/sitemap:urlset/sitemap:url/sitemap:loc', namespaces).map(&:text)
+    fixture_slugs.each { |slug| refute_includes urls, absolute_post_url(slug) }
+    PUBLIC_SLUGS.each { |slug| assert_includes urls, absolute_post_url(slug) }
+  end
+
+  def robots_meta_elements(html)
+    # Normalize lexical HTML void-tag tokens for the XML parser, preserving
+    # comments verbatim. Structure and head selection come from REXML events.
+    xml = html.gsub(/<!--.*?-->|<(?:"[^"]*"|'[^']*'|[^'">])*>/m) do |token|
+      if token.match?(/\A<(?:meta|link)\b/i) && !token.end_with?('/>')
+        token.sub(/>\z/, '/>')
+      else
+        token
+      end
+    end
+    parser = REXML::Parsers::PullParser.new(xml)
+    stack = []
+    robots = []
+    while parser.has_next?
+      event = parser.pull
+      if event.start_element?
+        stack << event[0]
+        if stack.first(2) == %w[html head] && event[0] == 'meta' && event[1]['name'] == 'robots'
+          robots << event[1]
+        end
+      elsif event.end_element?
+        # Stop at the real head so body-only HTML entities/void tags need no
+        # XML normalization. A commented-out head or meta produces no events.
+        return robots if stack == %w[html head] && event[0] == 'head'
+
+        stack.pop
+      end
+    end
+    flunk 'Built post must have an html/head element'
+  end
+
+  def assert_normal_post_has_no_robots_meta
+    assert_empty robots_meta_elements(output('blog/normal-post/index.html'))
+  end
+
   def test_front_matter_flag_stamps_exclusion_after_the_real_read
     fixture = post('ordinary-fixture')
     assert_equal true, fixture.data['test_fixture']
@@ -176,7 +241,8 @@ class ExcludeE2EPostsBuildTest < Minitest::Test
   end
 
   def test_feed_and_sitemap_filter_fixtures_and_keep_normal_posts
-    %w[feed.xml sitemap.xml].each { |path| assert_public_posts_only(output(path)) }
+    assert_public_feed_entries_only
+    assert_public_sitemap_posts_only
   end
 
   def assert_editor_markers(data)
@@ -185,7 +251,9 @@ class ExcludeE2EPostsBuildTest < Minitest::Test
 
   def assert_editor_post_output(slug, title:, body:)
     html = output("blog/#{slug}/index.html")
-    assert_includes html, '<meta name="robots" content="noindex,nofollow">'
+    robots = robots_meta_elements(html)
+    assert_equal 1, robots.length, "#{slug} must have exactly one robots meta element in its head"
+    assert_equal 'noindex,nofollow', robots.fetch(0).fetch('content')
     assert_includes html, "<h1>#{title}</h1>"
     assert_includes html, "<p>#{body}</p>"
   end
@@ -195,8 +263,9 @@ class ExcludeE2EPostsBuildTest < Minitest::Test
       assert_editor_markers(post(slug).data)
       assert_editor_post_output(slug, title: filename, body: "Post body for #{filename}.")
     end
-    refute_includes output('blog/normal-post/index.html'), '<meta name="robots" content="noindex,nofollow">'
-    %w[feed.xml sitemap.xml].each { |path| assert_public_posts_only(output(path), fixture_slugs: EDITOR_SLUGS.values) }
+    assert_normal_post_has_no_robots_meta
+    assert_public_feed_entries_only
+    assert_public_sitemap_posts_only(fixture_slugs: EDITOR_SLUGS.values)
   end
 
   def test_editor_markers_survive_a_resave_and_a_fresh_build
@@ -221,8 +290,9 @@ class ExcludeE2EPostsBuildTest < Minitest::Test
       refute_includes output("blog/#{slug}/index.html"), "Post body for #{filename}."
     end
     assert_includes output('blog/normal-post/index.html'), '<p>Post body for normal-post.</p>'
-    refute_includes output('blog/normal-post/index.html'), '<meta name="robots" content="noindex,nofollow">'
-    %w[feed.xml sitemap.xml].each { |path| assert_public_posts_only(output(path), fixture_slugs: EDITOR_SLUGS.values) }
+    assert_normal_post_has_no_robots_meta
+    assert_public_feed_entries_only
+    assert_public_sitemap_posts_only(fixture_slugs: EDITOR_SLUGS.values)
   end
 
   def test_site_posts_and_collection_listings_filter_fixtures
@@ -230,7 +300,8 @@ class ExcludeE2EPostsBuildTest < Minitest::Test
   end
 
   def test_shared_tag_archive_and_feed_filter_fixtures
-    %w[tags/shared/index.html tags/shared/feed.xml].each { |path| assert_public_posts_only(output(path)) }
+    assert_public_posts_only(output('tags/shared/index.html'))
+    assert_public_feed_entries_only('tags/shared/feed.xml')
   end
 
   def test_fixture_only_tags_generate_no_archives_feeds_or_cloud_entries
