@@ -178,21 +178,29 @@ if [[ -n "$CHANGESET_ARN" ]]; then
     --output json)" \
     || error "Could not read change set ${CHANGESET_ARN}, so nothing was executed."
 
-  # Print one line per resource action; exit 3 if any is destructive.
+  # Print one line per resource action; exit 3 if any is destructive, 4 if
+  # the response cannot be trusted to list every change. Fails closed: only an
+  # Add, Modify or Import that replaces nothing counts as safe, so an unknown
+  # or missing action (a Remove the guard cannot see, a nested stack's
+  # Dynamic) is refused too.
   info "Change set for ${STACK_NAME}:"
   GUARD_STATUS=0
   python3 -c "
 import json, sys
-changes = json.load(sys.stdin).get('Changes') or []
+data = json.load(sys.stdin)
+changes = data.get('Changes') if isinstance(data, dict) else None
+# No Changes list, or a NextToken (a page the CLI did not fetch): unreadable.
+if not isinstance(changes, list) or data.get('NextToken'):
+    sys.exit(4)
 destructive = False
 for change in changes:
-    rc = change.get('ResourceChange') or {}
-    action = rc.get('Action', '?')
-    replacement = rc.get('Replacement', '')
+    rc = (change.get('ResourceChange') if isinstance(change, dict) else None) or {}
+    action = str(rc.get('Action', '?'))
+    replacement = str(rc.get('Replacement', ''))
     line = '  %-8s %s (%s)' % (action, rc.get('LogicalResourceId', '?'), rc.get('ResourceType', '?'))
     if replacement:
         line += ' replacement=' + replacement
-    if action == 'Remove' or replacement in ('True', 'Conditional'):
+    if action not in ('Add', 'Modify', 'Import') or replacement not in ('', 'False'):
         destructive = True
         line += '  <- DESTRUCTIVE'
     print(line)

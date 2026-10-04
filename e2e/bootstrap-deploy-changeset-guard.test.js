@@ -24,6 +24,9 @@
 //   - ALLOW_DESTRUCTIVE_CHANGES=1 lets a destructive change set through; any
 //     other value does not;
 //   - an empty change set exits 0 without describing or executing anything;
+//   - fail closed: a Dynamic, unknown or missing action is refused like a
+//     Remove, and a response with no Changes list or with a NextToken (a page
+//     left unread) is refused outright, whatever ALLOW_DESTRUCTIVE_CHANGES says;
 //   - output with neither a change set ARN nor "No changes": refused;
 //   - an over-size or unparseable template is refused before ANY aws call;
 //   - the deploy call sends the minified template inline (no S3), with
@@ -178,12 +181,14 @@ const change = (Action, LogicalResourceId, ResourceType, Replacement) => ({
   ResourceChange: { Action, LogicalResourceId, ResourceType, ...(Replacement ? { Replacement } : {}) },
 });
 
-function runDeploy({ changes = [], deployScript = DEPLOY, ...extra } = {}) {
+function runDeploy({ changes = [], changeset, deployScript = DEPLOY, ...extra } = {}) {
   const env = sealedEnv(extra);
   for (const f of [env.STUB_LOG, env.STUB_TEMPLATE_COPY]) fs.rmSync(f, { force: true });
   fs.writeFileSync(
     env.STUB_CHANGESET_JSON,
-    JSON.stringify({ ChangeSetId: CHANGESET_ARN, StackName: STACK, Status: "CREATE_COMPLETE", Changes: changes }),
+    JSON.stringify(
+      changeset ?? { ChangeSetId: CHANGESET_ARN, StackName: STACK, Status: "CREATE_COMPLETE", Changes: changes },
+    ),
   );
   const r = spawnSync(bash, [deployScript], { env, encoding: "utf8" });
   return { status: r.status, out: `${r.stdout}${r.stderr}`, stderr: r.stderr, calls: readCalls(env.STUB_LOG) };
@@ -256,6 +261,35 @@ for (const [name, destructive] of [
     expect(r.stderr).toContain("Refusing to execute");
     expect(r.stderr).toContain("ALLOW_DESTRUCTIVE_CHANGES=1");
     expect(callsOf(r.calls, "describe-change-set")).toHaveLength(1);
+    expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+    expect(callsOf(r.calls, "wait")).toEqual([]);
+  });
+}
+
+// Fail closed: anything not positively known to be safe is refused.
+for (const [name, unknown] of [
+  ["a Dynamic action (a nested stack's unknown)", change("Dynamic", "NestedThing", "AWS::CloudFormation::Stack")],
+  ["an action the guard does not know", change("Teleport", "ProductionDistribution", "AWS::CloudFront::Distribution")],
+  ["a change with no ResourceChange", { Type: "Resource" }],
+]) {
+  test(`${name}: refused as destructive, execute-change-set never called`, () => {
+    const r = runDeploy({ changes: [...SAFE_CHANGES, unknown] });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.out).toContain("DESTRUCTIVE");
+    expect(r.stderr).toContain("Refusing to execute");
+    expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+  });
+}
+
+for (const [name, changeset] of [
+  ["no Changes list", { ChangeSetId: CHANGESET_ARN, Status: "CREATE_COMPLETE" }],
+  ["a NextToken (a page left unread)", { ChangeSetId: CHANGESET_ARN, Changes: SAFE_CHANGES, NextToken: "page-2" }],
+  ["a JSON array", []],
+]) {
+  test(`a describe-change-set response with ${name}: unreadable, refused even with ALLOW_DESTRUCTIVE_CHANGES=1`, () => {
+    const r = runDeploy({ changeset, ALLOW_DESTRUCTIVE_CHANGES: "1" });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.stderr).toContain(`Could not read change set ${CHANGESET_ARN}`);
     expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
     expect(callsOf(r.calls, "wait")).toEqual([]);
   });

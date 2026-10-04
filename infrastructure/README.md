@@ -73,6 +73,9 @@ bash infrastructure/rum/deploy.sh            # optional analytics
 
   and refuses to execute when any resource would be removed or replaced
   (`Replacement` `True` or `Conditional`), leaving the change set for review.
+  It fails closed: an action it does not recognize as a safe `Add`, `Modify` or
+  `Import` counts as destructive, and a change set it cannot read in full is
+  refused even with `ALLOW_DESTRUCTIVE_CHANGES=1`.
   Re-run with `ALLOW_DESTRUCTIVE_CHANGES=1` only when that is the intent.
   Otherwise it executes the change set and waits for the stack. An empty change
   set is a success. Every parameter is passed from the environment on every
@@ -103,6 +106,7 @@ platform script directly instead, from a checkout at `platform.lock`'s
 `platform_ref`:
 
 ```bash
+rm -rf .cms-platform   # the wrapper's own checkout dir; gitignored
 git clone --quiet --depth 1 --branch <platform_ref> \
   https://github.com/Adam-S-Daniel/cms-platform.git .cms-platform
 set -a; source infrastructure/site-params.env; set +a
