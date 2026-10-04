@@ -175,8 +175,8 @@ collection.
 `consumer-main`, and `visual-regression.yml` routes it through the manual
 `regression-review` GitHub Environment whenever the PR has any visually
 different page. Production lags `main`, so this fires on changes a visitor
-would never notice (see AGENTS.md, "Approving `regression-review` on a
-render-neutral PR").
+would never notice (see `docs/OPERATIONS.md`, "Approving `regression-review`
+on a render-neutral PR").
 
 For an editor, that is: pressed Publish, nothing happened, no error, forever.
 The only remedy lives in the GitHub Actions UI or `/admin/reviews/`, and
@@ -698,11 +698,13 @@ Three decisions in it, each with a shorter wrong alternative:
   an editor who follows a preview link sees which branch they are about to
   edit before they authenticate into it.
 
-The gate banner's copy was re-read for the same reason and now names the
-public site by its apex ("`<apex>` is in coming-soon mode — its visitors see
-the coming-soon page, not what has been published…"), which is true from
-either host; the flag is read at the repository's default branch on purpose,
-because that is what the public site is built from. When both banners
+The gate banner's copy was re-read for the same reason ("`<host>` is in
+coming-soon mode — its visitors see the coming-soon page, not what has been
+published…"). Since #528 the flag is read at the branch the admin is bound to
+(the served `backend.branch`, as `?ref=`), because each surface is built from
+its own branch and a preview can carry the opposite value; `<host>` is the
+canonical host on the production branch and the preview host otherwise, and
+the cached value is scoped to the branch. When both banners
 render, the branch banner is always first and the gate second, whichever
 async read resolves first (the gate banner anchors below the branch
 banner's id).

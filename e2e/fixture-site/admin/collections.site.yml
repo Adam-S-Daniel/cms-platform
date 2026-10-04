@@ -1,0 +1,18 @@
+# The fixture's own site-owned seam (issue #527). It opts ONE folder collection
+# into the platform's shared private-archive PDF fields, so the archived-PDF
+# browser test in e2e/cms-editorial-workflow.spec.js RUNS against this fixture
+# instead of skipping. Keep the `$ref`: e2e/site-capabilities.test.js fails if
+# this fixture stops opting in. fixture-site-singlepage keeps the non-PDF shape.
+#
+# Indentation must match the base collections list (2 spaces for `- name:`).
+  - name: articles
+    label: Articles
+    label_singular: Article
+    folder: _articles
+    create: true
+    delete: true
+    slug: "{{slug}}"
+    fields:
+      - { name: title, label: Title, widget: string, required: true }
+      - $ref: "#/field_library/archived_pdf_fields"
+      - { name: body, label: Body, widget: markdown, required: false }
