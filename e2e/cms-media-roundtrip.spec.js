@@ -102,6 +102,7 @@ const { loudBail } = require("./fixture-baseline");
 const {
   setPublished,
   saveEntry,
+  markEphemeralTestPost,
   publishViaUi,
   clickEditorDelete,
   confirmEditorDelete,
@@ -304,6 +305,14 @@ test(
           timeout: 30_000,
         })
         .toBe(true);
+    });
+
+    await test.step("Mark it a disposable test post (robots noindex, sitemap:false, test_fixture)", async () => {
+      // The posts form has no robots/sitemap widget and test_fixture is a
+      // hidden false, so without this the born-published post would serve
+      // with no noindex tag (#531). Stamped by a Decap preSave listener on
+      // this run's unique title — see markEphemeralTestPost.
+      await markEphemeralTestPost(page, { title });
     });
 
     await test.step("Toggle Published → ON (born live)", async () => {

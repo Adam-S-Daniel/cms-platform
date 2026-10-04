@@ -34,8 +34,10 @@
  * hidden widget can't be toggled through the editor UI. So a post created
  * by the genuinely-UI-driven create leg lands on `main` with
  * `test_fixture: false` and NO `sitemap`/`robots` keys (verified against
- * the real `Create Post` commits). `test_fixture: true` alone is therefore
- * NOT a reliable signal for the ephemeral posts.
+ * the real `Create Post` commits). Since #531 the create leg stamps all three
+ * through a Decap preSave listener (cms-editor-ui.js `markEphemeralTestPost`),
+ * but an orphan from an older run can still carry the unmarked shape, so
+ * `test_fixture: true` alone is still NOT a reliable signal for these posts.
  *
  * What IS reliable is the post's STRUCTURAL identity: the slug the spec
  * types into the URL Slug field (`e2e-prod-mutate-<runId>` /

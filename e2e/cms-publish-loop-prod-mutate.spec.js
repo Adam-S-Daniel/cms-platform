@@ -117,6 +117,7 @@ const { waitForChangeReflected } = require("./deploy-pill");
 const {
   setPublished,
   saveEntry,
+  markEphemeralTestPost,
   publishViaUi,
   clickEditorDelete,
   confirmEditorDelete,
@@ -275,6 +276,14 @@ test(
       const bodyEditor = page.locator('[role="textbox"][contenteditable="true"]').last();
       await bodyEditor.click();
       await bodyEditor.pressSequentially(body.trim());
+    });
+
+    await test.step("Mark it a disposable test post (robots noindex, sitemap:false, test_fixture)", async () => {
+      // The posts form has no robots/sitemap widget and test_fixture is a
+      // hidden false, so without this the born-published post would serve
+      // with no noindex tag (#531). Stamped by a Decap preSave listener on
+      // this run's unique title — see markEphemeralTestPost.
+      await markEphemeralTestPost(page, { title });
     });
 
     await test.step("Toggle Published → ON (born live)", async () => {

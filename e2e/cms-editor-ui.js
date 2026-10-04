@@ -17,6 +17,7 @@
  * ./base so messages match the rest of the suite.
  */
 const { expect } = require("./base");
+const { TEST_POST_MARKERS } = require("./prod-mutate-fixture");
 
 // Decap's boolean Published widget is a SWITCH (role="switch"), NOT a
 // checkbox; its state is exposed via aria-checked, not :checked. The
@@ -767,8 +768,60 @@ function collectionNewLink(page, collectionLabel) {
     .first();
 }
 
+// ── Disposable test posts carry noindex / sitemap:false / test_fixture (#531)
+//
+// The `posts` collection has no widget for `robots` or `sitemap`, and its
+// `test_fixture` is a hidden widget defaulting to false, so a post created by
+// typing into "+ New Post" lands on production WITHOUT a robots noindex tag —
+// born published and briefly served. markEphemeralTestPost registers a Decap
+// `preSave` listener in the page that stamps TEST_POST_MARKERS
+// (e2e/prod-mutate-fixture.js) onto the ONE posts entry whose title is the
+// run's unique title. It goes through Decap's own save path via the public
+// `CMS.registerEventListener` API (admin/slug-pin.js uses the same event);
+// Decap's event loop chains every handler's returned data, and an `undefined`
+// return means "no change", so other entries and other listeners are untouched.
+// Decap serializes every key in an entry's data, so the markers then survive a
+// later edit of the saved file even without this listener.
+//
+// Call it after the admin has loaded (window.CMS exists) and BEFORE the first
+// Save of the new entry; e2e/prod-test-post-markers.test.js lint-locks that for
+// every real-lane spec that opens a posts new-entry form. A navigation that
+// reloads the document drops the listener, so call it again after one.
+//
+// installTestPostMarkers runs IN THE PAGE: Playwright serializes it, so it must
+// reference nothing outside its own body and argument.
+function installTestPostMarkers({ title, markers }) {
+  const CMS = window.CMS;
+  if (!CMS || typeof CMS.registerEventListener !== "function") {
+    throw new Error("markEphemeralTestPost: window.CMS.registerEventListener is unavailable");
+  }
+  CMS.registerEventListener({
+    name: "preSave",
+    handler: ({ entry }) => {
+      if (!entry || entry.get("collection") !== "posts") return undefined;
+      const data = entry.get("data");
+      if (!data || data.get("title") !== title) return undefined;
+      let next = data;
+      for (const key of Object.keys(markers)) next = next.set(key, markers[key]);
+      return next;
+    },
+  });
+  return true;
+}
+
+async function markEphemeralTestPost(page, { title }) {
+  if (!title) throw new Error("markEphemeralTestPost requires the post's unique title.");
+  const installed = await page.evaluate(installTestPostMarkers, {
+    title,
+    markers: { ...TEST_POST_MARKERS },
+  });
+  expect(installed, "the test-post marker preSave listener should register").toBe(true);
+}
+
 module.exports = {
   collectionNewLink,
+  installTestPostMarkers,
+  markEphemeralTestPost,
   publishedSwitch,
   setPublished,
   expectPublished,

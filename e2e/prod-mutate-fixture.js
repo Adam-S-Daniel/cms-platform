@@ -35,23 +35,24 @@
  *     from the Posts list by default (issue #1042), exactly like the old
  *     committed canaries.
  *
- * IMPORTANT — what the LIVE post actually carries vs this text. The
- * `composePost` front matter above is the canonical/intended shape, and
- * it's what the afterAll harness-hygiene fallback writes (via
- * `removeFixtureViaPr` it's a DELETE, but a future seed path would use
- * this text). The PRIMARY create leg, however, is genuinely UI-driven —
- * the spec types Title/URL Slug/Date/Body into Decap's "+ New Post" form
- * and toggles Published. Decap writes ONLY the fields the `posts`
- * collection declares (admin/config*.yml), which does NOT include
- * `sitemap`/`robots`, and whose `test_fixture` is `widget: hidden,
- * default: false` — a hidden widget the editor can't toggle. So the post
- * that actually lands on `main` from the UI carries `published: true`,
- * the future date, `test_fixture: false`, and NO `sitemap`/`robots`
- * keys. That is why the public-content @parity crawls cannot rely on
- * `test_fixture: true` / `sitemap: false` to exclude these canaries and
- * key on the structural `e2e-` slug signature instead — see
- * e2e/public-content.js (`isTestFixturePost`). The `slug:`/`date:` the
- * spec types are reliably present, so the signature is robust.
+ * The UI-created post carries the same three markers (#531). The PRIMARY
+ * create leg is genuinely UI-driven — the spec types Title/URL Slug/Date/Body
+ * into Decap's "+ New Post" form and toggles Published — but the `posts`
+ * collection declares no `sitemap`/`robots` widget and its `test_fixture` is
+ * `widget: hidden, default: false`, so the form alone would land
+ * `test_fixture: false` and NO `sitemap`/`robots` on `main`: a born-published
+ * post served WITHOUT a noindex tag. So before Save, each spec that creates a
+ * production post calls `markEphemeralTestPost` (e2e/cms-editor-ui.js), which
+ * registers a Decap `preSave` listener stamping TEST_POST_MARKERS onto exactly
+ * that entry — through Decap's own save path, the same public API
+ * admin/slug-pin.js uses. Decap serializes every key in an entry's data, so the
+ * markers also survive a later edit of the same file.
+ * e2e/prod-test-post-markers.test.js lint-locks the call.
+ *
+ * The `e2e-` slug is still the load-bearing exclusion signal for feeds,
+ * listings and cross-posting (e2e/public-content.js `isTestFixturePost`,
+ * theme `exclude_e2e_posts.rb`), because a run killed before #531 (or an
+ * orphan the sweeper has not reaped yet) can still carry the unmarked shape.
  *
  * The body marker IS the runId (structural, in the slug AND the body) so
  * a Slate `widget: markdown` round-trip on the body can't strip the
@@ -66,6 +67,17 @@
 // serves only because `_config.yml` sets `future: true` (the same
 // mechanism the retired `2099-01-01` / `2099-01-03` canaries used).
 const EPHEMERAL_DATE = "2099-12-31";
+
+// The three front-matter markers every disposable test post carries (#531):
+// `robots` renders `<meta name="robots">` (theme default layout), `sitemap:
+// false` keeps jekyll-sitemap from listing it, and `test_fixture: true` hides
+// it from the Posts list and marks it as automated. The single source for
+// composePost below and for markEphemeralTestPost's preSave stamp.
+const TEST_POST_MARKERS = Object.freeze({
+  robots: "noindex,nofollow",
+  sitemap: false,
+  test_fixture: true,
+});
 
 // Slug prefixes — the orphan sweeper tier and the recursion-churn glob
 // both key off these, so they are exported (single source of truth).
@@ -132,10 +144,10 @@ function composePost({ title, slug, body, featuredImage = "" }) {
     "tags: []",
     `featured_image: ${featuredImage ? JSON.stringify(featuredImage) : '""'}`,
     "published: true",
-    "robots: noindex,nofollow",
-    "sitemap: false",
+    `robots: ${TEST_POST_MARKERS.robots}`,
+    `sitemap: ${TEST_POST_MARKERS.sitemap}`,
     'publish_date: ""',
-    "test_fixture: true",
+    `test_fixture: ${TEST_POST_MARKERS.test_fixture}`,
     "---",
   ].join("\n");
   return `${frontMatter}\n${body}`;
@@ -143,6 +155,7 @@ function composePost({ title, slug, body, featuredImage = "" }) {
 
 module.exports = {
   EPHEMERAL_DATE,
+  TEST_POST_MARKERS,
   PROD_MUTATE_SLUG_PREFIX,
   MEDIA_ROUNDTRIP_SLUG_PREFIX,
   buildProdMutatePost,

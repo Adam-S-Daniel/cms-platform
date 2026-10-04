@@ -281,6 +281,10 @@ const PLATFORM_META_SPECS = [
   // workflow's timeout-minutes; platform-internal, self-CI only.
   "cms-loop-budget-alignment.test.js",
   "cms-editor-ui.test.js",
+  // #531 — AST-walks the harness's own real-lane spec sources to lock the
+  // disposable-test-post markers before Save; harness-internal, self-CI only
+  // (the same posture as cms-editor-ui.test.js above).
+  "prod-test-post-markers.test.js",
   "cms-host.test.js",
   "cms-label-contract.spec.js",
   "cms-recursion-churn.test.js",

@@ -1,7 +1,8 @@
 // @lane: local — drives the in-browser test-repo backend; never touches real GitHub
 const { test, expect } = require("./base");
 const { captureStep } = require("./manual-capture");
-const { publishedSwitch } = require("./cms-editor-ui");
+const { publishedSwitch, markEphemeralTestPost, setPublished } = require("./cms-editor-ui");
+const { EPHEMERAL_DATE, TEST_POST_MARKERS } = require("./prod-mutate-fixture");
 const YAML = require("yaml");
 const path = require("node:path");
 const { guard } = require("./base-collections-guards");
@@ -624,6 +625,92 @@ test.describe(
         path: screenshot,
         contentType: "image/png",
       });
+    });
+
+    // ── #531: the UI-created disposable post's OWN front matter ─────────
+    //
+    // The real-lane specs that publish a post on a live site type it into
+    // "+ New Post", whose form has no robots/sitemap widget and a hidden
+    // test_fixture defaulting to false. markEphemeralTestPost stamps the three
+    // markers through Decap's preSave; these two tests read what the editor
+    // actually SAVED (the test-repo backend's file), not what a builder wrote.
+    test("a UI-created disposable post saves robots noindex, sitemap:false and test_fixture:true (#531)", async ({
+      page,
+    }) => {
+      await loadAdmin(page);
+      await page.goto("/admin/index-test.html#/collections/posts/new");
+      const title = "E2E Marker Probe 531";
+      const titleField = page.getByRole("textbox", { name: /^Title$/i });
+      await expect(titleField).toBeVisible({ timeout: 60_000 });
+      await titleField.fill(title);
+      await page.getByLabel(/^URL Slug/).fill("e2e-marker-probe-531");
+      await page.getByLabel(/^Date/).fill(`${EPHEMERAL_DATE}T00:00`);
+      const bodyEditor = page.locator('[role="textbox"][contenteditable="true"]').last();
+      await bodyEditor.click();
+      await bodyEditor.pressSequentially("Disposable marker probe.");
+      await markEphemeralTestPost(page, { title });
+      await setPublished(page, true);
+      await page.getByRole("button", { name: /^save$/i }).first().click();
+
+      let saved = null;
+      await expect
+        .poll(
+          async () => {
+            saved = await page.evaluate(
+              (t) =>
+                Object.values(window.repoFilesUnpublished || {})
+                  .map((entry) => entry?.diffs?.[0]?.content || "")
+                  .find((content) => content.includes(`title: ${t}`)) || null,
+              title,
+            );
+            return saved;
+          },
+          { timeout: 30_000 },
+        )
+        .not.toBeNull();
+      const frontMatter = YAML.parse(saved.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1]);
+      expect(frontMatter.published, "the probe is born published, like the prod loops").toBe(true);
+      for (const [key, value] of Object.entries(TEST_POST_MARKERS)) {
+        expect(frontMatter[key], `UI-saved front matter ${key}`).toBe(value);
+      }
+    });
+
+    test("the test-post markers survive a later edit of the saved post, with no listener installed (#531)", async ({
+      page,
+    }) => {
+      // Seed the published post WITH the markers, then edit it the way an
+      // editor (or a later loop leg) would — no markEphemeralTestPost. Decap
+      // re-serializes every key of the entry's data, so the markers ride along.
+      const markerLines = Object.entries(TEST_POST_MARKERS)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join("\n");
+      await loadAdmin(page, {
+        postContent: SEED_POST_CONTENT.replace("published: true\n", `published: true\n${markerLines}\n`),
+      });
+      await page.goto(`/admin/index-test.html#/collections/posts/entries/${SEED_POST_SLUG}`);
+      const titleField = page.getByRole("textbox", { name: /^Title$/i });
+      await expect(titleField).toBeVisible({ timeout: 60_000 });
+      const editedTitle = "Replacement test post 1, edited";
+      await titleField.fill(editedTitle);
+      await page.getByRole("button", { name: /^save$/i }).first().click();
+
+      let saved = null;
+      await expect
+        .poll(
+          async () => {
+            saved = await page.evaluate(
+              (slug) => window.repoFilesUnpublished?.[`posts/${slug}`]?.diffs?.[0]?.content || null,
+              SEED_POST_SLUG,
+            );
+            return saved;
+          },
+          { timeout: 30_000 },
+        )
+        .toContain(editedTitle);
+      const frontMatter = YAML.parse(saved.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1]);
+      for (const [key, value] of Object.entries(TEST_POST_MARKERS)) {
+        expect(frontMatter[key], `re-saved front matter ${key}`).toBe(value);
+      }
     });
 
     // ── Create-new through the workflow ────────────────────────────────
