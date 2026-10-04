@@ -30,7 +30,7 @@
 // doubt, run the spec. Missing a relevant test is far more costly
 // than running an irrelevant one.
 
-const { execSync } = require("node:child_process");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -876,18 +876,23 @@ const SPEC_RULES = {
   ],
 };
 
-function getChangedFiles(baseRef) {
+// `-z` + `--no-renames` (cms-platform#539): the default output quotes any
+// path with a non-ASCII byte, a quote or a newline
+// (`"_layouts/caf\303\251.html"`, leading quote included), which no
+// SPEC_RULES pattern matches; and rename detection reports only the
+// destination, hiding a file moved out of a path a rule watches. Git runs
+// through an argv array, so a branch name cannot reach a shell.
+function getChangedFiles(baseRef, cwd = process.cwd()) {
+  const git = (args) => execFileSync("git", args, { encoding: "utf8", cwd, maxBuffer: 64 * 1024 * 1024 });
   try {
-    const out = execSync(`git diff --name-only ${baseRef}...HEAD`, {
-      encoding: "utf8",
-    }).trim();
-    return out.split("\n").filter(Boolean);
+    return git(["diff", "--name-only", "-z", "--no-renames", `${baseRef}...HEAD`])
+      .split("\0")
+      .filter(Boolean);
   } catch {
-    // Fallback: list current uncommitted changes.
-    const out = execSync("git status --porcelain", { encoding: "utf8" });
-    return out
-      .split("\n")
-      .map((line) => line.slice(3).trim())
+    // Fallback: list current uncommitted changes. Each record is `XY path`.
+    return git(["status", "--porcelain", "-z", "--no-renames"])
+      .split("\0")
+      .map((record) => record.slice(3))
       .filter(Boolean);
   }
 }

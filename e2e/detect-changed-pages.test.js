@@ -178,20 +178,39 @@ test.describe("runDetect (CLI integration)", () => {
   // must throw loudly so the workflow fails the run instead of
   // shipping a `potentiallyAffected: 0` lie.
   test("throws when git diff fails (truncated history, no merge base)", () => {
-    const fakeGit = (cmd) => {
-      // The fetch is best-effort and shouldn't throw — only the diff
-      // should. Mirrors the in-CI failure mode exactly.
-      if (cmd.startsWith("git fetch")) return "";
+    const fakeGit = () => {
       const err = new Error("fatal: no merge base found between origin/main and HEAD");
       throw err;
     };
     expect(() =>
       runDetect({
         runGit: fakeGit,
+        runEnsureBase: () => ({ mergeBase: "0".repeat(40) }),
         runDiscover: () => new Set(["/"]),
         runFileExists: () => true,
       }),
     ).toThrow();
+  });
+
+  // cms-platform#541 — the history step must not degrade to a best-effort
+  // fetch: if the merge base cannot be established, runDetect fails
+  // before it can diff against a truncated history.
+  test("throws when the merge base cannot be established", () => {
+    let diffed = false;
+    expect(() =>
+      runDetect({
+        runGit: () => {
+          diffed = true;
+          return "";
+        },
+        runEnsureBase: () => {
+          throw new Error("no merge base between origin/main and HEAD");
+        },
+        runDiscover: () => new Set(["/"]),
+        runFileExists: () => true,
+      }),
+    ).toThrow(/no merge base/);
+    expect(diffed).toBe(false);
   });
 });
 

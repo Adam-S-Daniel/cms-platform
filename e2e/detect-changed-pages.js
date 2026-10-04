@@ -1,6 +1,8 @@
-const { execSync } = require("child_process");
+const { execFileSync, execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { parseNulPaths } = require("./visual-regression-salient");
+const { ensureMergeBase } = require("./ensure-merge-base");
 
 // ROOT — the SITE repo root, where `git diff origin/main...HEAD` must run and
 // where _site/_posts/_projects/_tags/pages live. When the harness sits AT the
@@ -8,21 +10,27 @@ const path = require("path");
 // platform is CONSUMED, this file runs from `<site>/.cms-platform/e2e/`, where
 // the platform-relative `..` points at the SHALLOW platform checkout (no
 // origin/main → `git diff` fails with "no merge base"). SITE_ROOT /
-// GITHUB_WORKSPACE both name the SITE checkout (the one fetched with
-// fetch-depth:0 + `git fetch origin main`). Mirrors playwright.config.js's
-// SITE_ROOT resolution.
+// GITHUB_WORKSPACE both name the SITE checkout (a `fetch-depth: 2` checkout
+// that runDetect deepens to the merge base via ensure-merge-base.js). Mirrors
+// playwright.config.js's SITE_ROOT resolution.
 const ROOT = process.env.SITE_ROOT || process.env.GITHUB_WORKSPACE || path.resolve(__dirname, "..");
 
-function git(cmd) {
-  return execSync(cmd, { cwd: ROOT, encoding: "utf-8" }).trim();
+// git is invoked WITHOUT a shell: each argument (a path that may hold
+// spaces, quotes, `$` or a newline) reaches git byte-for-byte. Output is
+// returned untrimmed, since `-z` output is NUL-delimited and a path may
+// legitimately begin or end with whitespace.
+function git(args, { cwd = ROOT } = {}) {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
 }
 
-function fileExistsOnMain(filePath) {
+function fileExistsOnMain(filePath, { cwd = ROOT } = {}) {
   try {
-    execSync(`git show origin/main:${filePath}`, {
-      cwd: ROOT,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    git(["cat-file", "-e", `origin/main:${filePath}`], { cwd });
     return true;
   } catch {
     return false;
@@ -243,30 +251,38 @@ function classifyPages({ allPages, changedFiles, fileExistsOnMain = () => true }
   return { changed, new: newList, unchanged };
 }
 
-// CLI entrypoint as a pure function. Injectable runGit / runDiscover
-// so the failure path (truncated history, no merge base) can be
+// CLI entrypoint as a pure function. Injectable runGit / runEnsureBase /
+// runDiscover so the failure path (truncated history, no merge base) can be
 // covered by unit tests without mutating the real repo.
 //
 // THROWS on git failure — silent fallback to "empty changeset" was the
 // exact bug that made visual-regression report `potentiallyAffected: 0`
 // on every PR (audit finding #2).
+//
+// `runGit` takes an ARGUMENT ARRAY (never a shell string) and returns raw
+// stdout. `root` is the site checkout the default bindings act on.
 function runDetect({
-  runGit = git,
-  runDiscover = discoverAllPages,
-  runFileExists = fileExistsOnMain,
+  root = ROOT,
+  runGit = (args) => git(args, { cwd: root }),
+  runEnsureBase = () => ensureMergeBase({ base: "main", cwd: root }),
+  runDiscover = () => discoverAllPages(root),
+  runFileExists = (filePath) => fileExistsOnMain(filePath, { cwd: root }),
 } = {}) {
-  // Best-effort fetch of origin/main so the diff below has a base to
-  // resolve against. Missing remote (offline dev) is fine — the diff
-  // is the real gate.
-  try {
-    runGit("git fetch origin main 2>/dev/null || true");
-  } catch {
-    // ignore — the diff below will surface any real problem
-  }
+  // Fetch origin/main and exactly the history the three-dot diff below
+  // needs — proven, not guessed — on the workflow's shallow checkout
+  // (cms-platform#541). Throws when no merge base can be established:
+  // an empty changeset here is the `potentiallyAffected: 0` lie.
+  runEnsureBase();
 
-  const changedFiles = runGit("git diff --name-only origin/main...HEAD")
-    .split("\n")
-    .filter(Boolean);
+  // `-z`: NUL-delimited, unquoted paths. The newline form quotes any
+  // non-ASCII name (`"_layouts/caf\303\251.html"`), which no `_layouts/`
+  // rule in mapFileToUrls matches, so a salient edit read as "nothing
+  // changed" (cms-platform#539). `--no-renames`: rename detection reports
+  // only the destination, so a layout moved out of a salient directory
+  // would hide its source path.
+  const changedFiles = parseNulPaths(
+    runGit(["diff", "--name-only", "-z", "--no-renames", "origin/main...HEAD"]),
+  );
 
   return classifyPages({
     allPages: runDiscover(),
@@ -285,11 +301,10 @@ module.exports = {
 };
 
 if (require.main === module) {
-  // Historic gotcha: do NOT pass `--depth=1` to the fetch. The workflow
-  // checks out with `fetch-depth: 0` (full history); a depth-1 fetch on
-  // top of that converts the local clone to shallow and severs the
-  // merge base, which then causes `git diff origin/main...HEAD` to
-  // fail with "no merge base".
+  // Historic gotcha: a bare `--depth=1` fetch severs the merge base and
+  // `git diff origin/main...HEAD` fails with "no merge base". The history
+  // is managed by ensure-merge-base.js, which never shallows a complete
+  // clone and deepens a shallow one until the merge base is proven.
   const result = runDetect();
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }

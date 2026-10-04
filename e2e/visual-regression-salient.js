@@ -80,22 +80,38 @@ function isSalient(files) {
   });
 }
 
-module.exports = { NON_SALIENT_OVERRIDES, SALIENT_PATTERNS, isSalient };
+// Split git's `-z` output into paths. Each path is NUL-terminated and carried
+// VERBATIM: no quoting, no octal escapes, and spaces, quotes and newlines are
+// part of the name. Without `-z`, git's default `core.quotepath` turns
+// `_layouts/café.html` into `"_layouts/caf\303\251.html"` — leading quote
+// included — so no `^_layouts/` rule matches it (cms-platform#539).
+function parseNulPaths(raw) {
+  return String(raw)
+    .split("\0")
+    .filter((p) => p.length > 0);
+}
 
-// CLI: read newline-delimited changed paths from stdin, print "true"/"false".
-// Used by the reusable workflow's `detect` job:
-//   git diff --name-only "origin/$BASE...HEAD" | node visual-regression-salient.js
+module.exports = { NON_SALIENT_OVERRIDES, SALIENT_PATTERNS, isSalient, parseNulPaths };
+
+// CLI: read changed paths from stdin, print "true"/"false". Used by the
+// reusable workflow's `detect` job with NUL-delimited input:
+//   git diff --name-only -z "origin/$BASE...HEAD" | node visual-regression-salient.js -z
+// Without `-z` it reads newline-delimited paths (the old contract), which
+// cannot represent a quoted, non-ASCII or newline-containing name.
 if (require.main === module) {
   const fs = require("node:fs");
+  const nul = process.argv.slice(2).some((a) => a === "-z" || a === "--null");
   let raw = "";
   try {
     raw = fs.readFileSync(0, "utf8");
   } catch {
     raw = "";
   }
-  const files = raw
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const files = nul
+    ? parseNulPaths(raw)
+    : raw
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
   process.stdout.write(isSalient(files) ? "true" : "false");
 }
