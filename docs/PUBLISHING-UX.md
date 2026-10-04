@@ -424,8 +424,10 @@ parent PR merges knows the edit rides along. Locked by
 `e2e/entry-status-model.test.js` (Draft and Going-live, with and without a known
 branch, the stall, and Live on the preview), `e2e/publish-status-links.test.js`
 (the confirmation) and `e2e/publish-progress-post-merge.test.js` (once the PR
-has merged, only a merge into the default branch reads as going live; a merge
-into the feature branch reads as on that branch's preview).
+has merged, only a merge into a known default-branch base reads as going live
+on the live site, whatever its labels; a merge into the feature branch, or one
+whose base is unknown, reads as on its way to the preview for the merge watch,
+and after that the entry's ordinary state applies).
 
 The old wording was never actually shown on GitHub. GitHub rejects a label
 description over 100 characters with a 422; the old one was 107, the

@@ -107,10 +107,22 @@
  * until a production deployment covering the merge has succeeded.
  *
  * Only a merge into the default branch goes to production. A merge into a
- * feature branch (a preview-only PR, decided the same way as `previewOnly`
- * above) reaches that branch and its preview, not the live site, so that
- * path reports `previewOnly` with the merge's base and never reads the
+ * feature branch reaches that branch and its preview, not the live site, so
+ * for MERGE_WATCH_MS that path reports the merge as in flight to the preview
+ * (`merged` + `previewOnly` with the merge's base) and never reads the
  * production deployment: "Going live… on <apex>" for it was false (#532).
+ * The poller does not see the preview's own deploy, so it says "on its way
+ * to" the preview, never "on" it. After the window the merge is ignored, as
+ * an old default-branch merge is.
+ *
+ * Which branch the merge went into, in order (mergeIsPreview()):
+ *   - a KNOWN base equal to the repo's default branch is production, even
+ *     with the `cms/preview-only` label: GitHub retargets a PR to main when
+ *     its feature branch merges and is deleted, and the label stays;
+ *   - a known base that is not the default branch is a preview;
+ *   - otherwise (base or default branch unknown) it is treated as a preview
+ *     with no named branch, labeled or not. That understates ("not on the
+ *     live site yet") rather than claiming the live site without evidence.
  *
  * A hidden tab polls nothing: an admin left open in a background tab
  * overnight must not spend the editor's rate limit on an entry nobody is
@@ -305,21 +317,21 @@
       // header for why the entry's own merged PR is read here.
       var merge = await recentMerge(token, entry);
       var now = Date.now();
-      if (merge && merge.previewOnly) {
-        // Merged into a feature branch: the edit is on that branch now and
-        // reaches the live site only when the branch does, so production's
+      if (merge && merge.previewOnly && now - merge.mergedAt < MERGE_WATCH_MS) {
+        // Merged into a feature branch: on its way to that branch's preview,
+        // and the live site only when the branch gets there, so production's
         // deployment says nothing about it (see "After the merge").
         return {
           facts: {
             hasOpenPr: false,
             armed: false,
-            merged: false,
+            merged: true,
             checksFailed: false,
             mergeConflict: false,
             awaitingReviewGate: false,
             deployState: null,
             waitingOn: null,
-            startedAt: null,
+            startedAt: merge.mergedAt,
             previewOnly: true,
             baseRef: merge.baseRef,
             settledSince: noteSettled(null, false, now),
@@ -334,7 +346,7 @@
       var deploying = depState === "in_progress" || depState === "queued" || depState === "pending";
       var startedAt = dep && deploying ? dep.createdAt : null;
       var inFlight = Boolean(deploying);
-      if (merge && now - merge.mergedAt < MERGE_WATCH_MS) {
+      if (merge && !merge.previewOnly && now - merge.mergedAt < MERGE_WATCH_MS) {
         // A deployment covers the merge if it IS the merge commit, or was
         // created after it (deploys run per push to the default branch, in
         // order, so a later one carries this commit too).
@@ -506,23 +518,27 @@
     for (var i = 0; i < prs.length; i++) {
       var t = Date.parse(prs[i].merged_at || "");
       if (isNaN(t)) continue;
-      // Same two signals as an open PR's `previewOnly`, erring the same way.
       var pr = prs[i];
-      var labels = (pr.labels || []).map(function (l) {
-        return typeof l === "string" ? l : l && l.name;
-      });
       var baseRef = (pr.base && pr.base.ref) || null;
       var defaultBranch = (pr.base && pr.base.repo && pr.base.repo.default_branch) || null;
       return {
         mergedAt: t,
         sha: pr.merge_commit_sha || null,
         baseRef: baseRef,
-        previewOnly:
-          labels.indexOf(PREVIEW_ONLY_LABEL) !== -1 ||
-          Boolean(baseRef && defaultBranch && baseRef !== defaultBranch),
+        previewOnly: mergeIsPreview(baseRef, defaultBranch),
       };
     }
     return null;
+  }
+
+  // Whether a MERGED PR went into a preview branch; see "After the merge".
+  // Unlike an open PR's `previewOnly`, the label never overrides a known
+  // default-branch base (a retargeted PR keeps it), and when the base is
+  // unknown the answer is "preview" whatever the label says, so the label
+  // changes no outcome here and is not read.
+  function mergeIsPreview(baseRef, defaultBranch) {
+    if (baseRef && defaultBranch) return baseRef !== defaultBranch;
+    return true;
   }
 
   // The newest production deployment and its latest state, or null.

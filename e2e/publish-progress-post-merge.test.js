@@ -32,7 +32,11 @@ function statuses(id) {
   return `${API}/deployments/${id}/statuses?per_page=1`;
 }
 
-function routes({ merged = true, mergedAt = MERGED_AT, deploy, base, labels }) {
+// GitHub's list response always carries `base`; a merge into the default
+// branch is the ordinary case. `base: null` drops it to test missing data.
+const DEFAULT_BASE = { ref: "main", repo: { default_branch: "main" } };
+
+function routes({ merged = true, mergedAt = MERGED_AT, deploy, base = DEFAULT_BASE, labels }) {
   const r = {
     [OPEN]: [],
     [CLOSED]: [
@@ -147,6 +151,11 @@ function derive(facts) {
 const PREVIOUS_DEPLOY = { sha: PREV_SHA, createdAt: "2026-09-28T12:16:23Z", state: "success" };
 const repo = { default_branch: "main" };
 
+const PREVIEW_IN_FLIGHT =
+  "This is on its way to the preview for “feature/x”. It is waiting for the preview for “feature/x” " +
+  "to finish updating. You can close this tab — it carries on without you. " +
+  "It will not reach example.com until the work on “feature/x” goes live there.";
+
 test.describe("publish-progress.js: where a merge goes depends on the PR's base (#532)", () => {
   test("merged into the default branch → going live on the live site", async () => {
     const { facts, calls } = await factsFor(routes({ base: { ref: "main", repo }, deploy: PREVIOUS_DEPLOY }));
@@ -158,28 +167,80 @@ test.describe("publish-progress.js: where a merge goes depends on the PR's base 
     expect(got.detail).toMatch(/^This is on its way to example\.com\. /);
   });
 
-  test("merged into a feature branch → on that branch's preview, the live site later", async () => {
+  test("merged into a non-`main` default branch → going live on the live site", async () => {
+    const { facts } = await factsFor(
+      routes({ base: { ref: "trunk", repo: { default_branch: "trunk" } }, deploy: PREVIOUS_DEPLOY }),
+    );
+    expect(facts.previewOnly).toBe(false);
+    expect(facts.merged).toBe(true);
+    expect(derive(facts).detail).toMatch(/^This is on its way to example\.com\. /);
+  });
+
+  test("merged into `main` where the default branch is `trunk` → a preview", async () => {
+    const { facts } = await factsFor(
+      routes({ base: { ref: "main", repo: { default_branch: "trunk" } }, deploy: PREVIOUS_DEPLOY }),
+    );
+    expect(facts.previewOnly).toBe(true);
+    expect(facts.baseRef).toBe("main");
+  });
+
+  test("merged into a feature branch → on its way to that branch's preview, the live site later", async () => {
     const { facts, calls } = await factsFor(
-      routes({ base: { ref: "feature/x", repo }, deploy: { ...PREVIOUS_DEPLOY, state: "in_progress" } }),
+      routes({ base: { ref: "feature/x", repo }, deploy: { ...PREVIOUS_DEPLOY, state: "failure" } }),
     );
     expect(facts.previewOnly).toBe(true);
     expect(facts.baseRef).toBe("feature/x");
-    expect(facts.merged, "production's deploy is not this merge's").toBe(false);
-    expect(facts.deployState).toBe(null);
+    expect(facts.merged).toBe(true);
+    expect(facts.startedAt).toBe(Date.parse(MERGED_AT));
+    expect(facts.deployState, "production's deploy is not this merge's").toBe(null);
     expect(calls, "production deployments are not read for a feature-branch merge").not.toContain(DEPLOYS);
     const got = derive(facts);
-    expect(got.badge).not.toBe("going-live");
-    expect(got.detail).toBe(
-      "This is on the preview for “feature/x” now. " +
-        "It will not reach example.com until the work on “feature/x” goes live there.",
-    );
+    expect(got.badge).toBe("going-live");
+    expect(got.detail).toBe(PREVIEW_IN_FLIGHT);
+    expect(got.detail, "the poller cannot see the preview's deploy finish").not.toMatch(/ now\./);
   });
 
-  test("the cms/preview-only label alone marks the merge as a preview's", async () => {
+  test("labeled cms/preview-only but merged into the default branch (retargeted) → going live", async () => {
+    const { facts, calls } = await factsFor(
+      routes({ base: { ref: "main", repo }, labels: [{ name: "cms/preview-only" }], deploy: PREVIOUS_DEPLOY }),
+    );
+    expect(facts.previewOnly).toBe(false);
+    expect(facts.merged).toBe(true);
+    expect(calls).toContain(DEPLOYS);
+    expect(derive(facts).detail).not.toMatch(/preview|“main”/);
+  });
+
+  for (const [what, labels] of [
+    ["labeled", [{ name: "cms/preview-only" }]],
+    ["unlabeled", undefined],
+  ]) {
+    test(`${what}, with no base in the response → never claims the live site`, async () => {
+      const { facts, calls } = await factsFor(routes({ base: null, labels, deploy: PREVIOUS_DEPLOY }));
+      expect(facts.previewOnly).toBe(true);
+      expect(facts.baseRef).toBe(null);
+      expect(calls).not.toContain(DEPLOYS);
+      const got = derive(facts);
+      expect(got.detail).toMatch(/^This is on its way to the preview for this branch\. /);
+      expect(got.detail).toMatch(/It will not reach example\.com until the work on this branch goes live there\.$/);
+    });
+  }
+
+  test("a feature-branch merge older than the merge watch → the entry's ordinary state", async () => {
+    const { facts, calls } = await factsFor(
+      routes({ base: { ref: "feature/x", repo }, mergedAt: "2026-09-25T10:00:00Z", deploy: PREVIOUS_DEPLOY }),
+    );
+    expect(facts.previewOnly).toBe(false);
+    expect(facts.merged).toBe(false);
+    expect(facts.deployState).toBe("success");
+    expect(calls).toContain(DEPLOYS);
+  });
+
+  test("one minute inside the merge watch is still the preview's", async () => {
     const { facts } = await factsFor(
-      routes({ labels: [{ name: "cms/preview-only" }], deploy: PREVIOUS_DEPLOY }),
+      routes({ base: { ref: "feature/x", repo }, deploy: PREVIOUS_DEPLOY }),
+      Date.parse(MERGED_AT) + 29 * 60 * 1000,
     );
     expect(facts.previewOnly).toBe(true);
-    expect(facts.merged).toBe(false);
+    expect(facts.merged).toBe(true);
   });
 });
