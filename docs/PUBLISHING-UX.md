@@ -422,20 +422,25 @@ site uses one phrase from `destination().laterNote`: *"It will not reach
 whether or not the branch ever merges, and an editor reading it before the
 parent PR merges knows the edit rides along. Locked by
 `e2e/entry-status-model.test.js` (Draft and Going-live, with and without a known
-branch) and `e2e/publish-status-links.test.js` (the confirmation).
+branch, the stall, and Live on the preview), `e2e/publish-status-links.test.js`
+(the confirmation) and `e2e/publish-progress-post-merge.test.js` (once the PR
+has merged, only a merge into the default branch reads as going live; a merge
+into the feature branch reads as on that branch's preview).
 
 The old wording was never actually shown on GitHub. GitHub rejects a label
 description over 100 characters with a 422; the old one was 107, the
-`createLabel` call sits in a `try { … } catch (_) {}`, and `addLabels` then
+`createLabel` call sat in a `try { … } catch (_) {}`, and `addLabels` then
 created the label implicitly with no description and the default grey. Both
 consumers' `cms/preview-only` labels read exactly that (description `null`,
 color `ededed`, 2026-10-03), while `cms/draft` and `cms/ready` from the same
 step carry their descriptions. `e2e/preview-only-label-description.test.js`
 parses every platform workflow's `createLabel` call (`yaml` + acorn) and holds
-each description to 100 characters.
+each description to 100 characters; a call shape it cannot evaluate fails it.
+The preview-only step now raises a warning with the HTTP status code (never
+the response body) for any failure other than `already_exists`.
 
 `createLabel` never updates a label that already exists (it answers 422
-`already_exists`, swallowed the same way), and no audit or sync in this repo
+`already_exists`, which the step ignores), and no audit or sync in this repo
 edits a label's description. A consumer whose `cms/preview-only` label already
 exists keeps its old description and color until someone edits it by hand:
 `gh label edit cms/preview-only --repo <owner>/<repo> --description "…" --color f5a623`.
