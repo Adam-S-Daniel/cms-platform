@@ -31,7 +31,7 @@ const BACKUP_STRING = "A local backup was recovered for this entry, would you li
  * Boot a fresh sandbox + load the shim into it.
  * @param {*} nativeReturn value the fake NATIVE confirm returns for delegated messages.
  */
-function bootShim(nativeReturn) {
+function bootShim(nativeReturn, hostname) {
   const nativeCalls = [];
   const appended = [];
 
@@ -60,6 +60,7 @@ function bootShim(nativeReturn) {
     },
     window: {
       confirm: nativeConfirm,
+      CMSHostname: hostname,
     },
   };
   sandbox.window.window = sandbox.window;
@@ -120,3 +121,20 @@ test.describe("confirm-wrap-local-backup.js (unit)", () => {
     expect(ctx.sandbox.window.confirm).toBe(confirmAfterFirst);
   });
 });
+
+for (const [access, destination] of [
+  ["preview-pr42.example.com", "example.com"],
+  ["example.com", "preview-pr42.example.com"],
+  ["example.com", "example.com"],
+  ["preview-pr42.example.com", "preview-pr42.example.com"],
+]) {
+  test(`backup toast names ${destination} when opened on ${access} (#533)`, () => {
+    const { confirm, appended } = bootShim(true, {
+      current: () => access,
+      destination: () => destination,
+    });
+    expect(confirm(BACKUP_STRING)).toBe(false);
+    expect(appended).toHaveLength(1);
+    expect(appended[0].textContent).toContain(`nothing reaches ${destination} until you Publish.`);
+  });
+}

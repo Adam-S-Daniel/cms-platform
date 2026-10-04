@@ -12,7 +12,7 @@
  * sandbox: a scripted fetch (no network), a fake clock (no wall-clock time),
  * and an immediate setTimeout (no sleeps). Both pills are covered, because the
  * production pill names the canonical hostname and the preview pill names the
- * preview's own hostname, and those must stay consistent between the fresh
+ * configured destination, and those must stay consistent between the fresh
  * and the stale renderings.
  */
 const fs = require("node:fs");
@@ -29,7 +29,12 @@ const MIN = 60 * 1000;
 const AMBER_TEXT = "#9a6700";
 const AMBER_BORDER = "#d4a72c";
 
-function load({ prodState = "in_progress", previewState = "in_progress" } = {}) {
+function load({
+  prodState = "in_progress",
+  previewState = "in_progress",
+  access = "preview-pr42.example.com",
+  destination = "preview-pr42.example.com",
+} = {}) {
   const pills = {};
   const toolbar = {
     firstChild: null,
@@ -60,7 +65,8 @@ function load({ prodState = "in_progress", previewState = "in_progress" } = {}) 
       CMS_REPO: "owner/repo",
       CMSHostname: {
         canonical: () => "example.com",
-        current: () => "preview-pr42.example.com",
+        current: () => access,
+        destination: () => destination,
       },
     },
     document: {
@@ -177,3 +183,23 @@ test.describe("deploy-status-pill.js: the stale state (renderStalePill, #534)", 
     }
   });
 });
+
+for (const [access, destination] of [
+  ["preview-pr42.example.com", "example.com"],
+  ["example.com", "preview-pr42.example.com"],
+  ["example.com", "example.com"],
+  ["preview-pr42.example.com", "preview-pr42.example.com"],
+]) {
+  test(`fresh and stale preview pills name ${destination} when opened on ${access} (#533)`, async () => {
+    const { pills, pollAt } = load({ access, destination });
+    await pollAt(0, { online: true });
+    expect(pills["cms-preview-build-pill"].innerHTML).toContain(`Updating ${destination}…`);
+    expect(pills["cms-prod-status-pill"].innerHTML).toContain("Updating example.com…");
+    await pollAt(6, { online: false });
+    expect(pills["cms-preview-build-pill"].innerHTML).toContain(`Update to ${destination} (details may be out of date`);
+    expect(pills["cms-preview-build-pill"].title).toBe(
+      `Publishing details for ${destination} may be out of date. View the last update.`,
+    );
+    expect(pills["cms-prod-status-pill"].innerHTML).toContain("Update to example.com (details may be out of date");
+  });
+}

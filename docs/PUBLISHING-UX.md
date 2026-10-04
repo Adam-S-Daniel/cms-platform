@@ -366,9 +366,11 @@ Publish confirmation's **"It will appear at https://&lt;apex&gt;/… in about
 nothing reaches the live site *now*.
 
 `entry-status-model.js` now derives the destination once (`destination(facts,
-options)`), and both the bar and the button name it. `site-hostname.js` supplies
-the browser's current hostname and the configured canonical hostname. On a
-preview, the former names where this publish goes and the latter names where
+options)`), and both the bar and the button name it. The bar and button pass
+`site-hostname.js`'s served-config `destination()` as the model's
+`currentHostname`; `canonicalHostname` remains the production hostname from
+`canonical()`. Opening the admin on the destination itself keeps the same copy.
+On a preview, the former names where this publish goes and the latter names where
 it does not go. When both hosts are the same, the model keeps the honest branch
 description rather than inventing a preview URL. `publish-progress.js` supplies the fact
 from two free signals on the `/pulls` list response it already makes — the
