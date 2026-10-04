@@ -49,7 +49,11 @@ cms:
   starts with `e2e-` or `test_fixture: true`) out of every public aggregation
   surface (feed, sitemap, tag archives + per-tag feeds, listings) by stamping a
   shared `feed_exclude`/`sitemap: false` marker, while the post still serves at
-  its own `/blog/<slug>/` URL.
+  its own `/blog/<slug>/` URL. The marker is stamped at the site's `post_read`
+  hook, after front matter is loaded and before generators run, so an explicit
+  `slug` or `test_fixture: true` is honored. The
+  [real Jekyll build regression](spec/exclude_e2e_posts_build_test.rb) checks
+  both discriminators, public aggregation, and direct post output.
 
 Updates flow to sites via a gem-version bump — `platform-bump`'s job, not
 Dependabot's: since #242, Dependabot's `bundler` ecosystem carries an explicit

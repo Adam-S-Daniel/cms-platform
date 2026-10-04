@@ -57,7 +57,7 @@
 # its direct URL (then 404 after delete); this plugin must not change
 # that, and does not.
 #
-# Unit tests: spec/exclude_e2e_posts_test.rb
+# Tests: spec/exclude_e2e_posts_test.rb and spec/exclude_e2e_posts_build_test.rb
 
 module Jekyll
   module ExcludeE2EPosts
@@ -103,7 +103,7 @@ module Jekyll
       slug = effective_slug(doc.data, doc.respond_to?(:relative_path) ? doc.relative_path : nil)
       return unless e2e_fixture?(slug: slug, test_fixture: doc.data['test_fixture'])
 
-      # Drop from sitemap.xml (jekyll-sitemap honours `sitemap: false`)
+      # Drop from sitemap.xml (jekyll-sitemap honors `sitemap: false`)
       # and mark for every Liquid-driven public surface to filter on.
       doc.data['sitemap'] = false
       doc.data['feed_exclude'] = true
@@ -115,13 +115,13 @@ end
 # require_relatives this file without Jekyll on the load path, and the
 # pure module methods above must stay callable in that context.
 #
-# `:posts, :post_init` fires once per post as its Document is initialised
-# (front matter parsed). Stamping here, before any generator runs or any
-# template renders, guarantees every downstream surface — the feed page,
-# the sitemap plugin, the tag generators, and the listing templates —
-# sees the marker.
+# `:site, :post_read` runs after all documents' front matter is read and
+# before any generator or template runs. `:posts, :post_init` runs before
+# that read, so it cannot see `test_fixture` or an explicit `slug`, and
+# front matter can overwrite its markers. Stamping after the read lets
+# feeds, sitemap, tag generators, and listings see the final exclusion.
 if defined?(Jekyll::Hooks)
-  Jekyll::Hooks.register :posts, :post_init do |post|
-    Jekyll::ExcludeE2EPosts.apply(post)
+  Jekyll::Hooks.register :site, :post_read do |site|
+    site.posts.docs.each { |post| Jekyll::ExcludeE2EPosts.apply(post) }
   end
 end
