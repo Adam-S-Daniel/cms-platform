@@ -10,18 +10,31 @@
 // For every skills/<name>/SKILL.md it extracts, from code spans, fenced and
 // indented code blocks only (agentskills' check_skills.py precision rule —
 // prose mentions are LISTED, never failed):
-//   path      `scripts/x.sh`, `.github/workflows/y.yml`, … → exists here
-//             (a `.github/workflows/<x>` may live at examples/site/ instead)
+//   path      `scripts/x.sh`, `.github/workflows/y.yml`, … → exists here (a
+//             `.github/workflows/<x>` is the PLATFORM file: the same-named
+//             example caller under examples/site/ does not stand in for it)
 //   workflow  a bare `<name>.yml` → a workflow under .github/workflows/ or
 //             examples/site/.github/workflows/, or some file of that name
 //   file      a bare `<name>.js|sh|rb|py` → some file of that name
 //   name      `secrets.X` / `vars.X` / a bare `UPPER_SNAKE` → read by a
-//             workflow (parsed with `yaml`: secrets./vars./env., env: keys,
-//             workflow_call secrets, $X in run:) or a script, or used as a
-//             code identifier (acorn for JS) — a knob only a COMMENT still
-//             mentions is flagged
+//             workflow (parsed with `yaml`: secrets./vars./env. inside `${{ }}`
+//             or an `if:`, env: keys, workflow_call secrets, $X in run:) or a
+//             script (JS through acorn: process.env.X; shell, Ruby and Python
+//             with their `#` comments and Ruby =begin/=end blocks stripped), or
+//             used as a code identifier. A name only a COMMENT or workflow
+//             prose (name:, description:) mentions is flagged. A string
+//             literal or docstring in shell/Ruby/Python still counts as
+//             source text. A bare UPPER_SNAKE span fails only where its
+//             context marks it a secret or variable (`$X`, `${X}`,
+//             `process.env.X`, `X=v`, or a heading, table header or sentence
+//             saying secret/variable/env/token); a status literal such as
+//             IN_PROGRESS is listed, never failed
 //   cfn       (aws-bootstrap) a parameter / resource / output / property name
 //             in infrastructure/*/template.yaml (parsed with `yaml`)
+// The tree is `git ls-files` (the walk only outside a git checkout), so a
+// gitignored local file such as infrastructure/site-params.env never counts
+// and the lint reads the same tree locally and in CI; a new file must be
+// `git add`-ed before a skill may cite it.
 // The rules live in e2e/skill-references-rules.js.
 //
 // A citation that is deliberately absent — removed and documented as removed,
@@ -31,11 +44,14 @@
 //
 // Registered in playwright.config.js PLATFORM_META_SPECS: it reads skills/ and
 // the platform's own workflows and templates, none of which a consumer ships.
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const YAML = require("yaml");
 const { test, expect } = require("./base");
 const {
+  allowlistStanza,
   checkSkill,
   extractCitations,
   loadTree,
@@ -64,9 +80,19 @@ function skillNames() {
 }
 
 function format(skill, failures) {
-  return failures
-    .map((f) => `  skills/${skill}/SKILL.md${f.line ? `:${f.line}` : ""} [${f.kind}] ${f.reason}`)
-    .join("\n");
+  const lines = failures.map(
+    (f) => `  skills/${skill}/SKILL.md${f.line ? `:${f.line}` : ""} [${f.kind}] ${f.reason}`,
+  );
+  // A ready-to-paste stanza for each failure the allowlist could answer.
+  const stanzas = failures.map((f) => allowlistStanza(skill, f)).filter(Boolean);
+  if (stanzas.length) {
+    lines.push(
+      "  If the citation is deliberately absent, paste under `allow:` in skills/.freshness-allow.yml " +
+        "and fill in the reason and marker:",
+      ...stanzas.map((x) => x.replace(/^/gm, "    ")),
+    );
+  }
+  return lines.join("\n");
 }
 
 test.describe("skill references are fresh (#408)", () => {
@@ -141,27 +167,31 @@ const FIXTURE = [
   "",
   "In prose, scripts/also-gone.sh is merely mentioned.",
   "",
-  "Set `NOBODY_READS_THIS` and `vars.LIVE_VAR` and `secrets.LIVE_SECRET`.",
+  "Set the variable `NOBODY_READS_THIS` and `vars.LIVE_VAR` and `secrets.LIVE_SECRET`.",
   "",
-  "`OLD_PAT` — REMOVED in v9 (kept for older pins).",
+  "The `OLD_PAT` token — REMOVED in v9 (kept for older pins).",
   "",
-  "`LIVE_SECRET` was allowlisted once, but is read again.",
+  "The secret `LIVE_SECRET` was allowlisted once, but is read again.",
   "",
   "The `deploy.yml` workflow and `examples/site/.github/workflows/caller.yml` run it.",
   "",
 ].join("\n");
 
 function syntheticTree(over = {}) {
-  const files = new Set(["scripts/real.sh", ".github/workflows/deploy.yml", "examples/site/.github/workflows/caller.yml"]);
+  const { files: extra, ...rest } = over;
+  const files = new Set(
+    extra || ["scripts/real.sh", ".github/workflows/deploy.yml", "examples/site/.github/workflows/caller.yml"],
+  );
+  const workflows = [...files].filter((f) => /^(?:examples\/site\/)?\.github\/workflows\/[^/]+\.ya?ml$/.test(f));
   return {
     exists: (rel) => files.has(rel) || [...files].some((f) => f.startsWith(`${rel}/`)),
     basenames: new Set([...files].map((f) => f.split("/").pop())),
-    workflows: new Set(["deploy.yml", "caller.yml"]),
+    workflows: new Set(workflows.map((f) => f.split("/").pop())),
     contextNames: new Set(["vars.LIVE_VAR", "secrets.LIVE_SECRET"]),
     envNames: new Set(["LIVE_VAR", "LIVE_SECRET"]),
     codeNames: new Set(),
     cfnNames: new Set(["ResourcePrefix"]),
-    ...over,
+    ...rest,
   };
 }
 
@@ -227,6 +257,68 @@ test.describe("skill-references rules (fixture)", () => {
     expect(failed(gone)).toContain("deploy.yml");
   });
 
+  test("a `.github/workflows/` citation must be the platform file; a bare name may be an example caller (S1)", () => {
+    const text = "Run `.github/workflows/deploy-preview.yml`, or just `deploy-preview.yml`.\n";
+    const exampleOnly = syntheticTree({ files: ["examples/site/.github/workflows/deploy-preview.yml"] });
+    const r = checkSkill(text, exampleOnly, { skill: "s" });
+    expect(failed(r)).toEqual([".github/workflows/deploy-preview.yml"]);
+    const both = syntheticTree({
+      files: [".github/workflows/deploy-preview.yml", "examples/site/.github/workflows/deploy-preview.yml"],
+    });
+    expect(failed(checkSkill(text, both, { skill: "s" }))).toEqual([]);
+  });
+
+  test("a status literal in prose is listed, not failed, and needs no allowlist entry (N3)", () => {
+    const text = "# T\n\nThe rollup shows `IN_PROGRESS`, so wait.\n";
+    const r = checkSkill(text, syntheticTree(), { skill: "s" });
+    expect(failed(r)).toEqual([]);
+    expect(r.prose.map((p) => p.value)).toContain("IN_PROGRESS");
+  });
+
+  test("an allowlist entry for a name that is not cited as a secret or variable fails as unneeded (N3)", () => {
+    const text = "# T\n\nThe rollup shows `IN_PROGRESS`, so wait.\n";
+    const allow = [{ skill: "s", citation: "IN_PROGRESS", reason: "status", marker: "The rollup shows" }];
+    const r = checkSkill(text, syntheticTree(), { skill: "s", allow });
+    expect(r.failures.map((f) => f.reason).join("\n")).toMatch(/not cited as a secret or variable/);
+  });
+
+  test("a bare name is a secret or variable citation when its context marks it as one (N3)", () => {
+    const text = [
+      "# T",
+      "",
+      "Export `$ENV_DOLLAR_GONE`, `${ENV_BRACE_GONE}`, `process.env.ENV_NODE_GONE` and `ENV_ASSIGN_GONE=1`.",
+      "",
+      "| Secret name | Where |",
+      "|---|---|",
+      "| `TABLE_SECRET_GONE` | repo |",
+      "",
+      "Plain prose mentions `UNMARKED_NAME_GONE` only.",
+      "",
+      "## Repository variables",
+      "",
+      "- `HEADING_VAR_GONE` is opt-in.",
+      "",
+    ].join("\n");
+    const r = checkSkill(text, syntheticTree(), { skill: "s" });
+    expect(failed(r).sort()).toEqual(
+      ["ENV_ASSIGN_GONE", "ENV_BRACE_GONE", "ENV_DOLLAR_GONE", "ENV_NODE_GONE", "HEADING_VAR_GONE", "TABLE_SECRET_GONE"].sort(),
+    );
+    expect(r.prose.map((p) => p.value)).toContain("UNMARKED_NAME_GONE");
+  });
+
+  test("the failure message carries a ready-to-paste allowlist stanza (N1)", () => {
+    const f = { kind: "path", value: "scripts/gone.sh", line: 3, reason: "x" };
+    const stanza = allowlistStanza("fixture", f);
+    const [entry] = YAML.parse(stanza);
+    expect(Object.keys(entry)).toEqual(["skill", "citation", "reason", "marker"]);
+    expect(entry.skill).toBe("fixture");
+    expect(entry.citation).toBe("scripts/gone.sh");
+    expect(stanza).toMatch(/^- skill: fixture$/m);
+    // A stale-allowlist failure is answered by removing the entry, not adding one.
+    expect(allowlistStanza("fixture", { kind: "allowlist", value: "X_Y", line: 0, reason: "r" })).toBeNull();
+    expect(format("fixture", [f])).toContain("citation: scripts/gone.sh");
+  });
+
   test("CloudFormation names are checked for aws-bootstrap only", () => {
     const text = "Use `ResourcePrefix` and `${ResourcePrefix}-x` but not `MissingOutput`.\n";
     const r = checkSkill(text, syntheticTree(), { skill: "aws-bootstrap" });
@@ -281,4 +373,180 @@ test.describe("skill-references rules (fixture)", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// loadTree over real files: comments never count (S2), the two workflow
+// directories stay distinct (S1), untracked files never count (S3).
+// ---------------------------------------------------------------------------
+
+function withTree(files, fn, { git = false } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "skill-refs-"));
+  try {
+    for (const [rel, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), body);
+    }
+    if (git) {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      execFileSync("git", ["add", "--", "."], { cwd: dir });
+    }
+    return fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test.describe("loadTree (synthetic trees)", () => {
+  const SCRIPTS = {
+    "scripts/a.js": [
+      "// process.env.JS_LINE_COMMENT is documented here",
+      "/* process.env.JS_BLOCK_COMMENT and JS_BLOCK_IDENT */",
+      "const a = process.env.JS_REAL; const b = process.env['JS_BRACKET']; const { JS_DESTRUCT } = process.env;",
+      "const text = 'process.env.JS_IN_STRING';",
+      "",
+    ].join("\n"),
+    "scripts/b.sh": [
+      "#!/usr/bin/env bash",
+      "# $SH_WHOLE_LINE and SH_WHOLE_WORD",
+      'echo "$SH_REAL" # trailing $SH_TRAILING and SH_TRAILING_WORD',
+      'echo "# kept $SH_QUOTED_HASH"',
+      "echo ${#SH_LENGTH_OF}",
+      "",
+    ].join("\n"),
+    "scripts/c.rb": [
+      "=begin",
+      'ENV["RB_BLOCK"] and RB_BLOCK_WORD',
+      "=end",
+      'x = ENV["RB_REAL"] # ENV["RB_TRAILING"]',
+      "",
+    ].join("\n"),
+    "scripts/d.py": 'import os\nx = os.environ["PY_REAL"]  # os.environ["PY_TRAILING"]\n# os.environ["PY_WHOLE"]\n',
+    ".github/workflows/w.yml": [
+      "name: Deploys using secrets.WF_NAME_PROSE and env.WF_NAME_ENV_PROSE",
+      "on:",
+      "  workflow_call:",
+      "    inputs:",
+      "      x: { description: 'reads vars.WF_DESC_PROSE', type: string }",
+      "jobs:",
+      "  j:",
+      "    name: job text with secrets.WF_JOBNAME_PROSE",
+      "    runs-on: ubuntu-latest",
+      "    if: vars.WF_IF_BARE != ''",
+      "    steps:",
+      "      - name: step text with secrets.WF_STEPNAME_PROSE",
+      "        run: |",
+      "          # echo $WF_RUN_WHOLE_COMMENT",
+      "          echo hi $WF_RUN_REAL # echo $WF_RUN_TRAILING",
+      "          echo 'secrets.WF_ECHO_PROSE'",
+      "      - uses: actions/github-script@x",
+      "        with:",
+      "          script: |",
+      "            // process.env.WF_SCRIPT_COMMENT",
+      "            const v = process.env.WF_SCRIPT_REAL;",
+      "      - run: echo ${{ secrets.WF_EXPR_SECRET }} ${{ env.WF_EXPR_ENV }}",
+      "",
+    ].join("\n"),
+  };
+  const load = (fn) => withTree(SCRIPTS, (dir) => fn(loadTree(dir)));
+  const reads = (t, name) => t.envNames.has(name) || t.contextNames.has(name) || t.codeNames.has(name);
+
+  test("a JS line comment never counts as a read (S2)", () =>
+    load((t) => {
+      expect(reads(t, "JS_LINE_COMMENT")).toBe(false);
+      expect(t.envNames.has("JS_REAL")).toBe(true);
+      expect(t.envNames.has("JS_BRACKET")).toBe(true);
+      expect(t.envNames.has("JS_DESTRUCT")).toBe(true);
+    }));
+
+  test("a JS block comment and a string literal never count as a read (S2)", () =>
+    load((t) => {
+      expect(reads(t, "JS_BLOCK_COMMENT")).toBe(false);
+      expect(reads(t, "JS_BLOCK_IDENT")).toBe(false);
+      expect(reads(t, "JS_IN_STRING")).toBe(false);
+    }));
+
+  test("a shell whole-line comment never counts as a read (S2)", () =>
+    load((t) => {
+      expect(reads(t, "SH_WHOLE_LINE")).toBe(false);
+      expect(reads(t, "SH_WHOLE_WORD")).toBe(false);
+      expect(t.envNames.has("SH_REAL")).toBe(true);
+    }));
+
+  test("a shell trailing comment never counts, a # inside quotes does not start one (S2)", () =>
+    load((t) => {
+      expect(reads(t, "SH_TRAILING")).toBe(false);
+      expect(reads(t, "SH_TRAILING_WORD")).toBe(false);
+      expect(t.envNames.has("SH_QUOTED_HASH")).toBe(true);
+      expect(t.envNames.has("SH_REAL")).toBe(true);
+    }));
+
+  test("Ruby =begin/=end blocks and Python # comments never count (S2)", () =>
+    load((t) => {
+      for (const n of ["RB_BLOCK", "RB_BLOCK_WORD", "RB_TRAILING", "PY_TRAILING", "PY_WHOLE"]) {
+        expect(reads(t, n), n).toBe(false);
+      }
+      expect(t.envNames.has("RB_REAL")).toBe(true);
+      expect(t.envNames.has("PY_REAL")).toBe(true);
+    }));
+
+  test("workflow prose (name:, description:, echo text) never counts, expressions and env do (S2)", () =>
+    load((t) => {
+      for (const n of [
+        "WF_NAME_PROSE",
+        "WF_NAME_ENV_PROSE",
+        "WF_DESC_PROSE",
+        "WF_JOBNAME_PROSE",
+        "WF_STEPNAME_PROSE",
+        "WF_ECHO_PROSE",
+        "WF_RUN_WHOLE_COMMENT",
+        "WF_RUN_TRAILING",
+        "WF_SCRIPT_COMMENT",
+      ]) {
+        expect(reads(t, n) || t.contextNames.has(`secrets.${n}`) || t.contextNames.has(`vars.${n}`), n).toBe(false);
+      }
+      expect(t.contextNames.has("secrets.WF_EXPR_SECRET")).toBe(true);
+      expect(t.envNames.has("WF_EXPR_ENV")).toBe(true);
+      expect(t.contextNames.has("vars.WF_IF_BARE")).toBe(true);
+      expect(t.envNames.has("WF_RUN_REAL")).toBe(true);
+      expect(t.envNames.has("WF_SCRIPT_REAL")).toBe(true);
+    }));
+
+  test("an examples/site workflow does not stand in for the platform's (S1)", () =>
+    withTree({ "examples/site/.github/workflows/x.yml": "on: push\njobs: {}\n" }, (dir) => {
+      const t = loadTree(dir);
+      expect(t.exists(".github/workflows/x.yml")).toBe(false);
+      expect(t.exists("examples/site/.github/workflows/x.yml")).toBe(true);
+      expect(t.workflows.has("x.yml")).toBe(true);
+    }));
+
+  test("untracked and gitignored files never count in a git checkout (S3)", () => {
+    const files = {
+      ".gitignore": "*.env\n",
+      "scripts/tracked.sh": "echo $TRACKED_READ\n",
+      "infrastructure/site-params.env": "IGNORED_KNOB=1\n",
+    };
+    withTree(
+      files,
+      (dir) => {
+        fs.writeFileSync(path.join(dir, "scripts/untracked.sh"), "echo $UNTRACKED_READ\n");
+        const t = loadTree(dir);
+        expect(t.exists("scripts/tracked.sh")).toBe(true);
+        expect(t.envNames.has("TRACKED_READ")).toBe(true);
+        expect(t.exists("infrastructure/site-params.env")).toBe(false);
+        expect(t.envNames.has("IGNORED_KNOB")).toBe(false);
+        expect(t.exists("scripts/untracked.sh")).toBe(false);
+        expect(t.basenames.has("untracked.sh")).toBe(false);
+        expect(t.envNames.has("UNTRACKED_READ")).toBe(false);
+      },
+      { git: true },
+    );
+  });
+
+  test("outside a git checkout the working tree is walked (S3 fallback)", () =>
+    withTree({ "infrastructure/site-params.env": "WALKED_KNOB=1\n" }, (dir) => {
+      const t = loadTree(dir);
+      expect(t.exists("infrastructure/site-params.env")).toBe(true);
+      expect(t.envNames.has("WALKED_KNOB")).toBe(true);
+    }));
 });

@@ -43,6 +43,13 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-04 — cms-platform/ci-watcher-loops — edit
+
+- Motivation: the #408 freshness lint read the `X.yml` placeholder in the BROKEN-capture example as a workflow citation, which needed an allowlist entry for a name that was never meant to resolve.
+- Change: the placeholder workflow name in the three example blocks is now `<workflow>.yml`, and the allowlist entry is gone (PR #563).
+- Eval: none — no eval exists yet
+- Outcome: pending merge.
+
 ## 2026-10-04 — cms-platform/platform-release-and-bump — edit
 
 - Motivation: the #408 freshness lint found `secrets.gh_token` and
@@ -51,7 +58,7 @@ no backfill is planned; the file adds the fields git does not capture.
 - Change: the credential paragraph now says the App token is the only path and
   a consumer without the App fails the bump (PR #563).
 - Eval: none — no eval exists yet
-- Outcome: pending review
+- Outcome: pending merge.
 
 ## 2026-10-04 — cms-platform/consumer-repo-provisioning — edit
 
@@ -63,7 +70,7 @@ no backfill is planned; the file adds the fields git does not capture.
   `GITHUB_TOKEN` (PR #563).
 - Eval: none — no eval exists yet (a Class B candidate in skills-evals'
   `DESIGN.md`; its tables are covered by the #408 freshness lint)
-- Outcome: pending review
+- Outcome: pending merge.
 
 ## 2026-10-04 — cms-platform/aws-bootstrap — edit
 
@@ -73,4 +80,4 @@ no backfill is planned; the file adds the fields git does not capture.
 - Change: the troubleshooting step now names the implicit `!Ref` dependency
   (PR #563).
 - Eval: exempt (DESIGN.md non-coverage table)
-- Outcome: pending review
+- Outcome: pending merge.
