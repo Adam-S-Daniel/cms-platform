@@ -165,6 +165,23 @@ img {
   border-radius: var(--radius-lg);
 }
 
+/* A fixed-width embed (<iframe width="800">) must not push the page sideways
+   on a phone. Authored height is left alone so the frame stays usable. */
+iframe {
+  max-width: 100%;
+}
+
+/* A Markdown table is a bare <table> (kramdown emits no class), so it has no
+   box of its own and a wide one widens the whole document. Make it its own
+   horizontal scroll box. `:not([class])` leaves a table an author or site
+   already styled alone: `width: 100%` on a `display: block` table would
+   shrink-wrap its columns instead of filling the row. */
+table:not([class]) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 hr {
   border: none;
   border-top: 1px solid var(--border);
