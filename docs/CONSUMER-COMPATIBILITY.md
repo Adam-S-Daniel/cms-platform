@@ -249,6 +249,14 @@ only the theme background gradient on `/`, which renders identically on a
 single-page bio (it passes on both fixtures); guarding it would skip a real
 glow/theme regression on a single-page consumer.
 
+The production media round-trip
+([`cms-media-roundtrip.spec.js`](../e2e/cms-media-roundtrip.spec.js)) also
+depends on the Posts editor, although it creates its post through the UI instead
+of reading an existing post or canary. It uses the build-independent
+`ADMIN_WRITE_GUARDS` check immediately after its workflow opt-in and before
+browser, PAT, fixture, or API work, so a consumer that drops Posts skips cleanly
+without a Jekyll build.
+
 **Adding a NEW generic-content spec:**
 - **Read-only / served / fs spec** (reads a base collection / canary / posts /
   `/blog/` / `/tags/`): guard on the matching `site-capabilities` predicate

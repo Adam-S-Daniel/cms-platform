@@ -10,6 +10,12 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
+## Unreleased
+
+The production media round-trip now checks the site's `cms.base_collections`
+Posts setting before browser or credential work
+([#33](https://github.com/Adam-S-Daniel/cms-platform/issues/33)).
+
 ## Version history (v0.1.0 → v0.1.127)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).

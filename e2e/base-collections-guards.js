@@ -93,6 +93,12 @@ const ADMIN_WRITE_GUARDS = {
     reason:
       'consumer opts out of the "posts" collection via cms.base_collections — the crawler waits for the Posts sidebar link that never renders (#33)',
   },
+  "cms-media-roundtrip.spec.js": {
+    collections: ["posts"],
+    mode: "any",
+    reason:
+      'consumer opts out of the "posts" collection via cms.base_collections — no Posts editor for the media round-trip (#33)',
+  },
   "cms-publish-flow.spec.js": {
     collections: ["posts"],
     mode: "any",

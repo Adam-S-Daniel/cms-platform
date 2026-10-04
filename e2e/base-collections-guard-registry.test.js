@@ -452,6 +452,42 @@ function appliesBaseCollectionGuard(src) {
   return registryGuard || directGuard;
 }
 
+function hasEarlyMediaRoundtripGuard(src) {
+  const f = analyzeSpec(src);
+  const hostTest = f.topLevelTests.find((t) => t.title.startsWith("CMS media round trip"));
+  if (!hostTest) return false;
+  const callback = hostTest.node.arguments.find((arg) => arg.type === "ArrowFunctionExpression");
+  if (!callback || callback.body.type !== "BlockStatement") return false;
+  const statements = callback.body.body;
+  const isWorkflowOptIn = (statement) => {
+    const call = statement.type === "ExpressionStatement" && statement.expression;
+    if (!call || call.type !== "CallExpression" || calleeName(call.callee) !== "test.skip") return false;
+    const condition = call.arguments[0];
+    return (
+      condition && condition.type === "BinaryExpression" && condition.operator === "!==" &&
+      condition.left.type === "MemberExpression" && condition.left.object.type === "MemberExpression" &&
+      condition.left.object.object.name === "process" && condition.left.object.property.name === "env" &&
+      condition.left.property.name === "RUN_PROD_MUTATE_PLAYGROUND" &&
+      stringValue(condition.right) === "1"
+    );
+  };
+  const isExactGuardSkip = (statement) => {
+    const call = statement.type === "ExpressionStatement" && statement.expression;
+    if (!call || call.type !== "CallExpression" || calleeName(call.callee) !== "test.skip") return false;
+    const spread = call.arguments[0];
+    if (!spread || spread.type !== "SpreadElement") return false;
+    const guardCall = spread.argument;
+    return (
+      guardCall.type === "CallExpression" && calleeName(guardCall.callee) === "guard" &&
+      guardCall.arguments.length === 2 && guardCall.arguments[0].type === "Identifier" &&
+      guardCall.arguments[0].name === "SITE_ROOT" &&
+      stringValue(guardCall.arguments[1]) === "cms-media-roundtrip.spec.js"
+    );
+  };
+  const optInIndex = statements.findIndex(isWorkflowOptIn);
+  return optInIndex === 0 && isExactGuardSkip(statements[1]);
+}
+
 test.describe("#33 base_collections guard registry — predicate proof", () => {
   // (1) Both-directions predicate proof, per registered spec, against the REAL
   // fixtures' _config.yml. No build needed — the keep-list is a source read.
@@ -467,6 +503,24 @@ test.describe("#33 base_collections guard registry — predicate proof", () => {
       ).toBe(false);
     });
   }
+
+  test("media round-trip runs when Posts alone is kept, without posts or canaries", () => {
+    const siteRoot = fs.mkdtempSync(path.join(HARNESS, "test-results", "media-posts-only-"));
+    try {
+      fs.writeFileSync(
+        path.join(siteRoot, "_config.yml"),
+        "cms:\n  base_collections: [posts]\ncollections: {}\n",
+      );
+      expect(fs.existsSync(path.join(siteRoot, "_posts"))).toBe(false);
+      expect(fs.existsSync(path.join(siteRoot, "_e2e"))).toBe(false);
+      expect(
+        reg.shouldSkip(siteRoot, "cms-media-roundtrip.spec.js"),
+        reg.guardReason("cms-media-roundtrip.spec.js"),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(siteRoot, { recursive: true, force: true });
+    }
+  });
 
   // The registry's per-spec collection mapping must reference only real base
   // collection names, and the predicate must agree with keepsBaseCollection.
@@ -539,6 +593,14 @@ test.describe("#33 base_collections guard registry — guard presence", () => {
       ).toBe(true);
     });
   }
+
+  test("media round-trip applies the direct source guard immediately after workflow opt-in", () => {
+    const source = fs.readFileSync(path.join(HARNESS, "cms-media-roundtrip.spec.js"), "utf8");
+    expect(
+      hasEarlyMediaRoundtripGuard(source),
+      "cms-media-roundtrip.spec.js must directly test.skip(...guard(SITE_ROOT, its basename)) immediately after the workflow opt-in, before browser, credential, fixture, or API work",
+    ).toBe(true);
+  });
 
   // (2b) PER-TEST-BLOCK coverage. The file-level check above is satisfied by a
   // guard ANYWHERE in the file — which is how cms-publish-loop.spec.js shipped
