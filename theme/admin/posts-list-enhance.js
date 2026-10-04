@@ -609,7 +609,10 @@
     if (!deploy) return '<span style="color:#8c959f">' + copy.signedOut + "</span>";
     var word = publishingStateWord(deploy.state);
     var stateWord = word;
-    if (deploy.url) {
+    // The URL is whatever a workflow wrote as the status's log_url or
+    // target_url; only an https: one becomes a link (no javascript:, no
+    // http:), and anything else leaves the words plain.
+    if (typeof deploy.url === "string" && /^https:\/\//i.test(deploy.url)) {
       stateWord =
         '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">' + stateWord + "</a>";
     }

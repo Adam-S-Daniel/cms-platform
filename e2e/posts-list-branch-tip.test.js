@@ -159,6 +159,16 @@ test.describe("posts-list-enhance.js publishing summary: every deployment state 
     );
   });
 
+  // Review of #558, N3: the URL comes from a workflow's deployment status,
+  // so only an https: one is put in an href.
+  for (const url of ["javascript:alert(1)", "JavaScript:alert(1)", "http://example.com/log", "data:text/html,x", "//example.com/log"]) {
+    test(`a non-https update URL (${url}) leaves the words unlinked`, () => {
+      const { hook } = load({}, { Date: FixedDate });
+      const html = hook.publishingSummaryHTML({ state: "success", at: FIVE_MIN_AGO, url }, "example.com");
+      expect(html).toBe("example.com updated 5m ago");
+    });
+  }
+
   test("with no time recorded the summary ends at the state words", () => {
     const { hook } = load({}, { Date: FixedDate });
     expect(hook.publishingSummaryHTML({ state: "success", at: null }, "example.com")).toBe("example.com updated");
