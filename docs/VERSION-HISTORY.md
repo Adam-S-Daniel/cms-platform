@@ -10,15 +10,20 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Unreleased
-
-The production media round-trip now checks the site's `cms.base_collections`
-Posts setting before browser or credential work
-([#33](https://github.com/Adam-S-Daniel/cms-platform/issues/33)).
-
-## Version history (v0.1.0 → v0.1.127)
+## Version history (v0.1.0 → v0.1.128)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.128 — the production media round-trip skips consumers that disable Posts.**
+The production media round-trip checks the site's `cms.base_collections` Posts setting
+before browser, credential, fixture, or API work, so an opted-out consumer skips
+instead of waiting for a missing Posts sidebar link. Consumers that keep Posts
+continue to run the round-trip, including a Posts-only fixture without existing
+posts or canaries. The guard-registry regressions enforce the source guard and
+its placement after workflow opt-in
+([#587](https://github.com/Adam-S-Daniel/cms-platform/pull/587)); this addresses
+the media-spec recurrence of
+[#33](https://github.com/Adam-S-Daniel/cms-platform/issues/33).
 
 **v0.1.127 — publishing follows the configured destination, fixture posts stay out of public indexes, and automation reports failures safely.**
 Publication links, confirmations, hints, toasts, list statuses, and preview deployment pills
