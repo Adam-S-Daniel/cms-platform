@@ -61,7 +61,7 @@
 const { test, expect } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
-const { parseYaml } = require("./workflow-yaml-utils");
+const { parseYaml, events } = require("./workflow-yaml-utils");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const MANIFEST_PATH = path.join(REPO_ROOT, "repo-settings.yml");
@@ -130,16 +130,181 @@ function consumerContexts() {
   return out;
 }
 
-// Contexts the platform repo's own PRs can carry. A `workflow_call`-only
-// workflow is a reusable: it never runs on this repo's PRs, so it publishes no
-// context here (AGENTS.md, "most workflows are workflow_call-only reusables").
-function platformContexts() {
-  const out = new Map();
+// A workflow's `on:` value. A BARE `on:` key parses to the boolean `true` under
+// a YAML 1.1 schema, which lands the triggers under the "true" property.
+function onOf(doc) {
+  return doc.on !== undefined ? doc.on : doc.true;
+}
+
+// The platform's OWN callers name a reusable by a LOCAL path
+// (`./.github/workflows/secrets-scan.yml` — self-secrets-scan.yml,
+// self-dependabot-auto-merge.yml). `platformReusableFor` above deliberately does
+// not resolve that spelling: in a consumer's caller `./` is the CONSUMER's tree.
+function localReusableFor(job) {
+  const uses = job && typeof job.uses === "string" ? job.uses : null;
+  const m = uses && /^\.\/\.github\/workflows\/([^@\s]+)$/.exec(uses);
+  if (!m) return null;
+  const full = path.join(PLATFORM_WORKFLOWS, m[1]);
+  return fs.existsSync(full) ? full : null;
+}
+
+// Every check run the platform repo's own workflows can publish, one entry per
+// (context, publishing job): `{ context, file, jobId, job, reusableJob, on }`.
+// A `workflow_call`-only workflow is a reusable: it never runs on this repo's
+// PRs, so it publishes nothing here (AGENTS.md, "most workflows are
+// workflow_call-only reusables").
+//
+// A caller job that `uses:` a local reusable publishes `<caller> / <called>`
+// and NEVER the bare `<caller>`. Until #525 this oracle emitted the bare
+// caller label for such a job, so it listed `scan` (which nothing publishes)
+// and not `scan / scan` (which self-secrets-scan.yml does): the bare `scan`
+// #525's issue text named would have passed this lint and then blocked every
+// PR to main forever, while the real `scan / scan` would have failed it.
+function platformPublishers() {
+  const out = [];
   for (const { file, doc } of readWorkflowDir(PLATFORM_WORKFLOWS)) {
-    const on = doc.on !== undefined ? doc.on : doc.true; // YAML 1.1 reads bare `on:` as true
-    const triggers = on && typeof on === "object" ? Object.keys(on) : on ? [String(on)] : [];
+    const on = onOf(doc);
+    const triggers = events(on);
     if (triggers.length === 1 && triggers[0] === "workflow_call") continue;
-    for (const [id, job] of Object.entries(jobsOf(doc))) out.set(jobLabel(id, job), file);
+    for (const [jobId, job] of Object.entries(jobsOf(doc))) {
+      const caller = jobLabel(jobId, job);
+      if (job && typeof job.uses === "string") {
+        // A `uses:` this oracle cannot read publishes nothing it can name — so
+        // a context that depends on one stays unresolved (and fails) rather
+        // than resolving to a bare caller label that is never reported.
+        const reusable = localReusableFor(job);
+        if (!reusable) continue;
+        const inner = parseYaml(fs.readFileSync(reusable, "utf8"));
+        for (const [rid, rjob] of Object.entries(jobsOf(inner))) {
+          out.push({
+            context: `${caller} / ${jobLabel(rid, rjob)}`,
+            file: `${file} → ${path.basename(reusable)}`,
+            jobId,
+            job,
+            reusableJob: rjob,
+            on,
+          });
+        }
+        continue;
+      }
+      out.push({ context: caller, file, jobId, job, reusableJob: null, on });
+    }
+  }
+  return out;
+}
+
+function platformContexts() {
+  return new Map(platformPublishers().map((p) => [p.context, p.file]));
+}
+
+// ── "Reported on EVERY pull request to main" (#525) ───────────────────────
+//
+// Publishable is not enough for a REQUIRED context: it must be reported on
+// every PR into the protected branch, including a PR that touches nothing the
+// job cares about. A `paths:` filter, a `branches:` list without main, a
+// `types:` list missing `opened`/`synchronize`/`reopened`, or a job-level `if:`
+// each leave some PR with no check run — a caller job skipped by `if:` emits
+// no `<caller> / <called>` run at all (#222) — and a required context that is
+// never reported blocks the merge forever. The fleet remedy for a costly job
+// is a broad trigger plus an early "salient changes?" step gating later STEPS,
+// so the job still reports.
+//
+// `continue-on-error` is checked here too: on a required job it makes the
+// verdict the ruleset reads something other than whether the work passed.
+
+const PROTECTED_BRANCH = "main";
+const REQUIRED_PR_TYPES = ["opened", "synchronize", "reopened"];
+
+function listOf(v) {
+  if (v == null) return [];
+  return Array.isArray(v) ? v.map(String) : [String(v)];
+}
+
+// GitHub's branch-filter glob, enough of it to answer "does this match main":
+// `**` crosses `/`, `*` does not, `?` is one character. A `!` negation can
+// only be judged against the rest of the list, so it is reported, not guessed.
+function globMatches(pattern, branch) {
+  let re = "";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    if (ch === "*" && pattern[i + 1] === "*") {
+      re += ".*";
+      i += 1;
+    } else if (ch === "*") re += "[^/]*";
+    else if (ch === "?") re += "[^/]";
+    else re += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`).test(branch);
+}
+
+// Why a workflow with this `on:` might NOT run on some pull request to main.
+// Empty means it runs on every one.
+function pullRequestTriggerGaps(on) {
+  if (!events(on).includes("pull_request")) return ["no `pull_request` trigger"];
+  const cfg = on && typeof on === "object" && !Array.isArray(on) ? on.pull_request : null;
+  if (!cfg || typeof cfg !== "object") return [];
+  const gaps = [];
+  for (const key of ["paths", "paths-ignore"]) {
+    if (key in cfg) gaps.push(`\`on.pull_request.${key}\` skips PRs that touch no matching path`);
+  }
+  const branches = listOf(cfg.branches);
+  if ("branches" in cfg) {
+    if (branches.some((b) => b.startsWith("!"))) {
+      gaps.push("`on.pull_request.branches` has a `!` negation this lint cannot evaluate");
+    } else if (!branches.some((b) => globMatches(b, PROTECTED_BRANCH))) {
+      gaps.push(`\`on.pull_request.branches\` does not match \`${PROTECTED_BRANCH}\``);
+    }
+  }
+  if (listOf(cfg["branches-ignore"]).some((b) => globMatches(b, PROTECTED_BRANCH))) {
+    gaps.push(`\`on.pull_request.branches-ignore\` matches \`${PROTECTED_BRANCH}\``);
+  }
+  if ("types" in cfg) {
+    const types = listOf(cfg.types);
+    for (const t of REQUIRED_PR_TYPES) {
+      if (!types.includes(t)) gaps.push(`\`on.pull_request.types\` omits \`${t}\``);
+    }
+  }
+  return gaps;
+}
+
+// Why this publishing job might be skipped, or report a verdict that is not
+// its work's.
+function publisherJobGaps({ job, reusableJob }) {
+  const gaps = [];
+  for (const [where, j] of [
+    ["job", job],
+    ["reusable job", reusableJob],
+  ]) {
+    if (!j || typeof j !== "object") continue;
+    if ("if" in j) gaps.push(`${where}-level \`if:\` can skip it, and a skip reports no verdict`);
+    if ("continue-on-error" in j && j["continue-on-error"] !== false) {
+      gaps.push(`${where}-level \`continue-on-error\` — the required verdict is not the work's`);
+    }
+  }
+  return gaps;
+}
+
+// PR-time jobs that are deliberately NOT required, keyed `<file>#<job id>`. The
+// fleet rule is that every CI job on pull requests is a required check unless
+// the repo documents why not; this map is that documentation, and the test
+// below fails on any PR-time job missing from both it and the ruleset.
+const NOT_REQUIRED_PR_JOBS = {
+  "self-dependabot-auto-merge.yml#auto-merge":
+    "an ACTUATOR, not a verdict: it arms native auto-merge on Dependabot PRs and is skipped " +
+    "(the reusable job's `if: github.actor == 'dependabot[bot]'`) on every other PR, so " +
+    "requiring it would gate merges on a job that checks nothing.",
+  "repo-settings-pat-verify.yml#verify":
+    "a LIVE credential probe that runs only when its own workflow file changes " +
+    "(`paths:`) and needs the REPO_SETTINGS_READ_* secrets, which a fork or Dependabot PR " +
+    "does not get — required, it would block every PR that does not touch that file.",
+};
+
+function requiredContextSet(m, repo) {
+  const out = new Set();
+  for (const rulesetName of Object.values(((m.repos || {})[repo] || {}).rulesets || {})) {
+    const ruleset = (m.ruleset_library || {})[rulesetName];
+    if (!ruleset) continue;
+    for (const c of requiredContextsOf(ruleset)) out.add(c);
   }
   return out;
 }
@@ -201,6 +366,20 @@ test.describe("repo-settings.yml required contexts are publishable", () => {
     ).toEqual([]);
   });
 
+  // The bare caller label of a `uses:` job is the shape #525's issue text
+  // proposed (`scan`), and nothing publishes it.
+  test("the platform oracle joins LOCAL reusable calls (`scan / scan`, never bare `scan`)", () => {
+    const platform = platformContexts();
+    expect(platform.has("scan / scan"), "self-secrets-scan.yml must resolve to `scan / scan`").toBe(
+      true,
+    );
+    expect(
+      platform.has("scan"),
+      "a bare `scan` must NOT be publishable — self-secrets-scan.yml's `scan` job calls a " +
+        "reusable, so GitHub reports `scan / scan` and never `scan`",
+    ).toBe(false);
+  });
+
   // A ruleset no repo references is checked against nothing above, so it could
   // carry an unpublishable context indefinitely and this lint would pass.
   test("every ruleset_library entry is referenced by at least one repo", () => {
@@ -235,5 +414,123 @@ test.describe("repo-settings.yml required contexts are publishable", () => {
       "a bare `validate-content` must NOT be publishable — if it ever is, the #371 defect " +
         "stops being detectable by this lint",
     ).toBe(false);
+  });
+});
+
+test.describe("platform-main: required contexts and PR-time jobs cannot drift apart (#525)", () => {
+  test("every required context is reported, with a real verdict, on EVERY pull request to main", () => {
+    const m = manifest();
+    const required = [...requiredContextSet(m, PLATFORM_REPO)];
+    expect(required.length, `${PLATFORM_REPO}'s required contexts resolved`).toBeGreaterThan(0);
+    const publishers = platformPublishers();
+
+    const offenders = [];
+    for (const ctx of required) {
+      const onPr = publishers.filter(
+        (p) => p.context === ctx && events(p.on).includes("pull_request"),
+      );
+      if (onPr.length === 0) {
+        offenders.push(`"${ctx}": no workflow with a \`pull_request\` trigger publishes it`);
+        continue;
+      }
+      for (const p of onPr) {
+        for (const gap of [...pullRequestTriggerGaps(p.on), ...publisherJobGaps(p)]) {
+          offenders.push(`"${ctx}" (${p.file}, job \`${p.jobId}\`): ${gap}`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      `A required context must be reported on every PR to ${PROTECTED_BRANCH}, and its verdict ` +
+        `must be the work's. One that is filtered out or skipped is never reported, and the ` +
+        `merge waits on it forever. Keep the trigger broad and gate later STEPS on an early ` +
+        `"salient changes?" step instead. Offenders:\n  ` +
+        offenders.join("\n  "),
+    ).toEqual([]);
+  });
+
+  test("every job a pull request runs here is required, or exempt with a stated reason", () => {
+    const m = manifest();
+    const required = requiredContextSet(m, PLATFORM_REPO);
+    const prJobs = platformPublishers().filter((p) => events(p.on).includes("pull_request"));
+    expect(prJobs.length, "PR-time jobs resolved").toBeGreaterThan(0);
+
+    const unlisted = prJobs.filter(
+      (p) => !required.has(p.context) && !NOT_REQUIRED_PR_JOBS[`${p.file.split(" → ")[0]}#${p.jobId}`],
+    );
+    expect(
+      unlisted.map((p) => `"${p.context}" (${p.file}, job \`${p.jobId}\`)`),
+      `These jobs run on pull requests but are neither required by ruleset_library's ` +
+        `${PLATFORM_REPO} ruleset nor listed in NOT_REQUIRED_PR_JOBS. A non-required check ` +
+        `cannot block a merge, so a red one is a warning nobody has to read. Add the context to ` +
+        `repo-settings.yml (after confirming the name GitHub reports on a real PR), or add a ` +
+        `NOT_REQUIRED_PR_JOBS entry saying why not.`,
+    ).toEqual([]);
+
+    // A stale or contradictory exemption is a hole: it would silently excuse
+    // the next job that reuses the key.
+    for (const [key, why] of Object.entries(NOT_REQUIRED_PR_JOBS)) {
+      expect(why.length, `${key}: an exemption must say why`).toBeGreaterThan(20);
+      const matches = prJobs.filter((p) => `${p.file.split(" → ")[0]}#${p.jobId}` === key);
+      expect(matches.length, `NOT_REQUIRED_PR_JOBS["${key}"] matches no PR-time job`).toBeGreaterThan(
+        0,
+      );
+      for (const p of matches) {
+        expect(
+          required.has(p.context),
+          `NOT_REQUIRED_PR_JOBS["${key}"] exempts "${p.context}", which the ruleset requires`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  // The detectors above must fire on every shape that leaves a PR unreported,
+  // or the gate regresses to a no-op that still reads green.
+  test("pullRequestTriggerGaps: clean on every-PR shapes, fires on each filter", () => {
+    expect(pullRequestTriggerGaps("pull_request")).toEqual([]);
+    expect(pullRequestTriggerGaps(["push", "pull_request"])).toEqual([]);
+    expect(pullRequestTriggerGaps({ pull_request: null })).toEqual([]);
+    expect(
+      pullRequestTriggerGaps({
+        pull_request: { types: ["opened", "synchronize", "reopened"], branches: ["main"] },
+      }),
+    ).toEqual([]);
+    expect(pullRequestTriggerGaps({ pull_request: { branches: ["**"] } })).toEqual([]);
+
+    expect(pullRequestTriggerGaps({ push: { branches: ["main"] } })).toEqual([
+      "no `pull_request` trigger",
+    ]);
+    expect(pullRequestTriggerGaps({ pull_request: { paths: ["src/**"] } })[0]).toContain("paths");
+    expect(pullRequestTriggerGaps({ pull_request: { "paths-ignore": ["docs/**"] } })[0]).toContain(
+      "paths-ignore",
+    );
+    expect(pullRequestTriggerGaps({ pull_request: { branches: ["release/*"] } })[0]).toContain(
+      "does not match",
+    );
+    expect(pullRequestTriggerGaps({ pull_request: { branches: ["main", "!main"] } })[0]).toContain(
+      "negation",
+    );
+    expect(pullRequestTriggerGaps({ pull_request: { "branches-ignore": ["ma*"] } })[0]).toContain(
+      "branches-ignore",
+    );
+    expect(pullRequestTriggerGaps({ pull_request: { types: ["opened"] } })).toEqual([
+      "`on.pull_request.types` omits `synchronize`",
+      "`on.pull_request.types` omits `reopened`",
+    ]);
+  });
+
+  test("publisherJobGaps: fires on `if:` and `continue-on-error` at either site", () => {
+    expect(publisherJobGaps({ job: { "runs-on": "ubuntu-latest" }, reusableJob: null })).toEqual([]);
+    expect(publisherJobGaps({ job: { "continue-on-error": false }, reusableJob: null })).toEqual([]);
+    expect(publisherJobGaps({ job: { if: "always()" }, reusableJob: null })[0]).toContain("`if:`");
+    expect(publisherJobGaps({ job: { uses: "x" }, reusableJob: { if: "false" } })[0]).toContain(
+      "reusable job-level `if:`",
+    );
+    expect(publisherJobGaps({ job: { "continue-on-error": true }, reusableJob: null })[0]).toContain(
+      "continue-on-error",
+    );
+    expect(
+      publisherJobGaps({ job: { "continue-on-error": "${{ matrix.experimental }}" } })[0],
+    ).toContain("continue-on-error");
   });
 });

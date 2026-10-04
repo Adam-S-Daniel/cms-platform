@@ -369,10 +369,13 @@ test.describe("a required status context can never end `cancelled`", () => {
 
   // ── PASS 1: the PLATFORM's own required contexts ────────────────────────
   //
-  // `platform-main` requires four BARE contexts, all published by self-ci.yml.
-  // That workflow carried `group: self-ci-<event>-<pr|ref>` with
+  // `platform-main` requires six BARE contexts, all published by self-ci.yml,
+  // plus `scan / scan` (#525), published through self-secrets-scan.yml's LOCAL
+  // `uses: ./.github/workflows/secrets-scan.yml` — which `reusableBasename`
+  // resolves, so this pass reads the reusable too.
+  // self-ci.yml carried `group: self-ci-<event>-<pr|ref>` with
   // `cancel-in-progress: true` until #285; the group is gone and this pass is
-  // what keeps it gone. None of the four carries a `timeout-minutes` either, and
+  // what keeps it gone. None of the six carries a `timeout-minutes` either, and
   // this pass is now what keeps THAT true as well (#289) — a wall added to
   // `node-unit-lints` would be the same defect in a different key.
   test("no platform required-context job can be cancelled structurally", () => {
@@ -671,12 +674,20 @@ test.describe("cancellationHazards — one call, every cause, each with its own 
 });
 
 // The required set is derived, not hardcoded — so prove the derivation actually
-// reaches self-ci.yml's four job ids and the six consumer contexts, and that the
+// reaches self-ci.yml's six job ids plus `scan / scan` and the consumer contexts, and that the
 // context splitter handles both shapes a ruleset can carry.
 test.describe("required-context derivation", () => {
-  test("yields the four self-ci.yml job ids the platform-main ruleset requires", () => {
+  test("yields the self-ci.yml job ids and `scan / scan` the platform-main ruleset requires", () => {
     const contexts = contextsOf(PLATFORM_RULESET);
-    for (const id of ["actionlint", "ruby-theme-specs", "node-unit-lints", "plugin-validate"]) {
+    for (const id of [
+      "actionlint",
+      "ruby-theme-specs",
+      "node-unit-lints",
+      "plugin-validate",
+      "python-unit-tests",
+      "cfn-lint",
+      "scan / scan",
+    ]) {
       expect(
         contexts,
         `repo-settings.yml ruleset_library.${PLATFORM_RULESET} must require \`${id}\` — this ` +
@@ -761,8 +772,16 @@ test.describe("required-context derivation", () => {
   // The three workflows #285 stripped. Asserted by NAME so a re-added block reds
   // here with a message that says which file, even if the scanner above were ever
   // narrowed: `readWorkflow` throws on a missing file rather than skipping.
-  test("self-ci, secrets-scan and visual-regression declare no `concurrency:` at all", () => {
-    for (const name of ["self-ci.yml", "secrets-scan.yml", "visual-regression.yml"]) {
+  // self-secrets-scan.yml joined in #525: it is the CALLER that publishes the
+  // platform's `scan / scan`, and a workflow-level group there cancels the run
+  // that would report it.
+  test("self-ci, self-secrets-scan, secrets-scan and visual-regression declare no `concurrency:` at all", () => {
+    for (const name of [
+      "self-ci.yml",
+      "self-secrets-scan.yml",
+      "secrets-scan.yml",
+      "visual-regression.yml",
+    ]) {
       const doc = parseYaml(readWorkflow(name)) || {};
       expect(
         Object.prototype.hasOwnProperty.call(doc, "concurrency"),

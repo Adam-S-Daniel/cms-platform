@@ -18,10 +18,15 @@
 #   3. node pure-fs harness lints: e2e/*.test.js that need no browser/build
 #                                                      (hard-fail)
 #   4. claude plugin validate over this repo's plugin ROOT (hard-fail)
-#   5. cfn-lint over the CloudFormation templates      (advisory, soft-fail)
+#   5. cfn-lint over the CloudFormation templates      (hard-fail since #525)
 #   6. python-unit-tests: scripts/cross_post's and oauth-proxy's pytest suites
-#      (hard-fail, but NOT one of the four REQUIRED contexts — see the job for
-#      why)
+#                                                      (hard-fail)
+#
+# ALL SIX job ids are REQUIRED status contexts (repo-settings.yml ->
+# `ruleset_library.platform-main`, which also requires self-secrets-scan.yml's
+# `scan / scan`). A new job here is a new PR-time check, so it must join that
+# list or carry a stated exemption in e2e/ruleset-context-publishable.test.js —
+# that lint fails otherwise.
 #
 # NOT RUN HERE (needs a browser / a built Jekyll site / AWS — covered by the
 # e2e reusable + dogfood/consumer CI, not by a unit-speed PR gate):
@@ -37,8 +42,9 @@
 #     Dockerfile this machinery repo intentionally doesn't ship — see AGENTS.md
 #     "playwright-image-drift real-repo subtest caveat").
 #   - `aws cloudformation validate-template` (no creds in CI) — cfn-lint is the
-#     credential-free stand-in, and is advisory so a cfn-lint version bump or a
-#     spec-coverage gap can't block an unrelated PR.
+#     credential-free stand-in. It is PINNED rather than advisory, so a new
+#     cfn-lint release can't block an unrelated PR: only a deliberate pin bump
+#     changes its rule set.
 
 name: Self CI
 
@@ -54,9 +60,14 @@ on:
   # No `edited` (#222): a skipped caller emits NO check-run, so an `edited` run
   # WITHDRAWS contexts an earlier run reported green, and only a new SHA restores
   # them. Everything else is GitHub's default types list. `workflow_dispatch` is
-  # absent because these four jobs are a MERGE GATE, not an on-demand tool — a
-  # dispatch would report the four required contexts against a ref nobody is
+  # absent because these six jobs are a MERGE GATE, not an on-demand tool — a
+  # dispatch would report the six required contexts against a ref nobody is
   # merging.
+  #
+  # NO `paths:` / `paths-ignore:` / `branches:` filter, and no job-level `if:`,
+  # on purpose: every job here publishes a REQUIRED context, and a required
+  # context that a filtered or skipped run never reports blocks the merge
+  # forever. Locked by e2e/ruleset-context-publishable.test.js.
   pull_request:
     types: [opened, synchronize, reopened]
   push:
@@ -69,9 +80,10 @@ permissions:
 
 # NO `concurrency:` BLOCK — a deliberate, load-bearing ABSENCE. Do not add one.
 #
-# The four jobs below publish this repo's four REQUIRED status contexts
+# The six jobs below publish six of this repo's REQUIRED status contexts
 # (repo-settings.yml -> `ruleset_library.platform-main`: actionlint,
-# ruby-theme-specs, node-unit-lints, plugin-validate). AGENTS.md's rule for a job
+# ruby-theme-specs, node-unit-lints, plugin-validate, cfn-lint,
+# python-unit-tests). AGENTS.md's rule for a job
 # in that position is categorical — no `concurrency` block at all — and this
 # workflow carried `group: self-ci-<event>-<pr|ref>` with
 # `cancel-in-progress: true` until cms-platform#285.
@@ -367,15 +379,21 @@ jobs:
         # changing this line.
         run: claude plugin validate .
 
-  # ── 5. cfn-lint — CloudFormation templates (advisory) ────────────────────
+  # ── 5. cfn-lint — CloudFormation templates (REQUIRED, hard-fail) ─────────
   # `aws cloudformation validate-template` needs AWS credentials we don't have
-  # in CI, so cfn-lint is the credential-free stand-in. Marked
-  # continue-on-error: a cfn-lint version bump or a new rule shouldn't block an
-  # otherwise-good PR — but its findings still surface in the run log so infra
-  # drift is visible.
+  # in CI, so cfn-lint is the credential-free stand-in.
+  #
+  # It carried a job-level `continue-on-error: true` until #525, so a finding
+  # could never fail a PR, and requiring the context would have required
+  # nothing. The reason given for it — "a cfn-lint version bump or a new rule
+  # shouldn't block an otherwise-good PR" — was a consequence of the UNPINNED
+  # `pip install cfn-lint`, so #525 fixes that cause instead: the version is
+  # pinned below, which means a new upstream rule reaches this lane only through
+  # a deliberate pin bump, whose PR shows its findings. Do not re-add
+  # `continue-on-error` (e2e/ruleset-context-publishable.test.js rejects it on
+  # any required-context job).
   cfn-lint:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -386,40 +404,46 @@ jobs:
           python-version: '3.12'
 
       - name: Install cfn-lint
-        run: pip install --disable-pip-version-check cfn-lint
+        env:
+          # Pinned + dated like the actionlint binary above. 1.57.0
+          # (2026-09-17) is the newest release at least 7 days old as of
+          # pinning (2026-10-03); 1.57.1 (2026-09-29) was still cooling off.
+          # Measured: 1.57.0 lints all three templates below with exit 0 and
+          # no findings.
+          CFN_LINT_VERSION: '1.57.0'  # 2026-09-17
+        run: pip install --disable-pip-version-check "cfn-lint==${CFN_LINT_VERSION}"
 
       - name: Lint CloudFormation templates
+        # Every listed template must EXIST: a moved or renamed template used to
+        # drop out of the lint silently (and an all-missing list exited 0), which
+        # is a green verdict on nothing — the same rule actionlint's template
+        # step above applies to an empty glob.
         run: |
           set -euo pipefail
-          shopt -s nullglob
           templates=(
             oauth-proxy/template.yaml
             infrastructure/rum/template.yaml
             infrastructure/bootstrap/template.yaml
           )
-          present=()
+          missing=0
           for t in "${templates[@]}"; do
-            [ -f "$t" ] && present+=("$t")
+            if [ ! -f "$t" ]; then
+              echo "::error::CloudFormation template not found: $t (update this list if it moved)" >&2
+              missing=1
+            fi
           done
-          if [ ${#present[@]} -eq 0 ]; then
-            echo "No CloudFormation templates found — nothing to lint."
-            exit 0
-          fi
-          cfn-lint "${present[@]}"
+          [ "$missing" -eq 0 ] || exit 1
+          cfn-lint "${templates[@]}"
 
   # ── 6. python-unit-tests — the pytest suites (cross_post + oauth-proxy) ──
   # cross_post.py (cms-platform#442) and the OAuth proxy's lambda.py are the
   # platform-owned Python with pytest suites instead of a node *.test.js lint,
   # so they get their own job rather than folding into node-unit-lints.
   # oauth-proxy/test_lambda.py used to run nowhere in CI, though it guards the
-  # login popup's token handoff. Deliberately NOT one of the four required
-  # contexts (repo-settings.yml's `platform-main` ruleset names
-  # actionlint / ruby-theme-specs / node-unit-lints / plugin-validate only) —
-  # adding a fifth required context is a repo-settings decision, not
-  # something this job should make unilaterally by existing. No
-  # `concurrency:` block for the same reason every job in this file carries
-  # none (see the file-level comment above); this job just also happens not
-  # to need one, since it publishes no required status context at all.
+  # login popup's token handoff. A REQUIRED context since #525
+  # (repo-settings.yml's `platform-main`), so a failing security suite blocks
+  # the merge instead of merely turning a non-required check red. No
+  # `concurrency:` block, for the reason the file-level comment above gives.
   python-unit-tests:
     runs-on: ubuntu-latest
     steps:
