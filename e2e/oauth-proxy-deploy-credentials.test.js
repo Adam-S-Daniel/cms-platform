@@ -376,6 +376,32 @@ for (const apex of ["test", "*.example.test", "example.test.", "https://example.
 
 const PREVIEW_WARNING = "will hang after GitHub consent";
 
+for (const [label, apex] of [
+  ["trailing LF", "example.com\n"],
+  ["repeated trailing LF", "example.com\n\n"],
+  ["trailing CRLF", "example.com\r\n"],
+  ["trailing space", "example.com "],
+  ["trailing tab", "example.com\t"],
+  ["leading space", " example.com"],
+  ["leading tab", "\texample.com"],
+  ["leading LF", "\nexample.com"],
+]) {
+  test(`APEX_DOMAIN ${label}: rejects whitespace before normalization without echoing it`, () => {
+    const r = runDeploy({ ALLOWED_ORIGINS: "https://example.com", APEX_DOMAIN: apex, STUB_STACK: "exists" });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.stderr).toContain("APEX_DOMAIN starts or ends with whitespace");
+    expect(r.stderr).toContain("Remove the whitespace");
+    expect(r.out).not.toContain(apex);
+    expect(r.calls, "neither aws nor sam may run").toEqual([]);
+    for (const valid of ["example.com", "ExAmPlE.NeT"]) {
+      const control = runDeploy({ ALLOWED_ORIGINS: `https://${valid.toLowerCase()}`, APEX_DOMAIN: valid, STUB_STACK: "exists" });
+      expect(control.status, control.out).toBe(0);
+      expect(overrides(samDeploy(control.calls))).toContain(`SiteApex=${valid.toLowerCase()}`);
+    }
+  });
+}
+
+
 test("no preview-* entry: warns, names the entry to add, and still deploys (#524)", () => {
   const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test", APEX_DOMAIN: APEX, STUB_STACK: "exists" });
   expect(r.status, r.out).toBe(0);

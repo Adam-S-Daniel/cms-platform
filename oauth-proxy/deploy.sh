@@ -100,6 +100,10 @@ fi
 # script carries no Public Suffix List, so the site's own apex is the bound.
 ORIGIN_RE='^https://[a-z0-9*-]+(\.[a-z0-9*-]+)+(:[0-9]{1,5})?$'
 APEX_RE='^[a-z0-9-]+(\.[a-z0-9-]+)+$'
+# Command substitution drops trailing newlines, so reject whitespace first.
+if [[ "$APEX_DOMAIN" =~ ^[[:space:]]|[[:space:]]$ ]]; then
+  error "APEX_DOMAIN starts or ends with whitespace and is not a domain name. Remove the whitespace and retry."
+fi
 APEX_DOMAIN="$(printf '%s' "$APEX_DOMAIN" | tr '[:upper:]' '[:lower:]')"
 if [[ -n "$APEX_DOMAIN" && ! "$APEX_DOMAIN" =~ $APEX_RE ]]; then
   error "APEX_DOMAIN '${APEX_DOMAIN}' is not a domain name. Set it to the site's apex, e.g. example.com (no scheme, no '*', no trailing dot)."
