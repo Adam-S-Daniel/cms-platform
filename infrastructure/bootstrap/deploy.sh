@@ -18,6 +18,14 @@
 # If a GitHub OIDC provider already exists in this account:
 #   CREATE_OIDC_PROVIDER=false bash infrastructure/bootstrap/deploy.sh
 #
+# The template is larger than 51,200 bytes, so the AWS CLI refuses to send it
+# inline and it must go through an S3 bucket. On an UPDATE that bucket is the
+# stack's own artifact bucket (ARTIFACT_BUCKET), which already exists. The very
+# FIRST deploy has no such bucket yet, so name any existing bucket you can
+# write to in TEMPLATE_S3_BUCKET (the script never creates one):
+#   TEMPLATE_S3_BUCKET=my-existing-bucket bash infrastructure/bootstrap/deploy.sh
+# TEMPLATE_S3_BUCKET also overrides the artifact bucket on an update.
+#
 # This script is idempotent — safe to re-run at any time.
 # =============================================================================
 
@@ -51,6 +59,10 @@ HOSTED_ZONE_ID="${HOSTED_ZONE_ID:-}"
 HSTS_MAX_AGE_SECONDS="${HSTS_MAX_AGE_SECONDS:-31536000}"
 HSTS_SCOPE="${HSTS_SCOPE:-this-host-only}"
 ADMIN_CSP_MODE="${ADMIN_CSP_MODE:-report-only}"
+# Where `aws cloudformation deploy` uploads the (over-51,200-byte) template.
+# Empty = use the stack's own artifact bucket, which exists only on an update.
+TEMPLATE_S3_BUCKET="${TEMPLATE_S3_BUCKET:-}"
+TEMPLATE_S3_PREFIX="bootstrap-templates"
 
 # ── Colour output ──────────────────────────────────────────────────────────
 BLUE='\033[0;34m'
@@ -89,9 +101,40 @@ if [[ -z "$HOSTED_ZONE_ID" ]]; then
   info "Found hosted zone: ${HOSTED_ZONE_ID}"
 fi
 
+# ── Pick the bucket the template is uploaded through ───────────────────────
+# template.yaml is over the CLI's 51,200-byte inline limit, so `deploy` needs
+# --s3-bucket. The stack's own artifact bucket is the natural home, but only an
+# EXISTING stack has it: decide that here, the way oauth-proxy/deploy.sh does.
+# A missing stack needs TEMPLATE_S3_BUCKET; any other failure stops the deploy
+# rather than guess. The aws error text is never echoed (it can carry account
+# detail).
+if [[ -z "$TEMPLATE_S3_BUCKET" ]]; then
+  if STACK_STATUS="$(aws cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" \
+    --region "$AWS_REGION" \
+    --query 'Stacks[0].StackStatus' \
+    --output text 2>&1)"; then
+    case "$STACK_STATUS" in
+      "" | None | REVIEW_IN_PROGRESS | CREATE_FAILED | ROLLBACK_COMPLETE)
+        error "Stack ${STACK_NAME} has no artifact bucket to hold the template yet. The template exceeds the AWS CLI's 51,200-byte inline limit, so set TEMPLATE_S3_BUCKET to an existing S3 bucket you can write to, then re-run."
+        ;;
+    esac
+    [[ "$STACK_STATUS" =~ ^[A-Z_]+$ ]] \
+      || error "Could not read the status of stack ${STACK_NAME} in ${AWS_REGION}, so the template upload bucket cannot be chosen safely. Re-run, or set TEMPLATE_S3_BUCKET."
+    TEMPLATE_S3_BUCKET="$ARTIFACT_BUCKET"
+  elif [[ "$STACK_STATUS" == *"Stack with id ${STACK_NAME} does not exist"* ]]; then
+    error "Stack ${STACK_NAME} does not exist in ${AWS_REGION}, so its artifact bucket (${ARTIFACT_BUCKET}) does not exist yet. The template exceeds the AWS CLI's 51,200-byte inline limit and must be uploaded through S3: set TEMPLATE_S3_BUCKET to an existing S3 bucket you can write to, then re-run. This script does not create buckets."
+  else
+    error "Could not tell whether stack ${STACK_NAME} exists in ${AWS_REGION}, so the template upload bucket cannot be chosen safely. Check the AWS session and network, then re-run, or set TEMPLATE_S3_BUCKET."
+  fi
+fi
+info "Template upload: s3://${TEMPLATE_S3_BUCKET}/${TEMPLATE_S3_PREFIX}/"
+
 # ── Deploy ─────────────────────────────────────────────────────────────────
 aws cloudformation deploy \
   --template-file template.yaml \
+  --s3-bucket "$TEMPLATE_S3_BUCKET" \
+  --s3-prefix "$TEMPLATE_S3_PREFIX" \
   --stack-name "$STACK_NAME" \
   --region "$AWS_REGION" \
   --capabilities CAPABILITY_NAMED_IAM \
