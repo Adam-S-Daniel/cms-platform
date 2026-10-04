@@ -20,7 +20,7 @@
 //   }
 //
 // Exit code: 0 for success in all scopes (including "skip" — that's
-// not an error). Non-zero only if git diff fails outright.
+// not an error). A failed git diff warns on stderr and selects all tests.
 //
 // Always-run baseline (cheap, no browser): compute-visual-diffs.test.js,
 // cms-config.spec.js, canary-content.test.js.
@@ -883,18 +883,11 @@ const SPEC_RULES = {
 // destination, hiding a file moved out of a path a rule watches. Git runs
 // through an argv array, so a branch name cannot reach a shell.
 function getChangedFiles(baseRef, cwd = process.cwd()) {
-  const git = (args) => execFileSync("git", args, { encoding: "utf8", cwd, maxBuffer: 64 * 1024 * 1024 });
-  try {
-    return git(["diff", "--name-only", "-z", "--no-renames", `${baseRef}...HEAD`])
-      .split("\0")
-      .filter(Boolean);
-  } catch {
-    // Fallback: list current uncommitted changes. Each record is `XY path`.
-    return git(["status", "--porcelain", "-z", "--no-renames"])
-      .split("\0")
-      .map((record) => record.slice(3))
-      .filter(Boolean);
-  }
+  // Status cannot replace a failed diff: committed changes would disappear.
+  // Capture stderr too, so an API caller can handle failure without leaking it.
+  return execFileSync("git", ["diff", "--name-only", "-z", "--no-renames", `${baseRef}...HEAD`], {
+    encoding: "utf8", cwd, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+  }).split("\0").filter(Boolean);
 }
 
 // Parse `// @<key>: <value>` style directives from the head of a spec
@@ -1292,7 +1285,18 @@ if (require.main === module) {
   const args = process.argv.slice(2);
   const baseIdx = args.indexOf("--base");
   const baseRef = baseIdx >= 0 ? args[baseIdx + 1] : "origin/main";
-  const changed = getChangedFiles(baseRef);
+  let changed;
+  try {
+    changed = getChangedFiles(baseRef);
+  } catch {
+    const reason = "Could not determine changed files; running all applicable tests.";
+    process.stderr.write(`Warning: ${reason}\n`);
+    const result = args.includes("--parity-preview")
+      ? { scope: "subset", files: [...PARITY_PREVIEW_SPECS], reason }
+      : { scope: "all", reason, shard_count: pickShardCount("all") };
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    process.exit(0);
+  }
   // --parity-preview emits the @parity-preview subset for the
   // parity-preview workflow's salient detector. Output shape matches
   // the rest of the script (JSON envelope) so the workflow can

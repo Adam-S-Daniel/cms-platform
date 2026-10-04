@@ -39,7 +39,50 @@ const lines = (s) =>
   String(s.run || "")
     .replace(/\\\n/g, " ")
     .split("\n");
-const words = (line) => line.split(/[\s$()|;]+/).filter(Boolean);
+// Lexical shell words: remove quotes, keep variable spellings, and stop at an
+// unquoted comment. Operators mark command positions, so echo arguments never
+// masquerade as an executable. No shell expansion or execution is needed.
+function words(line) {
+  const tokens = [];
+  let word = "";
+  let quote = "";
+  const substitutions = [];
+  const flush = () => {
+    if (word) tokens.push(word);
+    word = "";
+  };
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "\\" && quote !== "'" && i + 1 < line.length) {
+      word += line[++i];
+    } else if (ch === "$" && line[i + 1] === "(" && quote !== "'") {
+      // A command substitution executes even inside double quotes.
+      flush();
+      tokens.push("(");
+      substitutions.push(quote);
+      quote = "";
+      i += 1;
+    } else if (quote) {
+      if (ch === quote) quote = "";
+      else word += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "#" && !word) {
+      break;
+    } else if (/\s/.test(ch)) {
+      flush();
+    } else if ("()|;&".includes(ch)) {
+      flush();
+      tokens.push(ch);
+      if (ch === "(") substitutions.push(quote);
+      if (ch === ")" && substitutions.length) quote = substitutions.pop();
+    } else {
+      word += ch;
+    }
+  }
+  flush();
+  return tokens;
+}
 // git's global options that take a SEPARATE argument; `--opt=value` spellings
 // and the boolean flags (`-p`, `--no-pager`, ...) need no skipping.
 const GIT_OPTIONS_WITH_ARG = new Set([
@@ -57,8 +100,16 @@ const GIT_OPTIONS_WITH_ARG = new Set([
 // after git's global options. `git -c k=v fetch` is a fetch, not a `k=v`.
 function gitSubcommands(lineWords) {
   const subs = [];
+  let command = true;
   lineWords.forEach((word, i) => {
-    if (word !== "git") return;
+    if (["(", ")", "|", ";", "&"].includes(word)) {
+      command = true;
+      return;
+    }
+    if (!command) return;
+    if (["if", "then", "elif", "do", "!", "command", "env", "exec"].includes(word) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) return;
+    command = false;
+    if (word !== "git" && !word.endsWith("/git") && word !== "$GIT" && word !== "${GIT}") return;
     let j = i + 1;
     while (j < lineWords.length && lineWords[j].startsWith("-")) {
       j += GIT_OPTIONS_WITH_ARG.has(lineWords[j]) ? 2 : 1;
@@ -196,6 +247,18 @@ test.describe("every step that runs ensure-merge-base.js fails closed (behaviora
 // the spellings that hid a fetch behind global options.
 test.describe("gitSubcommands (the no-direct-fetch lint's reader)", () => {
   const sub = (cmd) => gitSubcommands(words(cmd));
+  test("quoted fetch is detected while comments and unrelated echo are ignored", () => {
+    expect(sub('"git" fetch origin main')).toEqual(["fetch"]);
+    for (const cmd of ["# git fetch origin main", 'echo "git fetch origin main"', "echo git fetch origin main"]) {
+      expect(sub(cmd), cmd).toEqual([]);
+    }
+    expect(sub("git diff # git fetch origin main")).toEqual(["diff"]);
+    expect(sub('files="$(git fetch origin main)"')).toEqual(["fetch"]);
+    expect(sub("echo '$(git fetch origin main)'")).toEqual([]);
+    for (const prefix of ["command", "env", "exec"]) {
+      expect(sub(`${prefix} git fetch origin main`), prefix).toEqual(["fetch"]);
+    }
+  });
   for (const [cmd, expected] of [
     ["git fetch origin main", ["fetch"]],
     ["git -c k=v fetch origin main", ["fetch"]],
@@ -207,6 +270,17 @@ test.describe("gitSubcommands (the no-direct-fetch lint's reader)", () => {
     ["git -c k=v diff --name-only", ["diff"]],
     ["git config --global --add safe.directory x", ["config"]],
     ["echo fetch", []],
+    ['"git" fetch origin main', ["fetch"]],
+    ["'git' fetch origin main", ["fetch"]],
+    ["$GIT fetch origin main", ["fetch"]],
+    ["${GIT} fetch origin main", ["fetch"]],
+    ['"$GIT" -c k=v fetch origin main', ["fetch"]],
+    ["/usr/bin/git fetch origin main", ["fetch"]],
+    ['"/usr/bin/git" --git-dir .git fetch origin main', ["fetch"]],
+    ['"git" --no-pager diff --name-only', ["diff"]],
+    ['"$GIT" config --global user.name', ["config"]],
+    ['files="$("git" fetch origin main)"', ["fetch"]],
+    ['files="$("$GIT" -c k=v fetch origin main)"', ["fetch"]],
   ]) {
     test(`${cmd} -> ${JSON.stringify(expected)}`, () => {
       expect(sub(cmd)).toEqual(expected);
