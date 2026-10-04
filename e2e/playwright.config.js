@@ -35,6 +35,8 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // basenames; the regex below matches them anywhere under the testDir.
 const CONSUMER = !!process.env.SITE_ROOT;
 const PLATFORM_META_SPECS = [
+  // Executes Decap save serialization against the platform-owned posts form.
+  "cms-ui-front-matter.test.js",
   // Reads the platform's own deploy workflows, bootstrap CloudFormation and
   // scripts/publish-opted-in-pdfs.sh — none of which a consumer site has, so
   // it must be testIgnored on the CONSUMER lane. See docs/MEDIA-ARCHIVE.md.
