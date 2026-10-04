@@ -190,7 +190,7 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
 
   // A site whose `main` holds a layout, a post and an upload, and a work
   // tree checked out at `pr`, which applies `prFiles` (null deletes).
-  function checkoutAfter(prFiles) {
+  function checkoutAfter(prFiles, base = "main") {
     sb = createSandbox("salience-step-");
     const src = sb.initRepo("src");
     sb.commit(
@@ -202,6 +202,8 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
       },
       "main",
     );
+    // The base the PR targets: `main`, or a branch named like shell syntax.
+    if (base !== "main") sb.git(src, ["branch", base, "main"]);
     sb.git(src, ["checkout", "-q", "-b", "pr"]);
     sb.commit(src, prFiles, "pr");
     const work = sb.fullClone(sb.publish(src));
@@ -213,7 +215,7 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
   // Runs the step and returns the raw result. `stubs` (name -> sh body) are
   // put first on PATH; mktemp files land in a private TMPDIR returned as
   // `tmp` so a leak is observable.
-  function execute(workflowFile, stepName, work, stubs = {}) {
+  function execute(workflowFile, stepName, work, stubs = {}, base = "main") {
     const [found] = findRunSteps(() => true).filter(
       (f) => f.workflow === workflowFile && f.step.name === stepName,
     );
@@ -225,7 +227,7 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
       cwd: work,
       scratch: path.join(sb.root, `run-${found.job}`),
       env: { ...sb.env, TMPDIR: tmp, PATH: `${bin}:${path.dirname(process.execPath)}:${sb.env.PATH}` },
-      stepEnv: { BASE: "main", BASE_REF: "main" },
+      stepEnv: { BASE: base, BASE_REF: base },
     });
     return { ...r, tmp };
   }
@@ -265,6 +267,34 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
     test(`preview-media: a new upload named ${JSON.stringify(name)} is salient (NUL-delimited)`, () => {
       const work = checkoutAfter({ [`assets/images/uploads/${name}`]: "img\n" });
       expect(decide(...MEDIA, work)).toBe("salient=true");
+    });
+  }
+
+  // Shell syntax in a path must stay data: `$VAR`, `$(...)`, a backtick and
+  // `;` are all legal in a file name, and an unquoted expansion would run or
+  // split them. A marker file in the work tree shows if anything ran.
+  const SHELL_NAMES = ["a$HOME.png", "b$(touch PWNED).png", "c`touch PWNED`.png", "d;touch PWNED;.png", "-e.png"];
+  for (const name of SHELL_NAMES) {
+    for (const [label, target] of [["preview-media", MEDIA], ["visual-regression", VISUAL]]) {
+      const dir = label === "preview-media" ? "assets/images/uploads" : "_layouts";
+      test(`${label}: a path named ${JSON.stringify(name)} is salient and never executed`, () => {
+        const work = checkoutAfter({ [`${dir}/${name}`]: "x\n" });
+        expect(decide(...target, work)).toBe("salient=true");
+        expect(fs.existsSync(path.join(work, "PWNED")), "no path text ran as shell").toBe(false);
+      });
+    }
+  }
+
+  // The base branch name is also an interpolation: legal ref names carry `$`,
+  // `(`, backticks and `;`.
+  const HOSTILE_BASE = "rel/x$(>PWNED)`>PWNED`;>PWNED";
+  for (const target of [MEDIA, VISUAL]) {
+    test(`${target[0]}: a base branch named like shell syntax is read verbatim and never executed`, () => {
+      const work = checkoutAfter({ "_config.yml": "title: x\n" }, HOSTILE_BASE);
+      const r = execute(...target, work, {}, HOSTILE_BASE);
+      expect(r.status, `exit status; stderr: ${r.stderr}`).toBe(0);
+      expect(r.output.trim()).toBe("salient=true");
+      expect(fs.existsSync(path.join(work, "PWNED")), "no branch text ran as shell").toBe(false);
     });
   }
 
@@ -334,6 +364,16 @@ test.describe("select-specs getChangedFiles (cms-platform#539, renames)", () => 
     const names = ["_layouts/café.html", '_includes/quote"d.html', "_includes/with space.html", "_data/new\nline.yml"];
     const work = clone(Object.fromEntries(names.map((n) => [n, "x\n"])));
     expect(getChangedFiles("origin/main", work).sort()).toEqual([...names].sort());
+  });
+
+  test("reads `$`, `(`, backtick and `;` names verbatim, and a base named like shell syntax", () => {
+    const names = ["_data/a$HOME.yml", "_data/b$(touch PWNED).yml", "_data/c`touch PWNED`.yml", "_data/d;touch PWNED;.yml"];
+    const work = clone(Object.fromEntries(names.map((n) => [n, "x\n"])));
+    expect(getChangedFiles("origin/main", work).sort()).toEqual([...names].sort());
+    const hostile = "rel/x$(>PWNED)`>PWNED`;>PWNED";
+    sb.git(work, ["branch", "-f", hostile, "origin/main"]);
+    expect(getChangedFiles(hostile, work).sort()).toEqual([...names].sort());
+    expect(fs.existsSync(path.join(work, "PWNED")), "no ref text ran as shell").toBe(false);
   });
 
   test("a move lists the source as well as the destination", () => {
