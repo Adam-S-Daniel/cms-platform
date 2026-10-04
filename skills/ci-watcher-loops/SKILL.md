@@ -23,9 +23,9 @@ The default approach has a subtle pitfall that breaks self-feedback silently. Th
 # Both go into $RUN. The watcher then runs `gh run view "$RUN"` with a
 # multi-line value, which fails. The until-loop's status check never
 # matches "completed", and the watcher polls forever.
-RUN=$(gh workflow run X.yml --ref main && \
+RUN=$(gh workflow run <workflow>.yml --ref main && \
       sleep 5 && \
-      gh run list --workflow=X.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+      gh run list --workflow=<workflow>.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 
 until [ "$(gh run view "$RUN" --json status --jq .status 2>/dev/null)" = "completed" ]; do
   sleep 60
@@ -38,9 +38,9 @@ done
 
 ```bash
 # CORRECT — silence the noisy command's stdout, then capture only what you need.
-gh workflow run X.yml --ref main > /dev/null
+gh workflow run <workflow>.yml --ref main > /dev/null
 sleep 5
-RUN=$(gh run list --workflow=X.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+RUN=$(gh run list --workflow=<workflow>.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 
 until [ "$(gh run view "$RUN" --json status --jq .status 2>/dev/null)" = "completed" ]; do
   sleep 60
@@ -50,9 +50,9 @@ done
 Or, equivalently:
 
 ```bash
-gh workflow run X.yml --ref main 1> /dev/null     # discard the URL line
+gh workflow run <workflow>.yml --ref main 1> /dev/null     # discard the URL line
 sleep 5
-RUN=$(gh run list --workflow=X.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+RUN=$(gh run list --workflow=<workflow>.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
 **Pre-flight check**: before wiring a chain into a long polling loop, `echo "$RUN"` and confirm it's a single value of the expected shape. Five seconds at write time saves hours of silent failure.

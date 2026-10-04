@@ -145,10 +145,11 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   `pin-consistency` alone. It checks out with a **Workflows: write** credential
   so the workflow-file push is authorised — otherwise GitHub rejects it
   (`refusing to allow ... to update workflow ... without 'workflows' permission`).
-  Since #238 that credential resolves **App → PAT → `GITHUB_TOKEN`**: the CMS
-  automation App's per-run installation token when the consumer has
-  `vars.CMS_AUTOMATION_APP_ID` + the `app_private_key` secret (nothing to
-  rotate), else the caller PAT (`secrets.gh_token` = `CMS_PLATFORM_PAT`).
+  Since #238 that credential is the CMS automation App's per-run installation
+  token, minted from `vars.CMS_AUTOMATION_APP_ID` + the `app_private_key`
+  secret (nothing to rotate). The caller-PAT fallback (the `gh_token` input)
+  was REMOVED in v0.1.103, so a consumer without the App fails the bump with
+  an `::error::` naming both knobs.
   Locked by `e2e/platform-bump-atomic.test.js` and
   `e2e/app-token-platform-writers.test.js`. It also seeds any workflow
   caller the release newly made platform-dictated (a file
