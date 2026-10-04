@@ -41,6 +41,8 @@ const PLATFORM_META_SPECS = [
   // scripts/publish-opted-in-pdfs.sh — none of which a consumer site has, so
   // it must be testIgnored on the CONSUMER lane. See docs/MEDIA-ARCHIVE.md.
   "media-archive-publish-gate.test.js",
+  // Executes repository-controlled log text in the platform's workflow steps.
+  "workflow-command-log.test.js",
   // Platform-internal: admin-JS augmentation + the deploy-preview workflow-shape
   // assertion; and the exclude-plugin's synthetic-build test. Validated in the
   // platform's own self-CI (against the platform tree), not a consumer site.

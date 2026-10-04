@@ -151,32 +151,6 @@ test.describe("detect-changed-pages over real git (cms-platform#539)", () => {
   });
 });
 
-test.describe("visual-regression.yml detect job reads paths NUL-delimited (cms-platform#539)", () => {
-  const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
-
-  test("the salience step pipes `git diff --name-only -z` into the classifier's `-z` mode", () => {
-    const wf = parseYaml(readWorkflow("visual-regression.yml"));
-    const steps = (wf.jobs && wf.jobs.detect && wf.jobs.detect.steps) || [];
-    const step = steps.find((s) => s && s.id === "salience");
-    expect(step, "detect job has a step with id `salience`").toBeTruthy();
-    // Join backslash-continued lines, find the pipeline that invokes the
-    // classifier, and check the words of its two stages: the producer must
-    // be `git diff --name-only -z`, the consumer must pass `-z`. Token
-    // checks on one parsed step's script, not code shape.
-    const logical = String(step.run).replace(/\\\n/g, " ").split("\n");
-    const pipeline = logical.find((l) => l.includes("visual-regression-salient.js"));
-    expect(pipeline, "salience step invokes visual-regression-salient.js").toBeTruthy();
-    const stages = pipeline.split("|");
-    const cli = stages.findIndex((st) => st.includes("visual-regression-salient.js"));
-    expect(cli, "the classifier reads a pipe").toBeGreaterThan(0);
-    const words = (st) => st.split(/[\s$()]+/).filter(Boolean);
-    expect(words(stages[cli])).toContain("-z");
-    expect(words(stages[cli - 1]), "the diff feeding the classifier is `git diff --name-only -z`").toEqual(
-      expect.arrayContaining(["git", "diff", "--name-only", "-z"]),
-    );
-  });
-});
-
 // The workflow steps, executed for real: the extracted `run:` script of the
 // step that decides salience, over a real clone whose PR branch MOVES a file
 // (identical content, so git's rename detection fires) or adds a non-ASCII
@@ -222,7 +196,9 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
     expect(found, `${workflowFile} has a step named ${stepName}`).toBeTruthy();
     const tmp = path.join(sb.root, "tmp");
     fs.mkdirSync(tmp, { recursive: true });
-    const bin = writeStubs(path.join(sb.root, "stubs"), stubs);
+    // Failure messages still pass through stdout; keep their legacy log file
+    // writes inside the fixture rather than writing /tmp/preview-media.log.
+    const bin = writeStubs(path.join(sb.root, "stubs"), { tee: "cat", ...stubs });
     const r = runStep(found.step, {
       cwd: work,
       scratch: path.join(sb.root, `run-${found.job}`),
@@ -242,6 +218,106 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
 
   const VISUAL = ["visual-regression.yml", "Decide salience"];
   const MEDIA = ["preview-media.yml", "Detect media-salient changes"];
+
+  const REAL_GIT = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+  const DIAGNOSTIC = "fatal: invalid%ref\r\n::error::injected\nlast diagnostic\n";
+  const ESCAPED_DIAGNOSTIC = "fatal: invalid%25ref%0D%0A::error::injected%0Alast diagnostic";
+
+  for (const target of [VISUAL, MEDIA]) {
+    const salientDir = target === VISUAL ? "_layouts" : "assets/images/uploads";
+    for (const [file, salient, listing] of [
+      ["::error::x", false, "::error::x"],
+      ["notes%\r\n::error::injected\n", false, "notes%25%0D%0A::error::injected%0A"],
+      [`${salientDir}/odd%\r\n::error::injected\n`, true,
+        `${salientDir}/odd%25%0D%0A::error::injected%0A`],
+    ]) {
+      test(`${target[0]}: safely lists ${JSON.stringify(file)} and preserves salient=${salient}`, () => {
+        const work = checkoutAfter({ [file]: "changed\n" });
+        const r = execute(...target, work);
+        expect(r.status, r.stderr).toBe(0);
+        expect(r.output.trim()).toBe(`salient=${salient}`);
+        expect(r.stdout.split("\n").filter((line) => line.startsWith("  - "))).toEqual([`  - ${listing}`]);
+        expect(r.stdout).not.toContain("\r");
+        expect(r.stdout.split("\n").filter((line) => line.trimStart().startsWith("::error::"))).toEqual([]);
+        expect(fs.readdirSync(r.tmp)).toEqual([]);
+      });
+    }
+
+    test(`${target[0]}: a valid empty diff is non-salient and removes both temporary files`, () => {
+      const work = checkoutAfter({});
+      const r = execute(...target, work);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.output.trim()).toBe("salient=false");
+      expect(r.stdout.split("\n").filter((line) => line.startsWith("  - "))).toEqual([]);
+      expect(fs.readdirSync(r.tmp)).toEqual([]);
+    });
+
+    test(`${target[0]}: ignores changes only on the base branch (three-dot diff)`, () => {
+      const work = checkoutAfter({ "notes.md": "content\n" });
+      // Advance the actual local fixture remote, because the media history
+      // helper fetches main and would overwrite a worktree-only tracking ref.
+      const src = path.join(sb.root, "src");
+      sb.git(src, ["checkout", "-q", "main"]);
+      const baseHead = sb.commit(src, { "_layouts/post.html": "base branch edit\n" }, "base only");
+      sb.git(path.join(sb.root, "origin.git"), ["fetch", "-q", src, `${baseHead}:refs/heads/main`]);
+      sb.git(work, ["fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
+      const r = execute(...target, work);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.output.trim()).toBe("salient=false");
+      expect(r.stdout).not.toContain("  - _layouts/post.html");
+      expect(fs.readdirSync(r.tmp)).toEqual([]);
+    });
+
+    for (const partialDiff of [false, true]) {
+      test(`${target[0]}: escapes failed diff stderr and refuses partial records (partial=${partialDiff})`, () => {
+        const work = checkoutAfter({ "_config.yml": "title: changed\n" });
+        const r = execute(...target, work, {
+          git: `if [ "$1" = diff ]; then
+${partialDiff ? "printf '_config.yml\\0'" : ":"}
+printf '%s' '${DIAGNOSTIC}' >&2
+exit 17
+fi
+exec '${REAL_GIT}' "$@"`,
+        });
+        expect(r.status, r.stderr).toBe(target === VISUAL ? 17 : 1);
+        expect(r.output).toBe("");
+        expect(r.stderr).not.toContain(DIAGNOSTIC);
+        expect(r.stdout.split("\n").filter((line) => line.startsWith("Git diff diagnostic: "))).toEqual([
+          `Git diff diagnostic: ${ESCAPED_DIAGNOSTIC}`,
+        ]);
+        expect(r.stdout).not.toContain("\r");
+        expect(r.stdout).not.toContain("  - _config.yml");
+        expect(r.stdout.split("\n").filter((line) => line.trimStart().startsWith("::error::"))).toEqual([]);
+        expect(fs.readdirSync(r.tmp)).toEqual([]);
+      });
+    }
+  }
+
+  for (const failRefs of [false, true]) {
+    test(`preview-media: escapes ref diagnostic output and preserves log-only status handling (failed=${failRefs})`, () => {
+      const work = checkoutAfter({ "_config.yml": "title: changed\n" });
+      const r = execute(...MEDIA, work, {
+        // The history helper uses rev-parse with additional options. Fail only
+        // the three diagnostic calls, after history verification has passed.
+        git: `if { [ "$1" = rev-parse ] && { [ "$2" = HEAD ] || [ "$2" = origin/main ]; }; } || { [ "$1" = merge-base ] && [ "$3" = HEAD ]; }; then
+printf '%s' '${DIAGNOSTIC}' ${failRefs ? ">&2" : ""}
+exit ${failRefs ? 17 : 0}
+fi
+exec '${REAL_GIT}' "$@"`,
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.output.trim()).toBe("salient=true");
+      expect(r.stderr).not.toContain(DIAGNOSTIC);
+      expect(r.stdout.split("\n").filter((line) => line.endsWith(ESCAPED_DIAGNOSTIC))).toEqual([
+        `HEAD            = ${ESCAPED_DIAGNOSTIC}`,
+        `origin/main    = ${ESCAPED_DIAGNOSTIC}`,
+        `merge-base      = ${ESCAPED_DIAGNOSTIC}`,
+      ]);
+      expect(r.stdout).not.toContain("\r");
+      expect(r.stdout.split("\n").filter((line) => line.trimStart().startsWith("::error::"))).toEqual([]);
+      expect(fs.readdirSync(r.tmp)).toEqual([]);
+    });
+  }
 
   test("visual-regression: moving a layout out of _layouts/ is salient", () => {
     const work = checkoutAfter(MOVE("_layouts/post.html", "uploads/post.html", POST));

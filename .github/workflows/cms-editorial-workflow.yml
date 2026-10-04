@@ -244,7 +244,10 @@ jobs:
             }
 
             if (result.verdict === 'fail') {
-              core.info(`content-pr-guard: non-Decap content change — offending file(s):\n${result.contentFiles.join('\n')}`);
+              const escapeWorkflowData = (value) => String(value)
+                .replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+              core.info('content-pr-guard: non-Decap content change — offending file(s):');
+              for (const file of result.contentFiles) core.info(`  - ${escapeWorkflowData(file)}`);
               core.setFailed(
                 `Non-Decap PR touches ${result.contentFiles.length} CMS-managed content file(s) — see the PR comment for why, and the ${OVERRIDE_LABEL} escape hatch.`,
               );
@@ -262,18 +265,32 @@ jobs:
           # than the literal pattern when there are no posts (otherwise
           # grep tries to read `_posts/*.md` as a filename and the loop
           # falsely flags it as a missing-title post).
+          # Escape workflow-command data before printing repository-controlled text.
+          escape_workflow_data() {
+            local value=$1
+            value=${value//\%/%25}
+            value=${value//$'\r'/%0D}
+            value=${value//$'\n'/%0A}
+            printf '%s' "$value"
+          }
           shopt -s nullglob
           echo "Checking post front matter..."
           ERRORS=0
 
           for f in _posts/*.md; do
             # Every post must have title, date, and published fields
-            if ! grep -q "^title:" "$f"; then
-              echo "ERROR: $f is missing 'title' field"
+            if ! grep_diagnostic=$(grep -q "^title:" "$f" 2>&1); then
+              if [ -n "$grep_diagnostic" ]; then
+                printf 'Front matter diagnostic: %s\n' "$(escape_workflow_data "$grep_diagnostic")"
+              fi
+              printf "ERROR: %s is missing 'title' field\n" "$(escape_workflow_data "$f")"
               ERRORS=$((ERRORS+1))
             fi
-            if ! grep -q "^date:" "$f"; then
-              echo "ERROR: $f is missing 'date' field"
+            if ! grep_diagnostic=$(grep -q "^date:" "$f" 2>&1); then
+              if [ -n "$grep_diagnostic" ]; then
+                printf 'Front matter diagnostic: %s\n' "$(escape_workflow_data "$grep_diagnostic")"
+              fi
+              printf "ERROR: %s is missing 'date' field\n" "$(escape_workflow_data "$f")"
               ERRORS=$((ERRORS+1))
             fi
           done

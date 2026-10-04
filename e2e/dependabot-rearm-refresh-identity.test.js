@@ -534,10 +534,16 @@ test.describe("Dependabot path readers preserve NUL-delimited git paths (#539)",
     test(`sweep refuses all writes when its diagnostic diff fails (partial=${partialDiff})`, () => {
       const { repo } = fixture({ ".github/workflows/café.yml": "manifest\n" });
       const cwd = buildCwd({ dir: repo, realManifest: true });
-      const { dir, ghLog } = stubs({ realDiff: true, failDiffAt: 2, partialDiff, mergeSucceeds: true });
+      const diffStderr = "fatal: invalid%ref\r\n::error::injected\nlast diagnostic\n";
+      const { dir, ghLog } = stubs({ realDiff: true, failDiffAt: 2, partialDiff, diffStderr, mergeSucceeds: true });
       const result = runSweep({ cwd, stubDir: dir, fixtureEnv: sb.env });
       expect(result.code, result.out).toBe(1);
       expect(result.out).toContain("could not read the workflow-path diff");
+      expect(result.out.split("\n").filter((line) => line.startsWith("Git diff diagnostic: "))).toEqual([
+        "Git diff diagnostic: fatal: invalid%25ref%0D%0A::error::injected%0Alast diagnostic",
+      ]);
+      expect(result.out).not.toContain("\r");
+      expect(result.out.split("\n").filter((line) => line.trimStart().startsWith("::error::injected"))).toEqual([]);
       expect(result.summary).toContain("| failed (could not merge, refresh OR re-arm — needs a human) | 1 |");
       expect(callsOf(ghLog).filter((call) => call.argv[0] === "pr" && ["merge", "update-branch"].includes(call.argv[1]))).toEqual([]);
       expect(result.temporaryFiles).toEqual([]);

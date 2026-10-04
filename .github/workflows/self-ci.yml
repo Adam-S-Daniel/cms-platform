@@ -202,6 +202,14 @@ jobs:
       - name: Run theme specs
         run: |
           set -euo pipefail
+          # Escape workflow-command data before printing repository-controlled text.
+          escape_workflow_data() {
+            local value=$1
+            value=${value//\%/%25}
+            value=${value//$'\r'/%0D}
+            value=${value//$'\n'/%0A}
+            printf '%s' "$value"
+          }
           shopt -s nullglob
           specs=(theme/spec/*_test.rb)
           if [ ${#specs[@]} -eq 0 ]; then
@@ -210,7 +218,7 @@ jobs:
           fi
           status=0
           for spec in "${specs[@]}"; do
-            echo "::group::ruby ${spec}"
+            printf '::group::ruby %s\n' "$(escape_workflow_data "$spec")"
             ruby "${spec}" || status=1
             echo "::endgroup::"
           done

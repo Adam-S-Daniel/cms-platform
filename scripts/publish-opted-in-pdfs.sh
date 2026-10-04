@@ -27,6 +27,14 @@
 #     without the file is a confident 404 in front of a visitor.
 set -euo pipefail
 
+escape_workflow_data() {
+  local value=$1
+  value=${value//\%/%25}
+  value=${value//$'\r'/%0D}
+  value=${value//$'\n'/%0A}
+  printf '%s' "$value"
+}
+
 SITE_DIR="${1:-_site}"
 BUCKET="${MEDIA_ARCHIVE_BUCKET:-}"
 PREFIX="${MEDIA_ARCHIVE_PREFIX:-media-pdfs}"
@@ -65,9 +73,17 @@ KEYS_FILE="$(mktemp)"
 trap 'rm -f "$KEYS_FILE"' EXIT
 
 if ! ruby -ryaml -rdate -e '
+  def escape_workflow_data(value)
+    value.gsub("%", "%25").gsub("\r", "%0D").gsub("\n", "%0A")
+  end
   dir = ARGV[0]
   Dir.glob(File.join(dir, "*.md")).sort.each do |f|
-    src = File.read(f, encoding: "utf-8")
+    src = begin
+      File.read(f, encoding: "utf-8")
+    rescue SystemCallError => e
+      warn "::error::#{escape_workflow_data(f)}: could not read entry (#{e.class})"
+      exit 1
+    end
     parts = src.split(/^---\s*$/, 3)
     next if parts.length < 3
     # Narrow rescue: malformed front matter is skippable, but anything else (a
@@ -77,7 +93,7 @@ if ! ruby -ryaml -rdate -e '
     fm = begin
       YAML.safe_load(parts[1], aliases: true, permitted_classes: [Date, Time])
     rescue Psych::SyntaxError, Psych::DisallowedClass => e
-      warn "::warning::#{f}: front matter did not parse (#{e.class}), skipped"
+      warn "::warning::#{escape_workflow_data(f)}: front matter did not parse (#{e.class}), skipped"
       nil
     end
     next unless fm.is_a?(Hash)
@@ -86,7 +102,7 @@ if ! ruby -ryaml -rdate -e '
     next unless fm["pdf_public"] == true
     key = fm["pdf_archive_file"].to_s.strip
     if key.empty?
-      warn "::error::#{f}: pdf_public is true but pdf_archive_file is empty"
+      warn "::error::#{escape_workflow_data(f)}: pdf_public is true but pdf_archive_file is empty"
       exit 1
     end
     puts key
@@ -114,7 +130,7 @@ for key in "${KEYS[@]}"; do
   # The key reaches both a filesystem path and an S3 key, so validate it rather
   # than trusting repo content: no directory separators, no traversal, .pdf only.
   if ! [[ "$key" =~ ^[A-Za-z0-9._-]+\.pdf$ ]] || [[ "$key" == *..* ]]; then
-    echo "::error::refusing archive key ${key} — expected a bare <name>.pdf" >&2
+    printf '::error::refusing archive key %s — expected a bare <name>.pdf\n' "$(escape_workflow_data "$key")" >&2
     exit 1
   fi
   if ! aws s3 cp "s3://${BUCKET}/${PREFIX}/${key}" "${SITE_DIR}/${PUBLIC_DIR}/${key}"; then

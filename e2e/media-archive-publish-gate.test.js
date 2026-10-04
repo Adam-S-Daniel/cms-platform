@@ -216,3 +216,114 @@ test("no front-matter field this script dictates carries a gitleaks keyword", ()
     ).toBeUndefined();
   }
 });
+
+// Run the real Ruby parser with synthetic entries and a local AWS stub. This
+// exercises the annotation boundary without granting archive access.
+test.describe("archive parser escapes repository-controlled filename diagnostics", () => {
+  const { spawnSync } = require("node:child_process");
+  const { createSandbox } = require("./git-fixture");
+  const { writeStubs } = require("./workflow-step-harness");
+  let sb;
+  test.afterEach(() => sb && sb.cleanup());
+
+  for (const [label, frontMatter, code, diagnostic] of [
+    ["malformed YAML", "title: [broken", 0, "front matter did not parse (Psych::SyntaxError), skipped"],
+    ["missing archive file", "pdf_public: true", 1, "pdf_public is true but pdf_archive_file is empty"],
+    ["valid opted-in file", "pdf_public: true\npdf_archive_file: example.pdf", 0, null],
+  ]) {
+    test(`${label} keeps its verdict and prints no filename-injected command`, () => {
+      sb = createSandbox("archive-command-log-");
+      const filename = "_media/bad%\r\n::error::injected\n.md";
+      fs.mkdirSync(path.join(sb.root, "_media"));
+      fs.writeFileSync(path.join(sb.root, filename), `---\n${frontMatter}\n---\nentry\n`);
+      const bin = writeStubs(path.join(sb.root, "bin"), {
+        aws: 'printf "called\\n" >> "$AWS_CALL_LOG"\nprintf "pdf fixture\\n" > "$4"',
+      });
+      const awsLog = path.join(sb.root, "aws.log");
+      fs.writeFileSync(awsLog, "");
+      const temp = path.join(sb.root, "tmp");
+      fs.mkdirSync(temp);
+      const result = spawnSync("bash", [SCRIPT, "_site"], {
+        cwd: sb.root,
+        encoding: "utf8",
+        env: { ...sb.env, PATH: `${bin}:${sb.env.PATH}`, TMPDIR: temp,
+          MEDIA_ARCHIVE_BUCKET: "example.com", AWS_CALL_LOG: awsLog },
+      });
+      const output = result.stdout + result.stderr;
+      expect(result.status, output).toBe(code);
+      expect(output).not.toContain("\r");
+      expect(output.split("\n").filter((line) => line.startsWith("::error::injected"))).toEqual([]);
+      if (diagnostic) {
+        const annotation = label === "malformed YAML" ? "warning" : "error";
+        expect(result.stderr.split("\n")[0]).toBe(
+          `::${annotation}::_media/bad%25%0D%0A::error::injected%0A.md: ${diagnostic}`,
+        );
+        expect(fs.readFileSync(awsLog, "utf8")).toBe("");
+      } else {
+        expect(fs.readFileSync(awsLog, "utf8")).toBe("called\n");
+        expect(fs.readFileSync(path.join(sb.root, "_site/media-pdfs/example.pdf"), "utf8")).toBe("pdf fixture\n");
+      }
+      expect(fs.readdirSync(temp)).toEqual([]);
+    });
+  }
+});
+
+test("archive rejects a control-character key with one escaped annotation and no AWS calls", () => {
+  const { spawnSync } = require("node:child_process");
+  const { createSandbox } = require("./git-fixture");
+  const { writeStubs } = require("./workflow-step-harness");
+  const sb = createSandbox("archive-key-log-");
+  try {
+    fs.mkdirSync(path.join(sb.root, "_media"));
+    fs.writeFileSync(path.join(sb.root, "_media/entry.md"),
+      '---\npdf_public: true\npdf_archive_file: "bad%\\r::error::injected.pdf"\n---\nentry\n');
+    const awsLog = path.join(sb.root, "aws.log");
+    fs.writeFileSync(awsLog, "");
+    const bin = writeStubs(path.join(sb.root, "bin"), { aws: 'printf "called\\n" >> "$AWS_CALL_LOG"\nexit 97' });
+    const temp = path.join(sb.root, "tmp");
+    fs.mkdirSync(temp);
+    const r = spawnSync("bash", [SCRIPT, "_site"], {
+      cwd: sb.root, encoding: "utf8",
+      env: { ...sb.env, PATH: `${bin}:${sb.env.PATH}`, TMPDIR: temp,
+        MEDIA_ARCHIVE_BUCKET: "example.com", AWS_CALL_LOG: awsLog },
+    });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toBe("::error::refusing archive key bad%25%0D::error::injected.pdf — expected a bare <name>.pdf\n");
+    expect(fs.readFileSync(awsLog, "utf8")).toBe("");
+    expect(fs.readdirSync(temp)).toEqual([]);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("archive read errors escape a hostile filename and fail closed", () => {
+  const { spawnSync } = require("node:child_process");
+  const { createSandbox } = require("./git-fixture");
+  const { writeStubs } = require("./workflow-step-harness");
+  const sb = createSandbox("archive-read-log-");
+  try {
+    fs.mkdirSync(path.join(sb.root, "_media"));
+    fs.symlinkSync("missing.md", path.join(sb.root, "_media/bad%\r\n::error::injected\n.md"));
+    const awsLog = path.join(sb.root, "aws.log");
+    fs.writeFileSync(awsLog, "");
+    const bin = writeStubs(path.join(sb.root, "bin"), { aws: 'printf "called\\n" >> "$AWS_CALL_LOG"\nexit 97' });
+    const temp = path.join(sb.root, "tmp");
+    fs.mkdirSync(temp);
+    const r = spawnSync("bash", [SCRIPT, "_site"], {
+      cwd: sb.root, encoding: "utf8",
+      env: { ...sb.env, PATH: `${bin}:${sb.env.PATH}`, TMPDIR: temp,
+        MEDIA_ARCHIVE_BUCKET: "example.com", AWS_CALL_LOG: awsLog },
+    });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr.split("\n")[0]).toBe(
+      "::error::_media/bad%25%0D%0A::error::injected%0A.md: could not read entry (Errno::ENOENT)",
+    );
+    expect(r.stderr).toContain("::error::could not read _media/ front matter. Refusing to deploy:");
+    expect(r.stderr).not.toContain("\r");
+    expect(r.stderr.split("\n").filter((line) => line === "::error::injected.md")).toEqual([]);
+    expect(fs.readFileSync(awsLog, "utf8")).toBe("");
+    expect(fs.readdirSync(temp)).toEqual([]);
+  } finally {
+    sb.cleanup();
+  }
+});

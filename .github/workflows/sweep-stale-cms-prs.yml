@@ -406,6 +406,14 @@ jobs:
           THRESHOLD_HOURS: ${{ inputs.threshold_hours || 6 }}
         run: |
           set -euo pipefail
+          # Escape workflow-command data before printing repository-controlled text.
+          escape_workflow_data() {
+            local value=$1
+            value=${value//\%/%25}
+            value=${value//$'\r'/%0D}
+            value=${value//$'\n'/%0A}
+            printf '%s' "$value"
+          }
           THRESHOLD_TS=$(date -u -d "${THRESHOLD_HOURS} hours ago" +%s)
 
           files=$(gh api "/repos/${GH_REPO}/contents/_e2e?ref=main" --jq \
@@ -427,11 +435,11 @@ jobs:
             last_commit=$(gh api "/repos/${GH_REPO}/commits?path=${path}&per_page=1" --jq '.[0].commit.committer.date')
             last_ts=$(date -u -d "$last_commit" +%s)
             if [ "$last_ts" -ge "$THRESHOLD_TS" ]; then
-              echo "skip ${path} — $(( ($(date -u +%s) - last_ts) / 60 )) min old"
+              printf 'skip %s — %s min old\n' "$(escape_workflow_data "$path")" "$(( ($(date -u +%s) - last_ts) / 60 ))"
               continue
             fi
             age_h=$(( ($(date -u +%s) - last_ts) / 3600 ))
-            echo "delete ${path} — ${age_h}h old"
+            printf 'delete %s — %sh old\n' "$(escape_workflow_data "$path")" "$age_h"
 
             if [ "$BRANCH_CREATED" = "false" ]; then
               gh api "/repos/${GH_REPO}/git/refs" \
@@ -504,6 +512,14 @@ jobs:
           THRESHOLD_HOURS: ${{ inputs.threshold_hours || 6 }}
         run: |
           set -euo pipefail
+          # Escape workflow-command data before printing repository-controlled text.
+          escape_workflow_data() {
+            local value=$1
+            value=${value//\%/%25}
+            value=${value//$'\r'/%0D}
+            value=${value//$'\n'/%0A}
+            printf '%s' "$value"
+          }
           THRESHOLD_TS=$(date -u -d "${THRESHOLD_HOURS} hours ago" +%s)
 
           # Ephemeral prod-loop posts: both per-run prefixes under _posts/.
@@ -539,11 +555,11 @@ jobs:
             last_commit=$(gh api "/repos/${GH_REPO}/commits?path=${path}&per_page=1" --jq '.[0].commit.committer.date')
             last_ts=$(date -u -d "$last_commit" +%s)
             if [ "$last_ts" -ge "$THRESHOLD_TS" ]; then
-              echo "skip ${path} — $(( ($(date -u +%s) - last_ts) / 60 )) min old"
+              printf 'skip %s — %s min old\n' "$(escape_workflow_data "$path")" "$(( ($(date -u +%s) - last_ts) / 60 ))"
               continue
             fi
             age_h=$(( ($(date -u +%s) - last_ts) / 3600 ))
-            echo "delete ${path} — ${age_h}h old"
+            printf 'delete %s — %sh old\n' "$(escape_workflow_data "$path")" "$age_h"
 
             if [ "$BRANCH_CREATED" = "false" ]; then
               gh api "/repos/${GH_REPO}/git/refs" \
