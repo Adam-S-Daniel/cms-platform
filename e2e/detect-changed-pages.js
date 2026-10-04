@@ -2,6 +2,7 @@ const { execFileSync, execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { parseNulPaths } = require("./visual-regression-salient");
+const { ensureMergeBase } = require("./ensure-merge-base");
 
 // ROOT — the SITE repo root, where `git diff origin/main...HEAD` must run and
 // where _site/_posts/_projects/_tags/pages live. When the harness sits AT the
@@ -9,9 +10,9 @@ const { parseNulPaths } = require("./visual-regression-salient");
 // platform is CONSUMED, this file runs from `<site>/.cms-platform/e2e/`, where
 // the platform-relative `..` points at the SHALLOW platform checkout (no
 // origin/main → `git diff` fails with "no merge base"). SITE_ROOT /
-// GITHUB_WORKSPACE both name the SITE checkout (the one fetched with
-// fetch-depth:0 + `git fetch origin main`). Mirrors playwright.config.js's
-// SITE_ROOT resolution.
+// GITHUB_WORKSPACE both name the SITE checkout (a `fetch-depth: 2` checkout
+// that runDetect deepens to the merge base via ensure-merge-base.js). Mirrors
+// playwright.config.js's SITE_ROOT resolution.
 const ROOT = process.env.SITE_ROOT || process.env.GITHUB_WORKSPACE || path.resolve(__dirname, "..");
 
 // git is invoked WITHOUT a shell: each argument (a path that may hold
@@ -250,8 +251,8 @@ function classifyPages({ allPages, changedFiles, fileExistsOnMain = () => true }
   return { changed, new: newList, unchanged };
 }
 
-// CLI entrypoint as a pure function. Injectable runGit / runDiscover
-// so the failure path (truncated history, no merge base) can be
+// CLI entrypoint as a pure function. Injectable runGit / runEnsureBase /
+// runDiscover so the failure path (truncated history, no merge base) can be
 // covered by unit tests without mutating the real repo.
 //
 // THROWS on git failure — silent fallback to "empty changeset" was the
@@ -263,17 +264,15 @@ function classifyPages({ allPages, changedFiles, fileExistsOnMain = () => true }
 function runDetect({
   root = ROOT,
   runGit = (args) => git(args, { cwd: root }),
+  runEnsureBase = () => ensureMergeBase({ base: "main", cwd: root }),
   runDiscover = () => discoverAllPages(root),
   runFileExists = (filePath) => fileExistsOnMain(filePath, { cwd: root }),
 } = {}) {
-  // Best-effort fetch of origin/main so the diff below has a base to
-  // resolve against. Missing remote (offline dev) is fine — the diff
-  // is the real gate.
-  try {
-    runGit(["fetch", "--no-tags", "origin", "main"]);
-  } catch {
-    // ignore — the diff below will surface any real problem
-  }
+  // Fetch origin/main and exactly the history the three-dot diff below
+  // needs — proven, not guessed — on the workflow's shallow checkout
+  // (cms-platform#541). Throws when no merge base can be established:
+  // an empty changeset here is the `potentiallyAffected: 0` lie.
+  runEnsureBase();
 
   // `-z`: NUL-delimited, unquoted paths. The newline form quotes any
   // non-ASCII name (`"_layouts/caf\303\251.html"`), which no `_layouts/`
@@ -298,11 +297,10 @@ module.exports = {
 };
 
 if (require.main === module) {
-  // Historic gotcha: do NOT pass `--depth=1` to the fetch. The workflow
-  // checks out with `fetch-depth: 0` (full history); a depth-1 fetch on
-  // top of that converts the local clone to shallow and severs the
-  // merge base, which then causes `git diff origin/main...HEAD` to
-  // fail with "no merge base".
+  // Historic gotcha: a bare `--depth=1` fetch severs the merge base and
+  // `git diff origin/main...HEAD` fails with "no merge base". The history
+  // is managed by ensure-merge-base.js, which never shallows a complete
+  // clone and deepens a shallow one until the merge base is proven.
   const result = runDetect();
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }

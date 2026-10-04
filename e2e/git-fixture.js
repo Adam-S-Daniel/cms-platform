@@ -68,6 +68,12 @@ function createSandbox(prefix = "git-fixture-") {
     return rev(dir, "HEAD");
   }
 
+  // `n` empty commits: cheap history depth behind a scenario.
+  function emptyCommits(dir, n, label = "old") {
+    for (let i = 1; i <= n; i += 1) git(dir, ["commit", "-q", "--allow-empty", "-m", `${label}${i}`]);
+    return rev(dir, "HEAD");
+  }
+
   // A bare mirror of `srcDir` (every ref, including refs/pull/*), served to
   // clones over file:// so shallow fetches behave as they do from a server.
   function publish(srcDir, name = "origin.git") {
@@ -98,7 +104,7 @@ function createSandbox(prefix = "git-fixture-") {
     fs.rmSync(root, { recursive: true, force: true });
   }
 
-  return { root, env, git, rev, initRepo, commit, publish, shallowCheckout, fullClone, cleanup };
+  return { root, env, git, rev, initRepo, commit, emptyCommits, publish, shallowCheckout, fullClone, cleanup };
 }
 
 module.exports = { createSandbox };

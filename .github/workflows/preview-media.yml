@@ -105,9 +105,11 @@ jobs:
       - name: Checkout site
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # Need history so the salient-path diff against the base tip is
-          # accurate.
-          fetch-depth: 0
+          # The PR merge commit plus its two parents, not full history
+          # (cms-platform#541): the salience step deepens it with
+          # ensure-merge-base.js until the diff against the base tip is
+          # provably the one a full clone gives.
+          fetch-depth: 2
 
       - name: Checkout platform (e2e harness + composite action)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -134,7 +136,14 @@ jobs:
           BASE_REF: ${{ inputs.base_ref }}
         run: |
           set -o pipefail
-          git fetch origin "$BASE_REF" --depth=500 || true
+          # Fail CLOSED, like the diff below: without a proven merge base the
+          # changed set is wrong or empty, and empty reads as non-salient.
+          if ! node .cms-platform/e2e/ensure-merge-base.js --base "$BASE_REF"; then
+            msg="preview-media could not establish the merge base of origin/${BASE_REF} and HEAD. Failing the required gate CLOSED so a media-salient PR cannot merge without the preview probe. Re-run the job; if it persists, investigate the workflow."
+            echo "::error title=preview-media::${msg}"
+            echo "$msg" | tee /tmp/preview-media.log
+            exit 1
+          fi
           echo "::group::salient diff refs"
           echo "base_ref = $BASE_REF"
           echo "HEAD            = $(git rev-parse HEAD 2>&1)"

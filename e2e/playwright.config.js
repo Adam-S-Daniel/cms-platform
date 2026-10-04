@@ -346,6 +346,11 @@ const PLATFORM_META_SPECS = [
   // (platform pipeline tooling) over throwaway git repos; platform-internal,
   // like detect-changed-pages.test.js above.
   "salience-git-paths.test.js",
+  // #541 — the merge-base helper's real-git scenarios, and the lint that
+  // parses the platform's visual-regression / parity-preview / preview-media
+  // workflow DEFINITIONS (absent on a consumer); platform-internal.
+  "ensure-merge-base.test.js",
+  "salience-checkout-depth.test.js",
   "fixture-baseline.test.js",
   "generate-test-videos.test.js",
   // The theme gemspec's version is deliberately frozen at 0.1.4 (see the
