@@ -180,7 +180,9 @@ are called, and only from `pull_request`, and that `repo-settings.yml` keeps
 `${{ github.event.* }}` in a `run:` body is the injection lint's job
 ([#261](https://github.com/Adam-S-Daniel/cms-platform/issues/261)).
 
-**What it cannot see.** Shell is not parsed, so a `run:` body that fetches
+**What it cannot see.** Local composite actions (`uses: ./.github/actions/...`)
+are not expanded, so an artifact download inside a local wrapper may be invisible.
+Shell is not parsed, so a `run:` body that fetches
 `pull/N/head` or runs `gh run download` under a privileged trigger is
 invisible, as is a head ref laundered through a step output or `env:` before
 it reaches `ref:`. That is why `pull_request_target` is banned rather than
