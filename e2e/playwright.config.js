@@ -342,6 +342,10 @@ const PLATFORM_META_SPECS = [
   "deploy-preview-cms-slug.test.js",
   "deploy-status-pill-robustness.test.js",
   "detect-changed-pages.test.js",
+  // #539 — drives detect-changed-pages.js and visual-regression-salient.js
+  // (platform pipeline tooling) over throwaway git repos; platform-internal,
+  // like detect-changed-pages.test.js above.
+  "salience-git-paths.test.js",
   "fixture-baseline.test.js",
   "generate-test-videos.test.js",
   // The theme gemspec's version is deliberately frozen at 0.1.4 (see the

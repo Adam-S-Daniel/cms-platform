@@ -1,6 +1,7 @@
-const { execSync } = require("child_process");
+const { execFileSync, execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { parseNulPaths } = require("./visual-regression-salient");
 
 // ROOT — the SITE repo root, where `git diff origin/main...HEAD` must run and
 // where _site/_posts/_projects/_tags/pages live. When the harness sits AT the
@@ -13,16 +14,22 @@ const path = require("path");
 // SITE_ROOT resolution.
 const ROOT = process.env.SITE_ROOT || process.env.GITHUB_WORKSPACE || path.resolve(__dirname, "..");
 
-function git(cmd) {
-  return execSync(cmd, { cwd: ROOT, encoding: "utf-8" }).trim();
+// git is invoked WITHOUT a shell: each argument (a path that may hold
+// spaces, quotes, `$` or a newline) reaches git byte-for-byte. Output is
+// returned untrimmed, since `-z` output is NUL-delimited and a path may
+// legitimately begin or end with whitespace.
+function git(args, { cwd = ROOT } = {}) {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
 }
 
-function fileExistsOnMain(filePath) {
+function fileExistsOnMain(filePath, { cwd = ROOT } = {}) {
   try {
-    execSync(`git show origin/main:${filePath}`, {
-      cwd: ROOT,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    git(["cat-file", "-e", `origin/main:${filePath}`], { cwd });
     return true;
   } catch {
     return false;
@@ -250,23 +257,29 @@ function classifyPages({ allPages, changedFiles, fileExistsOnMain = () => true }
 // THROWS on git failure — silent fallback to "empty changeset" was the
 // exact bug that made visual-regression report `potentiallyAffected: 0`
 // on every PR (audit finding #2).
+//
+// `runGit` takes an ARGUMENT ARRAY (never a shell string) and returns raw
+// stdout. `root` is the site checkout the default bindings act on.
 function runDetect({
-  runGit = git,
-  runDiscover = discoverAllPages,
-  runFileExists = fileExistsOnMain,
+  root = ROOT,
+  runGit = (args) => git(args, { cwd: root }),
+  runDiscover = () => discoverAllPages(root),
+  runFileExists = (filePath) => fileExistsOnMain(filePath, { cwd: root }),
 } = {}) {
   // Best-effort fetch of origin/main so the diff below has a base to
   // resolve against. Missing remote (offline dev) is fine — the diff
   // is the real gate.
   try {
-    runGit("git fetch origin main 2>/dev/null || true");
+    runGit(["fetch", "--no-tags", "origin", "main"]);
   } catch {
     // ignore — the diff below will surface any real problem
   }
 
-  const changedFiles = runGit("git diff --name-only origin/main...HEAD")
-    .split("\n")
-    .filter(Boolean);
+  // `-z`: NUL-delimited, unquoted paths. The newline form quotes any
+  // non-ASCII name (`"_layouts/caf\303\251.html"`), which no `_layouts/`
+  // rule in mapFileToUrls matches, so a salient edit read as "nothing
+  // changed" (cms-platform#539).
+  const changedFiles = parseNulPaths(runGit(["diff", "--name-only", "-z", "origin/main...HEAD"]));
 
   return classifyPages({
     allPages: runDiscover(),

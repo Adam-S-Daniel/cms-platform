@@ -167,12 +167,17 @@ jobs:
         id: salience
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
+        # `-z` on BOTH ends: git emits NUL-delimited, unquoted paths and the
+        # classifier splits on NUL. The newline form quotes a non-ASCII name
+        # (`"_layouts/caf\303\251.html"`, leading quote included), which no
+        # salient pattern matches (cms-platform#539). The listing above it is
+        # for the log only.
         run: |
           set -euo pipefail
           echo "Changed files vs origin/${BASE}:"
-          git diff --name-only "origin/${BASE}...HEAD" | sed 's/^/  /'
-          salient=$(git diff --name-only "origin/${BASE}...HEAD" \
-            | node .cms-platform/e2e/visual-regression-salient.js)
+          git -c core.quotepath=off diff --name-only "origin/${BASE}...HEAD" | sed 's/^/  /'
+          salient=$(git diff --name-only -z "origin/${BASE}...HEAD" \
+            | node .cms-platform/e2e/visual-regression-salient.js -z)
           echo "salient=${salient}"
           echo "salient=${salient}" >> "$GITHUB_OUTPUT"
 

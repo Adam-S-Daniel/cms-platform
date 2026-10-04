@@ -178,10 +178,10 @@ test.describe("runDetect (CLI integration)", () => {
   // must throw loudly so the workflow fails the run instead of
   // shipping a `potentiallyAffected: 0` lie.
   test("throws when git diff fails (truncated history, no merge base)", () => {
-    const fakeGit = (cmd) => {
+    const fakeGit = (args) => {
       // The fetch is best-effort and shouldn't throw — only the diff
       // should. Mirrors the in-CI failure mode exactly.
-      if (cmd.startsWith("git fetch")) return "";
+      if (args[0] === "fetch") return "";
       const err = new Error("fatal: no merge base found between origin/main and HEAD");
       throw err;
     };
