@@ -22,6 +22,8 @@ const PROXY_DIR = path.resolve(__dirname, "..", "oauth-proxy");
 const TOKEN = "TEST-TOKEN-VALUE";
 const NONCE = "testnonce";
 const ALLOWLIST = "https://example.com,https://preview-*.example.com";
+// The site's own domain: a `*` entry is honored only beneath it (#535).
+const APEX = "example.com";
 
 // `lambda` is a reserved word in Python, so the module is imported by name.
 const RENDER_SNIPPET = [
@@ -31,9 +33,10 @@ const RENDER_SNIPPET = [
   "sys.stdout.write(page)",
 ].join("\n");
 
-// Render the success page for an ALLOWED_ORIGINS value. Throws (failing the
-// calling test) when python3 is absent or the render exits non-zero.
-function renderPage(allowedOrigins) {
+// Render the success page for an ALLOWED_ORIGINS (and SITE_APEX) value. Throws
+// (failing the calling test) when python3 is absent or the render exits
+// non-zero.
+function renderPage(allowedOrigins, siteApex = APEX) {
   const r = spawnSync("python3", ["-c", RENDER_SNIPPET, PROXY_DIR, TOKEN, NONCE], {
     encoding: "utf8",
     env: {
@@ -41,6 +44,7 @@ function renderPage(allowedOrigins) {
       GITHUB_CLIENT_ID: "test-client",
       GITHUB_CLIENT_SECRET: "test-value",
       ALLOWED_ORIGINS: allowedOrigins,
+      SITE_APEX: siteApex,
       // Importing the module must not write __pycache__ into the source tree.
       PYTHONDONTWRITEBYTECODE: "1",
     },
@@ -177,6 +181,26 @@ test.describe("OAuth proxy callback page: the token reaches only a configured op
     expect(popup.posted).toHaveLength(2);
     expect(popup.posted[1].targetOrigin).toBe("https://preview-pr12.example.com");
     expect(popup.posted[1].message).toContain(TOKEN);
+  });
+
+  test("a wildcard over a public suffix is dropped: its openers never get the token (#535)", () => {
+    const popup = boot(renderPage("https://*.pages.example,https://*.co.example,https://example.com"));
+    for (const origin of ["https://someone.pages.example", "https://someone.co.example"]) {
+      popup.deliver({ source: popup.opener, origin, data: HANDSHAKE });
+    }
+    expect(popup.posted).toHaveLength(1);
+    expect(JSON.stringify(popup.posted)).not.toContain(TOKEN);
+    // The literal entry beside them still works.
+    popup.deliver({ source: popup.opener, origin: "https://example.com", data: HANDSHAKE });
+    expect(popup.posted).toHaveLength(2);
+    expect(popup.posted[1].targetOrigin).toBe("https://example.com");
+  });
+
+  test("with no SITE_APEX the preview wildcard is dropped, failing closed (#535)", () => {
+    const popup = boot(renderPage(ALLOWLIST, ""));
+    popup.deliver({ source: popup.opener, origin: "https://preview-pr12.example.com", data: HANDSHAKE });
+    expect(popup.posted).toHaveLength(1);
+    expect(JSON.stringify(popup.posted)).not.toContain(TOKEN);
   });
 
   test("ALLOWED_ORIGINS=* is not a wildcard: no origin ever gets the token", () => {

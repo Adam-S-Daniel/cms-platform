@@ -30,9 +30,19 @@ Parameters:
     Description: >
       Comma-separated list of https:// origins whose CMS window may receive
       the token via postMessage, e.g. https://example.com. A '*' may stand in
-      for part of a host label (never the last two labels), so per-PR preview
-      hosts need one entry: https://example.com,https://preview-*.example.com.
+      for part of a host label beneath SiteApex only, so per-PR preview hosts
+      need one entry: https://example.com,https://preview-*.example.com.
       With no valid entry the proxy refuses every login.
+
+  SiteApex:
+    Type: String
+    Default: ""
+    AllowedPattern: '^([a-z0-9-]+(\.[a-z0-9-]+)+)?$'
+    Description: >
+      The site's own registered domain (APEX_DOMAIN in site-params.env), e.g.
+      example.com. A '*' entry in AllowedOrigins is honored only at or beneath
+      it, so a wildcard can never span a public suffix such as co.uk or
+      github.io. Empty: no '*' entry is honored.
 
   GitHubScope:
     Type: String
@@ -71,6 +81,7 @@ Globals:
         GITHUB_CLIENT_ID:     !Ref GitHubClientId
         GITHUB_CLIENT_SECRET: !Ref GitHubClientSecret
         ALLOWED_ORIGINS:      !Ref AllowedOrigins
+        SITE_APEX:            !Ref SiteApex
         GITHUB_SCOPE:         !Ref GitHubScope
         PLATFORM_RELEASE:     !Ref PlatformRelease
 

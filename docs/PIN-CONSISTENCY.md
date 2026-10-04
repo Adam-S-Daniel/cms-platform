@@ -193,7 +193,9 @@ because those were "the ref shapes the pin-consistency checker recognizes." So
 jodidaniel.com's
 `cms-scheduled-publish-loop.yml`, seeded by the v0.1.62 bump, landed with
 `uses:@v0.1.62` **and the example template's own `platform_ref: v0.1.59`**. Every
-later bump's generic `CUR->LATEST` literal replace could never repair it — `CUR`
+later bump's `CUR`->`LATEST` rewrite (then a global literal replace, since
+replaced by `scripts/rewrite-platform-pins.js`, which likewise moves only a pin
+whose ref equals `CUR`) could never repair it — `CUR`
 is the CONSUMER's previous ref, which `v0.1.59` never matched again — so the
 input froze for 14 releases while the `uses:` line tracked every bump. At v0.1.70
 the checkout it selected (a v0.1.59 tree) predated the
@@ -226,10 +228,11 @@ This is not a `platform-bump` bug — a branch cut at time T legitimately contai
 `main` at time T. It is a **sequencing** hazard, and the fix is ordering:
 **let every other `main` merge settle before dispatching `platform-bump`**, or,
 if a bump PR is already open and stale, regenerate it rather than trying to
-`update-branch` through the conflict. Regeneration is deterministic — apply the
-same `CUR`→`LATEST` and `OLD_SHA`→`NEW_SHA` replace over `platform.lock`,
-`Gemfile`, `Gemfile.lock` and `.github/workflows/**` on top of current `main`
-(the workflow's own algorithm), then confirm with
+`update-branch` through the conflict. Regeneration is deterministic — run
+`scripts/rewrite-platform-pins.js --from <CUR> --to <LATEST> --new-sha <release commit>`
+over `platform.lock`, `Gemfile`, `Gemfile.lock` and `.github/workflows/**` on
+top of current `main` (the workflow's own step: it moves only pins, never
+prose that names the old version, cms-platform#530), then confirm with
 `scripts/verify-consumer-pins.sh --platform-dir <platform>` before force-pushing
 the bump branch. Caller SEEDING only matters if the release newly dictated a
 workflow the consumer lacks; a release that adds none needs no seeding step.

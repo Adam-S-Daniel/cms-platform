@@ -1,9 +1,10 @@
 # Reusable ATOMIC down-sync helper. Bumps EVERY cms-platform reference a
 # consumer pins — `platform_ref:` inputs + `platform.lock`, the reusable-workflow
 # `uses:@<tag>` pins, the `cms-platform-theme` Gemfile `tag:`, and `Gemfile.lock`
-# (`tag:` + git `revision:`), plus any composite-action `@<sha>` pin — to the
-# latest cms-platform release, in ONE PR. So the single-version pin-consistency
-# guard (#29) passes on this PR alone.
+# (`tag:` + git `revision:`), plus any TAG-pinned composite-action `uses:@` — to
+# the latest cms-platform release, in ONE PR, and touches nothing but those pins
+# (comments and prose naming a version are left byte-for-byte, #530). So the
+# single-version pin-consistency guard (#29) passes on this PR alone.
 #
 # It ALSO seeds any workflow caller that release newly made platform-dictated:
 # if examples/site/.github/workflows/ gained a file at the new ref that the
@@ -18,7 +19,7 @@
 # checker has no such opt-out (it fails MISSING unconditionally), so seeding
 # is always the correct move, never a false-positive graft-back. Seeding only
 # ever ADDS a wholly-absent caller; a file that exists but has drifted CONTENT
-# is untouched (that's dev-hooks-sync / the CUR->LATEST rewrite's job — #63
+# is untouched (that's dev-hooks-sync / the pin rewrite's job — #63
 # content parity catches that class separately).
 #
 # It RETIRES the mirror case (#315): a caller that LEFT the canonical set is
@@ -206,6 +207,14 @@ jobs:
           fi
           CUR=$(sed -n -E 's/^platform_ref:[[:space:]]*//p' platform.lock 2>/dev/null || echo "")
           [ "$LATEST" = "$CUR" ] && { echo "already on $LATEST"; exit 0; }
+          # The rewrite below takes $CUR as the exact ref to move, so it must be a
+          # bare release tag. The sed above does no unquoting and keeps a trailing
+          # comment, so say what was read instead of failing later in the rewrite
+          # with a usage error that never names platform.lock.
+          if [ -n "$CUR" ] && ! [[ "$CUR" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+            echo "::error::platform.lock's platform_ref reads as ${CUR@Q}, which is not a bare release tag such as v1.2.3 (a quoted value or a trailing comment is not handled here) — refusing to bump. Write the value as a bare tag."
+            exit 1
+          fi
 
           # Idempotency gate (#222). The check just above reads platform.lock on
           # the DEFAULT BRANCH, which only advances when a bump PR MERGES — so it
@@ -238,32 +247,47 @@ jobs:
           fi
 
           # Resolve the release tag -> its COMMIT sha (deref an annotated tag) for
-          # the Gemfile.lock git `revision:` and any composite-action `@<sha>` pin.
+          # the Gemfile.lock git `revision:`.
           NEW_SHA=$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.sha')
           if [ "$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.type')" = "tag" ]; then
             NEW_SHA=$(gh api "repos/$PLATFORM/git/tags/$NEW_SHA" --jq '.object.sha')
           fi
-          OLD_SHA=$(sed -n -E 's/^[[:space:]]*revision:[[:space:]]*//p' Gemfile.lock 2>/dev/null | head -1 || echo "")
-
-          # The pin-bearing files (everything pin-consistency checks). By the
-          # single-version invariant the CURRENT version string appears ONLY as a
-          # current pin, so a literal CUR->LATEST replace is safe; OLD_SHA->NEW_SHA
-          # moves the gem revision + any SHA-pinned composite. A composite-action
-          # SHA pin equals the release commit SHA, so the same OLD->NEW covers it.
-          TARGETS=()
-          [ -f platform.lock ]  && TARGETS+=("platform.lock")
-          [ -f Gemfile ]        && TARGETS+=("Gemfile")
-          [ -f Gemfile.lock ]   && TARGETS+=("Gemfile.lock")
-          while IFS= read -r -d '' f; do TARGETS+=("$f"); done \
-            < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 2>/dev/null || true)
-
-          for f in "${TARGETS[@]}"; do
-            [ -f "$f" ] || continue
-            CUR="$CUR" LATEST="$LATEST" perl -i -pe 's/\Q$ENV{CUR}\E/$ENV{LATEST}/g if length $ENV{CUR};' "$f"
-            if [ -n "$OLD_SHA" ]; then
-              OLD_SHA="$OLD_SHA" NEW_SHA="$NEW_SHA" perl -i -pe 's/\Q$ENV{OLD_SHA}\E/$ENV{NEW_SHA}/g;' "$f"
+          # Move every PIN from $CUR to $LATEST — and only pins (#530). This used
+          # to be a global `perl s/CUR/LATEST/g` over each pin-bearing file, on
+          # the theory that the current version string appears only as a pin.
+          # Prose names versions too: it re-dated jodidaniel.com's "since
+          # v0.1.103 — the CMS_PLATFORM_PAT fallback is gone" on every bump.
+          # scripts/rewrite-platform-pins.js locates the pins pin-consistency
+          # reads (the `uses:@` refs and `platform_ref:` values via the YAML
+          # parser, platform.lock, the Gemfile `tag:`, the Gemfile.lock platform
+          # GIT block's `tag:` + `revision:`) and splices only the version token,
+          # leaving every other byte alone. It is fetched at the release COMMIT
+          # ($NEW_SHA), not the movable tag, and it is ALL OR NOTHING: on any file it cannot
+          # rewrite safely it writes nothing and exits non-zero, which fails
+          # this step — a bump that moved some pins is worse than none.
+          # A first adoption has no platform.lock, so no $CUR and no pin to move
+          # (the fallback below writes the lock).
+          if [ -n "$CUR" ]; then
+            PIN_TOOLS="${RUNNER_TEMP:-/tmp}/pin-rewrite"
+            rm -rf "$PIN_TOOLS"
+            mkdir -p "$PIN_TOOLS/scripts"
+            if ! gh api "repos/$PLATFORM/contents/scripts/rewrite-platform-pins.js?ref=$NEW_SHA" \
+                 -H "Accept: application/vnd.github.raw+json" \
+                 > "$PIN_TOOLS/scripts/rewrite-platform-pins.js" 2>/dev/null; then
+              echo "::error::scripts/rewrite-platform-pins.js is not readable at $PLATFORM@$NEW_SHA ($LATEST) — refusing to fall back to a text-wide version replace (cms-platform#530)."
+              exit 1
             fi
-          done
+            # Into the tools dir, never the consumer root (see the secrets pass below).
+            if ! npm install --prefix "$PIN_TOOLS" --no-save --no-package-lock --ignore-scripts yaml@2.9.1 >/dev/null 2>&1; then
+              echo "::error::could not install the yaml parser the pin rewrite needs."
+              exit 1
+            fi
+            if ! node "$PIN_TOOLS/scripts/rewrite-platform-pins.js" \
+                 --root . --slug "$PLATFORM" --from "$CUR" --to "$LATEST" --new-sha "$NEW_SHA"; then
+              echo "::error::the pin rewrite could not move every pin from $CUR to $LATEST (see the ERROR lines above); nothing was written."
+              exit 1
+            fi
+          fi
 
           # First-adoption fallback: a repo with no platform.lock yet.
           if [ ! -f platform.lock ]; then
@@ -296,7 +320,7 @@ jobs:
             gh api "repos/$PLATFORM/contents/examples/site/.github/workflows/$name?ref=$LATEST" \
               --jq '.content' | base64 -d > "$dest"
             # Stamp the seeded file's platform-ref pin(s) to $LATEST. Can't reuse
-            # the CUR->LATEST replace above: CUR is the CONSUMER's old ref, which
+            # the CUR->LATEST pin rewrite above: CUR is the CONSUMER's old ref, which
             # the example's own embedded pin need not equal — so stamp
             # unconditionally to whatever version is actually there.
             #
@@ -331,7 +355,7 @@ jobs:
             # The `platform_ref:` one is not optional (#220). Stamping only `uses:@` seeded
             # jodidaniel.com's cms-scheduled-publish-loop caller with the example's
             # own `platform_ref: v0.1.59` while pinning `uses:@v0.1.62`, and the
-            # generic CUR->LATEST replace above could never repair it — CUR is the
+            # CUR->LATEST pin rewrite above could never repair it — CUR is the
             # consumer's ref, which `v0.1.59` never matched again. The reusable's
             # checkout obeys the INPUT, so that caller ran a v0.1.59 platform tree
             # for 14 releases until the v0.1.70 composite it lacked failed the job.

@@ -43,33 +43,28 @@ the pin-consistency guard fails. The two consumers differ slightly:
   bump replaces version STRINGS now; if you find yourself hunting 40-hex SHAs in
   a consumer's workflows, you are working from the old model.
 
-The robust, idempotent way (handles the unicode-quoted-filename trap — use
-`git ls-files -z`, not plain `ls-files`):
+The robust, idempotent way is the same script the workflow runs. It moves only
+real pins (a parser finds them; prose that names the old version stays as it
+is — cms-platform#530), so do NOT hand-roll a text replace of the old version:
 
 ```bash
 cd ~/repos/<consumer>
 git fetch origin --quiet && git checkout -b chore/bump-platform-vX.Y.Z origin/main
-python3 - <<'PY'
-import subprocess, pathlib
-OLD_VER="vA.B.C"; NEW_VER="vX.Y.Z"
-OLD_SHA="<old release SHA>"; NEW_SHA="<new release SHA>"
-for fb in subprocess.check_output(["git","ls-files","-z"]).split(b"\0"):
-    if not fb: continue
-    p = pathlib.Path(fb.decode("utf-8","surrogateescape"))
-    try: t = p.read_text()
-    except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError): continue
-    if OLD_VER not in t and OLD_SHA not in t: continue
-    n = t.replace(OLD_SHA, NEW_SHA).replace(OLD_VER, NEW_VER)
-    if n != t: p.write_text(n)
-PY
+# <platform> is a checkout of the release being adopted (it needs the `yaml`
+# package: `npm ci` in <platform>/e2e, or `npm install yaml`).
+node <platform>/scripts/rewrite-platform-pins.js --root . \
+  --slug Adam-S-Daniel/cms-platform --from vA.B.C --to vX.Y.Z \
+  --new-sha <new release commit SHA>
 ```
 
-References the replace covers: `platform.lock` (`platform_ref:` + `tag:`),
-`Gemfile` (`tag: "vX.Y.Z"`), `Gemfile.lock` (`tag:` + `revision:` — the SHA
-replace moves the revision for adamdaniel; for jodidaniel set `revision:`
-explicitly to the new release SHA since its files carry no SHA strings),
-`.github/workflows/*` (`uses:@` pins — reusable and composite alike, both
-tag-pinned — plus `platform_ref:` with-inputs).
+The script is all or nothing (one file it cannot rewrite safely and it writes
+nothing, exit 1) and a second run is a no-op. References it moves, only where
+the ref equals `--from`: `platform.lock` (`platform_ref:`), `Gemfile` (the
+`tag:` of the `cms-platform-theme` gem naming the platform), `Gemfile.lock`
+(the platform GIT block's `tag:`, plus its `revision:`, which `--new-sha` sets
+to the release commit), `.github/workflows/**` (`uses:@` pins, reusable and
+composite alike, both tag-pinned, plus `platform_ref:` with-inputs, including a
+commented-out opt-in pin such as examples/site's `# platform_ref:`).
 
 **This manual path does NOT seed newly-dictated workflow callers** — unlike
 `platform-bump.yml` (below), it only rewrites pins in files the consumer

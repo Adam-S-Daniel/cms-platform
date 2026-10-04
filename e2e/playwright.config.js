@@ -392,6 +392,9 @@ const PLATFORM_META_SPECS = [
   // Runs scripts/reconcile-caller-secrets.js + the pin checker and reads the
   // platform-bump.yml definition (the secrets: reconcile) — self-CI only.
   "platform-bump-secrets-reconcile.test.js",
+  // Runs scripts/rewrite-platform-pins.js + the pin checker against fixtures
+  // and the platform's own examples/site (#530) — self-CI only.
+  "rewrite-platform-pins.test.js",
   // #16 — the recurrence guard itself: it reads playwright.config.js + lints the
   // harness spec sources for unregistered platform-internal specs. A harness
   // self-test; ENOENT/no-op on a consumer (no platform tree to police).
