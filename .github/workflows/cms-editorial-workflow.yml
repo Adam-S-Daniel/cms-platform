@@ -193,7 +193,19 @@ jobs:
                   color: '5319e7',
                   description: 'Maintainer override: allow non-Decap content changes in this PR',
                 });
-              } catch (_) {}
+              } catch (e) {
+                // Ignore only a confirmed existing label; API error details stay private.
+                const errors = e && e.response && e.response.data && e.response.data.errors;
+                const exists = e && e.status === 422 && Array.isArray(errors) && errors.some((x) => x && x.code === 'already_exists');
+                if (!exists) {
+                  // Bound the type: an arbitrary error name can contain private data.
+                  const type = e && e.name === 'HttpError' ? 'HttpError' : 'Error';
+                  core.warning(
+                    `Could not create the ${OVERRIDE_LABEL} label (HTTP ${Number(e && e.status) || 'unknown'}; ${type}); ` +
+                      'The label may be missing from the PR UI.',
+                  );
+                }
+              }
 
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner,
@@ -291,7 +303,19 @@ jobs:
                 color: '1a2a5e',
                 description: 'Content draft — not ready for publish',
               });
-            } catch (_) {}
+            } catch (e) {
+              // Ignore only a confirmed existing label; API error details stay private.
+              const errors = e && e.response && e.response.data && e.response.data.errors;
+              const exists = e && e.status === 422 && Array.isArray(errors) && errors.some((x) => x && x.code === 'already_exists');
+              if (!exists) {
+                // Bound the type: an arbitrary error name can contain private data.
+                const type = e && e.name === 'HttpError' ? 'HttpError' : 'Error';
+                core.warning(
+                  `Could not create the cms/draft label (HTTP ${Number(e && e.status) || 'unknown'}; ${type}); ` +
+                    'addLabels will add it without its description and color.',
+                );
+              }
+            }
 
             try {
               await github.rest.issues.createLabel({
@@ -301,7 +325,19 @@ jobs:
                 color: '22c27a',
                 description: 'Content approved and ready to publish',
               });
-            } catch (_) {}
+            } catch (e) {
+              // Ignore only a confirmed existing label; API error details stay private.
+              const errors = e && e.response && e.response.data && e.response.data.errors;
+              const exists = e && e.status === 422 && Array.isArray(errors) && errors.some((x) => x && x.code === 'already_exists');
+              if (!exists) {
+                // Bound the type: an arbitrary error name can contain private data.
+                const type = e && e.name === 'HttpError' ? 'HttpError' : 'Error';
+                core.warning(
+                  `Could not create the cms/ready label (HTTP ${Number(e && e.status) || 'unknown'}; ${type}); ` +
+                    'addLabels will add it without its description and color.',
+                );
+              }
+            }
 
             var labels = ['cms/draft'];
 
@@ -321,15 +357,14 @@ jobs:
                   description: 'CMS edit on a feature-branch preview; reaches main when that branch merges, unless removed by hand',
                 });
               } catch (e) {
-                // 422 already_exists is the normal case once the label is
-                // there. Anything else used to vanish here, and addLabels
-                // then made a bare grey label (#532). Only the status code
-                // is logged: run logs are public, the response body is not.
-                const errors = (e && e.response && e.response.data && e.response.data.errors) || [];
-                const exists = e && e.status === 422 && errors.some((x) => x && x.code === 'already_exists');
+                // Ignore only a confirmed existing label; API error details stay private.
+                const errors = e && e.response && e.response.data && e.response.data.errors;
+                const exists = e && e.status === 422 && Array.isArray(errors) && errors.some((x) => x && x.code === 'already_exists');
                 if (!exists) {
+                  // Bound the type: an arbitrary error name can contain private data.
+                  const type = e && e.name === 'HttpError' ? 'HttpError' : 'Error';
                   core.warning(
-                    `Could not create the cms/preview-only label (HTTP ${Number(e && e.status) || 'unknown'}); ` +
+                    `Could not create the cms/preview-only label (HTTP ${Number(e && e.status) || 'unknown'}; ${type}); ` +
                       'addLabels will add it without its description and color.',
                   );
                 }

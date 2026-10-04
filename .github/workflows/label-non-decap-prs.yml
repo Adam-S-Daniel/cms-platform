@@ -155,8 +155,18 @@ jobs:
                 color: 'ededed',
                 description: 'PR was not created by Decap CMS (head branch is not cms/<col>/<slug>)',
               });
-            } catch (_) {
-              /* already exists */
+            } catch (e) {
+              // Ignore only a confirmed existing label; API error details stay private.
+              const errors = e && e.response && e.response.data && e.response.data.errors;
+              const exists = e && e.status === 422 && Array.isArray(errors) && errors.some((x) => x && x.code === 'already_exists');
+              if (!exists) {
+                // Bound the type: an arbitrary error name can contain private data.
+                const type = e && e.name === 'HttpError' ? 'HttpError' : 'Error';
+                core.warning(
+                  `Could not create the not-decap-created label (HTTP ${Number(e && e.status) || 'unknown'}; ${type}); ` +
+                    'addLabels will add it without its description and color.',
+                );
+              }
             }
 
             async function tag(pr) {
