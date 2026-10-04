@@ -485,8 +485,9 @@ lint holds every `createLabel` handler to that (acorn AST, never a regex):
   caught or awaited later, and `Promise.all`/`race`/`any`. `Promise.allSettled`
   never rejects, so its results must be bound and some statement that reads
   them must report. A handler throws or calls `core.warning`/`error`/
-  `setFailed`; an empty or comment-only body, an unused error binding and an
-  uncalled nested function are silent.
+  `setFailed` or their resolved aliases; an empty or comment-only body, an unused
+  error binding and a nested function alone are silent, even when the handler
+  calls that function.
 - **The lint fails closed** on a callback it cannot resolve (an undeclared or
   twice-bound identifier, `core.warning` passed as the callback, a callback
   built by a call) and on a promise that flows somewhere it cannot follow (an
@@ -494,11 +495,17 @@ lint holds every `createLabel` handler to that (acorn AST, never a regex):
   that awaits the call and propagates, whose callers swallow it; every
   handler here is top-level.
 - **Handler output carries only the HTTP status and a bounded type.** Arguments of
-  `console.log`/`error`/`warn` and
-  `core.warning`/`info`/`notice`/`error`/`setFailed`/`setOutput` are checked,
+  `console.log`/`error`/`warn`/`info`/`debug`,
+  `core.warning`/`info`/`notice`/`error`/`setFailed`/`setOutput`/`debug`/
+  `exportVariable`, every method chain rooted at `core.summary` (including
+  fluent calls), and `process.stdout.write`/`stderr.write` are checked,
   including every argument and outputs beside a clean warning. The sinks
-  include static computed spellings such as `console['error']`. The added
-  sinks do not change the reporting rule above: an info message, notice,
+  include static computed spellings such as `console['error']` and lexical
+  aliases such as `const log = console.log` or `const { warning: report } = core`,
+  including declarations outside the handler and summary builder aliases.
+  Aliases conservatively retain every assigned sink; an unknown replacement
+  prevents an alias from satisfying reporting but preserves its output checks.
+  The added sinks do not change the reporting rule above: an info message, notice,
   console call or output alone still silently catches the failure.
   Thrown expressions are checked too, including `new Error(e.message)` and
   a constructed error stored in a local; direct `throw e` propagation of an
@@ -507,8 +514,13 @@ lint holds every `createLabel` handler to that (acorn AST, never a regex):
   including `e = new Error(e.message); throw e`. Member writes such as
   `e.status = 500` and uninitialized `var e` do not replace the binding.
   Constructor arguments use the same bounded rules as logging arguments.
-  Output is checked against the caught error's binding and every local derived
-  from it: only `.status` (also `.response.status`, and
+  Output and the direct-rethrow exemption use lexical binding identity: block,
+  loop, switch, nested catch and function shadows stay separate, `var` is
+  function-scoped, and `let`/`const` are block-scoped. A shadowed `e` does not
+  inherit the caught error's taint or direct-rethrow exemption, and the outer
+  binding remains in force after leaving the shadow's scope. Output is checked
+  against the caught error's binding and every local derived from it: only
+  `.status` (also `.response.status`, and
   `.reason.status` for an `allSettled` result), `Number(…)` of anything, and
   a choice between fixed strings are allowed. `e.message`, `e.response`, the
   body, the bare error, `String(e)`, `JSON.stringify(e)` and a local copied
@@ -522,9 +534,17 @@ lint holds every `createLabel` handler to that (acorn AST, never a regex):
   clear taint after a safe reassignment, so an overwritten caught name may
   conservatively fail even when its replacement is bounded. It does not follow
   arbitrary mutator calls, dynamic sink methods, transformations in another
-  function or aliases through nested object properties. It counts report syntax
-  and excludes uncalled nested function bodies; it makes no broader reachability
-  claim.
+  function or aliases through nested object properties. All nested function
+  bodies are excluded from handler report/output scanning, whether called or
+  uncalled. A handler calling a nested helper still needs an inline warning or
+  throw; leakage inside such helpers is not detected. For example, a called
+  helper logging `e.message` alongside an inline fixed warning passes this lint.
+  Taint collection still visits nested bodies conservatively and resolves their
+  lexical bindings, so a captured outer assignment can taint inline output even
+  when the helper is uncalled. The separate explicit `allSettled` result
+  inspection scans callbacks on those results. Following helper calls, arguments
+  and returns requires separate interprocedural design; the lint counts report
+  syntax and makes no broader reachability claim.
 
 `createLabel` never updates a label that already exists (it answers 422
 `already_exists`, which the step ignores), and no audit or sync in this repo
