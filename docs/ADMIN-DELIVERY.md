@@ -179,8 +179,11 @@ the publishing toggle stays optional and defaults to `false`. Its reusable copy
 is deliberately site-neutral. The suffix pattern is written `[.]pdf$`,
 equivalent to `\.pdf$` without carrying a backslash through the resolved seam's
 replacement-string splice. `{{CMS_CURRENT_HOST}}` survives both render paths
-inside labels and hints, then `site-hostname.js` replaces it with the routed
-admin hostname only inside Decap's own `FieldLabel` and `ControlHint` nodes.
+inside labels and hints, then `site-hostname.js` replaces it with the
+publishing destination (the host of the served config's `site_url`: the
+canonical host on production from any access host, the preview host on a
+preview, #533; see `theme/admin/README.md`) only inside Decap's own
+`FieldLabel` and `ControlHint` nodes.
 Authored content is outside that narrow mutation surface.
 
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)

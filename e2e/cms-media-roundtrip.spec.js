@@ -91,6 +91,7 @@ const { closeStaleDecapPrOnBranch, removeFixtureViaPr } = require("./cms-fixture
 const {
   addLabel,
   gh,
+  getFileTextAtRef,
   getPullRequest,
   waitForCmsPullRequest,
   waitForMerge,
@@ -102,6 +103,7 @@ const { loudBail } = require("./fixture-baseline");
 const {
   setPublished,
   saveEntry,
+  markEphemeralTestPost,
   publishViaUi,
   clickEditorDelete,
   confirmEditorDelete,
@@ -109,7 +111,7 @@ const {
   openMediaLibrary,
   closeMediaLibrary,
 } = require("./cms-editor-ui");
-const { EPHEMERAL_DATE, buildMediaRoundtripPost } = require("./prod-mutate-fixture");
+const { EPHEMERAL_DATE, missingTestPostMarkers, buildMediaRoundtripPost } = require("./prod-mutate-fixture");
 
 // Parameterized target: CMS_TARGET=preview (+ PR_NUMBER) drives the PR's
 // preview-pr<N> surface; anything else keeps the prod default, so the
@@ -306,6 +308,14 @@ test(
         .toBe(true);
     });
 
+    await test.step("Mark it a disposable test post (robots noindex, sitemap:false, test_fixture)", async () => {
+      // The posts form has no robots/sitemap widget and test_fixture is a
+      // hidden false, so without this the born-published post would serve
+      // with no noindex tag (#531). Stamped by a Decap preSave listener on
+      // this run's unique title — see markEphemeralTestPost.
+      await markEphemeralTestPost(page, { title });
+    });
+
     await test.step("Toggle Published → ON (born live)", async () => {
       await setPublished(page, true, { visibleTimeout: 15_000 });
     });
@@ -347,6 +357,15 @@ test(
       expect(pr.number, "Decap create PR number").toBeGreaterThan(0);
       createPrNumber = pr.number;
       await addLabel({ prNumber: pr.number, label: "cms/ready" });
+      // The listener returns `undefined` (no change) when the entry's
+      // collection or title does not match, and Decap then saves WITHOUT the
+      // markers — so prove them on the file Decap actually committed to the PR
+      // head, not just on the code that registers the listener (#531).
+      const createdFile = await getFileTextAtRef({ filePath, ref: pr.head.sha });
+      expect(
+        missingTestPostMarkers(createdFile),
+        `${filePath} at the create PR head must carry robots, sitemap and test_fixture`,
+      ).toEqual([]);
     });
 
     // ── 6. Wait until the image is LIVE on adamdaniel.ai ─────────────

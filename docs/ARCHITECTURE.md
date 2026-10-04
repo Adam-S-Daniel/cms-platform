@@ -137,7 +137,7 @@ endpoint valid until build-time config render is proven.
   fans back out.
 - Decommission the throwaway site/stack after green.
 
-## Admin-machinery roadmap status (historical — as of v0.1.8; see AGENTS.md for current status)
+## Admin-machinery roadmap status (historical — as of v0.1.8; current status in § Remaining work below)
 
 The Decap admin layer was the one row in the per-layer table whose final reuse
 mechanism was still open at extraction time. Issue **#5** split it into two goals:
@@ -182,5 +182,18 @@ reusable workflow's `generate` job builds BEFORE running detection;
 `compute-visual-diffs.js` escalates a pixel-identical page to "different" on
 a text delta, and synced tool-vendor bumps under `assets/tools/` /
 `_data/tool_sources/` are carved out of salience so they auto-pass — that
-delta is already reviewed in the tool's own source repo). See AGENTS.md's
-"Roadmap / open issues" section for the authoritative current status.
+delta is already reviewed in the tool's own source repo). § Remaining work
+below is the current status.
+
+### Remaining work
+
+Shipped, so no longer tracked: the reusable-workflow port, the e2e meta-lints,
+the PR #1 completeness pass, the `e2e-required-stub.yml` port,
+pixel-regression baseline retirement, and the four roadmap items — issue #5
+GOAL 1 (v0.1.4), issue #5 GOAL 2 (the v0.1.9–v0.1.12 sweep, `field_library` +
+`$ref`), #21 (v0.1.13, `ErrorCachingMinTTL`) and #22 (canary-branch cleanup).
+Still true: `code-quality` and `ci-runner-image` are **deliberate skips, never
+ported**, and `playwright-image-drift`'s "real repo is drift-free" subtest
+cannot self-check here (no root `package-lock.json` or
+`.github/ci-runner/Dockerfile`), so it exercises fully only against the
+synthetic `scaffold()` fixtures.

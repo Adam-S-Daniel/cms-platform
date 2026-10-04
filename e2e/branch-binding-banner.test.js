@@ -167,6 +167,15 @@ function sandboxFor({ production, config, status = 200, gate = null, siteLive = 
       CMSHostname: {
         canonical: () => "example.test",
         current: () => "preview-pr9999.example.test",
+        // The gate banner reads its flag at the served branch (#528); the
+        // real reader is site-hostname.js, pinned in site-gate-banner.test.js.
+        destination: () =>
+          (/^ {2}branch:[ \t]*main$/m.test(String(config)) ? "example.test" : "preview-pr9999.example.test"),
+        binding: () =>
+          Promise.resolve({
+            branch: (/^ {2}branch:[ \t]*(\S+)/m.exec(String(config)) || [])[1] || null,
+            destination: /^ {2}branch:[ \t]*main$/m.test(String(config)) ? "example.test" : "preview-pr9999.example.test",
+          }),
       },
     },
     document,
