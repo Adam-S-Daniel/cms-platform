@@ -363,16 +363,18 @@
     }
     if (stalled) {
       // Two genuinely different situations, and conflating them is what made
-      // the preview case invisible for as long as it was.
+      // the preview case invisible for as long as it was. On a preview the
+      // stalled merge is the one into the feature branch, so that is what a
+      // person is asked to finish; the live site comes later, with the
+      // branch, in the same `laterNote` words as every other preview state
+      // (#532).
       if (f.previewOnly) {
         return {
           detail:
-            "Everything passed, but this was edited on a preview of " +
-            (f.baseRef ? "“" + f.baseRef + "”" : "another branch") +
-            ", and a change made there does not reach " + host +
-            " on its own. Nothing you typed has been lost — ask " + who +
-            " to put it on " + host + ".",
-          waitingOn: "a person to move this from " + dest.noun + " to " + host,
+            "Every check passed, but this has not been added to " + dest.noun +
+            " yet. Nothing you typed has been lost — ask " + who +
+            " to finish adding it. " + dest.laterNote,
+          waitingOn: "a person to finish adding this to " + dest.noun,
         };
       }
       return {

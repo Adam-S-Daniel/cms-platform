@@ -363,7 +363,7 @@ test.describe("entry-status-model — the stall (#371)", () => {
     expect(got.detail).not.toMatch(/preview/i);
   });
 
-  test("a stall on a preview says plainly that it will not reach the live website", () => {
+  test("a stall on a preview asks for the merge into its branch, and names the live site as later", () => {
     const m = loadModel();
     const got = m.derive(
       facts({
@@ -381,10 +381,13 @@ test.describe("entry-status-model — the stall (#371)", () => {
       },
     );
     expect(got.badge).toBe(m.BADGE.NEEDS_ATTENTION);
-    expect(got.detail).toMatch(/claude\/issue-26-site-live-on/);
-    expect(got.detail).toMatch(/does not reach example\.com/);
-    expect(got.detail).toMatch(/nothing you typed has been lost/i);
-    expect(got.waitingOn).toMatch(/preview-pr0\.example\.com.*example\.com/);
+    expect(got.detail).toBe(
+      "Every check passed, but this has not been added to preview-pr0.example.com yet. " +
+        "Nothing you typed has been lost — ask Adam to finish adding it. " +
+        "It will not reach example.com until the work on “claude/issue-26-site-live-on” goes live there.",
+    );
+    expect(got.detail).not.toMatch(/on its own|does not reach/);
+    expect(got.waitingOn).toBe("a person to finish adding this to preview-pr0.example.com");
   });
 });
 
@@ -429,6 +432,9 @@ test.describe("entry-status-model — the destination (#371)", () => {
     ["Draft", { hasOpenPr: true }],
     ["Going live", { hasOpenPr: true, armed: true }],
     ["Going live, merged", { hasOpenPr: true, merged: true }],
+    // The stall used to say the edit "does not reach example.com on its own",
+    // contradicting this note (review of #558, S1).
+    ["Needs attention, stalled", { hasOpenPr: true, armed: true, settledSince: NOW - GRACE - MIN }],
   ];
   for (const [label, extra] of PREVIEW_CASES) {
     for (const [baseRef, branch] of [
