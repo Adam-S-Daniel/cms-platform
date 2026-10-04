@@ -161,13 +161,36 @@ test.describe("posts-list-enhance.js publishing summary: every deployment state 
 
   // Review of #558, N3: the URL comes from a workflow's deployment status,
   // so only an https: one is put in an href.
-  for (const url of ["javascript:alert(1)", "JavaScript:alert(1)", "http://example.com/log", "data:text/html,x", "//example.com/log"]) {
-    test(`a non-https update URL (${url}) leaves the words unlinked`, () => {
+  for (const url of [
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "http://example.com/log",
+    "data:text/html,x",
+    "//example.com/log",
+    // The scheme test is anchored: https:// later in the string is not enough.
+    "javascript:x//https://example.com/",
+    // Userinfo can disguise the host the link really goes to.
+    "https://user:pw@example.com/log",
+    "https://example.net@example.com/log",
+    "https://example.net\\@example.com/log",
+  ]) {
+    test(`an update URL that is not plain https (${url}) leaves the words unlinked`, () => {
       const { hook } = load({}, { Date: FixedDate });
       const html = hook.publishingSummaryHTML({ state: "success", at: FIVE_MIN_AGO, url }, "example.com");
       expect(html).toBe("example.com updated 5m ago");
     });
   }
+
+  test("an https URL is escaped into the href", () => {
+    const { hook } = load({}, { Date: FixedDate });
+    const html = hook.publishingSummaryHTML(
+      { state: "success", at: FIVE_MIN_AGO, url: 'https://example.com/log?a=1&b="x"' },
+      "example.com",
+    );
+    expect(html).toBe(
+      'example.com <a href="https://example.com/log?a=1&amp;b=&quot;x&quot;" target="_blank" rel="noopener">updated</a> 5m ago',
+    );
+  });
 
   test("with no time recorded the summary ends at the state words", () => {
     const { hook } = load({}, { Date: FixedDate });

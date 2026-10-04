@@ -594,6 +594,7 @@
   // state this code does not know, and the honest answer is that it does not
   // know (#534) — never a phrase that reads as if something happened.
   var UNKNOWN_STATE_WORD = "update status unknown";
+  var SAFE_LINK_URL = /^https:\/\/[^\/?#@\\\s]+(?:[\/?#]|$)/i;
 
   function publishingStateWord(state) {
     if (state === "success") return "updated";
@@ -611,8 +612,10 @@
     var stateWord = word;
     // The URL is whatever a workflow wrote as the status's log_url or
     // target_url; only an https: one becomes a link (no javascript:, no
-    // http:), and anything else leaves the words plain.
-    if (typeof deploy.url === "string" && /^https:\/\//i.test(deploy.url)) {
+    // http:), and anything else leaves the words plain. The authority may
+    // not carry userinfo (`https://user:pw@host/`), which can disguise the
+    // real host; `\` is excluded because browsers read it as `/`.
+    if (typeof deploy.url === "string" && SAFE_LINK_URL.test(deploy.url)) {
       stateWord =
         '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">' + stateWord + "</a>";
     }
