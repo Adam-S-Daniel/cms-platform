@@ -21,6 +21,16 @@
  * the `yaml` package via workflow-yaml-utils.js, each github-script body with
  * acorn, and only the object literal actually passed to `createLabel` is
  * inspected.
+ *
+ * The lint is fail-closed: a shape it cannot evaluate is a failure, never a
+ * silent pass. That covers an unparseable script body, a description or name
+ * that is not a static string (a template literal with an expression
+ * included; a `const` bound once to a static string is resolved),
+ * `createLabel(opts)` with anything but an object literal, a
+ * spread or computed key in that literal, a computed callee
+ * (`issues["createLabel"](…)`), and `createLabel` reached any other way (an
+ * alias or destructuring). The last is caught by counting acorn's
+ * `createLabel` tokens: every one must be the property of an evaluated call.
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -28,89 +38,224 @@ const acorn = require("acorn");
 const walk = require("acorn-walk");
 const { test, expect } = require("./base");
 const { listWorkflows, githubScriptBlocks } = require("./workflow-yaml-utils");
-const { stringValue } = require("./spec-ast");
 
 // https://docs.github.com/en/rest/issues/labels#create-a-label
 const GITHUB_LABEL_DESCRIPTION_MAX = 100;
 const PREVIEW_ONLY = "cms/preview-only";
+const METHOD = "createLabel";
 
-function parseScript(src) {
-  return acorn.parse(src, {
-    ecmaVersion: "latest",
-    sourceType: "script",
-    allowAwaitOutsideFunction: true,
-    allowReturnOutsideFunction: true,
+const PARSE_OPTIONS = {
+  ecmaVersion: "latest",
+  sourceType: "script",
+  allowAwaitOutsideFunction: true,
+  allowReturnOutsideFunction: true,
+};
+
+// The string a node always evaluates to, or undefined when it is not fixed:
+// a string literal, a template literal with no expressions, or a `+` of
+// those. Anything else (an identifier, a `${…}`, a call) is undefined.
+function staticString(node) {
+  if (!node) return undefined;
+  if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis.map((q) => q.value.cooked).join("");
+  }
+  if (node.type === "BinaryExpression" && node.operator === "+") {
+    const l = staticString(node.left);
+    const r = staticString(node.right);
+    return l === undefined || r === undefined ? undefined : l + r;
+  }
+  return undefined;
+}
+
+// `const NAME = <static string>` bindings that nothing else in the script
+// can shadow: a name declared, or taken as a parameter, more than once is
+// left out, so resolving through it never guesses.
+function constStrings(ast) {
+  const seen = new Map();
+  const note = (id, value) => {
+    if (!id || id.type !== "Identifier") return;
+    seen.set(id.name, seen.has(id.name) ? undefined : value);
+  };
+  walk.full(ast, (node) => {
+    if (node.type === "VariableDeclaration") {
+      for (const d of node.declarations) note(d.id, node.kind === "const" ? staticString(d.init) : undefined);
+    } else if (/Function/.test(node.type)) {
+      for (const param of node.params) note(param, undefined);
+      if (node.id) note(node.id, undefined);
+    }
   });
+  return seen;
 }
 
-function prop(objectNode, key) {
-  const p = objectNode.properties.find(
-    (x) => x.type === "Property" && !x.computed && (x.key.name === key || x.key.value === key),
-  );
-  return p ? p.value : null;
+// Every `createLabel` call in one github-script body, as
+// { calls: [{ where, name, description }], problems: [string] }. A call is
+// only reported when every part this lint checks was evaluated; anything
+// else is a problem.
+function analyzeScript(src, where) {
+  const calls = [];
+  const problems = [];
+  let ast;
+  try {
+    ast = acorn.parse(src, PARSE_OPTIONS);
+  } catch (e) {
+    return { calls, problems: [`${where}: cannot parse github-script body: ${e.message}`] };
+  }
+  const consts = constStrings(ast);
+  const value = (node) =>
+    node && node.type === "Identifier" ? consts.get(node.name) : staticString(node);
+  let evaluatedTokens = 0;
+  walk.simple(ast, {
+    CallExpression(node) {
+      const callee = node.callee;
+      if (callee.type !== "MemberExpression") return;
+      const at = `${where}+${node.loc ? node.loc.start.line : "?"}`;
+      if (callee.computed) {
+        const key = staticString(callee.property);
+        if (key === undefined) problems.push(`${at}: computed callee this lint cannot resolve`);
+        else if (key === METHOD) problems.push(`${at}: computed ${METHOD} callee; call it as .${METHOD}({…})`);
+        return;
+      }
+      if (callee.property.name !== METHOD) return;
+      evaluatedTokens++;
+      const arg = node.arguments[0];
+      if (node.arguments.length !== 1 || !arg || arg.type !== "ObjectExpression") {
+        problems.push(`${at}: ${METHOD} must be called with one object literal`);
+        return;
+      }
+      const fields = {};
+      for (const p of arg.properties) {
+        if (p.type !== "Property" || p.computed) {
+          problems.push(`${at}: ${METHOD} argument has a spread or computed key`);
+          return;
+        }
+        fields[p.key.type === "Identifier" ? p.key.name : String(p.key.value)] = p.value;
+      }
+      const name = value(fields.name);
+      const description = value(fields.description);
+      // A name held in an identifier this script cannot resolve (one
+      // imported from a repo script) is kept as `<IDENT>`; the test below
+      // holds those to a reviewed list, so a new one still fails.
+      const opaqueName =
+        name === undefined && fields.name && fields.name.type === "Identifier" ? `<${fields.name.name}>` : undefined;
+      if (name === undefined && !opaqueName) problems.push(`${at}: ${METHOD} name must be a static string`);
+      if (description === undefined) problems.push(`${at}: ${METHOD} description must be a static string`);
+      if ((name !== undefined || opaqueName) && description !== undefined) {
+        calls.push({ where: at, name: name !== undefined ? name : opaqueName, opaque: Boolean(opaqueName), description });
+      }
+    },
+  });
+  // Lexical: acorn's own tokens, so comments never count. Each `createLabel`
+  // name or string token must be the property of a call evaluated above.
+  let tokens = 0;
+  for (const tok of acorn.tokenizer(src, PARSE_OPTIONS)) {
+    if (["name", "string", "template"].includes(tok.type.label) && tok.value === METHOD) tokens++;
+  }
+  if (tokens !== evaluatedTokens) {
+    problems.push(
+      `${where}: ${tokens} ${METHOD} token(s) but ${evaluatedTokens} evaluated call(s); ` +
+        `${METHOD} is reached in a shape this lint cannot evaluate (alias, destructuring, computed key)`,
+    );
+  }
+  return { calls, problems };
 }
 
-// Every `<anything>.createLabel({...})` call in every github-script step of
-// every platform workflow, as { file, line, name, description }.
+// Every createLabel call in every github-script step of every platform
+// workflow.
 function createLabelCalls() {
-  const out = [];
+  const calls = [];
+  const problems = [];
   for (const file of listWorkflows()) {
     const text = fs.readFileSync(file, "utf8");
     for (const block of githubScriptBlocks(text)) {
-      let ast;
-      try {
-        ast = parseScript(block.script);
-      } catch (e) {
-        // A body this lint cannot parse might hide a createLabel call; the
-        // lexical token check keeps an unparseable one from being skipped
-        // silently.
-        if (block.script.includes("createLabel")) {
-          throw new Error(`${path.basename(file)}:${block.line}: cannot parse github-script body: ${e.message}`);
-        }
-        continue;
-      }
-      walk.simple(ast, {
-        CallExpression(node) {
-          const callee = node.callee;
-          if (callee.type !== "MemberExpression" || callee.computed) return;
-          if (callee.property.name !== "createLabel") return;
-          const arg = node.arguments[0];
-          if (!arg || arg.type !== "ObjectExpression") return;
-          const nameNode = prop(arg, "name");
-          const descNode = prop(arg, "description");
-          out.push({
-            file: path.basename(file),
-            name: nameNode && nameNode.type === "Identifier" ? `<${nameNode.name}>` : stringValue(nameNode),
-            description: stringValue(descNode),
-          });
-        },
-      });
+      const got = analyzeScript(block.script, `${path.basename(file)}:${block.line}`);
+      calls.push(...got.calls);
+      problems.push(...got.problems);
     }
   }
-  return out;
+  return { calls, problems };
 }
 
 test.describe("createLabel descriptions (#532)", () => {
   test("every label description a workflow creates fits GitHub's 100-character limit", () => {
-    const calls = createLabelCalls();
+    const { calls, problems } = createLabelCalls();
+    expect(problems, "shapes this lint cannot evaluate").toEqual([]);
     expect(calls.length, "found no createLabel calls; the parse is broken").toBeGreaterThan(3);
     for (const c of calls) {
-      expect(c.description, `${c.file} ${c.name}: description must be a static string`).toEqual(expect.any(String));
       expect(
         c.description.length,
-        `${c.file} ${c.name}: GitHub rejects a description over ${GITHUB_LABEL_DESCRIPTION_MAX} characters, ` +
+        `${c.where} ${c.name}: GitHub rejects a description over ${GITHUB_LABEL_DESCRIPTION_MAX} characters, ` +
           "and the try/catch around createLabel hides the failure",
       ).toBeLessThanOrEqual(GITHUB_LABEL_DESCRIPTION_MAX);
     }
   });
 
   test("cms/preview-only says the edit reaches main with its branch, and promises no automatic drop", () => {
-    const calls = createLabelCalls().filter((c) => c.name === PREVIEW_ONLY);
-    expect(calls.map((c) => c.file)).toEqual(["cms-editorial-workflow.yml"]);
+    const calls = createLabelCalls().calls.filter((c) => c.name === PREVIEW_ONLY);
+    expect(calls.map((c) => c.where.split(":")[0])).toEqual(["cms-editorial-workflow.yml"]);
     const [{ description }] = calls;
     expect(description).toBe(
       "CMS edit on a feature-branch preview; reaches main when that branch merges, unless removed by hand",
     );
     expect(description).not.toMatch(/\b(drop|dropped|excluded|discarded)\b/i);
   });
+});
+
+// A label name this lint cannot see (imported from a repo script) could be
+// any label, cms/preview-only included, so each one is listed here after
+// review; a new one fails until it is.
+const OPAQUE_NAMES = [
+  // scripts/content-pr-guard.js's OVERRIDE_LABEL, "content-guard/override".
+  ["cms-editorial-workflow.yml", "<OVERRIDE_LABEL>"],
+];
+
+test("every label name the lint cannot resolve is a reviewed one", () => {
+  const opaque = createLabelCalls()
+    .calls.filter((c) => c.opaque)
+    .map((c) => [c.where.split(":")[0], c.name]);
+  expect(opaque).toEqual(OPAQUE_NAMES);
+});
+
+// Review of #558, S3: each shape the lint cannot evaluate must fail it.
+test.describe("createLabel lint is fail-closed", () => {
+  const ok = `await github.rest.issues.createLabel({ owner: o, repo: r, name: 'cms/x', color: 'ededed', description: 'Fine' });`;
+
+  test("an evaluable call is reported with its static name and description", () => {
+    const tpl = "await github.rest.issues.createLabel({ name: `cms/y`, description: 'a' + `b` });";
+    const bound = "const LABEL = 'cms/z'; await github.rest.issues.createLabel({ name: LABEL, description: 'c' });";
+    const got = analyzeScript(`// createLabel in a comment does not count\n${ok}\n${tpl}\n${bound}`, "t");
+    expect(got.problems).toEqual([]);
+    expect(got.calls.map((c) => [c.name, c.description])).toEqual([
+      ["cms/x", "Fine"],
+      ["cms/y", "ab"],
+      ["cms/z", "c"],
+    ]);
+    const shadowed = analyzeScript(
+      "const L = 'cms/x'; function f() { const L = 'cms/y'; } await github.rest.issues.createLabel({ name: L, description: 'd' });",
+      "t",
+    );
+    expect(shadowed.calls.map((c) => c.name), "a const declared twice is not resolved").toEqual(["<L>"]);
+    const reassignable = analyzeScript("let L = 'cms/x'; await github.rest.issues.createLabel({ name: L, description: 'd' });", "t");
+    expect(reassignable.calls.map((c) => c.name), "a let is not resolved").toEqual(["<L>"]);
+  });
+
+  const SHAPES = [
+    ["a template literal with an expression", "await github.rest.issues.createLabel({ name: 'cms/x', description: `CMS ${what}` });", /description must be a static string/],
+    ["a variable argument", "const opts = { name: 'cms/x', description: 'd' }; await github.rest.issues.createLabel(opts);", /must be called with one object literal/],
+    ["a computed callee", "await github.rest.issues['createLabel']({ name: 'cms/x', description: 'd' });", /computed createLabel callee/],
+    ["a computed callee built from parts", "await github.rest.issues['create' + 'Label']({ name: 'cms/x', description: 'd' });", /computed createLabel callee/],
+    ["an unresolvable computed callee", "await github.rest.issues[method]({ name: 'cms/x', description: 'd' });", /computed callee this lint cannot resolve/],
+    ["a spread into the argument", "await github.rest.issues.createLabel({ ...base, name: 'cms/x', description: 'd' });", /spread or computed key/],
+    ["a name that is not static", "await github.rest.issues.createLabel({ name: `cms/${kind}`, description: 'd' });", /name must be a static string/],
+    ["a name read off an object", "await github.rest.issues.createLabel({ name: cfg.label, description: 'd' });", /name must be a static string/],
+    ["no description", "await github.rest.issues.createLabel({ name: 'cms/x' });", /description must be a static string/],
+    ["a destructured alias", "const { createLabel } = github.rest.issues; await createLabel({ name: 'cms/x', description: 'd' });", /shape this lint cannot evaluate/],
+    ["an unparseable body", "await github.rest.issues.createLabel({ name: 'cms/x', ", /cannot parse/],
+  ];
+  for (const [shape, src, message] of SHAPES) {
+    test(`fails on ${shape}`, () => {
+      const got = analyzeScript(`${ok}\n${src}`, "t");
+      expect(got.problems.join("\n")).toMatch(message);
+    });
+  }
 });
