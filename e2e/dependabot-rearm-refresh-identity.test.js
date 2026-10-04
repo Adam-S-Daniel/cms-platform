@@ -43,6 +43,9 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
+const { createSandbox } = require("./git-fixture");
+const MANIFEST_SCRIPT = path.resolve(__dirname, "..", "scripts", "check-dependabot-manifest-paths.sh");
+const REAL_GIT = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
 const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 
 const REUSABLE = "dependabot-rearm-sweep.yml";
@@ -140,7 +143,7 @@ test.describe("dependabot-rearm-sweep.yml — App-token refresh shape (#458)", (
   });
 });
 
-// ── Group B: behaviour (real bash execution of the sweep step) ─────────────
+// ── Group B: behavior (real bash execution of the sweep step) ─────────────
 
 // The exact PR #450 shape from the #458 investigation: MERGEABLE, all checks
 // green, mergeStateStatus BLOCKED (logged, never gated on — see the
@@ -165,7 +168,7 @@ function writeExecutable(filePath, source) {
 // invocation (argv + the GH_TOKEN it saw) so a test can assert WHICH identity
 // called `pr update-branch` / `pr merge`. `git` answers `fetch` (no-op) and
 // `diff --name-only` (the workflows-touch check added by #458).
-function buildStubs() {
+function buildStubs({ realDiff = false, failDiffAt = 0, partialDiff = false, behindBy = 18, mergeSucceeds = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rearm-458-stub-"));
   const ghLog = path.join(dir, "gh-calls.jsonl");
   const gitLog = path.join(dir, "git-calls.jsonl");
@@ -188,7 +191,7 @@ if (argv[0] === "pr" && argv[1] === "view") {
 }
 if (argv[0] === "api") {
   // repos/o/r/compare/main...abc --jq .behind_by
-  process.stdout.write("18\\n");
+  process.stdout.write(${JSON.stringify(String(behindBy) + "\n")});
   process.exit(0);
 }
 if (argv[0] === "pr" && argv[1] === "update-branch") {
@@ -205,7 +208,7 @@ if (argv[0] === "pr" && argv[1] === "merge") {
   // Both --squash (direct) and --auto --squash (re-arm) refuse, per the
   // measured #450 log — neither is a workflows-permission write itself, but
   // GitHub still refuses them while the branch is behind.
-  process.exit(1);
+  process.exit(${mergeSucceeds ? 0 : 1});
 }
 console.error("gh stub: no route for " + argv.join(" "));
 process.exit(1);
@@ -223,7 +226,19 @@ if (argv[0] === "fetch") {
   process.exit(0);
 }
 if (argv[0] === "diff" && argv.includes("--name-only")) {
-  process.stdout.write(".github/workflows/deploy-preview.yml\\n");
+  const diffCount = fs.readFileSync(${JSON.stringify(gitLog)}, "utf8").trim().split("\\n")
+    .map((line) => JSON.parse(line)).filter((args) => args[0] === "diff").length;
+  if (diffCount === ${failDiffAt}) {
+    if (${partialDiff}) process.stdout.write("package.json\\0");
+    process.exit(17);
+  }
+  if (${realDiff}) {
+    const result = require("node:child_process").spawnSync(${JSON.stringify(REAL_GIT)}, argv);
+    process.stdout.write(result.stdout || "");
+    process.stderr.write(result.stderr || "");
+    process.exit(result.status === null ? 1 : result.status);
+  }
+  process.stdout.write(".github/workflows/deploy-preview.yml" + (argv.includes("-z") ? "\\0" : "\\n"));
   process.exit(0);
 }
 console.error("git stub: no route for " + argv.join(" "));
@@ -237,11 +252,11 @@ process.exit(1);
 // A working directory carrying a stub .cms-platform/scripts/check-
 // dependabot-manifest-paths.sh (exit 0) — the step invokes it by relative
 // path, which only resolves against cwd, never PATH.
-function buildCwd() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rearm-458-cwd-"));
+function buildCwd({ dir = fs.mkdtempSync(path.join(os.tmpdir(), "rearm-458-cwd-")), realManifest = false } = {}) {
   const scriptsDir = path.join(dir, ".cms-platform", "scripts");
   fs.mkdirSync(scriptsDir, { recursive: true });
-  writeExecutable(path.join(scriptsDir, "check-dependabot-manifest-paths.sh"), "#!/usr/bin/env bash\nexit 0\n");
+  writeExecutable(path.join(scriptsDir, "check-dependabot-manifest-paths.sh"),
+    realManifest ? fs.readFileSync(MANIFEST_SCRIPT, "utf8") : "#!/usr/bin/env bash\nexit 0\n");
   return dir;
 }
 
@@ -253,12 +268,16 @@ function callsOf(log) {
     .map((line) => JSON.parse(line));
 }
 
-function runSweep({ refreshToken, cwd, stubDir }) {
+function runSweep({ refreshToken, cwd, stubDir, fixtureEnv = {} }) {
   const script = String(sweepStep().run || "");
   expect(script, "the sweep step must be a run: script").toBeTruthy();
   const summaryFile = path.join(cwd, "step-summary.txt");
   fs.writeFileSync(summaryFile, "");
+  const tempDir = path.join(cwd, "temp");
+  fs.mkdirSync(tempDir, { recursive: true });
   const env = {
+    ...fixtureEnv,
+    TMPDIR: tempDir,
     PATH: `${stubDir}${path.delimiter}${process.env.PATH}`,
     GH_TOKEN: "gha-token",
     GH_REPO: "o/r",
@@ -272,10 +291,11 @@ function runSweep({ refreshToken, cwd, stubDir }) {
     code: res.status,
     out: `${res.stdout || ""}${res.stderr || ""}`,
     summary: fs.readFileSync(summaryFile, "utf8"),
+    temporaryFiles: fs.readdirSync(tempDir),
   };
 }
 
-test.describe("dependabot-rearm-sweep.yml — sweep step run: script, executed (#458 behaviour)", () => {
+test.describe("dependabot-rearm-sweep.yml — sweep step run: script, executed (#458 behavior)", () => {
   test("REFRESH_TOKEN=app-token: refreshes the behind workflow-file PR using the App, exit 0", () => {
     const cwd = buildCwd();
     const { dir: stubDir, ghLog } = buildStubs();
@@ -313,7 +333,7 @@ test.describe("dependabot-rearm-sweep.yml — sweep step run: script, executed (
       expect(out).toContain("https://github.com/o/r/pull/450");
 
       // And the refusal really was attempted under GITHUB_TOKEN, not silently
-      // skipped — the discriminating behaviour the negative control proves.
+      // skipped — the discriminating behavior the negative control proves.
       const calls = callsOf(ghLog);
       const updateBranchCalls = calls.filter((c) => c.argv[0] === "pr" && c.argv[1] === "update-branch");
       expect(updateBranchCalls.length, `no \`gh pr update-branch\` attempt:\n${out}`).toBeGreaterThan(0);
@@ -323,4 +343,150 @@ test.describe("dependabot-rearm-sweep.yml — sweep step run: script, executed (
       fs.rmSync(stubDir, { recursive: true, force: true });
     }
   });
+});
+
+// Group C executes both path readers over init-only, offline repositories.
+// Git's default quoting must not change either the allowlist or the sweep's
+// workflow-specific diagnostic. Each path is the only changed record.
+test.describe("Dependabot path readers preserve NUL-delimited git paths (#539)", () => {
+  let sb;
+  const stubDirs = [];
+  test.afterEach(() => {
+    for (const dir of stubDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+    if (sb) sb.cleanup();
+    sb = undefined;
+  });
+
+  function fixture(files = {}) {
+    sb = createSandbox("dependabot-paths-");
+    const repo = sb.initRepo("site");
+    const base = sb.commit(repo, { "README.md": "base\n" }, "base");
+    const head = sb.commit(repo, files, "change");
+    sb.git(repo, ["update-ref", "refs/remotes/origin/main", base]);
+    sb.git(repo, ["update-ref", "refs/remotes/dependabot-sweep/pr-450", head]);
+    return { repo, base, head };
+  }
+
+  function stubs(options) {
+    const result = buildStubs(options);
+    stubDirs.push(result.dir);
+    return result;
+  }
+
+  function manifest({ repo, base, head }, stubDir) {
+    const tempDir = path.join(repo, "temp");
+    fs.mkdirSync(tempDir, { recursive: true });
+    const result = spawnSync("bash", [MANIFEST_SCRIPT, base, head], {
+      cwd: repo,
+      encoding: "utf8",
+      env: {
+        ...sb.env,
+        TMPDIR: tempDir,
+        PATH: stubDir ? `${stubDir}${path.delimiter}${sb.env.PATH}` : sb.env.PATH,
+      },
+    });
+    expect(fs.readdirSync(tempDir), "manifest check removes its temporary diff on exit").toEqual([]);
+    return { code: result.status, out: `${result.stdout || ""}${result.stderr || ""}` };
+  }
+
+  const ALLOWED = [
+    "new\nline/package.json",
+    "café/package.json",
+    "with space/Gemfile",
+    'quote"d/Gemfile',
+    ".github/workflows/new\nline.yml",
+    ".github/workflows/café.yml",
+    ".github/workflows/with space.yaml",
+    '.github/workflows/quote"d.yml',
+  ];
+  for (const file of ALLOWED) {
+    test(`manifest allows ${JSON.stringify(file)} from real git`, () => {
+      const result = manifest(fixture({ [file]: "manifest\n" }));
+      expect(result.code, result.out).toBe(0);
+      expect(result.out).toContain("safe=true");
+    });
+  }
+
+  for (const file of ["new\nline/source.js", "café/source.js", "with space/source.js", 'quote"d/source.js']) {
+    test(`manifest rejects ${JSON.stringify(file)} from real git`, () => {
+      const result = manifest(fixture({ [file]: "source\n" }));
+      expect(result.code, result.out).toBe(1);
+      expect(result.out).toContain("safe=false");
+      expect(result.out).not.toContain("safe=true");
+    });
+  }
+
+  test("manifest allows a valid empty diff", () => {
+    const result = manifest(fixture());
+    expect(result.code, result.out).toBe(0);
+    expect(result.out).toContain("safe=true");
+  });
+
+  test("manifest rejects a renamed forbidden source even when its destination is allowed", () => {
+    const setup = fixture({ "notes.md": "same content\n" });
+    setup.base = setup.head;
+    setup.head = sb.commit(setup.repo, { "notes.md": null, "package.json": "same content\n" }, "rename");
+    const result = manifest(setup);
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).toContain("safe=false");
+  });
+
+  test("manifest rejects a real git diff failure instead of treating it as empty", () => {
+    const setup = fixture();
+    setup.head = "missing-ref";
+    const result = manifest(setup);
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).toContain("safe=false");
+    expect(result.out).not.toContain("safe=true");
+  });
+
+  test("manifest discards partial diff output when git fails", () => {
+    const setup = fixture();
+    const { dir } = stubs({ failDiffAt: 1, partialDiff: true });
+    const result = manifest(setup, dir);
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).toContain("safe=false");
+    expect(result.out).not.toContain("safe=true");
+  });
+
+  for (const file of ALLOWED) {
+    test(`sweep classifies ${JSON.stringify(file)} from real git`, () => {
+      const { repo } = fixture({ [file]: "manifest\n" });
+      const cwd = buildCwd({ dir: repo, realManifest: true });
+      const { dir, gitLog } = stubs({ realDiff: true });
+      const result = runSweep({ cwd, stubDir: dir, fixtureEnv: sb.env });
+      expect(result.code, result.out).toBe(1);
+      expect(result.summary).toContain("| failed (could not merge, refresh OR re-arm — needs a human) | 1 |");
+      expect(result.out.includes("changes .github/workflows/")).toBe(file.startsWith(".github/workflows/"));
+      expect(result.temporaryFiles).toEqual([]);
+      expect(callsOf(gitLog).filter((args) => args[0] === "diff")).toHaveLength(2);
+    });
+  }
+
+  for (const partialDiff of [false, true]) {
+    test(`sweep refuses all writes when its diagnostic diff fails (partial=${partialDiff})`, () => {
+      const { repo } = fixture({ ".github/workflows/café.yml": "manifest\n" });
+      const cwd = buildCwd({ dir: repo, realManifest: true });
+      const { dir, ghLog } = stubs({ realDiff: true, failDiffAt: 2, partialDiff, mergeSucceeds: true });
+      const result = runSweep({ cwd, stubDir: dir, fixtureEnv: sb.env });
+      expect(result.code, result.out).toBe(1);
+      expect(result.out).toContain("could not read the workflow-path diff");
+      expect(result.summary).toContain("| failed (could not merge, refresh OR re-arm — needs a human) | 1 |");
+      expect(callsOf(ghLog).filter((call) => call.argv[0] === "pr" && ["merge", "update-branch"].includes(call.argv[1]))).toEqual([]);
+      expect(result.temporaryFiles).toEqual([]);
+    });
+  }
+
+  for (const files of [{ "café/package.json": "manifest\n" }, {}]) {
+    test(`sweep succeeds and cleans up a valid ${Object.keys(files).length ? "manifest" : "empty"} diff`, () => {
+      const { repo } = fixture(files);
+      const cwd = buildCwd({ dir: repo, realManifest: true });
+      const { dir, ghLog } = stubs({ realDiff: true, behindBy: 0, mergeSucceeds: true });
+      const result = runSweep({ cwd, stubDir: dir, fixtureEnv: sb.env });
+      expect(result.code, result.out).toBe(0);
+      expect(result.summary).toContain("| merged | 1 |");
+      expect(callsOf(ghLog).filter((call) => call.argv[0] === "pr" && call.argv[1] === "merge")).toHaveLength(1);
+      expect(result.temporaryFiles).toEqual([]);
+    });
+  }
 });

@@ -10,7 +10,7 @@
 #     the same Dependabot batch merged first — see AGENTS.md "Dependabot
 #     batch-strand re-arm sweep")
 # Keep both call sites in lockstep: a change to the allowlist here changes
-# behaviour for BOTH gates identically, which is the point of factoring it
+# behavior for BOTH gates identically, which is the point of factoring it
 # out rather than duplicating it.
 #
 # Usage: check-dependabot-manifest-paths.sh <base-ref> <head-ref-or-sha>
@@ -33,7 +33,14 @@ fi
 BASE="$1"
 HEAD="$2"
 
-mapfile -t CHANGED < <(git diff --name-only "$BASE"..."$HEAD")
+changed_paths=$(mktemp)
+trap 'rm -f -- "$changed_paths"' EXIT
+if ! git diff --name-only --no-renames -z "$BASE"..."$HEAD" > "$changed_paths"; then
+  echo "::error::Could not read the Dependabot PR diff; refusing the manifest check."
+  echo "safe=false"
+  exit 1
+fi
+mapfile -d '' -t CHANGED < "$changed_paths"
 echo "Files changed (${BASE}...${HEAD}):"
 printf '  %s\n' "${CHANGED[@]}"
 

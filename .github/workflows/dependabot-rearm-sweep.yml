@@ -233,6 +233,9 @@ jobs:
           FAILED=0
           UNDETERMINED=0
 
+          changed_paths=$(mktemp)
+          trap 'rm -f -- "$changed_paths"' EXIT
+
           for num in "${PR_NUMBERS[@]}"; do
             # GitHub computes `mergeable` ASYNCHRONOUSLY, so a single read can
             # come back UNKNOWN on a PR it simply hasn't got to yet — the
@@ -299,16 +302,21 @@ jobs:
 
             # Does this PR's diff touch .github/workflows/? That is what makes
             # a BEHIND head unrefreshable by GITHUB_TOKEN (see the header's
-            # #458 correction) — the FAILED message below names the reason
-            # only when both are true. A bash pattern match, not `| grep -q`
-            # (AGENTS.md: a pipe into grep -q races past its 64 KiB buffer).
-            # A failed diff only degrades the FAILED message's wording, so it
-            # must not abort the sweep under `set -e`.
-            changed=$(git diff --name-only "origin/${base}...dependabot-sweep/pr-${num}") || changed=""
-            touches_workflows=false
-            if [[ $'\n'"$changed" == *$'\n'.github/workflows/* ]]; then
-              touches_workflows=true
+            # #458 correction). NUL-delimited records preserve quoted,
+            # non-ASCII, and newline-containing paths. A failed read refuses
+            # every write for this PR and makes the sweep fail closed.
+            if ! git diff --name-only --no-renames -z \
+              "origin/${base}...dependabot-sweep/pr-${num}" > "$changed_paths"; then
+              echo "::warning::#${num} — could not read the workflow-path diff; refusing to merge, refresh, or re-arm"
+              FAILED=$((FAILED + 1))
+              continue
             fi
+            touches_workflows=false
+            while IFS= read -r -d '' changed_path; do
+              case "$changed_path" in
+                .github/workflows/*) touches_workflows=true ;;
+              esac
+            done < "$changed_paths"
 
             # How far BEHIND its base is this head? That is the one question
             # `mergeStateStatus` cannot answer (see the header) and the one a
