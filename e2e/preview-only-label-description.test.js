@@ -635,6 +635,24 @@ test.describe("cms/preview-only label creation reports failures by status code o
     expect(warnings[0]).not.toContain(BODY);
   });
 
+  test("already_exists on a status other than 422 still warns", async () => {
+    const err = Object.assign(new Error(BODY), {
+      status: 500,
+      response: { data: { errors: [{ code: "already_exists" }] } },
+    });
+    const { warnings } = await run(err);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("HTTP 500");
+  });
+
+  test("an error with no status says HTTP unknown", async () => {
+    const { warnings } = await run(new Error(BODY));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("(HTTP unknown)");
+    expect(warnings[0]).not.toMatch(/undefined|NaN/);
+    expect(warnings[0]).not.toContain(BODY);
+  });
+
   test("no error, no warning", async () => {
     expect((await run(null)).warnings).toEqual([]);
   });
