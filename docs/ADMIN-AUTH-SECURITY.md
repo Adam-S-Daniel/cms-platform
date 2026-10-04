@@ -50,16 +50,50 @@ by `e2e/admin-reviews-auth.spec.js` in the consumer browser lanes.
 ## `ALLOWED_ORIGINS`
 
 Comma-separated `https://` origins. `*` stands for one or more of `[a-z0-9-]`
-**inside a single host label** and is refused in the last two labels, so it can
-name a site's per-PR preview hosts and nothing wider:
+**inside a single host label**, and only **at or beneath the site's own
+domain**, `APEX_DOMAIN` (the stack's `SiteApex` parameter, the Lambda's
+`SITE_APEX`), so it can name a site's per-PR preview hosts and nothing wider:
 
 ```bash
+export APEX_DOMAIN="<apex>"   # e.g. example.com; an older site-params.env may lack it
 export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
 ```
 
 - The preview entry is what lets an editor sign in on `preview-prN.<apex>` and
-  `preview-cms-<slug>.<apex>`. Leave it out and those admins can no longer
-  complete a sign-in; that is a valid choice for a site that does not use them.
+  `preview-cms-<slug>.<apex>`. Without it an editor on a preview admin
+  finishes GitHub's consent screen and then waits on a popup that never hands
+  the token back. `deploy.sh` warns when neither `https://preview-*.<apex>`
+  nor `https://*.<apex>` is listed. A site that does not want preview sign-in
+  sets `PREVIEW_SIGN_IN=disabled`, which replaces the warning with a line
+  saying so; `deploy.sh` refuses `disabled` next to a preview entry, and any
+  value other than `enabled` (the default) or `disabled`.
+- **Why the apex bounds the wildcard
+  ([#535](https://github.com/Adam-S-Daniel/cms-platform/issues/535)).** The
+  first rule refused `*` only in the last two labels. That is not where a
+  registrable domain ends: `https://*.co.uk` and `https://*.github.io` both
+  passed, and each spans sites registered by strangers, any of which could
+  open the sign-in popup and receive an editor's token. Which labels end a
+  registrable domain is the [Public Suffix List](https://publicsuffix.org/)'s
+  knowledge, and neither the Lambda nor `deploy.sh` carries a copy: a
+  partial list fails open for every suffix it misses, and a full one is a
+  dependency that goes stale. Instead the site declares its own domain, and
+  the labels after the last label holding a `*` must be that domain or a name
+  under it. `APEX_DOMAIN` is the domain whose Route 53 zone the bootstrap
+  stack serves, so it cannot be `co.uk` or `github.io` for a working site.
+  Nothing needs maintaining; the cost is that a wildcard over a domain the
+  site does not use as `APEX_DOMAIN` is refused, and must be listed as
+  literal origins instead.
+- **A `site-params.env` that predates this bound may not carry `APEX_DOMAIN`.**
+  Add `export APEX_DOMAIN="<the site's apex, e.g. example.com>"` to it before
+  redeploying; `deploy.sh` stops before any AWS call, and names the file and
+  the line to add, when a `*` entry has no apex. It does not guess the apex
+  from `ALLOWED_ORIGINS`, because that would bound the list by itself.
+- It **fails closed**: with `APEX_DOMAIN` unset, or not a plain domain of two
+  or more labels, `deploy.sh` refuses every `*` entry, and a Lambda whose
+  `SITE_APEX` is empty or malformed drops them (literal origins still work).
+  Lookalikes are refused too: `https://*<apex>` (the `*` would absorb
+  `evil<apex>`), `https://preview-*.not<apex>`, and
+  `https://preview-*.<apex>.example.net`.
 - `www.<apex>` serves the same `/admin` on the production distribution but is a
   different origin; list it only if editors really sign in there.
 - A site that serves its editor from its own origin (below) lists that origin
@@ -68,10 +102,66 @@ export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
   itself and, for an editor who has already authorized the app (GitHub then
   skips the consent screen), receive a token.
 - A bare `*`, an `http://` origin, or an entry with a path is invalid.
-  `deploy.sh` refuses to deploy it, and a proxy that somehow ends up with no
-  valid entry answers 500 instead of signing anyone in.
+  `deploy.sh` refuses to deploy a list holding any invalid entry. The Lambda
+  applies the same grammar and drops an invalid entry (logging it) rather than
+  widening anything; one that ends up with no valid entry answers 500 instead
+  of signing anyone in. `e2e/oauth-proxy-deploy-credentials.test.js` runs one
+  table of entries through both validators and requires the same verdict.
 - The API has no CORS configuration: nothing fetches it cross-origin, and the
   Lambda is the one place the allowlist is enforced.
+
+## One sign-in at a time, and the proxy's cookie
+
+[#537](https://github.com/Adam-S-Daniel/cms-platform/issues/537). The proxy
+keeps the `state` of a sign-in in progress in one cookie,
+`__Host-cms-oauth-state`, on its own host (`<api-id>.execute-api.<region>.amazonaws.com`).
+Two consequences follow, and neither is worked around: the state check is what
+stops a forged callback, so it stays.
+
+**Only one sign-in can be in progress per browser cookie context** (a browser
+profile; a private window has its own). `/auth` overwrites the cookie, so a
+second sign-in started before the first returns replaces the first one's
+`state`, and every callback clears the cookie, success or not. So:
+
+- start a second sign-in, finish the first: the first fails, and the cookie it
+  clears was the second's, so the second fails too;
+- finish the second first: it succeeds, and the first then fails.
+
+Every sign-in through the same proxy counts: `/admin`, `/admin/reviews/` and
+the preview admins of one site all share its proxy host, so a sign-in on a
+preview admin started during one on production collides with it. Two sites
+have two proxies and do not collide. The failure page reads **"This sign-in could not be
+verified. Close this window and start again."**, with HTTP 400, before the
+proxy contacts GitHub, and the Lambda logs
+`Callback state check failed (state param present=…, cookie present=…)`
+without either value. **To recover: close every sign-in popup, then start one
+sign-in and finish it before starting another.**
+
+**The browser must keep the proxy host's cookies.** `/auth` sets the cookie on
+a top-level page: the popup is a window of its own, not a frame inside the
+site. A browser that refuses cookies for that host returns from GitHub without
+it, and the sign-in fails with the same message (the log then says
+`cookie present=False`). Blocking *third-party* cookies is not the same thing
+and does not break it. Measured on 2026-10-03 with Playwright's builds over
+loopback (stand-in hosts for the site, the proxy and GitHub; a cookie set in a
+cross-site iframe on the site's page was the control showing each setting was
+live):
+
+| Browser setting | Sign-in |
+|---|---|
+| Chromium 153: default; "Block third-party cookies"; cookies blocked for the site only | works |
+| Chromium 153: all cookies blocked (the default cookie setting set to block); cookies blocked for the proxy host | fails: cookie missing |
+| Firefox 155: Standard (Total Cookie Protection); block cross-site tracking cookies; block third-party cookies; accept all | works |
+| Firefox 155: block all cookies | fails: cookie missing |
+
+Not measured: Safari and other WebKit browsers, extensions that strip
+`Set-Cookie`, and enterprise cookie policies; a rule that blocks
+`amazonaws.com` or `execute-api` hosts behaves like blocking the proxy host.
+An editor in such a browser allows cookies for the proxy host (its address is
+the popup's URL, and `cms.oauth_base_url` in `_config.yml`).
+
+`oauth-proxy/test_lambda.py`'s `TestConcurrentSignIn` drives both orders, the
+retry and a refused cookie through a cookie jar, with GitHub mocked.
 
 ## A release does not deploy the proxy
 
@@ -87,9 +177,14 @@ After any release that changes `oauth-proxy/`, for each site:
 ```bash
 # 1. the site's bump PR is merged, so platform.lock names the new release
 cd ~/repos/<site> && git checkout main && git pull
-# 2. infrastructure/site-params.env carries the ALLOWED_ORIGINS you intend, and
+# 2. infrastructure/site-params.env carries the ALLOWED_ORIGINS you intend
+#    (with https://preview-*.<apex> unless PREVIEW_SIGN_IN=disabled), and
 #    GITHUB_CLIENT_ID/SECRET empty to keep the live credentials (see below)
-# 3. deploy (the wrapper checks the platform out at platform.lock's ref)
+# 3. the same file carries APEX_DOMAIN, which any '*' entry needs. A file that
+#    predates the apex bound may lack it: add
+#      export APEX_DOMAIN="<the site's apex, e.g. example.com>"
+#    before deploying, or deploy.sh stops before any AWS call
+# 4. deploy (the wrapper checks the platform out at platform.lock's ref)
 bash oauth-proxy/deploy.sh
 ```
 
@@ -146,7 +241,8 @@ sam deploy --template-file .aws-sam/build/template.yaml \
   --stack-name <prefix>-oauth-proxy --region us-east-1 \
   --capabilities CAPABILITY_IAM --resolve-s3 --no-execute-changeset \
   --parameter-overrides "AllowedOrigins=https://<apex>,https://preview-*.<apex>" \
-    "GitHubScope=repo,read:user,workflow" "FunctionName=<prefix>-oauth-proxy"
+    "SiteApex=<apex>" "GitHubScope=repo,read:user,workflow" \
+    "FunctionName=<prefix>-oauth-proxy"
 ```
 
 `--no-execute-changeset` stops at the change set, so it can be read first
@@ -154,9 +250,9 @@ sam deploy --template-file .aws-sam/build/template.yaml \
 
 - `OAuthHttpApi` and `OAuthProxyFunction` are `Modify` with `Replacement:
   False` — the API URL does not move;
-- the function's `Environment` change is caused by `AllowedOrigins` and
-  `GitHubScope` only. A `ParameterReference` naming `GitHubClientSecret` means
-  the secret is about to change.
+- the function's `Environment` change is caused by `AllowedOrigins`,
+  `SiteApex` and `GitHubScope` only. A `ParameterReference` naming
+  `GitHubClientSecret` means the secret is about to change.
 
 Then `aws cloudformation execute-change-set --change-set-name <arn>` and
 `aws cloudformation wait stack-update-complete --stack-name <prefix>-oauth-proxy`.
@@ -876,6 +972,7 @@ Setup, owner only:
    read -rs GITHUB_CLIENT_SECRET   # the App's client secret; not echoed
    ( export GITHUB_CLIENT_SECRET STACK_NAME=<prefix>-oauth-proxy-app-spike \
        GITHUB_CLIENT_ID=<app-client-id> ALLOWED_ORIGINS='https://preview-*.<apex>' \
+       APEX_DOMAIN=<apex> \
        GITHUB_ORG=<owner> GITHUB_REPO=<repo>
      bash oauth-proxy/deploy.sh )
    ```
