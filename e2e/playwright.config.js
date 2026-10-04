@@ -590,6 +590,11 @@ const PLATFORM_META_SPECS = [
   // it — same posture as workflow-shell-glob-lint.test.js, and acceptable
   // because all three consumer trees scan 0 sinks today.
   "workflow-injection-lint.test.js",
+  // #536 — the contributor trust-boundary lint: parses the platform's OWN
+  // workflow definitions, the examples/site templates and repo-settings.yml.
+  // Its consumer half, "consumer-contributor-trust-boundary-lint.test.js", is
+  // deliberately absent from this list (the cms-platform#244 reason).
+  "contributor-trust-boundary-lint.test.js",
   // #16 — lints the prod-loop reusables' if:always() branch-cleanup steps by
   // parsing the platform's OWN workflow DEFINITIONS (readWorkflow). Platform-
   // internal: a consumer doesn't ship those reusable definitions.
