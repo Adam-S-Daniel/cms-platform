@@ -174,7 +174,7 @@ jobs:
           actionlint -color "${templates[@]}"
 
   # ── 2. theme-gem ruby unit specs ─────────────────────────────────────────
-  # Plain-ruby tests (no rspec/minitest, no bundle) — each `ruby <file>` exits
+  # Plain-ruby tests (no rspec, no bundle) — each `ruby <file>` exits
   # non-zero on a failed assertion. These guard the Liquid filters + Jekyll
   # generator plugins the gem ships (cachebust, auto_tag_pages, tag_feeds,
   # exclude_e2e_posts). Hard-fail.
@@ -187,18 +187,17 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9
         with:
-          # The specs stub the Liquid/Jekyll hooks they need and only use the
-          # stdlib (fileutils/tmpdir), so no `bundle install` is required —
-          # keeping this lane to a few seconds.
+          # Most specs stub Liquid/Jekyll hooks. Real render/build regressions
+          # use the pinned gems below without a site bundle install.
           ruby-version: '3.2'
 
-      # The one exception: cloudwatch_rum_include_render_test.rb renders the
-      # RUM include through real Liquid (#517), since what it locks is how the
-      # template engine evaluates the include's `if`. Liquid 4 is the major
-      # Jekyll 4 depends on (`~> 4.0`); 4.0.4 (2023-01-11) is the newest 4.x
-      # and has no runtime dependencies.
-      - name: Install Liquid
-        run: gem install liquid --version 4.0.4 --no-document
+      # The RUM include renders through real Liquid (#517), and fixture
+      # exclusion builds a real Jekyll site with sitemap generation (#531).
+      - name: Install theme spec dependencies
+        run: |
+          gem install liquid --version 4.0.4 --no-document
+          gem install jekyll --version 4.4.1 --no-document
+          gem install jekyll-sitemap --version 1.4.0 --no-document
 
       - name: Run theme specs
         run: |

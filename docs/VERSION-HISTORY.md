@@ -10,6 +10,17 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
+## Unreleased
+
+Fixture exclusion now runs at the site's `post_read` hook, after front matter
+is loaded and before generators run. Ordinary filenames marked `test_fixture: true`
+are excluded from feeds, sitemap, listings, and tag aggregation; explicit slugs
+also govern exclusion as intended. Direct post pages and collection documents are
+preserved. A real Jekyll build regression runs in the Ruby theme spec lane with
+pinned Jekyll and sitemap dependencies. Part of
+[#531](https://github.com/Adam-S-Daniel/cms-platform/issues/531), following the hook
+timing finding in [PR #564](https://github.com/Adam-S-Daniel/cms-platform/pull/564).
+
 ## Version history (v0.1.0 → v0.1.126)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).

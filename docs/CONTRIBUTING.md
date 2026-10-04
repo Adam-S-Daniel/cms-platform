@@ -95,9 +95,11 @@ REQUIRED:
 
 1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail; REQUIRED).
 2. **ruby-theme-specs** — `theme/spec/*_test.rb`, each run with plain `ruby`, no
-   bundle (hard-fail; REQUIRED). The one gem the lane installs is `liquid` 4.0.4,
-   for `cloudwatch_rum_include_render_test.rb`, which renders the RUM include
-   through real Liquid; every other spec stubs the Liquid/Jekyll surface it touches.
+   bundle (hard-fail; REQUIRED). The lane installs `liquid` 4.0.4 for the real
+   RUM include render, plus `jekyll` 4.4.1 and `jekyll-sitemap` 1.4.0 for
+   [the fixture exclusion build regression](../theme/spec/exclude_e2e_posts_build_test.rb).
+   That regression uses a temporary site to exercise front matter loading,
+   generators, and public aggregation output; other specs stub the surfaces they touch.
 3. **node-unit-lints** — the pure-fs `e2e/*.test.js` lints, selected by an
    exclusion DENY list (build-/repo-dependent specs are denied; a new pure-fs
    lint is picked up automatically). Run with `TARGET=prod` +
