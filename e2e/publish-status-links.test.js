@@ -305,7 +305,7 @@ function findAll(node, pred, out = []) {
   return out;
 }
 
-function loadBar(barFacts, windowExtra = {}) {
+function loadBar(barFacts, windowExtra = {}, options = {}) {
   const intervals = [];
   const root = new FakeNode("div");
   const toolbar = new FakeNode("div");
@@ -327,6 +327,8 @@ function loadBar(barFacts, windowExtra = {}) {
     querySelector: (selector) => {
       if (selector === 'button[class*="SaveButton"]') return save;
       if (selector === '[class*="oolbar"]') return toolbar;
+      if (options.nativePublish && selector.includes("PublishButton")) return new FakeNode("button");
+      if (options.deploy && selector === 'script[src*="deploy-status-pill"]') return {};
       return null;
     },
     querySelectorAll: () => [],
@@ -349,19 +351,21 @@ function loadBar(barFacts, windowExtra = {}) {
       return intervals.length;
     },
     setTimeout() {},
-    fetch() {
+    fetch: options.fetch || (() => {
       throw new Error("no network in this test");
-    },
+    }),
     console: { info() {}, warn() {} },
-    Date,
+    Date: class extends Date { static now() { return NOW; } },
     isFinite,
     Math,
     JSON,
   };
   vm.createContext(sandbox);
-  for (const f of ["entry-status-model.js", "publish-step-hint.js", "publish-button.js"]) {
-    vm.runInContext(read(f), sandbox);
-  }
+  const scripts = [];
+  if (options.model !== false) scripts.push("entry-status-model.js");
+  scripts.push("publish-step-hint.js");
+  if (options.publish !== false) scripts.push("publish-button.js");
+  for (const f of scripts) vm.runInContext(read(f), sandbox);
   const tick = () => intervals.forEach((fn) => fn());
   tick();
   return { doc, tick, win: sandbox.window };
@@ -445,6 +449,7 @@ test.describe("publish-button — the preview confirmation names when the live s
   test("“Put this on …?” on a preview says the live site comes only with the branch's work", () => {
     const hostname = {
       current: () => "preview-pr0.example.com",
+      destination: () => "preview-pr0.example.com",
       canonical: () => "example.com",
       options: () => ({ currentHostname: "preview-pr0.example.com", canonicalHostname: "example.com" }),
     };
@@ -467,6 +472,7 @@ test.describe("publish-button — the preview confirmation names when the live s
 test("“Put this on …?” on a preview falls back to the same promise when the model has no laterNote", () => {
   const hostname = {
     current: () => "preview-pr0.example.com",
+    destination: () => "preview-pr0.example.com",
     canonical: () => "example.com",
     options: () => ({ currentHostname: "preview-pr0.example.com", canonicalHostname: "example.com" }),
   };
@@ -486,4 +492,112 @@ test("“Put this on …?” on a preview falls back to the same promise when th
       "It will not reach example.com until the work on this branch goes live there.",
   );
   expect(slot.textContent).not.toMatch(/undefined/);
+});
+
+// Access to the admin shell can be through either host. Publication copy
+// follows the destination selected by its served config, including fallback
+// paths before the model or config has finished loading (#533).
+const HOST_CASES = [
+  { access: "preview-pr42.example.com", destination: "example.com" },
+  { access: "example.com", destination: "preview-pr42.example.com" },
+  { access: "example.com", destination: "example.com" },
+  { access: "preview-pr42.example.com", destination: "preview-pr42.example.com" },
+];
+
+test.describe("publication destination host (#533)", () => {
+  for (const { access, destination } of HOST_CASES) {
+    const label = `${access} opened, ${destination} destination`;
+    const hostname = {
+      current: () => access,
+      destination: () => destination,
+      canonical: () => "example.com",
+      // The helper still exposes the access identity here; the publication
+      // modules must pass their destination explicitly to the model.
+      options: () => ({ currentHostname: access, canonicalHostname: "example.com" }),
+    };
+    // Preview facts use the model's currentHostname argument directly;
+    // production facts use canonical and would mask a wrong argument.
+    const draft = facts({
+      hasOpenPr: true,
+      previewOnly: true,
+      baseRef: "feature/example",
+    });
+    const modelNoun = destination === "example.com" ? "the preview for “feature/example”" : destination;
+
+    for (const model of [true, false]) {
+      test(`publish-button ${model ? "model" : "fallback"} confirmation names ${label}`, () => {
+        const { doc } = loadBar(draft, { CMSHostname: hostname }, { model, nativePublish: true });
+        doc.getElementById("cms-publish-button").click();
+        expect(doc.getElementById("cms-publish-state-actions").textContent).toContain(
+          `Put this on ${model ? modelNoun : destination}?`,
+        );
+      });
+
+      test(`publish-step-hint ${model ? "model" : "fallback"} draft names ${label}`, () => {
+        const { doc } = loadBar(draft, { CMSHostname: hostname }, {
+          model,
+          publish: false,
+          nativePublish: true,
+          deploy: true,
+        });
+        expect(doc.getElementById("cms-publish-state-text").textContent).toContain(
+          `not on ${model ? modelNoun : destination} yet`,
+        );
+      });
+    }
+
+    test(`publish-button busy and rejected publish name ${label}`, async () => {
+      const { doc, win } = loadBar(draft, {
+        CMSHostname: hostname,
+        CMS_REPO: "owner/repo",
+        CMSPublishProgress: {
+          get: () => ({ ready: true, facts: draft, prNumber: 7 }),
+          getToken: () => "fixture",
+          subscribe() {},
+        },
+      }, {
+        fetch: async () => ({ ok: false, status: 503 }),
+      });
+      const publishing = win.__publishButton.doPublish();
+      expect(doc.getElementById("cms-publish-state-actions").textContent).toContain(`Sending it to ${modelNoun}…`);
+      await publishing;
+      expect(doc.getElementById("cms-publish-state-actions").children[0].textContent).toBe(
+        `${destination} did not accept the publish just now (GitHub returned 503). ` +
+          "Nothing you typed has been lost — press Publish again in a moment.",
+      );
+    });
+  }
+});
+
+test("production model copy keeps the canonical destination (#533)", () => {
+  const { doc } = loadBar(facts({ hasOpenPr: true }), {
+    CMSHostname: {
+      current: () => "preview-pr42.example.com",
+      destination: () => "preview-pr42.example.com",
+      canonical: () => "example.com",
+    },
+  });
+  expect(doc.getElementById("cms-publish-state-text").textContent).toContain("not on example.com yet");
+  doc.getElementById("cms-publish-button").click();
+  expect(doc.getElementById("cms-publish-state-actions").textContent).toContain("Put this on example.com?");
+});
+
+test("publish-step-hint fallback updates after the served config settles (#533)", () => {
+  let destination = "example.com";
+  const { doc, tick } = loadBar(facts({ hasOpenPr: true }), {
+    CMSHostname: {
+      current: () => "example.com",
+      destination: () => destination,
+      canonical: () => "example.com",
+    },
+  }, {
+    model: false,
+    publish: false,
+    nativePublish: true,
+    deploy: true,
+  });
+  expect(doc.getElementById("cms-publish-state-text").textContent).toContain("not on example.com yet");
+  destination = "preview-pr42.example.com";
+  tick();
+  expect(doc.getElementById("cms-publish-state-text").textContent).toContain("not on preview-pr42.example.com yet");
 });

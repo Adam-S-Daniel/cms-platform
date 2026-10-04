@@ -168,11 +168,15 @@
     },
     draft: {
       label: "Draft — only you can see this",
-      detail: HAS_REAL_DEPLOY
-        ? "This is a draft — it is not on " +
-          (window.CMSHostname ? window.CMSHostname.current() : "this address") +
-          " yet. Click Publish to put it there. It then takes about 5 minutes to appear."
-        : "This is a draft — it is not published yet. To publish it, click Publish.",
+      // The served config can settle after startup; read its destination
+      // each time the bar renders rather than caching the access host.
+      detail: function () {
+        return HAS_REAL_DEPLOY
+          ? "This is a draft — it is not on " +
+            (window.CMSHostname ? window.CMSHostname.destination() : "this address") +
+            " yet. Click Publish to put it there. It then takes about 5 minutes to appear."
+          : "This is a draft — it is not published yet. To publish it, click Publish.";
+      },
     },
   };
 
@@ -226,7 +230,7 @@
       var derived = model.derive(snapshot.facts, {
         now: Date.now(),
         contact: window.CMS_SUPPORT_CONTACT || null,
-        currentHostname: window.CMSHostname && window.CMSHostname.current(),
+        currentHostname: window.CMSHostname && window.CMSHostname.destination(),
         canonicalHostname: window.CMSHostname && window.CMSHostname.canonical(),
       });
       // "Live" with no toolbar publish control and no open PR is the steady
@@ -258,7 +262,7 @@
       return {
         state: "draft",
         label: FALLBACK.draft.label,
-        detail: FALLBACK.draft.detail,
+        detail: FALLBACK.draft.detail(),
         modifiers: [],
       };
     }

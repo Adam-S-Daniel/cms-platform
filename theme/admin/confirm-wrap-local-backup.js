@@ -76,7 +76,7 @@
           "silently drop your changes. Your work is saved by Save and by autosave " +
           "(on tab-close and after a short idle) onto this entry's PR branch — " +
           "nothing reaches " +
-          (window.CMSHostname ? window.CMSHostname.current() : "the publishing destination") +
+          (window.CMSHostname ? window.CMSHostname.destination() : "the publishing destination") +
           " until you Publish.",
       );
       return false;

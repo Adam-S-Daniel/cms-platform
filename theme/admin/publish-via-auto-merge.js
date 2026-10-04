@@ -105,7 +105,7 @@
           "Publishing in the background — auto-merge will land this when " +
             "the automatic safety checks finish (about 5 minutes). You can close this " +
             "tab; the entry appears on " +
-            (window.CMSHostname ? window.CMSHostname.current() : "the publishing destination") +
+            (window.CMSHostname ? window.CMSHostname.destination() : "the publishing destination") +
             " automatically. Decap may flash a " +
             "publish error here — it is safe to ignore.",
         );

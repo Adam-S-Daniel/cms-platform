@@ -61,6 +61,7 @@ async function renderDestinationPills() {
       CMSHostname: {
         canonical: () => "example.com",
         current: () => "preview-pr42.example.com",
+        destination: () => "preview-pr42.example.com",
       },
     },
     document: {

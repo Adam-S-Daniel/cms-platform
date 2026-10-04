@@ -28,7 +28,8 @@ const TEST_REPO = "TestOwner/test-repo";
 const API_BASE = `https://api.github.com/repos/${TEST_REPO}`;
 
 /** Build a fresh sandbox + load the shim into it; returns helpers. */
-function bootShim() {
+function bootShim(hostname) {
+  const appended = [];
   const calls = [];
   let nextResponses = [];
 
@@ -87,13 +88,14 @@ function bootShim() {
         style: { cssText: "" },
         remove: () => {},
       }),
-      body: { appendChild: () => {} },
+      body: { appendChild: (node) => appended.push(node) },
     },
     window: {
       fetch: fakeFetch,
       // Site identity is injected by the host page; the shim reads it to
       // build the recovery API base. Site-agnostic test value.
       CMS_REPO: TEST_REPO,
+      CMSHostname: hostname,
     },
   };
   sandbox.window.window = sandbox.window;
@@ -118,6 +120,7 @@ function bootShim() {
   return {
     sandbox,
     calls,
+    appended,
     queueResponse: (body, init) => nextResponses.push(makeResponse(body, init)),
     fetch: (url, init) => sandbox.window.fetch(url, init),
   };
@@ -525,3 +528,26 @@ test.describe("publish-via-auto-merge.js (unit)", () => {
     expect(calls[1].headers["X-GitHub-Api-Version"]).toBe("2022-11-28");
   });
 });
+
+for (const [access, destination] of [
+  ["preview-pr42.example.com", "example.com"],
+  ["example.com", "preview-pr42.example.com"],
+  ["example.com", "example.com"],
+  ["preview-pr42.example.com", "preview-pr42.example.com"],
+]) {
+  test(`auto-merge toast names ${destination} when opened on ${access} (#533)`, async () => {
+    const { fetch, queueResponse, appended } = bootShim({
+      current: () => access,
+      destination: () => destination,
+    });
+    queueResponse({ message: "Repository rule violations found" }, { status: 422 });
+    queueResponse({ id: 1 }, { status: 200 });
+    const response = await fetch(`${API_BASE}/pulls/42/merge`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer fixture" },
+    });
+    expect(response.status).toBe(422);
+    expect(appended).toHaveLength(1);
+    expect(appended[0].textContent).toContain(`the entry appears on ${destination} automatically.`);
+  });
+}
