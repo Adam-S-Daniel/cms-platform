@@ -85,6 +85,8 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
+const { guard } = require("./base-collections-guards");
+const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const { closeStaleDecapPrOnBranch, removeFixtureViaPr } = require("./cms-fixture-pr");
@@ -205,6 +207,11 @@ test(
       process.env.RUN_PROD_MUTATE_PLAYGROUND !== "1",
       "RUN_PROD_MUTATE_PLAYGROUND not set — only cms-media-roundtrip.yml runs this spec.",
     );
+
+    // The workflow gate runs first so a normal PR shard exits cheaply; this
+    // source-only #33 guard then skips single-page consumers before any browser
+    // event handlers, PAT checks, fixture reads, or API calls.
+    test.skip(...guard(SITE_ROOT, "cms-media-roundtrip.spec.js"));
 
     // Decap delete (and some confirm) flows use native window.confirm.
     // Register BEFORE any interaction so it's never too late.
