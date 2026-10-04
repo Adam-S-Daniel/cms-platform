@@ -149,22 +149,30 @@ jobs:
           echo "HEAD            = $(git rev-parse HEAD 2>&1)"
           echo "origin/$BASE_REF    = $(git rev-parse "origin/$BASE_REF" 2>&1)"
           echo "merge-base      = $(git merge-base "origin/$BASE_REF" HEAD 2>&1)"
-          echo "diff cmd        = git diff --name-only origin/$BASE_REF...HEAD"
+          echo "diff cmd        = git diff --name-only -z --no-renames origin/$BASE_REF...HEAD"
           echo "::endgroup::"
           # Fail CLOSED: a non-zero git diff must NOT be swallowed by
           # `|| true` — an empty changed set matches no salient path, so
           # the gate would silently report salient=false and let a
           # media-salient PR merge without the preview probe. Hard-fail
           # instead so a media-salient PR can never merge un-probed.
-          if ! changed=$(git diff --name-only "origin/${BASE_REF}...HEAD"); then
+          #
+          # NUL-delimited (`-z`) into a file, because a shell variable cannot
+          # hold NUL and the newline form quotes any non-ASCII name
+          # (`"assets/images/uploads/caf\303\251.png"`), which no salient
+          # pattern matches (cms-platform#539). `--no-renames` lists a moved
+          # file's source too: by default a rename reports only the
+          # destination, so moving `_layouts/post.html` elsewhere read as
+          # non-salient.
+          changed_z=$(mktemp)
+          if ! git diff --name-only -z --no-renames "origin/${BASE_REF}...HEAD" > "$changed_z"; then
             msg="preview-media could not compute the changed-file set against origin/${BASE_REF} (git diff exited non-zero). Failing the required gate CLOSED so a media-salient PR cannot merge without the preview probe. This indicates a CI/environment problem (e.g. git safe.directory), not a content issue — re-run the job; if it persists, investigate the workflow."
             echo "::error title=preview-media::${msg}"
             echo "$msg" | tee /tmp/preview-media.log
             exit 1
           fi
           echo "Changed files:"
-          # shellcheck disable=SC2001
-          echo "$changed" | sed 's/^/  /'
+          tr '\0' '\n' < "$changed_z" | sed 's/^/  /'
           # Salient = the flat media_folder, the Decap config, the site
           # config, or the post/canary layouts. (The workflow + spec
           # self-references from the original were dropped: those files
@@ -173,8 +181,11 @@ jobs:
           # anchor is intentionally omitted from this SITE-side salient
           # grep — that script is platform-owned and can never appear in
           # a site PR diff, so an anchor for it here would be dead weight.
-          if echo "$changed" | grep -Eq \
-            '^(assets/images/uploads/|admin/config(-local)?\.yml$|_config\.yml$|_layouts/(post|canary)\.html$)'; then
+          # `grep -z` reads the NUL records; the file operand (not a pipe)
+          # keeps `-q` from racing the writer.
+          if grep -Ezq \
+            '^(assets/images/uploads/|admin/config(-local)?\.yml$|_config\.yml$|_layouts/(post|canary)\.html$)' \
+            "$changed_z"; then
             echo "salient=true" >> "$GITHUB_OUTPUT"
             echo "Media-salient change detected — running the preview probe."
           else

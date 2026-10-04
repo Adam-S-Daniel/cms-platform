@@ -277,8 +277,12 @@ function runDetect({
   // `-z`: NUL-delimited, unquoted paths. The newline form quotes any
   // non-ASCII name (`"_layouts/caf\303\251.html"`), which no `_layouts/`
   // rule in mapFileToUrls matches, so a salient edit read as "nothing
-  // changed" (cms-platform#539).
-  const changedFiles = parseNulPaths(runGit(["diff", "--name-only", "-z", "origin/main...HEAD"]));
+  // changed" (cms-platform#539). `--no-renames`: rename detection reports
+  // only the destination, so a layout moved out of a salient directory
+  // would hide its source path.
+  const changedFiles = parseNulPaths(
+    runGit(["diff", "--name-only", "-z", "--no-renames", "origin/main...HEAD"]),
+  );
 
   return classifyPages({
     allPages: runDiscover(),
