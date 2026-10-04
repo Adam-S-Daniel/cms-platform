@@ -10,9 +10,42 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.125)
+## Version history (v0.1.0 → v0.1.126)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.126 — the proxy and the bootstrap deploy stop trusting their inputs, the editor tells the truth about previews, and platform merges need three more checks.**
+The OAuth proxy honors a `*` entry in `ALLOWED_ORIGINS` only at or beneath the site's apex
+(`APEX_DOMAIN`, which becomes `SiteApex` in the stack), so `https://*.co.uk` and
+`https://*.github.io` no longer pass; with no apex every wildcard is refused or dropped.
+`deploy.sh` also warns when no `preview-*` origin is allowed, and the docs record the
+one-sign-in-per-cookie-context limit (#560). `infrastructure/bootstrap/deploy.sh` now minifies
+the template through a YAML parser and sends it inline, which brings it back under the CLI's
+51,200-byte limit that v0.1.125 broke, and applies it through a change set that refuses any
+removal or replacement unless `ALLOW_DESTRUCTIVE_CHANGES=1` is set; it names its stack from
+`BOOTSTRAP_STACK_NAME` rather than the proxy's `STACK_NAME`, and a first-time create needs
+`ALLOW_STACK_CREATE=1` (#566 and #567; the S3 upload #566 added was replaced by #567 before
+any release). In the editor, the site-gate banner reads `site_live` at the branch the served
+`config.yml` is bound to, so a preview reports its own value, and host labels resolve to the
+publishing destination (#557); deployment status copy distinguishes each GitHub state and the
+preview-only label no longer overpromises (#558); Markdown tables scroll inside their own box
+and fixed-width iframes shrink to the page on a phone (#555). `platform-bump` rewrites only
+real pins through the new `scripts/rewrite-platform-pins.js`, so prose that merely names the
+current version is left alone (#559). Visual-salience detection reads paths NUL-delimited and
+proves a merge base instead of fetching full history (#565). New tests: a skill freshness lint
+that checks every path, workflow, secret and CFN name a `SKILL.md` cites (#563), and a shared
+PDF-field test on the fixture site with UI-created prod test posts marked `noindex` (#564).
+`repo-settings.yml` now requires `python-unit-tests`, `cfn-lint` and `scan / scan` on platform
+PRs besides the original four, `cfn-lint` is pinned to 1.57.0 and no longer
+`continue-on-error` (#561). Docs and housekeeping: two agent-memory lessons promoted into
+`docs/CI-INVARIANTS.md` (#554), `AGENTS.md` shrunk under a 28 KiB budget (#556) and its managed
+block re-synced (#562). **Operator notes.** (a) An OAuth proxy site whose `ALLOWED_ORIGINS` has
+a wildcard entry must set `APEX_DOMAIN` in its `site-params.env`; the proxy deploy stops with a
+clear error without it. (b) The bootstrap deploy takes its stack name from
+`BOOTSTRAP_STACK_NAME` (default `<prefix>-bootstrap`), a first-time create needs
+`ALLOW_STACK_CREATE=1`, and the template is minified and sent inline behind the change-set
+guard. (c) Three more required checks apply to platform PRs, once the `repo-settings` apply
+for #561 has run.
 
 **v0.1.125 — the editor's token gets less to fear: security headers, an opt-in admin origin, a same-origin RUM client, and a probe that names the live proxy build.**
 Both CloudFront distributions in the bootstrap stack attach a response headers policy (HSTS,
