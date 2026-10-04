@@ -19,11 +19,14 @@
 # If a GitHub OIDC provider already exists in this account:
 #   CREATE_OIDC_PROVIDER=false bash infrastructure/bootstrap/deploy.sh
 #
-# STACK_NAME defaults to <prefix>-bootstrap. site-params.env exports STACK_NAME
-# for the OAuth proxy stack, so after sourcing it run this script as
-#   STACK_NAME= bash infrastructure/bootstrap/deploy.sh
-# or it aims the bootstrap template at the proxy stack (the guard below then
-# refuses, because every proxy resource would be removed).
+# Stack name: BOOTSTRAP_STACK_NAME, default <prefix>-bootstrap. STACK_NAME is
+# NOT read as this stack's name: site-params.env exports it for the OAuth proxy
+# stack, and a bootstrap stack created under that name would be all Add
+# actions, which the destructive-change guard cannot catch. A STACK_NAME equal
+# to site-params.env's (SITE_PARAMS_FILE, else ./infrastructure/site-params.env)
+# is ignored; one equal to <prefix>-bootstrap is accepted; any other value stops
+# the script before any AWS call. It also refuses a bootstrap stack name equal
+# to site-params.env's STACK_NAME.
 #
 # Template size: template.yaml is over the AWS CLI's 51,200-byte inline limit
 # as written, because of its comments. The script deploys a minified copy
@@ -60,7 +63,7 @@ MEDIA_ARCHIVE_BUCKET="${MEDIA_ARCHIVE_BUCKET:-}"
 # docs/ADMIN-AUTH-SECURITY.md.
 ADMIN_DOMAIN="${ADMIN_DOMAIN:-}"
 PREVIEW_DOMAIN="${PREVIEW_DOMAIN:-*.${APEX_DOMAIN}}"
-STACK_NAME="${STACK_NAME:-${RESOURCE_PREFIX}-bootstrap}"
+DEFAULT_BOOTSTRAP_STACK_NAME="${RESOURCE_PREFIX}-bootstrap"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 CREATE_OIDC_PROVIDER="${CREATE_OIDC_PROVIDER:-true}"
 HOSTED_ZONE_ID="${HOSTED_ZONE_ID:-}"
@@ -92,6 +95,39 @@ command -v aws >/dev/null 2>&1 || error "AWS CLI not found. Install: https://doc
 command -v ruby >/dev/null 2>&1 || error "Ruby not found. It minifies the template before the deploy (the platform's Jekyll toolchain already needs it)."
 command -v python3 >/dev/null 2>&1 || error "python3 not found. It reads the change set before anything is executed."
 
+# ── Resolve the bootstrap stack name (before any aws call) ─────────────────
+# The name never comes from a STACK_NAME that site-params.env set: that is the
+# OAuth proxy stack's name. Read the file's value in a child shell (output and
+# errors discarded, so nothing from the file is printed).
+SITE_PARAMS_PATH="${SITE_PARAMS_FILE:-}"
+if [[ -z "$SITE_PARAMS_PATH" && -f "${PWD}/infrastructure/site-params.env" ]]; then
+  SITE_PARAMS_PATH="${PWD}/infrastructure/site-params.env"
+fi
+SITE_PARAMS_STACK_NAME=""
+if [[ -n "$SITE_PARAMS_PATH" ]]; then
+  [[ -f "$SITE_PARAMS_PATH" ]] || error "SITE_PARAMS_FILE=${SITE_PARAMS_PATH} does not exist; nothing was deployed."
+  # shellcheck disable=SC2016  # expanded by the child shell, not this one.
+  SITE_PARAMS_STACK_NAME="$(bash -c 'unset STACK_NAME; set -a; . "$1" >/dev/null 2>&1 || exit 1; printf "%s" "${STACK_NAME-}"' read-site-params "$SITE_PARAMS_PATH")" \
+    || error "Could not read ${SITE_PARAMS_PATH} to check its STACK_NAME; nothing was deployed."
+fi
+
+if [[ -n "${BOOTSTRAP_STACK_NAME:-}" ]]; then
+  : # Set explicitly.
+elif [[ -z "${STACK_NAME:-}" ]]; then
+  BOOTSTRAP_STACK_NAME="$DEFAULT_BOOTSTRAP_STACK_NAME"
+elif [[ -n "$SITE_PARAMS_STACK_NAME" && "$STACK_NAME" == "$SITE_PARAMS_STACK_NAME" ]]; then
+  info "Ignoring STACK_NAME=${STACK_NAME}: it is the OAuth proxy stack's name from ${SITE_PARAMS_PATH}."
+  BOOTSTRAP_STACK_NAME="$DEFAULT_BOOTSTRAP_STACK_NAME"
+elif [[ "$STACK_NAME" == "$DEFAULT_BOOTSTRAP_STACK_NAME" ]]; then
+  warn "STACK_NAME=${STACK_NAME} is the default bootstrap stack name, so it is used; set BOOTSTRAP_STACK_NAME instead, this script no longer reads STACK_NAME."
+  BOOTSTRAP_STACK_NAME="$STACK_NAME"
+else
+  error "STACK_NAME=${STACK_NAME} is set, and this script no longer reads STACK_NAME as the bootstrap stack's name (site-params.env exports it for the OAuth proxy stack). Nothing was deployed. Run with STACK_NAME= for the default bootstrap stack ${DEFAULT_BOOTSTRAP_STACK_NAME}, or set BOOTSTRAP_STACK_NAME to the bootstrap stack's name."
+fi
+if [[ -n "$SITE_PARAMS_STACK_NAME" && "$BOOTSTRAP_STACK_NAME" == "$SITE_PARAMS_STACK_NAME" ]]; then
+  error "Refusing: the bootstrap stack name ${BOOTSTRAP_STACK_NAME} is the STACK_NAME in ${SITE_PARAMS_PATH}, the OAuth proxy stack. Nothing was deployed. Set BOOTSTRAP_STACK_NAME to the bootstrap stack's name (default ${DEFAULT_BOOTSTRAP_STACK_NAME})."
+fi
+
 # ── Move to script directory ───────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -111,7 +147,7 @@ if ((TEMPLATE_BYTES > INLINE_LIMIT_BYTES)); then
   error "The minified template is ${TEMPLATE_BYTES} bytes, over the ${INLINE_LIMIT_BYTES}-byte limit for a template sent inline; nothing was deployed. Shrink template.yaml (comments do not count, everything else does)."
 fi
 
-info "Deploying stack: ${STACK_NAME} to ${AWS_REGION}"
+info "Deploying stack: ${BOOTSTRAP_STACK_NAME} to ${AWS_REGION}"
 info "Template: ${TEMPLATE_BYTES} bytes minified (inline limit ${INLINE_LIMIT_BYTES})"
 info "Create OIDC provider: ${CREATE_OIDC_PROVIDER}"
 info "Admin CSP mode: ${ADMIN_CSP_MODE}; HSTS: max-age=${HSTS_MAX_AGE_SECONDS}, ${HSTS_SCOPE}"
@@ -129,13 +165,14 @@ fi
 
 # ── Create the change set (never executed blind) ───────────────────────────
 # Every parameter is passed explicitly from this script's defaults, so a run
-# with a missing setting (CREATE_APEX_DNS_RECORDS, ADMIN_DOMAIN, a STACK_NAME
-# meant for another stack) can remove live resources. The change set is read
-# back below and refused if anything would be removed or replaced.
-info "Creating change set for ${STACK_NAME}…"
-CHANGESET_OUTPUT="$(aws cloudformation deploy \
+# with a missing setting (CREATE_APEX_DNS_RECORDS, ADMIN_DOMAIN) can remove
+# live resources. The change set is read back below and refused if anything
+# would be removed or replaced.
+info "Creating change set for ${BOOTSTRAP_STACK_NAME}…"
+DEPLOY_STDERR="${WORK_DIR}/deploy-stderr.txt"
+if ! CHANGESET_OUTPUT="$(aws cloudformation deploy \
   --template-file "$DEPLOY_TEMPLATE" \
-  --stack-name "$STACK_NAME" \
+  --stack-name "$BOOTSTRAP_STACK_NAME" \
   --region "$AWS_REGION" \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-execute-changeset \
@@ -156,17 +193,36 @@ CHANGESET_OUTPUT="$(aws cloudformation deploy \
   "AdminDomainName=${ADMIN_DOMAIN}" \
   "HstsMaxAgeSeconds=${HSTS_MAX_AGE_SECONDS}" \
   "HstsScope=${HSTS_SCOPE}" \
-  "AdminCspMode=${ADMIN_CSP_MODE}")" \
-  || error "Creating the change set failed (see the AWS CLI message above); nothing was executed."
+  "AdminCspMode=${ADMIN_CSP_MODE}" 2>"$DEPLOY_STDERR")"; then
+  DEPLOY_ERROR="$(<"$DEPLOY_STDERR")"
+  # A stack in a failed state cannot take a change set; say what to do rather
+  # than echo the CLI's message (it carries the stack ARN, account id included).
+  FAILED_STATE_RE='is in ([A-Z_]+) state'
+  if [[ "$DEPLOY_ERROR" =~ $FAILED_STATE_RE ]]; then
+    case "${BASH_REMATCH[1]}" in
+      ROLLBACK_COMPLETE | CREATE_FAILED | ROLLBACK_FAILED)
+        error "Stack ${BOOTSTRAP_STACK_NAME} is in ${BASH_REMATCH[1]}: its first create failed, and CloudFormation cannot update it. Nothing was executed. Read its events in the CloudFormation console, delete the failed stack first, then re-run." ;;
+      UPDATE_ROLLBACK_FAILED)
+        error "Stack ${BOOTSTRAP_STACK_NAME} is in UPDATE_ROLLBACK_FAILED: an update failed and could not roll back. Nothing was executed. Fix the rollback first (fix the resource named in the stack's events, then continue the rollback from the CloudFormation console), then re-run." ;;
+      *)
+        error "Stack ${BOOTSTRAP_STACK_NAME} is in ${BASH_REMATCH[1]}, so it cannot take a change set now. Nothing was executed. Check its events in the CloudFormation console, then re-run." ;;
+    esac
+  fi
+  [[ -n "$DEPLOY_ERROR" ]] && printf '%s\n' "$DEPLOY_ERROR" >&2
+  error "Creating the change set failed (see the AWS CLI message above); nothing was executed."
+fi
 
 # --no-execute-changeset prints the new change set's ARN; an empty change set
 # prints "No changes to deploy" instead and exits 0.
 CHANGESET_ARN_RE='(arn:aws[a-z-]*:cloudformation:[a-z0-9-]+:[0-9]+:changeSet/[^[:space:]]+)'
 if [[ "$CHANGESET_OUTPUT" =~ $CHANGESET_ARN_RE ]]; then
   CHANGESET_ARN="${BASH_REMATCH[1]}"
+  # Messages name the change set, never its ARN (which carries the account id).
+  CHANGESET_NAME="${CHANGESET_ARN#*:changeSet/}"
+  CHANGESET_NAME="${CHANGESET_NAME%%/*}"
 elif [[ "$CHANGESET_OUTPUT" == *"No changes to deploy"* ]]; then
   CHANGESET_ARN=""
-  success "No changes to deploy: stack ${STACK_NAME} is up to date."
+  success "No changes to deploy: stack ${BOOTSTRAP_STACK_NAME} is up to date."
 else
   error "Could not find the change set ARN in the AWS CLI output, so nothing was executed."
 fi
@@ -176,22 +232,24 @@ if [[ -n "$CHANGESET_ARN" ]]; then
     --change-set-name "$CHANGESET_ARN" \
     --region "$AWS_REGION" \
     --output json)" \
-    || error "Could not read change set ${CHANGESET_ARN}, so nothing was executed."
+    || error "Could not read change set ${CHANGESET_NAME} on stack ${BOOTSTRAP_STACK_NAME}, so nothing was executed."
 
   # Print one line per resource action; exit 3 if any is destructive, 4 if
-  # the response cannot be trusted to list every change. Fails closed: only an
+  # the response has no Changes list, 5 if it has a NextToken (more pages). Fails closed: only an
   # Add, Modify or Import that replaces nothing counts as safe, so an unknown
   # or missing action (a Remove the guard cannot see, a nested stack's
   # Dynamic) is refused too.
-  info "Change set for ${STACK_NAME}:"
+  info "Change set for ${BOOTSTRAP_STACK_NAME}:"
   GUARD_STATUS=0
   python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 changes = data.get('Changes') if isinstance(data, dict) else None
-# No Changes list, or a NextToken (a page the CLI did not fetch): unreadable.
-if not isinstance(changes, list) or data.get('NextToken'):
+if not isinstance(changes, list):
     sys.exit(4)
+# A NextToken means a page this script did not fetch, so it cannot vouch for it.
+if data.get('NextToken'):
+    sys.exit(5)
 destructive = False
 for change in changes:
     rc = (change.get('ResourceChange') if isinstance(change, dict) else None) or {}
@@ -215,19 +273,20 @@ sys.exit(3 if destructive else 0)
       if [[ "${ALLOW_DESTRUCTIVE_CHANGES:-}" == "1" ]]; then
         warn "ALLOW_DESTRUCTIVE_CHANGES=1: executing a change set that removes or replaces resources."
       else
-        error "Refusing to execute: the change set above removes or replaces resources (marked DESTRUCTIVE), and nothing was changed. Check STACK_NAME, CREATE_APEX_DNS_RECORDS and ADMIN_DOMAIN first. If the change is intended, re-run with ALLOW_DESTRUCTIVE_CHANGES=1. The change set is left for review: ${CHANGESET_ARN}"
+        error "Refusing to execute: the change set above removes or replaces resources (marked DESTRUCTIVE), and nothing was changed. Check BOOTSTRAP_STACK_NAME, CREATE_APEX_DNS_RECORDS and ADMIN_DOMAIN first. If the change is intended, re-run with ALLOW_DESTRUCTIVE_CHANGES=1. The change set is left for review: ${CHANGESET_NAME} on stack ${BOOTSTRAP_STACK_NAME}."
       fi
       ;;
-    *) error "Could not read change set ${CHANGESET_ARN}, so nothing was executed." ;;
+    5) error "Refusing to execute change set ${CHANGESET_NAME} on stack ${BOOTSTRAP_STACK_NAME}: it lists more changes than one page (describe-change-set returned a NextToken), and this script does not page through them, so it cannot show that none is destructive. Nothing was executed, and ALLOW_DESTRUCTIVE_CHANGES=1 does not override this. Inspect every page of the change set by hand (CloudFormation console, or describe-change-set with --starting-token) and execute it yourself if it is intended." ;;
+    *) error "Could not read change set ${CHANGESET_NAME} on stack ${BOOTSTRAP_STACK_NAME}, so nothing was executed." ;;
   esac
 
   # A change set for a new stack leaves it in REVIEW_IN_PROGRESS until executed.
   STACK_STATUS="$(aws cloudformation describe-stacks \
-    --stack-name "$STACK_NAME" \
+    --stack-name "$BOOTSTRAP_STACK_NAME" \
     --region "$AWS_REGION" \
     --query 'Stacks[0].StackStatus' \
     --output text)" \
-    || error "Could not read the status of stack ${STACK_NAME}, so nothing was executed."
+    || error "Could not read the status of stack ${BOOTSTRAP_STACK_NAME}, so nothing was executed."
   if [[ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ]]; then
     WAITER="stack-create-complete"
   else
@@ -238,19 +297,19 @@ sys.exit(3 if destructive else 0)
   aws cloudformation execute-change-set \
     --change-set-name "$CHANGESET_ARN" \
     --region "$AWS_REGION" \
-    || error "Executing change set ${CHANGESET_ARN} failed."
+    || error "Executing change set ${CHANGESET_NAME} on stack ${BOOTSTRAP_STACK_NAME} failed."
   info "Waiting for ${WAITER}…"
   aws cloudformation wait "$WAITER" \
-    --stack-name "$STACK_NAME" \
+    --stack-name "$BOOTSTRAP_STACK_NAME" \
     --region "$AWS_REGION" \
-    || error "Stack ${STACK_NAME} did not reach ${WAITER#stack-}; check its events in the CloudFormation console."
-  success "Stack ${STACK_NAME} deployed."
+    || error "Stack ${BOOTSTRAP_STACK_NAME} did not reach ${WAITER#stack-}; check its events in the CloudFormation console."
+  success "Stack ${BOOTSTRAP_STACK_NAME} deployed."
 fi
 
 # ── Fetch outputs ──────────────────────────────────────────────────────────
 info "Fetching stack outputs…"
 OUTPUTS=$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
+  --stack-name "$BOOTSTRAP_STACK_NAME" \
   --region "$AWS_REGION" \
   --query 'Stacks[0].Outputs' \
   --output json)

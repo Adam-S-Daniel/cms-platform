@@ -46,7 +46,7 @@ cp infrastructure/site-params.example.env infrastructure/site-params.env
 # edit site-params.env
 set -a; source infrastructure/site-params.env; set +a
 
-STACK_NAME= bash infrastructure/bootstrap/deploy.sh   # see "The STACK_NAME collision"
+bash infrastructure/bootstrap/deploy.sh      # stack <prefix>-bootstrap; see "The STACK_NAME collision"
 bash oauth-proxy/deploy.sh                   # first deploy needs GITHUB_CLIENT_ID/SECRET
 bash infrastructure/rum/deploy.sh            # optional analytics
 ```
@@ -80,38 +80,46 @@ bash infrastructure/rum/deploy.sh            # optional analytics
   Otherwise it executes the change set and waits for the stack. An empty change
   set is a success. Every parameter is passed from the environment on every
   run, so the usual cause of a refusal is a missing setting: a live apex
-  without `CREATE_APEX_DNS_RECORDS=true` (removes the apex and `www` records),
-  a site with an admin host but no `ADMIN_DOMAIN` (removes it), or the wrong
-  `STACK_NAME` (below).
+  without `CREATE_APEX_DNS_RECORDS=true` (removes the apex and `www` records)
+  or a site with an admin host but no `ADMIN_DOMAIN` (removes it).
 
 ### The STACK_NAME collision
 
 `site-params.env` exports `STACK_NAME` for the **OAuth proxy** stack, because
-`oauth-proxy/deploy.sh` requires it. `bootstrap/deploy.sh` also honors
-`STACK_NAME` (default `<prefix>-bootstrap`), so after sourcing the file it
-would aim the bootstrap template at the proxy stack: on a proxy stack that
-exists, the change set removes every proxy resource and the guard refuses; on
-a new site, it would create the bootstrap stack under the proxy's name. The
-bootstrap script must not inherit that name. From a platform checkout, empty it
-for the one command:
+`oauth-proxy/deploy.sh` requires it. The bootstrap stack therefore has its own
+variable, **`BOOTSTRAP_STACK_NAME`** (default `<prefix>-bootstrap`), and
+`bootstrap/deploy.sh` never takes its stack name from a `STACK_NAME` that
+`site-params.env` set. Before any AWS call it:
+
+- reads the `STACK_NAME` in `site-params.env` (the file named by
+  `SITE_PARAMS_FILE`, else `./infrastructure/site-params.env` under the
+  current directory), in a child shell that prints nothing from the file;
+- ignores an inherited `STACK_NAME` equal to that value;
+- accepts a `STACK_NAME` equal to `<prefix>-bootstrap`, with a warning, so an
+  older `STACK_NAME=<prefix>-bootstrap` command still targets the same stack;
+- stops on any other `STACK_NAME` and names `BOOTSTRAP_STACK_NAME`, rather than
+  guess which stack was meant;
+- refuses to run if the resolved bootstrap stack name equals the
+  `STACK_NAME` in `site-params.env`.
+
+This matters most on a **new** site: a change set that would create the
+bootstrap stack under the proxy's name contains only `Add` actions, so the
+destructive-change guard could not catch it.
+
+A consumer's delegating wrapper sources `site-params.env` itself, then puts
+`STACK_NAME` back to what it was before (unset, or the caller's value), and
+passes the file's path on as `SITE_PARAMS_FILE`. So the wrapper is safe to run
+on its own or after the file was sourced in the shell:
 
 ```bash
-set -a; source infrastructure/site-params.env; set +a
-STACK_NAME= bash infrastructure/bootstrap/deploy.sh   # empty = <prefix>-bootstrap
+bash infrastructure/bootstrap/deploy.sh                                  # <prefix>-bootstrap
+BOOTSTRAP_STACK_NAME=<name> bash infrastructure/bootstrap/deploy.sh      # a non-default name
 ```
 
-A consumer's delegating wrapper sources `site-params.env` itself, after the
-command line, so `STACK_NAME=` in front of the wrapper does not help. Run the
-platform script directly instead, from a checkout at `platform.lock`'s
-`platform_ref`:
-
-```bash
-rm -rf .cms-platform   # the wrapper's own checkout dir; gitignored
-git clone --quiet --depth 1 --branch <platform_ref> \
-  https://github.com/Adam-S-Daniel/cms-platform.git .cms-platform
-set -a; source infrastructure/site-params.env; set +a
-STACK_NAME= bash .cms-platform/infrastructure/bootstrap/deploy.sh
-```
+From a platform checkout, run the same commands after sourcing the site's
+`site-params.env`, from the site's root (so the script finds the file) or with
+`SITE_PARAMS_FILE` set. `STACK_NAME= bash ...` still works and means the
+default.
 
 A later `oauth-proxy/deploy.sh` with both credentials empty keeps the stack's
 live ones ([docs/ADMIN-AUTH-SECURITY.md](../docs/ADMIN-AUTH-SECURITY.md),

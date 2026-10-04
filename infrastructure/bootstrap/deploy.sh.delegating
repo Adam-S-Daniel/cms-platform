@@ -23,12 +23,13 @@
 # The platform script creates a change set, prints it, and refuses to execute
 # one that removes or replaces a resource unless ALLOW_DESTRUCTIVE_CHANGES=1.
 #
-# NOTE on STACK_NAME: site-params.env exports it for the OAuth proxy stack, and
-# this wrapper sources that file, so the bootstrap script inherits the proxy's
-# stack name and its change set would remove every proxy resource (the guard
-# refuses it). A STACK_NAME on the command line does not help, because the
-# file is sourced after it; cms-platform infrastructure/README.md ("The
-# STACK_NAME collision") gives the commands that work.
+# NOTE on stack names: site-params.env exports STACK_NAME for the OAuth proxy
+# stack. This wrapper puts STACK_NAME back to what it was before sourcing the
+# file, and passes the file's path as SITE_PARAMS_FILE. The platform script
+# names the bootstrap stack from BOOTSTRAP_STACK_NAME (default
+# <prefix>-bootstrap), ignores a STACK_NAME equal to the file's, and refuses a
+# bootstrap stack name equal to it. See cms-platform infrastructure/README.md,
+# "The STACK_NAME collision".
 #
 # Prerequisites: AWS CLI v2, git, Ruby, python3, AWS credentials.
 # Usage:  bash infrastructure/bootstrap/deploy.sh   (idempotent)
@@ -64,8 +65,12 @@ PLATFORM_REF="${PLATFORM_REF:-$(read_lock platform_ref)}"
 PARAMS_FILE="$REPO_ROOT/infrastructure/site-params.env"
 if [[ -f "$PARAMS_FILE" ]]; then
   info "Sourcing $PARAMS_FILE"
+  # The file's STACK_NAME is the OAuth proxy stack's; never hand it on.
+  if [[ -v STACK_NAME ]]; then STACK_NAME_BEFORE="$STACK_NAME"; else unset STACK_NAME_BEFORE; fi
   set -a; # shellcheck disable=SC1090
   source "$PARAMS_FILE"; set +a
+  if [[ -v STACK_NAME_BEFORE ]]; then export STACK_NAME="$STACK_NAME_BEFORE"; else unset STACK_NAME; fi
+  export SITE_PARAMS_FILE="$PARAMS_FILE"
 else
   warn "infrastructure/site-params.env not found — relying on already-exported env / platform defaults."
 fi

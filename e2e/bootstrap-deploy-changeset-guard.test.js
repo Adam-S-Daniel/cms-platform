@@ -9,13 +9,17 @@
 //     bootstrap-template-minify.test.js) and stops before any aws call if that
 //     copy is still over the limit.
 //   - deploy.sh passes every parameter explicitly from its own defaults, so a
-//     run missing CREATE_APEX_DNS_RECORDS=true removes a live apex's records,
-//     a run without ADMIN_DOMAIN removes the admin host, and a run that
-//     inherits site-params.env's STACK_NAME (the OAuth proxy stack's name)
-//     aims the bootstrap template at the proxy stack and removes every proxy
-//     resource. The script now creates a change set, prints it, and refuses
-//     to execute one that removes or replaces a resource unless
-//     ALLOW_DESTRUCTIVE_CHANGES=1.
+//     run missing CREATE_APEX_DNS_RECORDS=true removes a live apex's records
+//     and a run without ADMIN_DOMAIN removes the admin host. The script now
+//     creates a change set, prints it, and refuses to execute one that removes
+//     or replaces a resource unless ALLOW_DESTRUCTIVE_CHANGES=1.
+//   - site-params.env exports STACK_NAME for the OAuth proxy stack, and the
+//     delegating wrapper sources it, so the bootstrap script used to inherit
+//     the proxy's name. On a new site that CREATES the bootstrap stack under
+//     the proxy's name: all Add actions, which the guard cannot catch. The
+//     bootstrap stack is now named by BOOTSTRAP_STACK_NAME (default
+//     <prefix>-bootstrap), the wrapper hands on no STACK_NAME from the file,
+//     and the script refuses a bootstrap name equal to the file's STACK_NAME.
 //
 // WHAT THIS FILE PROVES (the stub plays back canned change-set JSON)
 //   - Add/Modify only: executed, then waited on (update or create waiter);
@@ -29,6 +33,13 @@
 //     left unread) is refused outright, whatever ALLOW_DESTRUCTIVE_CHANGES says;
 //   - output with neither a change set ARN nor "No changes": refused;
 //   - an over-size or unparseable template is refused before ANY aws call;
+//   - stack name: the default and the documented `STACK_NAME=` and
+//     `STACK_NAME=<prefix>-bootstrap` invocations target <prefix>-bootstrap;
+//     the proxy's STACK_NAME is never sent as --stack-name, directly or through
+//     the wrapper; any other STACK_NAME, and a bootstrap name equal to
+//     site-params.env's STACK_NAME, stop before any aws call;
+//   - a stack in a failed state stops with what to do, executing nothing;
+//   - refusal messages name the change set, never its ARN (account id).
 //   - the deploy call sends the minified template inline (no S3), with
 //     --no-execute-changeset and the complete parameter list, defaults
 //     unchanged (a wrong default deletes DNS records or replaces resources).
@@ -57,6 +68,10 @@ const MINIFIER = path.join(BOOTSTRAP, "minify-template.rb");
 const TEMPLATE = path.join(BOOTSTRAP, "template.yaml");
 const INLINE_LIMIT_BYTES = 51200;
 const STACK = "example-test-bootstrap";
+// What a site-params.env fixture exports for the OAuth proxy stack.
+const PROXY_STACK = "example-oauth-proxy";
+const CHANGESET_NAME = "awscli-cloudformation-package-deploy-1";
+const ACCOUNT_ID = "000000000000";
 const CHANGESET_ARN =
   "arn:aws:cloudformation:us-east-1:000000000000:changeSet/awscli-cloudformation-package-deploy-1/00000000-0000-0000-0000-000000000000";
 
@@ -83,8 +98,9 @@ const EXPECTED_PARAMETERS = [
   "AdminCspMode=report-only",
 ];
 
-// The tools deploy.sh runs besides aws (bash builtins aside).
-const TOOLS = ["bash", "dirname", "tr", "python3", "ruby", "mktemp", "rm", "wc"];
+// The tools deploy.sh runs besides aws (bash builtins aside), plus the
+// delegating wrapper's awk and git (it clones a local fixture "platform").
+const TOOLS = ["bash", "dirname", "tr", "python3", "ruby", "mktemp", "rm", "wc", "awk", "git"];
 const SAFE_DIRS = ["/usr/bin", "/bin"];
 
 // Records every call's argv, keeps a copy of the template `deploy` was handed,
@@ -100,9 +116,10 @@ case "$*" in
       prev="$a"
     done
     case "$STUB_DEPLOY" in
-      empty) printf '\\nNo changes to deploy. Stack %s is up to date\\n' "$STACK_NAME" ;;
+      empty) printf '\\nNo changes to deploy. Stack is up to date\\n' ;;
       garbled) echo "something unexpected" ;;
       fail) echo "An error occurred (ValidationError) when calling the CreateChangeSet operation" >&2; exit 254 ;;
+      failed-state) printf '\\nAn error occurred (ValidationError) when calling the CreateChangeSet operation: Stack:arn:aws:cloudformation:us-east-1:000000000000:stack/example/00000000-0000-0000-0000-000000000000 is in %s state and can not be updated.\\n' "$STUB_FAILED_STATE" >&2; exit 254 ;;
       *) printf 'Waiting for changeset to be created..\\nChangeset created successfully. Run the following command to review changes:\\naws cloudformation describe-change-set --change-set-name %s\\n' "$STUB_ARN" ;;
     esac ;;
   "cloudformation describe-change-set "*) printf '%s\\n' "$(<"$STUB_CHANGESET_JSON")" ;;
@@ -118,6 +135,19 @@ let scratch;
 let stubDir;
 let binDir;
 let bash;
+let emptyCwd;
+let siteCwd;
+let siteDir;
+let platformRepo;
+
+// A site-params.env fixture: what the scaffolder writes, with the OAuth proxy
+// stack's STACK_NAME. Never a real site's file.
+const SITE_PARAMS = `export GITHUB_REPO="example-repo"
+export APEX_DOMAIN="example.com"
+export HOSTED_ZONE_ID="Z123EXAMPLE"
+export ALLOWED_ORIGINS="https://example.com"
+export STACK_NAME="${PROXY_STACK}"
+`;
 
 test.beforeAll(() => {
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-deploy-guard-"));
@@ -131,6 +161,31 @@ test.beforeAll(() => {
   }
   bash = path.join(binDir, "bash");
   fs.writeFileSync(path.join(stubDir, "aws"), STUB(fs.realpathSync(bash)), { mode: 0o755 });
+  emptyCwd = path.join(scratch, "cwd");
+  fs.mkdirSync(emptyCwd);
+  // A site root holding only the fixture site-params.env, for direct runs.
+  siteCwd = path.join(scratch, "site-cwd");
+  fs.mkdirSync(path.join(siteCwd, "infrastructure"), { recursive: true });
+  fs.writeFileSync(path.join(siteCwd, "infrastructure", "site-params.env"), SITE_PARAMS);
+  // A fixture "platform" repo at a branch the wrapper clones, and a site that
+  // carries the delegating wrapper as infrastructure/bootstrap/deploy.sh.
+  platformRepo = path.join(scratch, "platform");
+  const pb = path.join(platformRepo, "infrastructure", "bootstrap");
+  fs.mkdirSync(pb, { recursive: true });
+  for (const f of [DEPLOY, MINIFIER, TEMPLATE]) fs.copyFileSync(f, path.join(pb, path.basename(f)));
+  const git = (...args) => {
+    const g = spawnSync(path.join(binDir, "git"), ["-C", platformRepo, ...args], { env: sealedEnv({}), encoding: "utf8" });
+    if (g.status !== 0) throw new Error(`git ${args[0]} failed: ${g.stderr}`);
+  };
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("-c", "user.name=Example", "-c", "user.email=ci@example.com", "commit", "-q", "-m", "fixture");
+  git("branch", "fixture-ref");
+  siteDir = path.join(scratch, "site");
+  fs.mkdirSync(path.join(siteDir, "infrastructure", "bootstrap"), { recursive: true });
+  fs.writeFileSync(path.join(siteDir, "platform.lock"), "platform_repo: example/platform\nplatform_ref: fixture-ref\n");
+  fs.writeFileSync(path.join(siteDir, "infrastructure", "site-params.env"), SITE_PARAMS);
+  fs.copyFileSync(`${DEPLOY}.delegating`, path.join(siteDir, "infrastructure", "bootstrap", "deploy.sh"));
   // Refuse to run deploy.sh at all unless aws resolves to the stub.
   const seal = spawnSync(bash, ["-c", "command -v aws"], { env: sealedEnv({}), encoding: "utf8" });
   if (seal.stdout !== `${path.join(stubDir, "aws")}\n`) {
@@ -154,7 +209,6 @@ function sealedEnv(extra) {
     GITHUB_REPO: "example-repo",
     APEX_DOMAIN: "example.test",
     HOSTED_ZONE_ID: "Z123EXAMPLE",
-    STACK_NAME: STACK,
     AWS_REGION: "us-east-1",
     STUB_LOG: path.join(scratch, "calls.log"),
     STUB_TEMPLATE_COPY: path.join(scratch, "deployed-template.yaml"),
@@ -181,7 +235,7 @@ const change = (Action, LogicalResourceId, ResourceType, Replacement) => ({
   ResourceChange: { Action, LogicalResourceId, ResourceType, ...(Replacement ? { Replacement } : {}) },
 });
 
-function runDeploy({ changes = [], changeset, deployScript = DEPLOY, ...extra } = {}) {
+function runDeploy({ changes = [], changeset, deployScript = DEPLOY, cwd = emptyCwd, ...extra } = {}) {
   const env = sealedEnv(extra);
   for (const f of [env.STUB_LOG, env.STUB_TEMPLATE_COPY]) fs.rmSync(f, { force: true });
   fs.writeFileSync(
@@ -190,7 +244,8 @@ function runDeploy({ changes = [], changeset, deployScript = DEPLOY, ...extra } 
       changeset ?? { ChangeSetId: CHANGESET_ARN, StackName: STACK, Status: "CREATE_COMPLETE", Changes: changes },
     ),
   );
-  const r = spawnSync(bash, [deployScript], { env, encoding: "utf8" });
+  // cwd is a scratch dir, so no real infrastructure/site-params.env is read.
+  const r = spawnSync(bash, [deployScript], { env, cwd, encoding: "utf8" });
   return { status: r.status, out: `${r.stdout}${r.stderr}`, stderr: r.stderr, calls: readCalls(env.STUB_LOG) };
 }
 
@@ -260,6 +315,9 @@ for (const [name, destructive] of [
     expect(r.out).toContain("DESTRUCTIVE");
     expect(r.stderr).toContain("Refusing to execute");
     expect(r.stderr).toContain("ALLOW_DESTRUCTIVE_CHANGES=1");
+    // Named, not by ARN: the ARN carries the account id.
+    expect(r.stderr).toContain(`left for review: ${CHANGESET_NAME} on stack ${STACK}`);
+    expect(r.stderr).not.toContain(ACCOUNT_ID);
     expect(callsOf(r.calls, "describe-change-set")).toHaveLength(1);
     expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
     expect(callsOf(r.calls, "wait")).toEqual([]);
@@ -283,17 +341,32 @@ for (const [name, unknown] of [
 
 for (const [name, changeset] of [
   ["no Changes list", { ChangeSetId: CHANGESET_ARN, Status: "CREATE_COMPLETE" }],
-  ["a NextToken (a page left unread)", { ChangeSetId: CHANGESET_ARN, Changes: SAFE_CHANGES, NextToken: "page-2" }],
   ["a JSON array", []],
 ]) {
   test(`a describe-change-set response with ${name}: unreadable, refused even with ALLOW_DESTRUCTIVE_CHANGES=1`, () => {
     const r = runDeploy({ changeset, ALLOW_DESTRUCTIVE_CHANGES: "1" });
     expect(r.status, r.out).not.toBe(0);
-    expect(r.stderr).toContain(`Could not read change set ${CHANGESET_ARN}`);
+    expect(r.stderr).toContain(`Could not read change set ${CHANGESET_NAME} on stack ${STACK}`);
+    expect(r.stderr).not.toContain(ACCOUNT_ID);
     expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
     expect(callsOf(r.calls, "wait")).toEqual([]);
   });
 }
+
+test("a NextToken (a page left unread): refused even with ALLOW_DESTRUCTIVE_CHANGES=1, saying why and what to do", () => {
+  const r = runDeploy({
+    changeset: { ChangeSetId: CHANGESET_ARN, Changes: SAFE_CHANGES, NextToken: "page-2" },
+    ALLOW_DESTRUCTIVE_CHANGES: "1",
+  });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain("NextToken");
+  expect(r.stderr).toContain("ALLOW_DESTRUCTIVE_CHANGES=1 does not override this");
+  expect(r.stderr).toContain("Inspect every page of the change set by hand");
+  expect(r.stderr).toContain(`${CHANGESET_NAME} on stack ${STACK}`);
+  expect(r.stderr).not.toContain(ACCOUNT_ID);
+  expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+  expect(callsOf(r.calls, "wait")).toEqual([]);
+});
 
 test("ALLOW_DESTRUCTIVE_CHANGES=1 lets a destructive change set through", () => {
   const r = runDeploy({
@@ -420,3 +493,124 @@ test("a template the minifier cannot parse is refused before any aws call", () =
   expect(r.stderr).toContain("Could not minify template.yaml");
   expect(r.calls).toEqual([]);
 });
+
+// ── Stack name: never the OAuth proxy's STACK_NAME from site-params.env ─────
+const stackNamesSent = (calls) =>
+  calls.map((c) => flagValue(c, "--stack-name")).filter((v) => v !== undefined);
+
+for (const [name, extra] of [
+  ["no STACK_NAME (the default)", {}],
+  ["STACK_NAME= (the documented empty form)", { STACK_NAME: "" }],
+  ["STACK_NAME=<prefix>-bootstrap (docs/MEDIA-ARCHIVE.md's form)", { STACK_NAME: STACK }],
+  ["BOOTSTRAP_STACK_NAME=<prefix>-bootstrap", { BOOTSTRAP_STACK_NAME: STACK }],
+]) {
+  test(`${name}: every aws call targets ${STACK}`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, ...extra });
+    expect(r.status, r.out).toBe(0);
+    const names = stackNamesSent(r.calls);
+    expect(names.length).toBeGreaterThan(0);
+    expect(new Set(names)).toEqual(new Set([STACK]));
+  });
+}
+
+test("BOOTSTRAP_STACK_NAME names a non-default bootstrap stack, and wins over STACK_NAME", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, BOOTSTRAP_STACK_NAME: "example-custom-bootstrap", STACK_NAME: PROXY_STACK });
+  expect(r.status, r.out).toBe(0);
+  expect(new Set(stackNamesSent(r.calls))).toEqual(new Set(["example-custom-bootstrap"]));
+});
+
+test("any other STACK_NAME, with no site-params.env to explain it: refused before any aws call, naming BOOTSTRAP_STACK_NAME", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STACK_NAME: PROXY_STACK });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain("no longer reads STACK_NAME");
+  expect(r.stderr).toContain("BOOTSTRAP_STACK_NAME");
+  expect(r.calls).toEqual([]);
+});
+
+test("run directly from a site root after sourcing site-params.env: the proxy's STACK_NAME is ignored", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, cwd: siteCwd, STACK_NAME: PROXY_STACK });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain(`Ignoring STACK_NAME=${PROXY_STACK}`);
+  expect(stackNamesSent(r.calls)).not.toContain(PROXY_STACK);
+  expect(new Set(stackNamesSent(r.calls))).toEqual(new Set([STACK]));
+});
+
+for (const [name, viaEnv] of [
+  ["found in ./infrastructure", false],
+  ["named by SITE_PARAMS_FILE", true],
+]) {
+  test(`a bootstrap stack name equal to site-params.env's STACK_NAME (${name}): refused before any aws call`, () => {
+    // Paths exist only once beforeAll has run.
+    const extra = viaEnv
+      ? { SITE_PARAMS_FILE: path.join(siteCwd, "infrastructure", "site-params.env") }
+      : { cwd: siteCwd };
+    const r = runDeploy({ changes: SAFE_CHANGES, BOOTSTRAP_STACK_NAME: PROXY_STACK, ...extra });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.stderr).toContain(`Refusing: the bootstrap stack name ${PROXY_STACK} is the STACK_NAME in`);
+    expect(r.calls).toEqual([]);
+  });
+}
+
+test("a SITE_PARAMS_FILE that does not exist: refused before any aws call", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, SITE_PARAMS_FILE: path.join(scratch, "missing.env") });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain("does not exist");
+  expect(r.calls).toEqual([]);
+});
+
+// The wrapper sources the fixture site-params.env (STACK_NAME = the proxy's)
+// and execs the platform script it cloned from the fixture repo.
+function runWrapper(extra = {}) {
+  return runDeploy({
+    changes: SAFE_CHANGES,
+    deployScript: path.join(siteDir, "infrastructure", "bootstrap", "deploy.sh"),
+    cwd: siteDir,
+    PLATFORM_URL: `file://${platformRepo}`,
+    APEX_DOMAIN: "",
+    GITHUB_REPO: "",
+    ...extra,
+  });
+}
+
+for (const [name, extra] of [
+  ["run plainly", {}],
+  ["after the shell sourced site-params.env (the scaffolder's original step 4)", { STACK_NAME: PROXY_STACK }],
+]) {
+  test(`the delegating wrapper, ${name}: never sends the proxy's STACK_NAME as --stack-name`, () => {
+    const r = runWrapper(extra);
+    expect(r.status, r.out).toBe(0);
+    const names = stackNamesSent(r.calls);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names).not.toContain(PROXY_STACK);
+    // site-params.env's APEX_DOMAIN example.com -> the default bootstrap name.
+    expect(new Set(names)).toEqual(new Set(["example-com-bootstrap"]));
+    expect(callsOf(r.calls, "execute-change-set")).toHaveLength(1);
+  });
+}
+
+test("the delegating wrapper with BOOTSTRAP_STACK_NAME set to the proxy's name: refused before any aws call", () => {
+  const r = runWrapper({ BOOTSTRAP_STACK_NAME: PROXY_STACK });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain(`Refusing: the bootstrap stack name ${PROXY_STACK} is the STACK_NAME in`);
+  expect(r.calls).toEqual([]);
+});
+
+// ── A stack in a failed state cannot take a change set ─────────────────────
+for (const [state, advice] of [
+  ["ROLLBACK_COMPLETE", "delete the failed stack first"],
+  ["CREATE_FAILED", "delete the failed stack first"],
+  ["UPDATE_ROLLBACK_FAILED", "Fix the rollback first"],
+]) {
+  test(`a stack in ${state}: stops, executes nothing, and says what to do`, () => {
+    const r = runDeploy({ STUB_DEPLOY: "failed-state", STUB_FAILED_STATE: state });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.stderr).toContain(`Stack ${STACK} is in ${state}`);
+    expect(r.stderr).toContain(advice);
+    // The CLI's message (stack ARN, account id) is not echoed.
+    expect(r.stderr).not.toContain(ACCOUNT_ID);
+    expect(callsOf(r.calls, "deploy")).toHaveLength(1);
+    expect(callsOf(r.calls, "describe-change-set")).toEqual([]);
+    expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+    expect(callsOf(r.calls, "wait")).toEqual([]);
+  });
+}

@@ -68,9 +68,10 @@ scaffolder writes these into `infrastructure/site-params.env`). Only
 # Standard deploy — load site params, then run (auto-detects Route53 zone)
 cp infrastructure/site-params.example.env infrastructure/site-params.env   # first time
 set -a; source infrastructure/site-params.env; set +a
-# site-params.env's STACK_NAME names the OAuth proxy stack: empty it here
+# Stack: BOOTSTRAP_STACK_NAME, default <prefix>-bootstrap. site-params.env's
+# STACK_NAME names the OAuth proxy stack and is never used for this one
 # (infrastructure/README.md, "The STACK_NAME collision")
-STACK_NAME= bash infrastructure/bootstrap/deploy.sh
+bash infrastructure/bootstrap/deploy.sh
 
 # If a GitHub OIDC provider already exists in the account
 CREATE_OIDC_PROVIDER=false bash infrastructure/bootstrap/deploy.sh
@@ -90,7 +91,7 @@ Key env vars (see `infrastructure/site-params.example.env` for the full set):
 | `APEX_DOMAIN` | yes | — (e.g. `example.com`) |
 | `GITHUB_ORG` | no | `Adam-S-Daniel` |
 | `RESOURCE_PREFIX` | no | `APEX_DOMAIN` with dots → hyphens |
-| `STACK_NAME` | no | `${RESOURCE_PREFIX}-bootstrap` (never the proxy's name from `site-params.env`) |
+| `BOOTSTRAP_STACK_NAME` | no | `${RESOURCE_PREFIX}-bootstrap`. `STACK_NAME` is not read as this stack's name: one equal to `site-params.env`'s is ignored, one equal to the default is accepted, any other stops the script; a bootstrap name equal to `site-params.env`'s `STACK_NAME` is refused |
 | `AWS_REGION` | no | `us-east-1` |
 | `HOSTED_ZONE_ID` | no | auto-detected from `APEX_DOMAIN` |
 | `CREATE_OIDC_PROVIDER` | no | `true` |
@@ -118,17 +119,26 @@ After deploying, add these as GitHub Actions secrets (repo → Settings → Secr
 An old copy of `deploy.sh` (v0.1.125, before the minified inline deploy) is running: pull the current platform ref. The current script stops on its own, before any AWS call, if even the minified template is over the limit.
 
 ### `Refusing to execute: the change set above removes or replaces resources`
-Read the lines marked `DESTRUCTIVE`. The usual causes are a live apex without `CREATE_APEX_DNS_RECORDS=true`, a site with an admin host but no `ADMIN_DOMAIN`, or `STACK_NAME` inherited from `site-params.env` (the OAuth proxy stack). Fix the setting and re-run; use `ALLOW_DESTRUCTIVE_CHANGES=1` only when the removal is intended. Nothing was changed, and the refused change set is left on the stack for review.
+Read the lines marked `DESTRUCTIVE`. The usual causes are a live apex without `CREATE_APEX_DNS_RECORDS=true` or a site with an admin host but no `ADMIN_DOMAIN`. Fix the setting and re-run; use `ALLOW_DESTRUCTIVE_CHANGES=1` only when the removal is intended. Nothing was changed, and the refused change set is left on the stack for review.
+
+### `STACK_NAME=... is set, and this script no longer reads STACK_NAME`
+`STACK_NAME` is the OAuth proxy stack's name, so the script will not guess. Run with `STACK_NAME=` for the default `<prefix>-bootstrap`, or set `BOOTSTRAP_STACK_NAME`. Nothing was deployed.
+
+### `Refusing: the bootstrap stack name ... is the STACK_NAME in ...site-params.env`
+`BOOTSTRAP_STACK_NAME` names the OAuth proxy stack. Set it to the bootstrap stack's name (default `<prefix>-bootstrap`). Nothing was deployed.
+
+### `Stack <name> is in ROLLBACK_COMPLETE` (or `CREATE_FAILED`, `UPDATE_ROLLBACK_FAILED`)
+CloudFormation cannot take a change set for a stack in a failed state, and the script executes nothing. After a failed first create (`ROLLBACK_COMPLETE`, `CREATE_FAILED`), read the stack's events, delete the failed stack, then re-run. After `UPDATE_ROLLBACK_FAILED`, fix the resource named in the events and continue the rollback from the CloudFormation console, then re-run.
 
 ### `ResourceExistenceCheck` / changeset FAILED
 The `AWS::Route53::HostedZone::Id` parameter type triggers early validation. The `HostedZoneId` parameter is typed as `String` with `AllowedPattern: "^Z[A-Z0-9]+$"` to avoid this.
 
 If this error reappears: check whether a resource being added already exists outside the stack. Delete failed changesets before re-running (substitute your stack name):
 ```bash
-aws cloudformation list-change-sets --stack-name "${STACK_NAME}" \
+aws cloudformation list-change-sets --stack-name "${BOOTSTRAP_STACK_NAME}" \
   --query 'Summaries[?Status==`FAILED`].ChangeSetName' --output text | \
   xargs -I{} aws cloudformation delete-change-set \
-    --stack-name "${STACK_NAME}" --change-set-name {}
+    --stack-name "${BOOTSTRAP_STACK_NAME}" --change-set-name {}
 ```
 
 ### Certificate error on CloudFront: "SSL certificate doesn't exist"

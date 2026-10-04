@@ -676,11 +676,9 @@ Next:
   2. Create GitHub repo ${owner}/${repo} and push.
   3. Edit infrastructure/site-params.env (GitHub OAuth app id/secret, etc.).
   4. Deploy infra (one-time, shared AWS account; needs the AWS CLI, git, Ruby, python3).
-     Bootstrap stack FIRST, and NOT through the committed wrapper yet:
-     site-params.env's STACK_NAME names the OAuth proxy stack, and the wrapper
-     sources it, so it would create the bootstrap stack under the proxy's name.
-     Use the commands in cms-platform infrastructure/README.md, "The STACK_NAME
-     collision". Then:
+     The bootstrap stack is ${prefix}-bootstrap (BOOTSTRAP_STACK_NAME); site-params.env's
+     STACK_NAME names the OAuth proxy stack and is never used for it:
+       bash infrastructure/bootstrap/deploy.sh   # committed delegating wrapper
        bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,read:user,workflow)
   5. Add GitHub secrets (exact fine-grained PAT permissions: see the
      /cms-platform:consumer-repo-provisioning skill, from the agentskills bundle):
