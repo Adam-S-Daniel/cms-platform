@@ -168,7 +168,7 @@ function writeExecutable(filePath, source) {
 // invocation (argv + the GH_TOKEN it saw) so a test can assert WHICH identity
 // called `pr update-branch` / `pr merge`. `git` answers `fetch` (no-op) and
 // `diff --name-only` (the workflows-touch check added by #458).
-function buildStubs({ realDiff = false, failDiffAt = 0, partialDiff = false, behindBy = 18, mergeSucceeds = false } = {}) {
+function buildStubs({ realDiff = false, failDiffAt = 0, partialDiff = false, diffStderr = "", behindBy = 18, mergeSucceeds = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rearm-458-stub-"));
   const ghLog = path.join(dir, "gh-calls.jsonl");
   const gitLog = path.join(dir, "git-calls.jsonl");
@@ -230,6 +230,7 @@ if (argv[0] === "diff" && argv.includes("--name-only")) {
     .map((line) => JSON.parse(line)).filter((args) => args[0] === "diff").length;
   if (diffCount === ${failDiffAt}) {
     if (${partialDiff}) process.stdout.write("package.json\\0");
+    process.stderr.write(${JSON.stringify(diffStderr)});
     process.exit(17);
   }
   if (${realDiff}) {
@@ -439,6 +440,20 @@ test.describe("Dependabot path readers preserve NUL-delimited git paths (#539)",
     expect(result.out.split("\n").filter((line) => line.startsWith("::"))).toEqual([]);
   });
 
+  for (const file of ["::error::x", "::error::x/package.json"]) {
+    test(`command-looking path ${JSON.stringify(file)} has a safe listing prefix`, () => {
+      const allowed = file.endsWith("/package.json");
+      const result = manifest(fixture({ [file]: "content\n" }));
+      expect(result.code, result.out).toBe(allowed ? 0 : 1);
+      expect(result.out).toContain(`  - ${file}\n`);
+      expect(result.out.split("\n").filter((line) => line.trimStart().startsWith("::"))).toEqual(
+        allowed ? [] : [
+          "::error file=%3A%3Aerror%3A%3Ax::Dependabot PR touches non-manifest path: ::error::x",
+        ],
+      );
+    });
+  }
+
   test("forbidden control characters are escaped in the listing and annotation", () => {
     const file = "bad%\r:field,part\n::error::injected/source.js";
     const result = manifest(fixture({ [file]: "source\n" }));
@@ -446,7 +461,7 @@ test.describe("Dependabot path readers preserve NUL-delimited git paths (#539)",
     const message = "bad%25%0D:field,part%0A::error::injected/source.js";
     expect(result.code, result.out).toBe(1);
     expect(result.out).not.toContain("\r");
-    expect(result.out).toContain("  bad%25%0D:field\\,part%0A::error::injected/source.js\n");
+    expect(result.out).toContain("  - bad%25%0D:field\\,part%0A::error::injected/source.js\n");
     expect(result.out.split("\n").filter((line) => line.startsWith("::"))).toEqual([
       `::error file=${property}::Dependabot PR touches non-manifest path: ${message}`,
     ]);
@@ -480,14 +495,26 @@ test.describe("Dependabot path readers preserve NUL-delimited git paths (#539)",
     expect(result.out).not.toContain("safe=true");
   });
 
-  test("manifest discards partial diff output when git fails", () => {
-    const setup = fixture();
-    const { dir } = stubs({ failDiffAt: 1, partialDiff: true });
-    const result = manifest(setup, dir);
-    expect(result.code, result.out).toBe(2);
-    expect(result.out).toContain("safe=false");
-    expect(result.out).not.toContain("safe=true");
-  });
+  for (const partialDiff of [false, true]) {
+    test(`manifest preserves escaped git failure diagnostics (partial=${partialDiff})`, () => {
+      const setup = fixture();
+      const diffStderr = "fatal: invalid%ref\r\n::error::injected\nlast diagnostic\n";
+      const { dir } = stubs({ failDiffAt: 1, partialDiff, diffStderr });
+      const result = manifest(setup, dir);
+      expect(result.code, result.out).toBe(2);
+      expect(result.out).toContain("safe=false");
+      expect(result.out).not.toContain("safe=true");
+      expect(result.out).not.toContain("package.json");
+      expect(result.out).not.toContain("Files changed");
+      expect(result.out).not.toContain("\r");
+      expect(result.out).toContain(
+        "Git diff diagnostic: fatal: invalid%25ref%0D%0A::error::injected%0Alast diagnostic\n",
+      );
+      expect(result.out.split("\n").filter((line) => line.trimStart().startsWith("::"))).toEqual([
+        "::error::Could not read the Dependabot PR diff; refusing the manifest check.",
+      ]);
+    });
+  }
 
   for (const file of ALLOWED) {
     test(`sweep classifies ${JSON.stringify(file)} from real git`, () => {
