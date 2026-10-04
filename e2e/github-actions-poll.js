@@ -321,6 +321,20 @@ async function getPullRequest({ repo = HOST_REPO, prNumber }) {
   return gh(`/repos/${repo}/pulls/${prNumber}`);
 }
 
+// A file's text as it exists at `ref` (a branch, or the head sha of a PR),
+// read through the contents API. Read-only. The ref is encoded; the path is
+// encoded per segment so its `/` separators survive.
+async function getFileTextAtRef({ repo = HOST_REPO, filePath, ref }) {
+  if (!filePath || !ref) throw new Error("getFileTextAtRef needs a filePath and a ref.");
+  const file = await gh(
+    `/repos/${repo}/contents/${filePath.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`,
+  );
+  if (!file || typeof file.content !== "string" || file.encoding !== "base64") {
+    throw new Error(`getFileTextAtRef: ${filePath}@${ref} did not come back as a base64 file.`);
+  }
+  return Buffer.from(file.content, "base64").toString("utf8");
+}
+
 async function waitForMerge({
   repo = HOST_REPO,
   prNumber,
@@ -1048,6 +1062,7 @@ module.exports = {
   deployLaneActivity,
   fetchPublicUrl,
   getDefaultBranchHeadSha,
+  getFileTextAtRef,
   getPullRequest,
   gh,
   headChecksTrulyGreen,

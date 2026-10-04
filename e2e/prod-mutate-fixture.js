@@ -31,9 +31,11 @@
  *     real post or another in-flight run.
  *   - `robots: noindex,nofollow` + `sitemap: false` so a born-published
  *     post that briefly serves mid-run never leaks into search.
- *   - `test_fixture: true` so `admin/posts-list-enhance.js` hides it
- *     from the Posts list by default (issue #1042), exactly like the old
- *     committed canaries.
+ *   - `test_fixture: true` marks it as automated test content, like the
+ *     old committed canaries. (It is NOT what hides the post from the
+ *     admin Posts list: `theme/admin/posts-list-enhance.js` hides by DOM,
+ *     from the `e2e-` filename and `E2E ` title patterns, and the
+ *     `test_fixture` list filter is opt-in.)
  *
  * The UI-created post carries the same three markers (#531). The PRIMARY
  * create leg is genuinely UI-driven — the spec types Title/URL Slug/Date/Body
@@ -62,6 +64,7 @@
  * Pure Node — no `require("./base")` — so it stays a plain, unit-testable
  * library (same discipline as `./fixture-baseline`).
  */
+const YAML = require("yaml");
 
 // Future date the ephemeral posts carry. Sorts last among `_posts/` and
 // serves only because `_config.yml` sets `future: true` (the same
@@ -70,14 +73,36 @@ const EPHEMERAL_DATE = "2099-12-31";
 
 // The three front-matter markers every disposable test post carries (#531):
 // `robots` renders `<meta name="robots">` (theme default layout), `sitemap:
-// false` keeps jekyll-sitemap from listing it, and `test_fixture: true` hides
-// it from the Posts list and marks it as automated. The single source for
-// composePost below and for markEphemeralTestPost's preSave stamp.
+// false` keeps jekyll-sitemap from listing it, and `test_fixture: true` marks
+// it as automated test content. (The admin Posts list hides these posts by
+// their `e2e-` filename and `E2E ` title, in the DOM — theme/admin/posts-list-
+// enhance.js — not by this key; the `test_fixture` list filter is opt-in.)
+// The single source for composePost below and for markEphemeralTestPost's
+// preSave stamp.
 const TEST_POST_MARKERS = Object.freeze({
   robots: "noindex,nofollow",
   sitemap: false,
   test_fixture: true,
 });
+
+// The TEST_POST_MARKERS keys a post file's front matter is missing or has with
+// the wrong value. An empty list means every marker landed. A file with no
+// front matter, or front matter that does not parse, is missing all of them.
+function missingTestPostMarkers(fileText) {
+  let data = null;
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(String(fileText));
+  if (match) {
+    try {
+      data = YAML.parse(match[1]);
+    } catch {
+      data = null;
+    }
+  }
+  const present = data && typeof data === "object" ? data : {};
+  return Object.entries(TEST_POST_MARKERS)
+    .filter(([key, value]) => present[key] !== value)
+    .map(([key]) => key);
+}
 
 // Slug prefixes — the orphan sweeper tier and the recursion-churn glob
 // both key off these, so they are exported (single source of truth).
@@ -156,6 +181,7 @@ function composePost({ title, slug, body, featuredImage = "" }) {
 module.exports = {
   EPHEMERAL_DATE,
   TEST_POST_MARKERS,
+  missingTestPostMarkers,
   PROD_MUTATE_SLUG_PREFIX,
   MEDIA_ROUNDTRIP_SLUG_PREFIX,
   buildProdMutatePost,

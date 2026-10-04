@@ -39,7 +39,9 @@
  * `2099-12-31` (serves the same way the old `2099-01-01` canary did, via
  * `_config.yml`'s `future: true`), `robots: noindex,nofollow` +
  * `sitemap: false` (a born-published post that briefly serves never leaks
- * to search), and `test_fixture: true` (hidden from the Posts list).
+ * to search), and `test_fixture: true` (marks it as automated test content;
+ * the admin Posts list hides it by its `e2e-` filename and `E2E ` title, not
+ * by this key).
  *
  * The CREATE leg publishes through Decap's editor (Status → Ready →
  * Publish → "Publish now"), exactly like the proven
@@ -108,6 +110,7 @@ const { closeStaleDecapPrOnBranch, removeFixtureViaPr } = require("./cms-fixture
 const {
   addLabel,
   gh,
+  getFileTextAtRef,
   getPullRequest,
   waitForCmsPullRequest,
   waitForMerge,
@@ -125,7 +128,7 @@ const {
 } = require("./cms-editor-ui");
 const { prodTarget } = require("./cms-host");
 const { loudBail } = require("./fixture-baseline");
-const { EPHEMERAL_DATE, buildProdMutatePost } = require("./prod-mutate-fixture");
+const { EPHEMERAL_DATE, missingTestPostMarkers, buildProdMutatePost } = require("./prod-mutate-fixture");
 
 // Fixed-prod loop, resolved through the shared cms-host resolver
 // (byte-identical to the old literals) so prod/preview can't drift.
@@ -332,6 +335,15 @@ test(
       expect(pr.number, "Decap create PR number").toBeGreaterThan(0);
       createPrNumber = pr.number;
       await addLabel({ prNumber: pr.number, label: "cms/ready" });
+      // The listener returns `undefined` (no change) when the entry's
+      // collection or title does not match, and Decap then saves WITHOUT the
+      // markers — so prove them on the file Decap actually committed to the PR
+      // head, not just on the code that registers the listener (#531).
+      const createdFile = await getFileTextAtRef({ filePath, ref: pr.head.sha });
+      expect(
+        missingTestPostMarkers(createdFile),
+        `${filePath} at the create PR head must carry robots, sitemap and test_fixture`,
+      ).toEqual([]);
     });
 
     // ── 5. Wait for the URL to serve the marker (pill terminal-hidden) ─
