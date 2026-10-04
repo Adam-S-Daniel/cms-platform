@@ -316,7 +316,7 @@ jobs:
                   repo:  context.repo.repo,
                   name:  'cms/preview-only',
                   color: 'f5a623',
-                  description: 'CMS edit made on a feature-branch preview — drop this content from the parent branch when it merges to main',
+                  description: 'CMS edit on a feature-branch preview; reaches main when that branch merges, unless removed by hand',
                 });
               } catch (_) {}
               labels.push('cms/preview-only');

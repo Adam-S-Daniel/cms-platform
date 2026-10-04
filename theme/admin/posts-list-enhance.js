@@ -586,22 +586,38 @@
     };
   }
 
+  // The words that follow the destination in the bar's summary, e.g.
+  // "example.com updated 5m ago". The time is when GitHub recorded this
+  // state, so each phrase must read true with "<n> ago" after it. Covers
+  // every deployment status GitHub documents: `inactive` is the state an
+  // earlier update moves to once a newer one replaces it. Anything else is a
+  // state this code does not know, and the honest answer is that it does not
+  // know (#534) — never a phrase that reads as if something happened.
+  var UNKNOWN_STATE_WORD = "update status unknown";
+
   function publishingStateWord(state) {
     if (state === "success") return "updated";
     if (state === "failure" || state === "error") return "update did not finish";
-    if (state === "in_progress" || state === "queued" || state === "pending") return "updating";
-    return "publishing details";
+    if (state === "in_progress") return "update started";
+    if (state === "queued" || state === "pending") return "update requested";
+    if (state === "inactive") return "update replaced by a newer one";
+    return UNKNOWN_STATE_WORD;
   }
 
   function publishingSummaryHTML(deploy, destination) {
     var copy = publishingBarCopy();
     if (!deploy) return '<span style="color:#8c959f">' + copy.signedOut + "</span>";
-    var stateWord = publishingStateWord(deploy.state);
+    var word = publishingStateWord(deploy.state);
+    var stateWord = word;
     if (deploy.url) {
       stateWord =
         '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">' + stateWord + "</a>";
     }
-    return esc(destination) + " " + stateWord + " " + esc(timeAgo(deploy.at));
+    // "unknown 5m ago" would read as if the status became unknown then; the
+    // time is only when GitHub last reported something.
+    var ago = timeAgo(deploy.at);
+    var when = !ago ? "" : word === UNKNOWN_STATE_WORD ? " (last reported " + ago + ")" : " " + ago;
+    return esc(destination) + " " + stateWord + esc(when);
   }
 
   function ensureBar(cards, fixtureCount) {

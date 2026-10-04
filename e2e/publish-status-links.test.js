@@ -305,7 +305,7 @@ function findAll(node, pred, out = []) {
   return out;
 }
 
-function loadBar(barFacts) {
+function loadBar(barFacts, windowExtra = {}) {
   const intervals = [];
   const root = new FakeNode("div");
   const toolbar = new FakeNode("div");
@@ -338,6 +338,7 @@ function loadBar(barFacts) {
         get: () => ({ ready: true, facts: barFacts, prNumber: 7 }),
         subscribe() {},
       },
+      ...windowExtra,
     },
     document: doc,
     MutationObserver: class {
@@ -433,5 +434,30 @@ test.describe("publish-step-hint — no Draft sentence under the confirmation", 
     tick();
     const text = doc.getElementById("cms-publish-state-text");
     expect(text.textContent).toMatch(/did not pass/);
+  });
+});
+
+// #532: on a preview, publishing merges the edit into that feature branch,
+// where it stays, so it reaches the live site when the branch does. The
+// confirmation once said "It will NOT go to example.com" — the same false
+// promise the cms/preview-only label made.
+test.describe("publish-button — the preview confirmation names when the live site gets it", () => {
+  test("“Put this on …?” on a preview says the live site comes only with the branch's work", () => {
+    const hostname = {
+      current: () => "preview-pr0.example.com",
+      canonical: () => "example.com",
+      options: () => ({ currentHostname: "preview-pr0.example.com", canonicalHostname: "example.com" }),
+    };
+    const { doc, tick } = loadBar(facts({ hasOpenPr: true, previewOnly: true, baseRef: "claude/x" }), {
+      CMSHostname: hostname,
+    });
+    doc.getElementById("cms-publish-button").click();
+    tick();
+    const slot = doc.getElementById("cms-publish-state-actions");
+    expect(slot.textContent).toContain(
+      "Put this on preview-pr0.example.com? It takes about 5 minutes to appear there. " +
+        "It will not reach example.com until the work on “claude/x” goes live there.",
+    );
+    expect(slot.textContent).not.toMatch(/will not go to|NOT go/i);
   });
 });

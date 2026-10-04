@@ -81,7 +81,10 @@
  * working, those specs surface it. The robustness invariants
  * (retry, rate-limit, stale-state amber) live in
  * e2e/deploy-status-pill-robustness.test.js as text-grep checks
- * against this file's source.
+ * against this file's source; the stale state's behavior (when it
+ * appears, what it names, where it links, and that it clears once
+ * polling recovers) is driven through the real polling tick in
+ * e2e/deploy-status-pill-stale.test.js.
  */
 (function () {
   "use strict";
@@ -468,6 +471,7 @@
           window.CMSHostname ? window.CMSHostname.canonical() : "the published destination",
           lastSuccessfulPollAt.prod,
           now,
+          "prod",
         );
       }
     }
@@ -490,6 +494,7 @@
           window.CMSHostname ? window.CMSHostname.current() : "the preview destination",
           lastSuccessfulPollAt.preview,
           now,
+          "preview",
         );
       }
     }
@@ -550,11 +555,17 @@
   // into the amber "details may be out of date" view. Editors
   // get a visible signal that polling is broken instead of staring at
   // a frozen spinner that's secretly disconnected from reality.
-  function applyStaleIfNeeded(pill, destination, lastPollAt, now) {
+  //
+  // Forgetting the last-seen status id is what lets the pill recover: the
+  // next successful poll usually returns the SAME status (nothing changed
+  // while polling was down), and pollOne only re-renders on a new id, so
+  // without the reset the amber warning outlived the outage (#534).
+  function applyStaleIfNeeded(pill, destination, lastPollAt, now, kind) {
     if (!isPillVisible(pill)) return;
     if (!lastPollAt) return; // never had a successful poll → nothing to mark stale
     if (now - lastPollAt < STALE_THRESHOLD_MS) return;
     renderStalePill(pill, destination, lastPollAt, now);
+    lastSeenStatusIds[kind] = null;
   }
 
   // Decap re-renders the toolbar on entry switches and form mutations.
