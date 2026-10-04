@@ -10,9 +10,20 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.129)
+## Version history (v0.1.0 → v0.1.130)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.130 — an unpublished upload renders in the editor and Live Preview, and production 404s are no longer cacheable.**
+Decap treats the absolute `public_folder` (`/assets/images/uploads`) as a URL,
+so a just-uploaded image rendered from the admin's origin and 404'd until the
+post published. The gem-shipped `admin/draft-media-fallback.js` retries such an
+image once, from the uploaded File or from the entry's `cms/` branch through
+the Contents API, in the editor and on `/preview/` (which now receives the
+entry slug from `preview-bridge.js`). Production deploys upload `404.html` with
+`no-cache, must-revalidate` instead of a day-long max-age, which CloudFront
+passed through on every miss and which kept that 404 cached in the editor's
+browser after publish ([#597](https://github.com/Adam-S-Daniel/cms-platform/pull/597)).
 
 **v0.1.129 — automation escapes repository-controlled log output, and label-error and fixture-save regressions cover more cases.**
 The Dependabot manifest-path checker prefixes each listed path with `  - ` and
