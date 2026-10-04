@@ -39,8 +39,8 @@
 #     counterpart base-collections-guard-registry.test.js DOES run here and is
 #     the real PR gate on the #33 admin-write skip-guards) and
 #     `playwright-image-drift` (reads a root package-lock.json + ci-runner
-#     Dockerfile this machinery repo intentionally doesn't ship — see AGENTS.md
-#     "playwright-image-drift real-repo subtest caveat").
+#     Dockerfile this machinery repo intentionally doesn't ship — see
+#     docs/ARCHITECTURE.md § "Remaining work").
 #   - `aws cloudformation validate-template` (no creds in CI) — cfn-lint is the
 #     credential-free stand-in. It is PINNED rather than advisory, so a new
 #     cfn-lint release can't block an unrelated PR: only a deliberate pin bump
@@ -301,7 +301,7 @@ jobs:
         # Explicit DENY list of the build-/repo-dependent specs (they need a
         # `jekyll build` _site, the `_e2e/` content fixtures, or a root
         # package-lock.json + ci-runner Dockerfile the machinery repo doesn't
-        # ship — see AGENTS.md). Everything else under e2e/*.test.js is a
+        # ship — see docs/ARCHITECTURE.md § "Remaining work"). Everything else under e2e/*.test.js is a
         # hermetic pure-fs lint. Building the allowlist by exclusion means a
         # newly-added pure-fs lint is picked up automatically; a new build-
         # dependent one is the only thing that ever needs adding to DENY.
