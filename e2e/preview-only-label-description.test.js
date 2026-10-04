@@ -47,6 +47,19 @@
  * Scope: `.github/workflows/*.yml` and composite `action.yml` files under `.github/actions/`
  * (github-script bodies and `run:` steps). Label creation handlers must
  * report unexpected failures or rethrow them; silent catches fail the lint.
+ * That covers a try/catch and every promise form (review of #571): `.catch`
+ * with a function literal or an identifier the script binds once to a
+ * function, a `.catch` after `.finally()`, `.then(…, onRejected)`, a promise
+ * held in a variable and `.catch`ed or awaited later, `Promise.all` and
+ * friends, and `Promise.allSettled`, whose results must be bound and reported
+ * on. A callback that cannot be resolved, or a promise that flows somewhere
+ * this cannot follow (an argument, an array, a function's return), fails
+ * closed. A handler's core.warning/error/setFailed may also log only the
+ * HTTP status and a bounded type: the arguments are checked against the
+ * caught error's bindings (and locals derived from them), so message,
+ * response and body access fail. Not followed: a function that awaits the
+ * call and propagates, whose callers swallow it (every handler here is
+ * top-level).
  * Repo scripts that create OTHER labels (scripts/gate-approval-issue.js's
  * CI-health label, the audits) are out of scope; the last test enforces that
  * claim by failing if any file under scripts/ that creates a label also
@@ -117,7 +130,7 @@ function bindings(ast) {
       for (const d of node.declarations) for (const n of patternNames(d.id)) add(n, { declarator: d, kind: node.kind });
     } else if (/Function/.test(node.type)) {
       for (const param of node.params) for (const n of patternNames(param)) add(n, { other: true });
-      if (node.id) add(node.id.name, { other: true });
+      if (node.id) add(node.id.name, node.type === "FunctionDeclaration" ? { other: true, fn: node } : { other: true });
     } else if (node.type === "CatchClause" && node.param) {
       for (const n of patternNames(node.param)) add(n, { other: true });
     } else if (/^Class/.test(node.type) && node.id) {
@@ -219,40 +232,307 @@ function protectedTry(ancestors) {
   return null;
 }
 
-// Reporting or rethrowing must happen in the handler itself, rather than in
-// an uncalled function declared there. Empty statements, return, and unused
-// error bindings all swallow the failure just as an empty catch does.
-function reportsFailure(body) {
+// What a failure handler may log: the HTTP status and a bounded type, never
+// the error's message, response or body (a handler once printed whatever an
+// API error carried; AGENTS.md "Sanitize error output"). `tainted` names the
+// error binding and every local derived from it that is not itself bounded.
+// A property chain on a tainted name is allowed only when it ends in
+// `.status`, the one field of an error that is a number.
+const STATUS_CHAINS = ["status", "response.status", "reason.status", "reason.response.status"];
+
+// The ways `node` can expose a tainted value, as short descriptions.
+function leakedRefs(node, tainted, out = []) {
+  if (!node) return out;
+  const each = (nodes) => nodes.forEach((n) => leakedRefs(n, tainted, out));
+  switch (node.type) {
+    case "Literal":
+    case "TemplateElement":
+      return out;
+    case "Identifier":
+      if (tainted.has(node.name)) out.push(node.name);
+      return out;
+    case "ChainExpression":
+      return leakedRefs(node.expression, tainted, out);
+    case "MemberExpression": {
+      const segments = [];
+      let root = node;
+      while (root.type === "MemberExpression") {
+        segments.unshift(root.computed ? staticString(root.property) : root.property.name);
+        root = root.object;
+      }
+      if (root.type === "Identifier" && tainted.has(root.name)) {
+        if (!STATUS_CHAINS.includes(segments.join("."))) out.push(`${root.name}.${segments.map((s) => s ?? "[…]").join(".")}`);
+        return out;
+      }
+      leakedRefs(node.object, tainted, out);
+      if (node.computed) leakedRefs(node.property, tainted, out);
+      return out;
+    }
+    case "CallExpression":
+      // `Number(x)` is a number or NaN, whatever x was.
+      if (node.callee.type === "Identifier" && node.callee.name === "Number") return out;
+      leakedRefs(node.callee, tainted, out);
+      each(node.arguments);
+      return out;
+    case "LogicalExpression":
+      // `e && x` yields `e` itself only when it is falsy, never an error object.
+      if (node.operator === "&&" && node.left.type === "Identifier" && tainted.has(node.left.name)) {
+        return leakedRefs(node.right, tainted, out);
+      }
+      each([node.left, node.right]);
+      return out;
+    case "ConditionalExpression":
+      // The test only chooses; its value never reaches the result.
+      each([node.consequent, node.alternate]);
+      return out;
+    case "BinaryExpression":
+      // Comparisons give a boolean and arithmetic a number; only `+` can carry text.
+      if (node.operator === "+") each([node.left, node.right]);
+      return out;
+    case "UnaryExpression":
+      return out;
+    case "TemplateLiteral":
+    case "SequenceExpression":
+      each(node.expressions);
+      return out;
+    case "ArrayExpression":
+      each(node.elements);
+      return out;
+    case "SpreadElement":
+      return leakedRefs(node.argument, tainted, out);
+    case "ObjectExpression":
+      for (const p of node.properties) {
+        if (p.type === "SpreadElement") leakedRefs(p.argument, tainted, out);
+        else {
+          if (p.computed) leakedRefs(p.key, tainted, out);
+          leakedRefs(p.value, tainted, out);
+        }
+      }
+      return out;
+    default:
+      // A shape this does not model: any mention of a tainted name counts.
+      walk.full(node, (n) => {
+        if (n.type === "Identifier" && tainted.has(n.name)) out.push(n.name);
+      });
+      return out;
+  }
+}
+
+// The names in a handler that can carry the caught error: its parameters
+// (except a destructured `status`) and, to a fixed point, every local whose
+// initializer or assignment exposes one.
+function taintedNames(handler) {
+  const tainted = new Set();
+  for (const param of handler.type === "CatchClause" ? [handler.param] : handler.params) {
+    if (param && param.type === "ObjectPattern") {
+      for (const p of param.properties) {
+        const bounded = p.type === "Property" && !p.computed && p.key.name === "status" && p.value.type === "Identifier";
+        if (!bounded) patternNames(p.type === "RestElement" ? p.argument : p.value).forEach((n) => tainted.add(n));
+      }
+    } else patternNames(param).forEach((n) => tainted.add(n));
+  }
+  const flows = [];
+  walk.full(handler.body, (n) => {
+    if (n.type === "VariableDeclarator" && n.init) flows.push([n.id, n.init]);
+    else if (n.type === "AssignmentExpression") flows.push([n.left, n.right]);
+  });
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [target, source] of flows) {
+      const names = patternNames(target).filter((n) => !tainted.has(n));
+      if (names.length && leakedRefs(source, tainted).length) {
+        names.forEach((n) => tainted.add(n));
+        changed = true;
+      }
+    }
+  }
+  return tainted;
+}
+
+// Whether `body` reports (throws, or calls core.warning/error/setFailed) and
+// every report call's arguments, as { reports, leaks: [string] }. A nested
+// function is not counted unless `intoFunctions`: an uncalled function that
+// reports swallows the failure just as an empty handler does.
+function scanReports(body, tainted, intoFunctions) {
   let reports = false;
+  const leaks = [];
   const visitors = {
     ThrowStatement() { reports = true; },
     CallExpression(node, state, visit) {
       const c = node.callee;
       if (c.type === "MemberExpression" && !c.computed && c.object.type === "Identifier" &&
-          c.object.name === "core" && ["warning", "error", "setFailed"].includes(c.property.name)) reports = true;
+          c.object.name === "core" && ["warning", "error", "setFailed"].includes(c.property.name)) {
+        reports = true;
+        const refs = node.arguments.flatMap((a) => leakedRefs(a, tainted));
+        if (refs.length) leaks.push(`line ${node.loc.start.line}: core.${c.property.name}() logs ${[...new Set(refs)].join(", ")}`);
+      }
       walk.base.CallExpression(node, state, visit);
     },
   };
-  for (const type of FUNCTION_NODES) visitors[type] = () => {};
+  if (!intoFunctions) for (const type of FUNCTION_NODES) visitors[type] = () => {};
   walk.recursive(body, null, visitors);
-  return reports;
+  return { reports, leaks };
 }
 
-function silentCatchProblems(node, ancestors, at) {
+const LEAK = "createLabel failure handler logs more than the HTTP status and a bounded type";
+const UNRESOLVED = "createLabel failure handler cannot be resolved to a function in this script";
+const UNFOLLOWED = "createLabel promise flows somewhere this lint cannot follow";
+
+// Problems with one failure handler (a catch clause, or a promise callback
+// function): none when it reports and logs only the status and a bounded type.
+function handlerProblems(handler) {
+  const { reports, leaks } = scanReports(handler.body, taintedNames(handler), false);
+  if (leaks.length) return leaks.map((l) => `${LEAK} (${l}); never log its message, response or body`);
+  return reports ? [] : ["createLabel failure is silently caught"];
+}
+
+// The function a `.catch` / `.then` rejection callback names: a function
+// expression itself, or an identifier the script binds exactly once to a
+// function declaration or to a function-valued `const`/`let`/`var`. Else null.
+function resolveCallback(node, ctx) {
+  if (node && FUNCTION_NODES.includes(node.type)) return node;
+  if (!node || node.type !== "Identifier") return null;
+  const entries = ctx.bound.get(node.name) || [];
+  if (entries.length !== 1) return null;
+  if (entries[0].fn) return entries[0].fn;
+  const init = entries[0].declarator && entries[0].declarator.id.type === "Identifier" && entries[0].declarator.init;
+  return init && FUNCTION_NODES.includes(init.type) ? init : null;
+}
+
+function callbackProblems(node, ctx) {
+  const fn = resolveCallback(node, ctx);
+  return fn ? handlerProblems(fn) : [UNRESOLVED];
+}
+
+const isNullish = (n) => !n || (n.type === "Literal" && n.raw === "null") || (n.type === "Identifier" && n.name === "undefined");
+const isPromiseStatic = (call) =>
+  call && call.type === "CallExpression" && call.callee.type === "MemberExpression" && !call.callee.computed &&
+  call.callee.object.type === "Identifier" && call.callee.object.name === "Promise";
+
+// Every Identifier reference to `name` in the script, as ancestor paths
+// ending at it (declarations and assignment targets are patterns, not
+// references).
+function referencesTo(ctx, name) {
+  const found = [];
+  walk.ancestor(ctx.ast, {
+    Identifier(node, _state, ancestors) {
+      if (node.name === name) found.push(ancestors.slice());
+    },
+  });
+  return found;
+}
+
+// A promise held in a variable: every use of that variable is followed.
+function heldProblems(name, ctx, seen) {
+  if (seen.has(name)) return [];
+  seen.add(name);
+  const entries = ctx.bound.get(name) || [];
+  if (entries.length !== 1 || entries[0].other) return [`${UNFOLLOWED} (a variable bound more than once or as a parameter)`];
+  return referencesTo(ctx, name).flatMap((path) => followPromise(path, ctx, seen));
+}
+
+// `await Promise.allSettled([...])` never rejects, so its results must be
+// inspected: bound to a variable some statement of which reports.
+function settledProblems(path, ctx) {
+  const wrapped = path[path.length - 2] && path[path.length - 2].type === "AwaitExpression";
+  const at = wrapped ? path.slice(0, -1) : path;
+  const node = at[at.length - 1];
+  const parent = at[at.length - 2];
+  const ignored = "createLabel failures are swallowed by Promise.allSettled and its results are never checked for rejection";
+  if (!parent || parent.type === "ExpressionStatement") return [ignored];
+  if (parent.type === "VariableDeclarator" && parent.init === node && parent.id.type === "Identifier") {
+    const refs = referencesTo(ctx, parent.id.name);
+    const leaks = [];
+    const inspected = refs.map((ref) => {
+      const stmt = ref.findLast((n) => /(Statement|Declaration)$/.test(n.type) && n.type !== "BlockStatement");
+      const tainted = new Set([parent.id.name]);
+      walk.full(stmt, (n) => {
+        if (n.type === "VariableDeclarator") patternNames(n.id).forEach((x) => tainted.add(x));
+        else if (/Function/.test(n.type)) n.params.forEach((p) => patternNames(p).forEach((x) => tainted.add(x)));
+        else if (/^For(In|Of)Statement$/.test(n.type) && n.left.type === "VariableDeclaration") {
+          n.left.declarations.forEach((d) => patternNames(d.id).forEach((x) => tainted.add(x)));
+        }
+      });
+      const got = scanReports(stmt, tainted, true);
+      leaks.push(...got.leaks);
+      return got.reports && !got.leaks.length;
+    }).some(Boolean);
+    if (leaks.length) return leaks.map((l) => `${LEAK} (${l}); never log its message, response or body`);
+    return inspected ? [] : [ignored];
+  }
+  const grand = at[at.length - 3];
+  const isThen = parent.type === "MemberExpression" && parent.object === node && !parent.computed && parent.property.name === "then";
+  if (isThen && grand && grand.type === "CallExpression" && grand.callee === parent) {
+    const fn = resolveCallback(grand.arguments[0], ctx);
+    const got = fn && scanReports(fn.body, taintedNames(fn), false);
+    if (got && got.leaks.length) return got.leaks.map((l) => `${LEAK} (${l}); never log its message, response or body`);
+    return got && got.reports ? [] : [ignored];
+  }
+  return [`${UNFOLLOWED} (Promise.allSettled result)`];
+}
+
+// What happens to a rejection of the promise `path` ends at, following the
+// chain a consumer builds: the first `.catch` (or `.then`'s second argument)
+// consumes it and must report; `.finally`, a bare `.then`, `Promise.all` and
+// friends pass it on; `await` rethrows it into an enclosing try. Anything
+// this cannot follow fails closed.
+function followPromise(path, ctx, seen = new Set()) {
+  const node = path[path.length - 1];
+  const parent = path[path.length - 2];
+  const grand = path[path.length - 3];
+  const up = (n) => path.slice(0, path.length - n);
+  switch (parent && parent.type) {
+    case "MemberExpression": {
+      const method = parent.computed ? staticString(parent.property) : parent.property.name;
+      const call = grand && grand.type === "CallExpression" && grand.callee === parent && grand.arguments;
+      if (parent.object !== node || method === undefined || !call || call.some((a) => a.type === "SpreadElement")) return [UNFOLLOWED];
+      if (method === "catch") return isNullish(call[0]) ? followPromise(up(2), ctx, seen) : callbackProblems(call[0], ctx);
+      if (method === "then") return isNullish(call[1]) ? followPromise(up(2), ctx, seen) : callbackProblems(call[1], ctx);
+      if (method === "finally") return followPromise(up(2), ctx, seen);
+      return [`${UNFOLLOWED} (.${method}())`];
+    }
+    case "AwaitExpression": {
+      const stmt = protectedTry(path);
+      return stmt ? handlerProblems(stmt.handler) : [];
+    }
+    case "ExpressionStatement":
+      return [];
+    case "ReturnStatement":
+      // Returned out of a function, it reaches callers this lint does not see.
+      return path.some((n) => FUNCTION_NODES.includes(n.type)) ? [UNFOLLOWED] : [];
+    case "UnaryExpression":
+      return parent.operator === "void" ? [] : [UNFOLLOWED];
+    case "LogicalExpression":
+      return followPromise(up(1), ctx, seen);
+    case "ConditionalExpression":
+      return parent.test === node ? [UNFOLLOWED] : followPromise(up(1), ctx, seen);
+    case "SequenceExpression":
+      return parent.expressions[parent.expressions.length - 1] === node ? followPromise(up(1), ctx, seen) : [];
+    case "ArrayExpression": {
+      if (!isPromiseStatic(grand) || grand.arguments[0] !== parent) return [`${UNFOLLOWED} (an array)`];
+      const method = grand.callee.property.name;
+      if (method === "allSettled") return settledProblems(up(2), ctx);
+      return ["all", "race", "any"].includes(method) ? followPromise(up(2), ctx, seen) : [UNFOLLOWED];
+    }
+    case "VariableDeclarator":
+      return parent.init === node && parent.id.type === "Identifier" ? heldProblems(parent.id.name, ctx, seen) : [UNFOLLOWED];
+    case "AssignmentExpression":
+      return parent.operator === "=" && parent.right === node && parent.left.type === "Identifier"
+        ? heldProblems(parent.left.name, ctx, seen)
+        : [UNFOLLOWED];
+    default:
+      return [UNFOLLOWED];
+  }
+}
+
+// `node` is a label creation: its failure must be reported or propagated,
+// whether the call sits in a try, is chained, or is held in a variable.
+function silentCatchProblems(node, ancestors, at, ctx) {
   const problems = [];
   const stmt = protectedTry(ancestors);
-  if (stmt && !reportsFailure(stmt.handler.body)) problems.push(`${at}: createLabel failure is silently caught`);
-  // The promise form protects only the call that is its receiver, not a
-  // different createLabel call inside the callback or another argument.
-  for (const outer of ancestors) {
-    const c = outer.type === "CallExpression" && outer.callee;
-    if (!c || c.type !== "MemberExpression" || c.computed || c.property.name !== "catch" || c.object !== node) continue;
-    const callback = outer.arguments[0];
-    if (callback && FUNCTION_NODES.includes(callback.type) && !reportsFailure(callback.body)) {
-      problems.push(`${at}: createLabel failure is silently caught`);
-    }
-  }
-  return problems;
+  if (stmt) problems.push(...handlerProblems(stmt.handler));
+  problems.push(...followPromise(ancestors, ctx));
+  return [...new Set(problems)].map((p) => `${at}: ${p}`);
 }
 
 // Every label creation in one github-script body, as
@@ -269,6 +549,7 @@ function analyzeScript(src, where) {
     return { calls, problems: [`${where}: cannot parse github-script body: ${e.message}`] };
   }
   const value = resolver(ast);
+  const ctx = { ast, bound: bindings(ast) };
   const evaluated = { [METHOD]: 0, request: 0 };
   walk.ancestor(ast, {
     CallExpression(node, ancestors) {
@@ -289,7 +570,7 @@ function analyzeScript(src, where) {
           return;
         }
         if (!LABEL_CREATE_ROUTE.test(route)) return;
-        problems.push(...silentCatchProblems(node, ancestors, at));
+        problems.push(...silentCatchProblems(node, ancestors, at, ctx));
         const got = labelFields(node.arguments[1], value, "request(POST …/labels)");
         if (typeof got === "string") problems.push(`${at}: ${got}`);
         else if (got.name !== PREVIEW_ONLY || got.description !== PREVIEW_ONLY_DESCRIPTION) {
@@ -299,7 +580,7 @@ function analyzeScript(src, where) {
       }
       if (callee.property.name !== METHOD) return;
       evaluated[METHOD]++;
-      problems.push(...silentCatchProblems(node, ancestors, at));
+      problems.push(...silentCatchProblems(node, ancestors, at, ctx));
       if (node.arguments.length !== 1) {
         problems.push(`${at}: ${METHOD} must be called with one object literal`);
         return;
@@ -563,6 +844,171 @@ test.describe("createLabel failures cannot disappear in a catch", () => {
     ["rethrow in promise catch", create.replace(";", ".catch(e => { throw e; });")],
   ];
   for (const [shape, script] of REPORTED) {
+    test(`allows ${shape}`, () => {
+      expect(analyzeScript(script, "t").problems).toEqual([]);
+    });
+  }
+});
+
+// Promise forms beyond an inline silent `.catch` (review of #571): a callback named
+// by an identifier, a `.catch` after `.finally()`, `.then(null, fn)`, a
+// promise held in a variable, and `Promise.allSettled`. Each is silent unless
+// its handler reports, and anything this cannot resolve fails closed.
+test.describe("createLabel promise forms cannot hide a failure", () => {
+  const call = "github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' })";
+  const SILENT_MESSAGE = /createLabel failure is silently caught/;
+  const REPORT = "e => core.warning(`Could not create the label (HTTP ${Number(e && e.status) || 'unknown'}).`)";
+  // Spelled in two pieces so the text-scanning silent-catch lint does not read it.
+  const EMPTY_FN = "() " + "=> {}";
+  const NOOP_DECL = "function noop() {}\n";
+  const NOOP_CONST = "const noop = () => {};\n";
+  const REPORT_DECL = "function report(e) { core.warning(`Could not create the label (HTTP ${Number(e && e.status) || 'unknown'}).`); }\n";
+  const REPORT_CONST = `const report = ${REPORT};\n`;
+
+  const FLAGGED = [
+    ["an identifier naming an empty function declaration", `${NOOP_DECL}await ${call}.catch(noop);`, SILENT_MESSAGE],
+    ["an identifier naming a const empty arrow", `${NOOP_CONST}await ${call}.catch(noop);`, SILENT_MESSAGE],
+    ["an identifier naming a const function expression with a comment-only body", `const noop = function () { /* exists */ };\nawait ${call}.catch(noop);`, SILENT_MESSAGE],
+    ["an identifier bound twice", `${NOOP_DECL}var noop = ${REPORT};\nawait ${call}.catch(noop);`, /cannot be resolved/],
+    ["an identifier that is not declared in the script", `await ${call}.catch(handle);`, /cannot be resolved/],
+    ["an identifier reassigned by a parameter of the same name", `const noop = () => {};\nfunction f(noop) {}\nawait ${call}.catch(noop);`, /cannot be resolved/],
+    ["a member callback", `await ${call}.catch(core.warning);`, /cannot be resolved/],
+    ["a callback built by a call", `await ${call}.catch(makeHandler());`, /cannot be resolved/],
+    ["a catch after finally", `await ${call}.finally(() => cleanup()).catch(${EMPTY_FN});`, SILENT_MESSAGE],
+    ["a catch after finally, by identifier", `${NOOP_DECL}await ${call}.finally(() => cleanup()).catch(noop);`, SILENT_MESSAGE],
+    ["then(null, silent)", `await ${call}.then(null, () => {});`, SILENT_MESSAGE],
+    ["then(undefined, silent)", `await ${call}.then(undefined, () => undefined);`, SILENT_MESSAGE],
+    ["then(onFulfilled, silent)", `await ${call}.then(() => ok(), () => {});`, SILENT_MESSAGE],
+    ["then(null, identifier)", `${NOOP_DECL}await ${call}.then(null, noop);`, SILENT_MESSAGE],
+    ["then(null, unresolvable)", `await ${call}.then(null, handle);`, /cannot be resolved/],
+    ["a spread argument", `await ${call}.catch(...handlers);`, /cannot follow/],
+    ["an unmodeled promise method", `await ${call}.tap(() => {});`, /cannot follow/],
+    ["a promise held in a const, then caught silently", `const p = ${call};\nawait p.catch(${EMPTY_FN});`, SILENT_MESSAGE],
+    ["a promise held in a const, caught by a silent identifier", `${NOOP_DECL}const p = ${call};\nawait p.catch(noop);`, SILENT_MESSAGE],
+    ["a promise held in a let assigned later", `let p;\np = ${call};\nawait p.finally(() => {}).catch(${EMPTY_FN});`, SILENT_MESSAGE],
+    ["a held promise awaited in a try with a silent catch", `const p = ${call};\ntry { await p; } catch {}`, SILENT_MESSAGE],
+    ["a held promise copied to another variable", `const p = ${call};\nconst q = p;\nawait q.catch(${EMPTY_FN});`, SILENT_MESSAGE],
+    ["a held promise handed to a function", `const p = ${call};\nawait track(p);`, /cannot follow/],
+    ["a promise variable bound twice", `var p = ${call};\nvar p = other();\nawait p.catch(${EMPTY_FN});`, /cannot follow/],
+    ["a promise returned from a function", `async function make() { return ${call}; }\nawait make().catch(${EMPTY_FN});`, /cannot follow/],
+    ["a promise placed in an array", `const ps = [${call}];\nawait Promise.allSettled(ps);`, /cannot follow/],
+    ["Promise.allSettled with ignored results", `await Promise.allSettled([${call}]);`, /Promise\.allSettled/],
+    ["Promise.allSettled without await", `Promise.allSettled([${call}, other()]);`, /Promise\.allSettled/],
+    ["Promise.allSettled with results never read", `const results = await Promise.allSettled([${call}]);`, /Promise\.allSettled/],
+    ["Promise.allSettled with results read but never reported", `const results = await Promise.allSettled([${call}]);\nconst failed = results.filter((r) => r.status === 'rejected');`, /Promise\.allSettled/],
+    ["Promise.allSettled with a silent then", `await Promise.allSettled([${call}]).then(() => {});`, /Promise\.allSettled/],
+    ["Promise.allSettled destructured", `const [first] = await Promise.allSettled([${call}]);`, /cannot follow/],
+    ["Promise.all caught silently", `await Promise.all([${call}, other()]).catch(${EMPTY_FN});`, SILENT_MESSAGE],
+    ["Promise.race in a try with a silent catch", `try { await Promise.race([${call}]); } catch {}`, SILENT_MESSAGE],
+    ["a silent catch behind a logical expression", `await (flag && ${call}.catch(${EMPTY_FN}));`, SILENT_MESSAGE],
+  ];
+  for (const [shape, script, message] of FLAGGED) {
+    test(`rejects ${shape}`, () => {
+      expect(analyzeScript(script, "t").problems.join("\n")).toMatch(message);
+    });
+  }
+
+  const ALLOWED = [
+    ["a callback identifier that reports (function declaration)", `${REPORT_DECL}await ${call}.catch(report);`],
+    ["a callback identifier that reports (const arrow)", `${REPORT_CONST}await ${call}.catch(report);`],
+    ["a catch after finally that reports", `await ${call}.finally(() => cleanup()).catch(${REPORT});`],
+    ["a catch after finally, by identifier", `${REPORT_DECL}await ${call}.finally(() => cleanup()).catch(report);`],
+    ["then(null, reporter)", `await ${call}.then(null, ${REPORT});`],
+    ["then(onFulfilled, reporter identifier)", `${REPORT_DECL}await ${call}.then(() => ok(), report);`],
+    ["a bare then and finally, which pass the rejection on", `await ${call}.then(() => ok()).finally(() => cleanup());`],
+    ["a rethrowing identifier", `function rethrow(e) { throw e; }\nawait ${call}.catch(rethrow);`],
+    ["a held promise caught by a reporter", `const p = ${call};\nawait p.catch(${REPORT});`],
+    ["a held promise awaited with no try", `const p = ${call};\nawait p;`],
+    ["a held promise awaited in a try that reports", `const p = ${call};\ntry { await p; } catch (e) { core.warning('failed'); }`],
+    ["a held promise assigned later and reported", `let p;\np = ${call};\nawait p.catch(${REPORT});`],
+    ["Promise.all with no catch", `await Promise.all([${call}, other()]);`],
+    ["Promise.all caught by a reporter", `await Promise.all([${call}]).catch(${REPORT});`],
+    ["a bare then on Promise.allSettled that reports", `await Promise.allSettled([${call}]).then((rs) => { for (const r of rs) if (r.status === 'rejected') core.warning('failed'); });`],
+    [
+      "Promise.allSettled whose results are looped and reported with a bounded status",
+      `const results = await Promise.allSettled([${call}]);\n` +
+        "for (const r of results) {\n  if (r.status === 'rejected') core.warning(`Could not create the label (HTTP ${Number(r.reason && r.reason.status) || 'unknown'}).`);\n}",
+    ],
+    [
+      "Promise.allSettled whose results are reported by forEach",
+      `const results = await Promise.allSettled([${call}]);\nresults.forEach((r) => { if (r.status === 'rejected') core.warning('failed'); });`,
+    ],
+    ["a floating call, whose rejection fails the step", `${call};`],
+    ["void, whose rejection fails the step", `void ${call};`],
+  ];
+  for (const [shape, script] of ALLOWED) {
+    test(`allows ${shape}`, () => {
+      expect(analyzeScript(script, "t").problems).toEqual([]);
+    });
+  }
+});
+
+// A warning must log only the HTTP status and a bounded type (review of
+// #571): `core.warning(e.message)` satisfied "reports" while printing
+// whatever the API error carried.
+test.describe("a createLabel failure handler logs only the status and a bounded type", () => {
+  const create = "await github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' });";
+  const inCatch = (body, param = "e") => `try { ${create} } catch (${param}) { ${body} }`;
+  const LEAK_MESSAGE = /logs more than the HTTP status and a bounded type/;
+
+  const LEAKS = [
+    ["e.message", inCatch("core.warning(e.message);")],
+    ["e.message in a template", inCatch("core.warning(`Could not create the label: ${e.message}`);")],
+    ["e.message concatenated", inCatch("core.warning('failed: ' + e.message);")],
+    ["a computed message key", inCatch("core.warning(e['message']);")],
+    ["the whole error", inCatch("core.warning(e);")],
+    ["the whole error in a template", inCatch("core.warning(`failed ${e}`);")],
+    ["String(e)", inCatch("core.warning(String(e));")],
+    ["e.toString()", inCatch("core.warning(e.toString());")],
+    ["JSON.stringify(e)", inCatch("core.warning(JSON.stringify(e));")],
+    ["e.response", inCatch("core.warning(`failed ${e.response}`);")],
+    ["the response body", inCatch("core.warning(`failed ${e.response.data.message}`);")],
+    ["a status-named field inside the body", inCatch("core.warning(`failed ${e.response.data.status}`);")],
+    ["the error name, unbounded", inCatch("core.warning(`failed ${e.name}`);")],
+    ["the error stack", inCatch("core.warning(e.stack);")],
+    ["an optional-chain message", inCatch("core.warning(e?.message);")],
+    ["a message copied to a variable", inCatch("const detail = e.message; core.warning(detail);")],
+    ["a message copied through two variables", inCatch("const detail = e.message; const copy = detail; core.warning(`x ${copy}`);")],
+    ["a message assigned later", inCatch("let detail; detail = e.message; core.warning(detail);")],
+    ["a destructured message", inCatch("const { message } = e; core.warning(message);")],
+    ["a destructured catch parameter", inCatch("core.warning(message);", "{ message }")],
+    ["a message in an object argument", inCatch("core.warning('failed', { title: e.message });")],
+    ["a message passed to core.error", inCatch("core.error(e.message);")],
+    ["a message passed to core.setFailed", inCatch("core.setFailed(`failed ${e.message}`);")],
+    ["a message in a reported alongside a clean warning", inCatch("core.warning('clean'); core.warning(e.message);")],
+    ["a message in a promise callback", create.replace(";", ".catch(e => core.warning(e.message));")],
+    ["a message in a promise callback body", create.replace(";", ".catch(function (err) { core.warning(`x ${err.message}`); });")],
+    ["a message in a resolved identifier callback", `function report(e) { core.warning(e.message); }\n${create.replace(";", ".catch(report);")}`],
+    ["a message in a then(null, fn) callback", create.replace(";", ".then(null, e => core.warning(e.message));")],
+    [
+      "a message in a Promise.allSettled report",
+      "const results = await Promise.allSettled([github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' })]);\n" +
+        "for (const r of results) { if (r.status === 'rejected') core.warning(`x ${r.reason.message}`); }",
+    ],
+  ];
+  for (const [shape, script] of LEAKS) {
+    test(`rejects ${shape}`, () => {
+      expect(analyzeScript(script, "t").problems.join("\n")).toMatch(LEAK_MESSAGE);
+    });
+  }
+
+  const BOUNDED = [
+    ["the status", inCatch("core.warning(`failed (HTTP ${e.status})`);")],
+    ["the status, as the real handlers write it", inCatch("core.warning(`failed (HTTP ${Number(e && e.status) || 'unknown'})`);")],
+    ["a response status", inCatch("core.warning(`failed (HTTP ${e.response.status})`);")],
+    ["a bounded type chosen by a conditional", inCatch("const type = e && e.name === 'HttpError' ? 'HttpError' : 'Error'; core.warning(`failed (${type})`);")],
+    ["a bounded type inline", inCatch("core.warning(`failed (${e.name === 'HttpError' ? 'HttpError' : 'Error'})`);")],
+    ["a status copied to a variable", inCatch("const status = Number(e && e.status) || 'unknown'; core.warning(`failed (HTTP ${status})`);")],
+    ["a destructured status", inCatch("core.warning(`failed (HTTP ${status})`);", "{ status }")],
+    ["a body read only to decide, not to log", inCatch("const errors = e && e.response && e.response.data && e.response.data.errors; const exists = e && e.status === 422 && Array.isArray(errors); if (!exists) core.warning('failed');")],
+    ["a message used in a condition only", inCatch("if (e.message.includes('exists')) return; core.warning('failed');")],
+    ["a string concatenated with outer values", inCatch("core.warning('Could not create ' + LABEL + ' (HTTP ' + Number(e.status) + ')');")],
+    ["a message that only picks between fixed strings", inCatch("core.warning(e.message ? 'it has detail' : 'it has no detail');")],
+    ["a numeric coercion of another field, which is a number or NaN", inCatch("core.warning(`failed (code ${Number(e.code)})`);")],
+    ["a rethrow, which the step reports itself", inCatch("throw e;")],
+    ["a promise callback with the status", create.replace(";", ".catch(e => core.warning(`failed (HTTP ${Number(e && e.status) || 'unknown'})`));")],
+  ];
+  for (const [shape, script] of BOUNDED) {
     test(`allows ${shape}`, () => {
       expect(analyzeScript(script, "t").problems).toEqual([]);
     });

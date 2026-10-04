@@ -444,7 +444,32 @@ Its scope is the platform's workflows; repo scripts that create other labels
 are out of it, and a test fails if one under `scripts/` names
 `cms/preview-only`.
 The preview-only step now raises a warning with the HTTP status code (never
-the response body) for any failure other than `already_exists`.
+the response body) for any failure other than `already_exists`, and the same
+lint holds every `createLabel` handler to that (acorn AST, never a regex):
+
+- **A failure may not be swallowed**, however the promise is written: a
+  `try`/`catch`, `.catch(fn)` where `fn` is a function literal or an
+  identifier the script binds once to a function (`.catch(noop)`), a `.catch`
+  after `.finally()`, `.then(null, fn)`, a promise held in a variable and
+  caught or awaited later, and `Promise.all`/`race`/`any`. `Promise.allSettled`
+  never rejects, so its results must be bound and some statement that reads
+  them must report. A handler throws or calls `core.warning`/`error`/
+  `setFailed`; an empty or comment-only body, an unused error binding and an
+  uncalled nested function are silent.
+- **The lint fails closed** on a callback it cannot resolve (an undeclared or
+  twice-bound identifier, `core.warning` passed as the callback, a callback
+  built by a call) and on a promise that flows somewhere it cannot follow (an
+  argument, an array, a function's return). It does not follow a function
+  that awaits the call and propagates, whose callers swallow it; every
+  handler here is top-level.
+- **A warning logs only the HTTP status and a bounded type.** The arguments of
+  each report call are checked against the caught error's binding and every
+  local derived from it: only `.status` (also `.response.status`, and
+  `.reason.status` for an `allSettled` result), `Number(…)` of anything, and
+  a choice between fixed strings are allowed. `e.message`, `e.response`, the
+  body, the bare error, `String(e)`, `JSON.stringify(e)` and a local copied
+  from them fail it. A conditional's test and comparisons are not logged, so
+  they may read the error (the `already_exists` check does).
 
 `createLabel` never updates a label that already exists (it answers 422
 `already_exists`, which the step ignores), and no audit or sync in this repo
