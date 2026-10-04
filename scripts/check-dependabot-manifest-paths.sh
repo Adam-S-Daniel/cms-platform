@@ -22,11 +22,32 @@
 # is within the allowlist (npm/bundler manifests + lockfiles, in any
 # directory, plus workflow YAML restricted to .github/workflows/). Exit 1 +
 # prints "safe=false" (with an `::error file=...` annotation per offender)
-# otherwise.
+# when a path is outside the allowlist. Exit 2 + prints "safe=false" when the
+# diff cannot be read.
 set -euo pipefail
 
+# Workflow commands interpret percent escapes, newlines, and (in properties)
+# colons and commas. Escape percent first so the replacement text is not
+# escaped again. `printf %q` then keeps the listing to one physical line per
+# path while retaining the escaped control characters.
+escape_workflow_data() {
+  local value=$1
+  value=${value//\%/%25}
+  value=${value//$'\r'/%0D}
+  value=${value//$'\n'/%0A}
+  printf '%s' "$value"
+}
+
+escape_workflow_property() {
+  local value
+  value=$(escape_workflow_data "$1")
+  value=${value//:/%3A}
+  value=${value//,/%2C}
+  printf '%s' "$value"
+}
+
 if [ "$#" -ne 2 ]; then
-  echo "usage: $0 <base-ref> <head-ref-or-sha>" >&2
+  printf 'usage: %q <base-ref> <head-ref-or-sha>\n' "$(escape_workflow_data "$0")" >&2
   exit 2
 fi
 
@@ -35,14 +56,19 @@ HEAD="$2"
 
 changed_paths=$(mktemp)
 trap 'rm -f -- "$changed_paths"' EXIT
-if ! git diff --name-only --no-renames -z "$BASE"..."$HEAD" > "$changed_paths"; then
+if git diff --name-only --no-renames -z "$BASE"..."$HEAD" > "$changed_paths" 2>/dev/null; then
+  :
+else
   echo "::error::Could not read the Dependabot PR diff; refusing the manifest check."
   echo "safe=false"
-  exit 1
+  exit 2
 fi
 mapfile -d '' -t CHANGED < "$changed_paths"
-echo "Files changed (${BASE}...${HEAD}):"
-printf '  %s\n' "${CHANGED[@]}"
+
+printf 'Files changed (%q...%q):\n' "$(escape_workflow_data "$BASE")" "$(escape_workflow_data "$HEAD")"
+for f in "${CHANGED[@]}"; do
+  printf '  %q\n' "$(escape_workflow_data "$f")"
+done
 
 REJECT=0
 for f in "${CHANGED[@]}"; do
@@ -51,7 +77,8 @@ for f in "${CHANGED[@]}"; do
     Gemfile|*/Gemfile|Gemfile.lock|*/Gemfile.lock) ;;
     .github/workflows/*.yml|.github/workflows/*.yaml) ;;
     *)
-      echo "::error file=$f::Dependabot PR touches non-manifest path: $f"
+      printf '::error file=%s::Dependabot PR touches non-manifest path: %s\n' \
+        "$(escape_workflow_property "$f")" "$(escape_workflow_data "$f")"
       REJECT=1
       ;;
   esac

@@ -293,10 +293,18 @@ jobs:
               continue
             fi
 
-            if ! bash .cms-platform/scripts/check-dependabot-manifest-paths.sh \
+            if bash .cms-platform/scripts/check-dependabot-manifest-paths.sh \
               "origin/${base}" "dependabot-sweep/pr-${num}"; then
-              echo "::warning::skip #${num} — diff touches a non-manifest path on re-check; leaving for human review"
-              SKIPPED=$((SKIPPED + 1))
+              :
+            else
+              manifest_status=$?
+              if [ "$manifest_status" -eq 1 ]; then
+                echo "::warning::skip #${num} — diff touches a non-manifest path on re-check; leaving for human review"
+                SKIPPED=$((SKIPPED + 1))
+              else
+                echo "::warning::#${num} — manifest diff failed on re-check; refusing to merge, refresh, or re-arm"
+                FAILED=$((FAILED + 1))
+              fi
               continue
             fi
 

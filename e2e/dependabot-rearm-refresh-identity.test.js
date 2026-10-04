@@ -431,11 +431,51 @@ test.describe("Dependabot path readers preserve NUL-delimited git paths (#539)",
     expect(result.out).toContain("safe=false");
   });
 
+  test("allowed path with a newline command-looking suffix prints no workflow command", () => {
+    const file = "safe\n::error::injected/package.json";
+    const result = manifest(fixture({ [file]: "manifest\n" }));
+    expect(result.code, result.out).toBe(0);
+    expect(result.out).not.toContain("\r");
+    expect(result.out.split("\n").filter((line) => line.startsWith("::"))).toEqual([]);
+  });
+
+  test("forbidden control characters are escaped in the listing and annotation", () => {
+    const file = "bad%\r:field,part\n::error::injected/source.js";
+    const result = manifest(fixture({ [file]: "source\n" }));
+    const property = "bad%25%0D%3Afield%2Cpart%0A%3A%3Aerror%3A%3Ainjected/source.js";
+    const message = "bad%25%0D:field,part%0A::error::injected/source.js";
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain("\r");
+    expect(result.out).toContain("  bad%25%0D:field\\,part%0A::error::injected/source.js\n");
+    expect(result.out.split("\n").filter((line) => line.startsWith("::"))).toEqual([
+      `::error file=${property}::Dependabot PR touches non-manifest path: ${message}`,
+    ]);
+  });
+
+  test("a trailing newline in a path stays on one output line", () => {
+    const result = manifest(fixture({ ["package.json\n"]: "manifest\n" }));
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain("\r");
+    expect(result.out.split("\n").filter((line) => line.startsWith("::"))).toHaveLength(1);
+    expect(result.out).toContain("package.json%0A");
+  });
+
+  test("a leading-dash directory can contain an allowed manifest", () => {
+    const allowed = manifest(fixture({ "-vendor/package.json": "manifest\n" }));
+    expect(allowed.code, allowed.out).toBe(0);
+  });
+
+  test("a leading-dash non-manifest file is rejected", () => {
+    const rejected = manifest(fixture({ "-notes.md": "notes\n" }));
+    expect(rejected.code, rejected.out).toBe(1);
+    expect(rejected.out).toContain("safe=false");
+  });
+
   test("manifest rejects a real git diff failure instead of treating it as empty", () => {
     const setup = fixture();
     setup.head = "missing-ref";
     const result = manifest(setup);
-    expect(result.code, result.out).toBe(1);
+    expect(result.code, result.out).toBe(2);
     expect(result.out).toContain("safe=false");
     expect(result.out).not.toContain("safe=true");
   });
@@ -444,7 +484,7 @@ test.describe("Dependabot path readers preserve NUL-delimited git paths (#539)",
     const setup = fixture();
     const { dir } = stubs({ failDiffAt: 1, partialDiff: true });
     const result = manifest(setup, dir);
-    expect(result.code, result.out).toBe(1);
+    expect(result.code, result.out).toBe(2);
     expect(result.out).toContain("safe=false");
     expect(result.out).not.toContain("safe=true");
   });
@@ -476,6 +516,36 @@ test.describe("Dependabot path readers preserve NUL-delimited git paths (#539)",
       expect(result.temporaryFiles).toEqual([]);
     });
   }
+
+  for (const partialDiff of [false, true]) {
+    test(`sweep reports manifest diff failure as FAILED without writes (partial=${partialDiff})`, () => {
+      const { repo } = fixture({ ".github/workflows/café.yml": "manifest\n" });
+      const cwd = buildCwd({ dir: repo, realManifest: true });
+      const { dir, gitLog, ghLog } = stubs({ realDiff: true, failDiffAt: 1, partialDiff, mergeSucceeds: true });
+      const result = runSweep({ cwd, stubDir: dir, fixtureEnv: sb.env });
+      expect(result.code, result.out).toBe(1);
+      expect(result.out).toContain("manifest diff failed on re-check");
+      expect(result.out).not.toContain("diff touches a non-manifest path");
+      expect(result.summary).toContain("| skipped (conflict / not green / non-manifest diff) | 0 |");
+      expect(result.summary).toContain("| failed (could not merge, refresh OR re-arm — needs a human) | 1 |");
+      expect(callsOf(gitLog).filter((args) => args[0] === "diff")).toHaveLength(1);
+      expect(callsOf(ghLog).filter((call) => call.argv[0] === "pr" && ["merge", "update-branch"].includes(call.argv[1]))).toEqual([]);
+      expect(result.temporaryFiles).toEqual([]);
+    });
+  }
+
+  test("sweep still skips an ordinary forbidden manifest path", () => {
+    const { repo } = fixture({ "README.md": "forbidden\n" });
+    const cwd = buildCwd({ dir: repo, realManifest: true });
+    const { dir, ghLog } = stubs({ realDiff: true, mergeSucceeds: true });
+    const result = runSweep({ cwd, stubDir: dir, fixtureEnv: sb.env });
+    expect(result.code, result.out).toBe(0);
+    expect(result.out).toContain("diff touches a non-manifest path on re-check");
+    expect(result.out).not.toContain("manifest diff failed");
+    expect(result.summary).toContain("| skipped (conflict / not green / non-manifest diff) | 1 |");
+    expect(result.summary).toContain("| failed (could not merge, refresh OR re-arm — needs a human) | 0 |");
+    expect(callsOf(ghLog).filter((call) => call.argv[0] === "pr" && ["merge", "update-branch"].includes(call.argv[1]))).toEqual([]);
+  });
 
   for (const files of [{ "café/package.json": "manifest\n" }, {}]) {
     test(`sweep succeeds and cleans up a valid ${Object.keys(files).length ? "manifest" : "empty"} diff`, () => {
