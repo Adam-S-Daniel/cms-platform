@@ -44,7 +44,9 @@
  * names cms/preview-only or takes the name from a variable (a lexical shell
  * token check: shell has no parser here).
  *
- * Scope: `.github/workflows/*.yml` (github-script bodies and `run:` steps).
+ * Scope: `.github/workflows/*.yml` and composite `action.yml` files under `.github/actions/`
+ * (github-script bodies and `run:` steps). Label creation handlers must
+ * report unexpected failures or rethrow them; silent catches fail the lint.
  * Repo scripts that create OTHER labels (scripts/gate-approval-issue.js's
  * CI-health label, the audits) are out of scope; the last test enforces that
  * claim by failing if any file under scripts/ that creates a label also
@@ -205,6 +207,54 @@ function labelFields(arg, value, what) {
   return { name, description };
 }
 
+// A nested function is a separate execution boundary: defining a callback
+// inside a try does not make that try protect calls made by the callback.
+const FUNCTION_NODES = ["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"];
+function protectedTry(ancestors) {
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const node = ancestors[i];
+    if (FUNCTION_NODES.includes(node.type)) return null;
+    if (node.type === "TryStatement" && node.handler && ancestors[i + 1] === node.block) return node;
+  }
+  return null;
+}
+
+// Reporting or rethrowing must happen in the handler itself, rather than in
+// an uncalled function declared there. Empty statements, return, and unused
+// error bindings all swallow the failure just as an empty catch does.
+function reportsFailure(body) {
+  let reports = false;
+  const visitors = {
+    ThrowStatement() { reports = true; },
+    CallExpression(node, state, visit) {
+      const c = node.callee;
+      if (c.type === "MemberExpression" && !c.computed && c.object.type === "Identifier" &&
+          c.object.name === "core" && ["warning", "error", "setFailed"].includes(c.property.name)) reports = true;
+      walk.base.CallExpression(node, state, visit);
+    },
+  };
+  for (const type of FUNCTION_NODES) visitors[type] = () => {};
+  walk.recursive(body, null, visitors);
+  return reports;
+}
+
+function silentCatchProblems(node, ancestors, at) {
+  const problems = [];
+  const stmt = protectedTry(ancestors);
+  if (stmt && !reportsFailure(stmt.handler.body)) problems.push(`${at}: createLabel failure is silently caught`);
+  // The promise form protects only the call that is its receiver, not a
+  // different createLabel call inside the callback or another argument.
+  for (const outer of ancestors) {
+    const c = outer.type === "CallExpression" && outer.callee;
+    if (!c || c.type !== "MemberExpression" || c.computed || c.property.name !== "catch" || c.object !== node) continue;
+    const callback = outer.arguments[0];
+    if (callback && FUNCTION_NODES.includes(callback.type) && !reportsFailure(callback.body)) {
+      problems.push(`${at}: createLabel failure is silently caught`);
+    }
+  }
+  return problems;
+}
+
 // Every label creation in one github-script body, as
 // { calls: [{ where, name, description }], problems: [string] }. A call is
 // only reported when every part this lint checks was evaluated; anything
@@ -220,8 +270,8 @@ function analyzeScript(src, where) {
   }
   const value = resolver(ast);
   const evaluated = { [METHOD]: 0, request: 0 };
-  walk.simple(ast, {
-    CallExpression(node) {
+  walk.ancestor(ast, {
+    CallExpression(node, ancestors) {
       const callee = node.callee;
       if (callee.type !== "MemberExpression") return;
       const at = `${where}+${node.loc.start.line}`;
@@ -239,6 +289,7 @@ function analyzeScript(src, where) {
           return;
         }
         if (!LABEL_CREATE_ROUTE.test(route)) return;
+        problems.push(...silentCatchProblems(node, ancestors, at));
         const got = labelFields(node.arguments[1], value, "request(POST …/labels)");
         if (typeof got === "string") problems.push(`${at}: ${got}`);
         else if (got.name !== PREVIEW_ONLY || got.description !== PREVIEW_ONLY_DESCRIPTION) {
@@ -248,6 +299,7 @@ function analyzeScript(src, where) {
       }
       if (callee.property.name !== METHOD) return;
       evaluated[METHOD]++;
+      problems.push(...silentCatchProblems(node, ancestors, at));
       if (node.arguments.length !== 1) {
         problems.push(`${at}: ${METHOD} must be called with one object literal`);
         return;
@@ -317,19 +369,29 @@ function lengthProblems(calls) {
     );
 }
 
+// Workflows and composite actions both contain executable github-script
+// steps. Keep discovery local to this lint rather than widening shared helpers.
+function labelDefinitionFiles(root = REPO_ROOT) {
+  const dir = path.join(root, ".github", "workflows");
+  const workflows = fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).map((f) => path.join(dir, f));
+  const actions = path.join(root, ".github", "actions");
+  return [...workflows, ...(fs.existsSync(actions) ? scriptFiles(actions).filter((f) => /[/\\]action\.ya?ml$/.test(f)) : [])];
+}
+
 // Every createLabel call in every github-script step of every platform
-// workflow.
-function createLabelCalls() {
+// workflow or composite action.
+function createLabelCalls(files = labelDefinitionFiles()) {
   const calls = [];
   const problems = [];
-  for (const file of listWorkflows()) {
+  for (const file of files) {
     const text = fs.readFileSync(file, "utf8");
+    const name = file.includes(`${path.sep}actions${path.sep}`) ? path.relative(REPO_ROOT, file) : path.basename(file);
     for (const block of githubScriptBlocks(text)) {
-      const got = analyzeScript(block.script, `${path.basename(file)}:${block.line}`);
+      const got = analyzeScript(block.script, `${name}:${block.line}`);
       calls.push(...got.calls);
       problems.push(...got.problems);
     }
-    for (const run of runScripts(text)) problems.push(...analyzeRun(run.script, `${path.basename(file)}:${run.line}`));
+    for (const run of runScripts(text)) problems.push(...analyzeRun(run.script, `${name}:${run.line}`));
   }
   return { calls, problems };
 }
@@ -466,6 +528,75 @@ test.describe("createLabel lint is fail-closed", () => {
   }
 });
 
+test.describe("createLabel failures cannot disappear in a catch", () => {
+  const create = "await github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' });";
+  const SILENT = [
+    ["empty catch", `try { ${create} } catch (e) {}`],
+    ["comment-only catch", `try { ${create} } catch (e) { /* already exists */ }`],
+    ["optional catch binding", `try { ${create} } catch {}`],
+    ["return-only catch", `try { ${create} } catch (e) { return; }`],
+    ["ignored error", `try { ${create} } catch (e) { void e; }`],
+    ["unused binding", `try { ${create} } catch (e) { const ignored = e; }`],
+    ["uncalled nested warning", `try { ${create} } catch (e) { function warn() { core.warning('failed'); } }`],
+    ["uncalled nested rethrow", `try { ${create} } catch (e) { const rethrow = () => { throw e; }; }`],
+    ["empty promise catch", create.replace(";", ".catch(() => {});")],
+    ["comment-only promise catch", create.replace(";", ".catch(function (e) { /* exists */ });")],
+    ["silent expression callback", create.replace(";", ".catch(e => undefined);")],
+  ];
+  for (const [shape, script] of SILENT) {
+    test(`rejects ${shape}`, () => {
+      expect(analyzeScript(script, "t").problems.join("\n")).toMatch(/createLabel failure is silently caught/);
+    });
+  }
+
+  const REPORTED = [
+    ["warning", `try { ${create} } catch (e) { core.warning('failed'); }`],
+    ["rethrow", `try { ${create} } catch (e) { throw e; }`],
+    ["propagation", create],
+    ["unrelated catch", `try { unrelated(); } catch {} ${create}`],
+    ["nested callback unrelated to the try", `try { const work = async () => { ${create} }; } catch {}`],
+    ["call in the catch body", `try { unrelated(); } catch { ${create} }`],
+    ["call in the finally body", `try { unrelated(); } catch {} finally { ${create} }`],
+    ["unrelated nested catch", `try { ${create} try { unrelated(); } catch {} } catch (e) { core.warning('failed'); }`],
+    ["warning in promise catch", create.replace(";", ".catch(e => core.warning('failed'));")],
+    ["rethrow in promise catch", create.replace(";", ".catch(e => { throw e; });")],
+  ];
+  for (const [shape, script] of REPORTED) {
+    test(`allows ${shape}`, () => {
+      expect(analyzeScript(script, "t").problems).toEqual([]);
+    });
+  }
+});
+
+test("the repository lint discovers github-script label handlers in composite actions", () => {
+  const root = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "label-action-"));
+  try {
+    fs.mkdirSync(path.join(root, ".github", "workflows"), { recursive: true });
+    const dir = path.join(root, ".github", "actions", "labels");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "action.yml");
+    fs.writeFileSync(file, `runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@0000000000000000000000000000000000000000
+      with:
+        script: |
+          try {
+            await github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' });
+          } catch { /* already exists */ }
+`);
+    const files = labelDefinitionFiles(root);
+    expect(files).toEqual([file]);
+    const got = createLabelCalls(files);
+    expect(got.calls).toHaveLength(1);
+    expect(got.problems).toHaveLength(1);
+    expect(got.problems[0]).toContain("action.yml");
+    expect(got.problems[0]).toContain("createLabel failure is silently caught");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Review of #558, round 2: `run:` steps can create the label with the gh CLI.
 test.describe("run: steps may not create cms/preview-only with gh", () => {
   const RUNS = [
@@ -577,91 +708,121 @@ test.describe("repo scripts stay out of the preview-only label's creation", () =
   });
 });
 
-// Review of #558, N1: the preview-only createLabel failure used to vanish in
-// `catch (_) {}`. Runs the real github-script step with a scripted client.
-test.describe("cms/preview-only label creation reports failures by status code only", () => {
-  function step() {
-    const file = listWorkflows().find((f) => path.basename(f) === "cms-editorial-workflow.yml");
-    const blocks = githubScriptBlocks(fs.readFileSync(file, "utf8")).filter((b) =>
-      analyzeScript(b.script, "x").calls.some((c) => c.name === PREVIEW_ONLY),
-    );
-    expect(blocks).toHaveLength(1);
-    return blocks[0].script;
-  }
-
-  async function run(previewOnlyError) {
-    const warnings = [];
-    const added = [];
-    const github = {
-      rest: {
-        issues: {
-          createLabel: async ({ name }) => {
-            if (name === PREVIEW_ONLY && previewOnlyError) throw previewOnlyError;
-          },
-          addLabels: async ({ labels }) => added.push(...labels),
+// Run the real protected createLabel bodies with a scripted client, without
+// executing the rest of each step (imports, comments, or publishing work).
+function labelCreationHandlers() {
+  const handlers = [];
+  for (const file of listWorkflows()) {
+    for (const block of githubScriptBlocks(fs.readFileSync(file, "utf8"))) {
+      const ast = acorn.parse(block.script, PARSE_OPTIONS);
+      const value = resolver(ast);
+      walk.ancestor(ast, {
+        CallExpression(node, ancestors) {
+          const callee = node.callee;
+          if (callee.type !== "MemberExpression" || callee.computed || callee.property.name !== METHOD) return;
+          const stmt = protectedTry(ancestors);
+          expect(stmt && stmt.handler, "createLabel must have a testable handler").toBeTruthy();
+          const fields = labelFields(node.arguments[0], value, METHOD);
+          handlers.push({
+            id: `${path.basename(file)} ${fields.name}`,
+            name: fields.name,
+            script: block.script.slice(stmt.start, stmt.end),
+          });
         },
-      },
-    };
-    const context = {
-      repo: { owner: "owner", repo: "repo" },
-      payload: { pull_request: { number: 7, base: { ref: "feature/x" } } },
-    };
-    const core = { warning: (m) => warnings.push(String(m)) };
-    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
-    await new AsyncFunction("github", "context", "core", step())(github, context, core);
-    return { warnings, added };
+      });
+    }
   }
+  return handlers;
+}
 
-  const BODY = "body-text-that-must-not-be-logged";
+async function runLabelCreation(handler, error) {
+  const warnings = [];
+  const created = [];
+  const github = { rest: { issues: { createLabel: async (args) => {
+    created.push(args);
+    if (error) throw error;
+  } } } };
+  const core = { warning: (m) => warnings.push(String(m)) };
+  const context = { repo: { owner: "owner", repo: "repo" } };
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  await new AsyncFunction("github", "context", "core", "owner", "repo", "OVERRIDE_LABEL", "LABEL", handler.script)(
+    github, context, core, "owner", "repo", "content-guard/override", "not-decap-created",
+  );
+  expect(created).toHaveLength(1);
+  expect(created[0].name).toBe(handler.name);
+  return warnings;
+}
 
-  test("already_exists is silent", async () => {
-    const err = Object.assign(new Error(BODY), {
-      status: 422,
-      response: { data: { message: BODY, errors: [{ resource: "Label", code: "already_exists", field: "name" }] } },
-    });
-    const { warnings, added } = await run(err);
-    expect(warnings).toEqual([]);
-    expect(added).toEqual(["cms/draft", PREVIEW_ONLY]);
+const PRIVATE_ERROR_TEXT = "private-error-text";
+const PRIVATE_ERROR_NAME = "private-error-name";
+const CASES = [
+  ["success", null, null],
+  ["already_exists 422", { status: 422, response: { data: { errors: [{ code: "already_exists" }] } } }, null],
+  ["validation 422", { status: 422, response: { data: { errors: [{ code: "invalid" }] } } }, "422"],
+  ["forbidden 403", { status: 403 }, "403"],
+  ["server 500", { status: 500, name: "HttpError" }, "500"],
+  ["already_exists wrong status", { status: 500, response: { data: { errors: [{ code: "already_exists" }] } } }, "500"],
+  ["missing status", {}, "unknown"],
+  ["missing errors", { status: 422, response: { data: {} } }, "422"],
+  ["malformed errors", { status: 422, response: { data: { errors: "already_exists" } } }, "422"],
+  ["null error entries", { status: 422, response: { data: { errors: [null, { code: "invalid" }] } } }, "422"],
+];
+
+test.describe("all createLabel handlers report sanitized failures", () => {
+  const handlers = labelCreationHandlers();
+  test("all seven label creation handlers are exercised", () => {
+    expect(handlers.map((h) => h.id)).toEqual([
+      "cms-editorial-workflow.yml content-guard/override",
+      "cms-editorial-workflow.yml cms/draft",
+      "cms-editorial-workflow.yml cms/ready",
+      "cms-editorial-workflow.yml cms/preview-only",
+      "label-non-decap-prs.yml not-decap-created",
+      "publish-scheduled-posts.yml cms/draft",
+      "publish-scheduled-posts.yml cms/ready",
+    ]);
   });
+  for (const handler of handlers) {
+    for (const [scenario, properties, status] of CASES) {
+      test(`${handler.id}: ${scenario}`, async () => {
+        const error = properties && Object.assign(new Error(PRIVATE_ERROR_TEXT), {
+          name: PRIVATE_ERROR_NAME,
+          response: { data: { message: PRIVATE_ERROR_TEXT } },
+        }, properties);
+        if (error) error.response = { data: { message: PRIVATE_ERROR_TEXT, ...(error.response && error.response.data) } };
+        const warnings = await runLabelCreation(handler, error);
+        if (status === null) {
+          expect(warnings).toEqual([]);
+        } else {
+          expect(warnings).toHaveLength(1);
+          const type = properties.name === "HttpError" ? "HttpError" : "Error";
+          expect(warnings[0]).toContain(`(HTTP ${status}; ${type})`);
+          expect(warnings[0]).toContain(`Could not create the ${handler.name} label`);
+          expect(warnings[0]).not.toMatch(/private-error-text|private-error-name|undefined|NaN/);
+        }
+      });
+    }
+  }
+});
 
-  test("a validation 422 warns with the status code and nothing from the body", async () => {
-    const err = Object.assign(new Error(BODY), {
-      status: 422,
-      response: { data: { message: BODY, errors: [{ resource: "Label", code: "invalid", field: "description" }] } },
-    });
-    const { warnings, added } = await run(err);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("HTTP 422");
-    expect(warnings[0]).not.toContain(BODY);
-    expect(added).toEqual(["cms/draft", PREVIEW_ONLY]);
-  });
-
-  test("a server error warns with its status code", async () => {
-    const { warnings } = await run(Object.assign(new Error(BODY), { status: 500 }));
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("HTTP 500");
-    expect(warnings[0]).not.toContain(BODY);
-  });
-
-  test("already_exists on a status other than 422 still warns", async () => {
-    const err = Object.assign(new Error(BODY), {
-      status: 500,
-      response: { data: { errors: [{ code: "already_exists" }] } },
-    });
-    const { warnings } = await run(err);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("HTTP 500");
-  });
-
-  test("an error with no status says HTTP unknown", async () => {
-    const { warnings } = await run(new Error(BODY));
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("(HTTP unknown)");
-    expect(warnings[0]).not.toMatch(/undefined|NaN/);
-    expect(warnings[0]).not.toContain(BODY);
-  });
-
-  test("no error, no warning", async () => {
-    expect((await run(null)).warnings).toEqual([]);
-  });
+// Preserve the whole-step check that warnings do not prevent labeling the PR.
+test("label creation warnings still allow addLabels", async () => {
+  const file = listWorkflows().find((f) => path.basename(f) === "cms-editorial-workflow.yml");
+  const block = githubScriptBlocks(fs.readFileSync(file, "utf8")).find((b) =>
+    analyzeScript(b.script, "t").calls.some((c) => c.name === PREVIEW_ONLY),
+  );
+  const added = [];
+  const warnings = [];
+  const github = { rest: { issues: {
+    createLabel: async () => { throw Object.assign(new Error(PRIVATE_ERROR_TEXT), { status: 500 }); },
+    addLabels: async ({ labels }) => added.push(...labels),
+  } } };
+  const context = {
+    repo: { owner: "owner", repo: "repo" },
+    payload: { pull_request: { number: 7, base: { ref: "feature/x" } } },
+  };
+  const core = { warning: (m) => warnings.push(String(m)) };
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  await new AsyncFunction("github", "context", "core", block.script)(github, context, core);
+  expect(warnings).toHaveLength(3);
+  expect(added).toEqual(["cms/draft", PREVIEW_ONLY]);
 });
