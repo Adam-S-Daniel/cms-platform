@@ -173,8 +173,8 @@ per-PR checkout):
   while its comment says `v6.1.1`, so it can never self-repair and each bump
   widens the gap; #179 carries setup-node v7.0.0's SHA behind
   `# v6.4.0 (2026-04-20)` across 18 files. Same trap as #220's frozen
-  `platform_ref` (a generic `CUR->LATEST` replace cannot match an
-  already-drifted value). The account first tried to keep the comment honest
+  `platform_ref` (a `CUR`->`LATEST` rewrite, whether the old global replace or
+  `scripts/rewrite-platform-pins.js`, cannot match an already-drifted value). The account first tried to keep the comment honest
   with a sync workflow; the measured verdict is that a label which goes stale
   silently and then LIES is worse than no label, because it is read and
   believed. So `dependabot-comment-sync.yml`, its self-caller and
