@@ -1,0 +1,112 @@
+# Citations in skills/*/SKILL.md that e2e/skill-references-fresh.test.js
+# must NOT fail, though they do not resolve in this tree (cms-platform#408).
+#
+# Every entry is one (skill, citation) pair:
+#   skill     the skills/<skill>/ directory
+#   citation  exactly as the lint reports it
+#   reason    why it is deliberately absent from this tree: removed and
+#             documented as removed, consumer-side, an AWS or GitHub literal,
+#             or an illustrative placeholder
+#   marker    text that must still appear in that SKILL.md, marking the
+#             citation historical or out-of-tree to a reader
+#
+# The lint fails an entry that has gone stale: its citation resolves again,
+# the skill no longer cites it, or its marker text is gone. So an entry
+# cannot outlive the reason it was added.
+allow:
+  - skill: admin-config-render
+    citation: config.yml
+    reason: The Decap config a build renders into _site/admin/config.yml; no file of that name is committed here.
+    marker: "**Render `config.yml` from `config.base.yml`**"
+
+  - skill: aws-bootstrap
+    citation: CachingOptimized
+    reason: AWS managed cache policy name; the template references it by policy ID, with the name only in a comment.
+    marker: "`CachingOptimized` policy ignores query strings"
+  - skill: aws-bootstrap
+    citation: infrastructure/site-params.env
+    reason: Consumer-side file the scaffolder writes; this tree ships only infrastructure/site-params.example.env.
+    marker: "scaffolder writes these into `infrastructure/site-params.env`"
+  - skill: aws-bootstrap
+    citation: ResourceExistenceCheck
+    reason: CloudFormation error name quoted in a troubleshooting heading, not a template identifier.
+    marker: "### `ResourceExistenceCheck` / changeset FAILED"
+  - skill: aws-bootstrap
+    citation: NoSuchOriginRequestPolicy
+    reason: CloudFront error name quoted in a troubleshooting heading, not a template identifier.
+    marker: "### `NoSuchOriginRequestPolicy`"
+  - skill: aws-bootstrap
+    citation: UPDATE_ROLLBACK_COMPLETE
+    reason: CloudFormation stack status, not a secret or variable.
+    marker: "### Stack in `UPDATE_ROLLBACK_COMPLETE`"
+
+  - skill: browser-testing
+    citation: e2e/my-feature.spec.js
+    reason: Illustrative name for a spec the reader is about to create.
+    marker: "1. Create `e2e/my-feature.spec.js`"
+  - skill: browser-testing
+    citation: scripts/generate-showcase.js
+    reason: Removed with the committed-PNG suite in v0.1.34; the section says so.
+    marker: "## Visual showcase — REMOVED, don't go looking for it"
+  - skill: browser-testing
+    citation: e2e/visual-regression.spec.js-snapshots
+    reason: Removed with the committed-PNG suite in v0.1.34; the section says so.
+    marker: "## Visual showcase — REMOVED, don't go looking for it"
+
+  - skill: ci-watcher-loops
+    citation: X.yml
+    reason: Placeholder workflow name in an example of a BROKEN capture pattern.
+    marker: "# BROKEN — `gh workflow run` prints a URL line"
+
+  - skill: cms-stuck-pr-triage
+    citation: IN_PROGRESS
+    reason: GitHub statusCheckRollup state value, not a secret or variable.
+    marker: "`statusCheckRollup` shows `IN_PROGRESS`"
+  - skill: cms-stuck-pr-triage
+    citation: config.yml
+    reason: The Decap config the theme gem renders at build time; no file of that name is committed here.
+    marker: "the live `config.yml` is **rendered** by the theme gem"
+
+  - skill: code-quality
+    citation: .github/workflows/code-quality.yml
+    reason: Never ported to cms-platform; the skill says it does not exist here.
+    marker: "there is no `.github/workflows/code-quality.yml`"
+  - skill: code-quality
+    citation: code-quality.yml
+    reason: Retired fleet-wide; the skill says no repo in the fleet has it.
+    marker: "**No `code-quality.yml` exists in this fleet**"
+
+  - skill: consumer-repo-provisioning
+    citation: CMS_PLATFORM_PAT
+    reason: REMOVED in v0.1.103; documented for repos still pinned below it.
+    marker: "## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103 (kept here for repos on an older pin)"
+  - skill: consumer-repo-provisioning
+    citation: infrastructure/site-params.env
+    reason: Consumer-side file the scaffolder writes; this tree ships only infrastructure/site-params.example.env.
+    marker: "derives every value from `APEX_DOMAIN` in"
+
+  - skill: github-actions-sha-pinning
+    citation: .github/workflows/dependabot-comment-sync.yml
+    reason: Deleted with the version-comment machinery; the skill says so.
+    marker: "and `scripts/sync-action-pin-comments.sh` — is **deleted**"
+  - skill: github-actions-sha-pinning
+    citation: scripts/sync-action-pin-comments.sh
+    reason: Deleted with the version-comment machinery; the skill says so.
+    marker: "and `scripts/sync-action-pin-comments.sh` — is **deleted**"
+  - skill: github-actions-sha-pinning
+    citation: sync-action-pin-comments.sh
+    reason: Deleted with the version-comment machinery; the skill says so.
+    marker: "and `scripts/sync-action-pin-comments.sh` — is **deleted**"
+  - skill: github-actions-sha-pinning
+    citation: .github/ci-runner/Dockerfile
+    reason: Cited only to record that no repo in the fleet has it (measured 2026-08-31).
+    marker: "That coupling does not exist anywhere in the fleet"
+  - skill: github-actions-sha-pinning
+    citation: .github/ci-runner/
+    reason: Cited only to record that no repo in the fleet has it (measured 2026-08-31).
+    marker: "That coupling does not exist anywhere in the fleet"
+
+  - skill: preview-environments
+    citation: teardown-preview.yml
+    reason: Cited only to say no separate teardown workflow exists; teardown is a job in deploy-preview.yml.
+    marker: "There is no separate `teardown-preview.yml`"

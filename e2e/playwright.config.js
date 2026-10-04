@@ -582,6 +582,10 @@ const PLATFORM_META_SPECS = [
   // source a consumer lane has no business re-linting.
   "app-token-platform-writers.test.js",
   "mint-app-token.test.js",
+  // #408 — skill freshness lint: reads skills/*/SKILL.md and checks each cited
+  // path, workflow, secret/variable and CloudFormation name against this
+  // repo's own tree. A consumer ships none of it. Platform tree only.
+  "skill-references-fresh.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is
