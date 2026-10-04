@@ -175,8 +175,8 @@ collection.
 `consumer-main`, and `visual-regression.yml` routes it through the manual
 `regression-review` GitHub Environment whenever the PR has any visually
 different page. Production lags `main`, so this fires on changes a visitor
-would never notice (see AGENTS.md, "Approving `regression-review` on a
-render-neutral PR").
+would never notice (see `docs/OPERATIONS.md`, "Approving `regression-review`
+on a render-neutral PR").
 
 For an editor, that is: pressed Publish, nothing happened, no error, forever.
 The only remedy lives in the GitHub Actions UI or `/admin/reviews/`, and
