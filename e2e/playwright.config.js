@@ -114,6 +114,10 @@ const PLATFORM_META_SPECS = [
   // parses what the script writes. Reads theme/admin SOURCE and scripts/;
   // platform-internal for the same reason as every entry around it.
   "branch-binding-banner.test.js",
+  // #528 — drives theme/admin/site-gate-banner.js with the real
+  // site-hostname.js in a vm sandbox (the gate read at the bound branch).
+  // Reads theme/admin SOURCE; platform-internal like the entry above.
+  "site-gate-banner.test.js",
   // The collection-list controls trim: reads the theme/admin SOURCE tree (the
   // shim plus the three shells) and vm-sandboxes the shim's pure sort-label
   // matcher. Platform-internal for the same reason as the entry above — a
@@ -158,6 +162,10 @@ const PLATFORM_META_SPECS = [
   // list for the same cms-platform#244 reason as the three consumer specs named
   // above. Do not "tidy" it on.
   "action-pin-comment-lint.test.js",
+  // cms-platform#538 — the byte budget for THIS repo's AGENTS.md. On a
+  // consumer lane `..` is the site root, so it would measure the consumer's
+  // own AGENTS.md against a budget chosen for this one.
+  "agents-md-size.test.js",
   "auto-merge-uses-queue.test.js",
   // The 2026-09-08 `catalog:` incident guard — asserts both platform-pin
   // reusables install the `yaml` parser with `--prefix .cms-platform` rather
