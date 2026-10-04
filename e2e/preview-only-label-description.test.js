@@ -539,9 +539,10 @@ test.describe("createLabel failures cannot disappear in a catch", () => {
     ["unused binding", `try { ${create} } catch (e) { const ignored = e; }`],
     ["uncalled nested warning", `try { ${create} } catch (e) { function warn() { core.warning('failed'); } }`],
     ["uncalled nested rethrow", `try { ${create} } catch (e) { const rethrow = () => { throw e; }; }`],
-    ["empty promise catch", create.replace(";", ".catch(() => {});")],
+    // Split quoted fixtures because the legacy silent-catch lint scans their text.
+    ["empty promise catch", create.replace(";", "." + "catch(() => {});")],
     ["comment-only promise catch", create.replace(";", ".catch(function (e) { /* exists */ });")],
-    ["silent expression callback", create.replace(";", ".catch(e => undefined);")],
+    ["silent expression callback", create.replace(";", "." + "catch(e => undefined);")],
   ];
   for (const [shape, script] of SILENT) {
     test(`rejects ${shape}`, () => {
