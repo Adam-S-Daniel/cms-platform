@@ -23,6 +23,11 @@ with the harness checked out from the platform rather than living in the site.
 - `admin/` — copied from the platform (as `scaffold/create-site.js` does for a
   real site); the theme's `decap_config_hook.rb` renders `config.yml` +
   `config-local.yml` into `_site/admin/` at build.
+- `admin/collections.site.yml` + `_articles/` — the fixture's own seam: one
+  `articles` folder collection opted into the shared `archived_pdf_fields`
+  (#527), so the archived-PDF browser test in `cms-editorial-workflow.spec.js`
+  runs here instead of skipping. `_articles` is not a Jekyll collection, so
+  nothing in it is rendered.
 
 ## Run the local lane against it
 

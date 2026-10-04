@@ -8,6 +8,7 @@
 const { test, expect } = require("./base");
 const {
   gh,
+  getFileTextAtRef,
   makeDeployQueueExtender,
   deployLaneActivity,
   headChecksTrulyGreen,
@@ -764,5 +765,36 @@ test.describe("makePreviewCanaryRecoverer (#82 in-spec recovery)", () => {
   test("constructor guards: missing base or getPrNumber throw", () => {
     expect(() => makePreviewCanaryRecoverer({ getPrNumber: () => 1 })).toThrow(/requires base/);
     expect(() => makePreviewCanaryRecoverer({ base: "feat/x" })).toThrow(/requires getPrNumber/);
+  });
+});
+
+test.describe("getFileTextAtRef (#531)", () => {
+  let originalFetch;
+  test.beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  test.afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("reads the file at the given ref, decoding base64 and encoding the path and ref", async () => {
+    const urls = [];
+    globalThis.fetch = async (url) => {
+      urls.push(String(url));
+      return fakeResponse({
+        json: { encoding: "base64", content: Buffer.from("---\ntitle: Ünï\n---\n", "utf8").toString("base64") },
+      });
+    };
+    const text = await getFileTextAtRef({ repo: "o/r", filePath: "_posts/2099-12-31-e2e a.md", ref: "feat/x y" });
+    expect(text).toBe("---\ntitle: Ünï\n---\n");
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("/repos/o/r/contents/_posts/2099-12-31-e2e%20a.md?ref=feat%2Fx%20y");
+  });
+
+  test("requires a file path and a ref, and rejects a non-file response", async () => {
+    await expect(getFileTextAtRef({ filePath: "a.md" })).rejects.toThrow(/needs a filePath and a ref/);
+    await expect(getFileTextAtRef({ ref: "abc" })).rejects.toThrow(/needs a filePath and a ref/);
+    globalThis.fetch = async () => fakeResponse({ json: [{ name: "a.md" }] });
+    await expect(getFileTextAtRef({ repo: "o/r", filePath: "a.md", ref: "abc" })).rejects.toThrow(/base64 file/);
   });
 });
