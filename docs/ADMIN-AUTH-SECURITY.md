@@ -679,6 +679,15 @@ that, which changes nothing a deployed site uses.
    bash infrastructure/bootstrap/deploy.sh   # ADMIN_CSP_MODE unset = report-only
    ```
 
+   `template.yaml` is over the AWS CLI's 51,200-byte inline limit, so the
+   script uploads it through S3: on an existing stack it uses the stack's own
+   artifact bucket (`<prefix>-cfn-artifacts`, prefix `bootstrap-templates`)
+   with nothing for you to set. A stack that does not exist yet has no such
+   bucket, so the first deploy needs `TEMPLATE_S3_BUCKET=<an existing bucket
+   you can write to>`; the script refuses without it and never creates a
+   bucket. `TEMPLATE_S3_BUCKET` also overrides the artifact bucket on an
+   update.
+
 2. Check the headers on production and on one live preview host (no
    invalidation is needed; the policy applies to cached responses too):
 

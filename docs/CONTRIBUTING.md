@@ -154,3 +154,9 @@ This mirrors `e2e/workflow-yaml-utils.js`, which parses workflow YAML with the
 any NEW code-shape lint must be too. (Regex stays fine for genuinely lexical
 concerns — a version string, a leaf token's content — never for code structure.)
 Adding the parser deps respected the fleet's 7-day dependency cooling-off.
+
+**A lint that forbids a token must not read comments.** The first draft of the
+#329 `position: fixed` lint was `/position\s*:\s*fixed/` over the source, and it
+red-failed the fixed file, whose header comment explains the defect it forbids.
+It walks acorn's AST now (string literals and style writes only) —
+`e2e/admin-329-shims.test.js`; see `docs/PUBLISHING-UX.md` §2.3.

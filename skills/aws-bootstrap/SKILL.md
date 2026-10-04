@@ -75,6 +75,9 @@ CREATE_OIDC_PROVIDER=false bash infrastructure/bootstrap/deploy.sh
 
 # Override hosted zone manually (otherwise auto-detected from APEX_DOMAIN)
 HOSTED_ZONE_ID=<your-zone-id> bash infrastructure/bootstrap/deploy.sh
+
+# FIRST deploy of a new stack only: upload the template through an existing bucket
+TEMPLATE_S3_BUCKET=<existing-bucket-you-can-write-to> bash infrastructure/bootstrap/deploy.sh
 ```
 
 Key env vars (see `infrastructure/site-params.example.env` for the full set):
@@ -89,10 +92,11 @@ Key env vars (see `infrastructure/site-params.example.env` for the full set):
 | `AWS_REGION` | no | `us-east-1` |
 | `HOSTED_ZONE_ID` | no | auto-detected from `APEX_DOMAIN` |
 | `CREATE_OIDC_PROVIDER` | no | `true` |
+| `TEMPLATE_S3_BUCKET` | first deploy only | the stack's own artifact bucket on an update |
 
 The script:
 1. Auto-detects the Route53 hosted zone for `${APEX_DOMAIN}` (unless `HOSTED_ZONE_ID` is set)
-2. Runs `aws cloudformation deploy` with `CAPABILITY_NAMED_IAM`, passing the derived parameters
+2. Runs `aws cloudformation deploy` with `CAPABILITY_NAMED_IAM`, passing the derived parameters. The template is over the CLI's 51,200-byte inline limit, so it goes through S3 (`--s3-bucket`, prefix `bootstrap-templates`): on an existing stack the stack's own artifact bucket, on a missing stack `TEMPLATE_S3_BUCKET` is required (the script refuses without it and never creates a bucket)
 3. Prints outputs including the Role ARN and both CloudFront distribution IDs
 
 ## Stack outputs → GitHub secrets
@@ -106,6 +110,9 @@ After deploying, add these as GitHub Actions secrets (repo → Settings → Secr
 | `ProductionDistributionId` | `PRODUCTION_CLOUDFRONT_ID` |
 
 ## Common errors and fixes
+
+### `Templates with a size greater than 51,200 bytes must be deployed via an S3 Bucket`
+`deploy.sh` always uploads the template through S3, so this means an old copy of the script (before the `--s3-bucket` fix) is running: pull the current platform ref. On a stack that does not exist yet the script stops and asks for `TEMPLATE_S3_BUCKET`; point it at any existing bucket you can write to.
 
 ### `ResourceExistenceCheck` / changeset FAILED
 The `AWS::Route53::HostedZone::Id` parameter type triggers early validation. The `HostedZoneId` parameter is typed as `String` with `AllowedPattern: "^Z[A-Z0-9]+$"` to avoid this.
@@ -122,7 +129,7 @@ aws cloudformation list-change-sets --stack-name "${STACK_NAME}" \
 CloudFormation rolled back and deleted the ACM cert. The cert has `DeletionPolicy: Retain` to prevent this. If it happens:
 1. Check `aws acm list-certificates --region us-east-1` for the cert status
 2. Re-run the deploy — the cert will be re-created and DNS-validated via Route53
-3. CloudFront creation waits on its `DependsOn` certificate
+3. CloudFront creation waits on the certificate its `!Ref` names (an implicit dependency; the template carries no explicit one)
 
 ### `NoSuchOriginRequestPolicy`
 The `CORS-S3Origin` managed origin request policy doesn't exist in all accounts. It is not used — S3 website custom origins don't need it.

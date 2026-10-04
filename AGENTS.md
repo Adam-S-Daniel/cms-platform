@@ -124,7 +124,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 
 | Doc | Read it when… |
 |---|---|
-| `docs/ARCHITECTURE.md` | the two-repo design, end to end. |
+| `docs/ARCHITECTURE.md` | the two-repo design, end to end; what was deliberately never ported. |
 | `docs/SYNC.md` | what syncs to a consumer, or drift. |
 | `docs/ADMIN-DELIVERY.md` | `theme/admin/`, a render path, `base_collections`, `field_library` `$ref`, the logo / `preview.md` / 404 seeds. |
 | `docs/ADMIN-AUTH-SECURITY.md` | sign-in, `oauth-proxy/` (a release does NOT deploy it; each site's daily `oauth-proxy-build` probe goes red until someone does), a `message` listener, the Decap SRI hash. |
@@ -189,8 +189,8 @@ Self-explanatory by name: `.github/workflows/`, `scripts/`, `infrastructure/`,
 - **`e2e/` deps install via `cd e2e && npm ci`** (`e2e/package-lock.json` is
   tracked); CloudFront-Function specs simulate `Fn::Sub` with a synthetic
   `example.test` apex. **AST always, never regex, for code-shape lints** —
-  `e2e/spec-ast.js` for JS, `e2e/workflow-yaml-utils.js` for workflows. →
-  `docs/CONTRIBUTING.md`.
+  `e2e/spec-ast.js` for JS, `e2e/workflow-yaml-utils.js` for workflows — and
+  **a lint forbidding a token must not read comments**. → `docs/CONTRIBUTING.md`.
 
 ## Admin delivery (gem-shipped, v0.1.4+)
 
@@ -209,48 +209,34 @@ An editor meets nine notions of "published" across four systems, two invisible:
 six required checks and a MANUAL `regression-review` gate that parks a publish
 with no error in `/admin`. All five phases shipped in **v0.1.96**
 (`one-door-publish.js`, `publish-button.js`, `publish-progress.js`, and the one
-derivation `entry-status-model.js`). Rules that outlive them:
-no shim paints a `position: fixed` overlay over the editor toolbar
-(`publish-step-hint.js` covered 68% of the button it pointed at), and a banner
-surviving the editor route needs `cms-notice-band` on `<body>` (#412); a lint
-forbidding a token must not read comments; an `auto-merge-when-ready` re-arm
-needs the label REMOVED first; hiding a control RETARGETS every selector
-matching it by ROLE AND NAME (`publishViaUi()` drove the platform's own button —
-v0.1.97, run 33439336337), and `mergeable` is absent from the `/pulls` LIST
-response; every GitHub GET under `theme/admin/` passes `cache: "no-cache"`
-because the API is cached 60 s (#386, run 33580693718); and a spec publishes ONE
-entry per page, since Decap 3.15.1 breaks the next publish after an entry→entry
-hash navigation (#342). → `docs/PUBLISHING-UX.md`.
+derivation `entry-status-model.js`). Rules that outlive them: no shim paints a
+`position: fixed` overlay over the toolbar (§2.3); a banner on the editor route
+needs `cms-notice-band` (#412); a re-arm removes the label first; hiding a
+control RETARGETS selectors matching it by ROLE AND NAME; `mergeable` is absent
+from the `/pulls` LIST response (§4); every GitHub GET
+under `theme/admin/` passes `cache: "no-cache"` (#386); a spec publishes ONE
+entry per page (#342). Incidents → `docs/PUBLISHING-UX.md` §2.3, §4.
 
 ### A required status check nobody publishes blocks forever, silently (#371)
 
-`cms-feature-branches` required `validate-content` while the consumer publishes
-`editorial / validate-content`, so every PR onto `cms/**`, `claude/**` and
-`feat/**` on BOTH consumers sat permanently `mergeable_state: blocked` —
-unnoticed, since `bypass_actors` let admins merge by hand. **Lock a required
-context to what would EMIT it** (`ruleset-context-publishable.test.js`). →
-`docs/PUBLISHING-UX.md` §2.10.
+A ruleset requiring `validate-content` where the consumer publishes
+`editorial / validate-content` blocked every feature-branch PR on both
+consumers. **Lock a required context to what would EMIT it**
+(`ruleset-context-publishable.test.js`). → `docs/PUBLISHING-UX.md` §2.10.
 
 ### A consumer's own post-build verifier runs through `site-verify.yml` (#377)
 
-jodidaniel.com's `scripts/verify-build-artifacts.rb` was cited as a guard in six
-places and run by nothing — how a `pdf_public: true` with no file in `_site`
-reached prod. Parity forbids a consumer-owned caller, so it is a platform seam:
-a `site-verify.yml` reusable plus a dictated thin caller `platform-bump` seeds
-(#315), required only once both consumers published it (v0.1.98,
-jodidaniel.com#236 / adamdaniel.ai#3464). → `docs/CI-INVARIANTS.md`.
+A verifier cited as a guard and run by nothing let a broken `pdf_public` file
+reach prod. Parity forbids a consumer-owned caller, so it is a platform seam: the
+`site-verify.yml` reusable plus a dictated thin caller. → `docs/CI-INVARIANTS.md`.
 
 ## Skills ship as a marketplace bundle, not a file sync (v0.1.83)
 
 `skills/` is where a platform skill is authored, and **nothing copies it into a
-consumer**: the repo is a federated bundle in the `agentskills` marketplace
-(`/plugin install cms-platform@agentskills`, invoked `/cms-platform:<skill>`),
-reaching an ephemeral surface only once the consuming repo's own `skills.lock`
-declares it a source (adamdaniel.ai PR #3109 pinning `679fb614`; jodidaniel.com
-PR #134). The `skills-sync.yml` transport, its `platform-drift-guard.yml`
-companion, the issue #83 destination-presence gate and the `.repo-local`
-carve-out were **deleted** in v0.1.83; an adopting consumer deletes both thin
-callers in the bump commit. → `docs/SYNC.md`.
+consumer**: it is a federated bundle in the `agentskills` marketplace
+(`/cms-platform:<skill>`), reaching an ephemeral surface only through the
+consuming repo's own `skills.lock`. The old `skills-sync.yml` transport was
+deleted in v0.1.83. → `docs/SYNC.md` § Skills, `docs/VERSION-HISTORY.md` v0.1.83.
 
 ## Every cross-post target gets text in ITS format, never raw Markdown
 
@@ -272,33 +258,22 @@ that drift piecemeal — a stale `platform_ref` once silently ran a
 
 ### A caller naming the version twice must name it the same twice (#283)
 
-The eight other fleet repos calling a reusable name the version twice
-(`uses: …@vX.Y.Z` and `platform_ref:`) and Dependabot moves only the first, so
-the NEW reusable runs the OLD sparse-checked-out script and reports **green**
-having detected nothing (2026-08-20: seven of eight a release behind, one with
-fourteen unreported failing push runs). `scripts/check-pin-agreement.js` asserts
-the two agree, via the reusable `.github/workflows/pin-agreement.yml` — **not**
-via a caller in `examples/site/.github/workflows/`. No fleet repo adopted it,
-and #283 was closed without a fix. **#424 removed the second reference
-instead**, for `scheduled-run-health.yml`. It checks its script out at
-`job.workflow_repository`@`job.workflow_sha`, read from `toJSON(job)` because
-actionlint does not type those yet. So `platform_ref` no longer selects the
-tree, and a currency step goes red once a caller's release has been superseded
-for more than `behind_days`. Never put `inputs.platform_ref` back into that
-checkout. Never drop a fleet repo's cms-platform Dependabot `ignore` before its
-caller deletes `platform_ref`. → `docs/FLEET-CALLER-CURRENCY.md`.
+A fleet caller naming it in both `uses:@` and `platform_ref:` gets half-bumped
+by Dependabot and reports green having run an old script
+(`docs/PIN-CONSISTENCY.md` § Pin AGREEMENT). **#424 removed the second
+reference** for `scheduled-run-health.yml`, which checks its script out at
+`job.workflow_repository`@`job.workflow_sha`. Never put `inputs.platform_ref`
+back into that checkout. Never drop a fleet repo's cms-platform Dependabot
+`ignore` before its caller deletes `platform_ref`. →
+`docs/FLEET-CALLER-CURRENCY.md`.
 
 ### Dependabot must not bump ANY cms-platform reference (#242, #244)
 
-`platform-bump` owns the version atomically in ONE PR, which is what lets
-`check-platform-pin-consistency.js --require-canonical` pass on that PR alone;
-either ecosystem sees one slice only, so its bump is redundant or skewing
-(adamdaniel.ai PR #3076 tried to downgrade the gem `v0.1.80` → `v0.1.75`;
-jodidaniel.com #8–#22 produced fifteen piecemeal PRs). Both consumers and
-`examples/site` carry an UNSCOPED `ignore` — `cms-platform-theme` under
-`bundler` (#242), `Adam-S-Daniel/cms-platform/*` under `github-actions` (#244) —
-locked by `e2e/dependabot-theme-gem-ignored.test.js` and
-`e2e/scaffold-seeds-dependabot-ignore.test.js`. → `docs/SYNC.md`.
+`platform-bump` owns the version atomically in ONE PR; a Dependabot bump sees
+one slice and skews it. Both consumers and `examples/site` carry an UNSCOPED
+`ignore` — `cms-platform-theme` under `bundler` (#242),
+`Adam-S-Daniel/cms-platform/*` under `github-actions` (#244) — lint-locked. →
+`docs/SYNC.md`.
 
 ### A pin carries no version comment - lint-locked (2026-08-20)
 
@@ -366,40 +341,28 @@ static server must not be bare `serve` (a racy ENOENT once cascaded into an
 
 ## A cancelled required check blocks the merge (#1815, #285, #289)
 
-A required-check job that can fire twice on one head sha will eventually leave a
-cancelled run shadowing a success, and nothing overrides it. **The invariant is
-the OUTCOME: NO REQUIRED CONTEXT MAY END `cancelled`.** #285 removed every
-`concurrency` group from required-context publishers, and four days later
-`parity / parity` and `preview-media / preview-media` still concluded
-`cancelled` on adamdaniel.ai #3202/#3217 — on a `timeout-minutes` wall, because
-**GitHub reports a job killed at its wall as `cancelled`, not `timed_out`**. Put
-the wall on a work job no ruleset names and publish the context from a
-`needs:` + `if: always()` gate (`e2e/required-context-cancellable.test.js`,
-renamed at #289).
+**The invariant is the OUTCOME: NO REQUIRED CONTEXT MAY END `cancelled`** —
+nothing overrides a cancelled run shadowing a success. Two routes: a
+`concurrency` group on a job that fires twice per sha, and a `timeout-minutes`
+wall (**GitHub reports it `cancelled`, not `timed_out`**). Put the wall on a
+work job no ruleset names; publish the context from a `needs:` + `if: always()`
+gate (`e2e/required-context-cancellable.test.js`). → `docs/CI-INVARIANTS.md`.
 
 ## An unapproved gate holds its concurrency group, silently (#313)
 
-`repo-settings-apply.yml` applied NOTHING for eleven days, twelve runs
-`cancelled`, nothing alerted: a run parked at an unapproved `environment:` gate
-holds its group. **Read the JOBS, not the run conclusion** (`total_count: 0`
-means cancelled while PENDING). **A job that can wait on a human gets no
-workflow-level group**, and its name is PER INDEPENDENT UNIT OF WORK — a
-job-level block applies per MATRIX LEG, so `apply`'s two owner legs killed each
-other until the group interpolated the axis. A gate firing every morning also
-trains the reviewer to click, so it now gates only protection-REDUCING writes
-(`scripts/repo-settings-write-risk.js`, `--refuse-weakening`). →
+A run parked at an unapproved `environment:` gate holds its group
+(`repo-settings-apply.yml` applied nothing for eleven days). **Read the JOBS, not
+the run conclusion. A job that can wait on a human gets no workflow-level
+group**, and a job-level one interpolates the MATRIX axis. The gate fires only
+on protection-REDUCING writes (`scripts/repo-settings-write-risk.js`). →
 `docs/CI-INVARIANTS.md`.
 
 ## platform-bump moves files and one dictated input, not just pins (#315)
 
 `platform-bump` re-pins, SEEDS a newly-dictated thin caller, RETIRES one that
-left the canonical set, and RECONCILES `cms-automerge-nudge.yml`'s
-`required_contexts`. Retire and reconcile must ride the bump commit —
-pin-consistency compares the consumer's workflow set against the platform at
-that consumer's OWN pinned ref, so splitting either off fails in the
-mirror-image direction (`MISSING` instead of `EXTRA`). The check reporting
-`workflow-set: EXTRA` is `platform-pin-consistency / pin-consistency`, NOT
-`parity / parity`. → `docs/PIN-CONSISTENCY.md`.
+left the canonical set, and RECONCILES the nudge's `required_contexts` — all in
+the bump commit, or pin-consistency fails (`workflow-set: EXTRA`/`MISSING`). →
+`docs/PIN-CONSISTENCY.md`.
 
 ## Admin-bundle parity is bump-aware (#14)
 
@@ -412,11 +375,10 @@ of the byte compare. → `docs/CONSUMER-COMPATIBILITY.md` before changing
 
 `.github/workflows/self-ci.yml` is this repo's merge gate; with
 `self-secrets-scan.yml` (#126) it is one of only two workflows here that run on
-a plain PR. Five lanes: **actionlint**, **ruby-theme-specs**
-(`theme/spec/*_test.rb`), **node-unit-lints** (the pure-fs `e2e/*.test.js`
-lints, chosen by a DENY list), **plugin-validate** (NON-STRICT deliberately) and
-**cfn-lint** (advisory); the browser matrix runs in CONSUMER e2e. →
-`docs/CONTRIBUTING.md`.
+a plain PR. Six lanes, four REQUIRED (**actionlint**, **ruby-theme-specs**,
+**node-unit-lints** — pure-fs `e2e/*.test.js` chosen by a DENY list — and
+**plugin-validate**, NON-STRICT deliberately); the browser matrix runs in
+CONSUMER e2e. → `docs/CONTRIBUTING.md`.
 
 ## Adding / porting a workflow
 
@@ -427,34 +389,14 @@ trigger + `paths-ignore` + `run-name` live in a **thin caller** under
 
 ## Definition of done (non-trivial changes)
 
-A merged PR with green unit-lints is **NOT** "done" for a non-trivial change:
-green lints routinely ship a LIVE regression (the double-`dialog.accept()` crash
-on loop run 27013147945). Done also requires:
-
-1. **Drive the prod-mutate validation loop to GREEN** — dispatch
-   `cms-publish-loop-prod.yml` (and `cms-media-roundtrip.yml` where relevant)
-   and ITERATE until one succeeds end-to-end (create → reflect → delete → 404).
-   A bump-skip-SKIPPED run is green and is NOT a validation.
-2. **Survey + drive every workflow green in ALL THREE repos** — each needs a run
-   AFTER the last non-CI-generated push, and its latest must SUCCEED; most here
-   are `workflow_call`-only, so the bar is **Self CI green**.
-3. **No OPTIONAL check may fail either** — drive `UNSTABLE` → clean; a genuine
-   credential / go-live blocker (jodidaniel `CMS_E2E_PAT`, #26) is surfaced, not
-   left silently red.
-
-Apply it after the consumer bump, not before. → `docs/CONTRIBUTING.md`.
-
-### Delegated mechanical work is done when a VERIFIER exits 0
-
-From the v0.1.76 consumer bump, delegated to two small-model subagents: **done
-means an exit code, not prose** — name the verifier in the spec and require its
-exit code back. Neither ran it; one stopped after 3 of 5 edit categories, left
-58 stale `v0.1.75` refs, and read as near-done. A subagent that cannot run the
-verifier reports **BLOCKED**, and a count disagreeing with the spec is
-STOP-AND-REPORT. Prefer a verifier that cannot silently degrade
-(`check-platform-pin-consistency.js` once fell from 96 checks to 61 and still
-printed "Pins are consistent" — hence `--require-canonical`); for a consumer
-bump it is **`scripts/verify-consumer-pins.sh`**.
+Green unit-lints are **NOT** "done": they routinely ship a LIVE regression. Done
+also requires (1) the prod-mutate loop (`cms-publish-loop-prod.yml`, plus
+`cms-media-roundtrip.yml` where relevant) driven to a real GREEN run — a
+bump-skip-SKIPPED run is not a validation; (2) every workflow in ALL THREE repos
+run after the last real push and latest SUCCESS (here: **Self CI green**); (3) no
+OPTIONAL check left red. Apply it after the consumer bump. Delegated work is done
+when a named verifier exits 0 (consumer bump: `scripts/verify-consumer-pins.sh`).
+→ `docs/CONTRIBUTING.md`.
 
 ## E2E workflow matrix (ported)
 
@@ -463,19 +405,6 @@ share a hard-mutual-exclusion concurrency lane, a recursion gate that tolerates
 a bump-only push, and a deploy-lane diagnostic that asks whether the PR merged
 before blaming the deploy chain. → `docs/CI-INVARIANTS.md` (and the
 `ci-watcher-loops` / `cms-stuck-pr-triage` skills).
-
-## Remaining work
-
-Shipped, so no longer tracked: the reusable-workflow port, the e2e meta-lints,
-the PR #1 completeness pass, the `e2e-required-stub.yml` port,
-pixel-regression baseline retirement, and the four roadmap items — issue #5
-GOAL 1 (v0.1.4), issue #5 GOAL 2 (the v0.1.9–v0.1.12 sweep, `field_library` +
-`$ref`), #21 (v0.1.13, `ErrorCachingMinTTL`) and #22 (canary-branch cleanup).
-Still true: `code-quality` and `ci-runner-image` are **deliberate skips, never
-ported**, and `playwright-image-drift`'s "real repo is drift-free" subtest
-cannot self-check here (no root `package-lock.json` or
-`.github/ci-runner/Dockerfile`), so it exercises fully only against the
-synthetic `scaffold()` fixtures.
 
 ## Consumers
 
@@ -491,72 +420,29 @@ synthetic `scaffold()` fixtures.
   mid-2026-07 failures were the sweep bugs fixed in v0.1.49-v0.1.51 (#127,
   #130).
 
-## Environment gotchas (this machine / web)
+## Operations: the short rules (→ `docs/OPERATIONS.md` for each how-to)
 
-- **The local checkout can be STALE/detached** — `git fetch && git checkout
-  main` before any analysis, then branch off `origin/main`; an old one may
-  predate the `admin/` → `theme/admin` move.
-- The **web** GitHub MCP connector can't create repos (403); `/teleport` to
-  local and use `gh`. Editing a non-cwd checkout from a background session trips
-  a worktree-isolation prompt on Edit/Write — write via Bash.
-- **A live repo-settings check may be IMPOSSIBLE from the session (v0.1.76)** —
-  the egress proxy 403s `/actions/variables` and `/actions/secrets`, so say so
-  rather than asserting either way, and make credential-dependent features fail
-  SOFT with a notice naming the exact knobs (`CMS_PLATFORM_PAT`,
-  `vars.CMS_AUTOMATION_APP_ID`, `CMS_AUTOMATION_APP_PRIVATE_KEY` — the App that
-  replaced the consumer PAT at #238).
-
-→ `docs/OPERATIONS.md` for all of the how-tos below.
-
-## Approving `regression-review` on a render-neutral PR
-
-`visual-regression` shoots the PR against **production**, and prod lags `main`,
-so a version-bump or delete-only PR parks on the manual gate over pre-existing
-drift. Never widen `e2e/detect-changed-pages.js` or the caller's content-skip
-list (both lint-locked); `Visually different ≥ 1` with `Text changed: 0` is the
-false-positive signature (v0.1.73). Prove `git diff --stat <old-tag> <new-tag>
--- theme/` is EMPTY, then approve via `pending_deployments`.
-
-## A validation dispatch tests the code that is REACHABLE, not the code you merged
-
-A host-loop iteration costs over an hour (`cms-publish-loop-host.yml`,
-`--workers=1`, `timeout-minutes: 150`). `deploy-production` succeeding is NOT
-proof prod `/admin` changed — the invalidation is fired without waiting — so
-curl the served asset and grep for the new symbol first, and dispatch on current
-HEAD.
-
-## Diagnose a failed loop run from its ARTIFACTS, not from the logs
-
-`gh run download <run-id>`, then read `test-failed-1.png` and `error-context.md`
-BEFORE theorising: these specs catch Decap UI-state bugs a log cannot show, and
-the v0.1.36 layer was cracked by the screenshot alone.
+- **The local checkout can be STALE/detached** — fetch, then branch off
+  `origin/main`. The web GitHub MCP connector can't create repos (403). A live
+  `/actions/variables`/`/actions/secrets` read may be IMPOSSIBLE from a session:
+  say so, and make credential-dependent features fail SOFT naming the knobs.
+- **`regression-review` on a render-neutral PR**: never widen
+  `e2e/detect-changed-pages.js` or the content-skip list; prove
+  `git diff --stat <old-tag> <new-tag> -- theme/` is EMPTY, then approve.
+- **A validation dispatch tests what is REACHABLE**: curl the served asset for
+  the new symbol first (the invalidation is not awaited); dispatch on HEAD.
+- **Diagnose a failed loop from its ARTIFACTS** (`gh run download`), not logs.
+- **Install the e2e fixture's gems into the fixture** (`bundle config set
+  --local path vendor/bundle`), once per fresh checkout.
+- **Before deleting anything from a consumer, grep the PLATFORM too** — its
+  e2e specs reach into a consumer's tree by hardcoded path.
 
 ## Pre-run the required lint lane locally
 
-`node-unit-lints` is a REQUIRED check and the cheapest to reproduce, from
-`e2e/`:
+From `e2e/`, the WHOLE set (these lints cross-reference each other); expected
+local reds are `self-ci.yml`'s DENY list and anything needing Jekyll:
 
 ```bash
 TARGET=prod PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
   npx playwright test --project=chromium-light --reporter=line ./*.test.js
 ```
-
-Run the WHOLE set — these lints cross-reference each other. Expected local reds:
-the specs on `self-ci.yml`'s DENY list, and anything needing Jekyll.
-
-## Install the e2e fixture's gems into the fixture, not the system gem path
-
-With `GEM_HOME` unset bundler defaults to an unwritable `/var/lib/gems` and the
-`e2e/fixture-site` install fails, blocking every lint that needs its
-`bundle exec`. Scope the fix to the fixture (`bundle config set --local path
-vendor/bundle`, command in `docs/OPERATIONS.md`); `.bundle/` does not travel
-with a clone, so it is a one-time step per fresh checkout.
-
-## Before deleting anything from a consumer, grep the PLATFORM too
-
-The platform's own e2e specs reach into a consumer's tree by HARDCODED path, so
-"no in-repo references" is necessary and never sufficient: a thin-ification
-audit called `assets/images/uploads/e2e-preview-media-probe.png` a stray upload,
-and it is the sentinel `e2e/preview-media-resolves.spec.js` fetches to prove the
-flat `media_folder` resolves — deleting it reds the REQUIRED `preview-media`
-check. Grep all three repos.
