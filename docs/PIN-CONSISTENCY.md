@@ -237,6 +237,22 @@ prose that names the old version, cms-platform#530), then confirm with
 the bump branch. Caller SEEDING only matters if the release newly dictated a
 workflow the consumer lacks; a release that adds none needs no seeding step.
 
+### The bump runs the reusable pinned by the consumer (v0.1.126, #559)
+
+The code that performs a bump comes from the consumer's CURRENT
+`platform-bump.yml` `uses:` pin; `LATEST` is only the release it targets. The
+fix in [PR #559](https://github.com/Adam-S-Daniel/cms-platform/pull/559)
+shipped in v0.1.126, so both bumps TO v0.1.126 still ran the old reusable at
+v0.1.125 (SHA `91392c279896f4eefcdc88343b1590dc013d0dd2`). Those runs used the
+old global version replacement one last time: [adamdaniel.ai run
+37185023596](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185023596)
+and [jodidaniel.com run
+37185025916](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37185025916).
+The first clean bump FROM v0.1.126, targeting v0.1.127 or later, runs the fixed
+rewrite. Historical comments already changed by the old replacement need
+separate repairs in the affected consumer workflow files; the platform bump
+does not repair those comments automatically.
+
 ### The consumer gate's stale-pin rule has one home, and two callers
 
 `scripts/verify-consumer-pins.sh`'s check 2 — "no platform version token other

@@ -418,7 +418,7 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
     return lines.slice(start, end + 1).join("\n");
   }
 
-  function runBlock(files, cur) {
+  function runBlock(files, cur, latest = NEW) {
     const root = materialize(files);
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-rewrite-bin-"));
     fs.writeFileSync(
@@ -437,7 +437,7 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
         RUNNER_TEMP: fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-rewrite-tmp-")),
         PLATFORM: SLUG,
         CUR: cur,
-        LATEST: NEW,
+        LATEST: latest,
         NEW_SHA,
       },
     });
@@ -449,6 +449,60 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
     expect(res.status, out(res)).toBe(0);
     const want = tree(NEW, NEW_SHA);
     expect(snapshot(root, Object.keys(want))).toEqual(want);
+  });
+
+  test("a v0.1.125 dev-hooks sync bump preserves its historical credential comment", () => {
+    const file = ".github/workflows/dev-hooks-sync.yml";
+    const before = `jobs:
+  sync:
+    uses: ${SLUG}/.github/workflows/dev-hooks-sync.yml@v0.1.125
+    with:
+      platform_ref: v0.1.125
+    secrets:
+      # key, with vars.CMS_AUTOMATION_APP_ID set on this repo. The only credential
+      # since v0.1.125 — the CMS_PLATFORM_PAT fallback is gone. Without it the PR
+      # is opened by GITHUB_TOKEN and fires no CI (a warning, not a failure).
+      app_private_key: \${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+`;
+    const want = `jobs:
+  sync:
+    uses: ${SLUG}/.github/workflows/dev-hooks-sync.yml@v0.1.126
+    with:
+      platform_ref: v0.1.126
+    secrets:
+      # key, with vars.CMS_AUTOMATION_APP_ID set on this repo. The only credential
+      # since v0.1.125 — the CMS_PLATFORM_PAT fallback is gone. Without it the PR
+      # is opened by GITHUB_TOKEN and fires no CI (a warning, not a failure).
+      app_private_key: \${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+`;
+    const { res, root } = runBlock({ [file]: before }, "v0.1.125", "v0.1.126");
+    expect(res.status, out(res)).toBe(0);
+    expect(res.stdout).toContain("SUMMARY: moved 2 pin(s) in 1 file(s) from v0.1.125 to v0.1.126");
+    expect(snapshot(root, [file])).toEqual({ [file]: want });
+  });
+
+  test("a v0.1.125 platform-bump caller preserves its historical credential comment", () => {
+    const file = ".github/workflows/platform-bump.yml";
+    const before = `jobs:
+  bump:
+    uses: ${SLUG}/.github/workflows/platform-bump.yml@v0.1.125
+    secrets:
+      # The push credential, and the ONLY one since v0.1.125: the CMS automation
+      # App's private key.
+      app_private_key: \${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+`;
+    const want = `jobs:
+  bump:
+    uses: ${SLUG}/.github/workflows/platform-bump.yml@v0.1.126
+    secrets:
+      # The push credential, and the ONLY one since v0.1.125: the CMS automation
+      # App's private key.
+      app_private_key: \${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+`;
+    const { res, root } = runBlock({ [file]: before }, "v0.1.125", "v0.1.126");
+    expect(res.status, out(res)).toBe(0);
+    expect(res.stdout).toContain("SUMMARY: moved 1 pin(s) in 1 file(s) from v0.1.125 to v0.1.126");
+    expect(snapshot(root, [file])).toEqual({ [file]: want });
   });
 
   test("a first adoption (no platform.lock, so no $CUR) skips the rewrite instead of failing", () => {
