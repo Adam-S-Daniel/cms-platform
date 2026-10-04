@@ -201,7 +201,7 @@ jobs:
                   // Bound the type: an arbitrary error name can contain private data.
                   const type = e && e.name === 'HttpError' ? 'HttpError' : 'Error';
                   core.warning(
-                    `Could not create the content-guard/override label (HTTP ${Number(e && e.status) || 'unknown'}; ${type}); ` +
+                    `Could not create the ${OVERRIDE_LABEL} label (HTTP ${Number(e && e.status) || 'unknown'}; ${type}); ` +
                       'The label may be missing from the PR UI.',
                   );
                 }
