@@ -94,14 +94,17 @@
  * rendered site would mean parsing the public HTML for the ABSENCE of
  * content, which cannot tell "gated" from "empty".
  *
- * The value is matched with a line-anchored regex for a top-level boolean.
- * That is a LEXICAL question about one leaf token, not a claim about
- * document structure, so it does not need a YAML parser (the house AST rule
- * governs code-shape lints, not this) — but it does mean the contract is
- * narrow, and deliberately so: the gate must be a TOP-LEVEL boolean key. A
- * nested or quoted or aliased value does not match, and an unmatched value
- * shows NO banner rather than a guessed one. Claiming the site is gated
- * when it is not would be worse than saying nothing.
+ * The value is read lexically — no YAML parser is loaded in the admin page
+ * (Decap bundles one but does not expose it) — so the contract is narrow,
+ * and deliberately so: the gate must be a TOP-LEVEL boolean key. Only a line
+ * that starts at column 0 with the key spelled exactly as declared counts,
+ * and its value must be a YAML boolean (`true`/`True`/`TRUE`, likewise
+ * false). An indented line is never the top-level key — it is a nested key
+ * or the body of a block scalar — so it is ignored; a differently-cased key
+ * is a different key. A quoted or aliased value, or the key appearing at
+ * column 0 more than once, reads as unknown, and unknown shows NO banner
+ * rather than a guessed one. Claiming the site is gated when it is not would
+ * be worse than saying nothing.
  */
 (function () {
   "use strict";
@@ -154,8 +157,15 @@
   // true / false / null (could not tell). See "Reading the flag" above for
   // why null must render nothing.
   function parseFlag(text) {
-    var re = new RegExp("^[ \\t]*" + gate.field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[ \\t]*:[ \\t]*(true|false)[ \\t]*(?:#.*)?$", "mi");
-    var m = re.exec(String(text || ""));
+    var key = gate.field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Column 0, exact key case: a top-level key and nothing else.
+    var keyLine = new RegExp("^" + key + "[ \\t]*:", "gm");
+    var lines = String(text || "").match(keyLine) || [];
+    if (lines.length !== 1) return null; // absent, or a duplicate key — unknown
+    var m = new RegExp(
+      "^" + key + "[ \\t]*:[ \\t]*(true|True|TRUE|false|False|FALSE)[ \\t]*(?:#[^\\n]*)?\\r?$",
+      "m",
+    ).exec(String(text || ""));
     if (!m) return null;
     return m[1].toLowerCase() === "true";
   }
@@ -290,7 +300,7 @@
 
   // Exported for e2e/site-gate-banner.test.js (vm sandbox), the seam
   // branch-binding-banner.js exposes as window.CMSBranchBinding.
-  window.CMSSiteGate = { refresh: refresh, BANNER_ID: BANNER_ID };
+  window.CMSSiteGate = { refresh: refresh, parseFlag: parseFlag, BANNER_ID: BANNER_ID };
 
   function start() {
     refresh();

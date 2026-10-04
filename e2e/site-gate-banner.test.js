@@ -157,7 +157,8 @@ async function loadAdmin({ adminURL, served, flags, session = {} }) {
         const value = flags[ref];
         if (value instanceof Error) return Promise.reject(value);
         if (value === undefined) return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve("") });
-        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(`title: x\nsite_live: ${value}\n`) });
+        const body = typeof value === "object" && value.raw !== undefined ? value.raw : `title: x\nsite_live: ${value}\n`;
+        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(body) });
       }
       if (u.pathname.endsWith("/admin/config.yml") && served !== null) {
         return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(served) });
@@ -169,7 +170,7 @@ async function loadAdmin({ adminURL, served, flags, session = {} }) {
   vm.runInContext(fs.readFileSync(HOSTNAME, "utf8"), sandbox);
   vm.runInContext(fs.readFileSync(GATE, "utf8"), sandbox);
   for (let i = 0; i < 6; i += 1) await flush();
-  return { banner: () => document.getElementById(GATE_ID), githubReads, store, body };
+  return { banner: () => document.getElementById(GATE_ID), githubReads, store, body, api: sandbox.window.CMSSiteGate };
 }
 
 const production = (flags, extra = {}) =>
@@ -260,5 +261,36 @@ test.describe("site-gate-banner.js — reads the branch this admin is bound to (
     );
     expect(pre.githubReads).toEqual([]);
     expect(pre.banner()).not.toBeNull();
+  });
+});
+
+// Only a TOP-LEVEL key at column 0, spelled exactly as declared, is the gate.
+// An indented line is a nested key or the body of a block scalar; a
+// differently-cased key is another key. Each of these files is valid YAML
+// whose real `site_live` is TRUE, and the old line regex (any indentation,
+// any case) read FALSE — a coming-soon banner over a live site.
+test.describe("site-gate-banner.js — only the top-level key is the gate", () => {
+  for (const [label, raw] of [
+    ["a nested key of the same name", "launch:\n  site_live: false\nsite_live: true\n"],
+    ["a block scalar whose text looks like the key", "notes: |\n  site_live: false\nsite_live: true\n"],
+    ["a differently-cased key", "Site_Live: false\nsite_live: true\n"],
+  ]) {
+    test(`reads the top-level value past ${label}`, async () => {
+      const pre = await preview({ [PREVIEW_BRANCH]: { raw } });
+      expect(pre.api.parseFlag(raw)).toBe(true);
+      expect(pre.banner(), "the site is live — no coming-soon banner").toBeNull();
+    });
+  }
+
+  test("YAML boolean spellings count; anything else, or an ambiguous file, is unknown", async () => {
+    const { api } = await preview({ [PREVIEW_BRANCH]: "true" });
+    expect(api.parseFlag("site_live: False\n")).toBe(false);
+    expect(api.parseFlag("site_live: TRUE   # launched\n")).toBe(true);
+    expect(api.parseFlag("site_live: false\r\ntitle: x\r\n"), "CRLF line endings").toBe(false);
+    expect(api.parseFlag("site_live: tRuE\n"), "not a YAML boolean").toBeNull();
+    expect(api.parseFlag('site_live: "false"\n'), "quoted is a string").toBeNull();
+    expect(api.parseFlag("  site_live: false\n"), "indented only — no top-level key").toBeNull();
+    expect(api.parseFlag("site_live: false\nsite_live: true\n"), "a duplicate key").toBeNull();
+    expect(api.parseFlag("site_live_extra: false\n"), "a longer key").toBeNull();
   });
 });

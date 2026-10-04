@@ -298,23 +298,72 @@ for (const [label, opts, expected] of [
     },
     "example.com",
   ],
-  ["an unreadable config (404) — the canonical host", { origin: "https://www.example.com/admin/", config: "", status: 404 }, "example.com"],
-  ["a failed config read — the canonical host", { origin: "https://www.example.com/admin/", config: new Error("offline") }, "example.com"],
+  // Unreadable: fall back to the access host. On a preview that is the
+  // preview — never production, which would tell the editor the switch is
+  // production's. On a production `www.` it is only cosmetically off.
   [
-    "a config with no usable site_url — the canonical host",
+    "an unreadable config (404) on a preview — the preview host, never production",
+    { origin: "https://preview-pr7.example.com/admin/", config: "", status: 404 },
+    "preview-pr7.example.com",
+  ],
+  [
+    "a failed config read on a preview — the preview host",
+    { origin: "https://preview-pr7.example.com/admin/", config: new Error("offline") },
+    "preview-pr7.example.com",
+  ],
+  ["an unreadable config (404) on www. — the access host", { origin: "https://www.example.com/admin/", config: "", status: 404 }, "www.example.com"],
+  [
+    "a config with no usable site_url — the access host",
     { origin: "https://www.example.com/admin/", config: "backend:\n  branch: main\nsite_url: javascript:alert(1)\n" },
-    "example.com",
+    "www.example.com",
   ],
 ]) {
   test(`destination(): ${label}`, async () => {
     const names = load({ siteOrigin: "https://example.com", ...opts });
-    expect(names.destination(), "before the read settles it is the canonical host, never the access host").toBe(
-      "example.com",
-    );
+    expect(names.destination(), "before the read settles it is the access host, current()").toBe(names.current());
     await names.binding();
     expect(names.destination()).toBe(expected);
   });
 }
+
+// A stalled read must not hold `{{CMS_CURRENT_HOST}}` on screen forever: after
+// 10 s the read is aborted and treated as unreadable. Fake timers — the
+// callback is fired by hand, nothing waits.
+test("a config read that never answers is abandoned after 10 s and treated as unreadable", async () => {
+  const pending = [];
+  let signal;
+  const location = new URL("https://preview-pr7.example.com/admin/");
+  const sandbox = {
+    window: { location, CMS_SITE_ORIGIN: "https://example.com", CMS_APEX: "example.com", CMS_ADMIN_ORIGIN: "" },
+    document: { readyState: "loading", body: null, baseURI: location.href, addEventListener() {} },
+    URL,
+    Promise,
+    AbortController,
+    MutationObserver: class {},
+    NodeFilter: { SHOW_TEXT: 4 },
+    setTimeout: (fn, ms) => pending.push({ fn, ms }),
+    clearTimeout: () => {},
+    fetch: (url, init) => {
+      signal = init.signal;
+      return new Promise(() => {}); // a connection that stalls forever
+    },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(SRC, "utf8"), sandbox);
+  const names = sandbox.window.CMSHostname;
+  expect(pending.map((t) => t.ms), "one read timer, 10 s").toEqual([10000]);
+  let settled = null;
+  names.binding().then((r) => {
+    settled = r;
+  });
+  await new Promise((r) => setImmediate(r));
+  expect(settled, "still waiting before the timer fires").toBeNull();
+  pending[0].fn();
+  await new Promise((r) => setImmediate(r));
+  expect(settled).toEqual({ branch: null, destination: null });
+  expect(signal && signal.aborted, "the stalled request is aborted, not left running").toBe(true);
+  expect(names.destination(), "an unreadable read names the access host — the preview").toBe("preview-pr7.example.com");
+});
 
 test("binding() reads the config file the shell names, once, past the HTTP cache", async () => {
   const names = load({

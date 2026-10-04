@@ -21,13 +21,17 @@
  *                   names localhost — intentionally: there a publish writes
  *                   to the working tree that localhost serves. Until the
  *                   config has been read, or when it cannot be, it is
- *                   canonical().
+ *                   current(): right on a preview (where canonical() would
+ *                   name production — the confusion this exists to remove),
+ *                   and only cosmetically off on a production `www.`.
  *
  * The `{{CMS_CURRENT_HOST}}` token in platform field labels and hints means
  * destination() (it keeps its old name because site-owned config may carry
  * it). It is replaced only once the served config has been read, so a label
  * never shows a guess that later turns out wrong; Decap needs the same config
  * before it can render any field, so in practice the read has settled first.
+ * The read is abandoned after CONFIG_READ_TIMEOUT_MS and treated as
+ * unreadable, so a stalled connection cannot leave the raw token on screen.
  *
  * binding() exposes the same read — `{ branch, destination }` — for
  * site-gate-banner.js, which must read its flag at the branch this admin is
@@ -44,6 +48,7 @@
   // The characters a plain git ref name is made of (branch-binding-banner.js).
   var REF_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
   var UNKNOWN = { branch: null, destination: null };
+  var CONFIG_READ_TIMEOUT_MS = 10000;
 
   function hostname(value) {
     if (value === null || value === undefined || String(value).trim() === "") return null;
@@ -114,23 +119,37 @@
 
   function binding() {
     if (servedRead) return servedRead;
+    var controller = typeof AbortController === "function" ? new AbortController() : null;
+    var timer = null;
     var read;
     try {
-      read = typeof fetch === "function" ? fetch(configURL(), { cache: "no-cache" }) : Promise.resolve(null);
+      read =
+        typeof fetch === "function"
+          ? fetch(configURL(), { cache: "no-cache", signal: controller ? controller.signal : undefined })
+          : Promise.resolve(null);
     } catch (e) {
       read = Promise.resolve(null);
     }
-    servedRead = Promise.resolve(read)
-      .then(function (res) {
-        return res && res.ok ? res.text() : null;
-      })
-      .then(function (text) {
-        return text === null ? UNKNOWN : parseServedConfig(text);
+    var text = Promise.resolve(read).then(function (res) {
+      return res && res.ok ? res.text() : null;
+    });
+    // A stalled read counts as unreadable — see the header.
+    var timedOut = new Promise(function (resolve) {
+      if (typeof setTimeout !== "function") return;
+      timer = setTimeout(function () {
+        if (controller) controller.abort();
+        resolve(null);
+      }, CONFIG_READ_TIMEOUT_MS);
+    });
+    servedRead = Promise.race([text, timedOut])
+      .then(function (body) {
+        return body === null ? UNKNOWN : parseServedConfig(body);
       })
       .catch(function () {
         return UNKNOWN;
       })
       .then(function (result) {
+        if (timer !== null && typeof clearTimeout === "function") clearTimeout(timer);
         served = result;
         return result;
       });
@@ -138,7 +157,7 @@
   }
 
   function destination() {
-    return (served && served.destination) || canonical();
+    return (served && served.destination) || current();
   }
 
   function ownedControlFor(node) {

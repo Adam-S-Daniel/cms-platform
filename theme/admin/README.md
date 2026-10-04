@@ -57,12 +57,12 @@ hook, so no per-site or per-workflow step is needed.
 | Global | From | Used by |
 |---|---|---|
 | `CMS_REPO` | `cms.repository` | deploy-status-pill, publish-via-auto-merge, live-url-banner, posts-list-enhance, oauth-app-restriction-detector, reviews dashboards |
-| `CMS_SITE_ORIGIN` | `url` | site-hostname (`canonical()`, the production destination; `destination()` falls back to it), posts-list-enhance, publish-button |
+| `CMS_SITE_ORIGIN` | `url` | site-hostname (`canonical()`, the production destination), posts-list-enhance, publish-button |
 | `CMS_ADMIN_ORIGIN` | `cms.admin_origin`, lowercased, no trailing slash (`""` when unset) — the editor's own origin when it is not the site's (#517) | site-hostname (`publicOrigin()`, and `current()` names the site, not the admin host), live-url-derive (live URLs), index.html / index-local.html (hide Live Preview, whose `/preview/` tab is out of reach of a cross-origin Save broadcast); inert on `""` and on any other origin, so a preview admin is unchanged |
 | `CMS_APEX` | host of `url` | site-hostname fallback, live-url-banner (preview-aware URL construction), posts-list-enhance (preview-host construction), reviews dashboards |
 | `CMS_OAUTH_BASE_URL` | `cms.oauth_base_url` | the Decap config itself (`config.base.yml` backend `base_url`), reviews dashboards (OAuth login flow) |
 | `CMS_SITE_TITLE` | the site's `_config.yml` `title` | admin shell `document.title` (index.html, index-local.html), reviews dashboards `document.title` |
-| `CMS_SITE_GATE` | `cms.site_gate` (an OBJECT, serialised with `JSON.generate`; `null` when the site declares no gate) | site-gate-banner (the "<host> is in coming-soon mode" banner, read at the branch this admin is bound to; inert on `null`) |
+| `CMS_SITE_GATE` | `cms.site_gate` (an OBJECT, serialized with `JSON.generate`; `null` when the site declares no gate) | site-gate-banner (the "`<host>` is in coming-soon mode" banner, read at the branch this admin is bound to; inert on `null`) |
 | `CMS_PRODUCTION_BRANCH` | `backend.branch` of the config.yml the render path just wrote, read back with a real YAML parse (`""` if unreadable) — the branch the admin binds to when served UNPATCHED, i.e. from production | branch-binding-banner (compares it with the SERVED config.yml's `backend.branch`, which deploy-preview patches to the PR head, and says which branch a preview admin edits — #412; inert on `""`) |
 | `CMS_BACKEND_BRANCH` | `commit.json` `branch` — set at runtime by index.html's commit-pill script, NOT by the render inject (the deploy workflows write commit.json at deploy time: `main` on prod, the PR head ref on a preview) | publish-via-auto-merge (scopes the delete-ref matcher's multi-segment recovery to the deployed backend branch, #114); unset (no/unreadable commit.json) ⇒ multi-segment recovery is disabled (fail closed) |
 
@@ -82,7 +82,7 @@ site's own `collections.site.yml` may carry it.
 | Function | Means | Production (apex, `www.`, CloudFront hostname) | Preview | Local shells |
 |---|---|---|---|---|
 | `current()` | the access host: where this tab was opened (the site's, on a separate admin origin) | that host, e.g. `www.<apex>` | `preview-prN.<apex>` | `localhost` |
-| `canonical()` | the production destination, from `CMS_SITE_ORIGIN`, then `CMS_APEX` | `<apex>` | `<apex>` | `<apex>` |
+| `canonical()` | the production destination, from `CMS_SITE_ORIGIN`, then `CMS_APEX`, and `current()` when neither is injected | `<apex>` | `<apex>` | `<apex>` |
 | `destination()` | the destination of THIS admin: the host of `site_url` in the config.yml it serves (the site's `url`; `patch-preview-config.sh` rewrites it on a preview). `{{CMS_CURRENT_HOST}}` resolves to this | `<apex>` | `preview-prN.<apex>` | `localhost` |
 
 The local and test shells name `localhost` on purpose: their configs
@@ -90,8 +90,10 @@ The local and test shells name `localhost` on purpose: their configs
 http://localhost:4000`, and a publish there writes to the working tree that
 localhost serves. Until the served config has been read the token is left in
 place rather than guessed (Decap needs the same file before it renders any
-field, so the read settles first in practice); when it cannot be read,
-`destination()` is `canonical()`.
+field, so the read settles first in practice). When it cannot be read, or has
+not answered within 10 seconds, `destination()` is `current()`: right on a
+preview, where `canonical()` would name production, and only cosmetically off
+on a production `www.` or distribution hostname.
 
 `CMSHostname.binding()` returns that same single read as `{ branch,
 destination }` — `branch` is the served `backend.branch` at the line anchor
