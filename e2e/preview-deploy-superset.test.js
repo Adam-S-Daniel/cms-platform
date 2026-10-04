@@ -146,8 +146,8 @@ function representativePath(rx) {
 // anchor fragments (e.g. `assets/images/uploads/`, `_config\.yml$`).
 function previewMediaSalientAnchors() {
   const yaml = readWorkflow("preview-media.yml");
-  // Match the single-quoted ERE inside the grep: '^(...)' .
-  const m = yaml.match(/grep -Eq[^\n]*\n\s*'\^\(([^']+)\)'/);
+  // Match the single-quoted ERE inside the grep (-Eq, or -Ezq for NUL records): '^(...)' .
+  const m = yaml.match(/grep -Ez?q[^\n]*\n\s*'\^\(([^']+)\)'/);
   expect(m, "preview-media.yml must contain the salient grep alternation '^( ... )'").toBeTruthy();
   return m[1].split("|").map((s) => s.trim());
 }

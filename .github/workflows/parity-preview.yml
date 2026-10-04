@@ -112,9 +112,11 @@ jobs:
       - name: Checkout site
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # Need history so the salient-path diff against the base tip is
-          # accurate.
-          fetch-depth: 0
+          # The PR merge commit plus its two parents, not full history
+          # (cms-platform#541): the select step deepens it with
+          # ensure-merge-base.js until the diff against the base tip is
+          # provably the one a full clone gives.
+          fetch-depth: 2
 
       - name: Checkout platform (e2e harness + composite action)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -146,7 +148,9 @@ jobs:
         run: |
           set -o pipefail
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git fetch origin "$GITHUB_BASE_REF" --depth=500 || true
+          # Fail closed: without a proven merge base the selector's diff is
+          # wrong or empty, and an empty selection reports success.
+          node .cms-platform/e2e/ensure-merge-base.js --base "$GITHUB_BASE_REF" || exit 1
           node .cms-platform/e2e/select-specs.js --parity-preview --base "origin/$GITHUB_BASE_REF" \
             | tee /tmp/parity-select.json
           specs=$(node -e "

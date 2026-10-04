@@ -147,14 +147,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
+          # The PR merge commit plus its two parents (base tip, PR head) —
+          # not full history (cms-platform#541). "Fetch history to the merge
+          # base" below deepens only as far as the diff provably needs.
+          fetch-depth: 2
       - name: Checkout platform (salience helper)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
-      - name: Fetch base ref
+      - name: Fetch history to the merge base
+        # Fetches origin/$BASE and deepens the shallow checkout until the
+        # merge base of origin/$BASE and HEAD is PROVEN (no shallow boundary
+        # could hide a better one), so `origin/$BASE...HEAD` below is the
+        # same diff a full clone gives; fails the job if it cannot be.
+        #
         # BASE via `env:`, same name+expression the "Decide salience" step
         # below already binds. A branch name may legally contain `$( )`,
         # backticks and `;` (git permits them), and an expression is expanded
@@ -162,17 +170,25 @@ jobs:
         # base.ref would execute here.
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
-        run: git fetch --no-tags origin "$BASE"
+        run: node .cms-platform/e2e/ensure-merge-base.js --base "$BASE"
       - name: Decide salience
         id: salience
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
+        # `-z` on BOTH ends: git emits NUL-delimited, unquoted paths and the
+        # classifier splits on NUL. The newline form quotes a non-ASCII name
+        # (`"_layouts/caf\303\251.html"`, leading quote included), which no
+        # salient pattern matches (cms-platform#539). `--no-renames` lists a
+        # moved file's SOURCE as well as its destination: by default a
+        # rename reports only the destination, so moving `_layouts/post.html`
+        # into `uploads/` read as non-salient. The listing above it is for
+        # the log only.
         run: |
           set -euo pipefail
           echo "Changed files vs origin/${BASE}:"
-          git diff --name-only "origin/${BASE}...HEAD" | sed 's/^/  /'
-          salient=$(git diff --name-only "origin/${BASE}...HEAD" \
-            | node .cms-platform/e2e/visual-regression-salient.js)
+          git -c core.quotepath=off diff --name-only --no-renames "origin/${BASE}...HEAD" | sed 's/^/  /'
+          salient=$(git diff --name-only -z --no-renames "origin/${BASE}...HEAD" \
+            | node .cms-platform/e2e/visual-regression-salient.js -z)
           echo "salient=${salient}"
           echo "salient=${salient}" >> "$GITHUB_OUTPUT"
 
@@ -200,7 +216,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
+          # Not full history (cms-platform#541): "Detect changed pages" runs
+          # ensure-merge-base.js for origin/main itself, and the Jekyll build
+          # reads no git history.
+          fetch-depth: 2
 
       - name: Checkout platform (e2e video-regression pipeline)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -208,9 +227,6 @@ jobs:
           repository: ${{ inputs.platform_repo }}
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
-
-      - name: Fetch main branch
-        run: git fetch origin main
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9
