@@ -481,7 +481,7 @@
         pill: previewPill,
         kind: "preview",
         environmentLabel: window.CMSHostname
-          ? window.CMSHostname.current()
+          ? window.CMSHostname.destination()
           : "the preview destination",
         fetchFn: function () {
           return fetchLatestPreviewStatus(token);
@@ -491,7 +491,7 @@
       if (previewResult === null) {
         applyStaleIfNeeded(
           previewPill,
-          window.CMSHostname ? window.CMSHostname.current() : "the preview destination",
+          window.CMSHostname ? window.CMSHostname.destination() : "the preview destination",
           lastSuccessfulPollAt.preview,
           now,
           "preview",

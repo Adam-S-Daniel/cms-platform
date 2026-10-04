@@ -306,7 +306,7 @@
     } catch (err) {
       mode = "";
       lastError =
-        ((window.CMSHostname && window.CMSHostname.current()) || "The destination") +
+        ((window.CMSHostname && window.CMSHostname.destination()) || "The destination") +
         " did not accept the publish just now (" +
         (err && err.message ? err.message : "unknown error") +
         "). Nothing you typed has been lost — press Publish again in a moment.";
@@ -375,13 +375,21 @@
     try {
       var m = window.CMSEntryStatus;
       if (m && typeof m.destination === "function") {
-        return m.destination(facts, window.CMSHostname ? window.CMSHostname.options() : {});
+        return m.destination(
+          facts,
+          window.CMSHostname
+            ? {
+                currentHostname: window.CMSHostname.destination(),
+                canonicalHostname: window.CMSHostname.canonical(),
+              }
+            : {},
+        );
       }
     } catch (e) {
       /* fall through */
     }
     return {
-      noun: window.CMSHostname ? window.CMSHostname.current() : "the destination",
+      noun: window.CMSHostname ? window.CMSHostname.destination() : "the destination",
       canonical: window.CMSHostname ? window.CMSHostname.canonical() : "the published destination",
       preview: false,
     };
