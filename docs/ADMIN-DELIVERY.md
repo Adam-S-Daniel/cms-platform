@@ -186,6 +186,54 @@ preview, #533; see `theme/admin/README.md`) only inside Decap's own
 `FieldLabel` and `ControlHint` nodes.
 Authored content is outside that narrow mutation surface.
 
+## Draft media fallback: an unpublished upload still renders
+
+`public_folder: /assets/images/uploads` is absolute, and Decap's
+`isAbsolutePath` (`/^(?:[a-z]+:)?\/\/|^\//i`) hands an absolute value back
+untouched, so right after an upload Decap renders
+`<img src="/assets/images/uploads/<name>">` against the admin's own origin
+instead of the draft blob it holds. Production does not have the file until the
+post publishes: the Featured Image thumbnail, the preview pane and Live Preview
+(`/preview/`, which renders the raw field and marked's raw body srcs) all showed
+a broken image, while the preview-pr host, which serves the branch, did not.
+The flat absolute path stays: it is the content contract above
+`public_folder` in `config.base.yml`, locked by `e2e/cms-config.spec.js`.
+
+`theme/admin/draft-media-fallback.js` repairs the image after it fails, never
+before, so a published image costs nothing:
+
+- **Detection.** A capture-phase `error` listener on `document`, and on each
+  same-origin iframe's document (Decap's preview pane), attached from a
+  capture-phase `load` listener. There is no DOM-walking MutationObserver (the
+  Safari postmortem in `preview-bridge.js`). Only a same-origin `<img>` directly
+  under the served config's `public_folder` is touched, once per original src
+  (`data-draft-media-fallback`).
+- **Source 1: the File this tab uploaded.** The script loads non-deferred
+  before `decap-cms.js` in `index.html` and `index-local.html` and wraps
+  `URL.createObjectURL`, which Decap's `AssetProxy` calls for every upload. A
+  File matches when Decap's upload-name transform (`persistMedia`:
+  `sanitizeSlug(file.name.toLowerCase(), config.slug)`, mirrored by
+  `normalizeUploadName`) equals the image's basename. This covers an entry that
+  was never saved.
+- **Source 2: the entry's editorial branch.** `GET
+  /repos/<repo>/contents/<media_folder>/<name>?ref=cms/<collection>/<slug>`
+  (Decap's `branchFromContentKey`), `Accept: application/vnd.github.raw`, with
+  the token Decap stores in `localStorage["decap-cms-user"]`; on a 404, the
+  config's `backend.branch`. Collection and slug come from the editor route,
+  or on `/preview/` from the bridge, whose payload now carries `slug` (re-sent
+  once when a new entry's route gains it, because a new entry's `postSave`
+  carries an empty slug). Skipped for `local_backend` and non-GitHub configs.
+  The admin CSP already allows `connect-src https://api.github.com` and
+  `img-src blob:`.
+
+Residual gap: with `slug.clean_accents: true` the name match strips accents with
+Unicode NFD, where Decap uses the `diacritics` map, so letters NFD does not
+decompose (ø, ß, ł) miss source 1 and fall through to source 2. Unit tests:
+`e2e/draft-media-fallback.test.js` and `e2e/preview-bridge-payload.test.js`;
+live: the pre-Save step in `e2e/cms-media-roundtrip.spec.js`. The other half of
+the incident, a cached 404 outliving the publish, is in `docs/OPERATIONS.md`
+§ "The production 404 page is never cacheable".
+
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 
 The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a

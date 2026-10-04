@@ -630,6 +630,15 @@ const PLATFORM_META_SPECS = [
   // path, workflow, secret/variable and CloudFormation name against this
   // repo's own tree. A consumer ships none of it. Platform tree only.
   "skill-references-fresh.test.js",
+  // Draft media fallback: vm-sandbox unit tests for
+  // theme/admin/draft-media-fallback.js (plus its <script> placement in the
+  // admin shells and theme/_layouts/preview.html) and for preview-bridge.js's
+  // payload. Both read theme/ SOURCE, absent on a consumer.
+  "draft-media-fallback.test.js",
+  "preview-bridge-payload.test.js",
+  // The production 404 page is uploaded no-cache: parses the platform's own
+  // deploy-production.yml DEFINITION, which a consumer does not carry.
+  "deploy-production-404-cache.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is

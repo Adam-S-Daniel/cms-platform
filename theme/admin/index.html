@@ -175,6 +175,17 @@
   <script src="confirm-wrap-local-backup.js"></script>
 
   <!--
+    draft-media-fallback shim. Same non-deferred / before-decap idiom: it
+    wraps URL.createObjectURL before Decap's AssetProxy calls it, so it can
+    remember each File an editor uploads. The absolute public_folder makes
+    Decap render a just-uploaded image as /assets/images/uploads/<name> on
+    this origin, which 404s until the post publishes; the shim retries such
+    an image once, from that File or from the entry's cms/ branch. See the
+    file's header. Live Preview (/preview/) loads it too.
+  -->
+  <script src="draft-media-fallback.js"></script>
+
+  <!--
     Decap CMS — pinned to an exact version. Editorial workflow + the
     GitHub backend with our custom OAuth proxy (`base_url` +
     `auth_endpoint` in admin/config.yml) drive the cms/<branch> →

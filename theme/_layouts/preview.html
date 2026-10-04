@@ -153,6 +153,15 @@ layout: default
   it's loaded before the inline script below runs) when the CDN is
   blocked, offline, or returning a bad response.
 -->
+<!--
+  Draft media fallback, shared with the admin (theme/admin/draft-media-fallback.js).
+  An image the editor uploaded is not on this origin until the post publishes,
+  so its /assets/images/uploads/<name> src 404s here; the script retries such an
+  image once from the entry's cms/ branch. This page is same-origin with the
+  admin, so it reads the same /admin/config.yml and the token Decap stored. The
+  bridge's `slug` names the branch: see setEntry() below.
+-->
+<script src="{{ "/admin/draft-media-fallback.js" | relative_url }}"></script>
 <script src="https://unpkg.com/marked@13.0.0/marked.min.js"></script>
 <script>
   if (typeof window.marked === "undefined") {
@@ -340,11 +349,25 @@ layout: default
     return origin === EXPECTED_ORIGIN || origin === "";
   }
 
+  // One update from the bridge. The entry's collection + slug go to the
+  // draft media fallback first, so an image the render below points at an
+  // unpublished upload can be fetched from that entry's cms/ branch; retry()
+  // then gives an image that already failed (the featured image keeps its
+  // element and src across saves) one attempt with the branch now known.
+  function update(data) {
+    var media = window.CMSDraftMedia;
+    if (media && typeof media.setEntry === "function") {
+      media.setEntry({ collection: data.collection, slug: data.slug });
+    }
+    apply(data.fields);
+    if (media && typeof media.retry === "function") media.retry(active);
+  }
+
   window.addEventListener("message", function (event) {
     if (!isTrustedOrigin(event.origin)) return;
     var data = event.data;
     if (!data || data.type !== "cms-preview-update") return;
-    apply(data.fields);
+    update(data);
   });
 
   // BroadcastChannel is the transport the admin bridge uses so it doesn't
@@ -355,7 +378,7 @@ layout: default
     channel.addEventListener("message", function (event) {
       var data = event.data;
       if (!data || data.type !== "cms-preview-update") return;
-      apply(data.fields);
+      update(data);
     });
   } catch (_) {
     // BroadcastChannel unavailable (very old browser) — postMessage still works.

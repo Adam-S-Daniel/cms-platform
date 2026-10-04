@@ -14,7 +14,10 @@
  *
  *   1. Create a born-published ephemeral `_posts/` entry via the "+ New
  *      Post" UI, uploading a unique image via the Media UI (the Featured
- *      Image widget's media library) and attaching it.
+ *      Image widget's media library) and attaching it. Before Save, the
+ *      widget thumbnail and the preview pane must already render the
+ *      upload (theme/admin/draft-media-fallback.js), and a missing upload
+ *      path's 404 must not be browser-cacheable.
  *   2. Save → cms PR → label cms/ready → auto-merge + deploy-production.
  *   3. Assert the post page on https://adamdaniel.ai renders the image
  *      AND that the image URL itself fetches 200 with real bytes. (This is
@@ -256,6 +259,22 @@ test(
       expect(imgRes.status, `${imageUrlAbs} must not exist yet (unique per-run name)`).toBe(404);
     });
 
+    // A missing upload's 404 must not be browser-cacheable. CloudFront serves
+    // /404.html for every missing key and passes its Cache-Control through;
+    // deploy-production.yml uploads that page no-cache. Under the site-wide
+    // day-long max-age an editor's draft-image 404 stayed cached in their
+    // browser after the post published, so the image stayed broken there.
+    await test.step("A missing upload's 404 is not cacheable", async () => {
+      const missing = `${PROD_HOST}/${UPLOADS_DIR}/e2e-missing-${runId}.png`;
+      const res = await fetch(missing, { cache: "no-store" });
+      expect(res.status, `${missing} must 404`).toBe(404);
+      const cc = (res.headers.get("cache-control") || "").toLowerCase();
+      expect(
+        /no-cache|no-store/.test(cc) || /(^|[\s,])max-age\s*=\s*0(\b|$)/.test(cc),
+        `${missing} 404 Cache-Control must not let a browser keep it (got "${cc}")`,
+      ).toBe(true);
+    });
+
     // ── 2. Load prod admin (PAT-seeded session, no OAuth popup) ──────
     await seedDecapAuth(page);
     await test.step("Load production admin", async () => {
@@ -313,6 +332,44 @@ test(
           timeout: 30_000,
         })
         .toBe(true);
+    });
+
+    // Before any Save the upload exists only in this tab, and the absolute
+    // public_folder makes Decap point both the widget thumbnail and the
+    // preview pane at /assets/images/uploads/<name> on prod, which 404s.
+    // theme/admin/draft-media-fallback.js answers that error from the File
+    // Decap was handed; once it has, the img's src is a blob: URL and the
+    // original path is kept in its data-draft-media-fallback attribute.
+    await test.step("The unsaved upload renders in the editor widget and the preview pane", async () => {
+      const widths = () =>
+        page.evaluate((name) => {
+          const matches = (img) =>
+            (img.getAttribute("src") || "").includes(name) ||
+            (img.getAttribute("data-draft-media-fallback") || "").includes(name);
+          const widthsIn = (doc) =>
+            Array.from(doc.querySelectorAll("img")).filter(matches).map((img) => img.naturalWidth);
+          const preview = [];
+          for (const frame of document.querySelectorAll("iframe")) {
+            try {
+              if (frame.contentDocument) preview.push(...widthsIn(frame.contentDocument));
+            } catch (_) {
+              // cross-origin frame: not Decap's preview pane
+            }
+          }
+          return { editor: widthsIn(document), preview };
+        }, imageName);
+      await expect
+        .poll(async () => Math.max(0, ...(await widths()).editor), {
+          message: "the Featured Image widget's <img> must load (naturalWidth > 0)",
+          timeout: 30_000,
+        })
+        .toBeGreaterThan(0);
+      await expect
+        .poll(async () => Math.max(0, ...(await widths()).preview), {
+          message: "the preview pane's featured <img> must load (naturalWidth > 0)",
+          timeout: 30_000,
+        })
+        .toBeGreaterThan(0);
     });
 
     await test.step("Mark it a disposable test post (robots noindex, sitemap:false, test_fixture)", async () => {
