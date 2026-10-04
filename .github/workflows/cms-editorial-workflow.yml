@@ -307,8 +307,10 @@ jobs:
 
             // Mark CMS PRs whose base isn't `main` as preview-only — they
             // exist to demonstrate / test the parent feature branch's
-            // changes against real content, and the content edit itself
-            // is not meant to flow to main when the feature merges.
+            // changes against real content. The edit merges into that
+            // feature branch and reaches main when the branch merges;
+            // nothing drops it, so remove it by hand first if it must not
+            // go live (#532).
             if (context.payload.pull_request.base.ref !== 'main') {
               try {
                 await github.rest.issues.createLabel({
