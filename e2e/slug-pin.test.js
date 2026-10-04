@@ -57,7 +57,15 @@ function entry({ collection = "posts", newRecord = false, slug = "", data = {} }
  * timeout fire at once (for the "hang" case); by default it never fires, so
  * no test depends on the clock.
  */
-function load({ withLiveUrl = true, registerThrows = false, head = 404, timerFires = false, access = "https://example.com", destinationOrigin } = {}) {
+function load({
+  withLiveUrl = true,
+  registerThrows = false,
+  head = 404,
+  timerFires = false,
+  access = "https://example.com",
+  destinationOrigin,
+  corsEnforced = false,
+} = {}) {
   const registered = [];
   const inputListeners = [];
   const heads = [];
@@ -92,6 +100,9 @@ function load({ withLiveUrl = true, registerThrows = false, head = 404, timerFir
     AbortController,
     fetch: (url, init) => {
       heads.push({ url: String(url), method: init && init.method });
+      if (corsEnforced && new URL(String(url)).origin !== access) {
+        return Promise.reject(new TypeError("Cross-origin HEAD response is not readable"));
+      }
       if (head === "throw") return Promise.reject(new Error("offline"));
       if (head === "hang") {
         return new Promise((_, reject) => {
@@ -289,13 +300,23 @@ for (const [access, destinationOrigin] of [
   ["http://localhost:4000", "https://example.com"],
   ["http://localhost:4000", "http://localhost:4000"],
 ]) {
-  test(`slug collision probes publication origin: ${access} -> ${destinationOrigin}`, async () => {
+  test(`slug collision probe uses the tab origin: ${access} -> ${destinationOrigin}`, async () => {
     const { preSave, heads } = load({ access, destinationOrigin, head: 200 });
     const out = await preSave[0].handler({ entry: entry({ newRecord: true, data: { title: "Hello" } }) });
     expect(out).toBeUndefined();
-    expect(heads).toEqual([{ url: destinationOrigin + "/blog/hello/", method: "HEAD" }]);
+    expect(heads).toEqual([{ url: access + "/blog/hello/", method: "HEAD" }]);
   });
 }
+
+test("slug collision probe keeps a readable tab-origin response across a canonical host mismatch", async () => {
+  const access = "https://www.example.com";
+  const destinationOrigin = "https://example.com";
+  const { preSave, heads } = load({ access, destinationOrigin, head: 200, corsEnforced: true });
+  const out = await preSave[0].handler({ entry: entry({ newRecord: true, data: { title: "Hello" } }) });
+  expect(out).toBeUndefined();
+  expect(new URL(heads[0].url).origin).toBe(access);
+  expect(heads).toEqual([{ url: access + "/blog/hello/", method: "HEAD" }]);
+});
 
 test("slug collision probe keeps the tab origin when destinationOrigin is unavailable", async () => {
   const { preSave, heads, sandbox } = load({ access: "http://localhost:4000" });

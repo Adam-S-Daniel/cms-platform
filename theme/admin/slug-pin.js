@@ -130,9 +130,9 @@
     var timer = setTimeout(function () {
       if (ctrl) ctrl.abort();
     }, PROBE_MS);
-    var origin = window.CMSHostname && typeof window.CMSHostname.destinationOrigin === "function"
-      ? window.CMSHostname.destinationOrigin() : window.location.origin;
-    var probe = fetch(origin + "/blog/" + encodeURIComponent(slug) + "/", {
+    // The editor tab's origin is intentional: a cross-origin HEAD response may
+    // be blocked by CORS, which would silently treat an occupied address as free.
+    var probe = fetch(window.location.origin + "/blog/" + encodeURIComponent(slug) + "/", {
       method: "HEAD",
       cache: "no-store",
       signal: ctrl ? ctrl.signal : undefined,
