@@ -556,10 +556,14 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://<apex>/admin/not-found.html"
 #    later bootstrap redeploy needs it too, or the admin host is removed),
 #    then redeploy the bootstrap stack the way docs/MEDIA-ARCHIVE.md step 3
 #    does for that site: a live apex keeps CREATE_APEX_DNS_RECORDS=true (a
-#    redeploy without it DELETES the apex records), and STACK_NAME must name
-#    the bootstrap stack, not the proxy's. A new certificate is validated and
-#    a new distribution deployed: allow several minutes.
-bash infrastructure/bootstrap/deploy.sh
+#    redeploy without it DELETES the apex records). The bootstrap stack is
+#    BOOTSTRAP_STACK_NAME (default <prefix>-bootstrap), never site-params.env's
+#    STACK_NAME, which names the proxy (infrastructure/README.md, "The
+#    STACK_NAME collision"). Expect Add lines for the Admin* resources in the
+#    printed change set; the script refuses a removal or a replacement. A new
+#    certificate is validated and a new distribution deployed: allow several
+#    minutes.
+bash infrastructure/bootstrap/deploy.sh   # the site's delegating wrapper
 
 # 4. Verify with GET (curl -I sends HEAD, which the admin host serves on purpose)
 hdr() { curl -s -o /dev/null -D - "$1" | grep -i -E '^(HTTP|location|content-type)'; }
@@ -684,17 +688,21 @@ that, which changes nothing a deployed site uses.
 
    ```bash
    cd ~/repos/<site> && git checkout main && git pull
-   bash infrastructure/bootstrap/deploy.sh   # ADMIN_CSP_MODE unset = report-only
+   # ADMIN_CSP_MODE unset = report-only. The stack is BOOTSTRAP_STACK_NAME
+   # (default <prefix>-bootstrap), never site-params.env's STACK_NAME, which
+   # names the OAuth proxy (infrastructure/README.md, "The STACK_NAME collision"):
+   bash infrastructure/bootstrap/deploy.sh   # the site's delegating wrapper
    ```
 
-   `template.yaml` is over the AWS CLI's 51,200-byte inline limit, so the
-   script uploads it through S3: on an existing stack it uses the stack's own
-   artifact bucket (`<prefix>-cfn-artifacts`, prefix `bootstrap-templates`)
-   with nothing for you to set. A stack that does not exist yet has no such
-   bucket, so the first deploy needs `TEMPLATE_S3_BUCKET=<an existing bucket
-   you can write to>`; the script refuses without it and never creates a
-   bucket. `TEMPLATE_S3_BUCKET` also overrides the artifact bucket on an
-   update.
+   The script sends a minified copy of `template.yaml` (the raw file is over
+   the AWS CLI's 51,200-byte inline limit), then prints the change set, one
+   line per resource. It refuses to execute a change set with anything marked
+   `DESTRUCTIVE` (a removal or a replacement) and changes nothing; read the
+   list before reaching for `ALLOW_DESTRUCTIVE_CHANGES=1`, since a missing
+   `CREATE_APEX_DNS_RECORDS=true` or `ADMIN_DOMAIN` is the usual cause. This
+   is an update of an existing stack, so it needs no `ALLOW_STACK_CREATE`: a
+   refusal saying the stack does not exist means the stack name is wrong, not
+   that the flag is missing.
 
 2. Check the headers on production and on one live preview host (no
    invalidation is needed; the policy applies to cached responses too):

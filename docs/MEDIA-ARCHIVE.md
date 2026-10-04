@@ -69,18 +69,18 @@ bucket is created and nothing else changes.
 
    ```sh
    set -a; source infrastructure/site-params.env; set +a
-   STACK_NAME=jodidaniel-com-bootstrap \
+   BOOTSTRAP_STACK_NAME=jodidaniel-com-bootstrap \
    MEDIA_ARCHIVE_BUCKET=jodidaniel-com-media-archive \
      bash /path/to/cms-platform/infrastructure/bootstrap/deploy.sh
    ```
 
-   > **Set `STACK_NAME` explicitly there, and do not skip it.** That params
-   > file exports `STACK_NAME="jodidaniel-com-oauth-proxy"` for the OAuth-proxy
-   > deploy, and the bootstrap script honours an inherited `STACK_NAME`
-   > (`${STACK_NAME:-${RESOURCE_PREFIX}-bootstrap}`). Sourcing the file and
-   > running the bootstrap deploy without overriding it aims the BOOTSTRAP
-   > template at the OAuth-proxy stack. Overriding it on the command line, as
-   > above, is the whole fix.
+   > That params file exports `STACK_NAME="jodidaniel-com-oauth-proxy"` for the
+   > OAuth-proxy deploy. The bootstrap script names its stack from
+   > `BOOTSTRAP_STACK_NAME` (default `<prefix>-bootstrap`, here
+   > `jodidaniel-com-bootstrap`), never from that `STACK_NAME`, and refuses a
+   > bootstrap name equal to it; run it from the site's root so it finds
+   > `infrastructure/site-params.env` (infrastructure/README.md, "The
+   > STACK_NAME collision").
 
    > **Until this change is released and the consumer bumped**, a wrapper that
    > checks the platform out at `platform_ref` will fetch a template that has

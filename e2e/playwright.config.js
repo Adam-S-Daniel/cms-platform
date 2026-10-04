@@ -433,9 +433,13 @@ const PLATFORM_META_SPECS = [
   // tree only: a consumer ships a delegating wrapper, not this script.
   "oauth-proxy-deploy-credentials.test.js",
   // Runs this repo's infrastructure/bootstrap/deploy.sh under a stub aws to lock
-  // the S3 template upload (template.yaml is over the CLI's 51,200-byte inline
-  // limit). Platform tree only: a consumer ships a delegating wrapper.
-  "bootstrap-deploy-template-s3.test.js",
+  // the inline minified template and the destructive-change guard. Platform
+  // tree only: a consumer ships a delegating wrapper.
+  "bootstrap-deploy-changeset-guard.test.js",
+  // Runs infrastructure/bootstrap/minify-template.rb over the bootstrap
+  // template: the 48,000-byte growth alarm and the parse-equivalence proof.
+  // Platform tree only, for the same reason.
+  "bootstrap-template-minify.test.js",
   "playwright-image-drift.test.js",
   // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
   // root plugin.json + .claude-plugin/plugin.json manifests, the vendored
