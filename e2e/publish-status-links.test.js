@@ -316,6 +316,7 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
     readyState: "complete",
     body: {},
     documentElement: {},
+    baseURI: (windowExtra.location || new URL("https://example.com/admin/")).href,
     createElement: (tag) => new FakeNode(tag),
     createTextNode: (text) => {
       const n = new FakeNode(null);
@@ -336,6 +337,7 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
   };
   const sandbox = {
     window: {
+      location: windowExtra.location || new URL("https://example.com/admin/"),
       addEventListener() {},
       CMSPublishProgress: {
         get: () => ({ ready: true, facts: barFacts, prNumber: 7 }),
@@ -364,6 +366,7 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
   };
   vm.createContext(sandbox);
   const scripts = [];
+  if (options.siteHostname) scripts.push("site-hostname.js");
   if (options.liveDerive) scripts.push("live-url-derive.js");
   if (options.model !== false) scripts.push("entry-status-model.js");
   scripts.push("publish-step-hint.js");
@@ -643,4 +646,78 @@ test("publish-button site fallback supports a cached helper without destinationO
   });
   doc.getElementById("cms-publish-button").click();
   expect(doc.getElementById("cms-publish-state-actions").textContent).toContain("It will appear at http://example.net:4000");
+});
+
+for (const [tab, siteOrigin, apex, config, status, expected] of [
+  ["https://www.example.com", "https://example.com", "example.net", "", 404, "https://example.com"],
+  [
+    "https://preview-pr7.example.com",
+    "https://example.com",
+    "example.com",
+    "site_url: javascript:alert(1)\n",
+    200,
+    "https://example.com",
+  ],
+  ["https://www.example.com", "", "example.net", "", 404, "https://example.net"],
+  ["https://preview-pr7.example.com", "", "example.net", "site_url: javascript:alert(1)\n", 200, "https://example.net"],
+]) {
+  test(
+    `publish-button canonical fallback (${siteOrigin || "apex " + apex}) survives unreadable config at ${tab}`,
+    async () => {
+      const { doc, win } = loadBar(facts({ hasOpenPr: true }), {
+        location: new URL(tab + "/admin/#/collections/pages/entries/about"),
+        CMS_SITE_ORIGIN: siteOrigin,
+        CMS_APEX: apex,
+      }, {
+        siteHostname: true,
+        fetch: async () => ({ ok: status >= 200 && status < 300, status, text: async () => config }),
+      });
+      await win.CMSHostname.binding();
+      doc.getElementById("cms-publish-button").click();
+      expect(doc.getElementById("cms-publish-state-actions").textContent).toContain(
+        `It will appear at ${expected} in about 5 minutes.`,
+      );
+    },
+  );
+}
+
+for (const [tab, siteOrigin, apex, siteURL, expected] of [
+  [
+    "https://preview-pr7.example.com",
+    "https://example.com",
+    "example.com",
+    "https://preview-pr7.example.com/path",
+    "https://preview-pr7.example.com",
+  ],
+  ["https://preview-pr7.example.com", "", "example.com", "http://localhost:4000/admin/", "http://localhost:4000"],
+]) {
+  test(
+    `publish-button served origin ${siteURL} overrides canonical fallback at ${tab}`,
+    async () => {
+      const config = `backend:\n  name: github\n  repo: acme/example\n  branch: main\n\nsite_url: ${siteURL}\ndisplay_url: ${siteURL}\n`;
+      const { doc, win } = loadBar(facts({ hasOpenPr: true }), {
+        location: new URL(tab + "/admin/#/collections/pages/entries/about"),
+        CMS_SITE_ORIGIN: siteOrigin,
+        CMS_APEX: apex,
+      }, {
+        siteHostname: true,
+        fetch: async () => ({ ok: true, status: 200, text: async () => config }),
+      });
+      await win.CMSHostname.binding();
+      doc.getElementById("cms-publish-button").click();
+      expect(doc.getElementById("cms-publish-state-actions").textContent).toContain(
+        `It will appear at ${expected} in about 5 minutes.`,
+      );
+    },
+  );
+}
+
+test("publish-button uses its canonical fallback before the served config settles", () => {
+  const { doc } = loadBar(facts({ hasOpenPr: true }), {
+    location: new URL("https://preview-pr7.example.com/admin/#/collections/pages/entries/about"),
+    CMS_SITE_ORIGIN: "https://example.com",
+    CMS_APEX: "example.com",
+  }, { siteHostname: true, fetch: () => new Promise(() => {}) });
+  doc.getElementById("cms-publish-button").click();
+  expect(doc.getElementById("cms-publish-state-actions").textContent).toContain("It will appear at https://example.com");
 });

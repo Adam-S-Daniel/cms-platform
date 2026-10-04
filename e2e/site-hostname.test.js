@@ -480,6 +480,29 @@ test("destinationOrigin updates after delayed config, preserving local fallback 
   expect(names.fetchCalls).toHaveLength(1);
 });
 
+test("destinationOrigin accepts an optional fallback before and after an unreadable config", async () => {
+  for (const config of [new Error("offline"), "site_url: ftp://example.com\n"]) {
+    const names = load({ origin: "https://www.example.com/admin/", siteOrigin: "https://example.com", config });
+    expect(names.destinationOrigin("https://example.com")).toBe("https://example.com");
+    await names.binding();
+    expect(names.destinationOrigin("https://example.com")).toBe("https://example.com");
+    expect(names.destinationOrigin()).toBe("https://www.example.com");
+  }
+});
+
+test("destinationOrigin uses a served preview or local origin ahead of its optional fallback", async () => {
+  for (const [origin, siteURL] of [
+    ["https://preview-pr7.example.com/admin/", "https://preview-pr7.example.com:8443/path"],
+    ["http://localhost:4000/admin/", "http://localhost:4000/path"],
+  ]) {
+    const names = load({ origin, config: servedConfig({ siteURL }) });
+    expect(names.destinationOrigin("https://example.com")).toBe("https://example.com");
+    await names.binding();
+    const expected = siteURL.startsWith("https:") ? "https://preview-pr7.example.com:8443" : "http://localhost:4000";
+    expect(names.destinationOrigin("https://example.com")).toBe(expected);
+  }
+});
+
 for (const config of [new Error("offline"), "site_url: ftp://example.com\n"]) {
   test(`destinationOrigin unreadable local fallback preserves protocol and port: ${String(config)}`, async () => {
     const names = load({ origin: "http://localhost:4000/admin/", config });

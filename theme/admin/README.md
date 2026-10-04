@@ -96,10 +96,16 @@ not answered within 10 seconds, `destination()` is `current()`: right on a
 preview, where `canonical()` would name production, and only cosmetically off
 on a production `www.` or distribution hostname.
 
-Publication URLs and slug-collision probes use `destinationOrigin()`. Before
-the config settles, or if unreadable or not HTTP(S), it falls back to
-`publicOrigin()` (the injected public site on a separate admin origin,
-otherwise this tab's origin). Both helpers share the same cached config read.
+Publication URLs use `destinationOrigin()`. The publish button passes its
+canonical fallback explicitly: `CMS_SITE_ORIGIN`, then `https://` plus
+`CMS_APEX`. A served preview or local origin takes precedence; if the config
+has not settled, is unreadable, or is not HTTP(S), the supplied site fallback
+is used. Other callers that omit the argument retain the `publicOrigin()`
+default (the injected public
+site on a separate admin origin, otherwise this tab's origin). All callers
+share the same cached config read. New-post slug-collision probes use the tab's
+own origin so the browser can read the `HEAD` response; a cross-origin CORS
+failure would otherwise silently treat an occupied address as free.
 
 `CMSHostname.binding()` returns that same single read as `{ branch,
 destination, destinationOrigin }` — `branch` is the served `backend.branch` at the line anchor

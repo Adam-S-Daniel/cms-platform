@@ -33,10 +33,12 @@
  * The read is abandoned after CONFIG_READ_TIMEOUT_MS and treated as
  * unreadable, so a stalled connection cannot leave the raw token on screen.
  *
- * destinationOrigin() preserves the HTTP(S) protocol and port of site_url,
- * with paths and credentials removed. Local config http://localhost:4000
+ * destinationOrigin(fallbackOrigin) preserves the HTTP(S) protocol and port
+ * of site_url, with paths and credentials removed. Local config
+ * http://localhost:4000
  * therefore keeps its local URL. Before the read settles, or if unreadable,
- * it falls back to publicOrigin(), including the separate admin origin rule.
+ * it uses fallbackOrigin when provided, otherwise publicOrigin(), including
+ * the separate admin origin rule.
  *
  * binding() exposes the same read — `{ branch, destination, destinationOrigin }` — for
  * site-gate-banner.js, which must read its flag at the branch this admin is
@@ -169,8 +171,8 @@
     return (served && served.destination) || current();
   }
 
-  function destinationOrigin() {
-    return (served && served.destinationOrigin) || publicOrigin();
+  function destinationOrigin(fallbackOrigin) {
+    return (served && served.destinationOrigin) || fallbackOrigin || publicOrigin();
   }
 
   function ownedControlFor(node) {
