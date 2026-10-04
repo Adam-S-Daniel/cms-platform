@@ -10,9 +10,46 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.128)
+## Version history (v0.1.0 → v0.1.129)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.129 — automation escapes repository-controlled log output, and label-error and fixture-save regressions cover more cases.**
+The Dependabot manifest-path checker prefixes each listed path with `  - ` and
+captures failed Git diff stderr as a labeled diagnostic with percent/CR/LF
+escaping; unreadable diffs still discard partial output, return status 2, and
+set `safe=false` ([#590](https://github.com/Adam-S-Daniel/cms-platform/pull/590)).
+Consumers receive this checker through the reusable `dependabot-auto-merge`
+workflow, which sparse-checks `scripts/check-dependabot-manifest-paths.sh` from
+the platform at the caller's pinned ref. The offline Decap save regression also
+exercises the actual front-matter listener, preSave, and YAML serializer for a
+fixture-like title in a non-Posts collection: its normal hidden default is
+preserved without adding robots or sitemap exclusions
+([#590](https://github.com/Adam-S-Daniel/cms-platform/pull/590)).
+
+Visual regression lists the same checked NUL-delimited diff used for salience,
+and the Dependabot re-arm sweep captures and labels failed Git stderr while
+preserving its failed-PR count, write refusal, and nonzero final status. The
+same display-only escaping now protects preview-media and editorial path logs,
+theme-spec group names, stale CMS cleanup paths, platform-bump diagnostics, and
+deploy commit metadata. PDF publication escapes annotations and archive-key
+errors and fails closed with an escaped file-specific diagnostic on a real
+entry read error. Filenames and generated file bytes keep their original values
+([#593](https://github.com/Adam-S-Daniel/cms-platform/pull/593)).
+
+The `createLabel` AST lint resolves additional output sinks, aliases, and
+lexically scoped error bindings, with 332 added regression cases and bounded
+controls. This strengthens static coverage without changing existing label
+handlers. Its documented limit remains: nested function bodies are excluded
+from handler report/output scanning whether called or uncalled; taint collection
+still visits them conservatively, and explicit `allSettled` inspection scans
+its callbacks ([#591](https://github.com/Adam-S-Daniel/cms-platform/pull/591)).
+Agent tooling also hardens optional fleet-delivery receipt reads and writes to
+regular files and arms the detached writer's deadline before Python site startup
+([#592](https://github.com/Adam-S-Daniel/cms-platform/pull/592)); synced fleet
+guidance adds the owner's `on-hold` rule
+([#594](https://github.com/Adam-S-Daniel/cms-platform/pull/594)). These tooling
+syncs do not change rendered site or admin assets.
 
 **v0.1.128 — the production media round-trip skips consumers that disable Posts.**
 The production media round-trip checks the site's `cms.base_collections` Posts setting
