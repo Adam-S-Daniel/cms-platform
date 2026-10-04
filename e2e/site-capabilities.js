@@ -125,6 +125,36 @@ function hasE2ECanaries(siteRoot = defaultSiteRoot()) {
   return fs.readdirSync(dir).some((f) => /^canary-.*\.md$/.test(f));
 }
 
+// The shared private-archive PDF fields (theme/admin/field_library.yml →
+// `archived_pdf_fields`, issue #527). A collection opts in with ONE field item,
+// `$ref: "#/field_library/archived_pdf_fields"`, which the render expands into
+// these three names; a site may also author the three fields inline.
+const ARCHIVED_PDF_FIELDS_REF = "#/field_library/archived_pdf_fields";
+const ARCHIVED_PDF_FIELD_NAMES = ["pdf_archive_file", "pdf_public", "pdf_label"];
+
+// The FOLDER collections the site's OWN seam (`admin/collections.site.yml`)
+// opts into the shared PDF fields — by `$ref` or by authoring all three inline.
+// A SOURCE signal (no build needed): it is what the site DECLARES, so a
+// rendered config that lacks the fields while this is non-empty means the
+// fields were lost between the seam and the render, not that the site opted
+// out. The seam is a bare 2-space-indented sequence fragment (it is spliced
+// into the base collections list), which the real `yaml` parser reads as a
+// top-level sequence. Returns [] when the seam is absent or holds no list.
+function archivedPdfSourceCollections(siteRoot = defaultSiteRoot()) {
+  const seam = path.join(siteRoot, "admin", "collections.site.yml");
+  if (!fs.existsSync(seam)) return [];
+  const doc = YAML.parse(fs.readFileSync(seam, "utf8"));
+  if (!Array.isArray(doc)) return [];
+  return doc
+    .filter((col) => {
+      if (!col || !col.folder || !Array.isArray(col.fields)) return false;
+      if (col.fields.some((f) => f && f.$ref === ARCHIVED_PDF_FIELDS_REF)) return true;
+      const names = new Set(col.fields.map((f) => f && f.name));
+      return ARCHIVED_PDF_FIELD_NAMES.every((n) => names.has(n));
+    })
+    .map((col) => String(col.name));
+}
+
 // ── RENDERED signals (require a local Jekyll build) ──────────────────────
 
 function renderedAdminConfigPath(siteRoot = defaultSiteRoot()) {
@@ -181,6 +211,9 @@ module.exports = {
   isSinglePageConsumer,
   hasSourcePosts,
   hasE2ECanaries,
+  ARCHIVED_PDF_FIELDS_REF,
+  ARCHIVED_PDF_FIELD_NAMES,
+  archivedPdfSourceCollections,
   renderedAdminConfigPath,
   isBuilt,
   adminCollections,

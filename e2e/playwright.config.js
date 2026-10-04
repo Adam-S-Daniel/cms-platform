@@ -114,6 +114,10 @@ const PLATFORM_META_SPECS = [
   // parses what the script writes. Reads theme/admin SOURCE and scripts/;
   // platform-internal for the same reason as every entry around it.
   "branch-binding-banner.test.js",
+  // #528 — drives theme/admin/site-gate-banner.js with the real
+  // site-hostname.js in a vm sandbox (the gate read at the bound branch).
+  // Reads theme/admin SOURCE; platform-internal like the entry above.
+  "site-gate-banner.test.js",
   // The collection-list controls trim: reads the theme/admin SOURCE tree (the
   // shim plus the three shells) and vm-sandboxes the shim's pure sort-label
   // matcher. Platform-internal for the same reason as the entry above — a
@@ -158,6 +162,10 @@ const PLATFORM_META_SPECS = [
   // list for the same cms-platform#244 reason as the three consumer specs named
   // above. Do not "tidy" it on.
   "action-pin-comment-lint.test.js",
+  // cms-platform#538 — the byte budget for THIS repo's AGENTS.md. On a
+  // consumer lane `..` is the site root, so it would measure the consumer's
+  // own AGENTS.md against a budget chosen for this one.
+  "agents-md-size.test.js",
   "auto-merge-uses-queue.test.js",
   // The 2026-09-08 `catalog:` incident guard — asserts both platform-pin
   // reusables install the `yaml` parser with `--prefix .cms-platform` rather
@@ -281,6 +289,10 @@ const PLATFORM_META_SPECS = [
   // workflow's timeout-minutes; platform-internal, self-CI only.
   "cms-loop-budget-alignment.test.js",
   "cms-editor-ui.test.js",
+  // #531 — AST-walks the harness's own real-lane spec sources to lock the
+  // disposable-test-post markers before Save; harness-internal, self-CI only
+  // (the same posture as cms-editor-ui.test.js above).
+  "prod-test-post-markers.test.js",
   "cms-host.test.js",
   "cms-label-contract.spec.js",
   "cms-recursion-churn.test.js",
@@ -408,6 +420,10 @@ const PLATFORM_META_SPECS = [
   // its credential handling (placeholder refusal, keep-on-update). Platform
   // tree only: a consumer ships a delegating wrapper, not this script.
   "oauth-proxy-deploy-credentials.test.js",
+  // Runs this repo's infrastructure/bootstrap/deploy.sh under a stub aws to lock
+  // the S3 template upload (template.yaml is over the CLI's 51,200-byte inline
+  // limit). Platform tree only: a consumer ships a delegating wrapper.
+  "bootstrap-deploy-template-s3.test.js",
   "playwright-image-drift.test.js",
   // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
   // root plugin.json + .claude-plugin/plugin.json manifests, the vendored
@@ -585,6 +601,10 @@ const PLATFORM_META_SPECS = [
   // source a consumer lane has no business re-linting.
   "app-token-platform-writers.test.js",
   "mint-app-token.test.js",
+  // #408 — skill freshness lint: reads skills/*/SKILL.md and checks each cited
+  // path, workflow, secret/variable and CloudFormation name against this
+  // repo's own tree. A consumer ships none of it. Platform tree only.
+  "skill-references-fresh.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is
