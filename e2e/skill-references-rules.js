@@ -63,9 +63,12 @@ const ENV_NAME_RE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
 const CONTEXT_NAME_RE = /(?<![\w./-])(secrets|vars)\.([A-Za-z_][A-Za-z0-9_]*)\b/g;
 // A bare UPPER_SNAKE span is a secret / variable citation (so it can FAIL)
 // only where its context marks it as one: a `$X`, `${X}`, `process.env.X` or
-// `X=value` span, or a heading, table header or sentence that says secret,
-// variable, env, knob, credential or token. Anywhere else (a status literal
-// such as `IN_PROGRESS`, an error code) it is LISTED, never failed.
+// `X=value` span; a span that OPENS a list item, a table cell or a heading
+// (a definition-style list or a name table: the name is what the line is
+// about); or a heading, table header or sentence that says secret, variable,
+// env, knob, credential or token. A mid-sentence mention with none of those
+// (a status literal such as `IN_PROGRESS`, an error code) is LISTED, never
+// failed.
 const LABEL_RE = /\b(?:secrets?|variables?|vars?|env|environment|knobs?|credentials?|tokens?)\b/i;
 const CFN_NAME_RE = /^[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+$/;
 const DOLLAR_SPAN_RE = /^\$\{?([A-Z][A-Z0-9_]*)\}?$/;
@@ -97,8 +100,9 @@ function trimWord(word) {
 
 /*
  * Every code region of a SKILL.md, in document order:
- *   { kind: "span" | "fence", text, line, ctx }   (line is 1-based in the FILE;
- *   ctx is the label text around it, see LABEL_RE)
+ *   { kind: "span" | "fence", text, line, ctx, opens }   (line is 1-based in the FILE;
+ *   ctx is the label text around it, see LABEL_RE; opens is true for a
+ *   span that opens a list item, table cell or heading)
  * plus `prose`: the plain-text words with their lines, for the listed-only
  * prose mentions.
  */
@@ -110,6 +114,11 @@ function codeRegions(text) {
   // A table cell's inline token carries no `map`; the enclosing row's does,
   // so fall back to the last block token that had one.
   let lastMap = [0, 1];
+  // The block an inline token sits in: "item" (the first paragraph of a list
+  // item), "cell", "heading" or "para". A span that opens an item, a cell or
+  // a heading is what that line defines.
+  let prev = null;
+  let blockKind = null;
   // What labels a span: the nearest heading above it, the header row of the
   // table it sits in, and its own block (paragraph, list item, table cell).
   let heading = "";
@@ -125,6 +134,10 @@ function codeRegions(text) {
   };
   for (const token of md.parse(body, {})) {
     if (token.map) lastMap = token.map;
+    if (token.type === "heading_open") blockKind = "heading";
+    else if (token.type === "td_open" || token.type === "th_open") blockKind = "cell";
+    else if (token.type === "paragraph_open") blockKind = prev && prev.type === "list_item_open" ? "item" : "para";
+    prev = token;
     if (token.type === "heading_open") headingNext = true;
     else if (token.type === "table_open" || token.type === "table_close") tableHeader = "";
     else if (token.type === "thead_open") inThead = true;
@@ -141,9 +154,12 @@ function codeRegions(text) {
         if (line.trim()) regions.push({ kind: "fence", text: line, line: first + i + offset, ctx });
       });
     } else if (token.type === "inline") {
-      for (const child of token.children || []) {
+      const children = token.children || [];
+      const first = children.find((c) => !(c.type === "text" && !c.content.trim()));
+      for (const child of children) {
         if (child.type === "code_inline") {
-          regions.push({ kind: "span", text: child.content, line: lineOf(token, child.content), ctx });
+          const opens = child === first && ["item", "cell", "heading"].includes(blockKind);
+          regions.push({ kind: "span", text: child.content, line: lineOf(token, child.content), ctx, opens });
         } else if (child.type === "text") {
           for (const word of child.content.split(/\s+/)) {
             const w = trimWord(word);
@@ -220,7 +236,7 @@ function extractCitations(text, { skill } = {}) {
         const dollar = DOLLAR_SPAN_RE.exec(t) || ENV_SPAN_RE.exec(t);
         const ident = dollar ? dollar[1] : t.split("=")[0];
         if (ENV_NAME_RE.test(ident)) {
-          add("name", ident, region.line, region.kind, !!dollar || t.includes("=") || LABEL_RE.test(region.ctx));
+          add("name", ident, region.line, region.kind, !!dollar || t.includes("=") || region.opens || LABEL_RE.test(region.ctx));
         }
       }
       if (CFN_SKILLS.has(skill)) {
@@ -469,6 +485,8 @@ const ENV_ACCESS_RES = [
 // `${{ ... }}`: the only place a workflow string is an expression.
 const EXPRESSION_RE = /\$\{\{([\s\S]*?)\}\}/g;
 const EXPR_ENV_RE = /\benv\.([A-Za-z_][A-Za-z0-9_]*)/g;
+// Bracket syntax: secrets['X'], vars["X"], env['X'].
+const EXPR_BRACKET_RE = /(?<![\w./-])(secrets|vars|env)\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\2\s*\]/g;
 
 // Remove `#` comments from shell, Ruby or Python source: whole-line and
 // trailing ones (a `#` that starts a word outside a quoted string on its
@@ -531,6 +549,14 @@ function workflowNames(parsed, into) {
       into.envNames.add(m[2]);
     }
     for (const m of expr.matchAll(EXPR_ENV_RE)) into.envNames.add(m[1]);
+    for (const m of expr.matchAll(EXPR_BRACKET_RE)) {
+      if (m[1] === "env") {
+        into.envNames.add(m[3]);
+      } else {
+        into.contextNames.add(`${m[1]}.${m[3]}`);
+        into.envNames.add(m[3]);
+      }
+    }
   };
   for (const { keys, value } of leaves(parsed)) {
     const key = keys[keys.length - 1];
@@ -542,7 +568,10 @@ function workflowNames(parsed, into) {
       let ids = null;
       try {
         // actions/github-script bodies run inside an async function.
-        ids = jsAnalyze(`(async function () {\n${value}\n})`, "script:");
+        // A `${{ }}` is expanded by Actions before the script runs, so it is
+        // not JS yet: swap each for a neutral expression to parse the rest.
+        const js = value.replace(EXPRESSION_RE, "0");
+        ids = jsAnalyze(`(async function () {\n${js}\n})`, "script:");
       } catch {
         for (const n of scriptReads(value).names) into.envNames.add(n);
       }

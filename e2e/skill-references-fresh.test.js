@@ -306,6 +306,26 @@ test.describe("skill-references rules (fixture)", () => {
     expect(r.prose.map((p) => p.value)).toContain("UNMARKED_NAME_GONE");
   });
 
+  test("a bare name that opens a list item, a table cell or a heading is a checked citation (R2-1)", () => {
+    const text = [
+      "# T",
+      "",
+      "- `LIST_OPENER_GONE` — what it does",
+      "- Wait while the rollup shows `MID_SENTENCE_STATUS`, then retry.",
+      "",
+      "| Name | Purpose |",
+      "|---|---|",
+      "| `CELL_OPENER_GONE` | does a thing |",
+      "| plain | see `CELL_MID_STATUS` |",
+      "",
+      "## `HEADING_OPENER_GONE` — gone",
+      "",
+    ].join("\n");
+    const r = checkSkill(text, syntheticTree(), { skill: "s" });
+    expect(failed(r).sort()).toEqual(["CELL_OPENER_GONE", "HEADING_OPENER_GONE", "LIST_OPENER_GONE"]);
+    expect(r.prose.map((p) => p.value).sort()).toEqual(["CELL_MID_STATUS", "MID_SENTENCE_STATUS"]);
+  });
+
   test("the failure message carries a ready-to-paste allowlist stanza (N1)", () => {
     const f = { kind: "path", value: "scripts/gone.sh", line: 3, reason: "x" };
     const stanza = allowlistStanza("fixture", f);
@@ -549,4 +569,58 @@ test.describe("loadTree (synthetic trees)", () => {
       expect(t.exists("infrastructure/site-params.env")).toBe(true);
       expect(t.envNames.has("WALKED_KNOB")).toBe(true);
     }));
+
+  test("a github-script body containing ${{ }} still yields its process.env reads (R2-2)", () =>
+    withTree(
+      {
+        ".github/workflows/t.yml": [
+          "on: push",
+          "jobs:",
+          "  j:",
+          "    runs-on: ubuntu-latest",
+          "    steps:",
+          "      - uses: actions/github-script@x",
+          "        with:",
+          "          script: |",
+          "            const msg = `deploy ${{ secrets.TPL_SECRET }} now`;",
+          "            const v = process.env.TPL_AFTER_READ;",
+          "      - uses: actions/github-script@x",
+          "        with:",
+          "          script: |",
+          "            const x = ${{ vars.BARE_VAR }};",
+          "            // process.env.BARE_COMMENT_ONLY",
+          "            const v = process.env.BARE_AFTER_READ;",
+          "",
+        ].join("\n"),
+      },
+      (dir) => {
+        const t = loadTree(dir);
+        expect(t.envNames.has("TPL_AFTER_READ")).toBe(true);
+        expect(t.envNames.has("BARE_AFTER_READ")).toBe(true);
+        expect(t.envNames.has("BARE_COMMENT_ONLY")).toBe(false);
+        expect(t.contextNames.has("secrets.TPL_SECRET")).toBe(true);
+        expect(t.contextNames.has("vars.BARE_VAR")).toBe(true);
+      },
+    ));
+
+  test("secrets['X'], vars[\"X\"] and env['X'] bracket syntax in an expression is a read (R2-3)", () =>
+    withTree(
+      {
+        ".github/workflows/b.yml": [
+          "on: push",
+          "jobs:",
+          "  j:",
+          "    runs-on: ubuntu-latest",
+          "    steps:",
+          "      - run: echo ${{ secrets['BRACKET_SECRET'] }} ${{ vars[\"BRACKET_VAR\"] }} ${{ env['BRACKET_ENV'] }}",
+          "",
+        ].join("\n"),
+      },
+      (dir) => {
+        const t = loadTree(dir);
+        expect(t.contextNames.has("secrets.BRACKET_SECRET")).toBe(true);
+        expect(t.contextNames.has("vars.BRACKET_VAR")).toBe(true);
+        expect(t.envNames.has("BRACKET_ENV")).toBe(true);
+      },
+    ));
 });

@@ -81,3 +81,17 @@ no backfill is planned; the file adds the fields git does not capture.
   (PR #563).
 - Eval: exempt (DESIGN.md non-coverage table)
 - Outcome: pending merge.
+
+## 2026-10-04 — cms-platform/aws-bootstrap — edit
+
+- Motivation: the bootstrap template outgrew the CLI's 51,200-byte inline limit, so a redeploy failed until `deploy.sh` uploaded it through S3; the skill described the old inline deploy.
+- Change: the skill now documents `TEMPLATE_S3_BUCKET` (first deploy of a new stack only), the S3 upload step, and the `Templates with a size greater than 51,200 bytes` error (https://github.com/Adam-S-Daniel/cms-platform/pull/566).
+- Eval: exempt (DESIGN.md non-coverage table)
+- Outcome: merged 2026-10-04.
+
+## 2026-10-04 — cms-platform/platform-release-and-bump — edit
+
+- Motivation: AGENTS.md was shrunk under a size budget and the "Delegated mechanical work is done when a VERIFIER exits 0" section moved out of it, so the skill's pointer named a heading that no longer existed there.
+- Change: the delegation pointer now names `docs/CONTRIBUTING.md` instead of AGENTS.md (https://github.com/Adam-S-Daniel/cms-platform/pull/556).
+- Eval: none — no eval exists yet
+- Outcome: merged 2026-10-04.
