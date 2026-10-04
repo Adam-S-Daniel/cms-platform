@@ -240,6 +240,78 @@ const CASES = [
     }),
   },
   {
+    rule: "privileged-no-head-ref",
+    name: "issue_comment checkout of refs/pull/<issue number>/head",
+    bad: wf("issue_comment", { a: steps(checkout({ ref: "refs/pull/${{ github.event.issue.number }}/head" })) }),
+    good: wf("issue_comment", { a: steps(checkout({})) }),
+  },
+  {
+    rule: "privileged-read-only-token",
+    name: "issues is privileged",
+    bad: wf("issues", { a: steps({ run: "true" }) }, { contents: "read", issues: "write" }),
+    good: wf("issues", { a: steps({ run: "true" }) }, { contents: "read", issues: "read" }),
+  },
+  {
+    rule: "privileged-read-only-token",
+    name: "discussion_comment is privileged",
+    bad: wf("discussion_comment", { a: { ...steps({ run: "true" }), permissions: { discussions: "write" } } }),
+    good: wf("pull_request_review_comment", { a: { ...steps({ run: "true" }), permissions: { "pull-requests": "write" } } }),
+  },
+  {
+    rule: "no-secrets-inherit",
+    name: "pull_request_review_comment is contributor-reachable",
+    bad: wf("pull_request_review_comment", { a: { uses: "./.github/workflows/r.yml", secrets: "inherit" } }),
+    good: wf("pull_request_review_comment", { a: { uses: "./.github/workflows/r.yml" } }),
+  },
+  {
+    rule: "privileged-no-run-artifacts",
+    name: "third-party download-artifact action",
+    bad: wf({ workflow_run: { workflows: ["x"] } }, { a: steps({ uses: "dawidd6/action-download-artifact@ac66b43f0e6a346234dd65d4d0c8fbb31cb316e5" }) }),
+    good: wf({ workflow_run: { workflows: ["x"] } }, { a: steps({ uses: "dawidd6/action-send-mail@ac66b43f0e6a346234dd65d4d0c8fbb31cb316e5" }) }),
+  },
+  {
+    rule: "privileged-no-head-ref",
+    name: "action name in another case",
+    bad: wf({ workflow_run: { workflows: ["x"] } }, {
+      a: steps({ uses: "Actions/Checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: { ref: "${{ github.event.workflow_run.head_sha }}" } }),
+    }),
+    good: wf({ workflow_run: { workflows: ["x"] } }, {
+      a: steps({ uses: "Actions/Checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: { ref: "${{ inputs.platform_ref }}" } }),
+    }),
+  },
+  {
+    rule: "privileged-no-run-artifacts",
+    name: "github-script destructured artifact method (acorn)",
+    bad: wf({ workflow_run: { workflows: ["x"] } }, {
+      a: steps({
+        uses: "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd",
+        with: { script: "const { downloadArtifact } = github.rest.actions;\nawait downloadArtifact({ ...context.repo, artifact_id: 1, archive_format: 'zip' });" },
+      }),
+    }),
+    good: wf({ workflow_run: { workflows: ["x"] } }, {
+      a: steps({
+        uses: "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd",
+        with: { script: "const { owner, repo } = context.repo;\ncore.info(owner + '/' + repo);" },
+      }),
+    }),
+  },
+  {
+    rule: "privileged-no-run-artifacts",
+    name: "github-script request() with a variable route (acorn)",
+    bad: wf({ workflow_run: { workflows: ["x"] } }, {
+      a: steps({
+        uses: "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd",
+        with: { script: "const r = 'GET /repos/{owner}/{repo}/actions/' + 'artifacts';\nawait github.request(r, context.repo);" },
+      }),
+    }),
+    good: wf({ workflow_run: { workflows: ["x"] } }, {
+      a: steps({
+        uses: "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd",
+        with: { script: "await github.request(`GET /repos/{owner}/{repo}/pulls`, context.repo);" },
+      }),
+    }),
+  },
+  {
     rule: "head-checkout-by-sha",
     bad: wf("pull_request", { a: steps(checkout({ ref: "${{ github.event.pull_request.head.ref }}" })) }),
     good: wf("pull_request", { a: steps(checkout({ ref: "${{ github.event.pull_request.head.sha }}" })) }),
@@ -273,6 +345,22 @@ test.describe("each trust-boundary rule fires on its bad shape only", () => {
     // Consumer mode without the platform tree cannot resolve the reusable: the
     // caller's own trigger is still judged.
     expect(rulesFor([caller({ pull_request_target: {} })], {})).toEqual(["no-pull-request-target"]);
+  });
+
+  test("an issue_comment ChatOps deploy is caught on every count", () => {
+    const rules = one(
+      wf(
+        "issue_comment",
+        {
+          build: steps(checkout({ ref: "refs/pull/${{ github.event.issue.number }}/head" })),
+          deploy: { uses: "./.github/workflows/r.yml", secrets: "inherit" },
+        },
+        { contents: "write" },
+      ),
+    );
+    expect(rules).toContain("privileged-read-only-token");
+    expect(rules).toContain("no-secrets-inherit");
+    expect(rules).toContain("privileged-no-head-ref");
   });
 
   test("an unreadable expression and an unparseable script are denied", () => {

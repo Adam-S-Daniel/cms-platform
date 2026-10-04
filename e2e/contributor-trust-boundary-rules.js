@@ -17,12 +17,16 @@
  * additionally waits for a maintainer's approval (`approval_policy:
  * all_external_contributors`, repo-settings.yml).
  *
- * The two triggers that break that are `pull_request_target` and
- * `workflow_run`: both run in the BASE repo's context, with its secrets and a
- * write-capable token, even when a fork caused them. Checking out the PR's
- * code there (or ingesting the triggering run's artifacts) hands attacker
- * code the secrets — the "pwn request". docs/ADMIN-AUTH-SECURITY.md,
- * "Outside contributors and previews", is the long form.
+ * What breaks that is any trigger that runs in the BASE repo's context, with
+ * its secrets and a write-capable token, yet can be fired by someone the repo
+ * never trusted: `pull_request_target` and `workflow_run` (a fork's PR fires
+ * both), and `issue_comment`, `issues`, `discussion`, `discussion_comment`,
+ * `fork` and `watch` (any GitHub user fires those on a public repo). See
+ * PRIVILEGED below for each. Checking out the PR's code there (a `refs/pull/`
+ * ref built from an issue number, say) or ingesting the triggering run's
+ * artifacts hands attacker code the secrets — the "pwn request".
+ * docs/ADMIN-AUTH-SECURITY.md, "Outside contributors and previews", is the
+ * long form.
  *
  * ── THE RULES ─────────────────────────────────────────────────────────────
  *   no-pull-request-target      no workflow declares `pull_request_target`.
@@ -75,9 +79,44 @@ const acorn = require("acorn");
 const walk = require("acorn-walk");
 const { ANY, interpolations, contextPaths } = require("./gha-expression-lexer");
 
-const PRIVILEGED = ["pull_request_target", "workflow_run"];
-// Triggers an outside contributor can cause.
-const CONTRIBUTOR_REACHABLE = ["pull_request", "pull_request_target", "workflow_run"];
+// PRIVILEGED: runs in the base repo's context with its secrets and a token
+// that can write, and an untrusted party can fire it.
+//   pull_request_target  a fork's PR, with the base workflow file.
+//   workflow_run         fires after a run a fork's PR caused.
+//   issue_comment        any user commenting on an issue or PR (the classic
+//                        "/deploy" ChatOps pwn: refs/pull/<issue.number>/head).
+//   issues               any user opening or editing an issue.
+//   discussion,          any user, where Discussions are enabled.
+//   discussion_comment
+//   fork, watch          any user forking or starring. No code or text to
+//                        abuse, but the run still holds secrets and a write
+//                        token on an attacker's schedule.
+// EXCLUDED, deliberately:
+//   pull_request_review, pull_request_review_comment  for a fork's PR GitHub
+//                        restricts these exactly like `pull_request` (read-only
+//                        token, no secrets), so they are contributor-REACHABLE
+//                        but not privileged.
+//   push, schedule, workflow_dispatch, repository_dispatch, release, create,
+//   delete, deployment*, status, check_*  need write access (or the repo's own
+//                        schedule) to fire, which is already trust.
+//   merge_group          only for PRs a writer queued.
+const PRIVILEGED = [
+  "pull_request_target",
+  "workflow_run",
+  "issue_comment",
+  "issues",
+  "discussion",
+  "discussion_comment",
+  "fork",
+  "watch",
+];
+// Triggers an outside contributor can cause, privileged or not.
+const CONTRIBUTOR_REACHABLE = [
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+  ...PRIVILEGED,
+];
 
 // Context paths whose value is chosen by whoever pushed the PR or the run
 // that triggered a `workflow_run`. Folded segments; ANY matches any name.
@@ -101,9 +140,13 @@ const ARTIFACT_METHODS = new Set([
   "downloadartifact",
 ]);
 
-const CHECKOUT = /^actions\/checkout@/;
-const DOWNLOAD_ARTIFACT = /^actions\/download-artifact@/;
-const GITHUB_SCRIPT = /^actions\/github-script@/;
+// Action refs are matched case-insensitively: GitHub resolves
+// `Actions/Checkout@…` to the same action. Any action whose name carries
+// `download-artifact` counts (`dawidd6/action-download-artifact` is the common
+// third-party one that reads ANOTHER run's artifacts).
+const CHECKOUT = /^actions\/checkout@/i;
+const DOWNLOAD_ARTIFACT = /^[^@]*download-artifact[^@]*@/i;
+const GITHUB_SCRIPT = /^actions\/github-script@/i;
 
 // A descendant of a root (`…head.ref`) counts, and so does an ancestor down
 // to the payload object (`github`, `github.event`, `github.event.workflow_run`),
@@ -211,10 +254,13 @@ function effectiveEvents(loaded, platformRepo) {
 }
 
 // What a github-script body touches, read with acorn: every STATIC member
-// name (folded), ANY for a call through a computed member (`api[name]()`,
-// unresolvable), and "route:artifacts" for `github.request()` with a route
-// naming the artifacts endpoint. A name inside a comment or a string literal
-// is not a member and is not seen. Throws on a body acorn cannot parse.
+// name and every destructured key (`const { downloadArtifact } =
+// github.rest.actions`), folded; ANY for a call through a computed member
+// (`api[name]()`) or a computed destructuring key; and "route:artifacts" for a
+// `request()` whose route names the artifacts endpoint OR is not a plain
+// literal (a variable, an object, a template with `${}`): a route the parser
+// cannot read is denied. A name inside a comment or a string literal is not a
+// member and is not seen. Throws on a body acorn cannot parse.
 function scriptProperties(body) {
   const ast = acorn.parse(body, {
     ecmaVersion: "latest",
@@ -233,18 +279,27 @@ function scriptProperties(body) {
     if (node.type === "MemberExpression") {
       const n = staticName(node);
       if (n !== null) names.push(n);
-    } else if (node.type === "CallExpression" && node.callee.type === "MemberExpression") {
-      const n = staticName(node.callee);
-      if (n === null) names.push(ANY);
-      else if (n === "request" && node.arguments.length) {
+    } else if (node.type === "ObjectPattern") {
+      for (const prop of node.properties) {
+        if (prop.type !== "Property") continue;
+        if (!prop.computed && prop.key.type === "Identifier") names.push(prop.key.name.toLowerCase());
+        else if (prop.key.type === "Literal" && typeof prop.key.value === "string") names.push(prop.key.value.toLowerCase());
+        else names.push(ANY);
+      }
+    } else if (node.type === "CallExpression") {
+      let n = null;
+      if (node.callee.type === "MemberExpression") {
+        n = staticName(node.callee);
+        if (n === null) names.push(ANY);
+      } else if (node.callee.type === "Identifier") {
+        n = node.callee.name.toLowerCase();
+      }
+      if (n === "request") {
         const a = node.arguments[0];
-        const text =
-          a.type === "Literal" && typeof a.value === "string"
-            ? a.value
-            : a.type === "TemplateLiteral"
-              ? a.quasis.map((q) => q.value.cooked).join("")
-              : "";
-        if (text.includes("/artifacts")) names.push("route:artifacts");
+        let text = null;
+        if (a && a.type === "Literal" && typeof a.value === "string") text = a.value;
+        else if (a && a.type === "TemplateLiteral" && a.expressions.length === 0) text = a.quasis[0].value.cooked;
+        if (text === null || text.includes("/artifacts")) names.push("route:artifacts");
       }
     }
   });
@@ -346,7 +401,7 @@ function lintWorkflows(files, { platformRepo = null } = {}) {
           }
           const hit = props.find((n) => n === ANY || n === "route:artifacts" || ARTIFACT_METHODS.has(n));
           if (hit !== undefined) {
-            add("privileged-no-run-artifacts", w, `${where} with.script`, `github-script ${hit === ANY ? "uses a computed member (unresolvable)" : `calls the artifact API (${hit})`} under ${privileged.join(", ")}`);
+            add("privileged-no-run-artifacts", w, `${where} with.script`, `github-script ${hit === ANY ? "uses a computed member (unresolvable)" : `${hit === "route:artifacts" ? "requests an artifacts route, or a route it cannot read" : `calls the artifact API (${hit})`}`} under ${privileged.join(", ")}`);
           }
         }
       });

@@ -133,8 +133,11 @@ from the site's thin caller on `pull_request`):
 
 A fork's PR can edit the thin caller itself, because a `pull_request` run uses
 the workflow files from the PR's merge commit. That is why the protection has to
-come from GitHub withholding secrets on the `pull_request` trigger, and why the
-two triggers that do NOT withhold them are kept out:
+come from GitHub withholding secrets on the `pull_request` trigger. (Fork PRs
+get the same treatment on `pull_request_review` and
+`pull_request_review_comment`.) The triggers that do NOT withhold secrets but
+can still be fired by someone the repo never trusted are the privileged ones.
+None of them may bring untrusted code or data into a run that holds secrets:
 
 - **`pull_request_target`** runs the base repo's workflow with its secrets and
   a write token for a fork's PR. Checking out the PR's head there runs fork
@@ -145,6 +148,13 @@ two triggers that do NOT withhold them are kept out:
   caller passes only the PR *number*, its token is read-only, it checks out
   only the platform's own scripts, and the resolver skips any PR whose head
   repo is not the base repo.
+- **`issue_comment`, `issues`, `discussion` and `discussion_comment`** run in
+  the base repo's context too, and any GitHub user can fire them on a public
+  repo. A "comment `/deploy` to preview" workflow that checks out
+  `refs/pull/<issue number>/head` is the classic pwn request. No workflow here
+  uses these triggers. **`fork`** and **`watch`** (starring) can also be fired
+  by anyone. They carry no code, but the run still holds secrets and a write
+  token, so they get the same rules.
 
 **What enforces it.** `e2e/contributor-trust-boundary-lint.test.js` (platform
 tree and `examples/site` templates, in self-CI) and
@@ -155,11 +165,13 @@ triggers its callers give it, because pin-consistency's caller parity
 deliberately ignores `on:` and a consumer could otherwise move its preview
 caller to `pull_request_target` with every check green. The rules:
 `pull_request_target` is banned; a workflow a contributor can reach declares a
-`permissions:` map and nothing is `write-all`; a privileged (`workflow_run` /
-`pull_request_target`) run has no `write` token scope, checks out no PR or
-run head (in any spelling, including `refs/pull/`), passes no head data to a
-reusable, and downloads no artifacts (github-script bodies are read with
-acorn); no PR-reachable job uses `secrets: inherit`; and a checkout of the PR
+`permissions:` map and nothing is `write-all`. A run on any privileged trigger
+above has no `write` token scope and checks out no PR or run head (in any
+spelling, including `refs/pull/`). It passes no head data to a reusable. It
+downloads no artifacts: no action whose name contains `download-artifact`, in
+any case. github-script bodies are read with acorn, destructured names
+included, and a `request()` route that is not a plain literal is denied. No
+job a contributor can reach uses `secrets: inherit`; and a checkout of the PR
 head pins `github.event.pull_request.head.sha`, never a branch name, which
 would resolve to whatever was pushed after a run was approved. It also asserts
 that `deploy-preview.yml` and every other reusable that checks out the PR head

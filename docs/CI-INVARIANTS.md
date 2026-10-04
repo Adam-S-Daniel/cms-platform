@@ -1535,7 +1535,8 @@ A preview receives the editor's token, so the workflows that build PR code must
 never run it with secrets or a write token. `e2e/contributor-trust-boundary-lint.test.js`
 (platform, registered) and `e2e/consumer-contributor-trust-boundary-lint.test.js`
 (consumer, deliberately unregistered) hold it: no `pull_request_target`; under
-`workflow_run` a read-only token, no head checkout, no head data passed to a
+`workflow_run`, `issue_comment` and the other privileged contributor-fireable
+triggers a read-only token, no head checkout, no head data passed to a
 reusable, no artifact download; no `secrets: inherit` on a PR-reachable job; a
 declared `permissions:` map; PR-head checkouts pinned to `head.sha`. A reusable
 is judged under its callers' triggers. Policy and the fork trace:
