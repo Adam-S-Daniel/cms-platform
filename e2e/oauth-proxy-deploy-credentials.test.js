@@ -401,7 +401,6 @@ for (const [label, apex] of [
   });
 }
 
-
 test("no preview-* entry: warns, names the entry to add, and still deploys (#524)", () => {
   const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test", APEX_DOMAIN: APEX, STUB_STACK: "exists" });
   expect(r.status, r.out).toBe(0);
