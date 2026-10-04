@@ -634,9 +634,10 @@ test("the delegating wrapper with BOOTSTRAP_STACK_NAME set to the proxy's name: 
 });
 
 // ── A stack in a failed state cannot take a change set ─────────────────────
+const DELETE_FAILED_STACK = `delete the failed stack first (aws cloudformation delete-stack --stack-name ${STACK} --region us-east-1, then wait for the delete to finish)`;
 for (const [state, advice] of [
-  ["ROLLBACK_COMPLETE", "delete the failed stack first"],
-  ["CREATE_FAILED", "delete the failed stack first"],
+  ["ROLLBACK_COMPLETE", DELETE_FAILED_STACK],
+  ["CREATE_FAILED", DELETE_FAILED_STACK],
   ["UPDATE_ROLLBACK_FAILED", "Fix the rollback first"],
 ]) {
   test(`a stack in ${state}: stops, executes nothing, and says what to do`, () => {
@@ -650,6 +651,8 @@ for (const [state, advice] of [
     expect(callsOf(r.calls, "describe-change-set")).toEqual([]);
     expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
     expect(callsOf(r.calls, "wait")).toEqual([]);
+    // The command is printed for the operator, never run by the script.
+    expect(callsOf(r.calls, "delete-stack")).toEqual([]);
   });
 }
 

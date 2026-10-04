@@ -209,7 +209,7 @@ if ! CHANGESET_OUTPUT="$(aws cloudformation deploy \
   if [[ "$DEPLOY_ERROR" =~ $FAILED_STATE_RE ]]; then
     case "${BASH_REMATCH[1]}" in
       ROLLBACK_COMPLETE | CREATE_FAILED | ROLLBACK_FAILED)
-        error "Stack ${BOOTSTRAP_STACK_NAME} is in ${BASH_REMATCH[1]}: its first create failed, and CloudFormation cannot update it. Nothing was executed. Read its events in the CloudFormation console, delete the failed stack first, then re-run." ;;
+        error "Stack ${BOOTSTRAP_STACK_NAME} is in ${BASH_REMATCH[1]}: its first create failed, and CloudFormation cannot update it. Nothing was executed. Read its events in the CloudFormation console, delete the failed stack first (aws cloudformation delete-stack --stack-name ${BOOTSTRAP_STACK_NAME} --region ${AWS_REGION}, then wait for the delete to finish), then re-run." ;;
       UPDATE_ROLLBACK_FAILED)
         error "Stack ${BOOTSTRAP_STACK_NAME} is in UPDATE_ROLLBACK_FAILED: an update failed and could not roll back. Nothing was executed. Fix the rollback first (fix the resource named in the stack's events, then continue the rollback from the CloudFormation console), then re-run." ;;
       *)
