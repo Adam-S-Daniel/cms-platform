@@ -453,11 +453,10 @@ real network. `python3 -m pytest scripts/cross_post -q` runs:
   above.
 
 `self-ci.yml`'s `python-unit-tests` job runs the full suite on every PR that
-touches this repo, but is deliberately **not** one of the four required
-status contexts (`repo-settings.yml`'s `platform-main` ruleset names
-`actionlint` / `ruby-theme-specs` / `node-unit-lints` / `plugin-validate`
-only) — adding a fifth required context is a `repo-settings.yml` decision,
-not something a new lane should make by merely existing.
+touches this repo, and since #525 it is one of the seven required status
+contexts (`repo-settings.yml`'s `platform-main` ruleset), so a red run blocks
+the merge. Adding a required context is a `repo-settings.yml` decision, not
+something a new lane should make by merely existing.
 
 ## Related
 

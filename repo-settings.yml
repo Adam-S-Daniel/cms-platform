@@ -231,6 +231,18 @@ ruleset_library:
   # live now, and `--fix --yes` is what reconciles any drift it reports.
   # The context string is the self-ci.yml JOB ID (no `name:` override on that
   # job), matching how the other three are spelled here.
+  #
+  # #525 added the other three PR-time checks this repo runs, so a red lane can
+  # no longer leave a PR mergeable: `python-unit-tests` (the cross-post suite
+  # and oauth-proxy/test_lambda.py, the sign-in handler's 71 tests since #520),
+  # `cfn-lint` (made a genuine pass/fail lane in the same change — it carried a
+  # job-level `continue-on-error: true` until then) and `scan / scan`
+  # (self-secrets-scan.yml's caller job `scan` -> secrets-scan.yml's job `scan`).
+  # Each string is the name GitHub REPORTED on PRs #551-#554, not one inferred
+  # from YAML: the secrets scan publishes `scan / scan`, never a bare `scan`.
+  # e2e/ruleset-context-publishable.test.js locks the set both ways — every
+  # context below must be reported on EVERY pull request to main, and every job
+  # a pull request runs here must be in this list or carry a stated exemption.
   platform-main:
     target: branch
     enforcement: active
@@ -270,6 +282,16 @@ ruleset_library:
             - context: ruby-theme-specs
             - context: node-unit-lints
             - context: plugin-validate
+            # why: #525 — the pytest suites guard the sign-in handler's token
+            # handoff and cross_post.py; a red run must block the merge.
+            - context: python-unit-tests
+            # why: #525 — the credential-free CloudFormation check, pinned and
+            # hard-fail since #525 so its verdict is real.
+            - context: cfn-lint
+            # why: #525 — gitleaks over the PR's own commits. Reported as the
+            # two-part `<caller job> / <reusable job>` name, the same string
+            # consumer-main requires on both consumers.
+            - context: scan / scan
     bypass_actors: []
 
   # why: = live adamdaniel.ai ruleset 13985217 as-found 2026-07-10 — the

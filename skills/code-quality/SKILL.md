@@ -16,7 +16,7 @@ description: Reference for the per-language lint + static-analysis + style toolc
 > | `self-ci.yml` → `actionlint` | `actionlint` over `.github/workflows/*.yml` | yes |
 > | `self-ci.yml` → `ruby-theme-specs` | `ruby theme/spec/*_test.rb` | yes |
 > | `self-ci.yml` → `node-unit-lints` | the ~101 pure-fs `e2e/*.test.js` lints | yes |
-> | `self-ci.yml` → `cfn-lint` | the CloudFormation templates | advisory |
+> | `self-ci.yml` → `cfn-lint` | the CloudFormation templates (pinned cfn-lint) | yes |
 > | `self-secrets-scan.yml` | gitleaks on the diff / history | yes |
 > | local pre-commit | `scripts/lint-staged.sh` + `scripts/secrets-scan.sh` (each skips any tool not on `PATH`) | local only |
 >

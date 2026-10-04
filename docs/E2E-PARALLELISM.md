@@ -735,7 +735,7 @@ says which one went red before you open a log.
 ## node-unit-lints (self-ci)
 
 `self-ci.yml`'s `node-unit-lints` job runs the e2e harness's pure-fs lints
-(`*.test.js`, no browser, no build) as one of the platform's four REQUIRED
+(`*.test.js`, no browser, no build) as one of the platform's seven REQUIRED
 `platform-main` contexts. cms-platform#461 measured whether it could be made
 faster the same way `e2e-tests.yml` was — more workers, or sharding — after
 first adding a cache for the ~10 s browser-download self-heal the job pays on

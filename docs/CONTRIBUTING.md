@@ -90,8 +90,8 @@ elsewhere) — a green run of it, not a diff review, is what makes the bump done
 other workflow here is an `on: workflow_call` reusable; `self-ci.yml` plus its
 sibling `self-secrets-scan.yml` — which dogfoods the `secrets-scan.yml`
 reusable on this repo's own history — are the only two that run directly on a
-plain PR). It runs six FAST lanes on `pull_request` + `push` to `main`, four of
-them REQUIRED:
+plain PR). It runs six FAST lanes on `pull_request` + `push` to `main`, all
+REQUIRED:
 
 1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail; REQUIRED).
 2. **ruby-theme-specs** — `theme/spec/*_test.rb`, each run with plain `ruby`, no
@@ -108,22 +108,31 @@ them REQUIRED:
    into a failure, and `CLAUDE.md` is managed by the `_agent-guidance` sync and
    is not ours to delete — so `--strict`'s only green path is removing a file we
    must keep.
-5. **cfn-lint** over the CloudFormation templates (advisory, `continue-on-error`).
+5. **cfn-lint** over the CloudFormation templates (hard-fail; REQUIRED since
+   #525). The cfn-lint version is pinned, so a new upstream rule reaches the lane
+   only through a deliberate bump; it carried `continue-on-error` before #525,
+   when it was unpinned, and every listed template must exist.
 6. **python-unit-tests** — `python3 -m pytest scripts/cross_post oauth-proxy -q`
    (the cross-post suite plus the OAuth proxy's `oauth-proxy/test_lambda.py`;
-   hard-fail, but deliberately NOT required — `repo-settings.yml`'s `platform-main` ruleset
-   names only the four lanes above; adding a fifth required context is a
-   `repo-settings.yml` decision, not something a new lane should make by merely
-   existing).
-
-The four REQUIRED contexts are `repo-settings.yml`'s `ruleset_library.platform-main.
-rules[required_status_checks]`, enforced by `e2e/required-context-cancellable.test.js`
-("yields the four self-ci.yml job ids the platform-main ruleset requires").
+   hard-fail; REQUIRED since #525).
 
 `self-secrets-scan.yml` (#126) runs alongside it as its own workflow,
 gitleaks-scanning the platform repo's diff on `pull_request`, incrementally on
 `push` to `main`, and full-history weekly — the same posture the consumer
-caller gets from `secrets-scan.yml`, applied to the machinery repo itself.
+caller gets from `secrets-scan.yml`, applied to the machinery repo itself. Its
+check run is reported as `scan / scan` (caller job / reusable job), REQUIRED
+since #525.
+
+The seven REQUIRED contexts are `repo-settings.yml`'s `ruleset_library.platform-main.
+rules[required_status_checks]`: the six self-CI job ids plus `scan / scan`. Two
+lints lock them to the workflows. `e2e/ruleset-context-publishable.test.js`
+checks that every one is reported on EVERY pull request to `main`: no `paths:`
+filter, no job-level `if:`, no `continue-on-error`. It also checks that every
+job a pull request runs here is either required or listed, with its reason, in
+that file's `NOT_REQUIRED_PR_JOBS`. `e2e/required-context-cancellable.test.js`
+checks that none of them can end `cancelled`. A new PR-time job therefore
+fails CI until it is added to the ruleset or exempted. Take a new context's
+string from the check run GitHub reports on a real PR, not from the YAML.
 
 The heavy browser matrix + `@admin-write` write-path specs run in **CONSUMER**
 e2e (dogfood / consuming-site CI), NOT in platform self-CI.
