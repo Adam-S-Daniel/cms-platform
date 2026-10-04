@@ -207,6 +207,14 @@ jobs:
           fi
           CUR=$(sed -n -E 's/^platform_ref:[[:space:]]*//p' platform.lock 2>/dev/null || echo "")
           [ "$LATEST" = "$CUR" ] && { echo "already on $LATEST"; exit 0; }
+          # The rewrite below takes $CUR as the exact ref to move, so it must be a
+          # bare release tag. The sed above does no unquoting and keeps a trailing
+          # comment, so say what was read instead of failing later in the rewrite
+          # with a usage error that never names platform.lock.
+          if [ -n "$CUR" ] && ! [[ "$CUR" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+            echo "::error::platform.lock's platform_ref reads as ${CUR@Q}, which is not a bare release tag such as v1.2.3 (a quoted value or a trailing comment is not handled here) — refusing to bump. Write the value as a bare tag."
+            exit 1
+          fi
 
           # Idempotency gate (#222). The check just above reads platform.lock on
           # the DEFAULT BRANCH, which only advances when a bump PR MERGES — so it
@@ -253,8 +261,8 @@ jobs:
           # reads (the `uses:@` refs and `platform_ref:` values via the YAML
           # parser, platform.lock, the Gemfile `tag:`, the Gemfile.lock platform
           # GIT block's `tag:` + `revision:`) and splices only the version token,
-          # leaving every other byte alone. It is fetched at $LATEST like the
-          # other scripts here, and it is ALL OR NOTHING: on any file it cannot
+          # leaving every other byte alone. It is fetched at the release COMMIT
+          # ($NEW_SHA), not the movable tag, and it is ALL OR NOTHING: on any file it cannot
           # rewrite safely it writes nothing and exits non-zero, which fails
           # this step — a bump that moved some pins is worse than none.
           # A first adoption has no platform.lock, so no $CUR and no pin to move
@@ -263,14 +271,14 @@ jobs:
             PIN_TOOLS="${RUNNER_TEMP:-/tmp}/pin-rewrite"
             rm -rf "$PIN_TOOLS"
             mkdir -p "$PIN_TOOLS/scripts"
-            if ! gh api "repos/$PLATFORM/contents/scripts/rewrite-platform-pins.js?ref=$LATEST" \
+            if ! gh api "repos/$PLATFORM/contents/scripts/rewrite-platform-pins.js?ref=$NEW_SHA" \
                  -H "Accept: application/vnd.github.raw+json" \
                  > "$PIN_TOOLS/scripts/rewrite-platform-pins.js" 2>/dev/null; then
-              echo "::error::scripts/rewrite-platform-pins.js is not readable at $PLATFORM@$LATEST — refusing to fall back to a text-wide version replace (cms-platform#530)."
+              echo "::error::scripts/rewrite-platform-pins.js is not readable at $PLATFORM@$NEW_SHA ($LATEST) — refusing to fall back to a text-wide version replace (cms-platform#530)."
               exit 1
             fi
             # Into the tools dir, never the consumer root (see the secrets pass below).
-            if ! npm install --prefix "$PIN_TOOLS" --no-save --no-package-lock yaml@2.9.1 >/dev/null 2>&1; then
+            if ! npm install --prefix "$PIN_TOOLS" --no-save --no-package-lock --ignore-scripts yaml@2.9.1 >/dev/null 2>&1; then
               echo "::error::could not install the yaml parser the pin rewrite needs."
               exit 1
             fi
@@ -347,7 +355,7 @@ jobs:
             # The `platform_ref:` one is not optional (#220). Stamping only `uses:@` seeded
             # jodidaniel.com's cms-scheduled-publish-loop caller with the example's
             # own `platform_ref: v0.1.59` while pinning `uses:@v0.1.62`, and the
-            # generic CUR->LATEST replace above could never repair it — CUR is the
+            # CUR->LATEST pin rewrite above could never repair it — CUR is the
             # consumer's ref, which `v0.1.59` never matched again. The reusable's
             # checkout obeys the INPUT, so that caller ran a v0.1.59 platform tree
             # for 14 releases until the v0.1.70 composite it lacked failed the job.

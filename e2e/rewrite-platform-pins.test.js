@@ -240,6 +240,102 @@ test.describe("rewrite-platform-pins.js — only pins move (#530)", () => {
   });
 });
 
+test.describe("rewrite-platform-pins.js — edge cases the main fixture cannot reach", () => {
+  const run = (root, from, to, extra = []) =>
+    spawnSync(process.execPath, [REWRITE, "--root", root, "--slug", SLUG, "--from", from, "--to", to, ...extra], {
+      encoding: "utf8",
+    });
+
+  test("a version that changes LENGTH moves every pin (offsets shift, so edits apply back to front)", () => {
+    const from = "v0.1.99";
+    const to = "v0.1.100";
+    const wf = (v) => `name: Lengths
+jobs:
+  a:
+    uses: ${SLUG}/.github/workflows/a.yml@${v}
+    with:
+      platform_ref: ${v}
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ${SLUG}/.github/actions/one@${v}
+      - uses: ${SLUG}/.github/actions/two@${v}
+      # platform_ref: ${v}
+`;
+    const lock = (v) => `platform_repo: ${SLUG}\nplatform_ref: ${v}\n`;
+    const gem = (v) => `gem "cms-platform-theme", git: "https://github.com/${SLUG}", tag: "${v}"\n`;
+    const glock = (v, sha) =>
+      `GIT\n  remote: https://github.com/${SLUG}\n  revision: ${sha}\n  tag: ${v}\n  specs:\n    cms-platform-theme (0.1.4)\n`;
+    const root = materialize({
+      ".github/workflows/lengths.yml": wf(from),
+      "platform.lock": lock(from),
+      Gemfile: gem(from),
+      "Gemfile.lock": glock(from, OLD_SHA),
+    });
+    const r = run(root, from, to, ["--new-sha", NEW_SHA]);
+    expect(r.status, out(r)).toBe(0);
+    expect(r.stdout).toContain(`SUMMARY: moved 8 pin(s) in 4 file(s) from ${from} to ${to}`);
+    expect(snapshot(root, [".github/workflows/lengths.yml", "platform.lock", "Gemfile", "Gemfile.lock"])).toEqual({
+      ".github/workflows/lengths.yml": wf(to),
+      "platform.lock": lock(to),
+      Gemfile: gem(to),
+      "Gemfile.lock": glock(to, NEW_SHA),
+    });
+  });
+
+  test("a `uses:` from another owner never moves, even when its owner/repo is as long as the slug", () => {
+    // Same length as the slug, and one character past it the path reads
+    // `.github/workflows/...`; a prefix check is the only thing keeping it out.
+    const sameLength = `Adam-S-Daniel/cms-platfora`;
+    expect(sameLength.length).toBe(SLUG.length);
+    const wf = (v) => `jobs:
+  real:
+    uses: ${SLUG}/.github/workflows/x.yml@${v}
+  lookalike:
+    uses: ${sameLength}/.github/workflows/x.yml@${OLD}
+  longer:
+    uses: ${SLUG}-extra/.github/workflows/x.yml@${OLD}
+  composites:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ${sameLength}/.github/actions/y@${OLD}
+      - uses: ${SLUG}-extra/.github/actions/y@${OLD}
+`;
+    const root = materialize({ ".github/workflows/decoys.yml": wf(OLD) });
+    const r = rewrite(root);
+    expect(r.status, out(r)).toBe(0);
+    expect(r.stdout).toContain(`SUMMARY: moved 1 pin(s) in 1 file(s)`);
+    expect(snapshot(root, [".github/workflows/decoys.yml"])[".github/workflows/decoys.yml"]).toBe(wf(NEW));
+  });
+
+  test("a cms-platform-theme gem from another source never moves", () => {
+    const gem = (v) => `source "https://rubygems.org"
+gem "cms-platform-theme", git: "https://github.com/example-org/cms-platform-theme", tag: "${OLD}"
+gem "cms-platform-theme", git: "https://github.com/${SLUG}", tag: "${v}"
+`;
+    const root = materialize({ Gemfile: gem(OLD) });
+    const r = rewrite(root);
+    expect(r.status, out(r)).toBe(0);
+    expect(r.stdout).toContain(`SUMMARY: moved 1 pin(s) in 1 file(s)`);
+    expect(snapshot(root, ["Gemfile"]).Gemfile).toBe(gem(NEW));
+  });
+
+  test("a --to that would re-type a plain `platform_ref:` value is refused and nothing is written", () => {
+    // `platform_ref: v0.1.123` -> `platform_ref: 1.5` would turn the string into
+    // a YAML float, so the pin would vanish from every reader; the re-parse
+    // check catches it where the splice itself looks fine.
+    const files = {
+      "platform.lock": `platform_repo: ${SLUG}\nplatform_ref: ${OLD}\n`,
+      ".github/workflows/c.yml": `jobs:\n  d:\n    uses: ${SLUG}/.github/workflows/x.yml@${OLD}\n    with:\n      platform_ref: ${OLD}\n`,
+    };
+    const root = materialize(files);
+    const r = run(root, OLD, "1.5");
+    expect(r.status, out(r)).toBe(1);
+    expect(r.stdout).toMatch(/does not re-parse to the expected pins/);
+    expect(snapshot(root, Object.keys(files))).toEqual(files);
+  });
+});
+
 test.describe("rewrite-platform-pins.js — against the platform's own examples/site", () => {
   // The template every site is scaffolded from, at the current release, bumped
   // to a made-up next one. Both of a consumer's bump gates must pass on the
@@ -315,7 +411,7 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-rewrite-bin-"));
     fs.writeFileSync(
       path.join(bin, "gh"),
-      `#!/usr/bin/env bash\n[[ "$2" == "repos/${SLUG}/contents/scripts/rewrite-platform-pins.js?ref=${NEW}" ]] || exit 1\ncat "${REWRITE}"\n`,
+      `#!/usr/bin/env bash\n[[ "$2" == "repos/${SLUG}/contents/scripts/rewrite-platform-pins.js?ref=${NEW_SHA}" ]] || exit 1\ncat "${REWRITE}"\n`,
       { mode: 0o755 },
     );
     fs.writeFileSync(path.join(bin, "npm"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
@@ -349,6 +445,40 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
     const { res, root } = runBlock(files, "");
     expect(res.status, out(res)).toBe(0);
     expect(snapshot(root, Object.keys(files))).toEqual(files);
+  });
+
+  test("a platform.lock value that is not a bare tag fails with a message naming it", () => {
+    // Lifted from the `CUR=$(sed ...)` read through its validation, run in a
+    // scratch consumer. A quoted value or a trailing comment fails closed and
+    // says what was read, not a usage error from deep in the rewrite.
+    const lines = run.split("\n");
+    const start = lines.findIndex((l) => l.trim().startsWith("CUR=$(sed"));
+    expect(start, "the run script must read CUR from platform.lock with sed").toBeGreaterThan(-1);
+    const indent = lines[start].match(/^\s*/)[0];
+    const end = lines.findIndex((l, i) => i > start && l === `${indent}fi`);
+    expect(end, "the CUR validation must close with `fi`").toBeGreaterThan(start);
+    const block = lines.slice(start, end + 1).join("\n");
+    const readCur = (value) => {
+      const root = materialize({ "platform.lock": `platform_repo: ${SLUG}\nplatform_ref: ${value}\n` });
+      return spawnSync("bash", ["-euo", "pipefail", "-c", `${block}\necho "CUR=$CUR"`], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, LATEST: NEW },
+      });
+    };
+    expect(readCur(OLD).stdout, "a bare tag passes").toContain(`CUR=${OLD}`);
+    expect(readCur(NEW).stdout, "already on the latest").toContain(`already on ${NEW}`);
+    for (const bad of [`"${OLD}"`, `${OLD} # pinned`]) {
+      const res = readCur(bad);
+      expect(res.status, out(res)).toBe(1);
+      expect(res.stdout).toContain("::error::platform.lock's platform_ref reads as");
+      expect(res.stdout).toContain("not a bare release tag");
+      expect(res.stdout).toContain(bad);
+    }
+  });
+
+  test("the yaml install in the rewrite block runs no package scripts", () => {
+    expect(rewriteBlock()).toMatch(/npm install --prefix "\$PIN_TOOLS" --no-save --no-package-lock --ignore-scripts yaml@2\.9\.1/);
   });
 
   test("a rewrite failure fails the step", () => {

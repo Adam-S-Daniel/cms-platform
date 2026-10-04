@@ -43,6 +43,13 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-04 — cms-platform/platform-release-and-bump — edit
+
+- Motivation: the manual-bump recipe was a python global replace of the old version, the same text-wide rewrite platform-bump dropped in #530 because it re-dates prose that names the old version; a hand-regenerated bump would diverge from the workflow.
+- Change: the recipe now calls `scripts/rewrite-platform-pins.js` (the workflow's own rewrite) and lists the pins it moves (PR #559).
+- Eval: none — no eval exists yet
+- Outcome: pending merge.
+
 ## 2026-10-04 — cms-platform/ci-watcher-loops — edit
 
 - Motivation: the #408 freshness lint read the `X.yml` placeholder in the BROKEN-capture example as a workflow citation, which needed an allowlist entry for a name that was never meant to resolve.

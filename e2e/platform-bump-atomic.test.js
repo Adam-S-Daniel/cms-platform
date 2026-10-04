@@ -121,10 +121,10 @@ test.describe("platform-bump reusable — pushable + atomic (#13)", () => {
     expect(run, "must resolve the release tag's commit sha").toMatch(/git\/refs\/tags/);
     expect(run, "must dereference annotated tags").toMatch(/object\.type/);
     // The pins (and the Gemfile.lock revision, via --new-sha) are moved by
-    // scripts/rewrite-platform-pins.js, fetched at the release being bumped to
-    // and handed the old ref, the new ref and the new commit (#530).
+    // scripts/rewrite-platform-pins.js, fetched at the release commit
+    // ($NEW_SHA, not the movable tag) and handed the old ref, the new ref and the new commit (#530).
     const script = stripBashComments(run);
-    expect(script).toMatch(/contents\/scripts\/rewrite-platform-pins\.js\?ref=\$LATEST/);
+    expect(script).toMatch(/contents\/scripts\/rewrite-platform-pins\.js\?ref=\$NEW_SHA/);
     expect(script).toMatch(
       /node "\$PIN_TOOLS\/scripts\/rewrite-platform-pins\.js" \\\n\s*--root \. --slug "\$PLATFORM" --from "\$CUR" --to "\$LATEST" --new-sha "\$NEW_SHA"/,
     );
