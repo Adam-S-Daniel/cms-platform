@@ -10,20 +10,56 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Unreleased
-
-Fixture exclusion now runs at the site's `post_read` hook, after front matter
-is loaded and before generators run. Ordinary filenames marked `test_fixture: true`
-are excluded from feeds, sitemap, listings, and tag aggregation; explicit slugs
-also govern exclusion as intended. Direct post pages and collection documents are
-preserved. A real Jekyll build regression runs in the Ruby theme spec lane with
-pinned Jekyll and sitemap dependencies. Part of
-[#531](https://github.com/Adam-S-Daniel/cms-platform/issues/531), following the hook
-timing finding in [PR #564](https://github.com/Adam-S-Daniel/cms-platform/pull/564).
-
-## Version history (v0.1.0 → v0.1.126)
+## Version history (v0.1.0 → v0.1.127)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.127 — publishing follows the configured destination, fixture posts stay out of public indexes, and automation reports failures safely.**
+Publication links, confirmations, hints, toasts, list statuses, and preview deployment pills
+now follow the destination in the served configuration when it differs from the admin tab's
+host ([#576](https://github.com/Adam-S-Daniel/cms-platform/pull/576),
+[#583](https://github.com/Adam-S-Daniel/cms-platform/pull/583)). The destination-origin helper
+preserves HTTP(S) protocol and port; the publish button keeps its injected canonical fallback
+while configuration is pending or unreadable. Slug-collision probes and preview coordination
+keep the tab origin, and the branch banner still describes the opened preview.
+Fixture exclusion runs at Jekyll's `post_read` hook, after front matter is loaded and before
+generators run: ordinary filenames marked `test_fixture: true` and `e2e-` slugs are excluded
+from feeds, sitemap, listings, and tag aggregation; explicit slugs govern classification,
+while direct post pages and collection documents remain available
+([#574](https://github.com/Adam-S-Daniel/cms-platform/pull/574)).
+
+Label-creation handlers now warn on unexpected failures with a numeric HTTP status
+(or `unknown`) and a bounded error type, while preserving the existing-label exemption;
+the label lint also stops counting inherited object properties such as `toString`
+([#571](https://github.com/Adam-S-Daniel/cms-platform/pull/571)). Platform bumps validate
+release SHAs and diagnose CRLF in `platform.lock`, proxy deploys reject raw apex whitespace
+before normalization, and failed committed-diff reads select every applicable spec
+([#572](https://github.com/Adam-S-Daniel/cms-platform/pull/572)). Failed bootstrap-stack
+recovery messages print the delete-stack command without executing it; salience regressions
+exercise shell-syntax paths and base branches
+([#577](https://github.com/Adam-S-Daniel/cms-platform/pull/577)). Dependabot's manifest gate
+and sweep read checked NUL-delimited diffs, preserve unusual path characters, escape paths
+for workflow logs and annotations, and skip writes for a PR whose diagnostic diff cannot
+be read ([#582](https://github.com/Adam-S-Daniel/cms-platform/pull/582)).
+
+The `createLabel` lint follows additional promise handlers and derived error values
+([#575](https://github.com/Adam-S-Daniel/cms-platform/pull/575)), then checks reconstructed
+exceptions, more logging/output sinks, and array mutations
+([#581](https://github.com/Adam-S-Daniel/cms-platform/pull/581)); these widen static checks,
+not site runtime behavior. A new contributor-boundary lint checks platform and consumer
+callers for privileged triggers, token permissions, secret inheritance, head references,
+and artifact downloads; the docs explain preview sign-in trust and the lint's limits
+([#579](https://github.com/Adam-S-Daniel/cms-platform/pull/579)), including local composite
+actions that wrap downloads ([#582](https://github.com/Adam-S-Daniel/cms-platform/pull/582)).
+Offline regressions preserve historical bump comments and document why the bump to
+v0.1.126 still executed the older reusable
+([#573](https://github.com/Adam-S-Daniel/cms-platform/pull/573)); real-build tests parse
+fixture robots tags, feed entries, and sitemap URLs and rebuild after an offline edit
+([#578](https://github.com/Adam-S-Daniel/cms-platform/pull/578)); Decap's actual save and
+front-matter code is exercised for fixture markers and an ordinary-post control, without
+claiming live persistence ([#584](https://github.com/Adam-S-Daniel/cms-platform/pull/584)).
+The fleet-memory and skills-bootstrap SessionStart hooks now also match forked sessions
+([#580](https://github.com/Adam-S-Daniel/cms-platform/pull/580)).
 
 **v0.1.126 — the proxy and the bootstrap deploy stop trusting their inputs, the editor tells the truth about previews, and platform merges need three more checks.**
 The OAuth proxy honors a `*` entry in `ALLOWED_ORIGINS` only at or beneath the site's apex
