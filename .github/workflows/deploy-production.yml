@@ -204,14 +204,38 @@ jobs:
         # the public bucket. `aws s3 sync --delete --exclude X` will NOT
         # delete X from the destination, so the explicit `aws s3 rm` below
         # cleans up copies on buckets predating this exclude.
+        #
+        # `404.html` is excluded here too and uploaded by the next step with a
+        # no-cache header. CloudFront answers every missing key with this
+        # object (CustomErrorResponses, ErrorCachingMinTTL 0) and passes ITS
+        # Cache-Control through, so under the day-long max-age below every 404
+        # reached the browser as cacheable for 24 hours. An editor's draft
+        # image 404s on the admin's origin until the post publishes, and that
+        # cached 404 kept the image broken in the editor's browser after
+        # publish. An excluded key is also spared by `--delete`, so the
+        # existing object stays in place until the next step overwrites it.
         run: |
           aws s3 sync ./_site "s3://${PRODUCTION_BUCKET}/" \
             --delete \
             --cache-control "public, max-age=86400" \
+            --exclude '404.html' \
             --exclude 'admin/index-local.html' \
             --exclude 'admin/config-local.yml' \
             --exclude 'admin/index-test.html' \
             --exclude 'admin/config-test.yml'
+
+      - name: Upload 404 page (not cacheable)
+        # See the exclude above: the error page must never be cached, or a
+        # 404 outlives the file arriving. Guarded because a consumer need not
+        # ship a 404.html (CloudFront then serves S3's own error instead).
+        run: |
+          if [ -f ./_site/404.html ]; then
+            aws s3 cp ./_site/404.html "s3://${PRODUCTION_BUCKET}/404.html" \
+              --cache-control "no-cache, must-revalidate" \
+              --content-type "text/html; charset=utf-8"
+          else
+            echo "No _site/404.html; nothing to upload."
+          fi
 
       - name: Remove stale dev-only admin objects
         # Idempotent purge of admin/*-local and admin/*-test objects that

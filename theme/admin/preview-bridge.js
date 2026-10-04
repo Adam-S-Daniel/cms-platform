@@ -3,9 +3,9 @@
  *
  * Boots after Decap's `window.CMS` global is defined and:
  *   - Registers a `postSave` event listener. On every save, the current
- *     entry is broadcast via a same-origin BroadcastChannel that the
- *     `/preview/` page subscribes to, so every open preview tab updates
- *     within a frame of Save being pressed.
+ *     entry (collection, slug and fields) is broadcast via a same-origin
+ *     BroadcastChannel that the `/preview/` page subscribes to, so every
+ *     open preview tab updates within a frame of Save being pressed.
  *
  * Uses only Decap's public CMS API (`registerEventListener`) — no
  * internal selectors, so it survives Decap minor-version churn.
@@ -62,18 +62,52 @@
     var collection =
       (typeof entry.get === "function" ? entry.get("collection") : entry.collection) || null;
 
-    return { collection: collection, fields: fields };
+    // The entry's slug names its editorial branch (`cms/<collection>/<slug>`),
+    // which /preview/ needs to fetch a not-yet-published upload through
+    // draft-media-fallback.js. postSave fires after the save, so it exists.
+    var slug = (typeof entry.get === "function" ? entry.get("slug") : entry.slug) || null;
+
+    return { collection: collection, slug: slug, fields: fields };
+  }
+
+  function post(payload) {
+    channel.postMessage({
+      type: "cms-preview-update",
+      collection: payload.collection,
+      slug: payload.slug,
+      fields: payload.fields,
+    });
+  }
+
+  // The slug of the entry the editor route names, when it is `collection`'s.
+  function slugFromRoute(collection) {
+    var m = /^#\/collections\/([^/?#]+)\/entries\/([^?#]+)/.exec(window.location.hash || "");
+    if (!m) return null;
+    try {
+      return decodeURIComponent(m[1]) === collection ? decodeURIComponent(m[2]) : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   function broadcast(entry) {
     if (!channel) return;
     var payload = readEntry(entry);
     if (!payload) return;
-    channel.postMessage({
-      type: "cms-preview-update",
-      collection: payload.collection,
-      fields: payload.fields,
-    });
+    post(payload);
+    if (payload.slug || !payload.collection) return;
+    // A NEW entry's postSave carries an empty slug: Decap computes it inside
+    // backend.persistEntry, after reading the entry it hands this event.
+    // It then replaces the route with #/collections/<c>/entries/<slug>
+    // (routing/history.ts navigateToEntry), so the next route change names
+    // it; re-send the same save once with that slug. Any other first route
+    // change (the editor left) sends nothing.
+    var onRoute = function () {
+      window.removeEventListener("hashchange", onRoute);
+      var slug = slugFromRoute(payload.collection);
+      if (slug) post({ collection: payload.collection, slug: slug, fields: payload.fields });
+    };
+    window.addEventListener("hashchange", onRoute);
   }
 
   function registerWithCMS(CMS) {

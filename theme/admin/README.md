@@ -56,7 +56,7 @@ hook, so no per-site or per-workflow step is needed.
 
 | Global | From | Used by |
 |---|---|---|
-| `CMS_REPO` | `cms.repository` | deploy-status-pill, publish-via-auto-merge, live-url-banner, posts-list-enhance, oauth-app-restriction-detector, reviews dashboards |
+| `CMS_REPO` | `cms.repository` | deploy-status-pill, publish-via-auto-merge, live-url-banner, posts-list-enhance, oauth-app-restriction-detector, draft-media-fallback (only when the served config names no `backend.repo`), reviews dashboards |
 | `CMS_SITE_ORIGIN` | `url` | site-hostname (`canonical()`, the production destination), posts-list-enhance, publish-button |
 | `CMS_ADMIN_ORIGIN` | `cms.admin_origin`, lowercased, no trailing slash (`""` when unset) — the editor's own origin when it is not the site's (#517) | site-hostname (`publicOrigin()`, and `current()` names the site, not the admin host), live-url-derive (live URLs), index.html / index-local.html (hide Live Preview, whose `/preview/` tab is out of reach of a cross-origin Save broadcast); inert on `""` and on any other origin, so a preview admin is unchanged |
 | `CMS_APEX` | host of `url` | site-hostname fallback, live-url-banner (preview-aware URL construction), posts-list-enhance (preview-host construction), reviews dashboards |

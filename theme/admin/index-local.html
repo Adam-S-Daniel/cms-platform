@@ -104,8 +104,15 @@
     + BEFORE decap-cms.js so window.confirm is wrapped before Decap loads,
     suppressing the misleading "restore local backup?" dialog. (No
     publish-via-auto-merge.js in this local shell — the local backend never
-    hits the ruleset — so this is the shell's only pre-decap wrap.) -->
+    hits the ruleset.) -->
   <script src="confirm-wrap-local-backup.js"></script>
+
+  <!--
+    draft-media-fallback shim — see admin/index.html. Non-deferred + BEFORE
+    decap-cms.js so it sees the File behind each upload's blob URL. Here only
+    that half applies: the local config's `local_backend: true` keeps it from
+    ever reading GitHub. -->
+  <script src="draft-media-fallback.js"></script>
 
   <!--
     Decap CMS — same pinned exact version as admin/index.html. The local

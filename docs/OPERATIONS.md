@@ -158,6 +158,26 @@ cd e2e/fixture-site && bundle config set --local path vendor/bundle && bundle in
 precisely what does NOT travel with a clone, so this is a one-time step on every
 fresh checkout, not a fix someone forgot to commit.
 
+## The production 404 page is never cacheable
+
+CloudFront answers every missing key on the production distribution with
+`/404.html` (`CustomErrorResponses`, `ErrorCachingMinTTL: 0`) and passes that
+object's own `Cache-Control` through. `deploy-production.yml` syncs the site
+with `public, max-age=86400`, so while `404.html` rode that sync every 404
+reached browsers as cacheable for a day
+(`curl -sSI https://<apex>/assets/images/uploads/nonexistent.jpeg` showed it).
+An editor's draft image 404s on the admin's origin until its post publishes,
+and that cached 404 kept the image broken in the editor's browser after the
+file was live.
+
+So the sync excludes `404.html` (an excluded key is also spared by
+`--delete`) and the next step, "Upload 404 page (not cacheable)", copies it
+with `no-cache, must-revalidate` when the site has one. A site that stops
+shipping `404.html` keeps the last uploaded copy until someone removes it.
+`e2e/deploy-production-404-cache.test.js` holds both halves;
+`e2e/cms-media-roundtrip.spec.js` checks the live header. `deploy-preview.yml`
+already uploads everything no-cache.
+
 ## Before deleting anything from a consumer, grep the PLATFORM too
 
 A file with no references anywhere inside a consumer repo can still be
