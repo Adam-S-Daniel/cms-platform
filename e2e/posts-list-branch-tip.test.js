@@ -22,7 +22,7 @@ const REFS = `${API}/git/matching-refs/heads/cms/posts/`;
 const OLD = "0ld0000000000000000000000000000000000000";
 const NEW = "4e40000000000000000000000000000000000000";
 
-function load(routes, extra = {}) {
+function load(routes, extra = {}, windowExtra = {}) {
   const calls = [];
   const sandbox = {
     window: {
@@ -30,6 +30,7 @@ function load(routes, extra = {}) {
       CMS_SITE_ORIGIN: "https://example.com",
       location: { hash: "#/" }, // not the list route — nothing runs at load
       addEventListener() {},
+      ...windowExtra,
     },
     document: { readyState: "complete", body: {}, addEventListener() {} },
     requestAnimationFrame: () => 0,
@@ -200,3 +201,39 @@ test.describe("posts-list-enhance.js publishing summary: every deployment state 
     );
   });
 });
+
+for (const [access, destinationOrigin] of [
+  ["https://example.com", "https://example.com"],
+  ["https://www.example.com", "https://example.com"],
+  ["https://d1234abcd.example.net", "https://example.com"],
+  ["https://preview-pr7.example.com", "https://example.com"],
+  ["https://example.com", "https://preview-pr7.example.com"],
+  ["https://preview-pr7.example.com", "https://preview-pr7.example.com"],
+  ["http://localhost:4000", "https://example.com"],
+  ["http://localhost:4000", "http://localhost:4000"],
+]) {
+  test(`Posts badge model receives publication host: ${access} -> ${destinationOrigin}`, () => {
+    const calls = [];
+    const destination = new URL(destinationOrigin).hostname;
+    const { hook } = load({}, { Date: FixedDate }, {
+      CMSHostname: {
+        current: () => new URL(access).hostname,
+        destination: () => destination,
+        canonical: () => "example.com",
+        options: () => ({ currentHostname: new URL(access).hostname, canonicalHostname: "example.com" }),
+      },
+      CMSEntryStatus: {
+        derive(facts, options) {
+          calls.push({ facts, options });
+          return { badge: "live", label: options.currentHostname };
+        },
+        SHORT_LABELS: {}, BADGE_COLORS: {}, MODIFIER_LABELS: {},
+      },
+    });
+    const card = { slug: "hello", state: { label: "Live", color: "green" } };
+    expect(hook.badgeFor(card, {}).label).toBe(destination);
+    expect(calls[0].options.currentHostname).toBe(destination);
+    expect(calls[0].options.canonicalHostname).toBe("example.com");
+    expect(calls[0].options.now).toBe(FIXED_NOW);
+  });
+}

@@ -20,7 +20,8 @@ const SRC = fs.readFileSync(path.resolve(__dirname, "../theme/admin/live-url-ban
 const SLUG = "2026-09-28-hello";
 const PROD = "https://example.com/blog/hello/";
 
-function load({ poller, cachedPr } = {}) {
+function load({ poller, cachedPr, banner = null, data, access = "https://example.com", destinationOrigin = "https://example.com" } = {}) {
+  const frames = [];
   const subscribers = [];
   const session = {};
   if (cachedPr != null) {
@@ -33,7 +34,13 @@ function load({ poller, cachedPr } = {}) {
   const window = {
     CMS_REPO: "owner/repo",
     CMS_APEX: "example.com",
-    location: { hash: `#/collections/posts/entries/${SLUG}`, origin: "https://example.com" },
+    CMSHostname: {
+      current: () => new URL(access).hostname,
+      destination: () => new URL(destinationOrigin).hostname,
+      fromURL: (value) => { try { return value ? new URL(value).hostname : null; } catch { return null; } },
+    },
+    LiveURL: data ? { compute: () => data } : undefined,
+    location: { hash: `#/collections/posts/entries/${SLUG}`, origin: access },
     addEventListener() {},
   };
   if (poller) {
@@ -51,14 +58,14 @@ function load({ poller, cachedPr } = {}) {
       body: {},
       readyState: "complete",
       addEventListener() {},
-      getElementById: () => null,
+      getElementById: (id) => id === "cms-live-url" ? banner : null,
       querySelector: () => null,
       querySelectorAll: () => [],
     },
     MutationObserver: class {
       observe() {}
     },
-    requestAnimationFrame: () => 0,
+    requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; },
     setTimeout: () => 0,
     sessionStorage: { getItem: (k) => session[k] || null, setItem() {} },
     localStorage: { getItem: () => null },
@@ -72,7 +79,7 @@ function load({ poller, cachedPr } = {}) {
   expect(hook && typeof hook.previewAwareURL, "live-url-banner.js must expose previewAwareURL for tests").toBe(
     "function",
   );
-  return { hook, subscribers };
+  return { hook, subscribers, render: () => frames.splice(0).forEach((fn) => fn()) };
 }
 
 const snap = (prNumber, slug = SLUG) => ({
@@ -107,4 +114,34 @@ test.describe("live-url-banner.js follows the live poller's PR, not a load-time 
     const { subscribers } = load({ poller: snap(42) });
     expect(subscribers.length, "live-url-banner.js must subscribe to CMSPublishProgress").toBeGreaterThan(0);
   });
+});
+
+for (const [access, destinationOrigin] of [
+  ["https://example.com", "https://example.com"],
+  ["https://www.example.com", "https://example.com"],
+  ["https://d1234abcd.example.net", "https://example.com"],
+  ["https://preview-pr7.example.com", "https://example.com"],
+  ["https://example.com", "https://preview-pr7.example.com"],
+  ["https://preview-pr7.example.com", "https://preview-pr7.example.com"],
+  ["http://localhost:4000", "https://example.com"],
+  ["http://localhost:4000", "http://localhost:4000"],
+]) {
+  for (const withURL of [false, true]) {
+    test(`live banner publication ${withURL ? "URL label" : "label fallback"}: ${access} -> ${destinationOrigin}`, () => {
+      const banner = { style: {}, innerHTML: "" };
+      const data = { published: true, url: withURL ? destinationOrigin + "/blog/hello/" : null };
+      const { render } = load({ poller: snap(null), banner, data, access, destinationOrigin });
+      render();
+      expect(banner.innerHTML).toContain("View page on " + new URL(destinationOrigin).hostname + ":");
+      if (withURL) expect(banner.innerHTML).toContain('href="' + destinationOrigin + '/blog/hello/"');
+    });
+  }
+}
+
+test("live banner names the actual per-PR preview URL rather than the publication fallback", () => {
+  const banner = { style: {}, innerHTML: "" };
+  const { render } = load({ poller: snap(42), banner, data: { published: true, url: PROD } });
+  render();
+  expect(banner.innerHTML).toContain("View page on preview-pr42.example.com:");
+  expect(banner.innerHTML).toContain('href="https://preview-pr42.example.com/blog/hello/"');
 });

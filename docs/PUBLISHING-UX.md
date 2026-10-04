@@ -382,6 +382,35 @@ update names the canonical hostname; a preview update names the current preview
 hostname. Their visible labels and help text describe publishing and updates,
 while workflow names, job ids and deployment states remain internal diagnostics.
 
+Publication links use `CMSHostname.destinationOrigin()`: the HTTP(S) origin of
+the served config's `site_url`, including protocol and port, with paths and
+credentials removed. They resolve it when rendered, so a delayed config read
+changes the destination without reloading. The local/test config names
+`http://localhost:4000`, intentionally preserving local development's protocol
+and port. The publish button supplies a site fallback explicitly:
+`CMS_SITE_ORIGIN`, then `https://` plus `CMS_APEX`. A served preview or local
+origin takes precedence; before the config settles, or when it is unreadable,
+times out after 10 seconds, or names a non-HTTP(S) URL, the button uses that
+supplied fallback.
+Other callers retain the no-argument `publicOrigin()` default: the configured
+public site on a separate admin origin, otherwise this tab's origin. A cached
+older hostname helper still supplies `publicOrigin()` to live-URL derivation
+until the new helper is available.
+
+New-post slug-collision probes intentionally use the tab's own origin for the
+`HEAD` request. A cross-origin response may be rejected by CORS, which would
+silently treat an occupied address as free; a same-origin response is readable.
+The probe remains best-effort and uses its existing timeout so Save can
+continue if a response is unavailable.
+
+Live Preview keeps the tab's origin because its BroadcastChannel is
+same-origin. The branch-binding banner likewise names the tab with `current()`;
+it identifies the preview the editor opened. The site-gate banner uses the same
+`binding()` result as the destination helpers, reads its flag at that served
+branch (#528), and names `canonical()` for the production branch or
+`destination()` for a preview. These banners explain the editing surface and
+its visibility; publication labels name where the configured publish goes.
+
 Every deployment state GitHub documents has its own words in the Posts-list
 summary (#534): *updated*, *update did not finish*, *update started*, *update
 requested*, and, for `inactive`, *update replaced by a newer one*. A state the

@@ -114,9 +114,12 @@
   function compute() {
     var collection = getCollection();
     if (!collection || !ROUTABLE_COLLECTIONS[collection]) return null;
-    // The public site's origin — not this tab's when the editor has its own
-    // (#517). site-hostname.js loads first in every shell.
-    var origin = window.CMSHostname ? window.CMSHostname.publicOrigin() : window.location.origin;
+    // Publication follows the served config, including its protocol and port.
+    // site-hostname.js loads first in every shell.
+    var origin = window.CMSHostname && typeof window.CMSHostname.destinationOrigin === "function"
+      ? window.CMSHostname.destinationOrigin()
+      : window.CMSHostname && typeof window.CMSHostname.publicOrigin === "function"
+        ? window.CMSHostname.publicOrigin() : window.location.origin;
 
     if (collection === "pages") {
       var permalink = readField("permalink");

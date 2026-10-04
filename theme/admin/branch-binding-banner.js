@@ -158,6 +158,8 @@
       "font:600 0.85em ui-monospace,SFMono-Regular,Menlo,monospace;" +
       "padding:0.05rem 0.35rem;border-radius:3px;background:rgba(255,255,255,0.14);word-break:break-all;";
     text.appendChild(code);
+    // This banner identifies the preview tab the editor opened. Publication
+    // copy uses destination(); this tab's identity intentionally uses current().
     text.appendChild(
       document.createTextNode(
         " branch on " + (window.CMSHostname ? window.CMSHostname.current() : "this preview") +

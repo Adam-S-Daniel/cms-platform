@@ -168,7 +168,11 @@
     } catch (e) {
       /* fall through to the site origin */
     }
-    return window.CMS_SITE_ORIGIN || (window.CMS_APEX ? "https://" + window.CMS_APEX : null);
+    var fallback = window.CMS_SITE_ORIGIN || (window.CMS_APEX ? "https://" + window.CMS_APEX : null);
+    if (window.CMSHostname && typeof window.CMSHostname.destinationOrigin === "function") {
+      return window.CMSHostname.destinationOrigin(fallback);
+    }
+    return fallback;
   }
 
   function hasUnsavedChanges() {

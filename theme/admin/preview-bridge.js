@@ -44,6 +44,8 @@
 
   function buildPreviewURL(collection) {
     var safe = String(collection || "posts").replace(/[^a-zA-Z0-9_-]/g, "");
+    // Live Preview shares this tab's BroadcastChannel, which is same-origin;
+    // its origin must stay here even when publication goes somewhere else.
     return window.location.origin + "/preview/?collection=" + encodeURIComponent(safe);
   }
   window.adamdaniel_cms_preview_url = buildPreviewURL;
