@@ -6,6 +6,8 @@
 // steps classify, so every scenario here compares the helper's answer with the
 // one a FULL clone gives, on real shallow repositories.
 const { test, expect } = require("./base");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { createSandbox } = require("./git-fixture");
 const { ensureMergeBase } = require("./ensure-merge-base");
 const { runDetect } = require("./detect-changed-pages");
@@ -193,6 +195,114 @@ test.describe("ensureMergeBase (cms-platform#541)", () => {
     sb.commit(src, { "f.txt": "1\n" }, "c1");
     expect(() => run(sb, src, { base: "bad..name" })).toThrow(/not a valid branch name/);
     expect(() => run(sb, src, { base: "" })).toThrow(/required/);
+  });
+});
+
+test.describe("ensureMergeBase fails closed on a shallow remote (cms-platform#541)", () => {
+  let sb;
+  test.afterEach(() => sb && sb.cleanup());
+
+  // The proof's last line of defense. When even `--unshallow` leaves a
+  // shallow boundary the merge base does not cover, the helper must throw
+  // rather than hand back a base it cannot prove. That happens when the
+  // REMOTE is itself shallow: T = merge(B, S) with S a side chain, and H a
+  // child of B. The merge base is B, but S's parents are hidden at the
+  // remote, so nothing fetched can show they do not hide a better one.
+  test("a remote that cannot supply the hidden history throws instead of guessing", () => {
+    sb = createSandbox("emb-shallow-remote-");
+    const src = sb.initRepo("src");
+    sb.commit(src, { "f.txt": "r\n" }, "root");
+    sb.git(src, ["checkout", "-q", "-b", "side"]);
+    sb.commit(src, { "s.txt": "1\n" }, "s1");
+    sb.commit(src, { "s.txt": "2\n" }, "s2");
+    sb.git(src, ["checkout", "-q", "main"]);
+    sb.commit(src, { "f.txt": "b\n" }, "B");
+    sb.git(src, ["checkout", "-q", "-b", "pr"]);
+    const head = sb.commit(src, { "pr.txt": "h\n" }, "H");
+    sb.git(src, ["checkout", "-q", "main"]);
+    sb.git(src, ["merge", "-q", "--no-ff", "-m", "T", "side"]);
+
+    // The shallow remote: depth 2 from every branch tip.
+    const shallowRemote = path.join(sb.root, "shallow-remote");
+    sb.git(sb.root, ["clone", "-q", "--no-tags", "--depth=2", "--no-single-branch", sb.publish(src), shallowRemote]);
+    sb.git(shallowRemote, ["branch", "pr", "origin/pr"]);
+
+    const work = sb.shallowCheckout(`file://${shallowRemote}`, head, 1);
+    expect(() => ensureMergeBase({ base: "main", cwd: work, step: 2, git: (args) => sb.git(work, args) })).toThrow(
+      /could not be proven: shallow boundaries remain/,
+    );
+  });
+});
+
+// The workflows run the CLI block, not the function, so the exit status and
+// the `--base` plumbing are what a required check actually depends on. These
+// spawn `node e2e/ensure-merge-base.js` against local repos (a bare mirror
+// served over file:// and a `--depth 1` checkout of it); no network.
+test.describe("ensure-merge-base.js CLI (cms-platform#541)", () => {
+  const CLI = path.join(__dirname, "ensure-merge-base.js");
+  let sb;
+  test.afterEach(() => sb && sb.cleanup());
+
+  // main: c0..c3. `release` forks at c1 (r1), and the PR head sits on r1, so
+  // its merge base is c1 against main but r1 against release.
+  function setup() {
+    sb = createSandbox("emb-cli-");
+    const src = sb.initRepo("src");
+    sb.commit(src, { "f.txt": "0\n" }, "c0");
+    const c1 = sb.commit(src, { "f.txt": "1\n" }, "c1");
+    sb.commit(src, { "f.txt": "2\n" }, "c2");
+    sb.commit(src, { "f.txt": "3\n" }, "c3");
+    sb.git(src, ["checkout", "-q", "-b", "release", c1]);
+    const r1 = sb.commit(src, { "r.txt": "r\n" }, "r1");
+    sb.git(src, ["checkout", "-q", "-b", "pr"]);
+    const head = sb.commit(src, { "pr.txt": "p\n" }, "p1");
+    const work = sb.shallowCheckout(sb.publish(src), head, 1);
+    return { c1, r1, work };
+  }
+
+  const cli = (cwd, args) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { cwd, env: sb.env, encoding: "utf8" });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+
+  test("success: exit 0 and the proven merge base on stdout", () => {
+    const { c1, work } = setup();
+    const r = cli(work, ["--base", "main"]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe(`${c1}\n`);
+  });
+
+  test("the base is the one named by --base, not a default", () => {
+    const { r1, c1, work } = setup();
+    const r = cli(work, ["--base", "release"]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe(`${r1}\n`);
+    expect(r1).not.toBe(c1);
+  });
+
+  test("--remote names the remote to fetch from", () => {
+    const { c1, work } = setup();
+    sb.git(work, ["remote", "rename", "origin", "upstream"]);
+    expect(cli(work, ["--base", "main"]).status, "origin no longer exists").toBe(1);
+    const r = cli(work, ["--base", "main", "--remote", "upstream"]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe(`${c1}\n`);
+  });
+
+  test("a failing fetch exits 1 with an ::error line and nothing on stdout", () => {
+    const { work } = setup();
+    const r = cli(work, ["--base", "no-such-branch"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^::error title=ensure-merge-base::/m);
+    expect(r.stdout).toBe("");
+  });
+
+  test("a missing --base exits 1 with an ::error line", () => {
+    const { work } = setup();
+    const r = cli(work, []);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^::error title=ensure-merge-base::.*`base`/m);
+    expect(r.stdout).toBe("");
   });
 });
 
