@@ -1607,3 +1607,40 @@ Measured before shipping: at jodidaniel.com `main`, `bundle exec jekyll build`
 + the script gives 192 `ok`, 0 `FAIL`, exit 0, identical under `JEKYLL_ENV=
 production`; 9 `note` lines are assertion groups that do not arm while
 `site_live: false`, so coverage roughly doubles at go-live (jodidaniel#26).
+
+## `secrets.*` is not allowed in a step-level `if:` (startup failure, not a flake)
+
+GitHub rejects `if: secrets.X == ''` (and `!=`) on a step at parse time with
+`Unrecognized named-value: 'secrets'`. A workflow that fails to parse produces a
+run with **zero jobs** and `conclusion: failure`, which looks exactly like a
+"phantom" `check_suite` run. When a workflow shows `event=push, jobs=0,
+conclusion=failure` rows, open the run page first: the parse error is printed
+there in plain text where the job list would be. A parse error can sit latent for
+weeks in a workflow whose triggers rarely fire (adamdaniel.ai's since-removed
+`dependabot-comment-sync.yml` had only `pull_request_target` and
+`workflow_dispatch` until a `push:` trigger exposed it, adamdaniel.ai PRs #280
+and #284), so adding a trigger can surface an old error.
+
+The fix is to hoist the secret into an `env:` value (secrets ARE allowed in
+`env:` at every scope) and test `env.X` in the `if:`, or compute a presence flag
+in an earlier step and test its output. `publish-scheduled-posts.yml` and
+`repo-settings-apply.yml` do this, and `e2e/repo-settings-apply.test.js` and
+`e2e/publish-scheduled-posts-flow.test.js` lock it.
+
+## A `pull_request` workflow runs the file from the PR's MERGE context, so a stale base keeps old pins
+
+A `pull_request` workflow executes the `.github/workflows/*` as they exist in the
+merge of the PR head into its **base branch**, not as they are on `main`. A
+`cms/*` editorial PR that targets a long-lived feature or scratch branch created
+before a platform bump therefore keeps running the OLD pinned reusable workflow
+(observed in the 2026-07 audit: the run's `referenced_workflows` showed
+`@v0.1.53` while `main` was on v0.1.54, which twice made a fix look like it had
+not worked).
+
+When testing platform-pinned behavior against a PR's preview environment, merge
+`main` into the PR's base branch first and let `deploy-preview` settle, then
+confirm which version actually ran before diagnosing "the fix didn't work":
+
+```bash
+gh api repos/<owner>/<repo>/actions/runs/<run_id> --jq '.referenced_workflows'
+```
