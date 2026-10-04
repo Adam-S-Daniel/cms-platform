@@ -263,7 +263,7 @@ function analyzeScript(src, where) {
   const tokens = { [METHOD]: 0, request: 0 };
   for (const tok of acorn.tokenizer(src, PARSE_OPTIONS)) {
     if (!["name", "string", "template"].includes(tok.type.label)) continue;
-    if (tok.value in tokens) tokens[tok.value]++;
+    if (Object.hasOwn(tokens, tok.value)) tokens[tok.value]++;
     if (tok.type.label === "name" && (tok.value === "eval" || tok.value === "Function")) {
       problems.push(`${where}+${tok.loc.start.line}: ${tok.value} is not allowed in a github-script body`);
     }
@@ -406,6 +406,14 @@ test.describe("createLabel lint is fail-closed", () => {
     );
     expect(shadowed.problems.join("\n"), "a const declared twice is not resolved").toMatch(/name must be a static string/);
   });
+
+  for (const name of ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"]) {
+    test(`ordinary ${name} tokens do not count as label creation`, () => {
+      const got = analyzeScript(`${ok}\nconst text = value.${name}();`, "t");
+      expect(got.problems).toEqual([]);
+      expect(got.calls).toHaveLength(1);
+    });
+  }
 
   const SHAPES = [
     ["a template literal with an expression", "await github.rest.issues.createLabel({ name: 'cms/x', description: `CMS ${what}` });", /description must be a static string/],
