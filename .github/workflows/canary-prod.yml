@@ -122,19 +122,27 @@ jobs:
           TARGET: prod
         run: |
           set -o pipefail
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/canary-output.log.json
+          status=0
           npx playwright test \
             cms-publish-loop.spec.js \
             --project=chromium-desktop-1080 \
             --grep '@canary-readonly' \
-            --reporter=list \
-            2>&1 | tee /tmp/canary-output.log
+            --reporter=list,html,json \
+            > /tmp/canary-output.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
 
       - name: Upload canary log
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: canary-prod-log
-          path: /tmp/canary-output.log
+          path: |
+            /tmp/canary-output.log
+            /tmp/canary-output.log.json
+            .cms-platform/e2e/playwright-report/
+            .cms-platform/e2e/test-results/
           retention-days: 14
 
       - name: Open issue on canary failure

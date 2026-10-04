@@ -302,12 +302,29 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -o pipefail
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/preview-media.log.json
+          status=0
           npx playwright test \
             preview-media-resolves.spec.js \
             --project=chromium-desktop-1080 \
-            --reporter=list \
+            --reporter=list,html,json \
             --max-failures=1 \
-            2>&1 | tee /tmp/preview-media.log
+            > /tmp/preview-media.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
+
+      - name: Upload preview media diagnostics
+        if: ${{ !cancelled() && (steps.salient.outputs.salient == 'true' || steps.salient.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: preview-media-results
+          path: |
+            /tmp/preview-media.log
+            /tmp/preview-media.log.json
+            .cms-platform/e2e/playwright-report/
+            .cms-platform/e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Post failure summary
         # Also fires when the salient detector itself hard-failed (fail

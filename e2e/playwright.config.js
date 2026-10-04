@@ -386,6 +386,7 @@ const PLATFORM_META_SPECS = [
   "gitleaks-allowlist-canary.test.js",
   "github-actions-poll.test.js",
   "live-failures-reporter.test.js",
+  "playwright-log-privacy.test.js",
   // Reads the platform's admin shell SOURCE (theme/admin/index*.html) —
   // meaningless on a consumer, which ships only the gem-rendered admin.
   "live-preview-gating-lint.test.js",

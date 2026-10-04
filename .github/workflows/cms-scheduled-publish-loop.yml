@@ -156,22 +156,28 @@ jobs:
           RUN_SCHEDULED_PUBLISH_LOOP: "1"
         run: |
           set -o pipefail
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/scheduled-publish-loop.log.json
+          status=0
           npx playwright test \
             cms-scheduled-publish-loop.spec.js \
             --project=chromium-desktop-1080 \
-            --reporter=list \
+            --reporter=list,html,json \
             --max-failures=1 \
             --workers=1 \
-            2>&1 | tee /tmp/scheduled-publish-loop.log
+            > /tmp/scheduled-publish-loop.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
 
-      - name: Upload test results on failure
-        if: ${{ (failure() || cancelled()) && vars.PROD_PLAYGROUND_MODE == 'true' }}
+      - name: Upload test results
+        if: ${{ always() && vars.PROD_PLAYGROUND_MODE == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scheduled-publish-loop-results
           path: |
             .cms-platform/e2e/test-results/
             /tmp/scheduled-publish-loop.log
+            /tmp/scheduled-publish-loop.log.json
+            .cms-platform/e2e/playwright-report/
           retention-days: 14
 
       - name: Post failure summary

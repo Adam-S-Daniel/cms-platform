@@ -190,20 +190,26 @@ jobs:
           PR_HEAD_REF: ${{ steps.pr.outputs.head_ref }}
         run: |
           set -o pipefail
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/preview-loop.log.json
+          status=0
           npx playwright test \
             cms-publish-loop-preview.spec.js \
             --project=chromium-desktop-3k \
-            --reporter=list \
+            --reporter=list,html,json \
             --max-failures=1 \
-            2>&1 | tee /tmp/preview-loop.log
+            > /tmp/preview-loop.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
 
-      - name: Upload test results on failure
-        if: ${{ failure() || cancelled() }}
+      - name: Upload test results
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: preview-loop-results
           path: |
             /tmp/preview-loop.log
+            /tmp/preview-loop.log.json
+            .cms-platform/e2e/playwright-report/
             .cms-platform/e2e/test-results/**
           if-no-files-found: ignore
           retention-days: 14

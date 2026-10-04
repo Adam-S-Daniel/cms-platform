@@ -279,15 +279,21 @@ jobs:
           # checkout (the FIRST, default-path checkout) so the #33 single-page
           # opt-out (cap.keepsBaseCollection) reads the right config.
           SITE_ROOT: ${{ github.workspace }}
+          PW_SPECS: ${{ steps.select.outputs.specs }}
         run: |
           set -o pipefail
           # The @parity specs span the public lane (chromium-desktop-1080)
           # and the admin lane (chromium-desktop-3k); run both. Playwright
           # handles per-spec project gating.
-          npx playwright test ${{ steps.select.outputs.specs }} \
+          read -r -a specs <<< "$PW_SPECS"
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/parity-preview.log.json
+          status=0
+          npx playwright test "${specs[@]}" \
             --project=chromium-desktop-1080 --project=chromium-desktop-3k \
-            --reporter=list \
-            2>&1 | tee /tmp/parity-preview.log
+            --reporter=list,html,json \
+            > /tmp/parity-preview.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
 
       - name: Upload artifacts
         if: ${{ !cancelled() && steps.select.outputs.count != '0' }}
@@ -297,6 +303,8 @@ jobs:
           path: |
             .cms-platform/e2e/test-results/
             /tmp/parity-preview.log
+            /tmp/parity-preview.log.json
+            .cms-platform/e2e/playwright-report/
             /tmp/parity-select.json
           retention-days: 7
 

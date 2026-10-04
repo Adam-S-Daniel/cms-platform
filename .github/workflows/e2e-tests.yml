@@ -297,7 +297,11 @@ jobs:
           shard_args=()
           if [ -n "${PW_SHARD:-}" ]; then shard_args=(--shard="$PW_SHARD"); fi
           echo "shard=${PW_SHARD:-<none>}"
-          npx playwright test --project="$PW_PROJECT" "${shard_args[@]}" --reporter=list 2>&1 | tee /tmp/playwright-output.log
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/playwright-output.log.json
+          status=0
+          npx playwright test --project="$PW_PROJECT" "${shard_args[@]}" --reporter=list,html,json > /tmp/playwright-output.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
@@ -317,6 +321,8 @@ jobs:
             e2e/test-results
             .cms-platform/e2e/playwright-report
             .cms-platform/e2e/test-results
+            /tmp/playwright-output.log
+            /tmp/playwright-output.log.json
           if-no-files-found: ignore
           retention-days: 7
 
