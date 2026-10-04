@@ -114,6 +114,10 @@ const PLATFORM_META_SPECS = [
   // parses what the script writes. Reads theme/admin SOURCE and scripts/;
   // platform-internal for the same reason as every entry around it.
   "branch-binding-banner.test.js",
+  // #528 — drives theme/admin/site-gate-banner.js with the real
+  // site-hostname.js in a vm sandbox (the gate read at the bound branch).
+  // Reads theme/admin SOURCE; platform-internal like the entry above.
+  "site-gate-banner.test.js",
   // The collection-list controls trim: reads the theme/admin SOURCE tree (the
   // shim plus the three shells) and vm-sandboxes the shim's pure sort-label
   // matcher. Platform-internal for the same reason as the entry above — a
