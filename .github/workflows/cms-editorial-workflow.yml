@@ -307,8 +307,10 @@ jobs:
 
             // Mark CMS PRs whose base isn't `main` as preview-only — they
             // exist to demonstrate / test the parent feature branch's
-            // changes against real content, and the content edit itself
-            // is not meant to flow to main when the feature merges.
+            // changes against real content. The edit merges into that
+            // feature branch and reaches main when the branch merges;
+            // nothing drops it, so remove it by hand first if it must not
+            // go live (#532).
             if (context.payload.pull_request.base.ref !== 'main') {
               try {
                 await github.rest.issues.createLabel({
@@ -316,9 +318,22 @@ jobs:
                   repo:  context.repo.repo,
                   name:  'cms/preview-only',
                   color: 'f5a623',
-                  description: 'CMS edit made on a feature-branch preview — drop this content from the parent branch when it merges to main',
+                  description: 'CMS edit on a feature-branch preview; reaches main when that branch merges, unless removed by hand',
                 });
-              } catch (_) {}
+              } catch (e) {
+                // 422 already_exists is the normal case once the label is
+                // there. Anything else used to vanish here, and addLabels
+                // then made a bare grey label (#532). Only the status code
+                // is logged: run logs are public, the response body is not.
+                const errors = (e && e.response && e.response.data && e.response.data.errors) || [];
+                const exists = e && e.status === 422 && errors.some((x) => x && x.code === 'already_exists');
+                if (!exists) {
+                  core.warning(
+                    `Could not create the cms/preview-only label (HTTP ${Number(e && e.status) || 'unknown'}); ` +
+                      'addLabels will add it without its description and color.',
+                  );
+                }
+              }
               labels.push('cms/preview-only');
             }
 

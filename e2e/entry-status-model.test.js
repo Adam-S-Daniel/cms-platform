@@ -363,7 +363,7 @@ test.describe("entry-status-model — the stall (#371)", () => {
     expect(got.detail).not.toMatch(/preview/i);
   });
 
-  test("a stall on a preview says plainly that it will not reach the live website", () => {
+  test("a stall on a preview asks for the merge into its branch, and names the live site as later", () => {
     const m = loadModel();
     const got = m.derive(
       facts({
@@ -381,10 +381,13 @@ test.describe("entry-status-model — the stall (#371)", () => {
       },
     );
     expect(got.badge).toBe(m.BADGE.NEEDS_ATTENTION);
-    expect(got.detail).toMatch(/claude\/issue-26-site-live-on/);
-    expect(got.detail).toMatch(/does not reach example\.com/);
-    expect(got.detail).toMatch(/nothing you typed has been lost/i);
-    expect(got.waitingOn).toMatch(/preview-pr0\.example\.com.*example\.com/);
+    expect(got.detail).toBe(
+      "Every check passed, but this has not been added to preview-pr0.example.com yet. " +
+        "Nothing you typed has been lost — ask Adam to finish adding it. " +
+        "It will not reach example.com until the work on “claude/issue-26-site-live-on” goes live there.",
+    );
+    expect(got.detail).not.toMatch(/on its own|does not reach/);
+    expect(got.waitingOn).toBe("a person to finish adding this to preview-pr0.example.com");
   });
 });
 
@@ -410,14 +413,56 @@ test.describe("entry-status-model — the destination (#371)", () => {
     );
     expect(going.badge).toBe(m.BADGE.GOING_LIVE);
     expect(going.detail).toMatch(/preview-pr0\.example\.com/);
-    expect(going.detail).toMatch(/not going to example\.com/);
+    expect(going.detail).toMatch(/will not reach example\.com until/);
 
     const draft = m.derive(
       facts({ hasOpenPr: true, previewOnly: true, baseRef: "claude/x" }),
       options,
     );
     expect(draft.badge).toBe(m.BADGE.DRAFT);
-    expect(draft.detail).toMatch(/will not go to example\.com/);
+    expect(draft.detail).toMatch(/will not reach example\.com until/);
+  });
+
+  // #532: publishing on a preview merges the edit into that feature branch,
+  // and nothing removes it again, so it reaches the live site when the
+  // branch does. "It will not go to example.com" promised the opposite.
+  // Every preview sentence about the live site says "not until", with the
+  // branch named, and never "will not go" or "is not going".
+  const PREVIEW_CASES = [
+    ["Draft", { hasOpenPr: true }],
+    ["Going live", { hasOpenPr: true, armed: true }],
+    ["Going live, merged", { hasOpenPr: true, merged: true }],
+    // The stall used to say the edit "does not reach example.com on its own",
+    // contradicting this note (review of #558, S1).
+    ["Needs attention, stalled", { hasOpenPr: true, armed: true, settledSince: NOW - GRACE - MIN }],
+    // Merged into the feature branch (publish-progress.js reports it as a
+    // preview with no open PR): on the preview now, the live site later.
+    ["Live on the preview", { hasOpenPr: false }],
+  ];
+  for (const [label, extra] of PREVIEW_CASES) {
+    for (const [baseRef, branch] of [
+      ["claude/x", "“claude/x”"],
+      [null, "this branch"],
+    ]) {
+      test(`${label} on a preview of ${branch}: the live site is "not until", never "never"`, () => {
+        const m = loadModel();
+        const options = { now: NOW, currentHostname: "preview-pr0.example.com", canonicalHostname: "example.com" };
+        const got = m.derive(facts({ ...extra, previewOnly: true, baseRef }), options);
+        const note = `It will not reach example.com until the work on ${branch} goes live there.`;
+        expect(m.destination(facts({ previewOnly: true, baseRef }), options).laterNote).toBe(note);
+        expect(got.detail.endsWith(` ${note}`), got.detail).toBe(true);
+        expect(got.detail).not.toMatch(/will not go to|not going to|\bnever\b|\bdrop/i);
+      });
+    }
+  }
+
+  test("production copy carries no preview note", () => {
+    const m = loadModel();
+    const options = { now: NOW, currentHostname: "example.com", canonicalHostname: "example.com" };
+    expect(m.destination(facts(), options).laterNote).toBeUndefined();
+    for (const extra of [{ hasOpenPr: true }, { hasOpenPr: true, armed: true }]) {
+      expect(m.derive(facts(extra), options).detail).not.toMatch(/until the work on/);
+    }
   });
 
   // A preview whose base ref we somehow do not know must still not claim the

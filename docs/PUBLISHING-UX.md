@@ -212,7 +212,8 @@ the five staged phases covered.
 preview admin's `backend.branch` to the PR's head ref. That is deliberate: an
 editor on a preview environment should edit that PR's branch. So Decap opens
 its editorial PR with `base` = a feature branch, and
-`cms-editorial-workflow.yml` labels it `cms/preview-only`.
+`cms-editorial-workflow.yml` labels it `cms/preview-only` (what that label
+does and does not mean: §3.6).
 
 Measured instance — jodidaniel.com [#233](https://github.com/jodidaniel/jodidaniel.com/pull/233),
 created through `preview-pr220.jodidaniel.com/admin` on 2026-08-31:
@@ -358,13 +359,11 @@ failure report.
 
 ### 3.5 On a preview, "the website" is the wrong noun
 
-An editor on a PR-preview deploy is editing a feature branch, and the
-`cms/preview-only` label's own description reads *"drop this content from the
-parent branch when it merges to main"*. So every sentence in the admin
-containing "the website" was false there — including the Publish
-confirmation's **"It will appear at https://&lt;apex&gt;/… in about 5–15
-minutes"**, a specific, checkable, false promise on the one surface whose whole
-point is that nothing reaches the live site.
+An editor on a PR-preview deploy is editing a feature branch. So every
+sentence in the admin containing "the website" was false there — including the
+Publish confirmation's **"It will appear at https://&lt;apex&gt;/… in about
+5–15 minutes"**, a specific, checkable, false promise on a surface where
+nothing reaches the live site *now*.
 
 `entry-status-model.js` now derives the destination once (`destination(facts,
 options)`), and both the bar and the button name it. `site-hostname.js` supplies
@@ -381,9 +380,77 @@ update names the canonical hostname; a preview update names the current preview
 hostname. Their visible labels and help text describe publishing and updates,
 while workflow names, job ids and deployment states remain internal diagnostics.
 
+Every deployment state GitHub documents has its own words in the Posts-list
+summary (#534): *updated*, *update did not finish*, *update started*, *update
+requested*, and, for `inactive`, *update replaced by a newer one*. A state the
+code does not recognize reads *update status unknown (last reported 5m ago)*,
+never the old *publishing details*, which read as if something had happened.
+When polling breaks for five minutes, the toolbar pill turns amber with *details
+may be out of date*, names the same production or preview hostname as before,
+keeps its link to the last update, and clears on the next successful poll
+(`e2e/deploy-status-pill-stale.test.js`; before #534 the warning outlived the
+outage until the deployment changed state).
+
 §2.8 measured the only thing distinguishing a preview admin from the real one
 as a 0.65rem pill in a corner. This puts it in the sentence the editor is
 already reading.
+
+### 3.6 What a preview-only edit does when its branch merges (#532)
+
+The `cms/preview-only` label used to describe itself as *"drop this content
+from the parent branch when it merges to main"*, and the admin echoed it:
+"It will not go to &lt;apex&gt;", "It will NOT go to &lt;apex&gt;". Nothing
+does that. Traced end to end:
+
+1. Decap opens the PR with `base` = the feature branch (§2.10), and
+   `cms-editorial-workflow.yml`'s "Apply draft label on new PR" step labels it
+   `cms/preview-only` because `base.ref !== 'main'`.
+2. Publishing it merges it **into the feature branch** —
+   `auto-merge-when-ready`'s preview-only path, with
+   `cms-automerge-nudge.yml`'s `basePreviewOnly` branch as the backstop.
+3. The edit is now an ordinary commit on that branch. When the feature branch
+   merges to `main`, the edit goes with it and production deploys it. No
+   workflow, script or check removes it, and nothing reads the label after it
+   is applied except the admin's own `previewOnly` fact.
+
+So the policy is the reworded one: **a preview-only edit reaches the live site
+when its branch does, unless someone removes it by hand first.** The label now
+says *"CMS edit on a feature-branch preview; reaches main when that branch
+merges, unless removed by hand"*, and every preview sentence about the live
+site uses one phrase from `destination().laterNote`: *"It will not reach
+&lt;apex&gt; until the work on “&lt;branch&gt;” goes live there."* That is true
+whether or not the branch ever merges, and an editor reading it before the
+parent PR merges knows the edit rides along. Locked by
+`e2e/entry-status-model.test.js` (Draft and Going-live, with and without a known
+branch, the stall, and Live on the preview), `e2e/publish-status-links.test.js`
+(the confirmation) and `e2e/publish-progress-post-merge.test.js` (once the PR
+has merged, only a merge into a known default-branch base reads as going live
+on the live site, whatever its labels; a merge into the feature branch, or one
+whose base is unknown, reads as on its way to the preview for the merge watch,
+and after that the entry's ordinary state applies).
+
+The old wording was never actually shown on GitHub. GitHub rejects a label
+description over 100 characters with a 422; the old one was 107, the
+`createLabel` call sat in a `try { … } catch (_) {}`, and `addLabels` then
+created the label implicitly with no description and the default grey. Both
+consumers' `cms/preview-only` labels read exactly that (description `null`,
+color `ededed`, 2026-10-03), while `cms/draft` and `cms/ready` from the same
+step carry their descriptions. `e2e/preview-only-label-description.test.js`
+parses every platform workflow's `createLabel` call (`yaml` + acorn) and holds
+each description to 100 characters; a call shape it cannot evaluate fails it,
+as do other ways to create `cms/preview-only` (a github-script `request()` to
+`POST …/labels`, `eval`, a `run:` step's `gh label create` or `gh api …/labels`).
+Its scope is the platform's workflows; repo scripts that create other labels
+are out of it, and a test fails if one under `scripts/` names
+`cms/preview-only`.
+The preview-only step now raises a warning with the HTTP status code (never
+the response body) for any failure other than `already_exists`.
+
+`createLabel` never updates a label that already exists (it answers 422
+`already_exists`, which the step ignores), and no audit or sync in this repo
+edits a label's description. A consumer whose `cms/preview-only` label already
+exists keeps its old description and color until someone edits it by hand:
+`gh label edit cms/preview-only --repo <owner>/<repo> --description "…" --color f5a623`.
 
 `e2e/entry-status-model.test.js` pins the fallback explicitly: a preview-only
 entry encountered on the canonical host degrades to "the preview for this

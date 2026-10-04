@@ -22,7 +22,7 @@ const REFS = `${API}/git/matching-refs/heads/cms/posts/`;
 const OLD = "0ld0000000000000000000000000000000000000";
 const NEW = "4e40000000000000000000000000000000000000";
 
-function load(routes) {
+function load(routes, extra = {}) {
   const calls = [];
   const sandbox = {
     window: {
@@ -48,6 +48,7 @@ function load(routes) {
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(hit) });
     },
     console: { info() {}, warn() {} },
+    ...extra,
   };
   vm.createContext(sandbox);
   vm.runInContext(SRC, sandbox);
@@ -105,5 +106,97 @@ test.describe("posts-list-enhance.js reads draft branch tips, not the PR list's 
     expect(copy.signedOut).toBe("Sign in to see publishing details");
     expect(copy.refreshTitle).toBe("Refresh latest edits and publishing details");
     expect(`${copy.signedOut} ${copy.refreshTitle}`).not.toMatch(/\b(deploy|PR)\b/);
+  });
+});
+
+// #534: the summary once read "example.com publishing details 3h ago" for any
+// state it did not list — including `inactive`, a state GitHub really sends.
+// Every documented deployment status gets words that are true with "<n> ago"
+// after them, and an unrecognized one says plainly that it is unknown.
+const FIXED_NOW = Date.parse("2026-10-01T12:00:00Z");
+class FixedDate extends Date {
+  constructor(...args) {
+    super(...(args.length ? args : [FIXED_NOW]));
+  }
+  static now() {
+    return FIXED_NOW;
+  }
+}
+const FIVE_MIN_AGO = new Date(FIXED_NOW - 5 * 60 * 1000).toISOString();
+
+const STATE_SUMMARIES = [
+  ["success", "example.com updated 5m ago"],
+  ["failure", "example.com update did not finish 5m ago"],
+  ["error", "example.com update did not finish 5m ago"],
+  ["in_progress", "example.com update started 5m ago"],
+  ["queued", "example.com update requested 5m ago"],
+  ["pending", "example.com update requested 5m ago"],
+  ["inactive", "example.com update replaced by a newer one 5m ago"],
+  ["some_future_state", "example.com update status unknown (last reported 5m ago)"],
+  [undefined, "example.com update status unknown (last reported 5m ago)"],
+];
+
+test.describe("posts-list-enhance.js publishing summary: every deployment state in plain words (#534)", () => {
+  for (const [state, expected] of STATE_SUMMARIES) {
+    test(`state ${String(state)} renders "${expected}"`, () => {
+      const { hook } = load({}, { Date: FixedDate });
+      const html = hook.publishingSummaryHTML({ state, at: FIVE_MIN_AGO, url: null }, "example.com");
+      expect(html).toBe(expected);
+      expect(html).not.toMatch(/publishing details/);
+      expect(html).not.toMatch(/\b(deploy\w*|inactive|in_progress|queued|pending|error)\b/i);
+    });
+  }
+
+  test("the state words link to the update's details without changing the words", () => {
+    const { hook } = load({}, { Date: FixedDate });
+    const html = hook.publishingSummaryHTML(
+      { state: "inactive", at: FIVE_MIN_AGO, url: "https://github.com/owner/repo/actions/runs/1" },
+      "example.com",
+    );
+    expect(html).toBe(
+      'example.com <a href="https://github.com/owner/repo/actions/runs/1" target="_blank" rel="noopener">' +
+        "update replaced by a newer one</a> 5m ago",
+    );
+  });
+
+  // Review of #558, N3: the URL comes from a workflow's deployment status,
+  // so only an https: one is put in an href.
+  for (const url of [
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "http://example.com/log",
+    "data:text/html,x",
+    "//example.com/log",
+    // The scheme test is anchored: https:// later in the string is not enough.
+    "javascript:x//https://example.com/",
+    // Userinfo can disguise the host the link really goes to.
+    "https://user:pw@example.com/log",
+    "https://example.net@example.com/log",
+    "https://example.net\\@example.com/log",
+  ]) {
+    test(`an update URL that is not plain https (${url}) leaves the words unlinked`, () => {
+      const { hook } = load({}, { Date: FixedDate });
+      const html = hook.publishingSummaryHTML({ state: "success", at: FIVE_MIN_AGO, url }, "example.com");
+      expect(html).toBe("example.com updated 5m ago");
+    });
+  }
+
+  test("an https URL is escaped into the href", () => {
+    const { hook } = load({}, { Date: FixedDate });
+    const html = hook.publishingSummaryHTML(
+      { state: "success", at: FIVE_MIN_AGO, url: 'https://example.com/log?a=1&b="x"' },
+      "example.com",
+    );
+    expect(html).toBe(
+      'example.com <a href="https://example.com/log?a=1&amp;b=&quot;x&quot;" target="_blank" rel="noopener">updated</a> 5m ago',
+    );
+  });
+
+  test("with no time recorded the summary ends at the state words", () => {
+    const { hook } = load({}, { Date: FixedDate });
+    expect(hook.publishingSummaryHTML({ state: "success", at: null }, "example.com")).toBe("example.com updated");
+    expect(hook.publishingSummaryHTML({ state: "bogus", at: null }, "example.com")).toBe(
+      "example.com update status unknown",
+    );
   });
 });

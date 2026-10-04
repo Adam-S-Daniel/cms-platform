@@ -94,6 +94,27 @@ test.describe("entry-status-model — checks in plain English, as x of y", () =>
     }
   });
 
+  // #534: "publishing to example.com is ready to use" did not say what the
+  // guard checks. scripts/assert-release-pin.js fails when platform.lock pins
+  // a trial build (vX.Y.Z-rc.N) of the shared publishing system, on changes
+  // headed for the main branch, so the name says exactly that.
+  test("the prerelease guard is named for what it checks: a finished, not trial, publishing system", () => {
+    const m = loadModel();
+    expect(m.CHECK_NAMES["prerelease-guard"]).toBe(
+      "the check that {{destination}} will be built with a finished version of its publishing system, not a trial one",
+    );
+    const got = m.derive(armed({ checks: { total: 9, pending: ["prerelease-guard"] } }), {
+      now: NOW,
+      currentHostname: "example.com",
+      canonicalHostname: "example.com",
+    });
+    expect(got.waitingOn).toBe(
+      "the last of 9 automatic safety checks (the check that example.com will be built with a finished " +
+        "version of its publishing system, not a trial one)",
+    );
+    expect(got.waitingOn).not.toMatch(/ready to use|\brc\b|prerelease/i);
+  });
+
   test("the plain-English 'x of y' phrase is the one linked to the check run (#473 + #3857)", () => {
     const m = loadModel();
     const url = "https://github.com/owner/repo/actions/runs/1";

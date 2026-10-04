@@ -279,6 +279,8 @@ const PLATFORM_META_SPECS = [
   "required-context-cancellable.test.js",
   "cms-config-preview-delta.spec.js",
   "cms-automerge-nudge.test.js",
+  // #532 — parses the platform's OWN workflow definitions' createLabel calls.
+  "preview-only-label-description.test.js",
   // #371 — joins repo-settings.yml's required-context strings to the workflow
   // tree that would have to publish them. Reads the platform's own
   // repo-settings.yml, .github/workflows/ and examples/site/ — none of which a
@@ -353,6 +355,7 @@ const PLATFORM_META_SPECS = [
   "deploy-pill.test.js",
   "deploy-preview-cms-slug.test.js",
   "deploy-status-pill-robustness.test.js",
+  "deploy-status-pill-stale.test.js",
   "detect-changed-pages.test.js",
   // #539 — drives detect-changed-pages.js and visual-regression-salient.js
   // (platform pipeline tooling) over throwaway git repos; platform-internal,

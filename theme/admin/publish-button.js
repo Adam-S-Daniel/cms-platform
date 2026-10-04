@@ -82,15 +82,17 @@
  * scripts/patch-preview-config.sh deliberately rewrites that admin's
  * `backend.branch` to the PR head ref — so an editor on a preview edits a
  * FEATURE BRANCH. cms-editorial-workflow.yml labels the resulting PR
- * `cms/preview-only`, whose own description is "drop this content from the
- * parent branch when it merges to main".
+ * `cms/preview-only`. Publishing it merges the edit into that feature
+ * branch; nothing removes it again, so it reaches the live site when that
+ * branch merges to main (#532 — the label once promised the opposite).
  *
  * The confirmation therefore must not name the live URL there. It used to,
  * unconditionally: "It will appear at https://<apex>/… in about 5–15
- * minutes" — a specific, checkable, false promise, on the one surface where
- * the whole point is that nothing reaches the live site. It now names the
- * destination entry-status-model.js derives, which is the preview's own
- * branch on that surface and the site everywhere else.
+ * minutes" — a specific, checkable, false promise, on a surface where
+ * nothing reaches the live site now. It now names the destination
+ * entry-status-model.js derives, which is the preview's own branch on that
+ * surface and the site everywhere else, and says the edit reaches the live
+ * site only once that branch's work does (`laterNote`) rather than never.
  *
  * And the button must not DISAPPEAR on a stalled publish. `armed` used to be
  * enough to render nothing at all ("already on its way — a second Publish
@@ -431,11 +433,16 @@
         // preview origin is not derivable from anything this shim may read.
         // Naming the branch is the same discipline targetUrl() already
         // applies — naming the wrong URL is worse than naming none.
+        // An entry-status-model.js older than laterNote (a cached copy)
+        // still says preview: true; say the same thing in its place rather
+        // than "undefined".
         return {
           kind: "confirm",
           note:
             "Put this on " + dest.noun + "? It takes about 5 minutes to appear " +
-            "there. It will NOT go to " + dest.canonical + ".",
+            "there. " +
+            (dest.laterNote ||
+              "It will not reach " + dest.canonical + " until the work on this branch goes live there."),
         };
       }
       var url = targetUrl();

@@ -52,12 +52,14 @@
  * 2. THE DESTINATION. A PR-preview admin edits a feature branch, not the
  *    live site — `scripts/patch-preview-config.sh` rewrites the preview
  *    admin's `backend.branch` on purpose, and cms-editorial-workflow.yml
- *    then labels the PR `cms/preview-only`, whose own description reads
- *    "drop this content from the parent branch when it merges to main". So
- *    on that surface every sentence containing "the website" was false.
- *    §2.8 measured the only thing distinguishing that admin from the real
- *    one as a 0.65rem pill in a corner; this puts it in the sentence the
- *    editor is already reading, where it cannot be missed.
+ *    then labels the PR `cms/preview-only`. Publishing there merges the edit
+ *    into that feature branch, so it is not on the live site now, and it
+ *    reaches the live site later only when that branch does: nothing removes
+ *    it on the way (#532). So on that surface every sentence containing "the
+ *    website" was false, and so was any sentence promising the edit would
+ *    never get there. §2.8 measured the only thing distinguishing that admin
+ *    from the real one as a 0.65rem pill in a corner; this puts it in the
+ *    sentence the editor is already reading, where it cannot be missed.
  *
  * ── Deliberately pure ──────────────────────────────────────────────────
  * No DOM, no network, no clock of its own — `now` is a parameter. That is
@@ -159,6 +161,13 @@
   // workflow's matrix of jobs is ONE check to the editor. The value names
   // what the check does, in words the editor already uses; a raw id such as
   // "e2e / e2e" in the bar was #3857's complaint.
+  //
+  // Each name says what the check actually tests. `prerelease-guard`
+  // (platform-prerelease-guard.yml → scripts/assert-release-pin.js) fails
+  // when the site's platform.lock pins a trial build (`vX.Y.Z-rc.N`) of the
+  // shared publishing system, and its caller runs only on changes headed for
+  // the main branch — so it guards against the live site being built with an
+  // unfinished version of that system, not anything about the post (#534).
   var DESTINATION_TOKEN = "{{destination}}";
   var CHECK_NAMES = {
     e2e: "the check that {{destination}} works on phones, tablets and computers",
@@ -168,7 +177,8 @@
     "visual-regression": "the check for unexpected changes to how pages look",
     editorial: "the check that the post's details are filled in correctly",
     scan: "the scan for passwords or keys pasted in by mistake",
-    "prerelease-guard": "the check that publishing to {{destination}} is ready to use",
+    "prerelease-guard":
+      "the check that {{destination}} will be built with a finished version of its publishing system, not a trial one",
     reap: "a housekeeping step",
     preview: "building the preview",
     "auto-merge": "the automatic publish step",
@@ -268,20 +278,25 @@
   // "the website" is a lie on a preview surface (see the header). Naming the
   // branch rather than inventing a preview URL follows publish-button.js's
   // targetUrl() rule: naming the wrong URL would be worse than naming none.
+  //
+  // `laterNote` is the one sentence every preview surface uses for the live
+  // site. "It will not go there" was false: publishing on a preview merges
+  // the edit into that branch, and it reaches the live site whenever that
+  // branch does (#532). So it says "not until", which is true whether or not
+  // the branch ever goes live, and promises nothing in either direction.
   function destination(facts, options) {
     var f = facts || {};
     var opts = options || {};
     var canonical = opts.canonicalHostname || "the published destination";
     if (!f.previewOnly) return { noun: canonical, canonical: canonical, preview: false };
     var current = opts.currentHostname;
-    var previewNoun =
-      current && current !== canonical
-        ? current
-        : "the preview for " + (f.baseRef ? "“" + f.baseRef + "”" : "this branch");
+    var branch = f.baseRef ? "“" + f.baseRef + "”" : "this branch";
+    var previewNoun = current && current !== canonical ? current : "the preview for " + branch;
     return {
       noun: previewNoun,
       canonical: canonical,
       preview: true,
+      laterNote: "It will not reach " + canonical + " until the work on " + branch + " goes live there.",
     };
   }
 
@@ -348,16 +363,18 @@
     }
     if (stalled) {
       // Two genuinely different situations, and conflating them is what made
-      // the preview case invisible for as long as it was.
+      // the preview case invisible for as long as it was. On a preview the
+      // stalled merge is the one into the feature branch, so that is what a
+      // person is asked to finish; the live site comes later, with the
+      // branch, in the same `laterNote` words as every other preview state
+      // (#532).
       if (f.previewOnly) {
         return {
           detail:
-            "Everything passed, but this was edited on a preview of " +
-            (f.baseRef ? "“" + f.baseRef + "”" : "another branch") +
-            ", and a change made there does not reach " + host +
-            " on its own. Nothing you typed has been lost — ask " + who +
-            " to put it on " + host + ".",
-          waitingOn: "a person to move this from " + dest.noun + " to " + host,
+            "Every check passed, but this has not been added to " + dest.noun +
+            " yet. Nothing you typed has been lost — ask " + who +
+            " to finish adding it. " + dest.laterNote,
+          waitingOn: "a person to finish adding this to " + dest.noun,
         };
       }
       return {
@@ -438,7 +455,7 @@
         detail:
           "This is on its way to " + dest.noun + ". It is waiting for " + waiting + ". " +
           "You can close this tab — it carries on without you." +
-          (dest.preview ? " It is not going to " + dest.canonical + "." : ""),
+          (dest.preview ? " " + dest.laterNote : ""),
         // Checks phase only: once merged, `waiting` is the deploy, not a check.
         // Links `waiting` — the phrase actually in `detail` — not the raw
         // `waitingOn` fact, which the poller no longer sets (it reports
@@ -457,7 +474,7 @@
         detail:
           "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
           "put it on " + dest.noun + "." +
-          (dest.preview ? " It will not go to " + dest.canonical + "." : ""),
+          (dest.preview ? " " + dest.laterNote : ""),
         detailLink: null,
         waitingOn: null,
         minutesLeft: null,
@@ -468,7 +485,7 @@
     return {
       badge: BADGE.LIVE,
       label: "Live",
-      detail: "This is on " + dest.noun + " now.",
+      detail: "This is on " + dest.noun + " now." + (dest.preview ? " " + dest.laterNote : ""),
       detailLink: null,
       waitingOn: null,
       minutesLeft: null,
