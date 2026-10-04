@@ -375,10 +375,11 @@ of the byte compare. → `docs/CONSUMER-COMPATIBILITY.md` before changing
 
 `.github/workflows/self-ci.yml` is this repo's merge gate; with
 `self-secrets-scan.yml` (#126) it is one of only two workflows here that run on
-a plain PR. Six lanes, four REQUIRED (**actionlint**, **ruby-theme-specs**,
-**node-unit-lints** — pure-fs `e2e/*.test.js` chosen by a DENY list — and
-**plugin-validate**, NON-STRICT deliberately); the browser matrix runs in
-CONSUMER e2e. → `docs/CONTRIBUTING.md`.
+a plain PR. Six lanes, all REQUIRED, plus `scan / scan` from the secrets scan:
+**actionlint**, **ruby-theme-specs**, **node-unit-lints** (pure-fs
+`e2e/*.test.js`, DENY list), **plugin-validate** (NON-STRICT deliberately),
+**python-unit-tests** and **cfn-lint** (no `continue-on-error` since #525); the
+browser matrix runs in CONSUMER e2e. → `docs/CONTRIBUTING.md`.
 
 ## Adding / porting a workflow
 

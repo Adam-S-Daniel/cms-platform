@@ -90,8 +90,8 @@ elsewhere) — a green run of it, not a diff review, is what makes the bump done
 other workflow here is an `on: workflow_call` reusable; `self-ci.yml` plus its
 sibling `self-secrets-scan.yml` — which dogfoods the `secrets-scan.yml`
 reusable on this repo's own history — are the only two that run directly on a
-plain PR). It runs six FAST lanes on `pull_request` + `push` to `main`, four of
-them REQUIRED:
+plain PR). It runs six FAST lanes on `pull_request` + `push` to `main`, all
+REQUIRED:
 
 1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail; REQUIRED).
 2. **ruby-theme-specs** — `theme/spec/*_test.rb`, each run with plain `ruby`, no

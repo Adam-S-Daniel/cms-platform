@@ -151,8 +151,8 @@ function localReusableFor(job) {
 // Every check run the platform repo's own workflows can publish, one entry per
 // (context, publishing job): `{ context, file, jobId, job, reusableJob, on }`.
 // A `workflow_call`-only workflow is a reusable: it never runs on this repo's
-// PRs, so it publishes nothing here (AGENTS.md, "most workflows are
-// workflow_call-only reusables").
+// PRs, so it publishes nothing here (docs/CONTRIBUTING.md, "In `cms-platform`
+// itself, most workflows are `workflow_call`-only reusables").
 //
 // A caller job that `uses:` a local reusable publishes `<caller> / <called>`
 // and NEVER the bare `<caller>`. Until #525 this oracle emitted the bare
