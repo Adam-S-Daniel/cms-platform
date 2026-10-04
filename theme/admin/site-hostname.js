@@ -1,9 +1,54 @@
-/* Shared, public-DOM site identity for admin copy. */
+/*
+ * Shared, public-DOM site identity for admin copy.
+ *
+ * Three hostnames, and they are not interchangeable (#533):
+ *
+ *   current()     — the ACCESS host: the address this admin tab was opened
+ *                   on (or the site's, on the separate admin origin, #517).
+ *                   On production that can be `www.`, a CloudFront
+ *                   distribution hostname or localhost, none of which is
+ *                   where a publish goes.
+ *   canonical()   — the PRODUCTION destination, from the injected
+ *                   window.CMS_SITE_ORIGIN (then window.CMS_APEX).
+ *   destination() — where a publish from THIS admin goes: the host of the
+ *                   `site_url` in the config.yml this admin serves. Both
+ *                   render paths write the site's `url` there, and
+ *                   scripts/patch-preview-config.sh rewrites it to the
+ *                   preview host on a preview deploy, so it is the canonical
+ *                   host on production (from any access host) and the
+ *                   preview host on a preview. The local and test shells'
+ *                   configs name http://localhost:4000, so local development
+ *                   names localhost — intentionally: there a publish writes
+ *                   to the working tree that localhost serves. Until the
+ *                   config has been read, or when it cannot be, it is
+ *                   current(): right on a preview (where canonical() would
+ *                   name production — the confusion this exists to remove),
+ *                   and only cosmetically off on a production `www.`.
+ *
+ * The `{{CMS_CURRENT_HOST}}` token in platform field labels and hints means
+ * destination() (it keeps its old name because site-owned config may carry
+ * it). It is replaced only once the served config has been read, so a label
+ * never shows a guess that later turns out wrong; Decap needs the same config
+ * before it can render any field, so in practice the read has settled first.
+ * The read is abandoned after CONFIG_READ_TIMEOUT_MS and treated as
+ * unreadable, so a stalled connection cannot leave the raw token on screen.
+ *
+ * binding() exposes the same read — `{ branch, destination }` — for
+ * site-gate-banner.js, which must read its flag at the branch this admin is
+ * bound to (#528). The branch is read at the line anchor
+ * patch-preview-config.sh writes (`^  branch:`), the same lexical contract as
+ * branch-binding-banner.js: a value that is not a plain git ref name is null.
+ */
 (function () {
   "use strict";
 
   var TOKEN = "{{CMS_CURRENT_HOST}}";
   var OWNED_CONTROL_SELECTORS = ['[class*="ControlHint"]', '[class*="FieldLabel"]'];
+  var DEFAULT_CONFIG_FILE = "config.yml";
+  // The characters a plain git ref name is made of (branch-binding-banner.js).
+  var REF_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+  var UNKNOWN = { branch: null, destination: null };
+  var CONFIG_READ_TIMEOUT_MS = 10000;
 
   function hostname(value) {
     if (value === null || value === undefined || String(value).trim() === "") return null;
@@ -42,6 +87,79 @@
     return { currentHostname: current(), canonicalHostname: canonical() };
   }
 
+  // ── The served config ────────────────────────────────────────────────
+  // Lexical reads of two top-level leaves, at the anchors the writers emit;
+  // an unmatched or malformed value is null, never a guess.
+  function parseServedConfig(text) {
+    var src = String(text || "");
+    var b = /^ {2}branch:[ \t]*([^\s#]+)[ \t]*(?:#.*)?$/m.exec(src);
+    var u = /^site_url:[ \t]*(["']?)([^\s"'#]+)\1[ \t]*(?:#.*)?$/m.exec(src);
+    var dest = null;
+    if (u) {
+      try {
+        var parsed = new URL(u[2]);
+        if (parsed.protocol === "https:" || parsed.protocol === "http:") dest = parsed.hostname || null;
+      } catch (e) {
+        dest = null;
+      }
+    }
+    return { branch: b && REF_NAME.test(b[1]) ? b[1] : null, destination: dest };
+  }
+
+  // Decap loads the file a `<link rel="cms-config-url">` names, else
+  // config.yml beside the shell; read the same one.
+  function configURL() {
+    var link = document.querySelector ? document.querySelector('link[rel="cms-config-url"]') : null;
+    var href = (link && link.getAttribute("href")) || DEFAULT_CONFIG_FILE;
+    return new URL(href, document.baseURI || window.location.href).href;
+  }
+
+  var served = null; // settled result of the one read; null until then
+  var servedRead = null;
+
+  function binding() {
+    if (servedRead) return servedRead;
+    var controller = typeof AbortController === "function" ? new AbortController() : null;
+    var timer = null;
+    var read;
+    try {
+      read =
+        typeof fetch === "function"
+          ? fetch(configURL(), { cache: "no-cache", signal: controller ? controller.signal : undefined })
+          : Promise.resolve(null);
+    } catch (e) {
+      read = Promise.resolve(null);
+    }
+    var text = Promise.resolve(read).then(function (res) {
+      return res && res.ok ? res.text() : null;
+    });
+    // A stalled read counts as unreadable — see the header.
+    var timedOut = new Promise(function (resolve) {
+      if (typeof setTimeout !== "function") return;
+      timer = setTimeout(function () {
+        if (controller) controller.abort();
+        resolve(null);
+      }, CONFIG_READ_TIMEOUT_MS);
+    });
+    servedRead = Promise.race([text, timedOut])
+      .then(function (body) {
+        return body === null ? UNKNOWN : parseServedConfig(body);
+      })
+      .catch(function () {
+        return UNKNOWN;
+      })
+      .then(function (result) {
+        if (timer !== null && typeof clearTimeout === "function") clearTimeout(timer);
+        served = result;
+        return result;
+      });
+    return servedRead;
+  }
+
+  function destination() {
+    return (served && served.destination) || current();
+  }
+
   function ownedControlFor(node) {
     if (!node || !node.closest) return null;
     for (var i = 0; i < OWNED_CONTROL_SELECTORS.length; i += 1) {
@@ -52,7 +170,8 @@
   }
 
   function replaceOwnedControlTokens(root) {
-    if (!root || !root.querySelectorAll) return;
+    // Hold the token until the served config has settled — see the header.
+    if (!served || !root || !root.querySelectorAll) return;
     var controls = [];
     OWNED_CONTROL_SELECTORS.forEach(function (selector) {
       if (root.matches && root.matches(selector)) controls.push(root);
@@ -63,7 +182,7 @@
       var node;
       while ((node = walker.nextNode())) {
         if (node.nodeValue && node.nodeValue.indexOf(TOKEN) !== -1) {
-          node.nodeValue = node.nodeValue.split(TOKEN).join(current());
+          node.nodeValue = node.nodeValue.split(TOKEN).join(destination());
         }
       }
     });
@@ -76,13 +195,21 @@
   window.CMSHostname = {
     current: current,
     canonical: canonical,
+    destination: destination,
+    binding: binding,
+    parseServedConfig: parseServedConfig,
     publicOrigin: publicOrigin,
     fromURL: hostname,
     options: options,
   };
 
+  // Start the read now, before Decap renders a field that needs it.
+  binding();
+
   function start() {
-    localize(document.body);
+    binding().then(function () {
+      localize(document.body);
+    });
     new MutationObserver(function (records) {
       records.forEach(function (record) {
         if (record.type === "characterData" && record.target.parentElement) {

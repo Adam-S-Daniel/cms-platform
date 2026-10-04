@@ -129,8 +129,8 @@ parity/e2e are non-required.
 **Delegating the bump?** Put that exact command in the spec as the definition of
 done and require its exit code in the report; a subagent that cannot run it must
 report BLOCKED rather than describe partial work as progress. See cms-platform
-AGENTS.md "Delegated mechanical work is done when a VERIFIER exits 0" for the
-v0.1.76 incident this rule comes from.
+`docs/CONTRIBUTING.md` "Delegated mechanical work is done when a VERIFIER exits
+0" for the v0.1.76 incident this rule comes from.
 
 ## The lockstep invariant + gotchas
 
