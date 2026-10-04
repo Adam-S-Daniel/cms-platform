@@ -157,6 +157,14 @@ jobs:
           PLATFORM: ${{ inputs.platform_repo }}
         run: |
           set -euo pipefail
+          # Escape workflow-command data before printing repository-controlled text.
+          escape_workflow_data() {
+            local value=$1
+            value=${value//\%/%25}
+            value=${value//$'\r'/%0D}
+            value=${value//$'\n'/%0A}
+            printf '%s' "$value"
+          }
           # Resolve the latest release. The OLD form here —
           #   LATEST=$(gh release view --repo "$PLATFORM" --json tagName -q .tagName 2>/dev/null || echo "")
           #   [ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
@@ -497,7 +505,7 @@ jobs:
               )
               CONTEXT_RC=$?
               set -e
-              printf '%s\n' "$CONTEXT_OUT"
+              printf 'Context reconciliation diagnostic: %s\n' "$(escape_workflow_data "$CONTEXT_OUT")"
               case "$CONTEXT_OUT" in
                 UPDATED*)
                   CONTEXT_NOTE=" Reconciled \`cms-automerge-nudge.yml\`'s \`required_contexts\` with the platform manifest's ruleset for this repo." ;;
@@ -508,7 +516,7 @@ jobs:
                   # stale list, so failing soft here moves the signal — it does
                   # not lose it.
                   CONTEXT_NOTE=" :warning: \`required_contexts\` in \`cms-automerge-nudge.yml\` could NOT be reconciled automatically and may be stale — check it against the platform manifest's ruleset for this repo before merging."
-                  echo "::warning::could not reconcile required_contexts automatically — $CONTEXT_OUT" ;;
+                  printf '::warning::could not reconcile required_contexts automatically — %s\n' "$(escape_workflow_data "$CONTEXT_OUT")" ;;
                 *)
                   if [ "$CONTEXT_RC" -ne 0 ]; then
                     CONTEXT_NOTE=" :warning: the \`required_contexts\` reconciliation did not run — check that input by hand before merging."
@@ -567,7 +575,7 @@ jobs:
               --canonical-dir "$SECRETS_TOOLS/canonical" --workflows-dir .github/workflows)
             SECRETS_RC=$?
             set -e
-            printf '%s\n' "$SECRETS_OUT"
+            printf 'Caller reconciliation diagnostic: %s\n' "$(escape_workflow_data "$SECRETS_OUT")"
             SECRETS_UPDATED=$(sed -n 's/^UPDATED //p' <<<"$SECRETS_OUT" | paste -sd ';' -)
             if [ -n "$SECRETS_UPDATED" ]; then
               SECRETS_NOTE=" Reconciled thin-caller \`secrets:\` maps with the template: ${SECRETS_UPDATED//;/; }."

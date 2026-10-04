@@ -148,6 +148,14 @@ jobs:
         # it's pinned to. Use HEAD rather than github.sha to sidestep
         # shallow-clone issues; on push events they're identical.
         run: |
+          # Escape workflow-command data before printing repository-controlled text.
+          escape_workflow_data() {
+            local value=$1
+            value=${value//\%/%25}
+            value=${value//$'\r'/%0D}
+            value=${value//$'\n'/%0A}
+            printf '%s' "$value"
+          }
           mkdir -p ./_site/admin
           SHA=$(git rev-parse HEAD)
           ISO=$(git log -1 --format=%cI HEAD)
@@ -159,7 +167,7 @@ jobs:
           cat > ./_site/admin/commit.json <<JSON
           { "sha": "${SHA}", "iso": "${ISO}", "branch": "main", "platform_repo": "${PLATFORM_REPO}", "platform_ref": "${PLATFORM_REF}" }
           JSON
-          cat ./_site/admin/commit.json
+          printf 'Commit metadata diagnostic: %s\n' "$(escape_workflow_data "$(cat ./_site/admin/commit.json)")"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
