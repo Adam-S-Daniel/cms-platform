@@ -13,13 +13,20 @@
     "@playwright/test": "^1.63.0",
     "acorn": "8.18.0",
     "acorn-walk": "8.3.5",
+    "decap-cms-core": "3.17.1",
     "decap-server": "^3.11.3",
+    "immutable": "3.8.2",
     "markdown-it": "15.0.2",
     "pngjs": "^7.0.0",
     "serve": "^14.2.6",
     "yaml": "2.9.1"
   },
   "overrides": {
-    "@hapi/joi": "npm:joi@17.13.7"
+    "@hapi/joi": "npm:joi@17.13.7",
+    "decap-cms-core": {
+      "immutable": "$immutable",
+      "react": "19.1.0",
+      "react-dom": "19.1.0"
+    }
   }
 }
