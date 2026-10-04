@@ -54,17 +54,27 @@
  * friends, and `Promise.allSettled`, whose results must be bound and reported
  * on. A callback that cannot be resolved, or a promise that flows somewhere
  * this cannot follow (an argument, an array, a function's return), fails
- * closed. A handler's console.log/error/warn and
- * core.warning/info/notice/error/setFailed/setOutput may also emit only the
+ * closed. A handler's console.log/error/warn/info/debug,
+ * core.warning/info/notice/error/setFailed/setOutput/debug/exportVariable,
+ * every core.summary method chain and process.stdout/stderr.write (including
+ * lexically resolved aliases and static computed properties) may emit only the
  * HTTP status and a bounded type, as may a newly thrown error (direct
  * rethrows of an unreassigned caught binding are preserved): arguments are
- * checked against the caught error's bindings (and locals derived from them),
- * so message,
+ * checked against the caught error's lexical bindings (and locals derived from
+ * them), so shadowed locals remain separate and message,
  * response and body access fail. Simple local aliases, assignments, member
  * assignments and array push/unshift/splice propagate taint to a fixed point.
  * This is conservative across branches, order and alias types, and safe
  * reassignment does not clear taint; arbitrary mutators, dynamic sink methods,
  * function calls and aliases through nested object properties are not followed.
+ * All nested function bodies are excluded from handler report/output scanning,
+ * whether called or uncalled: a handler calling a nested helper still needs an
+ * inline warning/throw, and leakage inside such helpers is not detected. Taint
+ * collection still visits nested bodies conservatively, resolving their lexical
+ * bindings, so a captured outer assignment can taint subsequent inline output
+ * even when its helper is uncalled. Following calls, arguments and returns
+ * requires separate interprocedural design. The explicit allSettled result
+ * inspection below separately scans callbacks on the results.
  * Not followed: a function that awaits the
  * call and propagates, whose callers swallow it (every handler here is
  * top-level).
@@ -243,24 +253,159 @@ function protectedTry(ancestors) {
 // What a failure handler may log: the HTTP status and a bounded type, never
 // the error's message, response or body (a handler once printed whatever an
 // API error carried; AGENTS.md "Sanitize error output"). `tainted` names the
-// error binding and every local derived from it that is not itself bounded.
+// error binding identities and every derived local that is not itself bounded.
 // A property chain on a tainted name is allowed only when it ends in
 // `.status`, the one field of an error that is a number.
 const STATUS_CHAINS = ["status", "response.status", "reason.status", "reason.response.status"];
 
-// The ways `node` can expose a tainted value, as short descriptions.
-function leakedRefs(node, tainted, out = []) {
+// Handler analysis uses binding identity, separately from the deliberately
+// script-wide resolver for label constants and promise callbacks above. Collect
+// declarations before resolving references so hoisting and lexical shadows do
+// not depend on traversal order. A var initializer inside catch(e) writes the
+// catch binding even though var itself is declared in the enclosing function.
+function lexicalBindings(ast) {
+  const scopes = new WeakMap();
+  const scope = (parent, functionScope = false) => ({ parent, functionScope, names: new Map() });
+  const declare = (node, here) => {
+    for (const name of patternNames(node)) if (!here.names.has(name)) here.names.set(name, { name });
+  };
+  const children = (node, here) => {
+    for (const value of Object.values(node)) {
+      if (value && typeof value.type === "string") visit(value, here);
+      else if (Array.isArray(value)) for (const item of value) {
+        if (item && typeof item.type === "string") visit(item, here);
+      }
+    }
+  };
+  function visit(node, here) {
+    if (FUNCTION_NODES.includes(node.type)) {
+      const enclosing = here;
+      if (node.type === "FunctionDeclaration" && node.id) declare(node.id, enclosing);
+      here = scope(here, true);
+      if (node.type === "FunctionExpression" && node.id) declare(node.id, here);
+      node.params.forEach((p) => declare(p, here));
+      scopes.set(node, here);
+      if (node.id) scopes.set(node.id, node.type === "FunctionDeclaration" ? enclosing : here);
+      node.params.forEach((p) => visit(p, here));
+      visit(node.body, here);
+      return;
+    } else if (node.type === "CatchClause") {
+      here = scope(here);
+      declare(node.param, here);
+    } else if (["BlockStatement", "ForStatement", "ForInStatement", "ForOfStatement"].includes(node.type)) {
+      here = scope(here);
+    } else if (node.type === "SwitchStatement") {
+      scopes.set(node, here);
+      visit(node.discriminant, here);
+      const cases = scope(here);
+      node.cases.forEach((c) => visit(c, cases));
+      return;
+    } else if (node.type === "ClassDeclaration" || node.type === "ClassExpression") {
+      if (node.type === "ClassDeclaration" && node.id) declare(node.id, here);
+      here = scope(here);
+      if (node.id) declare(node.id, here);
+    }
+    scopes.set(node, here);
+    if (node.type === "VariableDeclaration") {
+      let target = here;
+      if (node.kind === "var") while (!target.functionScope && target.parent) target = target.parent;
+      node.declarations.forEach((d) => declare(d.id, target));
+    }
+    children(node, here);
+  }
+  visit(ast, scope(null, true));
+  return (node) => {
+    for (let here = scopes.get(node); here; here = here.parent) {
+      if (here.names.has(node.name)) return here.names.get(node.name);
+    }
+    return null;
+  };
+}
+
+function patternBindings(node, binding, out = []) {
   if (!node) return out;
-  const each = (nodes) => nodes.forEach((n) => leakedRefs(n, tainted, out));
+  if (node.type === "Identifier") out.push(binding(node));
+  else if (node.type === "ObjectPattern") {
+    node.properties.forEach((p) => patternBindings(p.type === "RestElement" ? p.argument : p.value, binding, out));
+  } else if (node.type === "ArrayPattern") node.elements.forEach((e) => patternBindings(e, binding, out));
+  else if (node.type === "AssignmentPattern") patternBindings(node.left, binding, out);
+  else if (node.type === "RestElement") patternBindings(node.argument, binding, out);
+  return out.filter(Boolean);
+}
+
+const REPORT_SINKS = ["core.warning", "core.error", "core.setFailed"];
+const OUTPUT_SINKS = [
+  ...REPORT_SINKS, "core.setOutput", "core.info", "core.notice", "core.debug", "core.exportVariable",
+  "console.log", "console.error", "console.warn", "console.info", "console.debug",
+  "process.stdout.write", "process.stderr.write", "core.summary.*",
+];
+
+// Aliases retain every assigned sink, including assignments outside a handler.
+// An unknown replacement still leaves output checks conservative, but prevents
+// an alias from satisfying reporting merely because it once held core.warning.
+// Summary methods return the summary builder for fluent calls. All method names
+// on that builder are sinks, so its path representation is deliberately bounded.
+function sinkResolver(ast, binding) {
+  const values = new Map();
+  const flows = [];
+  const member = (paths, key) => new Set([...paths].map((p) => {
+    if (p === "core.summary" || p === "core.summary.*") return "core.summary.*";
+    const next = key === undefined ? "" : `${p}.${key}`;
+    return OUTPUT_SINKS.includes(next) || ["core.summary", "process.stdout", "process.stderr"].includes(next) ? next : "";
+  }));
+  const paths = (node) => {
+    if (!node) return new Set([""]);
+    if (node.type === "ChainExpression") return paths(node.expression);
+    if (node.type === "Identifier") {
+      const bound = binding(node);
+      return bound ? (values.get(bound) || new Set()) : new Set(["core", "console", "process"].includes(node.name) ? [node.name] : [""]);
+    }
+    if (node.type === "MemberExpression") return member(paths(node.object), node.computed ? staticString(node.property) : node.property.name);
+    if (node.type === "CallExpression" && paths(node.callee).has("core.summary.*")) return new Set(["core.summary"]);
+    return new Set([""]);
+  };
+  const targets = (pattern, source, keys = []) => {
+    if (pattern.type === "Identifier") flows.push([binding(pattern), source, keys]);
+    else if (pattern.type === "ObjectPattern") for (const p of pattern.properties) {
+      if (p.type === "Property") targets(p.value, source, [...keys, p.computed ? staticString(p.key) : p.key.name ?? String(p.key.value)]);
+      else targets(p.argument, null);
+    } else if (pattern.type === "AssignmentPattern") {
+      targets(pattern.left, source, keys);
+      targets(pattern.left, pattern.right);
+    } else for (const bound of patternBindings(pattern, binding)) flows.push([bound, null, []]);
+  };
+  walk.full(ast, (node) => {
+    if (node.type === "VariableDeclarator" && node.init) targets(node.id, node.init);
+    else if (node.type === "AssignmentExpression") targets(node.left, node.operator === "=" ? node.right : null);
+    else if (node.type === "UpdateExpression") targets(node.argument, null);
+  });
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const [bound, source, keys] of flows) {
+      if (!bound) continue;
+      let incoming = paths(source);
+      for (const key of keys) incoming = member(incoming, key);
+      const saved = values.get(bound) || new Set();
+      for (const p of incoming) if (!saved.has(p)) { saved.add(p); changed = true; }
+      values.set(bound, saved);
+    }
+  }
+  return paths;
+}
+
+// The ways `node` can expose a tainted value, as short descriptions.
+function leakedRefs(node, tainted, ctx, out = []) {
+  if (!node) return out;
+  const each = (nodes) => nodes.forEach((n) => leakedRefs(n, tainted, ctx, out));
   switch (node.type) {
     case "Literal":
     case "TemplateElement":
       return out;
     case "Identifier":
-      if (tainted.has(node.name)) out.push(node.name);
+      if (tainted.has(ctx.binding(node))) out.push(node.name);
       return out;
     case "ChainExpression":
-      return leakedRefs(node.expression, tainted, out);
+      return leakedRefs(node.expression, tainted, ctx, out);
     case "MemberExpression": {
       const segments = [];
       let root = node;
@@ -268,18 +413,18 @@ function leakedRefs(node, tainted, out = []) {
         segments.unshift(root.computed ? staticString(root.property) : root.property.name);
         root = root.object;
       }
-      if (root.type === "Identifier" && tainted.has(root.name)) {
+      if (root.type === "Identifier" && tainted.has(ctx.binding(root))) {
         if (!STATUS_CHAINS.includes(segments.join("."))) out.push(`${root.name}.${segments.map((s) => s ?? "[…]").join(".")}`);
         return out;
       }
-      leakedRefs(node.object, tainted, out);
-      if (node.computed) leakedRefs(node.property, tainted, out);
+      leakedRefs(node.object, tainted, ctx, out);
+      if (node.computed) leakedRefs(node.property, tainted, ctx, out);
       return out;
     }
     case "CallExpression":
       // `Number(x)` is a number or NaN, whatever x was.
       if (node.callee.type === "Identifier" && node.callee.name === "Number") return out;
-      leakedRefs(node.callee, tainted, out);
+      leakedRefs(node.callee, tainted, ctx, out);
       each(node.arguments);
       return out;
     case "NewExpression":
@@ -289,8 +434,8 @@ function leakedRefs(node, tainted, out = []) {
       return out;
     case "LogicalExpression":
       // `e && x` yields `e` itself only when it is falsy, never an error object.
-      if (node.operator === "&&" && node.left.type === "Identifier" && tainted.has(node.left.name)) {
-        return leakedRefs(node.right, tainted, out);
+      if (node.operator === "&&" && node.left.type === "Identifier" && tainted.has(ctx.binding(node.left))) {
+        return leakedRefs(node.right, tainted, ctx, out);
       }
       each([node.left, node.right]);
       return out;
@@ -312,45 +457,47 @@ function leakedRefs(node, tainted, out = []) {
       each(node.elements);
       return out;
     case "SpreadElement":
-      return leakedRefs(node.argument, tainted, out);
+      return leakedRefs(node.argument, tainted, ctx, out);
     case "ObjectExpression":
       for (const p of node.properties) {
-        if (p.type === "SpreadElement") leakedRefs(p.argument, tainted, out);
+        if (p.type === "SpreadElement") leakedRefs(p.argument, tainted, ctx, out);
         else {
-          if (p.computed) leakedRefs(p.key, tainted, out);
-          leakedRefs(p.value, tainted, out);
+          if (p.computed) leakedRefs(p.key, tainted, ctx, out);
+          leakedRefs(p.value, tainted, ctx, out);
         }
       }
       return out;
     default:
       // A shape this does not model: any mention of a tainted name counts.
       walk.full(node, (n) => {
-        if (n.type === "Identifier" && tainted.has(n.name)) out.push(n.name);
+        if (n.type === "Identifier" && tainted.has(ctx.binding(n))) out.push(n.name);
       });
       return out;
   }
 }
 
-// The names in a handler that can carry the caught error: its parameters
+// The lexical bindings in a handler that can carry the caught error: its parameters
 // (except a destructured `status`) and, to a fixed point, every local whose
 // initializer, assignment or modeled array mutation exposes one. Simple
 // identifier aliases share mutation taint in both directions. This is a
 // conservative fixed point, not execution-order or interprocedural analysis.
-function taintedNames(handler) {
+// Unlike output scanning, this visits nested functions, so captured writes can
+// taint an outer binding even when the function is never called.
+function taintedNames(handler, ctx) {
   const tainted = new Set();
   for (const param of handler.type === "CatchClause" ? [handler.param] : handler.params) {
     if (param && param.type === "ObjectPattern") {
       for (const p of param.properties) {
         const bounded = p.type === "Property" && !p.computed && p.key.name === "status" && p.value.type === "Identifier";
-        if (!bounded) patternNames(p.type === "RestElement" ? p.argument : p.value).forEach((n) => tainted.add(n));
+        if (!bounded) patternBindings(p.type === "RestElement" ? p.argument : p.value, ctx.binding).forEach((n) => tainted.add(n));
       }
-    } else patternNames(param).forEach((n) => tainted.add(n));
+    } else patternBindings(param, ctx.binding).forEach((n) => tainted.add(n));
   }
   const flows = [];
   const aliases = [];
   const targetNames = (target) => {
     while (target.type === "MemberExpression") target = target.object;
-    return patternNames(target);
+    return patternBindings(target, ctx.binding);
   };
   walk.full(handler.body, (n) => {
     let target, source;
@@ -358,7 +505,7 @@ function taintedNames(handler) {
     else if (n.type === "AssignmentExpression") [target, source] = [n.left, n.right];
     if (target) {
       flows.push([targetNames(target), source]);
-      if (target.type === "Identifier" && source.type === "Identifier") aliases.push([target.name, source.name]);
+      if (target.type === "Identifier" && source.type === "Identifier") aliases.push([ctx.binding(target), ctx.binding(source)]);
     }
     if (n.type === "CallExpression" && n.callee.type === "MemberExpression") {
       const c = n.callee;
@@ -373,13 +520,13 @@ function taintedNames(handler) {
     changed = false;
     for (const [target, source] of flows) {
       const names = target.filter((n) => !tainted.has(n));
-      if (names.length && leakedRefs(source, tainted).length) {
+      if (names.length && leakedRefs(source, tainted, ctx).length) {
         names.forEach((n) => tainted.add(n));
         changed = true;
       }
     }
     for (const pair of aliases) {
-      if (pair.some((n) => tainted.has(n))) for (const name of pair) {
+      if (pair.some((n) => tainted.has(n))) for (const name of pair.filter(Boolean)) {
         if (!tainted.has(name)) { tainted.add(name); changed = true; }
       }
     }
@@ -389,10 +536,12 @@ function taintedNames(handler) {
 
 // Whether `body` reports (throws, or calls core.warning/error/setFailed) and
 // every output sink's arguments, as { reports, leaks: [string] }. Lower-level
-// logging and setOutput are checked but do not satisfy failure reporting. A nested
-// function is not counted unless `intoFunctions`: an uncalled function that
-// reports swallows the failure just as an empty handler does.
-function scanReports(body, tainted, intoFunctions, rethrowNames = new Set()) {
+// logging and other sinks are checked but do not satisfy failure reporting. All
+// nested function bodies, called or uncalled, are excluded for handlers. The
+// `intoFunctions` mode is only for explicit allSettled result inspection. Calls
+// to helpers do not establish reports or expose helper output without a separate
+// interprocedural design that follows calls, arguments and returns.
+function scanReports(body, tainted, intoFunctions, ctx, rethrowNames = new Set()) {
   let reports = false;
   const leaks = [];
   const visitors = {
@@ -400,21 +549,18 @@ function scanReports(body, tainted, intoFunctions, rethrowNames = new Set()) {
       reports = true;
       // Preserve direct propagation of the unreassigned caught error. A derived
       // local or constructed error is output and must obey the bounded policy.
-      if (!(node.argument.type === "Identifier" && rethrowNames.has(node.argument.name))) {
-        const refs = leakedRefs(node.argument, tainted);
+      if (!(node.argument.type === "Identifier" && rethrowNames.has(ctx.binding(node.argument)))) {
+        const refs = leakedRefs(node.argument, tainted, ctx);
         if (refs.length) leaks.push(`line ${node.loc.start.line}: throw exposes ${[...new Set(refs)].join(", ")}`);
       }
       walk.base.ThrowStatement(node, state, visit);
     },
     CallExpression(node, state, visit) {
-      const c = node.callee;
-      const method = c.type === "MemberExpression" && (c.computed ? staticString(c.property) : c.property.name);
-      if (c.type === "MemberExpression" && c.object.type === "Identifier" &&
-          ((c.object.name === "core" && ["warning", "error", "setFailed", "setOutput", "info", "notice"].includes(method)) ||
-           (c.object.name === "console" && ["log", "error", "warn"].includes(method)))) {
-        if (c.object.name === "core" && ["warning", "error", "setFailed"].includes(method)) reports = true;
-        const refs = node.arguments.flatMap((a) => leakedRefs(a, tainted));
-        if (refs.length) leaks.push(`line ${node.loc.start.line}: ${c.object.name}.${method}() logs ${[...new Set(refs)].join(", ")}`);
+      const sinks = ctx.sinks(node.callee);
+      if ([...sinks].some((sink) => OUTPUT_SINKS.includes(sink))) {
+        if (sinks.size && [...sinks].every((sink) => REPORT_SINKS.includes(sink))) reports = true;
+        const refs = node.arguments.flatMap((a) => leakedRefs(a, tainted, ctx));
+        if (refs.length) leaks.push(`line ${node.loc.start.line}: ${[...sinks].filter(Boolean).join("/")}() logs ${[...new Set(refs)].join(", ")}`);
       }
       walk.base.CallExpression(node, state, visit);
     },
@@ -430,18 +576,18 @@ const UNFOLLOWED = "createLabel promise flows somewhere this lint cannot follow"
 
 // Problems with one failure handler (a catch clause, or a promise callback
 // function): none when it reports and logs only the status and a bounded type.
-function handlerProblems(handler) {
+function handlerProblems(handler, ctx) {
   const params = handler.type === "CatchClause" ? [handler.param] : handler.params;
-  const rethrowNames = new Set(params.filter((p) => p && p.type === "Identifier").map((p) => p.name));
+  const rethrowNames = new Set(params.filter((p) => p && p.type === "Identifier").map(ctx.binding));
   // The spelling still names a parameter after replacement, but no longer
   // necessarily holds the original error. Member writes preserve the binding.
   walk.full(handler.body, (node) => {
     const target = node.type === "AssignmentExpression" ? node.left :
       node.type === "UpdateExpression" ? node.argument :
       node.type === "VariableDeclarator" && node.init ? node.id : null;
-    for (const name of patternNames(target)) rethrowNames.delete(name);
+    for (const bound of patternBindings(target, ctx.binding)) rethrowNames.delete(bound);
   });
-  const { reports, leaks } = scanReports(handler.body, taintedNames(handler), false, rethrowNames);
+  const { reports, leaks } = scanReports(handler.body, taintedNames(handler, ctx), false, ctx, rethrowNames);
   if (leaks.length) return leaks.map((l) => `${LEAK} (${l}); never log its message, response or body`);
   return reports ? [] : ["createLabel failure is silently caught"];
 }
@@ -461,7 +607,7 @@ function resolveCallback(node, ctx) {
 
 function callbackProblems(node, ctx) {
   const fn = resolveCallback(node, ctx);
-  return fn ? handlerProblems(fn) : [UNRESOLVED];
+  return fn ? handlerProblems(fn, ctx) : [UNRESOLVED];
 }
 
 const isNullish = (n) => !n || (n.type === "Literal" && n.raw === "null") || (n.type === "Identifier" && n.name === "undefined");
@@ -505,15 +651,15 @@ function settledProblems(path, ctx) {
     const leaks = [];
     const inspected = refs.map((ref) => {
       const stmt = ref.findLast((n) => /(Statement|Declaration)$/.test(n.type) && n.type !== "BlockStatement");
-      const tainted = new Set([parent.id.name]);
+      const tainted = new Set([ctx.binding(parent.id)]);
       walk.full(stmt, (n) => {
-        if (n.type === "VariableDeclarator") patternNames(n.id).forEach((x) => tainted.add(x));
-        else if (/Function/.test(n.type)) n.params.forEach((p) => patternNames(p).forEach((x) => tainted.add(x)));
+        if (n.type === "VariableDeclarator") patternBindings(n.id, ctx.binding).forEach((x) => tainted.add(x));
+        else if (/Function/.test(n.type)) n.params.forEach((p) => patternBindings(p, ctx.binding).forEach((x) => tainted.add(x)));
         else if (/^For(In|Of)Statement$/.test(n.type) && n.left.type === "VariableDeclaration") {
-          n.left.declarations.forEach((d) => patternNames(d.id).forEach((x) => tainted.add(x)));
+          n.left.declarations.forEach((d) => patternBindings(d.id, ctx.binding).forEach((x) => tainted.add(x)));
         }
       });
-      const got = scanReports(stmt, tainted, true);
+      const got = scanReports(stmt, tainted, true, ctx);
       leaks.push(...got.leaks);
       return got.reports && !got.leaks.length;
     }).some(Boolean);
@@ -524,7 +670,7 @@ function settledProblems(path, ctx) {
   const isThen = parent.type === "MemberExpression" && parent.object === node && !parent.computed && parent.property.name === "then";
   if (isThen && grand && grand.type === "CallExpression" && grand.callee === parent) {
     const fn = resolveCallback(grand.arguments[0], ctx);
-    const got = fn && scanReports(fn.body, taintedNames(fn), false);
+    const got = fn && scanReports(fn.body, taintedNames(fn, ctx), false, ctx);
     if (got && got.leaks.length) return got.leaks.map((l) => `${LEAK} (${l}); never log its message, response or body`);
     return got && got.reports ? [] : [ignored];
   }
@@ -553,7 +699,7 @@ function followPromise(path, ctx, seen = new Set()) {
     }
     case "AwaitExpression": {
       const stmt = protectedTry(path);
-      return stmt ? handlerProblems(stmt.handler) : [];
+      return stmt ? handlerProblems(stmt.handler, ctx) : [];
     }
     case "ExpressionStatement":
       return [];
@@ -590,7 +736,7 @@ function followPromise(path, ctx, seen = new Set()) {
 function silentCatchProblems(node, ancestors, at, ctx) {
   const problems = [];
   const stmt = protectedTry(ancestors);
-  if (stmt) problems.push(...handlerProblems(stmt.handler));
+  if (stmt) problems.push(...handlerProblems(stmt.handler, ctx));
   problems.push(...followPromise(ancestors, ctx));
   return [...new Set(problems)].map((p) => `${at}: ${p}`);
 }
@@ -609,7 +755,8 @@ function analyzeScript(src, where) {
     return { calls, problems: [`${where}: cannot parse github-script body: ${e.message}`] };
   }
   const value = resolver(ast);
-  const ctx = { ast, bound: bindings(ast) };
+  const ctx = { ast, bound: bindings(ast), binding: lexicalBindings(ast) };
+  ctx.sinks = sinkResolver(ast, ctx.binding);
   const evaluated = { [METHOD]: 0, request: 0 };
   walk.ancestor(ast, {
     CallExpression(node, ancestors) {
@@ -1160,6 +1307,148 @@ test.describe("createLabel handler residual error leaks", () => {
   ]) {
     test(`allows residual flow ${shape}`, () => {
       expect(analyzeScript(inCatch(body), "t").problems).toEqual([]);
+    });
+  }
+});
+
+// Review of #581: sinks, aliases and lexical identity are independent of the
+// promise spelling. Each row has a leak and a bounded control in both handlers.
+test.describe("createLabel handler residual sinks and scopes", () => {
+  const call = "github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' })";
+  const handlers = [
+    ["catch", (body) => `try { await ${call}; } catch (e) { ${body} }`],
+    ["promise", (body) => `await ${call}.catch(e => { ${body} });`],
+  ];
+  const leak = /logs more than the HTTP status and a bounded type/;
+  const sinkRows = [
+    ["console.info", "", "console.info(VALUE);"],
+    ["console.debug", "", "console.debug(VALUE);"],
+    ["core.debug", "", "core.debug(VALUE);"],
+    ["core.exportVariable", "", "core.exportVariable('failure', VALUE);"],
+    ["summary addRaw", "", "core.summary.addRaw(VALUE);"],
+    ["summary arbitrary method", "", "core.summary.addHeading(VALUE);"],
+    ["summary fluent first argument", "", "core.summary.addRaw(VALUE).addCodeBlock('fixed').write();"],
+    ["summary fluent later argument", "", "core.summary.addRaw('fixed').addCodeBlock(VALUE).write();"],
+    ["summary computed fluent", "", "core['summary']['addRaw']('fixed')['addCodeBlock'](VALUE)['write']();"],
+    ["stdout", "", "process.stdout.write(VALUE);"],
+    ["stderr", "", "process.stderr.write(VALUE);"],
+    ["computed stdout", "", "process['stdout']['write'](VALUE);"],
+    ["computed console info", "", "console['info'](VALUE);"],
+    ["computed console debug", "", "console['debug'](VALUE);"],
+    ["computed core debug", "", "core['debug'](VALUE);"],
+    ["computed exportVariable", "", "core['exportVariable']('failure', VALUE);"],
+    ["local console alias", "", "const log = console.log; log(VALUE);"],
+    ["outside console alias", "const log = console.log;", "log(VALUE);"],
+    ["renamed destructured warning", "const { warning: report } = core;", "report(VALUE);"],
+    ["destructured warning", "", "const { warning } = core; warning(VALUE);"],
+    ["computed destructured warning", "const { ['warning']: report } = core;", "report(VALUE);"],
+    ["alias chain", "const log = console['info']; const output = log;", "output(VALUE);"],
+    ["assigned alias", "let log; log = console.debug;", "log(VALUE);"],
+    ["destructuring assignment alias", "let log; ({ info: log } = console);", "log(VALUE);"],
+    ["reassigned output alias", "let log = console.log; log = () => {};", "log(VALUE);"],
+    ["summary object alias", "const summary = core.summary;", "summary.addHeading(VALUE).write();"],
+    ["destructured summary alias", "const { summary: builder } = core;", "builder.addRaw('fixed').addTable(VALUE).write();"],
+    ["summary method alias", "const add = core.summary.addRaw;", "add(VALUE);"],
+    ["summary fluent result alias", "const builder = core.summary.addRaw('fixed');", "builder.addCodeBlock(VALUE).write();"],
+    ["stdout write alias", "const { write: output } = process.stdout;", "output(VALUE);"],
+    ["stderr stream alias", "const { stderr: stream } = process;", "stream.write(VALUE);"],
+    ["nested stdout destructuring", "const { stdout: { write: output } } = process;", "output(VALUE);"],
+    ["exportVariable alias", "const expose = core.exportVariable;", "expose('failure', VALUE);"],
+    ["debug alias", "const { debug: output } = core;", "output(VALUE);"],
+  ];
+  for (const [handler, wrap] of handlers) for (const [name, prelude, body] of sinkRows) {
+    test(`rejects residual sink ${name} in ${handler}`, () => {
+      const script = `${prelude}\n${wrap(`core.warning('failed'); ${body.replace('VALUE', 'e.message')}`)}`;
+      expect(analyzeScript(script, "t").problems.join("\n")).toMatch(leak);
+    });
+    test(`allows residual sink ${name} bounded status in ${handler}`, () => {
+      const script = `${prelude}\n${wrap(`core.warning('failed'); ${body.replace('VALUE', 'e.status')}`)}`;
+      expect(analyzeScript(script, "t").problems).toEqual([]);
+    });
+  }
+  const reportRows = [
+    ["warning alias", "const report = core.warning;", "report('failed');", true],
+    ["error alias", "const { error: report } = core;", "report('failed');", true],
+    ["setFailed alias", "const report = core['setFailed'];", "report('failed');", true],
+    ["reassigned report alias", "let report = core.warning; report = () => {};", "report('failed');", false],
+    ["report alias also assigned lower sink", "let report = core.warning; report = console.info;", "report('failed');", false],
+    ["shadowed report alias", "const report = core.warning;", "{ const report = () => {}; report('failed'); }", false],
+    ["restored outer report alias", "const report = core.warning;", "{ const report = () => {}; report('fixed'); } report('failed');", true],
+    ["shadowed core receiver", "", "{ const core = { warning() {} }; core.warning('failed'); }", false],
+  ];
+  for (const [handler, wrap] of handlers) {
+    for (const [name, prelude, body, reported] of reportRows) {
+      test(`residual scope ${name} reporting in ${handler}`, () => {
+        const problems = analyzeScript(`${prelude}\n${wrap(body)}`, "t").problems;
+        if (reported) expect(problems).toEqual([]);
+        else expect(problems.join("\n")).toMatch(/silently caught/);
+      });
+    }
+    for (const [name, prelude, body] of sinkRows) {
+      test(`residual sink ${name} alone is silent in ${handler}`, () => {
+        const problems = analyzeScript(`${prelude}\n${wrap(body.replace('VALUE', "'fixed'"))}`, "t").problems;
+        if (["renamed destructured warning", "destructured warning", "computed destructured warning"].includes(name)) expect(problems).toEqual([]);
+        else expect(problems.join("\n")).toMatch(/silently caught/);
+      });
+    }
+  }
+  const scopeRows = [
+    ["block caught shadow", "{ const e = 'fixed'; core.warning(e); }", "{ const e = 'fixed'; core.warning(e); } core.warning(e.message);"],
+    ["block let shadow", "{ let e = 'fixed'; core.warning(e); }", "{ let e = 'fixed'; core.warning(e); } console.info(e.message); core.warning('failed');"],
+    ["destructured caught shadow", "{ const { text: e } = { text: 'fixed' }; core.warning(e); }", "{ const { text: e } = { text: 'fixed' }; core.warning(e); } core.warning(e.message);"],
+    ["array caught shadow", "{ const [e] = ['fixed']; core.warning(e); }", "{ const [e] = ['fixed']; core.warning(e); } core.warning(e.message);"],
+    ["derived local shadow", "const detail = e.message; { const detail = 'fixed'; core.warning(detail); }", "const detail = e.message; { const detail = 'fixed'; core.warning(detail); } core.warning(detail);"],
+    ["for let caught shadow", "for (let e of ['fixed']) core.warning(e);", "for (let e of ['fixed']) core.warning(e); core.warning(e.message);"],
+    ["for initializer caught shadow", "for (let e = 'fixed'; flag; ) { core.warning(e); break; }", "for (let e = 'fixed'; flag; ) { core.warning(e); break; } core.warning(e.message);"],
+    ["for in caught shadow", "for (const e in {}) core.warning(e);", "for (const e in {}) core.warning(e); core.warning(e.message);"],
+    ["switch caught shadow", "switch (flag) { case 0: const e = 'fixed'; core.warning(e); }", "switch (flag) { case 0: const e = 'fixed'; core.warning(e); } core.warning(e.message);"],
+    ["switch discriminant outer binding", "switch (e.status) { case 0: const e = 'fixed'; core.warning(e); }", "switch (e.message) { case 0: const e = 'fixed'; core.warning(e); } core.warning(e.message);"],
+    ["nested catch shadow", "try { unrelated(); } catch (e) { core.warning('fixed'); }", "try { unrelated(); } catch (e) { core.warning('fixed'); } core.warning(e.message);"],
+    ["nested catch outer alias", "try { unrelated(); } catch (e) { core.warning(outer.status); }", "try { unrelated(); } catch (e) { core.warning(outer.message); }"],
+    ["nested function parameter shadow", "function helper(e) { const detail = e.message; } core.warning('failed');", "function helper(e) { const detail = e.message; } core.warning(e.message);"],
+    ["nested function var shadow", "function helper() { var e = 'fixed'; } throw e;", "function helper() { var e = 'fixed'; } core.warning(e.message);"],
+    ["nested function outer assignment", "function helper(e) { e = 'fixed'; } throw e;", "function helper() { e = 'fixed'; } throw e;"],
+    ["shadowed local rethrow exemption", "{ const e = 'fixed'; throw e; }", "{ const e = new Error('fixed', { cause: outer }); throw e; }"],
+    ["shadow assignment preserves rethrow", "{ let e = 'fixed'; e = 'other'; } throw e;", "{ let e = 'fixed'; e = 'other'; } e = 'other'; throw e;"],
+    ["var hoists derived binding", "{ var detail = e.status; } core.warning(detail);", "{ var detail = e.message; } core.warning(detail);"],
+    ["let confines derived binding", "let detail = 'fixed'; { let detail = e.message; } core.warning(detail);", "let detail = 'fixed'; { detail = e.message; } core.warning(detail);"],
+    ["console alias shadow", "const log = console.log; { const log = () => {}; log(e.message); } core.warning('failed');", "const log = console.log; { const log = () => {}; log('fixed'); } log(e.message); core.warning('failed');"],
+    ["destructured alias shadow", "const { info: output } = console; { const { output } = { output() {} }; output(e.message); } core.warning('failed');", "const { info: output } = console; { const { output } = { output() {} }; output('fixed'); } output(e.message); core.warning('failed');"],
+    ["console receiver shadow", "{ const console = { info() {} }; console.info(e.message); } core.warning('failed');", "{ const console = { info() {} }; console.info('fixed'); } console.info(e.message); core.warning('failed');"],
+    ["process receiver shadow", "{ const process = { stdout: { write() {} } }; process.stdout.write(e.message); } core.warning('failed');", "{ const process = { stdout: { write() {} } }; process.stdout.write('fixed'); } process.stdout.write(e.message); core.warning('failed');"],
+    ["summary receiver shadow", "{ const core = { summary: { addRaw() {} } }; core.summary.addRaw(e.message); } throw e;", "{ const core = { summary: { addRaw() {} } }; core.summary.addRaw('fixed'); } core.summary.addRaw(e.message); throw e;"],
+  ];
+  for (const [handler, wrap] of handlers) for (const [name, safe, unsafe] of scopeRows) {
+    test(`allows residual scope ${name} in ${handler}`, () => {
+      expect(analyzeScript(wrap(`const outer = e; ${safe}`), "t").problems).toEqual([]);
+    });
+    test(`rejects residual scope ${name} in ${handler}`, () => {
+      expect(analyzeScript(wrap(`const outer = e; ${unsafe}`), "t").problems.join("\n")).toMatch(leak);
+    });
+  }
+});
+
+test.describe("createLabel handler residual nested boundary", () => {
+  const call = "github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' })";
+  const handlers = [
+    ["catch", (body) => `try { await ${call}; } catch (e) { ${body} }`],
+    ["promise", (body) => `await ${call}.catch(e => { ${body} });`],
+  ];
+  const rows = [
+    ["called leak with inline warning passes", "function helper() { core.warning(e.message); } helper(); core.warning('failed');", null],
+    ["called arrow leak with inline warning passes", "const helper = () => console.info(e.message); helper(); core.warning('failed');", null],
+    ["called only warning is silent", "function helper() { core.warning('failed'); } helper();", /silently caught/],
+    ["called only rethrow is silent", "const helper = () => { throw e; }; helper();", /silently caught/],
+    ["uncalled warning is silent", "function helper() { core.warning('failed'); }", /silently caught/],
+    ["uncalled leak with inline warning passes", "function helper() { core.warning(e.message); } core.warning('failed');", null],
+    ["uncalled assignment still taints inline output", "let detail = 'fixed'; function helper() { detail = e.message; } core.warning(detail);", /logs more than the HTTP status and a bounded type/],
+    ["parameter shadow in uncalled function stays separate", "let detail = 'fixed'; function helper(e) { detail = e.message; } core.warning(detail);", null],
+  ];
+  for (const [handler, wrap] of handlers) for (const [name, body, message] of rows) {
+    test(`residual nested boundary ${name} in ${handler}`, () => {
+      const problems = analyzeScript(wrap(body), "t").problems;
+      if (message) expect(problems.join("\n")).toMatch(message);
+      else expect(problems).toEqual([]);
     });
   }
 });
