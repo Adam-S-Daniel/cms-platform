@@ -485,7 +485,7 @@
     return {
       badge: BADGE.LIVE,
       label: "Live",
-      detail: "This is on " + dest.noun + " now.",
+      detail: "This is on " + dest.noun + " now." + (dest.preview ? " " + dest.laterNote : ""),
       detailLink: null,
       waitingOn: null,
       minutesLeft: null,

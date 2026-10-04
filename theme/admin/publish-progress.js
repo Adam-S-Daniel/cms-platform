@@ -104,7 +104,15 @@
  * deployment is the PREVIOUS one, state `success`, so the entry read as Live
  * and the bar — which hides a plain Live — vanished mid-publish. The entry's
  * own most recent merged PR is now read on this path, and "going live" holds
- * until a production deployment covering the merge has succeeded. A hidden tab polls nothing: an admin left open in a background tab
+ * until a production deployment covering the merge has succeeded.
+ *
+ * Only a merge into the default branch goes to production. A merge into a
+ * feature branch (a preview-only PR, decided the same way as `previewOnly`
+ * above) reaches that branch and its preview, not the live site, so that
+ * path reports `previewOnly` with the merge's base and never reads the
+ * production deployment: "Going live… on <apex>" for it was false (#532).
+ *
+ * A hidden tab polls nothing: an admin left open in a background tab
  * overnight must not spend the editor's rate limit on an entry nobody is
  * looking at.
  *
@@ -296,9 +304,33 @@
       // live, or it was never saved as a draft. See "After the merge" in the
       // header for why the entry's own merged PR is read here.
       var merge = await recentMerge(token, entry);
+      var now = Date.now();
+      if (merge && merge.previewOnly) {
+        // Merged into a feature branch: the edit is on that branch now and
+        // reaches the live site only when the branch does, so production's
+        // deployment says nothing about it (see "After the merge").
+        return {
+          facts: {
+            hasOpenPr: false,
+            armed: false,
+            merged: false,
+            checksFailed: false,
+            mergeConflict: false,
+            awaitingReviewGate: false,
+            deployState: null,
+            waitingOn: null,
+            startedAt: null,
+            previewOnly: true,
+            baseRef: merge.baseRef,
+            settledSince: noteSettled(null, false, now),
+            checksUrl: null,
+          },
+          prNumber: null,
+          prUrl: null,
+        };
+      }
       var dep = await latestProductionDeployment(token);
       var depState = dep ? dep.state : null;
-      var now = Date.now();
       var deploying = depState === "in_progress" || depState === "queued" || depState === "pending";
       var startedAt = dep && deploying ? dep.createdAt : null;
       var inFlight = Boolean(deploying);
@@ -473,7 +505,22 @@
     if (!Array.isArray(prs)) return null;
     for (var i = 0; i < prs.length; i++) {
       var t = Date.parse(prs[i].merged_at || "");
-      if (!isNaN(t)) return { mergedAt: t, sha: prs[i].merge_commit_sha || null };
+      if (isNaN(t)) continue;
+      // Same two signals as an open PR's `previewOnly`, erring the same way.
+      var pr = prs[i];
+      var labels = (pr.labels || []).map(function (l) {
+        return typeof l === "string" ? l : l && l.name;
+      });
+      var baseRef = (pr.base && pr.base.ref) || null;
+      var defaultBranch = (pr.base && pr.base.repo && pr.base.repo.default_branch) || null;
+      return {
+        mergedAt: t,
+        sha: pr.merge_commit_sha || null,
+        baseRef: baseRef,
+        previewOnly:
+          labels.indexOf(PREVIEW_ONLY_LABEL) !== -1 ||
+          Boolean(baseRef && defaultBranch && baseRef !== defaultBranch),
+      };
     }
     return null;
   }

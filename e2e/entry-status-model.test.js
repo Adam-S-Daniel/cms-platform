@@ -435,6 +435,9 @@ test.describe("entry-status-model — the destination (#371)", () => {
     // The stall used to say the edit "does not reach example.com on its own",
     // contradicting this note (review of #558, S1).
     ["Needs attention, stalled", { hasOpenPr: true, armed: true, settledSince: NOW - GRACE - MIN }],
+    // Merged into the feature branch (publish-progress.js reports it as a
+    // preview with no open PR): on the preview now, the live site later.
+    ["Live on the preview", { hasOpenPr: false }],
   ];
   for (const [label, extra] of PREVIEW_CASES) {
     for (const [baseRef, branch] of [
