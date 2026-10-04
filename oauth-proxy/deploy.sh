@@ -36,6 +36,12 @@ FUNCTION_NAME="${FUNCTION_NAME:-${STACK_NAME}}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 SAM_S3_BUCKET="${SAM_S3_BUCKET:-}"
 ALLOWED_ORIGINS="${ALLOWED_ORIGINS:?set ALLOWED_ORIGINS, e.g. https://example.com}"
+# The site's own registered domain (site-params.env already carries it). A '*'
+# entry in ALLOWED_ORIGINS is accepted only at or beneath it (#535).
+APEX_DOMAIN="${APEX_DOMAIN:-}"
+# "disabled" says the site deliberately has no preview sign-in, which silences
+# the missing preview-* warning below (#524).
+PREVIEW_SIGN_IN="${PREVIEW_SIGN_IN:-enabled}"
 GITHUB_SCOPE="${GITHUB_SCOPE:-repo,read:user,workflow}"
 # Repo identity for the Next-Steps backend snippet (already in site-params.env).
 GITHUB_ORG="${GITHUB_ORG:-Adam-S-Daniel}"
@@ -87,26 +93,65 @@ fi
 # The proxy refuses every login when ALLOWED_ORIGINS has no valid entry, so
 # catch a bad value here instead of deploying a proxy nobody can sign in to.
 # Same grammar as _origin_patterns in lambda.py: https:// origins, optional
-# port, `*` allowed inside a host label but never in the last two labels.
+# port, `*` allowed inside a host label, and only when every label after the
+# one holding it is APEX_DOMAIN or a name beneath it. "The last two labels"
+# is not a registrable-domain boundary (`*.co.uk`, `*.github.io`), and this
+# script carries no Public Suffix List, so the site's own apex is the bound.
 ORIGIN_RE='^https://[a-z0-9*-]+(\.[a-z0-9*-]+)+(:[0-9]{1,5})?$'
+APEX_RE='^[a-z0-9-]+(\.[a-z0-9-]+)+$'
+APEX_DOMAIN="$(printf '%s' "$APEX_DOMAIN" | tr '[:upper:]' '[:lower:]')"
+if [[ -n "$APEX_DOMAIN" && ! "$APEX_DOMAIN" =~ $APEX_RE ]]; then
+  error "APEX_DOMAIN '${APEX_DOMAIN}' is not a domain name. Set it to the site's apex, e.g. example.com (no scheme, no '*', no trailing dot)."
+fi
 VALID_ORIGINS=0
+HAS_PREVIEW_ORIGIN=0
 IFS=',' read -r -a ORIGIN_ENTRIES <<<"$ALLOWED_ORIGINS"
 for raw_entry in "${ORIGIN_ENTRIES[@]}"; do
   entry="${raw_entry#"${raw_entry%%[![:space:]]*}"}"
   entry="${entry%"${entry##*[![:space:]]}"}"
   [[ -z "$entry" ]] && continue
   entry="$(printf '%s' "${entry%/}" | tr '[:upper:]' '[:lower:]')"
+  if [[ ! "$entry" =~ $ORIGIN_RE ]]; then
+    error "ALLOWED_ORIGINS entry '${entry}' is not valid. Use comma-separated https:// origins, e.g. https://example.com,https://preview-*.example.com."
+  fi
   host="${entry#https://}"
-  host="${host%%:*}"
-  last_label="${host##*.}"
-  second_label="${host%.*}"
-  second_label="${second_label##*.}"
-  if [[ ! "$entry" =~ $ORIGIN_RE || "$last_label$second_label" == *'*'* ]]; then
-    error "ALLOWED_ORIGINS entry '${entry}' is not valid. Use comma-separated https:// origins, e.g. https://example.com,https://preview-*.example.com ('*' only inside a host label, never in the last two)."
+  if [[ "$host" == *'*'* ]]; then
+    # The labels after the last label holding a '*'.
+    after_star="${host##*\*}"
+    fixed=""
+    [[ "$after_star" == *.* ]] && fixed="${after_star#*.}"
+    fixed="${fixed%%:*}"
+    [[ -n "$APEX_DOMAIN" ]] \
+      || error "ALLOWED_ORIGINS entry '${entry}' has a '*', which needs APEX_DOMAIN set to the site's own domain (e.g. example.com) so the wildcard stays inside it."
+    if [[ "$fixed" != "$APEX_DOMAIN" && "$fixed" != *".${APEX_DOMAIN}" ]]; then
+      error "ALLOWED_ORIGINS entry '${entry}' is not valid: a '*' may only stand for names inside APEX_DOMAIN (${APEX_DOMAIN}), e.g. https://preview-*.${APEX_DOMAIN}. A wildcard over another domain, or a public suffix such as co.uk or github.io, would hand the token to sites other people control."
+    fi
+    # What the per-PR preview admins (preview-prN.<apex>, preview-cms-<slug>.<apex>) need.
+    if [[ "$host" == "preview-*.${APEX_DOMAIN}" || "$host" == "*.${APEX_DOMAIN}" ]]; then
+      HAS_PREVIEW_ORIGIN=1
+    fi
   fi
   VALID_ORIGINS=$((VALID_ORIGINS + 1))
 done
 [[ "$VALID_ORIGINS" -gt 0 ]] || error "ALLOWED_ORIGINS has no origin. Set it to e.g. https://example.com,https://preview-*.example.com"
+
+# Without a preview entry an editor on a preview admin finishes GitHub consent
+# and then waits on a popup that never hands back the token (#524).
+case "$PREVIEW_SIGN_IN" in
+  enabled)
+    if [[ "$HAS_PREVIEW_ORIGIN" -eq 0 ]]; then
+      warn "ALLOWED_ORIGINS has no https://preview-*.${APEX_DOMAIN:-<apex>} entry, so sign-in on the per-PR preview admins (preview-prN.${APEX_DOMAIN:-<apex>}) will hang after GitHub consent. Add it (with APEX_DOMAIN set), or set PREVIEW_SIGN_IN=disabled if this site deliberately has no preview sign-in."
+    fi
+    ;;
+  disabled)
+    [[ "$HAS_PREVIEW_ORIGIN" -eq 0 ]] \
+      || error "PREVIEW_SIGN_IN=disabled, but ALLOWED_ORIGINS lists a preview entry. Remove one or the other."
+    info "Preview sign-in: disabled (PREVIEW_SIGN_IN=disabled); preview admins cannot sign in"
+    ;;
+  *)
+    error "PREVIEW_SIGN_IN must be 'enabled' (the default) or 'disabled', not '${PREVIEW_SIGN_IN}'."
+    ;;
+esac
 
 # ── Keep the stack's credentials only on an update (#518) ─────────────────
 # sam deploy sends every parameter missing from --parameter-overrides as
@@ -172,6 +217,11 @@ DEPLOY_ARGS=(
   "FunctionName=${FUNCTION_NAME}"
   "PlatformRelease=${PROXY_RELEASE}"
 )
+# Omitted when unset: sam then keeps the stack's value on an update (or uses
+# the template's empty default), and no '*' entry got past the check above.
+if [[ -n "$APEX_DOMAIN" ]]; then
+  DEPLOY_ARGS+=("SiteApex=${APEX_DOMAIN}")
+fi
 # Omitted in "keep" mode, so CloudFormation keeps the stack's current values.
 if [[ "$CREDENTIAL_MODE" == "set" ]]; then
   DEPLOY_ARGS+=(

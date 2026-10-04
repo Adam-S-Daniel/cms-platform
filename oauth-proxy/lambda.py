@@ -54,9 +54,17 @@ GITHUB_SCOPE = os.environ.get("GITHUB_SCOPE", "repo,read:user,workflow")
 # list of `https://` origins, e.g. https://example.com. `*` is allowed inside a
 # host label so per-PR preview hosts need one entry, e.g.
 # https://preview-*.example.com (it matches within ONE label, never across a
-# dot). The callback page releases the token only to a matching opener; if no
-# entry is valid, /auth and /callback refuse to run (see _origin_patterns).
+# dot), but only beneath SITE_APEX. The callback page releases the token only
+# to a matching opener; if no entry is valid, /auth and /callback refuse to
+# run (see _origin_patterns).
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://example.com")
+# The site's own registered domain, e.g. example.com: deploy.sh passes the
+# APEX_DOMAIN from site-params.env, the zone the site's bootstrap stack already
+# serves. A wildcard entry is honored only for names at or beneath it (#535),
+# so `https://*.github.io` or `https://*.co.uk` cannot hand the token to
+# sites someone else controls. Empty (the default) means no wildcard entry is
+# valid: fail closed.
+SITE_APEX = os.environ.get("SITE_APEX", "")
 
 # GitHub OAuth endpoints (constant — never derived from user input).
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
@@ -90,45 +98,64 @@ with open(__file__, "rb") as _handler_source:
 # One ALLOWED_ORIGINS entry: an https origin with an optional port. `*` may
 # stand in for part of a host label.
 _ORIGIN_ENTRY = re.compile(r"https://[a-z0-9*-]+(?:\.[a-z0-9*-]+)+(?::[0-9]{1,5})?")
+# SITE_APEX: two or more plain labels, no wildcard, no port.
+_APEX = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+")
 
 
-def _valid_origin_entry(entry: str) -> bool:
+def _valid_origin_entry(entry: str, apex: str) -> bool:
     if not _ORIGIN_ENTRY.fullmatch(entry):
         return False
     host = entry.removeprefix("https://").partition(":")[0]
-    # No wildcard in the last two labels: `https://*.com`, `https://example.*`.
-    return "*" not in ".".join(host.split(".")[-2:])
+    if "*" not in host:
+        return True
+    # Which labels end a registrable domain is the Public Suffix List's
+    # knowledge (co.uk, github.io), and this file carries none of it. So a
+    # wildcard is trusted only beneath the domain the site declared as its
+    # own: the labels after the last label holding a `*` must be SITE_APEX or
+    # a name under it. No apex, no wildcard.
+    if not _APEX.fullmatch(apex):
+        return False
+    fixed = host.rpartition("*")[2].partition(".")[2]
+    return fixed == apex or fixed.endswith("." + apex)
 
 
-def _origin_patterns(raw: str) -> list[str]:
+def _origin_patterns(raw: str, apex: str) -> list[str]:
     """
     Turn the ALLOWED_ORIGINS string into regex SOURCE strings, one per valid
     entry. Invalid entries are logged and dropped, never guessed at.
 
     The grammar is deliberately tiny: lowercase `https://` origins whose host
-    labels use only [a-z0-9-] plus `*`, and `*` is refused in the last two
-    labels (so `https://*.com` and `https://example.*` cannot widen the list to
-    a whole TLD). Every entry therefore draws on the alphabet [a-z0-9.*:/-],
-    which means the SAME regex source string means the same thing to Python's
-    re.fullmatch and to JavaScript's new RegExp('^(?:' + src + ')$') — the
-    callback page re-uses these sources in the browser, so the two engines must
-    never disagree about which origin matches.
+    labels use only [a-z0-9-] plus `*`, and `*` is accepted only when every
+    label after the one holding it is `apex` or beneath it (so neither
+    `https://*.com`, `https://*.co.uk` nor `https://*.github.io` can widen the
+    list to names other people register). Every entry therefore draws on the
+    alphabet [a-z0-9.*:/-], which means the SAME regex source string means the
+    same thing to Python's re.fullmatch and to JavaScript's
+    new RegExp('^(?:' + src + ')$') — the callback page re-uses these sources
+    in the browser, so the two engines must never disagree about which origin
+    matches.
     """
+    apex = apex.strip().lower()
     patterns: list[str] = []
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry:
             continue
         entry = entry.removesuffix("/").lower()
-        if not _valid_origin_entry(entry):
-            logger.error("Ignoring invalid ALLOWED_ORIGINS entry: %r", entry)
+        if not _valid_origin_entry(entry, apex):
+            logger.error(
+                "Ignoring invalid ALLOWED_ORIGINS entry: %r (a '*' entry must sit "
+                "beneath SITE_APEX %r)",
+                entry,
+                apex,
+            )
             continue
         # `.` is literal; `*` matches within one label and never crosses a dot.
         patterns.append(entry.replace(".", "\\.").replace("*", "[a-z0-9-]+"))
     return patterns
 
 
-ALLOWED_ORIGIN_PATTERNS = _origin_patterns(ALLOWED_ORIGINS)
+ALLOWED_ORIGIN_PATTERNS = _origin_patterns(ALLOWED_ORIGINS, SITE_APEX)
 
 
 def _origin_allowed(origin: str | None, patterns: list[str] | None = None) -> bool:
