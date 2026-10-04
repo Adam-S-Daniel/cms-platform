@@ -437,7 +437,12 @@ consumers' `cms/preview-only` labels read exactly that (description `null`,
 color `ededed`, 2026-10-03), while `cms/draft` and `cms/ready` from the same
 step carry their descriptions. `e2e/preview-only-label-description.test.js`
 parses every platform workflow's `createLabel` call (`yaml` + acorn) and holds
-each description to 100 characters; a call shape it cannot evaluate fails it.
+each description to 100 characters; a call shape it cannot evaluate fails it,
+as do other ways to create `cms/preview-only` (a github-script `request()` to
+`POST …/labels`, `eval`, a `run:` step's `gh label create` or `gh api …/labels`).
+Its scope is the platform's workflows; repo scripts that create other labels
+are out of it, and a test fails if one under `scripts/` names
+`cms/preview-only`.
 The preview-only step now raises a warning with the HTTP status code (never
 the response body) for any failure other than `already_exists`.
 
