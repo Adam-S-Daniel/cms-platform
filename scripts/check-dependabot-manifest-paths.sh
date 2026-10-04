@@ -55,11 +55,14 @@ BASE="$1"
 HEAD="$2"
 
 changed_paths=$(mktemp)
-trap 'rm -f -- "$changed_paths"' EXIT
-if git diff --name-only --no-renames -z "$BASE"..."$HEAD" > "$changed_paths" 2>/dev/null; then
+diff_stderr=""
+trap 'rm -f -- "$changed_paths" "$diff_stderr"' EXIT
+diff_stderr=$(mktemp)
+if git diff --name-only --no-renames -z "$BASE"..."$HEAD" > "$changed_paths" 2> "$diff_stderr"; then
   :
 else
   echo "::error::Could not read the Dependabot PR diff; refusing the manifest check."
+  printf 'Git diff diagnostic: %s\n' "$(escape_workflow_data "$(cat "$diff_stderr")")"
   echo "safe=false"
   exit 2
 fi
@@ -67,7 +70,7 @@ mapfile -d '' -t CHANGED < "$changed_paths"
 
 printf 'Files changed (%q...%q):\n' "$(escape_workflow_data "$BASE")" "$(escape_workflow_data "$HEAD")"
 for f in "${CHANGED[@]}"; do
-  printf '  %q\n' "$(escape_workflow_data "$f")"
+  printf '  - %q\n' "$(escape_workflow_data "$f")"
 done
 
 REJECT=0

@@ -107,7 +107,7 @@ function decapRuntime() {
   return { registry, defaults, backend: new SaveBackend() };
 }
 
-function renderedPostsCollection() {
+function renderedPostsCollection(collectionName = "posts") {
   const cacheDirectory = path.join(__dirname, "node_modules/.cache");
   fs.mkdirSync(cacheDirectory, { recursive: true });
   const temporary = fs.mkdtempSync(path.join(cacheDirectory, "c38-config-"));
@@ -125,14 +125,14 @@ function renderedPostsCollection() {
     execFileSync("ruby", [path.join(ROOT, "scripts/render-decap-config.rb"), temporary, output],
       { encoding: "utf8" });
     const config = YAML.parse(fs.readFileSync(path.join(output, "admin/config.yml"), "utf8"));
-    return fromJS(config.collections.find(c => c.name === "posts"));
+    return fromJS(config.collections.find(c => c.name === "posts")).set("name", collectionName);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 
-async function uiGeneratedPost(title) {
-  const collection = renderedPostsCollection();
+async function uiGeneratedPost(title, collectionName = "posts") {
+  const collection = renderedPostsCollection(collectionName);
   const { registry, defaults, backend } = decapRuntime();
   // The author lookup is the only backend I/O used by this save path.
   backend.currentUser = async () => ({ login: "fixture-author", name: "Fixture author" });
@@ -142,7 +142,7 @@ async function uiGeneratedPost(title) {
   }, { title: "E2E Offline Front Matter" });
   const data = fromJS(defaults.createEmptyDraftData(collection.get("fields")))
     .merge({ title, body: "Offline editor content.", date: "2026-01-02 03:04:05 +0000", published: true });
-  const entry = fromJS({ collection: "posts", newRecord: true }).set("data", data);
+  const entry = fromJS({ collection: collectionName, newRecord: true }).set("data", data);
   // These are the same calls persistEntry uses before handing raw to its
   // backend. GitHub persistence, widgets' date clock, and React mounting are
   // outside this deterministic regression; serialization is entirely Decap.
@@ -177,4 +177,18 @@ test("a normal UI post retains the hidden default without test-post exclusions",
   expect(Object.hasOwn(data, "robots")).toBe(false);
   expect(Object.hasOwn(data, "sitemap")).toBe(false);
   expect(data.test_fixture).toBe(false);
+});
+
+test("a matching test-post title in a non-posts collection preserves the complete normal save", async () => {
+  // Reuse every rendered field and the actual Decap save pipeline, changing
+  // only the collection name so the registered title cannot mask this guard.
+  const normal = await uiGeneratedPost("Normal editor post", "pages");
+  const matching = await uiGeneratedPost("E2E Offline Front Matter", "pages");
+  expect(matching).toEqual({ ...normal, title: "E2E Offline Front Matter" });
+  expect(matching.title).toBe("E2E Offline Front Matter");
+  expect(matching.date).toBe("2026-01-02 03:04:05 +0000");
+  expect(matching.published).toBe(true);
+  expect(matching.test_fixture).toBe(false);
+  expect(Object.hasOwn(matching, "robots")).toBe(false);
+  expect(Object.hasOwn(matching, "sitemap")).toBe(false);
 });
