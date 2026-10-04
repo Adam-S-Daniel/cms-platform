@@ -433,11 +433,16 @@
         // preview origin is not derivable from anything this shim may read.
         // Naming the branch is the same discipline targetUrl() already
         // applies — naming the wrong URL is worse than naming none.
+        // An entry-status-model.js older than laterNote (a cached copy)
+        // still says preview: true; say the same thing in its place rather
+        // than "undefined".
         return {
           kind: "confirm",
           note:
             "Put this on " + dest.noun + "? It takes about 5 minutes to appear " +
-            "there. " + dest.laterNote,
+            "there. " +
+            (dest.laterNote ||
+              "It will not reach " + dest.canonical + " until the work on this branch goes live there."),
         };
       }
       var url = targetUrl();

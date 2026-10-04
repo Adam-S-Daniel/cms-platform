@@ -364,7 +364,7 @@ function loadBar(barFacts, windowExtra = {}) {
   }
   const tick = () => intervals.forEach((fn) => fn());
   tick();
-  return { doc, tick };
+  return { doc, tick, win: sandbox.window };
 }
 
 test.describe("publish-step-hint — the run link", () => {
@@ -460,4 +460,30 @@ test.describe("publish-button — the preview confirmation names when the live s
     );
     expect(slot.textContent).not.toMatch(/will not go to|NOT go/i);
   });
+});
+
+// Review of #558, N2: a cached entry-status-model.js from before laterNote
+// still reports preview: true, and the confirmation read "… there. undefined".
+test("“Put this on …?” on a preview falls back to the same promise when the model has no laterNote", () => {
+  const hostname = {
+    current: () => "preview-pr0.example.com",
+    canonical: () => "example.com",
+    options: () => ({ currentHostname: "preview-pr0.example.com", canonicalHostname: "example.com" }),
+  };
+  const { doc, tick, win } = loadBar(facts({ hasOpenPr: true, previewOnly: true, baseRef: "claude/x" }), {
+    CMSHostname: hostname,
+  });
+  const real = win.CMSEntryStatus.destination;
+  win.CMSEntryStatus.destination = (f, o) => {
+    const { laterNote, ...older } = real(f, o);
+    return older;
+  };
+  doc.getElementById("cms-publish-button").click();
+  tick();
+  const slot = doc.getElementById("cms-publish-state-actions");
+  expect(slot.textContent).toContain(
+    "Put this on preview-pr0.example.com? It takes about 5 minutes to appear there. " +
+      "It will not reach example.com until the work on this branch goes live there.",
+  );
+  expect(slot.textContent).not.toMatch(/undefined/);
 });
