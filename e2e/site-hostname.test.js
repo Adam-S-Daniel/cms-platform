@@ -35,11 +35,11 @@ function load({
     sandbox.fetch = (url, init) => {
       fetchCalls.push({ url: String(url), init: init || {} });
       if (config instanceof Error) return Promise.reject(config);
-      return Promise.resolve({
+      return Promise.resolve(config).then((body) => ({
         ok: status >= 200 && status < 300,
         status,
-        text: () => Promise.resolve(config),
-      });
+        text: () => Promise.resolve(body),
+      }));
     };
   }
   vm.createContext(sandbox);
@@ -269,7 +269,7 @@ for (const [label, opts, expected] of [
   ["production on www.", { origin: "https://www.example.com/admin/", config: servedConfig() }, "example.com"],
   [
     "production on the CloudFront distribution hostname",
-    { origin: "https://d1234abcd.cloudfront.net/admin/", config: servedConfig() },
+    { origin: "https://d1234abcd.example.net/admin/", config: servedConfig() },
     "example.com",
   ],
   [
@@ -321,8 +321,10 @@ for (const [label, opts, expected] of [
   test(`destination(): ${label}`, async () => {
     const names = load({ siteOrigin: "https://example.com", ...opts });
     expect(names.destination(), "before the read settles it is the access host, current()").toBe(names.current());
+    expect(names.destinationOrigin()).toBe(names.publicOrigin());
     await names.binding();
     expect(names.destination()).toBe(expected);
+    expect(new URL(names.destinationOrigin()).hostname).toBe(expected);
   });
 }
 
@@ -360,7 +362,8 @@ test("a config read that never answers is abandoned after 10 s and treated as un
   expect(settled, "still waiting before the timer fires").toBeNull();
   pending[0].fn();
   await new Promise((r) => setImmediate(r));
-  expect(settled).toEqual({ branch: null, destination: null });
+  expect(settled).toEqual({ branch: null, destination: null, destinationOrigin: null });
+  expect(names.destinationOrigin()).toBe("https://preview-pr7.example.com");
   expect(signal && signal.aborted, "the stalled request is aborted, not left running").toBe(true);
   expect(names.destination(), "an unreadable read names the access host — the preview").toBe("preview-pr7.example.com");
 });
@@ -383,11 +386,11 @@ test("binding() reads the config file the shell names, once, past the HTTP cache
 
 test("binding() reports the served branch, slashes kept, and null for anything that is not a plain ref", async () => {
   const preview = load({ config: servedConfig({ branch: "claude/issue-528/x", siteURL: "https://preview-pr0.example.com" }) });
-  expect(await preview.binding()).toEqual({ branch: "claude/issue-528/x", destination: "preview-pr0.example.com" });
+  expect(await preview.binding()).toEqual({ branch: "claude/issue-528/x", destination: "preview-pr0.example.com", destinationOrigin: "https://preview-pr0.example.com" });
   for (const bad of ['backend:\n  branch: "quoted"\n', "backend:\n  branch: <b>x</b>\n", "backend:\n  name: github\n"]) {
     expect((await load({ config: bad }).binding()).branch).toBeNull();
   }
-  expect(await load({ config: "", status: 500 }).binding()).toEqual({ branch: null, destination: null });
+  expect(await load({ config: "", status: 500 }).binding()).toEqual({ branch: null, destination: null, destinationOrigin: null });
 });
 
 // The reader mirrors the writer: run the real preview patch on the real base
@@ -408,5 +411,79 @@ test("parses the branch and site_url patch-preview-config.sh writes into the rea
   expect(names.parseServedConfig(fs.readFileSync(cfg, "utf8"))).toEqual({
     branch: "claude/issue-528-x",
     destination: "preview-pr42.example.com",
+    destinationOrigin: "https://preview-pr42.example.com",
   });
 });
+
+for (const [access, siteURL] of [
+  ["https://example.com", "https://example.com"],
+  ["https://www.example.com", "https://example.com"],
+  ["https://d1234abcd.example.net", "https://example.com"],
+  ["https://preview-pr7.example.com", "https://example.com"],
+  ["https://example.com", "https://preview-pr7.example.com"],
+  ["https://preview-pr7.example.com", "https://preview-pr7.example.com"],
+  ["http://localhost:4000", "https://example.com"],
+  ["http://localhost:4000", "http://localhost:4000"],
+]) {
+  test(`destinationOrigin follows served config: ${access} -> ${siteURL}`, async () => {
+    const names = load({ origin: access + "/admin/", config: servedConfig({ siteURL }) });
+    expect(names.destinationOrigin()).toBe(access);
+    await names.binding();
+    expect(names.destinationOrigin()).toBe(siteURL);
+    expect(names.publicOrigin()).toBe(access);
+    expect(names.current()).toBe(new URL(access).hostname);
+    expect(names.options().currentHostname).toBe(names.current());
+    await names.binding();
+    expect(names.fetchCalls).toHaveLength(1);
+  });
+}
+
+for (const siteURL of ["javascript:alert(1)", "data:text/plain,x", "ftp://example.com", "//example.com", "invalid"]) {
+  test(`destinationOrigin rejects invalid site_url ${siteURL}`, async () => {
+    const names = load({ origin: "http://localhost:4000/admin/", config: servedConfig({ siteURL }) });
+    await names.binding();
+    expect(names.destinationOrigin()).toBe("http://localhost:4000");
+    expect(names.parseServedConfig(servedConfig({ siteURL })).destinationOrigin).toBeNull();
+  });
+}
+
+test("destinationOrigin strips credentials, paths, queries and fragments but keeps protocol and port", async () => {
+  const names = load({ config: servedConfig({ siteURL: "http://editor:fixture@example.net:4000/path?q=x#fragment" }) });
+  // Also exercise the supported quoted URL form.
+  const parsed = names.parseServedConfig('site_url: "http://editor:fixture@example.net:4000/path?q=x"\n');
+  expect(parsed.destinationOrigin).toBe("http://example.net:4000");
+  expect(parsed.destination).toBe("example.net");
+  await names.binding();
+  expect(names.destinationOrigin()).toBe("http://example.net:4000");
+});
+
+for (const config of [undefined, new Error("offline"), ""]) {
+  test(`destinationOrigin unreadable fallback keeps separate-admin public origin: ${String(config)}`, async () => {
+    const names = load({
+      origin: "https://admin.example.com/admin/", adminOrigin: "https://admin.example.com",
+      siteOrigin: "http://example.net:4000", config, status: 404,
+    });
+    await names.binding();
+    expect(names.destinationOrigin()).toBe("http://example.net:4000");
+  });
+}
+
+test("destinationOrigin updates after delayed config, preserving local fallback port until settled", async () => {
+  let answer;
+  const config = new Promise((resolve) => { answer = resolve; });
+  const names = load({ origin: "http://localhost:4000/admin/", config });
+  const read = names.binding();
+  expect(names.destinationOrigin()).toBe("http://localhost:4000");
+  answer(servedConfig({ siteURL: "https://preview-pr7.example.com:8443/path" }));
+  await read;
+  expect(names.destinationOrigin()).toBe("https://preview-pr7.example.com:8443");
+  expect(names.fetchCalls).toHaveLength(1);
+});
+
+for (const config of [new Error("offline"), "site_url: ftp://example.com\n"]) {
+  test(`destinationOrigin unreadable local fallback preserves protocol and port: ${String(config)}`, async () => {
+    const names = load({ origin: "http://localhost:4000/admin/", config });
+    await names.binding();
+    expect(names.destinationOrigin()).toBe("http://localhost:4000");
+  });
+}

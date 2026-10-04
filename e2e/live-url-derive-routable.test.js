@@ -26,15 +26,20 @@ const LIVE_URL_DERIVE_PATH = path.join(REPO_ROOT, "theme", "admin", "live-url-de
 // readPublished() walks `document.querySelectorAll("*")` looking for a
 // "Published" toggle, which we don't need for these cases (an empty list
 // makes it correctly return null == "no Published toggle in this schema").
-function loadLiveURL(fields) {
+function loadLiveURL(fields, { access = "https://example.com", siteURL } = {}) {
   const src = fs.readFileSync(LIVE_URL_DERIVE_PATH, "utf8");
   const els = {};
   for (const [name, value] of Object.entries(fields || {})) {
     els[name] = { value };
   }
   const sandbox = {
-    window: { location: { hash: "", origin: "https://example.com" } },
+    window: { location: new URL(access + "/admin/"), CMS_SITE_ORIGIN: "https://example.com" },
+    URL,
+    Promise,
+    fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve(`site_url: ${siteURL}\n`) }),
     document: {
+      readyState: "loading",
+      addEventListener() {},
       querySelector(sel) {
         const m = /id\^="([^"]+)-field"/.exec(sel);
         if (!m) return null;
@@ -46,6 +51,7 @@ function loadLiveURL(fields) {
     },
   };
   vm.createContext(sandbox);
+  if (siteURL) vm.runInContext(fs.readFileSync(path.join(REPO_ROOT, "theme/admin/site-hostname.js"), "utf8"), sandbox);
   vm.runInContext(src, sandbox);
   expect(
     sandbox.window.LiveURL && typeof sandbox.window.LiveURL.compute,
@@ -119,3 +125,54 @@ test.describe("live-url-derive.js compute() — routable-collection gate (#328.3
     expect(LiveURL.compute()).toBeNull();
   });
 });
+
+for (const [access, siteURL] of [
+  ["https://example.com", "https://example.com"],
+  ["https://www.example.com", "https://example.com"],
+  ["https://d1234abcd.example.net", "https://example.com"],
+  ["https://preview-pr7.example.com", "https://example.com"],
+  ["https://example.com", "https://preview-pr7.example.com"],
+  ["https://preview-pr7.example.com", "https://preview-pr7.example.com"],
+  ["http://localhost:4000", "https://example.com"],
+  ["http://localhost:4000", "http://localhost:4000"],
+]) {
+  test(`LiveURL publication origin: ${access} -> ${siteURL}`, async () => {
+    const { LiveURL, window } = loadLiveURL({ title: "Hello", permalink: "/about/" }, { access, siteURL });
+    window.location.hash = "#/collections/posts/entries/hello";
+    expect(LiveURL.compute().url).toBe(access + "/blog/hello/");
+    await window.CMSHostname.binding();
+    for (const [collection, route] of [["posts", "/blog/hello/"], ["tags", "/tags/hello/"], ["projects", "/projects/hello/"], ["pages", "/about/"]]) {
+      window.location.hash = `#/collections/${collection}/entries/hello`;
+      expect(LiveURL.compute().url).toBe(siteURL + route);
+    }
+  });
+}
+
+test("LiveURL preserves publicOrigin when a cached hostname helper lacks destinationOrigin", () => {
+  const { LiveURL, window } = loadLiveURL({ title: "Hello" }, { access: "https://admin.example.com" });
+  window.CMSHostname = { publicOrigin: () => "https://example.com" };
+  window.location.hash = "#/collections/posts/entries/hello";
+  expect(LiveURL.compute().url).toBe("https://example.com/blog/hello/");
+});
+
+for (const [access, destinationOrigin] of [
+  ["https://example.com", "https://example.com"],
+  ["https://www.example.com", "https://example.com"],
+  ["https://d1234abcd.example.net", "https://example.com"],
+  ["https://preview-pr7.example.com", "https://example.com"],
+  ["https://example.com", "https://preview-pr7.example.com"],
+  ["https://preview-pr7.example.com", "https://preview-pr7.example.com"],
+  ["http://localhost:4000", "https://example.com"],
+  ["http://localhost:4000", "http://localhost:4000"],
+]) {
+  test(`Live Preview stays same-origin for BroadcastChannel: ${access} -> ${destinationOrigin}`, () => {
+    const sandbox = {
+      window: { location: new URL(access + "/admin/"), CMSHostname: { destinationOrigin: () => destinationOrigin } },
+      document: { readyState: "loading", addEventListener() {} },
+      BroadcastChannel: class {},
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.join(REPO_ROOT, "theme/admin/preview-bridge.js"), "utf8"), sandbox);
+    expect(sandbox.window.adamdaniel_cms_preview_url("posts")).toBe(access + "/preview/?collection=posts");
+  });
+}

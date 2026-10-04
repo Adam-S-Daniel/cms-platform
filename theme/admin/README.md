@@ -84,6 +84,7 @@ site's own `collections.site.yml` may carry it.
 | `current()` | the access host: where this tab was opened (the site's, on a separate admin origin) | that host, e.g. `www.<apex>` | `preview-prN.<apex>` | `localhost` |
 | `canonical()` | the production destination, from `CMS_SITE_ORIGIN`, then `CMS_APEX`, and `current()` when neither is injected | `<apex>` | `<apex>` | `<apex>` |
 | `destination()` | the destination of THIS admin: the host of `site_url` in the config.yml it serves (the site's `url`; `patch-preview-config.sh` rewrites it on a preview). `{{CMS_CURRENT_HOST}}` resolves to this | `<apex>` | `preview-prN.<apex>` | `localhost` |
+| `destinationOrigin()` | the HTTP(S) origin of that same `site_url`, including protocol and port, with paths and credentials removed | `https://<apex>` | `https://preview-prN.<apex>` | `http://localhost:4000` |
 
 The local and test shells name `localhost` on purpose: their configs
 (`config-local.base.yml`, `config-test.yml`) set `site_url:
@@ -95,8 +96,13 @@ not answered within 10 seconds, `destination()` is `current()`: right on a
 preview, where `canonical()` would name production, and only cosmetically off
 on a production `www.` or distribution hostname.
 
+Publication URLs and slug-collision probes use `destinationOrigin()`. Before
+the config settles, or if unreadable or not HTTP(S), it falls back to
+`publicOrigin()` (the injected public site on a separate admin origin,
+otherwise this tab's origin). Both helpers share the same cached config read.
+
 `CMSHostname.binding()` returns that same single read as `{ branch,
-destination }` — `branch` is the served `backend.branch` at the line anchor
+destination, destinationOrigin }` — `branch` is the served `backend.branch` at the line anchor
 the patch script writes, `null` unless it is a plain git ref name.
 `site-gate-banner.js` reads its flag at that branch (#528), names
 `canonical()` when it is `CMS_PRODUCTION_BRANCH` and `destination()`

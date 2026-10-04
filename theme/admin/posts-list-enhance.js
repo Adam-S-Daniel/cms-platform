@@ -744,7 +744,12 @@
       },
       Object.assign(
         { now: Date.now(), contact: window.CMS_SUPPORT_CONTACT || null },
-        window.CMSHostname ? window.CMSHostname.options() : {},
+        window.CMSHostname
+          ? {
+              currentHostname: window.CMSHostname.destination(),
+              canonicalHostname: window.CMSHostname.canonical(),
+            }
+          : {},
       ),
     );
     // The modifiers come from the summary text, which is the only place
@@ -1049,6 +1054,7 @@
   // Test hook (e2e/posts-list-branch-tip.test.js), the same shape as
   // publish-button.js's window.__publishButton.
   window.__postsListEnhance = {
+    badgeFor: badgeFor,
     fetchOpenPrBySlug: fetchOpenPrBySlug,
     publishingBarCopy: publishingBarCopy,
     publishingSummaryHTML: publishingSummaryHTML,

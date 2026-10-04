@@ -168,7 +168,9 @@
     } catch (e) {
       /* fall through to the site origin */
     }
-    return window.CMS_SITE_ORIGIN || (window.CMS_APEX ? "https://" + window.CMS_APEX : null);
+    return (window.CMSHostname && typeof window.CMSHostname.destinationOrigin === "function"
+      ? window.CMSHostname.destinationOrigin() : null) ||
+      window.CMS_SITE_ORIGIN || (window.CMS_APEX ? "https://" + window.CMS_APEX : null);
   }
 
   function hasUnsavedChanges() {

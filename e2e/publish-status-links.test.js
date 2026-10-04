@@ -325,6 +325,7 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
     addEventListener() {},
     getElementById: (id) => findAll(root, (n) => n.id === id)[0] || null,
     querySelector: (selector) => {
+      if (options.liveDerive && selector.includes('id^="title-field"')) return { value: "Hello" };
       if (selector === 'button[class*="SaveButton"]') return save;
       if (selector === '[class*="oolbar"]') return toolbar;
       if (options.nativePublish && selector.includes("PublishButton")) return new FakeNode("button");
@@ -343,6 +344,7 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
       ...windowExtra,
     },
     document: doc,
+    URL,
     MutationObserver: class {
       observe() {}
     },
@@ -362,6 +364,7 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
   };
   vm.createContext(sandbox);
   const scripts = [];
+  if (options.liveDerive) scripts.push("live-url-derive.js");
   if (options.model !== false) scripts.push("entry-status-model.js");
   scripts.push("publish-step-hint.js");
   if (options.publish !== false) scripts.push("publish-button.js");
@@ -600,4 +603,44 @@ test("publish-step-hint fallback updates after the served config settles (#533)"
   destination = "preview-pr42.example.com";
   tick();
   expect(doc.getElementById("cms-publish-state-text").textContent).toContain("not on preview-pr42.example.com yet");
+});
+
+for (const [access, destinationOrigin] of [
+  ["https://example.com", "https://example.com"],
+  ["https://www.example.com", "https://example.com"],
+  ["https://d1234abcd.example.net", "https://example.com"],
+  ["https://preview-pr7.example.com", "https://example.com"],
+  ["https://example.com", "https://preview-pr7.example.com"],
+  ["https://preview-pr7.example.com", "https://preview-pr7.example.com"],
+  ["http://localhost:4000", "https://example.com"],
+  ["http://localhost:4000", "http://localhost:4000"],
+]) {
+  for (const liveDerive of [false, true]) {
+    test(`publish-button publication URL ${liveDerive ? "entry" : "site fallback"}: ${access} -> ${destinationOrigin}`, () => {
+      const { doc } = loadBar(facts({ hasOpenPr: true }), {
+        location: new URL(access + "/admin/#/collections/posts/entries/hello"),
+        CMS_SITE_ORIGIN: "https://example.com",
+        CMSHostname: {
+          current: () => new URL(access).hostname,
+          publicOrigin: () => access,
+          destination: () => new URL(destinationOrigin).hostname,
+          destinationOrigin: () => destinationOrigin,
+          canonical: () => "example.com",
+        },
+      }, { liveDerive });
+      doc.getElementById("cms-publish-button").click();
+      expect(doc.getElementById("cms-publish-state-actions").textContent).toContain(
+        "It will appear at " + destinationOrigin + (liveDerive ? "/blog/hello/" : "") + " in about 5 minutes.",
+      );
+    });
+  }
+}
+
+test("publish-button site fallback supports a cached helper without destinationOrigin", () => {
+  const { doc } = loadBar(facts({ hasOpenPr: true }), {
+    CMS_SITE_ORIGIN: "http://example.net:4000",
+    CMSHostname: { destination: () => "example.net", canonical: () => "example.net" },
+  });
+  doc.getElementById("cms-publish-button").click();
+  expect(doc.getElementById("cms-publish-state-actions").textContent).toContain("It will appear at http://example.net:4000");
 });

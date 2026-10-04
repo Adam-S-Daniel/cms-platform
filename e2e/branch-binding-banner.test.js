@@ -367,3 +367,16 @@ test.describe("branch-binding-banner.js + site-gate-banner.js — a fixed readin
     expect(g.textContent, "no clause may claim what 'you publish' does — that differs by host").not.toMatch(/you publish/i);
   });
 });
+
+test("branch banner names the opened preview tab even when publication has another destination", async () => {
+  const ctx = sandboxFor({ production: "main", config: previewConfig });
+  ctx.sandbox.window.CMSHostname.current = () => "preview-pr7.example.com";
+  ctx.sandbox.window.CMSHostname.destination = () => "preview-pr8.example.com";
+  ctx.sandbox.window.CMSHostname.canonical = () => "example.com";
+  run(ctx.sandbox, SHIM);
+  await ctx.sandbox.window.CMSBranchBinding.refresh();
+  await flush();
+  const banner = ctx.document.getElementById(BANNER_ID);
+  expect(banner.textContent).toContain("branch on preview-pr7.example.com.");
+  expect(banner.textContent).not.toContain("preview-pr8.example.com");
+});

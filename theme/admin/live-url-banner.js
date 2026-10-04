@@ -12,26 +12,20 @@
  * the production-vs-preview ORIGIN decision described next.
  *
  * ── Preview-aware origin ──────────────────────────────────────────
- * `window.LiveURL.compute()` builds the URL from `window.location.origin`
- * — on the production admin (https://adamdaniel.ai/admin/) that is the
- * production host. But a post edited through Decap's editorial workflow
- * lives on a `cms/<collection>/<file-slug>` PR branch and is NOT on the
- * production site until that PR merges, so the banner used to link the
- * whole draft lifecycle at https://adamdaniel.ai/blog/<slug>/ — a hard
- * 404. While the PR is open the post IS live at the per-PR preview
- * environment, so when the open entry has an editorial-workflow PR this
- * script swaps the URL's host for `preview-pr<N>.adamdaniel.ai`, exactly
- * the URL admin/posts-list-enhance.js surfaces in the Posts list. With
- * no open PR the post is genuinely on production and the URL is left at
- * the current origin.
+ * `window.LiveURL.compute()` builds the URL from the served config's
+ * `CMSHostname.destinationOrigin()`, preserving its protocol and port.
+ * An editorial-workflow draft lives on a `cms/<collection>/<file-slug>`
+ * PR branch until it merges. While that PR is open this script swaps the
+ * URL's host for `preview-pr<N>.<apex>`; the visible label names that actual
+ * URL. Without an open PR, or when lookup fails, it keeps the configured
+ * publication URL. With no derivable URL the label uses destination().
  *
  * The open-PR map is read from admin/posts-list-enhance.js's shared
  * sessionStorage cache when it's warm (an editor who reached the post
  * via the list pays zero extra network); otherwise one `pulls?state=
  * open` REST call (operator's Decap token, same auth pattern as
  * deploy-status-pill.js) is made and cached. With no token / on any API
- * error the banner degrades to the current-origin URL — never worse
- * than the pre-fix behaviour.
+ * error the banner degrades to the configured publication URL.
  *
  * Stateful sources (read inside `live-url-derive.js`):
  *   - `<input id="title-field-N">` — title text
@@ -280,7 +274,7 @@
     var liveURL = data.url ? previewAwareURL(data.url) : null;
     var labelHost =
       (window.CMSHostname && window.CMSHostname.fromURL(liveURL || data.url)) ||
-      (window.CMSHostname && window.CMSHostname.current()) ||
+      (window.CMSHostname && window.CMSHostname.destination()) ||
       "this address";
     var safeHost = String(labelHost).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];

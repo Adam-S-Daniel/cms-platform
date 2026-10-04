@@ -33,7 +33,12 @@
  * The read is abandoned after CONFIG_READ_TIMEOUT_MS and treated as
  * unreadable, so a stalled connection cannot leave the raw token on screen.
  *
- * binding() exposes the same read — `{ branch, destination }` — for
+ * destinationOrigin() preserves the HTTP(S) protocol and port of site_url,
+ * with paths and credentials removed. Local config http://localhost:4000
+ * therefore keeps its local URL. Before the read settles, or if unreadable,
+ * it falls back to publicOrigin(), including the separate admin origin rule.
+ *
+ * binding() exposes the same read — `{ branch, destination, destinationOrigin }` — for
  * site-gate-banner.js, which must read its flag at the branch this admin is
  * bound to (#528). The branch is read at the line anchor
  * patch-preview-config.sh writes (`^  branch:`), the same lexical contract as
@@ -47,7 +52,7 @@
   var DEFAULT_CONFIG_FILE = "config.yml";
   // The characters a plain git ref name is made of (branch-binding-banner.js).
   var REF_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-  var UNKNOWN = { branch: null, destination: null };
+  var UNKNOWN = { branch: null, destination: null, destinationOrigin: null };
   var CONFIG_READ_TIMEOUT_MS = 10000;
 
   function hostname(value) {
@@ -95,15 +100,19 @@
     var b = /^ {2}branch:[ \t]*([^\s#]+)[ \t]*(?:#.*)?$/m.exec(src);
     var u = /^site_url:[ \t]*(["']?)([^\s"'#]+)\1[ \t]*(?:#.*)?$/m.exec(src);
     var dest = null;
+    var origin = null;
     if (u) {
       try {
         var parsed = new URL(u[2]);
-        if (parsed.protocol === "https:" || parsed.protocol === "http:") dest = parsed.hostname || null;
+        if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+          dest = parsed.hostname || null;
+          origin = parsed.origin;
+        }
       } catch (e) {
         dest = null;
       }
     }
-    return { branch: b && REF_NAME.test(b[1]) ? b[1] : null, destination: dest };
+    return { branch: b && REF_NAME.test(b[1]) ? b[1] : null, destination: dest, destinationOrigin: origin };
   }
 
   // Decap loads the file a `<link rel="cms-config-url">` names, else
@@ -160,6 +169,10 @@
     return (served && served.destination) || current();
   }
 
+  function destinationOrigin() {
+    return (served && served.destinationOrigin) || publicOrigin();
+  }
+
   function ownedControlFor(node) {
     if (!node || !node.closest) return null;
     for (var i = 0; i < OWNED_CONTROL_SELECTORS.length; i += 1) {
@@ -196,6 +209,7 @@
     current: current,
     canonical: canonical,
     destination: destination,
+    destinationOrigin: destinationOrigin,
     binding: binding,
     parseServedConfig: parseServedConfig,
     publicOrigin: publicOrigin,

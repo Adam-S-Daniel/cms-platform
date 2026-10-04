@@ -130,7 +130,9 @@
     var timer = setTimeout(function () {
       if (ctrl) ctrl.abort();
     }, PROBE_MS);
-    var probe = fetch(window.location.origin + "/blog/" + encodeURIComponent(slug) + "/", {
+    var origin = window.CMSHostname && typeof window.CMSHostname.destinationOrigin === "function"
+      ? window.CMSHostname.destinationOrigin() : window.location.origin;
+    var probe = fetch(origin + "/blog/" + encodeURIComponent(slug) + "/", {
       method: "HEAD",
       cache: "no-store",
       signal: ctrl ? ctrl.signal : undefined,

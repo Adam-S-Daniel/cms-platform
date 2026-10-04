@@ -382,6 +382,26 @@ update names the canonical hostname; a preview update names the current preview
 hostname. Their visible labels and help text describe publishing and updates,
 while workflow names, job ids and deployment states remain internal diagnostics.
 
+Publication links and new-post slug-collision probes use
+`CMSHostname.destinationOrigin()`: the HTTP(S) origin of the served config's
+`site_url`, including protocol and port, with paths and credentials removed.
+They resolve it when rendered or probed, so a delayed config read changes the
+destination without reloading. The local/test config names
+`http://localhost:4000`, intentionally preserving local development's protocol
+and port. Before the single cached config read settles, or if it fails, times
+out after 10 seconds, or names a non-HTTP(S) URL, the helper falls back to
+`publicOrigin()`: the configured public site on a separate admin origin,
+otherwise this tab's origin. A cached older hostname helper still supplies
+`publicOrigin()` to live-URL derivation until the new helper is available.
+
+Live Preview keeps the tab's origin because its BroadcastChannel is
+same-origin. The branch-binding banner likewise names the tab with `current()`;
+it identifies the preview the editor opened. The site-gate banner uses the same
+`binding()` result as the destination helpers, reads its flag at that served
+branch (#528), and names `canonical()` for the production branch or
+`destination()` for a preview. These banners explain the editing surface and
+its visibility; publication labels name where the configured publish goes.
+
 Every deployment state GitHub documents has its own words in the Posts-list
 summary (#534): *updated*, *update did not finish*, *update started*, *update
 requested*, and, for `inactive`, *update replaced by a newer one*. A state the
