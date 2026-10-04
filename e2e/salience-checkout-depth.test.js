@@ -39,7 +39,71 @@ const lines = (s) =>
   String(s.run || "")
     .replace(/\\\n/g, " ")
     .split("\n");
-const words = (line) => line.split(/[\s$()|;]+/).filter(Boolean);
+// Lexical shell words: remove quotes, keep variable spellings, and stop at an
+// unquoted comment. Mark substitution boundaries so its commands can be read
+// separately from the surrounding echo/printf arguments. No shell execution.
+function words(line) {
+  const tokens = [];
+  let word = "";
+  let quote = "";
+  const substitutions = [];
+  const flush = () => {
+    if (word) tokens.push(word);
+    word = "";
+  };
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "\\" && quote !== "'" && i + 1 < line.length) {
+      word += line[++i];
+    } else if (ch === "$" && line[i + 1] === "(" && quote !== "'") {
+      // A command substitution executes even inside double quotes.
+      flush();
+      tokens.push("$(");
+      substitutions.push({ end: ")", quote, depth: 0 });
+      quote = "";
+      i += 1;
+    } else if (ch === "`" && quote !== "'") {
+      // Backticks also execute inside double quotes.
+      flush();
+      if (substitutions.at(-1)?.end === "`") {
+        tokens.push("`)");
+        quote = substitutions.pop().quote;
+      } else {
+        tokens.push("`(");
+        substitutions.push({ end: "`", quote });
+        quote = "";
+      }
+    } else if (ch === "(" && !quote && substitutions.at(-1)?.end === ")") {
+      flush();
+      tokens.push(ch);
+      substitutions.at(-1).depth += 1;
+    } else if (ch === ")" && !quote && substitutions.at(-1)?.end === ")" && substitutions.at(-1).depth > 0) {
+      flush();
+      tokens.push(ch);
+      substitutions.at(-1).depth -= 1;
+    } else if (ch === ")" && !quote && substitutions.at(-1)?.end === ")") {
+      flush();
+      tokens.push("$)");
+      quote = substitutions.pop().quote;
+    } else if (quote) {
+      if (ch === quote) quote = "";
+      else word += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "#" && !word) {
+      break;
+    } else if (/\s/.test(ch)) {
+      flush();
+    } else if ("()|;&".includes(ch)) {
+      flush();
+      tokens.push(ch);
+    } else {
+      word += ch;
+    }
+  }
+  flush();
+  return tokens;
+}
 // git's global options that take a SEPARATE argument; `--opt=value` spellings
 // and the boolean flags (`-p`, `--no-pager`, ...) need no skipping.
 const GIT_OPTIONS_WITH_ARG = new Set([
@@ -53,12 +117,44 @@ const GIT_OPTIONS_WITH_ARG = new Set([
   "--super-prefix",
   "--attr-source",
 ]);
-// The git subcommands one line runs: for each `git` word, the first word
-// after git's global options. `git -c k=v fetch` is a fetch, not a `k=v`.
+// The git subcommands one line runs: scan every lexical word outside
+// echo/printf arguments, including wrapper commands and shell control words.
+// A substitution has its own command scope, then returns to its caller's.
 function gitSubcommands(lineWords) {
   const subs = [];
+  let command = true;
+  let suppressed = false;
+  const scopes = [];
   lineWords.forEach((word, i) => {
-    if (word !== "git") return;
+    if (["$(", "`("].includes(word)) {
+      scopes.push(suppressed);
+      command = true;
+      suppressed = false;
+      return;
+    }
+    if (["$)", "`)"].includes(word)) {
+      suppressed = scopes.pop() ?? false;
+      command = false;
+      return;
+    }
+    if (["(", ")", "|", ";", "&"].includes(word)) {
+      command = true;
+      suppressed = false;
+      return;
+    }
+    if (suppressed) return;
+    if (command && (word === "{" || word === "}")) {
+      command = true;
+      return;
+    }
+    if (command && ["echo", "printf"].includes(word)) {
+      suppressed = true;
+      command = false;
+      return;
+    }
+    if (command && (["if", "then", "elif", "else", "while", "until", "do", "!", "command", "env", "exec"].includes(word) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word))) return;
+    command = false;
+    if (word !== "git" && !word.endsWith("/git") && word !== "$GIT" && word !== "${GIT}") return;
     let j = i + 1;
     while (j < lineWords.length && lineWords[j].startsWith("-")) {
       j += GIT_OPTIONS_WITH_ARG.has(lineWords[j]) ? 2 : 1;
@@ -196,6 +292,18 @@ test.describe("every step that runs ensure-merge-base.js fails closed (behaviora
 // the spellings that hid a fetch behind global options.
 test.describe("gitSubcommands (the no-direct-fetch lint's reader)", () => {
   const sub = (cmd) => gitSubcommands(words(cmd));
+  test("quoted fetch is detected while comments and unrelated echo are ignored", () => {
+    expect(sub('"git" fetch origin main')).toEqual(["fetch"]);
+    for (const cmd of ["# git fetch origin main", 'echo "git fetch origin main"', "echo git fetch origin main"]) {
+      expect(sub(cmd), cmd).toEqual([]);
+    }
+    expect(sub("git diff # git fetch origin main")).toEqual(["diff"]);
+    expect(sub('files="$(git fetch origin main)"')).toEqual(["fetch"]);
+    expect(sub("echo '$(git fetch origin main)'")).toEqual([]);
+    for (const prefix of ["command", "env", "exec"]) {
+      expect(sub(`${prefix} git fetch origin main`), prefix).toEqual(["fetch"]);
+    }
+  });
   for (const [cmd, expected] of [
     ["git fetch origin main", ["fetch"]],
     ["git -c k=v fetch origin main", ["fetch"]],
@@ -207,9 +315,92 @@ test.describe("gitSubcommands (the no-direct-fetch lint's reader)", () => {
     ["git -c k=v diff --name-only", ["diff"]],
     ["git config --global --add safe.directory x", ["config"]],
     ["echo fetch", []],
+    ['"git" fetch origin main', ["fetch"]],
+    ["'git' fetch origin main", ["fetch"]],
+    ["$GIT fetch origin main", ["fetch"]],
+    ["${GIT} fetch origin main", ["fetch"]],
+    ['"$GIT" -c k=v fetch origin main', ["fetch"]],
+    ["/usr/bin/git fetch origin main", ["fetch"]],
+    ['"/usr/bin/git" --git-dir .git fetch origin main', ["fetch"]],
+    ['"git" --no-pager diff --name-only', ["diff"]],
+    ['"$GIT" config --global user.name', ["config"]],
+    ['files="$("git" fetch origin main)"', ["fetch"]],
+    ['files="$("$GIT" -c k=v fetch origin main)"', ["fetch"]],
   ]) {
     test(`${cmd} -> ${JSON.stringify(expected)}`, () => {
       expect(sub(cmd)).toEqual(expected);
     });
   }
+});
+
+test.describe("gitSubcommands review round 2", () => {
+  const sub = (cmd) => gitSubcommands(words(cmd));
+
+  test("else branch runs a fetch after a separate command", () => {
+    expect(sub("else git fetch o")).toEqual(["fetch"]);
+    expect(sub("if false; then echo ok; else git fetch origin; fi")).toEqual(["fetch"]);
+  });
+
+  test("standalone braces leave Git visible without splitting variable braces", () => {
+    expect(sub("{ git fetch o; }")).toEqual(["fetch"]);
+    expect(sub("{ git fetch origin; }")).toEqual(["fetch"]);
+    expect(sub("{ ${GIT} -c k=v fetch origin; }")).toEqual(["fetch"]);
+    expect(sub("{ git fetch o; }; echo { git fetch ignored }")).toEqual(["fetch"]);
+    expect(sub("{ git fetch o; }; printf '%s' { git fetch ignored }")).toEqual(["fetch"]);
+  });
+
+  test("while condition runs Git", () => {
+    expect(sub("while git fetch o; do")).toEqual(["fetch"]);
+    expect(sub("while git fetch origin; do echo waiting; done")).toEqual(["fetch"]);
+  });
+
+  test("timeout runs Git after its duration", () => {
+    expect(sub("timeout 5 git fetch o")).toEqual(["fetch"]);
+    expect(sub("timeout 5 git -C /tmp/work fetch origin")).toEqual(["fetch"]);
+  });
+
+  test("sudo runs a quoted Git command", () => {
+    expect(sub("sudo git fetch o")).toEqual(["fetch"]);
+    expect(sub('sudo "git" --git-dir .git fetch origin')).toEqual(["fetch"]);
+  });
+
+  test("xargs runs Git", () => {
+    expect(sub("xargs git fetch")).toEqual(["fetch"]);
+  });
+
+  test("nohup runs Git through a path", () => {
+    expect(sub("nohup git fetch o")).toEqual(["fetch"]);
+    expect(sub("nohup /usr/bin/git fetch origin")).toEqual(["fetch"]);
+  });
+
+  test("env with a clean environment runs variable Git", () => {
+    expect(sub("env -i git fetch o")).toEqual(["fetch"]);
+    expect(sub("env -i $GIT fetch origin")).toEqual(["fetch"]);
+  });
+
+  test("env through a path runs Git", () => {
+    expect(sub("/usr/bin/env git fetch")).toEqual(["fetch"]);
+    expect(sub("/usr/bin/env git fetch origin")).toEqual(["fetch"]);
+  });
+
+  test("unquoted backticks run their own Git command", () => {
+    expect(sub("value=`git fetch origin`")).toEqual(["fetch"]);
+    expect(sub("echo `git fetch origin` git fetch ignored")).toEqual(["fetch"]);
+  });
+
+  test("double-quoted backticks run their own Git command", () => {
+    expect(sub('value="`git fetch origin`"')).toEqual(["fetch"]);
+    expect(sub('printf "%s git fetch ignored" "`git fetch origin`" git fetch ignored')).toEqual(["fetch"]);
+  });
+
+  test("echo arguments resume suppression after a dollar substitution", () => {
+    expect(sub("echo $(git fetch origin) git fetch ignored")).toEqual(["fetch"]);
+    expect(sub('echo "$(git fetch origin)" git fetch ignored')).toEqual(["fetch"]);
+    expect(sub("echo '$(git fetch ignored)' $(git fetch origin) git fetch ignored # git fetch ignored")).toEqual(["fetch"]);
+    expect(sub("echo $( (git diff); git fetch origin ) git fetch ignored")).toEqual(["diff", "fetch"]);
+  });
+
+  test("printf arguments resume suppression after a dollar substitution", () => {
+    expect(sub("printf '%s git fetch ignored' $(git fetch origin) git fetch ignored")).toEqual(["fetch"]);
+  });
 });

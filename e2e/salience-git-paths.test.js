@@ -341,10 +341,9 @@ test.describe("select-specs getChangedFiles (cms-platform#539, renames)", () => 
     expect(getChangedFiles("origin/main", work).sort()).toEqual(["_layouts/post.html", "uploads/post.html"]);
   });
 
-  test("the uncommitted-changes fallback reads odd names verbatim too", () => {
+  test("a missing base throws instead of substituting uncommitted changes", () => {
     const work = clone({ "x.txt": "x\n" });
     fs.writeFileSync(path.join(work, "café.html"), "new\n");
-    // A base ref that does not resolve takes the fallback.
-    expect(getChangedFiles("origin/no-such-branch", work)).toEqual(["café.html"]);
+    expect(() => getChangedFiles("origin/no-such-branch", work)).toThrow();
   });
 });

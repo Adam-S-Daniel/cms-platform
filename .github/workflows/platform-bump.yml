@@ -205,6 +205,11 @@ jobs:
             echo "::error::$PLATFORM/releases/latest returned no tag_name — refusing to exit green (cms-platform#244)."
             exit 1
           fi
+          # Check before reading CUR or returning early for an already-current lock.
+          if [ -f platform.lock ] && LC_ALL=C grep -q $'\r' platform.lock; then
+            echo "::error::platform.lock contains CRLF line endings — refusing to bump. Convert platform.lock to LF line endings and retry."
+            exit 1
+          fi
           CUR=$(sed -n -E 's/^platform_ref:[[:space:]]*//p' platform.lock 2>/dev/null || echo "")
           [ "$LATEST" = "$CUR" ] && { echo "already on $LATEST"; exit 0; }
           # The rewrite below takes $CUR as the exact ref to move, so it must be a
@@ -249,8 +254,16 @@ jobs:
           # Resolve the release tag -> its COMMIT sha (deref an annotated tag) for
           # the Gemfile.lock git `revision:`.
           NEW_SHA=$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.sha')
+          if ! [[ "$NEW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the release tag object SHA must be exactly 40 lowercase hexadecimal characters — refusing to fetch or bump."
+            exit 1
+          fi
           if [ "$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.type')" = "tag" ]; then
             NEW_SHA=$(gh api "repos/$PLATFORM/git/tags/$NEW_SHA" --jq '.object.sha')
+          fi
+          if ! [[ "$NEW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the release commit SHA must be exactly 40 lowercase hexadecimal characters — refusing to fetch or bump."
+            exit 1
           fi
           # Move every PIN from $CUR to $LATEST — and only pins (#530). This used
           # to be a global `perl s/CUR/LATEST/g` over each pin-bearing file, on

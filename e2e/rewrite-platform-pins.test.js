@@ -396,6 +396,18 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
   const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
   const run = parseYaml(readWorkflow("platform-bump.yml")).jobs.bump.steps.find((s) => s.id === "bump").run;
 
+  function lockReadBlock() {
+    const lines = run.split("\n");
+    const latest = lines.findIndex((l) => l.trim() === 'if [ -z "$LATEST" ]; then');
+    expect(latest).toBeGreaterThan(-1);
+    const start = lines.findIndex((l, i) => i > latest && l.trim() === "fi") + 1;
+    const cur = lines.findIndex((l) => l.trim().startsWith("CUR=$(sed"));
+    expect(cur).toBeGreaterThanOrEqual(start);
+    const end = lines.findIndex((l, i) => i > cur && l.trim() === "fi");
+    expect(end).toBeGreaterThan(cur);
+    return lines.slice(start, end + 1).join("\n");
+  }
+
   function rewriteBlock() {
     const lines = run.split("\n");
     const start = lines.findIndex((l) => l.trim() === 'if [ -n "$CUR" ]; then');
@@ -451,13 +463,7 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
     // Lifted from the `CUR=$(sed ...)` read through its validation, run in a
     // scratch consumer. A quoted value or a trailing comment fails closed and
     // says what was read, not a usage error from deep in the rewrite.
-    const lines = run.split("\n");
-    const start = lines.findIndex((l) => l.trim().startsWith("CUR=$(sed"));
-    expect(start, "the run script must read CUR from platform.lock with sed").toBeGreaterThan(-1);
-    const indent = lines[start].match(/^\s*/)[0];
-    const end = lines.findIndex((l, i) => i > start && l === `${indent}fi`);
-    expect(end, "the CUR validation must close with `fi`").toBeGreaterThan(start);
-    const block = lines.slice(start, end + 1).join("\n");
+    const block = lockReadBlock();
     const readCur = (value) => {
       const root = materialize({ "platform.lock": `platform_repo: ${SLUG}\nplatform_ref: ${value}\n` });
       return spawnSync("bash", ["-euo", "pipefail", "-c", `${block}\necho "CUR=$CUR"`], {
@@ -476,6 +482,106 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
       expect(res.stdout).toContain(bad);
     }
   });
+
+  for (const pin of [OLD, NEW]) {
+    test(`platform.lock CRLF at ${pin}: fails before lock read or already-current return, with LF remediation`, () => {
+      const files = tree(pin, OLD_SHA);
+      files["platform.lock"] = files["platform.lock"].replace(/\n/g, "\r\n");
+      const root = materialize(files);
+      try {
+        const res = spawnSync("/bin/bash", ["-euo", "pipefail", "-c", lockReadBlock()], {
+          cwd: root, encoding: "utf8", env: { PATH: "/usr/bin:/bin", LATEST: NEW },
+        });
+        expect(res.status, out(res)).toBe(1);
+        expect(res.stdout).toMatch(/::error::.*platform\.lock.*CRLF.*LF/);
+        expect(res.stdout).not.toContain("already on");
+        expect(snapshot(root, Object.keys(files))).toEqual(files);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  function resolveAndRewrite({ initial = NEW_SHA, type = "commit", dereferenced = NEW_SHA }) {
+    const files = tree(OLD, OLD_SHA);
+    const root = materialize(files);
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-sha-"));
+    const bin = path.join(scratch, "bin");
+    fs.mkdirSync(bin);
+    fs.mkdirSync(path.join(scratch, "tmp"));
+    const log = path.join(scratch, "calls");
+    for (const name of ["cat", "mkdir", "rm"]) fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
+    fs.symlinkSync(process.execPath, path.join(bin, "node"));
+    fs.writeFileSync(path.join(bin, "npm"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "gh"), `#!/bin/bash
+printf '%s\\0' "$2" >> "$STUB_LOG"
+case "$2" in
+  "repos/$PLATFORM/git/refs/tags/$LATEST")
+    if [[ "$4" == '.object.sha' ]]; then printf '%s' "$INITIAL_SHA"; else printf '%s' "$TAG_TYPE"; fi ;;
+  "repos/$PLATFORM/git/tags/"*) printf '%s' "$DEREFERENCED_SHA" ;;
+  "repos/$PLATFORM/contents/scripts/rewrite-platform-pins.js?ref="*) cat "$REWRITE_SCRIPT" ;;
+  *) exit 99 ;;
+esac
+`, { mode: 0o755 });
+    const lines = run.split("\n");
+    const start = lines.findIndex((l) => l.trim().startsWith("NEW_SHA=$(gh"));
+    const rewrite = lines.findIndex((l, i) => i > start && l.trim() === 'if [ -n "$CUR" ]; then');
+    const indent = lines[rewrite].match(/^\s*/)[0];
+    const end = lines.findIndex((l, i) => i > rewrite && l === `${indent}fi`);
+    expect(start).toBeGreaterThan(-1);
+    expect(rewrite).toBeGreaterThan(start);
+    expect(end).toBeGreaterThan(rewrite);
+    try {
+      const res = spawnSync("/bin/bash", ["-euo", "pipefail", "-c", lines.slice(start, end + 1).join("\n")], {
+        cwd: root, encoding: "utf8",
+        env: {
+          PATH: bin, HOME: scratch, NODE_PATH: path.join(__dirname, "node_modules"),
+          RUNNER_TEMP: path.join(scratch, "tmp"), PLATFORM: SLUG, LATEST: NEW, CUR: OLD,
+          INITIAL_SHA: initial, TAG_TYPE: type, DEREFERENCED_SHA: dereferenced,
+          STUB_LOG: log, REWRITE_SCRIPT: REWRITE,
+        },
+      });
+      return {
+        res,
+        calls: fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\0").filter(Boolean) : [],
+        before: files,
+        after: snapshot(root, Object.keys(files)),
+      };
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+
+  for (const [label, invalid] of [
+    ["uppercase", "A".repeat(40)],
+    ["39 characters", "2".repeat(39)],
+    ["41 characters", "2".repeat(41)],
+    ["nonhex", "g".repeat(40)],
+    ["embedded newline", `${"2".repeat(20)}\n${"2".repeat(20)}`],
+    ["empty", ""],
+  ]) {
+    for (const stage of ["initial", "dereferenced"]) {
+      test(`${stage} SHA ${label}: rejected before any API fetch using it and no fixture edits`, () => {
+        const r = resolveAndRewrite(stage === "initial"
+          ? { initial: invalid, type: "tag" }
+          : { initial: OLD_SHA, type: "tag", dereferenced: invalid });
+        expect(r.res.status, out(r.res)).toBe(1);
+        expect(r.res.stdout).toMatch(/::error::.*40 lowercase hexadecimal/);
+        expect(r.calls).toEqual(stage === "initial"
+          ? [`repos/${SLUG}/git/refs/tags/${NEW}`]
+          : [`repos/${SLUG}/git/refs/tags/${NEW}`, `repos/${SLUG}/git/refs/tags/${NEW}`, `repos/${SLUG}/git/tags/${OLD_SHA}`]);
+        expect(r.after).toEqual(r.before);
+        for (const type of ["commit", "tag"]) {
+          const control = resolveAndRewrite({ initial: type === "tag" ? OLD_SHA : NEW_SHA, type });
+          expect(control.res.status, out(control.res)).toBe(0);
+          expect(control.calls.at(-1)).toBe(`repos/${SLUG}/contents/scripts/rewrite-platform-pins.js?ref=${NEW_SHA}`);
+          expect(control.calls).toHaveLength(type === "tag" ? 4 : 3);
+          expect(control.after).toEqual(tree(NEW, NEW_SHA));
+        }
+      });
+    }
+  }
 
   test("the yaml install in the rewrite block runs no package scripts", () => {
     expect(rewriteBlock()).toMatch(/npm install --prefix "\$PIN_TOOLS" --no-save --no-package-lock --ignore-scripts yaml@2\.9\.1/);

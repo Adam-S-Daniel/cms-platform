@@ -3,6 +3,7 @@ const { test, expect } = require("./base");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const {
   selectSpecs,
   ALWAYS_RUN,
@@ -16,8 +17,75 @@ const {
   TEST_INFRA_FANOUT_PATTERNS,
 } = require("./select-specs");
 
-// Pure-function unit tests for the e2e spec selector. No browser, no
-// git — just verify each rule fires correctly.
+// Pure functions and CLI tests under a sealed stub git. No browser or network.
+
+test.describe("select-specs CLI — failed diff runs all tests", () => {
+  let scratch;
+  test.beforeEach(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "select-cli-"));
+  });
+  test.afterEach(() => fs.rmSync(scratch, { recursive: true, force: true }));
+
+  function cli({ diffStatus = 0, diff = "", status = "", missingGit = false, parity = false }) {
+    const bin = path.join(scratch, "bin");
+    fs.mkdirSync(bin);
+    const log = path.join(scratch, "calls");
+    if (!missingGit) {
+      fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
+printf '%s\\n' "$1" >> "$STUB_LOG"
+case "$1" in
+  diff) if [ "$DIFF_STATUS" != 0 ]; then printf '%s\\n' 'PRIVATE-GIT-ERROR-BODY' >&2; exit "$DIFF_STATUS"; fi
+        printf '%s' "$DIFF_FILES" | /usr/bin/tr '\\n' '\\000' ;;
+  status) printf '%s' "$STATUS_FILES" | /usr/bin/tr '\\n' '\\000' ;;
+  *) exit 99 ;;
+esac
+`, { mode: 0o755 });
+    }
+    const r = spawnSync(process.execPath, [path.join(__dirname, "select-specs.js"), "--base", "origin/missing", ...(parity ? ["--parity-preview"] : [])], {
+      cwd: scratch,
+      encoding: "utf8",
+      env: { PATH: bin, HOME: scratch, STUB_LOG: log, DIFF_STATUS: String(diffStatus), DIFF_FILES: diff, STATUS_FILES: status, GITHUB_HEAD_REF: "cms/example" },
+    });
+    return { ...r, calls: fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : [] };
+  }
+
+  for (const [label, setup] of [
+    ["failed diff with clean status", { diffStatus: 128 }],
+    ["failed diff with partial docs-only status", { diffStatus: 128, status: "?? docs/example.md\n" }],
+    ["missing git", { missingGit: true }],
+  ]) {
+    for (const parity of [false, true]) {
+      test(`${label} (${parity ? "parity-preview" : "normal"}): valid full-selection JSON and sanitized warning`, () => {
+        const r = cli({ ...setup, parity });
+        expect(r.status, r.stderr).toBe(0);
+        const result = JSON.parse(r.stdout);
+        expect(r.stderr).toMatch(/warning:.*changed files.*all/i);
+        expect(r.stdout + r.stderr).not.toContain("PRIVATE-GIT-ERROR-BODY");
+        expect(r.calls).not.toContain("status");
+        for (const [diff, scope] of [["", "skip"], ["docs/example.md\n", "skip"], ["_layouts/post.html\n", "all"]]) {
+          // The same fallback test also protects successful empty/docs/salient diffs.
+          fs.rmSync(path.join(scratch, "bin"), { recursive: true });
+          fs.rmSync(path.join(scratch, "calls"), { force: true });
+          const control = cli({ diff, parity });
+          expect(control.status, control.stderr).toBe(0);
+          expect(control.stderr).toBe("");
+          expect(control.calls).toEqual(["diff"]);
+          const selected = JSON.parse(control.stdout);
+          expect(selected.changedFiles).toEqual(diff.split("\n").filter(Boolean));
+          expect(selected.scope).toBe(parity && scope === "all" ? "subset" : scope);
+          if (parity) expect(selected.files).toEqual(scope === "all" ? [...PARITY_PREVIEW_SPECS].sort() : []);
+        }
+        if (parity) {
+          expect(result.scope).toBe("subset");
+          expect(result.files).toEqual([...PARITY_PREVIEW_SPECS]);
+        } else {
+          expect(result.scope).toBe("all");
+          expect(result.shard_count).toBe(pickShardCount("all"));
+        }
+      });
+    }
+  }
+});
 
 test.describe("select-specs", () => {
   test("empty changeset → skip with baseline", () => {
