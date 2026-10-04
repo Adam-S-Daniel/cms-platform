@@ -678,7 +678,8 @@ Next:
   4. Deploy infra (one-time, shared AWS account; needs the AWS CLI, git, Ruby, python3).
      The bootstrap stack is ${prefix}-bootstrap (BOOTSTRAP_STACK_NAME); site-params.env's
      STACK_NAME names the OAuth proxy stack and is never used for it:
-       bash infrastructure/bootstrap/deploy.sh   # committed delegating wrapper
+       ALLOW_STACK_CREATE=1 bash infrastructure/bootstrap/deploy.sh   # first bootstrap creates the stack;
+                                                                      # later redeploys drop the flag
        bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,read:user,workflow)
   5. Add GitHub secrets (exact fine-grained PAT permissions: see the
      /cms-platform:consumer-repo-provisioning skill, from the agentskills bundle):

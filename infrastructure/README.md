@@ -47,6 +47,7 @@ cp infrastructure/site-params.example.env infrastructure/site-params.env
 set -a; source infrastructure/site-params.env; set +a
 
 bash infrastructure/bootstrap/deploy.sh      # stack <prefix>-bootstrap; see "The STACK_NAME collision"
+#   first bootstrap of a site only: ALLOW_STACK_CREATE=1 bash infrastructure/bootstrap/deploy.sh
 bash oauth-proxy/deploy.sh                   # first deploy needs GITHUB_CLIENT_ID/SECRET
 bash infrastructure/rum/deploy.sh            # optional analytics
 ```
@@ -82,6 +83,18 @@ bash infrastructure/rum/deploy.sh            # optional analytics
   run, so the usual cause of a refusal is a missing setting: a live apex
   without `CREATE_APEX_DNS_RECORDS=true` (removes the apex and `www` records)
   or a site with an admin host but no `ADMIN_DOMAIN` (removes it).
+- **Creating a stack.** A change set that would create the stack (it does not
+  exist yet) is all `Add` actions, so the guard above would pass a mistyped
+  stack name. The script refuses to execute it unless `ALLOW_STACK_CREATE=1`
+  (any other value refuses), names the stack, says a typo is the usual cause,
+  and leaves the change set for review. Set the flag only for a site's first
+  bootstrap; an update of an existing stack needs no flag.
+- **A failed change set.** If the change set cannot be created, the script
+  names the stack and the likely causes and prints the read-only
+  `describe-stacks` command to run by hand; it never echoes the CLI's message,
+  which can carry the account id. A stack in `ROLLBACK_COMPLETE`,
+  `CREATE_FAILED` or `UPDATE_ROLLBACK_FAILED` gets a specific message when the
+  CLI's wording is recognized.
 
 ### The STACK_NAME collision
 
@@ -105,6 +118,13 @@ variable, **`BOOTSTRAP_STACK_NAME`** (default `<prefix>-bootstrap`), and
 This matters most on a **new** site: a change set that would create the
 bootstrap stack under the proxy's name contains only `Add` actions, so the
 destructive-change guard could not catch it.
+
+One case is left that this check cannot see: an explicit
+`BOOTSTRAP_STACK_NAME` equal to the proxy's name when `site-params.env` is
+absent or has no `STACK_NAME` line. That run is still stopped: if no such stack
+exists, creating it needs `ALLOW_STACK_CREATE=1`; if the proxy stack exists,
+its change set removes every proxy resource and the destructive-change guard
+refuses it.
 
 A consumer's delegating wrapper sources `site-params.env` itself, then puts
 `STACK_NAME` back to what it was before (unset, or the caller's value), and

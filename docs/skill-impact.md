@@ -45,6 +45,13 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ## 2026-10-04 — cms-platform/aws-bootstrap — edit
 
+- Motivation: review of PR #567 found a mistyped `BOOTSTRAP_STACK_NAME` would create a new stack, which the change-set guard passes because a create is all `Add` actions.
+- Change: the skill now documents `ALLOW_STACK_CREATE=1` for a site's first bootstrap, its refusal, and the fixed message for a failed change-set creation (https://github.com/Adam-S-Daniel/cms-platform/pull/567).
+- Eval: exempt (DESIGN.md non-coverage table)
+- Outcome: pending merge.
+
+## 2026-10-04 — cms-platform/aws-bootstrap — edit
+
 - Motivation: #566's S3 upload left a first create needing a bucket the stack itself creates, and `site-params.env`'s `STACK_NAME` (the OAuth proxy stack) could become the bootstrap stack's name; on a new site that create is all `Add` actions, which the change-set guard cannot catch.
 - Change: the skill now documents the minified inline deploy (no `TEMPLATE_S3_BUCKET`), the destructive-change guard and `ALLOW_DESTRUCTIVE_CHANGES=1`, `BOOTSTRAP_STACK_NAME` in place of `STACK_NAME`, and the new refusals, including a stack in a failed state (https://github.com/Adam-S-Daniel/cms-platform/pull/567).
 - Eval: exempt (DESIGN.md non-coverage table)

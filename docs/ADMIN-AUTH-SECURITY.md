@@ -699,7 +699,10 @@ that, which changes nothing a deployed site uses.
    line per resource. It refuses to execute a change set with anything marked
    `DESTRUCTIVE` (a removal or a replacement) and changes nothing; read the
    list before reaching for `ALLOW_DESTRUCTIVE_CHANGES=1`, since a missing
-   `CREATE_APEX_DNS_RECORDS=true` or `ADMIN_DOMAIN` is the usual cause.
+   `CREATE_APEX_DNS_RECORDS=true` or `ADMIN_DOMAIN` is the usual cause. This
+   is an update of an existing stack, so it needs no `ALLOW_STACK_CREATE`: a
+   refusal saying the stack does not exist means the stack name is wrong, not
+   that the flag is missing.
 
 2. Check the headers on production and on one live preview host (no
    invalidation is needed; the policy applies to cached responses too):

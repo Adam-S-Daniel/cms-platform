@@ -39,6 +39,10 @@
 //     the wrapper; any other STACK_NAME, and a bootstrap name equal to
 //     site-params.env's STACK_NAME, stop before any aws call;
 //   - a stack in a failed state stops with what to do, executing nothing;
+//   - creating a stack (REVIEW_IN_PROGRESS after the change set) is refused
+//     before execute-change-set unless ALLOW_STACK_CREATE=1 exactly: a create
+//     is all Add actions, so a mistyped stack name would pass the guard;
+//   - a failed change-set creation never echoes the CLI's message (ARNs);
 //   - refusal messages name the change set, never its ARN (account id).
 //   - the deploy call sends the minified template inline (no S3), with
 //     --no-execute-changeset and the complete parameter list, defaults
@@ -118,7 +122,7 @@ case "$*" in
     case "$STUB_DEPLOY" in
       empty) printf '\\nNo changes to deploy. Stack is up to date\\n' ;;
       garbled) echo "something unexpected" ;;
-      fail) echo "An error occurred (ValidationError) when calling the CreateChangeSet operation" >&2; exit 254 ;;
+      fail) echo "An error occurred (AccessDenied) when calling the CreateChangeSet operation: User: arn:aws:iam::000000000000:user/example is not authorized" >&2; exit 254 ;;
       failed-state) printf '\\nAn error occurred (ValidationError) when calling the CreateChangeSet operation: Stack:arn:aws:cloudformation:us-east-1:000000000000:stack/example/00000000-0000-0000-0000-000000000000 is in %s state and can not be updated.\\n' "$STUB_FAILED_STATE" >&2; exit 254 ;;
       *) printf 'Waiting for changeset to be created..\\nChangeset created successfully. Run the following command to review changes:\\naws cloudformation describe-change-set --change-set-name %s\\n' "$STUB_ARN" ;;
     esac ;;
@@ -296,11 +300,42 @@ test("Add/Modify only: the change set is printed, executed and waited on as an u
   expect(order.indexOf("wait")).toBeGreaterThan(order.indexOf("execute-change-set"));
 });
 
-test("a new stack (REVIEW_IN_PROGRESS after the change set) waits for stack-create-complete", () => {
-  const r = runDeploy({ changes: SAFE_CHANGES, STUB_STACK_STATUS: "REVIEW_IN_PROGRESS" });
+test("a new stack (REVIEW_IN_PROGRESS after the change set) with ALLOW_STACK_CREATE=1: executed, waits for stack-create-complete", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STUB_STACK_STATUS: "REVIEW_IN_PROGRESS", ALLOW_STACK_CREATE: "1" });
   expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain(`ALLOW_STACK_CREATE=1: creating stack ${STACK}`);
   expect(callsOf(r.calls, "execute-change-set")).toHaveLength(1);
   expect(callsOf(r.calls, "wait")[0][2]).toBe("stack-create-complete");
+});
+
+// A create is all Add actions, so a mistyped stack name passes the guard;
+// creating a stack therefore needs ALLOW_STACK_CREATE=1, and nothing else.
+for (const [name, extra] of [
+  ["no ALLOW_STACK_CREATE", {}],
+  ["ALLOW_STACK_CREATE=true", { ALLOW_STACK_CREATE: "true" }],
+  ["ALLOW_STACK_CREATE=yes", { ALLOW_STACK_CREATE: "yes" }],
+  ["ALLOW_STACK_CREATE=0", { ALLOW_STACK_CREATE: "0" }],
+  ["ALLOW_STACK_CREATE= (empty)", { ALLOW_STACK_CREATE: "" }],
+]) {
+  test(`a new stack with ${name}: refused before execute-change-set, change set left for review`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, STUB_STACK_STATUS: "REVIEW_IN_PROGRESS", ...extra });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.stderr).toContain(`stack ${STACK} does not exist`);
+    expect(r.stderr).toContain("typo");
+    expect(r.stderr).toContain("ALLOW_STACK_CREATE=1");
+    expect(r.stderr).toContain(`left for review: ${CHANGESET_NAME} on stack ${STACK}`);
+    expect(callsOf(r.calls, "describe-change-set")).toHaveLength(1);
+    expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+    expect(callsOf(r.calls, "wait")).toEqual([]);
+  });
+}
+
+test("an update of an existing stack needs no ALLOW_STACK_CREATE", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STUB_STACK_STATUS: "UPDATE_COMPLETE" });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).not.toContain("ALLOW_STACK_CREATE");
+  expect(callsOf(r.calls, "execute-change-set")).toHaveLength(1);
+  expect(callsOf(r.calls, "wait")[0][2]).toBe("stack-update-complete");
 });
 
 for (const [name, destructive] of [
@@ -406,10 +441,13 @@ test("deploy output with no change set ARN: refused, nothing executed", () => {
   expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
 });
 
-test("creating the change set fails: refused, nothing executed", () => {
+test("creating the change set fails: refused, nothing executed, the CLI's message (with an ARN) not echoed", () => {
   const r = runDeploy({ STUB_DEPLOY: "fail" });
   expect(r.status, r.out).not.toBe(0);
-  expect(r.stderr).toContain("Creating the change set failed");
+  expect(r.stderr).toContain(`Creating the change set failed for stack ${STACK}`);
+  expect(r.stderr).toContain(`aws cloudformation describe-stacks --stack-name ${STACK} --region us-east-1`);
+  expect(r.out).not.toContain(ACCOUNT_ID);
+  expect(r.out).not.toContain("arn:aws");
   expect(callsOf(r.calls, "describe-change-set")).toEqual([]);
   expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
 });

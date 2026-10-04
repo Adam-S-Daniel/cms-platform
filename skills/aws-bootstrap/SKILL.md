@@ -73,6 +73,10 @@ set -a; source infrastructure/site-params.env; set +a
 # (infrastructure/README.md, "The STACK_NAME collision")
 bash infrastructure/bootstrap/deploy.sh
 
+# A site's FIRST bootstrap creates the stack, which is refused without this
+# (a typo in the stack name would otherwise create a new stack)
+ALLOW_STACK_CREATE=1 bash infrastructure/bootstrap/deploy.sh
+
 # If a GitHub OIDC provider already exists in the account
 CREATE_OIDC_PROVIDER=false bash infrastructure/bootstrap/deploy.sh
 
@@ -96,11 +100,12 @@ Key env vars (see `infrastructure/site-params.example.env` for the full set):
 | `HOSTED_ZONE_ID` | no | auto-detected from `APEX_DOMAIN` |
 | `CREATE_OIDC_PROVIDER` | no | `true` |
 | `ALLOW_DESTRUCTIVE_CHANGES` | no | unset: a removal or replacement is refused |
+| `ALLOW_STACK_CREATE` | first bootstrap only | unset: creating a stack that does not exist is refused; an update needs no flag |
 
 The script:
 1. Auto-detects the Route53 hosted zone for `${APEX_DOMAIN}` (unless `HOSTED_ZONE_ID` is set)
 2. Minifies the template with `minify-template.rb` (Ruby's YAML parser: comments go, every tag and value stays), because the raw file is over the CLI's 51,200-byte inline limit; it refuses, before any AWS call, if the minified copy is still over it
-3. Creates a change set (`aws cloudformation deploy --no-execute-changeset`, `CAPABILITY_NAMED_IAM`, the derived parameters), prints one line per resource action, and refuses to execute when any resource would be removed or replaced unless `ALLOW_DESTRUCTIVE_CHANGES=1`; otherwise executes it and waits. An empty change set is a success
+3. Creates a change set (`aws cloudformation deploy --no-execute-changeset`, `CAPABILITY_NAMED_IAM`, the derived parameters), prints one line per resource action, and refuses to execute when any resource would be removed or replaced unless `ALLOW_DESTRUCTIVE_CHANGES=1`, and refuses to create a stack that does not exist unless `ALLOW_STACK_CREATE=1`; otherwise executes it and waits. An empty change set is a success
 4. Prints outputs including the Role ARN and both CloudFront distribution IDs
 
 ## Stack outputs → GitHub secrets
@@ -120,6 +125,12 @@ An old copy of `deploy.sh` (v0.1.125, before the minified inline deploy) is runn
 
 ### `Refusing to execute: the change set above removes or replaces resources`
 Read the lines marked `DESTRUCTIVE`. The usual causes are a live apex without `CREATE_APEX_DNS_RECORDS=true` or a site with an admin host but no `ADMIN_DOMAIN`. Fix the setting and re-run; use `ALLOW_DESTRUCTIVE_CHANGES=1` only when the removal is intended. Nothing was changed, and the refused change set is left on the stack for review.
+
+### `Refusing to execute: stack <name> does not exist, so this change set would CREATE it`
+Usually a typo in `BOOTSTRAP_STACK_NAME`, `RESOURCE_PREFIX` or `APEX_DOMAIN`: check the name against the stack you meant. Only for a site's genuine first bootstrap, re-run with `ALLOW_STACK_CREATE=1`. Nothing was changed, and the change set is left on the new stack for review.
+
+### `Creating the change set failed for stack <name>`
+The script does not echo the AWS CLI's message (it can carry the account id). Run the printed read-only `describe-stacks` command to see the stack's state; otherwise check the AWS session's credentials and CloudFormation permissions.
 
 ### `STACK_NAME=... is set, and this script no longer reads STACK_NAME`
 `STACK_NAME` is the OAuth proxy stack's name, so the script will not guess. Run with `STACK_NAME=` for the default `<prefix>-bootstrap`, or set `BOOTSTRAP_STACK_NAME`. Nothing was deployed.

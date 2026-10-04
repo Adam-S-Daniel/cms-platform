@@ -39,6 +39,11 @@
 #   ALLOW_DESTRUCTIVE_CHANGES=1 bash infrastructure/bootstrap/deploy.sh
 # A refused change set is left in place for review; nothing is changed.
 #
+# Creating a stack is refused the same way unless the operator sets
+#   ALLOW_STACK_CREATE=1 bash infrastructure/bootstrap/deploy.sh
+# because a create is all Add actions and a mistyped stack name would pass.
+# An update of an existing stack needs no flag.
+#
 # This script is idempotent — safe to re-run at any time.
 # =============================================================================
 
@@ -197,6 +202,9 @@ if ! CHANGESET_OUTPUT="$(aws cloudformation deploy \
   DEPLOY_ERROR="$(<"$DEPLOY_STDERR")"
   # A stack in a failed state cannot take a change set; say what to do rather
   # than echo the CLI's message (it carries the stack ARN, account id included).
+  # The "is in <STATE> state" wording is the CloudFormation error as commonly
+  # reported, not checked against a local awscli/botocore copy, so this match
+  # is best-effort; the fixed message after it is the guaranteed path.
   FAILED_STATE_RE='is in ([A-Z_]+) state'
   if [[ "$DEPLOY_ERROR" =~ $FAILED_STATE_RE ]]; then
     case "${BASH_REMATCH[1]}" in
@@ -208,8 +216,8 @@ if ! CHANGESET_OUTPUT="$(aws cloudformation deploy \
         error "Stack ${BOOTSTRAP_STACK_NAME} is in ${BASH_REMATCH[1]}, so it cannot take a change set now. Nothing was executed. Check its events in the CloudFormation console, then re-run." ;;
     esac
   fi
-  [[ -n "$DEPLOY_ERROR" ]] && printf '%s\n' "$DEPLOY_ERROR" >&2
-  error "Creating the change set failed (see the AWS CLI message above); nothing was executed."
+  # Never echo the CLI's message: it can carry an ARN (account id).
+  error "Creating the change set failed for stack ${BOOTSTRAP_STACK_NAME}; nothing was executed. The usual causes are an AWS session without valid credentials or CloudFormation permissions, or a stack in a state that cannot take a change set. To see the stack's state, run by hand (read-only): aws cloudformation describe-stacks --stack-name ${BOOTSTRAP_STACK_NAME} --region ${AWS_REGION} --query 'Stacks[0].StackStatus' --output text"
 fi
 
 # --no-execute-changeset prints the new change set's ARN; an empty change set
@@ -288,6 +296,12 @@ sys.exit(3 if destructive else 0)
     --output text)" \
     || error "Could not read the status of stack ${BOOTSTRAP_STACK_NAME}, so nothing was executed."
   if [[ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ]]; then
+    # Creating a stack is an explicit act: a create is all Add actions, so
+    # the guard above passes a mistyped stack name straight through.
+    if [[ "${ALLOW_STACK_CREATE:-}" != "1" ]]; then
+      error "Refusing to execute: stack ${BOOTSTRAP_STACK_NAME} does not exist, so this change set would CREATE it, and nothing was changed. A typo in BOOTSTRAP_STACK_NAME (or RESOURCE_PREFIX / APEX_DOMAIN) is the usual cause. For a genuine first bootstrap, re-run with ALLOW_STACK_CREATE=1. The change set is left for review: ${CHANGESET_NAME} on stack ${BOOTSTRAP_STACK_NAME}."
+    fi
+    warn "ALLOW_STACK_CREATE=1: creating stack ${BOOTSTRAP_STACK_NAME}."
     WAITER="stack-create-complete"
   else
     WAITER="stack-update-complete"
