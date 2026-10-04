@@ -1,0 +1,388 @@
+// @lane: local — runs the real infrastructure/bootstrap/deploy.sh under a stub
+// `aws` executable in a sealed environment. No network, no AWS.
+//
+// THE GAPS
+//   - v0.1.125 grew infrastructure/bootstrap/template.yaml to 60,694 bytes, and
+//     deploy.sh sent it inline: the AWS CLI refuses a template over 51,200
+//     bytes, so the documented per-site deploy failed for every site. The
+//     script now deploys a minified copy (minify-template.rb, locked by
+//     bootstrap-template-minify.test.js) and stops before any aws call if that
+//     copy is still over the limit.
+//   - deploy.sh passes every parameter explicitly from its own defaults, so a
+//     run missing CREATE_APEX_DNS_RECORDS=true removes a live apex's records,
+//     a run without ADMIN_DOMAIN removes the admin host, and a run that
+//     inherits site-params.env's STACK_NAME (the OAuth proxy stack's name)
+//     aims the bootstrap template at the proxy stack and removes every proxy
+//     resource. The script now creates a change set, prints it, and refuses
+//     to execute one that removes or replaces a resource unless
+//     ALLOW_DESTRUCTIVE_CHANGES=1.
+//
+// WHAT THIS FILE PROVES (the stub plays back canned change-set JSON)
+//   - Add/Modify only: executed, then waited on (update or create waiter);
+//   - a Remove, a Replacement True or a Replacement Conditional: refused, and
+//     execute-change-set is never called;
+//   - ALLOW_DESTRUCTIVE_CHANGES=1 lets a destructive change set through; any
+//     other value does not;
+//   - an empty change set exits 0 without describing or executing anything;
+//   - output with neither a change set ARN nor "No changes": refused;
+//   - an over-size or unparseable template is refused before ANY aws call;
+//   - the deploy call sends the minified template inline (no S3), with
+//     --no-execute-changeset and the complete parameter list, defaults
+//     unchanged (a wrong default deletes DNS records or replaces resources).
+//
+// SEALED: PATH is a stub directory plus a private bin of symlinks to the few
+// tools deploy.sh needs, taken from /usr/bin or /bin only; the environment is
+// built from scratch (no AWS_PROFILE, no AWS_ACCESS_KEY_ID, no session token),
+// the AWS config and credentials files are /dev/null, HOME and TMPDIR are
+// scratch directories. beforeAll refuses to run deploy.sh at all unless
+// `command -v aws` resolves to the stub. Same approach as
+// oauth-proxy-deploy-credentials.test.js.
+//
+// PLATFORM-INTERNAL, registered in PLATFORM_META_SPECS: it runs this repo's
+// infrastructure/bootstrap/deploy.sh, which a consumer ships as a delegating
+// wrapper (that wrapper `exec`s this script).
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const { test, expect } = require("./base");
+
+const REPO_ROOT = path.resolve(__dirname, "..");
+const BOOTSTRAP = path.join(REPO_ROOT, "infrastructure", "bootstrap");
+const DEPLOY = path.join(BOOTSTRAP, "deploy.sh");
+const MINIFIER = path.join(BOOTSTRAP, "minify-template.rb");
+const TEMPLATE = path.join(BOOTSTRAP, "template.yaml");
+const INLINE_LIMIT_BYTES = 51200;
+const STACK = "example-test-bootstrap";
+const CHANGESET_ARN =
+  "arn:aws:cloudformation:us-east-1:000000000000:changeSet/awscli-cloudformation-package-deploy-1/00000000-0000-0000-0000-000000000000";
+
+// The complete parameter list with its defaults, for the sealed environment
+// below (APEX_DOMAIN example.test, GITHUB_REPO example-repo, HOSTED_ZONE_ID
+// Z123EXAMPLE, nothing else set). Unchanged by the guard: it must not add
+// per-parameter special cases or move a default.
+const EXPECTED_PARAMETERS = [
+  "GitHubOrg=Adam-S-Daniel",
+  "GitHubRepo=example-repo",
+  "ResourcePrefix=example-test",
+  "ArtifactBucketName=example-test-cfn-artifacts",
+  "PreviewBucketName=example-test-previews",
+  "ProductionBucketName=example-test-production",
+  "ProductionDomainName=example.test",
+  "CreateOIDCProvider=true",
+  "CreateApexDnsRecords=false",
+  "HostedZoneId=Z123EXAMPLE",
+  "PreviewDomainName=*.example.test",
+  "MediaArchiveBucketName=",
+  "AdminDomainName=",
+  "HstsMaxAgeSeconds=31536000",
+  "HstsScope=this-host-only",
+  "AdminCspMode=report-only",
+];
+
+// The tools deploy.sh runs besides aws (bash builtins aside).
+const TOOLS = ["bash", "dirname", "tr", "python3", "ruby", "mktemp", "rm", "wc"];
+const SAFE_DIRS = ["/usr/bin", "/bin"];
+
+// Records every call's argv, keeps a copy of the template `deploy` was handed,
+// and answers from STUB_* variables. Builtins only, so the sealed bin stays
+// exactly TOOLS.
+const STUB = (bash) => `#!${bash}
+{ printf 'CALL\\n'; for a in "$@"; do printf 'ARG\\t%s\\n' "$a"; done; } >>"$STUB_LOG"
+case "$*" in
+  "cloudformation deploy "*)
+    prev=""
+    for a in "$@"; do
+      [[ "$prev" == "--template-file" ]] && printf '%s\\n' "$(<"$a")" >"$STUB_TEMPLATE_COPY"
+      prev="$a"
+    done
+    case "$STUB_DEPLOY" in
+      empty) printf '\\nNo changes to deploy. Stack %s is up to date\\n' "$STACK_NAME" ;;
+      garbled) echo "something unexpected" ;;
+      fail) echo "An error occurred (ValidationError) when calling the CreateChangeSet operation" >&2; exit 254 ;;
+      *) printf 'Waiting for changeset to be created..\\nChangeset created successfully. Run the following command to review changes:\\naws cloudformation describe-change-set --change-set-name %s\\n' "$STUB_ARN" ;;
+    esac ;;
+  "cloudformation describe-change-set "*) printf '%s\\n' "$(<"$STUB_CHANGESET_JSON")" ;;
+  "cloudformation describe-stacks "*"Stacks[0].StackStatus"*) echo "\${STUB_STACK_STATUS:-UPDATE_COMPLETE}" ;;
+  "cloudformation execute-change-set "*) exit 0 ;;
+  "cloudformation wait "*) exit 0 ;;
+  "cloudformation describe-stacks "*"Stacks[0].Outputs"*) echo '[{"OutputKey":"RoleArn","OutputValue":"arn:aws:iam::000000000000:role/example"}]' ;;
+  *) echo "unexpected aws call" >&2; exit 99 ;;
+esac
+`;
+
+let scratch;
+let stubDir;
+let binDir;
+let bash;
+
+test.beforeAll(() => {
+  scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-deploy-guard-"));
+  stubDir = path.join(scratch, "stubs");
+  binDir = path.join(scratch, "bin");
+  for (const d of [stubDir, binDir, path.join(scratch, "home"), path.join(scratch, "tmp")]) fs.mkdirSync(d);
+  for (const tool of TOOLS) {
+    const dir = SAFE_DIRS.find((d) => fs.existsSync(path.join(d, tool)));
+    if (!dir) throw new Error(`${tool} not found in ${SAFE_DIRS.join(" or ")}`);
+    fs.symlinkSync(path.join(dir, tool), path.join(binDir, tool));
+  }
+  bash = path.join(binDir, "bash");
+  fs.writeFileSync(path.join(stubDir, "aws"), STUB(fs.realpathSync(bash)), { mode: 0o755 });
+  // Refuse to run deploy.sh at all unless aws resolves to the stub.
+  const seal = spawnSync(bash, ["-c", "command -v aws"], { env: sealedEnv({}), encoding: "utf8" });
+  if (seal.stdout !== `${path.join(stubDir, "aws")}\n`) {
+    throw new Error("aws does not resolve to the stub; refusing to run deploy.sh");
+  }
+});
+
+test.afterAll(() => {
+  if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+});
+
+// A fresh environment, never process.env: nothing AWS-shaped leaks in.
+function sealedEnv(extra) {
+  return {
+    PATH: `${stubDir}:${binDir}`,
+    HOME: path.join(scratch, "home"),
+    TMPDIR: path.join(scratch, "tmp"),
+    AWS_CONFIG_FILE: "/dev/null",
+    AWS_SHARED_CREDENTIALS_FILE: "/dev/null",
+    AWS_EC2_METADATA_DISABLED: "true",
+    GITHUB_REPO: "example-repo",
+    APEX_DOMAIN: "example.test",
+    HOSTED_ZONE_ID: "Z123EXAMPLE",
+    STACK_NAME: STACK,
+    AWS_REGION: "us-east-1",
+    STUB_LOG: path.join(scratch, "calls.log"),
+    STUB_TEMPLATE_COPY: path.join(scratch, "deployed-template.yaml"),
+    STUB_CHANGESET_JSON: path.join(scratch, "changeset.json"),
+    STUB_ARN: CHANGESET_ARN,
+    ...extra,
+  };
+}
+
+// Each aws call is its argv array.
+function readCalls(log) {
+  if (!fs.existsSync(log)) return [];
+  const calls = [];
+  for (const line of fs.readFileSync(log, "utf8").split("\n")) {
+    if (line === "CALL") calls.push([]);
+    else if (line.startsWith("ARG\t")) calls[calls.length - 1].push(line.slice(4));
+  }
+  return calls;
+}
+
+// One canned DescribeChangeSet response, shaped like the real API's.
+const change = (Action, LogicalResourceId, ResourceType, Replacement) => ({
+  Type: "Resource",
+  ResourceChange: { Action, LogicalResourceId, ResourceType, ...(Replacement ? { Replacement } : {}) },
+});
+
+function runDeploy({ changes = [], deployScript = DEPLOY, ...extra } = {}) {
+  const env = sealedEnv(extra);
+  for (const f of [env.STUB_LOG, env.STUB_TEMPLATE_COPY]) fs.rmSync(f, { force: true });
+  fs.writeFileSync(
+    env.STUB_CHANGESET_JSON,
+    JSON.stringify({ ChangeSetId: CHANGESET_ARN, StackName: STACK, Status: "CREATE_COMPLETE", Changes: changes }),
+  );
+  const r = spawnSync(bash, [deployScript], { env, encoding: "utf8" });
+  return { status: r.status, out: `${r.stdout}${r.stderr}`, stderr: r.stderr, calls: readCalls(env.STUB_LOG) };
+}
+
+const callsOf = (calls, sub) => calls.filter((c) => c[0] === "cloudformation" && c[1] === sub);
+const flagValue = (argv, flag) => {
+  const i = argv.indexOf(flag);
+  return i === -1 ? undefined : argv[i + 1];
+};
+const overrides = (argv) => {
+  const rest = argv.slice(argv.indexOf("--parameter-overrides") + 1);
+  const end = rest.findIndex((a) => a.startsWith("--"));
+  return end === -1 ? rest : rest.slice(0, end);
+};
+
+const SAFE_CHANGES = [
+  change("Modify", "ProductionDistribution", "AWS::CloudFront::Distribution", "False"),
+  change("Add", "BaselineResponseHeadersPolicy", "AWS::CloudFront::ResponseHeadersPolicy"),
+];
+
+test("the environment is sealed: aws resolves to the stub, nothing AWS-shaped is set", () => {
+  const r = spawnSync(bash, ["-c", "command -v aws; compgen -e"], { env: sealedEnv({}), encoding: "utf8" });
+  expect(r.status).toBe(0);
+  const lines = r.stdout.split("\n");
+  expect(lines[0]).toBe(path.join(stubDir, "aws"));
+  for (const name of ["AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]) {
+    expect(lines.includes(name), `${name} must not be set`).toBe(false);
+  }
+  expect(fs.readdirSync(binDir).sort()).toEqual([...TOOLS].sort());
+});
+
+test("Add/Modify only: the change set is printed, executed and waited on as an update", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain("Modify   ProductionDistribution (AWS::CloudFront::Distribution) replacement=False");
+  expect(r.out).toContain("Add      BaselineResponseHeadersPolicy (AWS::CloudFront::ResponseHeadersPolicy)");
+  expect(r.out).not.toContain("DESTRUCTIVE");
+  expect(flagValue(callsOf(r.calls, "describe-change-set")[0], "--change-set-name")).toBe(CHANGESET_ARN);
+  const executes = callsOf(r.calls, "execute-change-set");
+  expect(executes).toHaveLength(1);
+  expect(flagValue(executes[0], "--change-set-name")).toBe(CHANGESET_ARN);
+  const waits = callsOf(r.calls, "wait");
+  expect(waits).toHaveLength(1);
+  expect(waits[0][2]).toBe("stack-update-complete");
+  expect(flagValue(waits[0], "--stack-name")).toBe(STACK);
+  // Order: create, describe, status, execute, wait, then the outputs.
+  const order = r.calls.map((c) => c[1]);
+  expect(order.indexOf("execute-change-set")).toBeGreaterThan(order.indexOf("describe-change-set"));
+  expect(order.indexOf("wait")).toBeGreaterThan(order.indexOf("execute-change-set"));
+});
+
+test("a new stack (REVIEW_IN_PROGRESS after the change set) waits for stack-create-complete", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STUB_STACK_STATUS: "REVIEW_IN_PROGRESS" });
+  expect(r.status, r.out).toBe(0);
+  expect(callsOf(r.calls, "execute-change-set")).toHaveLength(1);
+  expect(callsOf(r.calls, "wait")[0][2]).toBe("stack-create-complete");
+});
+
+for (const [name, destructive] of [
+  ["a Remove", change("Remove", "ProductionDnsRecord", "AWS::Route53::RecordSet")],
+  ["Replacement True", change("Modify", "PreviewBucket", "AWS::S3::Bucket", "True")],
+  ["Replacement Conditional", change("Modify", "AdminCertificate", "AWS::CertificateManager::Certificate", "Conditional")],
+]) {
+  test(`${name}: refused, execute-change-set never called`, () => {
+    const r = runDeploy({ changes: [...SAFE_CHANGES, destructive] });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.out).toContain(`${destructive.ResourceChange.LogicalResourceId} (`);
+    expect(r.out).toContain("DESTRUCTIVE");
+    expect(r.stderr).toContain("Refusing to execute");
+    expect(r.stderr).toContain("ALLOW_DESTRUCTIVE_CHANGES=1");
+    expect(callsOf(r.calls, "describe-change-set")).toHaveLength(1);
+    expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+    expect(callsOf(r.calls, "wait")).toEqual([]);
+  });
+}
+
+test("ALLOW_DESTRUCTIVE_CHANGES=1 lets a destructive change set through", () => {
+  const r = runDeploy({
+    changes: [change("Remove", "ProductionDnsRecord", "AWS::Route53::RecordSet")],
+    ALLOW_DESTRUCTIVE_CHANGES: "1",
+  });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain("DESTRUCTIVE");
+  expect(r.out).toContain("ALLOW_DESTRUCTIVE_CHANGES=1: executing");
+  expect(callsOf(r.calls, "execute-change-set")).toHaveLength(1);
+  expect(callsOf(r.calls, "wait")).toHaveLength(1);
+});
+
+test("ALLOW_DESTRUCTIVE_CHANGES set to anything but 1 still refuses", () => {
+  const r = runDeploy({
+    changes: [change("Remove", "ProductionDnsRecord", "AWS::Route53::RecordSet")],
+    ALLOW_DESTRUCTIVE_CHANGES: "true",
+  });
+  expect(r.status, r.out).not.toBe(0);
+  expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+});
+
+test("an empty change set exits 0 without describing or executing anything", () => {
+  const r = runDeploy({ STUB_DEPLOY: "empty" });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain("No changes to deploy");
+  expect(callsOf(r.calls, "deploy")).toHaveLength(1);
+  expect(callsOf(r.calls, "describe-change-set")).toEqual([]);
+  expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+  expect(callsOf(r.calls, "wait")).toEqual([]);
+});
+
+test("deploy output with no change set ARN: refused, nothing executed", () => {
+  const r = runDeploy({ STUB_DEPLOY: "garbled" });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain("Could not find the change set ARN");
+  expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+});
+
+test("creating the change set fails: refused, nothing executed", () => {
+  const r = runDeploy({ STUB_DEPLOY: "fail" });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain("Creating the change set failed");
+  expect(callsOf(r.calls, "describe-change-set")).toEqual([]);
+  expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+});
+
+test("deploy sends the minified template inline, never executes, and keeps the complete parameter list", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES });
+  expect(r.status, r.out).toBe(0);
+  const deploys = callsOf(r.calls, "deploy");
+  expect(deploys).toHaveLength(1);
+  const [deploy] = deploys;
+  expect(overrides(deploy)).toEqual(EXPECTED_PARAMETERS);
+  expect(flagValue(deploy, "--stack-name")).toBe(STACK);
+  expect(flagValue(deploy, "--region")).toBe("us-east-1");
+  expect(flagValue(deploy, "--capabilities")).toBe("CAPABILITY_NAMED_IAM");
+  // Nothing but the known flags (so a new one cannot slip in unreviewed); no S3.
+  expect(deploy.filter((a) => a.startsWith("--")).sort()).toEqual(
+    [
+      "--capabilities",
+      "--no-execute-changeset",
+      "--no-fail-on-empty-changeset",
+      "--parameter-overrides",
+      "--region",
+      "--stack-name",
+      "--template-file",
+    ].sort(),
+  );
+  // The file handed to deploy is the minifier's output, inside the limit, and
+  // not the raw template.
+  expect(flagValue(deploy, "--template-file")).not.toBe("template.yaml");
+  const sent = fs.readFileSync(sealedEnv({}).STUB_TEMPLATE_COPY);
+  expect(sent.length).toBeLessThanOrEqual(INLINE_LIMIT_BYTES);
+  const out = path.join(scratch, "expected-min.yaml");
+  const m = spawnSync(path.join(binDir, "ruby"), [MINIFIER, TEMPLATE, out], { env: sealedEnv({}), encoding: "utf8" });
+  expect(m.status, m.stderr).toBe(0);
+  expect(sent.toString("utf8")).toBe(fs.readFileSync(out, "utf8"));
+  // Its temp directory is gone once the script exits.
+  expect(fs.readdirSync(path.join(scratch, "tmp"))).toEqual([]);
+});
+
+test("the parameters keep passing through when a site sets them", () => {
+  const r = runDeploy({
+    changes: SAFE_CHANGES,
+    CREATE_APEX_DNS_RECORDS: "true",
+    ADMIN_DOMAIN: "admin.example.test",
+    MEDIA_ARCHIVE_BUCKET: "example-test-media-archive",
+    ADMIN_CSP_MODE: "enforce",
+  });
+  expect(r.status, r.out).toBe(0);
+  const params = overrides(callsOf(r.calls, "deploy")[0]);
+  expect(params).toContain("CreateApexDnsRecords=true");
+  expect(params).toContain("AdminDomainName=admin.example.test");
+  expect(params).toContain("MediaArchiveBucketName=example-test-media-archive");
+  expect(params).toContain("AdminCspMode=enforce");
+});
+
+// The script reads ./template.yaml next to itself, so a copy of the script
+// and the minifier beside a synthetic template exercises the refusals without
+// any test-only switch in deploy.sh.
+function deployBeside(dirName, templateText) {
+  const dir = path.join(scratch, dirName);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(DEPLOY, path.join(dir, "deploy.sh"));
+  fs.copyFileSync(MINIFIER, path.join(dir, "minify-template.rb"));
+  fs.writeFileSync(path.join(dir, "template.yaml"), templateText);
+  return path.join(dir, "deploy.sh");
+}
+
+test("a template still over 51,200 bytes after minifying is refused before any aws call", () => {
+  // Content, not comments: a block scalar the minifier must keep whole.
+  const body = Array.from({ length: 700 }, (_, i) => `  line ${i} ${"x".repeat(80)}`).join("\n");
+  const big = `AWSTemplateFormatVersion: '2010-09-09'\nDescription: |\n${body}\nResources: {}\n`;
+  const r = runDeploy({ deployScript: deployBeside("oversize", big), HOSTED_ZONE_ID: "" });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain(`over the ${INLINE_LIMIT_BYTES}-byte limit`);
+  expect(r.calls).toEqual([]);
+});
+
+test("a template the minifier cannot parse is refused before any aws call", () => {
+  const r = runDeploy({ deployScript: deployBeside("unparseable", "Resources: [unclosed\n"), HOSTED_ZONE_ID: "" });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain("Could not minify template.yaml");
+  expect(r.calls).toEqual([]);
+});

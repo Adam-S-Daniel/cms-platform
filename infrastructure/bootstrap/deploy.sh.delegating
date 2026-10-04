@@ -20,8 +20,17 @@
 # CreateApexDnsRecords (DEFAULT false, safe for pre-go-live sites). Once your
 # site is live at its apex, export CREATE_APEX_DNS_RECORDS=true (here or in
 # site-params.env) so a redeploy never deletes the production apex/www records.
+# The platform script creates a change set, prints it, and refuses to execute
+# one that removes or replaces a resource unless ALLOW_DESTRUCTIVE_CHANGES=1.
 #
-# Prerequisites: AWS CLI v2, git, AWS credentials.
+# NOTE on STACK_NAME: site-params.env exports it for the OAuth proxy stack, and
+# this wrapper sources that file, so the bootstrap script inherits the proxy's
+# stack name and its change set would remove every proxy resource (the guard
+# refuses it). A STACK_NAME on the command line does not help, because the
+# file is sourced after it; cms-platform infrastructure/README.md ("The
+# STACK_NAME collision") gives the commands that work.
+#
+# Prerequisites: AWS CLI v2, git, Ruby, python3, AWS credentials.
 # Usage:  bash infrastructure/bootstrap/deploy.sh   (idempotent)
 # =============================================================================
 

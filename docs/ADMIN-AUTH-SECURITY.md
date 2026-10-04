@@ -461,9 +461,14 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://<apex>/admin/not-found.html"
 #    then redeploy the bootstrap stack the way docs/MEDIA-ARCHIVE.md step 3
 #    does for that site: a live apex keeps CREATE_APEX_DNS_RECORDS=true (a
 #    redeploy without it DELETES the apex records), and STACK_NAME must name
-#    the bootstrap stack, not the proxy's. A new certificate is validated and
-#    a new distribution deployed: allow several minutes.
-bash infrastructure/bootstrap/deploy.sh
+#    the bootstrap stack, not the proxy's (infrastructure/README.md, "The
+#    STACK_NAME collision": the wrapper re-sources site-params.env, so run the
+#    platform script). Expect Add lines for the Admin* resources in the
+#    printed change set; the script refuses a removal or a replacement. A new
+#    certificate is validated and a new distribution deployed: allow several
+#    minutes.
+set -a; source infrastructure/site-params.env; set +a
+STACK_NAME= bash .cms-platform/infrastructure/bootstrap/deploy.sh
 
 # 4. Verify with GET (curl -I sends HEAD, which the admin host serves on purpose)
 hdr() { curl -s -o /dev/null -D - "$1" | grep -i -E '^(HTTP|location|content-type)'; }
@@ -588,17 +593,21 @@ that, which changes nothing a deployed site uses.
 
    ```bash
    cd ~/repos/<site> && git checkout main && git pull
-   bash infrastructure/bootstrap/deploy.sh   # ADMIN_CSP_MODE unset = report-only
+   # ADMIN_CSP_MODE unset = report-only. site-params.env's STACK_NAME names the
+   # OAuth proxy stack, so run the platform script with it emptied, from a
+   # checkout at platform.lock's platform_ref (infrastructure/README.md,
+   # "The STACK_NAME collision"):
+   set -a; source infrastructure/site-params.env; set +a
+   STACK_NAME= bash .cms-platform/infrastructure/bootstrap/deploy.sh
    ```
 
-   `template.yaml` is over the AWS CLI's 51,200-byte inline limit, so the
-   script uploads it through S3: on an existing stack it uses the stack's own
-   artifact bucket (`<prefix>-cfn-artifacts`, prefix `bootstrap-templates`)
-   with nothing for you to set. A stack that does not exist yet has no such
-   bucket, so the first deploy needs `TEMPLATE_S3_BUCKET=<an existing bucket
-   you can write to>`; the script refuses without it and never creates a
-   bucket. `TEMPLATE_S3_BUCKET` also overrides the artifact bucket on an
-   update.
+   The script sends a minified copy of `template.yaml` (the raw file is over
+   the AWS CLI's 51,200-byte inline limit), then prints the change set, one
+   line per resource. It refuses to execute a change set with anything marked
+   `DESTRUCTIVE` (a removal or a replacement) and changes nothing; read the
+   list before reaching for `ALLOW_DESTRUCTIVE_CHANGES=1`, since a missing
+   `CREATE_APEX_DNS_RECORDS=true`, `ADMIN_DOMAIN` or the proxy's `STACK_NAME`
+   is the usual cause.
 
 2. Check the headers on production and on one live preview host (no
    invalidation is needed; the policy applies to cached responses too):

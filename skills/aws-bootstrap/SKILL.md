@@ -1,7 +1,7 @@
 ---
 name: aws-bootstrap
 description: Deploy, update, or troubleshoot the platform AWS bootstrap CloudFormation stack for a site. Use when setting up AWS infrastructure for the first time, adding new resources, diagnosing CloudFormation errors, checking stack outputs, or explaining what the bootstrap provisions.
-compatibility: Requires AWS CLI v2 configured with credentials, bash. Must be run from the repo root or infrastructure/bootstrap/.
+compatibility: Requires AWS CLI v2 configured with credentials, bash, Ruby and python3. Must be run from the repo root or infrastructure/bootstrap/.
 ---
 
 # AWS Bootstrap
@@ -68,7 +68,9 @@ scaffolder writes these into `infrastructure/site-params.env`). Only
 # Standard deploy — load site params, then run (auto-detects Route53 zone)
 cp infrastructure/site-params.example.env infrastructure/site-params.env   # first time
 set -a; source infrastructure/site-params.env; set +a
-bash infrastructure/bootstrap/deploy.sh
+# site-params.env's STACK_NAME names the OAuth proxy stack: empty it here
+# (infrastructure/README.md, "The STACK_NAME collision")
+STACK_NAME= bash infrastructure/bootstrap/deploy.sh
 
 # If a GitHub OIDC provider already exists in the account
 CREATE_OIDC_PROVIDER=false bash infrastructure/bootstrap/deploy.sh
@@ -76,8 +78,8 @@ CREATE_OIDC_PROVIDER=false bash infrastructure/bootstrap/deploy.sh
 # Override hosted zone manually (otherwise auto-detected from APEX_DOMAIN)
 HOSTED_ZONE_ID=<your-zone-id> bash infrastructure/bootstrap/deploy.sh
 
-# FIRST deploy of a new stack only: upload the template through an existing bucket
-TEMPLATE_S3_BUCKET=<existing-bucket-you-can-write-to> bash infrastructure/bootstrap/deploy.sh
+# Execute a change set that removes or replaces resources (refused otherwise)
+ALLOW_DESTRUCTIVE_CHANGES=1 bash infrastructure/bootstrap/deploy.sh
 ```
 
 Key env vars (see `infrastructure/site-params.example.env` for the full set):
@@ -88,16 +90,17 @@ Key env vars (see `infrastructure/site-params.example.env` for the full set):
 | `APEX_DOMAIN` | yes | — (e.g. `example.com`) |
 | `GITHUB_ORG` | no | `Adam-S-Daniel` |
 | `RESOURCE_PREFIX` | no | `APEX_DOMAIN` with dots → hyphens |
-| `STACK_NAME` | no | `${RESOURCE_PREFIX}-bootstrap` |
+| `STACK_NAME` | no | `${RESOURCE_PREFIX}-bootstrap` (never the proxy's name from `site-params.env`) |
 | `AWS_REGION` | no | `us-east-1` |
 | `HOSTED_ZONE_ID` | no | auto-detected from `APEX_DOMAIN` |
 | `CREATE_OIDC_PROVIDER` | no | `true` |
-| `TEMPLATE_S3_BUCKET` | first deploy only | the stack's own artifact bucket on an update |
+| `ALLOW_DESTRUCTIVE_CHANGES` | no | unset: a removal or replacement is refused |
 
 The script:
 1. Auto-detects the Route53 hosted zone for `${APEX_DOMAIN}` (unless `HOSTED_ZONE_ID` is set)
-2. Runs `aws cloudformation deploy` with `CAPABILITY_NAMED_IAM`, passing the derived parameters. The template is over the CLI's 51,200-byte inline limit, so it goes through S3 (`--s3-bucket`, prefix `bootstrap-templates`): on an existing stack the stack's own artifact bucket, on a missing stack `TEMPLATE_S3_BUCKET` is required (the script refuses without it and never creates a bucket)
-3. Prints outputs including the Role ARN and both CloudFront distribution IDs
+2. Minifies the template with `minify-template.rb` (Ruby's YAML parser: comments go, every tag and value stays), because the raw file is over the CLI's 51,200-byte inline limit; it refuses, before any AWS call, if the minified copy is still over it
+3. Creates a change set (`aws cloudformation deploy --no-execute-changeset`, `CAPABILITY_NAMED_IAM`, the derived parameters), prints one line per resource action, and refuses to execute when any resource would be removed or replaced unless `ALLOW_DESTRUCTIVE_CHANGES=1`; otherwise executes it and waits. An empty change set is a success
+4. Prints outputs including the Role ARN and both CloudFront distribution IDs
 
 ## Stack outputs → GitHub secrets
 
@@ -112,7 +115,10 @@ After deploying, add these as GitHub Actions secrets (repo → Settings → Secr
 ## Common errors and fixes
 
 ### `Templates with a size greater than 51,200 bytes must be deployed via an S3 Bucket`
-`deploy.sh` always uploads the template through S3, so this means an old copy of the script (before the `--s3-bucket` fix) is running: pull the current platform ref. On a stack that does not exist yet the script stops and asks for `TEMPLATE_S3_BUCKET`; point it at any existing bucket you can write to.
+An old copy of `deploy.sh` (v0.1.125, before the minified inline deploy) is running: pull the current platform ref. The current script stops on its own, before any AWS call, if even the minified template is over the limit.
+
+### `Refusing to execute: the change set above removes or replaces resources`
+Read the lines marked `DESTRUCTIVE`. The usual causes are a live apex without `CREATE_APEX_DNS_RECORDS=true`, a site with an admin host but no `ADMIN_DOMAIN`, or `STACK_NAME` inherited from `site-params.env` (the OAuth proxy stack). Fix the setting and re-run; use `ALLOW_DESTRUCTIVE_CHANGES=1` only when the removal is intended. Nothing was changed, and the refused change set is left on the stack for review.
 
 ### `ResourceExistenceCheck` / changeset FAILED
 The `AWS::Route53::HostedZone::Id` parameter type triggers early validation. The `HostedZoneId` parameter is typed as `String` with `AllowedPattern: "^Z[A-Z0-9]+$"` to avoid this.
