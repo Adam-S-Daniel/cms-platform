@@ -49,7 +49,7 @@ no backfill is planned; the file adds the fields git does not capture.
   `CMS_PLATFORM_PAT` cited as platform-bump's live fallback credential; both
   were removed in v0.1.103.
 - Change: the credential paragraph now says the App token is the only path and
-  a consumer without the App fails the bump (PR pending, see below).
+  a consumer without the App fails the bump (PR #563).
 - Eval: none — no eval exists yet
 - Outcome: pending review
 
@@ -60,7 +60,7 @@ no backfill is planned; the file adds the fields git does not capture.
   v0.1.103.
 - Change: the App section now states there is no PAT fallback: platform-bump
   errors without the App, dev-hooks-sync warns and opens its PR as
-  `GITHUB_TOKEN` (PR pending, see below).
+  `GITHUB_TOKEN` (PR #563).
 - Eval: none — no eval exists yet (a Class B candidate in skills-evals'
   `DESIGN.md`; its tables are covered by the #408 freshness lint)
 - Outcome: pending review
@@ -71,6 +71,6 @@ no backfill is planned; the file adds the fields git does not capture.
   CloudFront-on-certificate ordering; the template dropped it as redundant
   (cfn-lint W3005).
 - Change: the troubleshooting step now names the implicit `!Ref` dependency
-  (PR pending, see below).
+  (PR #563).
 - Eval: exempt (DESIGN.md non-coverage table)
 - Outcome: pending review
