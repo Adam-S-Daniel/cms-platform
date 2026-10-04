@@ -70,8 +70,10 @@
  * ── WHAT IT CANNOT SEE ────────────────────────────────────────────────────
  * Shell: a `run:` body doing `git fetch origin pull/N/head` or
  * `gh run download` under a privileged trigger is invisible (shell is not
- * parsed). Dataflow: a head ref laundered through a step output or an `env:`
- * value before reaching `ref:` is invisible. Both are why
+ * parsed). Local composite actions referenced as
+ * `uses: ./.github/actions/...` are not expanded here, so a wrapped artifact
+ * download is invisible. Dataflow: a head ref laundered through a step output
+ * or an `env:` value before reaching `ref:` is invisible. These gaps are why
  * `no-pull-request-target` is a ban rather than a pattern check.
  */
 const YAML = require("yaml");
