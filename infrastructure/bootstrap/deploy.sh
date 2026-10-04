@@ -295,6 +295,17 @@ sys.exit(3 if destructive else 0)
     --query 'Stacks[0].StackStatus' \
     --output text)" \
     || error "Could not read the status of stack ${BOOTSTRAP_STACK_NAME}, so nothing was executed."
+  # Allow-list: only a new stack (REVIEW_IN_PROGRESS) or a status from which
+  # CloudFormation can execute an update change set goes on; anything else
+  # (empty, None, unknown, *_IN_PROGRESS, *_FAILED) is refused.
+  case "$STACK_STATUS" in
+    REVIEW_IN_PROGRESS | CREATE_COMPLETE | UPDATE_COMPLETE | UPDATE_ROLLBACK_COMPLETE | IMPORT_COMPLETE | IMPORT_ROLLBACK_COMPLETE) ;;
+    *)
+      STATUS_TOKEN="unreadable"
+      [[ "$STACK_STATUS" =~ ^[A-Z_]+$ ]] && STATUS_TOKEN="$STACK_STATUS"
+      error "Refusing to execute: stack ${BOOTSTRAP_STACK_NAME} has status ${STATUS_TOKEN}, from which this script does not execute a change set, and nothing was changed. Check the stack in the CloudFormation console and re-run once it is in a *_COMPLETE state. The change set is left for review: ${CHANGESET_NAME} on stack ${BOOTSTRAP_STACK_NAME}."
+      ;;
+  esac
   if [[ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ]]; then
     # Creating a stack is an explicit act: a create is all Add actions, so
     # the guard above passes a mistyped stack name straight through.

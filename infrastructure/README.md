@@ -89,12 +89,22 @@ bash infrastructure/rum/deploy.sh            # optional analytics
   (any other value refuses), names the stack, says a typo is the usual cause,
   and leaves the change set for review. Set the flag only for a site's first
   bootstrap; an update of an existing stack needs no flag.
-- **A failed change set.** If the change set cannot be created, the script
-  names the stack and the likely causes and prints the read-only
-  `describe-stacks` command to run by hand; it never echoes the CLI's message,
-  which can carry the account id. A stack in `ROLLBACK_COMPLETE`,
-  `CREATE_FAILED` or `UPDATE_ROLLBACK_FAILED` gets a specific message when the
-  CLI's wording is recognized.
+- **A failed change set.** If the change set cannot be created (the
+  `aws cloudformation deploy` call), the script prints a fixed message instead
+  of the CLI's: it names the stack and the likely causes and gives the
+  read-only `describe-stacks` command to run by hand. A stack in
+  `ROLLBACK_COMPLETE`, `CREATE_FAILED` or `UPDATE_ROLLBACK_FAILED` gets a
+  specific message when the CLI's wording is recognized. That is the only
+  fixed-message path: errors from the other AWS CLI calls (the Route53 lookup,
+  `describe-change-set`, `describe-stacks`, `execute-change-set`, `wait`) are
+  shown as the CLI prints them and may include the stack ARN, which carries the
+  account id, so do not paste them into a public issue.
+- **Stack status.** Before executing, it reads the stack's status and goes on
+  only from `REVIEW_IN_PROGRESS` (a new stack, which needs
+  `ALLOW_STACK_CREATE=1`) or a status from which CloudFormation executes an
+  update (`CREATE_COMPLETE`, `UPDATE_COMPLETE`, `UPDATE_ROLLBACK_COMPLETE`,
+  `IMPORT_COMPLETE`, `IMPORT_ROLLBACK_COMPLETE`). Any other status, or one it
+  cannot read, is refused and the change set left for review.
 
 ### The STACK_NAME collision
 

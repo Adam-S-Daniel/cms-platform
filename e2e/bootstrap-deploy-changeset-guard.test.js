@@ -127,7 +127,7 @@ case "$*" in
       *) printf 'Waiting for changeset to be created..\\nChangeset created successfully. Run the following command to review changes:\\naws cloudformation describe-change-set --change-set-name %s\\n' "$STUB_ARN" ;;
     esac ;;
   "cloudformation describe-change-set "*) printf '%s\\n' "$(<"$STUB_CHANGESET_JSON")" ;;
-  "cloudformation describe-stacks "*"Stacks[0].StackStatus"*) echo "\${STUB_STACK_STATUS:-UPDATE_COMPLETE}" ;;
+  "cloudformation describe-stacks "*"Stacks[0].StackStatus"*) echo "\${STUB_STACK_STATUS-UPDATE_COMPLETE}" ;;
   "cloudformation execute-change-set "*) exit 0 ;;
   "cloudformation wait "*) exit 0 ;;
   "cloudformation describe-stacks "*"Stacks[0].Outputs"*) echo '[{"OutputKey":"RoleArn","OutputValue":"arn:aws:iam::000000000000:role/example"}]' ;;
@@ -648,6 +648,32 @@ for (const [state, advice] of [
     expect(r.stderr).not.toContain(ACCOUNT_ID);
     expect(callsOf(r.calls, "deploy")).toHaveLength(1);
     expect(callsOf(r.calls, "describe-change-set")).toEqual([]);
+    expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
+    expect(callsOf(r.calls, "wait")).toEqual([]);
+  });
+}
+
+// ── Stack status before execute: an allow-list, not "anything but a create" ──
+for (const status of ["CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE", "IMPORT_COMPLETE", "IMPORT_ROLLBACK_COMPLETE"]) {
+  test(`stack status ${status}: executed as an update, no ALLOW_STACK_CREATE needed`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, STUB_STACK_STATUS: status });
+    expect(r.status, r.out).toBe(0);
+    expect(callsOf(r.calls, "execute-change-set")).toHaveLength(1);
+    expect(callsOf(r.calls, "wait")[0][2]).toBe("stack-update-complete");
+  });
+}
+
+for (const [status, token] of [
+  ["", "unreadable"],
+  ["None", "unreadable"],
+  ["ZZZ", "ZZZ"],
+  ["UPDATE_IN_PROGRESS", "UPDATE_IN_PROGRESS"],
+]) {
+  test(`stack status ${JSON.stringify(status)}: refused before execute-change-set`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, STUB_STACK_STATUS: status, ALLOW_STACK_CREATE: "1" });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.stderr).toContain(`stack ${STACK} has status ${token},`);
+    expect(r.stderr).toContain(`left for review: ${CHANGESET_NAME} on stack ${STACK}`);
     expect(callsOf(r.calls, "execute-change-set")).toEqual([]);
     expect(callsOf(r.calls, "wait")).toEqual([]);
   });
