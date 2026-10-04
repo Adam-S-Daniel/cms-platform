@@ -135,7 +135,10 @@ def _origin_patterns(raw: str, apex: str) -> list[str]:
     in the browser, so the two engines must never disagree about which origin
     matches.
     """
-    apex = apex.strip().lower()
+    # Not stripped: deploy.sh and the template's AllowedPattern both refuse an
+    # apex with whitespace, so a padded SITE_APEX is malformed here too and
+    # fails closed (no wildcard) rather than being quietly repaired.
+    apex = apex.lower()
     patterns: list[str] = []
     for entry in raw.split(","):
         entry = entry.strip()

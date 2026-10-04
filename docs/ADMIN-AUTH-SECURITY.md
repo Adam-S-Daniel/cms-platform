@@ -55,7 +55,7 @@ domain**, `APEX_DOMAIN` (the stack's `SiteApex` parameter, the Lambda's
 `SITE_APEX`), so it can name a site's per-PR preview hosts and nothing wider:
 
 ```bash
-export APEX_DOMAIN="<apex>"   # already in every site-params.env
+export APEX_DOMAIN="<apex>"   # e.g. example.com; an older site-params.env may lack it
 export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
 ```
 
@@ -83,6 +83,11 @@ export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
   Nothing needs maintaining; the cost is that a wildcard over a domain the
   site does not use as `APEX_DOMAIN` is refused, and must be listed as
   literal origins instead.
+- **A `site-params.env` that predates this bound may not carry `APEX_DOMAIN`.**
+  Add `export APEX_DOMAIN="<the site's apex, e.g. example.com>"` to it before
+  redeploying; `deploy.sh` stops before any AWS call, and names the file and
+  the line to add, when a `*` entry has no apex. It does not guess the apex
+  from `ALLOWED_ORIGINS`, because that would bound the list by itself.
 - It **fails closed**: with `APEX_DOMAIN` unset, or not a plain domain of two
   or more labels, `deploy.sh` refuses every `*` entry, and a Lambda whose
   `SITE_APEX` is empty or malformed drops them (literal origins still work).
@@ -173,10 +178,13 @@ After any release that changes `oauth-proxy/`, for each site:
 # 1. the site's bump PR is merged, so platform.lock names the new release
 cd ~/repos/<site> && git checkout main && git pull
 # 2. infrastructure/site-params.env carries the ALLOWED_ORIGINS you intend
-#    (with https://preview-*.<apex> unless PREVIEW_SIGN_IN=disabled), the
-#    APEX_DOMAIN any '*' entry needs, and GITHUB_CLIENT_ID/SECRET empty to
-#    keep the live credentials (see below)
-# 3. deploy (the wrapper checks the platform out at platform.lock's ref)
+#    (with https://preview-*.<apex> unless PREVIEW_SIGN_IN=disabled), and
+#    GITHUB_CLIENT_ID/SECRET empty to keep the live credentials (see below)
+# 3. the same file carries APEX_DOMAIN, which any '*' entry needs. A file that
+#    predates the apex bound may lack it: add
+#      export APEX_DOMAIN="<the site's apex, e.g. example.com>"
+#    before deploying, or deploy.sh stops before any AWS call
+# 4. deploy (the wrapper checks the platform out at platform.lock's ref)
 bash oauth-proxy/deploy.sh
 ```
 

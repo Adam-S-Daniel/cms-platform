@@ -184,8 +184,8 @@ test.describe("OAuth proxy callback page: the token reaches only a configured op
   });
 
   test("a wildcard over a public suffix is dropped: its openers never get the token (#535)", () => {
-    const popup = boot(renderPage("https://*.github.io,https://*.co.uk,https://example.com"));
-    for (const origin of ["https://someone.github.io", "https://someone.co.uk"]) {
+    const popup = boot(renderPage("https://*.pages.example,https://*.co.example,https://example.com"));
+    for (const origin of ["https://someone.pages.example", "https://someone.co.example"]) {
       popup.deliver({ source: popup.opener, origin, data: HANDSHAKE });
     }
     expect(popup.posted).toHaveLength(1);

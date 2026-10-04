@@ -36,8 +36,9 @@ FUNCTION_NAME="${FUNCTION_NAME:-${STACK_NAME}}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 SAM_S3_BUCKET="${SAM_S3_BUCKET:-}"
 ALLOWED_ORIGINS="${ALLOWED_ORIGINS:?set ALLOWED_ORIGINS, e.g. https://example.com}"
-# The site's own registered domain (site-params.env already carries it). A '*'
-# entry in ALLOWED_ORIGINS is accepted only at or beneath it (#535).
+# The site's own registered domain. A '*' entry in ALLOWED_ORIGINS is accepted
+# only at or beneath it (#535). A site-params.env written before that change may
+# not carry it: add `export APEX_DOMAIN="<apex>"` there before redeploying.
 APEX_DOMAIN="${APEX_DOMAIN:-}"
 # "disabled" says the site deliberately has no preview sign-in, which silences
 # the missing preview-* warning below (#524).
@@ -122,7 +123,7 @@ for raw_entry in "${ORIGIN_ENTRIES[@]}"; do
     [[ "$after_star" == *.* ]] && fixed="${after_star#*.}"
     fixed="${fixed%%:*}"
     [[ -n "$APEX_DOMAIN" ]] \
-      || error "ALLOWED_ORIGINS entry '${entry}' has a '*', which needs APEX_DOMAIN set to the site's own domain (e.g. example.com) so the wildcard stays inside it."
+      || error "ALLOWED_ORIGINS entry '${entry}' has a '*', which needs APEX_DOMAIN set to the site's own domain so the wildcard stays inside it. Add export APEX_DOMAIN=\"<apex>\" (e.g. example.com) to infrastructure/site-params.env, then run this again."
     if [[ "$fixed" != "$APEX_DOMAIN" && "$fixed" != *".${APEX_DOMAIN}" ]]; then
       error "ALLOWED_ORIGINS entry '${entry}' is not valid: a '*' may only stand for names inside APEX_DOMAIN (${APEX_DOMAIN}), e.g. https://preview-*.${APEX_DOMAIN}. A wildcard over another domain, or a public suffix such as co.uk or github.io, would hand the token to sites other people control."
     fi

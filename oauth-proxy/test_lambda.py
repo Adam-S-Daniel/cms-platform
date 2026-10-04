@@ -741,16 +741,16 @@ class TestWildcardsStayInsideTheSiteApex(unittest.TestCase):
         self.assertIn(entry.lower(), "\n".join(logs.output))
 
     def test_the_two_reported_patterns_are_refused(self):
-        for entry in ("https://*.github.io", "https://*.co.uk"):
+        for entry in ("https://*.pages.example", "https://*.co.example"):
             with self.subTest(entry=entry):
                 self._assert_dropped(entry)
 
     def test_wildcards_over_other_public_and_private_suffixes_are_refused(self):
         for entry in (
-            "https://preview-*.github.io",
-            "https://*.example.co.uk",
-            "https://*.s3.amazonaws.com",
-            "https://*.execute-api.us-east-1.amazonaws.com",
+            "https://preview-*.pages.example",
+            "https://*.example.co.example",
+            "https://*.s3.example.net",
+            "https://*.execute-api.us-east-1.example.net",
             "https://*.com",
             "https://example.*",
             "https://*.*",
@@ -765,7 +765,7 @@ class TestWildcardsStayInsideTheSiteApex(unittest.TestCase):
             "https://preview-*.notexample.com",
             # The apex followed by more labels is someone else's domain.
             "https://preview-*.example.com.example.net",
-            "https://*.example.com.co.uk",
+            "https://*.example.com.co.example",
             # The wildcard is the last label before a TLD.
             "https://example.*.com",
         ):
@@ -801,17 +801,24 @@ class TestWildcardsStayInsideTheSiteApex(unittest.TestCase):
         for origin in (
             "https://preview-a.example.com.example.net",
             "https://preview-a.b.example.com",
-            "https://preview-a.github.io",
+            "https://preview-a.pages.example",
             "https://example.com",
         ):
             with self.subTest(origin=origin):
                 self.assertFalse(handler_module._origin_allowed(origin, patterns))
 
-    def test_apex_is_normalized_like_an_entry(self):
+    def test_apex_is_lowercased_like_deploy_sh_does(self):
         self.assertEqual(
-            self._patterns("https://preview-*.example.com", " Example.COM "),
+            self._patterns("https://preview-*.example.com", "Example.COM"),
             [r"https://preview-[a-z0-9-]+\.example\.com"],
         )
+
+    def test_an_apex_with_whitespace_is_rejected_not_stripped(self):
+        # deploy.sh and the template's AllowedPattern refuse it, so the Lambda
+        # must not quietly repair it into a working bound.
+        for apex in (" example.com", "example.com ", " example.com ", "example.com\n", "exam ple.com"):
+            with self.subTest(apex=apex):
+                self._assert_dropped("https://preview-*.example.com", apex)
 
     def test_the_handler_reads_the_apex_from_site_apex(self):
         # A fresh interpreter, so the module-level allowlist is built from

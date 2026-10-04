@@ -312,10 +312,10 @@ const ORIGIN_CASES = [
   ["https://pr-*.staging.example.test", APEX, true],
   ["HTTPS://Preview-*.Example.TEST/", APEX, true],
   // The two broad patterns #535 reported, and their relatives.
-  ["https://*.github.io", APEX, false],
-  ["https://*.co.uk", APEX, false],
-  ["https://preview-*.github.io", APEX, false],
-  ["https://*.example.co.uk", APEX, false],
+  ["https://*.pages.example", APEX, false],
+  ["https://*.co.example", APEX, false],
+  ["https://preview-*.pages.example", APEX, false],
+  ["https://*.example.co.example", APEX, false],
   ["https://*.com", APEX, false],
   ["https://example.*", APEX, false],
   // Lookalikes of the apex.
@@ -348,9 +348,9 @@ for (const [entry, apex, valid] of ORIGIN_CASES) {
 }
 
 test("one bad entry refuses the whole list, before any aws or sam call", () => {
-  const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test,https://*.github.io", APEX_DOMAIN: APEX, STUB_STACK: "exists" });
+  const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test,https://*.pages.example", APEX_DOMAIN: APEX, STUB_STACK: "exists" });
   expect(r.status).not.toBe(0);
-  expect(r.stderr).toContain("'https://*.github.io' is not valid");
+  expect(r.stderr).toContain("'https://*.pages.example' is not valid");
   expect(r.calls).toEqual([]);
 });
 
@@ -358,10 +358,14 @@ test("a wildcard with APEX_DOMAIN unset is refused with the fix named, before an
   const r = runDeploy({ ALLOWED_ORIGINS: `https://example.test,https://preview-*.${APEX}`, STUB_STACK: "exists" });
   expect(r.status).not.toBe(0);
   expect(r.stderr).toContain("has a '*', which needs APEX_DOMAIN set to the site's own domain");
+  // The file to edit and the line to add, for a site whose site-params.env
+  // predates the apex bound.
+  expect(r.stderr).toContain('Add export APEX_DOMAIN="<apex>"');
+  expect(r.stderr).toContain("infrastructure/site-params.env");
   expect(r.calls).toEqual([]);
 });
 
-for (const apex of ["test", "*.example.test", "example.test.", "https://example.test"]) {
+for (const apex of ["test", "*.example.test", "example.test.", "https://example.test", " example.test", "example.test "]) {
   test(`a malformed APEX_DOMAIN '${apex}' is refused before any aws or sam call`, () => {
     const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test", APEX_DOMAIN: apex, STUB_STACK: "exists" });
     expect(r.status).not.toBe(0);
