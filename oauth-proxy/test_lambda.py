@@ -11,6 +11,7 @@ import importlib
 import json
 import os
 import re
+import subprocess  # nosec B404  # runs this file's own interpreter
 import sys
 import unittest
 import urllib.parse
@@ -35,6 +36,7 @@ FAKE_TOKEN = "TEST-TOKEN-VALUE"  # nosec B105  # fixture value, not a secret
 CLEARED_COOKIE = f"{STATE_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
 # The allowlist every test runs against, whatever ALLOWED_ORIGINS the shell has.
 TEST_ORIGINS = "https://example.com,https://preview-*.example.com"
+TEST_APEX = "example.com"
 
 
 def _event(
@@ -95,7 +97,7 @@ class _Base(unittest.TestCase):
         patcher = patch.object(
             handler_module,
             "ALLOWED_ORIGIN_PATTERNS",
-            handler_module._origin_patterns(TEST_ORIGINS),
+            handler_module._origin_patterns(TEST_ORIGINS, TEST_APEX),
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -623,7 +625,7 @@ class TestRequestCookies(unittest.TestCase):
 
 class TestOriginPatterns(unittest.TestCase):
     def _allowed(self, origin, raw="https://example.com,https://preview-*.example.com"):
-        patterns = handler_module._origin_patterns(raw)
+        patterns = handler_module._origin_patterns(raw, TEST_APEX)
         return handler_module._origin_allowed(origin, patterns)
 
     def test_exact_origin_matches(self):
@@ -686,36 +688,265 @@ class TestOriginPatterns(unittest.TestCase):
         ):
             with self.subTest(entry=entry):
                 with self.assertLogs(level="ERROR") as logs:
-                    self.assertEqual(handler_module._origin_patterns(entry), [])
+                    self.assertEqual(handler_module._origin_patterns(entry, TEST_APEX), [])
                 self.assertIn(entry.lower(), "\n".join(logs.output))
 
     def test_valid_entries_survive_next_to_invalid_ones(self):
-        patterns = handler_module._origin_patterns("*,https://example.com,https://*.com")
+        patterns = handler_module._origin_patterns(
+            "*,https://example.com,https://*.com", TEST_APEX
+        )
         self.assertEqual(patterns, [r"https://example\.com"])
 
     def test_normalizes_trailing_slash_case_and_whitespace(self):
-        patterns = handler_module._origin_patterns(" HTTPS://Example.COM/ , ,https://example.org")
+        patterns = handler_module._origin_patterns(
+            " HTTPS://Example.COM/ , ,https://example.org", TEST_APEX
+        )
         self.assertEqual(patterns, [r"https://example\.com", r"https://example\.org"])
 
     def test_only_one_trailing_slash_is_stripped(self):
         with self.assertLogs(level="ERROR"):
-            self.assertEqual(handler_module._origin_patterns("https://example.com//"), [])
+            self.assertEqual(handler_module._origin_patterns("https://example.com//", TEST_APEX), [])
 
     def test_empty_input_yields_no_patterns(self):
-        self.assertEqual(handler_module._origin_patterns(""), [])
-        self.assertEqual(handler_module._origin_patterns(" , "), [])
+        self.assertEqual(handler_module._origin_patterns("", TEST_APEX), [])
+        self.assertEqual(handler_module._origin_patterns(" , ", TEST_APEX), [])
 
     def test_sources_use_only_the_shared_alphabet(self):
         # The same source is compiled by Python here and by the browser in the
         # callback page, so it must stay inside the characters both engines
         # read identically.
-        for source in handler_module._origin_patterns(TEST_ORIGINS):
+        for source in handler_module._origin_patterns(TEST_ORIGINS, TEST_APEX):
             self.assertRegex(source, r"^[a-z0-9\\.:/\[\]+-]+$")
 
     def test_default_patterns_come_from_the_module_allowlist(self):
         with patch.object(handler_module, "ALLOWED_ORIGIN_PATTERNS", [r"https://example\.org"]):
             self.assertTrue(handler_module._origin_allowed("https://example.org"))
             self.assertFalse(handler_module._origin_allowed("https://example.com"))
+
+
+class TestWildcardsStayInsideTheSiteApex(unittest.TestCase):
+    """
+    #535: "no `*` in the last two labels" is not a registrable-domain boundary.
+    `https://*.github.io` and `https://*.co.uk` passed it, and each spans
+    sites that other people register. A `*` is now honored only at or beneath
+    SITE_APEX, the domain the site declared as its own.
+    """
+
+    def _patterns(self, raw, apex=TEST_APEX):
+        return handler_module._origin_patterns(raw, apex)
+
+    def _assert_dropped(self, entry, apex=TEST_APEX):
+        with self.assertLogs(level="ERROR") as logs:
+            self.assertEqual(self._patterns(entry, apex), [], entry)
+        self.assertIn(entry.lower(), "\n".join(logs.output))
+
+    def test_the_two_reported_patterns_are_refused(self):
+        for entry in ("https://*.pages.example", "https://*.co.example"):
+            with self.subTest(entry=entry):
+                self._assert_dropped(entry)
+
+    def test_wildcards_over_other_public_and_private_suffixes_are_refused(self):
+        for entry in (
+            "https://preview-*.pages.example",
+            "https://*.example.co.example",
+            "https://*.s3.example.net",
+            "https://*.execute-api.us-east-1.example.net",
+            "https://*.com",
+            "https://example.*",
+            "https://*.*",
+        ):
+            with self.subTest(entry=entry):
+                self._assert_dropped(entry)
+
+    def test_wildcards_that_only_look_like_the_apex_are_refused(self):
+        for entry in (
+            # A label that merely ends in the apex's first label.
+            "https://*example.com",
+            "https://preview-*.notexample.com",
+            # The apex followed by more labels is someone else's domain.
+            "https://preview-*.example.com.example.net",
+            "https://*.example.com.co.example",
+            # The wildcard is the last label before a TLD.
+            "https://example.*.com",
+        ):
+            with self.subTest(entry=entry):
+                self._assert_dropped(entry)
+
+    def test_no_apex_means_no_wildcard(self):
+        for apex in ("", "   ", "com", "*.example.com", "example.com.", "example..com"):
+            with self.subTest(apex=apex):
+                self._assert_dropped("https://preview-*.example.com", apex)
+
+    def test_a_literal_origin_needs_no_apex(self):
+        self.assertEqual(
+            self._patterns("https://example.com,https://admin.example.net", ""),
+            [r"https://example\.com", r"https://admin\.example\.net"],
+        )
+
+    def test_site_owned_wildcards_are_kept(self):
+        for entry, origin in (
+            ("https://preview-*.example.com", "https://preview-pr12.example.com"),
+            ("https://*.example.com", "https://anything.example.com"),
+            ("https://pr-*.staging.example.com", "https://pr-3.staging.example.com"),
+            ("https://a.*.example.com", "https://a.b.example.com"),
+            ("https://preview-*.example.com:8443", "https://preview-x.example.com:8443"),
+        ):
+            with self.subTest(entry=entry):
+                patterns = self._patterns(entry)
+                self.assertEqual(len(patterns), 1)
+                self.assertTrue(handler_module._origin_allowed(origin, patterns))
+
+    def test_a_kept_wildcard_still_never_leaves_the_apex(self):
+        patterns = self._patterns("https://preview-*.example.com")
+        for origin in (
+            "https://preview-a.example.com.example.net",
+            "https://preview-a.b.example.com",
+            "https://preview-a.pages.example",
+            "https://example.com",
+        ):
+            with self.subTest(origin=origin):
+                self.assertFalse(handler_module._origin_allowed(origin, patterns))
+
+    def test_apex_is_lowercased_like_deploy_sh_does(self):
+        self.assertEqual(
+            self._patterns("https://preview-*.example.com", "Example.COM"),
+            [r"https://preview-[a-z0-9-]+\.example\.com"],
+        )
+
+    def test_an_apex_with_whitespace_is_rejected_not_stripped(self):
+        # deploy.sh and the template's AllowedPattern refuse it, so the Lambda
+        # must not quietly repair it into a working bound.
+        for apex in (" example.com", "example.com ", " example.com ", "example.com\n", "exam ple.com"):
+            with self.subTest(apex=apex):
+                self._assert_dropped("https://preview-*.example.com", apex)
+
+    def test_the_handler_reads_the_apex_from_site_apex(self):
+        # A fresh interpreter, so the module-level allowlist is built from
+        # this environment rather than patched.
+        snippet = (
+            "import importlib, json, sys; sys.path.insert(0, sys.argv[1]); "
+            "print(json.dumps(importlib.import_module('lambda').ALLOWED_ORIGIN_PATTERNS))"
+        )
+        base = {
+            "PATH": os.environ.get("PATH", ""),
+            "GITHUB_CLIENT_ID": "test_client_id",
+            "GITHUB_CLIENT_SECRET": "test_client_secret",
+            "ALLOWED_ORIGINS": TEST_ORIGINS,
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        here = os.path.dirname(os.path.abspath(__file__))
+        for apex, expected in (
+            ("example.com", handler_module._origin_patterns(TEST_ORIGINS, "example.com")),
+            (None, [r"https://example\.com"]),
+        ):
+            env = dict(base) if apex is None else {**base, "SITE_APEX": apex}
+            with self.subTest(apex=apex):
+                out = subprocess.run(  # noqa: S603  # nosec B603  # fixed argv
+                    [sys.executable, "-c", snippet, here],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertEqual(json.loads(out.stdout), expected)
+
+
+class TestConcurrentSignIn(_Base):
+    """
+    #537: the state lives in ONE `__Host-cms-oauth-state` cookie per browser
+    cookie context, so a second /auth overwrites the first one's state. These
+    drive /auth and /callback through a minimal cookie jar and never reach
+    GitHub except where a sign-in is meant to succeed (mocked).
+    """
+
+    VERIFY_FAILED = "This sign-in could not be verified. Close this window and start again."
+
+    def setUp(self):
+        super().setUp()
+        self.jar: dict[str, str] = {}
+
+    def _store(self, resp):
+        # What a browser that accepts the proxy's cookies keeps.
+        for cookie in _set_cookies(resp):
+            name, _, rest = cookie.partition("=")
+            value = rest.split(";", 1)[0]
+            if "Max-Age=0" in cookie.split("; "):
+                self.jar.pop(name, None)
+            else:
+                self.jar[name] = value
+
+    def _auth(self, store=True) -> str:
+        resp = handler_module.handler(_event("/auth"), None)
+        if store:
+            self._store(resp)
+        return _state_of(resp["headers"]["Location"])
+
+    def _callback(self, state):
+        evt = _event("/callback", {"code": "code", "state": state}, cookies=dict(self.jar))
+        resp = handler_module.handler(evt, None)
+        self._store(resp)
+        return resp
+
+    @staticmethod
+    def _token_response():
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"access_token": FAKE_TOKEN}).encode("utf-8")
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        return mock_resp
+
+    def _assert_unverified(self, resp):
+        self.assertEqual(resp["statusCode"], 400)
+        self.assertIn(self.VERIFY_FAILED, resp["body"])
+        self.assertNotIn(FAKE_TOKEN, resp["body"])
+
+    @patch("urllib.request.urlopen")
+    def test_second_sign_in_overwrites_the_first_ones_state(self, mock_urlopen):
+        first = self._auth()
+        second = self._auth()
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.jar, {STATE_COOKIE: second})
+        # The first popup returns: its state is gone, and so is the cookie
+        # (every callback clears it), which then fails the second popup too.
+        self._assert_unverified(self._callback(first))
+        self.assertEqual(self.jar, {})
+        self._assert_unverified(self._callback(second))
+        mock_urlopen.assert_not_called()
+
+    @patch("urllib.request.urlopen")
+    def test_newest_sign_in_wins_when_it_returns_first(self, mock_urlopen):
+        mock_urlopen.return_value = self._token_response()
+        first = self._auth()
+        second = self._auth()
+        ok = self._callback(second)
+        self.assertEqual(ok["statusCode"], 200)
+        self.assertIn(FAKE_TOKEN, ok["body"])
+        self._assert_unverified(self._callback(first))
+        mock_urlopen.assert_called_once()
+
+    @patch("urllib.request.urlopen")
+    def test_one_fresh_sign_in_after_a_failure_succeeds(self, mock_urlopen):
+        # The retry instruction in docs/ADMIN-AUTH-SECURITY.md: close every
+        # sign-in popup, then start exactly one.
+        mock_urlopen.return_value = self._token_response()
+        first = self._auth()
+        self._auth()
+        self._assert_unverified(self._callback(first))
+        retry = self._auth()
+        self.assertEqual(self._callback(retry)["statusCode"], 200)
+        mock_urlopen.assert_called_once()
+
+    @patch("urllib.request.urlopen")
+    def test_a_browser_that_refuses_the_cookie_cannot_sign_in(self, mock_urlopen):
+        # The proxy-host cookie requirement: /auth's state is real, but with
+        # no cookie to compare it against the callback is refused before
+        # GitHub is contacted, and the log says which half was missing.
+        state = self._auth(store=False)
+        with self.assertLogs(level="WARNING") as logs:
+            resp = self._callback(state)
+        self._assert_unverified(resp)
+        self.assertIn("state param present=True, cookie present=False", "\n".join(logs.output))
+        mock_urlopen.assert_not_called()
 
 
 class TestMisconfiguredAllowlist(_Base):
@@ -750,7 +981,7 @@ class TestMisconfiguredAllowlist(_Base):
         # `*` is not a valid origin, so a legacy ALLOWED_ORIGINS=* config ends
         # up here rather than silently releasing the token to anyone.
         with self.assertLogs(level="ERROR"):
-            self.assertEqual(handler_module._origin_patterns("*"), [])
+            self.assertEqual(handler_module._origin_patterns("*", TEST_APEX), [])
 
 
 class TestHtmlResponses(_Base):

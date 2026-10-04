@@ -19,6 +19,15 @@
 //   - both set: both parameters are passed, as before;
 //   - the stack-existence check failing: refused, no sam.
 //
+// ALLOWED_ORIGINS (#524, #535)
+//   - one table of entries is run through BOTH validators, deploy.sh and
+//     lambda.py's _origin_patterns, and each must reach the expected verdict:
+//     a `*` only beneath APEX_DOMAIN, so `https://*.github.io` and
+//     `https://*.co.uk` are refused before any aws or sam call;
+//   - no preview-* entry: a warning, and the deploy still runs;
+//     PREVIEW_SIGN_IN=disabled silences it, and contradicting it is refused;
+//   - APEX_DOMAIN reaches the stack as SiteApex, and only when set.
+//
 // SEALED: PATH is a stub directory plus a private bin of symlinks to the few
 // tools deploy.sh needs, taken from /usr/bin or /bin only. The environment is
 // built from scratch (no AWS_PROFILE, no AWS_ACCESS_KEY_ID, no session token),
@@ -37,6 +46,7 @@ const { test, expect } = require("./base");
 const REPO_ROOT = path.resolve(__dirname, "..");
 const DEPLOY = path.join(REPO_ROOT, "oauth-proxy", "deploy.sh");
 const STACK = "example-test-oauth-proxy";
+const APEX = "example.test";
 
 // Obvious, low-entropy fakes. Never a real credential.
 const FAKE_ID = "fake-client-id-aaaa";
@@ -265,3 +275,154 @@ test("both set: passes both credential parameters, as before, without printing t
   expect(r.out).not.toContain(FAKE_ID);
   expect(r.out).not.toContain(FAKE_SECRET);
 });
+
+// ── ALLOWED_ORIGINS (#524, #535) ─────────────────────────────────────────────
+
+// lambda.py's own verdict on one entry: true when _origin_patterns keeps it.
+// `lambda` is a reserved word, so the module is imported by name.
+const KEEP_SNIPPET = [
+  "import importlib, json, sys",
+  "sys.path.insert(0, sys.argv[1])",
+  "m = importlib.import_module('lambda')",
+  "print(json.dumps(len(m._origin_patterns(sys.argv[2], sys.argv[3])) == 1))",
+].join("\n");
+
+function lambdaKeeps(entry, apex) {
+  const r = spawnSync(path.join(binDir, "python3"), ["-c", KEEP_SNIPPET, path.join(REPO_ROOT, "oauth-proxy"), entry, apex], {
+    encoding: "utf8",
+    env: {
+      PATH: binDir,
+      HOME: path.join(scratch, "home"),
+      GITHUB_CLIENT_ID: "fake-client-id-aaaa",
+      GITHUB_CLIENT_SECRET: "fake-client-secret-bbbb",
+      // Importing the module must not write __pycache__ into the source tree.
+      PYTHONDONTWRITEBYTECODE: "1",
+    },
+  });
+  if (r.status !== 0) throw new Error(`python3 exited ${r.status}: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+
+// [entry, APEX_DOMAIN ("" = unset), valid]
+const ORIGIN_CASES = [
+  ["https://example.test", "", true],
+  ["https://admin.example.test:8443", "", true],
+  ["https://preview-*.example.test", APEX, true],
+  ["https://*.example.test", APEX, true],
+  ["https://pr-*.staging.example.test", APEX, true],
+  ["HTTPS://Preview-*.Example.TEST/", APEX, true],
+  // The two broad patterns #535 reported, and their relatives.
+  ["https://*.pages.example", APEX, false],
+  ["https://*.co.example", APEX, false],
+  ["https://preview-*.pages.example", APEX, false],
+  ["https://*.example.co.example", APEX, false],
+  ["https://*.com", APEX, false],
+  ["https://example.*", APEX, false],
+  // Lookalikes of the apex.
+  ["https://*example.test", APEX, false],
+  ["https://preview-*.notexample.test", APEX, false],
+  ["https://preview-*.example.test.example.net", APEX, false],
+  // No apex, no wildcard.
+  ["https://preview-*.example.test", "", false],
+  // The grammar's other refusals.
+  ["*", APEX, false],
+  ["http://example.test", APEX, false],
+  ["https://example.test/path", APEX, false],
+];
+
+for (const [entry, apex, valid] of ORIGIN_CASES) {
+  test(`ALLOWED_ORIGINS ${entry} with APEX_DOMAIN '${apex}': deploy.sh and lambda.py both say ${valid ? "valid" : "invalid"}`, () => {
+    expect(lambdaKeeps(entry, apex), "lambda.py's verdict").toBe(valid);
+    const extra = { ALLOWED_ORIGINS: entry, STUB_STACK: "exists" };
+    if (apex) extra.APEX_DOMAIN = apex;
+    const r = runDeploy(extra);
+    if (valid) {
+      expect(r.status, r.out).toBe(0);
+      expect(overrides(samDeploy(r.calls))).toContain(`AllowedOrigins=${entry}`);
+    } else {
+      expect(r.status, r.out).not.toBe(0);
+      expect(r.stderr).toMatch(/ALLOWED_ORIGINS entry '[^']*' (is not valid|has a '\*', which needs APEX_DOMAIN)/);
+      expect(r.calls, "neither stub may run").toEqual([]);
+    }
+  });
+}
+
+test("one bad entry refuses the whole list, before any aws or sam call", () => {
+  const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test,https://*.pages.example", APEX_DOMAIN: APEX, STUB_STACK: "exists" });
+  expect(r.status).not.toBe(0);
+  expect(r.stderr).toContain("'https://*.pages.example' is not valid");
+  expect(r.calls).toEqual([]);
+});
+
+test("a wildcard with APEX_DOMAIN unset is refused with the fix named, before any aws or sam call", () => {
+  const r = runDeploy({ ALLOWED_ORIGINS: `https://example.test,https://preview-*.${APEX}`, STUB_STACK: "exists" });
+  expect(r.status).not.toBe(0);
+  expect(r.stderr).toContain("has a '*', which needs APEX_DOMAIN set to the site's own domain");
+  // The file to edit and the line to add, for a site whose site-params.env
+  // predates the apex bound.
+  expect(r.stderr).toContain('Add export APEX_DOMAIN="<apex>"');
+  expect(r.stderr).toContain("infrastructure/site-params.env");
+  expect(r.calls).toEqual([]);
+});
+
+for (const apex of ["test", "*.example.test", "example.test.", "https://example.test", " example.test", "example.test "]) {
+  test(`a malformed APEX_DOMAIN '${apex}' is refused before any aws or sam call`, () => {
+    const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test", APEX_DOMAIN: apex, STUB_STACK: "exists" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("is not a domain name");
+    expect(r.calls).toEqual([]);
+  });
+}
+
+const PREVIEW_WARNING = "will hang after GitHub consent";
+
+test("no preview-* entry: warns, names the entry to add, and still deploys (#524)", () => {
+  const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test", APEX_DOMAIN: APEX, STUB_STACK: "exists" });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain(PREVIEW_WARNING);
+  expect(r.out).toContain(`https://preview-*.${APEX}`);
+  expect(r.out).toContain("PREVIEW_SIGN_IN=disabled");
+  expect(samDeploy(r.calls), "sam deploy must run").toBeDefined();
+});
+
+for (const origins of [`https://example.test,https://preview-*.${APEX}`, `https://example.test,https://*.${APEX}`]) {
+  test(`${origins}: no preview warning, and the apex reaches the stack as SiteApex`, () => {
+    const r = runDeploy({ ALLOWED_ORIGINS: origins, APEX_DOMAIN: APEX, STUB_STACK: "exists" });
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).not.toContain(PREVIEW_WARNING);
+    const params = overrides(samDeploy(r.calls));
+    expect(params).toContain(`AllowedOrigins=${origins}`);
+    expect(params).toContain(`SiteApex=${APEX}`);
+  });
+}
+
+test("APEX_DOMAIN unset: SiteApex is not passed, so the stack keeps (or defaults) its own", () => {
+  const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test", STUB_STACK: "exists" });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain(PREVIEW_WARNING);
+  expect(overrides(samDeploy(r.calls)).some((p) => p.startsWith("SiteApex"))).toBe(false);
+});
+
+test("PREVIEW_SIGN_IN=disabled with no preview entry: no warning, says so, deploys", () => {
+  const r = runDeploy({ ALLOWED_ORIGINS: "https://example.test", APEX_DOMAIN: APEX, PREVIEW_SIGN_IN: "disabled", STUB_STACK: "exists" });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).not.toContain(PREVIEW_WARNING);
+  expect(r.out).toContain("Preview sign-in: disabled");
+  expect(samDeploy(r.calls)).toBeDefined();
+});
+
+for (const [label, extra, message] of [
+  [
+    "PREVIEW_SIGN_IN=disabled beside a preview entry",
+    { ALLOWED_ORIGINS: `https://example.test,https://preview-*.${APEX}`, PREVIEW_SIGN_IN: "disabled" },
+    "PREVIEW_SIGN_IN=disabled, but ALLOWED_ORIGINS lists a preview entry",
+  ],
+  ["an unknown PREVIEW_SIGN_IN value", { ALLOWED_ORIGINS: "https://example.test", PREVIEW_SIGN_IN: "off" }, "PREVIEW_SIGN_IN must be"],
+]) {
+  test(`${label}: refused before any aws or sam call`, () => {
+    const r = runDeploy({ ...extra, APEX_DOMAIN: APEX, STUB_STACK: "exists" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain(message);
+    expect(r.calls).toEqual([]);
+  });
+}
