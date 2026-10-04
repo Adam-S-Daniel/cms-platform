@@ -259,3 +259,74 @@ test.describe("createLabel lint is fail-closed", () => {
     });
   }
 });
+
+// Review of #558, N1: the preview-only createLabel failure used to vanish in
+// `catch (_) {}`. Runs the real github-script step with a scripted client.
+test.describe("cms/preview-only label creation reports failures by status code only", () => {
+  function step() {
+    const file = listWorkflows().find((f) => path.basename(f) === "cms-editorial-workflow.yml");
+    const blocks = githubScriptBlocks(fs.readFileSync(file, "utf8")).filter((b) =>
+      analyzeScript(b.script, "x").calls.some((c) => c.name === PREVIEW_ONLY),
+    );
+    expect(blocks).toHaveLength(1);
+    return blocks[0].script;
+  }
+
+  async function run(previewOnlyError) {
+    const warnings = [];
+    const added = [];
+    const github = {
+      rest: {
+        issues: {
+          createLabel: async ({ name }) => {
+            if (name === PREVIEW_ONLY && previewOnlyError) throw previewOnlyError;
+          },
+          addLabels: async ({ labels }) => added.push(...labels),
+        },
+      },
+    };
+    const context = {
+      repo: { owner: "owner", repo: "repo" },
+      payload: { pull_request: { number: 7, base: { ref: "feature/x" } } },
+    };
+    const core = { warning: (m) => warnings.push(String(m)) };
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    await new AsyncFunction("github", "context", "core", step())(github, context, core);
+    return { warnings, added };
+  }
+
+  const BODY = "body-text-that-must-not-be-logged";
+
+  test("already_exists is silent", async () => {
+    const err = Object.assign(new Error(BODY), {
+      status: 422,
+      response: { data: { message: BODY, errors: [{ resource: "Label", code: "already_exists", field: "name" }] } },
+    });
+    const { warnings, added } = await run(err);
+    expect(warnings).toEqual([]);
+    expect(added).toEqual(["cms/draft", PREVIEW_ONLY]);
+  });
+
+  test("a validation 422 warns with the status code and nothing from the body", async () => {
+    const err = Object.assign(new Error(BODY), {
+      status: 422,
+      response: { data: { message: BODY, errors: [{ resource: "Label", code: "invalid", field: "description" }] } },
+    });
+    const { warnings, added } = await run(err);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("HTTP 422");
+    expect(warnings[0]).not.toContain(BODY);
+    expect(added).toEqual(["cms/draft", PREVIEW_ONLY]);
+  });
+
+  test("a server error warns with its status code", async () => {
+    const { warnings } = await run(Object.assign(new Error(BODY), { status: 500 }));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("HTTP 500");
+    expect(warnings[0]).not.toContain(BODY);
+  });
+
+  test("no error, no warning", async () => {
+    expect((await run(null)).warnings).toEqual([]);
+  });
+});
