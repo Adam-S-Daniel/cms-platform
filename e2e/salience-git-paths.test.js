@@ -22,7 +22,7 @@ const path = require("node:path");
 const { createSandbox } = require("./git-fixture");
 const { runDetect } = require("./detect-changed-pages");
 const { getChangedFiles } = require("./select-specs");
-const { findRunSteps, runStep } = require("./workflow-step-harness");
+const { findRunSteps, writeStubs, runStep } = require("./workflow-step-harness");
 
 const SALIENT_CLI = path.join(__dirname, "visual-regression-salient.js");
 
@@ -210,17 +210,28 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
     return work;
   }
 
-  function decide(workflowFile, stepName, work) {
+  // Runs the step and returns the raw result. `stubs` (name -> sh body) are
+  // put first on PATH; mktemp files land in a private TMPDIR returned as
+  // `tmp` so a leak is observable.
+  function execute(workflowFile, stepName, work, stubs = {}) {
     const [found] = findRunSteps(() => true).filter(
       (f) => f.workflow === workflowFile && f.step.name === stepName,
     );
     expect(found, `${workflowFile} has a step named ${stepName}`).toBeTruthy();
+    const tmp = path.join(sb.root, "tmp");
+    fs.mkdirSync(tmp, { recursive: true });
+    const bin = writeStubs(path.join(sb.root, "stubs"), stubs);
     const r = runStep(found.step, {
       cwd: work,
       scratch: path.join(sb.root, `run-${found.job}`),
-      env: { ...sb.env, PATH: `${path.dirname(process.execPath)}:${sb.env.PATH}` },
+      env: { ...sb.env, TMPDIR: tmp, PATH: `${bin}:${path.dirname(process.execPath)}:${sb.env.PATH}` },
       stepEnv: { BASE: "main", BASE_REF: "main" },
     });
+    return { ...r, tmp };
+  }
+
+  function decide(workflowFile, stepName, work) {
+    const r = execute(workflowFile, stepName, work);
     expect(r.status, `exit status; stderr: ${r.stderr}`).toBe(0);
     return r.output.trim();
   }
@@ -262,6 +273,27 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
     const work = checkoutAfter({ "README.md": "edited\n", "_config.yml": "title: x\n" });
     expect(decide(...MEDIA, work)).toBe("salient=true");
   });
+
+  test("preview-media: removes its temp file", () => {
+    const work = checkoutAfter({ "_config.yml": "title: x\n" });
+    const r = execute(...MEDIA, work);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.readdirSync(r.tmp)).toEqual([]);
+  });
+
+  // grep exits 1 for "no match" and 2+ when it FAILED; only 1 is "not
+  // salient". A failed grep reading as not salient lets a media-salient PR
+  // skip the required probe.
+  for (const rc of [2, 127]) {
+    test(`preview-media: a grep that fails (exit ${rc}) fails the step closed, no salient= output`, () => {
+      const work = checkoutAfter({ "assets/images/uploads/new.png": "img\n" });
+      const r = execute(...MEDIA, work, { grep: `exit ${rc}` });
+      expect(r.status, "must not report success").not.toBe(0);
+      expect(r.output).toBe("");
+      expect(r.stdout).toContain("::error title=preview-media::");
+      expect(fs.readdirSync(r.tmp), "temp file removed on the failure path too").toEqual([]);
+    });
+  }
 
   test("preview-media: a post edit with an odd name stays non-salient", () => {
     const work = checkoutAfter({ "_posts/2026-02-02-crème brûlée.md": "post\n" });

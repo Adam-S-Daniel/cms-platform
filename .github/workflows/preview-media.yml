@@ -165,6 +165,7 @@ jobs:
           # destination, so moving `_layouts/post.html` elsewhere read as
           # non-salient.
           changed_z=$(mktemp)
+          trap 'rm -f "$changed_z"' EXIT
           if ! git diff --name-only -z --no-renames "origin/${BASE_REF}...HEAD" > "$changed_z"; then
             msg="preview-media could not compute the changed-file set against origin/${BASE_REF} (git diff exited non-zero). Failing the required gate CLOSED so a media-salient PR cannot merge without the preview probe. This indicates a CI/environment problem (e.g. git safe.directory), not a content issue — re-run the job; if it persists, investigate the workflow."
             echo "::error title=preview-media::${msg}"
@@ -182,15 +183,24 @@ jobs:
           # grep — that script is platform-owned and can never appear in
           # a site PR diff, so an anchor for it here would be dead weight.
           # `grep -z` reads the NUL records; the file operand (not a pipe)
-          # keeps `-q` from racing the writer.
-          if grep -Ezq \
+          # keeps `-q` from racing the writer. Three statuses, not two:
+          # 0 = a salient path, 1 = none, anything else = grep itself failed,
+          # which must fail the gate CLOSED, not read as "not salient".
+          grep_rc=0
+          grep -Ezq \
             '^(assets/images/uploads/|admin/config(-local)?\.yml$|_config\.yml$|_layouts/(post|canary)\.html$)' \
-            "$changed_z"; then
+            "$changed_z" || grep_rc=$?
+          if [ "$grep_rc" -eq 0 ]; then
             echo "salient=true" >> "$GITHUB_OUTPUT"
             echo "Media-salient change detected — running the preview probe."
-          else
+          elif [ "$grep_rc" -eq 1 ]; then
             echo "salient=false" >> "$GITHUB_OUTPUT"
             echo "No media-salient change — preview-media gate not applicable; reporting success."
+          else
+            msg="preview-media could not classify the changed-file set (grep exited ${grep_rc}). Failing the required gate CLOSED so a media-salient PR cannot merge without the preview probe. Re-run the job; if it persists, investigate the workflow."
+            echo "::error title=preview-media::${msg}"
+            echo "$msg" | tee /tmp/preview-media.log
+            exit 1
           fi
 
       - name: Install harness deps
