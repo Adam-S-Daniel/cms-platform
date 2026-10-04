@@ -515,18 +515,25 @@ test.describe("#412 — the branch binding is stated once, from the config", () 
     ).toBe(true);
   });
 
-  // The gate banner always describes the canonical destination, including
-  // when read from a preview. The shared hostname helper owns that identity.
-  test("site-gate-banner.js names the canonical host through CMSHostname", () => {
+  // The gate banner names the host whose gate it read (#528): the canonical
+  // production host for the production branch, the served preview host for a
+  // preview branch. The shared hostname helper owns both identities; the
+  // behavior is pinned in e2e/site-gate-banner.test.js.
+  test("site-gate-banner.js names its host through CMSHostname", () => {
     const src = admin(GATE_BANNER);
     expect(
       readsMember(src, "window", "CMSHostname"),
       "site-gate-banner.js must read the shared CMSHostname identity",
     ).toBe(true);
     expect(
-      callsInsideFunction(src, "render").has("canonical"),
-      "site-gate-banner.js render() must call CMSHostname.canonical() so preview copy still names " +
-        "the configured publishing destination (#412)",
+      callsInsideFunction(src, "render").has("siteName"),
+      "site-gate-banner.js render() must name the site through siteName()",
+    ).toBe(true);
+    const named = callsInsideFunction(src, "siteName");
+    expect(
+      named.has("canonical") && named.has("destination"),
+      "siteName() must call CMSHostname.canonical() for the production branch and " +
+        "CMSHostname.destination() for a preview (#528)",
     ).toBe(true);
   });
 });
