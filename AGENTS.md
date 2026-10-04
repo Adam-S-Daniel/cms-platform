@@ -189,8 +189,8 @@ Self-explanatory by name: `.github/workflows/`, `scripts/`, `infrastructure/`,
 - **`e2e/` deps install via `cd e2e && npm ci`** (`e2e/package-lock.json` is
   tracked); CloudFront-Function specs simulate `Fn::Sub` with a synthetic
   `example.test` apex. **AST always, never regex, for code-shape lints** —
-  `e2e/spec-ast.js` for JS, `e2e/workflow-yaml-utils.js` for workflows. →
-  `docs/CONTRIBUTING.md`.
+  `e2e/spec-ast.js` for JS, `e2e/workflow-yaml-utils.js` for workflows — and
+  **a lint forbidding a token must not read comments**. → `docs/CONTRIBUTING.md`.
 
 ## Admin delivery (gem-shipped, v0.1.4+)
 
@@ -212,7 +212,8 @@ with no error in `/admin`. All five phases shipped in **v0.1.96**
 derivation `entry-status-model.js`). Rules that outlive them: no shim paints a
 `position: fixed` overlay over the toolbar (§2.3); a banner on the editor route
 needs `cms-notice-band` (#412); a re-arm removes the label first; hiding a
-control RETARGETS selectors matching it by ROLE AND NAME; every GitHub GET
+control RETARGETS selectors matching it by ROLE AND NAME; `mergeable` is absent
+from the `/pulls` LIST response (§4); every GitHub GET
 under `theme/admin/` passes `cache: "no-cache"` (#386); a spec publishes ONE
 entry per page (#342). Incidents → `docs/PUBLISHING-UX.md` §2.3, §4.
 

@@ -156,8 +156,9 @@ Proven on PR 3941: diffing the two `_site` trees gave exactly the new post,
 
 ## Defects found that outlive the shelving
 
-None was fixed as of 2026-10-03. Each stands on its own, with or without the
-lane, and each has its own tracker in the owning repository, where its fix and
+As of 2026-10-04 none is closed: one has a fix on `main` awaiting release and
+consumer verification (marked in its row), and the rest are unfixed. Each stands
+on its own, with or without the lane, and each has its own tracker in the owning repository, where its fix and
 evidence belong
 ([cms-platform#529](https://github.com/Adam-S-Daniel/cms-platform/issues/529)
 groups them).
@@ -167,7 +168,7 @@ groups them).
 | Quoted paths reach the salience check | `visual-regression.yml` `detect`, `e2e/detect-changed-pages.js` | A salient file with a non-ASCII name reads as non-salient. Harmless so far only because the affected names were under `_posts/`. | [cms-platform#539](https://github.com/Adam-S-Daniel/cms-platform/issues/539) |
 | Site verifier is mostly unarmed | jodidaniel.com `scripts/verify-build-artifacts.rb` | With the gate closed, most assertion groups print "did NOT run"; they run only on a tree with `site_live: true`. | [jodidaniel.com#306](https://github.com/jodidaniel/jodidaniel.com/issues/306) |
 | Site verify is a no-op | adamdaniel.ai `site-verify` | The site has no verifier script, so the required check succeeds in about 7 s without building. | [adamdaniel.ai#3970](https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3970) |
-| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolls the whole page on a phone, and an author cannot fix it from the CMS. | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
+| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolled the whole page on a phone, and an author could not fix it from the CMS. **Rule added on `main` by [cms-platform#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555) (unreleased); [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) stays open for consumer verification.** | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
 | Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
 
 Also noted: neither consumer has a `tests/` directory, though jodidaniel.com's

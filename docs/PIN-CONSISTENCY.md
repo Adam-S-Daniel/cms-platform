@@ -314,7 +314,11 @@ at `v0.1.87` with `platform_ref` agreeing, so the VALUES are consistent. But the
 platform is at `v0.1.88` and both consumers are already there, moved by
 `platform-bump.yml` — which never targets these seven. They are a release behind
 again, one release after the hand-bump, exactly as #283 predicted. The hand-bump
-fixed the values; nothing fixed the mechanism, and that is why #283 stays open.
+fixed the values; nothing fixed the mechanism. #283 was nonetheless closed on
+2026-08-20 without a fleet fix: the check below shipped, but no fleet repo
+adopted it, so the half-bump stayed live in every two-ref caller. The mechanism
+was removed only later, by #424, for `scheduled-run-health.yml` — see
+[`docs/FLEET-CALLER-CURRENCY.md`](FLEET-CALLER-CURRENCY.md).
 
 ### The check
 
