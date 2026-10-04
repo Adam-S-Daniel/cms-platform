@@ -5,6 +5,7 @@ const { publishedSwitch } = require("./cms-editor-ui");
 const YAML = require("yaml");
 const path = require("node:path");
 const { guard } = require("./base-collections-guards");
+const cap = require("./site-capabilities");
 // SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source signal).
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
@@ -38,7 +39,7 @@ const SEED_POST_TITLE = "Replacement test post 1";
 const RESERVED_PREVIEW_ORIGIN = "https://preview-pr0.example.com";
 const RESERVED_CANONICAL_HOST = "example.com";
 const PREVIEW_PROBE_BRANCH = "preview-hostname-browser-probe";
-const PDF_FIELD_NAMES = ["pdf_archive_file", "pdf_public", "pdf_label"];
+const PDF_FIELD_NAMES = cap.ARCHIVED_PDF_FIELD_NAMES;
 const AUTHORED_HOST_TOKEN = "Authored {{CMS_CURRENT_HOST}}";
 const PDF_ARCHIVE_HINT =
   'Optional. Enter the PDF file name from the private media archive, for example "example-article.pdf". Leave blank when there is no archived copy. The site maintainer adds files to the private archive separately.';
@@ -544,10 +545,25 @@ test.describe(
       expect(configResponse.ok(), "rendered /admin/config.yml should be readable").toBe(true);
       const configSource = await configResponse.text();
       const collection = archivedPdfCollection(configSource);
-      test.skip(
-        !collection,
-        "rendered config does not opt a collection into archived_pdf_fields",
-      );
+      if (!collection) {
+        // #527: absence is a legitimate SKIP only for a site that does not opt
+        // in. On the local target the rendered config is built from this very
+        // SITE_ROOT, so a seam that DECLARES the shared PDF fields while the
+        // render carries none is a lost opt-in — fail it, never skip it. (A
+        // deployed target may lag the checked-out source, so it keeps the skip.)
+        const declared = cap.archivedPdfSourceCollections(SITE_ROOT);
+        const local = (process.env.TARGET || "local").toLowerCase() === "local";
+        expect(
+          local ? declared : [],
+          `${path.join(SITE_ROOT, "admin", "collections.site.yml")} opts ` +
+            `${declared.join(", ")} into archived_pdf_fields, but the rendered ` +
+            `/admin/config.yml has no folder collection carrying ${PDF_FIELD_NAMES.join(", ")} (#527)`,
+        ).toEqual([]);
+        test.skip(
+          true,
+          "this site's admin/collections.site.yml opts no collection into archived_pdf_fields (a non-PDF consumer)",
+        );
+      }
 
       const { currentHost } = await loadPreviewPdfEditor(
         page,

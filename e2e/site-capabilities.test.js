@@ -12,7 +12,10 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const os = require("node:os");
+const walk = require("acorn-walk");
 const cap = require("./site-capabilities");
+const { parse, calleeName, stringValue } = require("./spec-ast");
 
 const HARNESS = __dirname;
 const FULL = path.join(HARNESS, "fixture-site");
@@ -92,5 +95,124 @@ test.describe("site-capabilities: posts/source content", () => {
   test("full fixture has _posts; opted-out fixture does not", () => {
     expect(cap.hasSourcePosts(FULL)).toBe(true);
     expect(cap.hasSourcePosts(SINGLEPAGE)).toBe(false);
+  });
+});
+
+// ── #527: the platform coverage fixture must exercise the shared PDF fields ──
+//
+// The archived-PDF browser test in cms-editorial-workflow.spec.js used to call
+// test.skip whenever the rendered config had no opted-in collection — and the
+// platform fixture had none, so every run skipped it silently. The full fixture
+// now opts `articles` in through its own seam; these lints keep it that way and
+// keep the spec from sliding back to a silent skip.
+test.describe("site-capabilities: archived_pdf_fields opt-in (#527)", () => {
+  function seamSite(seam) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pdf-seam-"));
+    fs.mkdirSync(path.join(dir, "admin"));
+    if (seam != null) fs.writeFileSync(path.join(dir, "admin", "collections.site.yml"), seam);
+    return dir;
+  }
+
+  test("full fixture opts a folder collection into the shared PDF fields", () => {
+    expect(
+      cap.archivedPdfSourceCollections(FULL),
+      "e2e/fixture-site/admin/collections.site.yml must opt a folder collection into " +
+        `${cap.ARCHIVED_PDF_FIELDS_REF} — without it the archived-PDF browser test has ` +
+        "nothing to drive on the platform fixture (#527)",
+    ).toEqual(["articles"]);
+  });
+
+  test("opted-out fixture stays a NON-PDF consumer (its notes collection has no PDF fields)", () => {
+    expect(cap.archivedPdfSourceCollections(SINGLEPAGE)).toEqual([]);
+  });
+
+  test("the predicate reads a $ref opt-in, an inline opt-in, and nothing else", () => {
+    const ref = seamSite(
+      [
+        "  - name: articles",
+        "    folder: _articles",
+        "    fields:",
+        "      - { name: title, widget: string }",
+        `      - $ref: "${cap.ARCHIVED_PDF_FIELDS_REF}"`,
+        "",
+      ].join("\n"),
+    );
+    const inline = seamSite(
+      [
+        "  - name: media",
+        "    folder: _media",
+        "    fields:",
+        ...cap.ARCHIVED_PDF_FIELD_NAMES.map((n) => `      - { name: ${n}, widget: string }`),
+        "",
+      ].join("\n"),
+    );
+    const partial = seamSite(
+      [
+        "  - name: notes",
+        "    folder: _notes",
+        "    fields:",
+        "      - { name: pdf_public, widget: boolean }",
+        "",
+      ].join("\n"),
+    );
+    const fileCollection = seamSite(
+      [
+        "  - name: settings",
+        "    files:",
+        "      - { name: s, file: _data/s.yml, fields: [] }",
+        "    fields:",
+        `      - $ref: "${cap.ARCHIVED_PDF_FIELDS_REF}"`,
+        "",
+      ].join("\n"),
+    );
+    const none = seamSite(null);
+    try {
+      expect(cap.archivedPdfSourceCollections(ref)).toEqual(["articles"]);
+      expect(cap.archivedPdfSourceCollections(inline)).toEqual(["media"]);
+      expect(cap.archivedPdfSourceCollections(partial)).toEqual([]);
+      expect(cap.archivedPdfSourceCollections(fileCollection)).toEqual([]);
+      expect(cap.archivedPdfSourceCollections(none)).toEqual([]);
+    } finally {
+      for (const d of [ref, inline, partial, fileCollection, none]) {
+        fs.rmSync(d, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // AST, not regex: which calls sit inside which `if` is code SHAPE.
+  test("the archived-PDF browser test skips only after asserting the site declared no opt-in", () => {
+    const src = fs.readFileSync(path.join(HARNESS, "cms-editorial-workflow.spec.js"), "utf8");
+    let callback = null;
+    walk.full(parse(src), (node) => {
+      if (node.type !== "CallExpression" || calleeName(node.callee) !== "test") return;
+      const title = stringValue(node.arguments[0]) || "";
+      if (title.startsWith("opted-in archived PDF fields")) callback = node.arguments.at(-1);
+    });
+    expect(callback, "cms-editorial-workflow.spec.js lost its archived-PDF test").not.toBeNull();
+
+    const skips = [];
+    walk.ancestor(callback, {
+      CallExpression(node, ancestors) {
+        if (calleeName(node.callee) === "test.skip") skips.push({ node, ancestors: [...ancestors] });
+      },
+    });
+    expect(skips.length, "the archived-PDF test must keep its non-PDF-consumer skip").toBeGreaterThan(0);
+    for (const { node, ancestors } of skips) {
+      const where = `test.skip at line ${node.loc.start.line}`;
+      const guard = [...ancestors].reverse().find((a) => a.type === "IfStatement");
+      expect(guard, `${where} must sit inside the absence branch, not run unconditionally`).toBeTruthy();
+      const before = [];
+      walk.full(guard.consequent, (n) => {
+        if (n.type === "CallExpression" && n.start < node.start) before.push(calleeName(n.callee));
+      });
+      expect(
+        before.some((name) => name && name.endsWith("archivedPdfSourceCollections")),
+        `${where} must be preceded by cap.archivedPdfSourceCollections(SITE_ROOT) — a site that ` +
+          "declares the shared PDF fields must FAIL when the render drops them, not skip (#527)",
+      ).toBe(true);
+      expect(before, `${where} must be preceded by an expect() on the declared opt-ins`).toContain(
+        "expect",
+      );
+    }
   });
 });
