@@ -54,10 +54,18 @@
  * friends, and `Promise.allSettled`, whose results must be bound and reported
  * on. A callback that cannot be resolved, or a promise that flows somewhere
  * this cannot follow (an argument, an array, a function's return), fails
- * closed. A handler's core.warning/error/setFailed may also log only the
- * HTTP status and a bounded type: the arguments are checked against the
- * caught error's bindings (and locals derived from them), so message,
- * response and body access fail. Not followed: a function that awaits the
+ * closed. A handler's console.log/error/warn and
+ * core.warning/info/notice/error/setFailed/setOutput may also emit only the
+ * HTTP status and a bounded type, as may a newly thrown error (direct
+ * rethrows of an unreassigned caught binding are preserved): arguments are
+ * checked against the caught error's bindings (and locals derived from them),
+ * so message,
+ * response and body access fail. Simple local aliases, assignments, member
+ * assignments and array push/unshift/splice propagate taint to a fixed point.
+ * This is conservative across branches, order and alias types, and safe
+ * reassignment does not clear taint; arbitrary mutators, dynamic sink methods,
+ * function calls and aliases through nested object properties are not followed.
+ * Not followed: a function that awaits the
  * call and propagates, whose callers swallow it (every handler here is
  * top-level).
  * Repo scripts that create OTHER labels (scripts/gate-approval-issue.js's
@@ -274,6 +282,11 @@ function leakedRefs(node, tainted, out = []) {
       leakedRefs(node.callee, tainted, out);
       each(node.arguments);
       return out;
+    case "NewExpression":
+      // A wrapped error exposes its arguments, with the same bounded rules
+      // as a report call; a conditional's test is not constructor output.
+      each(node.arguments);
+      return out;
     case "LogicalExpression":
       // `e && x` yields `e` itself only when it is falsy, never an error object.
       if (node.operator === "&&" && node.left.type === "Identifier" && tainted.has(node.left.name)) {
@@ -320,7 +333,9 @@ function leakedRefs(node, tainted, out = []) {
 
 // The names in a handler that can carry the caught error: its parameters
 // (except a destructured `status`) and, to a fixed point, every local whose
-// initializer or assignment exposes one.
+// initializer, assignment or modeled array mutation exposes one. Simple
+// identifier aliases share mutation taint in both directions. This is a
+// conservative fixed point, not execution-order or interprocedural analysis.
 function taintedNames(handler) {
   const tainted = new Set();
   for (const param of handler.type === "CatchClause" ? [handler.param] : handler.params) {
@@ -332,17 +347,40 @@ function taintedNames(handler) {
     } else patternNames(param).forEach((n) => tainted.add(n));
   }
   const flows = [];
+  const aliases = [];
+  const targetNames = (target) => {
+    while (target.type === "MemberExpression") target = target.object;
+    return patternNames(target);
+  };
   walk.full(handler.body, (n) => {
-    if (n.type === "VariableDeclarator" && n.init) flows.push([n.id, n.init]);
-    else if (n.type === "AssignmentExpression") flows.push([n.left, n.right]);
+    let target, source;
+    if (n.type === "VariableDeclarator" && n.init) [target, source] = [n.id, n.init];
+    else if (n.type === "AssignmentExpression") [target, source] = [n.left, n.right];
+    if (target) {
+      flows.push([targetNames(target), source]);
+      if (target.type === "Identifier" && source.type === "Identifier") aliases.push([target.name, source.name]);
+    }
+    if (n.type === "CallExpression" && n.callee.type === "MemberExpression") {
+      const c = n.callee;
+      const method = c.computed ? staticString(c.property) : c.property.name;
+      if (["push", "unshift", "splice"].includes(method)) {
+        // All splice arguments are conservative: indices are normally bounded.
+        for (const arg of n.arguments) flows.push([targetNames(c.object), arg]);
+      }
+    }
   });
   for (let changed = true; changed; ) {
     changed = false;
     for (const [target, source] of flows) {
-      const names = patternNames(target).filter((n) => !tainted.has(n));
+      const names = target.filter((n) => !tainted.has(n));
       if (names.length && leakedRefs(source, tainted).length) {
         names.forEach((n) => tainted.add(n));
         changed = true;
+      }
+    }
+    for (const pair of aliases) {
+      if (pair.some((n) => tainted.has(n))) for (const name of pair) {
+        if (!tainted.has(name)) { tainted.add(name); changed = true; }
       }
     }
   }
@@ -350,21 +388,33 @@ function taintedNames(handler) {
 }
 
 // Whether `body` reports (throws, or calls core.warning/error/setFailed) and
-// every report call's arguments, as { reports, leaks: [string] }. A nested
+// every output sink's arguments, as { reports, leaks: [string] }. Lower-level
+// logging and setOutput are checked but do not satisfy failure reporting. A nested
 // function is not counted unless `intoFunctions`: an uncalled function that
 // reports swallows the failure just as an empty handler does.
-function scanReports(body, tainted, intoFunctions) {
+function scanReports(body, tainted, intoFunctions, rethrowNames = new Set()) {
   let reports = false;
   const leaks = [];
   const visitors = {
-    ThrowStatement() { reports = true; },
+    ThrowStatement(node, state, visit) {
+      reports = true;
+      // Preserve direct propagation of the unreassigned caught error. A derived
+      // local or constructed error is output and must obey the bounded policy.
+      if (!(node.argument.type === "Identifier" && rethrowNames.has(node.argument.name))) {
+        const refs = leakedRefs(node.argument, tainted);
+        if (refs.length) leaks.push(`line ${node.loc.start.line}: throw exposes ${[...new Set(refs)].join(", ")}`);
+      }
+      walk.base.ThrowStatement(node, state, visit);
+    },
     CallExpression(node, state, visit) {
       const c = node.callee;
-      if (c.type === "MemberExpression" && !c.computed && c.object.type === "Identifier" &&
-          c.object.name === "core" && ["warning", "error", "setFailed"].includes(c.property.name)) {
-        reports = true;
+      const method = c.type === "MemberExpression" && (c.computed ? staticString(c.property) : c.property.name);
+      if (c.type === "MemberExpression" && c.object.type === "Identifier" &&
+          ((c.object.name === "core" && ["warning", "error", "setFailed", "setOutput", "info", "notice"].includes(method)) ||
+           (c.object.name === "console" && ["log", "error", "warn"].includes(method)))) {
+        if (c.object.name === "core" && ["warning", "error", "setFailed"].includes(method)) reports = true;
         const refs = node.arguments.flatMap((a) => leakedRefs(a, tainted));
-        if (refs.length) leaks.push(`line ${node.loc.start.line}: core.${c.property.name}() logs ${[...new Set(refs)].join(", ")}`);
+        if (refs.length) leaks.push(`line ${node.loc.start.line}: ${c.object.name}.${method}() logs ${[...new Set(refs)].join(", ")}`);
       }
       walk.base.CallExpression(node, state, visit);
     },
@@ -381,7 +431,17 @@ const UNFOLLOWED = "createLabel promise flows somewhere this lint cannot follow"
 // Problems with one failure handler (a catch clause, or a promise callback
 // function): none when it reports and logs only the status and a bounded type.
 function handlerProblems(handler) {
-  const { reports, leaks } = scanReports(handler.body, taintedNames(handler), false);
+  const params = handler.type === "CatchClause" ? [handler.param] : handler.params;
+  const rethrowNames = new Set(params.filter((p) => p && p.type === "Identifier").map((p) => p.name));
+  // The spelling still names a parameter after replacement, but no longer
+  // necessarily holds the original error. Member writes preserve the binding.
+  walk.full(handler.body, (node) => {
+    const target = node.type === "AssignmentExpression" ? node.left :
+      node.type === "UpdateExpression" ? node.argument :
+      node.type === "VariableDeclarator" && node.init ? node.id : null;
+    for (const name of patternNames(target)) rethrowNames.delete(name);
+  });
+  const { reports, leaks } = scanReports(handler.body, taintedNames(handler), false, rethrowNames);
   if (leaks.length) return leaks.map((l) => `${LEAK} (${l}); never log its message, response or body`);
   return reports ? [] : ["createLabel failure is silently caught"];
 }
@@ -1011,6 +1071,95 @@ test.describe("a createLabel failure handler logs only the status and a bounded 
   for (const [shape, script] of BOUNDED) {
     test(`allows ${shape}`, () => {
       expect(analyzeScript(script, "t").problems).toEqual([]);
+    });
+  }
+});
+
+// Residual sinks and mutation flows from the independent review of #575.
+test.describe("createLabel handler residual error leaks", () => {
+  const create = "await github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' });";
+  const inCatch = (body) => `try { ${create} } catch (e) { ${body} }`;
+  const leak = /logs more than the HTTP status and a bounded type/;
+  const sinks = ["console.log", "console.error", "console.warn", "core.setOutput", "core.info", "core.notice", "core.error", "core.setFailed"];
+  const args = (sink, value) => sink === "core.setOutput" ? `'failure', ${value}` : value;
+
+  for (const sink of sinks) {
+    for (const value of ["e.message", "String(e)", "e.stack", "`failed ${e}`"]) {
+      test(`rejects residual sink ${sink} with ${value}`, () => {
+        expect(analyzeScript(inCatch(`core.warning('failed'); ${sink}(${args(sink, value)});`), "t").problems.join("\n")).toMatch(leak);
+      });
+    }
+    test(`allows residual sink ${sink} with bounded status and type`, () => {
+      const value = "`HTTP ${e.status}; ${e.name === 'HttpError' ? 'HttpError' : 'Error'}`";
+      expect(analyzeScript(inCatch(`core.warning('failed'); ${sink}(${args(sink, value)});`), "t").problems).toEqual([]);
+    });
+  }
+  for (const sink of ["console.log", "console.error", "console.warn", "core.setOutput", "core.info", "core.notice"]) {
+    test(`does not treat ${sink} as a failure report`, () => {
+      expect(analyzeScript(inCatch(`${sink}(${args(sink, "'fixed'")});`), "t").problems.join("\n")).toMatch(/silently caught/);
+    });
+  }
+  for (const [sink, args] of [
+    ["console['error']", "e.message"],
+    ["core['setOutput']", "'failure', e.message"],
+    ["core['warning']", "e.message"],
+  ]) {
+    test(`rejects residual computed sink ${sink}`, () => {
+      expect(analyzeScript(inCatch(`core.warning('failed'); ${sink}(${args});`), "t").problems.join("\n")).toMatch(leak);
+    });
+    test(`allows residual computed sink ${sink} with bounded arguments`, () => {
+      const bounded = sink === "core['setOutput']" ? "'failure', e.status" : "e.status";
+      expect(analyzeScript(inCatch(`core.warning('failed'); ${sink}(${bounded});`), "t").problems).toEqual([]);
+    });
+  }
+  test("counts residual computed core warning as a failure report", () => {
+    expect(analyzeScript(inCatch("core['warning'](`HTTP ${e.status}`);"), "t").problems).toEqual([]);
+  });
+  for (const [shape, body] of [
+    ["new Error message", "throw new Error(e.message);"],
+    ["new Error template", "throw new Error(`failed ${e.message}`);"],
+    ["new Error options", "throw new Error('failed', { cause: e });"],
+    ["new Error local", "const wrapped = new Error(e.message); throw wrapped;"],
+    ["message alias in new Error", "const m = e.message; throw new Error(m);"],
+    ["replaced catch binding with new Error", "e = new Error(e.message); throw e;"],
+    ["replaced catch binding with message", "e = e.message; throw e;"],
+    ["initialized catch binding declaration", "var e = new Error(e.message); throw e;"],
+    ["updated catch binding", "e++; throw e;"],
+    ["console later argument", "core.warning('failed'); console.log('failed', e.message);"],
+    ["array push", "const parts = []; parts.push(e.message); core.warning(parts.join(' '));"],
+    ["array alias push", "const parts = []; const copy = parts; copy.push(e.message); core.warning(parts.join(' '));"],
+    ["array unshift", "const parts = []; parts.unshift(e.message); core.warning(parts.join(' '));"],
+    ["array splice", "const parts = []; parts.splice(0, 0, e.message); core.warning(parts.join(' '));"],
+    ["array member assignment", "const parts = []; parts[0] = e.message; core.warning(parts.join(' '));"],
+    ["object member assignment", "const detail = {}; detail.text = e.message; core.warning(detail.text);"],
+    ["message compound assignment", "let msg = 'failed'; msg += e.message; core.warning(msg);"],
+    ["message alias", "const m = e.message; core.warning(m);"],
+  ]) {
+    test(`rejects residual flow ${shape}`, () => {
+      expect(analyzeScript(inCatch(body), "t").problems.join("\n")).toMatch(leak);
+    });
+  }
+  for (const [shape, body] of [
+    ["new Error status", "throw new Error(`HTTP ${e.status}`);"],
+    ["new Error numeric coercion", "throw new Error(`code ${Number(e.code)}`);"],
+    ["new Error fixed conditional", "throw new Error(e.message ? 'has detail' : 'no detail');"],
+    ["new Error bounded local", "const wrapped = new Error(`HTTP ${e.status}`); throw wrapped;"],
+    ["direct rethrow", "throw e;"],
+    ["direct rethrow after unrelated assignment", "let count = 0; count += 1; throw e;"],
+    ["direct rethrow after member assignment", "e.status = 500; throw e;"],
+    ["uninitialized catch binding declaration", "var e; throw e;"],
+    ["fixed warning after unrelated assignment", "let unrelated = 'fixed'; unrelated = 'other'; core.warning('failed');"],
+    ["array push bounded status", "const parts = []; parts.push(e.status); core.warning(parts.join(' '));"],
+    ["array alias push bounded type", "const parts = []; const copy = parts; copy.push(e.name === 'HttpError' ? 'HttpError' : 'Error'); core.warning(parts.join(' '));"],
+    ["array unshift bounded status", "const parts = []; parts.unshift(e.status); core.warning(parts.join(' '));"],
+    ["array splice bounded status", "const parts = []; parts.splice(0, 0, e.status); core.warning(parts.join(' '));"],
+    ["array member assignment bounded status", "const parts = []; parts[0] = e.status; core.warning(parts.join(' '));"],
+    ["object member assignment bounded type", "const detail = {}; detail.text = e.name === 'HttpError' ? 'HttpError' : 'Error'; core.warning(detail.text);"],
+    ["compound assignment bounded status", "let msg = 'HTTP '; msg += e.status; core.warning(msg);"],
+    ["bounded status alias", "const status = e.status; const copy = status; core.warning(copy);"],
+  ]) {
+    test(`allows residual flow ${shape}`, () => {
+      expect(analyzeScript(inCatch(body), "t").problems).toEqual([]);
     });
   }
 });

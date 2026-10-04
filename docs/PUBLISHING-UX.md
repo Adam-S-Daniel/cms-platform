@@ -464,14 +464,38 @@ lint holds every `createLabel` handler to that (acorn AST, never a regex):
   argument, an array, a function's return). It does not follow a function
   that awaits the call and propagates, whose callers swallow it; every
   handler here is top-level.
-- **A warning logs only the HTTP status and a bounded type.** The arguments of
-  each report call are checked against the caught error's binding and every
-  local derived from it: only `.status` (also `.response.status`, and
+- **Handler output carries only the HTTP status and a bounded type.** Arguments of
+  `console.log`/`error`/`warn` and
+  `core.warning`/`info`/`notice`/`error`/`setFailed`/`setOutput` are checked,
+  including every argument and outputs beside a clean warning. The sinks
+  include static computed spellings such as `console['error']`. The added
+  sinks do not change the reporting rule above: an info message, notice,
+  console call or output alone still silently catches the failure.
+  Thrown expressions are checked too, including `new Error(e.message)` and
+  a constructed error stored in a local; direct `throw e` propagation of an
+  unreassigned caught binding remains allowed. Assignments, updates or
+  initialized declarations replacing that binding remove the exemption,
+  including `e = new Error(e.message); throw e`. Member writes such as
+  `e.status = 500` and uninitialized `var e` do not replace the binding.
+  Constructor arguments use the same bounded rules as logging arguments.
+  Output is checked against the caught error's binding and every local derived
+  from it: only `.status` (also `.response.status`, and
   `.reason.status` for an `allSettled` result), `Number(…)` of anything, and
   a choice between fixed strings are allowed. `e.message`, `e.response`, the
   body, the bare error, `String(e)`, `JSON.stringify(e)` and a local copied
   from them fail it. A conditional's test and comparisons are not logged, so
   they may read the error (the `already_exists` check does).
+  Simple local aliases, `msg += e.message`, member assignments and array
+  `push`/`unshift`/`splice` propagate taint, including mutation through an
+  identifier alias followed by output through the original array. This is a
+  conservative fixed point: it does not model execution order, unreachable
+  branches or whether an alias holds a primitive or an object, and does not
+  clear taint after a safe reassignment, so an overwritten caught name may
+  conservatively fail even when its replacement is bounded. It does not follow
+  arbitrary mutator calls, dynamic sink methods, transformations in another
+  function or aliases through nested object properties. It counts report syntax
+  and excludes uncalled nested function bodies; it makes no broader reachability
+  claim.
 
 `createLabel` never updates a label that already exists (it answers 422
 `already_exists`, which the step ignores), and no audit or sync in this repo
