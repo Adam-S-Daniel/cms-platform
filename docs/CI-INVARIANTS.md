@@ -1525,6 +1525,23 @@ with the prod-mutate loop, not with the lint's exit code.
   **0 sinks each** across 32 workflows apiece. A consumer thin caller that
   grows one is not caught here.
 
+The expression lexer (`interpolations`, `contextPaths`) lives in
+`e2e/gha-expression-lexer.js` since #536, shared with the trust-boundary lint
+below; the canaries in this lint still exercise it.
+
+## The contributor trust boundary: fork code never meets a secret (#536)
+
+A preview receives the editor's token, so the workflows that build PR code must
+never run it with secrets or a write token. `e2e/contributor-trust-boundary-lint.test.js`
+(platform, registered) and `e2e/consumer-contributor-trust-boundary-lint.test.js`
+(consumer, deliberately unregistered) hold it: no `pull_request_target`; under
+`workflow_run`, `issue_comment` and the other privileged contributor-fireable
+triggers a read-only token, no head checkout, no head data passed to a
+reusable, no artifact download; no `secrets: inherit` on a PR-reachable job; a
+declared `permissions:` map; PR-head checkouts pinned to `head.sha`. A reusable
+is judged under its callers' triggers. Policy and the fork trace:
+`docs/ADMIN-AUTH-SECURITY.md` § "Outside contributors and previews".
+
 ## Editorial-workflow label audit (v0.1.6; self-heal + label-at-creation v0.1.48)
 
 Decap re-runs its editorial-workflow label migration on **every** `/admin` load

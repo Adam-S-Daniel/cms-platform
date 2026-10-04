@@ -110,6 +110,84 @@ export ALLOWED_ORIGINS="https://<apex>,https://preview-*.<apex>"
 - The API has no CORS configuration: nothing fetches it cross-origin, and the
   Lambda is the one place the allowlist is enforced.
 
+## Outside contributors and previews ([#536](https://github.com/Adam-S-Daniel/cms-platform/issues/536))
+
+**Listing `https://preview-*.<apex>` trusts every preview's JavaScript with the
+editor's token.** An editor who signs in on a preview hands the token to the
+page, and the page is built from the PR's code. The token's scopes are
+`repo,read:user,workflow`, so that JavaScript can do anything the editor can:
+push to any branch, edit any workflow file, and merge where the editor may.
+`PREVIEW_SIGN_IN=disabled` (above) is the way to withhold that trust.
+
+**The rule: a preview for an outside contributor's PR never runs the PR's code
+with repository secrets.** Only someone who can push a branch to the site repo
+can get code onto a preview, so granting write access is the trust decision.
+How each kind of PR reaches the preview workflow (`deploy-preview.yml`, called
+from the site's thin caller on `pull_request`):
+
+| PR from | What runs | Why it cannot deploy a preview, or why it may |
+|---|---|---|
+| A fork (outside contributor) | Nothing until a maintainer approves the run (`approval_policy: all_external_contributors` in `repo-settings.yml`, all three repos). Approved, the PR's code builds. | GitHub gives a fork's `pull_request` run a read-only `GITHUB_TOKEN` and no repository secrets. The deploy role's ARN (`AWS_ROLE_ARN`) is itself a secret, so the step that assumes the AWS role has no role to assume, and nothing reaches the preview bucket. Approving the run lets it proceed; it does not grant secrets. |
+| Dependabot | Nothing: the deploy and teardown jobs skip `dependabot[bot]`. | Dependabot runs get only Dependabot secrets, and the preview is for a human reviewer. |
+| A branch in the site repo | The full build and deploy, with the role and `pull-requests: write`. | The author can already push to the repo and edit its workflows, so their code is trusted by the act of granting write access. Decap's `cms/*` branches are this case: they are pushed with the editor's own token. |
+
+A fork's PR can edit the thin caller itself, because a `pull_request` run uses
+the workflow files from the PR's merge commit. That is why the protection has to
+come from GitHub withholding secrets on the `pull_request` trigger. (Fork PRs
+get the same treatment on `pull_request_review` and
+`pull_request_review_comment`.) The triggers that do NOT withhold secrets but
+can still be fired by someone the repo never trusted are the privileged ones.
+None of them may bring untrusted code or data into a run that holds secrets:
+
+- **`pull_request_target`** runs the base repo's workflow with its secrets and
+  a write token for a fork's PR. Checking out the PR's head there runs fork
+  code with both. No workflow here or in the templates uses it, and the lint
+  bans it outright.
+- **`workflow_run`** also runs in the base repo's context, even when a fork's
+  run triggered it. `auto-resolve-newline-conflict.yml` is the one user: its
+  caller passes only the PR *number*, its token is read-only, it checks out
+  only the platform's own scripts, and the resolver skips any PR whose head
+  repo is not the base repo.
+- **`issue_comment`, `issues`, `discussion` and `discussion_comment`** run in
+  the base repo's context too, and any GitHub user can fire them on a public
+  repo. A "comment `/deploy` to preview" workflow that checks out
+  `refs/pull/<issue number>/head` is the classic pwn request. No workflow here
+  uses these triggers. **`fork`** and **`watch`** (starring) can also be fired
+  by anyone. They carry no code, but the run still holds secrets and a write
+  token, so they get the same rules.
+
+**What enforces it.** `e2e/contributor-trust-boundary-lint.test.js` (platform
+tree and `examples/site` templates, in self-CI) and
+`e2e/consumer-contributor-trust-boundary-lint.test.js` (a consumer's real
+callers, on the consumer's e2e lane) run the rules in
+`e2e/contributor-trust-boundary-rules.js`. Each reusable is judged under the
+triggers its callers give it, because pin-consistency's caller parity
+deliberately ignores `on:` and a consumer could otherwise move its preview
+caller to `pull_request_target` with every check green. The rules:
+`pull_request_target` is banned; a workflow a contributor can reach declares a
+`permissions:` map and nothing is `write-all`. A run on any privileged trigger
+above has no `write` token scope and checks out no PR or run head (in any
+spelling, including `refs/pull/`). It passes no head data to a reusable. It
+downloads no artifacts: no action whose name contains `download-artifact`, in
+any case. github-script bodies are read with acorn, destructured names
+included, and a `request()` route that is not a plain literal is denied. No
+job a contributor can reach uses `secrets: inherit`; and a checkout of the PR
+head pins `github.event.pull_request.head.sha`, never a branch name, which
+would resolve to whatever was pushed after a run was approved. It also asserts
+that `deploy-preview.yml` and every other reusable that checks out the PR head
+are called, and only from `pull_request`, and that `repo-settings.yml` keeps
+`approval_policy: all_external_contributors` for every repo.
+`${{ github.event.* }}` in a `run:` body is the injection lint's job
+([#261](https://github.com/Adam-S-Daniel/cms-platform/issues/261)).
+
+**What it cannot see.** Shell is not parsed, so a `run:` body that fetches
+`pull/N/head` or runs `gh run download` under a privileged trigger is
+invisible, as is a head ref laundered through a step output or `env:` before
+it reaches `ref:`. That is why `pull_request_target` is banned rather than
+pattern-checked. Both consumers' callers (adamdaniel.ai at `c639f2e`,
+jodidaniel.com at `e88dfe7`, 2026-10-04) were run through the rules against
+the platform's current reusables with no finding.
+
 ## One sign-in at a time, and the proxy's cookie
 
 [#537](https://github.com/Adam-S-Daniel/cms-platform/issues/537). The proxy
