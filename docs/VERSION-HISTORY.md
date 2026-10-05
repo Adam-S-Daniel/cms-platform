@@ -10,9 +10,28 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.130)
+## Version history (v0.1.0 → v0.1.131)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.131 — Decap's "Publish now" arms `cms/ready` instead of dead-ending, rearming tolerates a missing label, and browser diagnostics stay out of public logs.**
+On the production shell, Decap's own Publish dropdown stays on screen until the
+progress poller finds the entry's PR (up to 30 s after saving an existing
+entry), and its handler alerts `Please update status to "Ready"` with no Status
+control to fix it. `publish-button.js` now catches "Publish now" (and "…and
+create new" / "…and duplicate") in the capture phase and runs the platform's
+`cms/ready` route instead; the published-entry and Status dropdowns pass through
+([#608](https://github.com/Adam-S-Daniel/cms-platform/pull/608)). Rearming reads
+the PR's current labels uncached, skips the DELETE when `cms/ready` is absent and
+accepts a racing DELETE 404; the admin and review pages declare the theme's SVG
+icon so the browser no longer probes `/favicon.ico`, and the rejection comment
+field has a visible label ([#607](https://github.com/Adam-S-Daniel/cms-platform/pull/607)).
+The reusable workflows keep Playwright output in log artifacts and print only
+aggregate counts, so DOM text and unpublished content no longer reach public
+Actions logs; the label-handler lint follows sinks through `.bind`/`.call`/`.apply`
+([#601](https://github.com/Adam-S-Daniel/cms-platform/pull/601)). Also: faster
+node unit lints ([#609](https://github.com/Adam-S-Daniel/cms-platform/pull/609))
+and publish-latency tracker updates ([#602](https://github.com/Adam-S-Daniel/cms-platform/pull/602)).
 
 **v0.1.130 — an unpublished upload renders in the editor and Live Preview, and production 404s are no longer cacheable.**
 Decap treats the absolute `public_folder` (`/assets/images/uploads`) as a URL,
