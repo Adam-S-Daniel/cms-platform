@@ -10,9 +10,21 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.132)
+## Version history (v0.1.0 → v0.1.133)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.133 — stuck-PR triage checks the required contexts before calling a green-but-BLOCKED PR a caching bug, and leaves editors' own entries alone.**
+`cms-stuck-pr-triage` §3 now diffs the base branch's required contexts (rulesets
+plus classic protection) against the head sha's check runs and commit statuses,
+then looks for a withdrawn context (a `skipped` run whose bare name matches a
+required `X / Y` caller job), and reaches the GitHub merge-state caching diagnosis
+only when both come back clean: a required context with no publisher is a
+settings change for a human, and a withdrawn context needs a fresh push, not a
+nudge. §4's close of a `pending_publish` PR applies only to a loop-owned PR
+(labeled `automated-test`, or the unpublish canary branch); anything else is an
+editor's entry and is left alone
+([#614](https://github.com/Adam-S-Daniel/cms-platform/pull/614)).
 
 **v0.1.132 — an infrastructure redeploy keeps the deployed admin CSP mode, and platform CI runs the fixture site's browser specs.**
 `infrastructure/bootstrap/deploy.sh` no longer defaults `ADMIN_CSP_MODE` to
