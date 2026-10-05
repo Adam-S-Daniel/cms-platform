@@ -341,6 +341,10 @@
        window.LiveURL.slugify at save time. -->
   <script src="slug-pin.js" defer></script>
 
+  <!-- Tags box: Enter ends a tag, and a space after a comma no longer eats the
+       comma — cms-platform#638. Standalone: touches only the tags-field input. -->
+  <script src="tags-input.js" defer></script>
+
   <!-- "View page on site:" banner above the entry form. Reads form
        state from the DOM and renders a link (or placeholder when
        Published is OFF / no slug yet). Restored in #1042 — a past
