@@ -39,7 +39,11 @@ function commandWord(script, names) {
     .split("\n")
     .filter((l) => !/^\s*#/.test(l))
     .join("\n");
-  const re = new RegExp(`(?:^|[;&|(\`]|\\$\\()\\s*(${names})(?=\\s|$)`, "m");
+  // Optional `NAME=value ` prefixes (value bare, "double" or 'single' quoted,
+  // possibly continued with a backslash-newline) sit between the separator and
+  // the command word: `| RG_LOOP="$RG_LOOP" node -e ...`.
+  const assign = `(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\\s"'\`;&|()]*)(?:\\s|\\\\\\n)+)*`;
+  const re = new RegExp(`(?:^|[;&|(\`]|\\$\\()\\s*${assign}(${names})(?=\\s|$)`, "m");
   const m = code.match(re);
   return m ? m[1] : null;
 }
@@ -235,6 +239,21 @@ runs:
   expect(findUnpinnedRuntimes(composite).map((o) => o.word)).toEqual(["gem"]);
 });
 
+test("the command word is found after env assignments, whatever the separator", () => {
+  const word = (run, names = "node|npm|npx") => commandWord(run, names);
+  expect(word("echo 1 | FOO=1 node -e 'x'")).toBe("node");
+  expect(word('printf x | RG_LOOP="$RG_LOOP" node -e "y"')).toBe("node");
+  expect(word('A=1 B="x y" npx playwright test')).toBe("npx");
+  expect(word("echo \"$(X=1 node -p 1)\"")).toBe("node");
+  expect(word("true && FOO=1 npm ci")).toBe("npm");
+  expect(word("true; FOO='a b' node x.js")).toBe("node");
+  expect(word("FOO=1 \\\n  node x.js")).toBe("node");
+  // A word that merely follows an argument, or is part of another word, is not a call.
+  expect(word("echo FOO=1 node")).toBeNull();
+  expect(word("echo node_modules; ls nodejs")).toBeNull();
+  expect(word("FOO=node bash x.sh")).toBeNull();
+});
+
 test("a composite that runs node is exempt itself and obliges its callers", () => {
   const composite = `
 runs:
@@ -273,6 +292,7 @@ test("the node-needing composites in this repo are discovered", () => {
   // would pass vacuously.
   expect([...nodeActions].sort()).toEqual([
     "await-prod-deploy",
+    "cms-recursion-gate",
     "install-playwright-browsers",
     "post-failure-comment",
   ]);
