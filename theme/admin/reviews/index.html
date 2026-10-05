@@ -423,6 +423,7 @@
 
         let html = '';
         for (const run of runs) {
+          if (!Number.isSafeInteger(run.id) || run.id <= 0) continue;
           const prNum = run.pull_requests?.[0]?.number;
           if (!prNum) continue;
 
@@ -480,7 +481,8 @@
                 <button class="btn btn-reject" onclick="toggleReject(this)">Request Changes</button>
               </div>
               <div class="reject-form">
-                <textarea placeholder="Describe the changes needed..."></textarea>
+                <label for="review-comment-${run.id}">Changes needed</label>
+                <textarea id="review-comment-${run.id}" name="comment" placeholder="Describe the changes needed..."></textarea>
                 <div class="reject-form-actions">
                   <button class="btn btn-reject" onclick="rejectRun(${run.id}, ${envId}, this)">Submit Rejection</button>
                   <button class="btn" onclick="toggleReject(this)">Cancel</button>
