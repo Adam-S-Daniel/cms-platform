@@ -552,6 +552,43 @@
     return Boolean(document.getElementById("cms-site-gate-banner"));
   }
 
+  // The facts with the SAVED `published` value filled in from the editor's
+  // own switch (#636) — the same merge publish-step-hint.js does, so the
+  // question and the bar above it describe the same publish. plan() reads
+  // it only after hasUnsavedChanges(), so the switch is the saved value.
+  function withSavedToggle(facts) {
+    try {
+      var m = window.CMSEntryStatus;
+      var L = window.LiveURL;
+      if (!m || typeof m.withSavedToggle !== "function") return facts;
+      var toggle = L && typeof L.readPublishedSwitch === "function" ? L.readPublishedSwitch() : null;
+      return m.withSavedToggle(facts, toggle);
+    } catch (e) {
+      return facts;
+    }
+  }
+
+  // The question for a publish that does NOT put the entry on the site — a
+  // take-down, or a save that stays hidden (#636) — or null for an ordinary
+  // publish. entry-status-model.js owns the words.
+  function intentNote(facts) {
+    try {
+      var m = window.CMSEntryStatus;
+      if (!m || typeof m.confirmNote !== "function") return null;
+      return m.confirmNote(
+        facts,
+        window.CMSHostname
+          ? {
+              currentHostname: window.CMSHostname.destination(),
+              canonicalHostname: window.CMSHostname.canonical(),
+            }
+          : {},
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
   function plan() {
     var p = progress();
     var state = p ? p.get() : null;
@@ -592,6 +629,10 @@
     }
 
     if (mode === "confirm") {
+      // Never "Put this on …?" for a publish that takes the entry down or
+      // keeps it hidden (#636): the toggle, not the button, decides that.
+      var other = intentNote(withSavedToggle(facts));
+      if (other) return { kind: "confirm", note: other };
       var dest = destination(facts);
       // Coming-soon site: do not promise it "appears" in 5 minutes — visitors
       // keep seeing the coming-soon page (#625 item 1). The gate state is

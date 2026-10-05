@@ -213,7 +213,7 @@ test.describe(
         section: "Editing a post",
         step: "3.1",
         title: "The Posts edit form",
-        body: "The Posts edit form renders every field declared in `admin/config.yml`: Title, URL Slug, Date, Excerpt, Tags, Featured Image, Published, Publish Date, and the Body markdown editor. Select **Save** to keep your changes, then **Publish** to put them on the configured website.",
+        body: "The Posts edit form renders every field declared in `admin/config.yml`: Title, URL Slug, Date, Excerpt, Tags, Featured Image, Show on site, Publish Date, and the Body markdown editor. Select **Save** to keep your changes, then **Publish** to put them on the configured website.",
       });
 
       // Every declared label from the Posts schema in admin/config.yml
@@ -230,7 +230,7 @@ test.describe(
         "Excerpt",
         "Tags",
         "Featured Image",
-        "Published",
+        "Show on site",
         "Publish Date",
         "Body",
       ]) {

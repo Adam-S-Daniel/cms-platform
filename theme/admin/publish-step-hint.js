@@ -157,6 +157,19 @@
   // PRODUCTION-ONLY timing clause — see the copy rules above.
   var HAS_REAL_DEPLOY = !!document.querySelector('script[src*="deploy-status-pill"]');
 
+  // The saved `published` toggle (#636), read off the editor's own switch.
+  // Only ever called when nothing is unsaved (currentView() returns early on
+  // "unsaved"), so the switch IS the saved value. null when the collection
+  // has no such field or live-url-derive.js has not loaded.
+  function savedToggle() {
+    try {
+      var L = window.LiveURL;
+      return L && typeof L.readPublishedSwitch === "function" ? L.readPublishedSwitch() : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // The DOM-only fallback copy, used before the poller has any facts and on
   // every shell that does not load it.
   var FALLBACK = {
@@ -168,23 +181,33 @@
     },
     draft: {
       label: "Draft — not on the site yet",
+      // Saved with “Show on site” off: publishing keeps it hidden (#636).
+      hiddenLabel: "Draft — will stay hidden",
       // The served config can settle after startup; read its destination
       // each time the bar renders rather than caching the access host.
-      detail: function () {
+      detail: function (hidden) {
         var where = window.CMSHostname ? window.CMSHostname.destination() : "this address";
+        if (hidden) {
+          return (
+            "This is saved, but it will stay hidden on " + where + " even after you publish, " +
+            "because “Show on site” is off. Turn on “Show on site” and Save to show it."
+          );
+        }
         // Gated (coming-soon) site: the 5-minute promise would be false for
         // visitors. Same sentence entry-status-model.js uses (#625 item 1).
         if (HAS_REAL_DEPLOY && siteGated()) {
           return (
-            "This is a draft — it is not on " + where + " yet. Click Publish to add it to the site, " +
+            "Your saved changes are not on " + where + " yet. Click Publish to add them to the site, " +
             "but visitors keep seeing the coming-soon page until the site is switched on."
           );
         }
         return HAS_REAL_DEPLOY
-          ? "This is a draft — it is not on " +
+          ? // "Your saved changes", not "this": the draft may be an edit to
+            // an entry that is already on the site (#636).
+            "Your saved changes are not on " +
               where +
-              " yet. Click Publish to put it there. It then takes about 5 minutes to appear."
-          : "This is a draft — it is not published yet. To publish it, click Publish.";
+              " yet. Click Publish to put them there. They then take about 5 minutes to appear."
+          : "Your saved changes are not published yet. To publish them, click Publish.";
       },
     },
   };
@@ -295,7 +318,13 @@
     var model = window.CMSEntryStatus;
     var snapshot = progress && typeof progress.get === "function" ? progress.get() : null;
     if (model && snapshot && snapshot.ready && snapshot.facts) {
-      var derived = model.derive(snapshot.facts, {
+      // The words follow the SAVED `published` value (#636): the poller reads
+      // it off the PR's diff when it changed, the switch fills it otherwise.
+      var facts =
+        typeof model.withSavedToggle === "function"
+          ? model.withSavedToggle(snapshot.facts, savedToggle())
+          : snapshot.facts;
+      var derived = model.derive(facts, {
         now: Date.now(),
         contact: window.CMS_SUPPORT_CONTACT || null,
         currentHostname: window.CMSHostname && window.CMSHostname.destination(),
@@ -328,10 +357,11 @@
     }
 
     if (dom === "draft") {
+      var hidden = savedToggle() === false;
       return {
         state: "draft",
-        label: FALLBACK.draft.label,
-        detail: FALLBACK.draft.detail(),
+        label: hidden ? FALLBACK.draft.hiddenLabel : FALLBACK.draft.label,
+        detail: FALLBACK.draft.detail(hidden),
         modifiers: [],
       };
     }

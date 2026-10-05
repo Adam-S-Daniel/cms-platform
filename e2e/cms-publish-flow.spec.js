@@ -165,13 +165,13 @@ test.describe(
       // (Default in the schema is OFF, which would route the post into the
       // scheduled-publish bucket and skip Jekyll's _posts/ rendering for the
       // immediate build.)
-      const publishedToggle = page.getByLabel(/^Published$/).first();
+      const publishedToggle = page.getByLabel(/^(Show on site|Published)$/).first();
       await publishedToggle.click();
       await captureStep(page, {
         section: "Marking ready and publishing",
         step: "6.1",
         title: "Filled-out post ready to publish",
-        body: "Title, URL Slug, body, tags, and the Published toggle are all set. In production, select **Save**, then select **Publish** to put the post on the configured website.",
+        body: "Title, URL Slug, body, tags, and the Show on site toggle are all set. In production, select **Save**, then select **Publish** to put the post on the configured website.",
       });
 
       // Decap's split publish button: open menu, pick "Publish now".

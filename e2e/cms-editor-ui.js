@@ -21,10 +21,12 @@ const { TEST_POST_MARKERS } = require("./prod-mutate-fixture");
 
 // Decap's boolean Published widget is a SWITCH (role="switch"), NOT a
 // checkbox; its state is exposed via aria-checked, not :checked. The
-// accessible name is the field label "Published". `.first()` guards the
+// accessible name is the field label: "Show on site" since #636, and
+// "Published" before it (still accepted, so a site that labels its own
+// `published` field the old way keeps working). `.first()` guards the
 // rare double-mount during editor hydration.
 function publishedSwitch(page) {
-  return page.getByRole("switch", { name: /^Published$/i }).first();
+  return page.getByRole("switch", { name: /^(Show on site|Published)$/i }).first();
 }
 
 // Toggle the Published switch to `on` (true ⇒ published, false ⇒ draft),
