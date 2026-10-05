@@ -109,6 +109,15 @@ jobs:
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
 
+      # publish_scheduled_posts.py is stdlib-only (it needs 3.11+ for
+      # datetime.UTC). Pinned through setup-python, not the runner's system
+      # python3, which moves with the image (3.12 -> 3.14 on Ubuntu 26.04,
+      # rolling out from 2026-10-19).
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
       - name: Check and publish due posts
         id: check
         run: python3 .cms-platform/scripts/publish_scheduled_posts.py
