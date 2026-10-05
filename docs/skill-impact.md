@@ -43,6 +43,14 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-05 — cms-platform/code-quality — edit
+
+- Motivation: in the skills-evals code-quality eval (issue #88 slice: add Go; https://github.com/Adam-S-Daniel/skills-evals/issues/88), all 3 with-skill trials wrote a golangci-lint v1 config (top-level `linters-settings`, no `version: "2"`) that v2 refuses to load, so golangci-width-100 scored 0/3 with the skill against 2/3 without.
+- Change: "Adding a new language" step 2 now says to write the tool's current config schema and names the golangci-lint v2 shape (`version: "2"`, `linters.settings`, gofmt/goimports under `formatters`), cited to the golangci-lint v2 config file reference.
+- Eval: skills-evals code-quality, local eval against cms-platform d54bace (skills-evals 1abf4ff), 3 trials per arm, before this change. After re-scoring with the CI tree-sitter pins, with_skill objective 9.0/10 vs without_skill 7.67/10 (the raw local 8.0 for with_skill was a `parser_unavailable` scorer artifact: hook-guards-go-tools scored 0/3 in both arms because the local scorer lacked tree-sitter; with the pins it is 3/3 with the skill and 0/3 without). Judge 6.57 vs 5.70, indicative only (judge not yet isolated from operator settings). golangci-width-100 0/3 with vs 2/3 without. The touch-gate re-run against this change is outstanding.
+- Outcome: pending merge.
+
+
 ## 2026-10-05 — cms-platform/cms-stuck-pr-triage — edit
 
 - Motivation: in the skills-evals cms-stuck-pr-triage eval, all 3 with-skill trials called a green-but-BLOCKED PR a merge-state caching bug and never named the required context no workflow publishes (both scored without-skill trials did), and 2 of 3 recommended closing an editor's `decap-cms/pending_publish` PR.
