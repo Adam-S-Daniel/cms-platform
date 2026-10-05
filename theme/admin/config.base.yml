@@ -341,11 +341,12 @@ collections:
         label: Permalink
         widget: string
         required: true
-        default: "/pages/"
-        hint: "The URL path the page lives at. Convention is /pages/<slug>/, but you can use any path. Must start and end with a slash."
+        # No default: a shared default makes every new page claim the same
+        # URL (#639). Decap cannot derive one from the title here.
+        hint: "The URL path the page lives at, unique per page, e.g. /pages/about/. Must start and end with a slash. A page is not added to the site menu automatically; link to it from the menu or another page."
         pattern:
-          - "^/.*/$"
-          - "Must start and end with a slash, e.g. /pages/about/"
+          - "^/(?!pages/$).+/$"
+          - "Must start and end with a slash and name the page, e.g. /pages/about/ (not just /pages/)"
 
       - name: published
         label: Published
