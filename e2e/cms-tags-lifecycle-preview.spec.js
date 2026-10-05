@@ -68,6 +68,7 @@ const {
   gh,
   makePreviewCanaryRecoverer,
   waitForCmsPullRequest,
+  describeError,
 } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { previewTarget } = require("./cms-host");
@@ -158,7 +159,7 @@ test.afterAll(async () => {
     });
   } catch (e) {
     console.warn(
-      `[cleanup-safety-net] failed to delete ${TAG_FILE_PATH} on ${PR_HEAD_REF}: ${e && e.message}`,
+      `[cleanup-safety-net] failed to delete ${TAG_FILE_PATH} on ${PR_HEAD_REF}: ${describeError(e)}`,
     );
   }
 });

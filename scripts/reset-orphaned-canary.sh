@@ -83,7 +83,9 @@ E2E_DIR="${E2E_DIR}" node -e '
   const path = require("path");
   const e2eDir = process.env.E2E_DIR;
   const { CANARIES, buildBaselineBody } = require(path.join(e2eDir, "canary-content.js"));
-  const { gh } = require(path.join(e2eDir, "github-actions-poll.js"));
+  // Public CI logs: describeError logs only a status code plus the error
+  // type, never an error message, stack or API response body.
+  const { gh, describeError } = require(path.join(e2eDir, "github-actions-poll.js"));
   const { seedFixtureViaPr } = require(path.join(e2eDir, "cms-fixture-pr.js"));
   const { HOST_REPO } = require(path.join(e2eDir, "decap-pat.js"));
 
@@ -102,14 +104,6 @@ E2E_DIR="${E2E_DIR}" node -e '
   // dash (post / preview-page / spike-project).
   const MARKER_RE = /e2e-publish-loop:[a-z]+(?:-[a-z]+)*:\d+/;
 
-  // Public CI logs: a gh() error message carries up to 300 bytes of the raw
-  // API response body, and any other error message or stack could embed data
-  // too. Log only a status code plus the error type, never the message,
-  // stack or body.
-  function describeError(e) {
-    const type = (e && e.constructor && e.constructor.name) || typeof e;
-    return e && Number.isInteger(e.status) ? `HTTP ${e.status} ${type}` : type;
-  }
 
   function toBase64(text) {
     return Buffer.from(text, "utf8").toString("base64");

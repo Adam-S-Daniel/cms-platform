@@ -138,10 +138,9 @@ async function gh(endpoint, opts = {}) {
     },
   });
   if (!res.ok) {
-    const body = await res.text();
-    const err = new Error(
-      `GH API ${opts.method || "GET"} ${endpoint} → ${res.status}: ${body.slice(0, 500)}`,
-    );
+    // Status only, never the response body: the message and stack are
+    // logged in public consumer CI.
+    const err = new Error(`GH API ${opts.method || "GET"} ${endpoint} → ${res.status}`);
     err.status = res.status;
     throw err;
   }

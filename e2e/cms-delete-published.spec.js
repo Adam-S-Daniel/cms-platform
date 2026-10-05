@@ -58,6 +58,7 @@ const {
   waitForCmsPullRequest,
   waitForMerge,
   makeDeployQueueExtender,
+  describeError,
 } = require("./github-actions-poll");
 const { removeFixtureViaPr } = require("./cms-fixture-pr");
 const {
@@ -148,7 +149,7 @@ async function tryHardDelete(filePath, slug, runId, message) {
     });
     console.warn(`[cleanup] removed ${filePath} via fixture-cleanup PR`);
   } catch (e) {
-    console.warn(`[cleanup] could not remove ${filePath}: ${e.message}`);
+    console.warn(`[cleanup] could not remove ${filePath}: ${describeError(e)}`);
   }
 }
 
@@ -434,7 +435,7 @@ test(
             try {
               await addLabel({ prNumber: pr.number, label: "cms/ready" });
             } catch (e) {
-              console.warn(`[delete-published] could not label PR #${pr.number}: ${e && e.message}`);
+              console.warn(`[delete-published] could not label PR #${pr.number}: ${describeError(e)}`);
             }
             labelled = true;
             break;

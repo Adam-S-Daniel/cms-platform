@@ -66,19 +66,20 @@ function resolvePreviewBaseURL() {
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
   } catch (err) {
+    // Exit code only, and no `cause`: the original message quotes gh's
+    // stderr (the API response's error text), Playwright prints a cause
+    // chain, and this lands in public consumer CI logs.
     throw new Error(
-      `TARGET=preview: failed to query GitHub for the latest open PR (${err.message}). ` +
+      `TARGET=preview: failed to query GitHub for the latest open PR (gh exited ${err.status}). ` +
         `Ensure 'gh' is on PATH and authenticated, or run with TARGET=local.`,
-      { cause: err },
     );
   }
   let pulls;
   try {
     pulls = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`TARGET=preview: GitHub API returned non-JSON: ${raw.slice(0, 200)}`, {
-      cause: err,
-    });
+  } catch {
+    // No body excerpt and no `cause` (a JSON SyntaxError quotes the text).
+    throw new Error(`TARGET=preview: GitHub API returned non-JSON (${raw.length} bytes)`);
   }
   if (!Array.isArray(pulls) || pulls.length === 0) {
     throw new Error(

@@ -7,12 +7,15 @@
 // injected sleep (for the Retry-After case).
 const { test, expect } = require("./base");
 const {
+  addLabel,
+  describeError,
   gh,
   getFileTextAtRef,
   makeDeployQueueExtender,
   deployLaneActivity,
   headChecksTrulyGreen,
   makePreviewCanaryRecoverer,
+  waitForCmsPullRequest,
 } = require("./github-actions-poll");
 
 // Minimal fetch Response stand-in. `headers.get(name)` is case-insensitive
@@ -796,5 +799,159 @@ test.describe("getFileTextAtRef (#531)", () => {
     await expect(getFileTextAtRef({ ref: "abc" })).rejects.toThrow(/needs a filePath and a ref/);
     globalThis.fetch = async () => fakeResponse({ json: [{ name: "a.md" }] });
     await expect(getFileTextAtRef({ repo: "o/r", filePath: "a.md", ref: "abc" })).rejects.toThrow(/base64 file/);
+  });
+});
+
+// ── API response bodies stay out of public output ───────────────────────
+//
+// This harness runs in the public CI of consumer repos: console output lands
+// in the job log, an uncaught error's message in the `list` reporter, the
+// live-failure PR comment and the media-roundtrip artifact. gh() keeps the
+// raw response body in err.responseBody only, and every harness site that
+// logs or rethrows a caught error goes through describeError(). Each case
+// drives the REAL gh() against a fetch double whose body carries a marker.
+test.describe("API response bodies never reach logs or thrown messages", () => {
+  test.describe.configure({ mode: "serial" });
+
+  const MARKER = "SECRET-BODY-MARKER-7c1e";
+  const BODY = JSON.stringify({
+    message: "Resource not accessible",
+    detail: MARKER,
+    documentation_url: "https://example.com/docs",
+  });
+  const denied = () => fakeResponse({ status: 403, body: BODY });
+
+  let originalFetch;
+  let originalWarn;
+  let logged;
+  test.beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    originalWarn = console.warn;
+    logged = [];
+    console.warn = (...args) => logged.push(args.join(" "));
+  });
+  test.afterEach(() => {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  });
+
+  async function ghError() {
+    globalThis.fetch = async () => denied();
+    try {
+      await gh("https://api.example.com/repos/o/r/pulls/7/merge");
+    } catch (e) {
+      return e;
+    }
+    throw new Error("expected gh() to throw");
+  }
+
+  test("gh()'s thrown message carries the status but not the body; responseBody keeps it", async () => {
+    const err = await ghError();
+    expect(err.status).toBe(403);
+    expect(err.message).toContain("403");
+    expect(err.message).not.toContain(MARKER);
+    expect(err.message).not.toContain("example.com/docs");
+    expect(err.responseBody).toContain(MARKER);
+  });
+
+  test("describeError gives `HTTP <status> <type>` or just the type", async () => {
+    expect(describeError(await ghError())).toBe("HTTP 403 Error");
+    expect(describeError(new TypeError(`fetch failed: ${MARKER}`))).toBe("TypeError");
+    expect(describeError(new SyntaxError(`Unexpected token in "${MARKER}"`))).toBe("SyntaxError");
+    expect(describeError("plain string")).toBe("String");
+    expect(describeError(undefined)).toBe("undefined");
+  });
+
+  test("addLabel's failed pre-read warns with the status only", async () => {
+    let issueReads = 0;
+    globalThis.fetch = async (url, init = {}) => {
+      if ((init.method || "GET") === "POST") return fakeResponse({ json: [] });
+      issueReads += 1;
+      return issueReads === 1 ? denied() : fakeResponse({ json: { labels: [{ name: "cms/ready" }] } });
+    };
+    await addLabel({ repo: "o/r", prNumber: 7, label: "cms/ready", verifyDelayMs: 0 });
+    const out = logged.join("\n");
+    expect(out).toContain("pre-read of #7 labels failed (HTTP 403 Error)");
+    expect(out).not.toContain(MARKER);
+  });
+
+  test("waitForCmsPullRequest's failed auto-label warns with the status only", async () => {
+    globalThis.fetch = async (url, init = {}) => {
+      const u = String(url);
+      if (u.includes("/pulls?")) return fakeResponse({ json: [{ number: 7, head: { ref: "cms/posts/x" } }] });
+      if (u.includes("/pulls/7/files")) {
+        return fakeResponse({ json: [{ filename: "_posts/x.md", patch: "+marker-run-1" }] });
+      }
+      if ((init.method || "GET") === "POST") return denied();
+      throw new Error(`unexpected request ${u}`);
+    };
+    const pr = await waitForCmsPullRequest({
+      repo: "o/r",
+      base: "main",
+      filePath: "_posts/x.md",
+      canaryMarker: "marker-run-1",
+    });
+    expect(pr.number).toBe(7);
+    const out = logged.join("\n");
+    expect(out).toContain("could not label PR #7 automated-test: HTTP 403 Error");
+    expect(out).not.toContain(MARKER);
+  });
+
+  test("the deploy-queue extender's failed lane probe warns with the status only", async () => {
+    globalThis.fetch = async () => denied();
+    const extend = makeDeployQueueExtender({ repo: "o/r", mergedAt: "2099-01-01T00:00:00Z" });
+    const grant = await extend({ elapsedMs: 1000, extensionCount: 0 });
+    expect(grant).toBeGreaterThan(0);
+    const out = logged.join("\n");
+    expect(out).toContain("could not probe the deploy-production.yml lane (HTTP 403 Error)");
+    expect(out).not.toContain(MARKER);
+  });
+
+  test("a failed check-run probe puts only the status in the verdict that reaches the timeout error", async () => {
+    globalThis.fetch = async () => denied();
+    const extend = makeDeployQueueExtender({
+      repo: "o/r",
+      maxTotalExtendMs: 0,
+      getPr: async () => ({ number: 7, merged: false, head: { sha: "abc" }, labels: [] }),
+    });
+    expect(await extend({ elapsedMs: 1000 })).toBe(0);
+    expect(extend.verdict.kind).toBe("pr-awaiting-required-check");
+    expect(extend.verdict.why).toContain("check-run probe failed (HTTP 403 Error)");
+    expect(extend.verdict.why).not.toContain(MARKER);
+  });
+
+  test("the canary recoverer reads `already merged` from the body and records only the status otherwise", async () => {
+    const already = new Error("GitHub API 405 Method Not Allowed on https://api.example.com/x");
+    already.status = 405;
+    already.responseBody = JSON.stringify({ message: "Pull Request is already merged" });
+    let rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => 7,
+      _gh: recovererGhDouble({
+        pr: OUR_CANARY(),
+        mergeImpl: () => {
+          throw already;
+        },
+      }),
+      _headChecksTrulyGreen: async () => ({ ok: true }),
+    });
+    await rec();
+    expect(rec.verdict.kind).toBe("merged-awaiting-deploy");
+
+    const real = await ghError();
+    rec = makePreviewCanaryRecoverer({
+      base: "feat/preview-branch",
+      getPrNumber: () => 7,
+      _gh: recovererGhDouble({
+        pr: OUR_CANARY(),
+        mergeImpl: () => {
+          throw real;
+        },
+      }),
+      _headChecksTrulyGreen: async () => ({ ok: true }),
+    });
+    await rec();
+    expect(rec.verdict.kind).toBe("merge-retry");
+    expect(rec.verdict.why).toBe("HTTP 403 Error");
   });
 });
