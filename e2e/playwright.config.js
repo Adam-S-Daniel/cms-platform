@@ -131,6 +131,9 @@ const PLATFORM_META_SPECS = [
   // vm-sandboxes theme/admin/publish-button.js's Decap-menu interception;
   // same reason as the entry above.
   "publish-button-decap-menu.test.js",
+  // #625 item 7 — vm-sandboxes publish-button.js's Unpublish explanation;
+  // same reason as the entry above.
+  "publish-button-unpublish-hint.test.js",
   "admin-github-fetch-cache.test.js",
   // adamdaniel.ai#3857 — vm-sandbox the theme/admin SOURCE (publish-progress.js,
   // posts-list-enhance.js, slug-pin.js + live-url-derive.js), which a consumer

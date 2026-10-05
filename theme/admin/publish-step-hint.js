@@ -167,14 +167,23 @@
       detail: "Save your changes to enable Publish.",
     },
     draft: {
-      label: "Draft — only you can see this",
+      label: "Draft — not on the site yet",
       // The served config can settle after startup; read its destination
       // each time the bar renders rather than caching the access host.
       detail: function () {
+        var where = window.CMSHostname ? window.CMSHostname.destination() : "this address";
+        // Gated (coming-soon) site: the 5-minute promise would be false for
+        // visitors. Same sentence entry-status-model.js uses (#625 item 1).
+        if (HAS_REAL_DEPLOY && siteGated()) {
+          return (
+            "This is a draft — it is not on " + where + " yet. Click Publish to add it to the site, " +
+            "but visitors keep seeing the coming-soon page until the site is switched on."
+          );
+        }
         return HAS_REAL_DEPLOY
           ? "This is a draft — it is not on " +
-            (window.CMSHostname ? window.CMSHostname.destination() : "this address") +
-            " yet. Click Publish to put it there. It then takes about 5 minutes to appear."
+              where +
+              " yet. Click Publish to put it there. It then takes about 5 minutes to appear."
           : "This is a draft — it is not published yet. To publish it, click Publish.";
       },
     },
@@ -188,7 +197,66 @@
     "going-live": { bg: "#e7f0fb", fg: "#10345f", rule: "#8fb8e8" },
     "needs-attention": { bg: "#fdecea", fg: "#7a1c12", rule: "#e8a49b" },
     unsaved: { bg: "#fdf3d8", fg: "#5c4813", rule: "#e8c766" },
+    // Nothing to say: the row stays (see ROW_MIN_HEIGHT) but paints nothing.
+    idle: { bg: "transparent", fg: "inherit", rule: "transparent" },
   };
+
+  // The bar's own row height: one line of the Publish button (0.8rem line,
+  // 2 x 0.45rem padding, 2px border) inside the bar's 2 x 0.5rem padding and
+  // 1px rule. The row exists on EVERY editor route at this minimum, even when
+  // it has nothing to say, so the bar appearing never pushes the form down
+  // (#625 item 6: "the bar's first appearance pushes every field down about
+  // 46px"). An in-flow reserved row is the only no-shift option that cannot
+  // overlay a control — see the PLACEMENT block above.
+  var ROW_MIN_HEIGHT = "calc(2.7rem + 3px)";
+
+  // Decap's toolbar says "Changes saved" whenever Save is disabled, which on a
+  // brand-new entry nobody has saved is untrue (#625 item 2). Hidden with
+  // visibility (not display) so the toolbar does not reflow, and only while the
+  // route is a new-entry route and the text is that status — restored the
+  // moment either stops being true. Matched by the BackStatus component-name
+  // substring (same Emotion-hash-churn rule as the selectors below); a Decap
+  // release that renames it makes this a silent no-op, never a page error.
+  var NEW_ENTRY_ROUTE = /#\/collections\/[^/?#]+\/new(?:[/?]|$)/;
+  var SAVED_STATUS = '[class*="BackStatus"]';
+  var SAVED_HIDDEN_ATTR = "data-cms-saved-status-hidden";
+
+  function onNewEntryRoute() {
+    var hash = window.location && window.location.hash;
+    return typeof hash === "string" && NEW_ENTRY_ROUTE.test(hash);
+  }
+
+  function syncSavedStatus() {
+    var nodes;
+    try {
+      nodes = document.querySelectorAll(SAVED_STATUS);
+    } catch (e) {
+      return;
+    }
+    var fresh = onNewEntryRoute();
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      var saved = /^\s*changes saved\s*$/i.test(node.textContent || "");
+      var hidden = node.getAttribute(SAVED_HIDDEN_ATTR) === "1";
+      // Compare before writing: this runs inside the shim's own observer.
+      if (fresh && saved && !hidden) {
+        node.style.setProperty("visibility", "hidden");
+        node.setAttribute(SAVED_HIDDEN_ATTR, "1");
+      } else if (hidden && !(fresh && saved)) {
+        node.style.removeProperty("visibility");
+        node.setAttribute(SAVED_HIDDEN_ATTR, "0");
+      }
+    }
+  }
+
+  // Is the site in coming-soon mode? site-gate-banner.js resolves that and
+  // shows its banner exactly while it applies, so the banner's presence is the
+  // state — no second request (#625 item 1). Not gated / unknown → false.
+  function siteGated() {
+    var model = window.CMSEntryStatus;
+    if (model && typeof model.isSiteGated === "function") return model.isSiteGated(document);
+    return Boolean(document.getElementById("cms-site-gate-banner"));
+  }
 
   function q(selector) {
     try {
@@ -232,6 +300,7 @@
         contact: window.CMS_SUPPORT_CONTACT || null,
         currentHostname: window.CMSHostname && window.CMSHostname.destination(),
         canonicalHostname: window.CMSHostname && window.CMSHostname.canonical(),
+        gated: siteGated(),
       });
       // "Live" with no toolbar publish control and no open PR is the steady
       // state of an entry nobody is publishing. Showing a green bar on every
@@ -297,6 +366,7 @@
         "align-items:center",
         "gap:0.5rem 0.75rem",
         "padding:0.5rem 1rem",
+        "min-height:" + ROW_MIN_HEIGHT,
         "font:600 0.8rem/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif",
       ].join(";") + ";";
 
@@ -362,14 +432,9 @@
 
   function render() {
     if (!document.body) return;
+    syncSavedStatus();
     var view = currentView();
     var existing = document.getElementById(BAR_ID);
-
-    if (!view) {
-      if (existing) existing.remove();
-      return;
-    }
-
     var toolbar = q(TOOLBAR);
     if (!toolbar || !toolbar.parentElement) {
       // No editor toolbar on this route (collection list, login, the
@@ -386,10 +451,18 @@
       toolbar.parentElement.insertBefore(el, toolbar.nextSibling);
     }
 
+    // No state to report: keep the row, paint nothing (see ROW_MIN_HEIGHT).
+    if (!view) view = { state: "idle", label: "", detail: "", modifiers: [] };
     var tone = TONE[view.state] || TONE.draft;
     setStyle(el, "background", tone.bg);
     setStyle(el, "color", tone.fg);
     setStyle(el, "border-bottom", "1px solid " + tone.rule);
+
+    // An idle row is invisible — unless publish-button.js has put a control in
+    // its slot, which must never be hidden with the row.
+    var slotEl = document.getElementById(ACTIONS_ID);
+    var idleEmpty = view.state === "idle" && !(slotEl && slotEl.firstChild);
+    setStyle(el, "visibility", idleEmpty ? "hidden" : "visible");
 
     var badge = document.getElementById(BADGE_ID);
     setText(badge, view.label);
