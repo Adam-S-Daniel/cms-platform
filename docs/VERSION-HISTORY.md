@@ -10,9 +10,24 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.131)
+## Version history (v0.1.0 → v0.1.132)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.132 — an infrastructure redeploy keeps the deployed admin CSP mode, and platform CI runs the fixture site's browser specs.**
+`infrastructure/bootstrap/deploy.sh` no longer defaults `ADMIN_CSP_MODE` to
+`report-only`: when the variable is unset it reads the stack's deployed
+`AdminCspMode` and sends it back, falling back to `report-only` only for a stack
+that does not exist yet, so a redeploy cannot silently downgrade an enforcing
+site ([#611](https://github.com/Adam-S-Daniel/cms-platform/pull/611)). The new
+"Self fixture E2E" workflow runs `e2e/fixture-site`'s admin browser specs on
+every platform PR and push to `main` as a required check
+([#613](https://github.com/Adam-S-Daniel/cms-platform/pull/613)). Also: the
+skills registry marketplace is named `adam-agentskills` throughout and a
+nonexistent canary probe is no longer cited
+([#612](https://github.com/Adam-S-Daniel/cms-platform/pull/612)), and stale facts
+in the repo-owned skills and `AGENTS.md` found by a prompt audit are fixed
+([#605](https://github.com/Adam-S-Daniel/cms-platform/pull/605)).
 
 **v0.1.131 — Decap's "Publish now" arms `cms/ready` instead of dead-ending, rearming tolerates a missing label, and browser diagnostics stay out of public logs.**
 On the production shell, Decap's own Publish dropdown stays on screen until the
