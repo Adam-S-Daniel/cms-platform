@@ -368,6 +368,9 @@ const PLATFORM_META_SPECS = [
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
   "deploy-preview-cms-slug.test.js",
+  // #637 — executes the build run: scripts of the platform's OWN
+  // deploy-preview.yml / deploy-production.yml / site-verify.yml DEFINITIONS.
+  "deploy-preview-unpublished.test.js",
   "deploy-status-pill-robustness.test.js",
   "deploy-status-pill-stale.test.js",
   "detect-changed-pages.test.js",

@@ -127,12 +127,29 @@ jobs:
       - name: Build Jekyll (preview mode)
         env:
           JEKYLL_ENV: preview
+          CMS_SLUG: ${{ steps.cms_slug.outputs.slug }}
         # No --baseurl: each PR serves from its own subdomain
         # (preview-prN.<apex>), so pages use root-relative URLs identical to
         # production. S3 stores the build under the pr-N/ prefix; the
         # CloudFront Function maps host → S3 prefix transparently.
+        #
+        # --unpublished only on a Decap editorial PR (a cms/* head ref, so
+        # CMS_SLUG is non-empty), issue #637: a new entry is saved with
+        # Published OFF (`published: false`), and without the flag Jekyll
+        # drops it, so the draft's own preview-pr<N> page 404s. Every other
+        # PR keeps production's publish semantics, which the preview-env
+        # loops rely on (cms-unpublish-republish-preview and
+        # cms-publish-loop-prod-mutate-preview assert a `published: false`
+        # fixture 4xxs on their non-cms parent PR's preview).
+        # deploy-production.yml never passes the flag. Preview responses
+        # carry `X-Robots-Tag: noindex` (the PreviewDistribution Function).
         run: |
-          bundle exec jekyll build --destination ./_site_preview
+          set -euo pipefail
+          build_args=(--destination ./_site_preview)
+          if [[ -n "$CMS_SLUG" ]]; then
+            build_args+=(--unpublished)
+          fi
+          bundle exec jekyll build "${build_args[@]}"
 
       - name: Patch CMS config for preview deployment
         # admin/config.yml ships with production values. See the platform
