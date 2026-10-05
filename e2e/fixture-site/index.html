@@ -20,3 +20,20 @@ title: Home
   </ul>
   <p><a href="{{ '/blog/' | relative_url }}">Blog</a> · <a href="{{ '/tags/' | relative_url }}">Tags</a></p>
 </div>
+
+{%- comment -%} The homepage tag cloud a real consumer ships (adamdaniel.ai's
+index.html); tags.spec.js expects it whenever /tags/ lists a tag (#702). {%- endcomment -%}
+{% assign all_tags = site.all_tags %}
+{% if all_tags and all_tags.size > 0 %}
+<section class="tag-cloud-section">
+  <div class="container">
+    <h2>Tags</h2>
+    <div class="tag-cloud">
+      {% for tag in all_tags %}
+      <a class="tag-pill" href="{{ tag.url | relative_url }}">{{ tag.name }}<span class="tag-cloud-count" aria-hidden="true"> · {{ tag.count }}</span></a>
+      {% endfor %}
+    </div>
+    <p><a href="{{ '/tags/' | relative_url }}">All Tags →</a></p>
+  </div>
+</section>
+{% endif %}
