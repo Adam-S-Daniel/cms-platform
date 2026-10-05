@@ -112,7 +112,14 @@ async function api(url, jwt, method, body) {
   // Status + method/url only — NEVER the response body. It can quote data and
   // must not land in a public Actions log (the repo's data-exposure rule).
   if (!res.ok) throw new Error(`${method || "GET"} ${url} -> HTTP ${res.status}`);
-  return res.json();
+  try {
+    return await res.json();
+  } catch {
+    // Not the parse error itself: its message quotes the body, which on the
+    // access_tokens call is the token, and main() logs err.message before
+    // the ::add-mask:: line can run.
+    throw new Error(`${method || "GET"} ${url} -> HTTP ${res.status}, body is not JSON`);
+  }
 }
 
 async function main() {

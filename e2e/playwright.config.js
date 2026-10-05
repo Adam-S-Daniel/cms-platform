@@ -398,6 +398,9 @@ const PLATFORM_META_SPECS = [
   // caller, so it is platform-internal, self-CI only.
   "gitleaks-allowlist-canary.test.js",
   "github-actions-poll.test.js",
+  // Runs scripts/diagnose-stuck-pr.js and scripts/auto-resolve-newline-
+  // conflict.js from the platform tree; a consumer ships neither.
+  "api-error-body-redaction.test.js",
   "live-failures-reporter.test.js",
   "playwright-log-privacy.test.js",
   // #527 — locks self-fixture-e2e.yml (the platform's own browser lane): reads
