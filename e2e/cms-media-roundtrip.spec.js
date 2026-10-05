@@ -92,7 +92,12 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { closeStaleDecapPrOnBranch, removeFixtureViaPr } = require("./cms-fixture-pr");
+const {
+  closeStaleDecapPrOnBranch,
+  closeOpenPrsAddingFile,
+  readFileOnRef,
+  removeFixtureViaPr,
+} = require("./cms-fixture-pr");
 const {
   addLabel,
   gh,
@@ -171,13 +176,7 @@ test.describe.configure({
 let pendingFixture = null;
 
 async function fileExistsOnMain(filePath) {
-  try {
-    await gh(`/repos/${HOST_REPO}/contents/${encodeURI(filePath)}?ref=main`);
-    return true;
-  } catch (e) {
-    if (/\b404\b/.test(String(e.message))) return false;
-    throw e;
-  }
+  return (await readFileOnRef({ ref: "main", filePath: encodeURI(filePath) })) !== null;
 }
 
 // Best-effort: delete a media file from main via the Contents API. Only
@@ -743,8 +742,35 @@ test.afterAll(async () => {
 
   const { filePath, slug, runId, imagePath } = pendingFixture;
 
-  // Leftover ephemeral post → labelled removal PR.
-  const postStillThere = await fileExistsOnMain(filePath).catch(() => false);
+  // #689 — stop this run's in-flight PRs FIRST. The create leg labels its
+  // PR cms/ready, and that PR adds BOTH the post and the upload, so a run
+  // that fails before the merge leaves it armed: a main-only check reads
+  // "gone" and the PR merges both afterwards. Both paths carry this run's
+  // runId, so only this run's own PRs can match; the delete legs' PRs only
+  // REMOVE the files and are left alone. The upload is checked on its own
+  // too, in case Decap committed it in a separate PR. Strict: an API error
+  // throws instead of reading as "nothing in flight".
+  const inFlight = [
+    [filePath, await closeOpenPrsAddingFile({ base: "main", filePath })],
+    [imagePath, await closeOpenPrsAddingFile({ base: "main", filePath: imagePath })],
+  ];
+  for (const [inFlightPath, { closed, merged }] of inFlight) {
+    if (closed.length > 0) {
+      console.warn(
+        `[cleanup-harness] closed in-flight PR(s) ${closed.map((n) => `#${n}`).join(", ")} still adding ${inFlightPath}`,
+      );
+    }
+    if (merged.length > 0) {
+      console.warn(
+        `[cleanup-harness] PR(s) ${merged.map((n) => `#${n}`).join(", ")} merged ${inFlightPath} before the close took effect`,
+      );
+    }
+  }
+
+  let postRemovalError = null;
+  // Leftover ephemeral post → labelled removal PR. Only a 404 means absent;
+  // any other read error throws.
+  const postStillThere = (await readFileOnRef({ ref: "main", filePath })) !== null;
   if (postStillThere) {
     console.warn(
       `[cleanup-harness] ${filePath} still on main; opening removal PR (existence-only delete, #1771 step 4)`,
@@ -768,11 +794,15 @@ test.afterAll(async () => {
       });
       console.warn(`[cleanup-harness] removed ${filePath} via removal PR`);
     } catch (e) {
-      console.warn(`[cleanup-harness] could not remove ${filePath}: ${describeError(e)}`);
+      // Loud, after the upload cleanup below has had its turn: the post is
+      // on main and nothing is removing it.
+      postRemovalError = new Error(
+        `[cleanup-harness] ${filePath} is on main and the removal PR could not be opened: ${describeError(e)}`,
+      );
     }
   } else {
     console.log(
-      `[cleanup-harness] ${filePath} gone from main; UI delete succeeded — no safety net needed`,
+      `[cleanup-harness] ${filePath} not on main and no open PR adds it — no safety net needed`,
     );
   }
 
@@ -786,4 +816,5 @@ test.afterAll(async () => {
   } catch (e) {
     console.warn(`[cleanup-harness] couldn't remove ${imagePath}: ${describeError(e)}`);
   }
+  if (postRemovalError) throw postRemovalError;
 });

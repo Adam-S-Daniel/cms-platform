@@ -1,8 +1,8 @@
 // @lane: local — pure logic with injected fakes, no network: the #689
-// leftover-e2e-tag sweep (e2e/leftover-e2e-tags.js) and the tags specs'
-// in-flight create-PR close (cms-fixture-pr.js closeOpenPrsAddingFile), plus
-// an AST lint over the two tags spec sources (harness-internal, so this file
-// is registered in PLATFORM_META_SPECS).
+// leftover-e2e-tag sweep (e2e/leftover-e2e-tags.js) and the Decap-created
+// fixtures' in-flight create-PR close (cms-fixture-pr.js
+// closeOpenPrsAddingFile), plus an AST lint over those spec sources
+// (harness-internal, so this file is registered in PLATFORM_META_SPECS).
 const fs = require("node:fs");
 const path = require("node:path");
 const walk = require("acorn-walk");
@@ -308,6 +308,147 @@ test.describe("closeOpenPrsAddingFile (#689)", () => {
   });
 });
 
+// The prod-mutate, delete-published and media round-trip safety nets (#689
+// follow-up) pass their own run-stamped paths: only this run's create PR may
+// be written to, never another run's fixture, a prefix collision, a sibling
+// spec's fixture with the same run id, or the delete leg's removal PR.
+test.describe("closeOpenPrsAddingFile with the posts/e2e/media safety-net paths (#689)", () => {
+  const ID = "1790000000000";
+  const LIST = "GET /repos/o/r/pulls?state=open&base=main&per_page=100&page=1";
+  const filesKey = (n) => `GET /repos/o/r/pulls/${n}/files?per_page=100&page=1`;
+  const pr = (number, ref) => ({ number, head: { ref, repo: { full_name: "o/r" } } });
+  const writes = (calls) => calls.filter((c) => !c.startsWith("GET "));
+
+  // [spec, this run's path, its create branch, distractor [ref, filename, status]...]
+  const CASES = [
+    [
+      "cms-publish-loop-prod-mutate",
+      `_posts/2099-12-31-e2e-prod-mutate-${ID}.md`,
+      `cms/posts/2099-12-31-e2e-prod-mutate-${ID}`,
+      [
+        ["cms/posts/2099-12-31-e2e-prod-mutate-1790000099999", "_posts/2099-12-31-e2e-prod-mutate-1790000099999.md", "added"],
+        [`cms/posts/2099-12-31-e2e-prod-mutate-${ID}0`, `_posts/2099-12-31-e2e-prod-mutate-${ID}0.md`, "added"],
+        [`cms/posts/2099-12-31-e2e-media-roundtrip-${ID}`, `_posts/2099-12-31-e2e-media-roundtrip-${ID}.md`, "added"],
+        [`cms/posts/delete-2099-12-31-e2e-prod-mutate-${ID}`, `_posts/2099-12-31-e2e-prod-mutate-${ID}.md`, "removed"],
+      ],
+    ],
+    [
+      "cms-delete-published",
+      `_e2e/canary-delete-${ID}.md`,
+      `cms/e2e/canary-delete-${ID}`,
+      [
+        ["cms/e2e/canary-delete-1790000099999", "_e2e/canary-delete-1790000099999.md", "added"],
+        [`cms/e2e/canary-delete-${ID}0`, `_e2e/canary-delete-${ID}0.md`, "added"],
+        [`cms/e2e/canary-${ID}`, `_e2e/canary-${ID}.md`, "added"],
+        [`cms/e2e/delete-canary-delete-${ID}`, `_e2e/canary-delete-${ID}.md`, "removed"],
+      ],
+    ],
+  ];
+  for (const [spec, FILE, branch, distractors] of CASES) {
+    test(`${spec}: closes only this run's create PR`, async () => {
+      let state = "open";
+      const routes = {
+        [LIST]: [...distractors.map(([ref], i) => pr(40 + i, ref)), pr(4000, branch)],
+        [filesKey(4000)]: [{ filename: FILE, status: "added" }],
+        "PATCH /repos/o/r/pulls/4000": () => {
+          state = "closed";
+          return {};
+        },
+        "GET /repos/o/r/pulls/4000": () => ({ state, merged: false }),
+        [`DELETE /repos/o/r/git/refs/heads/${branch}`]: {},
+      };
+      distractors.forEach(([, filename, status], i) => {
+        routes[filesKey(40 + i)] = [{ filename, status }];
+      });
+      const gh = fakeGh(routes);
+      const res = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: FILE, ghImpl: gh.impl });
+      expect(res).toEqual({ closed: [4000], merged: [] });
+      expect(writes(gh.calls)).toEqual(["PATCH /repos/o/r/pulls/4000", `DELETE /repos/o/r/git/refs/heads/${branch}`]);
+    });
+
+    test(`${spec}: with only foreign PRs open, nothing is written`, async () => {
+      const routes = { [LIST]: distractors.map(([ref], i) => pr(40 + i, ref)) };
+      distractors.forEach(([, filename, status], i) => {
+        routes[filesKey(40 + i)] = [{ filename, status }];
+      });
+      const gh = fakeGh(routes);
+      const res = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: FILE, ghImpl: gh.impl });
+      expect(res).toEqual({ closed: [], merged: [] });
+      expect(writes(gh.calls)).toEqual([]);
+    });
+  }
+
+  // The media spec closes by the post path, then by the upload path. Its
+  // create PR adds both, so the first call closes it and the second finds it
+  // gone from the open list; another run's upload and this run's media-delete
+  // PR stay untouched.
+  const POST = `_posts/2099-12-31-e2e-media-roundtrip-${ID}.md`;
+  const IMAGE = `assets/images/uploads/e2e-media-roundtrip-${ID}.png`;
+  const CREATE = `cms/posts/2099-12-31-e2e-media-roundtrip-${ID}`;
+  const MEDIA_DISTRACTORS = [
+    [51, "cms/posts/2099-12-31-e2e-media-roundtrip-1790000099999", [
+      { filename: "_posts/2099-12-31-e2e-media-roundtrip-1790000099999.md", status: "added" },
+      { filename: "assets/images/uploads/e2e-media-roundtrip-1790000099999.png", status: "added" },
+    ]],
+    [52, `cms/media/delete-e2e-media-roundtrip-${ID}`, [{ filename: IMAGE, status: "removed" }]],
+    [53, `cms/posts/2099-12-31-e2e-prod-mutate-${ID}`, [
+      { filename: `_posts/2099-12-31-e2e-prod-mutate-${ID}.md`, status: "added" },
+    ]],
+  ];
+  const mediaRoutes = (createOpen, extra) => {
+    const routes = {
+      [LIST]: () => [
+        ...MEDIA_DISTRACTORS.map(([n, ref]) => pr(n, ref)),
+        ...(createOpen() ? [pr(5000, CREATE)] : []),
+        ...extra.map(([n, ref]) => pr(n, ref)),
+      ],
+    };
+    for (const [n, , files] of [...MEDIA_DISTRACTORS, ...extra]) routes[filesKey(n)] = files;
+    return routes;
+  };
+
+  test("cms-media-roundtrip: one create PR adding post and upload is closed once", async () => {
+    let state = "open";
+    const gh = fakeGh({
+      ...mediaRoutes(() => state === "open", []),
+      [filesKey(5000)]: [
+        { filename: POST, status: "added" },
+        { filename: IMAGE, status: "added" },
+      ],
+      "PATCH /repos/o/r/pulls/5000": () => {
+        state = "closed";
+        return {};
+      },
+      "GET /repos/o/r/pulls/5000": () => ({ state, merged: false }),
+      [`DELETE /repos/o/r/git/refs/heads/${CREATE}`]: {},
+    });
+    const first = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: POST, ghImpl: gh.impl });
+    const second = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: IMAGE, ghImpl: gh.impl });
+    expect(first).toEqual({ closed: [5000], merged: [] });
+    expect(second).toEqual({ closed: [], merged: [] });
+    expect(writes(gh.calls)).toEqual(["PATCH /repos/o/r/pulls/5000", `DELETE /repos/o/r/git/refs/heads/${CREATE}`]);
+  });
+
+  test("cms-media-roundtrip: an upload committed in its own PR is closed by the upload-path call", async () => {
+    const UPLOAD = `cms/media/e2e-media-roundtrip-${ID}`;
+    let state = "open";
+    const gh = fakeGh({
+      ...mediaRoutes(() => false, [[5001, UPLOAD, [{ filename: IMAGE, status: "added" }]]]),
+      "PATCH /repos/o/r/pulls/5001": () => {
+        state = "closed";
+        return {};
+      },
+      "GET /repos/o/r/pulls/5001": () => ({ state, merged: false }),
+      [`DELETE /repos/o/r/git/refs/heads/${UPLOAD}`]: {},
+    });
+    const first = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: POST, ghImpl: gh.impl });
+    const second = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: IMAGE, ghImpl: gh.impl });
+    expect(first).toEqual({ closed: [], merged: [] });
+    expect(second).toEqual({ closed: [5001], merged: [] });
+    expect(writes(gh.calls)).toEqual(["PATCH /repos/o/r/pulls/5001", `DELETE /repos/o/r/git/refs/heads/${UPLOAD}`]);
+  });
+});
+
 // Both tags specs read the canary's ref through readFileOnRef (the AST lint
 // below locks that): only a 404 means absent. The old preview hook treated
 // every error as "UI delete succeeded, no cleanup needed".
@@ -337,12 +478,18 @@ test.describe("readFileOnRef (#689)", () => {
   });
 });
 
-// The safety net must stop the in-flight PR BEFORE it reads the canary's
-// ref; the reverse order is the #689 incident (absent on main, PR still open).
-test.describe("tags specs close the in-flight PR before reading the ref (#689)", () => {
-  for (const [spec, readsRef] of [
-    ["cms-tags-lifecycle.spec.js", (name) => name === "readFileOnRef"],
-    ["cms-tags-lifecycle-preview.spec.js", (name) => name === "readFileOnRef"],
+// Every safety net that creates its entry through Decap must stop the
+// in-flight PR BEFORE it reads the ref; the reverse order is the #689
+// incident (absent on main, PR still open). Each spec lists the identifiers
+// its closeOpenPrsAddingFile calls must pass as `filePath`: the media spec's
+// create PR adds both the post and the upload.
+test.describe("Decap-created fixtures close the in-flight PR before reading the ref (#689)", () => {
+  for (const [spec, closedPaths] of [
+    ["cms-tags-lifecycle.spec.js", ["TAG_FILE_PATH"]],
+    ["cms-tags-lifecycle-preview.spec.js", ["TAG_FILE_PATH"]],
+    ["cms-publish-loop-prod-mutate.spec.js", ["filePath"]],
+    ["cms-delete-published.spec.js", ["filePath"]],
+    ["cms-media-roundtrip.spec.js", ["filePath", "imagePath"]],
   ]) {
     test(spec, () => {
       const ast = parse(fs.readFileSync(path.join(__dirname, spec), "utf8"));
@@ -353,18 +500,29 @@ test.describe("tags specs close the in-flight PR before reading the ref (#689)",
         },
       });
       expect(hooks.length, "one afterAll hook").toBe(1);
-      let close = null;
+      const closes = [];
       let read = null;
       walk.simple(hooks[0], {
         CallExpression(n) {
           const name = calleeName(n.callee);
-          if (name === "closeOpenPrsAddingFile" && (close === null || n.start < close)) close = n.start;
-          if (readsRef(name) && (read === null || n.start < read)) read = n.start;
+          if (name === "closeOpenPrsAddingFile") {
+            const arg = n.arguments[0];
+            const prop =
+              arg && arg.type === "ObjectExpression"
+                ? arg.properties.find((p) => p.key && p.key.name === "filePath")
+                : null;
+            const value = prop && prop.value.type === "Identifier" ? prop.value.name : null;
+            closes.push({ start: n.start, value });
+          }
+          if (name === "readFileOnRef" && (read === null || n.start < read)) read = n.start;
         },
       });
-      expect(close, "afterAll calls closeOpenPrsAddingFile").not.toBeNull();
-      expect(read, "afterAll reads the canary's ref").not.toBeNull();
-      expect(close).toBeLessThan(read);
+      expect(
+        closes.map((c) => c.value).sort(),
+        "afterAll calls closeOpenPrsAddingFile once per run-unique path it creates",
+      ).toEqual([...closedPaths].sort());
+      expect(read, "afterAll reads the ref through readFileOnRef").not.toBeNull();
+      for (const c of closes) expect(c.start, `close of ${c.value} precedes the read`).toBeLessThan(read);
     });
   }
 });
