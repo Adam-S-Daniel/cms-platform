@@ -174,6 +174,38 @@ test.describe(
       }
     });
 
+    test("742px: no empty band above the toolbar; list reserves room for the floating stamps", async ({
+      page,
+    }) => {
+      // #625.10/.11 — at a ~742px window the editor sat below an empty ~65px
+      // band (Decap's reserved toolbar height, left behind once the toolbar
+      // goes static), and the collection list had no bottom clearance for the
+      // fixed commit/platform pills, so its last row could not scroll clear.
+      await page.setViewportSize({ width: 742, height: 900 });
+      await login(page);
+      await openEditor(page);
+      const gap = await page.evaluate(() => {
+        // The editor box starts where the notice banner (if any) ends; its toolbar
+        // is the page header in the editor, so nothing should sit between them.
+        const editor = document.querySelector('[class*="EditorContainer"]');
+        const toolbar = document.querySelector('[class*="ToolbarContainer"]');
+        return Math.round(
+          toolbar.getBoundingClientRect().top - editor.getBoundingClientRect().top,
+        );
+      });
+      expect(gap, `empty band above the editor toolbar: ${gap}px`).toBeLessThan(24);
+
+      await page.goto("/admin/index-test.html#/collections/posts");
+      await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
+      // The two bottom-right pills + Live Preview stack reach ~ 8.5rem; the list's
+      // own clearance must at least cover the 2-line pill stack (~3rem).
+      const padding = await page.evaluate(() => {
+        const main = document.querySelector('[class*="CollectionMain"]');
+        return parseFloat(getComputedStyle(main).paddingBottom);
+      });
+      expect(padding, "CollectionMain bottom clearance (px)").toBeGreaterThanOrEqual(64);
+    });
+
     test("desktop layout is untouched — the preview pane still renders wide", async ({ page }) => {
       // Guard against the breakpoint creeping up and stealing the
       // side-by-side preview from desktop editors.

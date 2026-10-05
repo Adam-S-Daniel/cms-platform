@@ -238,8 +238,8 @@
           <span class="last-refresh" id="last-refresh"></span>
         </div>
         <div class="header-actions">
-          <a href="/admin/reviews/" class="btn">Reviews</a>
-          <a href="/admin/" class="btn">Back to CMS</a>
+          <a id="sibling-dashboard" href="/admin/reviews/" class="btn">Reviews</a>
+          <a id="back-to-cms" href="/admin/" class="btn">Back to CMS</a>
           <button class="btn" id="refresh-btn">Refresh</button>
         </div>
       </header>
@@ -288,6 +288,28 @@
     ];
 
     let refreshTimer = null;
+
+    // "Back to CMS" returns to the exact admin screen the owner left, not the
+    // admin front page (#625.9). The admin shell's Reviews link carries the
+    // hash it was clicked from as ?return=<hash>. Only a same-origin Decap
+    // route ("#/…", no whitespace/quotes/angle brackets) is honoured and it is
+    // always appended to the fixed "/admin/" path, so the value can never name
+    // another origin or path — anything else falls back to the front page.
+    function cmsReturnHash(search) {
+      let raw = '';
+      try { raw = new URLSearchParams(search || '').get('return') || ''; } catch { return ''; }
+      return /^#\/[A-Za-z0-9\/_.~%:@!$()*+,;=&?-]*$/.test(raw) && raw.length <= 512 ? raw : '';
+    }
+    function cmsReturnHref(search) { return '/admin/' + cmsReturnHash(search); }
+    (function wireCmsReturnLinks() {
+      const hash = cmsReturnHash(window.location.search);
+      const back = document.getElementById('back-to-cms');
+      if (back) back.setAttribute('href', cmsReturnHref(window.location.search));
+      const sibling = document.getElementById('sibling-dashboard');
+      if (sibling && hash) {
+        sibling.setAttribute('href', sibling.getAttribute('href') + '?return=' + encodeURIComponent(hash));
+      }
+    })();
 
     function getToken() { return localStorage.getItem(TOKEN_KEY); }
     function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }

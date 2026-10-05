@@ -89,7 +89,16 @@ test.describe("Live Preview button — editor-only + previewable-collection gati
       src,
       "the Reviews button must stay always-visible — only the Live Preview " +
         "button is editor-scoped (the reviews dashboard is useful on every route)",
-    ).not.toContain("getElementById('reviews-link')");
+    ).not.toMatch(/getElementById\('reviews-link'\)[\s\S]{0,400}style\.display/);
+    // #625.9: a script MAY look the link up, but only to keep its ?return= href
+    // current — never to gate its visibility (that is the Live Preview script).
+    const scripts = [...src.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
+    for (const body of scripts.filter((b) => b.includes("getElementById('reviews-link')"))) {
+      expect(body, "a script touching #reviews-link must not toggle display").not.toContain(
+        "reviews-link').style",
+      );
+      expect(body).not.toContain("rl.style");
+    }
   });
 });
 

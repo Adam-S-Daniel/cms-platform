@@ -321,4 +321,32 @@
   [class*="ControlPaneContainer"]:not([class*="PreviewPaneContainer"]) {
     padding-bottom: 10rem !important;
   }
+
+  /* ── 9. Phone/tablet widths: no Reviews button, and room for the build
+   * stamp over the list (cms-platform#625.9/.10) ──────────────────────
+   * At ~742px the floating Reviews button and the deployed-commit /
+   * platform pills (position:fixed, bottom-right, z-index:10000) covered
+   * the DRAFT chip on the last Contents row and a list row's title, and
+   * the last row could not be scrolled clear. Reviews is a developer
+   * dashboard, so it is dropped here (still reachable from the full-width
+   * admin; the anchor stays in the DOM). The collection list gets bottom
+   * clearance so its last row scrolls above the stamps and the Live
+   * Preview button. */
+  #reviews-link {
+    display: none !important;
+  }
+  [class*="CollectionMain"] {
+    padding-bottom: 5rem !important;
+  }
+
+  /* ── 10. Empty band above the editor header (cms-platform#625.11) ───────
+   * Decap reserves the height of its absolutely-positioned toolbar with a
+   * top margin on the editor box. Rule 3 makes the toolbar and the editor
+   * static, so that margin is left as a blank ~65px band between the
+   * notice banner and the toolbar. The toolbar is in flow here, so
+   * nothing needs reserving. */
+  [class*="EditorContainer"] {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+  }
 }
