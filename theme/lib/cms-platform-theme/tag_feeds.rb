@@ -12,6 +12,9 @@
 # `site.config["all_tags"]` left by auto_tag_pages.rb) so this plugin is
 # order-independent and works even if auto_tag_pages runs after us.
 
+# Jekyll::ExcludeE2EPosts.excluded_tag_names (#689 e2e / fixture tags).
+require_relative 'exclude_e2e_posts'
+
 if defined?(Jekyll::Generator)
   module Jekyll
     module TagFeeds
@@ -43,6 +46,9 @@ if defined?(Jekyll::Generator)
         priority :low
 
         def generate(site)
+          # e2e / test-fixture `_tags/` entries (#689, stamped by
+          # exclude_e2e_posts.rb) get no public feed.
+          excluded = Jekyll::ExcludeE2EPosts.excluded_tag_names(site)
           curated = (site.collections['tags']&.docs || [])
                     .filter_map { |d| d.data['name'] }
           # Skip e2e / test-fixture posts (feed_exclude stamped by
@@ -53,7 +59,7 @@ if defined?(Jekyll::Generator)
           # lists the canary.
           public_posts = site.posts.docs.reject { |p| p.data['feed_exclude'] == true }
           from_posts = public_posts.flat_map { |p| Array(p.data['tags']) }.compact
-          (curated + from_posts).uniq.each do |name|
+          ((curated + from_posts).uniq - excluded).each do |name|
             site.pages << FeedPage.new(site, name)
           end
         end

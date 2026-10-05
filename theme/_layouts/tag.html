@@ -15,7 +15,10 @@ layout: default
   <div class="page-header">
     <div class="page-header-with-feed">
       <h1>{{ tag_label }}</h1>
+      {%- comment -%} An e2e / test-fixture tag (#689) has no feed (tag_feeds.rb skips it). {%- endcomment -%}
+      {%- unless page.feed_exclude == true -%}
       {% include feed-link.html href=_tag_feed label=_feed_label %}
+      {%- endunless -%}
     </div>
     <p class="subtitle">Tag</p>
   </div>

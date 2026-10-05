@@ -57,6 +57,11 @@ cms:
   `slug` or `test_fixture: true` is honored. The
   [real Jekyll build regression](spec/exclude_e2e_posts_build_test.rb) checks
   both discriminators, public aggregation, and direct post output.
+  It applies the same rule to `_tags/` entries (#689): an `e2e-` or
+  `test_fixture: true` tag stays out of `site.all_tags` (the tag cloud and
+  `/tags/`), the sitemap and the per-tag feeds, and its page still builds with
+  `robots: noindex,nofollow`
+  ([build regression](spec/exclude_e2e_tags_build_test.rb)).
 
 Updates flow to sites via a gem-version bump — `platform-bump`'s job, not
 Dependabot's: since #242, Dependabot's `bundler` ecosystem carries an explicit
