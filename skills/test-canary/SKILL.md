@@ -1,6 +1,6 @@
 ---
 name: test-canary
-description: Internal propagation canary for the cms-platform bundle — it carries no guidance and must never be invoked in normal work. It is INTENDED as the marker an automated probe would use to assert that "test-canary" appears in a session's loaded-skill set; that probe is not built yet (skills-evals issue #17), so nothing checks for this skill today.
+description: Internal propagation canary for the cms-platform bundle — it carries no guidance and must never be invoked in normal work. It is INTENDED as the marker an automated probe would use to assert that "test-canary" appears in a session's loaded-skill set; that probe is not built and no issue tracks it, so nothing checks for this skill today.
 ---
 
 # Test Canary
@@ -12,15 +12,18 @@ that to the user rather than acting on this content.
 
 ## What it is for
 
-It is **intended** as the propagation canary for the `cms-platform` bundle
-(skills-evals issue #17). A probe session there would assert
+It is **intended** as the propagation canary for the `cms-platform` bundle.
+A probe session would assert
 `"test-canary" in init.skills` — the set of skills the model actually has
 loaded — and that assertion passing would be the evidence that the bundle
 reached this surface.
 
-**No such probe exists yet.** skills-evals has not built it, so nothing
-currently checks for this skill anywhere: today the canary is a marker waiting
-for its checker, not a live signal. Do not read its presence in this directory
+**No such probe exists, and none is tracked.** skills-evals' closed propagation
+issue ([#17](https://github.com/Adam-S-Daniel/skills-evals/issues/17)) built
+arms against the `adam-agentskills` registry's own bundle only; none loads the
+`cms-platform` bundle or asserts this skill, so nothing currently checks for it anywhere:
+today the canary is a marker waiting for a checker nobody has scheduled, not a
+live signal. Do not read its presence in this directory
 as proof that anything is being verified.
 
 Checking the loaded-skill set is a deliberately stronger claim than checking the

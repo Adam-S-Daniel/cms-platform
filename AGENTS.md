@@ -231,7 +231,7 @@ reach prod. Parity forbids a consumer-owned caller, so it is a platform seam: th
 ## Skills ship as a marketplace bundle, not a file sync (v0.1.83)
 
 `skills/` is where a platform skill is authored, and **nothing copies it into a
-consumer**: it is a federated bundle in the `agentskills` marketplace
+consumer**: it is a federated bundle in the `adam-agentskills` marketplace
 (`/cms-platform:<skill>`), reaching an ephemeral surface only through the
 consuming repo's own `skills.lock`. The old `skills-sync.yml` transport was
 deleted in v0.1.83. → `docs/SYNC.md` § Skills, `docs/VERSION-HISTORY.md` v0.1.83.

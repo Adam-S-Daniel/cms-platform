@@ -210,8 +210,8 @@ async function main() {
     fs.readFileSync(path.join(PLATFORM_ROOT, "theme/admin/collections.site.yml.example"), "utf8"),
   );
   // Platform skills are NOT vendored into a site. They ship as a federated
-  // bundle in the agentskills marketplace (`/plugin install
-  // cms-platform@agentskills`); on an ephemeral surface that install does not
+  // bundle in the adam-agentskills marketplace (`/plugin install
+  // cms-platform@adam-agentskills`); on an ephemeral surface that install does not
   // persist, and the channel there — that registry's skills-bootstrap
   // SessionStart hook — delivers this bundle to a repo only once THAT repo's
   // own `skills.lock` declares cms-platform as a source. The lock is a
@@ -682,7 +682,7 @@ Next:
                                                                       # later redeploys drop the flag
        bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,read:user,workflow)
   5. Add GitHub secrets (exact fine-grained PAT permissions: see the
-     /cms-platform:consumer-repo-provisioning skill, from the agentskills bundle):
+     /cms-platform:consumer-repo-provisioning skill, from the adam-agentskills bundle):
        - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W; PAT user = reviewer of the regression-review env
        - CMS_AUTOMATION_APP_PRIVATE_KEY (+ the CMS_AUTOMATION_APP_ID variable, step 6) -- the CMS
                           automation GitHub App; powers platform-bump + dev-hooks-sync, nothing to rotate

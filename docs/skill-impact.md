@@ -43,6 +43,27 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-05 — cms-platform/test-canary — edit
+
+- Motivation: the skill cited closed skills-evals issue #17 as where its propagation probe would be built; #17 built arms against the registry's own bundle only, and no issue tracks a `cms-platform`-bundle probe.
+- Change: the description and body now say the probe is not built and untracked, and link #17 only as what it did build.
+- Eval: exempt (DESIGN.md non-coverage table)
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/consumer-repo-provisioning — edit
+
+- Motivation: the install line named the retired `agentskills` marketplace; the live registry marketplace is `adam-agentskills`.
+- Change: `cms-platform@agentskills` is now `cms-platform@adam-agentskills`.
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/github-actions-sha-pinning — edit
+
+- Motivation: the skill named the retired `agentskills` marketplace as the bundle's home.
+- Change: now `adam-agentskills`.
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
 ## 2026-10-04 — cms-platform/aws-bootstrap — edit
 
 - Motivation: review of PR #567 found a mistyped `BOOTSTRAP_STACK_NAME` would create a new stack, which the change-set guard passes because a create is all `Add` actions.

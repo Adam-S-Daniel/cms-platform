@@ -36,7 +36,7 @@ is **opt-in** per site. Agent skills are a fourth case — they are authored her
 | Jekyll theme | theme gem (layouts/includes/assets/plugin) | `platform-bump` (Dependabot ignores this gem, #242) | PR to this repo |
 | Decap CMS config | build-time render from the site's `_config.yml` | gem bump (`platform-bump`) | PR to this repo |
 | AWS infra | versioned CloudFormation (S3-published templates) | `platform-bump` workflow | PR to this repo |
-| Agent skills | the `agentskills` marketplace, which federates the `cms-platform` bundle from `skills/` in this repo | **none** — nothing is copied into a site (see "Agent skills" below) | PR to this repo |
+| Agent skills | the `adam-agentskills` marketplace, which federates the `cms-platform` bundle from `skills/` in this repo | **none** — nothing is copied into a site (see "Agent skills" below) | PR to this repo |
 
 Bidirectional sync in one line: **improvement made anywhere → PR to `cms-platform` →
 new tag → `platform-bump` fans the bump out to every site**. Nothing platform-owned
@@ -48,14 +48,14 @@ vendored copies was removed in v0.1.83.
 
 `skills/` is the canonical home of the platform's skills and the only place one is
 edited. They are **not** synced into a consumer: they are published as a federated
-bundle in the [`agentskills`](https://github.com/Adam-S-Daniel/agentskills)
+bundle in the [`adam-agentskills`](https://github.com/Adam-S-Daniel/adam-agentskills)
 marketplace, which resolves `cms-platform` from this repo's plugin manifest.
 
 Type these two in a Claude Code session (they are slash commands, not shell):
 
 ```text
-/plugin marketplace add Adam-S-Daniel/agentskills
-/plugin install cms-platform@agentskills
+/plugin marketplace add Adam-S-Daniel/adam-agentskills
+/plugin install cms-platform@adam-agentskills
 ```
 
 Skills are bundle-namespaced, so they invoke as `/cms-platform:<skill>` — e.g.

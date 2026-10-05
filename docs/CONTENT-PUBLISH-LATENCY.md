@@ -19,7 +19,10 @@ excludes `on:`, and the bump still never edits an existing caller's `on:`
 block), constraint 3 (`site_live: false`) and every row of the defect table were
 re-checked by reading the source, and still held; nothing was built or run. The
 defect table has since been brought up to date as of 2026-10-05 (v0.1.126
-fixed rows one, four and five; see below). The baseline timings and the other
+shipped the fixes for rows one, four and five; the consumers closed rows two
+and three on 2026-10-04; row four's tracker,
+[cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540),
+stays open for consumer verification; see below). The baseline timings and the other
 constraints were not re-measured; re-check them before relying on them.
 
 Reviving this **reverses a recorded decision**:
@@ -167,7 +170,7 @@ consumer-owned defects were closed on 2026-10-04. The table below records the
 state of each row; the trackers stay linked so the fix and its evidence have an
 accountable destination. Only
 [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540)
-is open, waiting on consumer verification. Each defect stood on its own, with or
+is an open tracker, waiting on consumer verification. Each defect stood on its own, with or
 without the lane, and each has its own tracker in the owning repository
 ([cms-platform#529](https://github.com/Adam-S-Daniel/cms-platform/issues/529)
 groups them).

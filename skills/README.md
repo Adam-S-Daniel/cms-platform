@@ -6,8 +6,8 @@ edited; nothing downstream is a source of truth for one.
 
 ## How they reach a consumer
 
-They are published as a **federated bundle in the `agentskills` marketplace**
-(`Adam-S-Daniel/agentskills`), which resolves the bundle from this repo's
+They are published as a **federated bundle in the `adam-agentskills` marketplace**
+(`Adam-S-Daniel/adam-agentskills`), which resolves the bundle from this repo's
 `.claude-plugin/plugin.json`. A consumer vendors nothing — there is no per-site
 copy of this directory to drift, guard, or re-sync.
 
@@ -16,13 +16,13 @@ install is authoritative. Type these in a Claude Code session — they are slash
 commands, not shell:
 
 ```text
-/plugin marketplace add Adam-S-Daniel/agentskills
-/plugin install cms-platform@agentskills
+/plugin marketplace add Adam-S-Daniel/adam-agentskills
+/plugin install cms-platform@adam-agentskills
 ```
 
 Skills are namespaced by bundle, so they invoke as `/cms-platform:<skill>` — e.g.
 `/cms-platform:admin-config-render`. Update with
-`/plugin marketplace update agentskills`.
+`/plugin marketplace update adam-agentskills`.
 
 **On an ephemeral surface** (a Claude Code cloud session, a CI runner) that
 install doesn't stick. The channel there is the registry's `skills-bootstrap`
@@ -43,6 +43,6 @@ fix.
 
 Edit it here. Delivery is the registry's job: the marketplace resolves the bundle
 from this repo, so a durable machine picks a change up on the next
-`/plugin marketplace update agentskills`. A repo that has adopted the hook picks
+`/plugin marketplace update adam-agentskills`. A repo that has adopted the hook picks
 it up when **its** `skills.lock` is regenerated against a newer commit of this
 repo.
