@@ -323,15 +323,26 @@
     }
   }
 
+  // requestAnimationFrame never fires in a background tab, so a pass scheduled
+  // there, or scheduled just before the tab went to the back, waited until the
+  // editor returned (#644). A hidden tab paints nothing, so the next task is
+  // as good as the next frame; `pending` makes whichever runs first the only
+  // pass.
   var pending = false;
+  function runRender() {
+    if (!pending) return;
+    pending = false;
+    render();
+  }
   function scheduleRender() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () {
-      pending = false;
-      render();
-    });
+    if (document.hidden) setTimeout(runRender, 0);
+    else requestAnimationFrame(runRender);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) runRender();
+  });
 
   // Mutations re-render the banner when the form mounts / fields update.
   new MutationObserver(scheduleRender).observe(document.body, {

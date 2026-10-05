@@ -747,7 +747,13 @@ Four details worth keeping:
   most likely to be "simplified" into a lie, so it has its own test.
 - **A hidden tab polls nothing.** An admin left open overnight in a
   background tab must not spend the editor's rate limit on an entry nobody
-  is looking at.
+  is looking at. A Publish press is the exception (unreleased, #644): its
+  `refresh()` reads in a hidden tab too, because an editor who pressed
+  Publish and switched to the Live Preview tab got "press Publish once more"
+  with no Publish control on screen. That failure now also gives Decap's
+  control back when no button of ours is showing, and the admin shims that
+  coalesce on `requestAnimationFrame` (which never fires in a hidden tab)
+  run their pass on the next task instead while the tab is hidden.
 - **The sentence links to the run (unreleased).** "did not pass" links to
   the failed check's workflow run, and the "It is waiting for …" phrase to
   the running one (one run's page when the running checks share a run, else

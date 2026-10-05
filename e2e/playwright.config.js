@@ -148,6 +148,9 @@ const PLATFORM_META_SPECS = [
   "publish-progress-post-merge.test.js",
   "live-url-banner-follows-poller.test.js",
   "entry-status-model-progress.test.js",
+  // #644 — vm-sandboxes theme/admin SOURCE (the poller, the button and the
+  // requestAnimationFrame shims) with document.hidden stubbed; same reason.
+  "admin-hidden-tab.test.js",
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
   "slug-pin.test.js",
