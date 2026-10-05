@@ -531,6 +531,8 @@ Resources:
   #               dashboards' preview-pr<N> regression.json). The OAuth proxy
   #               is NOT here: sign-in is a popup plus postMessage, which
   #               connect-src does not govern, so no per-site parameter.
+  #               blob: is Decap's fetch() of an uploaded image's object URL
+  #               before it commits the file (#627).
   #   img-src     GitHub avatars; blob:/data: for media Decap reads through
   #               the API.
   #   media-src   the dashboards' preview-pr<N> regression.mp4.
@@ -560,7 +562,7 @@ Resources:
           ContentSecurityPolicy:
             ContentSecurityPolicy: !If
               - AdminCspEnforced
-              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
               - "frame-ancestors 'self'"
             Override: true
         CustomHeadersConfig: !If
@@ -568,7 +570,7 @@ Resources:
           - !Ref AWS::NoValue
           - Items:
               - Header: Content-Security-Policy-Report-Only
-                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'"
+                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'"
                 Override: true
 
   # ── CloudFront distribution for preview-pr*.<apex> ───────────────────────

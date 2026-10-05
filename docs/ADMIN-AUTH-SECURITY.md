@@ -731,7 +731,7 @@ The full `/admin` policy, and why each part is there:
   (SRI-pinned) calls `new Function`; the shells' inline scripts carry
   per-site `window.CMS_*`, so a hash would differ per site and render path.
 - `style-src 'self' 'unsafe-inline'` — Decap injects inline styles.
-- `connect-src 'self' https://<apex> https://*.<apex> https://api.github.com
+- `connect-src 'self' blob: https://<apex> https://*.<apex> https://api.github.com
   https://www.githubstatus.com` — no bare `https:`. The subdomains cover the
   dashboards' `preview-pr<N>` `regression.json`; githubstatus.com is Decap's
   status probe. The OAuth proxy is absent on purpose: sign-in is a popup and
