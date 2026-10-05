@@ -158,6 +158,45 @@ run('apply: object without a data Hash is a no-op (StaticFile et al.)') do
   E.apply(Object.new)
 end
 
+# ── tags (#689) ────────────────────────────────────────────────────────────
+
+run('apply_tag: an e2e- tags-canary entry gets the post stamps plus noindex') do
+  doc = FakeDoc.new(
+    data: { 'name' => 'E2E Tags Canary 1786027176024' },
+    relative_path: '_tags/e2e-tags-canary-1786027176024.md',
+  )
+  E.apply_tag(doc)
+  check(doc.data['sitemap'] == false, "e2e tag: sitemap must be false, got #{doc.data.inspect}")
+  check(doc.data['feed_exclude'] == true, "e2e tag: feed_exclude must be true, got #{doc.data.inspect}")
+  check(doc.data['robots'] == 'noindex,nofollow', "e2e tag: robots must be noindex,nofollow, got #{doc.data.inspect}")
+end
+
+run('apply_tag: test_fixture: true stamps a non-e2e tag entry; an editor robots is kept') do
+  doc = FakeDoc.new(
+    data: { 'name' => 'Fixture', 'test_fixture' => true, 'robots' => 'noindex' },
+    relative_path: '_tags/fixture.md',
+  )
+  E.apply_tag(doc)
+  check(doc.data['feed_exclude'] == true, "flagged tag: feed_exclude must be true, got #{doc.data.inspect}")
+  check(doc.data['robots'] == 'noindex', "flagged tag: editor robots must be kept, got #{doc.data.inspect}")
+end
+
+run('apply_tag: a real tag entry is untouched') do
+  doc = FakeDoc.new(data: { 'name' => 'Ruby' }, relative_path: '_tags/ruby.md')
+  E.apply_tag(doc)
+  check(doc.data == { 'name' => 'Ruby' }, "real tag must be untouched, got #{doc.data.inspect}")
+end
+
+run('excluded_tag_names: only stamped _tags entries, by name') do
+  stamped = FakeDoc.new(data: { 'name' => 'E2E Canary', 'feed_exclude' => true }, relative_path: '_tags/e2e-canary.md')
+  real = FakeDoc.new(data: { 'name' => 'Ruby' }, relative_path: '_tags/ruby.md')
+  site = Struct.new(:collections).new({ 'tags' => Struct.new(:docs).new([stamped, real]) })
+  check(E.excluded_tag_names(site) == ['E2E Canary'],
+        "excluded_tag_names must list only the stamped entry, got #{E.excluded_tag_names(site).inspect}",)
+  no_tags = Struct.new(:collections).new({})
+  check(E.excluded_tag_names(no_tags) == [], 'a site without a tags collection excludes nothing')
+end
+
 # ── result ─────────────────────────────────────────────────────────────────
 
 if @failures.empty?

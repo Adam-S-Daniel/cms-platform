@@ -19,6 +19,9 @@
 #
 # Unit tests: _plugins_test/auto_tag_pages_test.rb
 
+# Jekyll::ExcludeE2EPosts.excluded_tag_names (#689 e2e / fixture tags).
+require_relative 'exclude_e2e_posts'
+
 module Jekyll
   module AutoTagPages
     # Pure data shaping — kept Jekyll-free so the unit tests can call it
@@ -81,14 +84,17 @@ if defined?(Jekyll::Generator)
         priority :low
 
         def generate(site)
+          excluded = Jekyll::ExcludeE2EPosts.excluded_tag_names(site)
           missing, all_tags = AutoTagPages.summarise(
-            curated: curated_tags(site),
+            curated: curated_tags(site).reject { |c| excluded.include?(c['name']) },
             # Skip e2e / test-fixture posts (feed_exclude stamped by
             # _plugins/exclude_e2e_posts.rb): their tags must not mint a
             # public /tags/<slug>/ archive, inflate a tag's count, or add a
             # tag-cloud pill. A canary tagged like a real post still serves
             # at /blog/<slug>/ — it just doesn't surface in tag aggregation.
-            post_tag_lists: public_posts(site).map { |p| Array(p.data['tags']) },
+            # e2e / test-fixture `_tags/` entries (#689) are dropped the same
+            # way: no tag-cloud or /tags/ entry, and no count.
+            post_tag_lists: public_posts(site).map { |p| Array(p.data['tags']) - excluded },
             slugify: ->(name) { Jekyll::Utils.slugify(name) },
           )
 

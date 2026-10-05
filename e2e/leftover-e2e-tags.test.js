@@ -70,11 +70,26 @@ test.describe("classifyE2eTags (#689)", () => {
 });
 
 test.describe("sweepLeftoverE2eTags (#689)", () => {
-  const LIST = "GET /repos/o/r/contents/_tags?ref=main";
+  const ROOT = "GET /repos/o/r/git/trees/main";
+  const TAGS_TREE = "GET /repos/o/r/git/trees/tagsha";
   const PULLS = "GET /repos/o/r/pulls?state=open&base=main&per_page=100&page=1";
+  // The two git-trees reads that list `_tags` on main; `file`/`dir`
+  // entries become blob/tree entries.
+  const listing = (entries) => ({
+    [ROOT]: {
+      tree: [
+        { path: "_posts", type: "tree", sha: "postsha" },
+        { path: "_tags", type: "tree", sha: "tagsha" },
+      ],
+    },
+    [TAGS_TREE]: {
+      truncated: false,
+      tree: entries.map((e) => ({ path: e.name, type: e.type === "file" ? "blob" : "tree", sha: "x" })),
+    },
+  });
 
   test("a site with no _tags directory has nothing left over", async () => {
-    const gh = fakeGh({ [LIST]: () => Promise.reject(httpError(404)) });
+    const gh = fakeGh({ [ROOT]: { tree: [{ path: "_posts", type: "tree", sha: "postsha" }] } });
     const removed = [];
     const res = await sweepLeftoverE2eTags({
       repo: "o/r",
@@ -88,7 +103,7 @@ test.describe("sweepLeftoverE2eTags (#689)", () => {
   });
 
   test("a non-404 listing error throws instead of reading clean", async () => {
-    const gh = fakeGh({ [LIST]: () => Promise.reject(httpError(500)) });
+    const gh = fakeGh({ [ROOT]: () => Promise.reject(httpError(500)) });
     await expect(
       sweepLeftoverE2eTags({
         repo: "o/r",
@@ -102,13 +117,13 @@ test.describe("sweepLeftoverE2eTags (#689)", () => {
 
   test("removes only stale canaries, reports other e2e tags, leaves fresh ones", async () => {
     const gh = fakeGh({
-      [LIST]: [
+      ...listing([
         file(`e2e-tags-canary-${OLD}.md`),
         file(`e2e-tags-canary-${YOUNG}.md`),
         file(`e2e-tags-canary-${FUTURE}.md`),
         file("e2e-hand-made.md"),
         file("ruby.md"),
-      ],
+      ]),
       [PULLS]: [],
     });
     const removed = [];
@@ -129,7 +144,7 @@ test.describe("sweepLeftoverE2eTags (#689)", () => {
 
   test("does not open a second removal PR while one is open, but still reports it", async () => {
     const gh = fakeGh({
-      [LIST]: [file(`e2e-tags-canary-${OLD}.md`)],
+      ...listing([file(`e2e-tags-canary-${OLD}.md`)]),
       [PULLS]: [{ number: 7, head: { ref: `cms/e2e-fixture/remove-e2e-tags-canary-${OLD}-x` } }],
     });
     const removed = [];
@@ -144,8 +159,59 @@ test.describe("sweepLeftoverE2eTags (#689)", () => {
     expect(res.leftover).toBe(1);
   });
 
+  test("a ref with no tree (404) has nothing left over", async () => {
+    const gh = fakeGh({ [ROOT]: () => Promise.reject(httpError(404)) });
+    const res = await sweepLeftoverE2eTags({
+      repo: "o/r",
+      ghImpl: gh.impl,
+      removeImpl: async () => {
+        throw new Error("no removal expected");
+      },
+      nowMs: NOW,
+      log: () => {},
+    });
+    expect(res.leftover).toBe(0);
+  });
+
+  test("sees a leftover past the Contents API's 1,000-entry directory cap", async () => {
+    // 1,500 real tags sorted before the canary: a Contents API listing
+    // stops at 1,000 entries and would read this site clean.
+    const real = Array.from({ length: 1500 }, (_, i) => file(`a-tag-${String(i).padStart(4, "0")}.md`));
+    const gh = fakeGh({
+      ...listing([...real, file(`e2e-tags-canary-${OLD}.md`), file("e2e-hand-made.md")]),
+      [PULLS]: [],
+    });
+    const removed = [];
+    const res = await sweepLeftoverE2eTags({
+      repo: "o/r",
+      ghImpl: gh.impl,
+      removeImpl: async (a) => removed.push(a),
+      nowMs: NOW,
+      log: () => {},
+    });
+    expect(gh.calls.some((c) => c.includes("/contents/"))).toBe(false);
+    expect(removed.map((a) => a.filePath)).toEqual([`_tags/e2e-tags-canary-${OLD}.md`]);
+    expect(res.other).toEqual(["_tags/e2e-hand-made.md"]);
+    expect(res.leftover).toBe(2);
+  });
+
+  test("a truncated _tags tree throws instead of reading partial", async () => {
+    const routes = listing([file(`e2e-tags-canary-${OLD}.md`)]);
+    routes[TAGS_TREE] = { ...routes[TAGS_TREE], truncated: true };
+    const gh = fakeGh(routes);
+    await expect(
+      sweepLeftoverE2eTags({
+        repo: "o/r",
+        ghImpl: gh.impl,
+        removeImpl: async () => {},
+        nowMs: NOW,
+        log: () => {},
+      }),
+    ).rejects.toThrow("truncated");
+  });
+
   test("a failed removal throws", async () => {
-    const gh = fakeGh({ [LIST]: [file(`e2e-tags-canary-${OLD}.md`)], [PULLS]: [] });
+    const gh = fakeGh({ ...listing([file(`e2e-tags-canary-${OLD}.md`)]), [PULLS]: [] });
     await expect(
       sweepLeftoverE2eTags({
         repo: "o/r",
