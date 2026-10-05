@@ -768,7 +768,8 @@ that, which changes nothing a deployed site uses.
 
    ```bash
    cd ~/repos/<site> && git checkout main && git pull
-   # ADMIN_CSP_MODE unset = report-only. The stack is BOOTSTRAP_STACK_NAME
+   # ADMIN_CSP_MODE unset = keep the deployed mode (report-only on a stack
+   # that predates the parameter). The stack is BOOTSTRAP_STACK_NAME
    # (default <prefix>-bootstrap), never site-params.env's STACK_NAME, which
    # names the OAuth proxy (infrastructure/README.md, "The STACK_NAME collision"):
    bash infrastructure/bootstrap/deploy.sh   # the site's delegating wrapper
@@ -804,15 +805,25 @@ that, which changes nothing a deployed site uses.
    and `/admin/reviews/health.html`, and repeat on a preview admin. Every
    `[Report Only]` line is a source the policy is missing: fix the template
    before enforcing.
-4. Enforce: add `export ADMIN_CSP_MODE="enforce"` to
-   `infrastructure/site-params.env` (the wrapper sources it, and a later
-   redeploy without it goes back to report-only), run
-   `bash infrastructure/bootstrap/deploy.sh` again, and repeat step 2:
-   `content-security-policy` now carries the full policy and the Report-Only
-   header is gone.
+4. Enforce once, explicitly:
+   `ADMIN_CSP_MODE=enforce bash infrastructure/bootstrap/deploy.sh`, then
+   repeat step 2: `content-security-policy` now carries the full policy and
+   the Report-Only header is gone. Later redeploys keep it: with
+   `ADMIN_CSP_MODE` unset, the platform script reads the stack's deployed
+   `AdminCspMode` and sends it back, logging
+   `Admin CSP mode: enforce (kept from deployed stack)`. Only a new stack, or
+   one deployed before the parameter existed, defaults to report-only. An
+   explicit value always wins, and anything but `enforce` or `report-only`
+   (or a `describe-stacks` failure other than "does not exist") stops the
+   script before the change set. Do not count on a wrapper to carry the
+   setting: the scaffolder's delegating wrapper sources
+   `infrastructure/site-params.env`, but a site's own wrapper may not
+   (adamdaniel.ai's does not), so an export there can be silently ignored.
+   Read the log line instead.
 5. Drive `gh workflow run cms-publish-loop-prod.yml --repo <owner>/<repo>`
    green (the definition of done in `AGENTS.md`). To back out, redeploy with
-   `ADMIN_CSP_MODE=report-only`.
+   `ADMIN_CSP_MODE=report-only bash infrastructure/bootstrap/deploy.sh`; that
+   value is then the deployed one, and later redeploys keep report-only.
 
 ## Rules that follow
 
