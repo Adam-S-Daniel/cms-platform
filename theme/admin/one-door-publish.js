@@ -16,18 +16,27 @@
  *      setting a status an editor reasonably reads as a private
  *      note-to-self publishes the entry.
  *
- * Worse, the two surfaces that offer route 2 disagree with each other.
- * The Workflow board hard-gates publishing on Ready
- * (`WorkflowList.requestPublish` alerts "Only items with a 'Ready' status
- * can be published…" and returns), while the entry editor's Publish
- * dropdown has no status gate at all. Same entry, same verb, opposite
- * rules, identical words. See docs/PUBLISHING-UX.md §2.1 and §2.2.
+ * Worse, Decap gates its OWN Publish on that same status, and says so only
+ * after refusing. The Workflow board's `WorkflowList.requestPublish` alerts
+ * "Only items with a 'Ready' status can be published…", and the entry
+ * editor's `handlePublishEntry` alerts `Please update status to "Ready"
+ * before publishing.` — the editor's dropdown RENDERS whatever the status,
+ * which is why this header once said it had no gate; the gate is in its
+ * handler. See docs/PUBLISHING-UX.md §2.1 and §2.2.
  *
  * This shim hides route 2 on the production shell: the toolbar Status
  * dropdown, the Workflow nav link, and the `#/workflow` route itself.
  * Publish becomes the only way to production, which is what makes the
  * one-sentence instruction in publish-step-hint.js true rather than
  * merely simplified.
+ *
+ * Hiding the Status control also removes the only way to satisfy Decap's
+ * editor gate, so Decap's own "Publish now" must never reach its handler on
+ * this shell. publish-button.js owns that: it replaces Decap's split button
+ * once the entry's PR is known, and before then it intercepts a selection
+ * in Decap's Publish dropdown and runs the same `cms/ready` route (the
+ * 2026-10-05 jodidaniel.com report: an "Expertise" entry, saved, then
+ * "Publish now" → the Ready alert, with no Status control to answer it).
  *
  * ── What it COSTS, stated plainly ──────────────────────────────────────
  * `pending_review` becomes unreachable from the production editor. Nothing

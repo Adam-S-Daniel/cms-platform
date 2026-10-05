@@ -101,6 +101,30 @@
  * unmerged with no control on screen. The armed branch now excludes a stall,
  * so the editor gets a button back alongside the bar's explanation.
  *
+ * ── Decap's own "Publish now" is routed here too (2026-10-05) ──────────
+ * This button renders only once publish-progress.js has FOUND the entry's
+ * open PR, and until then Decap's split button stays on screen (see the
+ * `unknown` and `none` branches of plan()). Saving an EXISTING entry fires
+ * no `hashchange`, so that window lasts up to one 30 s poll — and inside it
+ * an editor sees Decap's Publish, picks "Publish now", and gets Decap's
+ * native alert `Please update status to "Ready" before publishing.`
+ * Decap's Editor `handlePublishEntry` refuses unless the entry's status is
+ * the last workflow status, and one-door-publish.js hides the Status
+ * control that would satisfy it, so on this shell that alert is a dead
+ * end. Reported on jodidaniel.com's "Expertise" collection; it is not
+ * collection-specific, only timing-specific.
+ *
+ * So a capture-phase listener intercepts a selection inside the dropdown
+ * whose trigger is Decap's `PublishButton` ("Publish now", "Publish and
+ * create new", "Publish and duplicate") before Decap's React handler sees
+ * it, and runs doPublish() instead — the same `cms/ready` route, with the
+ * same bounded re-read that finds a PR the poller has not caught up with
+ * yet. Choosing a menu item is already the second deliberate step, so no
+ * further confirmation is added. "…and create new" / "…and duplicate"
+ * publish only; the editor stays on the entry. The published-entry
+ * dropdown (`PublishedToolbarButton`: Unpublish, Duplicate) and the
+ * rehearsal and local shells, which never load this file, are untouched.
+ *
  * ── Failure mode ───────────────────────────────────────────────────────
  * If publish-step-hint.js's bar is absent (a Decap release that renames the
  * toolbar, a route with no editor) there is no actions slot and this shim
@@ -318,10 +342,75 @@
     render();
   }
 
+  // ── Decap's "Publish now", routed through doPublish() ─────────────────
+  // See "Decap's own 'Publish now' is routed here too" in the header.
+  //
+  // react-aria-menubutton, which Decap's toolbar dropdowns are built on,
+  // renders each item as `[role="menuitem"]` inside a wrapper whose other
+  // child holds the `aria-haspopup` trigger. The nearest ancestor holding a
+  // trigger is therefore the item's OWN dropdown, and only the one whose
+  // trigger is Decap's `PublishButton` is routed (`PublishedToolbarButton`
+  // does not contain that substring, so Unpublish/Duplicate pass through).
+  var MENU_TRIGGER = '[aria-haspopup="true"]';
+  var MENU_DEPTH = 8;
+
+  function decapPublishMenuItem(target) {
+    var item = target && typeof target.closest === "function" ? target.closest('[role="menuitem"]') : null;
+    if (!item) return null;
+    var el = item.parentElement;
+    for (var depth = 0; el && depth < MENU_DEPTH; depth++, el = el.parentElement) {
+      var trigger = el.querySelector(MENU_TRIGGER);
+      if (!trigger) continue;
+      return trigger.matches(DECAP_PUBLISH) && !trigger.closest("#" + SLOT_ID) ? item : null;
+    }
+    return null;
+  }
+
+  // Close the menu the selection would have closed. react-aria-menubutton
+  // closes on Escape; best effort, never fatal.
+  function closeDecapMenu(item) {
+    try {
+      item.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    } catch (e) {
+      /* the menu stays open; the publish below still runs */
+    }
+  }
+
+  async function publishFromDecapMenu() {
+    if (mode === "busy") return;
+    await doPublish();
+    // doPublish() reports a failure in the state bar's slot. With no bar on
+    // screen (the very window this route exists for can have none — the bar
+    // renders nothing for an entry the poller still reads as live), say it
+    // the way Decap would have, rather than failing silently.
+    if (lastError && !document.getElementById(SLOT_ID) && typeof window.alert === "function") {
+      window.alert(lastError);
+    }
+  }
+
+  function onDecapMenuActivate(ev) {
+    // react-aria-menubutton selects on click, and on Enter or Space.
+    if (ev.type === "keydown" && ev.key !== "Enter" && ev.key !== " ") return;
+    var item = decapPublishMenuItem(ev.target);
+    if (!item) return;
+    // Capture phase on `document` runs before React's listener on its root
+    // container, so Decap's status-gated handler never sees this selection.
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+    closeDecapMenu(item);
+    publishFromDecapMenu();
+  }
+
+  document.addEventListener("click", onDecapMenuActivate, true);
+  document.addEventListener("keydown", onDecapMenuActivate, true);
+
   // Test hook (e2e/publish-button-refresh.test.js drives doPublish() in a vm
-  // sandbox). Same shape as one-door-publish.js's window.__oneDoorPublish.
+  // sandbox; e2e/publish-button-decap-menu.test.js drives the menu route).
+  // Same shape as one-door-publish.js's window.__oneDoorPublish.
   window.__publishButton = {
     doPublish: doPublish,
+    decapPublishMenuItem: decapPublishMenuItem,
     lastError: function () {
       return lastError;
     },
@@ -517,8 +606,11 @@
     // hiding the only route to production while offering no replacement is
     // the outcome the header calls worse than either alone. So this branch
     // leaves Decap's control exactly as it found it. If Decap is showing one,
-    // it is because Decap believes there is something to publish — and it is
-    // then the only working route.
+    // it is because Decap believes there is something to publish (most often
+    // a just-saved PR the poller has not read yet). Decap's own "Publish now"
+    // would then stop at its Status gate, whose control one-door-publish.js
+    // hides, so onDecapMenuActivate() routes that selection through
+    // doPublish() instead.
     if (p.kind === "none") {
       if (p.note) disabledNote(slot, p.note);
       return;

@@ -27,7 +27,7 @@ meets at least five of them in a normal afternoon.
 |---|---|---|---|---|
 | 1 | Workflow **status** — Draft / In review / Ready | Decap toolbar dropdown; stored as a `decap-cms/<status>` PR label | On this platform, **Ready publishes the entry** (see §2.1) | Yes — as a dropdown that looks like metadata |
 | 2 | **Publish → Publish now** | Decap toolbar split button | Merges the entry's PR → deploy → live | Yes, once the entry is saved clean |
-| 3 | The **Workflow board** (`#/workflow`) | Decap nav | The same three statuses again, as a kanban, with a *different publish rule* (§2.1) | Yes, and it contradicts the editor |
+| 3 | The **Workflow board** (`#/workflow`) | Decap nav | The same three statuses again, as a kanban, with the same Ready gate worded differently (§2.1) | Yes, and it repeats the editor's unexplained rule |
 | 4 | `published:` front matter | The entry's own fields (adamdaniel.ai posts/pages) | Whether Jekyll renders the page at all | Yes — as a toggle labelled "Published", next to a button labelled "Publish" |
 | 5 | `publish_date` | The entry's own fields | A future date `publish-scheduled-posts.yml` flips `published` on | Yes |
 | 6 | Site-level gate — `site_live` (jodidaniel.com) | `_data/settings.yml`, one collection | Hides **every** bio section on the live site | Only if she opens that one collection |
@@ -59,23 +59,30 @@ Publish now   → PUT /pulls/N/merge  → 422 (branch ruleset)
 Each of these was reproduced deliberately. Where a finding is a reading of
 code rather than an observation of production, it says so.
 
-### 2.1 The same action has opposite rules on two surfaces — and the user is right on one of them
+### 2.1 The same action is gated on Ready on two surfaces — and neither says so until it refuses
 
 The reported complaint was that the admin "fails to instruct the user to first
 change the status in order to be able to successfully publish." That rule is
-**real**, and it belongs to the surface the editor was not on:
+**real**, and Decap enforces it on both surfaces that publish:
 
 - **Workflow board** — `WorkflowList.requestPublish` hard-gates it:
   `if (ownStatus !== status.last()) { alert('Only items with a "Ready" status
   can be published. Please drag the card to the "Ready" column to enable
   publishing.'); return; }` — then a second `confirm()` before it proceeds.
-- **Entry editor** — `EditorToolbar.renderNewEntryWorkflowPublishControls`
-  renders the Publish dropdown with **no status gate and no confirmation**.
-  `publishUnpublishedEntry` merges the PR whatever the status says.
+- **Entry editor** — the toolbar's Publish dropdown renders whatever the
+  status, but its handler gates too: Decap's Editor `handlePublishEntry`
+  runs `currentStatus === status.last() ? … : window.alert(t("editor.editor.onPublishingNotReady"))`
+  — *Please update status to "Ready" before publishing.* — and only a Ready
+  entry gets the `confirm()` and the merge. (This section first read the
+  dropdown's RENDER condition and called the editor ungated; the handler is
+  where the gate lives. Corrected 2026-10-05, when an editor hit it — see
+  Phase 3.)
 
-Same entry, same verb, two surfaces, opposite rules, and the three words
-("Draft", "In review", "Ready") are identical on both. Nobody could be
-expected to hold that distinction, and no copy in the product explains it.
+So the rule is the same on both surfaces, and stated on neither until the
+editor has already been refused: nothing on screen says the status is what
+Publish waits for, and the three words ("Draft", "In review", "Ready") read as
+a private note-to-self. Nobody could be expected to infer it, and no copy in
+the product explains it.
 
 Worse, Decap *has* an explanation string for the status model —
 `statusInfoTooltipDraft`: "Entry status is set to draft. To finalize and
@@ -319,7 +326,7 @@ builds — a real action with a real artefact, replacing a status nobody reads.
 ### 3.3 One place statuses live
 
 The Workflow board goes away (`§4`, phase 2 — shipped). It is a second status surface
-with a *different publish rule* (§2.1), it is where #329.9's contradictory
+repeating the editor's unexplained Ready gate (§2.1), it is where #329.9's contradictory
 badges were seen, and everything it offers is available per-entry in the
 collection list once the badge above exists.
 
@@ -677,6 +684,23 @@ Three things it gets that the split button cannot:
   label its own click had applied for 58 s (every `/pulls` read answered in
   1 ms). Every GitHub GET in `theme/admin/` now passes `cache: "no-cache"`;
   `e2e/admin-github-fetch-cache.test.js` holds the line for every shim.
+- **Decap's own "Publish now" goes through the same route** (2026-10-05).
+  Until the poller has found the entry's PR — up to one 30 s poll after
+  saving an EXISTING entry, which fires no `hashchange` — the button is not
+  on screen and Decap's split button is. Its "Publish now" then hit the
+  status gate in §2.1 and alerted *Please update status to "Ready" before
+  publishing.*, on a shell where `one-door-publish.js` hides the Status
+  control: a dead end, reported on jodidaniel.com's custom "Expertise"
+  collection, though nothing about it is collection-specific. A
+  capture-phase listener in `publish-button.js` now takes a selection in the
+  dropdown whose trigger is Decap's `PublishButton` before Decap's React
+  handler sees it, and runs `doPublish()` — the `cms/ready` label with the
+  bounded re-read above. Choosing the menu item is the second deliberate
+  step, so no third confirmation is added; with no state bar on screen a
+  failure is said in an `alert()`, as Decap would have. The published-entry
+  dropdown (Unpublish, Duplicate) and the rehearsal and local shells are
+  untouched. `e2e/publish-button-decap-menu.test.js` drives it in a vm
+  sandbox against the dropdown's real react-aria-menubutton shape.
 
 It renders into the state bar's actions slot rather than the toolbar: the
 toolbar is `flex-wrap: nowrap` on desktop and a fifth control squeezes the
@@ -970,7 +994,7 @@ against the in-browser `test-repo` backend.
 npm pack decap-cms@3.15.1 && tar xzf decap-cms-3.15.1.tgz
 
 # 2. Decap's own source, from the bundle's source map — this is where the
-#    two publish rules in §2.1 come from.
+#    two publish gates in §2.1 come from.
 python3 - <<'PY'
 import json
 m = json.load(open('package/dist/decap-cms.js.map'))
