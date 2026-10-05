@@ -44,6 +44,13 @@
 # because a create is all Add actions and a mistyped stack name would pass.
 # An update of an existing stack needs no flag.
 #
+# Admin CSP mode: an explicit ADMIN_CSP_MODE (enforce or report-only) always
+# wins. Unset, the script keeps the AdminCspMode the deployed stack already
+# has, so a redeploy without it never puts an enforcing site back on
+# report-only; only a new stack, or one deployed before the parameter existed,
+# gets report-only. Back out of enforcement with
+#   ADMIN_CSP_MODE=report-only bash infrastructure/bootstrap/deploy.sh
+#
 # This script is idempotent — safe to re-run at any time.
 # =============================================================================
 
@@ -76,7 +83,8 @@ HOSTED_ZONE_ID="${HOSTED_ZONE_ID:-}"
 # docs/ADMIN-AUTH-SECURITY.md before widening HSTS_SCOPE or enforcing the CSP.
 HSTS_MAX_AGE_SECONDS="${HSTS_MAX_AGE_SECONDS:-31536000}"
 HSTS_SCOPE="${HSTS_SCOPE:-this-host-only}"
-ADMIN_CSP_MODE="${ADMIN_CSP_MODE:-report-only}"
+# Unset (or empty) = keep the deployed stack's AdminCspMode, resolved below.
+ADMIN_CSP_MODE="${ADMIN_CSP_MODE:-}"
 # The AWS CLI's (and CloudFormation's) limit on a template sent inline.
 INLINE_LIMIT_BYTES=51200
 
@@ -99,6 +107,11 @@ error() {
 command -v aws >/dev/null 2>&1 || error "AWS CLI not found. Install: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
 command -v ruby >/dev/null 2>&1 || error "Ruby not found. It minifies the template before the deploy (the platform's Jekyll toolchain already needs it)."
 command -v python3 >/dev/null 2>&1 || error "python3 not found. It reads the change set before anything is executed."
+
+case "$ADMIN_CSP_MODE" in
+  "" | enforce | report-only) ;;
+  *) error "ADMIN_CSP_MODE=${ADMIN_CSP_MODE} is not enforce or report-only; nothing was deployed. Unset it to keep the deployed stack's mode." ;;
+esac
 
 # ── Resolve the bootstrap stack name (before any aws call) ─────────────────
 # The name never comes from a STACK_NAME that site-params.env set: that is the
@@ -155,7 +168,40 @@ fi
 info "Deploying stack: ${BOOTSTRAP_STACK_NAME} to ${AWS_REGION}"
 info "Template: ${TEMPLATE_BYTES} bytes minified (inline limit ${INLINE_LIMIT_BYTES})"
 info "Create OIDC provider: ${CREATE_OIDC_PROVIDER}"
-info "Admin CSP mode: ${ADMIN_CSP_MODE}; HSTS: max-age=${HSTS_MAX_AGE_SECONDS}, ${HSTS_SCOPE}"
+info "HSTS: max-age=${HSTS_MAX_AGE_SECONDS}, ${HSTS_SCOPE}"
+
+# ── Resolve the admin CSP mode ─────────────────────────────────────────────
+# Read the deployed value rather than leaning on `deploy`'s UsePreviousValue
+# for an omitted parameter: that fails on a stack deployed before AdminCspMode
+# existed, and it would leave the mode unknown to this log and to the
+# complete, explicit parameter list below.
+if [[ -n "$ADMIN_CSP_MODE" ]]; then
+  info "Admin CSP mode: ${ADMIN_CSP_MODE} (set by ADMIN_CSP_MODE)"
+else
+  CSP_STDERR="${WORK_DIR}/csp-stderr.txt"
+  if DEPLOYED_CSP_MODE="$(aws cloudformation describe-stacks \
+    --stack-name "$BOOTSTRAP_STACK_NAME" \
+    --region "$AWS_REGION" \
+    --query "Stacks[0].Parameters[?ParameterKey=='AdminCspMode'].ParameterValue" \
+    --output text 2>"$CSP_STDERR")"; then
+    DEPLOYED_CSP_MODE="${DEPLOYED_CSP_MODE//[[:space:]]/}"
+    case "$DEPLOYED_CSP_MODE" in
+      enforce | report-only)
+        ADMIN_CSP_MODE="$DEPLOYED_CSP_MODE"
+        info "Admin CSP mode: ${ADMIN_CSP_MODE} (kept from deployed stack)" ;;
+      "" | None)
+        ADMIN_CSP_MODE="report-only"
+        info "Admin CSP mode: report-only (default: the deployed stack has no AdminCspMode parameter)" ;;
+      *) error "Stack ${BOOTSTRAP_STACK_NAME} has an AdminCspMode that is not enforce or report-only; nothing was deployed. Set ADMIN_CSP_MODE to enforce or report-only explicitly." ;;
+    esac
+  elif [[ "$(<"$CSP_STDERR")" == *"Stack with id "*" does not exist"* ]]; then
+    ADMIN_CSP_MODE="report-only"
+    info "Admin CSP mode: report-only (default: stack ${BOOTSTRAP_STACK_NAME} does not exist yet)"
+  else
+    # Never echo the CLI's message: it can carry an ARN (account id).
+    error "Could not read the deployed AdminCspMode of stack ${BOOTSTRAP_STACK_NAME}, and guessing could downgrade an enforced CSP; nothing was deployed. Check the AWS session, or set ADMIN_CSP_MODE to enforce or report-only explicitly."
+  fi
+fi
 
 # ── Auto-detect Route53 hosted zone if not specified ───────────────────────
 if [[ -z "$HOSTED_ZONE_ID" ]]; then

@@ -96,7 +96,7 @@ same Jekyll + Decap + AWS stack and improvements sync **both ways**. Design:
 (consumer 1, the dogfood) and **jodidaniel.com** (consumer 2, a single-page
 bio).
 
-**Current release: `v0.1.130`** (`v0.1.0`–`v0.1.130` are tagged; cut one with
+**Current release: `v0.1.131`** (`v0.1.0`–`v0.1.131` are tagged; cut one with
 `gh workflow run release.yml -f version=vX.Y.Z`). The bump is ONE atomic edit in
 the release PR, before the dispatch: this line, both plugin manifests
 (`plugin.json` + `.claude-plugin/plugin.json`), the `docs/VERSION-HISTORY.md`
@@ -378,7 +378,8 @@ REQUIRED: **actionlint**, **ruby-theme-specs**, **node-unit-lints** (pure-fs
 more required contexts come from siblings: `scan / scan` and **`fixture-e2e`**
 (#527: the `@lane: local` specs on the two admin projects against
 `e2e/fixture-site`; the public projects run only in CONSUMER e2e).
-→ `docs/CONTRIBUTING.md`.
+`self-dependabot-auto-merge.yml` also triggers on every PR, but its job is a
+no-op for anyone but Dependabot. → `docs/CONTRIBUTING.md`.
 
 | PR/push workflow | Salient paths |
 |---|---|
@@ -420,8 +421,8 @@ before blaming the deploy chain. → `docs/CI-INVARIANTS.md` (and the
   (PR #1883) live on prod, daily editorial-label-audit adopted; a loop
   co-arrival fix (#1892) narrowed the host publish-loop's push trigger so it
   stops evicting prod-mutate from `prod-mutating-loop`.
-- **jodidaniel.com** — consumer 2, org-owned, a SINGLE-PAGE bio: 9 per-section
-  collections (5 folder ones ordered by `weight`, `output:false`; 4 file ones
+- **jodidaniel.com** — consumer 2, org-owned, a SINGLE-PAGE bio: 10 per-section
+  collections (6 folder ones, all `output:false` except `media`; 4 file ones
   reading `_data/*.yml`), `cms.base_collections: []`, and `_data/settings.yml`
   `site_live` (default `false`) keeping prod coming-soon; go-live is jodidaniel
   #26. Its CMS automation runs on a **`CMS_E2E_PAT` repo secret**; the
