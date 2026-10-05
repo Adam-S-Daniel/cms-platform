@@ -115,7 +115,7 @@ layout: default
           <div class="post-tags" data-preview-slot="tags"></div>
         </div>
         <h1 data-preview-slot="title"></h1>
-        <img class="featured-image" data-preview-slot="featured-image" alt="" hidden>
+        <img class="featured-image" data-preview-slot="featured-image" decoding="async" alt="" hidden>
       </header>
       <div class="post-content" data-preview-slot="body"></div>
     </article>
@@ -231,6 +231,24 @@ layout: default
     }
   }
 
+  // Mirrors post.html (#688): width/height only when the entry carries both
+  // as positive integers, otherwise neither. The build reads them from the
+  // image file, which a draft upload is not yet; the preview uses only what
+  // the entry's front matter states.
+  function setHeroSize(width, height) {
+    var el = slot("featured-image");
+    if (!el) return;
+    var w = /^[1-9]\d*$/.test(String(width == null ? "" : width).trim()) ? String(width).trim() : "";
+    var h = /^[1-9]\d*$/.test(String(height == null ? "" : height).trim()) ? String(height).trim() : "";
+    if (w && h) {
+      el.setAttribute("width", w);
+      el.setAttribute("height", h);
+    } else {
+      el.removeAttribute("width");
+      el.removeAttribute("height");
+    }
+  }
+
   function formatDate(raw) {
     if (!raw) return "";
     var d = new Date(raw);
@@ -314,6 +332,7 @@ layout: default
 
     if (collection === "posts") {
       setAttr("featured-image", "src", fields.featured_image || "");
+      setHeroSize(fields.featured_image_width, fields.featured_image_height);
       setText("date", formatDate(fields.date));
       setText(
         "reading-time",

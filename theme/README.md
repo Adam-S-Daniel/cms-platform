@@ -43,11 +43,17 @@ cms:
   file) or by setting `cms.logo_url` in `_config.yml`. The `npx` scaffolder seeds
   a "replace me" copy of the placeholder into every new site.
 - `lib/cms-platform-theme/` — the plugins (`auto_tag_pages`, `cachebust_filter`,
-  `exclude_e2e_posts`, `normalize_empty_slug`, `seo_image`, `tag_feeds`) and
+  `exclude_e2e_posts`, `featured_image_dimensions`, `normalize_empty_slug`,
+  `seo_image`, `tag_feeds`) and
   `decap_config_hook` (a `post_write` hook that runs the Decap render — see
   `admin/README.md`). `seo_image` maps a post's `featured_image:` to the `image:`
   jekyll-seo-tag reads (og:image / twitter:image, large card), falling back to an optional
   site-wide `default_image:` in `_config.yml`; an explicit `image:` wins.
+  `featured_image_dimensions` gives the post hero `<img>` its `width`/`height`
+  (no layout shift): optional `featured_image_width` + `featured_image_height`
+  front matter wins, else the size is read from the local image file's header
+  (PNG, GIF, JPEG, WebP); for a remote URL, a missing file or an unknown format
+  both attributes are omitted.
   `exclude_e2e_posts` keeps e2e / test-fixture posts (slug
   starts with `e2e-` or `test_fixture: true`) out of every public aggregation
   surface (feed, sitemap, tag archives + per-tag feeds, listings) by stamping a

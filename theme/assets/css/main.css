@@ -588,6 +588,9 @@ main {
 
 .featured-image {
   width: 100%;
+  /* The width/height attributes (#688) set the aspect ratio only; without
+     this the height attribute would pin the box at the file's pixel height. */
+  height: auto;
   max-height: 400px;
   object-fit: cover;
   border-radius: var(--radius-lg);
