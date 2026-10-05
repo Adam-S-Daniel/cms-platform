@@ -78,6 +78,9 @@ const PLATFORM_META_SPECS = [
   // platform-internal and testIgnored on a CONSUMER lane.
   "admin-shim-load-order.test.js",
   "confirm-wrap-local-backup.test.js",
+  // #625 item 3 — vm-sandbox unit test reading theme/admin/autosave-on-hide.js
+  // SOURCE (platform theme/admin tree, absent on a consumer), same shape as above.
+  "autosave-on-hide.test.js",
   // #386 — parses theme/admin/publish-button.js's SOURCE (doPublish()) to
   // assert its two silent-failure strings stay byte-consistent with the
   // markers e2e/cms-editor-ui.js's publishViaUi() checks for. Reads the
