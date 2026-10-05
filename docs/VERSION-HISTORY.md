@@ -101,8 +101,9 @@ apart from the pins, so no bootstrap redeploy. The skill is an agent-side
 file (the plugin root's `skills/` directory, versioned by the manifests this
 release bumps), not something a site build or workflow reads. jodidaniel.com's
 v0.1.140 bump should pass e2e because the 4 theme specs now skip there.
-adamdaniel.ai's bump shows the same #669 visual diffs the v0.1.139 bump showed,
-until its screenshots are approved.
+adamdaniel.ai's bump should show no new visual diffs: the theme is unchanged and
+the v0.1.139 screenshots were approved and deployed
+([adamdaniel.ai#4102](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4102)).
 
 **v0.1.139 — A tags canary's in-flight PR can no longer outlive its run and leave an `e2e-` tag on a consumer's main; the public theme gets one meta description, share images, a skip link and reduced-motion support; the admin editor gets five fixes.**
 The tags lifecycle specs' `afterAll` safety net looked only at `main`, and any
