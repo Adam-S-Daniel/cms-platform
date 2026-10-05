@@ -66,19 +66,32 @@ function resolvePreviewBaseURL() {
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
   } catch (err) {
+    // Exit code, signal and spawn error code only, and no `cause`: the
+    // original message quotes gh's stderr (the API response's error text),
+    // Playwright prints a cause chain, and this lands in public consumer CI
+    // logs. Check them in the order they can be told apart: a real exit
+    // status; else a signal (which can come with an error code, as in
+    // ETIMEDOUT / ENOBUFS, where gh DID start); else a spawn error code with
+    // no signal (ENOENT: not on PATH, EACCES), where gh never ran.
+    const code = typeof err.code === "string" ? err.code : "";
+    const why = Number.isInteger(err.status)
+      ? `gh exited ${err.status}`
+      : typeof err.signal === "string" && err.signal
+        ? `gh was killed by ${err.signal}${code ? ` (${code})` : ""}`
+        : code
+          ? `gh could not start: ${code}`
+          : "gh failed with no exit status";
     throw new Error(
-      `TARGET=preview: failed to query GitHub for the latest open PR (${err.message}). ` +
+      `TARGET=preview: failed to query GitHub for the latest open PR (${why}). ` +
         `Ensure 'gh' is on PATH and authenticated, or run with TARGET=local.`,
-      { cause: err },
     );
   }
   let pulls;
   try {
     pulls = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`TARGET=preview: GitHub API returned non-JSON: ${raw.slice(0, 200)}`, {
-      cause: err,
-    });
+  } catch {
+    // No body excerpt and no `cause` (a JSON SyntaxError quotes the text).
+    throw new Error(`TARGET=preview: GitHub API returned non-JSON (${raw.length} bytes)`);
   }
   if (!Array.isArray(pulls) || pulls.length === 0) {
     throw new Error(
@@ -350,6 +363,7 @@ exports.test.step = _wrapStep(exports.test.step, exports.test);
 exports.expect = expect;
 exports.TARGET = TARGET;
 exports.resolveTargetBaseURL = resolveTargetBaseURL;
+exports.resolvePreviewBaseURL = resolvePreviewBaseURL;
 exports.safeTestId = safeTestId;
 exports.PER_TEST_FRAMES_ROOT = PER_TEST_FRAMES_ROOT;
 exports.PER_TEST_MAX_FRAMES = PER_TEST_MAX_FRAMES;

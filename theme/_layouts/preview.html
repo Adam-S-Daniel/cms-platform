@@ -231,13 +231,6 @@ layout: default
     }
   }
 
-  function syncFeaturedImageAlt(title) {
-    // A11y: mirror the post <h1> into the hero image's alt. Matches the
-    // real post layout (`_layouts/post.html`) which sets alt="{{ page.title }}".
-    var img = slot("featured-image");
-    if (img) img.setAttribute("alt", title || "");
-  }
-
   function formatDate(raw) {
     if (!raw) return "";
     var d = new Date(raw);
@@ -321,7 +314,6 @@ layout: default
 
     if (collection === "posts") {
       setAttr("featured-image", "src", fields.featured_image || "");
-      syncFeaturedImageAlt(fields.title || "");
       setText("date", formatDate(fields.date));
       setText(
         "reading-time",

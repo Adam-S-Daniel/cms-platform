@@ -101,6 +101,7 @@ const {
   waitForCmsPullRequest,
   waitForMerge,
   makeDeployQueueExtender,
+  describeError,
 } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { resolveCmsTarget } = require("./cms-host");
@@ -567,7 +568,7 @@ test(
             try {
               await addLabel({ prNumber: pr.number, label: "cms/ready" });
             } catch (e) {
-              console.warn(`[media-delete] could not label PR #${pr.number}: ${e && e.message}`);
+              console.warn(`[media-delete] could not label PR #${pr.number}: ${describeError(e)}`);
             }
             labelled = true;
             break;
@@ -671,7 +672,7 @@ test(
             try {
               await addLabel({ prNumber: pr.number, label: "cms/ready" });
             } catch (e) {
-              console.warn(`[media-delete] could not label PR #${pr.number}: ${e && e.message}`);
+              console.warn(`[media-delete] could not label PR #${pr.number}: ${describeError(e)}`);
             }
             labelled = true;
             break;
@@ -767,7 +768,7 @@ test.afterAll(async () => {
       });
       console.warn(`[cleanup-harness] removed ${filePath} via removal PR`);
     } catch (e) {
-      console.warn(`[cleanup-harness] could not remove ${filePath}: ${e && e.message}`);
+      console.warn(`[cleanup-harness] could not remove ${filePath}: ${describeError(e)}`);
     }
   } else {
     console.log(
@@ -783,6 +784,6 @@ test.afterAll(async () => {
       `test(media-roundtrip): harness safety-net delete of leftover upload ${path.basename(imagePath)}`,
     );
   } catch (e) {
-    console.warn(`[cleanup-harness] couldn't remove ${imagePath}: ${e && e.message}`);
+    console.warn(`[cleanup-harness] couldn't remove ${imagePath}: ${describeError(e)}`);
   }
 });

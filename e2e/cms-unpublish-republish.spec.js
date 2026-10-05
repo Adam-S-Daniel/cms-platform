@@ -60,7 +60,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { gh, makeDeployQueueExtender } = require("./github-actions-poll");
+const { gh, makeDeployQueueExtender, describeError } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
 const { guard } = require("./base-collections-guards");
@@ -183,7 +183,7 @@ test(
       } catch (e) {
         // Probe failure → treat as no PR; the unconditional close below still
         // runs. Log so a persistent API issue is visible.
-        console.warn(`[self-heal] could not list PRs on ${CANARY_BRANCH}: ${e && e.message}`);
+        console.warn(`[self-heal] could not list PRs on ${CANARY_BRANCH}: ${describeError(e)}`);
       }
       const urlServes = await urlServesPost(page);
       heal = computeBaselineHeal({ mainPublished, lingeringPR, urlServes });
@@ -424,7 +424,7 @@ test.afterAll(async () => {
     current = await fetchFixtureFromMain();
   } catch (e) {
     console.warn(
-      `[cleanup-harness] couldn't read ${FIXTURE_PATH} from main; skipping safety net: ${e && e.message}`,
+      `[cleanup-harness] couldn't read ${FIXTURE_PATH} from main; skipping safety net: ${describeError(e)}`,
     );
     return;
   }

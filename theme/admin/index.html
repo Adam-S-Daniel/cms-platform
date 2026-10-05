@@ -320,6 +320,11 @@
        CSS that round-trips through rich-text and raw modes. Loads after
        Decap so `window.CMS.registerEditorComponent` is available. -->
   <script src="editor-component-html-embed.js" defer></script>
+  <script src="editor-component-image.js" defer></script>
+
+  <!-- In-editor preview pane styled like the site (site stylesheet + a post /
+       page / project template). Loads after Decap so `window.CMS` exists. -->
+  <script src="preview-pane.js" defer></script>
 
   <!-- Live Preview bridge: broadcasts entry data on every save to any
        open /preview/ tab. Loads after Decap so `window.CMS` exists. -->
@@ -335,6 +340,10 @@
        cannot move a post's address — adamdaniel.ai#3857. Reads
        window.LiveURL.slugify at save time. -->
   <script src="slug-pin.js" defer></script>
+
+  <!-- Tags box: Enter ends a tag, and a space after a comma no longer eats the
+       comma — cms-platform#638. Standalone: touches only the tags-field input. -->
+  <script src="tags-input.js" defer></script>
 
   <!-- "View page on site:" banner above the entry form. Reads form
        state from the DOM and renders a link (or placeholder when

@@ -10,9 +10,59 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.136)
+## Version history (v0.1.0 → v0.1.138)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.138 — A malformed API response can no longer put its body into public output or a minted token into a log line; the Pages permalink field no longer defaults to a shared `/pages/`.**
+A 2xx response whose body is not JSON makes `Response.json()` throw a
+`SyntaxError` that quotes the start of the body, and the three `gh()` wrappers
+let that message through to public CI output: `e2e/github-actions-poll.js`,
+`scripts/diagnose-stuck-pr.js` and `scripts/auto-resolve-newline-conflict.js`
+now catch the parse error and rethrow a body-free `SyntaxError` carrying
+`err.status` (the e2e `gh()` keeps the `SyntaxError` type because
+`cms-scheduled-publish-loop.spec.js` treats an empty 204 from `/dispatches` as
+success by that type). `scripts/mint-app-token.js` had the same gap on its
+`access_tokens` call, where the response body is the token itself and
+`main()` logged `err.message` on an `::error::` line before `::add-mask::`
+ran; it now fails with `HTTP <status>, body is not JSON`. `e2e/base.js` also
+says `gh could not start: ENOENT` when `gh` cannot be spawned instead of
+`gh exited null`, and the fixture-missing throw in
+`cms-unpublish-republish-preview.spec.js` drops `{ cause: e }`, which
+Playwright prints. New `e2e/api-error-body-redaction.test.js` runs the scripts
+as child processes against a stubbed `fetch` and fake `gh` and asserts the
+marker never appears
+([#681](https://github.com/Adam-S-Daniel/cms-platform/pull/681), follow-up to
+[#664](https://github.com/Adam-S-Daniel/cms-platform/pull/664)).
+The admin's Pages collection no longer pre-fills `permalink` with `/pages/`:
+every new page left at the default was written with the same permalink, so a
+second page silently collided with the first. `theme/admin/config.base.yml`,
+`config-local.base.yml` and `config-test.yml` drop the `default`, the field
+stays required, and its pattern now rejects a bare `/pages/`
+(`^/(?!pages/$).+/$`); the hint says a page is not added to the menu
+automatically. New `e2e/pages-permalink-no-shared-default.test.js` locks it
+([#665](https://github.com/Adam-S-Daniel/cms-platform/pull/665), for
+[#639](https://github.com/Adam-S-Daniel/cms-platform/issues/639)).
+Consumers get both with their next platform bump: the admin config is rendered
+from the gem at every site build, and nothing under `infrastructure/` changed,
+so no bootstrap redeploy.
+
+**v0.1.137 — GitHub API response bodies stay out of public CI logs, artifacts and PR comments.**
+The "Self-heal orphaned canary markers" step (`scripts/reset-orphaned-canary.sh`,
+run by `cms-publish-loop-{prod,host,preview}` on public consumer repos) printed
+a caught error's message or stack, which carried up to 300 bytes of the raw
+GitHub API response body; it now logs only `HTTP <status> <type>` or the error
+type ([#661](https://github.com/Adam-S-Daniel/cms-platform/pull/661)). The
+shared e2e harness had the same leak by three routes (warning lines, thrown
+errors printed by the `list` reporter and the live-failure PR comment, and
+messages built from `e.message`): `gh()` in `e2e/github-actions-poll.js` now
+throws status and URL only and keeps the body on `err.responseBody`, an exported
+`describeError(e)` replaces `e.message` at every site that logs a caught `gh()`
+error, and `scripts/diagnose-stuck-pr.js`, `scripts/auto-resolve-newline-conflict.js`
+and `e2e/base.js`'s preview-PR lookup stop quoting response bodies or `gh api`
+stderr ([#664](https://github.com/Adam-S-Daniel/cms-platform/pull/664)).
+Consumers get it with their next platform bump; no template change, so no
+bootstrap redeploy.
 
 **v0.1.136 — the admin's status copy tells the truth on a coming-soon site and a new entry; plainer toasts; the Reviews link steps back and returns you where you were.**
 On a gated site the draft bar and the Publish confirmation say visitors keep

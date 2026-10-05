@@ -126,3 +126,39 @@ test.describe("admin-mobile.css — mobile clearance/affordance fixes", () => {
     ).toMatch(/box-shadow\s*:\s*inset\b/);
   });
 });
+
+// #640 — on desktop the in-flow #cms-publish-state bar sits between Decap's
+// `padding-top: 66px` EditorContainer and its `height: 100%` Editor, so the
+// container's content overflowed by the bar's height and slid the Save/Publish
+// toolbar off the top. Measured in a real browser (1024x768, bar present):
+// scrollHeight 814 vs clientHeight 768 before; 768 vs 768 after. This lint
+// locks the rules that make that so, using the same balanced-brace scan.
+test.describe("admin-mobile.css — desktop editor must not overflow (#640)", () => {
+  let desktopBlock;
+  test.beforeAll(() => {
+    const stripped = stripCssComments(fs.readFileSync(CSS_PATH, "utf8"));
+    const idx = stripped.indexOf("@media (min-width: 769px)");
+    expect(idx, "admin-mobile.css must carry an @media (min-width: 769px) desktop block").not.toBe(-1);
+    desktopBlock = extractBlockAfter(stripped, idx);
+    expect(desktopBlock, "the desktop @media block must be a balanced {...}").not.toBeNull();
+  });
+
+  test("the editor box is a flex column so the bar and the pane share its height", () => {
+    const body = extractRuleBody(desktopBlock, '[class*="EditorContainer"] {');
+    expect(body, "the desktop block must carry an EditorContainer rule").not.toBeNull();
+    expect(body).toMatch(/display\s*:\s*flex/);
+    expect(body).toMatch(/flex-direction\s*:\s*column/);
+  });
+
+  test("the pane shrinks (min-height 0, full width) and the bar keeps its own height", () => {
+    const pane = extractRuleBody(desktopBlock, '> :not(#cms-publish-state)');
+    expect(pane, "the non-bar children need a rule").not.toBeNull();
+    expect(pane).toMatch(/flex\s*:\s*1\s+1\s+auto/);
+    expect(pane).toMatch(/min-height\s*:\s*0/);
+    // Decap's Editor is `margin: 0 auto`, which collapses to width 0 in a column.
+    expect(pane).toMatch(/width\s*:\s*100%/);
+    const bar = extractRuleBody(desktopBlock, "> #cms-publish-state");
+    expect(bar, "the bar needs a rule").not.toBeNull();
+    expect(bar).toMatch(/flex\s*:\s*0\s+0\s+auto/);
+  });
+});

@@ -115,6 +115,7 @@ const {
   waitForCmsPullRequest,
   waitForMerge,
   makeDeployQueueExtender,
+  describeError,
 } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const {
@@ -478,7 +479,7 @@ test(
               await addLabel({ prNumber: pr.number, label: "cms/ready" });
             } catch (e) {
               console.warn(
-                `[prod-mutate-delete] could not label PR #${pr.number}: ${e && e.message}`,
+                `[prod-mutate-delete] could not label PR #${pr.number}: ${describeError(e)}`,
               );
             }
             labelled = true;
@@ -576,6 +577,6 @@ test.afterAll(async () => {
     });
     console.warn(`[cleanup-harness] removed ${filePath} via removal PR`);
   } catch (e) {
-    console.warn(`[cleanup-harness] could not remove ${filePath}: ${e && e.message}`);
+    console.warn(`[cleanup-harness] could not remove ${filePath}: ${describeError(e)}`);
   }
 });

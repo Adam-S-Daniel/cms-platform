@@ -255,11 +255,19 @@
   // every `banner.innerHTML = …` write and schedule another render,
   // detaching the anchor mid-click and producing a "click → element
   // detached" flake against the very thing this banner is for.
+  // The cache belongs to ONE banner element: Decap unmounts the form on a
+  // /new -> /entries/<slug> route change, so ensureBanner() builds a fresh,
+  // empty node and an identical nextHTML must still be written into it.
   var lastHTML = null;
+  var lastBanner = null;
 
   function render() {
     var banner = ensureBanner();
     if (!banner) return;
+    if (banner !== lastBanner) {
+      lastBanner = banner;
+      lastHTML = null;
+    }
     var data = compute();
     if (!data) {
       if (banner.style.display !== "none") banner.style.display = "none";

@@ -18,6 +18,7 @@
     "immutable": "3.8.4",
     "markdown-it": "15.0.2",
     "pngjs": "^7.0.0",
+    "postcss": "8.5.28",
     "serve": "^14.2.6",
     "yaml": "2.9.1"
   },

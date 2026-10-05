@@ -350,3 +350,31 @@
     padding-top: 0 !important;
   }
 }
+
+/* ── Desktop: the publish-state bar must not make the editor scroll ───────
+ * (cms-platform#640). Decap's EditorContainer is `height: 100%; overflow:
+ * hidden; padding-top: 66px` (room for the absolute toolbar) and its Editor
+ * child is `height: 100%` of what is left. publish-step-hint.js inserts the
+ * in-flow #cms-publish-state bar between them, so the container's content is
+ * toolbar clearance + bar + a full-height editor: ~46px taller than the box,
+ * and any focus or find-in-page scroll slid the Save/Publish toolbar off the
+ * top. Make the container a flex column so the bar keeps its own height and
+ * the editor pane shrinks by exactly that much. The toolbar is absolute, so
+ * it is not a flex item. Above the phone breakpoint only: below it the
+ * container is static and auto-height (rule 3) and the page scrolls. */
+@media (min-width: 769px) {
+  [class*="EditorContainer"] {
+    display: flex;
+    flex-direction: column;
+  }
+  [class*="EditorContainer"] > :not(#cms-publish-state) {
+    flex: 1 1 auto;
+    min-height: 0;
+    /* The Editor box is `margin: 0 auto`, which collapses a flex item to its
+     * content width (0) in a column; keep the full-width block it had. */
+    width: 100%;
+  }
+  [class*="EditorContainer"] > #cms-publish-state {
+    flex: 0 0 auto;
+  }
+}

@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="{{ page.description | default: site.description }}">
   {%- if page.robots -%}
   <meta name="robots" content="{{ page.robots }}">
   {%- endif -%}
@@ -20,9 +19,10 @@
   {% include analytics/cloudwatch-rum.html %}
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
   <div class="site-wrapper">
     {% include header.html %}
-    <main id="main-content">
+    <main id="main-content" tabindex="-1">
       {{ content }}
     </main>
     {% include footer.html %}

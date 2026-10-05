@@ -47,6 +47,8 @@ const PLATFORM_META_SPECS = [
   // assertion; and the exclude-plugin's synthetic-build test. Validated in the
   // platform's own self-CI (against the platform tree), not a consumer site.
   "cms-posts-list-enhance.spec.js",
+  // Parses theme/admin/config*.yml in the platform tree (#639 Pages permalink lock).
+  "pages-permalink-no-shared-default.test.js",
   "e2e-posts-public-exclusion.test.js",
   // KEEP LISTED. It walks `theme/admin/` in the platform tree, which
   // admin-spec-source-read-lint.test.js forbids a consumer-lane spec from doing
@@ -149,6 +151,8 @@ const PLATFORM_META_SPECS = [
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
   "slug-pin.test.js",
+  // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
+  "editor-component-image.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",
@@ -194,6 +198,9 @@ const PLATFORM_META_SPECS = [
   // sense only in the platform self-CI, never in a consumer.
   "site-capabilities.test.js",
   "base-collections-skip-meta.test.js",
+  // #656 — parses the platform theme's own theme/assets/css/main.css, absent in
+  // a consumer. Runs in self-ci node-unit-lints.
+  "theme-reduced-motion.test.js",
   // #33 CONCERN B — the pure-fs guard-registry lint: reads the platform's TWO
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
@@ -398,6 +405,9 @@ const PLATFORM_META_SPECS = [
   // caller, so it is platform-internal, self-CI only.
   "gitleaks-allowlist-canary.test.js",
   "github-actions-poll.test.js",
+  // Runs scripts/diagnose-stuck-pr.js and scripts/auto-resolve-newline-
+  // conflict.js from the platform tree; a consumer ships neither.
+  "api-error-body-redaction.test.js",
   "live-failures-reporter.test.js",
   "playwright-log-privacy.test.js",
   // #527 — locks self-fixture-e2e.yml (the platform's own browser lane): reads
@@ -491,6 +501,9 @@ const PLATFORM_META_SPECS = [
   // this entry is the ONLY thing keeping it off a consumer.
   "oauth-proxy-callback-page.test.js",
   "preview-bot-comment.test.js",
+  // cms-platform#651 — reads the platform's deploy-preview.yml (the preview 404
+  // page heredoc); self-CI only, like preview-bot-comment above.
+  "preview-404-contrast.test.js",
   "preview-config-patch.spec.js",
   // cms-platform#324 — reads infrastructure/bootstrap/template.yaml (the
   // platform's own CloudFormation template; a consumer vendors no copy of
@@ -657,6 +670,7 @@ const PLATFORM_META_SPECS = [
   // payload. Both read theme/ SOURCE, absent on a consumer.
   "draft-media-fallback.test.js",
   "preview-bridge-payload.test.js",
+  "preview-pane.test.js",
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",
