@@ -393,6 +393,10 @@ const PLATFORM_META_SPECS = [
   // #527 — locks self-fixture-e2e.yml (the platform's own browser lane): reads
   // and executes steps of that workflow DEFINITION, which a consumer never ships.
   "self-fixture-e2e.test.js",
+  // #526 — locks self-release-review-gate.yml and scripts/release-review-gate.js
+  // (the release-bearing PR review stamp): platform workflow + script, which a
+  // consumer never ships.
+  "self-release-review-gate.test.js",
   // Reads the platform's admin shell SOURCE (theme/admin/index*.html) —
   // meaningless on a consumer, which ships only the gem-rendered admin.
   "live-preview-gating-lint.test.js",

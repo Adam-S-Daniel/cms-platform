@@ -114,13 +114,28 @@ function ifExpressions(yamlText) {
   return out;
 }
 
+// Workflows that MUST fire on `edited`, keyed by repo-relative path, with the
+// reason. #222's hazard is a caller SKIPPED on `edited`: it reports no check run
+// and withdraws a context reported green earlier. An entry here runs its one job
+// with no `if:` on every `edited` event, so it REPLACES its verdict instead.
+const EDITED_REQUIRED = {
+  [path.join(".github", "workflows", "self-release-review-gate.yml")]:
+    "#526: the review stamp lands by editing the PR body, which changes no SHA; " +
+    "without `edited` the required `release-review-gate` stays red until an " +
+    "unrelated push (locked by e2e/self-release-review-gate.test.js)",
+};
+
 for (const file of candidateWorkflowPaths()) {
   const label = path.relative(REPO_ROOT, file);
   const yaml = fs.readFileSync(file, "utf8");
   const doc = parseYaml(yaml) || {};
 
   test.describe(`${label} — #222 no pull_request:edited`, () => {
-    if (events(doc.on).includes("pull_request")) {
+    if (EDITED_REQUIRED[label]) {
+      test("on.pull_request.types declares 'edited', as its exemption requires", () => {
+        expect(prTypes(doc.on) || [], EDITED_REQUIRED[label]).toContain("edited");
+      });
+    } else if (events(doc.on).includes("pull_request")) {
       test("on.pull_request.types does not declare 'edited'", () => {
         expect(
           prTypes(doc.on) || [],

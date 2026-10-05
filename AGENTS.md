@@ -105,7 +105,12 @@ entry, **every platform pin under `examples/site/.github/workflows`** (each
 `PLATFORM_VERSION`**. `release.yml` refuses a tag disagreeing with the
 manifests; `e2e/examples-site-pins-current.test.js` enforces the last two in the
 REQUIRED node-unit-lints lane, from in-repo values only — which is what lets the
-release PR go green *before* the tag exists.
+release PR go green *before* the tag exists. **A release-bearing PR (a manifest
+`version` change, or a `release/*` branch) also needs
+`Independent review: CLEAN at <full head sha>` in its body**, written by a
+reviewer independent of the author after reviewing that head (#526 criterion 3,
+owner decision 2026-10-05): the REQUIRED `release-review-gate` check fails
+without it, and a new push makes the stamp stale.
 
 ## The model
 
@@ -374,10 +379,12 @@ of the byte compare. → `docs/CONSUMER-COMPATIBILITY.md` before changing
 `.github/workflows/self-ci.yml` is this repo's merge gate. Six lanes, all
 REQUIRED: **actionlint**, **ruby-theme-specs**, **node-unit-lints** (pure-fs
 `e2e/*.test.js`, DENY list), **plugin-validate** (NON-STRICT deliberately),
-**python-unit-tests** and **cfn-lint** (no `continue-on-error` since #525). Two
-more required contexts come from siblings: `scan / scan` and **`fixture-e2e`**
+**python-unit-tests** and **cfn-lint** (no `continue-on-error` since #525). Three
+more required contexts come from siblings: `scan / scan`, **`fixture-e2e`**
 (#527: the `@lane: local` specs on the two admin projects against
-`e2e/fixture-site`; the public projects run only in CONSUMER e2e).
+`e2e/fixture-site`; the public projects run only in CONSUMER e2e) and
+**`release-review-gate`** (#526: the review stamp above; the one PR workflow
+that fires on `edited`, because the stamp is a body edit).
 `self-dependabot-auto-merge.yml` also triggers on every PR, but its job is a
 no-op for anyone but Dependabot. → `docs/CONTRIBUTING.md`.
 
@@ -385,6 +392,7 @@ no-op for anyone but Dependabot. → `docs/CONTRIBUTING.md`.
 |---|---|
 | `self-ci.yml`, `self-secrets-scan.yml` | all (required; no filter) |
 | `self-fixture-e2e.yml` | in-job deny-list: all but `docs/`, `infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE`, `*.md` outside `e2e/fixture-site/`; push to main always |
+| `self-release-review-gate.yml` | all (required; in-job: enforces only on a release-bearing PR, success otherwise) |
 | `self-dependabot-auto-merge.yml` | all (an actuator, skipped unless Dependabot) |
 | `repo-settings-pat-verify.yml` | its own file (`on.paths`; not required) |
 | `repo-settings-apply.yml` | `repo-settings.yml` (push to main) |
