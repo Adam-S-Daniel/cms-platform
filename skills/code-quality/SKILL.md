@@ -54,7 +54,7 @@ actionlint -ignore '"github\.(event\.pull_request\.head\.ref|head_ref)" is poten
 ## Adding a new language / file type
 
 1. Pick the best-in-class linter; add it to the right manifest (npm `package.json` for JS-runtime tools; pip in the lint workflow — where the repo has one — plus the pre-commit hook for Python-family; binary download for compiled tools).
-2. Create its config file (prefer a dedicated dotfile; only Python config lives in `pyproject.toml`).
+2. Create its config file (prefer a dedicated dotfile; only Python config lives in `pyproject.toml`); for golangci-lint write a v2 config (`version: "2"`, settings under `linters.settings`).
 3. Add a per-language branch to `scripts/lint-staged.sh` (tool-availability-gated so missing tools skip, never block) — and, only in a repo that actually runs a lint workflow, a `changes`-gated step there too.
 4. Document the toolchain row + any rule relaxations in this skill, and add the workflow trigger to the salient-paths table.
 5. Relaxations get a comment explaining *why*; never disable a rule to hide a real bug.
