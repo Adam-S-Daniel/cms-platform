@@ -1,5 +1,21 @@
 <footer class="site-footer">
   <div class="container">
+    <nav class="footer-follow" aria-label="Follow">
+      {%- comment -%}
+        Follow links for a reader at the end of a post: the Atom feed (every
+        site has /feed.xml) plus each profile in `cross_post.profiles`. The
+        profile URLs were already validated as absolute https by the
+        `rel_me_urls` filter in <head> (rel-me.html), which fails the build
+        on a bad one, so they are safe to link here.
+      {%- endcomment -%}
+      <a href="{{ '/feed.xml' | relative_url }}">RSS</a>
+      {%- for _profile in site.cross_post.profiles -%}
+      {%- assign _profile_url = _profile[1] | strip -%}
+      {%- if _profile_url != "" %}
+      <a href="{{ _profile_url | escape }}" rel="me">{{ _profile[0] | capitalize | escape }}</a>
+      {%- endif -%}
+      {%- endfor %}
+    </nav>
     <p>&copy; {{ 'now' | date: "%Y" }} {{ site.author.name | default: site.title }}</p>
   </div>
 </footer>
