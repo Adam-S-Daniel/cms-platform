@@ -526,3 +526,199 @@ test.describe("Decap-created fixtures close the in-flight PR before reading the 
     });
   }
 });
+
+// #697 — shapes the order lint above cannot see. Each check walks the spec's
+// whole AST, so a helper outside the afterAll (tryHardDelete) is covered too.
+const SAFETY_NET_SPECS = [
+  "cms-tags-lifecycle.spec.js",
+  "cms-tags-lifecycle-preview.spec.js",
+  "cms-publish-loop-prod-mutate.spec.js",
+  "cms-delete-published.spec.js",
+  "cms-media-roundtrip.spec.js",
+];
+// Calls whose failure must surface: a close, a strict read, or a removal.
+const STRICT_CALLS = new Set([
+  "closeOpenPrsAddingFile",
+  "readFileOnRef",
+  "removeFixtureViaPr",
+  "tryHardDelete",
+  "createBranchFromMain",
+  "deleteFileOnBranch",
+  "openPr",
+  "addReadyLabel",
+]);
+const FUNCTION_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
+
+function subtreeIdentifiers(node) {
+  const names = new Set();
+  walk.full(node, (n) => {
+    if (n.type === "Identifier") names.add(n.name);
+  });
+  return names;
+}
+
+// A catch handler is loud when it throws, or records the error into a binding
+// (`failures.push(e)`, `err = e`) that its enclosing function throws later.
+function handlerIsLoud(handler, enclosingFn) {
+  let throws = false;
+  const records = new Set();
+  walk.full(handler.body, (n) => {
+    if (n.type === "ThrowStatement") throws = true;
+    if (
+      n.type === "CallExpression" &&
+      n.callee.type === "MemberExpression" &&
+      n.callee.property.name === "push" &&
+      n.callee.object.type === "Identifier"
+    ) {
+      records.add(n.callee.object.name);
+    }
+    if (n.type === "AssignmentExpression" && n.left.type === "Identifier") records.add(n.left.name);
+  });
+  if (throws) return true;
+  if (records.size === 0 || !enclosingFn) return false;
+  let rethrown = false;
+  walk.full(enclosingFn.body, (n) => {
+    if (n.type !== "ThrowStatement" || n.start >= handler.start && n.end <= handler.end) return;
+    for (const name of subtreeIdentifiers(n.argument)) if (records.has(name)) rethrown = true;
+  });
+  return rethrown;
+}
+
+function strictTryViolations(ast) {
+  const out = [];
+  walk.ancestor(ast, {
+    TryStatement(n, _state, ancestors) {
+      if (!n.handler) return;
+      const strict = [];
+      walk.simple(n.block, {
+        CallExpression(c) {
+          const name = calleeName(c.callee);
+          if (STRICT_CALLS.has(name)) strict.push(name);
+        },
+      });
+      if (strict.length === 0) return;
+      const fn = [...ancestors].reverse().find((a) => a !== n && FUNCTION_TYPES.has(a.type));
+      if (!handlerIsLoud(n.handler, fn)) out.push(`line ${n.loc.start.line}: catch around ${strict.join(", ")} swallows the error`);
+    },
+  });
+  return out;
+}
+
+function readCatchViolations(ast) {
+  const out = [];
+  walk.ancestor(ast, {
+    CallExpression(n, _state, ancestors) {
+      if (calleeName(n.callee) !== "readFileOnRef") return;
+      const parent = ancestors[ancestors.length - 2];
+      if (
+        parent &&
+        parent.type === "MemberExpression" &&
+        parent.object === n &&
+        parent.property &&
+        ["catch", "then", "finally"].includes(parent.property.name)
+      ) {
+        out.push(`line ${n.loc.start.line}: readFileOnRef(...).${parent.property.name}(...)`);
+      }
+    },
+  });
+  return out;
+}
+
+// A `branch: "main"` key in a request body is a direct write to the default
+// branch, which the pull_request rule refuses (docs/CI-INVARIANTS.md: no
+// bypass actors).
+function directMainWrites(ast) {
+  const out = [];
+  walk.simple(ast, {
+    Property(n) {
+      const key = n.key && (n.key.name || n.key.value);
+      if (key === "branch" && n.value.type === "Literal" && n.value.value === "main") {
+        out.push(`line ${n.loc.start.line}: branch: "main"`);
+      }
+    },
+  });
+  return out;
+}
+
+test.describe("Decap fixture safety nets fail loudly and remove through a PR (#697)", () => {
+  for (const spec of SAFETY_NET_SPECS) {
+    const ast = () => parse(fs.readFileSync(path.join(__dirname, spec), "utf8"));
+    test(`${spec}: readFileOnRef is never chained with a catch`, () => {
+      expect(readCatchViolations(ast()), "only a 404 means absent; a .catch reads every error as absent").toEqual([]);
+    });
+    test(`${spec}: no catch around a close, read or removal swallows the error`, () => {
+      expect(strictTryViolations(ast())).toEqual([]);
+    });
+    test(`${spec}: no direct write to main`, () => {
+      expect(directMainWrites(ast())).toEqual([]);
+    });
+  }
+
+  test("cms-media-roundtrip.spec.js: the afterAll removes both the post and the upload via removeFixtureViaPr", () => {
+    const ast = parse(fs.readFileSync(path.join(__dirname, "cms-media-roundtrip.spec.js"), "utf8"));
+    let hook = null;
+    walk.simple(ast, {
+      CallExpression(n) {
+        if (calleeName(n.callee) === "test.afterAll") hook = n.arguments[n.arguments.length - 1];
+      },
+    });
+    const removed = [];
+    walk.simple(hook, {
+      CallExpression(n) {
+        if (calleeName(n.callee) !== "removeFixtureViaPr") return;
+        const arg = n.arguments[0];
+        const prop = arg.properties.find((p) => p.key && p.key.name === "filePath");
+        // shorthand `{ filePath }` and `filePath: imagePath` both resolve to the value's name
+        removed.push(prop && prop.value.type === "Identifier" ? prop.value.name : null);
+      },
+    });
+    expect(removed.sort()).toEqual(["filePath", "imagePath"]);
+  });
+
+  // #697 item 3: a failed post leg must not skip the upload leg, so every
+  // close, read and removal in the media hook sits in its own try (whose
+  // catch the rule above requires to record and rethrow).
+  test("cms-media-roundtrip.spec.js: every close, read and removal in the afterAll is inside a try", () => {
+    const ast = parse(fs.readFileSync(path.join(__dirname, "cms-media-roundtrip.spec.js"), "utf8"));
+    let hook = null;
+    walk.simple(ast, {
+      CallExpression(n) {
+        if (calleeName(n.callee) === "test.afterAll") hook = n.arguments[n.arguments.length - 1];
+      },
+    });
+    const bare = [];
+    walk.ancestor(hook, {
+      CallExpression(n, _state, ancestors) {
+        const name = calleeName(n.callee);
+        if (!STRICT_CALLS.has(name)) return;
+        const guarded = ancestors.some((a, i) => a.type === "TryStatement" && ancestors[i + 1] === a.block);
+        if (!guarded) bare.push(`line ${n.loc.start.line}: ${name}`);
+      },
+    });
+    expect(bare).toEqual([]);
+  });
+
+  // The detectors themselves, on the mutations the #694 review found surviving.
+  test("the detectors flag the surviving mutations", () => {
+    const src = (body) => parse(body);
+    // The review's mutant is `.catch(() => null)`; any handler reads an error
+    // as a value, and the repo's silent-catch lint forbids that literal here.
+    expect(readCatchViolations(src("async function f(){ await readFileOnRef({}).catch(() => false); }"))).toHaveLength(1);
+    expect(readCatchViolations(src("async function f(){ await readFileOnRef({}); }"))).toEqual([]);
+    const warnOnly =
+      "async function tryHardDelete(){ try { await removeFixtureViaPr({}); } catch (e) { console.warn(e); } }";
+    expect(strictTryViolations(src(warnOnly))).toHaveLength(1);
+    const rethrow =
+      "async function tryHardDelete(){ try { await removeFixtureViaPr({}); } catch (e) { throw new Error(String(e)); } }";
+    expect(strictTryViolations(src(rethrow))).toEqual([]);
+    const recorded =
+      "async function h(){ const f = []; try { await readFileOnRef({}); } catch (e) { f.push(e); } if (f.length) throw f[0]; }";
+    expect(strictTryViolations(src(recorded))).toEqual([]);
+    const recordedNeverThrown =
+      "async function h(){ const f = []; try { await readFileOnRef({}); } catch (e) { f.push(e); } }";
+    expect(strictTryViolations(src(recordedNeverThrown))).toHaveLength(1);
+    expect(
+      directMainWrites(src("gh('/x', { body: JSON.stringify({ sha: 's', branch: \"main\" }) })")),
+    ).toHaveLength(1);
+  });
+});
