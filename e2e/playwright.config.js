@@ -47,6 +47,8 @@ const PLATFORM_META_SPECS = [
   // assertion; and the exclude-plugin's synthetic-build test. Validated in the
   // platform's own self-CI (against the platform tree), not a consumer site.
   "cms-posts-list-enhance.spec.js",
+  // Parses theme/admin/config*.yml in the platform tree (#639 Pages permalink lock).
+  "pages-permalink-no-shared-default.test.js",
   "e2e-posts-public-exclusion.test.js",
   // KEEP LISTED. It walks `theme/admin/` in the platform tree, which
   // admin-spec-source-read-lint.test.js forbids a consumer-lane spec from doing
