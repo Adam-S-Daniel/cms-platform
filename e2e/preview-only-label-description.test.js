@@ -64,6 +64,12 @@
  * them), so shadowed locals remain separate and message,
  * response and body access fail. Simple local aliases, assignments, member
  * assignments and array push/unshift/splice propagate taint to a fixed point.
+ * Function.prototype bind/call/apply on known sinks, including static computed
+ * properties and lexical aliases, check their arguments. bind checks bound
+ * arguments when created but reports only when its result is invoked; call and
+ * apply invoke immediately. Their thisArg is checked conservatively as output.
+ * A summary method invoked through call/apply retains the builder for fluent
+ * output checks. Adapters of adapters (for example, call.bind) are not modeled.
  * This is conservative across branches, order and alias types, and safe
  * reassignment does not clear taint; arbitrary mutators, dynamic sink methods,
  * function calls and aliases through nested object properties are not followed.
@@ -348,7 +354,13 @@ const OUTPUT_SINKS = [
 function sinkResolver(ast, binding) {
   const values = new Map();
   const flows = [];
+  const adapter = (kind, sink) => `@${kind}|${sink}`;
+  const adapted = (path) => {
+    const match = /^@(bind|call|apply)\|(.+)$/.exec(path);
+    return match && { kind: match[1], sink: match[2] };
+  };
   const member = (paths, key) => new Set([...paths].map((p) => {
+    if (["bind", "call", "apply"].includes(key) && OUTPUT_SINKS.includes(p)) return adapter(key, p);
     if (p === "core.summary" || p === "core.summary.*") return "core.summary.*";
     const next = key === undefined ? "" : `${p}.${key}`;
     return OUTPUT_SINKS.includes(next) || ["core.summary", "process.stdout", "process.stderr"].includes(next) ? next : "";
@@ -361,7 +373,16 @@ function sinkResolver(ast, binding) {
       return bound ? (values.get(bound) || new Set()) : new Set(["core", "console", "process"].includes(node.name) ? [node.name] : [""]);
     }
     if (node.type === "MemberExpression") return member(paths(node.object), node.computed ? staticString(node.property) : node.property.name);
-    if (node.type === "CallExpression" && paths(node.callee).has("core.summary.*")) return new Set(["core.summary"]);
+    if (node.type === "CallExpression") {
+      const callees = paths(node.callee);
+      const returns = [...callees].map((p) => {
+        const target = adapted(p);
+        if (target?.kind === "bind") return target.sink;
+        if (["call", "apply"].includes(target?.kind) && target.sink === "core.summary.*") return "core.summary";
+        return p === "core.summary.*" ? "core.summary" : "";
+      });
+      if (returns.some(Boolean)) return new Set(returns);
+    }
     return new Set([""]);
   };
   const targets = (pattern, source, keys = []) => {
@@ -390,7 +411,15 @@ function sinkResolver(ast, binding) {
       values.set(bound, saved);
     }
   }
-  return paths;
+  return (call) => {
+    const candidates = [...paths(call.callee)].map((path) => adapted(path) || { kind: "direct", sink: path });
+    const sinks = new Set(candidates.map(({ sink }) => sink));
+    const reportable = candidates.length > 0 && candidates.every(({ kind, sink }) =>
+      kind !== "bind" && REPORT_SINKS.includes(sink));
+    // Checking the whole argument list also checks thisArg. For apply, the
+    // array expression (or a tainted array alias) is inspected recursively.
+    return { sinks, reportable, args: call.arguments };
+  };
 }
 
 // The ways `node` can expose a tainted value, as short descriptions.
@@ -556,10 +585,10 @@ function scanReports(body, tainted, intoFunctions, ctx, rethrowNames = new Set()
       walk.base.ThrowStatement(node, state, visit);
     },
     CallExpression(node, state, visit) {
-      const sinks = ctx.sinks(node.callee);
+      const { sinks, reportable, args } = ctx.sinks(node);
       if ([...sinks].some((sink) => OUTPUT_SINKS.includes(sink))) {
-        if (sinks.size && [...sinks].every((sink) => REPORT_SINKS.includes(sink))) reports = true;
-        const refs = node.arguments.flatMap((a) => leakedRefs(a, tainted, ctx));
+        if (reportable) reports = true;
+        const refs = args.flatMap((a) => leakedRefs(a, tainted, ctx));
         if (refs.length) leaks.push(`line ${node.loc.start.line}: ${[...sinks].filter(Boolean).join("/")}() logs ${[...new Set(refs)].join(", ")}`);
       }
       walk.base.CallExpression(node, state, visit);
@@ -1424,6 +1453,67 @@ test.describe("createLabel handler residual sinks and scopes", () => {
     });
     test(`rejects residual scope ${name} in ${handler}`, () => {
       expect(analyzeScript(wrap(`const outer = e; ${unsafe}`), "t").problems.join("\n")).toMatch(leak);
+    });
+  }
+});
+
+// Function.prototype adapters are resolved as sink calls, without executing
+// these snippets. Creation of a bound function is output, not a failure report.
+test.describe("createLabel handler sink adapters", () => {
+  const call = "github.rest.issues.createLabel({ name: 'cms/x', description: 'Fine' })";
+  const handlers = [
+    ["catch", (body) => `try { await ${call}; } catch (e) { ${body} }`],
+    ["promise", (body) => `await ${call}.catch(e => { ${body} });`],
+  ];
+  const rows = [
+    ["bound data without invocation", "core.warning.bind(null, e.message); core.warning('failed');", /logs more than/],
+    ["bound thisArg", "core.warning.bind(e.message, 'fixed'); core.warning('failed');", /logs more than/],
+    ["bound array alias", "const parts = []; parts.push(e.message); core.warning.bind(null, parts); core.warning('failed');", /logs more than/],
+    ["invoked bound data", "const report = core.warning.bind(null, e.message); report('fixed');", /logs more than/],
+    ["call data", "core.warning.call(null, e.message);", /logs more than/],
+    ["call thisArg", "core.warning.call(e.message, 'fixed');", /logs more than/],
+    ["apply array data", "core.warning.apply(null, ['fixed', e.message]);", /logs more than/],
+    ["apply tainted array alias", "const args = []; args.push(e.message); core.warning.apply(null, args);", /logs more than/],
+    ["computed adapter", "core['warning']['call'](null, e.message);", /logs more than/],
+    ["destructured adapter", "const { call: invoke } = core.warning; invoke(null, e.message);", /logs more than/],
+    ["aliased adapter", "const invoke = core.warning.call; const again = invoke; again(null, e.message);", /logs more than/],
+    ["rebound adapter still checks output", "let invoke = core.warning.call; invoke = unknown; invoke(null, e.message); core.warning('failed');", /logs more than/],
+    ["lower sink call", "console.info.call(null, e.message); core.warning('failed');", /logs more than/],
+    ["bound console sink", "console.log.bind(console)(e.message); core.warning('failed');", /logs more than/],
+    ["info call", "core.info.call(null, e.message); core.warning('failed');", /logs more than/],
+    ["info apply", "core.info.apply(null, [e.message]); core.warning('failed');", /logs more than/],
+    ["bound stderr alias", "const output = process.stderr.write.bind(process.stderr); output(e.message); core.warning('failed');", /logs more than/],
+    ["bound summary alias", "const output = core.summary.addRaw.bind(core.summary); output(e.message).write(); core.warning('failed');", /logs more than/],
+    ["summary call fluent output", "core.summary.addRaw.call(core.summary, e.status).write(e.message); core.warning('failed');", /logs more than/],
+    ["summary apply fluent output", "core.summary.addRaw.apply(core.summary, [e.status]).write(e.message); core.warning('failed');", /logs more than/],
+    ["bind creation is silent", "core.warning.bind(null, 'fixed');", /silently caught/],
+    ["bound alias creation is silent", "const { bind: adapt } = core.warning; adapt(null, 'fixed');", /silently caught/],
+    ["uncertain bound alias is silent", "let report = core.warning.bind(null); report = () => {}; report('fixed');", /silently caught/],
+    ["uncertain call adapter is silent", "let invoke = core.warning.call; invoke = unknown; invoke(null, 'fixed');", /silently caught/],
+    ["lower sink call is silent", "console.info.call(null, 'fixed');", /silently caught/],
+    ["bounded bind creation", "core.warning.bind(null, e.status); core.warning('failed');", null],
+    ["invoked bound alias", "const report = core.warning.bind(null, 'fixed'); report();", null],
+    ["chained bind aliases", "const first = core.warning.bind(null); const second = first['bind'](null, 'fixed'); second();", null],
+    ["direct call reports", "core.warning.call(null, e.status);", null],
+    ["direct apply reports", "core.warning.apply(null, [e.status]);", null],
+    ["computed apply reports", "core['warning']['apply'](null, [e.status]);", null],
+    ["bound console bounded", "console.log.bind(console)(e.status); core.warning('failed');", null],
+    ["info call bounded", "core.info.call(null, e.status); core.warning('failed');", null],
+    ["info apply bounded", "core.info.apply(null, [e.status]); core.warning('failed');", null],
+    ["bound stderr alias bounded", "const output = process.stderr.write.bind(process.stderr); output(e.status); core.warning('failed');", null],
+    ["bound summary alias bounded", "const output = core.summary.addRaw.bind(core.summary); output(e.status).write(); core.warning('failed');", null],
+    ["summary call fluent bounded", "core.summary.addRaw.call(core.summary, e.status).write(e.status); core.warning('failed');", null],
+    ["summary apply fluent bounded", "core.summary.addRaw.apply(core.summary, [e.status]).write(e.status); core.warning('failed');", null],
+    ["destructured call reports", "const { call: invoke } = core.warning; invoke(null, e.status);", null],
+    ["destructured bind reports when invoked", "const { bind: adapt } = core.warning; const report = adapt(null, 'fixed'); report();", null],
+    ["shadowed adapter stays separate", "const invoke = core.warning.call; { const invoke = () => {}; invoke(null, e.message); } core.warning('failed');", null],
+    ["shadowed receiver stays separate", "{ const core = { warning() {} }; core.warning.call(null, e.message); } core.warning('failed');", null],
+  ];
+  for (const [handler, wrap] of handlers) for (const [name, body, message] of rows) {
+    test(`${name} in ${handler}`, () => {
+      const problems = analyzeScript(wrap(body), "t").problems;
+      if (message) expect(problems.join("\n")).toMatch(message);
+      else expect(problems).toEqual([]);
     });
   }
 });

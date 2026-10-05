@@ -1661,3 +1661,25 @@ confirm which version actually ran before diagnosing "the fix didn't work":
 ```bash
 gh api repos/<owner>/<repo>/actions/runs/<run_id> --jq '.referenced_workflows'
 ```
+
+## Browser output in Actions logs ([#539](https://github.com/Adam-S-Daniel/cms-platform/issues/539))
+
+Playwright's list reporter includes test titles, errors, browser console output,
+and page content. The reusable browser workflows redirect all of its stdout and
+stderr to their original `/tmp/*.log` paths. They request list, HTML, and JSON
+reporters; `e2e/summarize-playwright.js` prints only validated pass, fail, flaky,
+skip, and fatal-error counts from the JSON report. Missing or malformed JSON
+produces one fixed “summary unavailable; inspect artifacts” line. The original
+Playwright exit code remains the step result even when the summary is unavailable.
+Do not add failing titles or error excerpts to that console summary: titles can
+include rendered page content.
+
+Each completed run, successful or failed, uploads its raw log, JSON report, HTML
+report, and test results to its existing diagnostics artifact (the preview-media
+probe now has one). Those files can contain page data; public-repository Actions
+artifacts are public and keep their existing 7- or 14-day retention. Loops that
+previously attempted canceled-run uploads continue to do so. The existing PR
+failure-summary comment behavior is separate and unchanged. The offline
+`e2e/playwright-log-privacy.test.js` checks parsed workflow structure and runs
+the shell steps with a local `npx` stub, so it belongs in the platform-only
+`PLATFORM_META_SPECS` registry and needs no browser, network, or site secrets.

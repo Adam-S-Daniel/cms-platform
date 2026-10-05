@@ -319,7 +319,12 @@ jobs:
           # e2e/loop-site-root-lint.test.js.
           SITE_ROOT: ${{ github.workspace }}
           PAGE_CHANGES_PATH: /tmp/page-changes.json
-        run: npx playwright test --config=playwright.regression.config.js
+        run: |
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/visual-regression.log.json
+          status=0
+          npx playwright test --config=playwright.regression.config.js --reporter=list,html,json > /tmp/visual-regression.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
 
       - name: Compute per-page visual diffs
         id: compute
@@ -513,6 +518,10 @@ jobs:
           path: |
             .cms-platform/screenshots/regression/comparison.mp4
             .cms-platform/screenshots/regression/diffs.json
+            /tmp/visual-regression.log
+            /tmp/visual-regression.log.json
+            .cms-platform/e2e/playwright-report/
+            .cms-platform/e2e/test-results/
           retention-days: 14
 
   approve-regression:

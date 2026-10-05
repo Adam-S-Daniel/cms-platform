@@ -503,6 +503,16 @@ lint holds every `createLabel` handler to that (acorn AST, never a regex):
   include static computed spellings such as `console['error']` and lexical
   aliases such as `const log = console.log` or `const { warning: report } = core`,
   including declarations outside the handler and summary builder aliases.
+  Known sinks also remain sinks through `bind`, `call` and `apply`, including
+  static computed methods and extracted adapter methods such as
+  `const { call: invoke } = core.warning`. A `bind` creation checks its bound
+  arguments even if the result is never called; only invoking the bound result
+  counts as reporting. `call` and `apply` invoke immediately, and an `apply`
+  argument array or tainted array alias is checked. Adapter `thisArg` values
+  are conservatively checked as output too. Summary methods invoked through
+  `call` or `apply` retain the summary builder for following fluent output
+  checks. Adapters of adapters, such as
+  `core.info.call.bind(core.info, null)(e.message)`, remain unmodeled.
   Aliases conservatively retain every assigned sink; an unknown replacement
   prevents an alias from satisfying reporting but preserves its output checks.
   The added sinks do not change the reporting rule above: an info message, notice,
