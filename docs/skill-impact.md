@@ -43,10 +43,10 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
-## 2026-10-04 — cms-platform/cms-stuck-pr-triage — edit
+## 2026-10-05 — cms-platform/cms-stuck-pr-triage — edit
 
 - Motivation: in the skills-evals cms-stuck-pr-triage eval, all 3 with-skill trials called a green-but-BLOCKED PR a merge-state caching bug and never named the required context no workflow publishes (both scored without-skill trials did), and 2 of 3 recommended closing an editor's `decap-cms/pending_publish` PR.
-- Change: §3 now diffs the ruleset/branch-protection required contexts against the head sha's reported check runs and statuses before any caching diagnosis; §1c and §4 point there; §4 closes a stale `pending_publish` PR only when it carries `automated-test` (PR link pending).
+- Change: §3 now diffs the ruleset/branch-protection required contexts against the head sha's reported check runs and statuses, then looks for a context withdrawn by a skipped caller job (cms-platform#222), before any caching diagnosis; §1c and §4 point there; §4 closes a stale `pending_publish` PR only when the loop owns it (`automated-test` label or the unpublish-canary branch).
 - Eval: outstanding — the skills-evals cms-stuck-pr-triage fixture eval has not been re-run against this change.
 - Outcome: pending merge.
 

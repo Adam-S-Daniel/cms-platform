@@ -140,22 +140,34 @@ A distinct failure mode: `mergeStateStatus: BLOCKED`, `autoMergeRequest` already
 BASE=$(gh pr view <N> --json baseRefName --jq .baseRefName)
 SHA=$(gh pr view <N> --json headRefOid --jq .headRefOid)
 # Required: rulesets that apply to the base branch
-gh api "repos/{owner}/{repo}/rules/branches/$BASE" \
+gh api "repos/{owner}/{repo}/rules/branches/$BASE" --paginate \
   --jq '[.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context]'
-# Required: classic branch protection (a 404 here means none is configured)
+# Required: classic branch protection. A 404 means none is configured OR this
+# credential lacks admin read on the repo; do not read it as "none" alone.
 gh api "repos/{owner}/{repo}/branches/$BASE/protection/required_status_checks" --jq '.contexts'
 # Reported: check runs and legacy commit statuses on the head sha
 gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --paginate --jq '[.check_runs[].name]'
-gh api "repos/{owner}/{repo}/commits/$SHA/status" --jq '[.statuses[].context]'
+gh api "repos/{owner}/{repo}/commits/$SHA/status" --paginate --jq '[.statuses[].context]'
 ```
 
-Any required context with no reported name to match is the cause. If no workflow in the repo (or the reusable workflow its caller invokes) publishes a check by that name, it can never arrive, and no nudge, re-run or close-and-reopen fixes it: the remedy is to restore the context's publisher or remove the context from the ruleset. That is a repository-settings change for a human to make; triage names the context and recommends it. A context withdrawn by a skipped job is the same shape: cms-platform#222 (https://github.com/Adam-S-Daniel/cms-platform/issues/222) measured every visible check green while a merge answered `5 of 6 required status checks are expected.`
+Any required context with no reported name to match is the cause. If no workflow in the repo (or the reusable workflow its caller invokes) publishes a check by that name, it can never arrive, and no nudge, re-run or close-and-reopen fixes it: the remedy is to restore the context's publisher or remove the context from the ruleset. That is a repository-settings change for a human to make; triage names the context and recommends it.
 
-**Only when that diff is empty** — every required context is reported and green — read the state as a GitHub merge-state-evaluator caching bug: two auto-merge-enabling label events landed in the same second, GitHub cached the BLOCKED snapshot taken mid-mutation, and no later event re-triggers evaluation. The PR sits green-but-BLOCKED until the nightly sweep closes it.
+**If the diff is empty, look for a WITHDRAWN context before anything else.** A required context `X / Y` is usually a reusable workflow's job `Y` under a caller job `X`. When a later event on the same sha (an `edited`, a re-label) starts a newer run whose caller job `X` is skipped by its `if:`, that run reports a single `skipped` check run named just `X`, and GitHub evaluates the newest run of each workflow, so the context the earlier run reported green no longer counts. The name diff cannot see this: the green `X / Y` run is still listed. List the skipped check runs named exactly like a required context's prefix:
+
+```bash
+gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --paginate \
+  --jq '.check_runs[] | select(.conclusion=="skipped") | "\(.name)\tsuite \(.check_suite.id)"'
+# A hit is a bare name X with a required "X / Y" context, typically in a
+# higher-numbered check suite than the green "X / Y" run.
+```
+
+Measured instance: cms-platform#222 (https://github.com/Adam-S-Daniel/cms-platform/issues/222). On adamdaniel.ai#3001's blocked head `2da05a9`, all six required contexts showed `success`, while bare `e2e`, `parity`, `scan`, `preview-media` and `visual-regression` check runs, all `skipped`, sat in newer check suites. A merge attempt answered `405 … 5 of 6 required status checks are expected.` A nudge cannot clear it, because no new run is triggered. The remedy is a fresh push to the head branch (an empty commit), which starts a clean run set; that cleared both #222 PRs. Triage recommends it rather than pushing.
+
+**Only when neither check finds anything** — every required context is reported and green — read the state as a GitHub merge-state-evaluator caching bug: two auto-merge-enabling label events landed in the same second, GitHub cached the BLOCKED snapshot taken mid-mutation, and no later event re-triggers evaluation. The PR sits green-but-BLOCKED until the nightly sweep closes it.
 
 ```bash
 # Confirm the pattern: BLOCKED + auto-merge on + no non-green reported check
-# (run the required-context diff above first; this cannot see a missing context)
+# (run both required-context checks above first; this sees neither shape)
 gh pr view <N> --json mergeStateStatus,autoMergeRequest,statusCheckRollup \
   --jq '{state: .mergeStateStatus, automerge: (.autoMergeRequest != null),
          non_green: [.statusCheckRollup[] | select(.conclusion=="FAILURE" or .conclusion=="CANCELLED" or .status=="IN_PROGRESS") | .name]}'
@@ -177,7 +189,7 @@ gh pr merge <N> --auto --merge   # no-op re-enable; re-triggers GitHub's merge-s
   ```
   Rebase + force-push also works but is more fragile — if the spec used a content-based slug, the next run rewrites the same branch and races with the rebase.
 
-- **BLOCKED with all checks green**: first run §3's required-context diff. If a required context is missing, recommend restoring its publisher or removing it from the ruleset (a settings change for a human); a nudge cannot fix it. Only when the diff is empty, nudge auto-merge (§3) rather than closing — the PR is mergeable, GitHub just didn't notice.
+- **BLOCKED with all checks green**: first run §3's two required-context checks. If a required context is missing, recommend restoring its publisher or removing it from the ruleset (a settings change for a human); if one was withdrawn by a skipped caller job, recommend a fresh push to the head branch. A nudge fixes neither. Only when both come back clean, nudge auto-merge (§3) rather than closing — the PR is mergeable, GitHub just didn't notice.
 
 - **Real failure, fix not yet on main**: investigate the failing check. `e2e`/`parity` failures on a CMS PR are usually content-spec drift (a spec hardcodes a fixture that was deleted from main); see `e2e/content-fixtures.js`'s discovery helpers for the dynamic-discovery pattern.
 
@@ -191,9 +203,9 @@ gh pr merge <N> --auto --merge   # no-op re-enable; re-triggers GitHub's merge-s
     - waiting for getByRole('button', { name: /^Status:\s*Draft$/i })
   ```
 
-  First establish that an automated run opened it. A loop-opened PR carries the `automated-test` label, which `e2e/github-actions-poll.js`'s `waitForCmsPullRequest` applies as the loop opens any cms PR and a human-authored PR never carries. No `automated-test` label (an editor's own entry, authored by a person) means it is NOT this case: leave it alone, and if its checks are still in progress, wait. Never close an editor's PR on its `decap-cms/*` label alone.
+  First establish that an automated run opened it. Two kinds of PR are loop-owned. (1) PRs labeled `automated-test`: `e2e/github-actions-poll.js`'s `waitForCmsPullRequest` applies the label, best effort (a labeling failure is non-fatal), to the PR it matches, and a human-authored PR never carries it. (2) PRs on `cms/posts/2024-01-02-e2e-unpublish-canary`: `e2e/cms-unpublish-republish.spec.js` opens them without `waitForCmsPullRequest`, so they carry no label, and the spec's own self-heal closes a leftover PR on that branch when its next run finds the canary dirty. Anything else, an editor's own entry authored by a person, is NOT this case: leave it alone, and if its checks are still in progress, wait. Never close an editor's PR on its `decap-cms/*` label alone. A loop PR whose labeling failed also lands in "leave it alone", which is the safe direction; the nightly sweep and the spec's next run handle it.
 
-  Fix, for an `automated-test` PR only: close the stale PR with `gh pr close <N> --delete-branch`. Decap will create a fresh branch on the next Save, with `cms/draft` from `cms-editorial-workflow.yml`'s opened-event handler, and the spec sees Status: Draft. To check if a Decap PR is in this state:
+  Fix, for a loop-owned PR only: close the stale PR with `gh pr close <N> --delete-branch`. Decap will create a fresh branch on the next Save, with `cms/draft` from `cms-editorial-workflow.yml`'s opened-event handler, and the spec sees Status: Draft. To check if a Decap PR is in this state:
 
   ```bash
   gh pr view <N> --json labels --jq '[.labels[].name]'
