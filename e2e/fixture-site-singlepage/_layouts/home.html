@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+{%- comment -%}
+  A SITE-OWNED home layout with no parent, the shape of jodidaniel.com's
+  _layouts/home.html: `/` renders through this file, never the theme's
+  default.html, so it has none of the theme's header, footer, skip link,
+  main.css or glow. The fixture-e2e public lane runs the public specs against
+  it (#702), so a theme spec that assumes the theme's markup on every site's
+  `/` fails in platform CI instead of on a consumer's platform-bump PR.
+{%- endcomment -%}
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ site.title }}</title>
+  <style>
+    body { margin: 0 auto; max-width: 40rem; padding: 2rem 1rem; font-family: system-ui, sans-serif; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    {{ content }}
+  </main>
+</body>
+</html>
