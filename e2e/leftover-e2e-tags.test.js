@@ -6,10 +6,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const walk = require("acorn-walk");
-const { parse, calleeName } = require("./spec-ast");
+const { parse, calleeName, stringValue } = require("./spec-ast");
 const { test, expect } = require("./base");
 const { classifyE2eTags, sweepLeftoverE2eTags, STALE_AFTER_MS } = require("./leftover-e2e-tags");
-const { closeOpenPrsAddingFile, listAllPages, readFileOnRef } = require("./cms-fixture-pr");
+const { closeOpenPrsAddingFile, fixtureBranchName, listAllPages, readFileOnRef } = require("./cms-fixture-pr");
+const { buildMediaRoundtripPost, mediaUploadRemovalSlug } = require("./prod-mutate-fixture");
 
 const NOW = 1790000000000;
 const OLD = NOW - STALE_AFTER_MS - 1;
@@ -576,12 +577,42 @@ function handlerIsLoud(handler, enclosingFn) {
   });
   if (throws) return true;
   if (records.size === 0 || !enclosingFn) return false;
+  // The rethrow must fire for EVERY non-zero count: each `if` between the
+  // function body and the throw must test `X.length > 0` (or `!== 0`,
+  // `>= 1`, bare `X.length`) with the throw in its consequent. A throw that
+  // fires only for one count (`if (X.length > 1)`) leaves the others silent.
   let rethrown = false;
-  walk.full(enclosingFn.body, (n) => {
-    if (n.type !== "ThrowStatement" || n.start >= handler.start && n.end <= handler.end) return;
-    for (const name of subtreeIdentifiers(n.argument)) if (records.has(name)) rethrown = true;
+  walk.ancestor(enclosingFn.body, {
+    ThrowStatement(n, _state, ancestors) {
+      if (n.start >= handler.start && n.end <= handler.end) return;
+      const names = [...subtreeIdentifiers(n.argument)].filter((name) => records.has(name));
+      if (names.length === 0) return;
+      const ok = ancestors.every((a, i) => {
+        if (a.type !== "IfStatement") return true;
+        return isNonEmptyTest(a.test, names) && a.consequent === ancestors[i + 1];
+      });
+      if (ok) rethrown = true;
+    },
   });
   return rethrown;
+}
+
+// `X.length`, `X.length > 0`, `X.length !== 0`, `X.length != 0`, `X.length >= 1`.
+function isNonEmptyTest(test, names) {
+  const isLength = (n) =>
+    n &&
+    n.type === "MemberExpression" &&
+    !n.computed &&
+    n.property.name === "length" &&
+    n.object.type === "Identifier" &&
+    names.includes(n.object.name);
+  if (isLength(test)) return true;
+  if (test.type !== "BinaryExpression" || !isLength(test.left) || test.right.type !== "Literal") return false;
+  const v = test.right.value;
+  return (
+    ((test.operator === ">" || test.operator === "!==" || test.operator === "!=") && v === 0) ||
+    (test.operator === ">=" && v === 1)
+  );
 }
 
 function strictTryViolations(ast) {
@@ -624,16 +655,49 @@ function readCatchViolations(ast) {
   return out;
 }
 
-// A `branch: "main"` key in a request body is a direct write to the default
-// branch, which the pull_request rule refuses (docs/CI-INVARIANTS.md: no
-// bypass actors).
+// A string with no interpolation: a string Literal or an expression-free
+// template literal (`main`). null for anything else.
+function staticString(node) {
+  if (!node) return null;
+  if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0) return node.quasis[0].value.cooked;
+  return null;
+}
+
+const propNamed = (obj, name) =>
+  obj && obj.type === "ObjectExpression"
+    ? obj.properties.find((p) => p.key && (p.key.name || p.key.value) === name)
+    : undefined;
+
+// A write to the default branch, which the pull_request rule refuses
+// (docs/CI-INVARIANTS.md: no bypass actors): a `branch: "main"` key (string or
+// plain template), or a Contents-API PUT/DELETE whose inline JSON body names
+// no branch (GitHub then writes the default branch) or cannot be read.
 function directMainWrites(ast) {
   const out = [];
   walk.simple(ast, {
     Property(n) {
       const key = n.key && (n.key.name || n.key.value);
-      if (key === "branch" && n.value.type === "Literal" && n.value.value === "main") {
+      if (key === "branch" && staticString(n.value) === "main") {
         out.push(`line ${n.loc.start.line}: branch: "main"`);
+      }
+    },
+    CallExpression(n) {
+      const url = stringValue(n.arguments[0]);
+      if (url == null || !url.includes("/contents/")) return;
+      const method = propNamed(n.arguments[1], "method");
+      const verb = method && staticString(method.value);
+      if (verb !== "PUT" && verb !== "DELETE") return;
+      const body = propNamed(n.arguments[1], "body");
+      const payload =
+        body &&
+        body.value.type === "CallExpression" &&
+        calleeName(body.value.callee) === "JSON.stringify" &&
+        body.value.arguments[0];
+      if (!payload || payload.type !== "ObjectExpression") {
+        out.push(`line ${n.loc.start.line}: contents ${verb} with a body the lint cannot read`);
+      } else if (!propNamed(payload, "branch")) {
+        out.push(`line ${n.loc.start.line}: contents ${verb} with no branch writes the default branch`);
       }
     },
   });
@@ -698,6 +762,44 @@ test.describe("Decap fixture safety nets fail loudly and remove through a PR (#6
     expect(bare).toEqual([]);
   });
 
+  // #697: the post's slug equals the upload's basename, and removeFixtureViaPr
+  // names its branch from slug + runId, so the upload leg needs its own slug or
+  // its createBranchFromMain recreates the branch under the post's removal PR.
+  test("cms-media-roundtrip: the post and upload removal PRs get different branches", () => {
+    const runId = 1790000000000;
+    const { slug } = buildMediaRoundtripPost({ runId });
+    expect(slug, "the collision this guards against").toBe(`e2e-media-roundtrip-${runId}`);
+    const post = fixtureBranchName({ slug, runId, action: "remove" });
+    const upload = fixtureBranchName({ slug: mediaUploadRemovalSlug(slug), runId, action: "remove" });
+    expect(upload).not.toBe(post);
+  });
+
+  test("cms-media-roundtrip.spec.js: the upload removal uses mediaUploadRemovalSlug, the post its own slug", () => {
+    const ast = parse(fs.readFileSync(path.join(__dirname, "cms-media-roundtrip.spec.js"), "utf8"));
+    let hook = null;
+    walk.simple(ast, {
+      CallExpression(n) {
+        if (calleeName(n.callee) === "test.afterAll") hook = n.arguments[n.arguments.length - 1];
+      },
+    });
+    const slugs = {};
+    walk.simple(hook, {
+      CallExpression(n) {
+        if (calleeName(n.callee) !== "removeFixtureViaPr") return;
+        const file = propNamed(n.arguments[0], "filePath");
+        const slug = propNamed(n.arguments[0], "slug");
+        const v = slug && slug.value;
+        slugs[file.value.name] =
+          v.type === "Identifier"
+            ? v.name
+            : v.type === "CallExpression" && v.arguments[0] && v.arguments[0].type === "Identifier"
+              ? `${calleeName(v.callee)}(${v.arguments[0].name})`
+              : null;
+      },
+    });
+    expect(slugs).toEqual({ filePath: "slug", imagePath: "mediaUploadRemovalSlug(slug)" });
+  });
+
   // The detectors themselves, on the mutations the #694 review found surviving.
   test("the detectors flag the surviving mutations", () => {
     const src = (body) => parse(body);
@@ -720,5 +822,18 @@ test.describe("Decap fixture safety nets fail loudly and remove through a PR (#6
     expect(
       directMainWrites(src("gh('/x', { body: JSON.stringify({ sha: 's', branch: \"main\" }) })")),
     ).toHaveLength(1);
+    expect(directMainWrites(src("gh('/x', { body: JSON.stringify({ branch: `main` }) })"))).toHaveLength(1);
+    const del = (body) => `gh(\`/repos/\${R}/contents/\${P}\`, { method: "DELETE", body: ${body} })`;
+    expect(directMainWrites(src(del("JSON.stringify({ sha: s })")))).toHaveLength(1);
+    expect(directMainWrites(src(del("payload")))).toHaveLength(1);
+    expect(directMainWrites(src(del("JSON.stringify({ sha: s, branch: HEAD_REF })")))).toEqual([]);
+    const countOnly =
+      "async function h(){ const f = []; try { await readFileOnRef({}); } catch (e) { f.push(e); } " +
+      "if (f.length > 1) throw new AggregateError(f); }";
+    expect(strictTryViolations(src(countOnly))).toHaveLength(1);
+    const elseOnly =
+      "async function h(){ const f = []; try { await readFileOnRef({}); } catch (e) { f.push(e); } " +
+      "if (f.length === 1) console.warn(f[0]); else if (f.length > 0) throw f[0]; }";
+    expect(strictTryViolations(src(elseOnly))).toHaveLength(1);
   });
 });

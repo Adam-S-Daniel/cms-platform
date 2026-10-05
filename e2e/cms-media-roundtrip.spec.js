@@ -72,7 +72,7 @@
  * it on the REAL production site through the REAL GitHub backend and the
  * REAL deploy pipeline, including the standalone Media library's delete
  * path. The afterAll safety net is test-harness HYGIENE (existence-only
- * removal PRs for a leftover post/upload), not the behaviour
+ * removal PRs for a leftover post/upload), not the behavior
  * under test — see AGENTS.md's harness-hygiene carve-out.
  *
  * Gating:
@@ -122,7 +122,12 @@ const {
   openMediaLibrary,
   closeMediaLibrary,
 } = require("./cms-editor-ui");
-const { EPHEMERAL_DATE, missingTestPostMarkers, buildMediaRoundtripPost } = require("./prod-mutate-fixture");
+const {
+  EPHEMERAL_DATE,
+  missingTestPostMarkers,
+  buildMediaRoundtripPost,
+  mediaUploadRemovalSlug,
+} = require("./prod-mutate-fixture");
 
 // Parameterized target: CMS_TARGET=preview (+ PR_NUMBER) drives the PR's
 // preview-pr<N> surface; anything else keeps the prod default, so the
@@ -716,10 +721,10 @@ test(
 // DELETE legs ARE the cleanup. If the test completed, the post + upload
 // are gone and the harness no-ops. If the test threw mid-flow, remove a
 // leftover ephemeral post (via a labelled removal PR — same auto-merge
-// path) and any leftover per-run upload (direct Contents-API delete). A
+// path) and any leftover per-run upload (its own removal PR, #697). A
 // failure here leaks at most ONE inert post + ONE upload the daily sweeper
 // reaps — never a corrupt shared baseline. Per AGENTS.md's harness-hygiene
-// carve-out, this API path is cleanup, not the behaviour under test.
+// carve-out, this API path is cleanup, not the behavior under test.
 test.afterAll(async () => {
   if (PROD_CANARY) return;
   if (!getPat()) return;
@@ -797,15 +802,13 @@ test.afterAll(async () => {
 
   // Leftover per-run upload → its own labelled removal PR (#697). A direct
   // Contents-API DELETE on main is refused by the default-branch ruleset
-  // (pull_request rule, no bypass actors). The slug gets an `-upload`
-  // suffix because the post's slug equals the upload's basename, and
-  // removeFixtureViaPr's branch name is built from slug + runId: the same
-  // name would recreate the branch under the post's removal PR.
+  // (pull_request rule, no bypass actors). mediaUploadRemovalSlug keeps
+  // this PR's branch apart from the post's removal PR.
   try {
     if ((await readFileOnRef({ ref: "main", filePath: imagePath })) !== null) {
       console.warn(`[cleanup-harness] ${imagePath} still on main; opening removal PR`);
       await removeFixtureViaPr({
-        slug: `${slug}-upload`,
+        slug: mediaUploadRemovalSlug(slug),
         runId,
         filePath: imagePath,
         message: `test(media-roundtrip): cleanup leftover upload ${path.basename(imagePath)}`,
@@ -825,11 +828,12 @@ test.afterAll(async () => {
     );
   }
 
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1) {
-    throw new AggregateError(
-      failures,
-      `[cleanup-harness] ${failures.length} cleanup steps failed: ${failures.map((e) => e.message).join(" | ")}`,
-    );
+  if (failures.length > 0) {
+    throw failures.length === 1
+      ? failures[0]
+      : new AggregateError(
+          failures,
+          `[cleanup-harness] ${failures.length} cleanup steps failed: ${failures.map((e) => e.message).join(" | ")}`,
+        );
   }
 });
