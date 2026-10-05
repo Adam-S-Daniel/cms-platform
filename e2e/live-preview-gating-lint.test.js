@@ -177,6 +177,11 @@ test.describe("/preview/ empty state says nothing was lost (#328.2)", () => {
       html.indexOf("</div>", html.indexOf('<div id="preview-empty-state">')),
     );
     expect(block, "Save is still styled as a <code> control name").toContain("<code>Save</code>");
+    // #646: the local backend has no Save — its toolbar shows only Publish,
+    // whose menu item is Publish now — so its paragraph names those.
+    expect(block, "the local-backend paragraph names Publish → Publish now").toContain(
+      "<code>Publish</code> → <code>Publish now</code>",
+    );
     expect(block, "the .hint line is still the last, quietest line").toContain('<p class="hint">');
   });
 });
