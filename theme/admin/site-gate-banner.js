@@ -218,6 +218,33 @@
     return window.CMSHostname.destination();
   }
 
+  // ── Entry route → entry route needs a full page load (#624, #342) ──────
+  // The link points at an ENTRY route and this banner is rendered inside the
+  // entry editor, so a plain click is an entry → entry hash change. Decap
+  // 3.15.1 mishandles that: it mounts the new editor without loading the
+  // entry, so Site Settings shows empty fields under "Changes saved" (F5
+  // fixes it; #342 is the same defect, seen there as a failed publish). So
+  // from an entry route we set the hash and reload. From any other route
+  // (list, dashboard, new-entry) the native in-app navigation works and is
+  // left alone, as is a modified click (open in a new tab).
+  //
+  // Unsaved work: the reload is a normal page unload, so Decap's own
+  // `beforeunload` guard (registered while the editor is dirty) raises the
+  // browser's leave-page prompt. We deliberately do NOT add a general
+  // "any entry → entry hashchange forces a reload" guard: by the time
+  // `hashchange` fires the URL has already changed, so it cannot ask first,
+  // and reloading there would race Decap's own router Prompt and could drop
+  // unsaved edits (Back/Forward, bookmarks stay as Decap handles them).
+  var ENTRY_ROUTE = /^#\/collections\/[^/]+\/entries\//;
+
+  function onEntryLinkClick(ev) {
+    if (ev.defaultPrevented || ev.button > 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+    if (!ENTRY_ROUTE.test(window.location.hash || "")) return;
+    ev.preventDefault();
+    window.location.hash = gate.entry;
+    window.location.reload();
+  }
+
   function render(live, branch) {
     var existing = document.getElementById(BANNER_ID);
     // live === true → gate is open, nothing to say.
@@ -267,6 +294,7 @@
       a.textContent = "Change this setting";
       a.style.cssText =
         "color:#fdf3d8;font-weight:700;text-decoration:underline;white-space:nowrap;";
+      a.addEventListener("click", onEntryLinkClick);
       b.appendChild(a);
     }
 

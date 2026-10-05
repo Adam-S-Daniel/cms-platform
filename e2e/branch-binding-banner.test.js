@@ -46,7 +46,8 @@ const ADMIN_URL = "https://preview-pr9999.example.test/admin/";
 // ── A DOM small enough to read in one screen ──────────────────────────────
 // The shims use createElement / createTextNode / appendChild / insertBefore /
 // remove / getElementById / firstChild / nextSibling / textContent /
-// setAttribute, and nothing else. Anything they touch beyond this list throws,
+// setAttribute / addEventListener (a no-op: the gate link's click handler),
+// and nothing else. Anything they touch beyond this list throws,
 // which is the point: a shim that starts leaning on more DOM than this fails
 // here loudly rather than silently in a browser nobody is watching.
 function fakeNode(tag) {
@@ -74,6 +75,7 @@ function fakeNode(tag) {
       el.children = [];
       el._text = String(v);
     },
+    addEventListener() {},
     setAttribute(k, v) {
       el.attrs[k] = String(v);
     },
