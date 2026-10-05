@@ -103,10 +103,10 @@ the release PR, before the dispatch: this line, both plugin manifests
 entry, **every platform pin under `examples/site/.github/workflows`** (each
 `uses:@ref` and each `with: platform_ref:`), and **`scaffold/create-site.js`'s
 `PLATFORM_VERSION`**. `release.yml` refuses a tag disagreeing with the
-manifests; `e2e/examples-site-pins-current.test.js` enforces the last two in the
-REQUIRED node-unit-lints lane, from in-repo values only — which is what lets the
-release PR go green *before* the tag exists. **A release-bearing PR (a manifest
-`version` change, or a `release/*` branch) also needs
+manifests; `e2e/examples-site-pins-current.test.js` enforces this line and the
+last two in the REQUIRED node-unit-lints lane, from in-repo values only — which
+is what lets the release PR go green *before* the tag exists. **A release-bearing
+PR (a manifest `version` change, or a `release/*` branch) also needs
 `Independent review: CLEAN at <full head sha>` in its body**, written by a
 reviewer independent of the author after reviewing that head (#526 criterion 3,
 owner decision 2026-10-05): the REQUIRED `release-review-gate` check fails
