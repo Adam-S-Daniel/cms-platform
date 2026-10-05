@@ -96,8 +96,9 @@ async function gh(endpoint, { headers = {}, deadline } = {}) {
     throw new RateLimitedError(remaining, res.headers.get("x-ratelimit-reset"));
   }
   if (!res.ok) {
-    const body = await res.text();
-    const err = new Error(`GH API ${endpoint} → ${res.status}: ${body.slice(0, 200)}`);
+    // Status only, never the response body: this script's output is appended
+    // to a failing test's error, which reaches public consumer CI logs.
+    const err = new Error(`GH API ${endpoint} → ${res.status}`);
     err.status = res.status;
     throw err;
   }
