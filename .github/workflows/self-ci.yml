@@ -196,12 +196,14 @@ jobs:
           ruby-version: '3.2'
 
       # The RUM include renders through real Liquid (#517), and fixture
-      # exclusion builds a real Jekyll site with sitemap generation (#531).
+      # exclusion builds a real Jekyll site with sitemap generation (#531), and
+      # the share image builds through the real jekyll-seo-tag (#655).
       - name: Install theme spec dependencies
         run: |
           gem install liquid --version 4.0.4 --no-document
           gem install jekyll --version 4.4.1 --no-document
           gem install jekyll-sitemap --version 1.4.0 --no-document
+          gem install jekyll-seo-tag --version 2.9.0 --no-document
 
       - name: Run theme specs
         run: |
