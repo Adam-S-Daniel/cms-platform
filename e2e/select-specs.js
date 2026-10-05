@@ -786,6 +786,12 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/index.*\.html$/,
     /^(theme\/)?_layouts\/preview\.html$/,
   ],
+  // #647 media-library draft sync: the unit sandbox also checks where the
+  // three admin shells load it.
+  "e2e/media-library-draft-sync.test.js": [
+    /^(theme\/)?admin\/media-library-draft-sync\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+  ],
   "e2e/preview-bridge-payload.test.js": [/^(theme\/)?admin\/preview-bridge\.js$/],
   "e2e/preview-pane.test.js": [
     /^(theme\/)?admin\/preview-pane\.js$/,

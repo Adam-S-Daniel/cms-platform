@@ -826,3 +826,107 @@ test.describe(
     });
   },
 );
+
+// ── #647: the image picker on a tab whose FIRST route is the editor ─────
+//
+// Decap builds an editor's draft from the media library before the library
+// has loaded when the editor is the first screen a tab opens, and the picker
+// lists the draft's copy: "No images found", where the same picker opened
+// after the collection list lists every upload. theme/admin/
+// media-library-draft-sync.js holds the draft until the library has loaded.
+// Every other test in this file opens the dashboard first (loadAdmin), which
+// hides the bug, so these navigate STRAIGHT to the editor route.
+const PICKER_UPLOADS = ["picker-alpha.png", "picker-beta.png"];
+const PICKER_DRAFT_SLUG = "2026-05-01-open-draft";
+const PICKER_DRAFT_CONTENT = `---
+title: Open draft
+date: 2026-05-01 10:00:00 -0400
+published: true
+---
+
+Draft body
+`;
+
+// Seeds the test-repo backend with two uploads (the backend's media entries
+// carry a File, which JSON cannot, hence built in the page) and one entry
+// with an open editorial-workflow draft, then opens `route` directly.
+async function openEditorDirectly(page, route) {
+  await page.addInitScript(
+    ({ uploads, postName, postContent, draftSlug, draftContent }) => {
+      const media = {};
+      for (const name of uploads) {
+        media[name] = {
+          content: {
+            path: `assets/images/uploads/${name}`,
+            fileObj: new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" }),
+          },
+        };
+      }
+      window.repoFiles = {
+        _posts: { [postName]: { content: postContent } },
+        _tags: {},
+        _projects: {},
+        pages: {},
+        assets: { images: { uploads: media } },
+      };
+      const draftPath = `_posts/${draftSlug}.md`;
+      window.repoFilesUnpublished = {
+        [`posts/${draftSlug}`]: {
+          slug: draftSlug,
+          collection: "posts",
+          status: "draft",
+          updatedAt: "2026-05-01T14:00:00.000Z",
+          diffs: [
+            { id: draftPath, originalPath: draftPath, path: draftPath, newFile: true, status: "added", content: draftContent },
+          ],
+        },
+      };
+    },
+    {
+      uploads: PICKER_UPLOADS,
+      postName: `${SEED_POST_SLUG}.md`,
+      postContent: SEED_POST_CONTENT,
+      draftSlug: PICKER_DRAFT_SLUG,
+      draftContent: PICKER_DRAFT_CONTENT,
+    },
+  );
+  page.on("pageerror", (err) => console.log(`[pageerror] ${err.name}: ${err.message}`));
+
+  await page.goto(`/admin/index-test.html${route}`);
+  const loginBtn = page.getByRole("button", { name: /login/i });
+  await expect(loginBtn).toBeVisible({ timeout: 60_000 });
+  await loginBtn.click();
+  await expect(page.getByLabel(/^Title$/)).toBeVisible({ timeout: 60_000 });
+}
+
+async function expectPickerListsUploads(page) {
+  await page
+    .getByRole("button", { name: /choose (an |different )?image/i })
+    .first()
+    .click();
+  for (const name of PICKER_UPLOADS) {
+    await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 30_000 });
+  }
+  await expect(page.getByText(/no (assets|images) found/i)).toHaveCount(0);
+}
+
+test.describe(
+  "Decap image picker lists the media library when the editor is the first route (#647)",
+  // Tagged @admin-read: drives /admin/* on the in-browser test-repo backend
+  // and saves nothing. Runs on chromium-desktop-3k + webkit-iphone16.
+  { tag: ["@admin-read"] },
+  () => {
+    test.describe.configure({ timeout: 180_000 });
+
+    test("a tab opened straight to /new lists the uploads in the Featured Image picker", async ({ page }) => {
+      await openEditorDirectly(page, "#/collections/posts/new");
+      await expectPickerListsUploads(page);
+    });
+
+    test("a tab opened straight to an entry with an open draft lists the uploads too", async ({ page }) => {
+      await openEditorDirectly(page, `#/collections/posts/entries/${PICKER_DRAFT_SLUG}`);
+      await expect(page.getByLabel(/^Title$/)).toHaveValue("Open draft");
+      await expectPickerListsUploads(page);
+    });
+  },
+);

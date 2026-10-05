@@ -218,6 +218,15 @@
   <script src="draft-media-fallback.js"></script>
 
   <!--
+    media-library-draft-sync shim (#647). Same non-deferred / before-decap
+    idiom: it defines the Redux DevTools compose hook Decap's store reads at
+    bundle load, and holds a new draft until the media library has loaded, so
+    the image picker is not empty when the editor is the first route a tab
+    opens. See the file's header.
+  -->
+  <script src="media-library-draft-sync.js"></script>
+
+  <!--
     Decap CMS — pinned to an exact version. Editorial workflow + the
     GitHub backend with our custom OAuth proxy (`base_url` +
     `auth_endpoint` in admin/config.yml) drive the cms/<branch> →
