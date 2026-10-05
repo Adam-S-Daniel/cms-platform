@@ -683,8 +683,13 @@ though their live admin bypasses had not changed.
 
 The read-only audit reports the ruleset and field as `UNVERIFIABLE` and never
 plans a bypass-only write from that absence. It still plans other visible drift
-on the same ruleset; because a ruleset `PUT` replaces the full body, the
-write-risk classifier gates that plan with `cannot verify live bypass_actors`.
+on the same ruleset. Because a ruleset `PUT` replaces the full body, the
+write-risk classifier gates that plan with `cannot verify live bypass_actors`
+only when the manifest's list for that ruleset is non-empty or omitted (it could
+add an actor). A declared empty list (`bypass_actors: []`) can only remove
+actors, so such a `PUT` is classified on its other deltas and applies unattended
+when they are safe (cms-platform's `main` gaining a required check, run
+37265875259).
 The approved apply mints a write-scoped token and replans before writing.
 Approval does not expand the earlier planner token or grant lasting credential
 scope, so bypass-only drift cannot be detected by the scheduled read-only scan.

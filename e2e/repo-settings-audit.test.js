@@ -2351,38 +2351,60 @@ function rsc(contexts, extraParams = {}) {
 const verdict = (w) => loadRisk().classifyWrite(w).verdict;
 
 test.describe("repo-settings write-risk classification", () => {
-  test("a full ruleset PUT with unobserved bypass_actors is gated even when desired is empty or omitted", () => {
-    const risk = loadRisk();
-    for (const desired of [
-      { ...rsc(["a / a"]), bypass_actors: [] },
-      (() => {
-        const body = rsc(["a / a"]);
-        delete body.bypass_actors;
-        return body;
-      })(),
-    ]) {
-      const live = rsc([]);
-      delete live.bypass_actors;
-      const result = risk.classifyWrite({
-        kind: "ruleset-put",
-        name: "main",
-        live,
-        desired,
-      });
+  // The plan token cannot see live bypass_actors, so `live` below omits the
+  // key. Only a DECLARED EMPTY desired list is provable without it (removal
+  // only); everything else about the PUT is still classified normally.
+  const unobservedLive = (contexts) => {
+    const live = rsc(contexts);
+    delete live.bypass_actors;
+    return live;
+  };
+  const putWith = (live, desired) =>
+    loadRisk().classifyWrite({ kind: "ruleset-put", name: "main", live, desired });
+
+  test("unobserved live bypass_actors + desired [] + only an added required check is safe", () => {
+    const result = putWith(unobservedLive([]), { ...rsc(["a / a"]), bypass_actors: [] });
+    expect(result.verdict).toBe("safe");
+    expect(result.reason).toContain("removal-only");
+    expect(result.reason).toContain("required check(s) added");
+  });
+
+  test("unobserved live bypass_actors + desired omitted stays gated", () => {
+    const desired = rsc(["a / a"]);
+    delete desired.bypass_actors;
+    const result = putWith(unobservedLive([]), desired);
+    expect(result.verdict).toBe("gated");
+    expect(result.reason).toContain("cannot verify live bypass_actors");
+  });
+
+  test("unobserved live bypass_actors + desired non-empty stays gated", () => {
+    const desired = {
+      ...rsc(["a / a"]),
+      bypass_actors: [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }],
+    };
+    const result = putWith(unobservedLive([]), desired);
+    expect(result.verdict).toBe("gated");
+    expect(result.reason).toContain("cannot verify live bypass_actors");
+  });
+
+  test("unobserved live bypass_actors + desired [] still gates a removed required check, for that reason", () => {
+    const result = putWith(unobservedLive(["a / a", "b / b"]), {
+      ...rsc(["a / a"]),
+      bypass_actors: [],
+    });
+    expect(result.verdict).toBe("gated");
+    expect(result.reason).not.toContain("cannot verify live bypass_actors");
+    expect(result.reason).toContain("b / b");
+  });
+
+  test("malformed (null) live bypass_actors stays gated even when desired is []", () => {
+    const malformed = rsc([]);
+    malformed.bypass_actors = null;
+    for (const desired of [rsc(["a / a"]), { ...rsc(["a / a"]), bypass_actors: [] }]) {
+      const result = putWith(malformed, desired);
       expect(result.verdict).toBe("gated");
       expect(result.reason).toContain("cannot verify live bypass_actors");
     }
-
-    const malformed = rsc([]);
-    malformed.bypass_actors = null;
-    const malformedResult = risk.classifyWrite({
-      kind: "ruleset-put",
-      name: "main",
-      live: malformed,
-      desired: rsc(["a / a"]),
-    });
-    expect(malformedResult.verdict).toBe("gated");
-    expect(malformedResult.reason).toContain("cannot verify live bypass_actors");
   });
 
   test("visible empty bypass_actors remains a real actor-add delta, and visible removal stays safe", () => {
