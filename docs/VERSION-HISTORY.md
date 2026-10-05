@@ -10,9 +10,26 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.136)
+## Version history (v0.1.0 → v0.1.137)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.137 — GitHub API response bodies stay out of public CI logs, artifacts and PR comments.**
+The "Self-heal orphaned canary markers" step (`scripts/reset-orphaned-canary.sh`,
+run by `cms-publish-loop-{prod,host,preview}` on public consumer repos) printed
+a caught error's message or stack, which carried up to 300 bytes of the raw
+GitHub API response body; it now logs only `HTTP <status> <type>` or the error
+type ([#661](https://github.com/Adam-S-Daniel/cms-platform/pull/661)). The
+shared e2e harness had the same leak by three routes (warning lines, thrown
+errors printed by the `list` reporter and the live-failure PR comment, and
+messages built from `e.message`): `gh()` in `e2e/github-actions-poll.js` now
+throws status and URL only and keeps the body on `err.responseBody`, an exported
+`describeError(e)` replaces `e.message` at every site that logs a caught `gh()`
+error, and `scripts/diagnose-stuck-pr.js`, `scripts/auto-resolve-newline-conflict.js`
+and `e2e/base.js`'s preview-PR lookup stop quoting response bodies or `gh api`
+stderr ([#664](https://github.com/Adam-S-Daniel/cms-platform/pull/664)).
+Consumers get it with their next platform bump; no template change, so no
+bootstrap redeploy.
 
 **v0.1.136 — the admin's status copy tells the truth on a coming-soon site and a new entry; plainer toasts; the Reviews link steps back and returns you where you were.**
 On a gated site the draft bar and the Publish confirmation say visitors keep
