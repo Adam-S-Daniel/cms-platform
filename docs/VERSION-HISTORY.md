@@ -10,9 +10,24 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.133)
+## Version history (v0.1.0 → v0.1.134)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.134 — the code-quality skill names golangci-lint's v2 config schema, and a release-bearing PR needs an independent review stamp to merge.**
+`code-quality`'s "Adding a new language" step 2 now says to write a golangci-lint
+v2 config (`version: "2"`, settings under `linters.settings`): in the skills-evals
+fixture every with-skill trial had written the v1 shape
+([#623](https://github.com/Adam-S-Daniel/cms-platform/pull/623)). The new
+required check `release-review-gate` refuses to merge a release-bearing PR (a
+plugin manifest `version` that differs from the merge base, or a `release/*`
+head branch) unless its body carries `Independent review: CLEAN at <head sha>`
+on a line of its own, with the full 40-character head sha; any push makes the
+stamp stale, and a prerelease, cut from `main` with no PR, is not gated by it
+([#620](https://github.com/Adam-S-Daniel/cms-platform/pull/620), part of
+[#526](https://github.com/Adam-S-Daniel/cms-platform/issues/526)). Also: this
+repo's own `skills.lock` re-pin
+([#626](https://github.com/Adam-S-Daniel/cms-platform/pull/626)).
 
 **v0.1.133 — stuck-PR triage checks the required contexts before calling a green-but-BLOCKED PR a caching bug, and leaves editors' own entries alone.**
 `cms-stuck-pr-triage` §3 now diffs the base branch's required contexts (rulesets
