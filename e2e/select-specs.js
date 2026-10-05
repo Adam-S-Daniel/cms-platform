@@ -787,6 +787,10 @@ const SPEC_RULES = {
     /^(theme\/)?_layouts\/preview\.html$/,
   ],
   "e2e/preview-bridge-payload.test.js": [/^(theme\/)?admin\/preview-bridge\.js$/],
+  "e2e/preview-pane.test.js": [
+    /^(theme\/)?admin\/preview-pane\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+  ],
   "e2e/cms-autosave.spec.js": [
     /^(theme\/)?admin\/(confirm-wrap-local-backup|autosave-on-hide)\.js$/,
     /^(theme\/)?admin\/index-test\.html$/,
