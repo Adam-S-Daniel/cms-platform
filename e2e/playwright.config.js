@@ -491,6 +491,9 @@ const PLATFORM_META_SPECS = [
   // this entry is the ONLY thing keeping it off a consumer.
   "oauth-proxy-callback-page.test.js",
   "preview-bot-comment.test.js",
+  // cms-platform#651 — reads the platform's deploy-preview.yml (the preview 404
+  // page heredoc); self-CI only, like preview-bot-comment above.
+  "preview-404-contrast.test.js",
   "preview-config-patch.spec.js",
   // cms-platform#324 — reads infrastructure/bootstrap/template.yaml (the
   // platform's own CloudFormation template; a consumer vendors no copy of
