@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
-const { discoverTags, discoverPost, feedHasTitle, hrefCarries } = require("./content-fixtures");
+const { discoverTags, discoverPost, feedHasTitle, hrefParamStartsWith } = require("./content-fixtures");
 const cap = require("./site-capabilities");
 
 // SITE_ROOT for the #33 capability gate (build-INDEPENDENT, so it's correct in
@@ -277,19 +277,19 @@ test.describe("Share row on a post", () => {
     const bskyHref = await bluesky.getAttribute("href");
     expect(bskyHref).toContain(post.slug);
 
-    // The title must be carried (form- or percent-encoded) on every
-    // intent that takes a quoted body. Check the first non-empty word of
-    // the title — covers both encoding styles without depending on a
-    // specific fixture's exact phrasing.
-    const firstWord = post.title.split(/\s+/).find((w) => w.length > 0);
-    if (firstWord) {
-      // The hrefs carry the `url_encode`d title (`+`, `%27`, `%26`, …), so
-      // compare decoded text rather than the raw word.
-      expect(hrefCarries(xHref, firstWord), "X intent URL is missing the post title").toBe(true);
-      expect(hrefCarries(bskyHref, firstWord), "Bluesky intent URL is missing the post title").toBe(
-        true,
-      );
-    }
+    // The title must lead the `text` parameter of every intent that takes a
+    // quoted body. Check that parameter, not the whole href: the slug in
+    // `url=` repeats the title's own words, so a whole-href search passes with
+    // the title absent. The full title is compared (decoded, so `+`, `%27`,
+    // `%26`, … all work), not a first word.
+    expect(
+      hrefParamStartsWith(xHref, "text", post.title),
+      "X intent text= is missing the post title",
+    ).toBe(true);
+    expect(
+      hrefParamStartsWith(bskyHref, "text", post.title),
+      "Bluesky intent text= is missing the post title",
+    ).toBe(true);
   });
 
   test("Mastodon and Copy buttons are buttons (not links) and carry data attrs", async ({

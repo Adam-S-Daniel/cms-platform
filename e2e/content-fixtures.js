@@ -140,36 +140,57 @@ function normalizeTitle(s) {
     .trim();
 }
 
-// Does an Atom/RSS document carry `title` in some <title> element? Compares
-// decoded text, so it holds for `&`, `<`, quotes and smartified spellings.
+// Does an Atom/RSS document carry `title` as the title of one of its
+// entries? Compares decoded text, so it holds for `&`, `<`, quotes and
+// smartified spellings.
+//
+// Two ways the first version passed vacuously:
+//   - it scanned EVERY <title>, including the feed's own site title, so a post
+//     titled "Adam" passed on the "Adam Daniel" site title alone. Only the
+//     title inside an <entry> (Atom) or <item> (RSS) counts now.
+//   - it used a substring test, so "Note" matched an entry titled "Notes on
+//     X". jekyll-feed never truncates a title (`post.title | smartify |
+//     strip_html | normalize_whitespace | xml_escape`, no `truncate`), so the
+//     full normalized titles must be EQUAL.
+// An entry's title is the first <title> in its block: jekyll-feed emits it
+// before <content>, whose CDATA body may itself contain the text `<title>`.
 function feedHasTitle(xml, title) {
   const want = normalizeTitle(title);
   if (!want) return false;
-  const re = /<title\b([^>]*)>([\s\S]*?)<\/title>/g;
-  let m;
-  while ((m = re.exec(xml)) !== null) {
-    const inner = m[2].replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1");
+  const blocks = /<(entry|item)\b[^>]*>([\s\S]*?)<\/\1>/g;
+  let b;
+  while ((b = blocks.exec(xml)) !== null) {
+    const t = /<title\b([^>]*)>([\s\S]*?)<\/title>/.exec(b[2]);
+    if (!t) continue;
+    const inner = t[2].replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1");
     let text = decodeEntities(inner);
     // `type="html"` content is itself HTML: a second decode yields the text.
-    if (/\btype\s*=\s*["']html["']/i.test(m[1])) text = decodeEntities(text);
-    if (normalizeTitle(text).includes(want)) return true;
+    if (/\btype\s*=\s*["']html["']/i.test(t[1])) text = decodeEntities(text);
+    if (normalizeTitle(text) === want) return true;
   }
   return false;
 }
 
-// Does a share-intent href carry `text` (case-insensitive, any `url_encode`
-// spelling)? `+` is a space in form encoding, so it is decoded BEFORE the
-// percent escapes (a literal plus arrives as %2B).
-function hrefCarries(href, text) {
-  const want = normalizeTitle(text).toLowerCase();
+// Does the share-intent href's query parameter `param` carry `text` as its
+// leading text? Parsed with URLSearchParams, which does the form decoding
+// (`+` is a space, a literal plus arrives as %2B, then percent escapes), so
+// the check holds for any `url_encode` spelling.
+//
+// Scoped to ONE parameter because the first version searched the whole href
+// for the title's first word, which the post's own slug also contains (a
+// "Quoting ..." post has `quoting` in its `url=`), so the check passed with
+// the title missing. share-row.html puts the title at the start of `text=`:
+// X is `text=<title>&url=<url>`, Bluesky `text=<title>%20<url>`. So the value
+// must be the title, alone or followed by a space and the rest; a longer
+// word that merely begins with the title does not count. Case-sensitive:
+// `url_encode` never changes case.
+function hrefParamStartsWith(href, param, text) {
+  const want = normalizeTitle(text);
   if (!want) return false;
-  let decoded = String(href).replace(/\+/g, " ");
-  try {
-    decoded = decodeURIComponent(decoded);
-  } catch {
-    // Malformed escape: compare the form-decoded string as-is.
-  }
-  return normalizeTitle(decoded).toLowerCase().includes(want);
+  const value = new URL(String(href), "https://example.invalid").searchParams.get(param);
+  if (value === null) return false;
+  const got = normalizeTitle(value);
+  return got === want || got.startsWith(`${want} `);
 }
 
 // Every VISIBLE element whose whole text is `title`. Playwright-native
@@ -187,6 +208,6 @@ module.exports = {
   decodeEntities,
   normalizeTitle,
   feedHasTitle,
-  hrefCarries,
+  hrefParamStartsWith,
   visibleTitleLocator,
 };
