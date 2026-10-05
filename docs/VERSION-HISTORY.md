@@ -10,9 +10,99 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.139)
+## Version history (v0.1.0 → v0.1.140)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.140 — The three other e2e safety nets also close the run's own in-flight Decap PR before trusting `main`; the theme's home-page specs skip a consumer whose `/` is a site-owned layout, which fixes the v0.1.139 bump failure on jodidaniel.com; the `ci-watcher-loops` skill takes a dispatched run's id from the URL `gh workflow run` prints.**
+Test-harness and skill release: nothing under `.github/`, `theme/`,
+`infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/` or `examples/`
+changed apart from the pins (`git diff --stat v0.1.139 origin/main` is `e2e/`,
+two docs files and one `SKILL.md`).
+Safety nets. v0.1.139 gave the two tags lifecycle specs an `afterAll` that
+first closes this run's open create PR and reads the ref strictly. The other
+three specs that create a throw-away fixture through Decap and label its PR
+`cms/ready` still read only `main` with a catch-all, so a run that failed
+before the merge read "gone" and the armed PR could merge the fixture
+afterwards. `cms-publish-loop-prod-mutate.spec.js`, `cms-delete-published.spec.js`
+and `cms-media-roundtrip.spec.js` now run `closeOpenPrsAddingFile` (matched on
+the run-stamped path, exact compare; a PR that only removes the file, which is
+the delete leg's, is left alone) and then `readFileOnRef` (only a 404 means
+absent), and a failure to open the removal PR throws instead of warning. The
+media hook closes twice, for the post path and for the upload path, to cover an
+upload Decap committed in a separate PR. `fileExistsOnMain` in the three specs
+uses `readFileOnRef` instead of a regex on the error message. The AST lint in
+`e2e/leftover-e2e-tags.test.js` now covers all five specs: each close must name
+the spec's own fixture paths and come before the hook's first `readFileOnRef`
+([#694](https://github.com/Adam-S-Daniel/cms-platform/pull/694), part of
+[#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689), which stays
+open: its site-side exclusion criterion is not in this release). Not changed:
+the media hook's `deleteFileFromMainIfPresent` is a direct Contents-API
+`DELETE` on `main` that the ruleset probably rejects, and its failure still only
+warns. No live e2e was run for #694.
+Theme specs on a site-owned home. `public-a11y-polish.spec.js` (skip link,
+footer follow link) and `reduced-motion.spec.js` (the no-preference control)
+load `/` and assert markup from the theme's `default.html` and `main.css`.
+jodidaniel.com's `index.html` uses `layout: home`, its own `_layouts/home.html`
+that never chains to the theme default, so 4 tests failed on all 8 projects in
+its v0.1.139 bump PR
+([jodidaniel.com#351](https://github.com/jodidaniel/jodidaniel.com/pull/351)).
+New `homeUsesThemeLayout(siteRoot, themeLayoutsDir)` in
+`e2e/site-capabilities.js` decides from the site's SOURCE, never from the
+rendered page lacking the markup (that would hide a regression on
+adamdaniel.ai): it finds the home page file (a top-level page with
+`permalink: /` or `/index.html`, else `index.html`, `index.md`,
+`index.markdown`), takes its `layout:` or the `_config.yml` `defaults:` layout
+that applies, follows the layout chain site before theme, and returns true when
+the chain reaches a `default` the site has not overridden. It returns false for
+no home file, no front matter, `layout: null` or `none`, a layout found
+nowhere, a cycle, a site layout with no parent, or a site `default.html`
+override. Theme layouts are read only to follow a chain through a theme layout
+other than `default`, from `<harness>/../theme/_layouts` or
+`<site>/.cms-platform/theme/_layouts` (the consumer lane copies the harness to
+`<site>/e2e`), at the harness's platform ref, not the site's installed gem; if
+they are needed and missing the predicate throws, so the specs call it inside
+each test (an AST lint in `site-capabilities.test.js` keeps it out of
+file-load scope). The 4 tests call `test.skip(!homeUsesThemeLayout(), ...)`;
+the reduce half of `reduced-motion.spec.js` and the `/blog/` checks are
+unchanged. `e2e/select-specs.js` also selects both specs when `index.*` or
+`e2e/site-capabilities.js` changes, and `reduced-motion` on a `_layouts/`
+change; `docs/CONSUMER-COMPATIBILITY.md` documents the predicate
+([#701](https://github.com/Adam-S-Daniel/cms-platform/pull/701)). Round 2 of
+that review caught a first version that threw at spec load in the copied-harness
+lane (0 tests loaded); the shipped one was run with `--list` against read-only
+copies of both consumers, 56 tests each, true for adamdaniel.ai, false for
+jodidaniel.com. No browser e2e was run locally.
+Skill. `skills/ci-watcher-loops/SKILL.md` discarded `gh workflow run`'s output
+and then found the run with a bare `gh run list --workflow=... --limit 1`,
+which is an extra read and races: the newest run of the workflow can be another
+actor's (skills-evals#89 rounds 3 and 4, 3 of 3 with-skill trials in round 4).
+"The fix" and the multi-step Monitor example now capture the dispatch output and
+take the run id from the run URL it prints (gh 2.87.0 or newer; with stdout not
+a TTY it prints that URL alone). Only when no URL is printed does a fallback
+run `gh run list` filtered by `--workflow`, `--event workflow_dispatch`,
+`--branch`, `--user` and a `--created ">=$SINCE"` timestamp taken before the
+dispatch, with `--limit 2` and a jq that accepts exactly one match; an empty
+`RUN` stops the script (`STEP2_NO_RUN_ID` in the multi-step example) instead of
+polling forever. The "Or, equivalently" variant is removed and "What NOT to do"
+now says never a bare `--limit 1`. The chained-capture pitfall, the background
+watcher guidance and the 60 s floor are unchanged
+([#680](https://github.com/Adam-S-Daniel/cms-platform/pull/680), part of
+[skills-evals#89](https://github.com/Adam-S-Daniel/skills-evals/issues/89)).
+The touch-gate eval for it passed, recorded in
+[a comment on #680](https://github.com/Adam-S-Daniel/cms-platform/pull/680#issuecomment-5998770991)
+(N=3 per arm, objective 8.0 vs 8.0 of 8,
+judge 8.32 vs 7.85) but on a fixture whose fake `gh workflow run` prints JSON,
+so neither the URL-parse branch nor the fallback was exercised.
+Consumers get the harness changes with their next platform bump: the specs and
+harness are read from the platform checkout at the pinned ref, and nothing
+under `infrastructure/`, `oauth-proxy/`, `examples/` or `scaffold/` changed
+apart from the pins, so no bootstrap redeploy. The skill is an agent-side
+file (the plugin root's `skills/` directory, versioned by the manifests this
+release bumps), not something a site build or workflow reads. jodidaniel.com's
+v0.1.140 bump should pass e2e because the 4 theme specs now skip there.
+adamdaniel.ai's bump shows the same #669 visual diffs the v0.1.139 bump showed,
+until its screenshots are approved.
 
 **v0.1.139 — A tags canary's in-flight PR can no longer outlive its run and leave an `e2e-` tag on a consumer's main; the public theme gets one meta description, share images, a skip link and reduced-motion support; the admin editor gets five fixes.**
 The tags lifecycle specs' `afterAll` safety net looked only at `main`, and any
