@@ -6,7 +6,7 @@ The rejected ones are the reason the file exists: git history records what
 landed, but nothing records what was tried and turned down, so the next
 session re-derives and re-proposes it. An approach already ruled out is the
 expensive thing to lose. (Convention defined in skills-evals' `DESIGN.md`,
-"Scaling to the registry", and copied from agentskills'
+"Scaling to the registry", and copied from adam-agentskills'
 `docs/skill-impact.md`; the underlying evidence — a proposal audit trail is
 what stops failed abstractions being re-proposed — is WikiSkill,
 arXiv:2608.27454.)
