@@ -1,5 +1,7 @@
 // @lane: local — exercises the locally-served Atom/RSS feeds + per-post share row
+const fs = require("node:fs");
 const path = require("node:path");
+const YAML = require("yaml");
 const { test, expect } = require("./base");
 const { discoverTags, discoverPost } = require("./content-fixtures");
 const cap = require("./site-capabilities");
@@ -24,6 +26,21 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // rather than failing because a specific fixture name was removed.
 
 const ATOM_NS = 'xmlns="http://www.w3.org/2005/Atom"';
+
+// The feed's <title> is the site's own `title` (else `name`) from _config.yml —
+// what both the site-owned feed.xml and jekyll-feed emit. Read from the SITE,
+// never hardcoded: a spec naming one consumer's identity fails every other
+// site (the fixture lane, #702).
+function siteFeedTitle() {
+  const cfg = YAML.parse(fs.readFileSync(path.join(SITE_ROOT, "_config.yml"), "utf8")) || {};
+  const title = cfg.title || cfg.name;
+  expect(title, `${SITE_ROOT}/_config.yml must set title (or name) for the feed`).toBeTruthy();
+  return String(title);
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 async function fetchText(page, url) {
   const response = await page.request.get(url);
@@ -53,7 +70,8 @@ test.describe("Atom feeds", () => {
     expect(body).toMatch(
       /<link[^>]+(rel="self"[^>]+href="[^"]*feed\.xml|href="[^"]*feed\.xml"[^>]+rel="self")/,
     );
-    expect(body).toMatch(/<title[^>]*>.*Adam Daniel.*<\/title>/);
+    const xmlTitle = siteFeedTitle().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    expect(body).toMatch(new RegExp(`<title[^>]*>.*${escapeRegExp(xmlTitle)}.*</title>`));
   });
 
   test("each discovered tag emits a valid per-tag Atom feed at /tags/<slug>/feed.xml", async ({
