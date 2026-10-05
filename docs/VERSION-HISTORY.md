@@ -10,9 +10,26 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.135)
+## Version history (v0.1.0 → v0.1.136)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.136 — the admin's status copy tells the truth on a coming-soon site and a new entry; plainer toasts; the Reviews link steps back and returns you where you were.**
+On a gated site the draft bar and the Publish confirmation say visitors keep
+seeing the coming-soon page until the site is switched on (gate state read from
+the banner's presence, no second fetch); the draft label is now "Draft — not on
+the site yet"; Decap's "Changes saved" is hidden on a never-saved new entry;
+the publish bar reserves its row so fields no longer jump; "Unpublish" carries a
+plain explanation; the reload toast drops developer vocabulary, sits
+bottom-right and lasts 7s
+([#633](https://github.com/Adam-S-Daniel/cms-platform/pull/633), part of
+[#625](https://github.com/Adam-S-Daniel/cms-platform/issues/625)). The Reviews
+link is small and faded (hidden below 768px), "Back to CMS" returns to the
+admin hash you left (validated, `/admin/`-only), the list reserves room under
+the floating pills, and the ~66px empty band above the editor toolbar on narrow
+screens is gone ([#632](https://github.com/Adam-S-Daniel/cms-platform/pull/632),
+part of [#625](https://github.com/Adam-S-Daniel/cms-platform/issues/625)).
+Leftovers: [#658](https://github.com/Adam-S-Daniel/cms-platform/issues/658).
 
 **v0.1.135 — the enforced admin CSP allows `blob:` fetches, so saving an entry with an uploaded image works again; the gate banner's link reloads from inside an entry; idle autosave no longer paints a half-filled entry red.**
 The enforced (and Report-Only) admin CSP's `connect-src` now includes `blob:`:
