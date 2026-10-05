@@ -183,6 +183,13 @@ jobs:
           sparse-checkout-cone-mode: false
           path: .cms-platform
 
+      # Pinned: mint-app-token.js runs under node, and ubuntu-latest's default
+      # Node moves from 22 to 24 with Ubuntu 26.04
+      # (actions/runner-images#14748).
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
       - name: Mint the CMS automation App token (branch refresh only)
         id: app
         env:

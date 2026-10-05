@@ -210,6 +210,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Pinned: the await-prod-deploy composite below runs node
+      # (ubuntu-latest's default Node moves from 22 to 24 with Ubuntu 26.04,
+      # actions/runner-images#14748).
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
       - name: Install cross-post dependencies
         run: python3 -m pip install --user 'markdown-it-py==4.2.0' 'mdurl==0.1.2' 'pyyaml==6.0.3'
 
