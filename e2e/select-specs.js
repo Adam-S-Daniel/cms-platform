@@ -775,6 +775,7 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/index.*\.html$/,
   ],
   "e2e/confirm-wrap-local-backup.test.js": [/^(theme\/)?admin\/confirm-wrap-local-backup\.js$/],
+  "e2e/autosave-on-hide.test.js": [/^(theme\/)?admin\/autosave-on-hide\.js$/],
   // Draft media fallback: the shim's unit sandbox also checks where the admin
   // shells and the Live Preview layout load it; the payload test reads the
   // preview bridge it depends on.

@@ -41,6 +41,11 @@
  *      @admin-write e2e spec sets it low to exercise the idle path; also
  *      documented in theme/admin/README.md's window.CMS_* / contract table).
  *
+ * ── Incomplete-entry guard (#625 item 3) ──────────────────────────────
+ * No trigger clicks Save while a required text field is empty: Decap's Save
+ * would only paint validation errors + a toast the owner never asked for.
+ * See hasEmptyRequiredField() below.
+ *
  * ── Route gate ────────────────────────────────────────────────────────
  * Acts only on entry-editor routes — hash `#/collections/<c>/entries/<slug>`
  * or `#/collections/<c>/new` — mirroring the entry-route logic the admin
@@ -79,6 +84,45 @@
     return null;
   }
 
+  // True when a REQUIRED text field on the open entry is still empty.
+  //
+  // Why (cms-platform#625 item 3): Decap's Save validates before it persists.
+  // On a half-filled entry (typically a brand-new one the owner stepped away
+  // from) the idle-timer click made Decap paint every empty required field red
+  // ("TITLE IS REQUIRED.") and raise the "you've missed a required field"
+  // toast — to the owner, being told off for a Save she never pressed. And the
+  // click could not have saved anything: validation fails, nothing persists.
+  // So an incomplete entry is skipped: nothing is lost, and the errors stay
+  // hidden until the owner presses Save herself. Tab-hide / pagehide use the
+  // same guard (the same failed Save would flash errors on return).
+  //
+  // How: Decap renders <label for=ID> per field and appends " (optional)" to
+  // the label of every `required: false` field, so a label without that suffix
+  // is a required field and #ID is its control. Only plain <input>/<textarea>/
+  // <select> controls are judged. Widgets whose input value does not mirror the
+  // field value (react-select / relation comboboxes, the rich-text editor, an
+  // unlocatable id) are treated as "unknown", never "empty" — otherwise a
+  // filled Category would block autosave forever. A bad format (e.g. a URL
+  // pattern) is not detected here; Decap still reports that if it is saved.
+  function hasEmptyRequiredField() {
+    var labels = document.querySelectorAll("label[for]");
+    for (var i = 0; i < labels.length; i++) {
+      var label = labels[i];
+      if (/\(optional\)\s*$/i.test((label.textContent || "").trim())) continue;
+      var el = document.getElementById(label.getAttribute("for"));
+      if (!el) continue;
+      var tag = (el.tagName || "").toUpperCase();
+      if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") continue;
+      var role = el.getAttribute && el.getAttribute("role");
+      if (role === "combobox" || role === "listbox") continue;
+      if (el.getAttribute && el.getAttribute("aria-autocomplete")) continue;
+      var type = ((el.getAttribute && el.getAttribute("type")) || "").toLowerCase();
+      if (type === "checkbox" || type === "radio" || type === "hidden") continue;
+      if (String(el.value == null ? "" : el.value).trim() === "") return true;
+    }
+    return false;
+  }
+
   // The save-click fire function. Route-gated; clicks Save iff we're on an
   // entry editor and a "Save" button exists. Decap's own onClick guard
   // (()=>hasChanged&&onPersist()) makes a click on a clean entry a no-op, so
@@ -87,6 +131,7 @@
     if (!onEntryEditorRoute()) return;
     var btn = findSaveButton();
     if (!btn) return;
+    if (hasEmptyRequiredField()) return;
     btn.click();
     // Always log (error/warn are the levels the host-loop trace captures);
     // the e2e spec can assert the fire via this tag too.
