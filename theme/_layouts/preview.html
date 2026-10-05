@@ -88,12 +88,24 @@ layout: default
      So the heading names the TAB rather than the content, and the last
      sentence says outright that nothing is lost. Do not trim that sentence
      for brevity — it is the whole point of the block, and
-     e2e/live-preview-gating-lint.test.js holds it. -->
+     e2e/live-preview-gating-lint.test.js holds it.
+
+     #646 — on load this tab asks the editor tab for the entry it has open
+     (cms-preview-request, answered by admin/preview-bridge.js), so Live
+     Preview on a saved entry renders it at once. This screen is what is left
+     when no editor tab answers. The instruction names the control the
+     editor really has: the GitHub editorial workflow shows Save, while the
+     local backend (decap-server, no editorial workflow) shows only Publish,
+     whose menu item is Publish now. The script below picks the paragraph
+     from the backend Decap's own session in this origin records. -->
 <div id="preview-empty-state">
   <h2>Nothing to preview in this tab yet</h2>
-  <p>Go back to the editor tab and hit <code>Save</code> (or
-  <code>Publish</code>) — this tab fills in with what you save while both tabs
-  are open.</p>
+  <p data-empty-hint="github">Open the entry in the editor tab and click
+  <code>Save</code> — this tab shows what you save while both tabs are
+  open.</p>
+  <p data-empty-hint="local" hidden>Open the entry in the editor tab and choose
+  <code>Publish</code> → <code>Publish now</code> — this tab shows what you
+  publish while both tabs are open.</p>
   <p>Your saved and published content is safe; reloading this tab only clears
   the preview, never your work.</p>
   <p class="hint">Keep this tab open while you edit.</p>
@@ -355,23 +367,63 @@ layout: default
     if (media && typeof media.retry === "function") media.retry(active);
   }
 
-  window.addEventListener("message", function (event) {
+  // An update is applied only when it is well formed and for THIS layout:
+  // a plain object of the update type, fields (when present) a plain object,
+  // a string slug or none, and a collection that is this tab's or absent.
+  // An entry of another collection would fill this layout with fields it
+  // does not have (#646: the bridge also answers requests, so every open
+  // preview tab hears every reply).
+  function isPlainObject(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function acceptUpdate(data) {
+    if (!isPlainObject(data) || data.type !== "cms-preview-update") return false;
+    if (data.fields != null && !isPlainObject(data.fields)) return false;
+    if (data.slug != null && typeof data.slug !== "string") return false;
+    return data.collection == null || data.collection === collection;
+  }
+
+  function onMessage(event) {
     if (!isTrustedOrigin(event.origin)) return;
-    var data = event.data;
-    if (!data || data.type !== "cms-preview-update") return;
-    update(data);
-  });
+    if (!acceptUpdate(event.data)) return;
+    update(event.data);
+  }
+
+  window.addEventListener("message", onMessage);
+
+  // The empty state names the controls the editor really has. Decap records
+  // its session in this origin's localStorage under "decap-cms-user", and a
+  // local_backend session (decap-server) is the "proxy" backend: no
+  // editorial workflow, so no Save, only Publish → Publish now. Anything
+  // else, an unreadable value included, keeps the GitHub (Save) wording.
+  function storedBackend() {
+    try {
+      var user = JSON.parse(window.localStorage.getItem("decap-cms-user") || "null");
+      return isPlainObject(user) && user.backendName === "proxy" ? "local" : "github";
+    } catch (_) {
+      return "github";
+    }
+  }
+
+  (function chooseEmptyHint() {
+    var backend = storedBackend();
+    var hints = document.querySelectorAll("#preview-empty-state [data-empty-hint]");
+    Array.prototype.forEach.call(hints, function (p) {
+      p.hidden = p.getAttribute("data-empty-hint") !== backend;
+    });
+  })();
 
   // BroadcastChannel is the transport the admin bridge uses so it doesn't
   // need to hold a live reference to the preview tab. Same-origin only by
   // construction — browsers scope channels to the origin.
   try {
     var channel = new BroadcastChannel("adamdaniel-cms-preview");
-    channel.addEventListener("message", function (event) {
-      var data = event.data;
-      if (!data || data.type !== "cms-preview-update") return;
-      update(data);
-    });
+    channel.addEventListener("message", onMessage);
+    // Ask an editor tab for the entry it has open, so a saved entry renders
+    // now rather than after another Save (#646). preview-bridge.js answers
+    // with an ordinary update when its route is this collection's editor.
+    channel.postMessage({ type: "cms-preview-request", collection: collection });
   } catch (_) {
     // BroadcastChannel unavailable (very old browser) — postMessage still works.
   }

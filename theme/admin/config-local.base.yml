@@ -120,7 +120,7 @@ collections:
         label: Body
         widget: markdown
         required: true
-        hint: "Full post content. For a real-layout preview that updates on every Save, open /preview/?collection=posts in a second tab."
+        hint: "Full post content."
         modes:
           - rich_text
           - raw

@@ -353,7 +353,9 @@ site MUST expose `/preview/` (the admin "Live Preview" target) and a graceful
 `404.html`, or the admin button dead-ends on a raw S3 404 and unknown URLs 404
 ungracefully. The gem ships `theme/_layouts/preview.html` (the preview SHELL,
 with the hidden post/page/project variants the admin `preview-bridge` streams
-into) + the admin scripts, but the consuming site must provide the `/preview/`
+into; on load it posts `cms-preview-request` and the editor tab answers with
+the entry it has open, so Live Preview renders a saved entry without another
+Save, #646) + the admin scripts, but the consuming site must provide the `/preview/`
 PAGE. `scaffold/create-site.js` seeds both (`SEED_PREVIEW` / `SEED_404`):
 `preview.md` is **front-matter only** (`layout: preview`, `permalink: /preview/`,
 `sitemap: false`) and carries **no front-matter `robots`** — the gem preview

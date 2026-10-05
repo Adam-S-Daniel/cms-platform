@@ -133,5 +133,39 @@ test.describe(
       const pagesUrl = await page.evaluate(() => window.adamdaniel_cms_preview_url("pages"));
       expect(pagesUrl).toMatch(/\/preview\/\?collection=pages$/);
     });
+
+    // #646 — Live Preview on an already-saved entry used to open on the empty
+    // state until the next Save. /preview/ now asks on load and the bridge
+    // answers with the entry the editor has open (here: the stubbed preview
+    // pane's last render), over the real BroadcastChannel. No save is fired.
+    test("a /preview/ tab opened on a saved entry renders it without a Save", async ({
+      page,
+      context,
+    }) => {
+      await loadBridgeHarness(page);
+      await page.evaluate(() => {
+        history.replaceState(null, "", "#/collections/posts/entries/2026-01-15-saved-entry");
+        const data = { title: "Saved, never re-saved", body: "Body from the editor tab." };
+        const entry = {
+          get(key) {
+            if (key === "data") return { toJS: () => data };
+            if (key === "collection") return "posts";
+            if (key === "slug") return "2026-01-15-saved-entry";
+            return undefined;
+          },
+        };
+        window.adamdaniel_cms_preview_pane = { current: () => ({ collection: "posts", entry }) };
+      });
+
+      const preview = await context.newPage();
+      await preview.goto("/preview/?collection=posts");
+      const variant = preview.locator('[data-preview-layout="posts"]');
+      await expect(variant.locator('[data-preview-slot="title"]')).toHaveText("Saved, never re-saved");
+      await expect(variant.locator('[data-preview-slot="body"]')).toContainText(
+        "Body from the editor tab.",
+      );
+      await expect(preview.locator("#preview-empty-state")).toHaveCount(0);
+      await preview.close();
+    });
   },
 );

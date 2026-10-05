@@ -11,6 +11,11 @@
  *     renders the same markup as the Live Preview layout
  *     (theme/_layouts/preview.html), with the date formatted for people.
  *
+ * Each render also records the entry it drew (current()), so preview-bridge.js
+ * can answer a /preview/ tab that opens on an entry nobody has saved in this
+ * session (#646): a template's `props.entry` is the only public Decap API that
+ * sees an entry it merely loaded.
+ *
  * Uses only Decap's public CMS API (registerPreviewStyle,
  * registerPreviewTemplate) and the `h` it exposes. Loaded after
  * `decap-cms.js` in the admin shells so `window.CMS` exists.
@@ -62,9 +67,13 @@
     return entry && typeof entry.getIn === "function" ? entry.getIn(["data", name]) : undefined;
   }
 
+  // The entry the pane last drew, read by preview-bridge.js on request.
+  var current = null;
+
   function makeTemplate(h, collection) {
     return function PreviewTemplate(props) {
       var entry = props.entry;
+      current = { collection: collection, entry: entry };
       var title = field(entry, "title");
       var children = [];
 
@@ -138,5 +147,10 @@
     waitForCMS();
   }
 
-  window.adamdaniel_cms_preview_pane = { formatDate: formatDate };
+  window.adamdaniel_cms_preview_pane = {
+    formatDate: formatDate,
+    current: function () {
+      return current;
+    },
+  };
 })();

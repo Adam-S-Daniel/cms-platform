@@ -9,8 +9,8 @@ const cap = require("./site-capabilities");
 // These properties together close the gaps documented in the content-workflow
 // review: drafts go through PRs (not straight to main), the auto-overwritten
 // reading_time field doesn't waste editor time, the precedence between
-// `published` and `publish_date` is explicit, the real-layout preview URL is
-// discoverable from the editor, tags can be created inline, and the media
+// `published` and `publish_date` is explicit, the Body hint leaves the
+// real-layout preview to the Live Preview button, tags can be created inline, and the media
 // path is flat + template-free so an uploaded file's on-disk path is
 // byte-identical to the URL written into content (no broken images, no
 // literal `{{year}}` in the standalone Media library's Copy Path).
@@ -159,15 +159,16 @@ test.describe("Decap CMS config invariants", () => {
       expect(String(published.hint || "").toLowerCase()).toMatch(/leave.*off|off.*to schedule/);
     });
 
-    test(`${label}: posts.body hint surfaces the real-layout /preview/ URL`, () => {
+    test(`${label}: posts.body hint does not send writers to a raw /preview/ path`, () => {
       skipUnlessCollection("posts");
       const posts = findCollection(parseConfig(configPath), "posts");
       const body = findField(posts, "body");
       expect(body, "posts.body field must exist").not.toBeNull();
-      // The /preview/ route renders draft content using the real Jekyll
-      // layouts — strictly better than the in-editor markdown preview, but
-      // there's no in-CMS UI for it, so it has to live in the hint text.
-      expect(String(body.hint || "")).toContain("/preview/?collection=posts");
+      // The floating Live Preview button opens /preview/ for the entry being
+      // edited, and the preview fills from the editor on load (#646). A hint
+      // telling writers to type the path into a second tab duplicated that
+      // button with a raw URL, so it is gone and must stay gone.
+      expect(String(body.hint || "")).not.toContain("/preview/");
     });
   }
 
