@@ -1,10 +1,10 @@
 # Build + dependency artifacts for the local-lane self-test fixture.
 # The fixture's SOURCE is committed; everything Jekyll/bundler/decap-server
-# produces at validation time is not.
+# produces at validation time is not. Gemfile.lock is SOURCE (#527): the
+# `fixture-e2e` check installs from it in frozen mode.
 _site/
 .jekyll-cache/
 .sass-cache/
-Gemfile.lock
 vendor/
 .bundle/
 # Rendered Decap configs — the theme's decap_config_hook.rb writes these
