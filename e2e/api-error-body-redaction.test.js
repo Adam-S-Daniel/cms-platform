@@ -116,6 +116,16 @@ test.describe("e2e/base.js TARGET=preview PR lookup keeps gh output out of its e
         `  echo 'gh: ${MARKER} (HTTP 502)' >&2`,
         "  exit 1",
         "fi",
+        'if [ "$FAKE_GH_MODE" = kill ]; then',
+        `  echo 'gh: ${MARKER} (HTTP 502)' >&2`,
+        "  kill -9 $$",
+        "fi",
+        // More than execFileSync's default 1 MiB buffer: Node kills the child
+        // with SIGTERM and sets err.code = ENOBUFS although gh did start.
+        'if [ "$FAKE_GH_MODE" = flood ]; then',
+        // Shell builtins only: PATH holds just this directory in these tests.
+        "  i=0; while [ $i -lt 2100 ]; do printf '%01000d' 0; i=$((i+1)); done",
+        "fi",
         `printf '%s' '${MARKER}'`,
         "",
       ].join("\n"),
@@ -167,5 +177,25 @@ test.describe("e2e/base.js TARGET=preview PR lookup keeps gh output out of its e
     const err = lookupError();
     expect(err.message).toContain("(gh could not start: ENOENT)");
     expect(err.message).not.toContain("null");
+  });
+
+  test("gh is killed by a signal: the error names the signal, never `exited null`", () => {
+    process.env.PATH = binDir;
+    process.env.FAKE_GH_MODE = "kill";
+    const err = lookupError();
+    expect(err.message).not.toContain(MARKER);
+    expect(err.message).toContain("(gh was killed by SIGKILL)");
+    expect(err.message).not.toContain("null");
+    expect(err.cause).toBeUndefined();
+  });
+
+  test("gh is killed with a spawn error code (ENOBUFS): says killed, not `could not start`", () => {
+    process.env.PATH = binDir;
+    process.env.FAKE_GH_MODE = "flood";
+    const err = lookupError();
+    expect(err.message).toContain("(gh was killed by SIGTERM (ENOBUFS))");
+    expect(err.message).not.toContain("could not start");
+    expect(err.message).not.toContain("0000");
+    expect(err.cause).toBeUndefined();
   });
 });
