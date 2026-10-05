@@ -108,7 +108,8 @@
    * already ships /preview/ as the editor's WYSIWYG (opened in a second
    * tab), so the inline preview pane is redundant on a phone and only
    * adds horizontal scroll. Give the form the full width, let it size to
-   * its content, and drop the preview pane + drag handle. */
+   * its content, and drop the preview pane + drag handle. The eye toggle
+   * still reaches the preview: rule 11 shows it full-width instead. */
   .SplitPane,
   .SplitPane .Pane1 {
     position: static !important;
@@ -349,6 +350,61 @@
     margin-top: 0 !important;
     padding-top: 0 !important;
   }
+
+  /* ── 11. The eye shows the preview full-width (cms-platform#645) ────────
+   * Rule 4 hides `.Pane2`, so Decap's eye ("Toggle preview") toggled a pane
+   * that could never show. admin/mobile-preview-toggle.js turns the eye into
+   * a switch between two full-width views and marks the preview view with
+   * `cms-mobile-preview` on <html> (set only while Decap has the preview pane
+   * mounted). Without the class nothing here applies and the form layout
+   * above is unchanged. With it, the form pane steps aside and the preview
+   * pane takes the full width, with the shim's "Back to editing" bar on top.
+   * The pane gets a definite height so the preview iframe (height: 100%) has
+   * something to fill; it is in normal flow (rule 3), so the page scrolls. */
+  html.cms-mobile-preview .SplitPane > .Pane1 {
+    display: none !important;
+  }
+  html.cms-mobile-preview .SplitPane > .Pane2 {
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    height: 100vh !important;
+    height: 100svh !important;
+  }
+  html.cms-mobile-preview .SplitPane > .Pane2 > [class*="PreviewPaneContainer"] {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+  }
+  /* The eye sits at the top-right of the editor (Decap's ViewControls), so
+   * the bar keeps its right edge clear and the two never overlap. */
+  html.cms-mobile-preview #cms-mobile-preview-back {
+    display: flex !important;
+    align-items: center;
+    padding: 0.5rem 4.5rem 0.5rem 1rem;
+    min-height: 3.5rem;
+    box-sizing: border-box;
+    border-bottom: 1px solid #d0d7de;
+    background: #fff;
+  }
+  #cms-mobile-preview-back button {
+    font: inherit;
+    font-size: 16px;
+    padding: 0.5rem 0.9rem;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    background: #f6f8fa;
+    color: #1f2328;
+    cursor: pointer;
+  }
+}
+
+/* The back bar exists only for the phone preview view above; at any other
+ * width (or after rotating to landscape) it stays out of the desktop
+ * side-by-side preview. */
+#cms-mobile-preview-back {
+  display: none;
 }
 
 /* ── Desktop: the publish-state bar must not make the editor scroll ───────

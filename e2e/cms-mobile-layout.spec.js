@@ -20,6 +20,7 @@
  * load-bearing one; the Chromium pass is a cheap second engine.
  */
 const { test, expect } = require("./base");
+const { expectReachable } = require("./ui-visibility");
 
 const IPHONE_16 = { width: 393, height: 852 };
 const DESKTOP = { width: 1400, height: 900 };
@@ -204,6 +205,74 @@ test.describe(
         return parseFloat(getComputedStyle(main).paddingBottom);
       });
       expect(padding, "CollectionMain bottom clearance (px)").toBeGreaterThanOrEqual(64);
+    });
+
+    // #645 — the eye ("Toggle preview") used to toggle a pane rule 4 hides, so
+    // it did nothing on a phone. It now switches to a full-width preview, and
+    // the eye or "Back to editing" returns to the form.
+    async function expectPreviewView(page) {
+      const frame = page.locator('[class*="PreviewPaneFrame"]').first();
+      await expect(frame).toBeVisible();
+      const box = await frame.boundingBox();
+      const vw = page.viewportSize().width;
+      expect(box.width, "preview fills the phone width").toBeGreaterThan(vw - 8);
+      expect(box.height, "preview has a usable height").toBeGreaterThan(300);
+      await expect(page.getByLabel(/^Title$/)).toBeHidden();
+      await expect(
+        page.frameLocator('[class*="PreviewPaneFrame"]').getByText("Replacement test post 1").first(),
+      ).toBeVisible();
+      const back = page.getByRole("button", { name: "Back to editing" });
+      await expectReachable(page, back, "Back to editing");
+      await expectReachable(page, page.getByRole("button", { name: "Toggle preview" }), "eye toggle");
+      return back;
+    }
+
+    async function expectFormView(page) {
+      await expect(page.getByLabel(/^Title$/)).toBeVisible();
+      await expect(page.locator('[class*="PreviewPaneFrame"]').first()).toBeHidden();
+      await expect(page.getByRole("button", { name: "Back to editing" })).toBeHidden();
+    }
+
+    test("#645: the eye shows a full-width preview; the eye or Back returns to the form", async ({
+      page,
+    }) => {
+      await page.setViewportSize(IPHONE_16);
+      await login(page);
+      await openEditor(page);
+      await expectFormView(page);
+
+      const eye = page.getByRole("button", { name: "Toggle preview" });
+      await eye.click();
+      const back = await expectPreviewView(page);
+
+      await back.click();
+      await expectFormView(page);
+
+      await eye.click();
+      await expectPreviewView(page);
+      await eye.click();
+      await expectFormView(page);
+    });
+
+    test("#645: one tap previews even when Decap's preview was switched off", async ({ page }) => {
+      // A stored `cms.preview-visible=false` (the eye turned off on a desktop)
+      // means Decap renders no preview pane at all until the eye is tapped.
+      await page.addInitScript(() => {
+        try {
+          window.localStorage.setItem("cms.preview-visible", "false");
+        } catch (e) {
+          /* storage blocked: the default (on) path is covered above */
+        }
+      });
+      await page.setViewportSize(IPHONE_16);
+      await login(page);
+      await openEditor(page);
+      await expectFormView(page);
+
+      await page.getByRole("button", { name: "Toggle preview" }).click();
+      const back = await expectPreviewView(page);
+      await back.click();
+      await expectFormView(page);
     });
 
     test("desktop layout is untouched — the preview pane still renders wide", async ({ page }) => {

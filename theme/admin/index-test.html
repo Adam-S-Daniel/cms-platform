@@ -161,6 +161,11 @@
        page / project template). Loads after Decap so `window.CMS` exists. -->
   <script src="preview-pane.js" defer></script>
 
+  <!-- Phone widths: Decap's eye ("Toggle preview") switches the editor to a
+       full-width preview with a "Back to editing" bar (cms-platform#645).
+       Pairs with rule 11 in admin-mobile.css. Loads after Decap. -->
+  <script src="mobile-preview-toggle.js" defer></script>
+
   <!-- Single source of truth for the live URL — see admin/index.html.
        Required so the native preview-href override below produces the
        same URL as the banner. -->
