@@ -71,11 +71,49 @@ test.describe("entry-status-model — the four badges", () => {
     expect(got.modifiers).toEqual([]);
   });
 
-  test("an open PR that is not armed is a Draft, and says only you can see it", () => {
+  // #625 item 5: a draft lives on a public PR, so "only you can see this" was
+  // untrue. The label says only what is certain: it is not on the site yet.
+  test("an open PR that is not armed is a Draft, and says it is not on the site yet", () => {
     const m = loadModel();
     const got = m.derive(facts({ hasOpenPr: true }), { now: NOW });
     expect(got.badge).toBe(m.BADGE.DRAFT);
-    expect(got.label).toMatch(/only you can see this/i);
+    expect(got.label).toBe("Draft — not on the site yet");
+    expect(got.label).not.toMatch(/only you/i);
+  });
+
+  // #625 item 1: on a gated (coming-soon) site "It then takes about 5 minutes
+  // to appear" is a promise the visitors' page will not keep.
+  test("a Draft on a gated site says visitors keep seeing the coming-soon page", () => {
+    const m = loadModel();
+    const live = m.derive(facts({ hasOpenPr: true }), { now: NOW, canonicalHostname: "example.com" });
+    const gated = m.derive(facts({ hasOpenPr: true }), {
+      now: NOW,
+      canonicalHostname: "example.com",
+      gated: true,
+    });
+    expect(gated.badge).toBe(m.BADGE.DRAFT);
+    expect(gated.detail).toMatch(/visitors keep seeing the coming-soon page until the site is switched on/);
+    expect(gated.detail).not.toMatch(/minutes/);
+    expect(live.detail).not.toMatch(/coming-soon/);
+    expect(live.detail).toBe(
+      "This is saved, but it is not on example.com yet. Click Publish to put it on example.com.",
+    );
+  });
+
+  test("a Live entry on a gated site does not claim visitors can see it", () => {
+    const m = loadModel();
+    const got = m.derive(facts(), { now: NOW, canonicalHostname: "example.com", gated: true });
+    expect(got.badge).toBe(m.BADGE.LIVE);
+    expect(got.detail).toMatch(/coming-soon page/);
+  });
+
+  test("isSiteGated reads the site-gate banner the admin already shows", () => {
+    const m = loadModel();
+    expect(m.isSiteGated({ getElementById: () => null })).toBe(false);
+    expect(
+      m.isSiteGated({ getElementById: (id) => (id === "cms-site-gate-banner" ? {} : null) }),
+    ).toBe(true);
+    expect(m.isSiteGated(undefined)).toBe(false);
   });
 
   test("an armed PR is Going live, and names what it is waiting on", () => {

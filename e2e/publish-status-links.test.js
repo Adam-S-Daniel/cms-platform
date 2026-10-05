@@ -312,6 +312,12 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
   const save = new FakeNode("button");
   save.disabled = true; // saved: nothing unsaved
   root.appendChild(toolbar);
+  if (options.gated) {
+    // site-gate-banner.js's banner, present exactly while the site is gated.
+    const banner = new FakeNode("div");
+    banner.id = "cms-site-gate-banner";
+    root.appendChild(banner);
+  }
   const doc = {
     readyState: "complete",
     body: {},
@@ -722,4 +728,55 @@ test("publish-button uses its canonical fallback before the served config settle
   }, { siteHostname: true, fetch: () => new Promise(() => {}) });
   doc.getElementById("cms-publish-button").click();
   expect(doc.getElementById("cms-publish-state-actions").textContent).toContain("It will appear at https://example.com");
+});
+
+// #625 item 1: on a coming-soon (gated) site the bar and the confirmation must
+// not promise "it then takes about 5 minutes to appear" — visitors keep seeing
+// the coming-soon page. The gate state is the one site-gate-banner.js already
+// resolved: its banner is in the page exactly while the site is gated.
+const GATE_SENTENCE = "visitors keep seeing the coming-soon page until the site is switched on";
+
+test.describe("gate-aware publishing copy (#625 item 1)", () => {
+  for (const model of [true, false]) {
+    const kind = model ? "model" : "fallback";
+
+    test(`${kind} draft bar says visitors keep seeing the coming-soon page when gated`, () => {
+      const { doc } = loadBar(facts({ hasOpenPr: true }), {}, {
+        model,
+        publish: false,
+        nativePublish: true,
+        deploy: true,
+        gated: true,
+      });
+      const text = doc.getElementById("cms-publish-state-text").textContent;
+      expect(text).toContain(GATE_SENTENCE);
+      expect(text).not.toMatch(/minutes/);
+    });
+
+    test(`${kind} draft bar keeps the live-site wording when the site is switched on`, () => {
+      const { doc } = loadBar(facts({ hasOpenPr: true }), {}, {
+        model,
+        publish: false,
+        nativePublish: true,
+        deploy: true,
+      });
+      const text = doc.getElementById("cms-publish-state-text").textContent;
+      expect(text).not.toMatch(/coming-soon/);
+      expect(text).toMatch(/Click Publish to put it/);
+    });
+
+    test(`${kind} confirmation says the same when gated, and is unchanged when not`, () => {
+      const gated = loadBar(facts({ hasOpenPr: true }), {}, { model, nativePublish: true, gated: true });
+      gated.doc.getElementById("cms-publish-button").click();
+      const note = gated.doc.getElementById("cms-publish-state-actions").textContent;
+      expect(note).toContain(GATE_SENTENCE);
+      expect(note).not.toMatch(/minutes/);
+
+      const open = loadBar(facts({ hasOpenPr: true }), {}, { model, nativePublish: true });
+      open.doc.getElementById("cms-publish-button").click();
+      const openNote = open.doc.getElementById("cms-publish-state-actions").textContent;
+      expect(openNote).not.toMatch(/coming-soon/);
+      expect(openNote).toMatch(/^Put this on .*\? It .*5 minutes/);
+    });
+  }
 });

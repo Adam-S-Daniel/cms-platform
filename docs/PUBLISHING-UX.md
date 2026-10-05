@@ -295,7 +295,7 @@ Every entry, in the list and in the editor, carries exactly one badge:
 | Badge | Means | Derived from |
 |---|---|---|
 | **Live** | On the public site right now | No open `cms/*` PR for it, and the last deploy carrying it succeeded |
-| **Draft — only you can see this** | Saved, not on the site | Open `cms/*` PR, auto-merge not armed |
+| **Draft — not on the site yet** | Saved, not on the site | Open `cms/*` PR, auto-merge not armed |
 | **Going live… (about 10 minutes)** | Publish requested, in flight | PR armed or merged, deploy not finished |
 | **Needs attention** | Something stopped it | A required check failed, a merge conflict, or a park on the review gate |
 
@@ -763,6 +763,34 @@ Four details worth keeping:
   and restores it on Cancel. The bar asks `window.CMSPublishButton` what is
   rendered, not what `mode` is set to. `e2e/publish-status-links.test.js`
   covers both.
+- **Owner-pass wording and layout fixes (#625 items 1, 2, 4, 5, 6, 7).**
+  - *Gate-aware copy (1).* On a coming-soon (gated) site the Draft bar and the
+    "Publish this to <site>?" confirmation say that publishing saves the entry
+    to the site but visitors keep seeing the coming-soon page until the site
+    is switched on, instead of "it then takes about 5 minutes to appear".
+    The gate state is not fetched again: `site-gate-banner.js` already resolves
+    it (branch-aware, cached) and shows `#cms-site-gate-banner` exactly while the
+    site is gated, so `CMSEntryStatus.isSiteGated()` reads that banner's presence.
+    Not gated, no gate declared or not yet resolved reads as not gated and the
+    live-site wording is unchanged.
+  - *No "Changes saved" on a never-saved entry (2).* On a `#/collections/<c>/new`
+    route `publish-step-hint.js` hides Decap's "Changes saved" toolbar status
+    (`visibility`, so nothing reflows) until the entry has a saved route.
+  - *Reload toast (4).* `confirm-wrap-local-backup.js` now says, in owner
+    language, that work is saved automatically and by Save and that nothing
+    reaches the site until Publish; bottom-right, narrow, 7 s (was a centred
+    560 px toast for 14 s over the form).
+  - *Draft label (5).* "Draft — only you can see this" was untrue (the draft is
+    a public PR); it is now "Draft — not on the site yet".
+  - *No layout shift (6).* The bar keeps its row (`min-height`) on every editor
+    route, empty and invisible when it has nothing to say, so its first
+    appearance no longer pushes the fields down ~46 px. Publish is already
+    rendered in the bar once the poller has found the entry's PR; Decap's own
+    toolbar "Publish ▾" is only visible before that (the hide-nothing-until-
+    there-is-a-replacement rule above), so it is not moved.
+  - *Unpublish explained (7).* The "Unpublish" item in the published-entry
+    dropdown carries a plain `title`: it takes the entry off the site and moves
+    it back to Drafts. `e2e/publish-button-unpublish-hint.test.js`.
 
 Also in this phase: Decap's misleading post-publish error toast is
 suppressed — the one the shim's deliberate 422 provokes. The matcher

@@ -445,6 +445,44 @@
     },
   };
 
+  // ── Explaining "Unpublish" (#625 item 7) ──────────────────────────────
+  // "Published ▾" on a live entry offers Unpublish with no word on what it
+  // does. Decap's Unpublish takes the entry off the site and moves it back to
+  // Drafts, so say so, as a `title` on that one menu item. Additive only: it
+  // touches no other item, never the Publish dropdown, and writes nothing once
+  // set. react-aria-menubutton mounts items only while the menu is open, so a
+  // slow interval applies it (the 500 ms render tick's own cadence).
+  var UNPUBLISHED_TRIGGER_CLASS = "PublishedToolbarButton";
+  var UNPUBLISH_HINT =
+    "Takes this off the site and moves it back to your drafts. " +
+    "Nothing is lost — you can publish it again.";
+
+  function inPublishedDropdown(item) {
+    var el = item.parentElement;
+    for (var depth = 0; el && depth < MENU_DEPTH; depth++, el = el.parentElement) {
+      var trigger = el.querySelector(MENU_TRIGGER);
+      if (!trigger) continue;
+      return String(trigger.getAttribute("class") || "").indexOf(UNPUBLISHED_TRIGGER_CLASS) !== -1;
+    }
+    return false;
+  }
+
+  function explainUnpublish() {
+    var items;
+    try {
+      items = document.querySelectorAll('[role="menuitem"]');
+    } catch (e) {
+      return;
+    }
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      var label = String(item.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (label.indexOf("unpublish") !== 0 || !inPublishedDropdown(item)) continue;
+      if (item.getAttribute("title") !== UNPUBLISH_HINT) item.setAttribute("title", UNPUBLISH_HINT);
+    }
+  }
+  setInterval(explainUnpublish, 500);
+
   // ── Rendering ─────────────────────────────────────────────────────────
   function styleButton(b, primary) {
     b.style.cssText =
@@ -508,6 +546,12 @@
     };
   }
 
+  function siteGated() {
+    var model = window.CMSEntryStatus;
+    if (model && typeof model.isSiteGated === "function") return model.isSiteGated(document);
+    return Boolean(document.getElementById("cms-site-gate-banner"));
+  }
+
   function plan() {
     var p = progress();
     var state = p ? p.get() : null;
@@ -549,6 +593,17 @@
 
     if (mode === "confirm") {
       var dest = destination(facts);
+      // Coming-soon site: do not promise it "appears" in 5 minutes — visitors
+      // keep seeing the coming-soon page (#625 item 1). The gate state is
+      // site-gate-banner.js's banner, read through the shared model helper.
+      if (siteGated()) {
+        return {
+          kind: "confirm",
+          note:
+            "Publish this to " + dest.noun + "? It will be saved to the site, but " +
+            "visitors keep seeing the coming-soon page until the site is switched on.",
+        };
+      }
       if (dest.preview) {
         // No URL: window.LiveURL computes the LIVE site's path, and the
         // preview origin is not derivable from anything this shim may read.

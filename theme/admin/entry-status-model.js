@@ -19,7 +19,7 @@
  * FOUR badges, exactly one of which applies at a time:
  *
  *   live            On the public site right now.
- *   draft           Saved, not on the site. Only you can see this.
+ *   draft           Saved, not on the site yet.
  *   going-live      Publish requested, in flight.
  *   needs-attention Something stopped it.
  *
@@ -399,6 +399,28 @@
   // (claiming progress that is not happening) rather than the §2.4 defect of
   // claiming failure that is not real. Both are lies; this orders them so
   // neither is told.
+  // ── The site gate (#625 item 1) ───────────────────────────────────────
+  // A site can be GATED (coming-soon mode): everything published is kept, but
+  // visitors see only the coming-soon page until the site is switched on, so
+  // "it then takes about 5 minutes to appear" would promise what they never
+  // see. site-gate-banner.js already resolves that state (branch-aware, cached)
+  // and shows its banner exactly while the site is gated; the banner's presence
+  // IS the state, so every publishing surface reads it from there instead of
+  // making a second GitHub request. No banner (not gated, no gate declared,
+  // not yet resolved) reads as not gated: saying nothing is the safe default.
+  var GATE_BANNER_ID = "cms-site-gate-banner";
+  var GATED_NOTE =
+    "visitors keep seeing the coming-soon page until the site is switched on";
+
+  function isSiteGated(doc) {
+    try {
+      var d = arguments.length ? doc : typeof document !== "undefined" ? document : null;
+      return Boolean(d && typeof d.getElementById === "function" && d.getElementById(GATE_BANNER_ID));
+    } catch (e) {
+      return false;
+    }
+  }
+
   function derive(facts, options) {
     var f = facts || {};
     var opts = options || {};
@@ -470,11 +492,13 @@
     if (f.hasOpenPr) {
       return {
         badge: BADGE.DRAFT,
-        label: "Draft — only you can see this",
-        detail:
-          "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
-          "put it on " + dest.noun + "." +
-          (dest.preview ? " " + dest.laterNote : ""),
+        label: "Draft — not on the site yet",
+        detail: opts.gated
+          ? "This is saved, but it is not on " + dest.noun + " yet. Click Publish to add it to " +
+            "the site — " + GATED_NOTE + "."
+          : "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
+            "put it on " + dest.noun + "." +
+            (dest.preview ? " " + dest.laterNote : ""),
         detailLink: null,
         waitingOn: null,
         minutesLeft: null,
@@ -485,7 +509,9 @@
     return {
       badge: BADGE.LIVE,
       label: "Live",
-      detail: "This is on " + dest.noun + " now." + (dest.preview ? " " + dest.laterNote : ""),
+      detail: opts.gated
+        ? "This is saved on " + dest.noun + ", but " + GATED_NOTE + "."
+        : "This is on " + dest.noun + " now." + (dest.preview ? " " + dest.laterNote : ""),
       detailLink: null,
       waitingOn: null,
       minutesLeft: null,
@@ -504,6 +530,8 @@
     DEPLOY_NOMINAL_MIN: DEPLOY_NOMINAL_MIN,
     STALL_GRACE_MIN: STALL_GRACE_MIN,
     derive: derive,
+    isSiteGated: isSiteGated,
+    GATED_NOTE: GATED_NOTE,
     isStalled: isStalled,
     destination: destination,
     modifiersFor: modifiersFor,
