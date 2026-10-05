@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
-const { discoverTags, discoverPost } = require("./content-fixtures");
+const { discoverTags, discoverPost, feedHasTitle, hrefCarries } = require("./content-fixtures");
 const cap = require("./site-capabilities");
 
 // SITE_ROOT for the #33 capability gate (build-INDEPENDENT, so it's correct in
@@ -106,11 +106,11 @@ test.describe("Atom feeds", () => {
     expect(body, `feed.xml should reference ${post.url} (the discovered post)`).toMatch(
       new RegExp(`href="[^"]*${post.url.replace(/\//g, "\\/")}"`),
     );
-    // The post's title should appear in an <entry><title>…</title>.
-    // Escape any regex special chars in the title.
-    const escapedTitle = post.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    expect(body, `feed.xml should contain the post title "${post.title}"`).toMatch(
-      new RegExp(`<title[^>]*>[^<]*${escapedTitle}`),
+    // The post's title should appear in an <entry><title>…</title>. The
+    // feed spells it smartified and entity-escaped, so compare decoded text
+    // (see `feedHasTitle`), not the raw string.
+    expect(feedHasTitle(body, post.title), `feed.xml should contain the post title "${post.title}"`).toBe(
+      true,
     );
   });
 
@@ -278,14 +278,17 @@ test.describe("Share row on a post", () => {
     expect(bskyHref).toContain(post.slug);
 
     // The title must be carried (form- or percent-encoded) on every
-    // intent that takes a quoted body. Build a regex from the first
-    // non-empty word of the title — covers both encoding styles
-    // without depending on a specific fixture's exact phrasing.
+    // intent that takes a quoted body. Check the first non-empty word of
+    // the title — covers both encoding styles without depending on a
+    // specific fixture's exact phrasing.
     const firstWord = post.title.split(/\s+/).find((w) => w.length > 0);
     if (firstWord) {
-      const wordRe = new RegExp(firstWord.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      expect(xHref, "X intent URL is missing the post title").toMatch(wordRe);
-      expect(bskyHref, "Bluesky intent URL is missing the post title").toMatch(wordRe);
+      // The hrefs carry the `url_encode`d title (`+`, `%27`, `%26`, …), so
+      // compare decoded text rather than the raw word.
+      expect(hrefCarries(xHref, firstWord), "X intent URL is missing the post title").toBe(true);
+      expect(hrefCarries(bskyHref, firstWord), "Bluesky intent URL is missing the post title").toBe(
+        true,
+      );
     }
   });
 

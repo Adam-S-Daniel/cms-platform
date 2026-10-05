@@ -9,7 +9,14 @@
 // so every test that needs a post (share row, blog post, feed content)
 // skipped with "no published posts" on the fixture site and on real sites.
 const { test, expect } = require("./base");
-const { pickPostLink } = require("./content-fixtures");
+const {
+  pickPostLink,
+  decodeEntities,
+  normalizeTitle,
+  feedHasTitle,
+  hrefCarries,
+  visibleTitleLocator,
+} = require("./content-fixtures");
 
 // Lexical token extraction only (`<a ... href="...">text</a>`): the helper
 // under test receives `[{ href, text }]` from the browser, and this turns the
@@ -96,4 +103,117 @@ test("accepts a slug that merely starts with 'page' and percent-encoded slugs", 
     slug: "quoting-anthropic%E2%80%99s-note",
     title: "T",
   });
+});
+
+// ── Titles with quotes, ampersands and angle brackets ───────────────────────
+// `discoverPost().title` is the anchor's rendered text; the specs compare it
+// against the feed, the share-intent hrefs and the post page. Each of those
+// spells it differently, so a title like `Q&A: "Don't <stop>"` used to break
+// the consuming specs (selector parse error, regex never matching the
+// escaped/smartified feed text, a share-intent word that is percent-encoded).
+// Real titles already carry curly quotes (adamdaniel.ai posts).
+
+const TITLES = [
+  'He said "hi"',
+  "Don't stop",
+  "Q&A time",
+  "Less < more",
+  "Quoting Anthropic\u2019s \u201Csomewhat less robust\u201D",
+  'Q&A: "Don\'t <stop>"',
+];
+
+test("pickPostLink keeps the rendered title text verbatim for special characters", () => {
+  for (const title of TITLES) {
+    expect(pickPostLink([{ href: "/blog/x/", text: `  ${title} ` }]).title).toBe(title);
+  }
+});
+
+test("decodeEntities decodes once, named and numeric", () => {
+  expect(decodeEntities("A &amp; B &lt;i&gt; &quot;q&quot; it&#39;s &#x2019;")).toBe(
+    "A & B <i> \"q\" it's \u2019",
+  );
+  expect(decodeEntities("&amp;amp;")).toBe("&amp;");
+  expect(decodeEntities("&bogus; &#0; &#x110000;")).toBe("&bogus; &#0; &#x110000;");
+});
+
+test("normalizeTitle folds smartify typography on either side", () => {
+  expect(normalizeTitle("Don\u2019t \u201Cstop\u201D")).toBe(normalizeTitle(`Don't "stop"`));
+  expect(normalizeTitle("a -- b --- c ... d")).toBe(normalizeTitle("a \u2013 b \u2014 c \u2026 d"));
+  expect(normalizeTitle("  a \n  b ")).toBe("a b");
+});
+
+// jekyll-feed 0.17.0 renders `smartify | strip_html | normalize_whitespace |
+// xml_escape` into `<title type="html">`; smartify HTML-escapes `&` and `<`
+// first, so xml_escape escapes them a second time. These strings are what
+// that pipeline emitted for the titles above (checked with Jekyll 4.4.1).
+const FEED_SPELLINGS = {
+  'He said "hi"': "He said \u201Chi\u201D",
+  "Don't stop": "Don\u2019t stop",
+  "Q&A time": "Q&amp;amp;A time",
+  "Less < more": "Less &amp;lt; more",
+  "Quoting Anthropic\u2019s \u201Csomewhat less robust\u201D":
+    "Quoting Anthropic\u2019s \u201Csomewhat less robust\u201D",
+  'Q&A: "Don\'t <stop>"': null, // strip_html drops `<stop>`; covered separately below
+};
+
+function feedWith(titleHtml) {
+  return `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="html">Fixture Site</title>
+  <entry><title type="html">${titleHtml}</title><link href="/blog/x/"/></entry></feed>`;
+}
+
+test("feedHasTitle matches the smartified, entity-escaped feed spelling", () => {
+  for (const [title, spelled] of Object.entries(FEED_SPELLINGS)) {
+    if (spelled === null) continue;
+    expect(feedHasTitle(feedWith(spelled), title), `title ${JSON.stringify(title)}`).toBe(true);
+  }
+});
+
+test("feedHasTitle also matches plain single- and unescaped spellings", () => {
+  expect(feedHasTitle(feedWith("Q&amp;A time"), "Q&A time")).toBe(true);
+  expect(feedHasTitle(feedWith("He said &quot;hi&quot;"), 'He said "hi"')).toBe(true);
+  expect(feedHasTitle(feedWith("Don&#39;t stop"), "Don't stop")).toBe(true);
+  expect(feedHasTitle(feedWith("<![CDATA[Q&A time]]>"), "Q&A time")).toBe(true);
+});
+
+test("feedHasTitle is false for an absent title, an empty title and a non-title element", () => {
+  expect(feedHasTitle(feedWith("Something else"), "Q&A time")).toBe(false);
+  expect(feedHasTitle(feedWith("Anything"), "")).toBe(false);
+  expect(feedHasTitle("<feed><summary>Q&amp;A time</summary></feed>", "Q&A time")).toBe(false);
+});
+
+test("hrefCarries decodes url_encode output (+ for space, %27, %26, %E2%80%99)", () => {
+  const x = "https://twitter.com/intent/tweet?text=Don%27t+stop&url=https%3A%2F%2Fexample.com%2Fblog%2Fx%2F";
+  expect(hrefCarries(x, "Don't")).toBe(true);
+  expect(hrefCarries(x, "dont")).toBe(false);
+  const bsky = "https://bsky.app/intent/compose?text=Q%26A+time%20https%3A%2F%2Fexample.com%2F";
+  expect(hrefCarries(bsky, "Q&A")).toBe(true);
+  expect(hrefCarries(bsky, "Q&A time")).toBe(true);
+  expect(hrefCarries("?text=%22hi%22+there", '"hi"')).toBe(true);
+  expect(hrefCarries("?text=Anthropic%E2%80%99s+note", "Anthropic\u2019s")).toBe(true);
+  expect(hrefCarries("?text=a%2Bb", "a+b")).toBe(true);
+  expect(hrefCarries("?text=Less+%3C+more", "<")).toBe(true);
+});
+
+test("hrefCarries tolerates a malformed escape and an empty needle", () => {
+  expect(hrefCarries("?text=100%+sure", "sure")).toBe(true);
+  expect(hrefCarries("?text=x", "")).toBe(false);
+});
+
+test("visibleTitleLocator hands the raw title to getByText (no selector interpolation)", () => {
+  for (const title of TITLES) {
+    const calls = [];
+    const located = { filter: (arg) => (calls.push(["filter", arg]), "LOCATOR") };
+    const page = {
+      getByText: (text, opts) => (calls.push(["getByText", text, opts]), located),
+      locator: () => {
+        throw new Error("title must not be interpolated into a CSS/text selector");
+      },
+    };
+    expect(visibleTitleLocator(page, title)).toBe("LOCATOR");
+    expect(calls).toEqual([
+      ["getByText", title, { exact: true }],
+      ["filter", { visible: true }],
+    ]);
+  }
 });
