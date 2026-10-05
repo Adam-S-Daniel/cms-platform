@@ -76,7 +76,7 @@ const PROD_HINTS = {
       "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below.",
     publish_date:
       "Optional. Choose a future date and time (UTC) to publish this post automatically on {{CMS_CURRENT_HOST}}. Only honored when Published is off.",
-    body: "Full post content. Supports Markdown, images, code blocks, and HTML embeds (toolbar → 'HTML Embed' button — drops a block of raw HTML / JS / CSS that round-trips between rich-text and raw modes). For a real-layout preview that updates on every Save, open /preview/?collection=posts in a second browser tab and snap it next to the editor.",
+    body: "Full post content. Supports Markdown, images, code blocks, and embedded content such as a video or form (use the 'HTML Embed' button in the toolbar). To see how the post will look, and have it update each time you Save, open Live Preview in a second browser tab next to the editor.",
   },
   tags: {
     name: "Tag label shown on posts (e.g. 'Machine Learning', 'Python')",
@@ -96,7 +96,7 @@ const PROD_HINTS = {
       "The URL path the page lives at, unique per page, e.g. /pages/about/. Must start and end with a slash. A page is not added to the site menu automatically; link to it from the menu or another page.",
     published:
       "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft.",
-    body: "Page content. For a real-layout preview that updates on every Save, open /preview/?collection=pages in a second tab.",
+    body: "Page content. To see how the page will look, and have it update each time you Save, open Live Preview in a second tab.",
   },
 };
 

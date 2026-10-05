@@ -149,6 +149,8 @@ const PLATFORM_META_SPECS = [
   "live-url-banner-follows-poller.test.js",
   "entry-status-model-progress.test.js",
   "admin-publish-duration-copy.test.js",
+  // #649 — AST lint over theme/admin SOURCE (owner-facing copy; platform tree only).
+  "admin-owner-copy-banned-words.test.js",
   "posts-list-branch-tip.test.js",
   "slug-pin.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.

@@ -148,15 +148,20 @@ test.describe("posts-list-enhance.js publishing summary: every deployment state 
     });
   }
 
-  test("the state words link to the update's details without changing the words", () => {
+  // #649: the link goes to a build log, so it sits behind "Advanced" and the
+  // words themselves stay plain text.
+  const ADV_OPEN = '<details class="cms-ple-advanced" data-testid="cms-ple-advanced"><summary>Advanced</summary><span>';
+  test("the update's details link sits behind Advanced and the words stay plain", () => {
     const { hook } = load({}, { Date: FixedDate });
     const html = hook.publishingSummaryHTML(
       { state: "inactive", at: FIVE_MIN_AGO, url: "https://github.com/owner/repo/actions/runs/1" },
       "example.com",
     );
     expect(html).toBe(
-      'example.com <a href="https://github.com/owner/repo/actions/runs/1" target="_blank" rel="noopener">' +
-        "update replaced by a newer one</a> 5m ago",
+      "example.com update replaced by a newer one 5m ago" +
+        ADV_OPEN +
+        '<a href="https://github.com/owner/repo/actions/runs/1" target="_blank" rel="noopener">View technical details</a>' +
+        "</span></details>",
     );
   });
 
@@ -189,7 +194,10 @@ test.describe("posts-list-enhance.js publishing summary: every deployment state 
       "example.com",
     );
     expect(html).toBe(
-      'example.com <a href="https://example.com/log?a=1&amp;b=&quot;x&quot;" target="_blank" rel="noopener">updated</a> 5m ago',
+      "example.com updated 5m ago" +
+        ADV_OPEN +
+        '<a href="https://example.com/log?a=1&amp;b=&quot;x&quot;" target="_blank" rel="noopener">View technical details</a>' +
+        "</span></details>",
     );
   });
 

@@ -132,7 +132,7 @@ collections:
         label: Body
         widget: markdown
         required: true
-        hint: "Open /preview/?collection=posts in a second tab for the real-layout preview."
+        hint: "Open Live Preview in a second tab to see how the post will look."
         modes:
           - rich_text
           - raw
