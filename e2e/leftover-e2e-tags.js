@@ -19,21 +19,28 @@
  * and type (describeError), never by its message or an API body, because
  * these logs are public on a public consumer.
  */
+const { listAllPages } = require("./cms-fixture-pr");
+
 const TAGS_DIR = "_tags";
 const E2E_PREFIX = "e2e-";
 // e2e-tags-canary-<ms> (cms-tags-lifecycle.spec.js) and
 // e2e-tags-canary-preview-<ms> (cms-tags-lifecycle-preview.spec.js).
 const CANARY_TAG_RE = /^e2e-tags-canary-(?:preview-)?(\d{13})\.md$/;
 const STALE_AFTER_MS = 3 * 60 * 60 * 1000;
+// A stamp this far past `now` was not written by a run's Date.now(): clock
+// skew between runners is seconds, not minutes.
+const FUTURE_SKEW_MS = 10 * 60 * 1000;
 
 /**
  * Split a `_tags` directory listing (Contents API entries) into the e2e tag
  * files that are stale run-stamped canaries (safe to remove), fresh ones (a
- * run may still own them) and any other `e2e-` file (report only).
+ * run may still own them), future-stamped ones and any other `e2e-` file
+ * (the last two are reported, never removed).
  */
 function classifyE2eTags(entries, nowMs) {
   const stale = [];
   const fresh = [];
+  const future = [];
   const other = [];
   for (const entry of entries) {
     if (!entry || entry.type !== "file" || typeof entry.name !== "string") continue;
@@ -42,21 +49,23 @@ function classifyE2eTags(entries, nowMs) {
     const m = CANARY_TAG_RE.exec(entry.name);
     if (!m) {
       other.push(path);
+    } else if (Number(m[1]) - nowMs > FUTURE_SKEW_MS) {
+      future.push(path);
     } else if (nowMs - Number(m[1]) > STALE_AFTER_MS) {
       stale.push(path);
     } else {
       fresh.push(path);
     }
   }
-  return { stale, fresh, other };
+  return { stale, fresh, future, other };
 }
 
 /**
  * List `_tags` on `ref`, open a fire-and-forget removal PR for each stale
  * canary tag, and return what is left over.
  *
- * Returns `{ leftover, removed, fresh, other }` where `leftover` counts the
- * stale and other files (each one a defect to report, even when its removal
+ * Returns `{ leftover, removed, fresh, future, other }` where `leftover`
+ * counts the stale, future-stamped and other files (each one a defect to report, even when its removal
  * PR is already open) and `removed` lists the files this call opened a
  * removal PR for. A 404 on the listing
  * means the site has no `_tags` directory: nothing left over. Any other
@@ -72,16 +81,19 @@ async function sweepLeftoverE2eTags({ repo, ref = "main", ghImpl, removeImpl, no
   } catch (e) {
     if (e && e.status === 404) {
       log(`[leftover-e2e-tags] ${TAGS_DIR}@${ref}: no ${TAGS_DIR} directory — nothing to check.`);
-      return { leftover: 0, removed: [], fresh: [], other: [] };
+      return { leftover: 0, removed: [], fresh: [], future: [], other: [] };
     }
     throw e;
   }
   if (!Array.isArray(entries)) {
     throw new TypeError(`${TAGS_DIR}@${ref} listing is not a directory`);
   }
-  const { stale, fresh, other } = classifyE2eTags(entries, nowMs);
+  const { stale, fresh, future, other } = classifyE2eTags(entries, nowMs);
   for (const p of fresh) {
     log(`[leftover-e2e-tags] ${p}@${ref}: younger than the stale threshold — a run may own it; left alone.`);
+  }
+  for (const p of future) {
+    log(`[leftover-e2e-tags] ${p}@${ref}: canary stamp is in the future — reported, not removed.`);
   }
   for (const p of other) {
     log(`[leftover-e2e-tags] ${p}@${ref}: e2e tag that is not a run-stamped canary — reported, not removed.`);
@@ -91,11 +103,10 @@ async function sweepLeftoverE2eTags({ repo, ref = "main", ghImpl, removeImpl, no
   // enough, so skip a file whose `cms/e2e-fixture/remove-<slug>-` PR is open.
   const openHeads = [];
   if (stale.length > 0) {
-    const prs = await ghImpl(
-      `/repos/${repo}/pulls?state=open&base=${encodeURIComponent(ref)}&per_page=100`,
-      { retries: 2 },
+    const prs = await listAllPages(
+      ghImpl,
+      `/repos/${repo}/pulls?state=open&base=${encodeURIComponent(ref)}`,
     );
-    if (!Array.isArray(prs)) throw new TypeError("pulls listing is not an array");
     for (const pr of prs) {
       if (pr && pr.head && typeof pr.head.ref === "string") openHeads.push(pr.head.ref);
     }
@@ -122,7 +133,13 @@ async function sweepLeftoverE2eTags({ repo, ref = "main", ghImpl, removeImpl, no
     });
     removed.push(p);
   }
-  return { leftover: stale.length + other.length, removed, fresh, other };
+  return {
+    leftover: stale.length + future.length + other.length,
+    removed,
+    fresh,
+    future,
+    other,
+  };
 }
 
 module.exports = {

@@ -62,7 +62,11 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { closeStaleDecapPrOnBranch, closeOpenPrsAddingFile } = require("./cms-fixture-pr");
+const {
+  closeStaleDecapPrOnBranch,
+  closeOpenPrsAddingFile,
+  readFileOnRef,
+} = require("./cms-fixture-pr");
 const {
   addLabel,
   gh,
@@ -151,13 +155,8 @@ test.afterAll(async () => {
   }
 
   // Only a 404 means absent; any other read error throws.
-  let existing;
-  try {
-    existing = await gh(
-      `/repos/${HOST_REPO}/contents/${TAG_FILE_PATH}?ref=${encodeURIComponent(PR_HEAD_REF)}`,
-    );
-  } catch (e) {
-    if (e && e.status !== 404) throw e;
+  const existing = await readFileOnRef({ ref: PR_HEAD_REF, filePath: TAG_FILE_PATH });
+  if (existing === null) {
     console.log(
       `[cleanup-safety-net] ${TAG_FILE_PATH} not on ${PR_HEAD_REF} and no open PR adds it — no cleanup needed`,
     );

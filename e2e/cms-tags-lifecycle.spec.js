@@ -64,6 +64,7 @@ const {
   addReadyLabel,
   closeStaleDecapPrOnBranch,
   closeOpenPrsAddingFile,
+  readFileOnRef,
   fixtureBranchName,
 } = require("./cms-fixture-pr");
 const {
@@ -108,13 +109,7 @@ test.describe.configure({
 // create PR's merge never landed" (#1815). Mirrors the helper in
 // cms-publish-loop-prod-mutate.spec.js / cms-delete-published.spec.js.
 async function fileExistsOnMain(filePath) {
-  try {
-    await gh(`/repos/${HOST_REPO}/contents/${filePath}?ref=main`);
-    return true;
-  } catch (e) {
-    if (/\b404\b/.test(String(e.message))) return false;
-    throw e;
-  }
+  return (await readFileOnRef({ ref: "main", filePath })) !== null;
 }
 
 // Persistent dialog handler — Decap uses native window.confirm() on
@@ -182,7 +177,8 @@ test.afterAll(async () => {
   }
 
   // Then check main. Only a 404 means absent; any other error throws.
-  const tagFileStillExists = await fileExistsOnMain(TAG_FILE_PATH);
+  const tagFileStillExists =
+    (await readFileOnRef({ ref: "main", filePath: TAG_FILE_PATH })) !== null;
   if (!tagFileStillExists) {
     console.log(
       `[cleanup-safety-net] ${TAG_FILE_PATH} not on main and no open PR adds it — no cleanup needed`,

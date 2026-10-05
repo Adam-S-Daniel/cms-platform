@@ -9,11 +9,12 @@ const walk = require("acorn-walk");
 const { parse, calleeName } = require("./spec-ast");
 const { test, expect } = require("./base");
 const { classifyE2eTags, sweepLeftoverE2eTags, STALE_AFTER_MS } = require("./leftover-e2e-tags");
-const { closeOpenPrsAddingFile } = require("./cms-fixture-pr");
+const { closeOpenPrsAddingFile, listAllPages, readFileOnRef } = require("./cms-fixture-pr");
 
 const NOW = 1790000000000;
 const OLD = NOW - STALE_AFTER_MS - 1;
 const YOUNG = NOW - 60 * 1000;
+const FUTURE = NOW + 24 * 60 * 60 * 1000;
 const file = (name) => ({ type: "file", name });
 
 function httpError(status) {
@@ -43,7 +44,11 @@ test.describe("classifyE2eTags (#689)", () => {
         file(`e2e-tags-canary-${OLD}.md`),
         file(`e2e-tags-canary-preview-${OLD}.md`),
         file(`e2e-tags-canary-${YOUNG}.md`),
+        file(`e2e-tags-canary-${FUTURE}.md`),
         file("e2e-hand-made.md"),
+        // Anchor locks: neither is a run-stamped canary name.
+        file(`e2e-x-e2e-tags-canary-${OLD}.md`),
+        file(`e2e-tags-canary-${OLD}.md.orig`),
         file("jekyll.md"),
         { type: "dir", name: "e2e-dir" },
       ],
@@ -54,13 +59,18 @@ test.describe("classifyE2eTags (#689)", () => {
       `_tags/e2e-tags-canary-preview-${OLD}.md`,
     ]);
     expect(res.fresh).toEqual([`_tags/e2e-tags-canary-${YOUNG}.md`]);
-    expect(res.other).toEqual(["_tags/e2e-hand-made.md"]);
+    expect(res.future).toEqual([`_tags/e2e-tags-canary-${FUTURE}.md`]);
+    expect(res.other).toEqual([
+      "_tags/e2e-hand-made.md",
+      `_tags/e2e-x-e2e-tags-canary-${OLD}.md`,
+      `_tags/e2e-tags-canary-${OLD}.md.orig`,
+    ]);
   });
 });
 
 test.describe("sweepLeftoverE2eTags (#689)", () => {
   const LIST = "GET /repos/o/r/contents/_tags?ref=main";
-  const PULLS = "GET /repos/o/r/pulls?state=open&base=main&per_page=100";
+  const PULLS = "GET /repos/o/r/pulls?state=open&base=main&per_page=100&page=1";
 
   test("a site with no _tags directory has nothing left over", async () => {
     const gh = fakeGh({ [LIST]: () => Promise.reject(httpError(404)) });
@@ -94,6 +104,7 @@ test.describe("sweepLeftoverE2eTags (#689)", () => {
       [LIST]: [
         file(`e2e-tags-canary-${OLD}.md`),
         file(`e2e-tags-canary-${YOUNG}.md`),
+        file(`e2e-tags-canary-${FUTURE}.md`),
         file("e2e-hand-made.md"),
         file("ruby.md"),
       ],
@@ -110,7 +121,8 @@ test.describe("sweepLeftoverE2eTags (#689)", () => {
     expect(removed.map((a) => a.filePath)).toEqual([`_tags/e2e-tags-canary-${OLD}.md`]);
     expect(removed[0].slug).toBe(`e2e-tags-canary-${OLD}`);
     expect(removed[0].skipWaitForMerge).toBe(true);
-    expect(res.leftover).toBe(2);
+    expect(res.leftover).toBe(3);
+    expect(res.future).toEqual([`_tags/e2e-tags-canary-${FUTURE}.md`]);
     expect(res.removed).toEqual([`_tags/e2e-tags-canary-${OLD}.md`]);
   });
 
@@ -148,45 +160,121 @@ test.describe("sweepLeftoverE2eTags (#689)", () => {
 });
 
 test.describe("closeOpenPrsAddingFile (#689)", () => {
-  const FILE = "_tags/e2e-tags-canary-1786027176024.md";
+  const ID = "1786027176024";
+  const FILE = `_tags/e2e-tags-canary-${ID}.md`;
   const LIST = "GET /repos/o/r/pulls?state=open&base=main&per_page=100&page=1";
+  const filesKey = (n) => `GET /repos/o/r/pulls/${n}/files?per_page=100&page=1`;
+  const pr = (number, ref, repo = { full_name: "o/r" }) => ({ number, head: { ref, repo } });
 
-  test("closes this run's open create PR and deletes its branch", async () => {
+  // Open cms/ PRs that are NOT this run's create PR: none may be written to.
+  const DISTRACTORS = [
+    // another run's canary
+    [11, "cms/tags/e2e-tags-canary-1786027999999", "_tags/e2e-tags-canary-1786027999999.md", "added"],
+    // a name that has our file name as a prefix
+    [12, `cms/tags/e2e-tags-canary-${ID}x`, `_tags/e2e-tags-canary-${ID}x.md`, "added"],
+    // the preview spec's canary with the same run id
+    [13, `cms/tags/e2e-tags-canary-preview-${ID}`, `_tags/e2e-tags-canary-preview-${ID}.md`, "added"],
+    // a PR that only REMOVES our file
+    [14, `cms/tags/e2e-tags-canary-${ID}`, FILE, "removed"],
+  ];
+  const distractorPrs = () => DISTRACTORS.map(([n, ref]) => pr(n, ref));
+  const distractorRoutes = () =>
+    Object.fromEntries(DISTRACTORS.map(([n, , filename, status]) => [filesKey(n), [{ filename, status }]]));
+  const writes = (calls) => calls.filter((c) => !c.startsWith("GET "));
+
+  test("closes only this run's open create PR, never another open cms/ PR", async () => {
     let state = "open";
     const gh = fakeGh({
-      [LIST]: [
-        { number: 2938, head: { ref: "cms/tags/e2e-tags-canary-1786027176024" } },
-        { number: 5, head: { ref: "cms/posts/real-draft" } },
-        { number: 6, head: { ref: "feature/x" } },
-      ],
-      "GET /repos/o/r/pulls/2938/files?per_page=100": [{ filename: FILE, status: "added" }],
-      "GET /repos/o/r/pulls/5/files?per_page=100": [{ filename: "_posts/real.md", status: "added" }],
+      [LIST]: [...distractorPrs(), pr(2938, `cms/tags/e2e-tags-canary-${ID}`), pr(5, "cms/posts/real-draft"), pr(6, "feature/x")],
+      ...distractorRoutes(),
+      [filesKey(2938)]: [{ filename: FILE, status: "added" }],
+      [filesKey(5)]: [{ filename: "_posts/real.md", status: "added" }],
       "PATCH /repos/o/r/pulls/2938": () => {
         state = "closed";
         return {};
       },
       "GET /repos/o/r/pulls/2938": () => ({ state, merged: false }),
-      "DELETE /repos/o/r/git/refs/heads/cms/tags/e2e-tags-canary-1786027176024": {},
+      [`DELETE /repos/o/r/git/refs/heads/cms/tags/e2e-tags-canary-${ID}`]: {},
     });
     const res = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: FILE, ghImpl: gh.impl });
     expect(res).toEqual({ closed: [2938], merged: [] });
-    expect(gh.calls).not.toContain("PATCH /repos/o/r/pulls/5");
-    expect(gh.calls).not.toContain("GET /repos/o/r/pulls/6/files?per_page=100");
+    expect(writes(gh.calls)).toEqual([
+      "PATCH /repos/o/r/pulls/2938",
+      `DELETE /repos/o/r/git/refs/heads/cms/tags/e2e-tags-canary-${ID}`,
+    ]);
+    expect(gh.calls).not.toContain(filesKey(6));
   });
 
-  test("leaves a PR that only removes the file alone", async () => {
-    const gh = fakeGh({
-      [LIST]: [{ number: 9, head: { ref: "cms/tags/e2e-tags-canary-1786027176024" } }],
-      "GET /repos/o/r/pulls/9/files?per_page=100": [{ filename: FILE, status: "removed" }],
-    });
+  test("with only other cms/ PRs open, nothing is closed", async () => {
+    const gh = fakeGh({ [LIST]: distractorPrs(), ...distractorRoutes() });
     const res = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: FILE, ghImpl: gh.impl });
     expect(res).toEqual({ closed: [], merged: [] });
+    expect(writes(gh.calls)).toEqual([]);
+  });
+
+  test("the preview spec's call closes only the preview canary PR into the head branch", async () => {
+    const PFILE = `_tags/e2e-tags-canary-preview-${ID}.md`;
+    let state = "open";
+    const gh = fakeGh({
+      "GET /repos/o/r/pulls?state=open&base=feature%2Fx&per_page=100&page=1": [
+        pr(21, `cms/tags/e2e-tags-canary-${ID}`),
+        pr(22, `cms/tags/e2e-tags-canary-preview-${ID}`),
+        pr(23, `cms/tags/e2e-tags-canary-preview-${ID}x`),
+      ],
+      [filesKey(21)]: [{ filename: FILE, status: "added" }],
+      [filesKey(22)]: [{ filename: PFILE, status: "added" }],
+      [filesKey(23)]: [{ filename: `_tags/e2e-tags-canary-preview-${ID}x.md`, status: "added" }],
+      "PATCH /repos/o/r/pulls/22": () => {
+        state = "closed";
+        return {};
+      },
+      "GET /repos/o/r/pulls/22": () => ({ state, merged: false }),
+      [`DELETE /repos/o/r/git/refs/heads/cms/tags/e2e-tags-canary-preview-${ID}`]: {},
+    });
+    const res = await closeOpenPrsAddingFile({ repo: "o/r", base: "feature/x", filePath: PFILE, ghImpl: gh.impl });
+    expect(res).toEqual({ closed: [22], merged: [] });
+    expect(writes(gh.calls)).toEqual([
+      "PATCH /repos/o/r/pulls/22",
+      `DELETE /repos/o/r/git/refs/heads/cms/tags/e2e-tags-canary-preview-${ID}`,
+    ]);
+  });
+
+  test("a closed fork PR is not followed by a branch delete in this repo", async () => {
+    const gh = fakeGh({
+      [LIST]: [pr(31, `cms/tags/e2e-tags-canary-${ID}`, { full_name: "someone/fork" })],
+      [filesKey(31)]: [{ filename: FILE, status: "added" }],
+      "PATCH /repos/o/r/pulls/31": {},
+      "GET /repos/o/r/pulls/31": { state: "closed", merged: false },
+    });
+    const res = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: FILE, ghImpl: gh.impl });
+    expect(res).toEqual({ closed: [31], merged: [] });
+    expect(writes(gh.calls)).toEqual(["PATCH /repos/o/r/pulls/31"]);
+  });
+
+  test("reads every page of the PR list and of a PR's files, the list before any write", async () => {
+    let state = "open";
+    const PAGE2 = "GET /repos/o/r/pulls?state=open&base=main&per_page=100&page=2";
+    const gh = fakeGh({
+      [LIST]: Array.from({ length: 100 }, (_, i) => pr(1000 + i, `feature/f${i}`)),
+      [PAGE2]: [pr(2938, `cms/tags/e2e-tags-canary-${ID}`)],
+      [filesKey(2938)]: Array.from({ length: 100 }, (_, i) => ({ filename: `_posts/p${i}.md`, status: "added" })),
+      "GET /repos/o/r/pulls/2938/files?per_page=100&page=2": [{ filename: FILE, status: "added" }],
+      "PATCH /repos/o/r/pulls/2938": () => {
+        state = "closed";
+        return {};
+      },
+      "GET /repos/o/r/pulls/2938": () => ({ state, merged: false }),
+      [`DELETE /repos/o/r/git/refs/heads/cms/tags/e2e-tags-canary-${ID}`]: {},
+    });
+    const res = await closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: FILE, ghImpl: gh.impl });
+    expect(res).toEqual({ closed: [2938], merged: [] });
+    expect(gh.calls.indexOf(PAGE2)).toBeLessThan(gh.calls.indexOf("PATCH /repos/o/r/pulls/2938"));
   });
 
   test("reports a PR that merged before the close took effect", async () => {
     const gh = fakeGh({
-      [LIST]: [{ number: 2938, head: { ref: "cms/tags/e2e-tags-canary-1786027176024" } }],
-      "GET /repos/o/r/pulls/2938/files?per_page=100": [{ filename: FILE, status: "added" }],
+      [LIST]: [pr(2938, `cms/tags/e2e-tags-canary-${ID}`)],
+      [filesKey(2938)]: [{ filename: FILE, status: "added" }],
       "PATCH /repos/o/r/pulls/2938": () => Promise.reject(httpError(422)),
       "GET /repos/o/r/pulls/2938": { state: "closed", merged: true },
     });
@@ -196,8 +284,8 @@ test.describe("closeOpenPrsAddingFile (#689)", () => {
 
   test("throws when the PR is still open after the close", async () => {
     const gh = fakeGh({
-      [LIST]: [{ number: 2938, head: { ref: "cms/tags/e2e-tags-canary-1786027176024" } }],
-      "GET /repos/o/r/pulls/2938/files?per_page=100": [{ filename: FILE, status: "added" }],
+      [LIST]: [pr(2938, `cms/tags/e2e-tags-canary-${ID}`)],
+      [filesKey(2938)]: [{ filename: FILE, status: "added" }],
       "PATCH /repos/o/r/pulls/2938": () => Promise.reject(httpError(403)),
       "GET /repos/o/r/pulls/2938": { state: "open", merged: false },
     });
@@ -212,14 +300,49 @@ test.describe("closeOpenPrsAddingFile (#689)", () => {
       closeOpenPrsAddingFile({ repo: "o/r", base: "main", filePath: FILE, ghImpl: gh.impl }),
     ).rejects.toThrow("502");
   });
+
+  test("a non-array list page throws", async () => {
+    await expect(listAllPages(fakeGh({ "GET /x?per_page=100&page=1": { message: "x" } }).impl, "/x")).rejects.toThrow(
+      "not an array",
+    );
+  });
+});
+
+// Both tags specs read the canary's ref through readFileOnRef (the AST lint
+// below locks that): only a 404 means absent. The old preview hook treated
+// every error as "UI delete succeeded, no cleanup needed".
+test.describe("readFileOnRef (#689)", () => {
+  const KEY = "GET /repos/o/r/contents/_tags/a.md?ref=feature%2Fx";
+  const read = (routes) =>
+    readFileOnRef({ repo: "o/r", ref: "feature/x", filePath: "_tags/a.md", ghImpl: fakeGh(routes).impl });
+
+  test("returns the file when present", async () => {
+    expect(await read({ [KEY]: { sha: "abc" } })).toEqual({ sha: "abc" });
+  });
+
+  test("returns null on a 404", async () => {
+    expect(await read({ [KEY]: () => Promise.reject(httpError(404)) })).toBeNull();
+  });
+
+  for (const status of [401, 403, 500]) {
+    test(`throws on a ${status} instead of reading absent`, async () => {
+      await expect(read({ [KEY]: () => Promise.reject(httpError(status)) })).rejects.toThrow(String(status));
+    });
+  }
+
+  test("throws on a network error", async () => {
+    await expect(read({ [KEY]: () => Promise.reject(new TypeError("fetch failed")) })).rejects.toThrow(
+      "fetch failed",
+    );
+  });
 });
 
 // The safety net must stop the in-flight PR BEFORE it reads the canary's
 // ref; the reverse order is the #689 incident (absent on main, PR still open).
 test.describe("tags specs close the in-flight PR before reading the ref (#689)", () => {
   for (const [spec, readsRef] of [
-    ["cms-tags-lifecycle.spec.js", (name) => name === "fileExistsOnMain"],
-    ["cms-tags-lifecycle-preview.spec.js", (name) => name === "gh"],
+    ["cms-tags-lifecycle.spec.js", (name) => name === "readFileOnRef"],
+    ["cms-tags-lifecycle-preview.spec.js", (name) => name === "readFileOnRef"],
   ]) {
     test(spec, () => {
       const ast = parse(fs.readFileSync(path.join(__dirname, spec), "utf8"));
