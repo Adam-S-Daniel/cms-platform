@@ -10,9 +10,42 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.142)
+## Version history (v0.1.0 → v0.1.143)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.143 — Eight reusable workflows that ran the runner's default `node` now pin Node 20 with `actions/setup-node`, ahead of `ubuntu-latest` moving to 26.04 on 2026-10-19 (default Node 22 to 24); a test-only follow-up covers the e2e tag sweep's root-tree truncation guard.**
+Two changes since v0.1.142, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
+No `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/`, `theme/` or `examples/` file changed apart
+from the pins (`git diff --stat v0.1.142 origin/main` is `.github/workflows/` and `e2e/`).
+Node pin. [#715](https://github.com/Adam-S-Daniel/cms-platform/pull/715) (v0.1.142) pinned python, ruby and shellcheck and
+recorded "several jobs still call the runner's default `node` without `setup-node`". Each such job now runs
+`actions/setup-node` (the same full SHA and `node-version: "20"` every other Node job in this repo already uses) before its
+first `node` step. Ten jobs in ten workflows; eight are reusable workflows that adamdaniel.ai and jodidaniel.com call at a
+pinned `platform_ref`: `dependabot-rearm-sweep.yml` (`rearm`), `dev-hooks-sync.yml` (`sync`), `platform-bump.yml` (`bump`,
+the first step, so the mint-before-checkout order is unchanged), `visual-regression.yml` (`detect`), `cross-post.yml` (it
+calls the `await-prod-deploy` composite, which runs `node`), and the `recursion-gate` job of `cms-media-roundtrip.yml`,
+`cms-publish-loop-host.yml` and `cms-publish-loop-prod.yml` (they call the `cms-recursion-gate` composite, whose step
+pipes into `node -e`). The other two, `repo-settings-apply.yml` (`close-approval-issue`) and
+`self-release-review-gate.yml` (`release-review-gate`), are this repo's own and took effect on merge. The jobs holding a
+minted or write-scoped token (`rearm`, `sync`, `bump`, `cross-post`, `close-approval-issue`) set `package-manager-cache: false`.
+The four composites that run node or npx (`await-prod-deploy`, `cms-recursion-gate`, `install-playwright-browsers`,
+`post-failure-comment`) do not set Node up themselves, because a composite cannot choose its caller's Node; their callers
+must. `e2e/workflow-runtime-pinned.test.js` (#715's guard) now also requires an earlier `actions/setup-node` step before a
+`node`/`npm`/`npx` command in any job, over the parsed YAML, accepts `NAME=value` prefixes before the command word, and
+pins the four node-needing composites so the caller check cannot pass vacuously
+([#719](https://github.com/Adam-S-Daniel/cms-platform/pull/719), part of
+[runner-images#14748](https://github.com/actions/runner-images/issues/14748)).
+Not covered: node reached indirectly (a `run:` that calls a script that calls node) is invisible to the command-word check.
+Tags test. `e2e/leftover-e2e-tags.test.js` gains two cases for the root-tree `truncated` guard in `listTagsDir`: a truncated
+root tree with no `_tags` entry rejects, and a truncated root tree that still lists `_tags` is swept normally. No production
+code changed ([#718](https://github.com/Adam-S-Daniel/cms-platform/pull/718), part of
+[#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689), which stays open until the consumer bumps land).
+Consumers get the Node pin with their next platform bump, once their `uses:@` pins name v0.1.143. No reusable workflow's
+`workflow_call` inputs, secrets or outputs changed (37 workflows with a `workflow_call` trigger compared between v0.1.142
+and `origin/main`, none differs), so the bump needs no edit beyond the pins; the eight workflows above run Node 20, not the
+image default, from then on. `oauth-proxy/lambda.py` and `infrastructure/` did not move, so no proxy redeploy and no
+bootstrap redeploy. Ship this release before the Ubuntu 26.04 rollout starts on 2026-10-19.
 
 **v0.1.142 — Leftover `e2e-` tags no longer surface on the public site, the sweep that finds them lists `_tags` past 1,000 entries, and the reusable workflows pin python and ruby instead of taking the runner image's, ahead of `ubuntu-latest` moving to 26.04 on 2026-10-19.**
 Two changes since v0.1.141, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
