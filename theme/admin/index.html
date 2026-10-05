@@ -58,6 +58,22 @@
      * the pill script's positioning comments near the end of <body>). */
     #live-preview-link { bottom: 6rem; }
     #reviews-link      { bottom: 3.25rem; }
+    /* Reviews opens a developer dashboard (visual-regression gate, QA
+     * health), not something the site's owner needs on every screen (#625.9).
+     * Keep it reachable but low-key: smaller, borderless and faded until
+     * hovered/focused. admin-mobile.css hides it outright at phone/tablet
+     * widths, where it only ever covered content (#625.10). */
+    #reviews-link {
+      padding: 0.25rem 0.6rem;
+      font-size: 0.72rem;
+      border-color: transparent;
+      box-shadow: none;
+      background: rgba(255, 255, 255, 0.7);
+      opacity: 0.6;
+    }
+    #reviews-link:hover,
+    #reviews-link:focus-visible { opacity: 1; }
+    #reviews-link svg { width: 12px; height: 12px; }
   </style>
 
   <!-- This admin shell is intentionally minimal: the cobalt theme was
@@ -150,6 +166,21 @@
       }
       window.addEventListener('hashchange', updateHref);
       updateHref();
+    })();
+
+    // Reviews -> "Back to CMS" must land on the screen the owner left, not
+    // the admin front page (#625.9). Carry the current Decap hash route in
+    // ?return=; the dashboards validate it (same-origin "#/…" only) before
+    // using it, so this side only has to keep it current.
+    (function () {
+      var rl = document.getElementById('reviews-link');
+      if (!rl) return;
+      function syncReviewsReturn() {
+        var h = window.location.hash;
+        rl.setAttribute('href', '/admin/reviews/' + (h && h.length > 1 ? '?return=' + encodeURIComponent(h) : ''));
+      }
+      window.addEventListener('hashchange', syncReviewsReturn);
+      syncReviewsReturn();
     })();
   </script>
 

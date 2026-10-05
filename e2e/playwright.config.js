@@ -70,6 +70,7 @@ const PLATFORM_META_SPECS = [
   // SOURCE (the mobile-breakpoint clearance/affordance fixes); meaningless
   // on a consumer, which ships only the gem-rendered admin CSS.
   "admin-mobile-clearance-lint.test.js",
+  "admin-reviews-return-lint.test.js",
   "admin-pin-invariant.test.js",
   // #161 — the confirm-wrap + autosave shim load-order lint (reads the three
   // theme/admin shells + the confirm-wrap SOURCE) and the confirm-wrap unit

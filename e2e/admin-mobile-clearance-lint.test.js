@@ -92,6 +92,25 @@ test.describe("admin-mobile.css — mobile clearance/affordance fixes", () => {
     ).toBeGreaterThanOrEqual(8);
   });
 
+  test("#625.10: Reviews is hidden and the list reserves room for the stamps at phone/tablet widths", () => {
+    const reviews = extractRuleBody(mediaBlock, "#reviews-link");
+    expect(reviews, "the media block must carry a #reviews-link rule").not.toBeNull();
+    expect(reviews).toMatch(/display\s*:\s*none\s*!important/);
+    // The clearance rule is the LAST CollectionMain rule in the block.
+    const body = extractBlockAfter(mediaBlock, mediaBlock.lastIndexOf('[class*="CollectionMain"]'));
+    expect(body, "the collection list must reserve bottom clearance").not.toBeNull();
+    const m = /padding-bottom\s*:\s*([\d.]+)rem\s*!important/.exec(body);
+    expect(m, "padding-bottom in rem with !important").not.toBeNull();
+    // Commit pill (bottom:1.75rem) + platform pill (bottom:0.25rem) stack ~3rem tall.
+    expect(parseFloat(m[1])).toBeGreaterThanOrEqual(4);
+  });
+
+  test("#625.11: the editor box drops Decap's reserved toolbar band once the toolbar is static", () => {
+    const idx = mediaBlock.lastIndexOf('[class*="EditorContainer"]');
+    const body = extractBlockAfter(mediaBlock, idx);
+    expect(body).toMatch(/padding-top\s*:\s*0\s*!important/);
+  });
+
   test("#329.6: the collection sidebar carries a bottom scroll-affordance shadow", () => {
     const body = extractRuleBody(mediaBlock, 'aside[class*="SidebarContainer"]');
     expect(body, "the collection sidebar rule must still exist").not.toBeNull();
