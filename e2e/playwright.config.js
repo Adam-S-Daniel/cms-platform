@@ -677,6 +677,8 @@ const PLATFORM_META_SPECS = [
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",
+  // The production admin prefix is uploaded no-cache (#663): same reason.
+  "deploy-production-admin-cache.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is
