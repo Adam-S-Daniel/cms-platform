@@ -84,6 +84,15 @@ jobs:
       group: platform-bump-${{ github.repository }}
       cancel-in-progress: false
     steps:
+      # Pinned: the mint step and the bump step both run node/npm, and
+      # ubuntu-latest's default Node moves from 22 to 24 with Ubuntu 26.04
+      # (actions/runner-images#14748). Needs no checkout, so it does not
+      # disturb the mint-before-checkout order below.
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          package-manager-cache: false
       # The bump rewrites .github/workflows/* (the `uses:@` pins + `platform_ref:`
       # inputs), so the PUSH needs `workflows` permission. The default Actions
       # GITHUB_TOKEN's GitHub App lacks it — git rejects the push with "refusing
