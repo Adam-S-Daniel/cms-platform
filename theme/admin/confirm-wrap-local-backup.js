@@ -64,6 +64,9 @@
   // assumption note in the header — a locale change requires updating this.
   var BACKUP_STRING = "A local backup was recovered for this entry, would you like to use it?";
 
+  // Long enough to read two sentences, short enough not to linger over the form.
+  var TOAST_MS = 7000;
+
   var origConfirm = window.confirm.bind(window);
 
   window.confirm = function (msg) {
@@ -71,13 +74,15 @@
       // Returning false BOTH suppresses the (misleading) dialog AND routes
       // Decap into its own deleteBackup() — clearing the stale IndexedDB
       // backup so the race can't resurface a phantom "recovered" draft.
+      // Owner language (#625 item 4): this is read by the site's
+      // non-technical owner after a reload, so no tool names and nothing that
+      // sounds broken. The facts are the same: Save and the automatic save
+      // (tab close, short idle) keep the work; only Publish reaches the site.
       toast(
-        "Draft-restore is off — Decap's local backup was unreliable and could " +
-          "silently drop your changes. Your work is saved by Save and by autosave " +
-          "(on tab-close and after a short idle) onto this entry's PR branch — " +
-          "nothing reaches " +
-          (window.CMSHostname ? window.CMSHostname.destination() : "the publishing destination") +
-          " until you Publish.",
+        "Your work is saved automatically when you pause or close the tab, and when you press Save. " +
+          "Nothing reaches " +
+          (window.CMSHostname ? window.CMSHostname.destination() : "the site") +
+          " until you press Publish.",
       );
       return false;
     }
@@ -96,9 +101,11 @@
       // Inline style.cssText (NOT a .css file) so admin-css-banned-patterns
       // — which only scans theme/admin/*.css + <style> blocks — is untouched.
       t.style.cssText =
-        "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);" +
-        "background:#1f2937;color:#fff;padding:14px 20px;border-radius:8px;" +
-        "font:14px/1.4 system-ui,sans-serif;max-width:560px;z-index:2147483647;" +
+        // Bottom-right and narrow, for a few seconds: a centred 560px toast
+        // for 14s sat over the form fields the owner had just come back to.
+        "position:fixed;bottom:16px;right:16px;" +
+        "background:#1f2937;color:#fff;padding:12px 16px;border-radius:8px;" +
+        "font:14px/1.4 system-ui,sans-serif;max-width:min(340px,calc(100vw - 32px));z-index:2147483647;" +
         "box-shadow:0 8px 24px rgba(0,0,0,.3);";
       document.body.appendChild(t);
       setTimeout(function () {
@@ -107,7 +114,7 @@
         } catch {
           /* ignore */
         }
-      }, 14000);
+      }, TOAST_MS);
     } catch {
       /* DOM not ready — log only */
     }

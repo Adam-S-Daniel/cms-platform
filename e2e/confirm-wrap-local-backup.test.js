@@ -34,6 +34,7 @@ const BACKUP_STRING = "A local backup was recovered for this entry, would you li
 function bootShim(nativeReturn, hostname) {
   const nativeCalls = [];
   const appended = [];
+  const timers = [];
 
   // The fake NATIVE window.confirm — records every delegated call and returns
   // the canned value, so a test can prove delegation + return-value passthrough.
@@ -44,7 +45,10 @@ function bootShim(nativeReturn, hostname) {
 
   const sandbox = {
     console: { warn: () => {}, error: () => {}, log: () => {} },
-    setTimeout: (fn) => fn, // don't auto-run the toast auto-remove
+    setTimeout: (fn, ms) => {
+      timers.push(ms); // recorded, never run: don't auto-remove the toast
+      return fn;
+    },
     document: {
       createElement: () => ({
         textContent: "",
@@ -72,6 +76,7 @@ function bootShim(nativeReturn, hostname) {
     sandbox,
     nativeCalls,
     appended,
+    timers,
     // The (now-wrapped) confirm.
     confirm: (msg) => sandbox.window.confirm(msg),
   };
@@ -122,6 +127,27 @@ test.describe("confirm-wrap-local-backup.js (unit)", () => {
   });
 });
 
+// #625 item 4: the reload toast is read by the site's non-technical owner. It
+// must not use developer vocabulary or sound like something is broken, and it
+// must not sit over the form for long.
+test("the reload toast is written in owner language and is short-lived", () => {
+  const ctx = bootShim(true);
+  ctx.confirm(BACKUP_STRING);
+  const toast = ctx.appended[ctx.appended.length - 1];
+  const timers = ctx.timers;
+  expect(toast).not.toBeNull();
+  const text = toast.textContent;
+  for (const banned of [/draft-restore/i, /decap/i, /local backup/i, /PR branch/i, /autosave/i, /unreliable/i, /is off/i]) {
+    expect(text, String(banned)).not.toMatch(banned);
+  }
+  expect(text).toContain("Your work is saved automatically when you pause or close the tab, and when you press Save.");
+  expect(text).toMatch(/Nothing reaches .* until you press Publish./);
+  // Short enough not to cover fields for long (was 14 s).
+  expect(Math.max(...timers)).toBeLessThanOrEqual(8000);
+  // Pinned to a corner, not centred over the form.
+  expect(toast.style.cssText).not.toContain("translateX(-50%)");
+});
+
 for (const [access, destination] of [
   ["preview-pr42.example.com", "example.com"],
   ["example.com", "preview-pr42.example.com"],
@@ -135,6 +161,6 @@ for (const [access, destination] of [
     });
     expect(confirm(BACKUP_STRING)).toBe(false);
     expect(appended).toHaveLength(1);
-    expect(appended[0].textContent).toContain(`nothing reaches ${destination} until you Publish.`);
+    expect(appended[0].textContent).toContain(`Nothing reaches ${destination} until you press Publish.`);
   });
 }
