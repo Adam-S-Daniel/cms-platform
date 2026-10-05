@@ -657,6 +657,7 @@ const PLATFORM_META_SPECS = [
   // payload. Both read theme/ SOURCE, absent on a consumer.
   "draft-media-fallback.test.js",
   "preview-bridge-payload.test.js",
+  "preview-pane.test.js",
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",

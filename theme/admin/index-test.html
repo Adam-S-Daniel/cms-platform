@@ -156,6 +156,10 @@
   <!-- "HTML Embed" editor component — see admin/index.html for rationale. -->
   <script src="editor-component-html-embed.js" defer></script>
 
+  <!-- In-editor preview pane styled like the site (site stylesheet + a post /
+       page / project template). Loads after Decap so `window.CMS` exists. -->
+  <script src="preview-pane.js" defer></script>
+
   <!-- Single source of truth for the live URL — see admin/index.html.
        Required so the native preview-href override below produces the
        same URL as the banner. -->

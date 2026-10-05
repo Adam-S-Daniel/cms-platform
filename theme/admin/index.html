@@ -321,6 +321,10 @@
        Decap so `window.CMS.registerEditorComponent` is available. -->
   <script src="editor-component-html-embed.js" defer></script>
 
+  <!-- In-editor preview pane styled like the site (site stylesheet + a post /
+       page / project template). Loads after Decap so `window.CMS` exists. -->
+  <script src="preview-pane.js" defer></script>
+
   <!-- Live Preview bridge: broadcasts entry data on every save to any
        open /preview/ tab. Loads after Decap so `window.CMS` exists. -->
   <script src="preview-bridge.js" defer></script>
