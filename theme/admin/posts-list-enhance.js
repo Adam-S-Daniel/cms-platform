@@ -397,6 +397,20 @@
     return tips;
   }
 
+  // The file slug a posts editorial branch names, or "" for any other ref.
+  // decodeURIComponent-safe: a ref with a stray `%` is kept as written.
+  var POSTS_BRANCH_PREFIX = "cms/posts/";
+  function branchSlug(ref) {
+    ref = String(ref || "");
+    if (ref.indexOf(POSTS_BRANCH_PREFIX) !== 0) return "";
+    var tail = ref.slice(POSTS_BRANCH_PREFIX.length);
+    try {
+      return decodeURIComponent(tail);
+    } catch {
+      return tail;
+    }
+  }
+
   async function fetchOpenPrBySlug(token) {
     var map = {};
     // In parallel with the /pulls read below; awaited only once it is needed.
@@ -414,11 +428,16 @@
       var tips = await tipsReady;
       prs.forEach(function (pr) {
         var ref = (pr.head && pr.head.ref) || "";
-        // Decap editorial-workflow branches: cms/posts/<slug> (the
-        // slug here is the on-disk file slug). Be lenient: any open
-        // PR whose head ref ends with a posts file slug.
-        var mm = /(?:^|\/)((?:\d{4}-\d{2}-\d{2}-)?[a-z0-9-]+)$/i.exec(ref);
-        if (/cms\/posts\//i.test(ref) && mm) {
+        // Decap editorial-workflow branches are `cms/posts/<slug>`, the
+        // on-disk file slug — the convention publish-progress.js's
+        // matchesEntry reads for the editor bar. Key on the WHOLE ref after
+        // that prefix, decoded, which is what collectCards decodes a card's
+        // slug from. An ASCII-only pattern here once dropped every draft
+        // whose name kept an em dash, curly quotes or an emoji, and a draft
+        // with no PR found reads as Live (#635); branches saved before
+        // config.base.yml's `slug: {encoding: ascii}` still carry such names.
+        var slug = branchSlug(ref);
+        if (slug) {
           // `labels`, `auto_merge` and the head sha come free in this same
           // response — they are what entry-status-model.js needs to tell a
           // Draft from a publish that is already on its way, so reading them
@@ -426,7 +445,7 @@
           var labels = (pr.labels || []).map(function (l) {
             return typeof l === "string" ? l : l.name;
           });
-          map[mm[1]] = {
+          map[slug] = {
             number: pr.number,
             url: pr.html_url,
             sha: tips["refs/heads/" + ref] || (pr.head && pr.head.sha) || null,

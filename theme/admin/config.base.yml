@@ -30,6 +30,25 @@ backend:
 # production immediately and bypasses the entire review gate.
 publish_mode: editorial_workflow
 
+# Entry file names, and so the editorial-workflow branch
+# `cms/<collection>/<slug>` named after them, are ASCII-only (#635).
+# Decap's default `encoding: unicode` keeps every IRI-legal character, so
+# the title "Test — delete me" was saved as `_posts/<date>-test-—-delete-me.md`
+# on branch `cms/posts/<date>-test-—-delete-me`; emoji, curly quotes and
+# accented letters reached file and branch names the same way. `ascii` turns
+# every character outside [A-Za-z0-9_.~-] into `sanitize_replacement` and
+# collapses the runs, and `clean_accents` first turns é into e instead of
+# dropping it (decap-cms@3.15.1 bundles decap-cms-core 3.17.1, whose
+# sanitizeSlug does exactly this). Decap has no length option, so each base
+# collection's `slug:` template caps the title instead — see the Posts block.
+# This block also names uploaded media files (Decap's persistMedia runs the
+# same sanitizeSlug); admin/draft-media-fallback.js reads it from here.
+# e2e/decap-slug-ascii-config.test.js locks it in all three configs.
+slug:
+  encoding: ascii
+  clean_accents: true
+  sanitize_replacement: "-"
+
 # Site configuration
 site_url: {{CMS_SITE_URL}}
 display_url: {{CMS_DISPLAY_URL}}
@@ -97,7 +116,15 @@ collections:
     # required by Jekyll's `_posts/` collection. The native "View Live" toolbar anchor is CSS-hidden at
     # runtime by admin/native-preview-href.js so the date-prefix divergence
     # between this template and Jekyll's `permalink: /blog/:slug/` is moot.
-    slug: "{{year}}-{{month}}-{{day}}-{{slug}}"
+    # `truncate(80, '-')` caps the title part of the name at 80 characters
+    # (#635; one page name reached 195, and Windows checkouts stop at 260 for
+    # the whole path). Decap 3.15.1's compileStringTemplate applies a filter to
+    # the RAW title and only then slugifies it, so the cap lands on the title
+    # and the `-` omission it appends is trimmed as a trailing replacement. The
+    # omission cannot be empty: the filter reads `''` as its default `...`.
+    # Every base collection's `slug:` carries the same cap, in all three
+    # configs (e2e/decap-slug-ascii-config.test.js).
+    slug: "{{year}}-{{month}}-{{day}}-{{slug | truncate(80, '-')}}"
     preview_path: "/blog/{{slug}}/"
     # NO date token/filter in the summary. Decap's `summaryFormatter`
     # (decap-cms-core formatters.js) computes the date via
@@ -235,7 +262,7 @@ collections:
     folder: _tags
     create: true
     delete: true
-    slug: "{{slug}}"
+    slug: "{{slug | truncate(80, '-')}}"
     identifier_field: name
     summary: "{{name}}"
     fields:
@@ -258,7 +285,7 @@ collections:
     folder: _projects
     create: true
     delete: true
-    slug: "{{slug}}"
+    slug: "{{slug | truncate(80, '-')}}"
     preview_path: /projects/{{slug}}/
     summary: "{{title}}{{featured | ternary(' ⭐', '')}}"
     sortable_fields:
@@ -320,7 +347,7 @@ collections:
     folder: pages
     create: true
     delete: true
-    slug: "{{slug}}"
+    slug: "{{slug | truncate(80, '-')}}"
     preview_path: "/pages/{{slug}}/"
     summary: "{{title}}"
     sortable_fields:
@@ -403,7 +430,7 @@ collections:
     folder: _e2e
     create: true
     delete: true
-    slug: "{{slug}}"
+    slug: "{{slug | truncate(80, '-')}}"
     preview_path: "/e2e/{{slug}}/"
     summary: "{{title}}"
     sortable_fields:

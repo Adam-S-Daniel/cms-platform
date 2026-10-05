@@ -657,6 +657,10 @@ const PLATFORM_META_SPECS = [
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",
+  // #635 — ASCII, length-capped entry file names: parses the theme/admin
+  // SOURCE configs and runs theme/admin/draft-media-fallback.js, absent on a
+  // consumer.
+  "decap-slug-ascii-config.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is
