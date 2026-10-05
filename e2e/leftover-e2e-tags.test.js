@@ -210,6 +210,40 @@ test.describe("sweepLeftoverE2eTags (#689)", () => {
     ).rejects.toThrow("truncated");
   });
 
+  test("a truncated root tree with no _tags entry throws instead of reading clean", async () => {
+    // A truncated root listing may have cut `_tags` itself, so its absence
+    // proves nothing: "no directory" (nothing left over) would be a false clean.
+    const gh = fakeGh({ [ROOT]: { truncated: true, tree: [{ path: "_posts", type: "tree", sha: "postsha" }] } });
+    await expect(
+      sweepLeftoverE2eTags({
+        repo: "o/r",
+        ghImpl: gh.impl,
+        removeImpl: async () => {},
+        nowMs: NOW,
+        log: () => {},
+      }),
+    ).rejects.toThrow("root tree listing is truncated");
+  });
+
+  test("a truncated root tree that still lists _tags is swept normally", async () => {
+    // The `_tags` entry is present, so its own (non-truncated) tree is the
+    // authority: the root's `truncated` flag alone must not fail the sweep.
+    const routes = listing([file(`e2e-tags-canary-${OLD}.md`)]);
+    routes[ROOT] = { ...routes[ROOT], truncated: true };
+    routes[PULLS] = [];
+    const gh = fakeGh(routes);
+    const removed = [];
+    const res = await sweepLeftoverE2eTags({
+      repo: "o/r",
+      ghImpl: gh.impl,
+      removeImpl: async (a) => removed.push(a),
+      nowMs: NOW,
+      log: () => {},
+    });
+    expect(removed.map((a) => a.filePath)).toEqual([`_tags/e2e-tags-canary-${OLD}.md`]);
+    expect(res.leftover).toBe(1);
+  });
+
   test("a failed removal throws", async () => {
     const gh = fakeGh({ ...listing([file(`e2e-tags-canary-${OLD}.md`)]), [PULLS]: [] });
     await expect(
