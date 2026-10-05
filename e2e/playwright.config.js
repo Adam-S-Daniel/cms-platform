@@ -150,6 +150,7 @@ const PLATFORM_META_SPECS = [
   "entry-status-model-progress.test.js",
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
+  "posts-list-status-dedupe.test.js",
   "slug-pin.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
   "editor-component-image.test.js",

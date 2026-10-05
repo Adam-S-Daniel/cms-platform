@@ -127,9 +127,16 @@ collections:
     # e2e/posts-list-date-lint.test.js, and against the rendered config
     # by e2e/cms-post-list-summary.spec.js.
     summary: "{{title}}{{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}"
+    # Newest first by default (#650): without `default`, Decap lists in
+    # repository order, so a just-saved post jumped to the top until a reload
+    # dropped it to the bottom.
     sortable_fields:
-      - date
-      - title
+      fields:
+        - date
+        - title
+      default:
+        field: date
+        direction: Descending
     # `Automated tests` matches posts carrying `test_fixture: true` (the
     # E2E canary fixtures). Decap 3.15.1 has no declarative default-on/off
     # for view_filters — RE-VERIFIED against the 3.15.1 bundle, not
