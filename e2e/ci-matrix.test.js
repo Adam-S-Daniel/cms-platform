@@ -17,8 +17,14 @@
  * self-CI's node-unit-lints lane.
  */
 const { test, expect } = require("@playwright/test");
+
+// Share immutable inputs within a worker, with independent test failures.
+test.describe.configure({ mode: "default" });
 const { execFileSync, spawnSync } = require("node:child_process");
 const path = require("node:path");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const { createRequire } = require("node:module");
 const { parseYaml, readWorkflow } = require("./workflow-yaml-utils");
 const {
   CI_WORKERS,
@@ -34,8 +40,40 @@ const config = require("./playwright.config.js");
 const WORKFLOW = "e2e-tests.yml";
 const CI_MATRIX_JS = path.join(__dirname, "ci-matrix.js");
 
+// The parsed workflow is only read by these assertions; parse it once per worker.
+let parsedWorkflow;
 function workflow() {
-  return parseYaml(readWorkflow(WORKFLOW));
+  return (parsedWorkflow ||= parseYaml(readWorkflow(WORKFLOW)));
+}
+
+// Run the original CommonJS source with isolated argv/env while retaining
+// Node's dependency cache. No CLI dispatch or worker-coercion logic is copied.
+function compileModule(filename) {
+  const source = fs.readFileSync(filename, "utf8").replace(/^#![^\n]*\n/, "");
+  return new vm.Script(
+    `(function(require, module, exports, __filename, __dirname, process, console) {${source}\n})`,
+    { filename },
+  ).runInThisContext();
+}
+
+const runMatrixModule = compileModule(CI_MATRIX_JS);
+const runConfigModule = compileModule(path.join(__dirname, "playwright.config.js"));
+
+function matrixCli(...args) {
+  const module = { exports: {} };
+  const moduleRequire = createRequire(CI_MATRIX_JS);
+  const cliRequire = (id) => moduleRequire(id);
+  cliRequire.main = module;
+  const output = [];
+  runMatrixModule(
+    cliRequire, module, module.exports, CI_MATRIX_JS, __dirname,
+    {
+      argv: [process.execPath, CI_MATRIX_JS, ...args],
+      exit: (status) => { throw new Error(`ci-matrix.js exited ${status}`); },
+    },
+    { log: (line) => output.push(String(line)), error: (line) => { throw new Error(String(line)); } },
+  );
+  return output.join("\n") + "\n";
 }
 
 test("e2e-tests.yml matrix.include matches node ci-matrix.js --matrix exactly", () => {
@@ -170,8 +208,11 @@ test("ci-matrix.js CLI: --list/--engine/--workers/--matrix, and a loud failure o
 
   expect(cli("--list").trim().split("\n")).toEqual(projectNames());
   expect(cli("--workers").trim()).toBe(CI_WORKERS);
-  for (const name of projectNames()) {
-    expect(cli("--engine", name).trim()).toBe(engineFor(name));
+  for (const [index, name] of projectNames().entries()) {
+    // Keep a real spawn for the successful --engine contract; every other
+    // project still runs the original CLI dispatch with cached dependencies.
+    const engineCli = index === 0 ? cli : matrixCli;
+    expect(engineCli("--engine", name).trim()).toBe(engineFor(name));
   }
   for (const args of [["--engine", "no-such-project"], ["--engine"], ["--bogus"]]) {
     expect(() => execFileSync("node", [CI_MATRIX_JS, ...args], { stdio: "pipe" })).toThrow();
@@ -236,22 +277,36 @@ test("PW_WORKERS is coerced to what Playwright accepts, and garbage fails loud",
   }
 });
 
-// Re-evaluate playwright.config.js in a child process with a given env and
-// report the `workers` value it resolves to. A child process is the only way to
-// test a require-time value without poisoning this process's module cache.
+// Re-evaluate the original config with isolated env and module exports. Keep
+// real child-process controls for both successful import and rejected input.
 function loadWorkers(env) {
-  const script =
-    "const c = require(process.argv[1]);" +
-    "process.stdout.write(JSON.stringify({ w: c.workers === undefined ? null : c.workers }));";
-  const r = spawnSync("node", ["-e", script, path.join(__dirname, "playwright.config.js")], {
-    encoding: "utf8",
-    env: { PATH: process.env.PATH, TARGET: "prod", ...env },
-  });
-  // A rejected value throws at require-time; surface the whole stderr so the
-  // assertion can match the message (the stack tail alone would not carry it).
-  if (r.status !== 0) throw new Error(r.stderr.trim());
-  const { w } = JSON.parse(r.stdout);
-  return w === null ? undefined : w;
+  if (Object.keys(env).length === 0 || env.PW_WORKERS === "0") {
+    const script =
+      "const c = require(process.argv[1]);" +
+      "process.stdout.write(JSON.stringify({ w: c.workers === undefined ? null : c.workers }));";
+    const childEnv = { ...process.env };
+    delete childEnv.CI;
+    delete childEnv.PW_WORKERS;
+    const r = spawnSync("node", ["-e", script, path.join(__dirname, "playwright.config.js")], {
+      encoding: "utf8",
+      env: {
+        ...childEnv,
+        TARGET: "prod",
+        ...env,
+      },
+    });
+    // Preserve the rejected import's actual stderr and exit-status boundary.
+    if (r.status !== 0) throw new Error(r.stderr.trim());
+    const { w } = JSON.parse(r.stdout);
+    return w === null ? undefined : w;
+  }
+  const filename = path.join(__dirname, "playwright.config.js");
+  const module = { exports: {} };
+  runConfigModule(
+    createRequire(filename), module, module.exports, filename, __dirname,
+    { env: { TARGET: "prod", ...env } }, console,
+  );
+  return module.exports.workers;
 }
 
 test("--engines is the de-duplicated engine set the matrix installs (the apt seeder's matrix)", () => {

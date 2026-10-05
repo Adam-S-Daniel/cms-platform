@@ -56,6 +56,15 @@ const templateFiles = () =>
     .filter((f) => /\.ya?ml$/.test(f))
     .sort();
 
+// Each shape changes only its selected workflow, so share immutable inputs for
+// all the other callers instead of rereading and reparsing them.
+const templateWorkflows = Object.freeze(
+  Object.fromEntries(
+    templateFiles().map((file) => [file, fs.readFileSync(path.join(TEMPLATE_WORKFLOWS, file), "utf8")]),
+  ),
+);
+const guardFindings = new Map();
+
 // A job with `steps:` — no template caller has one today, so the shapes that
 // need a step (a composite ref, a `run:` line) have to add it.
 const stepJob = (step) => `\n  site-local:\n    runs-on: ubuntu-latest\n    steps:\n${step}\n`;
@@ -258,13 +267,10 @@ function mkScaffoldedConsumer(workflows) {
 }
 
 function applyShape(shape) {
-  const workflows = {};
-  for (const f of templateFiles()) {
-    const text = fs.readFileSync(path.join(TEMPLATE_WORKFLOWS, f), "utf8");
-    workflows[f] = shape.file === f ? shape.mutate(text) : text;
-  }
+  const workflows = { ...templateWorkflows };
   if (shape.file) {
-    const before = fs.readFileSync(path.join(TEMPLATE_WORKFLOWS, shape.file), "utf8");
+    const before = templateWorkflows[shape.file];
+    workflows[shape.file] = shape.mutate(before);
     // A mutation that silently no-ops (the template moved under it) would make
     // its case a duplicate of "pristine" and pass for the wrong reason.
     if (workflows[shape.file] === before) {
@@ -279,7 +285,13 @@ function applyShape(shape) {
 function guardVerdict(workflows) {
   const found = [];
   for (const [file, text] of Object.entries(workflows)) {
-    for (const o of offences(text, { canonical: CANONICAL, file })) {
+    // Cache by the actual bytes AND filename, preserving source lines and
+    // diagnostics. Every mutated input still runs the real YAML-based rules.
+    const key = `${file}\0${text}`;
+    if (!guardFindings.has(key)) {
+      guardFindings.set(key, offences(text, { canonical: CANONICAL, file }));
+    }
+    for (const o of guardFindings.get(key)) {
       found.push(`${file} line ${o.line}: ${o.found}`);
     }
   }
@@ -298,6 +310,10 @@ function siteVerdict(workflows) {
 }
 
 test.describe("scaffold-template guard AGREES with the scaffolded site's own pin gate", () => {
+  // Keep this immutable-input table in one worker so its parse cache is shared,
+  // including when the lane enables fullyParallel. Failures stay independent.
+  test.describe.configure({ mode: "default" });
+
   test("the verifier and the shared scanner are both present to be driven", () => {
     for (const s of PLATFORM_SCRIPTS) {
       expect(
