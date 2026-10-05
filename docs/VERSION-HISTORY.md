@@ -10,9 +10,46 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.141)
+## Version history (v0.1.0 → v0.1.142)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.142 — Leftover `e2e-` tags no longer surface on the public site, the sweep that finds them lists `_tags` past 1,000 entries, and the reusable workflows pin python and ruby instead of taking the runner image's, ahead of `ubuntu-latest` moving to 26.04 on 2026-10-19.**
+Two changes since v0.1.141, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
+No `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed apart from the pins
+(`git diff --stat v0.1.141 origin/main` is `.github/workflows/`, `e2e/`, `theme/`).
+Runtime pins. `ubuntu-latest` (x64) rolls to Ubuntu 26.04 from 2026-10-19 to 2026-11-19
+([actions/runner-images#14748](https://github.com/actions/runner-images/issues/14748)): system python3 3.12 to 3.14,
+ruby 3.2 to 3.3, shellcheck 0.9 to 0.11. Four reusable workflows called the system interpreter and now pin it
+(`runs-on` is unchanged): `publish-scheduled-posts.yml` and `secrets-scan.yml` (its allowlist canary needs `tomllib`)
+run `actions/setup-python` 3.12; `platform-bump.yml` does the same and also installs `pyyaml==6.0.3`, because
+`scripts/reconcile-nudge-contexts.py` imports PyYAML and fails soft (a MANUAL warning in the bump PR body) on a
+setup-python interpreter without it; `oauth-proxy-build.yml` runs `ruby/setup-ruby` 3.2 before its `ruby -ryaml` step.
+`self-ci.yml` (the platform's own CI, not a reusable) installs a checksummed shellcheck 0.11.0, so the required
+actionlint lane no longer follows the image. `release.yml`'s manifest-skew error text now names what
+`examples-site-pins-current.test.js` enforces (the Current release line, the platform pins, `PLATFORM_VERSION`, and
+the two manifests equal). New `e2e/workflow-runtime-pinned.test.js` (registered in `PLATFORM_META_SPECS`) fails a job in
+any workflow or composite action that runs python3/pip, ruby/gem/bundle or actionlint without an earlier pinning
+step ([#715](https://github.com/Adam-S-Daniel/cms-platform/pull/715), part of runner-images#14748).
+Not changed: several jobs still call the runner's default `node` without `setup-node`.
+Tags. The tags lifecycle specs create `_tags/e2e-tags-canary-<runId>.md`; one left on `main` was listed in the tag
+cloud and on `/tags/`, in `/sitemap.xml` and in its own tag feed. `exclude_e2e_posts.rb` now stamps `_tags/` entries
+with the posts rule (an `e2e-` slug or `test_fixture: true`): `sitemap: false`, `feed_exclude: true` and, unless the
+editor set one, `robots: noindex,nofollow`. `auto_tag_pages.rb` leaves stamped tags out of `site.all_tags` and out of
+every count, `tag_feeds.rb` mints no feed for them, and the `tag.html` and `default.html` layouts drop the feed link
+and `<link rel="alternate">`. The tag page itself still builds (with `noindex`), because the tags lifecycle specs wait
+for its URL to answer 200 and then 404. The leftover sweep (`e2e/leftover-e2e-tags.js`) listed `_tags` through
+`GET /contents/_tags`, which returns at most 1,000 entries, so a leftover sorted past the cut read as clean; it now
+walks the git trees API (root tree, then the `_tags` subtree), and a `truncated` tree throws so the caller reports
+`error`, not a false zero. New `theme/spec/exclude_e2e_tags_build_test.rb` runs a real Jekyll build
+([#716](https://github.com/Adam-S-Daniel/cms-platform/pull/716), part of
+[#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689), which stays open until the consumer bumps land).
+Consumers get both with their next platform bump. The `setup-python`/`setup-ruby` steps take effect on a consumer's
+workflow runs once its `uses:@` pins name v0.1.142. The theme change hides `e2e-` tags from `all_tags`, the sitemap and
+the feeds: adamdaniel.ai's `_tags/` holds only `.gitkeep` and jodidaniel.com has no `_tags/`, so neither changes today.
+`oauth-proxy/lambda.py` and `infrastructure/` did not move, so no proxy redeploy (the build probe compares the live
+handler's digest with `lambda.py`'s, and `oauth-proxy-build.yml`'s new step only changes how the probe reads
+`_config.yml`) and no bootstrap redeploy. Ship this release before the Ubuntu 26.04 rollout starts on 2026-10-19.
 
 **v0.1.141 — A harness helper that skipped every blog-post, share-row and feed-content test (it took the nav's `/blog/` link for a post) now finds the post; platform self-CI runs a public project on both fixture sites; the media round trip's leftover upload is removed through a PR, not a direct write to `main`.**
 Test-harness release: nothing under `theme/`, `infrastructure/`,
