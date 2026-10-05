@@ -168,9 +168,12 @@ fixes shipped in v0.1.126
 [#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555)), and the two
 consumer-owned defects were closed on 2026-10-04. The table below records the
 state of each row; the trackers stay linked so the fix and its evidence have an
-accountable destination. Only
+accountable destination. Two trackers are still open:
 [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540)
-is an open tracker, waiting on consumer verification. Each defect stood on its own, with or
+is waiting on consumer verification, and
+[cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541)
+tracks row five, whose fix shipped in v0.1.126 but whose issue is not closed.
+Each defect stood on its own, with or
 without the lane, and each has its own tracker in the owning repository
 ([cms-platform#529](https://github.com/Adam-S-Daniel/cms-platform/issues/529)
 groups them).

@@ -104,7 +104,7 @@ const DESCRIPTION_MAX = 1024;
 //               agent-plugins-spec/main/schemas/1.0.0/plugin.schema.json
 //   size        1805 bytes
 //   sha256      0a4aad95ce337878ad38802ebf0daa3fde76abe3f65400c86bcbb1ec0b3ab883
-//   retrieved   2026-08-14, byte-for-byte from adam-agentskills'
+//   retrieved   2026-08-14, byte-for-byte from agentskills' (now archived)
 //               schemas/agent-plugins-1.0.0-plugin.schema.json (same digest),
 //               which is where the provenance above was established.
 //
