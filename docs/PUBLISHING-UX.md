@@ -661,7 +661,13 @@ Three things it gets that the split button cannot:
   on the `labeled` EVENT, and GitHub emits none for a label already present
   — so the second Publish press, which is the most likely one in the whole
   product because it follows a "Needs attention", would have returned 200
-  and done nothing. The button removes the label before adding it.
+  and done nothing. The button reads the current PR detail with
+  `cache: "no-cache"` and removes `cms/ready` only when present before
+  adding it. The PR detail includes the complete label set, avoiding a
+  paginated label-list read and a needless DELETE 404 on a first publish.
+  A racing DELETE 404 is successful removal; other read/removal failures
+  stop before the add and show a retry error. Console warnings contain only
+  a numeric HTTP status or `unknown`, never an API body or thrown Error text.
 - a **Publish that does not trust a stale snapshot** (#386). The poller
   reads the PR every 30 s and on `hashchange`, and saving an EXISTING entry
   changes no hash — so a Publish pressed right after Save could read the
@@ -677,6 +683,16 @@ Three things it gets that the split button cannot:
   label its own click had applied for 58 s (every `/pulls` read answered in
   1 ms). Every GitHub GET in `theme/admin/` now passes `cache: "no-cache"`;
   `e2e/admin-github-fetch-cache.test.js` holds the line for every shim.
+
+Labels on a merged editorial PR are historical metadata. The
+[publish button](../theme/admin/publish-button.js)
+changes only `cms/ready`, leaving Decap's `decap-cms/<status>` label as Decap
+set it; `cms/draft` can therefore remain alongside `cms/ready` and
+`decap-cms/draft` after a successful publish. These labels do not override
+the merged state. The [editorial caller](../examples/site/.github/workflows/cms-editorial-workflow.yml)
+listens for `opened`, `synchronize`, and `labeled`, with no `closed` cleanup,
+and the [editorial label audit](../scripts/audit-editorial-labels.js) examines
+only open PRs. The current design retains these labels after publication.
 
 It renders into the state bar's actions slot rather than the toolbar: the
 toolbar is `flex-wrap: nowrap` on desktop and a fifth control squeezes the
