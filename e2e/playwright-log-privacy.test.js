@@ -23,6 +23,7 @@ const RUNS = new Map([
   ["parity-preview.yml", "parity-preview"],
   ["cms-media-roundtrip.yml", "media-roundtrip"],
   ["visual-regression.yml", "visual-regression"],
+  ["self-fixture-e2e.yml", "fixture-e2e"],
 ]);
 // These lanes already attempted an artifact upload when their job was canceled.
 const CANCELED_UPLOADS = new Set([

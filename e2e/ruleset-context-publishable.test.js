@@ -267,6 +267,18 @@ function pullRequestTriggerGaps(on) {
   return gaps;
 }
 
+// The ONE job-level `if:` that cannot skip a publisher: a gate with `needs:`
+// whose condition is exactly `always()` (#527's `fixture-e2e`). That is the
+// shape required-context-cancellable.test.js DEMANDS of a gate — without it the
+// gate skips whenever the job it needs fails — so this lint must accept it, but
+// only verbatim: `always() && <clause>` can still be false, and a bare
+// `always()` on a job with no `needs:` is noise this lint keeps flagging.
+function isAlwaysGate(j) {
+  if (!j || !("needs" in j) || typeof j.if !== "string") return false;
+  const cond = j.if.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1");
+  return cond === "always()";
+}
+
 // Why this publishing job might be skipped, or report a verdict that is not
 // its work's.
 function publisherJobGaps({ job, reusableJob }) {
@@ -276,7 +288,9 @@ function publisherJobGaps({ job, reusableJob }) {
     ["reusable job", reusableJob],
   ]) {
     if (!j || typeof j !== "object") continue;
-    if ("if" in j) gaps.push(`${where}-level \`if:\` can skip it, and a skip reports no verdict`);
+    if ("if" in j && !isAlwaysGate(j)) {
+      gaps.push(`${where}-level \`if:\` can skip it, and a skip reports no verdict`);
+    }
     if ("continue-on-error" in j && j["continue-on-error"] !== false) {
       gaps.push(`${where}-level \`continue-on-error\` — the required verdict is not the work's`);
     }
@@ -293,6 +307,11 @@ const NOT_REQUIRED_PR_JOBS = {
     "an ACTUATOR, not a verdict: it arms native auto-merge on Dependabot PRs and is skipped " +
     "(the reusable job's `if: github.actor == 'dependabot[bot]'`) on every other PR, so " +
     "requiring it would gate merges on a job that checks nothing.",
+  "self-fixture-e2e.yml#fixture-e2e-project":
+    "the WORK half of a work/gate split (#527): its two matrix legs carry the " +
+    "`timeout-minutes` wall the browser install needs, and a job killed at its wall reports " +
+    "`cancelled`, which no merge can get past (#289). The required context is the " +
+    "`fixture-e2e` gate in the same file, which fails unless every leg succeeded.",
   "repo-settings-pat-verify.yml#verify":
     "a LIVE credential probe that runs only when its own workflow file changes " +
     "(`paths:`) and needs the REPO_SETTINGS_READ_* secrets, which a fork or Dependabot PR " +
@@ -532,5 +551,18 @@ test.describe("platform-main: required contexts and PR-time jobs cannot drift ap
     expect(
       publisherJobGaps({ job: { "continue-on-error": "${{ matrix.experimental }}" } })[0],
     ).toContain("continue-on-error");
+  });
+
+  // #527: a `needs:` + `if: always()` gate is the shape the cancellable lint
+  // requires of a required-context publisher; anything looser still fires.
+  test("publisherJobGaps: accepts a verbatim `always()` gate with `needs:`, nothing looser", () => {
+    expect(publisherJobGaps({ job: { needs: "work", if: "${{ always() }}" } })).toEqual([]);
+    expect(publisherJobGaps({ job: { needs: ["a", "b"], if: " always() " } })).toEqual([]);
+    expect(
+      publisherJobGaps({ job: { needs: "work", if: "always() && github.event_name == 'push'" } }),
+    ).toHaveLength(1);
+    expect(publisherJobGaps({ job: { needs: "work", if: "success()" } })).toHaveLength(1);
+    expect(publisherJobGaps({ job: { if: "${{ always() }}" } })).toHaveLength(1);
+    expect(publisherJobGaps({ job: { needs: "work", if: "!cancelled()" } })).toHaveLength(1);
   });
 });

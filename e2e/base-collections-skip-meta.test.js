@@ -41,7 +41,6 @@
 // complementary: this one proves the FS guards end-to-end through a real build;
 // the registry lint proves the admin-write guard SET (predicate + presence +
 // no-drift) without a build.
-const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test, expect } = require("./base");
@@ -66,14 +65,16 @@ const FS_GUARDED_SPECS = [
 ];
 
 function hasJekyllToolchain(siteRoot) {
+  // The fixture's gems must be INSTALLED so `bundle exec` works without a
+  // network install mid-test. Both fixtures commit their Gemfile.lock (#527
+  // for fixture-site), so the lock's presence no longer says that; `bundle
+  // check` does.
   try {
-    execFileSync("bundle", ["--version"], { stdio: "pipe" });
+    execFileSync("bundle", ["check", "--dry-run"], { cwd: siteRoot, stdio: "pipe" });
+    return true;
   } catch (_) {
     return false;
   }
-  // The fixture must have resolved gems (Gemfile.lock) so `bundle exec` works
-  // without a network install mid-test.
-  return fs.existsSync(path.join(siteRoot, "Gemfile.lock"));
 }
 
 function buildFixture(siteRoot) {
@@ -141,7 +142,7 @@ test.describe("#33 base_collections skip contract — opted-out SKIPS, full RUNS
   const TOOLCHAIN = hasJekyllToolchain(FULL) && hasJekyllToolchain(SINGLEPAGE);
 
   test("opted-out fixture: every FS-guarded spec SKIPS (none fail)", () => {
-    test.skip(!TOOLCHAIN, "no Jekyll toolchain (bundler + both Gemfile.lock) — pure-fs lanes skip the build-and-run proof");
+    test.skip(!TOOLCHAIN, "no Jekyll toolchain (bundler + both fixtures' gems installed) — pure-fs lanes skip the build-and-run proof");
     buildFixture(SINGLEPAGE);
     const results = runGuardedSpecs(SINGLEPAGE);
     expect(results.length, "child run produced no test results").toBeGreaterThan(0);
@@ -159,7 +160,7 @@ test.describe("#33 base_collections skip contract — opted-out SKIPS, full RUNS
   });
 
   test("full fixture: the SAME FS-guarded specs RUN (pass; skip is precise)", () => {
-    test.skip(!TOOLCHAIN, "no Jekyll toolchain (bundler + both Gemfile.lock) — pure-fs lanes skip the build-and-run proof");
+    test.skip(!TOOLCHAIN, "no Jekyll toolchain (bundler + both fixtures' gems installed) — pure-fs lanes skip the build-and-run proof");
     buildFixture(FULL);
     const results = runGuardedSpecs(FULL);
     expect(results.length, "child run produced no test results").toBeGreaterThan(0);

@@ -96,7 +96,7 @@ same Jekyll + Decap + AWS stack and improvements sync **both ways**. Design:
 (consumer 1, the dogfood) and **jodidaniel.com** (consumer 2, a single-page
 bio).
 
-**Current release: `v0.1.131`** (`v0.1.0`–`v0.1.131` are tagged; cut one with
+**Current release: `v0.1.132`** (`v0.1.0`–`v0.1.132` are tagged; cut one with
 `gh workflow run release.yml -f version=vX.Y.Z`). The bump is ONE atomic edit in
 the release PR, before the dispatch: this line, both plugin manifests
 (`plugin.json` + `.claude-plugin/plugin.json`), the `docs/VERSION-HISTORY.md`
@@ -231,7 +231,7 @@ reach prod. Parity forbids a consumer-owned caller, so it is a platform seam: th
 ## Skills ship as a marketplace bundle, not a file sync (v0.1.83)
 
 `skills/` is where a platform skill is authored, and **nothing copies it into a
-consumer**: it is a federated bundle in the `agentskills` marketplace
+consumer**: it is a federated bundle in the `adam-agentskills` marketplace
 (`/cms-platform:<skill>`), reaching an ephemeral surface only through the
 consuming repo's own `skills.lock`. The old `skills-sync.yml` transport was
 deleted in v0.1.83. → `docs/SYNC.md` § Skills, `docs/VERSION-HISTORY.md` v0.1.83.
@@ -371,14 +371,23 @@ of the byte compare. → `docs/CONSUMER-COMPATIBILITY.md` before changing
 
 ## Self-CI lanes
 
-`.github/workflows/self-ci.yml` is this repo's merge gate; with
-`self-secrets-scan.yml` (#126) it is one of only two workflows here whose jobs
-run on a plain PR (`self-dependabot-auto-merge.yml` also triggers on every PR,
-but its job is a no-op for anyone but Dependabot). Six lanes, all REQUIRED, plus `scan / scan` from the secrets scan:
-**actionlint**, **ruby-theme-specs**, **node-unit-lints** (pure-fs
+`.github/workflows/self-ci.yml` is this repo's merge gate. Six lanes, all
+REQUIRED: **actionlint**, **ruby-theme-specs**, **node-unit-lints** (pure-fs
 `e2e/*.test.js`, DENY list), **plugin-validate** (NON-STRICT deliberately),
-**python-unit-tests** and **cfn-lint** (no `continue-on-error` since #525); the
-browser matrix runs in CONSUMER e2e. → `docs/CONTRIBUTING.md`.
+**python-unit-tests** and **cfn-lint** (no `continue-on-error` since #525). Two
+more required contexts come from siblings: `scan / scan` and **`fixture-e2e`**
+(#527: the `@lane: local` specs on the two admin projects against
+`e2e/fixture-site`; the public projects run only in CONSUMER e2e).
+`self-dependabot-auto-merge.yml` also triggers on every PR, but its job is a
+no-op for anyone but Dependabot. → `docs/CONTRIBUTING.md`.
+
+| PR/push workflow | Salient paths |
+|---|---|
+| `self-ci.yml`, `self-secrets-scan.yml` | all (required; no filter) |
+| `self-fixture-e2e.yml` | in-job deny-list: all but `docs/`, `infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE`, `*.md` outside `e2e/fixture-site/`; push to main always |
+| `self-dependabot-auto-merge.yml` | all (an actuator, skipped unless Dependabot) |
+| `repo-settings-pat-verify.yml` | its own file (`on.paths`; not required) |
+| `repo-settings-apply.yml` | `repo-settings.yml` (push to main) |
 
 ## Adding / porting a workflow
 

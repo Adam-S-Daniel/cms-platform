@@ -390,6 +390,9 @@ const PLATFORM_META_SPECS = [
   "github-actions-poll.test.js",
   "live-failures-reporter.test.js",
   "playwright-log-privacy.test.js",
+  // #527 — locks self-fixture-e2e.yml (the platform's own browser lane): reads
+  // and executes steps of that workflow DEFINITION, which a consumer never ships.
+  "self-fixture-e2e.test.js",
   // Reads the platform's admin shell SOURCE (theme/admin/index*.html) —
   // meaningless on a consumer, which ships only the gem-rendered admin.
   "live-preview-gating-lint.test.js",
@@ -452,7 +455,7 @@ const PLATFORM_META_SPECS = [
   // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
   // root plugin.json + .claude-plugin/plugin.json manifests, the vendored
   // Agent Plugins schema under e2e/fixtures/, and every skills/<name>/SKILL.md).
-  // A consumer ships none of that — skills are installed from the agentskills
+  // A consumer ships none of that — skills are installed from the adam-agentskills
   // marketplace, never mirrored into a site — so it is platform-internal,
   // self-CI only. (It also self-skips on SITE_ROOT; this registration is the
   // belt to that spec's braces, and is what the recurrence guard demands.)

@@ -1,0 +1,329 @@
+# Self fixture E2E — the platform's own BROWSER lane (cms-platform#527).
+#
+# WHY THIS EXISTS
+# self-ci.yml is deliberately browser-free, and e2e-tests.yml is a
+# `workflow_call` reusable that only a CONSUMER runs. So until #527 no platform
+# PR executed a single `*.spec.js`: a change to the theme, the admin bundle or
+# a spec could merge here and first meet a browser in a consumer's CI. This
+# workflow runs the harness's `@lane: local` specs against `e2e/fixture-site`
+# (a neutral consuming-site fixture whose Gemfile pins the theme by local path,
+# so the WORKING TREE's theme is what gets built and tested) on the two ADMIN
+# projects, where the CMS editor specs and #527's archived-PDF test live.
+#
+# WHAT IT RUNS, per project job
+#   1. a salience check (below): a PR touching only docs/infra skips the work
+#      but still reports success;
+#   2. the harness PLACED inside the fixture (`e2e/fixture-site/e2e/`), because
+#      the specs read site files via `path.resolve(__dirname, "..")`;
+#   3. `bundle install` from the fixture's COMMITTED Gemfile.lock (frozen);
+#   4. `npx playwright test --project=<project>` over every `@lane: local`
+#      spec, with SITE_ROOT pointing playwright.config.js's local webServer at
+#      the fixture (jekyll build + static serve + decap-server);
+#   5. a NON-VACUITY assertion: the archived-PDF test in
+#      cms-editorial-workflow.spec.js must have PASSED on this project. A
+#      future skip must not read green — this lane is #527's proof that the
+#      test executes in platform CI.
+#
+# WHAT IT DELIBERATELY DOES NOT RUN
+#   - `@lane: real` specs. Most self-skip without CMS_E2E_PAT, but
+#     admin-bundle-parity.spec.js fetches https://adamdaniel.ai/admin/*
+#     unconditionally; this lane must not depend on production. They are
+#     filtered out by select-specs.js's filterByLane(…, "local").
+#   - the PUBLIC projects (chromium-desktop-1080 etc.). They fail on the
+#     fixture for site-identity/layout reasons (no site header, no tag pages),
+#     which is fixture work outside #527.
+#
+# NETWORK. No secrets, no AWS, no production site. It does need the public
+# internet: npm, rubygems, the Ubuntu archive (via the install composite) and
+# unpkg.com, because every admin/index*.html loads
+# https://unpkg.com/decap-cms@<version>/dist/decap-cms.js at runtime — the same
+# CDN dependency every consumer's admin has. Accepted for #527; a cached copy
+# routed through `page.route` would be a harness change that touches consumers.
+#
+# ONE REQUIRED CONTEXT: `fixture-e2e` (repo-settings.yml ->
+# `ruleset_library.platform-main`). The per-project jobs carry the
+# `timeout-minutes` wall (apt's only backstop — see the install composite), and
+# a job killed at its wall reports `cancelled`, which no merge can get past
+# (#289). So the wall sits on `fixture-e2e-project`, which no ruleset names, and
+# the context is published by the `fixture-e2e` gate: `needs:` + `if: always()`,
+# no timeout, red unless every project job succeeded. Locked by
+# e2e/self-fixture-e2e.test.js and e2e/required-context-cancellable.test.js.
+
+name: Self fixture E2E
+
+# Same grammar as self-ci.yml (enforced by e2e/workflow-run-name.test.js).
+run-name: >-
+  ${{ github.event_name == 'pull_request'
+        && format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title)
+   || format('push — {0} @{1}', github.ref_name, github.actor) }}
+
+on:
+  # Same trigger set as self-ci.yml, for the same reasons: no `edited` (#222),
+  # no `workflow_dispatch` (a merge gate, not a tool), and NO `paths:` filter —
+  # a required context that a filtered run never reports blocks the merge
+  # forever (e2e/ruleset-context-publishable.test.js). The cost control is the
+  # in-job salience step instead.
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# NO `concurrency:` block, on purpose: `opened` and `synchronize` can share a
+# head SHA, and a cancelled run shadowing a green one wedges the required
+# context (see self-ci.yml's block comment; e2e/required-context-cancellable.test.js).
+
+jobs:
+  fixture-e2e-project:
+    name: fixture-e2e-project (${{ matrix.project }})
+    # The wall lives HERE, never on the gate. 45 min clears the install
+    # composite's bounded download worst case (~35 min) plus the measured ~5 min
+    # of placement + tests; e2e/playwright-install-bounded.test.js checks it.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chromium-desktop-3k, webkit-iphone16]
+    runs-on: ubuntu-latest
+    env:
+      PW_PROJECT: ${{ matrix.project }}
+      TARGET: local
+      CI: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The salience diff needs the PR's base commit.
+          fetch-depth: 0
+
+      # Deny-list salience: a change is NON-salient only when every changed path
+      # is one of the shapes below; anything else — or a diff that cannot be
+      # computed — runs the suite (fail-safe). A push to main always runs it, so
+      # main's own result and the apt .deb cache stay fresh. SHAs come from the
+      # event payload file, never `${{ github.event.* }}` in a script (the
+      # rendered command is echoed). NUL-delimited and `--no-renames`
+      # (e2e/salience-git-paths.test.js: quoting and rename-destination bugs).
+      - name: Detect salient changes
+        id: salient
+        run: |
+          set -euo pipefail
+          is_salient() {
+            case "$1" in
+              e2e/fixture-site/*) return 0 ;;
+              docs/*|infrastructure/*|oauth-proxy/*|scripts/cross_post/*|LICENSE) return 1 ;;
+              *.md) return 1 ;;
+              *) return 0 ;;
+            esac
+          }
+          run=true
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            base="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
+            head="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+            list="${RUNNER_TEMP}/fixture-e2e-changed"
+            if [ -n "$base" ] && [ -n "$head" ] \
+              && git diff --name-only -z --no-renames "${base}...${head}" > "$list"; then
+              run=false
+              while IFS= read -r -d '' f; do
+                if is_salient "$f"; then run=true; break; fi
+              done < "$list"
+            else
+              echo "::warning::could not compute the PR diff; running the suite (fail-safe)"
+            fi
+          fi
+          echo "salient: ${run}"
+          echo "salient=${run}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      # The harness must sit INSIDE the site so REPO_ROOT (`__dirname/..`)
+      # resolves to the fixture, exactly as e2e-tests.yml places it at
+      # `<site>/e2e`. The fixture trees and node_modules are excluded: the copy
+      # must not contain itself.
+      - name: Place the harness inside the fixture
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        run: |
+          set -euo pipefail
+          rsync -a --exclude fixture-site --exclude fixture-site-singlepage --exclude node_modules \
+            e2e/ e2e/fixture-site/e2e/
+
+      - name: Install harness deps
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        working-directory: e2e/fixture-site/e2e
+        run: npm ci
+
+      - name: Resolve this project's browser engine
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        id: engine
+        working-directory: e2e/fixture-site/e2e
+        run: |
+          set -euo pipefail
+          engine="$(node ci-matrix.js --engine "$PW_PROJECT")"
+          echo "project=$PW_PROJECT engine=$engine"
+          echo "engine=$engine" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ matrix.project }}-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+
+      - name: Install Playwright browser + system deps
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        uses: ./.github/actions/install-playwright-browsers
+        with:
+          browser: ${{ steps.engine.outputs.engine }}
+          working-directory: e2e/fixture-site/e2e
+
+      # Frozen install from the committed e2e/fixture-site/Gemfile.lock
+      # (setup-ruby turns on deployment mode when a lockfile exists), so a new
+      # gem release cannot change what this lane builds with.
+      - name: Setup Ruby + Bundler
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: e2e/fixture-site
+
+      # `@lane: real` specs are excluded explicitly rather than left to
+      # self-skip: admin-bundle-parity.spec.js fetches production. The filter is
+      # select-specs.js's own header parser, so this lane and the consumer
+      # matrix agree on what "local" means.
+      - name: Select the local-lane specs
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        id: select
+        working-directory: e2e/fixture-site/e2e
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          all=()
+          for f in ./*.spec.js; do all+=("${f#./}"); done
+          specs="$(node -e '
+            const { filterByLane } = require("./select-specs");
+            const out = filterByLane(process.argv.slice(1), "local", { repoRoot: process.cwd() });
+            process.stdout.write(out.join(" "));
+          ' "${all[@]}")"
+          count="$(wc -w <<< "$specs")"
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no @lane: local specs selected (of ${#all[@]} spec files)" >&2
+            exit 1
+          fi
+          workers="$(node ci-matrix.js --workers)"
+          echo "project=$PW_PROJECT workers=$workers specs=$count of ${#all[@]}"
+          {
+            echo "specs=$specs"
+            echo "count=$count"
+            echo "workers=$workers"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run the local-lane specs against the fixture
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        working-directory: e2e/fixture-site/e2e
+        env:
+          # playwright.config.js's local webServer builds + serves THIS tree and
+          # runs decap-server in it.
+          SITE_ROOT: ${{ github.workspace }}/e2e/fixture-site
+          PW_SPECS: ${{ steps.select.outputs.specs }}
+          PW_WORKERS: ${{ steps.select.outputs.workers }}
+          # No consumer of per-navigation frames runs here (see e2e-tests.yml).
+          DISABLE_PER_TEST_VIDEOS: '1'
+        run: |
+          set -o pipefail
+          read -r -a specs <<< "$PW_SPECS"
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/fixture-e2e.log.json
+          status=0
+          # Raw output goes to the uploaded artifact; only aggregate counts reach
+          # the public log (summarize-playwright.js, e2e/playwright-log-privacy.test.js).
+          npx playwright test --project="$PW_PROJECT" --reporter=list,html,json "${specs[@]}" \
+            > /tmp/fixture-e2e.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
+
+      # #527 criterion 2, kept live: the archived-PDF test must have RUN and
+      # PASSED on this project. Without this, a future skip (a lost opt-in, a
+      # renamed fixture collection) would leave the lane green while proving
+      # nothing.
+      - name: Assert the archived-PDF test passed
+        if: ${{ steps.salient.outputs.salient == 'true' }}
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/fixture-e2e.log.json
+          REQUIRED_SPEC_FILE: cms-editorial-workflow.spec.js
+          REQUIRED_TEST_TITLE: opted-in archived PDF fields render host-specific copy and stay private by default
+        run: |
+          set -euo pipefail
+          node - <<'JS'
+          const fs = require("node:fs");
+          const { PLAYWRIGHT_JSON_OUTPUT_FILE: file, REQUIRED_SPEC_FILE: specFile,
+                  REQUIRED_TEST_TITLE: title, PW_PROJECT: project } = process.env;
+          let report;
+          try {
+            report = JSON.parse(fs.readFileSync(file, "utf8"));
+          } catch (_) {
+            console.log(`::error::no readable Playwright JSON report at ${file}`);
+            process.exit(1);
+          }
+          const found = [];
+          const walk = (suite) => {
+            for (const spec of suite.specs || []) {
+              if (spec.title !== title || !String(spec.file || "").endsWith(specFile)) continue;
+              for (const t of spec.tests || []) {
+                if (t.projectName === project) found.push(t);
+              }
+            }
+            for (const child of suite.suites || []) walk(child);
+          };
+          for (const suite of report.suites || []) walk(suite);
+          if (found.length === 0) {
+            console.log(`::error::${specFile} › "${title}" did not run on ${project}`);
+            process.exit(1);
+          }
+          for (const t of found) {
+            const results = t.results || [];
+            const last = results.length ? results[results.length - 1].status : "none";
+            if (!["expected", "flaky"].includes(t.status) || last !== "passed") {
+              console.log(`::error::${specFile} › "${title}" on ${project} ended ${t.status}/${last}, not passed`);
+              process.exit(1);
+            }
+          }
+          console.log(`${specFile} › "${title}" passed on ${project}`);
+          JS
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() && steps.salient.outputs.salient == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fixture-e2e-report-${{ matrix.project }}
+          path: |
+            e2e/fixture-site/e2e/playwright-report
+            e2e/fixture-site/e2e/test-results
+            /tmp/fixture-e2e.log
+            /tmp/fixture-e2e.log.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The REQUIRED context. No `timeout-minutes`, no `concurrency`, and
+  # `if: always()` so it reports even when a project job fails or hits its wall;
+  # it translates the matrix's rolled-up result into its own verdict.
+  fixture-e2e:
+    needs: fixture-e2e-project
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every fixture project job to succeed
+        env:
+          PROJECTS_RESULT: ${{ needs.fixture-e2e-project.result }}
+        run: |
+          echo "fixture-e2e-project: ${PROJECTS_RESULT}"
+          if [ "$PROJECTS_RESULT" != "success" ]; then
+            echo "::error::a fixture-e2e-project job ended ${PROJECTS_RESULT}, not success"
+            exit 1
+          fi

@@ -30,7 +30,11 @@
 #
 # NOT RUN HERE (needs a browser / a built Jekyll site / AWS — covered by the
 # e2e reusable + dogfood/consumer CI, not by a unit-speed PR gate):
-#   - the Playwright browser matrix (`*.spec.js`)
+#   - the Playwright browser matrix (`*.spec.js`). Since #527 the platform runs
+#     the `@lane: local` specs itself on the two ADMIN projects against
+#     e2e/fixture-site, in the sibling workflow self-fixture-e2e.yml (required
+#     context `fixture-e2e`) — kept separate so this file stays browser-free.
+#     The public projects still run only in consumer CI.
 #   - the build-dependent harness lints (canary-content / canary-ondemand-
 #     noindex / e2e-posts-public-exclusion / prod-mutate-fixture — they read a
 #     `bundle exec jekyll build` `_site` or the `_e2e/` content fixtures;
@@ -331,7 +335,7 @@ jobs:
           npx playwright test --project=chromium-light --reporter=line "${specs[@]}"
 
   # ── 4. claude plugin validate — this repo's own plugin ROOT ──────────────
-  # This repo's ROOT is a plugin root: `agentskills` publishes `cms-platform`
+  # This repo's ROOT is a plugin root: `adam-agentskills` publishes `cms-platform`
   # as a FEDERATED marketplace entry sourced straight from here, so nothing in
   # that repo can see these manifests or these skills — if this workflow
   # doesn't check them, nothing does (see e2e/plugin-manifests.test.js's

@@ -6,7 +6,7 @@ The rejected ones are the reason the file exists: git history records what
 landed, but nothing records what was tried and turned down, so the next
 session re-derives and re-proposes it. An approach already ruled out is the
 expensive thing to lose. (Convention defined in skills-evals' `DESIGN.md`,
-"Scaling to the registry", and copied from agentskills'
+"Scaling to the registry", and copied from adam-agentskills'
 `docs/skill-impact.md`; the underlying evidence — a proposal audit trail is
 what stops failed abstractions being re-proposed — is WikiSkill,
 arXiv:2608.27454.)
@@ -48,6 +48,27 @@ no backfill is planned; the file adds the fields git does not capture.
 - Motivation: in the skills-evals cms-stuck-pr-triage eval, all 3 with-skill trials called a green-but-BLOCKED PR a merge-state caching bug and never named the required context no workflow publishes (both scored without-skill trials did), and 2 of 3 recommended closing an editor's `decap-cms/pending_publish` PR.
 - Change: §3 now diffs the ruleset/branch-protection required contexts against the head sha's reported check runs and statuses, then looks for a context withdrawn by a skipped caller job (cms-platform#222), before any caching diagnosis; §1c and §4 point there; §4 closes a stale `pending_publish` PR only when the loop owns it (`automated-test` label or the unpublish-canary branch).
 - Eval: outstanding — the skills-evals cms-stuck-pr-triage fixture eval has not been re-run against this change.
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/test-canary — edit
+
+- Motivation: the skill cited closed skills-evals issue #17 as where its propagation probe would be built; #17 built arms against the registry's own bundle only, and no issue tracks a `cms-platform`-bundle probe.
+- Change: the description and body now say the probe is not built and untracked, and link #17 only as what it did build.
+- Eval: exempt (DESIGN.md non-coverage table)
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/consumer-repo-provisioning — edit
+
+- Motivation: the install line named the retired `agentskills` marketplace; the live registry marketplace is `adam-agentskills`.
+- Change: `cms-platform@agentskills` is now `cms-platform@adam-agentskills`.
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/github-actions-sha-pinning — edit
+
+- Motivation: the skill named the retired `agentskills` marketplace as the bundle's home.
+- Change: now `adam-agentskills`.
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
 - Outcome: pending merge.
 
 ## 2026-10-05 — cms-platform/code-quality — edit

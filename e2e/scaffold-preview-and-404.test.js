@@ -163,15 +163,19 @@ test.describe("scaffolder + fixture expose /preview/ and a 404 page (#23)", () =
   // (node-unit-lints) has no Ruby toolchain, so this stays green there while
   // still running in any environment that CAN build (dogfood / local dev).
   test("(c) built fixture renders /preview/ + /404.html with the preview shell", () => {
+    // `bundle check` asks whether the fixture's gems are INSTALLED. It used to
+    // be "does Gemfile.lock exist", which stopped meaning anything once #527
+    // committed the lock: a runner with system bundler and no installed gems
+    // (node-unit-lints) would then try the build and fail.
     const hasBundle = (() => {
       try {
-        execFileSync("bundle", ["--version"], { stdio: "pipe" });
-        return fs.existsSync(path.join(FIXTURE_ROOT, "Gemfile.lock"));
+        execFileSync("bundle", ["check", "--dry-run"], { cwd: FIXTURE_ROOT, stdio: "pipe" });
+        return true;
       } catch (_) {
         return false;
       }
     })();
-    test.skip(!hasBundle, "no Jekyll toolchain (bundler + Gemfile.lock) available — pure-fs lanes skip the build");
+    test.skip(!hasBundle, "no Jekyll toolchain (bundler + the fixture's gems installed) — pure-fs lanes skip the build");
 
     execFileSync("bundle", ["exec", "jekyll", "build", "--quiet"], {
       cwd: FIXTURE_ROOT,

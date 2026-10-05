@@ -93,7 +93,7 @@ settings_defaults:
   # This is a DELIBERATE DIVERGENCE from the fleet, not drift. repo-settings'
   # fleet.yml disables squash on every repo it manages, because a squash strands
   # the pre-merge commits on no branch and so breaks any lockfile that pins one
-  # by sha (agentskills' skills.lock). These three repos are `manage: false`
+  # by sha (adam-agentskills' skills.lock). These three repos are `manage: false`
   # there precisely so that default cannot reach them; they pin nothing by sha,
   # and the publish chain would stop working the moment squash went away.
   # Turning it off here is a cms-platform release, not a settings flip: four
@@ -219,7 +219,7 @@ ruleset_library:
   # node-unit-lints) with PR-only writes and no bypass. `plugin-validate` was
   # added to the required set in v0.1.83: it is the only check that parses
   # every `skills/*/SKILL.md` the way the runtime does, and this repo's ROOT is
-  # the plugin root the `agentskills` marketplace federates from — nothing in
+  # the plugin root the `adam-agentskills` marketplace federates from — nothing in
   # that repo can see these manifests, so if self-CI doesn't gate them nothing
   # does. Left non-required it could not block a merge, which is the exact
   # weakness that made `platform-drift-guard` (deleted in v0.1.83) worthless.
@@ -292,6 +292,11 @@ ruleset_library:
             # two-part `<caller job> / <reusable job>` name, the same string
             # consumer-main requires on both consumers.
             - context: scan / scan
+            # why: #527 — the platform's own browser lane: the @lane: local
+            # specs on the two admin projects against e2e/fixture-site, from
+            # self-fixture-e2e.yml's always() gate (its matrix legs carry the
+            # timeout wall, so they are deliberately not required).
+            - context: fixture-e2e
     bypass_actors: []
 
   # why: = live adamdaniel.ai ruleset 13985217 as-found 2026-07-10 — the

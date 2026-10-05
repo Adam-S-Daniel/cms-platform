@@ -25,8 +25,8 @@ Personal Access Token you create by hand, one is a GitHub App's private key
 (with the App's ID as a repository variable), and the three AWS values are
 emitted by the bootstrap stack (see the `aws-bootstrap` skill). This file is the single
 source of truth. It is authored in `cms-platform`'s `skills/` and reaches a
-session through the `cms-platform` bundle in the `agentskills` marketplace
-(`/plugin install cms-platform@agentskills`) — nothing copies it into a consumer
+session through the `cms-platform` bundle in the `adam-agentskills` marketplace
+(`/plugin install cms-platform@adam-agentskills`) — nothing copies it into a consumer
 repo, so a consumer's checkout is never a place to look for or edit it.
 
 > **Policy: fine-grained PATs only — never classic PATs.** Every token below is
