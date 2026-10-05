@@ -292,6 +292,11 @@ ruleset_library:
             # two-part `<caller job> / <reusable job>` name, the same string
             # consumer-main requires on both consumers.
             - context: scan / scan
+            # why: #527 — the platform's own browser lane: the @lane: local
+            # specs on the two admin projects against e2e/fixture-site, from
+            # self-fixture-e2e.yml's always() gate (its matrix legs carry the
+            # timeout wall, so they are deliberately not required).
+            - context: fixture-e2e
     bypass_actors: []
 
   # why: = live adamdaniel.ai ruleset 13985217 as-found 2026-07-10 — the

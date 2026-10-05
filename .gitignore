@@ -25,11 +25,12 @@ vendor/
 .bundle/
 
 # e2e local-lane self-test fixture (e2e/fixture-site/): its SOURCE is
-# tracked; everything bundler / Jekyll / the theme's Decap render hook
-# produce at validation time is not. (_site/, vendor/, .bundle/,
-# .jekyll-cache/ are already covered above at any depth; these add the
-# fixture-specific ones.)
-e2e/fixture-site/Gemfile.lock
+# tracked; everything Jekyll / the theme's Decap render hook produce at
+# validation time is not. (_site/, vendor/, .bundle/, .jekyll-cache/ are
+# already covered above at any depth; these add the fixture-specific ones.)
+# Its Gemfile.lock IS tracked (#527): the `fixture-e2e` required check
+# installs from it in frozen mode, so a new upstream gem release cannot turn
+# an unrelated PR red.
 # The theme's decap_config_hook.rb renders these into the fixture's admin/
 # at build — generated, never source.
 e2e/fixture-site/admin/config.yml
