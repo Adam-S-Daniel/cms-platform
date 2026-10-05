@@ -66,11 +66,17 @@ function resolvePreviewBaseURL() {
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
   } catch (err) {
-    // Exit code only, and no `cause`: the original message quotes gh's
-    // stderr (the API response's error text), Playwright prints a cause
-    // chain, and this lands in public consumer CI logs.
+    // Exit code (or spawn error code) only, and no `cause`: the original
+    // message quotes gh's stderr (the API response's error text), Playwright
+    // prints a cause chain, and this lands in public consumer CI logs. When
+    // gh never started (ENOENT: not on PATH) there is no exit status at all.
+    const why = Number.isInteger(err.status)
+      ? `gh exited ${err.status}`
+      : typeof err.code === "string"
+        ? `gh could not start: ${err.code}`
+        : `gh was killed by ${err.signal}`;
     throw new Error(
-      `TARGET=preview: failed to query GitHub for the latest open PR (gh exited ${err.status}). ` +
+      `TARGET=preview: failed to query GitHub for the latest open PR (${why}). ` +
         `Ensure 'gh' is on PATH and authenticated, or run with TARGET=local.`,
     );
   }
@@ -351,6 +357,7 @@ exports.test.step = _wrapStep(exports.test.step, exports.test);
 exports.expect = expect;
 exports.TARGET = TARGET;
 exports.resolveTargetBaseURL = resolveTargetBaseURL;
+exports.resolvePreviewBaseURL = resolvePreviewBaseURL;
 exports.safeTestId = safeTestId;
 exports.PER_TEST_FRAMES_ROOT = PER_TEST_FRAMES_ROOT;
 exports.PER_TEST_MAX_FRAMES = PER_TEST_MAX_FRAMES;
