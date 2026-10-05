@@ -440,7 +440,6 @@ test.describe("site-capabilities: homeUsesThemeLayout", () => {
       expect(loadTime, `${spec}: a layout predicate must not run at file load`).toEqual([]);
     }
     for (const spec of [
-      "glow-banding.spec.js",
       "not-found.spec.js",
       "public-a11y-polish.spec.js",
       "reduced-motion.spec.js",

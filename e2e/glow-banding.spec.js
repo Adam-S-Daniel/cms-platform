@@ -1,7 +1,6 @@
 // @lane: local — pixel-level sample of a locally-rendered page; no network
 const { test, expect } = require("./base");
 const { PNG } = require("pngjs");
-const cap = require("./site-capabilities");
 
 test.describe("Glow effect quality", () => {
   test("background glow gradient renders without visible color banding", async ({
@@ -14,14 +13,6 @@ test.describe("Glow effect quality", () => {
     test.skip(
       testInfo.project.use.forcedColors === "active",
       "Gradient rendering differs in forced-colors mode",
-    );
-
-    // The glow lives in the theme's main.css, linked by its default.html. A
-    // home page on a site-owned layout (jodidaniel.com; fixture-site-singlepage)
-    // has no glow, and its flat background reads as one long "band" (#702).
-    test.skip(
-      !cap.homeUsesThemeLayout(),
-      "the home page renders through a site-owned layout, not the theme's default.html",
     );
 
     await page.goto("/");
