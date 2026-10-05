@@ -29,6 +29,13 @@
 // asserts a real published post is unaffected (still in feed + sitemap), so
 // the exclusion can't over-reach. The temp fixture is always removed in
 // afterAll.
+//
+// The same build carries a TAG probe for cms-platform#689: a leftover
+// `_tags/e2e-tagleak-probe.md` with only a `name` (the shape a Decap "+ New
+// Tag" create produces, like the `_tags/e2e-tags-canary-<runId>.md` the tags
+// lifecycle specs seed). `exclude_e2e_tags.rb` must keep it off `/tags/`, the
+// homepage, sitemap.xml and the per-tag feeds, while its own `/tags/<slug>/`
+// page still builds (the lifecycle specs wait for that 200) with `noindex`.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -48,6 +55,11 @@ const PROBE_SLUG = "e2e-feedleak-probe";
 const PROBE_TAG = "Feedleak Probe Tag";
 const PROBE_TAG_SLUG = "feedleak-probe-tag";
 const PROBE_TITLE = "E2E Feedleak Probe";
+const TAGS_DIR = path.join(REPO_ROOT, "_tags");
+const TAG_PROBE_SLUG = "e2e-tagleak-probe";
+const TAG_PROBE_PATH = path.join(TAGS_DIR, `${TAG_PROBE_SLUG}.md`);
+const TAG_PROBE_NAME = "E2E Tagleak Probe";
+let createdTagsDir = false; // remove `_tags/` in afterAll only if we made it
 const PROBE_CONTENT = `---
 title: ${PROBE_TITLE}
 date: 2099-12-31 00:00:00 +0000
@@ -58,6 +70,11 @@ published: true
 Temporary build-and-assert fixture for e2e-posts-public-exclusion.test.js.
 It has an \`e2e-\` slug but NO test_fixture flag and NO sitemap: false,
 mirroring a Decap UI-created e2e post. Removed in afterAll.
+`;
+
+const TAG_PROBE_CONTENT = `---
+name: ${TAG_PROBE_NAME}
+---
 `;
 
 let OUT_DIR; // throwaway Jekyll destination for this test's build
@@ -89,6 +106,10 @@ test.describe("e2e/test-fixture posts are excluded from public aggregation", () 
     // Guard: never clobber a real post if the probe name somehow collided.
     if (fs.existsSync(PROBE_PATH)) fs.unlinkSync(PROBE_PATH);
     fs.writeFileSync(PROBE_PATH, PROBE_CONTENT);
+    createdTagsDir = !fs.existsSync(TAGS_DIR);
+    fs.mkdirSync(TAGS_DIR, { recursive: true });
+    if (fs.existsSync(TAG_PROBE_PATH)) fs.unlinkSync(TAG_PROBE_PATH);
+    fs.writeFileSync(TAG_PROBE_PATH, TAG_PROBE_CONTENT);
     OUT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-exclude-build-"));
     buildInto(OUT_DIR);
   });
@@ -96,6 +117,8 @@ test.describe("e2e/test-fixture posts are excluded from public aggregation", () 
   test.afterAll(() => {
     // Always remove the temp fixture and the throwaway build dir.
     if (fs.existsSync(PROBE_PATH)) fs.unlinkSync(PROBE_PATH);
+    if (fs.existsSync(TAG_PROBE_PATH)) fs.unlinkSync(TAG_PROBE_PATH);
+    if (createdTagsDir) fs.rmSync(TAGS_DIR, { recursive: true, force: true });
     if (OUT_DIR && fs.existsSync(OUT_DIR)) fs.rmSync(OUT_DIR, { recursive: true, force: true });
   });
 
@@ -155,6 +178,26 @@ test.describe("e2e/test-fixture posts are excluded from public aggregation", () 
     const page = path.join("blog", PROBE_SLUG, "index.html");
     expect(exists(page), `${PROBE_SLUG} must still be built at /blog/${PROBE_SLUG}/`).toBe(true);
     expect(read(page), "the served e2e post page should contain its title").toContain(PROBE_TITLE);
+  });
+
+  test("a leftover e2e tag is ABSENT from /tags/, the homepage and sitemap.xml", () => {
+    expect(read("tags/index.html"), "/tags/ index leaked the e2e tag").not.toContain(TAG_PROBE_SLUG);
+    expect(read("index.html"), "homepage leaked the e2e tag").not.toContain(TAG_PROBE_SLUG);
+    expect(read("sitemap.xml"), "sitemap leaked the e2e tag").not.toContain(TAG_PROBE_SLUG);
+  });
+
+  test("a leftover e2e tag mints no per-tag Atom feed", () => {
+    expect(exists(path.join("tags", TAG_PROBE_SLUG, "feed.xml"))).toBe(false);
+  });
+
+  test("a leftover e2e tag STILL serves at /tags/<slug>/, with noindex and no feed link", () => {
+    // The tags lifecycle specs wait for this page to return 200.
+    const page = path.join("tags", TAG_PROBE_SLUG, "index.html");
+    expect(exists(page), `/tags/${TAG_PROBE_SLUG}/ must still be built`).toBe(true);
+    const html = read(page);
+    expect(html).toContain(TAG_PROBE_NAME);
+    expect(html).toContain('<meta name="robots" content="noindex,nofollow">');
+    expect(html).not.toContain(`/tags/${TAG_PROBE_SLUG}/feed.xml`);
   });
 
   test("a real published post is NOT over-excluded (still in feed + sitemap)", () => {

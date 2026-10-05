@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'exclude_e2e_tags'
+
 #
 # Surface every tag referenced by a post — even ones the editor never
 # created a `_tags/` entry for — as a real `/tags/<slug>/` archive page,
@@ -15,7 +17,8 @@
 # `site.all_tags` is `[{name, slug, url, description, count}, ...]` sorted
 # case-insensitively by name. `description` comes from the `_tags/` entry
 # when one exists, else nil. `count` is the number of posts referencing
-# that tag.
+# that tag. e2e / test-fixture tags (exclude_e2e_tags.rb) are left out of
+# `site.all_tags`; an archive page generated for one is stamped noindex.
 #
 # Unit tests: _plugins_test/auto_tag_pages_test.rb
 
@@ -92,8 +95,21 @@ if defined?(Jekyll::Generator)
             slugify: ->(name) { Jekyll::Utils.slugify(name) },
           )
 
-          missing.each { |name| site.pages << TagPage.new(site, name) }
-          site.config['all_tags'] = all_tags
+          # e2e / test-fixture tags still get their archive page (a real
+          # post's pill may link to it), stamped noindex and out of the
+          # sitemap, but never a `site.all_tags` entry, which is what the
+          # home page tag cloud and `/tags/` list.
+          excluded = ExcludeE2ETags.excluded_names(
+            curated: curated_tags(site),
+            names: all_tags.map { |tag| tag['name'] },
+            slugify: ->(name) { Jekyll::Utils.slugify(name) },
+          )
+          missing.each do |name|
+            page = TagPage.new(site, name)
+            ExcludeE2ETags.stamp(page.data) if excluded.include?(name)
+            site.pages << page
+          end
+          site.config['all_tags'] = all_tags.reject { |tag| excluded.include?(tag['name']) }
         end
 
         private
@@ -106,7 +122,8 @@ if defined?(Jekyll::Generator)
         end
 
         # Shape the `_tags/` collection (if any) into the `[{name,
-        # description}, ...]` list `summarise` expects.
+        # description, feed_exclude}, ...]` list `summarise` and
+        # `ExcludeE2ETags.excluded_names` expect.
         def curated_tags(site)
           collection = site.collections['tags']
           return [] unless collection
@@ -115,6 +132,7 @@ if defined?(Jekyll::Generator)
             {
               'name' => doc.data['name'],
               'description' => doc.data['description'],
+              'feed_exclude' => doc.data['feed_exclude'],
             }
           end
         end
