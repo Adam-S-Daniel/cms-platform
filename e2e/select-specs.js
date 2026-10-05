@@ -738,6 +738,7 @@ const SPEC_RULES = {
   "e2e/glow-banding.spec.js": [
     // CSS-only spec; otherwise idle. Picks up via fanout.
   ],
+  "e2e/reduced-motion.spec.js": [/^(theme\/)?assets\/css\//],
   "e2e/preview-bridge.spec.js": [
     /^(theme\/)?admin\/preview-bridge\.js$/,
     /^_layouts\/preview\.html$/,

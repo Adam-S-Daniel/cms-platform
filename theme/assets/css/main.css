@@ -875,6 +875,21 @@ main {
   }
 }
 
+/* ── Reduced motion ─────────────────────────────── */
+
+/* The glow, thermal color cycles and link shimmer all run forever. Honor the
+   OS "reduce motion" setting by stopping every animation and parking the
+   full-viewport glow at a static, subdued level. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+  }
+
+  body::before {
+    opacity: 0.3;
+  }
+}
+
 /* ── Responsive ─────────────────────────────────── */
 
 @media (width <= 640px) {
