@@ -380,6 +380,9 @@ const PLATFORM_META_SPECS = [
   // workflow DEFINITIONS (absent on a consumer); platform-internal.
   "ensure-merge-base.test.js",
   "salience-checkout-depth.test.js",
+  // Runs the platform's scripts/reset-orphaned-canary.sh against a stubbed fetch
+  // to prove its public-log output carries no API body; platform-internal.
+  "reset-orphaned-canary-log.test.js",
   "fixture-baseline.test.js",
   "generate-test-videos.test.js",
   // The theme gemspec's version is deliberately frozen at 0.1.4 (see the

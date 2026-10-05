@@ -102,6 +102,15 @@ E2E_DIR="${E2E_DIR}" node -e '
   // dash (post / preview-page / spike-project).
   const MARKER_RE = /e2e-publish-loop:[a-z]+(?:-[a-z]+)*:\d+/;
 
+  // Public CI logs: a gh() error message carries up to 300 bytes of the raw
+  // API response body, and any other error message or stack could embed data
+  // too. Log only a status code plus the error type, never the message,
+  // stack or body.
+  function describeError(e) {
+    const type = (e && e.constructor && e.constructor.name) || typeof e;
+    return e && Number.isInteger(e.status) ? `HTTP ${e.status} ${type}` : type;
+  }
+
   function toBase64(text) {
     return Buffer.from(text, "utf8").toString("base64");
   }
@@ -156,7 +165,7 @@ E2E_DIR="${E2E_DIR}" node -e '
         // A 404 means the canary file is not present on this ref (a
         // consuming site may not carry every canary; a feature branch may
         // pre-date it) — nothing to heal.
-        console.log(`[reset-orphaned-canary] ${c.path}@${ref}: skip (${(e && e.message) || e})`);
+        console.log(`[reset-orphaned-canary] ${c.path}@${ref}: skip (${describeError(e)})`);
         continue;
       }
       const decoded = Buffer.from(current.content, "base64").toString("utf8");
@@ -189,7 +198,7 @@ E2E_DIR="${E2E_DIR}" node -e '
     // Fail-open: never break the loop on the self-heal. The spec-side
     // setup-reset (step 0) + the byte-lock check remain the backstop.
     console.warn(
-      `::warning::reset-orphaned-canary: self-heal errored (continuing, fail-open): ${(e && e.stack) || e}`,
+      `::warning::reset-orphaned-canary: self-heal errored (continuing, fail-open): ${describeError(e)}`,
     );
     process.exit(0);
   });
