@@ -7,7 +7,7 @@ description: Reference for the per-language lint + static-analysis + style toolc
 
 > ## What actually runs (read this first)
 >
-> **Most of this file describes a toolchain that is not wired up in cms-platform.** Verified **in cms-platform**: there is no `.github/workflows/code-quality.yml`, the root `package.json` has **no `scripts` key at all** (so `npm run lint` / `npm run format` cannot run *there*), and there is no `pyproject.toml`, `.yamllint.yml`, or top-level `tests/`. **Those are facts about cms-platform, not about wherever you are reading this** — a consumer that adopted the npm tools does differ: adamdaniel.ai defines `lint`/`lint:js`/`lint:css`/`lint:md`/`format` in its `package.json`, so `npm run lint` genuinely works there. Check the tree you are actually in before quoting any of it. AGENTS.md's own "Deliberate skips — NOT ported" list says `code-quality` was kept platform-internal and never shipped — but this skill *was* in the synced set through v0.1.82, so it reached consumers describing machinery none of them have. That transport is gone as of v0.1.83: the skill is now published in the `cms-platform` marketplace bundle, which a consumer installs deliberately rather than receiving by sync. The pointer below to "**AGENTS.md → Code quality**" as the canonical toolchain reference is also wrong: that heading is generic managed boilerplate and contains no toolchain table.
+> **Most of this file describes a toolchain that is not wired up in cms-platform.** Verified **in cms-platform**: there is no `.github/workflows/code-quality.yml`, the root `package.json` has **no `scripts` key at all** (so `npm run lint` / `npm run format` cannot run *there*), and there is no `pyproject.toml`, `.yamllint.yml`, or top-level `tests/`. **Those are facts about cms-platform, not about wherever you are reading this** — a consumer that adopted the npm tools does differ: adamdaniel.ai defines `lint`/`lint:js`/`lint:css`/`lint:md`/`format` in its `package.json`, so `npm run lint` genuinely works there. Check the tree you are actually in before quoting any of it. This skill *was* in the synced set through v0.1.82, so it reached consumers describing machinery none of them have. That transport is gone as of v0.1.83: the skill is now published in the `cms-platform` marketplace bundle, which a consumer installs deliberately rather than receiving by sync. AGENTS.md has no "Code quality" section and no toolchain table; this skill is the toolchain reference.
 >
 > What genuinely gates code in **cms-platform**:
 >
@@ -15,7 +15,7 @@ description: Reference for the per-language lint + static-analysis + style toolc
 > | --- | --- | --- |
 > | `self-ci.yml` → `actionlint` | `actionlint` over `.github/workflows/*.yml` | yes |
 > | `self-ci.yml` → `ruby-theme-specs` | `ruby theme/spec/*_test.rb` | yes |
-> | `self-ci.yml` → `node-unit-lints` | the ~101 pure-fs `e2e/*.test.js` lints | yes |
+> | `self-ci.yml` → `node-unit-lints` | the pure-fs `e2e/*.test.js` lints (every file except `self-ci.yml`'s DENY list) | yes |
 > | `self-ci.yml` → `cfn-lint` | the CloudFormation templates (pinned cfn-lint) | yes |
 > | `self-secrets-scan.yml` | gitleaks on the diff / history | yes |
 > | local pre-commit | `scripts/lint-staged.sh` + `scripts/secrets-scan.sh` (each skips any tool not on `PATH`) | local only |
@@ -56,5 +56,5 @@ actionlint -ignore '"github\.(event\.pull_request\.head\.ref|head_ref)" is poten
 1. Pick the best-in-class linter; add it to the right manifest (npm `package.json` for JS-runtime tools; pip in the lint workflow — where the repo has one — plus the pre-commit hook for Python-family; binary download for compiled tools).
 2. Create its config file (prefer a dedicated dotfile; only Python config lives in `pyproject.toml`).
 3. Add a per-language branch to `scripts/lint-staged.sh` (tool-availability-gated so missing tools skip, never block) — and, only in a repo that actually runs a lint workflow, a `changes`-gated step there too.
-4. Document the toolchain row + any rule relaxations in AGENTS.md → "Code quality", and add the workflow trigger to the salient-paths table.
+4. Document the toolchain row + any rule relaxations in this skill, and add the workflow trigger to the salient-paths table.
 5. Relaxations get a comment explaining *why*; never disable a rule to hide a real bug.

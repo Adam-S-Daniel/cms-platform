@@ -92,7 +92,7 @@ permissions**:
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
   reject its pending deployments even with `Actions: write`.
 
-## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103 (kept here for repos on an older pin)
+## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103
 
 > **This PAT no longer exists as a credential path.** v0.1.103 removed the
 > `gh_token` INPUT from `platform-bump` and `dev-hooks-sync`, not just the read
@@ -112,46 +112,14 @@ permissions**:
 > `.github/workflows/*` and `GITHUB_TOKEN` cannot hold `workflows:write` —
 > while `dev-hooks-sync` **warns** and opens its PR on `GITHUB_TOKEN`, which
 > fires no CI.
->
-> This section stays only for a repo still pinned **below v0.1.103**, whose
-> reusable still declares the input.
 
-Consumed by:
-- `platform-bump` — opens the single-version bump PR that moves `platform_ref` +
-  the gem tag + every reusable `uses: …@<ref>` pin to a new release in one PR.
-- `dev-hooks-sync` — pushes the platform's dev hooks into the consumer.
-
-There used to be a third, `dependabot-comment-sync`, which pushed a refreshed
-`# vX.Y.Z (date)` pin comment back into the workflow file after Dependabot
-bumped a `uses: …@<sha>`. It was **deleted on 2026-08-20** along with the pin
-comment itself: the comment goes stale silently and then actively lies, and
-Dependabot refreshes it only sometimes, so a wrong label is worse than no
-label. A third-party `uses:` now ends at `@<sha>`.
-
-**These edit `.github/workflows/*`, so they need `Workflows: write`** — the one
-permission `CMS_E2E_PAT` deliberately lacks. That shared requirement is why they
-**consolidate onto this single `repo`+`workflow` PAT** rather than a third
-secret.
-
-It needs **Workflows** but — unlike `CMS_E2E_PAT` — does **not** need **Actions**
-(it neither polls runs nor reviews deployments). **Repository permissions**:
-
-| Permission | Access | Why it's needed |
-|---|---|---|
-| **Contents** | **Read and write** | push the `platform/bump-*` branch |
-| **Pull requests** | **Read and write** | open the bump PR |
-| **Workflows** | **Read and write** | the bump edits `.github/workflows/*` — GitHub **rejects** the push without this (`refusing to allow … to update workflow … without 'workflows' permission`) |
-| **Metadata** | **Read** | mandatory |
-
-Without the **Workflows** permission, `platform-bump` fails and version bumps
-must be done manually (issue cms-platform#13). This is the single most-missed
-permission.
-
-> A fine-grained PAT can't span two owners; if cms-platform and the consumer
-> have different owners, `CMS_PLATFORM_PAT` must be authorized for the consumer
-> repo's owner (where it pushes). It does not need access to cms-platform.
-
-> `platform-bump` hard-needs this PAT — issue cms-platform#13.
+The two reusables that took it, `platform-bump` and `dev-hooks-sync`, edit
+`.github/workflows/*`, so their push-back credential needs **Workflows: write**
+(the one permission `CMS_E2E_PAT` deliberately lacks) — the App below carries it.
+A third consumer of the PAT, `dependabot-comment-sync`, was **deleted on
+2026-08-20** along with the version pin comment it refreshed: the comment goes
+stale silently and then actively lies, so a wrong label is worse than no label.
+A third-party `uses:` now ends at `@<sha>`.
 
 ## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the CMS automation App (replaces `CMS_PLATFORM_PAT`, #238)
 
@@ -373,7 +341,7 @@ platform-bump cron (a `::warning`, never a job failure).
 
 - [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Issues R/W** + **Actions R/W** + **Commit statuses R** (+ be a reviewer of the `regression-review` environment)
 - [ ] `CMS_AUTOMATION_APP_PRIVATE_KEY` (secret) + `CMS_AUTOMATION_APP_ID` (variable) — the CMS automation App, installed on this owner; powers platform-bump and dev-hooks-sync with nothing to rotate; the `dependabot-rearm-sweep.yml` caller passes the key too, so the sweep can refresh a behind workflow-file Dependabot PR (#458)
-- [ ] ~~`CMS_PLATFORM_PAT`~~ — **removed in v0.1.103.** Do not create it. The App above is the only push credential; only a repo pinned below v0.1.103 still has an input for it
+- [ ] ~~`CMS_PLATFORM_PAT`~~ — **removed in v0.1.103.** Do not create it. The App above is the only push credential; a caller still passing `gh_token` fails at startup
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
 - [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` when `site-params.env` sets them)
 - [ ] Settings → General → **Allow auto-merge** = ON
