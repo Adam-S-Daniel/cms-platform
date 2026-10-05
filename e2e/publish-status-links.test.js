@@ -562,7 +562,9 @@ test.describe("publication destination host (#533)", () => {
           subscribe() {},
         },
       }, {
-        fetch: async () => ({ ok: false, status: 503 }),
+        fetch: async (url, init) => init && init.method === "POST"
+          ? { ok: false, status: 503 }
+          : { ok: true, status: 200, json: async () => ({ labels: [] }) },
       });
       const publishing = win.__publishButton.doPublish();
       expect(doc.getElementById("cms-publish-state-actions").textContent).toContain(`Sending it to ${modelNoun}…`);
