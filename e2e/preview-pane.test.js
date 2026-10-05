@@ -3,7 +3,9 @@
  * Issue #653: Decap's in-editor preview pane rendered in default Times, with the
  * raw `2026-10-05 09:40:00 -0400` date and "URL Slug:" lines, and overflowing
  * images. preview-pane.js registers the site stylesheet and a template per
- * previewable collection. The script is loaded in a vm sandbox with a stub
+ * previewable collection. Issue #687: an <iframe> embed in the body, which
+ * Decap's sanitized markdown preview drops, is rendered by the template
+ * itself from an allowlist. The script is loaded in a vm sandbox with a stub
  * window.CMS and a recording `h`; the real pane is checked in a browser.
  */
 const fs = require("node:fs");
@@ -34,8 +36,19 @@ function boot() {
   return { styles, templates, window };
 }
 
+// A minimal stand-in for Decap's Immutable entry: getIn(["data", k]) and
+// get("data") returning a Map-like with get/set (set returns a copy).
+function dataMap(data) {
+  return { get: (k) => data[k], set: (k, v) => dataMap({ ...data, [k]: v }) };
+}
+
 function entry(data) {
-  return { getIn: ([, k]) => data[k] };
+  return { getIn: ([, k]) => data[k], get: (k) => (k === "data" ? dataMap(data) : undefined) };
+}
+
+// widgetFor(name, fields, values) stand-in: records the markdown it was given.
+function widgetFor(name, _fields, values) {
+  return { type: "markdown-preview", props: { value: values ? values.get(name) : "WHOLE-BODY" }, children: [] };
 }
 
 function textOf(node) {
@@ -99,6 +112,97 @@ test.describe("preview-pane.js", () => {
     const raw = b.styles.find((s) => s.opts && s.opts.raw).value;
     expect(raw).toMatch(/img[^{]*\{\s*max-width:\s*100%/);
     expect(raw).toMatch(/padding-top/);
+  });
+
+  // Issue #687: Decap's markdown preview sanitizes with DOMPurify's defaults,
+  // which drop <iframe>. The template renders an HTML block holding one itself.
+  const EMBED_BODY = [
+    "Intro paragraph.",
+    "",
+    "<!-- html-embed:start -->",
+    '<div class="post-embed">',
+    "<iframe",
+    '  src="/assets/tools/claude-memory-map/"',
+    '  title="Claude Memory Map &mdash; a map"',
+    '  loading="lazy"',
+    '  style="width:100%; height:80vh; min-height:560px;"></iframe>',
+    '<p style="font-size:0.85em;">Trouble? <a href="/tools/x/" target="_blank">Open it &rarr;</a></p>',
+    "</div>",
+    "<!-- html-embed:end -->",
+    "",
+    "Closing paragraph.",
+  ].join("\n");
+
+  function renderPost(body) {
+    const b = boot();
+    return b.templates.posts({ entry: entry({ title: "T", body }), widgetFor, getAsset: String });
+  }
+
+  test("an iframe embed in the body renders as an <iframe> in the template output", () => {
+    const tree = renderPost(EMBED_BODY);
+    const [iframe] = find(tree, (n) => n.type === "iframe");
+    expect(iframe, "no <iframe> in the rendered template").toBeTruthy();
+    expect(iframe.props.src).toBe("/assets/tools/claude-memory-map/");
+    expect(iframe.props.title).toBe("Claude Memory Map — a map");
+    expect(iframe.props.loading).toBe("lazy");
+    expect(iframe.props.style).toEqual({ width: "100%", height: "80vh", minHeight: "560px" });
+    // It sits in the embed wrapper, and the caption link survives with rel set.
+    const [wrapper] = find(tree, (n) => n.type === "div" && n.props.className === "post-embed");
+    expect(find(wrapper, (n) => n.type === "iframe")).toHaveLength(1);
+    const [a] = find(wrapper, (n) => n.type === "a");
+    expect(a.props).toMatchObject({ href: "/tools/x/", target: "_blank", rel: "noopener noreferrer" });
+    expect(textOf(a)).toBe("Open it →");
+    // The markdown around it still goes through Decap's markdown preview.
+    const md = find(tree, (n) => n.type === "markdown-preview").map((n) => n.props.value);
+    expect(md).toEqual(["Intro paragraph.\n", "\nClosing paragraph."]);
+  });
+
+  test("a body without an iframe block renders through widgetFor unchanged", () => {
+    const tree = renderPost("Just text.\n\n<div>no frame</div>");
+    const md = find(tree, (n) => n.type === "markdown-preview");
+    expect(md.map((n) => n.props.value)).toEqual(["WHOLE-BODY"]);
+    expect(find(tree, (n) => n.type === "iframe")).toHaveLength(0);
+  });
+
+  test("an iframe inside a code fence stays markdown", () => {
+    const body = 'Example:\n\n```html\n<iframe src="/x"></iframe>\n```\n';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
+    expect(find(renderPost(body), (n) => n.type === "iframe")).toHaveLength(0);
+  });
+
+  test("the embed renderer drops scripts, handlers, srcdoc and unsafe URLs", () => {
+    const body = [
+      "<div>",
+      '<iframe src="javascript:alert(1)" srcdoc="<script>alert(1)</script>" onload="alert(1)"></iframe>',
+      '<iframe src=" java\tscript:alert(1)"></iframe>',
+      '<iframe src="data:text/html,hi"></iframe>',
+      '<iframe src="https://www.youtube-nocookie.com/embed/x" allowfullscreen></iframe>',
+      "<script>alert(1)</script><style>body{}</style>",
+      '<img src="/a.png" onerror="alert(1)"><a href="javascript:alert(1)">x</a>',
+      '<object data="/x"><embed src="/x"></object><custom-el>kept text</custom-el>',
+      "</div>",
+    ].join("\n");
+    const tree = renderPost(body);
+    const iframes = find(tree, (n) => n.type === "iframe");
+    expect(iframes.map((n) => n.props.src)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      "https://www.youtube-nocookie.com/embed/x",
+    ]);
+    expect(iframes[3].props.allowFullScreen).toBe(true);
+    const types = new Set(find(tree, () => true).map((n) => n.type));
+    for (const t of ["script", "style", "object", "embed", "custom-el"]) expect(types.has(t), t).toBe(false);
+    for (const n of find(tree, () => true)) {
+      for (const k of Object.keys(n.props)) {
+        expect(k.toLowerCase(), `${n.type}.${k}`).not.toMatch(/^on|^srcdoc$|^dangerouslysetinnerhtml$/);
+      }
+    }
+    const [a] = find(tree, (n) => n.type === "a");
+    expect(a.props.href).toBeUndefined();
+    const all = textOf(tree);
+    expect(all).not.toContain("alert");
+    expect(all).toContain("kept text");
   });
 
   test("the script makes the three registration calls (AST)", () => {

@@ -536,6 +536,13 @@ Resources:
   #   img-src     GitHub avatars; blob:/data: for media Decap reads through
   #               the API.
   #   media-src   the dashboards' preview-pr<N> regression.mp4.
+  #   frame-src   an entry's iframe embed in Decap's preview pane (#687),
+  #               which inherits this policy: the apex + its subdomains, so
+  #               an absolute https://<apex>/assets/tools/... src previews
+  #               from a preview-pr<N> or admin.<apex> editor too. The live
+  #               site sets no frame-src, so a third-party embed still
+  #               previews blank once enforced (no bare https: here, the
+  #               invariant e2e/cloudfront-security-headers.test.js locks).
   # The Report-Only copy leaves out frame-ancestors only because it is
   # already enforced by the Content-Security-Policy header in both modes, so
   # reporting it as well would add nothing.
@@ -562,7 +569,7 @@ Resources:
           ContentSecurityPolicy:
             ContentSecurityPolicy: !If
               - AdminCspEnforced
-              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
               - "frame-ancestors 'self'"
             Override: true
         CustomHeadersConfig: !If
@@ -570,7 +577,7 @@ Resources:
           - !Ref AWS::NoValue
           - Items:
               - Header: Content-Security-Policy-Report-Only
-                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'"
+                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName}; object-src 'none'; base-uri 'none'"
                 Override: true
 
   # ── CloudFront distribution for preview-pr*.<apex> ───────────────────────
