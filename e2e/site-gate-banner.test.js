@@ -131,11 +131,19 @@ async function loadAdmin({ adminURL, served, flags, session = {}, hash = "" }) {
   const location = new URL(adminURL);
   if (hash) location.hash = hash;
   const reloads = [];
+  const pushes = [];
+  const history = {
+    pushState: (_s, _t, url) => {
+      pushes.push(url);
+      location.hash = url;
+    },
+  };
   location.reload = () => reloads.push(location.hash);
   const githubReads = [];
   const sandbox = {
     window: {
       location,
+      history,
       CMS_REPO: REPO,
       CMS_SITE_ORIGIN: "https://example.com",
       CMS_APEX: "example.com",
@@ -178,7 +186,7 @@ async function loadAdmin({ adminURL, served, flags, session = {}, hash = "" }) {
   vm.runInContext(fs.readFileSync(HOSTNAME, "utf8"), sandbox);
   vm.runInContext(fs.readFileSync(GATE, "utf8"), sandbox);
   for (let i = 0; i < 6; i += 1) await flush();
-  return { banner: () => document.getElementById(GATE_ID), location, reloads, githubReads, store, body, api: sandbox.window.CMSSiteGate };
+  return { banner: () => document.getElementById(GATE_ID), location, reloads, pushes, githubReads, store, body, api: sandbox.window.CMSSiteGate };
 }
 
 const production = (flags, extra = {}) =>
@@ -288,7 +296,7 @@ test.describe("site-gate-banner.js — the link survives entry → entry navigat
     const pre = await production({ main: "false" }, { hash: "#/collections/media/entries/some-item" });
     const ev = click(pre);
     expect(ev.prevented, "the in-app hash change is what leaves the form blank").toBe(true);
-    expect(pre.location.hash).toBe(GATE_DECL.entry);
+    expect(pre.pushes, "pushState, so no hashchange reaches Decap's router").toEqual([GATE_DECL.entry]);
     expect(pre.reloads, "reloaded once, at the target").toEqual([GATE_DECL.entry]);
   });
 
@@ -298,6 +306,7 @@ test.describe("site-gate-banner.js — the link survives entry → entry navigat
       const ev = click(pre);
       expect(ev.prevented, `hash ${JSON.stringify(hash)}`).toBe(false);
       expect(pre.reloads).toEqual([]);
+      expect(pre.pushes).toEqual([]);
     }
   });
 
