@@ -656,6 +656,7 @@ const SPEC_RULES = {
   "e2e/blog-post.spec.js": [/^_posts\//, /^blog\//],
   "e2e/tags.spec.js": [/^_tags\//, /^tags\//, /^e2e\/site-capabilities\.js$/],
   "e2e/not-found.spec.js": [/^404\.html$/],
+  "e2e/public-a11y-polish.spec.js": [/^_layouts\//, /^_includes\//, /^assets\/css\//],
   // @parity specs that hit Jekyll output through the deployed preview
   // surface. Path-rules cover the inputs that can shift what's served.
   // The sitemap/feed/console-clean/image-alt specs ALSO read `_site/`
