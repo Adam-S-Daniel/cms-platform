@@ -43,6 +43,13 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-05 — cms-platform/cms-stuck-pr-triage — edit
+
+- Motivation: in the skills-evals cms-stuck-pr-triage eval, all 3 with-skill trials called a green-but-BLOCKED PR a merge-state caching bug and never named the required context no workflow publishes (both scored without-skill trials did), and 2 of 3 recommended closing an editor's `decap-cms/pending_publish` PR.
+- Change: §3 now diffs the ruleset/branch-protection required contexts against the head sha's reported check runs and statuses, then looks for a context withdrawn by a skipped caller job (cms-platform#222), before any caching diagnosis; §1c and §4 point there; §4 closes a stale `pending_publish` PR only when the loop owns it (`automated-test` label or the unpublish-canary branch).
+- Eval: skills-evals cms-stuck-pr-triage, local eval against this branch's ac3470a snapshot (skills-evals a41dfb0), 3 trials per arm, trial 3 timed out in both arms (runner), so 2 scored per arm and the run reports "completed with errors". with_skill objective 6.0/7 (pr-b-missing-required-context-named 2/2, pr-c-left-alone 2/2, no-write-attempted 2/2); without_skill 4.0/7 (pr-b 2/2, pr-c-left-alone 0/2, no-write-attempted 0/2); judge 9.6 vs 9.6 (with_skill n=1 after one judge error, without_skill n=2). loop-log-was-read 0/2 in both arms is a fixture-level check issue, not this change.
+- Outcome: pending merge.
+
 ## 2026-10-05 — cms-platform/test-canary — edit
 
 - Motivation: the skill cited closed skills-evals issue #17 as where its propagation probe would be built; #17 built arms against the registry's own bundle only, and no issue tracks a `cms-platform`-bundle probe.
