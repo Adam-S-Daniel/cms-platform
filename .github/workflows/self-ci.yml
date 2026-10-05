@@ -197,7 +197,8 @@ jobs:
 
       # The RUM include renders through real Liquid (#517), and fixture
       # exclusion builds a real Jekyll site with sitemap generation (#531), and
-      # the layout's head builds through the real jekyll-seo-tag (#654).
+      # the layout's head (#654) and share image (#655) build through the real
+      # jekyll-seo-tag.
       - name: Install theme spec dependencies
         run: |
           gem install liquid --version 4.0.4 --no-document
