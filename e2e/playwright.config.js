@@ -148,6 +148,10 @@ const PLATFORM_META_SPECS = [
   "entry-status-model-progress.test.js",
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
+  // #642 — vm-sandbox posts-list-enhance.js and native-preview-href.js SOURCE
+  // on a preview admin; same reason as the entries above.
+  "posts-list-preview-host.test.js",
+  "check-for-preview-preview-only.test.js",
   "slug-pin.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
