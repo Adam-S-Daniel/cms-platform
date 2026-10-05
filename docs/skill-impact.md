@@ -6,7 +6,7 @@ The rejected ones are the reason the file exists: git history records what
 landed, but nothing records what was tried and turned down, so the next
 session re-derives and re-proposes it. An approach already ruled out is the
 expensive thing to lose. (Convention defined in skills-evals' `DESIGN.md`,
-"Scaling to the registry", and copied from agentskills'
+"Scaling to the registry", and copied from adam-agentskills'
 `docs/skill-impact.md`; the underlying evidence — a proposal audit trail is
 what stops failed abstractions being re-proposed — is WikiSkill,
 arXiv:2608.27454.)
@@ -42,6 +42,27 @@ Entries before 2026-10-04 predate this file and live only in git history —
 no backfill is planned; the file adds the fields git does not capture.
 
 ---
+
+## 2026-10-05 — cms-platform/test-canary — edit
+
+- Motivation: the skill cited closed skills-evals issue #17 as where its propagation probe would be built; #17 built arms against the registry's own bundle only, and no issue tracks a `cms-platform`-bundle probe.
+- Change: the description and body now say the probe is not built and untracked, and link #17 only as what it did build.
+- Eval: exempt (DESIGN.md non-coverage table)
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/consumer-repo-provisioning — edit
+
+- Motivation: the install line named the retired `agentskills` marketplace; the live registry marketplace is `adam-agentskills`.
+- Change: `cms-platform@agentskills` is now `cms-platform@adam-agentskills`.
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/github-actions-sha-pinning — edit
+
+- Motivation: the skill named the retired `agentskills` marketplace as the bundle's home.
+- Change: now `adam-agentskills`.
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
 
 ## 2026-10-05 — cms-platform/code-quality — edit
 

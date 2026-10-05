@@ -331,7 +331,7 @@ jobs:
           npx playwright test --project=chromium-light --reporter=line "${specs[@]}"
 
   # ── 4. claude plugin validate — this repo's own plugin ROOT ──────────────
-  # This repo's ROOT is a plugin root: `agentskills` publishes `cms-platform`
+  # This repo's ROOT is a plugin root: `adam-agentskills` publishes `cms-platform`
   # as a FEDERATED marketplace entry sourced straight from here, so nothing in
   # that repo can see these manifests or these skills — if this workflow
   # doesn't check them, nothing does (see e2e/plugin-manifests.test.js's

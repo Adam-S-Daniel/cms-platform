@@ -1,17 +1,17 @@
 // @lane: local — pure-fs lint (no browser, no build, no network) over this
 // repo's TWO plugin manifests and the skills they publish.
 //
-// WHY THIS LINT LIVES HERE AND NOT IN `agentskills`. `skills/` ships as a
-// FEDERATED bundle in the `agentskills` marketplace: the marketplace ENTRY
+// WHY THIS LINT LIVES HERE AND NOT IN `adam-agentskills`. `skills/` ships as a
+// FEDERATED bundle in the `adam-agentskills` marketplace: the marketplace ENTRY
 // lives in that repo, but its source is
 // `{"source":"github","repo":"Adam-S-Daniel/cms-platform"}` with NO
 // subdirectory path — so THIS repo's root is the plugin root, and the
 // manifests plus every `skills/<name>/SKILL.md` are files only this repo can
-// see. `agentskills` validates its own bundles' manifests in its own CI and
+// see. `adam-agentskills` validates its own bundles' manifests in its own CI and
 // structurally cannot reach these. If this repo doesn't lint them, nothing
 // does: both repos stay green while the pair drifts.
 //
-// THE TWO-MANIFEST MODEL (mirrors the fleet shape in `agentskills`)
+// THE TWO-MANIFEST MODEL (mirrors the fleet shape in `adam-agentskills`)
 //   .claude-plugin/plugin.json   Claude Code
 //   plugin.json  (repo root)     Agent Plugins 1.0.0 — Codex >= 0.147.0,
 //                                VS Code, Cursor, Copilot
@@ -21,7 +21,7 @@
 // carried twice, by hand — a standing drift hazard: bump one, forget the
 // other, and the client reading the stale copy reports the wrong plugin
 // forever. Hence the cross-check below, which is the same contract
-// `agentskills`' scripts/check_agent_plugins.py enforces for its own bundles.
+// `adam-agentskills`' scripts/check_agent_plugins.py enforces for its own bundles.
 //
 // WHY `version` IS PRESENT AT ALL, AND WHAT KEEPS IT HONEST. A manifest with
 // no `version` is the single warning that makes `claude plugin validate
@@ -40,7 +40,7 @@
 // cap, are the two defects that reached a consumer PAST a green CI. Neither is
 // visible from the manifests, so they are locked here alongside them.
 //
-// WHY THIS FILE ALSO SCHEMA-VALIDATES THE ROOT MANIFEST. `agentskills`'
+// WHY THIS FILE ALSO SCHEMA-VALIDATES THE ROOT MANIFEST. `adam-agentskills`'
 // scripts/check_agent_plugins.py prints, for this bundle: "federated from
 // Adam-S-Daniel/cms-platform — its Agent Plugins manifests are validated by
 // that repo's own CI, not here." That sentence is a PROMISE, and this file is
@@ -104,7 +104,7 @@ const DESCRIPTION_MAX = 1024;
 //               agent-plugins-spec/main/schemas/1.0.0/plugin.schema.json
 //   size        1805 bytes
 //   sha256      0a4aad95ce337878ad38802ebf0daa3fde76abe3f65400c86bcbb1ec0b3ab883
-//   retrieved   2026-08-14, byte-for-byte from agentskills'
+//   retrieved   2026-08-14, byte-for-byte from agentskills' (now archived)
 //               schemas/agent-plugins-1.0.0-plugin.schema.json (same digest),
 //               which is where the provenance above was established.
 //
@@ -113,7 +113,7 @@ const DESCRIPTION_MAX = 1024;
 // today — and a pure-fs lint must not acquire a network dependency. JSON has no
 // comment syntax, so the provenance lives here and SCHEMA_SHA256 turns it into
 // an assertion: tamper with the vendored bytes and the run FAILS rather than
-// validating against something nobody reviewed. Same posture as agentskills'
+// validating against something nobody reviewed. Same posture as adam-agentskills'
 // checker, deliberately — a swapped schema is the one way this whole check
 // could be made to pass while asserting nothing.
 const SCHEMA_FILE = path.join(__dirname, "fixtures", "agent-plugins-1.0.0-plugin.schema.json");
@@ -366,7 +366,7 @@ test.describe("plugin manifests: this repo is a publishable federated bundle", (
       expect(
         doc.name,
         `${label}: 'name' must be "${BUNDLE_NAME}" — it has to equal the marketplace entry's ` +
-          `name in agentskills, which is also the /${BUNDLE_NAME}:<skill> prefix editors type.`,
+          `name in adam-agentskills, which is also the /${BUNDLE_NAME}:<skill> prefix editors type.`,
       ).toBe(BUNDLE_NAME);
     }
 
@@ -431,7 +431,7 @@ test.describe("plugin manifests: this repo is a publishable federated bundle", (
 
     expect(
       agentPluginsProblems(root.doc, schema),
-      `${root.label} must satisfy Agent Plugins 1.0.0. This is the check agentskills' ` +
+      `${root.label} must satisfy Agent Plugins 1.0.0. This is the check adam-agentskills' ` +
         `check_agent_plugins.py DELEGATES here — it prints "federated from ` +
         `${BUNDLE_REPO} — its Agent Plugins manifests are validated by that repo's own CI, ` +
         `not here", and structurally cannot reach this file. \`claude plugin validate\` does ` +
@@ -443,7 +443,7 @@ test.describe("plugin manifests: this repo is a publishable federated bundle", (
   // mutating the REAL shipping manifest so a case can never drift away from the
   // document it is meant to protect. Every one of these ships GREEN without the
   // schema check above; four of them are the reviewer's original demonstrations,
-  // and `category` + `defaultEnabled` are the exact two keys the agentskills
+  // and `category` + `defaultEnabled` are the exact two keys the adam-agentskills
   // marketplace ENTRY for this bundle carries — copy-paste is the likely
   // mistake, and the closed schema forbids them here.
   //

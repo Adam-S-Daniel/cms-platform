@@ -452,7 +452,7 @@ const PLATFORM_META_SPECS = [
   // v0.1.83 — the federated-bundle lint: reads this repo's PLUGIN ROOT (the
   // root plugin.json + .claude-plugin/plugin.json manifests, the vendored
   // Agent Plugins schema under e2e/fixtures/, and every skills/<name>/SKILL.md).
-  // A consumer ships none of that — skills are installed from the agentskills
+  // A consumer ships none of that — skills are installed from the adam-agentskills
   // marketplace, never mirrored into a site — so it is platform-internal,
   // self-CI only. (It also self-skips on SITE_ROOT; this registration is the
   // belt to that spec's braces, and is what the recurrence guard demands.)

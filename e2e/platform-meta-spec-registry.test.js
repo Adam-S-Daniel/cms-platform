@@ -223,7 +223,7 @@ function allWorkflowsDirJoinsAreSiteRootRooted(rawSrc) {
 
 // ── PLUGIN-ROOT (v0.1.83): the federated-bundle surface ──────────────────
 //
-// The repo ROOT is a plugin root — `agentskills` publishes `cms-platform` as a
+// The repo ROOT is a plugin root — `adam-agentskills` publishes `cms-platform` as a
 // FEDERATED marketplace entry whose source names no subdirectory, so the two
 // manifests and `skills/` are read from here. A spec that reads that surface is
 // platform-internal by the registry's own rule (a consumer installs skills from
@@ -564,7 +564,7 @@ test.describe("#16 PLATFORM_META_SPECS recurrence guard", () => {
     expect(
       platformSignals(stripComments(claudeManifestRead), claudeManifestRead),
       "a spec that reads .claude-plugin/plugin.json reads the PLUGIN ROOT — a surface a " +
-        "consumer never ships (skills install from the agentskills marketplace) — so it must " +
+        "consumer never ships (skills install from the adam-agentskills marketplace) — so it must " +
         "carry the plugin-root signal and be registered.",
     ).toContain("plugin-root");
 

@@ -10,7 +10,7 @@
  * leaves — "is this one token shaped like a path / a secret name" — which
  * is a lexical question about a string the parser already isolated.
  *
- * Precision rule (agentskills' scripts/check_skills.py, widened by #408 to
+ * Precision rule (adam-agentskills' scripts/check_skills.py, widened by #408 to
  * code spans): only a token inside a fenced block, an indented code block or
  * a backtick span can FAIL the build. A path-shaped word in plain prose is
  * LISTED, never failed: prose mentions another repo's file, an example, or a

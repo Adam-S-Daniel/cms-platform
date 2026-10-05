@@ -9,7 +9,7 @@ How platform changes reach sites, and how site-side improvements get back.
 | Reusable workflow `uses:@<tag>` pins | **`platform-bump`** (Dependabot's `github-actions` ecosystem `ignore`s every cms-platform ref as of #244 — see below) |
 | `cms-platform-theme` gem (layouts/includes/assets/plugins + Decap render hook + **admin UI** `theme/admin`) | **`platform-bump`** (Dependabot's `bundler` ecosystem `ignore`s this gem as of #242 — see below) |
 | **EVERY** version ref in ONE PR — `platform_ref:` inputs + `platform.lock`, the `uses:@<tag>` pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:`, and any composite `@<sha>` pin — plus seeding any workflow caller the release newly made platform-dictated | **`platform-bump`** reusable workflow — an **atomic single-version bump** (#13) that also seeds newly-dictated workflow callers so workflow-SET parity (#54) passes too. Checks out with the caller PAT so the workflow-file push is authorised |
-| Skills (`skills/`) | **not a down-sync at all** — published as a federated bundle in the `agentskills` marketplace; nothing is copied into a consumer (see "Skills" below) |
+| Skills (`skills/`) | **not a down-sync at all** — published as a federated bundle in the `adam-agentskills` marketplace; nothing is copied into a consumer (see "Skills" below) |
 | AWS infra templates | re-run `infrastructure/*/deploy.sh` with the new templates |
 
 Cut a release on `cms-platform` (Actions → **Cut release**, `workflow_dispatch`
@@ -180,11 +180,11 @@ tag → it flows back down to all sites. Site **content/branding/docs never sync
 place one is authored or edited. They do **not** travel down any of the paths
 above:
 
-- They are published as a **federated bundle in the `agentskills` marketplace**
-  (`Adam-S-Daniel/agentskills`), which resolves the `cms-platform` bundle from
+- They are published as a **federated bundle in the `adam-agentskills` marketplace**
+  (`Adam-S-Daniel/adam-agentskills`), which resolves the `cms-platform` bundle from
   this repo's own plugin manifest rather than holding a mirror of it.
 - A **durable machine** installs it once with
-  `/plugin install cms-platform@agentskills`; skills are bundle-namespaced, so
+  `/plugin install cms-platform@adam-agentskills`; skills are bundle-namespaced, so
   they invoke as `/cms-platform:<skill>`.
 - On an **ephemeral surface** — a Claude Code cloud session, a CI runner —
   that install does not persist, so the delivery channel is the registry's

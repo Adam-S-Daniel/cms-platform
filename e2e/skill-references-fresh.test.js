@@ -8,7 +8,7 @@
 // so the instrument is this lint, in the repo where the cited things live.
 //
 // For every skills/<name>/SKILL.md it extracts, from code spans, fenced and
-// indented code blocks only (agentskills' check_skills.py precision rule —
+// indented code blocks only (adam-agentskills' check_skills.py precision rule —
 // prose mentions are LISTED, never failed):
 //   path      `scripts/x.sh`, `.github/workflows/y.yml`, … → exists here (a
 //             `.github/workflows/<x>` is the PLATFORM file: the same-named
