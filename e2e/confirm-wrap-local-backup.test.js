@@ -31,7 +31,7 @@ const BACKUP_STRING = "A local backup was recovered for this entry, would you li
  * Boot a fresh sandbox + load the shim into it.
  * @param {*} nativeReturn value the fake NATIVE confirm returns for delegated messages.
  */
-function bootShim(nativeReturn, hostname) {
+function bootShim(nativeReturn, hostname, titleValue) {
   const nativeCalls = [];
   const appended = [];
   const timers = [];
@@ -50,6 +50,7 @@ function bootShim(nativeReturn, hostname) {
       return fn;
     },
     document: {
+      querySelector: (sel) => (titleValue === undefined || sel !== 'input[id^="title-field"]' ? null : { value: titleValue }),
       createElement: () => ({
         textContent: "",
         setAttribute: () => {},
@@ -103,9 +104,9 @@ test.describe("confirm-wrap-local-backup.js (unit)", () => {
 
   test("any OTHER message delegates to the captured original confirm and returns ITS value (true)", () => {
     const { confirm, nativeCalls, appended } = bootShim(true);
-    const result = confirm("Are you sure you want to delete this published entry?");
+    const result = confirm("Are you sure you want to unpublish this entry?");
     expect(result).toBe(true); // native's return value, passed through
-    expect(nativeCalls).toEqual(["Are you sure you want to delete this published entry?"]);
+    expect(nativeCalls).toEqual(["Are you sure you want to unpublish this entry?"]);
     // No toast for a delegated message.
     expect(appended).toHaveLength(0);
   });
@@ -124,6 +125,51 @@ test.describe("confirm-wrap-local-backup.js (unit)", () => {
     // The second run must NOT re-wrap (else origConfirm would become the
     // first wrapper and the backup string could double-toast).
     expect(ctx.sandbox.window.confirm).toBe(confirmAfterFirst);
+  });
+});
+
+// #649: the delete-published and leave-page confirms are rewritten for the
+// owner, then shown through the ORIGINAL native confirm (value passed through).
+test.describe("plain-language confirm rewrites (#649)", () => {
+  const DELETE = "Are you sure you want to delete this published entry?";
+  const DELETE_UNSAVED =
+    "Are you sure you want to delete this published entry, as well as your unsaved changes from the current session?";
+  const LEAVE = "Are you sure you want to leave this page?";
+  const host = { destination: () => "example.com" };
+
+  test("delete names the entry and says it leaves the site", () => {
+    const { confirm, nativeCalls } = bootShim(true, host, "My first post");
+    expect(confirm(DELETE)).toBe(true);
+    expect(nativeCalls).toEqual(["Delete “My first post”? It will be removed from example.com."]);
+  });
+
+  test("delete with unsaved changes also warns that they are lost", () => {
+    const { confirm, nativeCalls } = bootShim(false, host, "My first post");
+    expect(confirm(DELETE_UNSAVED)).toBe(false); // Cancel passes through
+    expect(nativeCalls).toHaveLength(1);
+    expect(nativeCalls[0]).toContain("“My first post”");
+    expect(nativeCalls[0]).toContain("example.com");
+    expect(nativeCalls[0]).toContain("not saved yet will be lost");
+  });
+
+  test("delete falls back to generic words with no title or destination", () => {
+    const { confirm, nativeCalls } = bootShim(true, undefined, "");
+    confirm(DELETE);
+    expect(nativeCalls).toEqual(["Delete this entry? It will be removed from the site."]);
+  });
+
+  test("leave-page mentions unsaved changes", () => {
+    const { confirm, nativeCalls } = bootShim(true, host);
+    expect(confirm(LEAVE)).toBe(true);
+    expect(nativeCalls).toHaveLength(1);
+    expect(nativeCalls[0]).toMatch(/not saved yet/);
+    expect(nativeCalls[0]).toMatch(/lose them/);
+  });
+
+  test("rewritten texts avoid developer vocabulary", () => {
+    const { confirm, nativeCalls } = bootShim(true, host, "A post");
+    for (const m of [DELETE, DELETE_UNSAVED, LEAVE]) confirm(m);
+    for (const t of nativeCalls) expect(t).not.toMatch(/(PR|branch|Decap|E2E|specs?|plugin|CI)/i);
   });
 });
 

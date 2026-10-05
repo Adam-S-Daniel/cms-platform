@@ -532,6 +532,11 @@
       ".cms-ple-meta a{color:#0969da;text-decoration:none;}",
       ".cms-ple-meta a:hover{text-decoration:underline;}",
       ".cms-ple-fixture-tag{color:#8250df;font-weight:600;}",
+      // The "Advanced" disclosure keeps developer-facing links (GitHub diffs,
+      // build logs) out of the owner's way (#649).
+      ".cms-ple-advanced{display:inline-block;}",
+      ".cms-ple-advanced>summary{cursor:pointer;color:#57606a;}",
+      ".cms-ple-advanced>span{display:inline-flex;flex-wrap:wrap;gap:0.3rem 0.9rem;margin-left:0.5rem;}",
       "#cms-ple-bar{display:flex;flex-wrap:wrap;align-items:center;",
       "gap:0.75rem;margin:0 0 0.6rem;padding:0.5rem 0.7rem;",
       "border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;",
@@ -605,25 +610,40 @@
     return UNKNOWN_STATE_WORD;
   }
 
+  // A small disclosure for links meant for developers. `inner` is
+  // already-escaped markup built by the caller.
+  function advancedHTML(inner) {
+    return (
+      '<details class="cms-ple-advanced" data-testid="cms-ple-advanced">' +
+      "<summary>Advanced</summary><span>" +
+      inner +
+      "</span></details>"
+    );
+  }
+
   function publishingSummaryHTML(deploy, destination) {
     var copy = publishingBarCopy();
     if (!deploy) return '<span style="color:#8c959f">' + copy.signedOut + "</span>";
     var word = publishingStateWord(deploy.state);
     var stateWord = word;
+    var advanced = "";
     // The URL is whatever a workflow wrote as the status's log_url or
     // target_url; only an https: one becomes a link (no javascript:, no
     // http:), and anything else leaves the words plain. The authority may
     // not carry userinfo (`https://user:pw@host/`), which can disguise the
     // real host; `\` is excluded because browsers read it as `/`.
     if (typeof deploy.url === "string" && SAFE_LINK_URL.test(deploy.url)) {
-      stateWord =
-        '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">' + stateWord + "</a>";
+      // The link goes to a build log, not a page the owner can use, so it
+      // sits behind "Advanced" and the words stay plain (#649).
+      advanced = advancedHTML(
+        '<a href="' + esc(deploy.url) + '" target="_blank" rel="noopener">View technical details</a>',
+      );
     }
     // "unknown 5m ago" would read as if the status became unknown then; the
     // time is only when GitHub last reported something.
     var ago = timeAgo(deploy.at);
     var when = !ago ? "" : word === UNKNOWN_STATE_WORD ? " (last reported " + ago + ")" : " " + ago;
-    return esc(destination) + " " + stateWord + esc(when);
+    return esc(destination) + " " + stateWord + esc(when) + advanced;
   }
 
   function ensureBar(cards, fixtureCount) {
@@ -646,8 +666,8 @@
     var copy = publishingBarCopy();
     var nextHTML =
       '<strong style="color:#24292f">Posts</strong>' +
-      '<label title="The E2E canary fixtures are hidden by default. ' +
-      'Specs that need them navigate by direct URL.">' +
+      '<label title="Test posts the site uses to check itself. ' +
+      'They are hidden unless you tick this box.">' +
       '<input type="checkbox" id="cms-ple-show-fixtures"' +
       (showFixtures() ? " checked" : "") +
       " /> Show automated-test posts (" +
@@ -825,21 +845,20 @@
           "</span>",
       );
     }
+    // Developer links (GitHub change views, the commit behind "edited") are
+    // collected here and rendered once, behind "Advanced" (#649).
+    var advancedLinks = [];
     if (le && le.date) {
       bits.push(
-        '<span title="Last commit to ' +
-          esc(card.filePath) +
-          ' on main">edited ' +
-          (le.url
-            ? '<a href="' +
-              esc(le.url) +
-              '" target="_blank" ' +
-              'rel="noopener">' +
-              esc(timeAgo(le.date)) +
-              "</a>"
-            : esc(timeAgo(le.date))) +
+        '<span title="When this post was last changed">edited ' +
+          esc(timeAgo(le.date)) +
           "</span>",
       );
+      if (le.url) {
+        advancedLinks.push(
+          '<a href="' + esc(le.url) + '" target="_blank" rel="noopener">view last change on GitHub</a>',
+        );
+      }
     }
     // "view published changes" — the GitHub diff (Files-changed tab)
     // of the PR whose merge put the current live version of this post
@@ -859,15 +878,12 @@
     // this file exist on main" is the accurate "is it live" test.
     var publishedPr = le && le.pr;
     if (publishedPr) {
-      bits.push(
+      advancedLinks.push(
         '<a href="' +
           esc(publishedPr.url) +
-          '/files" target="_blank" rel="noopener" title="GitHub diff ' +
-          "(Files changed) of the merged PR #" +
-          esc(publishedPr.number) +
-          ' that published the version on ' +
+          '/files" target="_blank" rel="noopener" title="Opens GitHub to show exactly what changed when this version went live on ' +
           esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") +
-          '">view published changes</a>',
+          '">view published changes on GitHub</a>',
       );
     }
 
@@ -893,29 +909,25 @@
             window.CMS_APEX +
             "/blog/" +
             esc(urlSlug(card.slug)) +
-            '/" target="_blank" rel="noopener" title="Per-PR preview ' +
-            "environment for the unmerged draft (open PR #" +
-            esc(pr.number) +
-            ')">preview draft ↗</a>',
+            '/" target="_blank" rel="noopener" title="Opens a private preview of ' +
+            'your unpublished changes">See how your draft will look ↗</a>',
         );
       } else {
         bits.push(
-          '<span style="color:#8c959f" title="Set Published to ON to ' +
-            "render this draft at preview-pr" + esc(pr.number) + "." + esc(window.CMS_APEX) +
-            " — that address uses the same publish rules as " +
-            esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") + ", so a " +
-            'Published-OFF entry is built nowhere">draft — Published OFF</span>',
+          '<span style="color:#8c959f" title="Turn Published ON to preview this draft. ' +
+            "A preview follows the same rules as " +
+            esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") + ", so an entry " +
+            'with Published OFF is not shown anywhere">draft — Published OFF</span>',
         );
       }
-      bits.push(
+      advancedLinks.push(
         '<a href="' +
           esc(pr.url) +
-          '/files" target="_blank" rel="noopener" title="GitHub diff ' +
-          "(Files changed) of the open editorial-workflow PR #" +
-          esc(pr.number) +
-          '">view draft changes</a>',
+          '/files" target="_blank" rel="noopener" title="Opens GitHub to show exactly ' +
+          'what changed in your draft">view draft changes on GitHub</a>',
       );
     }
+    if (advancedLinks.length) bits.push(advancedHTML(advancedLinks.join("")));
     var next = bits.join("");
     // eslint-disable-next-line no-unsanitized/property -- every dynamic value pushed into `bits` (PR numbers, URLs, slugs, timestamps) is run through the HTML-escaping `esc()` helper; the rest is static markup.
     if (meta.innerHTML !== next) meta.innerHTML = next;
