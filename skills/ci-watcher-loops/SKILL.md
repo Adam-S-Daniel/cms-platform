@@ -37,23 +37,31 @@ done
 ## The fix: split the assignment
 
 ```bash
-# CORRECT — silence the noisy command's stdout, then capture only what you need.
-gh workflow run <workflow>.yml --ref main > /dev/null
-sleep 5
-RUN=$(gh run list --workflow=<workflow>.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+# CORRECT — capture only the dispatch's own output. Since gh 2.87.0, `gh workflow run`
+# prints the created run's URL (non-TTY: that URL alone), so the run id comes from
+# the dispatch itself: no second read, and no race with other runs of the workflow.
+SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # only for the fallback below
+OUT=$(gh workflow run <workflow>.yml --ref main)
+RUN=$(sed -n 's#^https://.*/actions/runs/\([0-9][0-9]*\)$#\1#p' <<<"$OUT")
+
+# Fallback, only when no run URL was printed (gh < 2.87.0, or a server that returns
+# no run details). Never `gh run list --limit 1` bare: it returns the newest run of
+# the workflow, which can be another actor's. Filter to this dispatch, and accept
+# only an unambiguous match — an empty RUN means "not found", not "guess".
+if [ -z "$RUN" ]; then
+  sleep 5
+  RUN=$(gh run list --workflow=<workflow>.yml --event workflow_dispatch --branch main \
+          --user "$(gh api user --jq .login)" --created ">=$SINCE" \
+          --limit 2 --json databaseId --jq 'if length == 1 then .[0].databaseId else empty end')
+fi
+[ -n "$RUN" ] || { echo "no run id for this dispatch" >&2; exit 1; }
 
 until [ "$(gh run view "$RUN" --json status --jq .status 2>/dev/null)" = "completed" ]; do
   sleep 60
 done
 ```
 
-Or, equivalently:
-
-```bash
-gh workflow run <workflow>.yml --ref main 1> /dev/null     # discard the URL line
-sleep 5
-RUN=$(gh run list --workflow=<workflow>.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-```
+The fallback still cannot tell apart two dispatches of the same workflow by the same account inside the window (it then returns nothing rather than the wrong run); upgrade gh rather than lean on it.
 
 **Pre-flight check**: before wiring a chain into a long polling loop, `echo "$RUN"` and confirm it's a single value of the expected shape. Five seconds at write time saves hours of silent failure.
 
@@ -70,9 +78,10 @@ while true; do
   if [ "$s" = "MERGED" ]; then echo "STEP1_MERGED"; break; fi
   sleep 60
 done
-gh workflow run cms-publish-loop-host.yml --ref main > /dev/null 2>&1
-sleep 6
-RUN=$(gh run list --workflow=cms-publish-loop-host.yml --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+OUT=$(gh workflow run cms-publish-loop-host.yml --ref main 2>/dev/null)
+RUN=$(sed -n 's#^https://.*/actions/runs/\([0-9][0-9]*\)$#\1#p' <<<"$OUT")
+# No URL (gh < 2.87.0)? Use the filtered fallback from "The fix" here.
+if [ -z "$RUN" ]; then echo "STEP2_NO_RUN_ID"; exit 1; fi
 echo "STEP2_TRIGGERED run=$RUN"
 while true; do
   s=$(gh run view "$RUN" --json status --jq .status 2>/dev/null || echo "")
@@ -124,7 +133,7 @@ Verified 2026-09-30 on Claude Code 2.1.285: a default-timeout Bash watcher (`sle
 
 - **Don't use `gh run watch`** in an unattended watcher: it prints progress to stdout but doesn't exit until the run finishes, making it hard to chain into the rest of a watcher.
 - **Don't poll faster than 30 s** against the GitHub API. Even 30 s is borderline for a watcher that runs concurrently with other agent work.
-- **Don't rely on `gh workflow run`'s exit code** to tell you the run started. It only confirms the dispatch was accepted; the run might be queued, skipped (recursion guard), or rejected. Always poll `gh run list --limit 1` after a 5 – 8 s wait to confirm the run actually appeared.
+- **Don't rely on `gh workflow run`'s exit code** to tell you the run started. It only confirms the dispatch was accepted; the run might be queued, skipped (recursion guard), or rejected. Take the run id from the URL it prints (gh ≥ 2.87.0) — that is the run it created. Without a URL, find the run with the filtered `gh run list` in [the fix](#the-fix-split-the-assignment) after a 5 – 8 s wait, never a bare `gh run list --limit 1`, which can return another actor's run.
 - **Don't put critical state in chained `$(...)` captures** without testing first. Variable pollution from `&&`-chained commands is the #1 cause of silent watcher hangs in this repo.
 
 ## Reference
