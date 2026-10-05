@@ -42,6 +42,24 @@ globalThis.fetch = async (url, init = {}) => {
     case "putnetwork":
       if (method === "GET") return Response.json({ content: file, sha: "abc123" });
       throw new TypeError("fetch failed: " + marker);
+    // #689: a stale canary tag on main. "tagsopenpr" already has its
+    // removal PR open; "tagsremove500" fails opening one.
+    case "tagsopenpr":
+    case "tagsremove500":
+      if (method === "GET" && url.includes("/contents/_tags?")) {
+        return Response.json([{ type: "file", name: "e2e-tags-canary-1000000000000.md" }]);
+      }
+      if (method === "GET" && url.includes("/pulls?")) {
+        return Response.json(
+          process.env.FETCH_SCENARIO === "tagsopenpr"
+            ? [{ number: 1, head: { ref: "cms/e2e-fixture/remove-e2e-tags-canary-1000000000000-x" } }]
+            : [],
+        );
+      }
+      if (method === "GET" && !url.includes("/git/refs/")) {
+        return new Response(body, { status: 404, statusText: "Not Found" });
+      }
+      return new Response(body, { status: 500, statusText: "Server Error" });
     default:
       throw new Error("unknown FETCH_SCENARIO");
   }
@@ -53,6 +71,8 @@ function run(scenario, extraEnv = {}) {
   try {
     const stub = path.join(dir, "fetch-stub.js");
     fs.writeFileSync(stub, FETCH_STUB);
+    const outputFile = path.join(dir, "github-output");
+    fs.writeFileSync(outputFile, "");
     const res = spawnSync("bash", [SCRIPT], {
       encoding: "utf8",
       env: {
@@ -63,10 +83,15 @@ function run(scenario, extraEnv = {}) {
         CMS_REPO: "example-owner/example-site",
         FETCH_SCENARIO: scenario,
         MARKER,
+        GITHUB_OUTPUT: outputFile,
         ...extraEnv,
       },
     });
-    return { code: res.status, out: `${res.stdout}${res.stderr}` };
+    return {
+      code: res.status,
+      out: `${res.stdout}${res.stderr}`,
+      output: fs.readFileSync(outputFile, "utf8"),
+    };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -109,5 +134,47 @@ test.describe("reset-orphaned-canary.sh logs no API body or error message", () =
     expect(out).not.toContain(MARKER);
     expect(out).not.toContain("fetch failed");
     expect(out).not.toMatch(/^\s+at /m);
+  });
+});
+
+// #689: on main the script also sweeps _tags/ for leftover e2e tags and
+// reports the count as the step output the host loop fails on.
+test.describe("reset-orphaned-canary.sh leftover e2e tag output (#689)", () => {
+  test("no _tags directory reports zero", () => {
+    const { code, output } = run("http404");
+    expect(code).toBe(0);
+    expect(output).toBe("leftover_e2e_tags=0\n");
+  });
+
+  test("a stale canary tag whose removal PR is open still reports one", () => {
+    const { code, out, output } = run("tagsopenpr");
+    expect(code).toBe(0);
+    expect(output).toBe("leftover_e2e_tags=1\n");
+    expect(out).toContain("_tags/e2e-tags-canary-1000000000000.md@main");
+    expect(out).toContain("a removal PR is already open");
+  });
+
+  test("a failed removal reports error and logs only status and type", () => {
+    const { code, out, output } = run("tagsremove500");
+    expect(code).toBe(0);
+    expect(output).toBe("leftover_e2e_tags=error\n");
+    expect(out).toContain("leftover e2e tag check errored: HTTP 500 Error");
+    expect(out).not.toContain(MARKER);
+    expect(out).not.toContain("api.github.com");
+    expect(out).not.toMatch(/^\s+at /m);
+  });
+
+  test("a network error on the listing reports error and logs only its type", () => {
+    const { code, out, output } = run("network");
+    expect(code).toBe(0);
+    expect(output).toBe("leftover_e2e_tags=error\n");
+    expect(out).toContain("leftover e2e tag check errored: TypeError");
+    expect(out).not.toContain(MARKER);
+  });
+
+  test("a preview branch run does not sweep tags", () => {
+    const { code, output } = run("http404", { CANARY_RESET_BRANCH: "example-branch" });
+    expect(code).toBe(0);
+    expect(output).toBe("");
   });
 });
