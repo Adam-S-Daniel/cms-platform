@@ -149,6 +149,8 @@ const PLATFORM_META_SPECS = [
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
   "slug-pin.test.js",
+  // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
+  "editor-component-image.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",
