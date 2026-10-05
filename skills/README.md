@@ -33,8 +33,9 @@ that repo's own `skills.lock` names, so a repo receives this bundle only once it
 lock declares `cms-platform` as a source (pinned to an immutable commit SHA, with
 a sha256 per skill, because fetching instruction text at session start is a
 supply-chain surface). The registry's own `skills.lock` deliberately stays
-`adam`-only and never carries these skills, and **no consuming repo has declared
-this source yet** — repo-side, the marketplace entry is what exists today. The
+`adam`-only and never carries these skills; the consuming repos declare this
+source in their own locks (adamdaniel.ai and jodidaniel.com each list
+`Adam-S-Daniel/cms-platform` in `skills.lock`). The
 hook is a no-op on a durable machine — where the marketplace install already won
 — and it always exits 0, downgrading any failure to a notice naming the knob to
 fix.

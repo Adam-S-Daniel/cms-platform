@@ -47,6 +47,12 @@
 //   - the deploy call sends the minified template inline (no S3), with
 //     --no-execute-changeset and the complete parameter list, defaults
 //     unchanged (a wrong default deletes DNS records or replaces resources).
+//   - AdminCspMode: an unset ADMIN_CSP_MODE keeps the deployed stack's value
+//     (a redeploy without it used to put an enforcing site back on
+//     report-only), and falls back to report-only only for a new stack or one
+//     without the parameter; an explicit value always wins; anything but
+//     enforce or report-only, explicit or deployed, stops before the deploy,
+//     and so does a describe-stacks failure other than "does not exist".
 //
 // SEALED: PATH is a stub directory plus a private bin of symlinks to the few
 // tools deploy.sh needs, taken from /usr/bin or /bin only; the environment is
@@ -127,6 +133,13 @@ case "$*" in
       *) printf 'Waiting for changeset to be created..\\nChangeset created successfully. Run the following command to review changes:\\naws cloudformation describe-change-set --change-set-name %s\\n' "$STUB_ARN" ;;
     esac ;;
   "cloudformation describe-change-set "*) printf '%s\\n' "$(<"$STUB_CHANGESET_JSON")" ;;
+  "cloudformation describe-stacks "*"ParameterKey=='AdminCspMode'"*)
+    case "\${STUB_DEPLOYED_CSP-report-only}" in
+      missing-stack) echo "An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id example does not exist" >&2; exit 254 ;;
+      denied) echo "An error occurred (AccessDenied) when calling the DescribeStacks operation: User: arn:aws:iam::000000000000:user/example is not authorized" >&2; exit 254 ;;
+      no-param) echo "" ;;
+      *) echo "\${STUB_DEPLOYED_CSP-report-only}" ;;
+    esac ;;
   "cloudformation describe-stacks "*"Stacks[0].StackStatus"*) echo "\${STUB_STACK_STATUS-UPDATE_COMPLETE}" ;;
   "cloudformation execute-change-set "*) exit 0 ;;
   "cloudformation wait "*) exit 0 ;;
@@ -681,3 +694,72 @@ for (const [status, token] of [
     expect(callsOf(r.calls, "wait")).toEqual([]);
   });
 }
+
+// ── AdminCspMode: an unset ADMIN_CSP_MODE keeps what is deployed ───────────
+const cspQueries = (calls) =>
+  callsOf(calls, "describe-stacks").filter((c) => (flagValue(c, "--query") || "").includes("AdminCspMode"));
+const cspSent = (r) => overrides(callsOf(r.calls, "deploy")[0]).filter((p) => p.startsWith("AdminCspMode="));
+
+test("ADMIN_CSP_MODE unset, deployed stack enforces: enforce is kept, not downgraded", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STUB_DEPLOYED_CSP: "enforce" });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain("Admin CSP mode: enforce (kept from deployed stack)");
+  expect(cspSent(r)).toEqual(["AdminCspMode=enforce"]);
+  const [q] = cspQueries(r.calls);
+  expect(flagValue(q, "--stack-name")).toBe(STACK);
+  expect(flagValue(q, "--region")).toBe("us-east-1");
+  // Read before the change set is created.
+  expect(r.calls.indexOf(q)).toBeLessThan(r.calls.indexOf(callsOf(r.calls, "deploy")[0]));
+});
+
+for (const [name, deployed, reason] of [
+  ["a new stack (describe-stacks: does not exist)", "missing-stack", `stack ${STACK} does not exist yet`],
+  ["a deployed stack without the parameter", "no-param", "the deployed stack has no AdminCspMode parameter"],
+  ["a deployed stack answering None", "None", "the deployed stack has no AdminCspMode parameter"],
+]) {
+  test(`ADMIN_CSP_MODE unset, ${name}: falls back to report-only`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, STUB_DEPLOYED_CSP: deployed });
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain(`Admin CSP mode: report-only (default: ${reason})`);
+    expect(cspQueries(r.calls)).toHaveLength(1);
+    expect(cspSent(r)).toEqual(["AdminCspMode=report-only"]);
+  });
+}
+
+for (const [explicit, deployed] of [
+  ["report-only", "enforce"],
+  ["enforce", "report-only"],
+]) {
+  test(`ADMIN_CSP_MODE=${explicit} over a deployed ${deployed}: the explicit value wins, no lookup`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, ADMIN_CSP_MODE: explicit, STUB_DEPLOYED_CSP: deployed });
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain(`Admin CSP mode: ${explicit} (set by ADMIN_CSP_MODE)`);
+    expect(cspSent(r)).toEqual([`AdminCspMode=${explicit}`]);
+    expect(cspQueries(r.calls)).toEqual([]);
+  });
+}
+
+for (const value of ["Enforce", "enforced", "report_only", "off"]) {
+  test(`ADMIN_CSP_MODE=${value}: refused before any aws call`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, ADMIN_CSP_MODE: value });
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.stderr).toContain(`ADMIN_CSP_MODE=${value} is not enforce or report-only`);
+    expect(r.calls).toEqual([]);
+  });
+}
+
+test("ADMIN_CSP_MODE unset, deployed stack holds an unexpected value: refused before the change set", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STUB_DEPLOYED_CSP: "sideways" });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain("AdminCspMode that is not enforce or report-only");
+  expect(callsOf(r.calls, "deploy")).toEqual([]);
+});
+
+test("ADMIN_CSP_MODE unset, describe-stacks fails for another reason: refused, the CLI's message not echoed", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STUB_DEPLOYED_CSP: "denied" });
+  expect(r.status, r.out).not.toBe(0);
+  expect(r.stderr).toContain(`Could not read the deployed AdminCspMode of stack ${STACK}`);
+  expect(r.stderr).toContain("ADMIN_CSP_MODE");
+  expect(r.out).not.toContain(ACCOUNT_ID);
+  expect(callsOf(r.calls, "deploy")).toEqual([]);
+});

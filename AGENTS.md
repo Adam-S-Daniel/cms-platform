@@ -372,8 +372,9 @@ of the byte compare. → `docs/CONSUMER-COMPATIBILITY.md` before changing
 ## Self-CI lanes
 
 `.github/workflows/self-ci.yml` is this repo's merge gate; with
-`self-secrets-scan.yml` (#126) it is one of only two workflows here that run on
-a plain PR. Six lanes, all REQUIRED, plus `scan / scan` from the secrets scan:
+`self-secrets-scan.yml` (#126) it is one of only two workflows here whose jobs
+run on a plain PR (`self-dependabot-auto-merge.yml` also triggers on every PR,
+but its job is a no-op for anyone but Dependabot). Six lanes, all REQUIRED, plus `scan / scan` from the secrets scan:
 **actionlint**, **ruby-theme-specs**, **node-unit-lints** (pure-fs
 `e2e/*.test.js`, DENY list), **plugin-validate** (NON-STRICT deliberately),
 **python-unit-tests** and **cfn-lint** (no `continue-on-error` since #525); the
@@ -411,8 +412,8 @@ before blaming the deploy chain. → `docs/CI-INVARIANTS.md` (and the
   (PR #1883) live on prod, daily editorial-label-audit adopted; a loop
   co-arrival fix (#1892) narrowed the host publish-loop's push trigger so it
   stops evicting prod-mutate from `prod-mutating-loop`.
-- **jodidaniel.com** — consumer 2, org-owned, a SINGLE-PAGE bio: 9 per-section
-  collections (5 folder ones ordered by `weight`, `output:false`; 4 file ones
+- **jodidaniel.com** — consumer 2, org-owned, a SINGLE-PAGE bio: 10 per-section
+  collections (6 folder ones, all `output:false` except `media`; 4 file ones
   reading `_data/*.yml`), `cms.base_collections: []`, and `_data/settings.yml`
   `site_live` (default `false`) keeping prod coming-soon; go-live is jodidaniel
   #26. Its CMS automation runs on a **`CMS_E2E_PAT` repo secret**; the

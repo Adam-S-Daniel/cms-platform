@@ -130,5 +130,4 @@ Verified 2026-09-30 on Claude Code 2.1.285: a default-timeout Bash watcher (`sle
 ## Reference
 
 - The pitfall surfaced on 2026-05-06 while watching `cms-publish-loop-host.yml` after fixes #222 + #227 landed; the chained-capture bug left an agent blind for ~30 minutes.
-- Agent-side memory: `~/.claude/projects/<project>/memory/feedback_chained_bash_capture_pitfall.md`
 - Tooling: `Monitor` (preferred for multi-step), `Bash run_in_background` (preferred for single-event), `TaskStop` to kill a hung watcher. In Claude Code, both watcher tools stop at a time limit — see [Claude Code watchers have a time limit](#claude-code-watchers-have-a-time-limit--size-them-and-re-arm-them).
