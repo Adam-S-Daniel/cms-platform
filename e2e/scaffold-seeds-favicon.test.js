@@ -15,12 +15,64 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const YAML = require("yaml");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const SCAFFOLDER = path.join(REPO_ROOT, "scaffold", "create-site.js");
 const GEM_FAVICON = path.join(REPO_ROOT, "theme", "assets", "favicon.svg");
 const FAVICON_INCLUDE = path.join(REPO_ROOT, "theme", "_includes", "favicon.html");
 const LAYOUTS_DIR = path.join(REPO_ROOT, "theme", "_layouts");
+const ADMIN_TEMPLATE = path.join(REPO_ROOT, "infrastructure", "bootstrap", "template.yaml");
+const ADMIN_SHELLS = [
+  ["theme/admin/index.html", "../assets/favicon.svg"],
+  ["theme/admin/index-local.html", "../assets/favicon.svg"],
+  ["theme/admin/index-test.html", "../assets/favicon.svg"],
+  ["theme/admin/reviews/index.html", "../../assets/favicon.svg"],
+  ["theme/admin/reviews/health.html", "../../assets/favicon.svg"],
+];
+
+const HEAD_LINK_PARSER = String.raw`
+import json
+import sys
+from html.parser import HTMLParser
+
+class HeadLinks(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.in_head = False
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "head":
+            self.in_head = True
+        elif tag == "link" and self.in_head:
+            self.links.append(dict(attrs))
+
+    def handle_endtag(self, tag):
+        if tag == "head":
+            self.in_head = False
+
+parser = HeadLinks()
+with open(sys.argv[1], encoding="utf-8") as source:
+    parser.feed(source.read())
+print(json.dumps(parser.links))
+`;
+
+function adminCspTemplate() {
+  const intrinsic = (name) => {
+    const key = `Fn::${name}`;
+    return [
+      { tag: `!${name}`, resolve: (scalar) => ({ [key]: scalar }) },
+      { tag: `!${name}`, collection: "seq", resolve: (seq) => ({ [key]: seq.toJSON() }) },
+      { tag: `!${name}`, collection: "map", resolve: (map) => ({ [key]: map.toJSON() }) },
+    ];
+  };
+  const tags = [
+    { tag: "!Ref", resolve: (scalar) => ({ Ref: scalar }) },
+    ...["Sub", "If", "GetAtt", "Equals", "Not", "Join", "Select", "Split"].flatMap(intrinsic),
+  ];
+  return YAML.parse(fs.readFileSync(ADMIN_TEMPLATE, "utf8"), { customTags: tags });
+}
 
 test.describe("scaffolder seeds a neutral favicon (#325)", () => {
   let target;
@@ -121,6 +173,33 @@ test.describe("favicon <head> emission is real, not just documented (#325)", () 
       expect(fm[1], `${f}: must declare layout: default to inherit the favicon <head>`).toMatch(
         /^layout:\s*default\s*$/m,
       );
+    }
+  });
+});
+
+test.describe("admin shells load the neutral favicon (#325)", () => {
+  test("every served admin shell links to the shared asset from its own directory", () => {
+    for (const [relativePath, expectedHref] of ADMIN_SHELLS) {
+      const shellPath = path.join(REPO_ROOT, relativePath);
+      expect(fs.existsSync(shellPath), `${relativePath} must exist`).toBe(true);
+      const links = JSON.parse(execFileSync("python3", ["-c", HEAD_LINK_PARSER, shellPath], { encoding: "utf8" }));
+      const icons = links.filter((link) => (link.rel || "").split(/\s+/).includes("icon"));
+      expect(icons, `${relativePath} must declare one icon in <head>`).toHaveLength(1);
+      expect(icons[0].href, `${relativePath} must resolve the shared SVG relative to its URL`).toBe(expectedHref);
+      expect(icons[0].type).toBe("image/svg+xml");
+      expect(path.resolve(path.dirname(shellPath), icons[0].href)).toBe(GEM_FAVICON);
+    }
+  });
+
+  test("admin CSP allows the same-origin favicon under enforced and report-only policies", () => {
+    const template = adminCspTemplate();
+    const headers = template.Resources.AdminResponseHeadersPolicy.Properties.ResponseHeadersPolicyConfig;
+    const enforced = headers.SecurityHeadersConfig.ContentSecurityPolicy.ContentSecurityPolicy["Fn::If"][1]["Fn::Sub"];
+    const reportOnly = headers.CustomHeadersConfig["Fn::If"][2].Items[0].Value["Fn::Sub"];
+    for (const policy of [enforced, reportOnly]) {
+      const imgSrc = policy.split(";").map((part) => part.trim()).find((part) => part.startsWith("img-src "));
+      expect(imgSrc, "admin CSP must have an img-src directive").toBeTruthy();
+      expect(imgSrc.split(/\s+/), "same-origin favicon must be allowed by img-src").toContain("'self'");
     }
   });
 });

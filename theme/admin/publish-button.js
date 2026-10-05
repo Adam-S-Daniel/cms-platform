@@ -51,8 +51,10 @@
  * Publish again after a "Needs attention" — the single most likely second
  * click in the product — would POST a 200 that fires nothing at all, and
  * the button would report success over a publish that never restarted.
- * Removing first guarantees a fresh event. The DELETE is allowed to fail
- * (404 = not there, which is the state we wanted anyway).
+ * Read the current PR labels without the browser cache, then remove only
+ * when present. That avoids an expected HTTP 404 on a first publish. A
+ * racing DELETE 404 is also the desired absent state; other read/removal
+ * failures stop the attempt rather than promise an event we cannot prove.
  *
  * ── Placement: in the state bar, not in the toolbar ────────────────────
  * publish-step-hint.js's `#cms-publish-state` row is a full-width block in
@@ -246,15 +248,33 @@
       "X-GitHub-Api-Version": "2022-11-28",
       "Content-Type": "application/json",
     };
-    // Remove first — see "Why a re-publish REMOVES the label" above. A 404
-    // here is the desired state, not an error.
+    // A PR detail carries the complete label set without label-list
+    // pagination. Do not trust the poller's snapshot for a re-arm.
+    var status = "unknown";
     try {
-      await fetch(base + "/issues/" + prNumber + "/labels/" + encodeURIComponent("cms/ready"), {
-        method: "DELETE",
+      var read = await fetch(base + "/pulls/" + prNumber, {
         headers: headers,
+        cache: "no-cache",
       });
+      status = Number.isInteger(read.status) && read.status >= 100 && read.status <= 599 ? read.status : "unknown";
+      if (!read.ok) throw new Error("Could not read publish labels");
+      var pr = await read.json();
+      if (!pr || !Array.isArray(pr.labels) || !pr.labels.every(function (label) {
+        return label && typeof label === "object" && typeof label.name === "string";
+      })) throw new Error("Invalid publish labels");
+      if (pr.labels.some(function (label) { return label.name === "cms/ready"; })) {
+        status = "unknown";
+        var removed = await fetch(base + "/issues/" + prNumber + "/labels/" + encodeURIComponent("cms/ready"), {
+          method: "DELETE",
+          headers: headers,
+        });
+        status = Number.isInteger(removed.status) && removed.status >= 100 && removed.status <= 599 ? removed.status : "unknown";
+        if (!removed.ok && removed.status !== 404) throw new Error("Could not remove publish label");
+      }
     } catch (e) {
-      /* the add below is what matters */
+      // Neither API bodies nor thrown Error text belong in browser logs.
+      console.warn("publish-button: label re-arm failed (HTTP " + status + ")");
+      throw new Error("Could not re-arm publishing");
     }
     var res = await fetch(base + "/issues/" + prNumber + "/labels", {
       method: "POST",

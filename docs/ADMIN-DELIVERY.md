@@ -186,6 +186,43 @@ preview, #533; see `theme/admin/README.md`) only inside Decap's own
 `FieldLabel` and `ControlHint` nodes.
 Authored content is outside that narrow mutation surface.
 
+## Form-control ownership (Decap 3.15.1 source audit)
+
+The three platform admin shells load Decap 3.15.1. Its
+[published source map](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js.map)
+establishes these upstream owners:
+
+- [`decap-cms-core/dist/esm/components/Editor/EditorControlPane/EditorControl.js`](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js.map)
+  generates the field ID and label's `htmlFor`; adjacent
+  [`Widget.js`](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js.map) passes
+  `forID` to the widget.
+- The posts `body` field uses `markdown` in
+  [`theme/admin/config.base.yml`](../theme/admin/config.base.yml).
+  [`decap-cms-widget-markdown/dist/esm/MarkdownControl/index.js`](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js.map) renders
+  `div.cms-editor-visual` without forwarding `forID`; its
+  [`VisualEditor.js`](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js.map)
+  renders Slate's `Editable` without an ID or `aria-labelledby`. This explains
+  the selected body label's missing target.
+- [`node_modules/react-textarea-autosize/dist/react-textarea-autosize.browser.esm.js`](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js.map)
+  appends a hidden measurement textarea to `document.body`, with
+  `tabindex="-1"` and `aria-hidden="true"`. It is a sizing helper, not an
+  editor field.
+
+This source audit does not reconstruct the owner's reported ten unmatched
+labels or five anonymous textareas. The other nine label mappings and exact
+helper count require the original DOM snapshot. Keep upstream fixes upstream;
+do not patch the vendored bundle or add a generic label-repair observer.
+
+The platform owns the rejection textarea in
+[`theme/admin/reviews/index.html`](../theme/admin/reviews/index.html):
+its visible label targets a unique per-run ID, it has `name="comment"`, and
+only positive safe-integer run IDs enter the markup. The existing
+[`e2e/reviews-dashboard-lint.test.js`](../e2e/reviews-dashboard-lint.test.js)
+checks two simultaneous cards and malformed
+IDs offline. The posts-list fixture checkbox in
+[`theme/admin/posts-list-enhance.js`](../theme/admin/posts-list-enhance.js)
+already has a native enclosing label.
+
 ## Draft media fallback: an unpublished upload still renders
 
 `public_folder: /assets/images/uploads` is absolute, and Decap's
