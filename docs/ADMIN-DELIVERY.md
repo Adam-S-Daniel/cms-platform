@@ -261,7 +261,7 @@ before, so a published image costs nothing:
   once when a new entry's route gains it, because a new entry's `postSave`
   carries an empty slug). Skipped for `local_backend` and non-GitHub configs.
   The admin CSP already allows `connect-src https://api.github.com` and
-  `img-src blob:`.
+  `img-src blob:`; `connect-src blob:` covers Decap's fetch of an uploaded image (#627).
 
 Residual gap: with `slug.clean_accents: true` the name match strips accents with
 Unicode NFD, where Decap uses the `diacritics` map, so letters NFD does not

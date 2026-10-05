@@ -248,6 +248,8 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
     expect(h["content-security-policy"]).toBe("frame-ancestors 'self'");
     const reported = csp(h["content-security-policy-report-only"]);
     expect([...reported.keys()]).toEqual(FULL_ADMIN_DIRECTIVES);
+    // Decap fetch()es an uploaded image's blob: URL back before committing it (#627).
+    expect(reported.get("connect-src")).toContain("blob:");
   });
 
   test("enforce: the full policy is enforced and nothing is report-only", () => {
@@ -280,8 +282,10 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
     expect(d.get("object-src")).toEqual(["'none'"]);
     expect(d.get("base-uri")).toEqual(["'none'"]);
     expect(d.get("default-src")).toEqual(["'self'"]);
+    // blob: lets Decap fetch() an uploaded image back before committing it (#627).
     expect(d.get("connect-src")).toEqual([
       "'self'",
+      "blob:",
       `https://${APEX}`,
       `https://*.${APEX}`,
       "https://api.github.com",
