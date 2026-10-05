@@ -9,10 +9,14 @@ const cap = require("./site-capabilities");
 // markup. A site whose home page renders through its own layout (jodidaniel.com's
 // _layouts/home.html) never asked for them, so the `/` checks skip there —
 // decided from the site's source, so a theme-layout site that loses the markup
-// still fails.
-const HOME_ON_SITE_LAYOUT = !cap.homeUsesThemeLayout();
-const HOME_SKIP_REASON =
-  "the home page renders through a site-owned layout, not the theme's default.html";
+// still fails. Evaluated inside each test, never at file load: a throw (no
+// theme layouts found) then fails that test instead of loading zero tests.
+function skipUnlessHomeUsesTheme() {
+  test.skip(
+    !cap.homeUsesThemeLayout(),
+    "the home page renders through a site-owned layout, not the theme's default.html",
+  );
+}
 
 // Meta, nav and hero text was 11.2-11.5px; WCAG has no minimum but 12px is
 // the floor the issue asked for.
@@ -22,7 +26,7 @@ test.describe("Public-site accessibility polish", () => {
   test("first Tab stop is a skip link that reveals itself and moves focus to main", async ({
     page,
   }) => {
-    test.skip(HOME_ON_SITE_LAYOUT, HOME_SKIP_REASON);
+    skipUnlessHomeUsesTheme();
     await page.goto("/");
     await page.keyboard.press("Tab");
 
@@ -39,7 +43,7 @@ test.describe("Public-site accessibility polish", () => {
   });
 
   test("skip link is hidden until focused", async ({ page }) => {
-    test.skip(HOME_ON_SITE_LAYOUT, HOME_SKIP_REASON);
+    skipUnlessHomeUsesTheme();
     await page.goto("/");
     const box = await page.locator("a.skip-link").boundingBox();
     expect(box.y + box.height).toBeLessThanOrEqual(0);
@@ -60,7 +64,7 @@ test.describe("Public-site accessibility polish", () => {
   });
 
   test("footer offers the feed as a follow link", async ({ page }) => {
-    test.skip(HOME_ON_SITE_LAYOUT, HOME_SKIP_REASON);
+    skipUnlessHomeUsesTheme();
     await page.goto("/");
     const follow = page.locator(".site-footer .footer-follow");
     await expect(follow).toHaveAttribute("aria-label", "Follow");

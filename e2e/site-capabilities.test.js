@@ -225,7 +225,7 @@ test.describe("site-capabilities: archived_pdf_fields opt-in (#527)", () => {
 // checks failed there (jodidaniel.com#351). The skip is decided from the site's
 // SOURCE by homeUsesThemeLayout; these cases pin each branch of that decision.
 test.describe("site-capabilities: homeUsesThemeLayout", () => {
-  const THEME = cap.defaultThemeLayoutsDir();
+  const THEME = cap.themeLayoutsDirCandidates()[0];
 
   // Builds a throwaway site root from { "relative/path": "contents" }.
   function siteTree(files) {
@@ -343,14 +343,88 @@ test.describe("site-capabilities: homeUsesThemeLayout", () => {
     expect(cap.homeUsesThemeLayout(SINGLEPAGE, THEME)).toBe(true);
   });
 
-  test("a missing theme layouts directory throws instead of skipping silently", () => {
-    const dir = siteTree({ "index.html": page("layout: default") });
+  test("a top-level page with `permalink: /` is the home page, over index.*", () => {
+    const viaPermalink = siteTree({
+      "index.html": page("layout: default"),
+      "home.md": page("layout: home\npermalink: /"),
+      "_layouts/home.html": DOC,
+    });
+    const indexOnly = siteTree({
+      "index.html": page("layout: default"),
+      "about.md": page("layout: home\npermalink: /about/"),
+      "broken.html": "---\nlayout: [unclosed\n---\n",
+      "_layouts/home.html": DOC,
+    });
     try {
-      expect(() => cap.homeUsesThemeLayout(dir, path.join(dir, "no-theme"))).toThrow(
-        /theme layouts directory not found/,
+      expect(cap.homeUsesThemeLayout(viaPermalink, THEME)).toBe(false);
+      expect(cap.homeUsesThemeLayout(indexOnly, THEME)).toBe(true);
+    } finally {
+      fs.rmSync(viaPermalink, { recursive: true, force: true });
+      fs.rmSync(indexOnly, { recursive: true, force: true });
+    }
+  });
+
+  // The consumer local lane COPIES the harness to `<site>/e2e`, so
+  // `<harness>/../theme` is the site, which has no theme/ (it uses the gem);
+  // the platform checkout survives at `<site>/.cms-platform/`.
+  test("copied-harness layout: the theme resolves from <site>/.cms-platform", () => {
+    const site = siteTree({
+      "index.html": page("layout: page"),
+      "e2e/playwright.config.js": "",
+      ".cms-platform/theme/_layouts/page.html": page("layout: default"),
+      ".cms-platform/theme/_layouts/default.html": DOC,
+    });
+    try {
+      const harness = path.join(site, "e2e");
+      const dir = cap.resolveThemeLayoutsDir(site, harness);
+      expect(dir).toBe(path.join(site, ".cms-platform", "theme", "_layouts"));
+      expect(cap.homeUsesThemeLayout(site, dir)).toBe(true);
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+    }
+  });
+
+  test("the harness's own platform checkout is preferred when it has a theme", () => {
+    expect(cap.resolveThemeLayoutsDir(FULL)).toBe(THEME);
+    expect(fs.existsSync(THEME)).toBe(true);
+  });
+
+  test("no theme found: `default` still resolves, another theme layout throws", () => {
+    const site = siteTree({ "index.html": page("layout: default"), "e2e/x.js": "" });
+    const viaPage = siteTree({ "index.html": page("layout: page"), "e2e/x.js": "" });
+    try {
+      expect(cap.resolveThemeLayoutsDir(site, path.join(site, "e2e"))).toBeNull();
+      // The theme always ships `default`; deciding that needs no theme files.
+      expect(cap.homeUsesThemeLayout(site, null)).toBe(true);
+      expect(() => cap.homeUsesThemeLayout(viaPage, null)).toThrow(
+        /layout "page" is not site-owned and no theme layouts directory was found/,
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(viaPage, { recursive: true, force: true });
+    }
+  });
+
+  // A throw at spec-file load empties the whole consumer suite (Playwright
+  // loads zero tests), so the specs must call the predicate inside tests only.
+  // AST, not regex: where a call sits is code SHAPE.
+  test("the gated specs call homeUsesThemeLayout only inside a function, never at load", () => {
+    for (const spec of ["public-a11y-polish.spec.js", "reduced-motion.spec.js"]) {
+      const src = fs.readFileSync(path.join(HARNESS, spec), "utf8");
+      const calls = [];
+      walk.ancestor(parse(src), {
+        CallExpression(node, ancestors) {
+          const name = calleeName(node.callee) || "";
+          if (name.endsWith("homeUsesThemeLayout")) calls.push([...ancestors]);
+        },
+      });
+      expect(calls.length, `${spec} must gate on homeUsesThemeLayout`).toBeGreaterThan(0);
+      for (const ancestors of calls) {
+        expect(
+          ancestors.some((a) => /Function/.test(a.type)),
+          `${spec}: homeUsesThemeLayout must not run at file load`,
+        ).toBe(true);
+      }
     }
   });
 });

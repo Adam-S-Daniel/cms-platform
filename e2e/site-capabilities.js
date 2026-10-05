@@ -169,11 +169,27 @@ function archivedPdfSourceCollections(siteRoot = defaultSiteRoot()) {
 // the markup: a runtime "no skip link, so skip" would hide exactly the
 // regression these specs exist to catch on a site that does use the theme.
 
-// The theme's layouts as the harness checkout carries them. A consumer checks
-// the platform out at `.cms-platform/` (harness at `.cms-platform/e2e`), so
-// `<harness>/../theme/_layouts` is the theme the site builds against.
-function defaultThemeLayoutsDir() {
-  return path.resolve(__dirname, "..", "theme", "_layouts");
+// Where the theme's layouts live, relative to where the harness runs. The
+// local lane checks the platform out at `<site>/.cms-platform/` and then COPIES
+// the harness to `<site>/e2e` (e2e-tests.yml "Place harness at site root"), so
+// `<harness>/..` is the SITE there, which has no `theme/` (consumers get the
+// theme as a gem). Candidates, first existing wins:
+//   1. `<harness>/../theme/_layouts` — the harness inside a platform checkout
+//      (`.cms-platform/e2e`, the platform's own fixture lanes).
+//   2. `<siteRoot>/.cms-platform/theme/_layouts` — the copied-harness layout.
+// These are the theme at the HARNESS's platform ref, which the consumer's
+// pinned gem matches by the pin-consistency guard; they are not read from the
+// installed gem itself.
+function themeLayoutsDirCandidates(siteRoot = defaultSiteRoot(), harnessDir = __dirname) {
+  return [
+    path.resolve(harnessDir, "..", "theme", "_layouts"),
+    path.join(siteRoot, ".cms-platform", "theme", "_layouts"),
+  ];
+}
+
+// The first existing candidate, or null when none exists.
+function resolveThemeLayoutsDir(siteRoot = defaultSiteRoot(), harnessDir = __dirname) {
+  return themeLayoutsDirCandidates(siteRoot, harnessDir).find((d) => fs.existsSync(d)) || null;
 }
 
 // Jekyll front matter: a first line of exactly `---`, closed by the next line
@@ -241,36 +257,58 @@ function defaultLayoutFor(siteRoot, relPath) {
   return best ? best.layout : undefined;
 }
 
+// The source file Jekyll writes to `/`. A top-level page declaring
+// `permalink: /` (or `/index.html`) wins over `index.*`; otherwise the first of
+// index.html, index.md, index.markdown. Pages whose front matter does not
+// parse are passed over (Jekyll warns and carries on). Returns null when none.
+const HOME_INDEX_FILES = ["index.html", "index.md", "index.markdown"];
+function homeSourceFile(siteRoot) {
+  const pages = fs
+    .readdirSync(siteRoot, { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.(html|md|markdown)$/.test(e.name))
+    .map((e) => e.name)
+    .sort();
+  for (const f of pages) {
+    let fm = null;
+    try {
+      fm = readFrontMatter(path.join(siteRoot, f));
+    } catch {
+      continue;
+    }
+    if (fm && ["/", "/index.html"].includes(fm.permalink)) return f;
+  }
+  return HOME_INDEX_FILES.find((f) => fs.existsSync(path.join(siteRoot, f))) || null;
+}
+
 // Does the site's home page (`/`) render through the THEME's `default` layout?
 //
-//   - index.(html|md|markdown) at the site root, first found in that order; no
-//     index, or one without front matter, ⇒ false (nothing wraps it).
+//   - the home source is a top-level page with `permalink: /`, else
+//     index.(html|md|markdown); none, or one without front matter, ⇒ false
+//     (nothing wraps it).
 //   - its `layout:` key, else the `_config.yml` `defaults:` layout for it;
 //     none, `null` or `none` ⇒ false.
 //   - each layout name resolves SITE `_layouts/` first (Jekyll's override
 //     order), then the theme's; the chain follows each layout's own `layout:`.
-//   - true when the chain reaches `default` resolved from the THEME. A site
-//     that overrides `default.html` itself returns false: the theme's markup
-//     is then not guaranteed, and the site's own copy is the site's to test.
+//   - true when the chain reaches `default` NOT overridden by the site: the
+//     theme always ships `default`, so that answer needs no theme files. A
+//     site that overrides `default.html` itself returns false: the theme's
+//     markup is then not guaranteed, and the site's own copy is the site's to
+//     test.
 //   - a site-owned layout with no parent, a layout found nowhere (Jekyll warns
 //     and renders without it) or a cycle ⇒ false.
 //
-// Throws when the theme layouts directory is missing: that is a broken harness
-// checkout, and a silent false would skip the specs that depend on this.
-function homeUsesThemeLayout(
-  siteRoot = defaultSiteRoot(),
-  themeLayoutsDir = defaultThemeLayoutsDir(),
-) {
-  if (!fs.existsSync(themeLayoutsDir)) {
-    throw new Error(`theme layouts directory not found: ${themeLayoutsDir}`);
-  }
-  const index = ["index.html", "index.md", "index.markdown"].find((f) =>
-    fs.existsSync(path.join(siteRoot, f)),
-  );
-  if (!index) return false;
-  const fm = readFrontMatter(path.join(siteRoot, index));
+// Theme files are read only to follow a chain through a theme layout OTHER than
+// `default` (e.g. `layout: page`). `themeLayoutsDir` defaults to
+// resolveThemeLayoutsDir(siteRoot); if that finds nothing at the moment it is
+// needed, this THROWS naming the candidates — call it inside a test, never at
+// spec-file load, so a broken checkout fails that one test loudly instead of
+// emptying the whole suite or skipping silently.
+function homeUsesThemeLayout(siteRoot = defaultSiteRoot(), themeLayoutsDir) {
+  const home = homeSourceFile(siteRoot);
+  if (!home) return false;
+  const fm = readFrontMatter(path.join(siteRoot, home));
   if (fm == null) return false;
-  let name = Object.hasOwn(fm, "layout") ? fm.layout : defaultLayoutFor(siteRoot, index);
+  let name = Object.hasOwn(fm, "layout") ? fm.layout : defaultLayoutFor(siteRoot, home);
 
   const siteLayoutsDir = path.join(siteRoot, "_layouts");
   const seen = new Set();
@@ -279,10 +317,21 @@ function homeUsesThemeLayout(
     if (seen.has(name)) return false;
     seen.add(name);
     const siteFile = findLayoutFile(siteLayoutsDir, name);
-    const themeFile = siteFile ? null : findLayoutFile(themeLayoutsDir, name);
-    if (!siteFile && !themeFile) return false;
-    if (themeFile && name === "default") return true;
-    const parent = readFrontMatter(siteFile || themeFile);
+    if (!siteFile && name === "default") return true;
+    let file = siteFile;
+    if (!file) {
+      if (themeLayoutsDir === undefined) themeLayoutsDir = resolveThemeLayoutsDir(siteRoot);
+      if (!themeLayoutsDir || !fs.existsSync(themeLayoutsDir)) {
+        const tried = themeLayoutsDir ? [themeLayoutsDir] : themeLayoutsDirCandidates(siteRoot);
+        throw new Error(
+          `homeUsesThemeLayout: layout "${name}" is not site-owned and no theme layouts ` +
+            `directory was found (tried: ${tried.join(", ")})`,
+        );
+      }
+      file = findLayoutFile(themeLayoutsDir, name);
+      if (!file) return false;
+    }
+    const parent = readFrontMatter(file);
     name = parent && parent.layout;
   }
   return false;
@@ -347,7 +396,8 @@ module.exports = {
   ARCHIVED_PDF_FIELDS_REF,
   ARCHIVED_PDF_FIELD_NAMES,
   archivedPdfSourceCollections,
-  defaultThemeLayoutsDir,
+  themeLayoutsDirCandidates,
+  resolveThemeLayoutsDir,
   homeUsesThemeLayout,
   renderedAdminConfigPath,
   isBuilt,

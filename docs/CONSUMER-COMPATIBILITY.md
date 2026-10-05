@@ -47,7 +47,13 @@ of the harness uses). Parses YAML with the real `yaml` lib.
   spec asserting the theme default's markup on `/` (skip link, footer follow
   links, the `main.css` glow) skips there; a site overriding `default.html`
   itself also reads false. Never skip on the rendered page lacking the markup:
-  that hides the regression on a site that does use the theme.
+  that hides the regression on a site that does use the theme. A top-level
+  page with `permalink: /` counts as the home page over `index.*`. Theme
+  layouts resolve from `<harness>/../theme` or `<site>/.cms-platform/theme` (the
+  local lane COPIES the harness to `<site>/e2e`), at the harness's platform ref,
+  not the site's installed gem; only a chain through a theme layout other than
+  `default` reads them. Call it INSIDE a test: if those files are needed and
+  missing it throws, which at spec-file load would empty a consumer's suite.
 
 **The skip pattern** — a precise `test.skip()` (or `beforeEach` skip) keyed on
 the helper, with a message that names the collection + `cms.base_collections` +
