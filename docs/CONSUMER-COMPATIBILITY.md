@@ -40,6 +40,14 @@ of the harness uses). Parses YAML with the real `yaml` lib.
 - `hasE2ECanaries(siteRoot)` / `hasRenderedCanary(siteRoot, slug)` /
   `hasSourcePosts(siteRoot)` / `isSinglePageConsumer(siteRoot)` — canary +
   posts presence.
+- `homeUsesThemeLayout(siteRoot)` — **SOURCE** signal: does `/` render
+  through the THEME's `default.html`? It follows the site's `index.*` front
+  matter (or its `_config.yml` `defaults:`) through `_layouts/`, site before
+  theme. jodidaniel.com's `layout: home` is a site-owned full document, so a
+  spec asserting the theme default's markup on `/` (skip link, footer follow
+  links, the `main.css` glow) skips there; a site overriding `default.html`
+  itself also reads false. Never skip on the rendered page lacking the markup:
+  that hides the regression on a site that does use the theme.
 
 **The skip pattern** — a precise `test.skip()` (or `beforeEach` skip) keyed on
 the helper, with a message that names the collection + `cms.base_collections` +

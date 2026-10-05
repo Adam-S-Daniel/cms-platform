@@ -216,3 +216,141 @@ test.describe("site-capabilities: archived_pdf_fields opt-in (#527)", () => {
     }
   });
 });
+
+// ── v0.1.139 follow-up: theme home-page specs on a site-owned home layout ──
+//
+// public-a11y-polish.spec.js and reduced-motion.spec.js load `/` and assert the
+// theme default layout's markup. jodidaniel.com's index.html uses its own
+// _layouts/home.html, a full document that never chains to `default`, so those
+// checks failed there (jodidaniel.com#351). The skip is decided from the site's
+// SOURCE by homeUsesThemeLayout; these cases pin each branch of that decision.
+test.describe("site-capabilities: homeUsesThemeLayout", () => {
+  const THEME = cap.defaultThemeLayoutsDir();
+
+  // Builds a throwaway site root from { "relative/path": "contents" }.
+  function siteTree(files) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "home-layout-"));
+    for (const [rel, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), body);
+    }
+    return dir;
+  }
+  const page = (frontMatter) => `---\n${frontMatter}\n---\n<p>body</p>\n`;
+  const DOC = "<!DOCTYPE html>\n<html><body>{{ content }}</body></html>\n";
+
+  const cases = [
+    // adamdaniel.ai's shape: index.html `layout: default`, a site _layouts/
+    // holding only an unrelated layout.
+    [
+      "theme default (adamdaniel.ai shape)",
+      { "index.html": page("layout: default\ntitle: Home"), "_layouts/tool.html": DOC },
+      true,
+    ],
+    // jodidaniel.com's shape: `layout: home`, the site's own full-document home.html.
+    [
+      "site home.html with no parent (jodidaniel.com shape)",
+      { "index.html": page("layout: home"), "_layouts/home.html": DOC },
+      false,
+    ],
+    [
+      "site layout chaining to the theme default",
+      { "index.html": page("layout: landing"), "_layouts/landing.html": page("layout: default") },
+      true,
+    ],
+    ["theme layout that chains to default", { "index.html": page("layout: page") }, true],
+    [
+      "site override of default.html",
+      { "index.html": page("layout: default"), "_layouts/default.html": DOC },
+      false,
+    ],
+    [
+      "site layout chaining to a site-overridden default",
+      {
+        "index.html": page("layout: landing"),
+        "_layouts/landing.html": page("layout: default"),
+        "_layouts/default.html": DOC,
+      },
+      false,
+    ],
+    [
+      "layout cycle",
+      {
+        "index.html": page("layout: a"),
+        "_layouts/a.html": page("layout: b"),
+        "_layouts/b.html": page("layout: a"),
+      },
+      false,
+    ],
+    ["layout found nowhere", { "index.html": page("layout: missing") }, false],
+    ["layout: null", { "index.html": page("layout: null") }, false],
+    ["layout: none", { "index.html": page("layout: none") }, false],
+    ["no index file", { "about.html": page("layout: default") }, false],
+    ["index without front matter (copied verbatim)", { "index.html": DOC }, false],
+    ["index.md on the theme default", { "index.md": page("layout: default") }, true],
+    [
+      "no layout key, _config.yml default for all pages",
+      {
+        "index.html": page("title: Home"),
+        "_config.yml":
+          'defaults:\n  - scope: { path: "", type: pages }\n    values: { layout: default }\n',
+      },
+      true,
+    ],
+    [
+      "no layout key, a more specific default wins",
+      {
+        "index.html": page("title: Home"),
+        "_layouts/home.html": DOC,
+        "_config.yml":
+          'defaults:\n  - scope: { path: index.html }\n    values: { layout: home }\n  - scope: { path: "", type: pages }\n    values: { layout: default }\n',
+      },
+      false,
+    ],
+    [
+      "no layout key, a default scoped to another type or dir does not apply",
+      {
+        "index.html": page("title: Home"),
+        "_config.yml":
+          'defaults:\n  - scope: { path: "", type: posts }\n    values: { layout: default }\n  - scope: { path: pages }\n    values: { layout: default }\n',
+      },
+      false,
+    ],
+    ["no layout key, no defaults", { "index.html": page("title: Home") }, false],
+    [
+      "explicit layout beats a default",
+      {
+        "index.html": page("layout: home"),
+        "_layouts/home.html": DOC,
+        "_config.yml": 'defaults:\n  - scope: { path: "" }\n    values: { layout: default }\n',
+      },
+      false,
+    ],
+  ];
+  for (const [name, files, expected] of cases) {
+    test(`${name} → ${expected}`, () => {
+      const dir = siteTree(files);
+      try {
+        expect(cap.homeUsesThemeLayout(dir, THEME)).toBe(expected);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("both platform fixtures render home through the theme default", () => {
+    expect(cap.homeUsesThemeLayout(FULL, THEME)).toBe(true);
+    expect(cap.homeUsesThemeLayout(SINGLEPAGE, THEME)).toBe(true);
+  });
+
+  test("a missing theme layouts directory throws instead of skipping silently", () => {
+    const dir = siteTree({ "index.html": page("layout: default") });
+    try {
+      expect(() => cap.homeUsesThemeLayout(dir, path.join(dir, "no-theme"))).toThrow(
+        /theme layouts directory not found/,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
