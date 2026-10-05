@@ -10,9 +10,114 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.138)
+## Version history (v0.1.0 → v0.1.139)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.139 — A tags canary's in-flight PR can no longer outlive its run and leave an `e2e-` tag on a consumer's main; the public theme gets one meta description, share images, a skip link and reduced-motion support; the admin editor gets five fixes.**
+The tags lifecycle specs' `afterAll` safety net looked only at `main`, and any
+error on `GET contents/_tags/<slug>.md?ref=main`, not just a 404, counted as
+"not on main". In adamdaniel.ai's run 31107474927 the create leg timed out
+while the Decap create PR (adamdaniel.ai#2938) was still open and armed with
+`cms/ready`; the hook read 404 and returned, the PR auto-merged 12 minutes
+later, and `_tags/e2e-tags-canary-1786027176024.md` stayed on the public site
+until adamdaniel.ai#4090. `scripts/reset-orphaned-canary.sh` healed only
+`_e2e/` markers, so nothing swept it. New `closeOpenPrsAddingFile` and
+`readFileOnRef` in `e2e/cms-fixture-pr.js`: both tags specs' `afterAll` hooks
+now close this run's open create PR (matched on the exact run-stamped path,
+head branch deleted only when it is in this repo), re-read it to prove it is
+closed, and read the ref strictly (only a 404 means absent), and a failure to
+open the cleanup PR throws instead of warning. New `e2e/leftover-e2e-tags.js`:
+on main, `reset-orphaned-canary.sh` lists `_tags/`, opens a labelled removal PR
+for a run-stamped canary tag older than 3 hours (deduped against an open
+`cms/e2e-fixture/remove-<slug>-` PR), reports but never touches a tag stamped
+more than 10 minutes in the future or any other `e2e-` tag, and writes the
+count to the step output `leftover_e2e_tags` (`error` when the check failed;
+the script still exits 0). `cms-publish-loop-host.yml` gains a last `always()`
+step that fails the job on a non-zero or `error` count, so the daily run goes
+red and `scheduled-run-health` opens its issue. A site with no `_tags/`
+(jodidaniel.com) lists 404 and reports 0. The prod loop runs the same sweep and
+opens the same removal PRs but only the host loop fails on the count. The
+site-side exclusion half of
+[#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689) (keeping an
+`e2e-` tag out of the sitemap, tag feeds and indexing) is not in this release,
+and three other specs keep the main-only safety net
+(`cms-publish-loop-prod-mutate`, `cms-delete-published`,
+`cms-media-roundtrip`)
+([#690](https://github.com/Adam-S-Daniel/cms-platform/pull/690)).
+`e2e/base.js`'s `resolvePreviewBaseURL()` checked the spawn error code before
+the signal, so a `gh` that Node itself killed (timeout `ETIMEDOUT`, buffer
+overflow `ENOBUFS`) read "could not start". It now reports exit status, then
+signal with the error code (`gh was killed by SIGTERM (ENOBUFS)`), then a
+signal-less spawn code, then `gh failed with no exit status`; still no stderr,
+stdout or `cause`
+([#684](https://github.com/Adam-S-Daniel/cms-platform/pull/684), follow-up to
+[#681](https://github.com/Adam-S-Daniel/cms-platform/pull/681)).
+Public theme. `theme/_layouts/default.html` no longer hard-codes
+`<meta name="description">`: it emitted the site tagline ahead of
+jekyll-seo-tag's page description and crawlers take the first, so every post
+showed the tagline; `{% seo %}` is now the only source
+([#666](https://github.com/Adam-S-Daniel/cms-platform/pull/666), for
+[#654](https://github.com/Adam-S-Daniel/cms-platform/issues/654)). New plugin
+`theme/lib/cms-platform-theme/seo_image.rb` sets a page's `image:` from
+`featured_image:`, else an optional site-wide `default_image:` in
+`_config.yml`, so jekyll-seo-tag emits `og:image` and `twitter:image` and a
+`summary_large_image` card; an explicit `image:` wins
+([#671](https://github.com/Adam-S-Daniel/cms-platform/pull/671), for
+[#655](https://github.com/Adam-S-Daniel/cms-platform/issues/655)). Both build
+real Jekyll sites in new `theme/spec/` tests, so the `ruby-theme-specs` lane
+installs `jekyll-seo-tag` 2.9.0. Accessibility: a skip-to-content link as the
+first Tab stop (`main` gets `tabindex="-1"`), the post's featured image is
+decorative (`alt=""`, and the `/preview/` shell stops mirroring the title into
+it), small text raised to at least 0.75rem, and a footer "Follow" nav with the
+Atom feed plus each `cross_post.profiles` entry as `rel="me"`
+([#669](https://github.com/Adam-S-Daniel/cms-platform/pull/669), for
+[#657](https://github.com/Adam-S-Daniel/cms-platform/issues/657)); a
+`prefers-reduced-motion: reduce` block in `theme/assets/css/main.css` stops the
+always-running glow, color-cycle and shimmer animations and parks the glow at
+`opacity: 0.3` (`postcss` 8.5.28 is a new exact-pinned `e2e` devDependency for
+its lint)
+([#668](https://github.com/Adam-S-Daniel/cms-platform/pull/668), for
+[#656](https://github.com/Adam-S-Daniel/cms-platform/issues/656)). The preview
+host's 404 page (`deploy-preview.yml`) keeps its palette in per-scheme custom
+properties, which fixes light text on a white card in dark mode; a new lint
+requires 4.5:1 for every pair in both schemes, and the page reaches a preview
+on its next deploy
+([#667](https://github.com/Adam-S-Daniel/cms-platform/pull/667), for
+[#651](https://github.com/Adam-S-Daniel/cms-platform/issues/651)).
+Admin editor. New `theme/admin/tags-input.js`: Enter in the Tags box ends the
+current tag, and a space typed right after a comma is dropped, so `alpha, beta`
+no longer saves `alphabeta`; the Tags hint (`config.base.yml`,
+`config-local.base.yml`, `config-test.yml`) now describes that
+([#675](https://github.com/Adam-S-Daniel/cms-platform/pull/675), for
+[#638](https://github.com/Adam-S-Daniel/cms-platform/issues/638)). New
+`theme/admin/preview-pane.js` registers the site stylesheet and a preview
+template for posts, pages and projects, so the in-editor preview is no longer
+raw fields in default Times with an unformatted date
+([#673](https://github.com/Adam-S-Daniel/cms-platform/pull/673), for
+[#653](https://github.com/Adam-S-Daniel/cms-platform/issues/653)). New
+`theme/admin/editor-component-image.js` re-registers the Image component with
+a `toBlock` that writes nothing when no image was chosen, instead of a literal
+`![]()` line
+([#670](https://github.com/Adam-S-Daniel/cms-platform/pull/670), for
+[#648](https://github.com/Adam-S-Daniel/cms-platform/issues/648)). The "View
+page on site" banner (`live-url-banner.js`) is written into the fresh element
+Decap builds on the `/new` to `/entries/<slug>` route change instead of being
+skipped by its render cache, which left an empty strip until reload
+([#674](https://github.com/Adam-S-Daniel/cms-platform/pull/674), for
+[#641](https://github.com/Adam-S-Daniel/cms-platform/issues/641)). On desktop
+(`min-width: 769px`, `admin-mobile.css`) the editor container is a flex column
+so the Draft bar no longer makes it taller than its box and focus scrolls stop
+sliding the Save/Publish toolbar off the top
+([#678](https://github.com/Adam-S-Daniel/cms-platform/pull/678), for
+[#640](https://github.com/Adam-S-Daniel/cms-platform/issues/640)). The three
+new admin scripts are loaded in all three admin shells.
+Consumers get all of it with their next platform bump: the theme and admin
+config ship in the gem the bump moves, the reusable workflows are pinned by the
+bump, and nothing under `infrastructure/`, `oauth-proxy/`, `examples/` or
+`scaffold/` changed apart from the pins, so no bootstrap redeploy. Expect the
+host loop's first daily run after the bump to go red if a consumer's `_tags/`
+still holds an `e2e-` file.
 
 **v0.1.138 — A malformed API response can no longer put its body into public output or a minted token into a log line; the Pages permalink field no longer defaults to a shared `/pages/`.**
 A 2xx response whose body is not JSON makes `Response.json()` throw a
