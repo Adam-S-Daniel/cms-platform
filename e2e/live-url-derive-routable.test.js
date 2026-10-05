@@ -111,6 +111,20 @@ test.describe("live-url-derive.js compute() — routable-collection gate (#328.3
     expect(data.url).toBe("https://example.com/projects/widget-builder/");
   });
 
+  test("derives /tools/<slug>/ for tools from the slug field (site-owned collection)", () => {
+    const { LiveURL, window } = loadLiveURL({ title: "Some Other Title", slug: "word-counter" });
+    window.location.hash = "#/collections/tools/entries/word-counter";
+    const data = LiveURL.compute();
+    expect(data, "tools has a preview_path route — compute() must return an object").not.toBeNull();
+    expect(data.url).toBe("https://example.com/tools/word-counter/");
+  });
+
+  test("tools falls back to the slugified title when the slug field is empty", () => {
+    const { LiveURL, window } = loadLiveURL({ title: "Word Counter" });
+    window.location.hash = "#/collections/tools/entries/word-counter";
+    expect(LiveURL.compute().url).toBe("https://example.com/tools/word-counter/");
+  });
+
   test("still derives a real URL for pages via the permalink field (routable, unaffected by the fix)", () => {
     const { LiveURL, window } = loadLiveURL({ permalink: "/about/" });
     window.location.hash = "#/collections/pages/entries/about";
@@ -141,7 +155,7 @@ for (const [access, siteURL] of [
     window.location.hash = "#/collections/posts/entries/hello";
     expect(LiveURL.compute().url).toBe(access + "/blog/hello/");
     await window.CMSHostname.binding();
-    for (const [collection, route] of [["posts", "/blog/hello/"], ["tags", "/tags/hello/"], ["projects", "/projects/hello/"], ["pages", "/about/"]]) {
+    for (const [collection, route] of [["posts", "/blog/hello/"], ["tags", "/tags/hello/"], ["projects", "/projects/hello/"], ["tools", "/tools/hello/"], ["pages", "/about/"]]) {
       window.location.hash = `#/collections/${collection}/entries/hello`;
       expect(LiveURL.compute().url).toBe(siteURL + route);
     }
