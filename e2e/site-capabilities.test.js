@@ -216,3 +216,215 @@ test.describe("site-capabilities: archived_pdf_fields opt-in (#527)", () => {
     }
   });
 });
+
+// ── v0.1.139 follow-up: theme home-page specs on a site-owned home layout ──
+//
+// public-a11y-polish.spec.js and reduced-motion.spec.js load `/` and assert the
+// theme default layout's markup. jodidaniel.com's index.html uses its own
+// _layouts/home.html, a full document that never chains to `default`, so those
+// checks failed there (jodidaniel.com#351). The skip is decided from the site's
+// SOURCE by homeUsesThemeLayout; these cases pin each branch of that decision.
+test.describe("site-capabilities: homeUsesThemeLayout", () => {
+  const THEME = cap.themeLayoutsDirCandidates()[0];
+
+  // Builds a throwaway site root from { "relative/path": "contents" }.
+  function siteTree(files) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "home-layout-"));
+    for (const [rel, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), body);
+    }
+    return dir;
+  }
+  const page = (frontMatter) => `---\n${frontMatter}\n---\n<p>body</p>\n`;
+  const DOC = "<!DOCTYPE html>\n<html><body>{{ content }}</body></html>\n";
+
+  const cases = [
+    // adamdaniel.ai's shape: index.html `layout: default`, a site _layouts/
+    // holding only an unrelated layout.
+    [
+      "theme default (adamdaniel.ai shape)",
+      { "index.html": page("layout: default\ntitle: Home"), "_layouts/tool.html": DOC },
+      true,
+    ],
+    // jodidaniel.com's shape: `layout: home`, the site's own full-document home.html.
+    [
+      "site home.html with no parent (jodidaniel.com shape)",
+      { "index.html": page("layout: home"), "_layouts/home.html": DOC },
+      false,
+    ],
+    [
+      "site layout chaining to the theme default",
+      { "index.html": page("layout: landing"), "_layouts/landing.html": page("layout: default") },
+      true,
+    ],
+    ["theme layout that chains to default", { "index.html": page("layout: page") }, true],
+    [
+      "site override of default.html",
+      { "index.html": page("layout: default"), "_layouts/default.html": DOC },
+      false,
+    ],
+    [
+      "site layout chaining to a site-overridden default",
+      {
+        "index.html": page("layout: landing"),
+        "_layouts/landing.html": page("layout: default"),
+        "_layouts/default.html": DOC,
+      },
+      false,
+    ],
+    [
+      "layout cycle",
+      {
+        "index.html": page("layout: a"),
+        "_layouts/a.html": page("layout: b"),
+        "_layouts/b.html": page("layout: a"),
+      },
+      false,
+    ],
+    ["layout found nowhere", { "index.html": page("layout: missing") }, false],
+    ["layout: null", { "index.html": page("layout: null") }, false],
+    ["layout: none", { "index.html": page("layout: none") }, false],
+    ["no index file", { "about.html": page("layout: default") }, false],
+    ["index without front matter (copied verbatim)", { "index.html": DOC }, false],
+    ["index.md on the theme default", { "index.md": page("layout: default") }, true],
+    [
+      "no layout key, _config.yml default for all pages",
+      {
+        "index.html": page("title: Home"),
+        "_config.yml":
+          'defaults:\n  - scope: { path: "", type: pages }\n    values: { layout: default }\n',
+      },
+      true,
+    ],
+    [
+      "no layout key, a more specific default wins",
+      {
+        "index.html": page("title: Home"),
+        "_layouts/home.html": DOC,
+        "_config.yml":
+          'defaults:\n  - scope: { path: index.html }\n    values: { layout: home }\n  - scope: { path: "", type: pages }\n    values: { layout: default }\n',
+      },
+      false,
+    ],
+    [
+      "no layout key, a default scoped to another type or dir does not apply",
+      {
+        "index.html": page("title: Home"),
+        "_config.yml":
+          'defaults:\n  - scope: { path: "", type: posts }\n    values: { layout: default }\n  - scope: { path: pages }\n    values: { layout: default }\n',
+      },
+      false,
+    ],
+    ["no layout key, no defaults", { "index.html": page("title: Home") }, false],
+    [
+      "explicit layout beats a default",
+      {
+        "index.html": page("layout: home"),
+        "_layouts/home.html": DOC,
+        "_config.yml": 'defaults:\n  - scope: { path: "" }\n    values: { layout: default }\n',
+      },
+      false,
+    ],
+  ];
+  for (const [name, files, expected] of cases) {
+    test(`${name} → ${expected}`, () => {
+      const dir = siteTree(files);
+      try {
+        expect(cap.homeUsesThemeLayout(dir, THEME)).toBe(expected);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("both platform fixtures render home through the theme default", () => {
+    expect(cap.homeUsesThemeLayout(FULL, THEME)).toBe(true);
+    expect(cap.homeUsesThemeLayout(SINGLEPAGE, THEME)).toBe(true);
+  });
+
+  test("a top-level page with `permalink: /` is the home page, over index.*", () => {
+    const viaPermalink = siteTree({
+      "index.html": page("layout: default"),
+      "home.md": page("layout: home\npermalink: /"),
+      "_layouts/home.html": DOC,
+    });
+    const indexOnly = siteTree({
+      "index.html": page("layout: default"),
+      "about.md": page("layout: home\npermalink: /about/"),
+      "broken.html": "---\nlayout: [unclosed\n---\n",
+      "_layouts/home.html": DOC,
+    });
+    try {
+      expect(cap.homeUsesThemeLayout(viaPermalink, THEME)).toBe(false);
+      expect(cap.homeUsesThemeLayout(indexOnly, THEME)).toBe(true);
+    } finally {
+      fs.rmSync(viaPermalink, { recursive: true, force: true });
+      fs.rmSync(indexOnly, { recursive: true, force: true });
+    }
+  });
+
+  // The consumer local lane COPIES the harness to `<site>/e2e`, so
+  // `<harness>/../theme` is the site, which has no theme/ (it uses the gem);
+  // the platform checkout survives at `<site>/.cms-platform/`.
+  test("copied-harness layout: the theme resolves from <site>/.cms-platform", () => {
+    const site = siteTree({
+      "index.html": page("layout: page"),
+      "e2e/playwright.config.js": "",
+      ".cms-platform/theme/_layouts/page.html": page("layout: default"),
+      ".cms-platform/theme/_layouts/default.html": DOC,
+    });
+    try {
+      const harness = path.join(site, "e2e");
+      const dir = cap.resolveThemeLayoutsDir(site, harness);
+      expect(dir).toBe(path.join(site, ".cms-platform", "theme", "_layouts"));
+      expect(cap.homeUsesThemeLayout(site, dir)).toBe(true);
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+    }
+  });
+
+  test("the harness's own platform checkout is preferred when it has a theme", () => {
+    expect(cap.resolveThemeLayoutsDir(FULL)).toBe(THEME);
+    expect(fs.existsSync(THEME)).toBe(true);
+  });
+
+  test("no theme found: `default` still resolves, another theme layout throws", () => {
+    const site = siteTree({ "index.html": page("layout: default"), "e2e/x.js": "" });
+    const viaPage = siteTree({ "index.html": page("layout: page"), "e2e/x.js": "" });
+    try {
+      expect(cap.resolveThemeLayoutsDir(site, path.join(site, "e2e"))).toBeNull();
+      // The theme always ships `default`; deciding that needs no theme files.
+      expect(cap.homeUsesThemeLayout(site, null)).toBe(true);
+      expect(() => cap.homeUsesThemeLayout(viaPage, null)).toThrow(
+        /layout "page" is not site-owned and no theme layouts directory was found/,
+      );
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(viaPage, { recursive: true, force: true });
+    }
+  });
+
+  // A throw at spec-file load empties the whole consumer suite (Playwright
+  // loads zero tests), so the specs must call the predicate inside tests only.
+  // AST, not regex: where a call sits is code SHAPE.
+  test("the gated specs call homeUsesThemeLayout only inside a function, never at load", () => {
+    for (const spec of ["public-a11y-polish.spec.js", "reduced-motion.spec.js"]) {
+      const src = fs.readFileSync(path.join(HARNESS, spec), "utf8");
+      const calls = [];
+      walk.ancestor(parse(src), {
+        CallExpression(node, ancestors) {
+          const name = calleeName(node.callee) || "";
+          if (name.endsWith("homeUsesThemeLayout")) calls.push([...ancestors]);
+        },
+      });
+      expect(calls.length, `${spec} must gate on homeUsesThemeLayout`).toBeGreaterThan(0);
+      for (const ancestors of calls) {
+        expect(
+          ancestors.some((a) => /Function/.test(a.type)),
+          `${spec}: homeUsesThemeLayout must not run at file load`,
+        ).toBe(true);
+      }
+    }
+  });
+});
