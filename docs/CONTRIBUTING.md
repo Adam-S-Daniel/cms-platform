@@ -150,9 +150,11 @@ to the theme gemspec's dependencies must re-lock `e2e/fixture-site/Gemfile.lock`
 `self-release-review-gate.yml` (#526, acceptance criterion 3; owner decision
 2026-10-05) enforces the independent review of a RELEASE-BEARING PR: one whose
 `plugin.json` or `.claude-plugin/plugin.json` `version` differs from the merge
-base (every release, stable or prerelease, needs one, because `release.yml`
-refuses a tag that disagrees with the manifests), or whose head branch is
-`release/*`. Such a PR is red until its body carries, on a line of its own,
+base (every STABLE release needs one, because `release.yml` refuses a stable
+tag that disagrees with the manifests), or whose head branch is `release/*`. A
+prerelease is cut from `main` as-is with no PR (`release.yml` skips the manifest
+guard for it), so this check does not gate it; that is the job of #526
+criterion 4's release gate, which does not exist yet. Such a PR is red until its body carries, on a line of its own,
 
 ```text
 Independent review: CLEAN at <the PR's current head sha, all 40 characters>

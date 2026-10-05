@@ -22,9 +22,12 @@
 //
 // RELEASE-BEARING means the PR carries a release: it changes the `version` of
 // `plugin.json` or `.claude-plugin/plugin.json` relative to the merge base
-// (release.yml refuses a tag that disagrees with the manifests, so every
-// release, stable or prerelease, needs such a PR), or its head branch is
-// `release/*` (the release PR convention, e.g. release/v0.1.133). Comparing
+// (release.yml refuses a STABLE tag that disagrees with the manifests, so every
+// stable release needs such a PR), or its head branch is `release/*` (the
+// release PR convention, e.g. release/v0.1.133). A PRERELEASE is cut from main
+// as-is with no PR (release.yml skips the manifest guard for it), so this check
+// does not gate it; that belongs to #526 criterion 4's release gate, which does
+// not exist yet. Comparing
 // against the MERGE BASE, not the base tip, keeps a stale feature branch that
 // predates a release from reading as one.
 //
