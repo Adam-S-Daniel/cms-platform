@@ -10,7 +10,15 @@ title: Home
   exclude_e2e_posts.rb on any `e2e-`-slug or `test_fixture: true` post). They
   still serve at /blog/<slug>/ but must not surface on the homepage. {%- endcomment -%}
   {% assign published_posts = site.posts | where: "published", true | where_exp: "post", "post.feed_exclude != true" %}
-  <h2>Latest Posts</h2>
+  {%- comment -%} Same markup as adamdaniel.ai's homepage: the heading and the
+  feed-link icon share a `.page-header-with-feed` row (e2e/feeds-and-share.spec.js
+  asserts the icon is visible beside "Latest Posts"). {%- endcomment -%}
+  <div class="page-header">
+    <div class="page-header-with-feed">
+      <h2>Latest Posts</h2>
+      {% include feed-link.html href="/feed.xml" label="Subscribe to all posts (Atom feed)" %}
+    </div>
+  </div>
   <ul class="post-list">
     {% for post in published_posts %}
     <li class="post-item">

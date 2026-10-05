@@ -13,7 +13,8 @@
 //                         self-skip).
 //
 //   discoverPost(page)  → { url, slug, title } or null
-//                         Reads the first post link from /blog/. Returns
+//                         Reads the first post permalink from /blog/
+//                         (skipping the nav's own /blog/ link). Returns
 //                         null when no published posts exist (e.g. only
 //                         the future-dated canary). Tests that need a
 //                         post fall back to test.skip().
@@ -53,26 +54,41 @@ async function discoverTags(page) {
   return tags;
 }
 
+// Pure: pick the first real post permalink from a page's anchors, given as
+// `[{ href, text }]` in DOM order. A post permalink is exactly one segment
+// under /blog/ (`/blog/<slug>/`, the `permalink: /blog/:slug/` both
+// consumers and the fixture use). The blog index is NOT one: every
+// default-layout page carries the site nav's `/blog/` link BEFORE the post
+// list, and `/blog/` matches `^/blog/` + `/$` — so a bare prefix/suffix
+// selector grabbed the nav link first and the slug match then failed, making
+// every test that needs a post skip with "no published posts". The slug
+// segment must be non-empty, and a paginator's `/blog/page<N>/` listing page
+// is not a post either.
+function pickPostLink(anchors) {
+  for (const { href, text } of anchors) {
+    if (!href) continue;
+    const m = href.match(/^\/blog\/([^/?#]+)\/$/);
+    if (!m) continue;
+    if (/^page\d*$/i.test(m[1])) continue;
+    return { url: href, slug: m[1], title: (text || "").trim() };
+  }
+  return null;
+}
+
 async function discoverPost(page) {
   const response = await page.goto("/blog/", { waitUntil: "domcontentloaded" });
   if (!response || response.status() !== 200) return null;
 
-  // The blog index renders a list of published posts as anchors with
-  // `/blog/<slug>/` hrefs. Pick the first one — it's the "most recent"
-  // post in the user's chronological ordering and is therefore the
-  // most stable target for tests that need any post (e.g. "does the
-  // share row render?").
-  const link = page.locator('a[href^="/blog/"][href$="/"]').first();
-  const visible = await link.isVisible().catch(() => false);
-  if (!visible) return null;
-  const href = await link.getAttribute("href");
-  if (!href) return null;
-  const m = href.match(/^\/blog\/([^/]+)\/$/);
-  if (!m) return null;
-  // The link text is typically the post title — use it directly. Some
-  // sites wrap the title in nested elements, but `innerText` collapses.
-  const title = (await link.innerText()).trim();
-  return { url: href, slug: m[1], title };
+  // The blog index renders its published posts as anchors, newest first, but
+  // the site header's nav link to the index itself comes earlier in the DOM —
+  // so collect every anchor and let `pickPostLink` skip non-posts. The first
+  // real post is the "most recent" one and the most stable target for tests
+  // that need any post (e.g. "does the share row render?"). The link text is
+  // typically the post title; `innerText` collapses nested elements.
+  const anchors = await page.$$eval("a[href]", (els) =>
+    els.map((a) => ({ href: a.getAttribute("href"), text: a.innerText })),
+  );
+  return pickPostLink(anchors);
 }
 
-module.exports = { discoverTags, discoverPost };
+module.exports = { discoverTags, discoverPost, pickPostLink };
