@@ -10,9 +10,82 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.140)
+## Version history (v0.1.0 → v0.1.141)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.141 — A harness helper that skipped every blog-post, share-row and feed-content test (it took the nav's `/blog/` link for a post) now finds the post; platform self-CI runs a public project on both fixture sites; the media round trip's leftover upload is removed through a PR, not a direct write to `main`.**
+Test-harness release: nothing under `theme/`, `infrastructure/`,
+`oauth-proxy/`, `scaffold/`, `scripts/`, `examples/` or `skills/` changed apart
+from the pins, and the only `.github/` change is `self-fixture-e2e.yml`, the
+platform's own CI, not a reusable workflow
+(`git diff --stat v0.1.140 origin/main` is `e2e/`, `.github/workflows/self-fixture-e2e.yml`,
+`AGENTS.md`, `docs/CONTRIBUTING.md` and `docs/skill-impact.md`).
+Post discovery. `discoverPost` in `e2e/content-fixtures.js` took the first
+`a[href^="/blog/"][href$="/"]`, which is the site header's nav link `/blog/`
+(first in the DOM on every default-layout page); the slug match on the next line
+rejected it and the helper returned `null`, so every test that needs a post hit
+`test.skip("no published posts")`. New pure `pickPostLink(anchors)` returns the
+first anchor whose href is exactly `/blog/<slug>/` (non-empty slug, no query or
+fragment) and skips paginator `/blog/page<N>/` listings; `discoverPost` collects
+every anchor and delegates to it. `e2e/content-fixtures.test.js` covers it (5
+tests). The tests this un-skips on a consumer with a blog are the `blog-post`
+specs, the share-row tests, the "/feed.xml content includes every published
+post" test and the feed-link icon tests in `feeds-and-share.spec.js`.
+jodidaniel.com has no blog, so they still skip there
+([#713](https://github.com/Adam-S-Daniel/cms-platform/pull/713), which found the
+gap in [#712](https://github.com/Adam-S-Daniel/cms-platform/pull/712)'s review).
+Public specs on the fixtures. Platform self-CI ran no public-site spec, so
+v0.1.139's public specs first ran on a consumer's bump PR and broke
+jodidaniel.com. The `fixture-e2e-project` matrix in `self-fixture-e2e.yml` gains
+two legs, `chromium-desktop-1080` on `e2e/fixture-site` (`/` on the theme layout)
+and on `e2e/fixture-site-singlepage` (`/` on a site-owned `_layouts/home.html`,
+jodidaniel.com's shape), each with a named proof test that must pass; the
+required `fixture-e2e` gate is unchanged. To make the specs hold on the fixtures:
+`feeds-and-share.spec.js` reads the feed title from the site's `_config.yml`
+(`title`, else `name`, and fails if neither is set) instead of the literal
+"Adam Daniel"; `not-found.spec.js` skips its header/footer test when the new
+`pageUsesThemeLayout(siteRoot, relPath)` in `e2e/site-capabilities.js` says
+`404.html` does not use the theme layout (`homeUsesThemeLayout` now delegates to
+it; both consumers use `layout: default`, so it still runs there);
+`site-link-crawler.spec.js` ignores a `/tags/` link only on an `e2e-` slug post
+page (`<article class="post">`), because `auto_tag_pages.rb` never builds an
+archive for those; the fixtures' home, blog index and tags index markup now
+match adamdaniel.ai's. The load-time AST lint follows spec-local wrappers
+transitively and covers every `*.spec.js`
+([#712](https://github.com/Adam-S-Daniel/cms-platform/pull/712), fixes
+[#702](https://github.com/Adam-S-Daniel/cms-platform/issues/702)).
+Media safety net. `cms-media-roundtrip.spec.js` removed a leftover per-run
+upload with a Contents-API `DELETE` on `main`, which the ruleset refuses (empty
+`bypass_actors`), so it only warned. It now removes the upload through
+`removeFixtureViaPr` with its own slug (`mediaUploadRemovalSlug`, the post's
+slug plus `-upload`, so the two removal PRs get different branches). Each close,
+read and removal in that `afterAll` runs in its own `try`, so the upload leg
+runs even when the post leg fails; failures are rethrown (one as is, two or more
+as an `AggregateError`). New checks in `e2e/leftover-e2e-tags.test.js` over the
+five safety-net specs: no `.catch`/`.then`/`.finally` on `readFileOnRef`, a
+`catch` around a close, read or removal must throw or record the error and throw
+later, and no Contents-API write to `main`
+([#709](https://github.com/Adam-S-Daniel/cms-platform/pull/709), fixes
+[#697](https://github.com/Adam-S-Daniel/cms-platform/issues/697)). Not changed:
+`cms-delete-published.spec.js`'s `tryHardDelete` still waits on the merge.
+Guards and docs. `e2e/examples-site-pins-current.test.js` gains contract 8:
+AGENTS.md's "Current release: `vX.Y.Z` (`v0.1.0`–`vX.Y.Z` are tagged" sentence
+must name `plugin.json`'s version in both positions, so a release prep that
+forgets the line goes red
+([#708](https://github.com/Adam-S-Daniel/cms-platform/pull/708)).
+`docs/skill-impact.md` records the touch-gate result for the v0.1.140
+`ci-watcher-loops` change, which was "outstanding" at that release
+([#705](https://github.com/Adam-S-Daniel/cms-platform/pull/705), part of
+[skills-evals#89](https://github.com/Adam-S-Daniel/skills-evals/issues/89)).
+Consumers get the harness changes with their next platform bump (specs and
+harness are read from the platform checkout at the pinned ref), and nothing a
+bootstrap template, the oauth proxy, the gem or the reusable workflows ship
+moved, so no bootstrap redeploy. adamdaniel.ai's bump now runs the blog-post,
+share-row and feed-content tests that skipped before; they ran and passed in the
+#713 review against a local build of adamdaniel.ai with this theme. jodidaniel.com's
+bump should show no change (no blog, home page already skipped for the theme
+specs).
 
 **v0.1.140 — The three other e2e safety nets also close the run's own in-flight Decap PR before trusting `main`; the theme's home-page specs skip a consumer whose `/` is a site-owned layout, which fixes the v0.1.139 bump failure on jodidaniel.com; the `ci-watcher-loops` skill takes a dispatched run's id from the URL `gh workflow run` prints.**
 Test-harness and skill release: nothing under `.github/`, `theme/`,
