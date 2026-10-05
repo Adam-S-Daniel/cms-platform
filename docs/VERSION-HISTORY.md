@@ -10,9 +10,28 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.134)
+## Version history (v0.1.0 → v0.1.135)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.135 — the enforced admin CSP allows `blob:` fetches, so saving an entry with an uploaded image works again; the gate banner's link reloads from inside an entry; idle autosave no longer paints a half-filled entry red.**
+The enforced (and Report-Only) admin CSP's `connect-src` now includes `blob:`:
+Decap `fetch()`es an uploaded image's object URL before committing it, and
+without it every save of an entry with a new upload failed with `TypeError:
+Failed to fetch` on a site running `ADMIN_CSP_MODE=enforce`; consumers must
+redeploy their bootstrap stack after the bump
+([#630](https://github.com/Adam-S-Daniel/cms-platform/pull/630), for
+[#627](https://github.com/Adam-S-Daniel/cms-platform/issues/627)). The
+coming-soon banner's "Change this setting" link, clicked from an entry route,
+now pushes the target URL and reloads instead of letting Decap do an
+entry → entry hash navigation that opened Site Settings as an empty form under
+"Changes saved" ([#629](https://github.com/Adam-S-Daniel/cms-platform/pull/629),
+for [#624](https://github.com/Adam-S-Daniel/cms-platform/issues/624)).
+`autosave-on-hide.js` skips its Save click while a required text field is
+empty, so stepping away from a half-filled new entry no longer raises "… IS
+REQUIRED." errors and the missed-field toast
+([#631](https://github.com/Adam-S-Daniel/cms-platform/pull/631), part of
+[#625](https://github.com/Adam-S-Daniel/cms-platform/issues/625)).
 
 **v0.1.134 — the code-quality skill names golangci-lint's v2 config schema, and a release-bearing PR needs an independent review stamp to merge.**
 `code-quality`'s "Adding a new language" step 2 now says to write a golangci-lint
