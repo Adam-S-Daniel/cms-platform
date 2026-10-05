@@ -55,6 +55,7 @@ const {
   waitForCmsPullRequest,
   waitForMerge,
   makeDeployQueueExtender,
+  describeError,
 } = require("./github-actions-poll");
 const {
   createBranchFromMain,
@@ -204,7 +205,7 @@ test.afterAll(async () => {
       `[cleanup-safety-net] opened cleanup PR #${pr.number} on branch ${branch}; not waiting for merge`,
     );
   } catch (e) {
-    console.warn(`[cleanup-safety-net] failed to open cleanup PR: ${e && e.message}`);
+    console.warn(`[cleanup-safety-net] failed to open cleanup PR: ${describeError(e)}`);
   }
 });
 
@@ -411,7 +412,7 @@ test(
             try {
               await addLabel({ prNumber: pr.number, label: "cms/ready" });
             } catch (e) {
-              console.warn(`[tags-lifecycle] could not label PR #${pr.number}: ${e && e.message}`);
+              console.warn(`[tags-lifecycle] could not label PR #${pr.number}: ${describeError(e)}`);
             }
             labelled = true;
             break;

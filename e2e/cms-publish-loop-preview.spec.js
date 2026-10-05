@@ -44,6 +44,7 @@ const {
   makePreviewCanaryRecoverer,
   waitForCmsPullRequest,
   waitForMerge,
+  describeError,
 } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { previewTarget } = require("./cms-host");
@@ -449,7 +450,7 @@ test.afterAll(async () => {
     current = await fetchCanaryFromBranch(PR_HEAD_REF);
   } catch (e) {
     console.warn(
-      `[cleanup-harness] couldn't read ${CANARY.path} from ${PR_HEAD_REF}; skipping safety net: ${e && e.message}`,
+      `[cleanup-harness] couldn't read ${CANARY.path} from ${PR_HEAD_REF}; skipping safety net: ${describeError(e)}`,
     );
     return;
   }
