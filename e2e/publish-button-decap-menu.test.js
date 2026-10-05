@@ -144,7 +144,8 @@ const PR_42 = {
  * in publish-button-refresh.test.js: get() returns snapshots[i], each
  * refresh() advances i (the last one sticks).
  */
-function load(snapshots, { withSlot = false } = {}) {
+function load(snapshots, { withSlot = false, holdReads = false } = {}) {
+  const held = [];
   const src = fs.readFileSync(SHIM_PATH, "utf8");
   const dom = buildToolbar();
   const slot = withSlot ? dom.root.append(new El("span", { id: "cms-publish-state-actions" })) : null;
@@ -196,9 +197,16 @@ function load(snapshots, { withSlot = false } = {}) {
       fn();
       return 0;
     },
+    // Answers every call arm() makes: GET /pulls/<n> (the label read
+    // before the re-arm, cms-platform#607) returns a PR with no labels, and
+    // the label POST succeeds. `holdReads` parks each GET until release(),
+    // which is how a publish is kept "in flight".
     fetch: (url, init) => {
-      fetchCalls.push({ url: String(url), method: (init && init.method) || "GET", body: init && init.body });
-      return Promise.resolve({ ok: true, status: 200 });
+      const method = (init && init.method) || "GET";
+      fetchCalls.push({ url: String(url), method, body: init && init.body });
+      const res = { ok: true, status: 200, json: () => Promise.resolve({ labels: [] }) };
+      if (method === "GET" && holdReads) return new Promise((resolve) => held.push(() => resolve(res)));
+      return Promise.resolve(res);
     },
     console: { info() {}, warn() {} },
   };
@@ -241,7 +249,10 @@ function load(snapshots, { withSlot = false } = {}) {
     return ev;
   }
 
-  return { api: sandbox.window.__publishButton, dom, fire, fetchCalls, alerts };
+  const release = () => {
+    while (held.length) held.shift()();
+  };
+  return { api: sandbox.window.__publishButton, dom, fire, fetchCalls, alerts, release };
 }
 
 function armPosts(fetchCalls) {
@@ -251,7 +262,7 @@ function armPosts(fetchCalls) {
 // doPublish() is async and fire-and-forget from the listener; drain the
 // microtask queue (no wall clock involved).
 async function settle() {
-  for (let n = 0; n < 20; n++) await Promise.resolve();
+  for (let n = 0; n < 50; n++) await Promise.resolve();
 }
 
 test.describe("publish-button — Decap's Publish menu goes through the cms/ready route", () => {
@@ -313,6 +324,23 @@ test.describe("publish-button — Decap's Publish menu goes through the cms/read
     expect(alerts.length, "one explanation with no state bar on screen").toBe(1);
     expect(alerts[0]).toContain("could not be published right now");
     expect(alerts[0]).not.toContain("Ready");
+  });
+
+  test("a second selection while the first publish is in flight adds cms/ready once", async () => {
+    const { dom, fire, fetchCalls, alerts, release } = load([PR_42], { holdReads: true });
+    fire("click", dom.publish.items[0]);
+    await settle();
+    // The first publish is parked on its label read; press again, by click
+    // and by keyboard, on two different items.
+    fire("click", dom.publish.items[0]);
+    fire("keydown", dom.publish.items[1], { key: "Enter" });
+    await settle();
+    release();
+    await settle();
+    release();
+    await settle();
+    expect(alerts, "Decap's handler never runs, and nothing failed").toEqual([]);
+    expect(armPosts(fetchCalls).length, "one publish in flight means one cms/ready add").toBe(1);
   });
 
   test("with the state bar on screen the error stays in the bar, not a dialog", async () => {
