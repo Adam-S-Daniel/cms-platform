@@ -34,8 +34,9 @@ const EXAMPLE_CALLER = path.resolve(
   "../examples/site/.github/workflows/scheduled-run-health.yml",
 );
 
+// The helpers are stateless; keep Node's module cache instead of reloading the
+// entire audit source for each independent assertion.
 function loadScript() {
-  delete require.cache[SCRIPT_PATH];
   return require(SCRIPT_PATH);
 }
 
@@ -140,8 +141,10 @@ const CALLERS = [
 
 for (const { label, text } of CALLERS) {
   test.describe(`${label} — caller shape`, () => {
+    const raw = text();
+    const doc = parseYaml(raw);
+
     test("schedules daily and allows manual dispatch", () => {
-      const doc = parseYaml(text());
       const evs = events(doc.on);
       expect(evs).toContain("schedule");
       expect(evs).toContain("workflow_dispatch");
@@ -157,22 +160,19 @@ for (const { label, text } of CALLERS) {
       // strings; the reusable's boolean input then rejects them and the run
       // STARTUP-FAILS — invisibly, which is precisely the failure class this
       // audit exists to surface. Never regress the caller to type: boolean.
-      const doc = parseYaml(text());
       const input = doc.on.workflow_dispatch.inputs.dry_run;
       expect(input.type).toBe("string");
       expect(input.default).toBe("false");
-      expect(text()).toMatch(
+      expect(raw).toMatch(
         /dry_run:\s*\$\{\{\s*github\.event_name\s*==\s*'workflow_dispatch'\s*&&\s*fromJSON\(inputs\.dry_run\)\s*\|\|\s*false\s*\}\}/,
       );
     });
 
     test("grants the reusable's needed permissions (caller caps the token)", () => {
-      const doc = parseYaml(text());
       expect(doc.permissions).toMatchObject({ actions: "read", issues: "write" });
     });
 
     test("calls the scheduled-run-health reusable", () => {
-      const doc = parseYaml(text());
       const uses = doc.jobs.audit.uses;
       expect(uses).toMatch(/\.github\/workflows\/scheduled-run-health\.yml/);
     });
@@ -888,10 +888,11 @@ test.describe("audit-scheduled-runs.js — default-branch push lane (#279)", () 
 // tests still green, which is how it shipped the first time. These two tests
 // drive the real CLI end to end so that can't happen twice.
 //
-// `ghApi` shells out to `gh`, so a `gh` stub earlier on PATH is the entire
-// injection seam: no production code changes shape to be testable, and what
-// gets asserted is the argv the script really builds (`-X PATCH -f
-// state=closed`) rather than a mock's idea of it.
+// `ghApi` shells out through execFileSync. Most cases preload a canned answer
+// at that boundary, avoiding a fresh Node interpreter for every gh response.
+// Success and failure cases also retain an executable gh stub on PATH, using
+// the same route handler. Every audit itself still runs as a real Node CLI:
+// require.main, argv, stdout/stderr and process.exit are all authentic.
 //
 // Deterministic: no network, no sleeps, and both fixtures return ZERO runs, so
 // nothing depends on where "now" falls relative to a run's timestamp.
@@ -907,29 +908,50 @@ function ghStubDir(routes) {
   const log = path.join(dir, "calls.jsonl");
   const routesFile = path.join(dir, "routes.json");
   fs.writeFileSync(routesFile, JSON.stringify(routes));
-  const bin = path.join(dir, "gh");
+  const handler = path.join(dir, "route.cjs");
   fs.writeFileSync(
-    bin,
-    `#!/usr/bin/env node
+    handler,
+    `
 const fs = require("node:fs");
-const argv = process.argv.slice(2);
+const routes = JSON.parse(fs.readFileSync(${JSON.stringify(routesFile)}, "utf8"));
+exports.execFileSync = (command, argv, options) => {
+if (command !== "gh" || options.encoding !== "utf8" || options.maxBuffer !== 64 * 1024 * 1024) {
+  throw new Error("unexpected subprocess interface in audit fixture");
+}
 // Logged BEFORE routing, so a call this table refuses to answer is still
 // recorded — an attempted close must be visible even when it then fails.
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(argv) + "\\n");
 const endpoint = argv[0] === "api" ? argv[1] : "";
-for (const [kind, pattern, body] of JSON.parse(fs.readFileSync(${JSON.stringify(routesFile)}, "utf8"))) {
+let failure = "gh stub: no route for " + endpoint;
+for (const [kind, pattern, body] of routes) {
   if (kind === "eq" ? endpoint !== pattern : !endpoint.includes(pattern)) continue;
   if (body === null) {
-    console.error("gh stub: forced failure for " + endpoint);
-    process.exit(1);
+    failure = "gh stub: forced failure for " + endpoint;
+    break;
   }
-  process.stdout.write(body);
-  process.exit(0);
+  return body;
 }
-console.error("gh stub: no route for " + endpoint);
-process.exit(1);
+// Match the failed execFileSync interface, including its encoded output.
+const stderr = failure + "\\n";
+throw Object.assign(new Error("Command failed: gh " + argv.join(" ") + "\\n" + stderr), {
+  status: 1, signal: null, stdout: "", stderr, output: [null, "", stderr],
+});
+};
 `,
   );
+  fs.writeFileSync(path.join(dir, "preload.cjs"),
+    'require("node:child_process").execFileSync = require("./route.cjs").execFileSync;\n');
+  const bin = path.join(dir, "gh");
+  fs.writeFileSync(bin, `#!/usr/bin/env node
+try {
+  process.stdout.write(require("./route.cjs").execFileSync("gh", process.argv.slice(2), {
+    encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+  }));
+} catch (error) {
+  process.stderr.write(error.stderr || error.message);
+  process.exit(error.status || 1);
+}
+`);
   fs.chmodSync(bin, 0o755);
   return { dir, log };
 }
@@ -948,8 +970,9 @@ function closeCalls(log) {
   return callsOf(log).filter((argv) => argv.includes("PATCH") && argv.includes("state=closed"));
 }
 
-function runAudit(stubDir) {
-  const res = spawnSync(process.execPath, [SCRIPT_PATH, "--repo", "o/r"], {
+function runAudit(stubDir, { spawnGh = false } = {}) {
+  const preload = spawnGh ? [] : ["--require", path.join(stubDir, "preload.cjs")];
+  const res = spawnSync(process.execPath, [...preload, SCRIPT_PATH, "--repo", "o/r"], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${stubDir}${path.delimiter}${process.env.PATH}` },
   });
@@ -996,7 +1019,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
     ]);
 
-    const { code, out } = runAudit(dir);
+    const { code, out } = runAudit(dir, { spawnGh: true });
     expect(
       closeCalls(log),
       `THE #258 BUG: closed the alert with a dead workflow outstanding:\n${out}`,
@@ -1075,7 +1098,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       ["eq", "repos/o/r", null],
     ]);
 
-    const { code, out } = runAudit(dir);
+    const { code, out } = runAudit(dir, { spawnGh: true });
     expect(
       closeCalls(log),
       `THE #258 BUG: closed the alert on an UNKNOWN dead-workflow answer:\n${out}`,

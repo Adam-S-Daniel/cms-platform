@@ -815,6 +815,65 @@ reruns one job in place for an additional same-commit sample; `gh run rerun
 because its runner-allocation stagger is a property of the whole matrix
 launch, not of one job.
 
+### Less repeated work (2026-10-04)
+
+[Issue #462](https://github.com/Adam-S-Daniel/cms-platform/issues/462) follows
+the worker/shard experiment above by reducing repeated child processes and
+parsing. The baseline was
+[commit 3818240](https://github.com/Adam-S-Daniel/cms-platform/commit/381824060a448677eb78dc7cda5bf2889271d60f).
+The five files retain **237 tests**:
+[ci-matrix](../e2e/ci-matrix.test.js) 14,
+[scaffold agreement](../e2e/examples-site-scaffold-agreement.test.js) 15,
+[gitleaks canary](../e2e/gitleaks-allowlist-canary.test.js) 24,
+[repo-settings audit](../e2e/repo-settings-audit.test.js) 102, and
+[scheduled-run health](../e2e/scheduled-run-health.test.js) 82. Every assertion
+and case remains; each real CLI contract retains a real invocation. Measured
+gitleaks invocations fall **28 → 17**, fixture `gh` invocations **47 → 10**, and
+matrix/config Node invocations **30 → 10**. Immutable parsed inputs are shared
+per worker, with copies for mutation cases and independent test failures.
+
+Each comparison below has three clean local runs per side, measured with
+`/usr/bin/time -v`; **CPU-seconds = user + system**, including child processes.
+Five-file runs used `--project=chromium-light --workers=1 --reporter=line`.
+Full-lane runs used the unchanged
+[self-CI lint command](../.github/workflows/self-ci.yml), with `TARGET=prod`,
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, `PW_PROJECT=chromium-light`, `CI` unset,
+and `PW_WORKERS` set to the stated count. All ran in a PID namespace on the
+same host with 24 logical CPUs and the same dependencies. The four-worker
+comparison matches the CI worker count, but enforces no CPU affinity or quota;
+it remains a local measurement on that host.
+
+| Scope / workers / version | CPU samples (s) | CPU median (range), s | Wall samples (s) | Wall median (range), s |
+|---|---|---|---|---|
+| Five files / 1 / before | 42.12, 50.62, 52.18 | 50.62 (42.12–52.18) | 31.75, 38.55, 40.60 | 38.55 (31.75–40.60) |
+| Five files / 1 / after | 21.78, 19.33, 18.43 | 19.33 (18.43–21.78) | 16.77, 14.29, 14.65 | 14.65 (14.29–16.77) |
+| Full lane / 24 / before | 362.37, 360.41, 397.98 | 362.37 (360.41–397.98) | 24.28, 22.75, 26.16 | 24.28 (22.75–26.16) |
+| Full lane / 24 / after | 421.51, 396.21, 398.70 | 398.70 (396.21–421.51) | 28.40, 25.58, 27.09 | 27.09 (25.58–28.40) |
+| Full lane / 4 / before | 201.87, 219.58, 183.01 | 201.87 (183.01–219.58) | 45.57, 48.85, 42.21 | 45.57 (42.21–48.85) |
+| Full lane / 4 / after | 171.76, 187.41, 193.63 | 187.41 (171.76–193.63) | 41.24, 43.39, 43.35 | 43.35 (41.24–43.39) |
+
+All clean five-file runs passed 237 tests and exited 0. All clean full-lane
+runs exited 0 with **3,655 passed + 98 skipped = 3,753 tests** across 183 files;
+the 2,112-test count above is the earlier experiment's snapshot. An initial
+baseline canary run hit an existing random probe diagnostic flake: a per-rule
+allowlist produced the whole-file-skip message instead of the expected
+rule-specific message. Failed baseline samples were retained separately and
+excluded from the timing table; their assertions were preserved.
+
+The five-file CPU median drops about **62%**. Whole-lane results depend on
+worker count: at four workers, CPU and wall medians fall about **7%** and
+**5%**, with overlapping ranges; at 24 workers, both medians regress. These
+measurements establish the targeted CPU reduction and a modest local
+four-worker improvement, without establishing a faster GitHub job.
+
+Three **before-only CI** `Run pure-fs harness lints` step samples are
+[79 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242331905/job/111553363207),
+[56 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242134166/job/111552804256), and
+[53 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37240324345/job/111547578693).
+Post-change CI samples remain unavailable because this sprint did not push or
+dispatch workflows. The issue's three-run CI before/after requirement remains
+open until the proposed change runs there.
+
 ### act learnings (from this measurement session)
 
 The task called for validating the shard+gate wiring with `nektos/act`

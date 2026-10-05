@@ -52,17 +52,29 @@ const os = require("node:os");
 const path = require("node:path");
 const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 
+// Share workflow/AST facts and the probe batch in one worker even when the
+// overall lane is fullyParallel. Default mode keeps failures independent;
+// serial mode would skip the remaining cases after a failure.
+test.describe.configure({ mode: "default" });
+
 const WORKFLOW = "secrets-scan.yml";
 const CANARY_STEP = "Allowlist canary";
+let workflowSteps;
+let extractedProbe;
+let extractedFacts;
+let factResult;
 
 // Parse the workflow (real YAML parser — anchors/aliases resolved) and return
 // its scan-job steps.
 function steps() {
-  const doc = parseYaml(readWorkflow(WORKFLOW));
-  return ((doc && doc.jobs && doc.jobs.scan && doc.jobs.scan.steps) || []).map((s) => ({
-    name: String(s.name || ""),
-    run: String(s.run || ""),
-  }));
+  if (!workflowSteps) {
+    const doc = parseYaml(readWorkflow(WORKFLOW));
+    workflowSteps = ((doc && doc.jobs && doc.jobs.scan && doc.jobs.scan.steps) || []).map((s) => ({
+      name: String(s.name || ""),
+      run: String(s.run || ""),
+    }));
+  }
+  return workflowSteps;
 }
 
 function canaryStep() {
@@ -73,13 +85,15 @@ function canaryStep() {
 // lexical token inside an already-parsed shell string, not code structure, so
 // locating it by marker is appropriate here.
 function probeSource() {
+  if (extractedProbe !== undefined) return extractedProbe;
   const step = canaryStep();
   if (!step) return null;
   const open = step.run.indexOf("<<'PYEOF'\n");
   if (open < 0) return null;
   const body = step.run.slice(open + "<<'PYEOF'\n".length);
   const close = body.lastIndexOf("\nPYEOF");
-  return close < 0 ? null : body.slice(0, close);
+  extractedProbe = close < 0 ? null : body.slice(0, close);
+  return extractedProbe;
 }
 
 // HOUSE RULE: reason about the probe's STRUCTURE with a parser, never a regex.
@@ -140,13 +154,21 @@ json.dump({
 // Module-level function names, the names actually called, the shape of the
 // `seen.add(...)` argument inside scan(), and every gitleaks argv — as facts,
 // not text.
+function probeFactResult() {
+  if (!factResult) {
+    factResult = require("node:child_process").spawnSync("python3", ["-c", FACTS_PY], {
+      input: probeSource(),
+      encoding: "utf8",
+    });
+  }
+  return factResult;
+}
+
 function probeFacts() {
-  const res = require("node:child_process").spawnSync("python3", ["-c", FACTS_PY], {
-    input: probeSource(),
-    encoding: "utf8",
-  });
+  const res = probeFactResult();
   if (res.status !== 0) throw new Error(`probe fact extraction failed:\n${res.stderr}`);
-  return JSON.parse(res.stdout);
+  if (!extractedFacts) extractedFacts = JSON.parse(res.stdout);
+  return extractedFacts;
 }
 
 function hasBinary(bin) {
@@ -240,6 +262,18 @@ useDefault = true
 [allowlist]
 description = "fixture"
 regexes = ['''test_client_(id|secret)''']
+`;
+const LATENT_GLOBAL = `[extend]
+useDefault = true
+[allowlist]
+description = "fixture"
+paths = ['''scripts/nonexistent-file\\.js''']
+`;
+const SWALLOW = `[extend]
+useDefault = true
+[allowlist]
+description = "fixture"
+regexes = ['''ghp_[A-Za-z0-9]{36}''']
 `;
 
 // ── rule-scoped allowlists ────────────────────────────────────────────────────
@@ -341,6 +375,110 @@ id = "githbu-pat"
 paths = ['''oauth-proxy/''']
 `;
 
+// The remaining cases share one worker/process, but execute the shipped probe
+// separately for every config. Only identical BARE scans are reused; each
+// caller scan still invokes the real gitleaks CLI. The standalone blanket and
+// no-config cases below also keep Python's real process-exit contracts.
+const BATCH_CONFIGS = [
+  NARROWED, LATENT_GLOBAL, SWALLOW, PER_RULE_PLURAL, PER_RULE_SINGULAR,
+  PER_RULE_DIRECTORY, PER_RULE_BOTH, PER_RULE_UNRELATED, PER_RULE_LATENT,
+  GLOBAL_TARGET_RULES, GLOBAL_MATCH_REGEXES, PER_RULE_NO_PATHS, UNLOADABLE,
+  "[allowlist\nthis is not toml = = =\n",
+];
+let batchResults;
+const BATCH_PY = `
+import contextlib, io, itertools, json, os, pathlib, secrets, shutil, string, subprocess, sys
+
+payload = json.load(sys.stdin)
+source = compile(payload["source"], "shipped-canary.py", "exec")
+workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
+runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+real_run, real_choice = subprocess.run, secrets.choice
+bare_cache = {}
+
+def run(argv, *args, **kwargs):
+    config = pathlib.Path(argv[argv.index("--config") + 1]) if argv[0] == "gitleaks" else None
+    if config != runner_temp / "gitleaks-canary-bare.toml":
+        return real_run(argv, *args, **kwargs)
+    report = pathlib.Path(argv[argv.index("--report-path") + 1])
+    tree = pathlib.Path(argv[-1])
+    executable = pathlib.Path(shutil.which(argv[0])).resolve()
+    stat = executable.stat()
+    # Full argv, executable identity, config and tree BYTES, cwd, environment,
+    # and subprocess options must match. Nothing caller-scoped is cached.
+    key = (tuple(argv), str(executable), stat.st_dev, stat.st_ino, stat.st_size,
+           stat.st_mtime_ns, config.read_bytes(), os.getcwd(),
+           tuple(sorted(os.environ.items())), repr(args), repr(sorted(kwargs.items())),
+           tuple((str(p.relative_to(tree)), p.read_bytes())
+                 for p in sorted(tree.rglob("*")) if p.is_file()))
+    if key not in bare_cache:
+        result = real_run(argv, *args, **kwargs)
+        bare_cache[key] = (result, report.read_bytes() if report.exists() else None)
+    else:
+        result, data = bare_cache[key]
+        if data is None:
+            report.unlink(missing_ok=True)
+        else:
+            report.write_bytes(data)
+    return bare_cache[key][0]
+
+results = []
+try:
+    subprocess.run = run
+    for config in payload["configs"]:
+        (workspace / ".gitleaks.toml").write_text(config, encoding="utf-8")
+        # Every original run had a fresh RUNNER_TEMP. In particular, an
+        # unloadable config must not read the preceding caller's report.
+        for entry in runner_temp.iterdir():
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+        # Thirty-six distinct characters give the fallback rule stable entropy.
+        # Build only the body at runtime; no credential literal is committed.
+        # Reset per case so equal planted trees really are byte-identical.
+        alphabet = string.ascii_letters + string.digits
+        letters = itertools.cycle("".join(alphabet[(17 * i + 11) % len(alphabet)]
+                                        for i in range(36)))
+        def choice(alphabet):
+            assert alphabet == string.ascii_letters + string.digits
+            return next(letters)
+        secrets.choice = choice
+        out, err, code = io.StringIO(), io.StringIO(), 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                exec(source, {"__name__": "__main__"})
+            except SystemExit as exc:
+                code = exc.code if exc.code is not None else 0
+        results.append({"code": code, "out": out.getvalue() + err.getvalue()})
+finally:
+    subprocess.run, secrets.choice = real_run, real_choice
+json.dump(results, sys.stdout)
+`;
+
+function runBatchedProbe(config) {
+  if (!batchResults) {
+    const repo = fixtureRepo(FIXTURE_FILES, NARROWED);
+    const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), "canary-batch-"));
+    try {
+      const res = require("node:child_process").spawnSync("python3", ["-c", BATCH_PY], {
+        input: JSON.stringify({ source: probeSource(), configs: BATCH_CONFIGS }),
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_WORKSPACE: repo, RUNNER_TEMP: runnerTemp },
+      });
+      if (res.status !== 0) throw new Error(`batched probe failed:\n${res.stderr}`);
+      const results = JSON.parse(res.stdout);
+      if (results.length !== BATCH_CONFIGS.length) throw new Error("batched probe lost a case");
+      batchResults = new Map(BATCH_CONFIGS.map((entry, i) => [entry, results[i]]));
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(runnerTemp, { recursive: true, force: true });
+    }
+  }
+  if (!batchResults.has(config)) throw new Error("config missing from probe batch");
+  return batchResults.get(config);
+}
+
 // ── structural lints (always run) ─────────────────────────────────────────────
 
 test.describe("secrets-scan allowlist canary: shape", () => {
@@ -359,11 +497,7 @@ test.describe("secrets-scan allowlist canary: shape", () => {
   test("the probe body extracts and is valid python", () => {
     const src = probeSource();
     expect(src, "could not extract the `<<'PYEOF'` heredoc — keep the delimiter").toBeTruthy();
-    const res = require("node:child_process").spawnSync(
-      "python3",
-      ["-c", "import ast,sys; ast.parse(sys.stdin.read())"],
-      { input: src, encoding: "utf8" },
-    );
+    const res = probeFactResult();
     expect(res.status, `probe body is not valid python:\n${res.stderr}`).toBe(0);
   });
 
@@ -445,8 +579,7 @@ test.describe("secrets-scan allowlist canary: behaviour", () => {
   });
 
   test("PASSES on the same fixture with the entry narrowed to `regexes`", () => {
-    const repo = fixtureRepo(FIXTURE_FILES, NARROWED);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(NARROWED);
     expect(code, `canary failed a config with no path exclusions:\n${out}`).toBe(0);
     expect(out).toContain("allowlist canary: OK");
   });
@@ -463,8 +596,7 @@ test.describe("secrets-scan allowlist canary: behaviour", () => {
   test("PASSES, with a warning, on an unparseable .gitleaks.toml", () => {
     // The real scan step reports the config error; the canary must not turn one
     // broken config into two confusing failures.
-    const repo = fixtureRepo(FIXTURE_FILES, "[allowlist\nthis is not toml = = =\n");
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe("[allowlist\nthis is not toml = = =\n");
     expect(code, `canary hard-failed on a malformed config:\n${out}`).toBe(0);
     expect(out).toContain("::warning::");
   });
@@ -474,14 +606,7 @@ test.describe("secrets-scan allowlist canary: behaviour", () => {
     // entries but ship none of the matching files, so there is no LIVE blind
     // spot. A latent entry must not red their CI — it activates, and fails, the
     // moment a matching file appears.
-    const latent = `[extend]
-useDefault = true
-[allowlist]
-description = "fixture"
-paths = ['''scripts/nonexistent-file\\.js''']
-`;
-    const repo = fixtureRepo(FIXTURE_FILES, latent);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(LATENT_GLOBAL);
     expect(code, `canary failed on a latent (unmatched) paths entry:\n${out}`).toBe(0);
     expect(out).toContain("allowlist canary: OK");
   });
@@ -495,14 +620,7 @@ paths = ['''scripts/nonexistent-file\\.js''']
     // config written to $RUNNER_TEMP, which a caller cannot influence. So the
     // verdict here must be the caller's blind spot, never "the canary broke" —
     // the paired self-check test below covers the other side of that fork.
-    const swallow = `[extend]
-useDefault = true
-[allowlist]
-description = "fixture"
-regexes = ['''ghp_[A-Za-z0-9]{36}''']
-`;
-    const repo = fixtureRepo(FIXTURE_FILES, swallow);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(SWALLOW);
     expect(code, `a config swallowing every PAT should fail:\n${out}`).toBe(1);
     expect(out).toContain("allowlist blind spot: __gitleaks_canary_control__/control.txt");
     expect(out, "the blind spot must be attributed to the control path").toContain(
@@ -520,8 +638,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
   // short of a (file, RuleID) comparison can see the loss.
 
   test("FAILS on a per-rule `[[rules.allowlists]]` paths entry", () => {
-    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_PLURAL);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(PER_RULE_PLURAL);
     expect(code, `canary passed a per-rule paths entry:\n${out}`).toBe(1);
     expect(out).toContain("rule 'github-pat' reports nothing at oauth-proxy/test_lambda.py");
     // The message must name the entry AND the rule, so the reader can judge the
@@ -534,8 +651,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
 
   test("FAILS on the singular `[rules.allowlist]` spelling too", () => {
     // Half the bypass: measured, both spellings silence the rule identically.
-    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_SINGULAR);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(PER_RULE_SINGULAR);
     expect(code, `canary passed the singular per-rule spelling:\n${out}`).toBe(1);
     expect(out).toContain("rule 'github-pat' reports nothing at oauth-proxy/test_lambda.py");
   });
@@ -543,8 +659,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
   test("FAILS on an id-only rule stanza covering a whole directory", () => {
     // The minimal real-world shape: three lines, no regex restated, attached to
     // an INHERITED default rule, blinding it across a directory.
-    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_DIRECTORY);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(PER_RULE_DIRECTORY);
     expect(code, `canary passed an id-only directory-wide entry:\n${out}`).toBe(1);
     expect(out).toContain("rule 'github-pat' reports nothing at oauth-proxy/test_lambda.py");
     expect(out, "the entry, not just the rule, must be named").toContain("'oauth-proxy/'");
@@ -558,8 +673,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     // This case alone is NOT sufficient coverage: the file vanishes entirely, so
     // even a file-level comparison catches it. The three tests above are what
     // discriminate the fix from the naive one.
-    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_BOTH);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(PER_RULE_BOTH);
     expect(code, `canary passed two entries blinding every rule:\n${out}`).toBe(1);
     expect(out).toContain("oauth-proxy/test_lambda.py is skipped ENTIRELY");
     expect(out, "no rule reports this file — do not claim others still scan it").not.toContain(
@@ -571,8 +685,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     // The false-positive bound. gitleaks DEDUPES: the bare baseline attributes
     // the plant to exactly one rule, so an entry on any other rule cannot be
     // measured here — and says so instead of guessing.
-    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_UNRELATED);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(PER_RULE_UNRELATED);
     expect(code, `canary failed an entry on a rule the plant never triggers:\n${out}`).toBe(0);
     expect(out).toContain("NOT measurable by this check");
     expect(out, "the note must name the rule it could not measure").toContain("aws-access-token");
@@ -582,8 +695,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
   test("PASSES on a per-rule entry that matches no tracked file", () => {
     // Mirrors the latent-global contract above: an entry that covers nothing
     // today must not red anyone's CI. It activates when a matching file appears.
-    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_LATENT);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(PER_RULE_LATENT);
     expect(code, `canary failed on a latent per-rule entry:\n${out}`).toBe(0);
     expect(out).toContain("allowlist canary: OK");
   });
@@ -592,8 +704,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     // Not a per-rule block at all — a global one, i.e. squarely inside the scope
     // this check already claimed to cover, and it passed anyway. `targetRules`
     // is load-validated (a bogus id is fatal), so it is a first-class construct.
-    const repo = fixtureRepo(FIXTURE_FILES, GLOBAL_TARGET_RULES);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(GLOBAL_TARGET_RULES);
     expect(code, `canary passed a global targetRules entry:\n${out}`).toBe(1);
     expect(out).toContain("rule 'github-pat' reports nothing at oauth-proxy/test_lambda.py");
     expect(out, "the failure must name the construct that caused it").toContain("targetRules");
@@ -605,8 +716,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     // advice too literally: the entry matches the credential SHAPE, so it
     // silences `github-pat` everywhere — including the control path — while
     // `generic-api-key` keeps reporting the same files.
-    const repo = fixtureRepo(FIXTURE_FILES, GLOBAL_MATCH_REGEXES);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(GLOBAL_MATCH_REGEXES);
     expect(code, `canary passed a match-target regexes entry:\n${out}`).toBe(1);
     expect(out).toContain(
       "rule 'github-pat' reports nothing at __gitleaks_canary_control__/control.txt",
@@ -634,8 +744,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     // disabledRules = ["github-pat"]` all land here identically — exit 1 at the
     // control path with `generic-api-key` still reporting it. `stopwords` is the
     // fixture because it is an ALLOWLIST construct, i.e. squarely in scope.
-    const repo = fixtureRepo(FIXTURE_FILES, PER_RULE_NO_PATHS);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(PER_RULE_NO_PATHS);
     expect(code, `canary passed a stopwords entry blinding one rule:\n${out}`).toBe(1);
     expect(out).toContain(
       "rule 'github-pat' reports nothing at __gitleaks_canary_control__/control.txt",
@@ -657,8 +766,7 @@ regexes = ['''ghp_[A-Za-z0-9]{36}''']
     // report and exits non-zero — which the old code read as "nothing reported
     // anywhere", i.e. a blind spot at the control path, sending the reader to
     // hunt an allowlist that was never the problem.
-    const repo = fixtureRepo(FIXTURE_FILES, UNLOADABLE);
-    const { code, out } = runProbe(repo);
+    const { code, out } = runBatchedProbe(UNLOADABLE);
     expect(code, `canary hard-failed on a config gitleaks cannot load:\n${out}`).toBe(0);
     expect(out).toContain("::warning::");
     expect(out).toContain("could not load");

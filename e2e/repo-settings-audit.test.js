@@ -44,6 +44,9 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
 
+// Reuse immutable parsed inputs across cases without serial failure skipping.
+test.describe.configure({ mode: "default" });
+
 const SCRIPT_PATH = path.resolve(
   __dirname,
   "../scripts/audit-repo-settings.js",
@@ -52,8 +55,16 @@ const MANIFEST_PATH = path.resolve(__dirname, "../repo-settings.yml");
 const FIXTURES_DIR = path.join(__dirname, "fixtures", "repo-settings");
 
 function loadScript() {
-  delete require.cache[SCRIPT_PATH];
   return require(SCRIPT_PATH);
+}
+
+// Only the shipped manifest is immutable across this file. Parse and validate
+// it with the real loader once per worker, then clone for each mutation case.
+// Temporary manifests below still call script.loadManifest directly.
+let shippedManifest;
+function loadManifest() {
+  shippedManifest ||= loadScript().loadManifest(MANIFEST_PATH);
+  return structuredClone(shippedManifest);
 }
 
 function fixture(name) {
@@ -198,7 +209,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // regressed — NOT the live repos (this is a fixture-vs-manifest lock,
     // not a live comparison).
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     for (const repo of Object.keys(LIVE)) {
       const { findings, informational } = diffAgainstFixtures(
         script,
@@ -220,7 +231,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   test("READ-ONLY RULESETS: omitted bypass_actors on every fixture repo is UNVERIFIABLE, never fabricated drift or a write", () => {
     const script = loadScript();
     const risk = loadRisk();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const scans = Object.entries(LIVE).map(([repo, live]) =>
       diffAgainstFixtures(script, manifest, repo, {
         rulesets: withoutBypassActors(live.rulesets.map(fixture)),
@@ -248,7 +259,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("READ-ONLY RULESETS: hidden bypass plus a visible required-check delta plans that delta and gates the full PUT as unverifiable", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/adamdaniel.ai";
     const feature = fixture("adamdaniel.ruleset-feature.json");
     delete feature.bypass_actors;
@@ -293,7 +304,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("READ-ONLY RULESETS: null bypass_actors is malformed and remains unknown", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const main = fixture("cms-platform.ruleset-main.json");
     main.bypass_actors = null;
@@ -313,7 +324,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(a) jodidaniel feature ruleset vs the SHARED library entry is clean (default dismissal_restriction stripped)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const live = fixture("jodidaniel.ruleset-feature.json");
     // The org-repo-only decoration is present in the capture...
     const pr = live.rules.find((r) => r.type === "pull_request");
@@ -344,7 +355,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(b) rule order / check order / server keys never count as drift", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const shuffled = fixture("adamdaniel.ruleset-main.json");
     shuffled.rules.reverse();
     const rsc = shuffled.rules.find((r) => r.type === "required_status_checks");
@@ -369,7 +380,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // override) — so the flip this test locks is a live regression BACK to
     // false, not the other direction.
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const { findings } = diffAgainstFixtures(
       script,
       manifest,
@@ -415,7 +426,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // shipped the parameter cannot carry it, so the skew count goes up by one.
     // The CURRENT fixtures were re-captured for that field; this one was not.
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const { projected } = script.normalizeRuleset(
       fixture("jodidaniel.ruleset-main.DRIFTED-as-found-2026-07-10.json"),
     );
@@ -464,7 +475,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   // unnoticed: the people who could merge never met the wall.
   test("(g) the as-found feature rulesets carry EXACTLY the #371 required-context skew", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     for (const [repo, file] of [
       ["Adam-S-Daniel/adamdaniel.ai", "adamdaniel.ruleset-feature.DRIFTED-as-found-2026-07-10.json"],
       ["jodidaniel/jodidaniel.com", "jodidaniel.ruleset-feature.DRIFTED-as-found-2026-07-10.json"],
@@ -493,7 +504,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(e) an unmanaged live ruleset is detected (and never auto-deleted)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const stray = fixture("adamdaniel.ruleset-feature.json"); // not declared for the platform repo
     const { findings, liveRepo, liveRulesets } = diffAgainstFixtures(
       script,
@@ -526,7 +537,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(f) a live-only rule-parameter key is INFORMATIONAL, not drift", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const live = fixture("adamdaniel.ruleset-main.json");
     live.rules.find(
       (r) => r.type === "pull_request",
@@ -558,7 +569,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("a NON-default dismissal_restriction is drift (only the default is noise)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const live = fixture("jodidaniel.ruleset-main.json");
     live.rules.find(
       (r) => r.type === "pull_request",
@@ -599,7 +610,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(h) an unknown non-allowlisted ruleset field -> ruleset-unknown-field + fix-skip (the lossy-PUT guard)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const live = fixture("cms-platform.ruleset-main.json");
     live.push_allowances = ["something-the-api-grew"]; // unknown top-level field
     live.enforcement = "disabled"; // AND a real drift on the same ruleset
@@ -629,7 +640,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("buildFixPlan: drifted keys only, manual-only keys refused, PUT carries the full library body", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const scan = diffAgainstFixtures(
       script,
       manifest,
@@ -663,7 +674,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("buildFixPlan is EMPTY on a clean scan (the --fix plan-mode proof)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const results = Object.keys(LIVE).map((repo) =>
       diffAgainstFixtures(script, manifest, repo),
     );
@@ -740,7 +751,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   // these tests lock the EXACT as-found drift a `--fix` will correct.
   test("(i) actions permissions drift EXACTLY to the desired baseline on every repo", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     // cms-platform: sha_pinning false->true AND fork first_time->all_external.
     // consumers: sha already true, only the fork policy drifts.
     const expectByRepo = {
@@ -771,7 +782,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(j) sha_pinning_required drift is endpoint-tagged (the actions/permissions surface)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const findings = [];
     script.diffActionsPermissions(
@@ -799,7 +810,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // {skipped:true}; the diff must emit an informational line and NO
     // approval_policy finding, while sha_pinning_required still diffs normally.
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/adamdaniel.ai";
     const live = liveActions(repo, {
       permissions: { sha_pinning_required: false }, // force a sha drift too
@@ -829,7 +840,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(l) buildFixPlan: sha PUT ECHOES enabled+allowed_actions; fork PUT sets approval_policy", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const liveAP = liveActions(repo); // sha:false, fork:first_time_contributors
     const findings = [];
@@ -878,7 +889,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // Prove the diff is genuinely two-sided: feed live values that equal the
     // manifest and expect zero drift (the anti-false-positive proof).
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/adamdaniel.ai";
     const live = liveActions(repo, {
       permissions: { sha_pinning_required: true },
@@ -905,7 +916,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   // visible flags + rulesets + actions-permissions surface.
   test("(n) DEGRADED: fetchLive never throws on a read-only token; absent merge flags are flag-not-visible informationals, not drift; visible flags + rulesets + actions still diff", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     // Simulate the read-only capture: the Contents-gated keys are gone.
     const degradedRepo = { ...fixture("cms-platform.repo.json") };
@@ -998,7 +1009,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // A visible-flag drift on the same degraded read still surfaces as a real
     // finding — proving flag-not-visible does not mask genuine drift.
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const degradedRepo = {
       ...fixture("cms-platform.repo.json"),
@@ -1079,7 +1090,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   // surfaces an UNVERIFIABLE tally (still read-only, still exit 0).
   test("(r) UNVERIFIABLE: the per-repo OK line + the final summary are QUALIFIED when flags were not visible", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     // The same degraded read-only capture tests (n)/(o) simulate.
     const degradedRepo = { ...fixture("cms-platform.repo.json") };
@@ -1125,7 +1136,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // from quietly reverting to the overstating text, so assert the EXACT
     // strings, not a substring.
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const { findings, informational } = diffAgainstFixtures(
       script,
@@ -1173,7 +1184,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("UNVERIFIABLE summaries and notices name hidden ruleset fields alongside hidden flags", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const degradedRepo = fixture("cms-platform.repo.json");
     delete degradedRepo.delete_branch_on_merge;
@@ -1343,7 +1354,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("diffEnvironments: a repo already at the desired baseline yields NO findings", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const findings = [];
     const informational = [];
@@ -1360,7 +1371,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("diffEnvironments: an EXISTING-BUT-DRIFTED environment emits one environment-drift finding PER drifted key", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const findings = [];
     script.diffEnvironments(
@@ -1388,7 +1399,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("diffEnvironments: a declared-but-ABSENT environment (404) emits environment-absent findings, not an operational skip", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const findings = [];
     const informational = [];
@@ -1498,7 +1509,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(t) drift on the fix-forbidden `repo-settings` environment IS a finding (reaches the tracking issue)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const findings = [];
     script.diffEnvironments(
@@ -1514,7 +1525,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("(u) buildFixPlan NEVER puts a fix-forbidden environment — drifted case: no PUT, reported as envManualOnly", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const findings = [];
     script.diffEnvironments(
@@ -1566,9 +1577,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   function forbiddenEnvPlan(liveEnv) {
     const script = loadScript();
     const repo = "Adam-S-Daniel/cms-platform";
-    const manifest = script.loadManifest(
-      path.resolve(__dirname, "..", "repo-settings.yml"),
-    );
+    const manifest = loadManifest();
     const findings = [];
     script.diffEnvironments(
       repo,
@@ -1834,7 +1843,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     // manifest must declare exactly reviewer 4205216, and that name must be
     // the one ENV_FIX_FORBIDDEN protects.
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const desired = script.desiredEnvironments(
       manifest,
       "Adam-S-Daniel/cms-platform",
@@ -2091,7 +2100,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
   // (instead of enforcing the real dependency) would fail this test.
   test("buildFixPlan: security-analysis ENABLE order is vulnerability_alerts THEN automated_security_fixes (the dependency-order regression guard)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const findings = [
       {
@@ -2133,7 +2142,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
   test("buildFixPlan: security-analysis DISABLE order is automated_security_fixes THEN vulnerability_alerts (the dependency-order regression guard, reversed)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const repo = "Adam-S-Daniel/cms-platform";
     const findings = [
       {
@@ -2315,7 +2324,6 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 // must come back GATED.
 const RISK_PATH = path.resolve(__dirname, "../scripts/repo-settings-write-risk.js");
 function loadRisk() {
-  delete require.cache[require.resolve(RISK_PATH)];
   return require(RISK_PATH);
 }
 // A ruleset body carrying one required_status_checks rule with `contexts`.
@@ -2860,7 +2868,7 @@ test.describe("write-risk classification is not fooled by array order", () => {
   test("a bypass-actor add is named as such, not as a `conditions` diff", () => {
     const script = loadScript();
     const risk = loadRisk();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     // The real incident, reproduced: `cms-feature-branches` is the one library
     // entry that declares a bypass actor, and live carries none — so the
     // manifest is ADDING one. (Live-has / manifest-hasn't is the mirror case
@@ -2957,7 +2965,7 @@ test.describe("write-risk classification is not fooled by array order", () => {
 test.describe("the plan carries a concise per-write diff (#396)", () => {
   function bypassActorPlan() {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
       rulesets: [
         fixture("adamdaniel.ruleset-main.json"),
@@ -3072,7 +3080,7 @@ test.describe("the plan says WHAT the actor and the ruleset are (#397 review)", 
 
   test("a ruleset PUT carries `context`: the live ruleset's id, its settings URL and the refs it covers", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
       rulesets: [
         fixture("adamdaniel.ruleset-main.json"),
@@ -3103,7 +3111,7 @@ test.describe("the plan says WHAT the actor and the ruleset are (#397 review)", 
 
   test("the URL is derived when the live body carries no _links (older captures, other callers)", () => {
     const script = loadScript();
-    const manifest = script.loadManifest(MANIFEST_PATH);
+    const manifest = loadManifest();
     const live = { ...fixture("adamdaniel.ruleset-feature.json"), bypass_actors: [] };
     delete live._links;
     const scan = diffAgainstFixtures(script, manifest, "Adam-S-Daniel/adamdaniel.ai", {
