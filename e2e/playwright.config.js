@@ -81,6 +81,9 @@ const PLATFORM_META_SPECS = [
   // platform-internal and testIgnored on a CONSUMER lane.
   "admin-shim-load-order.test.js",
   "confirm-wrap-local-backup.test.js",
+  // #652 — vm-sandbox test of theme/admin/hide-fixture-media.js + probe invariants
+  // (reads the platform theme/admin tree, absent on a consumer).
+  "hide-fixture-media.test.js",
   // #625 item 3 — vm-sandbox unit test reading theme/admin/autosave-on-hide.js
   // SOURCE (platform theme/admin tree, absent on a consumer), same shape as above.
   "autosave-on-hide.test.js",

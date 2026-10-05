@@ -164,3 +164,75 @@ for (const [access, destination] of [
     expect(appended[0].textContent).toContain(`Nothing reaches ${destination} until you press Publish.`);
   });
 }
+
+// #652: the media-library "Delete selected" confirm must name the file and say
+// the delete hits the live site, while still going through the NATIVE confirm.
+const MEDIA_DELETE_STRING = "Are you sure you want to delete selected media?";
+
+function bootMediaShim(nativeReturn, hostname, names) {
+  const listeners = [];
+  const cards = names.map((name) => {
+    const card = { nodeType: 1, className: "e2etv5a6 css-1-Card", parentElement: null };
+    const label = { nodeType: 1, className: "css-2-CardText", textContent: name, parentElement: card };
+    card.querySelector = () => label;
+    return { card, label };
+  });
+  const nativeCalls = [];
+  const sandbox = {
+    console: { warn: () => {}, error: () => {}, log: () => {} },
+    setTimeout: () => 0,
+    document: {
+      createElement: () => ({ setAttribute: () => {}, style: {}, remove: () => {} }),
+      body: { appendChild: () => {} },
+      addEventListener: (type, fn) => listeners.push({ type, fn }),
+      querySelectorAll: () => cards.map((c) => c.label),
+    },
+    window: {
+      confirm: (msg) => {
+        nativeCalls.push(msg);
+        return nativeReturn;
+      },
+      CMSHostname: hostname,
+    },
+  };
+  sandbox.window.window = sandbox.window;
+  vm.createContext(sandbox);
+  vm.runInContext(SHIM_SOURCE, sandbox);
+  const click = (i) => listeners.filter((l) => l.type === "click").forEach((l) => l.fn({ target: cards[i].label }));
+  return { nativeCalls, click, confirm: (m) => sandbox.window.confirm(m) };
+}
+
+test.describe("media-library delete confirm (#652)", () => {
+  test("names the selected file and the live site, via the native confirm (OK)", () => {
+    const m = bootMediaShim(true, { destination: () => "example.com" }, ["a.png", "b.png"]);
+    m.click(1);
+    expect(m.confirm(MEDIA_DELETE_STRING)).toBe(true);
+    expect(m.nativeCalls).toHaveLength(1);
+    expect(m.nativeCalls[0]).toContain("“b.png”");
+    expect(m.nativeCalls[0]).toContain("example.com");
+    expect(m.nativeCalls[0]).toMatch(/live site/);
+    expect(m.nativeCalls[0]).toMatch(/cannot be undone/);
+  });
+
+  test("Cancel stays Cancel", () => {
+    const m = bootMediaShim(false, undefined, ["a.png"]);
+    m.click(0);
+    expect(m.confirm(MEDIA_DELETE_STRING)).toBe(false);
+    expect(m.nativeCalls[0]).toContain("the live site");
+  });
+
+  test("a second click on the same card deselects, so no stale name is shown", () => {
+    const m = bootMediaShim(true, undefined, ["a.png"]);
+    m.click(0);
+    m.click(0);
+    m.confirm(MEDIA_DELETE_STRING);
+    expect(m.nativeCalls[0]).toContain("the selected file");
+    expect(m.nativeCalls[0]).not.toContain("a.png");
+  });
+
+  test("with no readable selection it falls back to generic wording", () => {
+    const m = bootMediaShim(true, undefined, ["a.png"]);
+    m.confirm(MEDIA_DELETE_STRING);
+    expect(m.nativeCalls[0]).toContain("the selected file");
+  });
+});
