@@ -6,10 +6,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const walk = require("acorn-walk");
-const { parse, calleeName } = require("./spec-ast");
+const { parse, calleeName, stringValue } = require("./spec-ast");
 const { test, expect } = require("./base");
 const { classifyE2eTags, sweepLeftoverE2eTags, STALE_AFTER_MS } = require("./leftover-e2e-tags");
-const { closeOpenPrsAddingFile, listAllPages, readFileOnRef } = require("./cms-fixture-pr");
+const { closeOpenPrsAddingFile, fixtureBranchName, listAllPages, readFileOnRef } = require("./cms-fixture-pr");
+const { buildMediaRoundtripPost, mediaUploadRemovalSlug } = require("./prod-mutate-fixture");
 
 const NOW = 1790000000000;
 const OLD = NOW - STALE_AFTER_MS - 1;
@@ -525,4 +526,314 @@ test.describe("Decap-created fixtures close the in-flight PR before reading the 
       for (const c of closes) expect(c.start, `close of ${c.value} precedes the read`).toBeLessThan(read);
     });
   }
+});
+
+// #697 — shapes the order lint above cannot see. Each check walks the spec's
+// whole AST, so a helper outside the afterAll (tryHardDelete) is covered too.
+const SAFETY_NET_SPECS = [
+  "cms-tags-lifecycle.spec.js",
+  "cms-tags-lifecycle-preview.spec.js",
+  "cms-publish-loop-prod-mutate.spec.js",
+  "cms-delete-published.spec.js",
+  "cms-media-roundtrip.spec.js",
+];
+// Calls whose failure must surface: a close, a strict read, or a removal.
+const STRICT_CALLS = new Set([
+  "closeOpenPrsAddingFile",
+  "readFileOnRef",
+  "removeFixtureViaPr",
+  "tryHardDelete",
+  "createBranchFromMain",
+  "deleteFileOnBranch",
+  "openPr",
+  "addReadyLabel",
+]);
+const FUNCTION_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
+
+function subtreeIdentifiers(node) {
+  const names = new Set();
+  walk.full(node, (n) => {
+    if (n.type === "Identifier") names.add(n.name);
+  });
+  return names;
+}
+
+// A catch handler is loud when it throws, or records the error into a binding
+// (`failures.push(e)`, `err = e`) that its enclosing function throws later.
+function handlerIsLoud(handler, enclosingFn) {
+  let throws = false;
+  const records = new Set();
+  walk.full(handler.body, (n) => {
+    if (n.type === "ThrowStatement") throws = true;
+    if (
+      n.type === "CallExpression" &&
+      n.callee.type === "MemberExpression" &&
+      n.callee.property.name === "push" &&
+      n.callee.object.type === "Identifier"
+    ) {
+      records.add(n.callee.object.name);
+    }
+    if (n.type === "AssignmentExpression" && n.left.type === "Identifier") records.add(n.left.name);
+  });
+  if (throws) return true;
+  if (records.size === 0 || !enclosingFn) return false;
+  // The rethrow must fire for EVERY non-zero count: each `if` between the
+  // function body and the throw must test `X.length > 0` (or `!== 0`,
+  // `>= 1`, bare `X.length`) with the throw in its consequent. A throw that
+  // fires only for one count (`if (X.length > 1)`) leaves the others silent.
+  let rethrown = false;
+  walk.ancestor(enclosingFn.body, {
+    ThrowStatement(n, _state, ancestors) {
+      if (n.start >= handler.start && n.end <= handler.end) return;
+      const names = [...subtreeIdentifiers(n.argument)].filter((name) => records.has(name));
+      if (names.length === 0) return;
+      const ok = ancestors.every((a, i) => {
+        if (a.type !== "IfStatement") return true;
+        return isNonEmptyTest(a.test, names) && a.consequent === ancestors[i + 1];
+      });
+      if (ok) rethrown = true;
+    },
+  });
+  return rethrown;
+}
+
+// `X.length`, `X.length > 0`, `X.length !== 0`, `X.length != 0`, `X.length >= 1`.
+function isNonEmptyTest(test, names) {
+  const isLength = (n) =>
+    n &&
+    n.type === "MemberExpression" &&
+    !n.computed &&
+    n.property.name === "length" &&
+    n.object.type === "Identifier" &&
+    names.includes(n.object.name);
+  if (isLength(test)) return true;
+  if (test.type !== "BinaryExpression" || !isLength(test.left) || test.right.type !== "Literal") return false;
+  const v = test.right.value;
+  return (
+    ((test.operator === ">" || test.operator === "!==" || test.operator === "!=") && v === 0) ||
+    (test.operator === ">=" && v === 1)
+  );
+}
+
+function strictTryViolations(ast) {
+  const out = [];
+  walk.ancestor(ast, {
+    TryStatement(n, _state, ancestors) {
+      if (!n.handler) return;
+      const strict = [];
+      walk.simple(n.block, {
+        CallExpression(c) {
+          const name = calleeName(c.callee);
+          if (STRICT_CALLS.has(name)) strict.push(name);
+        },
+      });
+      if (strict.length === 0) return;
+      const fn = [...ancestors].reverse().find((a) => a !== n && FUNCTION_TYPES.has(a.type));
+      if (!handlerIsLoud(n.handler, fn)) out.push(`line ${n.loc.start.line}: catch around ${strict.join(", ")} swallows the error`);
+    },
+  });
+  return out;
+}
+
+function readCatchViolations(ast) {
+  const out = [];
+  walk.ancestor(ast, {
+    CallExpression(n, _state, ancestors) {
+      if (calleeName(n.callee) !== "readFileOnRef") return;
+      const parent = ancestors[ancestors.length - 2];
+      if (
+        parent &&
+        parent.type === "MemberExpression" &&
+        parent.object === n &&
+        parent.property &&
+        ["catch", "then", "finally"].includes(parent.property.name)
+      ) {
+        out.push(`line ${n.loc.start.line}: readFileOnRef(...).${parent.property.name}(...)`);
+      }
+    },
+  });
+  return out;
+}
+
+// A string with no interpolation: a string Literal or an expression-free
+// template literal (`main`). null for anything else.
+function staticString(node) {
+  if (!node) return null;
+  if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0) return node.quasis[0].value.cooked;
+  return null;
+}
+
+const propNamed = (obj, name) =>
+  obj && obj.type === "ObjectExpression"
+    ? obj.properties.find((p) => p.key && (p.key.name || p.key.value) === name)
+    : undefined;
+
+// A write to the default branch, which the pull_request rule refuses
+// (docs/CI-INVARIANTS.md: no bypass actors): a `branch: "main"` key (string or
+// plain template), or a Contents-API PUT/DELETE whose inline JSON body names
+// no branch (GitHub then writes the default branch) or cannot be read.
+function directMainWrites(ast) {
+  const out = [];
+  walk.simple(ast, {
+    Property(n) {
+      const key = n.key && (n.key.name || n.key.value);
+      if (key === "branch" && staticString(n.value) === "main") {
+        out.push(`line ${n.loc.start.line}: branch: "main"`);
+      }
+    },
+    CallExpression(n) {
+      const url = stringValue(n.arguments[0]);
+      if (url == null || !url.includes("/contents/")) return;
+      const method = propNamed(n.arguments[1], "method");
+      const verb = method && staticString(method.value);
+      if (verb !== "PUT" && verb !== "DELETE") return;
+      const body = propNamed(n.arguments[1], "body");
+      const payload =
+        body &&
+        body.value.type === "CallExpression" &&
+        calleeName(body.value.callee) === "JSON.stringify" &&
+        body.value.arguments[0];
+      if (!payload || payload.type !== "ObjectExpression") {
+        out.push(`line ${n.loc.start.line}: contents ${verb} with a body the lint cannot read`);
+      } else if (!propNamed(payload, "branch")) {
+        out.push(`line ${n.loc.start.line}: contents ${verb} with no branch writes the default branch`);
+      }
+    },
+  });
+  return out;
+}
+
+test.describe("Decap fixture safety nets fail loudly and remove through a PR (#697)", () => {
+  for (const spec of SAFETY_NET_SPECS) {
+    const ast = () => parse(fs.readFileSync(path.join(__dirname, spec), "utf8"));
+    test(`${spec}: readFileOnRef is never chained with a catch`, () => {
+      expect(readCatchViolations(ast()), "only a 404 means absent; a .catch reads every error as absent").toEqual([]);
+    });
+    test(`${spec}: no catch around a close, read or removal swallows the error`, () => {
+      expect(strictTryViolations(ast())).toEqual([]);
+    });
+    test(`${spec}: no direct write to main`, () => {
+      expect(directMainWrites(ast())).toEqual([]);
+    });
+  }
+
+  test("cms-media-roundtrip.spec.js: the afterAll removes both the post and the upload via removeFixtureViaPr", () => {
+    const ast = parse(fs.readFileSync(path.join(__dirname, "cms-media-roundtrip.spec.js"), "utf8"));
+    let hook = null;
+    walk.simple(ast, {
+      CallExpression(n) {
+        if (calleeName(n.callee) === "test.afterAll") hook = n.arguments[n.arguments.length - 1];
+      },
+    });
+    const removed = [];
+    walk.simple(hook, {
+      CallExpression(n) {
+        if (calleeName(n.callee) !== "removeFixtureViaPr") return;
+        const arg = n.arguments[0];
+        const prop = arg.properties.find((p) => p.key && p.key.name === "filePath");
+        // shorthand `{ filePath }` and `filePath: imagePath` both resolve to the value's name
+        removed.push(prop && prop.value.type === "Identifier" ? prop.value.name : null);
+      },
+    });
+    expect(removed.sort()).toEqual(["filePath", "imagePath"]);
+  });
+
+  // #697 item 3: a failed post leg must not skip the upload leg, so every
+  // close, read and removal in the media hook sits in its own try (whose
+  // catch the rule above requires to record and rethrow).
+  test("cms-media-roundtrip.spec.js: every close, read and removal in the afterAll is inside a try", () => {
+    const ast = parse(fs.readFileSync(path.join(__dirname, "cms-media-roundtrip.spec.js"), "utf8"));
+    let hook = null;
+    walk.simple(ast, {
+      CallExpression(n) {
+        if (calleeName(n.callee) === "test.afterAll") hook = n.arguments[n.arguments.length - 1];
+      },
+    });
+    const bare = [];
+    walk.ancestor(hook, {
+      CallExpression(n, _state, ancestors) {
+        const name = calleeName(n.callee);
+        if (!STRICT_CALLS.has(name)) return;
+        const guarded = ancestors.some((a, i) => a.type === "TryStatement" && ancestors[i + 1] === a.block);
+        if (!guarded) bare.push(`line ${n.loc.start.line}: ${name}`);
+      },
+    });
+    expect(bare).toEqual([]);
+  });
+
+  // #697: the post's slug equals the upload's basename, and removeFixtureViaPr
+  // names its branch from slug + runId, so the upload leg needs its own slug or
+  // its createBranchFromMain recreates the branch under the post's removal PR.
+  test("cms-media-roundtrip: the post and upload removal PRs get different branches", () => {
+    const runId = 1790000000000;
+    const { slug } = buildMediaRoundtripPost({ runId });
+    expect(slug, "the collision this guards against").toBe(`e2e-media-roundtrip-${runId}`);
+    const post = fixtureBranchName({ slug, runId, action: "remove" });
+    const upload = fixtureBranchName({ slug: mediaUploadRemovalSlug(slug), runId, action: "remove" });
+    expect(upload).not.toBe(post);
+  });
+
+  test("cms-media-roundtrip.spec.js: the upload removal uses mediaUploadRemovalSlug, the post its own slug", () => {
+    const ast = parse(fs.readFileSync(path.join(__dirname, "cms-media-roundtrip.spec.js"), "utf8"));
+    let hook = null;
+    walk.simple(ast, {
+      CallExpression(n) {
+        if (calleeName(n.callee) === "test.afterAll") hook = n.arguments[n.arguments.length - 1];
+      },
+    });
+    const slugs = {};
+    walk.simple(hook, {
+      CallExpression(n) {
+        if (calleeName(n.callee) !== "removeFixtureViaPr") return;
+        const file = propNamed(n.arguments[0], "filePath");
+        const slug = propNamed(n.arguments[0], "slug");
+        const v = slug && slug.value;
+        slugs[file.value.name] =
+          v.type === "Identifier"
+            ? v.name
+            : v.type === "CallExpression" && v.arguments[0] && v.arguments[0].type === "Identifier"
+              ? `${calleeName(v.callee)}(${v.arguments[0].name})`
+              : null;
+      },
+    });
+    expect(slugs).toEqual({ filePath: "slug", imagePath: "mediaUploadRemovalSlug(slug)" });
+  });
+
+  // The detectors themselves, on the mutations the #694 review found surviving.
+  test("the detectors flag the surviving mutations", () => {
+    const src = (body) => parse(body);
+    // The review's mutant is `.catch(() => null)`; any handler reads an error
+    // as a value, and the repo's silent-catch lint forbids that literal here.
+    expect(readCatchViolations(src("async function f(){ await readFileOnRef({}).catch(() => false); }"))).toHaveLength(1);
+    expect(readCatchViolations(src("async function f(){ await readFileOnRef({}); }"))).toEqual([]);
+    const warnOnly =
+      "async function tryHardDelete(){ try { await removeFixtureViaPr({}); } catch (e) { console.warn(e); } }";
+    expect(strictTryViolations(src(warnOnly))).toHaveLength(1);
+    const rethrow =
+      "async function tryHardDelete(){ try { await removeFixtureViaPr({}); } catch (e) { throw new Error(String(e)); } }";
+    expect(strictTryViolations(src(rethrow))).toEqual([]);
+    const recorded =
+      "async function h(){ const f = []; try { await readFileOnRef({}); } catch (e) { f.push(e); } if (f.length) throw f[0]; }";
+    expect(strictTryViolations(src(recorded))).toEqual([]);
+    const recordedNeverThrown =
+      "async function h(){ const f = []; try { await readFileOnRef({}); } catch (e) { f.push(e); } }";
+    expect(strictTryViolations(src(recordedNeverThrown))).toHaveLength(1);
+    expect(
+      directMainWrites(src("gh('/x', { body: JSON.stringify({ sha: 's', branch: \"main\" }) })")),
+    ).toHaveLength(1);
+    expect(directMainWrites(src("gh('/x', { body: JSON.stringify({ branch: `main` }) })"))).toHaveLength(1);
+    const del = (body) => `gh(\`/repos/\${R}/contents/\${P}\`, { method: "DELETE", body: ${body} })`;
+    expect(directMainWrites(src(del("JSON.stringify({ sha: s })")))).toHaveLength(1);
+    expect(directMainWrites(src(del("payload")))).toHaveLength(1);
+    expect(directMainWrites(src(del("JSON.stringify({ sha: s, branch: HEAD_REF })")))).toEqual([]);
+    const countOnly =
+      "async function h(){ const f = []; try { await readFileOnRef({}); } catch (e) { f.push(e); } " +
+      "if (f.length > 1) throw new AggregateError(f); }";
+    expect(strictTryViolations(src(countOnly))).toHaveLength(1);
+    const elseOnly =
+      "async function h(){ const f = []; try { await readFileOnRef({}); } catch (e) { f.push(e); } " +
+      "if (f.length === 1) console.warn(f[0]); else if (f.length > 0) throw f[0]; }";
+    expect(strictTryViolations(src(elseOnly))).toHaveLength(1);
+  });
 });
