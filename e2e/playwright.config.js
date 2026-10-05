@@ -390,6 +390,9 @@ const PLATFORM_META_SPECS = [
   // Runs the platform's scripts/reset-orphaned-canary.sh against a stubbed fetch
   // to prove its public-log output carries no API body; platform-internal.
   "reset-orphaned-canary-log.test.js",
+  // #689 — AST-walks the two tags lifecycle spec sources (harness-internal)
+  // beside the pure leftover-e2e-tag and in-flight-PR-close tests.
+  "leftover-e2e-tags.test.js",
   "fixture-baseline.test.js",
   "generate-test-videos.test.js",
   // The theme gemspec's version is deliberately frozen at 0.1.4 (see the

@@ -62,7 +62,7 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
+const { closeStaleDecapPrOnBranch, closeOpenPrsAddingFile } = require("./cms-fixture-pr");
 const {
   addLabel,
   gh,
@@ -131,15 +131,35 @@ test.afterAll(async () => {
   if (!PR_NUMBER || !PR_HEAD_REF) return;
   test.setTimeout(2 * 60 * 1000);
 
+  // #689 — close this run's in-flight create PR (into the head branch)
+  // FIRST: one that outlives the run merges the canary onto the head branch
+  // after this hook looked, and the head branch carries it to main when the
+  // parent PR merges. Strict: an API error throws.
+  const { closed, merged } = await closeOpenPrsAddingFile({
+    base: PR_HEAD_REF,
+    filePath: TAG_FILE_PATH,
+  });
+  if (closed.length > 0) {
+    console.warn(
+      `[cleanup-safety-net] closed in-flight PR(s) ${closed.map((n) => `#${n}`).join(", ")} still adding ${TAG_FILE_PATH}`,
+    );
+  }
+  if (merged.length > 0) {
+    console.warn(
+      `[cleanup-safety-net] PR(s) ${merged.map((n) => `#${n}`).join(", ")} merged ${TAG_FILE_PATH} before the close took effect`,
+    );
+  }
+
+  // Only a 404 means absent; any other read error throws.
   let existing;
   try {
     existing = await gh(
       `/repos/${HOST_REPO}/contents/${TAG_FILE_PATH}?ref=${encodeURIComponent(PR_HEAD_REF)}`,
     );
-  } catch (_e) {
-    // 404 expected on success (UI delete removed it) — nothing to do.
+  } catch (e) {
+    if (e && e.status !== 404) throw e;
     console.log(
-      `[cleanup-safety-net] ${TAG_FILE_PATH} not on ${PR_HEAD_REF} — UI delete succeeded, no cleanup needed`,
+      `[cleanup-safety-net] ${TAG_FILE_PATH} not on ${PR_HEAD_REF} and no open PR adds it — no cleanup needed`,
     );
     return;
   }
@@ -158,7 +178,8 @@ test.afterAll(async () => {
       }),
     });
   } catch (e) {
-    console.warn(
+    // Loud: the canary is on the head branch and nothing is removing it.
+    throw new Error(
       `[cleanup-safety-net] failed to delete ${TAG_FILE_PATH} on ${PR_HEAD_REF}: ${describeError(e)}`,
     );
   }

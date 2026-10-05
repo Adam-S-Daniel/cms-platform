@@ -180,6 +180,83 @@ async function closeStaleDecapPrOnBranch({ repo = HOST_REPO, branch }) {
   }
 }
 
+/**
+ * #689 — close every OPEN `cms/` PR into `base` that still ADDS or edits
+ * `filePath`, and prove each one ended closed or merged.
+ *
+ * A Decap create PR can outlive its run: on 2026-08-06 (adamdaniel.ai run
+ * 31107474927) the tags spec's create leg timed out while adamdaniel.ai#2938
+ * was still open, the afterAll saw the tag absent from main and returned, and
+ * #2938 auto-merged 12 minutes later, leaving `_tags/e2e-tags-canary-…` on
+ * main for two months. A safety net must therefore stop the in-flight PR
+ * before it trusts a "not on main" read.
+ *
+ * `filePath` must be run-unique (a slug carrying this run's id), so any PR
+ * that adds it is this run's own; a PR that only REMOVES it is left alone.
+ * Every read is strict (transient 5xx/429 retried): a list, files or
+ * re-read error throws, because a swallowed error here reads as "nothing in
+ * flight". A failed close is judged by the re-read, never assumed.
+ *
+ * Returns `{ closed: [n…], merged: [n…] }`: PRs this call closed, and PRs
+ * that merged before the close took effect (the caller's file-on-base check
+ * then sees the file and removes it).
+ */
+async function closeOpenPrsAddingFile({ repo = HOST_REPO, base, filePath, ghImpl = gh } = {}) {
+  if (!base || !filePath) {
+    throw new Error("closeOpenPrsAddingFile requires base and filePath.");
+  }
+  const closed = [];
+  const merged = [];
+  for (let page = 1; ; page += 1) {
+    const prs = await ghImpl(
+      `/repos/${repo}/pulls?state=open&base=${encodeURIComponent(base)}&per_page=100&page=${page}`,
+      { retries: 2 },
+    );
+    if (!Array.isArray(prs)) {
+      throw new Error(`closeOpenPrsAddingFile: unexpected pulls response for ${repo}`);
+    }
+    for (const pr of prs) {
+      const ref = pr && pr.head && pr.head.ref;
+      if (typeof ref !== "string" || !ref.startsWith("cms/")) continue;
+      const files = await ghImpl(`/repos/${repo}/pulls/${pr.number}/files?per_page=100`, {
+        retries: 2,
+      });
+      if (!Array.isArray(files)) {
+        throw new Error(`closeOpenPrsAddingFile: unexpected files response for PR #${pr.number}`);
+      }
+      const adds = files.some((f) => f && f.filename === filePath && f.status !== "removed");
+      if (!adds) continue;
+      try {
+        await ghImpl(`/repos/${repo}/pulls/${pr.number}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: "closed" }),
+        });
+      } catch (_) {
+        // A PR that merged between the list and the close answers 422; the
+        // re-read below tells that apart from a close that really failed.
+      }
+      const after = await ghImpl(`/repos/${repo}/pulls/${pr.number}`, { retries: 2 });
+      if (after && after.merged === true) {
+        merged.push(pr.number);
+      } else if (after && after.state === "closed") {
+        closed.push(pr.number);
+        try {
+          await ghImpl(`/repos/${repo}/git/refs/heads/${ref}`, { method: "DELETE" });
+        } catch (_) {
+          /* the branch is harmless once its PR is closed; the sweep prunes it */
+        }
+      } else {
+        throw new Error(
+          `closeOpenPrsAddingFile: PR #${pr.number} adding ${filePath} is still open after the close`,
+        );
+      }
+    }
+    if (prs.length < 100) break;
+  }
+  return { closed, merged };
+}
+
 /** Best-effort PR close + branch delete. Used when a fixture flow times
  * out; leaves the repo cleaner than an open zombie PR but doesn't
  * throw if either step fails — the cleanup workflow picks up the
@@ -354,6 +431,7 @@ module.exports = {
   seedFixtureViaPr,
   removeFixtureViaPr,
   closeStaleDecapPrOnBranch,
+  closeOpenPrsAddingFile,
   // Exported for unit tests / debugging
   createBranchFromMain,
   putFileOnBranch,
