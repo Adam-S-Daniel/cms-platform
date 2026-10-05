@@ -43,6 +43,48 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-05 — cms-platform/code-quality — edit
+
+- Motivation: a prompt audit found the "What actually runs" callout citing an AGENTS.md "Deliberate skips" list and a "Code quality" section that do not exist, and a lint count (~101) that no longer matches (e2e has 190 test files minus the DENY list).
+- Change: the callout drops the dangling AGENTS.md references and the lint count, and step 4 of "Adding a new language" says to document in this skill.
+- Eval: none — no eval exists yet
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/browser-testing — edit
+
+- Motivation: a prompt audit found "~25 specs" where e2e holds 74 `*.spec.js` files.
+- Change: the matrix sentence no longer quotes a spec count.
+- Eval: none — no eval exists yet
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/ci-watcher-loops — edit
+
+- Motivation: the Reference section pointed at a per-machine agent-memory file that exists on one workstation only, against AGENTS.md's "record knowledge in the repo, not agent memory".
+- Change: the memory pointer is removed; the 2026-05-06 incident line and the chained-capture rule above it stay.
+- Eval: none — no eval exists yet
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/platform-release-and-bump — edit
+
+- Motivation: a prompt audit found a dated ref count (32 `@v0.1.88` refs) and a v0.1.76 bullet written as if the next bump carried the 9-caller `edited` edit; both consumers are at v0.1.130.
+- Change: the ref count is replaced by a re-check at v0.1.130 without a number, and the bullet states the current rule (callers omit `edited`; `deploy-preview.yml` keeps `closed`).
+- Eval: none — no eval exists yet
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/github-actions-sha-pinning — edit
+
+- Motivation: the consumer-scope paragraph quoted "32 apiece at v0.1.85"; each consumer now has 36 platform refs at v0.1.130.
+- Change: the paragraph drops the count.
+- Eval: a skills-evals fixture exists for this skill; not run here, outstanding for the touch gate
+- Outcome: pending merge.
+
+## 2026-10-05 — cms-platform/consumer-repo-provisioning — edit
+
+- Motivation: a prompt audit flagged ~60 lines on `CMS_PLATFORM_PAT` "for repos on an older pin"; both consumers are on v0.1.130 and the PAT section carried a stale "hard-needs this PAT" line and a PAT permission table.
+- Change: the section keeps the removal rule and the 2026-09-02 / 2026-08-20 dated facts, drops the PAT permission table, owner note and older-pin framing; the freshness allow-list marker follows the new heading.
+- Eval: a skills-evals fixture exists for this skill; not run here, outstanding for the touch gate
+- Outcome: pending merge.
+
 ## 2026-10-04 — cms-platform/aws-bootstrap — edit
 
 - Motivation: review of PR #567 found a mistyped `BOOTSTRAP_STACK_NAME` would create a new stack, which the change-set guard passes because a create is all `Add` actions.

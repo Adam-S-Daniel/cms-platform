@@ -65,8 +65,8 @@ allow:
 
   - skill: consumer-repo-provisioning
     citation: CMS_PLATFORM_PAT
-    reason: REMOVED in v0.1.103; documented for repos still pinned below it.
-    marker: "## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103 (kept here for repos on an older pin)"
+    reason: REMOVED in v0.1.103; the skill documents it as removed.
+    marker: "## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103"
   - skill: consumer-repo-provisioning
     citation: infrastructure/site-params.env
     reason: Consumer-side file the scaffolder writes; this tree ships only infrastructure/site-params.example.env.

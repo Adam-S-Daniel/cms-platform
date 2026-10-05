@@ -31,8 +31,10 @@ the pin-consistency guard fails. The two consumers differ slightly:
 
 - **Both consumers** pin every cross-repo platform ref — reusable workflow and
   composite action alike — by **`@vX.Y.Z`** TAG, so only the version string
-  changes. Measured 2026-08-20: 32 `@v0.1.88` refs in adamdaniel.ai, zero SHA
-  pins, zero pin comments; jodidaniel.com the same shape.
+  changes. Measured 2026-08-20 at v0.1.88 and re-checked 2026-10-04 at
+  v0.1.130: every ref in both repos ends in the release tag, with no SHA pin
+  and no pin comment. The ref count moves with every workflow added or
+  removed, so read it off the pin-consistency summary line, not this file.
 - **jodidaniel.com additionally** has `Gemfile.lock`'s git `revision:`, which is
   the resolved commit SHA and must move to the new release commit too.
 - **Historical, and why a stale doc here bites:** adamdaniel.ai once SHA-pinned
@@ -200,13 +202,13 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   the class of drift that let jodidaniel's sweep caller silently lose its
   `CMS_E2E_PAT` map and `startup_failure` for weeks — now caught, and fixed,
   at the bump.
-- **v0.1.76 also changes 9 workflow callers' `pull_request` types** (dropping
-  `edited` — #222 part 2), so both consumers' bump PRs carry that 9-file edit
-  alongside the pin rewrite. **`deploy-preview.yml` is the ONE exception and
-  KEEPS `closed`** — it is the only caller declaring it, and the reusable's
-  teardown (S3 `rm --recursive` + CloudFront invalidation + bot-comment update)
-  fires only on that action; the replacement lint asserts `closed` POSITIVELY,
-  so applying the generic diff there fails self-CI. Residual risk to record
+- **Since v0.1.76 the workflow callers' `pull_request` types omit `edited`**
+  (#222 part 2; the v0.1.76 bump carried that 9-file edit alongside the pin
+  rewrite, and no bump crosses it now). **`deploy-preview.yml` is the ONE
+  exception and KEEPS `closed`** — it is the only caller declaring it, and the
+  reusable's teardown (S3 `rm --recursive` + CloudFront invalidation +
+  bot-comment update) fires only on that action; the replacement lint asserts
+  `closed` POSITIVELY, so applying the generic diff there fails self-CI. Residual risk to record
   beside `delete_branch_on_merge=true`: dropping `edited` reverts #145 / PR #166,
   whose case is a PR **retargeted onto a different base** — that fires
   `pull_request: edited` and, with no listener, the whole required suite silently
