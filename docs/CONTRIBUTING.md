@@ -89,9 +89,9 @@ elsewhere) — a green run of it, not a diff review, is what makes the bump done
 `.github/workflows/self-ci.yml` is the machinery repo's own merge gate (most
 other workflows here are `on: workflow_call` reusables; `self-ci.yml`, its
 sibling `self-secrets-scan.yml` — which dogfoods the `secrets-scan.yml`
-reusable on this repo's own history — and `self-fixture-e2e.yml` (the browser
-lane below) are the ones that report required checks on a plain PR). It runs
-six FAST lanes on `pull_request` + `push` to `main`, all REQUIRED:
+reusable on this repo's own history — `self-fixture-e2e.yml` (the browser
+lane below) and `self-release-review-gate.yml` are the ones that report required
+checks on a plain PR). It runs six FAST lanes on `pull_request` + `push` to `main`, all REQUIRED:
 
 1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail; REQUIRED).
 2. **ruby-theme-specs** — `theme/spec/*_test.rb`, each run with plain `ruby`, no
@@ -147,9 +147,35 @@ site-identity and layout reasons, which is fixture work outside #527. A change
 to the theme gemspec's dependencies must re-lock `e2e/fixture-site/Gemfile.lock`
 (`bundle lock` there) in the same PR, or the frozen install fails.
 
-The eight REQUIRED contexts are `repo-settings.yml`'s `ruleset_library.platform-main.
-rules[required_status_checks]`: the six self-CI job ids, `scan / scan` and
-`fixture-e2e`. Two
+`self-release-review-gate.yml` (#526, acceptance criterion 3; owner decision
+2026-10-05) enforces the independent review of a RELEASE-BEARING PR: one whose
+`plugin.json` or `.claude-plugin/plugin.json` `version` differs from the merge
+base (every release, stable or prerelease, needs one, because `release.yml`
+refuses a tag that disagrees with the manifests), or whose head branch is
+`release/*`. Such a PR is red until its body carries, on a line of its own,
+
+```text
+Independent review: CLEAN at <the PR's current head sha, all 40 characters>
+```
+
+(`gh pr view <n> --json headRefOid --jq .headRefOid` prints it). A reviewer
+independent of the change's author writes it after reviewing that head; no owner
+approval and no bot identity are involved, and the check cannot verify who wrote
+it. A 7+ character prefix is NOT accepted: an abbreviated SHA is what a hurried
+reviewer copies, which is when a stale review slips through. A stamp quoted
+(`>`), fenced, in an HTML comment or indented as code does not count, and any
+push makes the stamp stale until it is re-reviewed and updated. Every other PR
+gets success. The workflow fires on `edited` (unlike every other PR workflow
+here, #222) because the stamp is a body edit that changes no SHA; it reads the
+body from `$GITHUB_EVENT_PATH`, the manifests through the API at the merge base
+and the head, and fails closed when either read fails. The logic is
+`scripts/release-review-gate.js`, locked by `e2e/self-release-review-gate.test.js`.
+It does not run the consumers' checks against the candidate or gate the tag
+itself; those parts of #526 are separate.
+
+The nine REQUIRED contexts are `repo-settings.yml`'s `ruleset_library.platform-main.
+rules[required_status_checks]`: the six self-CI job ids, `scan / scan`,
+`fixture-e2e` and `release-review-gate`. Two
 lints lock them to the workflows. `e2e/ruleset-context-publishable.test.js`
 checks that every one is reported on EVERY pull request to `main`: no `paths:`
 filter, no job-level `if:`, no `continue-on-error`. It also checks that every

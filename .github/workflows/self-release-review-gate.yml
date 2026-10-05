@@ -1,0 +1,94 @@
+# Self release review gate — the enforced independent review of a
+# release-bearing PR (cms-platform#526, acceptance criterion 3; owner decision
+# 2026-10-05). The logic, the release-bearing definition and the stamp grammar
+# live in scripts/release-review-gate.js; this file only gathers its inputs.
+#
+# A release-bearing PR (a `plugin.json` / `.claude-plugin/plugin.json` version
+# change against the merge base, or a `release/*` head branch) is red until its
+# body carries `Independent review: CLEAN at <sha>` with <sha> the PR's CURRENT
+# head, all 40 characters. Any other PR reports success. `release-review-gate`
+# is a REQUIRED context of `main` (repo-settings.yml
+# `ruleset_library.platform-main`).
+#
+# WHY `edited` IS DECLARED, unlike every other PR workflow here (#222): the
+# reviewer's stamp lands by editing the PR body, which changes no SHA. Without
+# `edited` the check would stay red until an unrelated push. #222's hazard was
+# a caller SKIPPED on `edited`, which withdraws a context reported earlier; this
+# job has no `if:` and reports a verdict on every run, so an `edited` run
+# replaces the earlier verdict instead of withdrawing it.
+#
+# NO `concurrency:` and NO `timeout-minutes:` on purpose. `edited` and
+# `synchronize`/`opened` fire on the SAME head SHA, and a cancelled required
+# context blocks the merge for good (#285, #289); this job is a few seconds of
+# API reads. Locked by e2e/required-context-cancellable.test.js and
+# e2e/self-release-review-gate.test.js.
+#
+# The trigger is broad (no `paths:`): a required check that a filtered run never
+# reports blocks the merge forever. Locked by
+# e2e/ruleset-context-publishable.test.js.
+name: Self release review gate
+
+# Dynamic per-run title (issue #1776 grammar; enforced by
+# e2e/workflow-run-name.test.js).
+run-name: >-
+  ${{ format('PR #{0} {1} — {2}', github.event.pull_request.number, github.event.action, github.event.pull_request.title) }}
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+# Reads the event payload and two public manifests through the API; posts,
+# pushes and comments nothing.
+permissions:
+  contents: read
+
+jobs:
+  release-review-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the gate script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/release-review-gate.js
+          sparse-checkout-cone-mode: false
+
+      # Every PR field comes from the event file ($GITHUB_EVENT_PATH), never a
+      # `${{ github.event.* }}` interpolation: the body and branch name are
+      # author-controlled text. The manifests are read at the MERGE BASE (from
+      # the compare API) and at the head, so a branch that predates a release
+      # does not read as release-bearing. Any API failure fails the gate: a
+      # missing input is not a pass. Errors log a status, never a response body.
+      - name: Decide release-bearing and check the review stamp
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          head_sha="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+          base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
+          for v in "$head_sha" "$base_sha"; do
+            if [[ ! "$v" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::the event carries no 40-character head/base SHA"
+              exit 1
+            fi
+          done
+          merge_base="$(gh api "repos/$REPO/compare/$base_sha...$head_sha" --jq '.merge_base_commit.sha' 2>/dev/null)" || merge_base=""
+          if [[ ! "$merge_base" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::could not resolve the merge base of $base_sha...$head_sha"
+            exit 1
+          fi
+          echo "head=$head_sha merge-base=$merge_base"
+          for pair in "base:$merge_base" "head:$head_sha"; do
+            side="${pair%%:*}" ref="${pair#*:}"
+            for f in plugin.json .claude-plugin/plugin.json; do
+              dest="$RUNNER_TEMP/manifests/$side/$f"
+              mkdir -p "$(dirname "$dest")"
+              if ! gh api -H 'Accept: application/vnd.github.raw' \
+                  "repos/$REPO/contents/$f?ref=$ref" > "$dest" 2>/dev/null; then
+                echo "::error::could not read $f at $ref"
+                exit 1
+              fi
+            done
+          done
+          node scripts/release-review-gate.js --event "$GITHUB_EVENT_PATH" \
+            --base-dir "$RUNNER_TEMP/manifests/base" --head-dir "$RUNNER_TEMP/manifests/head"

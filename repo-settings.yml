@@ -297,6 +297,12 @@ ruleset_library:
             # self-fixture-e2e.yml's always() gate (its matrix legs carry the
             # timeout wall, so they are deliberately not required).
             - context: fixture-e2e
+            # why: #526 criterion 3 (owner decision 2026-10-05) — the enforced
+            # independent review: self-release-review-gate.yml fails a
+            # release-bearing PR unless its body carries
+            # `Independent review: CLEAN at <current head sha>`; every other PR
+            # passes it.
+            - context: release-review-gate
     bypass_actors: []
 
   # why: = live adamdaniel.ai ruleset 13985217 as-found 2026-07-10 — the

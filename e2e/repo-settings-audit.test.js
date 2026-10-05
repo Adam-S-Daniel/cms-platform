@@ -20,8 +20,8 @@
  * declares it and this fixture encodes that desired state, so live stays
  * BEHIND until a human runs `--fix --yes`; same manifest-ahead-of-live shape
  * as the delete_branch_on_merge flip above; again in #525 for the
- * `python-unit-tests`, `cfn-lint` and `scan / scan` contexts, and in #527 for
- * `fixture-e2e`), and BOTH consumers'
+ * `python-unit-tests`, `cfn-lint` and `scan / scan` contexts, in #527 for
+ * `fixture-e2e`, and in #526 for `release-review-gate`), and BOTH consumers'
  * *.ruleset-main.json again on 2026-09-01 (the `site-verify / site-verify`
  * required context, #377 sequencing step 3 — added only after both consumers
  * published it on their v0.1.98 bump PRs; same manifest-ahead-of-live shape
