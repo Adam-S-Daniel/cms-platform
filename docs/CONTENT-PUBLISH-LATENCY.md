@@ -17,9 +17,10 @@ caller under `examples/site/.github/workflows/`, and v0.1.125
 against `main` at v0.1.125 (`0c3b80c`), constraint 1 (`structuralShape()` still
 excludes `on:`, and the bump still never edits an existing caller's `on:`
 block), constraint 3 (`site_live: false`) and every row of the defect table were
-re-checked by reading the source, and still hold; nothing was built or run. The
-baseline timings and the other constraints were not re-measured; re-check them
-before relying on them.
+re-checked by reading the source, and still held; nothing was built or run. The
+defect table has since been brought up to date as of 2026-10-05 (v0.1.126
+fixed rows one, four and five; see below). The baseline timings and the other
+constraints were not re-measured; re-check them before relying on them.
 
 Reviving this **reverses a recorded decision**:
 [Rejected: skipping tests per diff](E2E-PARALLELISM.md#rejected-skipping-tests-per-diff).
@@ -134,7 +135,9 @@ Proven on PR 3941: diffing the two `_site` trees gave exactly the new post,
    docs-only PR waits forever on `e2e / e2e` with pin-consistency green.
 2. **Paths must be NUL-delimited.** Default `git diff --name-only` quotes a
    non-ASCII path, leading quote included, so no `^_posts/` rule matches it.
-   Two of adamdaniel.ai's five posts have such names.
+   Two of adamdaniel.ai's five posts have such names. The salience readers
+   now follow this (v0.1.126, row one of the defect table below), and the
+   router must too.
 3. **jodidaniel.com's gate is closed.** `site_live: false` on `main`: content
    edits change no public output, so a focused check there inspects a
    coming-soon page. The gate's location is declared as `cms.site_gate` in the
@@ -156,20 +159,26 @@ Proven on PR 3941: diffing the two `_site` trees gave exactly the new post,
 
 ## Defects found that outlive the shelving
 
-As of 2026-10-04 none is closed: one has a fix on `main` awaiting release and
-consumer verification (marked in its row), and the rest are unfixed. Each stands
-on its own, with or without the lane, and each has its own tracker in the owning repository, where its fix and
-evidence belong
+As of 2026-10-05 four of the five are fixed and one is open. The cms-platform
+fixes shipped in v0.1.126
+([#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565) and
+[#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555)), and the two
+consumer-owned defects were closed on 2026-10-04. The table below records the
+state of each row; the trackers stay linked so the fix and its evidence have an
+accountable destination. Only
+[cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540)
+is open, waiting on consumer verification. Each defect stood on its own, with or
+without the lane, and each has its own tracker in the owning repository
 ([cms-platform#529](https://github.com/Adam-S-Daniel/cms-platform/issues/529)
 groups them).
 
 | Defect | Where | Effect | Tracker |
 |---|---|---|---|
-| Quoted paths reach the salience check | `visual-regression.yml` `detect`, `e2e/detect-changed-pages.js` | A salient file with a non-ASCII name reads as non-salient. Harmless so far only because the affected names were under `_posts/`. | [cms-platform#539](https://github.com/Adam-S-Daniel/cms-platform/issues/539) |
-| Site verifier is mostly unarmed | jodidaniel.com `scripts/verify-build-artifacts.rb` | With the gate closed, most assertion groups print "did NOT run"; they run only on a tree with `site_live: true`. | [jodidaniel.com#306](https://github.com/jodidaniel/jodidaniel.com/issues/306) |
-| Site verify is a no-op | adamdaniel.ai `site-verify` | The site has no verifier script, so the required check succeeds in about 7 s without building. | [adamdaniel.ai#3970](https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3970) |
-| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolled the whole page on a phone, and an author could not fix it from the CMS. **Rule added on `main` by [cms-platform#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555) (unreleased); [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) stays open for consumer verification.** | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
-| Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
+| Quoted paths reach the salience check | `visual-regression.yml` `detect`, `e2e/detect-changed-pages.js` | A salient file with a non-ASCII name read as non-salient. Harmless in practice only because the affected names were under `_posts/`. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** both readers now take NUL-delimited paths (`git diff --name-only -z`), so accented, spaced, quoted and newline names classify correctly; so do `preview-media.yml` and `e2e/select-specs.js`, which shared the defect. | [cms-platform#539](https://github.com/Adam-S-Daniel/cms-platform/issues/539) |
+| Site verifier is mostly unarmed | jodidaniel.com `scripts/verify-build-artifacts.rb` | With the gate closed, most assertion groups printed "did NOT run"; they ran only on a tree with `site_live: true`. **Fixed and closed 2026-10-04 by [jodidaniel.com#313](https://github.com/jodidaniel/jodidaniel.com/pull/313), which verifies the open-gate build too.** | [jodidaniel.com#306](https://github.com/jodidaniel/jodidaniel.com/issues/306) |
+| Site verify is a no-op | adamdaniel.ai `site-verify` | The site had no verifier script, so the required check succeeded in about 7 s without building. **Fixed and closed 2026-10-04 by [adamdaniel.ai#4006](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4006), a site-owned post-build verifier.** | [adamdaniel.ai#3970](https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3970) |
+| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolled the whole page on a phone, and an author could not fix it from the CMS. **Rule added by [cms-platform#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555), released in v0.1.126. The tracker stays open: neither consumer has a built page with a bare Markdown table or a fixed-width iframe, so consumer verification rests on the platform fixture and the served CSS.** | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
+| Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** a `fetch-depth: 2` checkout plus `e2e/ensure-merge-base.js`, which deepens only until the merge base is proven. Measured on adamdaniel.ai `pull_request` runs, three before (v0.1.125) and three after (v0.1.126), medians: `detect` 16 s to 9 s (checkout 10 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483694/job/111374795291), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052769/job/111385134290)); `parity-probe` 28 s to 16 s (checkout 10 s to 1 s; noisy, the first runs took 69-71 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483680/job/111374795567), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052742/job/111385134369)); `media-probe` 19 s to 13 s (checkout 9 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483634/job/111374795274), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052774/job/111385134381)). jodidaniel.com was not measured. | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
 
 Also noted: neither consumer has a `tests/` directory, though jodidaniel.com's
 deploy callers already list `tests/**`.
