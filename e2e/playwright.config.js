@@ -641,6 +641,11 @@ const PLATFORM_META_SPECS = [
   // internal: a consumer doesn't ship those reusable definitions.
   "workflow-loop-branch-cleanup.test.js",
   "workflow-prod-loop-serialized.test.js",
+  // Every job that runs python3/pip, ruby/gem/bundle or actionlint pins the
+  // runtime through a setup step (runner-images#14748: ubuntu-latest rolls to
+  // 26.04 from 2026-10-19). Reads the PLATFORM's own workflow and composite
+  // action definitions — a consumer has neither.
+  "workflow-runtime-pinned.test.js",
   // #145 — reads the canonical examples/site thin-caller DEFINITIONS + the
   // platform's own self-dependabot-auto-merge.yml / self-secrets-scan.yml to
   // lock the base-retarget `edited` trigger + caller-job gate. Platform-
