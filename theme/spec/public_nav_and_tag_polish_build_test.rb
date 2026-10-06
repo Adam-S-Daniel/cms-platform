@@ -90,15 +90,18 @@ class PublicNavAndTagPolishBuildTest < Minitest::Test
     REXML::XPath.match(doc, "//nav[@class='site-nav']/a").first
   end
 
-  def test_blog_link_is_current_on_the_blog_index
+  def test_blog_link_is_the_current_page_on_the_blog_index
     link = nav_link(parse(build(tags_index: false), 'blog'))
     assert_equal 'Blog', link.texts.join
     assert_equal 'page', link.attributes['aria-current']
   end
 
-  def test_blog_link_is_current_on_a_post_under_it
+  # A post is inside the section but is not the page the link points to, so
+  # it is `true` (the current location), not `page`.
+  def test_blog_link_is_current_true_on_a_post_under_it
     link = nav_link(parse(build(tags_index: false), 'blog/first'))
-    assert_equal 'page', link.attributes['aria-current']
+    assert_equal 'true', link.attributes['aria-current']
+    assert_includes link.attributes['class'].split, 'active'
   end
 
   def test_blog_link_is_not_current_elsewhere

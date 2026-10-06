@@ -65,15 +65,25 @@ test("the Decap preview pane's image, outside a header, keeps its spacing", () =
 test("the current nav item stops the text-thermal animation that would hide its color", () => {
   const base = ruleFor(".site-nav a");
   expect(declValue(base, "animation"), "base nav link animates (the premise)").toMatch(/text-thermal/);
-  const current = topLevelRules().find((r) =>
-    r.selectors.some((s) => s.replace(/\s+/g, " ").trim() === '.site-nav a[aria-current="page"]'),
-  );
-  expect(current, 'a rule for .site-nav a[aria-current="page"]').toBeTruthy();
-  expect(declValue(current, "animation")).toBe("none");
-  expect(declValue(current, "color"), "color").toBeTruthy();
-  // Not color alone (WCAG 1.4.1): a border or underline marks it too.
-  const marked = declValue(current, "border-bottom") || declValue(current, "text-decoration");
-  expect(marked, "a non-color marker").toBeTruthy();
+  for (const value of ["page", "true"]) {
+    const selector = `.site-nav a[aria-current="${value}"]`;
+    const current = topLevelRules().find((r) =>
+      r.selectors.some((s) => s.replace(/\s+/g, " ").trim() === selector),
+    );
+    expect(current, `a rule for ${selector}`).toBeTruthy();
+    expect(declValue(current, "animation"), `${selector} animation`).toBe("none");
+    expect(declValue(current, "color"), `${selector} color`).toBeTruthy();
+    // Not color alone (WCAG 1.4.1): an underline marks it too.
+    expect(declValue(current, "text-decoration"), `${selector} text-decoration`).toMatch(/underline/);
+  }
+});
+
+test("marking the current nav item moves nothing: no border, padding or margin added", () => {
+  for (const r of topLevelRules().filter((r) => r.selectors.some((s) => /^\.site-nav a(\.active|\[aria-current)/.test(s.trim())))) {
+    for (const prop of ["border", "border-bottom", "padding", "padding-bottom", "margin", "margin-bottom"]) {
+      expect(declValue(r, prop), `${r.selector} ${prop}`).toBeNull();
+    }
+  }
 });
 
 test("a tag is displayed uppercase everywhere the pill shows it", () => {

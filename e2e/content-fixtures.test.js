@@ -16,6 +16,7 @@ const {
   feedHasTitle,
   hrefParamStartsWith,
   visibleTitleLocator,
+  discoverTags,
 } = require("./content-fixtures");
 
 // Lexical token extraction only (`<a ... href="...">text</a>`): the helper
@@ -287,4 +288,31 @@ test("visibleTitleLocator hands the raw title to getByText (no selector interpol
       ["filter", { visible: true }],
     ]);
   }
+});
+
+// discoverTags reads each tag's name from the /tags/ index. The theme shows
+// that name uppercase with CSS `text-transform` (#737), and `innerText`
+// applies it, so reading it that way returned "WELCOME" for the stored
+// "Welcome" and tags.spec.js failed comparing it to the tag page's heading.
+// The fake locator behaves like a browser: innerText is transformed,
+// textContent is the stored text.
+test("discoverTags returns the stored tag name, not the CSS-uppercased one", async () => {
+  const stored = [{ slug: "welcome", name: "Welcome", count: "3" }];
+  const text = (value, transform) => ({
+    innerText: async () => (transform ? value.toUpperCase() : value),
+    textContent: async () => value,
+  });
+  const itemFor = (t) => ({
+    locator: (sel) => {
+      if (sel === "a.tag-list-link") return { getAttribute: async () => `/tags/${t.slug}/` };
+      if (sel === ".tag-list-name") return text(t.name, true);
+      if (sel === ".tag-list-count") return text(t.count, false);
+      throw new Error(`unexpected selector ${sel}`);
+    },
+  });
+  const page = {
+    goto: async () => ({ status: () => 200 }),
+    locator: () => ({ count: async () => stored.length, nth: (i) => itemFor(stored[i]) }),
+  };
+  expect(await discoverTags(page)).toEqual([{ slug: "welcome", name: "Welcome", count: 3 }]);
 });

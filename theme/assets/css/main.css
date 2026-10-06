@@ -293,14 +293,15 @@ main {
 /* Current section (#737). The base `.site-nav a` rule runs the text-thermal
    animation, and a running animation outranks every normal declaration, so a
    plain `color` here never showed: the old `.active` rule was inert. The state
-   has to switch the animation off, then adds an underline so it does not rest
-   on color alone. */
+   has to switch the animation off. The underline is text-decoration, not a
+   border plus padding, so marking a link moves nothing around it. */
 .site-nav a.active,
-.site-nav a[aria-current="page"] {
+.site-nav a[aria-current="page"],
+.site-nav a[aria-current="true"] {
   animation: none;
   color: var(--text-bright);
-  border-bottom: 1px solid currentcolor;
-  padding-bottom: 2px;
+  text-decoration: underline;
+  text-underline-offset: 0.4em;
 }
 
 /* ── Site Footer ────────────────────────────────── */
