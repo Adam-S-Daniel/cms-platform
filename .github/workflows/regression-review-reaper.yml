@@ -167,7 +167,7 @@ jobs:
                 2>&1 >/dev/null); then
                 continue
               fi
-              status=$(sed -nE 's/.*\(HTTP ([0-9]{3})\).*/\1/p' <<<"$err" | head -n 1)
+              status=$(sed -nE '1s/.*\(HTTP ([0-9]{3})\).*/\1/p' <<<"$err")
               status=${status:-unknown}
 
               # A failed reject is NOT proof the deployment was already
@@ -181,7 +181,7 @@ jobs:
                   echo "::notice::reject of run ${run_id} env ${env_id} failed (HTTP ${status}) but the deployment is no longer pending — already resolved."
                   continue
                 fi
-                echo "::error::failed to reject run ${run_id} env ${env_id} (HTTP ${status}); the deployment is still waiting. The reviewer PAT (CMS_E2E_PAT) must belong to a required reviewer of '${ENVNAME}' and have Actions: write on this repo."
+                echo "::error::failed to reject run ${run_id} env ${env_id} (HTTP ${status}); the deployment is still waiting. CMS_E2E_PAT must belong to a required reviewer of '${ENVNAME}'; see https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens (Deployments: write for a fine-grained token, or the classic repo scope)."
               else
                 echo "::error::failed to reject run ${run_id} env ${env_id} (HTTP ${status}) and could not re-read its pending deployments to confirm it was resolved."
               fi

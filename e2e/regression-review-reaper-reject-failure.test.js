@@ -62,6 +62,11 @@ test("403 on reject while the deployment is still waiting fails the job with an 
   expect(r.stdout).toMatch(new RegExp(`::error::failed to reject run ${RUN_ID} env ${ENV_ID} \\(HTTP 403\\); the deployment is still waiting`));
   expect(r.stdout).not.toContain("::warning::");
   expect(r.stdout).toContain("::error::Reap incomplete");
+  // The log names the reviewer requirement and the docs, and does not prescribe a scope.
+  expect(r.stdout).toContain("required reviewer of 'regression-review'");
+  expect(r.stdout).toContain("https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens");
+  expect(r.stdout).toContain("Deployments: write");
+  expect(r.stdout).not.toContain("Actions: write");
   // The error body is never echoed; only the status is.
   expect(r.stdout).not.toContain("Resource not accessible");
 });
