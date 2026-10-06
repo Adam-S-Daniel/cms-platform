@@ -443,16 +443,17 @@ the probe shows deploys trailing releases by more than a release cycle.
 
 Once issued, the token sits in `localStorage`, readable by every script on the
 origin, and it is an OAuth App token: scope `repo,user,workflow` (or
-`repo,read:user,workflow` from a proxy deployed after #516), every repository
+`repo,read:user,workflow` from a proxy deployed after #516; which one the
+live proxies send is not verified, see the permissions row), every repository
 the editor can reach, no expiry. A script that should not be there
 is therefore expensive. What was weighed:
 
 | Measure | Status | Why |
 |---|---|---|
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
-| Security headers | **In the template, not yet deployed** — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | Both distributions send HSTS, `nosniff`, `Referrer-Policy` and same-origin framing once a site redeploys its bootstrap stack; `/admin/*` adds a CSP, Report-Only until `AdminCspMode=enforce`. Decap's `new Function` and the per-site inline scripts keep `script-src` loose; the gain is `connect-src`, `object-src`, `base-uri` and `frame-ancestors`. See [Security headers](#security-headers) below. |
-| Narrower permissions | Evaluated, spike pending — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516); `read:user` replaces `user` in the proxy's default scope | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. The source evaluation, the minimal permission set and the spike kit are in [GitHub App sign-in](#github-app-sign-in-516) below. |
-| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); off until a site follows the runbook below | Public pages share the origin, and so do their scripts. The CloudWatch RUM client is no longer fetched from AWS: the gem ships the exact release and pages load it from the site's own origin (rule below), which takes the RUM CDN out of the page but not the client out of the token's reach. Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
+| Security headers | **Deployed and enforced on both consumer sites** — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515). Measured 2026-10-06 over HTTPS with TLS verification on: `/`, `/admin/` and `/admin/reviews/` on adamdaniel.ai and jodidaniel.com answer HSTS, `nosniff`, `Referrer-Policy`, `X-Frame-Options` and `frame-ancestors 'self'`; the `/admin/` pages carry the full policy in the enforcing `Content-Security-Policy` header and no `Content-Security-Policy-Report-Only` header. The template default for a NEW site is still `AdminCspMode=report-only` | Both distributions send HSTS, `nosniff`, `Referrer-Policy` and same-origin framing once a site redeploys its bootstrap stack; `/admin/*` adds a CSP, Report-Only until `AdminCspMode=enforce`. Decap's `new Function` and the per-site inline scripts keep `script-src` loose; the gain is `connect-src`, `object-src`, `base-uri` and `frame-ancestors`. See [Security headers](#security-headers) below. |
+| Narrower permissions | Evaluated, spike pending — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516); `read:user` replaces `user` in the proxy's default scope (platform default since #548). **Unverified: the live proxies' `GITHUB_SCOPE`** — the proxies were redeployed 2026-10-04 at v0.1.126, after #548, so `read:user` is probable, but nobody has observed it; the check is [below](#the-interim-step-readuser-instead-of-user) | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. The source evaluation, the minimal permission set and the spike kit are in [GitHub App sign-in](#github-app-sign-in-516) below. |
+| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); the opt-in shipped in #549 and **no site has opted in** (`/admin/` answers 200 from the apex on both, 2026-10-06); off until a site follows the runbook below | Public pages share the origin, and so do their scripts. The CloudWatch RUM client is no longer fetched from AWS: the gem ships the exact release and pages load it from the site's own origin (rule below), which takes the RUM CDN out of the page but not the client out of the token's reach. Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
 
 ## Serving the editor from its own origin (opt-in, #517)
@@ -558,13 +559,25 @@ admin origin.
 **Not closed:**
 
 - **Content rendered inside the editor.** Decap draws the markdown preview
-  pane in a same-origin frame, and the platform leaves Decap's
-  `sanitize_preview` at its default (`false`), so an HTML embed
-  (`editor-component-html-embed.js`) with an event-handler attribute, such as
-  an `<img onerror>`, runs in the admin origin when the entry is opened;
-  `<script>` tags do not (they arrive through `innerHTML`). Anyone who can put
-  content on a `cms/*` branch reaches every editor who opens it. Not verified
-  in a browser here.
+  pane in a same-origin frame, so the HTML it renders runs in the admin
+  origin. The platform does not set `sanitize_preview` on any field (no file
+  in this repo mentions it), so Decap's default applies, and in the pinned
+  `decap-cms@3.15.1` that default is **`true`**: `MarkdownPreview.js` (in
+  `decap-cms-widget-markdown`) and `RichtextPreview.js` read
+  `field?.get('sanitize_preview') ?? true` and, when true, pass the HTML
+  through `DOMPurify.sanitize(html)` with no custom configuration. Read from
+  the bundle whose sha384 matches the shells' `integrity` attribute
+  (`dist/decap-cms.js`, source map `sourcesContent`; checked 2026-10-06).
+  DOMPurify's defaults drop event-handler attributes such as `onerror` and
+  `<script>` and `<iframe>` elements, so an HTML embed
+  (`editor-component-html-embed.js`) cannot run script in the preview at the
+  default. What stays open is that this protection is Decap's default and
+  not something the platform pins or tests: a field config that sets
+  `sanitize_preview: false` would let such an embed run in the admin origin,
+  and a Decap upgrade could change the default. Anyone who can put content
+  on a `cms/*` branch reaches every editor who opens it only if that happens.
+  Not verified in a browser here; an earlier version of this bullet claimed
+  the default was `false`, which the pinned source contradicts.
 - **Per-PR preview admins are unchanged.** `preview-prN.<apex>` and
   `preview-cms-<slug>.<apex>` each serve their admin next to that build's
   public pages. Preview builds run with `JEKYLL_ENV=preview`, so they load no
@@ -588,9 +601,10 @@ admin origin.
   window the editor opened), which is not built.
 - **Framing and CSP need the bootstrap redeploy.** `frame-ancestors 'self'`
   and the admin CSP reach `admin.<apex>` only once the stack carrying #515 is
-  deployed, and the CSP only reports until `AdminCspMode=enforce`; with its
-  `'unsafe-inline'` and `'unsafe-eval'` it does not stop the preview-pane
-  embed above.
+  deployed (it is, on both consumer sites, 2026-10-06), and the CSP only
+  reports until `AdminCspMode=enforce` (both sites enforce); with its
+  `'unsafe-inline'` and `'unsafe-eval'` it would not stop an
+  event-handler attribute that got past the preview sanitizer above.
 - **Tokens issued before the cut-over.** They stay in the apex's
   `localStorage` (`decap-cms-user`, `gh_reviews_token`), readable by every
   apex script, and the editor on its new origin cannot clear another origin's
