@@ -10,9 +10,42 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.148)
+## Version history (v0.1.0 → v0.1.149)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.149 — The admin's validation toast stays off the field it names and says which list row failed, only the stale "missed a required field" toast is closed, the Tags box keeps a trailing space and separates an applied suggestion, long URLs and identifiers in post text wrap instead of widening the page, and tags that differ only in case merge into one tag.**
+Five changes since v0.1.148, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Apart from the pins, the change is `theme/` (admin shims, `main.css`, the tag layouts and the `cms-platform-theme` gem's tag generator), `e2e/` and one `docs/` file, `docs/PUBLISHING-UX.md` (`git diff --stat v0.1.148 origin/main` is 22 files: 12 under `theme/`, 9 under `e2e/` and that one):
+no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
+Validation toast. [#751](https://github.com/Adam-S-Daniel/cms-platform/pull/751) (for [#750](https://github.com/Adam-S-Daniel/cms-platform/issues/750), closed by it)
+edits `theme/admin/validation-feedback.js`. The toast now takes the screen edge the failing field is not near, has `pointer-events: none` except its Dismiss button
+(it covered the field it named and blocked clicks for 10 s), leads with the list row (`Not saved yet. Item 2 (Beta): URL: ...`, a collapsed row opened through its own toggle),
+and ignores a Decap toast that was already up before the click. That last part is the cause of "missed a required field" on a format error: Decap raises that toast only
+for a presence error, and the one the tester saw was left over from an earlier empty Publish, so the shim had stood down. A leftover error toast is closed when the shim shows its own.
+Unit tests go from 13 to 24, three more real-Decap browser tests, `docs/PUBLISHING-UX.md` section 2.11.
+Stale-toast scope. [#758](https://github.com/Adam-S-Daniel/cms-platform/pull/758) (for [#752](https://github.com/Adam-S-Daniel/cms-platform/issues/752), closed by it)
+narrows #751's cleanup in the same file: only a stale "missed a required field" toast is closed, matched against that string in every locale Decap ships, the page `lang`
+and the browser languages, so "logged out" and "backend unavailable" toasts survive. A toast in a locale it cannot read stays open. The Dismiss button is at least 24 px
+(44 px under `(pointer: coarse)`) with an `aria-hidden` glyph, and on a phone the toast is full width inside its margins instead of about half the screen. Unit tests go from 24 to 31, plus browser tests.
+Long strings. [#759](https://github.com/Adam-S-Daniel/cms-platform/pull/759) (for [#753](https://github.com/Adam-S-Daniel/cms-platform/issues/753), closed by it)
+changes the public theme: `theme/assets/css/main.css` gives `.post-content`, `.post-excerpt` and `:not(pre) > code` `overflow-wrap: break-word`, so a long URL or identifier
+no longer widens the page (about 1660px at a 1440px viewport, about 1330px at 390px). It is `break-word`, not `anywhere`, because `anywhere` lowers min-content size
+and broke table cells mid-word; `pre` keeps its horizontal scroll. New `theme-overflow-wrap-css.test.js` (6 tests, in `PLATFORM_META_SPECS`).
+Tag case. [#760](https://github.com/Adam-S-Daniel/cms-platform/pull/760) (for [#754](https://github.com/Adam-S-Daniel/cms-platform/issues/754), closed by it)
+changes the theme's tag generation: `theme/lib/cms-platform-theme/auto_tag_pages.rb` and `tag_feeds.rb` group spellings by slug, so `quotes` and `Quotes` give one `site.all_tags` row
+(count is posts, a post with both spellings counts once), one tag page and one feed. The display name is the `_tags/` entry's name, else the spelling most posts use, a tie going to the one seen first.
+The generator builds `site.tag_posts_by_slug` once and `theme/_layouts/tag.html` and `atom_feed.xml` do one lookup (slugifying every post's tags per tag page made a 2,000-post, 300-tag build 4x slower).
+Before, both spellings minted a page at one URL, the later overwriting the earlier, and the archive dropped the other spelling's posts. New `tag_case_variants_build_test.rb` (real Jekyll build, 9 tests),
+extended `auto_tag_pages_test.rb` and `tag_feeds_test.rb`, `duplicateTagSlugs` in `e2e/content-fixtures.js` (which ships to consumers) and a card-count assertion in `tags.spec.js`.
+Tags box. [#761](https://github.com/Adam-S-Daniel/cms-platform/pull/761) (for [#756](https://github.com/Adam-S-Daniel/cms-platform/issues/756), closed by it)
+follows up #746 in `theme/admin/tags-input.js`: Decap's list widget trims the box on every keystroke, so a space typed at the end of a tag was swallowed (`Field Notes` became `FieldNotes`);
+the shim now holds a single trailing space after a letter. An applied suggestion ends in `, ` and the box's trailing separator is trimmed on focus-out through the box, so Save no longer stores an empty second tag.
+Chips are at least 44px under `(pointer: coarse)`. Unit tests in `tags-suggest.test.js` and seven more real-Decap tests in `cms-tags-input.spec.js`.
+Consumer effect. The admin changes (#751, #758, #761) reach both sites with their next bump, when the `cms-platform-theme` gem tag names v0.1.149: the shims load in the `/admin` shells of both.
+#759 and #760 change public theme output, but reviewers measured no visual diff on adamdaniel.ai: 11 pages at 3 widths came out byte-identical apart from `/`, whose diffs match a main-vs-main control, and the tag pages are unchanged for its single tag.
+jodidaniel.com is unaffected by the theme changes: it loads no `main.css` and has no blog or tags. Tag feeds and URLs are unchanged. Bump only, no consumer-side edit:
+no reusable workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy redeploy and no bootstrap redeploy.
 
 **v0.1.148 — Cancelling the admin's leave prompt on browser Back keeps the editor and the address bar in sync, the Tags box offers existing tags and warns on near-duplicates, the public theme gets a visible current-page nav state, a tighter hero gap and fuller tag pages, and the phone admin toolbar sticks and the date field fits.**
 Four changes since v0.1.147, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
