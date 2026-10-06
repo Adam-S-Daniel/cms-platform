@@ -136,6 +136,7 @@ jobs:
             exit 0
           fi
 
+          failures=0
           for row in $runs; do
             run=$(echo "$row" | base64 -d)
             run_id=$(echo "$run" | jq -r '.id')
@@ -157,11 +158,40 @@ jobs:
 
             for env_id in $env_ids; do
               echo "reject run ${run_id} [${head_sha}] — env ${ENVNAME} (${env_id})"
-              gh api -X POST "repos/${GH_REPO}/actions/runs/${run_id}/pending_deployments" \
+              # stderr is captured (stdout discarded) so a failure's HTTP status
+              # survives; only the status is ever logged, never the error body.
+              if err=$(gh api -X POST "repos/${GH_REPO}/actions/runs/${run_id}/pending_deployments" \
                 -F "environment_ids[]=${env_id}" \
                 -f state=rejected \
                 -f comment="Superseded — reaped by regression-review-reaper (PR #${PR_NUMBER} ${ACTION}). A newer commit or the PR close obsoleted this review gate." \
-                >/dev/null || echo "::warning::failed to reject run ${run_id} env ${env_id} (already resolved?)"
+                2>&1 >/dev/null); then
+                continue
+              fi
+              status=$(sed -nE '1s/.*\(HTTP ([0-9]{3})\).*/\1/p' <<<"$err")
+              status=${status:-unknown}
+
+              # A failed reject is NOT proof the deployment was already
+              # resolved: a reviewer PAT without access answers 403 and leaves
+              # the gate waiting (jodidaniel.com runs 37464002781 and
+              # 37475300425, cms-platform#788). Re-read the run's pending
+              # deployments and tell the two apart.
+              if still=$(gh api "repos/${GH_REPO}/actions/runs/${run_id}/pending_deployments" \
+                --jq ".[] | select(.environment.id == ${env_id}) | .environment.id" 2>/dev/null); then
+                if [ -z "$still" ]; then
+                  echo "::notice::reject of run ${run_id} env ${env_id} failed (HTTP ${status}) but the deployment is no longer pending — already resolved."
+                  continue
+                fi
+                echo "::error::failed to reject run ${run_id} env ${env_id} (HTTP ${status}); the deployment is still waiting. CMS_E2E_PAT must belong to a required reviewer of '${ENVNAME}'; see https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens (Deployments: write for a fine-grained token, or the classic repo scope)."
+              else
+                echo "::error::failed to reject run ${run_id} env ${env_id} (HTTP ${status}) and could not re-read its pending deployments to confirm it was resolved."
+              fi
+              failures=$((failures + 1))
             done
           done
+          if [ "$failures" -gt 0 ]; then
+            # Not a required check on either consumer's ruleset, so this turns
+            # the job red (visible) without blocking a merge.
+            echo "::error::Reap incomplete — ${failures} superseded '${ENVNAME}' deployment(s) could not be rejected."
+            exit 1
+          fi
           echo "::notice::Reap complete."
