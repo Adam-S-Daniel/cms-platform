@@ -30,6 +30,24 @@
  *      into view and show a toast with its message. Decap's own toast
  *      still covers the missing-value case, so there is never a second one.
  *
+ * ── Follow-ups (cms-platform#750) ─────────────────────────────────────
+ *   4. The toast used to sit fixed at the bottom for 10 s, over the field
+ *      it named (the last field cannot scroll any higher) and swallowing
+ *      clicks. It now sits on whichever edge the field is NOT near, lets
+ *      every click through except on its own close button, and can be
+ *      dismissed.
+ *   5. A field inside a list row names the row ("Item 2 (Beta): URL: ..."),
+ *      by its position and its summary; a collapsed row is opened so the
+ *      field the message is about is on screen.
+ *   6. Decap raises "you missed a required field" ONLY for an empty
+ *      required field (PRESENCE), but its toast outlives the click that
+ *      raised it by 8 s. A format error fixed-and-retried inside those 8 s
+ *      used to find that stale toast, stand down, and leave the editor
+ *      reading "missed a required field" for a format error (reproduced
+ *      against Decap 3.15.1). Only a toast that appeared AFTER the click
+ *      counts as Decap's answer to it; a stale error toast is closed when
+ *      this one is shown.
+ *
  * Everything keys on Decap's public surface (`CMS.getLocale`, the button
  * text) or on the `ControlErrorsList` Emotion label; if Decap changes any of
  * them the affected part is a silent no-op and Decap behaves as before.
@@ -44,6 +62,13 @@
   var CLICK_TARGET = 'button, [role="menuitem"], [role="button"]';
   var SAVE_OR_PUBLISH = /^(save|publish)\b/i;
   var TOAST_MS = 10000;
+  // A list row, its summary (kept in the DOM, shown only while the row is
+  // collapsed), and the row's own expand/collapse button.
+  var ROW = '[class*="SortableListItem"]';
+  var ROW_LABEL = '[class*="NestedObjectLabel"]';
+  var ROW_TOGGLE = '[class*="StyledListItemTopBar"] button';
+  var CONTROL = '[class*="ControlContainer"]';
+  var DECAP_CLOSE = '[class*="Toastify__close-button"]';
   // Frames to let Decap validate and re-render after a click before looking.
   var SETTLE_FRAMES = 3;
 
@@ -94,24 +119,136 @@
     }
   }
 
-  function raisedByDecap() {
-    return document.querySelector(DECAP_TOAST) !== null;
+  function decapToasts() {
+    return Array.prototype.slice.call(document.querySelectorAll(DECAP_TOAST));
   }
 
-  function toast(msg) {
+  // Decap's toast lives 8 s, so one left over from an earlier click is not
+  // an answer to this one: only a toast that was not there at the click is.
+  function raisedByDecap(before) {
+    var now = decapToasts();
+    for (var i = 0; i < now.length; i++) if (before.indexOf(now[i]) < 0) return true;
+    return false;
+  }
+
+  // An earlier "you missed a required field" would sit beside a message that
+  // says something else; close it through Decap's own close button.
+  function closeStaleDecapToasts(before) {
+    for (var i = 0; i < before.length; i++) {
+      try {
+        if (!/Toastify__toast--error/.test(String(before[i].className || ""))) continue;
+        var x = before[i].querySelector(DECAP_CLOSE);
+        if (x) x.click();
+      } catch {
+        /* the stale toast is only noise; leave it */
+      }
+    }
+  }
+
+  // The list rows around a field, outermost first.
+  function rowsOf(el) {
+    var rows = [];
+    var n = el && el.closest ? el.closest(ROW) : null;
+    while (n) {
+      rows.unshift(n);
+      var up = n.parentElement;
+      n = up && up.closest ? up.closest(ROW) : null;
+    }
+    return rows;
+  }
+
+  function summaryOf(row) {
+    var label = row.querySelector(ROW_LABEL);
+    return label ? String(label.textContent || "").trim() : "";
+  }
+
+  // "Item 2 (Beta)": the row's 1-based position among its siblings and the
+  // summary Decap shows for it. The summary is the editor's own name for it,
+  // the position is what is left when the summary is blank.
+  function rowName(row) {
+    var sibs = row.parentElement ? row.parentElement.children : [];
+    var pos = 0;
+    for (var i = 0; i < sibs.length; i++) {
+      if (sibs[i].matches && sibs[i].matches(ROW)) {
+        pos++;
+        if (sibs[i] === row) break;
+      }
+    }
+    var summary = summaryOf(row);
+    return "Item " + (pos || "?") + (summary ? " (" + summary + ")" : "");
+  }
+
+  function rowPath(list) {
+    try {
+      return rowsOf(list).map(rowName).join(" > ");
+    } catch {
+      return "";
+    }
+  }
+
+  // A collapsed row keeps its fields in the DOM but hidden, so the message
+  // would point at nothing. Open each collapsed row around the field (a
+  // collapsed row is the one whose summary is showing).
+  function expandRowsAround(list) {
+    try {
+      var rows = rowsOf(list);
+      for (var i = 0; i < rows.length; i++) {
+        var label = rows[i].querySelector(ROW_LABEL);
+        var toggle = rows[i].querySelector(ROW_TOGGLE);
+        if (label && label.offsetParent !== null && toggle) toggle.click();
+      }
+    } catch {
+      /* Decap's list markup changed: the toast still names the row */
+    }
+  }
+
+  // The toast goes on the edge of the screen the field is not near. Called
+  // after the (instant) scroll, so the field is where it will stay.
+  function fieldInLowerHalf(list) {
+    try {
+      var box = list.closest && list.closest(CONTROL) ? list.closest(CONTROL) : list;
+      var r = box.getBoundingClientRect();
+      return r.top + r.height / 2 > window.innerHeight / 2;
+    } catch {
+      return false;
+    }
+  }
+
+  function toast(msg, atTop) {
     try {
       removeToast();
       var t = document.createElement("div");
-      t.textContent = msg;
       t.setAttribute("role", "alert");
       t.setAttribute("data-validation-feedback-toast", "");
       // Inline style, as the other admin toasts: admin-css-banned-patterns
-      // scans .css files and <style> blocks only.
+      // scans .css files and <style> blocks only. pointer-events:none lets
+      // every click through to the form; only the close button takes one.
       t.style.cssText =
-        "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);" +
-        "background:#7f1d1d;color:#fff;padding:14px 20px;border-radius:8px;" +
+        "position:fixed;" +
+        (atTop ? "top:12px;" : "bottom:24px;") +
+        "left:50%;transform:translateX(-50%);pointer-events:none;" +
+        "display:flex;align-items:flex-start;gap:12px;" +
+        "background:#7f1d1d;color:#fff;padding:14px 12px 14px 20px;border-radius:8px;" +
         "font:14px/1.4 system-ui,sans-serif;max-width:min(560px,calc(100vw - 32px));z-index:2147483647;" +
         "box-shadow:0 8px 24px rgba(0,0,0,.3);";
+      var text = document.createElement("span");
+      text.textContent = msg;
+      var close = document.createElement("button");
+      close.setAttribute("type", "button");
+      close.setAttribute("aria-label", "Dismiss");
+      close.textContent = "\u00d7";
+      close.style.cssText =
+        "pointer-events:auto;cursor:pointer;background:none;border:0;color:inherit;" +
+        "font:20px/1 system-ui,sans-serif;padding:0 6px;margin:-2px 0 0;";
+      close.addEventListener("click", function () {
+        try {
+          t.remove();
+        } catch {
+          /* ignore */
+        }
+      });
+      t.appendChild(text);
+      t.appendChild(close);
       document.body.appendChild(t);
       setTimeout(function () {
         try {
@@ -125,29 +262,36 @@
     }
   }
 
-  function report() {
+  function report(before) {
     // An earlier "Not saved yet" must not outlive a save that went through.
     removeToast();
     var lists = document.querySelectorAll(ERROR_LIST);
     if (!lists.length) return;
     var first = lists[0];
+    expandRowsAround(first);
     try {
-      first.scrollIntoView({ block: "center", behavior: "smooth" });
+      // Instant, so the toast can be placed against where the field ends up.
+      first.scrollIntoView({ block: "center", behavior: "auto" });
     } catch {
       /* old browser: the toast still says what is wrong */
     }
-    if (raisedByDecap()) return;
-    var msg = messageOf(first);
+    if (raisedByDecap(before)) return;
+    closeStaleDecapToasts(before);
+    var where = rowPath(first);
+    var msg = (where ? where + ": " : "") + messageOf(first);
     var more = lists.length - 1;
-    toast("Not saved yet. " + msg + (more > 0 ? " (" + more + " more below.)" : ""));
+    toast("Not saved yet. " + msg + (more > 0 ? " (" + more + " more below.)" : ""), fieldInLowerHalf(first));
   }
 
   function afterClick(e) {
     if (!isSaveOrPublish(e.target)) return;
+    // Taken before Decap handles the click (this listener is in the capture
+    // phase), so a toast raised BY the click is told from one left over.
+    var before = decapToasts();
     var frames = SETTLE_FRAMES;
     function tick() {
       if (--frames > 0) window.requestAnimationFrame(tick);
-      else report();
+      else report(before);
     }
     window.requestAnimationFrame(tick);
   }
