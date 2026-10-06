@@ -484,5 +484,44 @@ test.describe("Share row on a post", () => {
       await expect(masto).toBeFocused();
       expect(dialogs).toEqual([]);
     });
+
+    test("a repeat invalid submit re-announces the error; Escape also closes from the toggle", async ({
+      page,
+    }) => {
+      const post = await discoverPost(page);
+      test.skip(!post, "no published posts on the site");
+      await arm(page);
+      await page.goto(post.url);
+
+      const masto = page.locator(".share-mastodon");
+      await masto.click();
+      const input = page.getByLabel("Your Mastodon instance");
+      const error = page.locator(".share-mastodon-error");
+      await input.fill("nope");
+      await input.press("Enter");
+      await expect(error).toHaveText(/Enter an instance address/);
+
+      // Same text again: a live region only speaks on a change, so the node
+      // must be emptied and refilled. Record its text mutations.
+      await error.evaluate((el) => {
+        window.__errorTexts = [];
+        new MutationObserver(() => window.__errorTexts.push(el.textContent)).observe(el, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      });
+      await input.press("Enter");
+      await expect(error).toHaveText(/Enter an instance address/);
+      const texts = await page.evaluate(() => window.__errorTexts);
+      expect(texts, "the alert text was cleared, then set again").toContain("");
+      expect(texts[texts.length - 1]).toMatch(/Enter an instance address/);
+
+      // Escape with focus back on the toggle button closes the form too.
+      await masto.focus();
+      await masto.press("Escape");
+      await expect(page.locator(".share-mastodon-form")).toBeHidden();
+      await expect(masto).toHaveAttribute("aria-expanded", "false");
+    });
   });
 });

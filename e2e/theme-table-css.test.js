@@ -62,12 +62,64 @@ test("the header row is heavier and has its own token background", () => {
   expect(decl(head, "background")).toMatch(/^var\(--bg-\d\)$/);
 });
 
-test("no bare `table`, `th` or `td` rule restyles classed tables", () => {
+// Selector scanning without a regex over its shape: split a selector into its
+// compounds at combinators (whitespace, >, +, ~) that sit outside [] and (),
+// then read each compound's leading type name character by character.
+const TABLE_PARTS = new Set(["table", "caption", "colgroup", "col", "thead", "tbody", "tfoot", "tr", "th", "td"]);
+
+function compounds(selector) {
+  const out = [];
+  let cur = "";
+  let depth = 0;
+  for (const ch of selector.trim()) {
+    if (ch === "[" || ch === "(") depth += 1;
+    if (ch === "]" || ch === ")") depth -= 1;
+    const combinator = depth === 0 && (ch === " " || ch === "\t" || ch === "\n" || ch === ">" || ch === "+" || ch === "~");
+    if (combinator) {
+      if (cur) out.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function typeName(compound) {
+  let name = "";
+  for (const ch of compound) {
+    const isNameChar = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch === "-";
+    if (!isNameChar) break;
+    name += ch;
+  }
+  return name.toLowerCase();
+}
+
+// A selector ends on a table part (so it styles table content) without any
+// compound pinning a `table` to `:not([class])` => it restyles classed tables.
+function restylesClassedTables(selector) {
+  const parts = compounds(selector);
+  if (parts.length === 0 || !TABLE_PARTS.has(typeName(parts[parts.length - 1]))) return false;
+  const scoped = parts.some((c) => typeName(c) === "table" && c.includes(":not([class])"));
+  return !scoped;
+}
+
+test("the scope check itself catches bare, descendant and structural selectors", () => {
+  for (const bad of ["td", "table", ".page-content td", ".post-content table", "tbody tr:hover td", "main > table th", "table td"]) {
+    expect(restylesClassedTables(bad), bad).toBe(true);
+  }
+  for (const ok of ["table:not([class])", "table:not([class]) td", ".page-content table:not([class]) th", "pre", ".share-link svg"]) {
+    expect(restylesClassedTables(ok), ok).toBe(false);
+  }
+});
+
+test("no rule in main.css restyles classed tables", () => {
+  const offenders = [];
   root.walkRules((r) => {
     for (const sel of r.selectors) {
-      if (/^(table|th|td)\b/.test(sel) && !sel.includes(":not([class])")) {
-        throw new Error(`"${sel}" would restyle a classed table; scope it with :not([class])`);
-      }
+      if (restylesClassedTables(sel)) offenders.push(sel);
     }
   });
+  expect(offenders, "scope each with table:not([class])").toEqual([]);
 });

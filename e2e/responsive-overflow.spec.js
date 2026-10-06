@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const cap = require("./site-capabilities");
 
 // #540 (8.4) — a wide Markdown table or a fixed-width <iframe> must not make
 // the PAGE scroll sideways on a phone, and the table's content must stay
@@ -108,6 +109,15 @@ test.describe("bare Markdown table styling (#729)", () => {
       test.skip(
         testInfo.project.name !== "chromium-mobile",
         "Sets its own viewport; one project is enough",
+      );
+      // The cell rules live in the theme's main.css, linked by its default.html.
+      // A home page on a site-owned layout (jodidaniel.com's _layouts/home.html
+      // loads only its own stylesheet, which copies the #540 scroll rule and
+      // nothing else) never asked for them; the #540 test above still covers it.
+      // Decided from the site's source inside the test, like reduced-motion.spec.js.
+      test.skip(
+        !cap.homeUsesThemeLayout(),
+        "the home page renders through a site-owned layout that does not load the theme's main.css",
       );
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");

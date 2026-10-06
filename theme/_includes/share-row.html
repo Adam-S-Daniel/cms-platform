@@ -82,15 +82,22 @@
       input.select();
     });
     form.querySelector('.share-mastodon-cancel').addEventListener('click', function(){ close(true); });
-    form.addEventListener('keydown', function(e){
-      if (e.key === 'Escape') { e.preventDefault(); close(true); }
-    });
+    var onEscape = function(e){
+      if (e.key === 'Escape' && !form.hidden) { e.preventDefault(); close(true); }
+    };
+    form.addEventListener('keydown', onEscape);
+    btn.addEventListener('keydown', onEscape);
     form.addEventListener('submit', function(e){
       e.preventDefault();
       var host = input.value.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
       if (!/^[a-z0-9.\-]+\.[a-z]{2,}$/i.test(host)) {
-        error.textContent = 'Enter an instance address, like mastodon.social.';
+        // Clear, then set the text a beat later, so a screen reader announces
+        // the alert again on a repeat invalid submit (same text, same node).
+        error.textContent = '';
         error.hidden = false;
+        window.setTimeout(function(){
+          error.textContent = 'Enter an instance address, like mastodon.social.';
+        }, 50);
         input.setAttribute('aria-invalid', 'true');
         input.focus();
         return;
