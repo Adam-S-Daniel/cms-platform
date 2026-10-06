@@ -64,9 +64,34 @@
     (document.head || document.documentElement).appendChild(s);
   }
 
+  // The toolbar's "Publish" control only opens a menu (aria-haspopup); the
+  // menu items inside it ("Publish now", ...) are what publish.
   function isSaveOrPublish(el) {
     var btn = el && el.closest ? el.closest(CLICK_TARGET) : null;
-    return !!btn && SAVE_OR_PUBLISH.test(String(btn.textContent || "").trim());
+    if (!btn || btn.getAttribute("aria-haspopup") === "true") return false;
+    return SAVE_OR_PUBLISH.test(String(btn.textContent || "").trim());
+  }
+
+  // One error list holds one <li> per failed rule on that field; read them
+  // apart, since their textContent runs together with no space. Each ends in
+  // a period so the toast reads as sentences, whatever the site wrote.
+  function messageOf(list) {
+    var items = list.querySelectorAll ? list.querySelectorAll("li") : [];
+    var texts = [];
+    for (var i = 0; i < items.length; i++) {
+      var t = String(items[i].textContent || "").trim();
+      if (t) texts.push(/[.!?)]$/.test(t) ? t : t + ".");
+    }
+    return texts.length ? texts.join(" ") : String(list.textContent || "").trim();
+  }
+
+  function removeToast() {
+    try {
+      var old = document.querySelector("[data-validation-feedback-toast]");
+      if (old) old.remove();
+    } catch {
+      /* ignore */
+    }
   }
 
   function raisedByDecap() {
@@ -75,8 +100,7 @@
 
   function toast(msg) {
     try {
-      var old = document.querySelector("[data-validation-feedback-toast]");
-      if (old) old.remove();
+      removeToast();
       var t = document.createElement("div");
       t.textContent = msg;
       t.setAttribute("role", "alert");
@@ -102,6 +126,8 @@
   }
 
   function report() {
+    // An earlier "Not saved yet" must not outlive a save that went through.
+    removeToast();
     var lists = document.querySelectorAll(ERROR_LIST);
     if (!lists.length) return;
     var first = lists[0];
@@ -111,7 +137,7 @@
       /* old browser: the toast still says what is wrong */
     }
     if (raisedByDecap()) return;
-    var msg = String(first.textContent || "").trim();
+    var msg = messageOf(first);
     var more = lists.length - 1;
     toast("Not saved yet. " + msg + (more > 0 ? " (" + more + " more below.)" : ""));
   }

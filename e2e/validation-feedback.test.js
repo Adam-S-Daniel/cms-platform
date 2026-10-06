@@ -40,13 +40,20 @@ function fakeEl(props = {}) {
     appendChild(c) {
       this.children.push(c);
     },
+    getAttribute(k) {
+      return this.attrs[k] === undefined ? null : this.attrs[k];
+    },
+    querySelectorAll(sel) {
+      return sel === "li" ? this.items || [] : [];
+    },
   };
   return el;
 }
 
 // A click target that answers closest() the way the browser does for a button.
-function button(text) {
+function button(text, attrs = {}) {
   const b = fakeEl({ textContent: text });
+  Object.assign(b.attrs, attrs);
   b.closest = () => b;
   return b;
 }
@@ -58,7 +65,13 @@ function load({ phrase = DECAP_DEFAULT, hasGetLocale = true, errors = [], decapT
   const listeners = {};
   const toasts = [];
   const styles = [];
-  const errorEls = errors.map((t) => fakeEl({ textContent: t }));
+  // An entry is one error list: a string, or an array of <li> texts (which
+  // the real DOM's textContent runs together with no separator).
+  const errorEls = errors.map((t) =>
+    Array.isArray(t)
+      ? fakeEl({ textContent: t.join(""), items: t.map((x) => fakeEl({ textContent: x })) })
+      : fakeEl({ textContent: t }),
+  );
   const body = fakeEl();
   body.appendChild = (c) => {
     toasts.push(c);
@@ -101,7 +114,12 @@ function load({ phrase = DECAP_DEFAULT, hasGetLocale = true, errors = [], decapT
     listeners.click.fn({ target });
     flush();
   };
-  return { widget, listeners, toasts, styles, errorEls, click };
+  // The state Decap's re-render leaves behind: what a later click will see.
+  const setErrors = (next) => {
+    errorEls.length = 0;
+    next.forEach((t) => errorEls.push(fakeEl({ textContent: t })));
+  };
+  return { widget, listeners, toasts, styles, errorEls, click, setErrors };
 }
 
 test.describe("validation-feedback.js (#730)", () => {
@@ -174,5 +192,34 @@ test.describe("validation-feedback.js (#730)", () => {
     const t = load({ errors: ["Permalink: bad"] });
     t.listeners.click.fn({ target: button("Save") });
     expect(t.toasts, "nothing before the frames run").toHaveLength(0);
+  });
+
+  test("a toast from a blocked save is removed when the next save goes through", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.click(button("Save"));
+    expect(t.toasts).toHaveLength(1);
+    expect(t.toasts[0].removed).toBe(false);
+    t.setErrors([]); // the editor fixed the field; Decap re-renders without the list
+    t.click(button("Save"));
+    expect(t.toasts[0].removed, "the stale 'Not saved yet' must be gone").toBe(true);
+    expect(t.toasts, "and no new one appears").toHaveLength(1);
+  });
+
+  test("opening the toolbar's Publish menu (aria-haspopup) is not a publish attempt", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.click(button("Publish", { "aria-haspopup": "true", role: "button" }));
+    expect(t.toasts).toHaveLength(0);
+    expect(t.errorEls[0].scrolled).toBeNull();
+    // ... while the menu item inside it still is.
+    t.click(button("Publish now", { role: "menuitem" }));
+    expect(t.toasts).toHaveLength(1);
+  });
+
+  test("several messages on one field are read apart, as separate sentences", () => {
+    const t = load({ errors: [["Slug: Use lowercase letters only.", "Slug: Keep it short"]] });
+    t.click(button("Save"));
+    expect(t.toasts[0].textContent).toBe(
+      "Not saved yet. Slug: Use lowercase letters only. Slug: Keep it short.",
+    );
   });
 });
