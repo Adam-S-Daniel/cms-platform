@@ -208,6 +208,9 @@ const PLATFORM_META_SPECS = [
   "theme-share-row-css.test.js",
   // #729 — same, for the bare Markdown table rules (padding, borders, header).
   "theme-table-css.test.js",
+  // #737 — the same shape for the hero gap, the current-nav state and the tag
+  // name casing in main.css. Pure-fs; self-ci node-unit-lints.
+  "theme-public-polish-css.test.js",
   // #33 CONCERN B — the pure-fs guard-registry lint: reads the platform's TWO
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
