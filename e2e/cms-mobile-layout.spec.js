@@ -27,6 +27,8 @@ const DESKTOP = { width: 1400, height: 900 };
 const PHONE_390 = { width: 390, height: 844 };
 
 const SEED_POST_SLUG = "2026-04-25-replacement-test-post-1";
+// Decap's "+ New" button on a collection list (absent from the entry editor).
+const NEW_BUTTON = '[class*="CollectionTopNewButton"]';
 
 async function login(page, { collectionLabel = "Posts" } = {}) {
   if (collectionLabel !== "Posts") {
@@ -922,8 +924,20 @@ test.describe(
     }) => {
       await page.setViewportSize(PHONE_390);
       await login(page);
-      await page.goto("/admin/index-test.html#/collections/posts");
-      await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
+      // Do not page.goto the list URL: login() leaves Decap on the Posts list,
+      // and that goto is a full reload whose first paint starts
+      // single-entry-collection-shortcut.js's 700 ms settle timer before Decap
+      // has rendered. On a slow runner the timer finds the seeded post's one
+      // entry link with no "+ New" link beside it, takes the collection for a
+      // singleton, and jumps into the entry editor (no AppHeader), so the nav
+      // item is never there. Wait for the list Decap rendered itself (its "+ New"
+      // button is what the shim checks for), then pin the route; a hash already
+      // equal to it is a no-op that starts no timer.
+      await expect(page.locator(NEW_BUTTON)).toBeVisible({ timeout: 60_000 });
+      await page.evaluate(() => {
+        location.hash = "#/collections/posts";
+      });
+      await expect(page.locator(NEW_BUTTON)).toBeVisible();
       await liftProductionReviews(page);
 
       const header = page.locator('header[class*="AppHeader"]');
