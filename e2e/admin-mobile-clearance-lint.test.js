@@ -162,3 +162,155 @@ test.describe("admin-mobile.css — desktop editor must not overflow (#640)", ()
     expect(bar).toMatch(/flex\s*:\s*0\s+0\s+auto/);
   });
 });
+
+// #731 — on a phone the editor toolbar (Save / Publish / Delete) scrolled
+// away with the page, took ~185px of the first screen, and the date field's
+// "Clear" button ran off the right edge. Measured against the real Decap
+// 3.15.1 bundle at 390x844 (toolbar bottom 185 -> 93, Clear right edge
+// 435 -> 170 against a 390px viewport; scrolled to the end, the toolbar sat at
+// top 0 instead of -3380). This lint locks the rules that make that so. It
+// parses the stylesheet with postcss (a real AST) instead of the brace scan
+// above, because it reads nested at-rules (@supports inside @media) and
+// declaration priority.
+const postcss = require("postcss");
+
+test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => {
+  let root;
+  let mq768;
+  let mq600;
+  let supports;
+
+  const findAtRule = (parent, name, params) => {
+    let found = null;
+    parent.each((n) => {
+      if (!found && n.type === "atrule" && n.name === name && n.params === params) found = n;
+    });
+    return found;
+  };
+  // EVERY rule in the container (nested at-rules included, document order)
+  // whose selector list names `selector`. Checking only the first match would
+  // let a later override of the same selector pass.
+  const rulesFor = (container, selector) => {
+    const out = [];
+    container.walkRules((r) => {
+      if (r.selectors.includes(selector)) out.push(r);
+    });
+    return out;
+  };
+  // The declaration that wins among all matching rules: the last one in
+  // document order (every rule here has the same specificity, and all carry
+  // !important where it matters). A later override therefore fails the test.
+  const effective = (container, selector, prop) => {
+    let win = null;
+    for (const r of rulesFor(container, selector)) {
+      r.walkDecls(prop, (d) => {
+        if (d.parent === r) win = { value: d.value.trim(), important: !!d.important };
+      });
+    }
+    return win;
+  };
+
+  const TOOLBAR = '[class*="EditorContainer"] > [class*="ToolbarContainer"]';
+
+  test.beforeAll(() => {
+    root = postcss.parse(fs.readFileSync(CSS_PATH, "utf8"));
+    mq768 = findAtRule(root, "media", "(max-width: 768px)");
+    mq600 = findAtRule(root, "media", "(max-width: 600px)");
+    expect(mq768, "the @media (max-width: 768px) block").not.toBeNull();
+    expect(mq600, "an @media (max-width: 600px) phone block").not.toBeNull();
+    supports = findAtRule(mq600, "supports", "(overflow: clip)");
+    expect(
+      supports,
+      "the sticky rules must sit inside @supports (overflow: clip): without it the " +
+        "body stays a scroll container and sticky pins to a body that never scrolls",
+    ).not.toBeNull();
+  });
+
+  test("the editor toolbar is sticky at the top, above Decap's controls and below the modals", () => {
+    expect(
+      rulesFor(supports, TOOLBAR).length,
+      "the rule must match the toolbar as a DIRECT child of the editor box, so Decap's " +
+        "other ...Toolbar... components stay untouched",
+    ).toBeGreaterThan(0);
+    // Rule 3's `position: static !important` is earlier and equally specific.
+    expect(effective(mq600, TOOLBAR, "position")).toEqual({ value: "sticky", important: true });
+    expect(effective(mq600, TOOLBAR, "top").value).toBe("0");
+    const z = Number(effective(mq600, TOOLBAR, "z-index")?.value);
+    // Decap's highest in-editor z-index is 600; the floating links use 10000.
+    expect(z, "z-index between Decap's controls and the floating links").toBeGreaterThan(600);
+    expect(z).toBeLessThan(10000);
+    expect(effective(mq600, TOOLBAR, "background")?.value, "opaque, or the form shows through").toBe(
+      "#fff",
+    );
+  });
+
+  test("nothing between the toolbar and the viewport is a scroll container", () => {
+    // `html, body { overflow-x: hidden }` (rule 1) turns body's overflow-y into
+    // auto, and Decap's editor box is `overflow: hidden`; either breaks sticky.
+    expect(effective(mq600, "body", "overflow-x")).toEqual({ value: "clip", important: true });
+    expect(effective(mq600, '[class*="EditorContainer"]', "overflow")).toEqual({
+      value: "visible",
+      important: true,
+    });
+  });
+
+  test("Decap's own app header keeps scrolling away on the list screens", () => {
+    // With body no longer a scroll container, Decap's `position: sticky`
+    // header would pin to the top of every collection list (100px at 390px,
+    // 127px at 320px). On main it scrolled away; this keeps it that way.
+    expect(effective(mq600, 'header[class*="AppHeader"]', "position")).toEqual({
+      value: "static",
+      important: true,
+    });
+    expect(
+      rulesFor(supports, 'header[class*="AppHeader"]').length,
+      "the header rule must sit in the same @supports block as the body clip that causes the need",
+    ).toBeGreaterThan(0);
+  });
+
+  test("the phone block comes after the 768px block so its sticky rule wins rule 5", () => {
+    expect(root.index(mq600)).toBeGreaterThan(root.index(mq768));
+  });
+
+  test("the toolbar is compact: back link and avatar share a row, the hostname is hidden", () => {
+    const sel = (part) => `${TOOLBAR} [class*="${part}"]`;
+    expect(effective(mq600, sel("AppHeaderSiteLink"), "display")).toEqual({
+      value: "none",
+      important: true,
+    });
+    // `flex: 1 1 100%` (rule 5) is what forces one section per row.
+    expect(effective(mq600, sel("ToolbarSectionBackLink"), "flex")).toEqual({
+      value: "1 1 0",
+      important: true,
+    });
+    expect(effective(mq600, sel("ToolbarSectionMeta"), "flex")).toEqual({
+      value: "0 0 auto",
+      important: true,
+    });
+  });
+
+  test("index-local.html's fixed commit / platform pills move off the stuck button row", () => {
+    // Their inline `top: 60px / 91px; right: 12px` (z-index 10000) covered the
+    // right end of Delete (measured: pill 163-378 x 60-83 over Delete
+    // 195-375 x 51-87 at 390px). `:not([style*="bottom"])` skips the
+    // production shell's pills, which already set `bottom`.
+    for (const [id, minBottom] of [
+      ["cms-platform-pill", 4],
+      ["cms-commit-pill", 5],
+    ]) {
+      const sel = `#${id}:not([style*="bottom"])`;
+      expect(effective(mq600, sel, "top")).toEqual({ value: "auto", important: true });
+      // Clear the Live Preview link (bottom 1.5rem + ~2.4rem tall).
+      const bottom = effective(mq600, sel, "bottom")?.value ?? "";
+      expect(bottom, `${id} bottom in rem`).toMatch(/^[\d.]+rem$/);
+      expect(parseFloat(bottom)).toBeGreaterThanOrEqual(minBottom);
+    }
+  });
+
+  test("the date control's Now / Clear buttons wrap instead of running off the edge", () => {
+    expect(effective(mq768, '[class*="DateTimeControl"]', "flex-wrap")).toEqual({
+      value: "wrap",
+      important: true,
+    });
+  });
+});
