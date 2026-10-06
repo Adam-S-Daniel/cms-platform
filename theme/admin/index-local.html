@@ -182,6 +182,12 @@
        window.LiveURL.slugify at save time. -->
   <script src="slug-pin.js" defer></script>
 
+  <!-- Pattern-validation feedback (cms-platform#730): the site's own message
+       alone ("URL slug: Use lowercase ..."), in normal case, plus a toast and
+       a scroll to the first bad field when Save or Publish is blocked. Deferred,
+       after decap-cms.js (it edits Decap's English locale phrases). -->
+  <script src="validation-feedback.js" defer></script>
+
   <!-- Tags box: Enter ends a tag, and a space after a comma no longer eats the
        comma — cms-platform#638. Standalone: touches only the tags-field input. -->
   <script src="tags-input.js" defer></script>
