@@ -54,6 +54,17 @@ async function failAPublish(page) {
   await expect(page.getByText(MISSED)).toBeVisible({ timeout: 15_000 });
 }
 
+// Resolves once the toast has finished sliding in. react-toastify enters a
+// toast with a 500 ms bounce that overshoots about 25px to the left, so for a
+// moment (tens of milliseconds) the close button (the one corner that keeps `pointer-events: auto`)
+// sweeps across the avatar's center. A hit test taken in that window lands on
+// the close button's svg instead of the avatar: a race with the animation, not
+// a missing rule. Waiting on the animation itself, not a timer, takes the
+// verdict at the resting position every time (allSettled: a cancelled
+// animation is not running either).
+const toastSettled = (page) =>
+  page.locator(TOAST).first().evaluate((el) => Promise.allSettled(el.getAnimations().map((a) => a.finished)));
+
 // What a tap at the center of `locator` would land on, as a verdict.
 const hitTest = (locator) =>
   locator.evaluate((el) => {
@@ -72,6 +83,7 @@ test.describe(
     test("a tap on Publish and on the avatar lands while a toast is up", async ({ page }) => {
       await openEmptyPage(page);
       await failAPublish(page);
+      await toastSettled(page);
       // The toast really is over the toolbar, or the checks below prove nothing.
       const toast = await page.locator(TOAST).first().boundingBox();
       const publish = await publishButton(page).boundingBox();
