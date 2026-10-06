@@ -162,3 +162,106 @@ test.describe("admin-mobile.css — desktop editor must not overflow (#640)", ()
     expect(bar).toMatch(/flex\s*:\s*0\s+0\s+auto/);
   });
 });
+
+// #731 — on a phone the editor toolbar (Save / Publish / Delete) scrolled
+// away with the page, took ~185px of the first screen, and the date field's
+// "Clear" button ran off the right edge. Measured against the real Decap
+// 3.15.1 bundle at 390x844 (toolbar bottom 185 -> 93, Clear right edge
+// 435 -> 170 against a 390px viewport; scrolled to the end, the toolbar sat at
+// top 0 instead of -3380). This lint locks the rules that make that so. It
+// parses the stylesheet with postcss (a real AST) instead of the brace scan
+// above, because it reads nested at-rules (@supports inside @media) and
+// declaration priority.
+const postcss = require("postcss");
+
+test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => {
+  let root;
+  let mq768;
+  let mq600;
+  let supports;
+
+  const findAtRule = (parent, name, params) => {
+    let found = null;
+    parent.each((n) => {
+      if (!found && n.type === "atrule" && n.name === name && n.params === params) found = n;
+    });
+    return found;
+  };
+  const findRule = (parent, selector) => {
+    let found = null;
+    parent.each((n) => {
+      if (!found && n.type === "rule" && n.selectors.includes(selector)) found = n;
+    });
+    return found;
+  };
+  const decl = (rule, prop) => {
+    const d = rule.nodes.find((n) => n.type === "decl" && n.prop === prop);
+    return d ? { value: d.value.trim(), important: !!d.important } : null;
+  };
+
+  test.beforeAll(() => {
+    root = postcss.parse(fs.readFileSync(CSS_PATH, "utf8"));
+    mq768 = findAtRule(root, "media", "(max-width: 768px)");
+    mq600 = findAtRule(root, "media", "(max-width: 600px)");
+    expect(mq768, "the @media (max-width: 768px) block").not.toBeNull();
+    expect(mq600, "an @media (max-width: 600px) phone block").not.toBeNull();
+    supports = findAtRule(mq600, "supports", "(overflow: clip)");
+    expect(
+      supports,
+      "the sticky rules must sit inside @supports (overflow: clip): without it the " +
+        "body stays a scroll container and sticky pins to a body that never scrolls",
+    ).not.toBeNull();
+  });
+
+  test("the editor toolbar is sticky at the top, above Decap's controls and below the modals", () => {
+    const rule = findRule(supports, '[class*="EditorContainer"] > [class*="ToolbarContainer"]');
+    expect(
+      rule,
+      "the rule must match the toolbar as a DIRECT child of the editor box, so Decap's " +
+        "other ...Toolbar... components stay untouched",
+    ).not.toBeNull();
+    // Rule 3's `position: static !important` is earlier and equally specific.
+    expect(decl(rule, "position")).toEqual({ value: "sticky", important: true });
+    expect(decl(rule, "top").value).toBe("0");
+    const z = Number(decl(rule, "z-index")?.value);
+    // Decap's highest in-editor z-index is 600; the floating links use 10000.
+    expect(z, "z-index between Decap's controls and the floating links").toBeGreaterThan(600);
+    expect(z).toBeLessThan(10000);
+    expect(decl(rule, "background")?.value, "opaque, or the form shows through").toBe("#fff");
+  });
+
+  test("nothing between the toolbar and the viewport is a scroll container", () => {
+    // `html, body { overflow-x: hidden }` (rule 1) turns body's overflow-y into
+    // auto, and Decap's editor box is `overflow: hidden`; either breaks sticky.
+    const body = findRule(supports, "body");
+    expect(body, "the phone block must relax body's overflow").not.toBeNull();
+    expect(decl(body, "overflow-x")).toEqual({ value: "clip", important: true });
+    const editor = findRule(supports, '[class*="EditorContainer"]');
+    expect(editor, "the phone block must relax the editor box's overflow").not.toBeNull();
+    expect(decl(editor, "overflow")).toEqual({ value: "visible", important: true });
+  });
+
+  test("the phone block comes after the 768px block so its sticky rule wins rule 5", () => {
+    expect(root.index(mq600)).toBeGreaterThan(root.index(mq768));
+  });
+
+  test("the toolbar is compact: back link and avatar share a row, the hostname is hidden", () => {
+    const sel = (part) => `[class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="${part}"]`;
+    const hostname = findRule(supports, sel("AppHeaderSiteLink"));
+    expect(hostname, "the hostname link rule").not.toBeNull();
+    expect(decl(hostname, "display")).toEqual({ value: "none", important: true });
+    // `flex: 1 1 100%` (rule 5) is what forces one section per row.
+    const back = findRule(supports, sel("ToolbarSectionBackLink"));
+    expect(back, "the back-link section must stop taking a full row").not.toBeNull();
+    expect(decl(back, "flex")).toEqual({ value: "1 1 0", important: true });
+    const meta = findRule(supports, sel("ToolbarSectionMeta"));
+    expect(meta, "the avatar section must size to its content").not.toBeNull();
+    expect(decl(meta, "flex")).toEqual({ value: "0 0 auto", important: true });
+  });
+
+  test("the date control's Now / Clear buttons wrap instead of running off the edge", () => {
+    const rule = findRule(mq768, '[class*="DateTimeControl"]');
+    expect(rule, "the 768px block must carry a DateTimeControl rule").not.toBeNull();
+    expect(decl(rule, "flex-wrap")).toEqual({ value: "wrap", important: true });
+  });
+});

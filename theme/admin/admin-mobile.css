@@ -349,6 +349,84 @@
     margin-top: 0 !important;
     padding-top: 0 !important;
   }
+
+  /* ── 11. Date field: Now / Clear stay on-screen (cms-platform#731) ──────
+   * Decap's datetime control is a nowrap flex row of the native
+   * `datetime-local` input (~245px intrinsic) plus the Now / Clear buttons.
+   * At 390px the pair is ~377px wide in a ~358px card, so "Clear" was cut
+   * off at the right edge. Let the buttons wrap under the input when they
+   * do not fit. */
+  [class*="DateTimeControl"] {
+    flex-wrap: wrap !important;
+    row-gap: 0.4rem;
+  }
+}
+
+/* ── Phone only (<= 600px): a sticky, compact editor toolbar (#731) ───────
+ * Rule 3 above puts the editor in normal flow, so the toolbar that holds
+ * Save / Publish / Delete scrolled away: after writing a long body an editor
+ * scrolled ~8 screens back up to publish, and the three stacked rows (back
+ * link + status, buttons, hostname + avatar) took ~185px of the first
+ * screen. Here the toolbar sticks to the top and shrinks to two rows: back
+ * link + avatar, then the buttons. The hostname link is dropped (the
+ * editor's "View page" box and the URL hint already name the site).
+ *
+ * `position: sticky` needs no scrolling ancestor between the toolbar and the
+ * viewport. `html, body { overflow-x: hidden }` (rule 1) makes <body> a
+ * scroll container (an `overflow-x` other than visible turns `overflow-y`
+ * into auto), which pins the toolbar to a body that never scrolls, and the
+ * editor box carries `overflow: hidden` too. `overflow-x: clip` clamps the
+ * same horizontal overflow without creating a scroll container; where it is
+ * unsupported (Safari < 16) the whole block is skipped and the toolbar
+ * scrolls away as before. The toolbar is matched as a DIRECT child of the
+ * editor box so Decap's other `...Toolbar...` components are untouched.
+ *
+ * The toolbar's z-index sits above Decap's in-editor controls (their highest
+ * is 600) and below the floating links (10000) and Decap's modals (99999).
+ *
+ * Not covered: on the production shell Publish lives in the in-flow
+ * `#cms-publish-state` bar (publish-step-hint.js / publish-button.js),
+ * which is still not sticky; see the PR for why. */
+@media (max-width: 600px) {
+  @supports (overflow: clip) {
+    body {
+      overflow-x: clip !important;
+    }
+    [class*="EditorContainer"] {
+      overflow: visible !important;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] {
+      position: sticky !important;
+      top: 0;
+      z-index: 1000;
+      background: #fff;
+      align-items: center;
+      column-gap: 0.4rem;
+      row-gap: 0;
+    }
+    /* Row 1: back link (takes the slack) + avatar. Row 2: the buttons. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] {
+      flex: 1 1 0 !important;
+      min-width: 0 !important;
+      order: 0;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMeta"] {
+      flex: 0 0 auto !important;
+      order: 1;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] {
+      order: 2;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="AppHeaderSiteLink"] {
+      display: none !important;
+    }
+    /* Decap's own button margins plus the 0.4rem gaps above would push
+     * "Delete published entry" onto a third row. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] button,
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarDropdown"] {
+      margin: 0 !important;
+    }
+  }
 }
 
 /* ── Desktop: the publish-state bar must not make the editor scroll ───────
