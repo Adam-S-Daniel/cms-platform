@@ -447,6 +447,20 @@ update names the canonical hostname; a preview update names the current preview
 hostname. Their visible labels and help text describe publishing and updates,
 while workflow names, job ids and deployment states remain internal diagnostics.
 
+A draft saved on a preview admin opens a PR into the preview's own branch, and
+`deploy-preview.yml`'s caller builds only PRs into the default branch, so that
+PR never gets a `preview-pr<N>` host or a `deploy/preview` status (#642). For
+such a PR (the same `previewOnly` signal) the "View page on" banner keeps the
+configured publication URL, the Posts list points at Live Preview instead of
+linking a host that does not exist, and Decap's "Check for Preview" button is
+hidden behind a Live Preview pointer (`native-preview-href.js`). The Posts
+list's "published ↗" links use `destinationOrigin()`, and on a preview admin
+(served branch ≠ `CMS_PRODUCTION_BRANCH`) its freshness line reads the
+`preview-pr-<N>` deployment of the open PR whose head is the served branch,
+never production's. The bar says "Sign in" only when there is no token; a
+signed-in editor whose read has not landed sees a loading note, and one whose
+read found no deployment sees *update status unknown*.
+
 Publication links use `CMSHostname.destinationOrigin()`: the HTTP(S) origin of
 the served config's `site_url`, including protocol and port, with paths and
 credentials removed. They resolve it when rendered, so a delayed config read

@@ -29,11 +29,18 @@
  *     there); rendered BEFORE "preview draft" when both are present;
  *   - "preview draft ↗" — the per-PR preview environment for the
  *     post's open editorial-workflow PR, if any (GitHub REST, one
- *     `pulls` call) — `https://preview-pr<N>.adamdaniel.ai/blog/<slug>/`;
+ *     `pulls` call) — `https://preview-pr<N>.adamdaniel.ai/blog/<slug>/`.
+ *     Only a PR into the default branch gets one: a draft saved on a
+ *     preview admin (`cms/preview-only`) gets a pointer to Live Preview
+ *     instead of a link to a host that is never built (#642);
  *   - "view draft changes" — the GitHub diff (Files-changed tab) of
  *     that same open editorial-workflow PR;
  *   - a control bar showing when the site itself last deployed
  *     (GitHub REST, one `deployments` call) plus a manual ↻ Refresh.
+ *     On a preview admin (served branch ≠ window.CMS_PRODUCTION_BRANCH,
+ *     the branch-binding-banner.js verdict) "the site" is that preview:
+ *     its `preview-pr-<N>` deployment, found through the open PR whose
+ *     head is the served branch (one more `pulls` call), never production.
  *
  * Batched remote data (the three calls above, never one-per-row) is
  * cached in sessionStorage and refreshed (a) on the ↻ button and
@@ -156,9 +163,21 @@
     return L && L.slugify ? L.slugify(dateStripped) : dateStripped;
   }
 
+  // Where a publish from THIS admin goes — the preview on a preview admin,
+  // production otherwise (site-hostname.js's destination*()). Linking a
+  // preview admin's posts to production sent editors to the wrong site (#642).
+  function destinationOrigin() {
+    var names = window.CMSHostname;
+    return names && typeof names.destinationOrigin === "function" ? names.destinationOrigin(SITE_ORIGIN) : SITE_ORIGIN;
+  }
+
+  function destinationName() {
+    return window.CMSHostname ? window.CMSHostname.destination() : "the published destination";
+  }
+
   function publicUrl(fileSlug) {
     var s = urlSlug(fileSlug);
-    return s ? SITE_ORIGIN + "/blog/" + s + "/" : null;
+    return s ? destinationOrigin() + "/blog/" + s + "/" : null;
   }
 
   // The summary template is
@@ -393,9 +412,51 @@
     return out;
   }
 
-  async function fetchSiteDeploy(token) {
+  // Which GitHub deployment environment is "the site" for this admin, and
+  // whether this admin is a preview. A preview admin's served branch differs
+  // from the production branch (the branch-binding-banner.js verdict, read
+  // from config, never from the hostname); its site is the `preview-pr-<N>`
+  // environment deploy-preview.yml registers for the open PR whose head is
+  // that branch. `environment` is null when that PR cannot be found — the
+  // bar then says it does not know, rather than reporting production.
+  async function deployTarget(token) {
+    var production = { environment: "production", onPreview: false };
+    var names = window.CMSHostname;
+    var productionBranch = window.CMS_PRODUCTION_BRANCH;
+    if (!names || typeof names.binding !== "function" || !productionBranch) return production;
+    var bound = null;
     try {
-      var dRes = await fetch(REST + "/deployments?environment=production&per_page=1", {
+      bound = await names.binding();
+    } catch {
+      return production;
+    }
+    if (!bound || !bound.branch || bound.branch === productionBranch) return production;
+    var owner = String(REPO || "").split("/")[0];
+    try {
+      var res = await fetch(
+        REST + "/pulls?state=open&head=" + encodeURIComponent(owner + ":" + bound.branch) + "&per_page=1",
+        {
+          cache: "no-cache",
+          headers: {
+            Authorization: "token " + token,
+            Accept: "application/vnd.github+json",
+          },
+        },
+      );
+      var prs = await safeJson(res);
+      if (Array.isArray(prs) && prs.length && prs[0].number) {
+        return { environment: "preview-pr-" + prs[0].number, onPreview: true };
+      }
+    } catch {
+      /* degrade — unknown, never production */
+    }
+    return { environment: null, onPreview: true };
+  }
+
+  async function fetchSiteDeploy(token, environment) {
+    if (!environment) return null;
+    try {
+      var dRes = await fetch(REST + "/deployments?environment=" + encodeURIComponent(environment) + "&per_page=1", {
         cache: "no-cache",
         headers: {
           Authorization: "token " + token,
@@ -480,6 +541,10 @@
           var labels = (pr.labels || []).map(function (l) {
             return typeof l === "string" ? l : l.name;
           });
+          // No per-PR preview is built for a PR whose base is not the
+          // default branch — publish-progress.js's `previewOnly` signal.
+          var baseRef = (pr.base && pr.base.ref) || null;
+          var defaultBranch = (pr.base && pr.base.repo && pr.base.repo.default_branch) || null;
           map[mm[1]] = {
             number: pr.number,
             url: pr.html_url,
@@ -488,6 +553,9 @@
               Boolean(pr.auto_merge) ||
               labels.indexOf("cms/ready") !== -1 ||
               labels.indexOf("decap-cms/pending_publish") !== -1,
+            previewOnly:
+              labels.indexOf("cms/preview-only") !== -1 ||
+              Boolean(baseRef && defaultBranch && baseRef !== defaultBranch),
           };
         }
       });
@@ -550,12 +618,14 @@
     var token = getToken();
     if (!token) return null;
     var lastEdited = await fetchLastEdited(token, cards);
-    var siteDeploy = await fetchSiteDeploy(token);
+    var target = await deployTarget(token);
+    var siteDeploy = await fetchSiteDeploy(token, target.environment);
     var prBySlug = await fetchOpenPrBySlug(token);
     var checksFailedBySha = await fetchChecksForPrs(token, prBySlug);
     var data = {
       lastEdited: lastEdited,
       siteDeploy: siteDeploy,
+      onPreview: target.onPreview,
       prBySlug: prBySlug,
       checksFailedBySha: checksFailedBySha,
     };
@@ -636,6 +706,7 @@
   function publishingBarCopy() {
     return {
       signedOut: "Sign in to see publishing details",
+      loading: "Loading publishing details…",
       refreshTitle: "Refresh latest edits and publishing details",
     };
   }
@@ -680,6 +751,21 @@
     return esc(destination) + " " + stateWord + esc(when);
   }
 
+  // The bar's summary. "Sign in" only when there IS no token: a signed-in
+  // editor whose first read has not landed, or whose read found no
+  // deployment (a failed read, or a deployment with no status yet), was told
+  // to sign in — the false negative #642 reported after a delete, which
+  // lands on the list before any read for it has finished.
+  function publishingBarHTML(remote, signedIn) {
+    var copy = publishingBarCopy();
+    if (!signedIn) return publishingSummaryHTML(null);
+    if (!remote) return '<span style="color:#8c959f">' + copy.loading + "</span>";
+    var names = window.CMSHostname;
+    var host = names ? (remote.onPreview ? names.destination() : names.canonical()) : "Published destination";
+    if (!remote.siteDeploy) return esc(host) + " " + UNKNOWN_STATE_WORD;
+    return publishingSummaryHTML(remote.siteDeploy, host);
+  }
+
   function ensureBar(cards, fixtureCount) {
     var ul = listUl(cards);
     if (!ul || !ul.parentNode) return;
@@ -692,11 +778,8 @@
     } else if (bar.nextElementSibling !== ul && bar.parentNode === ul.parentNode) {
       ul.parentNode.insertBefore(bar, ul);
     }
-    var deploy =
-      (memCache && memCache.siteDeploy) ||
-      (readCache() && readCache().data && readCache().data.siteDeploy);
-    var deployHost = window.CMSHostname ? window.CMSHostname.canonical() : "Published destination";
-    var deployHtml = publishingSummaryHTML(deploy, deployHost);
+    var cached = readCache();
+    var deployHtml = publishingBarHTML(memCache || (cached && cached.data) || null, Boolean(getToken()));
     var copy = publishingBarCopy();
     var nextHTML =
       '<strong style="color:#24292f">Posts</strong>' +
@@ -882,13 +965,13 @@
           esc(pub) +
           '" target="_blank" rel="noopener" ' +
           'title="Open the post on ' +
-          esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") +
+          esc(destinationName()) +
           '">published ↗</a>',
       );
     } else if (pub) {
       bits.push(
         '<span title="Available on ' +
-          esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") +
+          esc(destinationName()) +
           ' once published" style="color:#8c959f">' +
           esc("/blog/" + urlSlug(card.slug) + "/") +
           "</span>",
@@ -949,8 +1032,16 @@
       // open), so it's the correct gate for whether preview-pr<N> actually
       // serves this slug — unlike the "published ↗" gate above (which needs
       // the separate on-main confirmation), there's no unmerged-PR ambiguity
-      // here: `pr` IS that PR.
-      if (card.state.live) {
+      // here: `pr` IS that PR. A preview-only PR has no preview-pr<N> at all
+      // (#642), so it points at Live Preview, which renders it on Save.
+      if (pr.previewOnly) {
+        bits.push(
+          '<span style="color:#8c959f" title="Drafts saved here get no preview address of their own. ' +
+            "Open the post and use Live Preview to see it; publishing puts it on " +
+            esc(destinationName()) +
+            '">draft — open to preview</span>',
+        );
+      } else if (card.state.live) {
         bits.push(
           '<a href="https://preview-pr' +
             esc(pr.number) +
@@ -1188,7 +1279,11 @@
     fetchLastEdited: fetchLastEdited,
     fetchOpenPrBySlug: fetchOpenPrBySlug,
     publishingBarCopy: publishingBarCopy,
+    publishingBarHTML: publishingBarHTML,
     publishingSummaryHTML: publishingSummaryHTML,
+    decorate: decorate,
+    deployTarget: deployTarget,
+    refreshRemote: refreshRemote,
   };
 
   window.addEventListener("hashchange", onRoute);
