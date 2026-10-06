@@ -15,6 +15,22 @@ const { test, expect } = require("./base");
 // `diffs[0].content` is the exact file text Decap would commit. Seed/login
 // pattern mirrors cms-slug-pin.spec.js.
 
+// A site's tags index (`/tags/`): the page tags-input.js reads for the tags that
+// already exist (#735). Mocked, so the spec does not depend on the site's posts.
+async function mockTagsIndex(page, names) {
+  await page.route("**/tags/", (route) =>
+    names
+      ? route.fulfill({
+          contentType: "text/html",
+          body:
+            "<ul class='tag-list'>" +
+            names.map((n) => `<li class='tag-list-item'><a class='tag-list-link' href='#'><span class='tag-list-name'>${n}</span></a></li>`).join("") +
+            "</ul>",
+        })
+      : route.fulfill({ status: 404, contentType: "text/html", body: "Not found" }),
+  );
+}
+
 async function openNewPost(page) {
   await page.addInitScript(() => {
     window.repoFiles = { _posts: {}, _tags: {}, _projects: {}, pages: {} };
@@ -83,6 +99,51 @@ test.describe(
       await tags.press("Enter");
       await tags.pressSequentially("ai");
       expect(await savedTags(page)).toEqual(["zz-test", "ai"]);
+    });
+
+    test("typing `quo` offers the existing tag `quotes`, and picking it saves exactly that (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes", "release"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("quo");
+      const offer = page.locator("#cms-tags-suggest").getByRole("button", { name: "quotes", exact: true });
+      await expect(offer).toBeVisible();
+      await offer.click();
+      expect(await savedTags(page)).toEqual(["quotes"]);
+    });
+
+    test("`quote` beside existing `quotes` is warned about, never rewritten on its own (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("quote");
+      const panel = page.locator("#cms-tags-suggest");
+      await expect(panel).toContainText("\u201cquote\u201d is a new tag that differs from the existing tag \u201cquotes\u201d");
+      await expect(panel.getByRole("button", { name: "Use \u201cquotes\u201d" })).toBeVisible();
+      // Left alone, the editor's own spelling is saved: nothing was changed behind their back.
+      expect(await savedTags(page)).toEqual(["quote"]);
+    });
+
+    test("the warning's button swaps `Quotes` for the existing `quotes` (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("Quotes");
+      await page.locator("#cms-tags-suggest").getByRole("button", { name: "Use \u201cquotes\u201d" }).click();
+      expect(await savedTags(page)).toEqual(["quotes"]);
+    });
+
+    test("a site with no tags index gets no panel and the box works as before (#735)", async ({ page }) => {
+      await mockTagsIndex(page, null);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("alpha, beta");
+      await expect(page.locator("#cms-tags-suggest")).toHaveCount(0);
+      expect(await savedTags(page)).toEqual(["alpha", "beta"]);
     });
   },
 );
