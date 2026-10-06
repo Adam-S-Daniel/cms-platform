@@ -44,6 +44,11 @@ async function openNewPage(page, { body }) {
 
 const saveButton = (page) => page.getByRole("button", { name: /^save$/i }).first();
 
+// A finished save is Decap's "Entry saved" toast (ui.toast.entrySaved, raised
+// after the backend write, 3.15.1). Not the Save button: Decap marks it
+// disabled with a CSS class only, never the `disabled` attribute.
+const expectSaved = (page) => expect(page.getByText("Entry saved", { exact: true })).toBeVisible({ timeout: 30_000 });
+
 // Let the shim's own settle frames run, so "nothing appeared" is a statement
 // about a finished check and not about one that has not started yet.
 const settle = (page) =>
@@ -96,7 +101,7 @@ test.describe(
 
       await page.getByLabel(/^Permalink$/).fill("/pages/validation-feedback/");
       await saveButton(page).click();
-      await expect(saveButton(page)).toBeDisabled({ timeout: 30_000 });
+      await expectSaved(page);
       await settle(page);
       await expect(page.locator(SHIM_TOAST)).toHaveCount(0);
     });
@@ -105,7 +110,7 @@ test.describe(
       await openNewPage(page, { body: true });
       await page.getByLabel(/^Permalink$/).fill("/pages/validation-feedback/");
       await saveButton(page).click();
-      await expect(saveButton(page)).toBeDisabled({ timeout: 30_000 });
+      await expectSaved(page);
 
       // Decap's Publish control is a menu trigger, shown once the entry is saved.
       const publish = page.getByRole("button", { name: /^publish/i }).first();
