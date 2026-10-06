@@ -789,11 +789,12 @@ main {
    whichever comes first. The badge's left edge sits ~101px (about 6.3rem) from
    the card edge and the card's own 1.8rem padding already covers about 29px of
    that, so 5.25rem leaves the text ~12px short of the badge and it wraps
-   instead of running under it. overflow-wrap keeps one unbreakable word (a
+   instead of running under it. overflow-wrap: break-word (not `anywhere`, which
+   theme-overflow-wrap-css.test.js forbids) keeps one unbreakable word (a
    long URL-like title or technology) from overflowing the padding. */
 .featured-badge ~ .project-card-inner > :first-child {
   padding-right: 5.25rem;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 /* ── Page content ───────────────────────────────── */
