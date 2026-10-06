@@ -48,6 +48,23 @@
  *      counts as Decap's answer to it; a stale error toast is closed when
  *      this one is shown.
  *
+ * ── Follow-ups (cms-platform#752) ─────────────────────────────────────
+ *   7. Item 6 used to close EVERY error toast that predated the click,
+ *      which also closed unrelated persistent ones ("logged out",
+ *      "backend unavailable") the editor may not have read; Decap raises
+ *      some only from the collection Header, which the editor view does not
+ *      show. Only the stale "missed a required field" toast is closed now:
+ *      one whose text is `ui.toast.missingRequiredField`, which Decap renders
+ *      in the site's configured `locale` (config.yml `locale:`, default
+ *      en). The shim cannot read that config, so it compares with the phrase
+ *      of every locale Decap ships (read through `CMS.getLocale`), the
+ *      page's `lang` and the browser's languages; a toast in none of them
+ *      stays open.
+ *   8. The "Dismiss" button is at least 24 x 24 px (44 x 44 on a touch
+ *      screen) and its "\u00d7" glyph is aria-hidden, so the alert reads as its
+ *      message alone. The toast is centered with auto margins instead of
+ *      `left:50%`, which shrank it to about half the width on a phone.
+ *
  * Everything keys on Decap's public surface (`CMS.getLocale`, the button
  * text) or on the `ControlErrorsList` Emotion label; if Decap changes any of
  * them the affected part is a silent no-op and Decap behaves as before.
@@ -69,6 +86,13 @@
   var ROW_TOGGLE = '[class*="StyledListItemTopBar"] button';
   var CONTROL = '[class*="ControlContainer"]';
   var DECAP_CLOSE = '[class*="Toastify__close-button"]';
+  // The locale codes Decap 3.15.1 registers (its bundled phrase sets). A code
+  // it lacks is a locale this shim cannot see: that toast just stays open.
+  var DECAP_LOCALES = [
+    "bg", "ca", "cs", "da", "de", "en", "es", "fa", "fr", "gr", "he", "hr", "hu", "it", "ja", "ko", "lt", "mk",
+    "nb_no", "nl", "nn_no", "pl", "pt", "ro", "ru", "sk", "sl", "sr_Cyrl", "sv", "th", "tr", "ua", "uk", "vi",
+    "zh_Hans", "zh_Hant",
+  ];
   // Frames to let Decap validate and re-render after a click before looking.
   var SETTLE_FRAMES = 3;
 
@@ -131,12 +155,44 @@
     return false;
   }
 
+  // Every spelling of Decap's "you missed a required field" toast the page
+  // could be showing: the configured locale is not readable from here, so
+  // take each shipped locale's phrase plus any locale the page or browser
+  // names (a site may have registered its own with CMS.registerLocale).
+  function missingFieldPhrases() {
+    var phrases = [];
+    try {
+      var codes = DECAP_LOCALES.slice();
+      var nav = window.navigator || {};
+      var hints = [document.documentElement && document.documentElement.lang, nav.language].concat(nav.languages || []);
+      for (var h = 0; h < hints.length; h++) {
+        if (!hints[h]) continue;
+        var hint = String(hints[h]);
+        codes.push(hint, hint.replace("-", "_"), hint.split(/[-_]/)[0]);
+      }
+      for (var i = 0; i < codes.length; i++) {
+        var loc = window.CMS.getLocale(codes[i]);
+        var text = loc && loc.ui && loc.ui.toast && loc.ui.toast.missingRequiredField;
+        if (typeof text === "string" && text && phrases.indexOf(text) < 0) phrases.push(text);
+      }
+    } catch {
+      /* Decap's locale shape changed: nothing is recognized, nothing closed */
+    }
+    return phrases;
+  }
+
   // An earlier "you missed a required field" would sit beside a message that
-  // says something else; close it through Decap's own close button.
+  // says something else; close it through Decap's own close button. Any
+  // other leftover toast (logged out, backend unavailable) is not ours to close.
   function closeStaleDecapToasts(before) {
+    var phrases = missingFieldPhrases();
     for (var i = 0; i < before.length; i++) {
       try {
         if (!/Toastify__toast--error/.test(String(before[i].className || ""))) continue;
+        var said = String(before[i].textContent || "");
+        var missing = false;
+        for (var p = 0; p < phrases.length; p++) if (said.indexOf(phrases[p]) >= 0) missing = true;
+        if (!missing) continue;
         var x = before[i].querySelector(DECAP_CLOSE);
         if (x) x.click();
       } catch {
@@ -214,6 +270,16 @@
     }
   }
 
+  // A touch screen needs a bigger target than a pointer (WCAG 2.5.8 asks for
+  // 24 px; 44 is the usual touch size).
+  function closeSize() {
+    try {
+      return window.matchMedia && window.matchMedia("(pointer: coarse)").matches ? 44 : 24;
+    } catch {
+      return 24;
+    }
+  }
+
   function toast(msg, atTop) {
     try {
       removeToast();
@@ -226,7 +292,7 @@
       t.style.cssText =
         "position:fixed;" +
         (atTop ? "top:12px;" : "bottom:24px;") +
-        "left:50%;transform:translateX(-50%);pointer-events:none;" +
+        "left:0;right:0;margin:0 auto;width:fit-content;pointer-events:none;" +
         "display:flex;align-items:flex-start;gap:12px;" +
         "background:#7f1d1d;color:#fff;padding:14px 12px 14px 20px;border-radius:8px;" +
         "font:14px/1.4 system-ui,sans-serif;max-width:min(560px,calc(100vw - 32px));z-index:2147483647;" +
@@ -236,10 +302,21 @@
       var close = document.createElement("button");
       close.setAttribute("type", "button");
       close.setAttribute("aria-label", "Dismiss");
-      close.textContent = "\u00d7";
+      // The glyph is decoration: the button's name is its aria-label.
+      var glyph = document.createElement("span");
+      glyph.setAttribute("aria-hidden", "true");
+      glyph.textContent = "\u00d7";
+      close.appendChild(glyph);
+      var size = closeSize();
+      // Negative vertical margins keep a bigger target from making the toast
+      // taller than its text (the message line is about 20 px).
+      var pull = Math.round((size - 20) / 2);
       close.style.cssText =
         "pointer-events:auto;cursor:pointer;background:none;border:0;color:inherit;" +
-        "font:20px/1 system-ui,sans-serif;padding:0 6px;margin:-2px 0 0;";
+        "font:20px/1 system-ui,sans-serif;padding:0;flex:none;" +
+        "display:inline-flex;align-items:center;justify-content:center;" +
+        "min-width:" + size + "px;min-height:" + size + "px;" +
+        "margin:-" + pull + "px -6px -" + pull + "px 0;";
       close.addEventListener("click", function () {
         try {
           t.remove();

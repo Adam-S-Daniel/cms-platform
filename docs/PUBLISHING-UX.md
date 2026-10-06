@@ -302,8 +302,15 @@ row if it is collapsed. "Decap raised its own toast" means a toast that
 appeared after the click: Decap's missing-field toast outlives its click by
 8 s, and a format error retried inside that window used to find it, stand
 down, and leave "you missed a required field" on screen for a bad format
-(reproduced on Decap 3.15.1). A leftover error toast is now closed when the
-shim shows its own.
+(reproduced on Decap 3.15.1). A leftover "missed a required field" toast is
+now closed when the shim shows its own; any other leftover error toast
+("logged out", "backend unavailable") is left open (#752). The shim matches
+the toast's text against `ui.toast.missingRequiredField` of every locale Decap
+ships (read through `CMS.getLocale`), since it cannot read the site's
+configured `locale`; a toast in a locale it cannot read stays open. The
+"Dismiss" button is at least 24 x 24 px (44 x 44 on a touch screen) with its
+"×" glyph `aria-hidden`, and the toast is centered with auto margins so it
+keeps its width on a phone.
 
 ---
 

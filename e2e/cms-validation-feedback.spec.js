@@ -265,5 +265,65 @@ test.describe(
       await expect(page.getByLabel(/^URL$/).last()).toBeVisible();
       await expect(page.getByLabel(/^URL$/).first()).toBeHidden();
     });
+
+    // ── cms-platform#752 ──────────────────────────────────────────────────
+
+    test("a Save closes the stale 'missed a required field' toast and leaves an unrelated error toast open", async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+      await openNewPage(page, { body: false });
+      await saveButton(page).click();
+      const missed = page.getByText(/missed a required field/i);
+      await expect(missed).toBeVisible({ timeout: 15_000 });
+
+      // A persistent error toast of Decap's that is not about a required field
+      // ("logged out", "backend unavailable"): Decap's own toast markup (the
+      // react-toastify classes the shim keys on), appended outside React's root
+      // because the test-repo backend has no such failure to raise.
+      await page.evaluate(() => {
+        const note = document.createElement("div");
+        note.className = "Toastify__toast Toastify__toast--error";
+        note.setAttribute("data-test-unrelated-toast", "");
+        note.textContent = "You have been logged out. Please log in again.";
+        const x = document.createElement("button");
+        x.className = "Toastify__close-button";
+        x.addEventListener("click", () => note.remove());
+        note.appendChild(x);
+        document.body.appendChild(note);
+      });
+      const unrelated = page.locator("[data-test-unrelated-toast]");
+      await expect(unrelated).toBeVisible();
+
+      await fillBody(page);
+      await expect(missed).toBeVisible();
+      await saveButton(page).click();
+
+      const toast = page.locator(SHIM_TOAST);
+      await expect(toast).toBeVisible({ timeout: 15_000 });
+      await expect(toast).toContainText(/^Not saved yet\. Permalink: Must start and end with a slash/);
+      await expect(missed).toHaveCount(0, { timeout: 3_000 });
+      await settle(page);
+      await expect(unrelated, "an unrelated error toast is not the shim's to close").toHaveCount(1);
+
+      // The Dismiss target: at least 24 x 24, and its glyph is out of the alert's text.
+      const dismiss = await toast.getByRole("button", { name: "Dismiss" }).boundingBox();
+      expect(dismiss.width).toBeGreaterThanOrEqual(24);
+      expect(dismiss.height).toBeGreaterThanOrEqual(24);
+      await expect(toast.locator("button [aria-hidden='true']")).toHaveText("\u00d7");
+      const read = await toast.evaluate((el) => {
+        const clone = el.cloneNode(true);
+        clone.querySelectorAll("[aria-hidden='true']").forEach((n) => n.remove());
+        return clone.textContent;
+      });
+      expect(read).not.toContain("\u00d7");
+
+      // On a 390 px phone the toast is not shrunk to half the screen (it was
+      // about 195 px wide with left:50%) and stays inside the 16 px margins.
+      const box = await toast.boundingBox();
+      expect(box.width).toBeGreaterThan(300);
+      expect(box.x).toBeGreaterThanOrEqual(15);
+      expect(box.x + box.width).toBeLessThanOrEqual(375);
+    });
   },
 );
