@@ -17,7 +17,7 @@ const { test, expect } = require("./base");
 const ADMIN = path.resolve(__dirname, "../theme/admin");
 const SRC = fs.readFileSync(path.join(ADMIN, "preview-pane.js"), "utf8");
 
-function boot({ hash = "" } = {}) {
+function boot({ hash = "", lookup = true } = {}) {
   const styles = [];
   const templates = {};
   const listeners = { window: {}, document: {} };
@@ -30,7 +30,7 @@ function boot({ hash = "" } = {}) {
     CMS: {
       registerPreviewStyle: (value, opts) => styles.push({ value, opts }),
       registerPreviewTemplate: (name, component) => (templates[name] = component),
-      getPreviewTemplate: (name) => templates[name],
+      getPreviewTemplate: lookup ? (name) => templates[name] : undefined,
     },
   };
   const document = { readyState: "complete", addEventListener: listen("document") };
@@ -244,7 +244,7 @@ test.describe("preview-pane.js", () => {
     expect(textOf(tree)).toContain("Snakes.");
   });
 
-  test("a collection with neither markdown nor description lists its short fields, labelled", () => {
+  test("a collection with neither markdown nor description lists its short fields, labeled", () => {
     const b = boot();
     b.press("#/collections/events");
     const fields = [
@@ -276,6 +276,17 @@ test.describe("preview-pane.js", () => {
     b.press("https://example.com/");
     expect(b.templates.posts).toBe(posts);
     expect(Object.keys(b.templates).sort()).toEqual(["gadgets", "pages", "posts", "projects", "tools"]);
+  });
+
+  test("the own-template guard holds without Decap's template lookup", () => {
+    // getPreviewTemplate would also keep posts/pages/projects, so take it away:
+    // only claim()'s own list stands between a link press and the generic
+    // template replacing the specific one.
+    const b = boot({ lookup: false });
+    const own = { posts: b.templates.posts, pages: b.templates.pages, projects: b.templates.projects };
+    for (const c of Object.keys(own)) b.press("#/collections/" + c);
+    b.navigate("#/collections/projects/new");
+    for (const c of Object.keys(own)) expect(b.templates[c], c).toBe(own[c]);
   });
 
   test("pane CSS constrains images and clears the floating buttons", () => {

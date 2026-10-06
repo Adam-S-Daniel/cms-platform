@@ -174,7 +174,7 @@
   // for Tags), the `description` as the subtitle the site's own tool/project
   // pages use, and the markdown field. Only when the entry has neither a
   // markdown field nor a description (a site's list-like collections) are its
-  // other short fields listed, labelled, so the pane is not just a heading.
+  // other short fields listed, labeled, so the pane is not just a heading.
   function makeGenericTemplate(h) {
     return function GenericPreviewTemplate(props) {
       var entry = props.entry;
