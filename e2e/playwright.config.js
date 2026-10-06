@@ -204,6 +204,9 @@ const PLATFORM_META_SPECS = [
   // sense only in the platform self-CI, never in a consumer.
   "site-capabilities.test.js",
   "base-collections-skip-meta.test.js",
+  // UX round 4 package 3: renders theme/assets/css/main.css and the project
+  // layout's SOURCE in a static fixture (theme/ tree, absent on a consumer).
+  "theme-featured-badge.spec.js",
   // #656 — parses the platform theme's own theme/assets/css/main.css, absent in
   // a consumer. Runs in self-ci node-unit-lints.
   "theme-reduced-motion.test.js",
