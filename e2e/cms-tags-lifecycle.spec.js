@@ -63,6 +63,8 @@ const {
   openPr,
   addReadyLabel,
   closeStaleDecapPrOnBranch,
+  closeOpenPrsAddingFile,
+  readFileOnRef,
   fixtureBranchName,
 } = require("./cms-fixture-pr");
 const {
@@ -107,13 +109,7 @@ test.describe.configure({
 // create PR's merge never landed" (#1815). Mirrors the helper in
 // cms-publish-loop-prod-mutate.spec.js / cms-delete-published.spec.js.
 async function fileExistsOnMain(filePath) {
-  try {
-    await gh(`/repos/${HOST_REPO}/contents/${filePath}?ref=main`);
-    return true;
-  } catch (e) {
-    if (/\b404\b/.test(String(e.message))) return false;
-    throw e;
-  }
+  return (await readFileOnRef({ ref: "main", filePath })) !== null;
 }
 
 // Persistent dialog handler — Decap uses native window.confirm() on
@@ -133,6 +129,10 @@ test.beforeEach(({ page }) => {
 // The editorial-workflow auto-merges in the background; the daily
 // `sweep-stale-cms-prs.yml` workflow catches orphan PRs (Tier 1
 // covers the `cms/e2e-fixture/` prefix).
+//
+// It first closes any of this run's create PRs still open (#689): a
+// create PR that outlives the run merges the canary after this hook has
+// already looked at main.
 //
 // Per AGENTS.md "No back doors in cleanup either": the UI-driven
 // cleanup IS the contract; this safety-net only fires when that
@@ -154,18 +154,34 @@ test.afterAll(async () => {
   // under runner contention. 2 min covers the worst case.
   test.setTimeout(2 * 60 * 1000);
 
-  // Check whether the file still exists on main. If the UI-delete step
-  // succeeded, this returns 404 and we early-return.
-  let tagFileStillExists = false;
-  try {
-    await gh(`/repos/${HOST_REPO}/contents/${TAG_FILE_PATH}?ref=main`);
-    tagFileStillExists = true;
-  } catch (_e) {
-    // 404 expected on success — fall through.
+  // #689 — stop this run's in-flight create PR FIRST. A create leg that
+  // timed out before the merge leaves the cms/tags/<slug> PR open and armed
+  // with cms/ready; checking main alone read "not on main" and returned, and
+  // the PR merged the canary 12 minutes later (adamdaniel.ai#2938). The file
+  // path carries this run's RUN_ID, so only this run's own PR can match.
+  // Strict: an API error throws, so an unreadable state fails the run
+  // instead of reading as "nothing in flight".
+  const { closed, merged } = await closeOpenPrsAddingFile({
+    base: "main",
+    filePath: TAG_FILE_PATH,
+  });
+  if (closed.length > 0) {
+    console.warn(
+      `[cleanup-safety-net] closed in-flight PR(s) ${closed.map((n) => `#${n}`).join(", ")} still adding ${TAG_FILE_PATH}`,
+    );
   }
+  if (merged.length > 0) {
+    console.warn(
+      `[cleanup-safety-net] PR(s) ${merged.map((n) => `#${n}`).join(", ")} merged ${TAG_FILE_PATH} before the close took effect`,
+    );
+  }
+
+  // Then check main. Only a 404 means absent; any other error throws.
+  const tagFileStillExists =
+    (await readFileOnRef({ ref: "main", filePath: TAG_FILE_PATH })) !== null;
   if (!tagFileStillExists) {
     console.log(
-      `[cleanup-safety-net] ${TAG_FILE_PATH} not on main — UI-delete succeeded, no cleanup needed`,
+      `[cleanup-safety-net] ${TAG_FILE_PATH} not on main and no open PR adds it — no cleanup needed`,
     );
     return;
   }
@@ -205,7 +221,10 @@ test.afterAll(async () => {
       `[cleanup-safety-net] opened cleanup PR #${pr.number} on branch ${branch}; not waiting for merge`,
     );
   } catch (e) {
-    console.warn(`[cleanup-safety-net] failed to open cleanup PR: ${describeError(e)}`);
+    // Loud: the canary is on main and nothing is removing it.
+    throw new Error(
+      `[cleanup-safety-net] ${TAG_FILE_PATH} is on main and the cleanup PR could not be opened: ${describeError(e)}`,
+    );
   }
 });
 

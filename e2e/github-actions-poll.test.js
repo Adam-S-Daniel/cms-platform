@@ -854,6 +854,22 @@ test.describe("API response bodies never reach logs or thrown messages", () => {
     expect(err.responseBody).toContain(MARKER);
   });
 
+  test("a 2xx whose body is not JSON throws a body-free SyntaxError carrying the status", async () => {
+    // A real Response, so res.json() throws V8's own SyntaxError, which
+    // quotes a body this short in full.
+    const short = "leak.example.com";
+    globalThis.fetch = async () => new Response(short, { status: 200 });
+    const err = await gh("https://api.example.com/repos/o/r/pulls").catch((e) => e);
+    expect(err.message).not.toContain(short);
+    expect(err).toBeInstanceOf(SyntaxError);
+    expect(err.status).toBe(200);
+    expect(describeError(err)).toBe("HTTP 200 SyntaxError");
+    // An empty 204 (POST .../dispatches) still rejects as a SyntaxError,
+    // which cms-scheduled-publish-loop.spec.js treats as success.
+    globalThis.fetch = async () => new Response(null, { status: 204 });
+    await expect(gh("https://api.example.com/x/dispatches")).rejects.toBeInstanceOf(SyntaxError);
+  });
+
   test("describeError gives `HTTP <status> <type>` or just the type", async () => {
     expect(describeError(await ghError())).toBe("HTTP 403 Error");
     expect(describeError(new TypeError(`fetch failed: ${MARKER}`))).toBe("TypeError");

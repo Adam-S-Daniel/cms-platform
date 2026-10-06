@@ -99,7 +99,19 @@ async function gh(pathname, init = {}) {
       ...fetchInit,
       headers: { ...authHeaders(), ...(fetchInit.headers || {}) },
     });
-    if (res.ok) return res.json();
+    if (res.ok) {
+      try {
+        return await res.json();
+      } catch (e) {
+        if (!(e instanceof SyntaxError)) throw e;
+        // A JSON SyntaxError's message quotes the body it failed to parse,
+        // so rethrow one that carries only the status. Still a SyntaxError:
+        // a caller treats an empty 204 (`/dispatches`) as success that way.
+        const err = new SyntaxError(`GitHub API ${res.status} on ${url}: body is not JSON`);
+        err.status = res.status;
+        throw err;
+      }
+    }
 
     const body = await res.text();
     // Attach the HTTP status as a numeric `status` property so

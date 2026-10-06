@@ -12,6 +12,15 @@ so /admin shows ONLY the site's own custom `notes` collection (spliced from
 `admin/collections.site.yml`). It ships **no** `_posts`/blog, **no**
 `_tags`/`_projects`, **no** `_e2e` canaries, **no** `e2e` collection.
 
+Like jodidaniel.com, its home page renders through a SITE-OWNED
+`_layouts/home.html` with no parent, never the theme's `default.html`, so `/`
+has none of the theme's header, footer, skip link, `main.css` or glow; like
+jodidaniel.com's, its background is a dithered linear gradient, which
+`glow-banding.spec.js` samples there unguarded. The
+`fixture-e2e` public leg runs the public specs here (#702): a theme spec that
+assumes the theme's markup on every site's `/` fails in platform CI instead of
+on a consumer's platform-bump PR.
+
 ## Why it exists
 
 The platform e2e suite includes ~a dozen specs that assume the generic
