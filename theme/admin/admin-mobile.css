@@ -37,6 +37,34 @@
  * layout.
  */
 
+/* ── 0. Keyboard focus ring (all widths) ─────────────────────────────
+ * Decap leaves buttons and links on the browser's default focus ring, a
+ * dark 1-2 px line (computed `outline: rgb(16,16,16) auto`). On its dark
+ * fills ("＋ Post", the Publish group) that ring is dark on dark and all but
+ * invisible (UX round 3: ad-kbd K14), and on the collection sidebar the
+ * links are exactly as wide as their scrolling list, so the outline was cut
+ * off at both sides and showed only as top and bottom lines (jd-kbd F11b).
+ *
+ * Two tones so one of them contrasts with ANY fill or page color: a white
+ * 2 px outline with a #1d4ed8 ring outside it. `:focus-visible` only, so a
+ * mouse click looks exactly as before. Scoped to Decap's root so it cannot
+ * leak into a consumer's public pages; no `!important`, Decap's Emotion
+ * rules are a single class and lose to the id. */
+#nc-root :is(button, a, [role="button"], [role="menuitem"], summary):focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 0;
+  box-shadow: 0 0 0 4px #1d4ed8;
+}
+/* Sidebar collection links sit flush in an `overflow: auto` list, so any
+ * ring drawn outside the link's box is clipped. Draw the whole ring inside
+ * it instead: a #1d4ed8 outline pulled in by its own width, with the white
+ * tone as an inset shadow. */
+#nc-root [class*="SidebarNavList"] a:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px #fff;
+}
+
 @media (max-width: 768px) {
   /* ── 1. Remove the desktop min-width floor ──────────────────────────
    * The shell + editor containers size themselves for the side-by-side
