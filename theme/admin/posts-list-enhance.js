@@ -175,6 +175,40 @@
     return { label: "Published", color: "#1a7f37", live: true };
   }
 
+  // The summary template's " — DRAFT" / " — Scheduled" clauses are a DATA
+  // carrier for stateFromSummary() (Decap exposes no front-matter path to
+  // this list), not copy for the editor: the status chip says it once.
+  var SUMMARY_SUFFIX_RE = /\s*—\s*(DRAFT|Scheduled)\b.*$/;
+
+  function stripSummarySuffix(text) {
+    return String(text || "").replace(SUMMARY_SUFFIX_RE, "").trim();
+  }
+
+  // Remove the suffix from the card's visible title in place, remembering
+  // the raw summary on the anchor so a later pass (the title text no longer
+  // carries the suffix) still reads the original state. React only rewrites
+  // the text node when the summary string changes, and then it brings the
+  // suffix back for the next pass to strip again.
+  function hideSummarySuffix(a, h2, current) {
+    var prev = a.__plePrev;
+    var raw = prev && current === prev.stripped ? prev.raw : current;
+    var stripped = stripSummarySuffix(raw);
+    var node = h2 && h2.childNodes && h2.childNodes.length === 1 ? h2.childNodes[0] : null;
+    if (node && node.nodeType === 3 && node.nodeValue !== stripped) node.nodeValue = stripped;
+    a.__plePrev = { raw: raw, stripped: stripped };
+    return raw;
+  }
+
+  // The post's front-matter `date:` calendar day (`2026-05-13 08:51 -0400`
+  // -> `2026-05-13`), read in the offset the editor wrote it in — the same
+  // day the site prints. Null when the text has no front matter or date.
+  function frontMatterDate(text) {
+    var fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ""));
+    if (!fm) return null;
+    var d = /^date:\s*["']?(\d{4}-\d{2}-\d{2})/m.exec(fm[1]);
+    return d ? d[1] : null;
+  }
+
   function timeAgo(iso) {
     if (!iso) return "";
     var then = new Date(iso).getTime();
@@ -206,11 +240,15 @@
       }
       var li = a.closest("li") || a.parentElement;
       var h2 = a.querySelector("h2");
-      var summaryText = (h2 ? h2.textContent : a.textContent || "").trim();
+      var summaryText = hideSummarySuffix(
+        a,
+        h2,
+        (h2 ? h2.textContent : a.textContent || "").trim(),
+      );
       // Title is only used for fixture detection (leading-anchored), so
       // stripping the trailing status suffix is enough — there's no
       // parenthesized date to strip anymore.
-      var title = summaryText.replace(/\s*—\s*(DRAFT|Scheduled)\b.*$/, "").trim() || slug;
+      var title = stripSummarySuffix(summaryText) || slug;
       var isFixture = FIXTURE_SLUG_RE.test(slug) || FIXTURE_TITLE_RE.test(title);
       // The on-disk slug's YYYY-MM-DD- prefix is the engine-proof date
       // source (see config.base.yml's summary comment for why the
@@ -288,6 +326,18 @@
         " associatedPullRequests(first: 1) { nodes { number url } } } }"
       );
     });
+    // The front-matter `date:` is the date the site prints; the file name's
+    // prefix can differ from it. One aliased blob read per file, in the SAME
+    // request (still one GraphQL call regardless of post count).
+    var blobs = files.map(function (fp, idx) {
+      return (
+        "b" +
+        idx +
+        ": object(expression: " +
+        JSON.stringify("refs/heads/main:" + fp) +
+        ") { ... on Blob { text } }"
+      );
+    });
     var query =
       "query {\n  repository(owner: " +
       JSON.stringify(REPO.split("/")[0]) +
@@ -295,7 +345,9 @@
       JSON.stringify(REPO.split("/")[1]) +
       ') {\n    ref(qualifiedName: "refs/heads/main") {\n      target {\n        ... on Commit {\n          ' +
       parts.join("\n          ") +
-      "\n        }\n      }\n    }\n  }\n}";
+      "\n        }\n      }\n    }\n    " +
+      blobs.join("\n    ") +
+      "\n  }\n}";
     var out = {};
     try {
       var res = await fetch(GQL, {
@@ -324,7 +376,9 @@
             node.associatedPullRequests &&
             node.associatedPullRequests.nodes &&
             node.associatedPullRequests.nodes[0];
+          var blob = j.data.repository["b" + idx];
           out[fp] = {
+            fmDate: frontMatterDate(blob && blob.text),
             date: node.committedDate,
             url: node.url,
             pr: prNode ? { number: prNode.number, url: prNode.url } : null,
@@ -756,24 +810,25 @@
     // this list can read the entry's own front matter from — Decap exposes
     // no supported path to it (see this file's header).
     var modifiers = [];
-    if (card.state.label === "Draft") modifiers.push(model.MODIFIER_LABELS.hidden);
+    var badge = derived.badge;
+    // `published: false` with nothing in flight is a Draft, full stop. The
+    // derived badge reads "Live" for an entry that merged long ago and was
+    // later unpublished, which beside a "Hidden" chip said two things about
+    // one card (#650). Say "Draft" once and drop the redundant chip.
+    if (card.state.label === "Draft") {
+      if (badge === model.BADGE.LIVE) badge = model.BADGE.DRAFT;
+      if (badge !== model.BADGE.DRAFT) modifiers.push(model.MODIFIER_LABELS.hidden);
+    }
     if (card.state.label === "Scheduled") modifiers.push(model.MODIFIER_LABELS.scheduled);
     return {
-      label: model.SHORT_LABELS[derived.badge] || derived.label,
-      color: model.BADGE_COLORS[derived.badge] || card.state.color,
+      label: model.SHORT_LABELS[badge] || derived.label,
+      color: model.BADGE_COLORS[badge] || card.state.color,
       modifiers: modifiers,
     };
   }
 
-  function decorate(card, remote) {
-    var li = card.li;
-    if (!li) return;
-    var meta = li.querySelector(":scope > .cms-ple-meta");
-    if (!meta) {
-      meta = document.createElement("div");
-      meta.className = "cms-ple-meta";
-      li.appendChild(meta);
-    }
+  // The card's meta-row markup. Pure (no DOM), so the unit test can pin it.
+  function metaHTML(card, remote) {
     var bits = [];
     var badge = badgeFor(card, remote);
     bits.push(
@@ -786,7 +841,13 @@
     badge.modifiers.forEach(function (m) {
       bits.push('<span class="cms-ple-modifier">' + esc(m) + "</span>");
     });
-    if (card.postDate) {
+    // Prefer the front-matter date (what the site prints); the file name's
+    // prefix is only the fallback while that has not been read yet.
+    var fmDate = remote && remote.lastEdited && remote.lastEdited[card.filePath];
+    fmDate = fmDate && fmDate.fmDate;
+    if (fmDate) {
+      bits.push('<span title="Post date (from the post\'s front matter)">' + esc(fmDate) + "</span>");
+    } else if (card.postDate) {
       bits.push('<span title="Post date (from the post\'s file name)">' + esc(card.postDate) + "</span>");
     }
     if (card.isFixture) {
@@ -806,7 +867,15 @@
     // (the pre-existing degraded view) rather than treating every card as
     // unconfirmed.
     var le = remote && remote.lastEdited && remote.lastEdited[card.filePath];
-    var confirmedOnMain = !remote || le;
+    var pr =
+      remote &&
+      remote.prBySlug &&
+      (remote.prBySlug[card.slug] || remote.prBySlug[urlSlug(card.slug)]);
+    // A live-per-summary post with NO open editorial PR is on `main` whether
+    // or not the (capped, best-effort) history lookup answered, so it keeps
+    // its link and never gets the "once published" tooltip, which is only
+    // true of a post whose edit is still in an open PR (#650).
+    var confirmedOnMain = !remote || le || !pr;
     if (pub && card.state.live && confirmedOnMain) {
       bits.push(
         '<a href="' +
@@ -871,10 +940,6 @@
       );
     }
 
-    var pr =
-      remote &&
-      remote.prBySlug &&
-      (remote.prBySlug[card.slug] || remote.prBySlug[urlSlug(card.slug)]);
     if (pr) {
       // The per-PR preview build mirrors production's publish semantics
       // (see this file's header + e2e/cms-unpublish-republish-preview.spec.js):
@@ -916,9 +981,57 @@
           '">view draft changes</a>',
       );
     }
-    var next = bits.join("");
-    // eslint-disable-next-line no-unsanitized/property -- every dynamic value pushed into `bits` (PR numbers, URLs, slugs, timestamps) is run through the HTML-escaping `esc()` helper; the rest is static markup.
+    return bits.join("");
+  }
+
+  function decorate(card, remote) {
+    var li = card.li;
+    if (!li) return;
+    var meta = li.querySelector(":scope > .cms-ple-meta");
+    if (!meta) {
+      meta = document.createElement("div");
+      meta.className = "cms-ple-meta";
+      li.appendChild(meta);
+    }
+    var next = metaHTML(card, remote);
+    // eslint-disable-next-line no-unsanitized/property -- every dynamic value in `metaHTML`'s markup (PR numbers, URLs, slugs, dates, timestamps) is run through the HTML-escaping `esc()` helper; the rest is static markup.
     if (meta.innerHTML !== next) meta.innerHTML = next;
+  }
+
+  // The list's own empty state. Every card is a hidden automated-test
+  // fixture (the default, or the "Automated tests" filter while the toggle
+  // is off), so the list would otherwise be blank with no explanation (#650).
+  function emptyStateText(cards, show) {
+    if (show || !cards.length) return "";
+    for (var i = 0; i < cards.length; i++) if (!cards[i].isFixture) return "";
+    return (
+      "No posts match. " +
+      cards.length +
+      " automated-test " +
+      (cards.length === 1 ? "post is" : "posts are") +
+      " hidden — tick “Show automated-test posts” to see " +
+      (cards.length === 1 ? "it." : "them.")
+    );
+  }
+
+  function ensureEmptyState(cards) {
+    var ul = listUl(cards);
+    if (!ul || !ul.parentNode) return;
+    var text = emptyStateText(cards, showFixtures());
+    var el = document.getElementById("cms-ple-empty");
+    if (!text) {
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+      return;
+    }
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "cms-ple-empty";
+      el.setAttribute("data-testid", "posts-list-empty");
+      el.setAttribute("role", "status");
+      el.setAttribute("style", "margin:0 0 0.6rem;padding:0.6rem 0.7rem;color:#57606a;font-size:0.8rem;");
+      ul.parentNode.insertBefore(el, ul);
+    }
+    if (el.textContent !== text) el.textContent = text;
   }
 
   // Move fixture rows to the END of the list (still in the DOM, still
@@ -985,19 +1098,30 @@
   }
 
   // ── orchestration ────────────────────────────────────────────────
+  // requestAnimationFrame never fires in a background tab, so a pass scheduled
+  // there, or scheduled just before the tab went to the back, waited until the
+  // editor returned (#644). A hidden tab paints nothing, so the next task is
+  // as good as the next frame; `pending` makes whichever runs first the only
+  // pass.
   var pending = false;
+  function runAugment() {
+    if (!pending) return;
+    pending = false;
+    try {
+      augment();
+    } catch (e) {
+      console.warn("[posts-list-enhance] augment error: " + (e && e.message ? e.message : e));
+    }
+  }
   function scheduleAugment() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () {
-      pending = false;
-      try {
-        augment();
-      } catch (e) {
-        console.warn("[posts-list-enhance] augment error: " + (e && e.message ? e.message : e));
-      }
-    });
+    if (document.hidden) setTimeout(runAugment, 0);
+    else requestAnimationFrame(runAugment);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) runAugment();
+  });
 
   function augment() {
     hideE2EQuickAdd();
@@ -1016,6 +1140,7 @@
     }
     reorderFixturesLast(cards);
     ensureBar(cards, fixtureCount);
+    ensureEmptyState(cards);
   }
 
   // First land on the list (incl. returning from an entry editor):
@@ -1055,6 +1180,12 @@
   // publish-button.js's window.__publishButton.
   window.__postsListEnhance = {
     badgeFor: badgeFor,
+    metaHTML: metaHTML,
+    emptyStateText: emptyStateText,
+    stripSummarySuffix: stripSummarySuffix,
+    hideSummarySuffix: hideSummarySuffix,
+    frontMatterDate: frontMatterDate,
+    fetchLastEdited: fetchLastEdited,
     fetchOpenPrBySlug: fetchOpenPrBySlug,
     publishingBarCopy: publishingBarCopy,
     publishingSummaryHTML: publishingSummaryHTML,

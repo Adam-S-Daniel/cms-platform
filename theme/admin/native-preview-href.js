@@ -132,15 +132,26 @@
     }
   }
 
+  // requestAnimationFrame never fires in a background tab, so a pass scheduled
+  // there, or scheduled just before the tab went to the back, waited until the
+  // editor returned (#644). A hidden tab paints nothing, so the next task is
+  // as good as the next frame; `pending` makes whichever runs first the only
+  // pass.
   var pending = false;
+  function runHide() {
+    if (!pending) return;
+    pending = false;
+    hide();
+  }
   function scheduleHide() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () {
-      pending = false;
-      hide();
-    });
+    if (document.hidden) setTimeout(runHide, 0);
+    else requestAnimationFrame(runHide);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) runHide();
+  });
 
   // Mutations re-hide when Decap (re)renders the toolbar — including
   // the initial mount, hash navigations between entries, and field

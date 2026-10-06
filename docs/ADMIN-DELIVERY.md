@@ -290,6 +290,118 @@ library loads and adds the library's files to it, the way Decap's own
 the #647 describe in `e2e/cms-editorial-workflow.spec.js`, which opens the
 editor route directly.
 
+## Media library tidy (#736): upload names, `.gitkeep`, and the image a deleted entry leaves
+
+Three rough edges in Decap's media library, all in Decap core with no config
+lever (decap-cms 3.15.1). Two are fixed by `theme/admin/media-library-tidy.js`
+(non-deferred, before `decap-cms.js`, in `index.html` and `index-local.html`;
+not in the stock-Decap rehearsal shell `index-test.html`); the third is a
+decision, recorded here.
+
+- **Trailing hyphen in an upload's name.** `Workshop Diagram (final).jpg` was
+  stored as `workshop-diagram-final-.jpg`. `persistMedia` names the file
+  `sanitizeSlug(file.name.toLowerCase(), config.slug)`; sanitizeSlug trims a
+  leading or trailing replacement off the WHOLE string, which still ends in
+  `.jpg`, so the `-` that `)` became is never seen. No `slug:` option helps
+  (`sanitize_replacement: ""` also deletes the hyphens between words, and the
+  options also name every post file). The shim trims leading and trailing
+  non-letter/mark/digit characters off the part of the name before its last
+  dot, on the File itself, in capture-phase `change` and `drop` listeners that
+  run before Decap's `handlePersist`. It renames the File in place (an own
+  `name` property), so `draft-media-fallback.js`, which matches uploads by File
+  and Decap's name transform, sees the stored name. Existing files are not
+  renamed.
+- **`.gitkeep` as a tile.** Decap lists every blob in the media folder. The
+  library is a virtualized grid, so hiding the tile in the DOM would leave a
+  blank cell; the shim instead filters the listing in a `window.fetch` wrap: the
+  GitHub `git/trees/<ref>:<dir>` answer (production) and decap-server's
+  `getMedia` answer (`index-local.html`). Dotfiles are dropped; everything else
+  passes through with the caller's own arguments.
+- **A deleted entry's image stays in Media. Not fixed, on purpose.** An upload
+  is not owned by an entry: the same file can be a featured image on two posts,
+  an inline body image, a site hero or a Site Settings value, and Decap keeps no
+  reference index. Deleting "the entry's images" with the entry would break any
+  other page that uses one, with no undo short of a git revert. So there is no
+  automatic delete. What the issue proposed as safe options are both feature
+  work for the owner to schedule: a delete-time prompt that lists only images
+  no other entry or data file references (needs a scan of every collection's
+  content, not just the one entry), or an "unused" flag in the library built
+  from the same scan. Until then an orphan costs repository bytes and a tile,
+  and is removed by hand from the Media library (or by a PR). The delete-success
+  toast is #649.
+
+Tests: `e2e/media-library-tidy.test.js` (name trim through Decap's transform,
+listing filters, the fetch wrap's pass-through, load order). The browser
+behavior of the two listeners was also checked in Chromium (real `<input
+type=file>` change and a synthetic drop); Firefox and WebKit were not.
+
+## Admin focus after a route change, a Save or a Delete, and the skip link
+
+Decap is hash-routed React: Enter on a list entry, Back, Save, Delete and a list
+row's remove "x" unmount the element that had focus, so `document.activeElement`
+becomes `<body>`. The next Tab then restarts near the top (after Back it landed on
+"Search all"), and there was no skip link (UX round 3, ad-kbd K8 / jd-kbd F5; the
+"Live Preview is last in Tab order" note, K10, is the same cause). `theme/admin/route-focus.js`
+(all three shells, deferred, after `decap-cms.js`) adds a "Skip to content" link as the
+first child of `<body>` and restores focus. Rules that keep it safe:
+
+- **It acts only while focus is on `<body>` or null**, checked on every animation
+  frame it polls and again right before it moves focus, so it never takes focus from
+  another shim (the tags box refocuses its input; `validation-feedback.js` focuses the first
+  invalid field three frames after a blocked Save, and route-focus waits six frames after a click).
+  A key or pointer press cancels a pending move (the person took over); a click from script
+  (`autosave-on-hide.js`) is ignored; a `#/search` route is left alone; nothing moves on page load.
+- **Where focus goes** (verified on Decap 3.15.1): a list or other page, `main h1` (else `main`);
+  a new entry, the first field in a `ControlContainer`; an existing entry, the toolbar's
+  `ToolbarSectionBackLink` (the editor has no `main` or heading). The skip link goes to the
+  first field of an existing entry instead. Emotion class-name substrings, same convention as
+  `list-row-affordance.js`: a missing class means a silent no-op.
+- **The skip link never follows its `href`** (a `#fragment` would change the route).
+
+Tests: `e2e/route-focus.test.js` (vm sandbox, stubbed frames, in `PLATFORM_META_SPECS`),
+`e2e/cms-route-focus.spec.js` (real Decap: Enter on an entry then Tab stays in the editor, Back
+returns to the heading, the skip link, a keyboard Save), load order in `e2e/admin-shim-load-order.test.js`.
+
+## Admin keyboard focus ring (UX round 3: ad-kbd K14, jd-kbd F11b)
+
+Decap leaves buttons and links on the browser's default focus ring (computed
+`outline: rgb(16,16,16) auto`), which vanishes on a dark fill such as "＋ Post",
+and the collection sidebar's links are exactly as wide as their `overflow: auto`
+`SidebarNavList`, so the ring was cut off at both sides. Section 0 of
+`theme/admin/admin-mobile.css` (outside the `@media` block, so every width, and
+already linked from all three shells and shipped in the gem to both consumers)
+draws a two-tone `:focus-visible` ring under `#nc-root`: a white 2px outline with
+a `#1d4ed8` shadow outside it, and for `SidebarNavList a` the same two tones kept
+inside the link (outline offset -2px, inset shadow), since anything outside it is
+clipped. Decap's dropdown menus (Publish now, Status, Account, Quick add) are
+`overflow: hidden` with flush items, so `#nc-root [role="menuitem"]` gets the same
+inside ring (UX round 4 triage package 2); it must stay after the general rule.
+`:focus-visible` only, so a mouse click is unchanged. Not covered: inputs
+(Decap styles its own), the standalone `reviews/` pages, and Decap's modal portals
+outside `#nc-root`. Test: `e2e/cms-admin-focus-ring.spec.js` (computed styles after
+real Tab presses on a dark button, a sidebar link and the keyboard-opened Publish
+menu's first item; a mouse click stays plain). It runs in CI on `chromium-desktop-3k`
+(an `@admin-write` spec, selected by `self-fixture-e2e.yml`); no admin project uses
+Firefox, so the Firefox pass is local only.
+
+## Decap's toasts let taps through at 1100px and below (UX round 4 triage package 6: ad A4, jd F13)
+
+Decap raises its toasts ("missed a required field", "Entry saved") in a react-toastify
+container at `top-right`, fixed to the viewport, for 8 s. Since #766 pinned the phone
+toolbar to the top, that container sat exactly on Publish and the avatar, so the retry
+tap after a failed Publish landed on the toast. In the shipped 3.15.1 bundle no node sets
+`pointer-events` (the container, toast, body and close button all compute `auto`), so
+the last rule of `theme/admin/admin-mobile.css` sets `pointer-events: none` on
+`[class*="Toastify__toast-container"]` at `max-width: 1100px` (inherited by the whole
+subtree) and `auto` on its `[class*="Toastify__close-button"]`. A toast can then only be
+dismissed by its close button or its timer; click-to-close and swipe-to-dismiss no longer
+fire. Desktop is untouched. `validation-feedback.js` reads these nodes with
+`querySelector` and closes a stale one with a script `.click()`, neither of which is
+hit-tested. Not covered: Decap stacks a second identical toast on a second failure.
+Test: `e2e/cms-admin-toast-passthrough.spec.js` (390x844: a hit test and a real click on
+Publish and the avatar under a live toast, the close button still closes it, and the
+rule is off above 1100px).
+
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 
 The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a

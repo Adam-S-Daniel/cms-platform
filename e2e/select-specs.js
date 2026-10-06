@@ -656,7 +656,15 @@ const SPEC_RULES = {
   "e2e/blog-post.spec.js": [/^_posts\//, /^blog\//],
   "e2e/tags.spec.js": [/^_tags\//, /^tags\//, /^e2e\/site-capabilities\.js$/],
   "e2e/not-found.spec.js": [/^404\.html$/],
-  "e2e/public-a11y-polish.spec.js": [/^_layouts\//, /^_includes\//, /^assets\/css\//],
+  // Its `/` checks skip on a home page that bypasses the theme default layout,
+  // read from the site's index front matter + _layouts by site-capabilities.js.
+  "e2e/public-a11y-polish.spec.js": [
+    /^_layouts\//,
+    /^_includes\//,
+    /^assets\/css\//,
+    /^index\.(html|md|markdown)$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
   // @parity specs that hit Jekyll output through the deployed preview
   // surface. Path-rules cover the inputs that can shift what's served.
   // The sitemap/feed/console-clean/image-alt specs ALSO read `_site/`
@@ -739,7 +747,14 @@ const SPEC_RULES = {
   "e2e/glow-banding.spec.js": [
     // CSS-only spec; otherwise idle. Picks up via fanout.
   ],
-  "e2e/reduced-motion.spec.js": [/^(theme\/)?assets\/css\//],
+  // Its no-preference control skips on a home page that bypasses the theme
+  // default layout (site-capabilities.js homeUsesThemeLayout).
+  "e2e/reduced-motion.spec.js": [
+    /^(theme\/)?assets\/css\//,
+    /^_layouts\//,
+    /^index\.(html|md|markdown)$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
   "e2e/preview-bridge.spec.js": [
     /^(theme\/)?admin\/preview-bridge\.js$/,
     /^_layouts\/preview\.html$/,
@@ -786,6 +801,12 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/index.*\.html$/,
     /^(theme\/)?_layouts\/preview\.html$/,
   ],
+  // #736: the tidy shim's sandbox tests also check where the shells load it.
+  "e2e/media-library-tidy.test.js": [
+    /^(theme\/)?admin\/media-library-tidy\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+    /^(theme\/)?admin\/draft-media-fallback\.js$/,
+  ],
   // #647 media-library draft sync: the unit sandbox also checks where the
   // three admin shells load it.
   "e2e/media-library-draft-sync.test.js": [
@@ -795,6 +816,7 @@ const SPEC_RULES = {
   "e2e/preview-bridge-payload.test.js": [/^(theme\/)?admin\/preview-bridge\.js$/],
   "e2e/preview-pane.test.js": [
     /^(theme\/)?admin\/preview-pane\.js$/,
+    /^(theme\/)?admin\/config\.base\.yml$/,
     /^(theme\/)?admin\/index.*\.html$/,
   ],
   "e2e/cms-autosave.spec.js": [

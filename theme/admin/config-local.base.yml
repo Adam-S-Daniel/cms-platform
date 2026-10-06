@@ -53,8 +53,16 @@ collections:
     # all three configs, e2e/cms-post-list-summary.spec.js against the
     # rendered config.
     summary: "{{title}}{{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}"
+    # Newest first by default (#650): without a default, Decap lists in
+    # repository order, so a just-saved post jumped to the top until a reload
+    # dropped it to the bottom. Decap 3.15.1's schema wants `sortable_fields`
+    # to be an ARRAY (an object throws "must be array" and the admin never
+    # loads); an array item may be `{field, default_sort: asc|desc}`, which
+    # the bundle's loadEntries applies when no sort is stored yet.
+    # e2e/posts-list-status-dedupe.test.js pins this shape.
     sortable_fields:
-      - date
+      - field: date
+        default_sort: desc
       - title
     view_filters:
       - label: Published

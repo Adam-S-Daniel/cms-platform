@@ -187,14 +187,16 @@ test.describe("deploy-preview workflow: per-CMS-slug preview alias", () => {
         }
       }
     }
-    // Six consumers, all via env: the two github-script steps that were
-    // always env-bound (deployment registration + PR comment), plus the four
+    // Seven consumers, all via env: the two github-script steps that were
+    // always env-bound (deployment registration + PR comment), the four
     // shell steps converted by #259 — deploy's alias sync and invalidation,
-    // teardown's alias delete and invalidation.
+    // teardown's alias delete and invalidation — and the Jekyll build, which
+    // adds --unpublished for a cms/* draft (#637,
+    // deploy-preview-unpublished.test.js).
     expect(
       bound.length,
-      `expected 6 env-bound cms-slug consumers, found ${bound.length}: ${bound.join(", ")}`,
-    ).toBe(6);
+      `expected 7 env-bound cms-slug consumers, found ${bound.length}: ${bound.join(", ")}`,
+    ).toBe(7);
   });
 
   test("PR-comment renders the cms-slug alias URL when applicable", () => {
