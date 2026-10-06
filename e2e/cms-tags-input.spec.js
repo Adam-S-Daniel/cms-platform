@@ -163,7 +163,7 @@ test.describe(
       await page.keyboard.press("Tab");
       await expect(offer).toBeFocused();
       await page.keyboard.press("Enter");
-      await expect(tags).toHaveValue("quotes");
+      await expect(tags).toHaveValue("quotes, ");
       expect(await savedTags(page)).toEqual(["quotes"]);
     });
 
@@ -178,8 +178,88 @@ test.describe(
       await page.keyboard.press("Tab");
       await expect(offer).toBeFocused();
       await page.keyboard.press("Enter");
-      await expect(tags).toHaveValue("quotes");
+      await expect(tags).toHaveValue("quotes, ");
       expect(await savedTags(page)).toEqual(["quotes"]);
+    });
+
+    // #756: Decap trims the box on every keystroke, so a space typed after a
+    // letter used to vanish and `Field Notes` became `FieldNotes`.
+    test("a space typed inside a tag stays: `Field Notes` saves as one tag with its space (#756)", async ({ page }) => {
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("agents, field");
+      await page.keyboard.press("Space");
+      await expect(tags).toHaveValue("agents, field ");
+      await tags.pressSequentially("notes");
+      await expect(tags).toHaveValue("agents, field notes");
+      expect(await savedTags(page)).toEqual(["agents", "field notes"]);
+    });
+
+    test("deleting the first letter of a word keeps the space before it (#756)", async ({ page }) => {
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("Field N");
+      await page.keyboard.press("Backspace");
+      await expect(tags).toHaveValue("Field ");
+      await tags.pressSequentially("Notes");
+      expect(await savedTags(page)).toEqual(["Field Notes"]);
+    });
+
+    test("a second space, or one right after a comma, is still dropped (#756)", async ({ page }) => {
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("a");
+      await page.keyboard.press("Space");
+      await page.keyboard.press("Space");
+      await expect(tags).toHaveValue("a ");
+      await tags.pressSequentially("b, ");
+      await expect(tags).toHaveValue("a b, ");
+      expect(await savedTags(page)).toEqual(["a b"]);
+    });
+
+    test("`Field Notes` is compared with the existing `field-notes`, spaces and all (#756)", async ({ page }) => {
+      await mockTagsIndex(page, ["field-notes"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("Field");
+      await page.keyboard.press("Space");
+      await tags.pressSequentially("Notes");
+      await expect(page.locator("#cms-tags-suggest")).toContainText(
+        "\u201cField Notes\u201d is a new tag that is nearly identical to the existing tag \u201cfield-notes\u201d",
+      );
+    });
+
+    // #756: an applied suggestion ends the tag, so the next one is not glued on.
+    test("after applying a suggestion the next tag is typed after `, ` (#756)", async ({ page }) => {
+      await mockTagsIndex(page, ["release-notes", "agents"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("rel");
+      const offer = page.locator("#cms-tags-suggest").getByRole("button", { name: "release-notes", exact: true });
+      await expect(offer).toBeVisible();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Enter");
+      await expect(tags).toBeFocused();
+      await expect(tags).toHaveValue("release-notes, ");
+      await tags.pressSequentially("agent");
+      await expect(tags).toHaveValue("release-notes, agent");
+      expect(await savedTags(page)).toEqual(["release-notes", "agent"]);
+    });
+
+    test("saving right after applying a suggestion saves no empty tag (#756)", async ({ page }) => {
+      await mockTagsIndex(page, ["release-notes"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("rel");
+      await page.locator("#cms-tags-suggest").getByRole("button", { name: "release-notes", exact: true }).click();
+      await expect(tags).toHaveValue("release-notes, ");
+      expect(await savedTags(page)).toEqual(["release-notes"]);
     });
 
     // A tag name comes from fetched HTML: it must reach the page as text, never markup.
@@ -235,6 +315,36 @@ test.describe(
       await tags.pressSequentially("alpha, beta");
       await expect(page.locator("#cms-tags-suggest")).toHaveCount(0);
       expect(await savedTags(page)).toEqual(["alpha", "beta"]);
+    });
+  },
+);
+
+// #756: the chips were ~62x20 px, a fiddly target for a finger. A touch device
+// reports `(pointer: coarse)`; give it a 44 px minimum.
+test.describe(
+  "CMS Tags box suggestion chips are finger-sized on a phone (#756)",
+  { tag: ["@admin-write"] },
+  () => {
+    test.describe.configure({ timeout: 180_000 });
+    test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+    test.beforeEach(() => {
+      pageErrors = [];
+    });
+
+    test("suggestion and warning chips are at least 44 px tall and wide under a coarse pointer", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes", "quoted-words"]);
+      await openNewPost(page);
+      expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("quote");
+      const panel = page.locator("#cms-tags-suggest");
+      for (const chip of [panel.getByRole("button", { name: "quoted-words", exact: true }), panel.getByRole("button", { name: "Use \u201cquotes\u201d" })]) {
+        await expect(chip).toBeVisible();
+        const box = await chip.boundingBox();
+        expect(box.height).toBeGreaterThanOrEqual(44);
+        expect(box.width).toBeGreaterThanOrEqual(44);
+      }
     });
   },
 );

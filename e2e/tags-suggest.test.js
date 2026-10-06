@@ -77,10 +77,32 @@ test.describe("tags-input.js existing-tag suggestions (#735)", () => {
     expect(analyze("release, rel", EXISTING).suggest).toEqual([]);
   });
 
-  test("replaceTag swaps one piece and adds no comma (a trailing one would save an empty tag)", () => {
+  // #756: applying a suggestion ends the tag, so the next one can be typed at once.
+  test("replaceTag swaps one piece and ends it with `, ` (#756)", () => {
     const { replaceTag } = load();
-    expect(replaceTag("quo", 0, "quotes")).toBe("quotes");
-    expect(replaceTag("alpha, quo", 1, "quotes")).toBe("alpha,quotes");
-    expect(replaceTag("quote, beta, ", 0, "quotes")).toBe("quotes,beta,");
+    expect(replaceTag("quo", 0, "quotes")).toBe("quotes, ");
+    expect(replaceTag("alpha, quo", 1, "quotes")).toBe("alpha,quotes, ");
+    expect(replaceTag("quote, beta", 0, "quotes")).toBe("quotes,beta, ");
+  });
+
+  test("replaceTag never leaves an empty piece behind a trailing comma (#756)", () => {
+    const { replaceTag } = load();
+    expect(replaceTag("quote, beta, ", 0, "quotes")).toBe("quotes,beta, ");
+    expect(replaceTag("quote, ", 0, "quotes")).toBe("quotes, ");
+  });
+
+  // #756: Decap trims the box on every keystroke, so an in-progress trailing space
+  // must be hidden from it. Only a space after a letter, with the caret at the end.
+  test("holdsTrailingSpace is true only for a lone space after a letter at the caret end (#756)", () => {
+    const { holdsTrailingSpace } = load();
+    expect(holdsTrailingSpace("field ", true)).toBe(true);
+    expect(holdsTrailingSpace("agents, field ", true)).toBe(true);
+    expect(holdsTrailingSpace("field ", false)).toBe(false);
+    expect(holdsTrailingSpace("field", true)).toBe(false);
+    expect(holdsTrailingSpace("agents, ", true)).toBe(false);
+    expect(holdsTrailingSpace("agents,", true)).toBe(false);
+    expect(holdsTrailingSpace("field  ", true)).toBe(false);
+    expect(holdsTrailingSpace(" ", true)).toBe(false);
+    expect(holdsTrailingSpace("", true)).toBe(false);
   });
 });
