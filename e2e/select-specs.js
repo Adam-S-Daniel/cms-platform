@@ -381,6 +381,8 @@ const SPEC_RULES = {
   "e2e/cms-link-crawler.spec.js": [
     /^(theme\/)?admin\//,
     /^_posts\//,
+    /^_tags\//,
+    /^e2e\/public-content\.js$/,
     /^e2e\/site-capabilities\.js$/,
     /^e2e\/base-collections-guards\.js$/,
   ],
