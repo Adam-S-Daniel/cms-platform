@@ -30,8 +30,8 @@
  *     `quotes`), and
  *   - warns when a tag differs from an existing one only by case, plural,
  *     spaces or hyphens (`quote`, `Quotes` vs `quotes`).
- * Each offer is a button that swaps the typed text for the existing tag. It
- * only ever offers: no tag is rewritten or dropped on its own, a brand-new
+ * Each offer is a button that swaps the typed text for the existing tag; Tab
+ * from the box reaches them. It only ever offers: no tag is rewritten or dropped on its own, a brand-new
  * tag is still one Enter away, and stored tags are never touched.
  *
  * The existing names are the ones the site already publishes on its tags
@@ -188,23 +188,59 @@
     return b;
   }
 
+  // The panel is an aria-live region. A live region announces what is ADDED to
+  // it, not what it already holds when it appears, so it is created empty and
+  // filled one frame later; once it exists it is emptied, never hidden or
+  // removed, so every later change is announced too.
+  var boxEl = null; // the Tags box the panel belongs to
+  var boxWith = true; // whether suggestions (not just warnings) are shown
+
+  function nextFrame(fn) {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(fn);
+    else setTimeout(fn, 16);
+  }
+
+  // Removing the button that has focus fires `focusout` synchronously; that
+  // handler must not re-render in the middle of the removal.
+  var clearing = false;
+
+  function clearPanel() {
+    clearing = true;
+    try {
+      while (panel.firstChild) panel.removeChild(panel.firstChild);
+    } finally {
+      clearing = false;
+    }
+    panel.style.marginTop = "0";
+  }
+
   function render(el, withSuggestions) {
+    boxEl = el;
+    boxWith = withSuggestions;
     var a = analyze(el.value, existing);
     if (!withSuggestions) a.suggest = [];
     if (!a.near.length && !a.suggest.length) {
-      if (panel) panel.hidden = true;
+      if (panel) clearPanel();
       return;
     }
-    if (!panel || !panel.isConnected) {
+    var fresh = !panel || !panel.isConnected;
+    if (fresh) {
       panel = document.createElement("div");
       panel.id = "cms-tags-suggest";
       panel.setAttribute("role", "status");
       panel.setAttribute("aria-live", "polite");
-      panel.style.cssText = "margin-top:6px;font-size:13px;line-height:1.5;";
+      panel.style.cssText = "font-size:13px;line-height:1.5;";
     }
     if (panel.previousSibling !== el) el.parentNode.insertBefore(panel, el.nextSibling);
-    panel.hidden = false;
-    while (panel.firstChild) panel.removeChild(panel.firstChild);
+    if (fresh) {
+      clearPanel();
+      nextFrame(function () {
+        if (boxEl) render(boxEl, boxWith);
+      });
+      return;
+    }
+    clearPanel();
+    panel.style.marginTop = "6px";
     function pick(index, name) {
       return function () {
         setValue(el, replaceTag(el.value, index, name));
@@ -216,7 +252,12 @@
       var tag = n.matches.length > 1 ? "the existing tags " : "the existing tag ";
       line.appendChild(
         document.createTextNode(
-          "“" + n.typed + "” is a new tag that differs from " + tag + n.matches.map(quote).join(", ") + " only in case or plural. "
+          "“" +
+            n.typed +
+            "” is a new tag that is nearly identical to " +
+            tag +
+            n.matches.map(quote).join(", ") +
+            " (ignoring case, plurals, spaces and punctuation). "
         )
       );
       n.matches.forEach(function (m) {
@@ -252,9 +293,18 @@
   }
 
   function onFocusOut(e) {
-    // Leaving the box keeps the near-duplicate warnings (they matter at
-    // Save time) but drops the as-you-type suggestions.
-    if (isTagsBox(e.target)) render(e.target, false);
+    if (clearing) return;
+    var t = e.target;
+    var inPanel = !!panel && panel.contains(t);
+    if (!isTagsBox(t) && !inPanel) return;
+    // Focus moving between the box and its own buttons (Tab, Shift+Tab, or one
+    // button to the next) must not rebuild the panel: that would remove the
+    // very button about to take focus and drop focus on <body>.
+    var to = e.relatedTarget;
+    if (to && ((panel && panel.contains(to)) || isTagsBox(to))) return;
+    // Focus left the box and its panel: keep the near-duplicate warnings (they
+    // matter at Save time) but drop the as-you-type suggestions.
+    render(isTagsBox(t) ? t : boxEl, false);
   }
 
   document.addEventListener("keydown", onKeyDown, true);
