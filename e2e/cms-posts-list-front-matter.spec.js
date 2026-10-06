@@ -21,6 +21,8 @@ const CARRIER = "⁣";
 // `li`: index-test.html's static "open Replacement test post 1" hint also links
 // an entry, outside the list.
 const ENTRY_LINKS = 'li a[href*="#/collections/posts/entries/"]';
+// Decap's "+ New" button: on a collection list, absent from the entry editor.
+const NEW_BUTTON = '[class*="CollectionTopNewButton"]';
 
 const post = (title, slug, published) =>
   [
@@ -54,6 +56,24 @@ const SEED = {
   repoFilesUnpublished: [],
 };
 
+// Stand on the Posts list without reloading. loadTestAdmin leaves Decap on that
+// list, so `page.goto("/admin/index-test.html#/collections/posts")` is a full
+// reload whose first paint starts single-entry-collection-shortcut.js's 700 ms
+// settle timer before Decap has rendered. On a slow runner (webkit-iphone16) the
+// timer finds only index-test.html's static "open Replacement test post 1" link
+// with no "+ New" link beside it, takes the collection for a singleton and jumps
+// into an entry that is not seeded, so the list never renders. Wait for the list
+// Decap rendered itself (its "+ New" button is what the shim checks for), then
+// pin the route by hash: a hash already equal to it starts no timer. Same fix as
+// cms-route-focus.spec.js and cms-admin-focus-ring.spec.js.
+async function openPostsList(page) {
+  await expect(page.locator(NEW_BUTTON)).toBeVisible({ timeout: 60_000 });
+  await page.evaluate(() => {
+    location.hash = "#/collections/posts";
+  });
+  await expect(page.locator(NEW_BUTTON)).toBeVisible();
+}
+
 // What an editor SEES in each card's title (innerText, not textContent).
 async function visibleTitles(page) {
   await expect(page.locator(ENTRY_LINKS)).toHaveCount(3, { timeout: 60_000 });
@@ -77,7 +97,7 @@ test.describe(
 
     test("the list's titles carry no slug, and each post is linked at its Jekyll address", async ({ page }) => {
       await loadTestAdmin(page, { seed: SEED });
-      await page.goto("/admin/index-test.html#/collections/posts");
+      await openPostsList(page);
 
       const titles = await visibleTitles(page);
       expectNoCarriedFrontMatter(titles);
