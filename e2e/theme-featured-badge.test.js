@@ -1,4 +1,4 @@
-// @lane: local — static fixture around the theme's own main.css; no network, no writes
+// @lane: local — static fixture around the theme's own main.css; no network, no writes, no build
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
@@ -12,25 +12,31 @@ const { test, expect } = require("./base");
 // adds an --accent-text token for small accent text, keeping --accent for
 // borders.
 //
-// The fixture is a page carrying the theme's real main.css and the exact card
-// markup adamdaniel.ai's tools/index.html renders, injected with setContent,
-// so it needs no Jekyll build. It reads theme/ SOURCE, hence the entry in
-// playwright.config.js's PLATFORM_META_SPECS.
+// The fixture is a page carrying the theme's real main.css and the card markup
+// adamdaniel.ai renders, injected with setContent, so it needs no Jekyll build.
+// Two shapes exist there: tools/index.html puts the h3 first in
+// .project-card-inner; index.html and projects/index.html put .project-tech
+// BEFORE the h3. Both are covered. It is a .test.js on chromium-light so the
+// self-CI node-unit-lints lane (`./*.test.js`, --project=chromium-light) runs
+// it; it reads theme/ SOURCE, hence the entry in PLATFORM_META_SPECS.
 
 const THEME = path.resolve(__dirname, "..", "theme");
 const MAIN_CSS = fs.readFileSync(path.join(THEME, "assets", "css", "main.css"), "utf8");
 const PROJECT_LAYOUT = fs.readFileSync(path.join(THEME, "_layouts", "project.html"), "utf8");
+const PREVIEW_LAYOUT = fs.readFileSync(path.join(THEME, "_layouts", "preview.html"), "utf8");
 
 // Static animations would repaint body's background mid-measurement.
 const FREEZE = "*, *::before, *::after { animation: none !important; transition: none !important; }";
 
-function card({ title, featured, tech }) {
+function card({ title, featured, tech, techFirst }) {
+  const techLine = tech ? `<p class="project-tech">${tech}</p>` : "";
   return `
     <article class="project-card">
       ${featured ? '<span class="featured-badge">Featured</span>' : ""}
       <div class="project-card-inner">
+        ${techFirst ? techLine : ""}
         <h3><a href="/tools/x/">${title}</a></h3>
-        ${tech ? `<p class="project-tech">${tech}</p>` : ""}
+        ${techFirst ? "" : techLine}
         <p class="project-description">A short description of the tool.</p>
         <a class="project-link" href="/tools/x/">Open tool &rarr;</a>
       </div>
@@ -60,8 +66,42 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-const SCOPE = "chromium-mobile";
-const TITLES = ["Claude Memory Map", "A Considerably Longer Featured Tool Title For Narrow Cards"];
+const SCOPE = "chromium-light";
+
+const LONG_TITLE = "A Considerably Longer Featured Tool Title For Narrow Cards";
+const LONG_WORD = "Supercalifragilisticexpialidocious".repeat(2);
+
+// Each case is one card; `of` is the element whose text must stay clear of the
+// badge ("title" is the h3's link, "tech" the .project-tech line).
+const OVERLAP_CASES = [
+  { name: "title first", card: { title: "Claude Memory Map" }, of: "title" },
+  { name: "title first, long title", card: { title: LONG_TITLE }, of: "title" },
+  { name: "title first, unbreakable word", card: { title: LONG_WORD }, of: "title" },
+  { name: "tech first, short title", card: { title: "Claude Memory Map", tech: "Ruby", techFirst: true }, of: "title" },
+  {
+    name: "tech first, long technology line",
+    card: { title: "Claude Memory Map", tech: "Ruby Rust Java Perl Lisp Dart Zig Lua Go C", techFirst: true },
+    of: "tech",
+  },
+  {
+    name: "tech first, unbreakable technology word",
+    card: { title: "Claude Memory Map", tech: LONG_WORD, techFirst: true },
+    of: "tech",
+  },
+];
+const SELECTOR = { title: ".project-card h3 a", tech: ".project-card .project-tech" };
+
+// The Featured pill each layout carries inline. DOMParser (no scripts run)
+// lifts the real element, so the layout file's own inline style is measured.
+async function pillMarkup(page, layoutHtml) {
+  return page.evaluate((html) => {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const pills = doc.querySelectorAll('span.tag-pill[style*="--accent"]');
+    if (pills.length !== 1) throw new Error(`expected one Featured pill, found ${pills.length}`);
+    pills[0].removeAttribute("hidden");
+    return pills[0].outerHTML;
+  }, layoutHtml);
+}
 
 test.describe("theme: FEATURED badge and small accent text", () => {
   test.beforeEach(({}, testInfo) => {
@@ -69,14 +109,16 @@ test.describe("theme: FEATURED badge and small accent text", () => {
   });
 
   for (const width of [320, 390]) {
-    for (const title of TITLES) {
-      test(`${width}px: the title "${title}" wraps clear of the badge`, async ({ page }) => {
+    for (const c of OVERLAP_CASES) {
+      test(`${width}px, ${c.name}: the text wraps clear of the badge`, async ({ page }) => {
         await page.setViewportSize({ width, height: 640 });
-        await page.setContent(fixture(card({ title, featured: true })));
-        const { badge, rects } = await page.evaluate(() => {
+        await page.setContent(fixture(card({ ...c.card, featured: true })));
+        const { badge, rects, overflow } = await page.evaluate((sel) => {
           const b = document.querySelector(".featured-badge").getBoundingClientRect();
+          const el = document.querySelector(sel);
           const range = document.createRange();
-          range.selectNodeContents(document.querySelector(".project-card h3 a"));
+          range.selectNodeContents(el);
+          const card = document.querySelector(".project-card").getBoundingClientRect();
           return {
             badge: { left: b.left, right: b.right, top: b.top, bottom: b.bottom },
             rects: Array.from(range.getClientRects()).map((r) => ({
@@ -85,37 +127,41 @@ test.describe("theme: FEATURED badge and small accent text", () => {
               top: r.top,
               bottom: r.bottom,
             })),
+            overflow: Math.max(0, ...Array.from(range.getClientRects()).map((r) => r.right - card.right)),
           };
-        });
-        expect(rects.length, "the title has text boxes to measure").toBeGreaterThan(0);
+        }, SELECTOR[c.of]);
+        expect(rects.length, "there are text boxes to measure").toBeGreaterThan(0);
         for (const r of rects) {
           const overlaps =
             r.left < badge.right && r.right > badge.left && r.top < badge.bottom && r.bottom > badge.top;
-          expect(overlaps, `title box ${JSON.stringify(r)} runs under badge ${JSON.stringify(badge)}`).toBe(false);
+          expect(overlaps, `text box ${JSON.stringify(r)} runs under badge ${JSON.stringify(badge)}`).toBe(false);
         }
+        expect(overflow, "text must not spill past the card's right edge").toBe(0);
       });
     }
   }
 
   test("a card with no badge keeps the full title width", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 640 });
-    await page.setContent(fixture(card({ title: "Plain", featured: false })));
-    const pad = await page.evaluate(
-      () => getComputedStyle(document.querySelector(".project-card h3")).paddingRight,
+    await page.setContent(
+      fixture(card({ title: "Plain", featured: false }) + card({ title: "Plain", featured: false, tech: "Ruby", techFirst: true })),
     );
-    expect(pad).toBe("0px");
+    const pads = await page.evaluate(() =>
+      Array.from(document.querySelectorAll(".project-card-inner > h3, .project-card-inner > .project-tech")).map((e) => getComputedStyle(e).paddingRight),
+    );
+    expect(pads.every((p) => p === "0px"), JSON.stringify(pads)).toBe(true);
   });
 
   test("small accent text is at least 4.5:1 on --bg-0, --bg-1 and --bg-2", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 640 });
-    // The project layout's inline "Featured" pill is part of the page header:
-    // load the layout file itself (its Liquid renders as inert text) so the
-    // pill's real inline style is what gets measured.
-    const html = fixture(
-      card({ title: "Claude Memory Map", featured: true, tech: "Python" }),
-      `<div id="layout">${PROJECT_LAYOUT}</div>`,
+    const projectPill = await pillMarkup(page, PROJECT_LAYOUT);
+    const previewPill = await pillMarkup(page, PREVIEW_LAYOUT);
+    await page.setContent(
+      fixture(
+        card({ title: "Claude Memory Map", featured: true, tech: "Python" }),
+        `<div id="project-layout">${projectPill}</div><div id="preview-layout">${previewPill}</div>`,
+      ),
     );
-    await page.setContent(html);
     const measured = await page.evaluate(() => {
       const root = getComputedStyle(document.documentElement);
       const probe = document.createElement("span");
@@ -132,7 +178,8 @@ test.describe("theme: FEATURED badge and small accent text", () => {
         text: {
           ".featured-badge": color(".featured-badge"),
           ".project-tech": color(".project-card .project-tech"),
-          "project layout Featured pill": color("#layout .tag-pill"),
+          "project.html Featured pill": color("#project-layout .tag-pill"),
+          "preview.html Featured pill": color("#preview-layout .tag-pill"),
         },
       };
     });

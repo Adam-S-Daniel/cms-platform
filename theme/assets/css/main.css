@@ -783,13 +783,17 @@ main {
 }
 
 /* The badge is a sibling of .project-card-inner, positioned out of flow, so
-   the title would run under it on a narrow card (320px: "Claude Memory Map"
-   under an ~85px badge). The badge's left edge sits ~101px (about 6.3rem)
-   from the card edge and the card's own 1.8rem padding already covers about
-   29px of that, so 5.25rem leaves the title ~12px short of the badge and it
-   wraps instead of running under it. */
-.featured-badge ~ .project-card-inner h3 {
+   the first line of the card would run under it on a narrow card (320px:
+   "Claude Memory Map" under an ~85px badge). That first child is the h3 in
+   tools/index.html but the .project-tech line in the projects markup, so pad
+   whichever comes first. The badge's left edge sits ~101px (about 6.3rem) from
+   the card edge and the card's own 1.8rem padding already covers about 29px of
+   that, so 5.25rem leaves the text ~12px short of the badge and it wraps
+   instead of running under it. overflow-wrap keeps one unbreakable word (a
+   long URL-like title or technology) from overflowing the padding. */
+.featured-badge ~ .project-card-inner > :first-child {
   padding-right: 5.25rem;
+  overflow-wrap: anywhere;
 }
 
 /* ── Page content ───────────────────────────────── */
