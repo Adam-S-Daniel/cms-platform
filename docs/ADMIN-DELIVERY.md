@@ -271,6 +271,51 @@ live: the pre-Save step in `e2e/cms-media-roundtrip.spec.js`. The other half of
 the incident, a cached 404 outliving the publish, is in `docs/OPERATIONS.md`
 § "The production 404 page is never cacheable".
 
+## Media library tidy (#736): upload names, `.gitkeep`, and the image a deleted entry leaves
+
+Three rough edges in Decap's media library, all in Decap core with no config
+lever (decap-cms 3.15.1). Two are fixed by `theme/admin/media-library-tidy.js`
+(non-deferred, before `decap-cms.js`, in `index.html` and `index-local.html`;
+not in the stock-Decap rehearsal shell `index-test.html`); the third is a
+decision, recorded here.
+
+- **Trailing hyphen in an upload's name.** `Workshop Diagram (final).jpg` was
+  stored as `workshop-diagram-final-.jpg`. `persistMedia` names the file
+  `sanitizeSlug(file.name.toLowerCase(), config.slug)`; sanitizeSlug trims a
+  leading or trailing replacement off the WHOLE string, which still ends in
+  `.jpg`, so the `-` that `)` became is never seen. No `slug:` option helps
+  (`sanitize_replacement: ""` also deletes the hyphens between words, and the
+  options also name every post file). The shim trims leading and trailing
+  non-letter/mark/digit characters off the part of the name before its last
+  dot, on the File itself, in capture-phase `change` and `drop` listeners that
+  run before Decap's `handlePersist`. It renames the File in place (an own
+  `name` property), so `draft-media-fallback.js`, which matches uploads by File
+  and Decap's name transform, sees the stored name. Existing files are not
+  renamed.
+- **`.gitkeep` as a tile.** Decap lists every blob in the media folder. The
+  library is a virtualized grid, so hiding the tile in the DOM would leave a
+  blank cell; the shim instead filters the listing in a `window.fetch` wrap: the
+  GitHub `git/trees/<ref>:<dir>` answer (production) and decap-server's
+  `getMedia` answer (`index-local.html`). Dotfiles are dropped; everything else
+  passes through with the caller's own arguments.
+- **A deleted entry's image stays in Media. Not fixed, on purpose.** An upload
+  is not owned by an entry: the same file can be a featured image on two posts,
+  an inline body image, a site hero or a Site Settings value, and Decap keeps no
+  reference index. Deleting "the entry's images" with the entry would break any
+  other page that uses one, with no undo short of a git revert. So there is no
+  automatic delete. What the issue proposed as safe options are both feature
+  work for the owner to schedule: a delete-time prompt that lists only images
+  no other entry or data file references (needs a scan of every collection's
+  content, not just the one entry), or an "unused" flag in the library built
+  from the same scan. Until then an orphan costs repository bytes and a tile,
+  and is removed by hand from the Media library (or by a PR). The delete-success
+  toast is #649.
+
+Tests: `e2e/media-library-tidy.test.js` (name trim through Decap's transform,
+listing filters, the fetch wrap's pass-through, load order). The browser
+behavior of the two listeners was also checked in Chromium (real `<input
+type=file>` change and a synthetic drop); Firefox and WebKit were not.
+
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 
 The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a

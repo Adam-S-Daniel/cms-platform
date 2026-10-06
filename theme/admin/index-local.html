@@ -116,6 +116,12 @@
   <script src="draft-media-fallback.js"></script>
 
   <!--
+    media-library-tidy shim (#736) — see admin/index.html. Non-deferred +
+    BEFORE decap-cms.js. Here its decap-server half applies (the getMedia
+    listing); the GitHub tree listing never occurs in this shell. -->
+  <script src="media-library-tidy.js"></script>
+
+  <!--
     Decap CMS — same pinned exact version as admin/index.html. The local
     config sets `local_backend: true` so saves go through the
     decap-server proxy (port 8081) into the working tree instead of
