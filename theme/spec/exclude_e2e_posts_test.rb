@@ -14,6 +14,7 @@
 # site Gemfile (matches the other theme spec files).
 
 require_relative '../lib/cms-platform-theme/exclude_e2e_posts'
+require_relative 'support/jekyll_slugify'
 
 # Minimal stand-in for a Jekyll::Document. The plugin only reads `.data`
 # (a Hash) and `.relative_path` (a String) and mutates `.data` in place.
@@ -195,6 +196,25 @@ run('excluded_tag_names: only stamped _tags entries, by name') do
         "excluded_tag_names must list only the stamped entry, got #{E.excluded_tag_names(site).inspect}",)
   no_tags = Struct.new(:collections).new({})
   check(E.excluded_tag_names(no_tags) == [], 'a site without a tags collection excludes nothing')
+end
+
+run('e2e_tag_name?: a tag name is judged by its slugified name') do
+  slugify = ->(name) { SpecJekyllSlugify.slugify(name) }
+  check(E.e2e_tag_name?('E2E Namedonly', slugify: slugify), "'E2E Namedonly' slugifies to e2e-namedonly")
+  check(E.e2e_tag_name?('e2e-x', slugify: slugify), 'a slug-shaped e2e name must match')
+  check(!E.e2e_tag_name?('Notes on e2e testing', slugify: slugify), 'e2e mid-name must not match')
+  check(!E.e2e_tag_name?('E2E', slugify: slugify), "'E2E' alone has no e2e- prefix")
+  check(!E.e2e_tag_name?(nil, slugify: slugify), 'nil must not match')
+end
+
+run('stamp_tag_page: noindex, out of the sitemap, feed_exclude; an existing robots is kept') do
+  data = {}
+  E.stamp_tag_page(data)
+  check(data == { 'sitemap' => false, 'feed_exclude' => true, 'robots' => 'noindex,nofollow' },
+        "unexpected stamps #{data.inspect}",)
+  kept = { 'robots' => 'noindex' }
+  E.stamp_tag_page(kept)
+  check(kept['robots'] == 'noindex', 'an existing robots value must be kept')
 end
 
 # ── result ─────────────────────────────────────────────────────────────────
