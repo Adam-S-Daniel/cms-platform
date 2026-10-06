@@ -634,3 +634,41 @@
     flex: 0 0 auto;
   }
 }
+
+/* ── Tablet and phone (<= 1100px): taps pass through Decap's toasts ───────
+ * (UX round 4 triage package 6: ad A4, jd F13). Decap raises its toasts
+ * ("Oops, you've missed a required field", "Entry saved") in a react-toastify
+ * container at `top-right`, fixed to the viewport. Since #766 pinned the
+ * editor toolbar to the top of a phone, that container sits exactly on
+ * Publish and the avatar: on a 390px phone it is the full width and 64px tall
+ * for the 8 s a toast stays up, so the retry tap after a failed Publish hit
+ * the toast and did nothing. A toast never needs a tap (it closes itself, and
+ * its text is for reading), so the container lets pointer events fall through
+ * to whatever is under it.
+ *
+ * Checked against the shipped decap-cms 3.15.1 bundle (react-toastify):
+ * no node sets `pointer-events`. The container is `position: fixed` with the
+ * default `auto`, and the toast, its body and the close button inherit it, so
+ * `none` on the container alone silences the whole subtree. The close button
+ * is switched back to `auto` so a toast can still be dismissed by hand; it is
+ * a 14x19px corner of the toast, not the toolbar-wide strip it replaces. The
+ * toast's own click-to-close and swipe-to-dismiss no longer fire (they need
+ * the pointer); the close button and the 8 s timer remain.
+ *
+ * Selectors are react-toastify's own class names (not Emotion hashes), as
+ * substring matches like the rest of this file, so a renamed class degrades
+ * to Decap's default (toast catches taps), never worse than before.
+ * validation-feedback.js reads these nodes with querySelector and closes a
+ * stale toast with a script `.click()`; neither goes through hit-testing, so
+ * this rule does not affect it.
+ *
+ * Desktop (> 1100px) is untouched: this fix is scoped to the widths where the
+ * toolbar is pinned under the container. */
+@media (max-width: 1100px) {
+  [class*="Toastify__toast-container"] {
+    pointer-events: none;
+  }
+  [class*="Toastify__toast-container"] [class*="Toastify__close-button"] {
+    pointer-events: auto;
+  }
+}
