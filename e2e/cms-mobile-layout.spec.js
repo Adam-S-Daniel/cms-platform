@@ -88,6 +88,48 @@ async function openEditor(page) {
   await page.waitForTimeout(800);
 }
 
+// Decap's native "View Live" toolbar anchor is hidden by
+// admin/native-preview-href.js, a deferred shim that re-hides it from a
+// MutationObserver + requestAnimationFrame after each toolbar render. Until
+// that pass runs, the visible anchor wraps the phone toolbar onto a third row
+// (104px instead of 88px), so a height measured right after the editor mounts
+// races the shim on a slow WebKit run. The shim's own signal is the
+// `data-native-view-live-hidden` marker plus a computed display:none; wait for
+// every native anchor to show both before measuring. A toolbar with no
+// native anchor has nothing to wait for. The height assertions stay strict:
+// a toolbar that is genuinely three rows still fails after the wait.
+async function waitForNativeViewLiveHidden(page) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const excluded = new Set([
+            "cms-live-url-banner-link",
+            "live-preview-link",
+            "cms-commit-pill",
+            "cms-prod-status-pill",
+            "cms-preview-build-pill",
+          ]);
+          const pending = [];
+          for (const tb of document.querySelectorAll('[class*="oolbar"]')) {
+            for (const a of tb.querySelectorAll('a[target="_blank"][rel*="noopener"][href]')) {
+              if (excluded.has(a.id)) continue;
+              const hidden =
+                a.getAttribute("data-native-view-live-hidden") === "1" &&
+                getComputedStyle(a).display === "none";
+              if (!hidden) pending.push(a.textContent.trim() || a.getAttribute("href"));
+            }
+          }
+          return pending;
+        }),
+      {
+        message: "native View Live anchor was never hidden by native-preview-href.js",
+        timeout: 30_000,
+      },
+    )
+    .toEqual([]);
+}
+
 test.describe(
   "CMS admin — mobile layout (iPhone 16)",
   // Tagged @admin-read: drives /admin/* but is read-only — runs on
@@ -481,6 +523,7 @@ test.describe(
 
         // Without the local chip (the production shell): two rows of 44px.
         // 96 = 2 x 44 plus 8px of slack for sub-pixel text metrics.
+        await waitForNativeViewLiveHidden(page);
         let m = await measure();
         if (tall) {
           expect(
@@ -494,6 +537,7 @@ test.describe(
         // so 124 allows it and still fails the old ~165px stack.
         await page.addScriptTag({ url: "/admin/local-save-indicator.js" });
         await expect(page.locator("#cms-local-save-indicator")).toBeVisible();
+        await waitForNativeViewLiveHidden(page);
         m = await measure();
         if (tall) {
           expect(
