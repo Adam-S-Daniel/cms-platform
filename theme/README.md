@@ -60,7 +60,9 @@ cms:
   It applies the same rule to `_tags/` entries (#689): an `e2e-` or
   `test_fixture: true` tag stays out of `site.all_tags` (the tag cloud and
   `/tags/`), the sitemap and the per-tag feeds, and its page still builds with
-  `robots: noindex,nofollow`
+  `robots: noindex,nofollow`. A tag that is only a name in a post's `tags:`
+  list, with no `_tags/` entry, is judged by its slugified name: an `e2e-` one
+  gets the same treatment, even on a real post
   ([build regression](spec/exclude_e2e_tags_build_test.rb)).
 
 Updates flow to sites via a gem-version bump — `platform-bump`'s job, not

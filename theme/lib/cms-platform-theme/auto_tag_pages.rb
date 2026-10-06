@@ -98,8 +98,18 @@ if defined?(Jekyll::Generator)
             slugify: ->(name) { Jekyll::Utils.slugify(name) },
           )
 
-          missing.each { |name| site.pages << TagPage.new(site, name) }
-          site.config['all_tags'] = all_tags
+          # A name with no `_tags/` entry whose slug starts `e2e-` (#689)
+          # still gets its archive, so a real post's pill does not 404, but
+          # stamped noindex / out of the sitemap and left out of
+          # `site.all_tags` (the tag cloud and /tags/).
+          slugify = ->(name) { Jekyll::Utils.slugify(name) }
+          e2e_names = missing.select { |name| Jekyll::ExcludeE2EPosts.e2e_tag_name?(name, slugify: slugify) }
+          missing.each do |name|
+            page = TagPage.new(site, name)
+            Jekyll::ExcludeE2EPosts.stamp_tag_page(page.data) if e2e_names.include?(name)
+            site.pages << page
+          end
+          site.config['all_tags'] = all_tags.reject { |tag| e2e_names.include?(tag['name']) }
         end
 
         private

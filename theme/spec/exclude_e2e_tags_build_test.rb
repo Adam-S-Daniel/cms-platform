@@ -39,6 +39,13 @@ class ExcludeE2ETagsBuildTest < Minitest::Test
     'real-tag' => { 'name' => 'Real Tag' },
   }.freeze
   EXCLUDED_SLUGS = [CANARY, 'flagged-fixture'].freeze
+  # A tag that exists only as a NAME in a real post's `tags:` list, with no
+  # `_tags/` entry: auto_tag_pages.rb mints its archive at the slugified
+  # name, so an `e2e-` slug there is an e2e tag like a `_tags/` file's.
+  NAMED_ONLY = 'e2e-namedonly'
+  NAMED_ONLY_NAME = 'E2E Namedonly'
+  # A tag carried only by a `test_fixture: true` post gets no surface at all.
+  FIXTURE_POST_TAG_SLUG = 'fixture-post-only'
 
   def setup
     @tmpdir = Dir.mktmpdir('exclude-e2e-tags-build-')
@@ -64,8 +71,12 @@ class ExcludeE2ETagsBuildTest < Minitest::Test
     end
     # A public post carrying the canary tag must not bring it back into the
     # listings or mint a second (indexable) archive for it.
-    { 'normal-post' => ['Real Tag', CANARY_NAME] }.each do |slug, tags|
-      front_matter = { 'title' => slug, 'layout' => 'post', 'tags' => tags }
+    {
+      'normal-post' => { 'tags' => ['Real Tag', CANARY_NAME] },
+      'named-only-post' => { 'tags' => ['Real Tag', NAMED_ONLY_NAME] },
+      'fixture-post' => { 'tags' => ['Fixture Post Only'], 'test_fixture' => true },
+    }.each do |slug, data|
+      front_matter = { 'title' => slug, 'layout' => 'post' }.merge(data)
       File.write(File.join(@source, '_posts', "2024-01-01-#{slug}.md"),
                  "#{front_matter.to_yaml}---\nPost body for #{slug}.\n")
     end
@@ -127,5 +138,43 @@ class ExcludeE2ETagsBuildTest < Minitest::Test
       assert_includes html, '<meta name="robots" content="noindex,nofollow">'
     end
     refute_includes output('tags/real-tag/index.html'), 'name="robots"'
+  end
+
+  def sitemap_urls
+    sitemap = REXML::Document.new(output('sitemap.xml'))
+    namespaces = { 'sitemap' => 'http://www.sitemaps.org/schemas/sitemap/0.9' }
+    REXML::XPath.match(sitemap, '/sitemap:urlset/sitemap:url/sitemap:loc', namespaces).map(&:text)
+  end
+
+  def test_named_only_e2e_tag_is_left_out_of_the_listings
+    refute_includes @site.config.fetch('all_tags').map { |t| t.fetch('name') }, NAMED_ONLY_NAME
+    index = output('tags/index.html')
+    refute_includes index, "/tags/#{NAMED_ONLY}/"
+    refute_includes index, NAMED_ONLY_NAME
+  end
+
+  def test_named_only_e2e_tag_page_still_builds_with_noindex
+    html = output("tags/#{NAMED_ONLY}/index.html")
+    # The real post's pill links here, so the archive must not 404.
+    assert_includes html, '/blog/named-only-post/'
+    assert_equal 1, html.scan('<meta name="robots"').length
+    assert_includes html, '<meta name="robots" content="noindex,nofollow">'
+  end
+
+  def test_named_only_e2e_tag_page_is_left_out_of_the_sitemap
+    assert built?("tags/#{NAMED_ONLY}/index.html")
+    refute_includes sitemap_urls, "https://example.com/tags/#{NAMED_ONLY}/"
+  end
+
+  def test_named_only_e2e_tag_gets_no_feed
+    refute built?("tags/#{NAMED_ONLY}/feed.xml")
+    refute_includes output("tags/#{NAMED_ONLY}/index.html"), "/tags/#{NAMED_ONLY}/feed.xml"
+  end
+
+  def test_fixture_post_tag_mints_no_public_surface
+    refute built?("tags/#{FIXTURE_POST_TAG_SLUG}/index.html")
+    refute built?("tags/#{FIXTURE_POST_TAG_SLUG}/feed.xml")
+    refute_includes @site.config.fetch('all_tags').map { |t| t.fetch('slug') }, FIXTURE_POST_TAG_SLUG
+    refute_includes sitemap_urls, "https://example.com/tags/#{FIXTURE_POST_TAG_SLUG}/"
   end
 end

@@ -59,7 +59,13 @@ if defined?(Jekyll::Generator)
           # lists the canary.
           public_posts = site.posts.docs.reject { |p| p.data['feed_exclude'] == true }
           from_posts = public_posts.flat_map { |p| Array(p.data['tags']) }.compact
-          ((curated + from_posts).uniq - excluded).each do |name|
+          # A name with no `_tags/` entry whose slug starts `e2e-` (#689)
+          # gets no feed either.
+          slugify = ->(name) { Jekyll::Utils.slugify(name) }
+          e2e_names = (from_posts - curated).select do |name|
+            Jekyll::ExcludeE2EPosts.e2e_tag_name?(name, slugify: slugify)
+          end
+          ((curated + from_posts).uniq - excluded - e2e_names).each do |name|
             site.pages << FeedPage.new(site, name)
           end
         end
