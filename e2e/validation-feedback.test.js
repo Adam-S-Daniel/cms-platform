@@ -87,11 +87,23 @@ const ROW_TOGGLE = '[class*="StyledListItemTopBar"] button';
 const CONTROL = '[class*="ControlContainer"]';
 
 // A Decap toast as react-toastify marks it; `error` is the red variant.
-const decapToastEl = () => fakeEl({ className: "Toastify__toast Toastify__toast--error" });
+const MISSING_EN = "Oops, you've missed a required field. Please complete before saving.";
+const MISSING_DE = "Oops, einige zwingend erforderliche Felder sind nicht ausgef\u00fcllt.";
+const decapToastEl = (textContent = MISSING_EN) =>
+  fakeEl({ className: "Toastify__toast Toastify__toast--error", textContent });
 
-function load({ phrase = DECAP_DEFAULT, hasGetLocale = true, errors = [], staleDecapToast = false, innerHeight } = {}) {
+function load({
+  phrase = DECAP_DEFAULT,
+  hasGetLocale = true,
+  errors = [],
+  staleDecapToast = false,
+  staleText,
+  coarsePointer = false,
+  innerHeight,
+} = {}) {
   const widget = { regexPattern: phrase, required: "%{fieldLabel} is required." };
-  const en = { editor: { editorControlPane: { widget } } };
+  const en = { editor: { editorControlPane: { widget } }, ui: { toast: { missingRequiredField: MISSING_EN } } };
+  const de = { ui: { toast: { missingRequiredField: MISSING_DE } } };
   const frames = [];
   const listeners = {};
   const toasts = [];
@@ -105,7 +117,7 @@ function load({ phrase = DECAP_DEFAULT, hasGetLocale = true, errors = [], staleD
   );
   // Decap's toasts on screen. One left over from an earlier click is here
   // before the click; one the click raised is pushed during it.
-  const decapToasts = staleDecapToast ? [decapToastEl()] : [];
+  const decapToasts = staleDecapToast ? [decapToastEl(staleText)] : [];
   const stale = decapToasts[0];
   if (stale) {
     stale.found = { '[class*="Toastify__close-button"]': fakeEl() };
@@ -135,8 +147,9 @@ function load({ phrase = DECAP_DEFAULT, hasGetLocale = true, errors = [], staleD
   };
   const sandbox = {
     window: {
-      CMS: hasGetLocale ? { getLocale: (l) => (l === "en" ? en : undefined) } : {},
+      CMS: hasGetLocale ? { getLocale: (l) => ({ en, de })[l] } : {},
       requestAnimationFrame: (fn) => frames.push(fn),
+      matchMedia: (q) => ({ matches: coarsePointer && /pointer:\s*coarse/.test(q) }),
       innerHeight,
     },
     document,
@@ -158,12 +171,19 @@ function load({ phrase = DECAP_DEFAULT, hasGetLocale = true, errors = [], staleD
     flush();
   };
   const raiseDecapToast = () => decapToasts.push(decapToastEl());
+  const addDecapToast = (text, extra = {}) => {
+    const el = decapToastEl(text);
+    Object.assign(el, extra);
+    el.found = { '[class*="Toastify__close-button"]': fakeEl() };
+    decapToasts.push(el);
+    return el;
+  };
   // The state Decap's re-render leaves behind: what a later click will see.
   const setErrors = (next) => {
     errorEls.length = 0;
     next.forEach((t) => errorEls.push(fakeEl({ textContent: t })));
   };
-  return { widget, listeners, toasts, styles, errorEls, click, setErrors, decapToasts, stale, raiseDecapToast };
+  return { widget, listeners, toasts, styles, errorEls, click, setErrors, decapToasts, stale, raiseDecapToast, addDecapToast };
 }
 
 test.describe("validation-feedback.js (#730)", () => {
@@ -389,5 +409,75 @@ test.describe("validation-feedback.js (#730)", () => {
     t.click(button("Save"));
     expect(t.toasts).toHaveLength(1);
     expect(close.clicked).toBe(0);
+  });
+
+  // ── cms-platform#752 ────────────────────────────────────────────────────
+
+  test("only the stale 'missed a required field' toast is closed; an unrelated error toast stays", () => {
+    // 'Logged out' and 'backend unavailable' notices are persistent and may
+    // not have been read; a format-error Save must not dismiss them.
+    const t = load({ errors: ["Start date: Use YYYY-MM-DD"], staleDecapToast: true });
+    const other = t.addDecapToast("You have been logged out. Please log in again.");
+    const missingClose = t.stale.found['[class*="Toastify__close-button"]'];
+    const otherClose = other.found['[class*="Toastify__close-button"]'];
+    t.click(button("Save"));
+    expect(t.toasts).toHaveLength(1);
+    expect(missingClose.clicked, "the stale missing-field toast is closed").toBe(1);
+    expect(otherClose.clicked, "the unrelated error toast is left open").toBe(0);
+  });
+
+  test("a stale missing-field toast in the site's configured locale is closed too", () => {
+    const t = load({ errors: ["Start date: Use YYYY-MM-DD"], staleDecapToast: true, staleText: MISSING_DE });
+    const close = t.stale.found['[class*="Toastify__close-button"]'];
+    t.click(button("Save"));
+    expect(t.toasts).toHaveLength(1);
+    expect(close.clicked).toBe(1);
+  });
+
+  test("an error toast in a locale it cannot read is left open", () => {
+    const t = load({ errors: ["Start date: Use YYYY-MM-DD"], staleDecapToast: true, staleText: "Unrecognized wording" });
+    const close = t.stale.found['[class*="Toastify__close-button"]'];
+    t.click(button("Save"));
+    expect(t.toasts).toHaveLength(1);
+    expect(close.clicked).toBe(0);
+  });
+
+  test("with no readable locale API no stale toast is closed (and nothing throws)", () => {
+    const t = load({ errors: ["Start date: Use YYYY-MM-DD"], staleDecapToast: true, hasGetLocale: false });
+    const close = t.stale.found['[class*="Toastify__close-button"]'];
+    t.click(button("Save"));
+    expect(t.toasts).toHaveLength(1);
+    expect(close.clicked).toBe(0);
+  });
+
+  test("the Dismiss button is at least 24 x 24, and 44 x 44 on a touch screen", () => {
+    const sizeOf = (coarsePointer) => {
+      const t = load({ errors: ["Permalink: bad"], coarsePointer });
+      t.click(button("Save"));
+      const css = t.toasts[0].children[1].style.cssText;
+      return [Number(/min-width:(\d+)px/.exec(css)[1]), Number(/min-height:(\d+)px/.exec(css)[1])];
+    };
+    expect(sizeOf(false)).toEqual([24, 24]);
+    expect(sizeOf(true)).toEqual([44, 44]);
+  });
+
+  test("the close glyph is aria-hidden, so the alert reads as its message alone", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.click(button("Save"));
+    const close = t.toasts[0].children[1];
+    expect(close.attrs["aria-label"]).toBe("Dismiss");
+    expect(close.textContent, "no bare glyph text on the button").toBeUndefined();
+    expect(close.children).toHaveLength(1);
+    expect(close.children[0].textContent).toBe("\u00d7");
+    expect(close.children[0].attrs["aria-hidden"]).toBe("true");
+  });
+
+  test("the toast is centered by auto margins, not left:50% (which halved its width on a phone)", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.click(button("Save"));
+    const css = t.toasts[0].style.cssText;
+    expect(css).not.toMatch(/left:50%/);
+    expect(css).not.toMatch(/translateX/);
+    expect(css).toMatch(/left:0;right:0;margin:0 auto;width:fit-content/);
   });
 });
