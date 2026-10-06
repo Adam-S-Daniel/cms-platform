@@ -105,4 +105,76 @@ test.describe("tags-input.js existing-tag suggestions (#735)", () => {
     expect(holdsTrailingSpace(" ", true)).toBe(false);
     expect(holdsTrailingSpace("", true)).toBe(false);
   });
+
+  // #762: the shim holds the space by hiding the event from Decap's React root.
+  // Every shim listens on `document` in the capture phase, so the stop must be
+  // `stopPropagation()` (the event goes no deeper, to React) and never
+  // `stopImmediatePropagation()` (which also cuts off the OTHER `document`
+  // capture listeners, live-url-banner.js and autosave-on-hide.js, registered
+  // after this one). The mini dispatcher below follows the DOM's rule: a
+  // same-node listener runs unless an earlier one stopped immediately.
+  function loadWithDispatch() {
+    const listeners = [];
+    const sandbox = {
+      window: {},
+      document: {
+        addEventListener(type, fn, capture) {
+          listeners.push({ type, fn, capture });
+        },
+      },
+      Promise,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(SRC, sandbox);
+    function fireInput(el) {
+      const ev = {
+        type: "input",
+        target: el,
+        isComposing: false,
+        deeperStopped: false,
+        immediateStopped: false,
+        stopPropagation() {
+          this.deeperStopped = true;
+        },
+        stopImmediatePropagation() {
+          this.deeperStopped = true;
+          this.immediateStopped = true;
+        },
+      };
+      for (const l of listeners.filter((x) => x.type === "input" && x.capture)) {
+        if (ev.immediateStopped) break;
+        l.fn.call(sandbox.document, ev);
+      }
+      return ev;
+    }
+    return { listeners, fireInput };
+  }
+
+  function tagsBox(value) {
+    return { tagName: "INPUT", id: "tags-field-1", value, selectionEnd: value.length, parentNode: null };
+  }
+
+  test("a held trailing space is hidden from React but not from a later `document` input listener (#762)", () => {
+    const { listeners, fireInput } = loadWithDispatch();
+    let later = 0;
+    listeners.push({
+      type: "input",
+      capture: true,
+      fn() {
+        later++;
+      },
+    });
+    const ev = fireInput(tagsBox("field "));
+    expect(ev.deeperStopped, "the event is stopped before React's root sees it").toBe(true);
+    expect(ev.immediateStopped, "but not for the listeners registered after this one").toBe(false);
+    expect(later, "the later listener ran for the keystroke").toBe(1);
+  });
+
+  test("an input event that is not held is not stopped at all (#762)", () => {
+    const { listeners, fireInput } = loadWithDispatch();
+    listeners.push({ type: "input", capture: true, fn() {} });
+    const ev = fireInput(tagsBox("field"));
+    expect(ev.deeperStopped).toBe(false);
+    expect(ev.immediateStopped).toBe(false);
+  });
 });
