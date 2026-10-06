@@ -27,10 +27,21 @@
   --radius: 4px;
   --radius-lg: 8px;
   --transition: 0.2s ease;
+  /* The sticky .site-header is 3.5rem tall (2rem padding, one 0.9rem * 1.6
+     line of logo, 1px rule) at every width; one more rem keeps a focus ring
+     clear of it. */
+  --site-header-offset: 4.5rem;
 }
 
 html, body {
   height: 100%;
+}
+
+/* A focus-induced scroll (Shift+Tab up a long page), scrollIntoView and a
+   #fragment jump (skip link, heading anchors) otherwise leave the target
+   under the sticky header (WCAG 2.4.11 Focus Not Obscured). */
+html {
+  scroll-padding-top: var(--site-header-offset);
 }
 
 body {
