@@ -440,6 +440,55 @@
   }
 }
 
+/* ── Tablet and phone (<= 1100px): the Back link stays on one line ─────────
+ * Decap's desktop toolbar is a single 66px row: Back link, buttons, host
+ * link + avatar. Its Back link (`[arrow] [title block]`) never shrank below
+ * its longest word, so at 820px (an iPad portrait) "Writing in <label>
+ * collection" and the saved-state line wrapped to four lines, clipped at the
+ * top of the bar, and a long collection label ("Accomplishments") pushed the
+ * toolbar 20px wider than the viewport, cutting off the avatar (UX round 4,
+ * triage package 7). The one-line ellipsis the phone block (#731) already
+ * gives the title now applies up to 1100px, where the buttons and the host
+ * link leave the Back link its natural width again. `overflow: hidden` lets
+ * the title block shrink (a clipping flex item's automatic minimum size is
+ * zero); the text stays in the DOM, so the link's accessible name is still
+ * the full title. */
+@media (max-width: 1100px) {
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] {
+    /* Rule 5 lets every section wrap at <= 768px; the arrow must not drop
+     * above the title at 320px. */
+    flex-wrap: nowrap !important;
+    min-width: 0;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] > :not([class*="BackArrow"]) {
+    overflow: hidden;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackCollection"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackStatus"] {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* The local-mode "saves to your working copy" chip prepends itself to the
+ * toolbar with `order: -1`; it is 260px wide and `white-space: nowrap`, so in
+ * the single tablet row it left the Back link 41px and pushed the avatar 130px
+ * off screen. Let it shrink and end in an ellipsis. Tablet only: the phone
+ * block below wraps it onto its own row, and its id selector would beat that
+ * block's `max-width`. The deploy pills are left alone: they carry a message
+ * that should not be cut at 9rem. */
+@media (min-width: 601px) and (max-width: 1100px) {
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] > #cms-local-save-indicator {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 /* ── Phone only (<= 600px): a sticky, compact editor toolbar (#731) ───────
  * Rule 3 above puts the editor in normal flow, so the toolbar that holds
  * Save / Publish / Delete scrolled away: after writing a long body an editor
@@ -473,27 +522,12 @@
    * The back link is `[arrow] [title block]`. The title block (an unnamed
    * <div>) is a flex item that never shrank below "Writing in Media Items
    * collection" and pushed the avatar's section over it (the divider line ran
-   * through the text). `overflow: hidden` lets it shrink (a clipping flex
-   * item's automatic minimum size is zero), and the text below is
-   * truncated to one line with an ellipsis; the text stays in the DOM, so
-   * the link's accessible name is still the full title. Decap's buttons are
+   * through the text). The one-line ellipsis rules for it live in the
+   * 1100px block above. Decap's buttons are
    * 36px tall; the back link 36px; lift them all to 44px. */
   [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] {
     box-sizing: border-box;
     min-height: 44px;
-    /* Rule 5 lets every section wrap; the arrow must not drop above the
-     * title at 320px. */
-    flex-wrap: nowrap !important;
-  }
-  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] > :not([class*="BackArrow"]) {
-    overflow: hidden;
-  }
-  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackCollection"],
-  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackStatus"] {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] button,
   [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarDropdown"],

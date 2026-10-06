@@ -596,3 +596,114 @@ test.describe(
     }
   },
 );
+
+// UX round 4, triage package 7: at 820px (an iPad in portrait) Decap's single
+// 66px desktop toolbar applies, and the Back link's title block never shrank
+// below its longest word. "Writing in <label> collection" and the saved-state
+// line wrapped to four lines clipped at the top of the bar, and a long
+// collection label ("Accomplishments") made the toolbar 20px wider than the
+// viewport, so the avatar sat past the right edge. The one-line ellipsis rules
+// (#731) now reach 1100px, and the local-mode chip shrinks instead of taking
+// 260px from the title. The chip is the REAL shim, loaded the way
+// index-local.html loads it. Own describe, like the phone one: a failure here
+// must not skip the other cases.
+test.describe(
+  "CMS admin — tablet toolbar (820px)",
+  { tag: ["@admin-read"] },
+  () => {
+    for (const collectionLabel of ["Posts", "Accomplishments"]) {
+      for (const edited of [false, true]) {
+        test(`one-line Back link, nothing past the right edge ("${collectionLabel}", ${edited ? "unsaved edit" : "published entry"})`, async ({
+          page,
+        }) => {
+          await page.setViewportSize({ width: 820, height: 1180 });
+          await login(page, { collectionLabel });
+          await openEditor(page);
+          if (edited) {
+            await page.getByLabel(/^Title$/).fill("Replacement test post 1, edited");
+            await expect(
+              page.locator('[class*="BackStatus"]'),
+            ).toHaveText(/unsaved/i);
+          }
+
+          const measure = () =>
+            page.evaluate(() => {
+              const toolbar = document.querySelector(
+                '[class*="EditorContainer"] > [class*="ToolbarContainer"]',
+              );
+              const right = (el) => (el ? el.getBoundingClientRect().right : null);
+              const left = (el) => (el ? el.getBoundingClientRect().left : null);
+              const oneLine = (el) =>
+                el.getBoundingClientRect().height <
+                parseFloat(getComputedStyle(el).fontSize) * 1.6;
+              const title = toolbar.querySelector('[class*="BackCollection"]');
+              const status = toolbar.querySelector('[class*="BackStatus"]');
+              const back = toolbar.querySelector('[class*="ToolbarSectionBackLink"]');
+              const chip = document.getElementById("cms-local-save-indicator");
+              return {
+                viewport: window.innerWidth,
+                scrollWidth: toolbar.scrollWidth,
+                clientWidth: toolbar.clientWidth,
+                docScrollWidth: document.documentElement.scrollWidth,
+                avatarRight: right(
+                  toolbar.querySelector('[class*="AvatarDropdownButton"]'),
+                ),
+                titleText: title.textContent.trim(),
+                titleOneLine: oneLine(title),
+                statusOneLine: oneLine(status),
+                backHeight: back.getBoundingClientRect().height,
+                toolbarHeight: toolbar.getBoundingClientRect().height,
+                titleRight: right(title),
+                statusRight: right(status),
+                backRight: right(back),
+                chipLeft: left(chip),
+                chipRight: right(chip),
+              };
+            });
+
+          const check = (m, what) => {
+            expect(m.scrollWidth, `${what}: toolbar wider than itself`).toBeLessThanOrEqual(
+              m.clientWidth,
+            );
+            expect(m.docScrollWidth, `${what}: page scrolls sideways`).toBeLessThanOrEqual(
+              m.viewport,
+            );
+            expect(
+              m.avatarRight,
+              `${what}: avatar past the right edge`,
+            ).toBeLessThanOrEqual(m.viewport);
+            // Title and saved-state line: one line each, so the link is two
+            // lines at most and never taller than the bar.
+            expect(m.titleOneLine, `${what}: title wraps`).toBe(true);
+            expect(m.statusOneLine, `${what}: saved-state line wraps`).toBe(true);
+            expect(m.backHeight, `${what}: Back link outgrew the bar`).toBeLessThanOrEqual(
+              m.toolbarHeight + 1,
+            );
+            expect(m.titleRight, `${what}: title spills out of its link`).toBeLessThanOrEqual(
+              m.backRight + 1,
+            );
+            expect(m.statusRight, `${what}: status spills out of its link`).toBeLessThanOrEqual(
+              m.backRight + 1,
+            );
+          };
+
+          // The production shell: no chip.
+          let m = await measure();
+          expect(m.titleText).toBe(`Writing in ${collectionLabel} collection`);
+          check(m, "without the chip");
+
+          // The local shell: the real chip shim, 260px of nowrap text.
+          await page.addScriptTag({ url: "/admin/local-save-indicator.js" });
+          await expect(page.locator("#cms-local-save-indicator")).toBeVisible();
+          m = await measure();
+          check(m, "with the local chip");
+          expect(m.chipLeft, "chip off the left edge").toBeGreaterThanOrEqual(0);
+          expect(m.chipRight, "chip past the right edge").toBeLessThanOrEqual(m.viewport);
+          await expect(
+            page.getByRole("link", { name: new RegExp(m.titleText) }),
+          ).toBeVisible();
+        });
+      }
+    }
+  },
+);

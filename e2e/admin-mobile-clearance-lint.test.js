@@ -178,6 +178,8 @@ test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => 
   let root;
   let mq768;
   let mq600;
+  let mq1100;
+  let mqTablet;
   let supports;
 
   const findAtRule = (parent, name, params) => {
@@ -216,8 +218,12 @@ test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => 
     root = postcss.parse(fs.readFileSync(CSS_PATH, "utf8"));
     mq768 = findAtRule(root, "media", "(max-width: 768px)");
     mq600 = findAtRule(root, "media", "(max-width: 600px)");
+    mq1100 = findAtRule(root, "media", "(max-width: 1100px)");
+    mqTablet = findAtRule(root, "media", "(min-width: 601px) and (max-width: 1100px)");
     expect(mq768, "the @media (max-width: 768px) block").not.toBeNull();
     expect(mq600, "an @media (max-width: 600px) phone block").not.toBeNull();
+    expect(mq1100, "an @media (max-width: 1100px) tablet-and-phone block").not.toBeNull();
+    expect(mqTablet, "an @media (min-width: 601px) and (max-width: 1100px) block").not.toBeNull();
     supports = findAtRule(mq600, "supports", "(overflow: clip)");
     expect(
       supports,
@@ -289,27 +295,41 @@ test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => 
     });
   });
 
-  test("the title truncates to one line instead of squeezing the avatar (#731)", () => {
+  test("the title truncates to one line instead of squeezing the avatar (#731, tablet width too)", () => {
     // Without these, "Writing in Media Items collection" wrapped to 4-5 lines
     // beside the local-mode chip and the avatar's section sat on top of it.
+    // They live in the 1100px block, not the phone block: at 820px (an iPad
+    // in portrait) Decap's single-row desktop toolbar wrapped the same title
+    // to four clipped lines and a long label pushed the avatar off screen
+    // (UX round 4, triage package 7).
     for (const part of ["BackCollection", "BackStatus"]) {
       const sel = `${TOOLBAR} [class*="${part}"]`;
-      expect(effective(mq600, sel, "white-space")?.value, `${part} white-space`).toBe("nowrap");
-      expect(effective(mq600, sel, "text-overflow")?.value, `${part} text-overflow`).toBe(
+      expect(effective(mq1100, sel, "white-space")?.value, `${part} white-space`).toBe("nowrap");
+      expect(effective(mq1100, sel, "text-overflow")?.value, `${part} text-overflow`).toBe(
         "ellipsis",
       );
-      expect(effective(mq600, sel, "overflow")?.value, `${part} overflow`).toBe("hidden");
+      expect(effective(mq1100, sel, "overflow")?.value, `${part} overflow`).toBe("hidden");
     }
     // The unnamed title block is a flex item that refused to shrink below its
     // text; the arrow must not wrap above it at 320px either.
     const block = `${TOOLBAR} [class*="ToolbarSectionBackLink"] > :not([class*="BackArrow"])`;
     // `overflow: hidden` is what lets it shrink (a flex item's automatic
     // minimum size is zero once it clips), so that is the declaration to lock.
-    expect(effective(mq600, block, "overflow")?.value).toBe("hidden");
-    expect(effective(mq600, `${TOOLBAR} [class*="ToolbarSectionBackLink"]`, "flex-wrap")).toEqual({
+    expect(effective(mq1100, block, "overflow")?.value).toBe("hidden");
+    expect(effective(mq1100, `${TOOLBAR} [class*="ToolbarSectionBackLink"]`, "flex-wrap")).toEqual({
       value: "nowrap",
       important: true,
     });
+  
+    // The local-mode chip is 260px of nowrap text; on a tablet row it has to
+    // shrink, or it leaves the title 41px and pushes the avatar off screen.
+    // Its id selector must stay out of the phone block, where it would beat
+    // the chip's `max-width: calc(100% - 20px)`.
+    const chip = `${TOOLBAR} > #cms-local-save-indicator`;
+    expect(effective(mqTablet, chip, "min-width")?.value, "chip min-width").toBe("0");
+    expect(effective(mqTablet, chip, "text-overflow")?.value, "chip text-overflow").toBe("ellipsis");
+    expect(effective(mqTablet, chip, "overflow")?.value, "chip overflow").toBe("hidden");
+    expect(rulesFor(mq600, chip), "the chip rule must not be in the phone block").toEqual([]);
   });
 
   test("every toolbar control is a 44px touch target (#731)", () => {
