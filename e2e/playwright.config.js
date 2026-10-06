@@ -201,6 +201,9 @@ const PLATFORM_META_SPECS = [
   // #656 — parses the platform theme's own theme/assets/css/main.css, absent in
   // a consumer. Runs in self-ci node-unit-lints.
   "theme-reduced-motion.test.js",
+  // #727 — the same shape for the share row's rules in main.css (idle copy icon
+  // specificity, 44px touch targets). Pure-fs; self-ci node-unit-lints.
+  "theme-share-row-css.test.js",
   // #33 CONCERN B — the pure-fs guard-registry lint: reads the platform's TWO
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.

@@ -895,7 +895,10 @@ main:focus {
   background: var(--bg-2);
 }
 
-.share-icon-success { display: none; }
+/* `.share-link svg` above is (0,1,1); a bare `.share-icon-success` (0,1,0)
+   lost to it, so the idle copy button showed the link AND the check (#727).
+   Keep this at least (0,2,0). */
+.share-link .share-icon-success { display: none; }
 .share-copy.share-copied .share-icon-default { display: none; }
 .share-copy.share-copied .share-icon-success { display: block; }
 
@@ -904,9 +907,103 @@ main:focus {
   border-color: var(--accent);
 }
 
+/* The Mastodon instance field (#727): replaces a bare window.prompt(). It opens
+   on its own line under the icons. A `display` here beats the UA's
+   `[hidden] { display: none }`, so the hidden state is spelled out. */
+.share-mastodon-form {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.share-mastodon-form[hidden],
+.share-mastodon-error[hidden] {
+  display: none;
+}
+
+.share-mastodon-form label {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+
+.share-mastodon-form input {
+  flex: 1 1 11rem;
+  min-width: 0;
+  min-height: 2.25rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.share-mastodon-form input:focus-visible,
+.share-mastodon-form button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.share-mastodon-form button {
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition), background var(--transition);
+}
+
+.share-mastodon-form button:hover,
+.share-mastodon-form button:focus-visible {
+  color: var(--text-bright);
+  border-color: var(--border-bright);
+  background: var(--bg-2);
+}
+
+.share-mastodon-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--text-bright);
+  font-size: 0.875rem;
+}
+
+/* Touch targets (#727): 1.9rem (~30px) is under the 44px minimum (WCAG 2.5.5,
+   Apple HIG), so on a phone or any coarse pointer each button becomes a real
+   2.75rem (44px) box. The icon stays 0.95rem, and the tighter gap and label
+   margin keep all five buttons on one line down to a 360px viewport. Desktop
+   (fine pointer, wider than a phone) is untouched. */
+@media (pointer: coarse), (width <= 640px) {
+  .share-row {
+    gap: 0.25rem;
+  }
+
+  .share-row-label {
+    margin-right: 0.25rem;
+  }
+
+  .share-link {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .share-mastodon-form input,
+  .share-mastodon-form button {
+    min-height: 2.75rem;
+  }
+}
+
 @media (forced-colors: active) {
   .feed-link,
-  .share-link {
+  .share-link,
+  .share-mastodon-form button {
     border-color: ButtonText;
   }
 
