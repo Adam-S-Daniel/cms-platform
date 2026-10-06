@@ -156,6 +156,8 @@ const PLATFORM_META_SPECS = [
   "admin-hidden-tab.test.js",
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
+  "posts-list-status-dedupe.test.js",
+  "admin-config-sortable-fields-schema.test.js",
   "slug-pin.test.js",
   // cms-platform#735 — vm-sandboxes theme/admin/tags-input.js SOURCE; platform-internal likewise.
   "tags-suggest.test.js",
