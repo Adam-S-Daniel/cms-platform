@@ -15,8 +15,11 @@ with the harness checked out from the platform rather than living in the site.
   checkout out of `_site`.
 - `Gemfile` — pins `cms-platform-theme` by **local path** (`../../theme`), so
   the fixture tests the working-tree theme + plugins + Decap render hook.
-- `_posts/` — one normal public post (`hello-world`) + one `e2e-`-slug fixture
-  post (`e2e-seed-fixture`) to exercise `feed_exclude`.
+- `_posts/` — one normal public post (`hello-world`), one whose front-matter
+  `slug:` differs from its file name (`slug-differs-from-file-name`, served at
+  `/blog/front-matter-slug-wins/`, so the admin link crawler covers the Posts
+  list linking by `slug:`), + one `e2e-`-slug fixture post (`e2e-seed-fixture`)
+  to exercise `feed_exclude`.
 - `_e2e/canary-post.md` — the mandatory canary collection entry.
 - `pages/about.md`, `index.html`, `blog/index.html`, `tags/index.html`,
   `feed.xml` — the site-owned listing/feed surfaces (filter on the shared
