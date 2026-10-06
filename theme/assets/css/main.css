@@ -14,6 +14,10 @@
   --bg-2: #0a1530;
   --bg-3: #111e40;
   --accent: #285aff;
+  /* --accent is 3.4-3.9:1 on --bg-0..--bg-2, fine for borders and large
+     shapes but under AA (4.5:1) for 12px text. Small accent TEXT uses this
+     lighter blue: 5.85:1 on --bg-0, 5.60:1 on --bg-1, 5.22:1 on --bg-2. */
+  --accent-text: #5a82ff;
   --accent-dim: #1a3abf;
   --accent-glow: rgb(40 90 255 / 28%);
   --text-primary: #d8e4ff;
@@ -27,10 +31,21 @@
   --radius: 4px;
   --radius-lg: 8px;
   --transition: 0.2s ease;
+  /* The sticky .site-header is 3.5rem tall (2rem padding, one 0.9rem * 1.6
+     line of logo, 1px rule) at every width; one more rem keeps a focus ring
+     clear of it. */
+  --site-header-offset: 4.5rem;
 }
 
 html, body {
   height: 100%;
+}
+
+/* A focus-induced scroll (Shift+Tab up a long page), scrollIntoView and a
+   #fragment jump (skip link, heading anchors) otherwise leave the target
+   under the sticky header (WCAG 2.4.11 Focus Not Obscured). */
+html {
+  scroll-padding-top: var(--site-header-offset);
 }
 
 body {
@@ -151,6 +166,19 @@ pre code {
   padding: 0;
 }
 
+/* A long URL or identifier has no break opportunity, so it widens the whole
+   page (#753). `break-word` breaks only a string that would otherwise
+   overflow its line. Unlike `anywhere` it leaves min-content size alone, so a
+   table's auto layout (a bare Markdown table, a classed one such as
+   .bws-table) is computed exactly as before: no cell breaks mid-word while the
+   table fits, and a wide table still scrolls in its own box. `pre` never wraps
+   (white-space: pre), so a code block keeps its horizontal scroll. */
+.post-content,
+.post-excerpt,
+:not(pre) > code {
+  overflow-wrap: break-word;
+}
+
 blockquote {
   border-left: 2px solid var(--accent);
   padding-left: 1.2rem;
@@ -180,6 +208,28 @@ table:not([class]) {
   display: block;
   max-width: 100%;
   overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+}
+
+/* Readable defaults for that same bare table (#729): kramdown's output has no
+   padding or borders, so "1,450 ms" ran into "slow & thorough". Same
+   `:not([class])` scope, so a classed table (adamdaniel.ai's .bws-table) keeps
+   its own cell styling. Cell alignment from a Markdown `:---:` row is an inline
+   style and still wins over the `text-align` here. */
+table:not([class]) th,
+table:not([class]) td {
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+table:not([class]) th {
+  background: var(--bg-2);
+  border-bottom-color: var(--border-bright);
+  color: var(--text-bright);
+  font-weight: 600;
 }
 
 hr {
@@ -268,8 +318,18 @@ main {
   border: none;
 }
 
-.site-nav a.active {
-  color: var(--text-primary);
+/* Current section (#737). The base `.site-nav a` rule runs the text-thermal
+   animation, and a running animation outranks every normal declaration, so a
+   plain `color` here never showed: the old `.active` rule was inert. The state
+   has to switch the animation off. The underline is text-decoration, not a
+   border plus padding, so marking a link moves nothing around it. */
+.site-nav a.active,
+.site-nav a[aria-current="page"],
+.site-nav a[aria-current="true"] {
+  animation: none;
+  color: var(--text-bright);
+  text-decoration: underline;
+  text-underline-offset: 0.4em;
 }
 
 /* ── Site Footer ────────────────────────────────── */
@@ -518,6 +578,21 @@ main {
 .tag-list-name {
   font-size: 0.95rem;
   letter-spacing: 0.04em;
+  text-transform: uppercase; /* same display convention as .tag-pill (#737) */
+}
+
+/* The tag page heading: shown the way the pill shows the tag. Display only;
+   the tag's name is unchanged in the data, the title and the feed label. */
+.tag-title {
+  text-transform: uppercase;
+}
+
+.tag-back {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: var(--mono);
 }
 
 .tag-list-count {
@@ -587,12 +662,22 @@ main {
 }
 
 .featured-image {
+  /* Block, not the inline default: an inline image sits on a text baseline, so
+     its line box added a descender strip under the picture (#737). */
+  display: block;
   width: 100%;
   max-height: 400px;
   object-fit: cover;
   border-radius: var(--radius-lg);
   margin-bottom: 2rem;
   border: 1px solid var(--border);
+}
+
+/* In the post header the image's own 2rem stacked on `.post-header`'s 3rem and
+   left about 90px before the body (#737). The header's margin is the one gap;
+   the Decap preview pane renders the image outside a header and keeps 2rem. */
+.post-header .featured-image {
+  margin-bottom: 0;
 }
 
 /* ── Projects Grid ──────────────────────────────── */
@@ -651,7 +736,7 @@ main {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--accent-text);
   margin-bottom: 0.8rem;
 }
 
@@ -690,11 +775,26 @@ main {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--accent-text);
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   padding: 0.2em 0.5em;
   z-index: 2;
+}
+
+/* The badge is a sibling of .project-card-inner, positioned out of flow, so
+   the first line of the card would run under it on a narrow card (320px:
+   "Claude Memory Map" under an ~85px badge). That first child is the h3 in
+   tools/index.html but the .project-tech line in the projects markup, so pad
+   whichever comes first. The badge's left edge sits ~101px (about 6.3rem) from
+   the card edge and the card's own 1.8rem padding already covers about 29px of
+   that, so 5.25rem leaves the text ~12px short of the badge and it wraps
+   instead of running under it. overflow-wrap: break-word (not `anywhere`, which
+   theme-overflow-wrap-css.test.js forbids) keeps one unbreakable word (a
+   long URL-like title or technology) from overflowing the padding. */
+.featured-badge ~ .project-card-inner > :first-child {
+  padding-right: 5.25rem;
+  overflow-wrap: break-word;
 }
 
 /* ── Page content ───────────────────────────────── */
@@ -895,7 +995,10 @@ main:focus {
   background: var(--bg-2);
 }
 
-.share-icon-success { display: none; }
+/* `.share-link svg` above is (0,1,1); a bare `.share-icon-success` (0,1,0)
+   lost to it, so the idle copy button showed the link AND the check (#727).
+   Keep this at least (0,2,0). */
+.share-link .share-icon-success { display: none; }
 .share-copy.share-copied .share-icon-default { display: none; }
 .share-copy.share-copied .share-icon-success { display: block; }
 
@@ -904,9 +1007,103 @@ main:focus {
   border-color: var(--accent);
 }
 
+/* The Mastodon instance field (#727): replaces a bare window.prompt(). It opens
+   on its own line under the icons. A `display` here beats the UA's
+   `[hidden] { display: none }`, so the hidden state is spelled out. */
+.share-mastodon-form {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.share-mastodon-form[hidden],
+.share-mastodon-error[hidden] {
+  display: none;
+}
+
+.share-mastodon-form label {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+
+.share-mastodon-form input {
+  flex: 1 1 11rem;
+  min-width: 0;
+  min-height: 2.25rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.share-mastodon-form input:focus-visible,
+.share-mastodon-form button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.share-mastodon-form button {
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition), background var(--transition);
+}
+
+.share-mastodon-form button:hover,
+.share-mastodon-form button:focus-visible {
+  color: var(--text-bright);
+  border-color: var(--border-bright);
+  background: var(--bg-2);
+}
+
+.share-mastodon-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--text-bright);
+  font-size: 0.875rem;
+}
+
+/* Touch targets (#727): 1.9rem (~30px) is under the 44px minimum (WCAG 2.5.5,
+   Apple HIG), so on a phone or any coarse pointer each button becomes a real
+   2.75rem (44px) box. The icon stays 0.95rem, and the tighter gap and label
+   margin keep all five buttons on one line down to a 360px viewport. Desktop
+   (fine pointer, wider than a phone) is untouched. */
+@media (pointer: coarse), (width <= 640px) {
+  .share-row {
+    gap: 0.25rem;
+  }
+
+  .share-row-label {
+    margin-right: 0.25rem;
+  }
+
+  .share-link {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .share-mastodon-form input,
+  .share-mastodon-form button {
+    min-height: 2.75rem;
+  }
+}
+
 @media (forced-colors: active) {
   .feed-link,
-  .share-link {
+  .share-link,
+  .share-mastodon-form button {
     border-color: ButtonText;
   }
 

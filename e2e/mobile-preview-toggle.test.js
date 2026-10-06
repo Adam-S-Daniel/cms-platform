@@ -4,7 +4,7 @@
  * `.Pane2`, so Decap's eye ("Toggle preview") toggled a pane that could never
  * show. mobile-preview-toggle.js turns the eye into a switch between the form
  * and a full-width preview (the `cms-mobile-preview` class on <html>), and
- * admin-mobile.css rule 11 keys off that class.
+ * admin-mobile.css rule 13 keys off that class.
  *
  * The shim runs in a vm sandbox against a minimal fake DOM whose lookups are
  * keyed by the shim's own selector constants; the CSS is read with postcss, a
