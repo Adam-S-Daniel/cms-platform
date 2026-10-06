@@ -165,4 +165,39 @@ test.describe("Public-site accessibility polish", () => {
       expect(top).toBeGreaterThanOrEqual(bottom);
     });
   });
+
+  // UX r5 F1: the sticky header was rgb(4 6 15 / 85%) over a backdrop blur, so a
+  // scrolled post's date line and title ghosted through the brand and nav
+  // (clear in WebKit at 390px, faint in Chromium at 1280px). Its fill must be
+  // opaque at every width and in both color schemes. Computed style, not the
+  // stylesheet source: a site override that re-adds an alpha fails here too.
+  // theme-sticky-header-opaque-css.test.js holds the theme source.
+  test.describe("sticky header is opaque", () => {
+    const widths = [
+      { name: "phone", viewport: { width: 390, height: 844 } },
+      { name: "desktop", viewport: { width: 1280, height: 800 } },
+    ];
+    for (const { name, viewport } of widths) {
+      for (const colorScheme of ["light", "dark"]) {
+        test.describe(`${name} ${colorScheme}`, () => {
+          test.use({ viewport, colorScheme });
+
+          test("the header background alpha is 1", async ({ page }) => {
+            await page.goto("/blog/");
+            const header = page.locator(".site-header");
+            test.skip((await header.count()) === 0, "this page renders without the theme's sticky header");
+
+            const bg = await header.evaluate((el) => getComputedStyle(el).backgroundColor);
+            // Chromium serializes rgb(r, g, b) when opaque, rgba(r, g, b, a)
+            // otherwise; modern syntax puts the alpha after a slash.
+            const m = /^rgba?\((.*)\)$/.exec(bg);
+            expect(m, `a parseable computed background (got "${bg}")`).not.toBeNull();
+            const parts = m[1].split(/[\s,/]+/).filter(Boolean);
+            const alpha = parts.length > 3 ? parseFloat(parts[3]) / (parts[3].endsWith("%") ? 100 : 1) : 1;
+            expect(alpha, `header background ${bg}`).toBe(1);
+          });
+        });
+      }
+    }
+  });
 });

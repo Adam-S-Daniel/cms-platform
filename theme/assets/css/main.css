@@ -270,9 +270,11 @@ main {
   position: sticky;
   top: 0;
   z-index: 100;
-  background: rgb(4 6 15 / 85%);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  /* Solid, not translucent: at 85% with a blur the scrolled post's date line
+     and title ghosted through the brand and nav (clear in WebKit at phone
+     width, where the backdrop blur does not hold up). The token is the page
+     background, so the header looks the same over empty space. */
+  background: var(--bg-0);
   border-bottom: 1px solid var(--border);
   padding: 1rem 0;
 }
