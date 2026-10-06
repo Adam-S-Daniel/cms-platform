@@ -22,6 +22,19 @@
  * If Decap changes the box's id scheme the listener simply stops matching
  * and this shim is a silent no-op.
  *
+ * ── A space at the end of a tag — cms-platform#756 ────────────────────
+ * Decap's list widget runs `e.target.value.trim()` in handleChange on EVERY
+ * keystroke and writes the result back to the controlled box, so a space
+ * typed after a letter never survives: `Field Notes` became `FieldNotes`
+ * (and the near-duplicate warning never saw the space). The widget offers no
+ * option for this, so the shim keeps the in-progress space itself: an input
+ * event that leaves the box ending in a space (caret at the end) is stopped
+ * before React sees it, so Decap never trims it and the space stays on
+ * screen. The next keystroke arrives as `field n`, which Decap stores
+ * trimmed at the edges only, so the space inside survives. Decap's blur
+ * handler trims whatever is left over. A second space, or one right after a
+ * comma, is dropped (keydown), as before.
+ *
  * ── Existing-tag suggestions — cms-platform#735 ───────────────────────
  * Nothing told a writer which tags already exist, so `quote` and `Quotes`
  * could be minted beside `quotes`, each with its own archive page. A small
@@ -68,9 +81,21 @@
     if (e.key === "Enter") {
       e.preventDefault();
       if (value.trim() && !/,\s*$/.test(value)) setValue(el, value.replace(/\s+$/, "") + ",");
-    } else if (e.key === " " && /,\s*$/.test(value)) {
+    } else if (e.key === " " && /(,\s*|\s)$/.test(value) && atEnd(el)) {
       e.preventDefault();
     }
+  }
+
+  function atEnd(el) {
+    var end = el.selectionEnd;
+    return typeof end !== "number" || end === String(el.value || "").length;
+  }
+
+  // Pure: should an input event that left the box as `value` be hidden from
+  // Decap (#756)? True for a single in-progress space right after a letter
+  // (not after a comma, which Decap rewrites itself), with the caret at the end.
+  function holdsTrailingSpace(value, caretAtEnd) {
+    return !!caretAtEnd && /[^\s,] $/.test(String(value || ""));
   }
 
   // ── Existing-tag suggestions (#735) ─────────────────────────────────
@@ -133,12 +158,15 @@
     return { near: near, suggest: suggest, last: last };
   }
 
-  // Pure: the box value after swapping piece `index` for `name`. No comma is
-  // added: a trailing one would save an empty tag if the editor stops here.
+  // Pure: the box value after swapping piece `index` for `name`, ending in
+  // ", " so the next tag can be typed straight away (#756), as after Enter.
+  // The trailing separator is trimmed again when focus leaves the box, so no
+  // empty tag is saved (see onFocusOut).
   function replaceTag(value, index, name) {
     var tokens = splitTags(value);
     tokens[index] = name;
-    return tokens.join(",");
+    while (tokens.length && !tokens[tokens.length - 1]) tokens.pop();
+    return tokens.join(",") + ", ";
   }
 
   var existing = [];
@@ -174,13 +202,27 @@
     return loading;
   }
 
+  // Chips are ~20 px tall: too small for a finger. On a coarse pointer (a
+  // phone) give them a 44 px tap target (#756). A rule, not inline style, so
+  // the media query can apply; `!important` beats the inline `padding`.
+  function ensureChipStyle() {
+    if (document.getElementById("cms-tags-chip-style")) return;
+    var s = document.createElement("style");
+    s.id = "cms-tags-chip-style";
+    s.textContent =
+      "@media (pointer: coarse) { #cms-tags-suggest .cms-tags-chip { min-height: 44px !important; min-width: 44px !important; padding-top: 0 !important; padding-bottom: 0 !important; } }";
+    document.head.appendChild(s);
+  }
+
   function button(label, title, onPick) {
     var b = document.createElement("button");
     b.type = "button";
     b.textContent = label;
     b.title = title;
+    b.className = "cms-tags-chip";
     b.style.cssText =
       "margin:0 6px 4px 0;padding:1px 8px;border:1px solid currentColor;border-radius:999px;background:transparent;color:inherit;font:inherit;cursor:pointer;";
+    ensureChipStyle();
     // Keep focus in the Tags box so the click does not blur it first.
     b.addEventListener("mousedown", function (e) {
       e.preventDefault();
@@ -281,7 +323,11 @@
   }
 
   function onInput(e) {
-    if (isTagsBox(e.target)) render(e.target, true);
+    var el = e.target;
+    if (!isTagsBox(el)) return;
+    // #756: keep an in-progress trailing space away from Decap's trim.
+    if (!e.isComposing && holdsTrailingSpace(el.value, atEnd(el))) e.stopImmediatePropagation();
+    render(el, true);
   }
 
   function onFocusIn(e) {
@@ -303,8 +349,15 @@
     // very button about to take focus and drop focus on <body>.
     var to = e.relatedTarget;
     if (to && ((panel && panel.contains(to)) || isTagsBox(to))) return;
-    // Focus left the box and its panel: keep the near-duplicate warnings (they
-    // matter at Save time) but drop the as-you-type suggestions.
+    // Focus left the box and its panel. A box left ending in a separator
+    // (after Enter, or an applied suggestion) would save an empty tag: Decap's
+    // blur handler tidies only what is shown, never the stored list. Trim the
+    // separator through the box so Decap stores the tidied list (#756).
+    if (isTagsBox(t) && /[,\s]$/.test(t.value) && t.value.replace(/[,\s]+$/, "")) {
+      setValue(t, t.value.replace(/[,\s]+$/, ""));
+    }
+    // Keep the near-duplicate warnings (they matter at Save time) but drop the
+    // as-you-type suggestions.
     render(isTagsBox(t) ? t : boxEl, false);
   }
 
@@ -314,5 +367,5 @@
   document.addEventListener("focusout", onFocusOut, true);
 
   // Pure helpers, exposed for the unit test (e2e/tags-suggest.test.js).
-  window.__tagsInput = { keyOf: keyOf, analyze: analyze, replaceTag: replaceTag };
+  window.__tagsInput = { keyOf: keyOf, analyze: analyze, replaceTag: replaceTag, holdsTrailingSpace: holdsTrailingSpace };
 })();
