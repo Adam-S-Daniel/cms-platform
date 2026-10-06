@@ -316,6 +316,33 @@ listing filters, the fetch wrap's pass-through, load order). The browser
 behavior of the two listeners was also checked in Chromium (real `<input
 type=file>` change and a synthetic drop); Firefox and WebKit were not.
 
+## Admin focus after a route change, a Save or a Delete, and the skip link
+
+Decap is hash-routed React: Enter on a list entry, Back, Save, Delete and a list
+row's remove "x" unmount the element that had focus, so `document.activeElement`
+becomes `<body>`. The next Tab then restarts near the top (after Back it landed on
+"Search all"), and there was no skip link (UX round 3, ad-kbd K8 / jd-kbd F5; the
+"Live Preview is last in Tab order" note, K10, is the same cause). `theme/admin/route-focus.js`
+(all three shells, deferred, after `decap-cms.js`) adds a "Skip to content" link as the
+first child of `<body>` and restores focus. Rules that keep it safe:
+
+- **It acts only while focus is on `<body>` or null**, checked on every animation
+  frame it polls and again right before it moves focus, so it never takes focus from
+  another shim (the tags box refocuses its input; `validation-feedback.js` focuses the first
+  invalid field three frames after a blocked Save, and route-focus waits six frames after a click).
+  A key or pointer press cancels a pending move (the person took over); a click from script
+  (`autosave-on-hide.js`) is ignored; a `#/search` route is left alone; nothing moves on page load.
+- **Where focus goes** (verified on Decap 3.15.1): a list or other page, `main h1` (else `main`);
+  a new entry, the first field in a `ControlContainer`; an existing entry, the toolbar's
+  `ToolbarSectionBackLink` (the editor has no `main` or heading). The skip link goes to the
+  first field of an existing entry instead. Emotion class-name substrings, same convention as
+  `list-row-affordance.js`: a missing class means a silent no-op.
+- **The skip link never follows its `href`** (a `#fragment` would change the route).
+
+Tests: `e2e/route-focus.test.js` (vm sandbox, stubbed frames, in `PLATFORM_META_SPECS`),
+`e2e/cms-route-focus.spec.js` (real Decap: Enter on an entry then Tab stays in the editor, Back
+returns to the heading, the skip link, a keyboard Save), load order in `e2e/admin-shim-load-order.test.js`.
+
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 
 The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a
