@@ -326,7 +326,12 @@
     var el = e.target;
     if (!isTagsBox(el)) return;
     // #756: keep an in-progress trailing space away from Decap's trim.
-    if (!e.isComposing && holdsTrailingSpace(el.value, atEnd(el))) e.stopImmediatePropagation();
+    // `stopPropagation`, not `stopImmediatePropagation` (#762): this listener
+    // runs on `document` in the capture phase, so stopping propagation keeps
+    // the event from reaching Decap's React root below it, while the other
+    // `document` capture listeners (live-url-banner.js, autosave-on-hide.js)
+    // still see the keystroke.
+    if (!e.isComposing && holdsTrailingSpace(el.value, atEnd(el))) e.stopPropagation();
     render(el, true);
   }
 

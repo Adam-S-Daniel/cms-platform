@@ -220,6 +220,35 @@ test.describe(
       expect(await savedTags(page)).toEqual(["a b"]);
     });
 
+    // #762: holding the space must hide the keystroke from Decap's React root
+    // only. The other admin shims (live-url-banner.js, autosave-on-hide.js)
+    // listen for `input` on the same `document`, in the capture phase, and the
+    // shim used to cut them off too. This listener is registered AFTER the
+    // page's own, so it is exactly the position those shims are in.
+    test("a held trailing space still reaches a later input listener on the same document (#762)", async ({ page }) => {
+      await openNewPost(page);
+      await page.evaluate(() => {
+        window.__laterTagsInputs = [];
+        document.addEventListener(
+          "input",
+          (e) => {
+            if (e.target && /^tags-field-\d+$/.test(String(e.target.id))) window.__laterTagsInputs.push(e.target.value);
+          },
+          true,
+        );
+      });
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("field");
+      await page.keyboard.press("Space");
+      // The space is held: Decap never trimmed it...
+      await expect(tags).toHaveValue("field ");
+      // ...and the later listener still saw that very keystroke.
+      expect(await page.evaluate(() => window.__laterTagsInputs)).toEqual(["f", "fi", "fie", "fiel", "field", "field "]);
+      await tags.pressSequentially("notes");
+      expect(await savedTags(page)).toEqual(["field notes"]);
+    });
+
     test("`Field Notes` is compared with the existing `field-notes`, spaces and all (#756)", async ({ page }) => {
       await mockTagsIndex(page, ["field-notes"]);
       await openNewPost(page);
