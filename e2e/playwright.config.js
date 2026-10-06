@@ -240,6 +240,11 @@ const PLATFORM_META_SPECS = [
   // UX r5 F1 — the sticky site header's fill in main.css is opaque (no 85%
   // alpha + backdrop blur). Pure-fs; self-ci node-unit-lints.
   "theme-sticky-header-opaque-css.test.js",
+  // jodidaniel.com#388 — AST lint that public-a11y-polish.spec.js's `.site-header`
+  // tests skip unless the header is sticky or fixed. It polices the platform's
+  // own spec source, like status-dropdown-selector.test.js, so it runs in
+  // self-ci node-unit-lints rather than on a consumer lane.
+  "public-a11y-sticky-header-guard.test.js",
   // #33 CONCERN B — the pure-fs guard-registry lint: reads the platform's TWO
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
