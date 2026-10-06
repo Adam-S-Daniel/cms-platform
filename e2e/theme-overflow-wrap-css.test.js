@@ -2,10 +2,13 @@
 // Lint: a long unbroken string must wrap, not widen the page (#753).
 //
 // A bare URL or identifier has no break opportunity, so without `overflow-wrap`
-// it pushes the document past the viewport (about 1330px wide on a 390px phone
-// in the UX audit). Post text, listing excerpts and inline code must break
-// such a string; a `pre` block and the bare table keep their own horizontal
-// scroll box instead, so the wrap is reset there. Parsed with postcss.
+// it pushes the document past the viewport (about 1330px on a 390px phone in
+// the UX audit). Post text, listing excerpts and inline code must break such a
+// string, with `break-word`, NOT `anywhere`: `anywhere` also lowers min-content
+// size, which makes a table's auto layout break cells mid-word ("Langua|ge")
+// even when the table fits, in a classed table (.bws-table) and in inline code
+// inside a bare table alike. `break-word` leaves layout alone until a string
+// actually overflows. Parsed with postcss.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -29,34 +32,41 @@ function decl(rule, prop) {
   return ds.length ? ds[ds.length - 1].value.trim() : null;
 }
 
-function wrapValues(selector) {
-  return rulesFor(selector).map((r) => decl(r, "overflow-wrap")).filter(Boolean);
+function lastValue(selector, prop) {
+  const values = rulesFor(selector).map((r) => decl(r, prop)).filter(Boolean);
+  return values.length ? values[values.length - 1] : null;
 }
-
-const BREAKS = /^(anywhere|break-word)$/;
 
 for (const selector of [".post-content", ".post-excerpt", ":not(pre) > code"]) {
-  test(`${selector} breaks an unbroken string`, () => {
-    const values = wrapValues(selector);
-    expect(values, `an overflow-wrap declaration on ${selector}`).not.toHaveLength(0);
-    expect(values[values.length - 1]).toMatch(BREAKS);
+  test(`${selector} breaks an unbroken string with break-word`, () => {
+    expect(lastValue(selector, "overflow-wrap")).toBe("break-word");
   });
 }
 
-for (const selector of [".post-content pre", ".post-content table:not([class])"]) {
-  test(`${selector} opts back out so it keeps its horizontal scroll`, () => {
-    expect(wrapValues(selector).pop()).toBe("normal");
+test("nothing lowers min-content size, so table layout is computed as before", () => {
+  // `overflow-wrap: anywhere` (and `word-break: break-all` / `break-word`) are
+  // inherited into a classed table and into inline code inside a bare table,
+  // where they break cells mid-word although the table fits. Any selector.
+  const offenders = [];
+  root.walkDecls((d) => {
+    if (d.prop === "overflow-wrap" && d.value.trim() === "anywhere") offenders.push(`${d.parent.selector} overflow-wrap`);
+    if (d.prop === "word-break" && /break-all|break-word/.test(d.value)) offenders.push(`${d.parent.selector} word-break`);
+    if (d.prop === "line-break" && d.value.trim() === "anywhere") offenders.push(`${d.parent.selector} line-break`);
   });
-}
-
-test("the code block and bare table keep their scroll boxes", () => {
-  const scrolls = (sel) => rulesFor(sel).map((r) => decl(r, "overflow-x")).filter(Boolean).pop();
-  expect(scrolls("pre")).toBe("auto");
-  expect(scrolls("table:not([class])")).toBe("auto");
+  expect(offenders).toEqual([]);
 });
 
-test("no blanket word-break that would split ordinary words", () => {
-  root.walkDecls("word-break", (d) => {
-    expect(d.value, `${d.parent.selector} word-break`).not.toMatch(/break-all/);
+test("the wrap reaches inline code only, and a code block keeps its horizontal scroll", () => {
+  const pre = rulesFor("pre").map((r) => decl(r, "overflow-x")).filter(Boolean).pop();
+  expect(pre).toBe("auto");
+  // break-word cannot act on a pre as long as it never soft-wraps.
+  root.walkRules((r) => {
+    if (!r.selectors.some((s) => /(^|[\s>+~])pre($|[\s.:[>+~])/.test(s.trim()) && !/^:not\(pre\)/.test(s.trim()))) return;
+    expect(decl(r, "white-space") || "pre", `${r.selector} white-space`).not.toMatch(/wrap|normal|break-spaces/);
   });
+  expect(rulesFor(":not(pre) > code")).toHaveLength(1);
+});
+
+test("the bare table keeps its own scroll box", () => {
+  expect(lastValue("table:not([class])", "overflow-x")).toBe("auto");
 });
