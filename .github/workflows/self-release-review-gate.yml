@@ -53,6 +53,13 @@ jobs:
           sparse-checkout: scripts/release-review-gate.js
           sparse-checkout-cone-mode: false
 
+      # Pinned: release-review-gate.js runs under node (ubuntu-latest's
+      # default Node moves from 22 to 24 with Ubuntu 26.04,
+      # actions/runner-images#14748).
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
       # Every PR field comes from the event file ($GITHUB_EVENT_PATH), never a
       # `${{ github.event.* }}` interpolation: the body and branch name are
       # author-controlled text. The manifests are read at the MERGE BASE (from

@@ -84,6 +84,15 @@ jobs:
       group: platform-bump-${{ github.repository }}
       cancel-in-progress: false
     steps:
+      # Pinned: the mint step and the bump step both run node/npm, and
+      # ubuntu-latest's default Node moves from 22 to 24 with Ubuntu 26.04
+      # (actions/runner-images#14748). Needs no checkout, so it does not
+      # disturb the mint-before-checkout order below.
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          package-manager-cache: false
       # The bump rewrites .github/workflows/* (the `uses:@` pins + `platform_ref:`
       # inputs), so the PUSH needs `workflows` permission. The default Actions
       # GITHUB_TOKEN's GitHub App lacks it — git rejects the push with "refusing
@@ -147,6 +156,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           token: ${{ steps.app.outputs.token || github.token }}
+      # reconcile-nudge-contexts.py imports PyYAML and fails soft (a MANUAL
+      # warning in the PR body) without it. The runner's system python3 happened
+      # to carry it; a setup-python interpreter does not, so install the same
+      # pin cross-post.yml uses.
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: python3 -m pip install --user 'pyyaml==6.0.3'
+
       - name: Bump every cms-platform reference to the latest release (atomic)
         # `id: bump` is what the lints key on: this step and the mint step above
         # BOTH read /releases/latest, so "the step that resolves the release" no

@@ -30,7 +30,8 @@
  *   pages    -> the permalink field's value (verbatim)
  *
  * The slug-derivation chain is intentional: an editor's explicit `slug`
- * field always wins (if set), then the title is slugified as the fallback,
+ * field always wins (if set, slugified as Jekyll's `:slug` does), then the
+ * title is slugified as the fallback,
  * then `name` for tags. This mirrors what Decap actually writes to disk
  * AFTER stripping the `_posts/` `YYYY-MM-DD-` date prefix Jekyll adds.
  *
@@ -133,7 +134,11 @@
 
     var explicitSlug = (readField("slug") || "").trim();
     var fallback = readField("title") || readField("name") || "";
-    var slug = explicitSlug || slugify(fallback);
+    // Jekyll runs the front-matter slug through its default slugify too (the
+    // `:slug` placeholder, Drops::UrlDrop#slug), so a typed "Bad Slug!" is
+    // served at /blog/bad-slug/. Slugify it here or the link 404s. An already
+    // slugified value (every slug-pin.js writes) is returned unchanged.
+    var slug = slugify(explicitSlug) || slugify(fallback);
 
     var path = {
       posts: "/blog/",
