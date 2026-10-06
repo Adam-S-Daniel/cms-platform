@@ -312,6 +312,25 @@ configured `locale`; a toast in a locale it cannot read stays open. The
 "×" glyph `aria-hidden`, and the toast is centered with auto margins so it
 keeps its width on a phone.
 
+Follow-up (keyboard Publish, UX round 3): Enter or Space on "Publish now" gave
+no feedback at all. The Publish menu is react-aria-menubutton, which selects an
+item on `keydown` and fires no `click`, so the shim's click listener never ran
+(the mouse path worked). A capture-phase `keydown` listener now treats Enter or
+Space on a `role="menuitem"` Save/Publish item as the same attempt (a real
+`<button>` is skipped: its own Enter fires a click, so Save reports once). After
+the scroll, focus moves to the first input in the first failing field (a
+collapsed list row is opened first), also when Decap raised its own "missed a
+required field" toast, so a keyboard or screen-reader editor lands on the field
+the message names instead of staying on the Publish button. Focus moves only
+for an event the editor made (`isTrusted`): `autosave-on-hide.js` clicks Save
+from a script on tab hide, page hide and idle, and that report still toasts and
+scrolls but must not move focus out from under her typing. A held key
+(`repeat`) is ignored, and a field in a row opened a moment ago is waited for (a
+few frames) before it is focused. Under
+`publish_mode: editorial_workflow` Decap's Publish never validates; the path
+only exists in simple mode (the local backend), which
+`e2e/cms-validation-feedback.spec.js` selects by rewriting `config-test.yml`.
+
 ---
 
 ## 3. The target model

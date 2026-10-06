@@ -63,11 +63,18 @@ async function fillBody(page) {
   await editor.pressSequentially("Body text.");
 }
 
-async function openNewPage(page, { body, extraFields = false }) {
-  if (extraFields) {
+// `simple` drops the editorial workflow, as the local backend (decap-server)
+// does: Publish then validates and persists like Save, which is the path a
+// pattern error blocks. Under the workflow Publish never validates, and Decap
+// hides it while the entry has unsaved changes.
+async function openNewPage(page, { body, extraFields = false, simple = false }) {
+  if (extraFields || simple) {
     await page.route(/\/admin\/config-test\.yml$/, async (route) => {
       const res = await route.fetch();
-      await route.fulfill({ status: 200, contentType: "text/yaml", body: (await res.text()) + EXTRA_FIELDS });
+      let config = await res.text();
+      if (simple) config = config.replace(/^publish_mode: editorial_workflow$/m, "publish_mode: simple");
+      if (extraFields) config += EXTRA_FIELDS;
+      await route.fulfill({ status: 200, contentType: "text/yaml", body: config });
     });
   }
   await page.addInitScript(() => {
@@ -264,6 +271,88 @@ test.describe(
       // The row the message is about is open; the good row stays shut.
       await expect(page.getByLabel(/^URL$/).last()).toBeVisible();
       await expect(page.getByLabel(/^URL$/).first()).toBeHidden();
+      // ... and focus is inside it, on the field the message names.
+      await expect(page.getByLabel(/^URL$/).last()).toBeFocused();
+    });
+
+    // ── Publish by keyboard (UX round 3) ──────────────────────────────────
+    // react-aria-menubutton selects a menu item on keydown and never fires a
+    // click, so the click-only listener missed every keyboard Publish.
+
+    // Simple publish mode, an invalid Permalink, then the Publish menu opened
+    // from the keyboard with focus on "Publish now": the state an editor is in
+    // just before pressing the key.
+    async function openPublishMenuByKeyboard(page) {
+      await openNewPage(page, { body: true, simple: true });
+      const publish = page.getByRole("button", { name: /^publish/i }).first();
+      await expect(publish).toBeVisible({ timeout: 30_000 });
+      await publish.focus();
+      await page.keyboard.press("Enter");
+      const item = page.getByRole("menuitem", { name: /^publish now$/i });
+      await expect(item).toBeVisible({ timeout: 15_000 });
+      return item;
+    }
+
+    for (const key of ["Enter", "Space"]) {
+      test(`${key} on "Publish now" with an invalid field toasts and moves focus to that field`, async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 420 });
+        const item = await openPublishMenuByKeyboard(page);
+        // The keyboard path: the item is focused by the menu, not clicked.
+        await expect(item).toBeFocused();
+        await page.keyboard.press(key);
+
+        const toast = page.locator(SHIM_TOAST);
+        await expect(toast).toBeVisible({ timeout: 15_000 });
+        await expect(toast).toContainText(/^Not saved yet\. Permalink: Must start and end with a slash/);
+        await expect(page.getByLabel(/^Permalink$/)).toBeFocused();
+        await expect(page.locator(FIELD_ERRORS).first()).toBeInViewport();
+        // The close button is a real button: keyboard users can reach and press it.
+        const dismiss = toast.getByRole("button", { name: "Dismiss" });
+        await dismiss.focus();
+        await expect(dismiss).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(toast).toHaveCount(0);
+      });
+    }
+
+    test("an autosave click on page hide reports, but never moves focus out from under the editor", async ({
+      page,
+    }) => {
+      // autosave-on-hide.js clicks the real Save button from a script when the
+      // page is hidden (an incomplete entry is skipped, a format error is not).
+      // That is not a Save the editor pressed: focus must stay in the Body.
+      await openNewPage(page, { body: true });
+      const body = page.locator('[role="textbox"][contenteditable="true"]').last();
+      await body.click();
+      await expect(body).toBeFocused();
+
+      await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+      const toast = page.locator(SHIM_TOAST);
+      await expect(toast).toBeVisible({ timeout: 15_000 });
+      await expect(toast).toContainText(/^Not saved yet\. Permalink: Must start and end with a slash/);
+      await settle(page);
+      await expect(body, "the Permalink did not take focus").toBeFocused();
+    });
+
+    test("Enter on Save reports once and moves focus to the field", async ({ page }) => {
+      await openNewPage(page, { body: true });
+      await saveButton(page).focus();
+      await page.keyboard.press("Enter");
+      await expect(page.locator(SHIM_TOAST)).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByLabel(/^Permalink$/)).toBeFocused();
+      await settle(page);
+      await expect(page.locator(SHIM_TOAST), "one toast, not two").toHaveCount(1);
+    });
+
+    test("a missing required field: Decap's own toast, no second one, and focus on the field", async ({ page }) => {
+      await openNewPage(page, { body: false });
+      await setPermalink(page, "/pages/validation-feedback/");
+      await saveButton(page).click();
+      await expect(page.getByText(/missed a required field/i)).toBeVisible({ timeout: 15_000 });
+      await settle(page);
+      await expect(page.locator(SHIM_TOAST)).toHaveCount(0);
+      // The Body is the only empty required field, so the one in error.
+      await expect(page.locator('[role="textbox"][contenteditable="true"]').last()).toBeFocused();
     });
 
     // ── cms-platform#752 ──────────────────────────────────────────────────
