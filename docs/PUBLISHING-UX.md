@@ -321,7 +321,12 @@ Space on a `role="menuitem"` Save/Publish item as the same attempt (a real
 the scroll, focus moves to the first input in the first failing field (a
 collapsed list row is opened first), also when Decap raised its own "missed a
 required field" toast, so a keyboard or screen-reader editor lands on the field
-the message names instead of staying on the Publish button. Under
+the message names instead of staying on the Publish button. Focus moves only
+for an event the editor made (`isTrusted`): `autosave-on-hide.js` clicks Save
+from a script on tab hide, page hide and idle, and that report still toasts and
+scrolls but must not move focus out from under her typing. A held key
+(`repeat`) is ignored, and a field in a row opened a moment ago is waited for (a
+few frames) before it is focused. Under
 `publish_mode: editorial_workflow` Decap's Publish never validates; the path
 only exists in simple mode (the local backend), which
 `e2e/cms-validation-feedback.spec.js` selects by rewriting `config-test.yml`.
