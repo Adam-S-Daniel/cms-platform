@@ -23,6 +23,13 @@ display_url: http://localhost:4000
 # Cobalt-thermal theme is linked from admin/index-local.html (Decap has no
 # `custom_css` config option).
 
+# ASCII-only, length-capped entry file and branch names — must mirror
+# admin/config.yml exactly (#635). See that file for why.
+slug:
+  encoding: ascii
+  clean_accents: true
+  sanitize_replacement: "-"
+
 # Flat, template-free path — must mirror admin/config.yml exactly
 # (public_folder == "/" + media_folder). See that file for why.
 media_folder: "assets/images/uploads"
@@ -42,7 +49,7 @@ collections:
     folder: _posts
     create: true
     delete: true
-    slug: "{{year}}-{{month}}-{{day}}-{{slug}}"
+    slug: "{{year}}-{{month}}-{{day}}-{{slug | truncate(80, '-')}}"
     preview_path: "/blog/{{slug}}/"
     # See admin/config.yml for the WebKit "(--)" rationale: Decap's
     # summaryFormatter parses the stored space+offset date with plain
@@ -131,7 +138,7 @@ collections:
     folder: _tags
     create: true
     delete: true
-    slug: "{{slug}}"
+    slug: "{{slug | truncate(80, '-')}}"
     identifier_field: name
     summary: "{{name}}"
     fields:
@@ -150,7 +157,7 @@ collections:
     folder: _projects
     create: true
     delete: true
-    slug: "{{slug}}"
+    slug: "{{slug | truncate(80, '-')}}"
     preview_path: /projects/{{slug}}/
     summary: "{{title}}{{featured | ternary(' ⭐', '')}}"
     fields:
@@ -192,7 +199,7 @@ collections:
     folder: pages
     create: true
     delete: true
-    slug: "{{slug}}"
+    slug: "{{slug | truncate(80, '-')}}"
     preview_path: "/pages/{{slug}}/"
     summary: "{{title}}"
     sortable_fields:
