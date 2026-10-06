@@ -10,9 +10,32 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.144)
+## Version history (v0.1.0 → v0.1.145)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.145 — A real post carrying an `e2e-` tag name with no `_tags/` entry no longer leaks that tag into the tag cloud, `/tags/`, the sitemap or a tag feed, and the tag's archive page is stamped `noindex`.**
+One change since v0.1.144, merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `theme/` changed apart from the pins (`git diff --stat v0.1.144 origin/main` is six `theme/` files: the README, three files under
+`theme/lib/cms-platform-theme/` and two specs): no `.github/workflows/`, `e2e/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`,
+`scripts/`, `skills/` or `examples/` file changed.
+Tag names. [#716](https://github.com/Adam-S-Daniel/cms-platform/pull/716) (v0.1.142) hid `e2e-` and `test_fixture` tags, but
+only when they had a `_tags/` document. A real post whose `tags:` list held a name like `E2E Namedonly` (slug `e2e-namedonly`)
+and had no `_tags/` entry still appeared in `site.all_tags` (the home tag cloud and `/tags/`), in `sitemap.xml`, and got its own
+`/tags/<slug>/feed.xml`, and its archive page carried no `robots` meta. [#724](https://github.com/Adam-S-Daniel/cms-platform/pull/724)
+(part of [#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689), now closed; it supersedes the remaining piece of
+[#695](https://github.com/Adam-S-Daniel/cms-platform/pull/695), closed) judges such a name by its slugified name with the posts
+rule: new `ExcludeE2EPosts.e2e_tag_name?` and `stamp_tag_page`. `auto_tag_pages.rb` still builds the archive, so the real post's
+tag pill does not 404, but stamps it `robots: noindex,nofollow`, `sitemap: false` and `feed_exclude: true` (the tag and default
+layouts then drop the feed link) and leaves the name out of `site.all_tags`; `tag_feeds.rb` mints no feed for it. A name that has a
+`_tags/` entry is still judged by that entry (filename, `slug:`, `test_fixture`), as in v0.1.142. New cases in
+`theme/spec/exclude_e2e_tags_build_test.rb` (a real Jekyll build; 5 failures on the previous main, 9 of 9 pass) and
+`theme/spec/exclude_e2e_posts_test.rb`.
+Consumer effect. The change reaches a site with its next bump, when the `cms-platform-theme` gem tag names v0.1.145.
+#724's reviewer scanned both consumers' `_posts/` and `_tags/` on main: adamdaniel.ai's only tag is `quotes` (its `_tags/` holds
+only `.gitkeep`) and jodidaniel.com has no `_posts/` or `_tags/`, so no tag is hidden on either site today. Bump only, no
+consumer-side edit: no reusable workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy
+redeploy and no bootstrap redeploy. After the bump, a consumer's site deploy publishes the theme change; nothing else is needed.
 
 **v0.1.144 — The e2e title checks in `blog-post.spec.js` and `feeds-and-share.spec.js` no longer break on quotes, `&` or `<` in a post title and can no longer pass with the title absent; consumers run the stricter specs at their next bump.**
 Two changes since v0.1.143, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
