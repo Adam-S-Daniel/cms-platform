@@ -94,6 +94,9 @@ function load({ facts, snapEntry = ENTRY, routeEntry = ENTRY, liveLinkDisplay = 
     window,
     document: {
       body: {},
+      hidden: false,
+      // The shim listens for visibilitychange (#644).
+      addEventListener() {},
       getElementById: (id) => byId()[id] || null,
       createElement: (tag) => new FakeEl(tag),
       querySelectorAll: (sel) => (sel === '[class*="RefreshPreviewButton"]' && button.parentNode ? [button] : []),
@@ -102,6 +105,7 @@ function load({ facts, snapEntry = ENTRY, routeEntry = ENTRY, liveLinkDisplay = 
       observe() {}
     },
     requestAnimationFrame: () => 0,
+    setTimeout: () => 0,
     console: { info() {} },
   };
   vm.createContext(sandbox);
