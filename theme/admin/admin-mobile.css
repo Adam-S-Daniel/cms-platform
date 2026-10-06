@@ -77,6 +77,13 @@
   box-shadow: inset 0 0 0 4px #fff;
 }
 
+/* The header-nav "Reviews" item (reviews-nav-link.js) is for the widths
+ * where the floating Reviews button is hidden; rule 9 below shows it there.
+ * Above them the floating button is the way in, as before. */
+#cms-reviews-nav-item {
+  display: none;
+}
+
 @media (max-width: 768px) {
   /* ── 1. Remove the desktop min-width floor ──────────────────────────
    * The shell + editor containers size themselves for the side-by-side
@@ -368,13 +375,29 @@
    * At ~742px the floating Reviews button and the deployed-commit /
    * platform pills (position:fixed, bottom-right, z-index:10000) covered
    * the DRAFT chip on the last Contents row and a list row's title, and
-   * the last row could not be scrolled clear. Reviews is a developer
-   * dashboard, so it is dropped here (still reachable from the full-width
-   * admin; the anchor stays in the DOM). The collection list gets bottom
+   * the last row could not be scrolled clear. The floating button is
+   * dropped here (the anchor stays in the DOM) and Reviews is a header nav
+   * item instead (below). The collection list gets bottom
    * clearance so its last row scrolls above the stamps and the Live
    * Preview button. */
   #reviews-link {
     display: none !important;
+  }
+  /* ...and Reviews moves into the top app bar instead, between Contents and
+   * Media (reviews-nav-link.js inserts it; production shell only). The owner
+   * approves visual-regression changes from a phone, so the dashboard needs
+   * a way in here. Hidden at every other width by the rule above this
+   * media block, so exactly one Reviews link shows at a time. */
+  #cms-reviews-nav-item {
+    display: list-item;
+  }
+  /* one-door-publish.js hides the Workflow link but leaves its <li>, and
+   * Decap spaces the nav items `space-around` below 800px, so the empty item
+   * still took a share of the row and pushed Media away from Reviews. Take
+   * the emptied item out so the three are evenly spaced. Without `:has()`
+   * (Safari < 15.4) the spacing is just uneven. */
+  [class*="AppHeaderNavList"] > li:has(> [data-one-door-hidden="1"]) {
+    display: none;
   }
   [class*="CollectionMain"] {
     padding-bottom: 5rem !important;
