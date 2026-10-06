@@ -22,6 +22,21 @@ function skipUnlessHomeUsesTheme() {
 // the floor the issue asked for.
 const MIN_FONT_PX = 12;
 
+// The header checks below (focus clearance, opacity) are about a bar that STAYS
+// in view while content scrolls under it. `.site-header` is only a class name:
+// a site-owned layout can carry one that is `position: static` and transparent
+// (jodidaniel.com's 404 layout), where nothing scrolls under it and an alpha
+// below 1 is correct. Measured from computed style, not the stylesheet, so a
+// site override that makes the theme's sticky header static skips too, while one
+// that re-adds an alpha to a header that stays sticky still fails.
+async function skipUnlessStickyHeader(header) {
+  const position = await header.evaluate((el) => getComputedStyle(el).position);
+  test.skip(
+    position !== "sticky" && position !== "fixed",
+    `the page's .site-header is position: ${position}, not a header that stays in view over scrolled content`,
+  );
+}
+
 test.describe("Public-site accessibility polish", () => {
   test("first Tab stop is a skip link that reveals itself and moves focus to main", async ({
     page,
@@ -106,6 +121,7 @@ test.describe("Public-site accessibility polish", () => {
       await page.goto("/blog/");
       const header = page.locator(".site-header");
       test.skip((await header.count()) === 0, "this page renders without the theme's sticky header");
+      await skipUnlessStickyHeader(header);
 
       await page.evaluate(() => {
         const link = (id, text) => {
@@ -147,6 +163,7 @@ test.describe("Public-site accessibility polish", () => {
       await page.goto("/blog/");
       const header = page.locator(".site-header");
       test.skip((await header.count()) === 0, "this page renders without the theme's sticky header");
+      await skipUnlessStickyHeader(header);
       await page.evaluate(() => {
         const spacer = document.createElement("div");
         spacer.style.height = "2400px";
@@ -186,6 +203,7 @@ test.describe("Public-site accessibility polish", () => {
             await page.goto("/blog/");
             const header = page.locator(".site-header");
             test.skip((await header.count()) === 0, "this page renders without the theme's sticky header");
+            await skipUnlessStickyHeader(header);
 
             const bg = await header.evaluate((el) => getComputedStyle(el).backgroundColor);
             // Chromium serializes rgb(r, g, b) when opaque, rgba(r, g, b, a)
