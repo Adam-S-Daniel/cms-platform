@@ -57,13 +57,26 @@ class El {
     this.children = [];
     this.parentElement = null;
     this.dispatched = [];
-    this.style = { getPropertyValue: () => "", setProperty() {} };
+    const props = {};
+    this.style = {
+      getPropertyValue: (n) => props[n] || "",
+      setProperty: (n, v) => {
+        props[n] = v;
+      },
+    };
     for (const c of children) this.append(c);
   }
   append(c) {
     c.parentElement = this;
     this.children.push(c);
     return c;
+  }
+  get textContent() {
+    return (this.attrs.text || "") + this.children.map((c) => c.textContent).join("");
+  }
+  set textContent(v) {
+    this.attrs.text = String(v);
+    this.children = [];
   }
   get id() {
     return this.attrs.id || "";
@@ -108,17 +121,21 @@ class El {
 
 // One react-aria-menubutton dropdown as Decap renders it: a wrapper whose
 // first child holds the trigger and whose second holds the menu.
-function dropdown(triggerClass, itemLabels) {
-  const items = itemLabels.map(
+function menuItems(itemLabels) {
+  return itemLabels.map(
     (label) => new El("div", { role: "menuitem", class: "css-1-DropdownItem" }, [new El("span", { text: label })]),
   );
+}
+
+function dropdown(triggerClass, itemLabels) {
+  const items = menuItems(itemLabels);
   const wrapper = new El("div", { class: "css-1-StyledWrapper" }, [
     new El("div", {}, [
       new El("span", { role: "button", "aria-haspopup": "true", class: `css-1-${triggerClass}` }),
     ]),
     new El("div", { role: "menu" }, [new El("ul", { class: "css-1-DropdownList" }, items)]),
   ]);
-  return { wrapper, items };
+  return { wrapper, items, list: wrapper.children[1].children[0] };
 }
 
 function buildToolbar() {
@@ -181,9 +198,19 @@ function load(snapshots, { withSlot = false, holdReads = false } = {}) {
     getElementById: (id) => (id === "cms-publish-state-actions" ? slot : null),
     querySelector: (sel) => dom.root.querySelector(sel),
     querySelectorAll: (sel) => dom.root.querySelectorAll(sel),
+    documentElement: dom.root,
     createElement: (tag) => new El(tag),
   };
+  const observers = [];
+  class MutationObserver {
+    constructor(fn) {
+      this.fn = fn;
+      observers.push(this);
+    }
+    observe() {}
+  }
   const sandbox = {
+    MutationObserver,
     window: {
       CMS_REPO: "owner/repo",
       CMSPublishProgress: progress,
@@ -252,7 +279,16 @@ function load(snapshots, { withSlot = false, holdReads = false } = {}) {
   const release = () => {
     while (held.length) held.shift()();
   };
-  return { api: sandbox.window.__publishButton, dom, fire, fetchCalls, alerts, release };
+  // react-aria-menubutton unmounts the menu on close and mounts fresh item
+  // nodes on open: model that, then deliver the observer's childList record.
+  function remount(dd, labels) {
+    dd.list.children = [];
+    dd.items = menuItems(labels);
+    for (const it of dd.items) dd.list.append(it);
+    for (const o of observers) o.fn([{ addedNodes: dd.items }]);
+    return dd.items;
+  }
+  return { api: sandbox.window.__publishButton, dom, fire, fetchCalls, alerts, release, remount, observers };
 }
 
 function armPosts(fetchCalls) {
@@ -285,18 +321,33 @@ test.describe("publish-button — Decap's Publish menu goes through the cms/read
     ).toBe(true);
   });
 
-  test("every item in Decap's Publish dropdown is routed, by click and by Enter/Space", async () => {
+  test("'Publish now' is routed by click and by Enter/Space", async () => {
     for (const [type, extra] of [
       ["click", {}],
       ["keydown", { key: "Enter" }],
       ["keydown", { key: " " }],
     ]) {
-      for (let idx = 0; idx < 3; idx++) {
+      const { dom, fire, fetchCalls, alerts } = load([PR_42]);
+      fire(type, dom.publish.items[0], extra);
+      await settle();
+      expect(alerts, `${type} ${JSON.stringify(extra)}`).toEqual([]);
+      expect(armPosts(fetchCalls).length, `${type} ${JSON.stringify(extra)}`).toBe(1);
+    }
+  });
+
+  test("a hidden 'create new' / 'duplicate' item that is somehow selected publishes nothing", async () => {
+    for (const [type, extra] of [
+      ["click", {}],
+      ["keydown", { key: "Enter" }],
+      ["keydown", { key: " " }],
+    ]) {
+      for (const idx of [1, 2]) {
         const { dom, fire, fetchCalls, alerts } = load([PR_42]);
-        fire(type, dom.publish.items[idx], extra);
+        const ev = fire(type, dom.publish.items[idx], extra);
         await settle();
-        expect(alerts, `${type} ${JSON.stringify(extra)} on item ${idx}`).toEqual([]);
-        expect(armPosts(fetchCalls).length, `${type} ${JSON.stringify(extra)} on item ${idx}`).toBe(1);
+        expect(ev.stopped, "Decap's handler must not run on a hidden item").toBe(true);
+        expect(alerts, `${type} item ${idx}`).toEqual([]);
+        expect(armPosts(fetchCalls).length, `${type} item ${idx}`).toBe(0);
       }
     }
   });
@@ -349,5 +400,57 @@ test.describe("publish-button — Decap's Publish menu goes through the cms/read
     await settle();
     expect(alerts).toEqual([]);
     expect(api.lastError()).toContain("could not be published right now");
+  });
+
+  test("the 'create new' and 'duplicate' items are hidden, 'Publish now' is not, and the published dropdown is untouched", async () => {
+    const { dom, remount } = load([PR_42]);
+    // Menu items mount only while open: nothing is hidden until the observer
+    // sees them, so deliver the record the way the page would.
+    remount(dom.publish, ["Publish now", "Publish and create new", "Publish and duplicate"]);
+    const [now, createNew, duplicate] = dom.publish.items;
+    for (const hidden of [createNew, duplicate]) {
+      expect(hidden.style.getPropertyValue("display")).toBe("none");
+      expect(hidden.style.getPropertyValue("pointer-events")).toBe("none");
+      expect(hidden.getAttribute("aria-hidden")).toBe("true");
+      expect(hidden.getAttribute("data-one-door-hidden")).toBe("1");
+    }
+    expect(now.style.getPropertyValue("display"), "'Publish now' stays visible").toBe("");
+    expect(now.getAttribute("aria-hidden")).toBeNull();
+    for (const item of [...dom.published.items, ...dom.status.items]) {
+      expect(item.style.getPropertyValue("display"), item.textContent).toBe("");
+      expect(item.getAttribute("aria-hidden"), item.textContent).toBeNull();
+    }
+    expect(dom.published.items.map((i) => i.textContent)).toEqual(["Unpublish", "Duplicate"]);
+  });
+
+  test("the hide is re-applied when Decap re-renders the menu with new nodes", async () => {
+    const { dom, remount } = load([PR_42]);
+    for (let n = 0; n < 3; n++) {
+      const items = remount(dom.publish, ["Publish now", "Publish and create new", "Publish and duplicate"]);
+      expect(items[1].style.getPropertyValue("display"), `render ${n}`).toBe("none");
+      expect(items[2].style.getPropertyValue("display"), `render ${n}`).toBe("none");
+      expect(items[0].style.getPropertyValue("display"), `render ${n}`).toBe("");
+    }
+  });
+
+  test("an already-hidden item is not written again (no observer feedback loop)", async () => {
+    const { dom, remount, observers } = load([PR_42]);
+    remount(dom.publish, ["Publish now", "Publish and create new", "Publish and duplicate"]);
+    let writes = 0;
+    for (const item of dom.publish.items) {
+      const set = item.style.setProperty;
+      item.style.setProperty = (...a) => {
+        writes += 1;
+        set(...a);
+      };
+      const attr = item.setAttribute.bind(item);
+      item.setAttribute = (...a) => {
+        writes += 1;
+        attr(...a);
+      };
+    }
+    // A second childList record over the same, already-hidden nodes.
+    for (const o of observers) o.fn([{ addedNodes: dom.publish.items }]);
+    expect(writes, "only hidden items exist to re-write; none may be touched").toBe(0);
   });
 });

@@ -703,7 +703,17 @@ Three things it gets that the split button cannot:
   handler sees it, and runs `doPublish()` — the `cms/ready` label with the
   bounded re-read above. Choosing the menu item is the second deliberate
   step, so no third confirmation is added; with no state bar on screen a
-  failure is said in an `alert()`, as Decap would have. The published-entry
+  failure is said in an `alert()`, as Decap would have. The dropdown's other
+  two items, "Publish and create new" and "Publish and duplicate", are hidden
+  (#619): the intercept would have run each as a plain "Publish now", so
+  "Publish now" is the only choice shown. The hide is CSS plus
+  `data-one-door-hidden` (never `removeChild`), matched by label inside the
+  Publish dropdown only and re-applied by a childList `MutationObserver`
+  because react-aria-menubutton mounts items only while the menu is open; a
+  hidden item that is somehow selected is swallowed, not published. The labels
+  are Decap's English strings, and react-aria's arrow-key navigation may still
+  land its focus on a `display:none` item (invisible, inert, Enter ignored).
+  The published-entry
   dropdown (Unpublish, Duplicate) and the rehearsal and local shells are
   untouched. `e2e/publish-button-decap-menu.test.js` drives it in a vm
   sandbox against the dropdown's real react-aria-menubutton shape.

@@ -122,10 +122,13 @@
  * it, and runs doPublish() instead — the same `cms/ready` route, with the
  * same bounded re-read that finds a PR the poller has not caught up with
  * yet. Choosing a menu item is already the second deliberate step, so no
- * further confirmation is added. "…and create new" / "…and duplicate"
- * publish only; the editor stays on the entry. The published-entry
- * dropdown (`PublishedToolbarButton`: Unpublish, Duplicate) and the
- * rehearsal and local shells, which never load this file, are untouched.
+ * further confirmation is added. The dropdown's other two items, "Publish
+ * and create new" and "Publish and duplicate", are CSS-hidden (#619): this
+ * route would run them as a plain "Publish now", so their labels promised a
+ * follow-up the shell does not perform, and "Publish now" is the only
+ * honest choice. The published-entry dropdown (`PublishedToolbarButton`:
+ * Unpublish, Duplicate) and the rehearsal and local shells, which never load
+ * this file, are untouched.
  *
  * ── Failure mode ───────────────────────────────────────────────────────
  * If publish-step-hint.js's bar is absent (a Decap release that renames the
@@ -386,6 +389,46 @@
     return null;
   }
 
+  // ── Hiding "Publish and create new" / "Publish and duplicate" (#619) ──
+  // react-aria-menubutton mounts menu items only while the menu is open, so
+  // the hide is re-applied by a childList observer (and the 500 ms render
+  // tick as a backstop) rather than once. CSS-hide, never removeChild: the
+  // one-door-publish.js `hideEl` precedent. Matched by label inside the
+  // Publish dropdown only, so the published-entry dropdown's "Duplicate" is
+  // never touched. Labels are Decap's English strings; a localized admin
+  // keeps all three items (and the intercept still routes each to doPublish).
+  var EXTRA_PUBLISH_LABELS = ["publish and create new", "publish and duplicate"];
+
+  function isExtraPublishItem(item) {
+    var label = String(item.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    return EXTRA_PUBLISH_LABELS.indexOf(label) !== -1;
+  }
+
+  function hideExtraPublishItems() {
+    var items;
+    try {
+      items = document.querySelectorAll('[role="menuitem"]');
+    } catch (e) {
+      return;
+    }
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      // Already hidden — write nothing (see hideDecapPublish's note on
+      // attribute mutations); still recovers if emotion clobbers the style.
+      if (item.style.getPropertyValue("display") === "none") continue;
+      if (!isExtraPublishItem(item) || decapPublishMenuItem(item) !== item) continue;
+      item.style.setProperty("display", "none", "important");
+      item.style.setProperty("visibility", "hidden", "important");
+      item.style.setProperty("pointer-events", "none", "important");
+      item.setAttribute("aria-hidden", "true");
+      item.setAttribute("tabindex", "-1");
+      item.setAttribute(HIDDEN_ATTR, "1");
+    }
+  }
+
   // Close the menu the selection would have closed. react-aria-menubutton
   // closes on Escape; best effort, never fatal.
   function closeDecapMenu(item) {
@@ -413,6 +456,14 @@
     if (ev.type === "keydown" && ev.key !== "Enter" && ev.key !== " ") return;
     var item = decapPublishMenuItem(ev.target);
     if (!item) return;
+    if (isExtraPublishItem(item)) {
+      // A hidden item that react-aria's arrow-key navigation still reaches
+      // must not publish: swallow the selection and leave the menu alone.
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+      return;
+    }
     // Capture phase on `document` runs before React's listener on its root
     // container, so Decap's status-gated handler never sees this selection.
     ev.preventDefault();
@@ -755,7 +806,25 @@
   // documentElement would re-run this on every keystroke for a boolean that
   // changes twice per edit session. 500 ms matches publish-step-hint.js's
   // own re-sync cadence.
-  setInterval(render, 500);
+  setInterval(function () {
+    render();
+    hideExtraPublishItems();
+  }, 500);
+  // Menu items exist only while the menu is open, so hide them the moment
+  // they mount. childList only: our own style/attribute writes never retrigger.
+  if (typeof MutationObserver === "function") {
+    var menuRoot = document.documentElement || document.body;
+    if (menuRoot) {
+      new MutationObserver(function (mutations) {
+        for (var m = 0; m < mutations.length; m++) {
+          if (mutations[m].addedNodes && mutations[m].addedNodes.length) {
+            hideExtraPublishItems();
+            return;
+          }
+        }
+      }).observe(menuRoot, { childList: true, subtree: true });
+    }
+  }
   window.addEventListener("hashchange", function () {
     mode = "";
     lastError = null;
