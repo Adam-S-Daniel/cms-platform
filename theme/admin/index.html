@@ -62,7 +62,8 @@
      * health), not something the site's owner needs on every screen (#625.9).
      * Keep it reachable but low-key: smaller, borderless and faded until
      * hovered/focused. admin-mobile.css hides it outright at phone/tablet
-     * widths, where it only ever covered content (#625.10). */
+     * widths, where it only ever covered content (#625.10); there
+     * reviews-nav-link.js puts Reviews in Decap's header nav instead. */
     #reviews-link {
       padding: 0.25rem 0.6rem;
       font-size: 0.72rem;
@@ -324,6 +325,13 @@
        list on a phone. NOT loaded on index-test.html: that shell has to keep
        rendering Decap's stock collection chrome. See the file's own header. -->
   <script src="collection-controls-trim.js" defer></script>
+
+  <!-- Phone/tablet widths (<= 768px): "Reviews" in Decap's top app bar,
+       between Contents and Media, standing in for the floating #reviews-link
+       that admin-mobile.css rule 9 hides there. Copies that link's
+       ?return= href, so the inline syncReviewsReturn above stays its only
+       writer. See the file's header. -->
+  <script src="reviews-nav-link.js" defer></script>
 
   <!-- "HTML Embed" editor component — adds a toolbar button on every
        markdown body field so authors can drop a block of raw HTML / JS /

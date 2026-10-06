@@ -820,3 +820,167 @@ test.describe(
     }
   },
 );
+
+// Owner request (approving visual-regression changes from a phone): rule 9
+// hides the floating Reviews button at <= 768px (#625.9/.10), which left the
+// phone admin with no way into /admin/reviews/. reviews-nav-link.js puts
+// "Reviews" in Decap's top app bar there, between Contents and Media.
+//
+// The item exists only on the PRODUCTION shell (admin/index.html), which
+// needs GitHub sign-in, so the shell's own pieces are lifted into the
+// test-repo shell over HTTP, the #757.1 idiom above: the floating links, their
+// styles and the inline script that keeps their hrefs (Reviews' ?return=),
+// then the deferred shims the shell loads that shape the header
+// (one-door-publish.js hides Workflow there, so the production order is
+// Contents, Reviews, Media). Everything is
+// read from the SERVED admin, so this runs unchanged on a consumer.
+async function liftProductionReviews(page) {
+  const lifted = await page.evaluate(async () => {
+    const html = await (await fetch("/admin/index.html")).text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    // The inline script syncs Live Preview first and needs its anchor too.
+    const links = ["live-preview-link", "reviews-link"].map((id) => doc.getElementById(id));
+    const sync = [...doc.querySelectorAll("script:not([src])")].find((s) =>
+      s.textContent.includes("syncReviewsReturn"),
+    );
+    const srcs = [...doc.querySelectorAll("script[src]")].map((s) => s.getAttribute("src"));
+    if (links.includes(null) || !sync) return { ok: false, srcs };
+    for (const style of doc.querySelectorAll("style")) {
+      if (style.textContent.includes(".floating-link")) {
+        document.head.appendChild(document.importNode(style, true));
+      }
+    }
+    for (const link of links) document.body.appendChild(document.importNode(link, true));
+    const run = document.createElement("script");
+    run.textContent = sync.textContent;
+    document.body.appendChild(run);
+    return { ok: true, srcs };
+  });
+  expect(lifted.ok, "admin/index.html must carry #reviews-link and its ?return= sync").toBe(true);
+  for (const shim of ["one-door-publish.js", "reviews-nav-link.js"]) {
+    expect(lifted.srcs, `admin/index.html must load ${shim}`).toContain(shim);
+    await page.addScriptTag({ url: `/admin/${shim}` });
+  }
+}
+
+test.describe(
+  "CMS admin — Reviews in the header nav at phone widths",
+  { tag: ["@admin-read"] },
+  () => {
+    test.describe.configure({ timeout: 180_000 });
+
+    const headerState = (page) =>
+      page.evaluate(() => {
+        const header = document.querySelector('header[class*="AppHeader"]');
+        const item = document.getElementById("cms-reviews-nav-item");
+        const shown = (el) => !!el && el.getClientRects().length > 0;
+        const navItems = [...header.querySelectorAll('[class*="AppHeaderNavList"] > li')]
+          .map((li) => li.querySelector("a, button"))
+          .filter(shown);
+        const style = (el) => {
+          const cs = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          return {
+            fontFamily: cs.fontFamily,
+            fontSize: cs.fontSize,
+            fontWeight: cs.fontWeight,
+            color: cs.color,
+            top: Math.round(r.top),
+            height: Math.round(r.height),
+            right: r.right,
+          };
+        };
+        const reviews = document.getElementById("cms-reviews-nav");
+        const media = navItems.find((el) => el.textContent.trim() === "Media");
+        // Header height with and without the item: it must not add a row.
+        const withItem = header.getBoundingClientRect().height;
+        let without = withItem;
+        if (item) {
+          item.style.setProperty("display", "none", "important");
+          without = header.getBoundingClientRect().height;
+          item.style.removeProperty("display");
+        }
+        // The free space between neighbors (Decap spaces them space-around).
+        const boxes = navItems.map((el) => el.getBoundingClientRect());
+        return {
+          order: navItems.map((el) => el.textContent.trim()),
+          gaps: boxes.slice(1).map((r, i) => Math.round(r.left - boxes[i].right)),
+          itemShown: shown(item),
+          inRoot: !!reviews && !!reviews.closest("#nc-root"),
+          href: reviews ? reviews.getAttribute("href") : null,
+          hash: location.hash,
+          reviews: shown(reviews) ? style(reviews) : null,
+          media: media ? style(media) : null,
+          headerWith: Math.round(withItem),
+          headerWithout: Math.round(without),
+          viewport: window.innerWidth,
+        };
+      });
+
+    test("phone: Reviews sits between Contents and Media, styled like them; desktop keeps the floating button", async ({
+      page,
+    }) => {
+      await page.setViewportSize(PHONE_390);
+      await login(page);
+      await page.goto("/admin/index-test.html#/collections/posts");
+      await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
+      await liftProductionReviews(page);
+
+      const header = page.locator('header[class*="AppHeader"]');
+      const navReviews = header.getByRole("link", { name: "Reviews", exact: true });
+      const floating = page.locator("#reviews-link");
+
+      for (const width of [390, 320, 768]) {
+        await page.setViewportSize({ width, height: PHONE_390.height });
+        await expect(navReviews, `${width}px: Reviews in the header nav`).toBeVisible();
+        await expect(floating, `${width}px: floating Reviews stays hidden`).toBeHidden();
+        const s = await headerState(page);
+        expect(s.order, `${width}px: header nav order`).toEqual(["Contents", "Reviews", "Media"]);
+        expect(s.inRoot, "inside #nc-root, so rule 0's focus ring applies").toBe(true);
+        expect(s.href).toBe(`/admin/reviews/?return=${encodeURIComponent(s.hash)}`);
+        for (const prop of ["fontFamily", "fontSize", "fontWeight", "color", "top", "height"]) {
+          expect(s.reviews[prop], `${width}px: Reviews ${prop} matches Media`).toBe(s.media[prop]);
+        }
+        expect(s.reviews.right, `${width}px: Reviews past the right edge`).toBeLessThanOrEqual(s.viewport);
+        expect(s.headerWith, `${width}px: Reviews added a header row`).toBe(s.headerWithout);
+        // Evenly spaced: the Workflow item one-door-publish.js empties must
+        // not keep a share of the row between Reviews and Media.
+        expect(
+          Math.abs(s.gaps[0] - s.gaps[1]),
+          `${width}px: Contents-Reviews vs Reviews-Media spacing ${JSON.stringify(s.gaps)}`,
+        ).toBeLessThanOrEqual(2);
+      }
+
+      // The ?return= target follows the route, like the floating link's.
+      await page.setViewportSize(PHONE_390);
+      await page.evaluate(() => {
+        location.hash = "#/collections/tags";
+      });
+      await expect(navReviews).toHaveAttribute(
+        "href",
+        `/admin/reviews/?return=${encodeURIComponent("#/collections/tags")}`,
+      );
+      // Decap re-creates the header when the editor (which has none) closes;
+      // the item comes back with it.
+      await page.evaluate((slug) => {
+        location.hash = `#/collections/posts/entries/${slug}`;
+      }, SEED_POST_SLUG);
+      await expect(page.getByLabel(/^Title$/)).toBeVisible({ timeout: 60_000 });
+      await expect(header).toHaveCount(0);
+      await page.evaluate(() => {
+        location.hash = "#/collections/posts";
+      });
+      await expect(navReviews).toBeVisible();
+      expect((await headerState(page)).order).toEqual(["Contents", "Reviews", "Media"]);
+
+      // Above 768px (the 820px tablet, desktop) the header has no Reviews and
+      // the floating button is back.
+      for (const width of [820, DESKTOP.width]) {
+        await page.setViewportSize({ width, height: DESKTOP.height });
+        await expect(navReviews, `${width}px: no Reviews in the header`).toBeHidden();
+        await expect(floating, `${width}px: floating Reviews is visible`).toBeVisible();
+        expect((await headerState(page)).itemShown).toBe(false);
+      }
+    });
+  },
+);
