@@ -3,9 +3,9 @@
 // PLATFORM-INTERNAL: reads the platform's own workflow definition.
 //
 // cms-platform#527: self-fixture-e2e.yml is the one platform lane that runs
-// `*.spec.js` in a browser (the `@lane: local` specs on the two admin projects,
-// against e2e/fixture-site). Its value rests on a few things that each break
-// silently:
+// `*.spec.js` in a browser (the `@lane: local` specs on the two admin projects
+// against e2e/fixture-site, and since #702 on one public project against both
+// fixtures). Its value rests on a few things that each break silently:
 //
 //   - the GATE: `fixture-e2e` is a REQUIRED context, so it must report on every
 //     PR (always(), no wall, no concurrency) and must actually translate the
@@ -15,8 +15,8 @@
 //   - the LANE FILTER: `@lane: real` specs must be excluded, because
 //     admin-bundle-parity.spec.js fetches production unconditionally;
 //   - SALIENCE: a docs-only PR may skip the work, but anything unknown runs it;
-//   - NON-VACUITY: the archived-PDF test must have PASSED, so a future skip
-//     cannot leave #527's proof green while proving nothing.
+//   - NON-VACUITY: each leg's proof test must have PASSED (the archived-PDF
+//     test on the admin legs), so a future skip cannot read green.
 //
 // The shape checks parse the YAML (workflow-yaml-utils); the behavior checks
 // execute the workflow's own `run:` scripts (workflow-step-harness), so they
@@ -121,13 +121,54 @@ test.describe("self-fixture-e2e.yml: the required gate (#527)", () => {
 });
 
 test.describe("self-fixture-e2e.yml: the work job (#527)", () => {
-  test("runs exactly the two admin projects, one engine each, with a wall", () => {
+  test("runs the two admin projects on the full fixture and one public project on both (#702)", () => {
     const w = job(WORK);
-    expect(w.strategy.matrix.project).toEqual(["chromium-desktop-3k", "webkit-iphone16"]);
+    const legs = w.strategy.matrix.include.map((l) => `${l.project} @ ${l.fixture}`);
+    expect(legs).toEqual([
+      "chromium-desktop-3k @ fixture-site",
+      "webkit-iphone16 @ fixture-site",
+      "chromium-desktop-1080 @ fixture-site",
+      "chromium-desktop-1080 @ fixture-site-singlepage",
+    ]);
+    expect(Object.keys(w.strategy.matrix), "legs come only from `include`").toEqual(["include"]);
     expect(w.strategy["fail-fast"]).toBe(false);
     expect(w["timeout-minutes"]).toBeGreaterThan(0);
     expect(w.env.PW_PROJECT).toBe("${{ matrix.project }}");
+    expect(w.env.FIXTURE).toBe("${{ matrix.fixture }}");
     expect(w.env.TARGET).toBe("local");
+  });
+
+  // Admin projects carry a `grep` (ADMIN_TAGS_*); public ones a `grepInvert`.
+  function isAdminProject(name) {
+    const p = require("./playwright.config").projects.find((x) => x.name === name);
+    expect(p, `${name} is a playwright.config.js project`).toBeTruthy();
+    return p.grep !== undefined;
+  }
+
+  test("admin legs run on the full fixture; the public legs cover both home shapes", () => {
+    const cap = require("./site-capabilities");
+    const theme = cap.themeLayoutsDirCandidates()[0];
+    const shapes = [];
+    for (const leg of job(WORK).strategy.matrix.include) {
+      expect(fs.existsSync(path.join(HARNESS, leg.fixture, "_config.yml")), leg.fixture).toBe(true);
+      if (isAdminProject(leg.project)) {
+        expect(leg.fixture, `${leg.project} is an admin leg`).toBe("fixture-site");
+      } else {
+        shapes.push(cap.homeUsesThemeLayout(path.join(HARNESS, leg.fixture), theme));
+      }
+    }
+    // One public leg whose `/` is the theme's default layout, one whose `/` is
+    // a site-owned layout (jodidaniel.com's shape, the #702 incident).
+    expect(shapes.sort()).toEqual([false, true]);
+  });
+
+  test("every leg's proof test exists by that title in the spec it names", () => {
+    for (const leg of job(WORK).strategy.matrix.include) {
+      const src = fs.readFileSync(path.join(HARNESS, leg.proof_spec), "utf8");
+      expect(src, `${leg.project} @ ${leg.fixture}: ${leg.proof_spec}`).toContain(
+        JSON.stringify(leg.proof_title),
+      );
+    }
   });
 
   test("every step after salience is gated on it, so a skip still reports success", () => {
@@ -143,27 +184,30 @@ test.describe("self-fixture-e2e.yml: the work job (#527)", () => {
 
   test("the harness is placed INSIDE the fixture and SITE_ROOT points at the fixture", () => {
     const place = step(WORK, "Place the harness inside the fixture");
-    expect(place.run).toMatch(/rsync\b[^\n]*\\\n\s*e2e\/ e2e\/fixture-site\/e2e\//);
+    expect(place.run).toMatch(/rsync\b[^\n]*\\\n\s*e2e\/ "e2e\/\$\{FIXTURE\}\/e2e\/"/);
     for (const ex of ["fixture-site", "fixture-site-singlepage", "node_modules"]) {
       expect(place.run).toContain(`--exclude ${ex}`);
     }
     const run = step(WORK, "Run the local-lane specs against the fixture");
-    expect(run["working-directory"]).toBe("e2e/fixture-site/e2e");
-    expect(run.env.SITE_ROOT).toBe("${{ github.workspace }}/e2e/fixture-site");
-    expect(stepWithId(WORK, "select")["working-directory"]).toBe("e2e/fixture-site/e2e");
+    expect(run["working-directory"]).toBe("e2e/${{ matrix.fixture }}/e2e");
+    expect(run.env.SITE_ROOT).toBe("${{ github.workspace }}/e2e/${{ matrix.fixture }}");
+    expect(stepWithId(WORK, "select")["working-directory"]).toBe("e2e/${{ matrix.fixture }}/e2e");
     const ruby = step(WORK, "Setup Ruby + Bundler");
-    expect(ruby.with["working-directory"]).toBe("e2e/fixture-site");
+    expect(ruby.with["working-directory"]).toBe("e2e/${{ matrix.fixture }}");
     expect(ruby.with["bundler-cache"]).toBe(true);
   });
 
-  test("the fixture's Gemfile.lock is committed, not ignored (frozen install)", () => {
-    const lock = path.join(HARNESS, "fixture-site", "Gemfile.lock");
-    expect(fs.existsSync(lock), "e2e/fixture-site/Gemfile.lock must be tracked").toBe(true);
-    const src = fs.readFileSync(lock, "utf8");
-    expect(src).toContain("PATH\n  remote: ../../theme\n");
-    for (const ignore of [path.join(REPO_ROOT, ".gitignore"), path.join(HARNESS, "fixture-site", ".gitignore")]) {
-      const lines = fs.readFileSync(ignore, "utf8").split("\n").map((l) => l.trim());
-      expect(lines.filter((l) => /(^|\/)Gemfile\.lock$/.test(l)), ignore).toEqual([]);
+  test("each fixture's Gemfile.lock is committed, not ignored (frozen install)", () => {
+    for (const fixture of new Set(job(WORK).strategy.matrix.include.map((l) => l.fixture))) {
+      const lock = path.join(HARNESS, fixture, "Gemfile.lock");
+      expect(fs.existsSync(lock), `e2e/${fixture}/Gemfile.lock must be tracked`).toBe(true);
+      const src = fs.readFileSync(lock, "utf8");
+      expect(src).toContain("PATH\n  remote: ../../theme\n");
+      for (const ignore of [path.join(REPO_ROOT, ".gitignore"), path.join(HARNESS, fixture, ".gitignore")]) {
+        if (!fs.existsSync(ignore)) continue;
+        const lines = fs.readFileSync(ignore, "utf8").split("\n").map((l) => l.trim());
+        expect(lines.filter((l) => /(^|\/)Gemfile\.lock$/.test(l)), ignore).toEqual([]);
+      }
     }
   });
 });
@@ -224,6 +268,7 @@ test.describe("self-fixture-e2e.yml: salience is a fail-safe deny-list (#527)", 
     { files: { "oauth-proxy/lambda.py": "x\n", "scripts/cross_post/cross_post.py": "x\n" }, salient: false },
     { files: { "docs/x.md": "x\n", "theme/_layouts/post.html": "x\n" }, salient: true },
     { files: { "e2e/fixture-site/_posts/2026-01-01-new.md": "x\n" }, salient: true },
+    { files: { "e2e/fixture-site-singlepage/_notes/welcome.md": "x\n" }, salient: true },
     { files: { "e2e/cms-editorial-workflow.spec.js": "x\n" }, salient: true },
     { files: { ".github/workflows/self-fixture-e2e.yml": "x\n" }, salient: true },
     { files: { "theme/admin/café.js": "x\n" }, salient: true },
@@ -261,7 +306,7 @@ test.describe("self-fixture-e2e.yml: salience is a fail-safe deny-list (#527)", 
   });
 });
 
-test.describe("self-fixture-e2e.yml: the archived-PDF test must have PASSED (#527)", () => {
+test.describe("self-fixture-e2e.yml: each leg's proof test must have PASSED (#527, #702)", () => {
   const TITLE = "opted-in archived PDF fields render host-specific copy and stay private by default";
   const SPEC = "cms-editorial-workflow.spec.js";
 
@@ -285,9 +330,9 @@ test.describe("self-fixture-e2e.yml: the archived-PDF test must have PASSED (#52
   }
 
   function assertStep(json) {
-    const s = step(WORK, "Assert the archived-PDF test passed");
-    expect(s.env.REQUIRED_SPEC_FILE).toBe(SPEC);
-    expect(s.env.REQUIRED_TEST_TITLE).toBe(TITLE);
+    const s = step(WORK, "Assert the leg's proof test passed");
+    expect(s.env.REQUIRED_SPEC_FILE).toBe("${{ matrix.proof_spec }}");
+    expect(s.env.REQUIRED_TEST_TITLE).toBe("${{ matrix.proof_title }}");
     const sb = createSandbox("fixture-e2e-assert-");
     try {
       const file = path.join(sb.root, "results.json");
@@ -309,8 +354,14 @@ test.describe("self-fixture-e2e.yml: the archived-PDF test must have PASSED (#52
 
   const passed = { projectName: "webkit-iphone16", status: "expected", results: [{ status: "passed" }] };
 
-  test("the test's title still exists in the spec it names", () => {
-    expect(fs.readFileSync(path.join(HARNESS, SPEC), "utf8")).toContain(JSON.stringify(TITLE));
+  test("both admin legs still prove the archived-PDF test (#527)", () => {
+    const admin = job(WORK).strategy.matrix.include.filter((l) =>
+      ["chromium-desktop-3k", "webkit-iphone16"].includes(l.project),
+    );
+    expect(admin.length).toBe(2);
+    for (const leg of admin) {
+      expect([leg.proof_spec, leg.proof_title]).toEqual([SPEC, TITLE]);
+    }
   });
 
   test("passes when the test passed on this project (also after a retry)", () => {

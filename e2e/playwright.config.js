@@ -152,6 +152,12 @@ const PLATFORM_META_SPECS = [
   "posts-list-branch-tip.test.js",
   "posts-list-status-dedupe.test.js",
   "slug-pin.test.js",
+  // cms-platform#735 — vm-sandboxes theme/admin/tags-input.js SOURCE; platform-internal likewise.
+  "tags-suggest.test.js",
+  // cms-platform#730 — vm-sandboxes theme/admin/validation-feedback.js SOURCE.
+  "validation-feedback.test.js",
+  // UX round 3 (K8/F5) — vm-sandboxes theme/admin/route-focus.js SOURCE.
+  "route-focus.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
   "editor-component-image.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
@@ -199,9 +205,23 @@ const PLATFORM_META_SPECS = [
   // sense only in the platform self-CI, never in a consumer.
   "site-capabilities.test.js",
   "base-collections-skip-meta.test.js",
+  // UX round 4 package 3: renders theme/assets/css/main.css and the project
+  // layout's SOURCE in a static fixture (theme/ tree, absent on a consumer).
+  "theme-featured-badge.test.js",
   // #656 — parses the platform theme's own theme/assets/css/main.css, absent in
   // a consumer. Runs in self-ci node-unit-lints.
   "theme-reduced-motion.test.js",
+  // #727 — the same shape for the share row's rules in main.css (idle copy icon
+  // specificity, 44px touch targets). Pure-fs; self-ci node-unit-lints.
+  "theme-share-row-css.test.js",
+  // #729 — same, for the bare Markdown table rules (padding, borders, header).
+  "theme-table-css.test.js",
+  // #753 — the same shape for overflow-wrap on post text, excerpts and inline
+  // code in main.css. Pure-fs; self-ci node-unit-lints.
+  "theme-overflow-wrap-css.test.js",
+  // #737 — the same shape for the hero gap, the current-nav state and the tag
+  // name casing in main.css. Pure-fs; self-ci node-unit-lints.
+  "theme-public-polish-css.test.js",
   // #33 CONCERN B — the pure-fs guard-registry lint: reads the platform's TWO
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
@@ -642,6 +662,11 @@ const PLATFORM_META_SPECS = [
   // internal: a consumer doesn't ship those reusable definitions.
   "workflow-loop-branch-cleanup.test.js",
   "workflow-prod-loop-serialized.test.js",
+  // Every job that runs python3/pip, ruby/gem/bundle or actionlint pins the
+  // runtime through a setup step (runner-images#14748: ubuntu-latest rolls to
+  // 26.04 from 2026-10-19). Reads the PLATFORM's own workflow and composite
+  // action definitions — a consumer has neither.
+  "workflow-runtime-pinned.test.js",
   // #145 — reads the canonical examples/site thin-caller DEFINITIONS + the
   // platform's own self-dependabot-auto-merge.yml / self-secrets-scan.yml to
   // lock the base-retarget `edited` trigger + caller-job gate. Platform-
@@ -673,6 +698,10 @@ const PLATFORM_META_SPECS = [
   // admin shells and theme/_layouts/preview.html) and for preview-bridge.js's
   // payload. Both read theme/ SOURCE, absent on a consumer.
   "draft-media-fallback.test.js",
+  // #736 media library tidy: vm-sandbox tests for theme/admin/media-library-tidy.js
+  // (upload-name trim, dotfile listing filter) and its placement in the admin
+  // shells. Reads theme/ SOURCE, absent on a consumer.
+  "media-library-tidy.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
   // The production 404 page is uploaded no-cache: parses the platform's own

@@ -14,6 +14,7 @@
 # site Gemfile (matches the other theme spec files).
 
 require_relative '../lib/cms-platform-theme/exclude_e2e_posts'
+require_relative 'support/jekyll_slugify'
 
 # Minimal stand-in for a Jekyll::Document. The plugin only reads `.data`
 # (a Hash) and `.relative_path` (a String) and mutates `.data` in place.
@@ -156,6 +157,64 @@ end
 
 run('apply: object without a data Hash is a no-op (StaticFile et al.)') do
   E.apply(Object.new)
+end
+
+# ── tags (#689) ────────────────────────────────────────────────────────────
+
+run('apply_tag: an e2e- tags-canary entry gets the post stamps plus noindex') do
+  doc = FakeDoc.new(
+    data: { 'name' => 'E2E Tags Canary 1786027176024' },
+    relative_path: '_tags/e2e-tags-canary-1786027176024.md',
+  )
+  E.apply_tag(doc)
+  check(doc.data['sitemap'] == false, "e2e tag: sitemap must be false, got #{doc.data.inspect}")
+  check(doc.data['feed_exclude'] == true, "e2e tag: feed_exclude must be true, got #{doc.data.inspect}")
+  check(doc.data['robots'] == 'noindex,nofollow', "e2e tag: robots must be noindex,nofollow, got #{doc.data.inspect}")
+end
+
+run('apply_tag: test_fixture: true stamps a non-e2e tag entry; an editor robots is kept') do
+  doc = FakeDoc.new(
+    data: { 'name' => 'Fixture', 'test_fixture' => true, 'robots' => 'noindex' },
+    relative_path: '_tags/fixture.md',
+  )
+  E.apply_tag(doc)
+  check(doc.data['feed_exclude'] == true, "flagged tag: feed_exclude must be true, got #{doc.data.inspect}")
+  check(doc.data['robots'] == 'noindex', "flagged tag: editor robots must be kept, got #{doc.data.inspect}")
+end
+
+run('apply_tag: a real tag entry is untouched') do
+  doc = FakeDoc.new(data: { 'name' => 'Ruby' }, relative_path: '_tags/ruby.md')
+  E.apply_tag(doc)
+  check(doc.data == { 'name' => 'Ruby' }, "real tag must be untouched, got #{doc.data.inspect}")
+end
+
+run('excluded_tag_names: only stamped _tags entries, by name') do
+  stamped = FakeDoc.new(data: { 'name' => 'E2E Canary', 'feed_exclude' => true }, relative_path: '_tags/e2e-canary.md')
+  real = FakeDoc.new(data: { 'name' => 'Ruby' }, relative_path: '_tags/ruby.md')
+  site = Struct.new(:collections).new({ 'tags' => Struct.new(:docs).new([stamped, real]) })
+  check(E.excluded_tag_names(site) == ['E2E Canary'],
+        "excluded_tag_names must list only the stamped entry, got #{E.excluded_tag_names(site).inspect}",)
+  no_tags = Struct.new(:collections).new({})
+  check(E.excluded_tag_names(no_tags) == [], 'a site without a tags collection excludes nothing')
+end
+
+run('e2e_tag_name?: a tag name is judged by its slugified name') do
+  slugify = ->(name) { SpecJekyllSlugify.slugify(name) }
+  check(E.e2e_tag_name?('E2E Namedonly', slugify: slugify), "'E2E Namedonly' slugifies to e2e-namedonly")
+  check(E.e2e_tag_name?('e2e-x', slugify: slugify), 'a slug-shaped e2e name must match')
+  check(!E.e2e_tag_name?('Notes on e2e testing', slugify: slugify), 'e2e mid-name must not match')
+  check(!E.e2e_tag_name?('E2E', slugify: slugify), "'E2E' alone has no e2e- prefix")
+  check(!E.e2e_tag_name?(nil, slugify: slugify), 'nil must not match')
+end
+
+run('stamp_tag_page: noindex, out of the sitemap, feed_exclude; an existing robots is kept') do
+  data = {}
+  E.stamp_tag_page(data)
+  check(data == { 'sitemap' => false, 'feed_exclude' => true, 'robots' => 'noindex,nofollow' },
+        "unexpected stamps #{data.inspect}",)
+  kept = { 'robots' => 'noindex' }
+  E.stamp_tag_page(kept)
+  check(kept['robots'] == 'noindex', 'an existing robots value must be kept')
 end
 
 # ── result ─────────────────────────────────────────────────────────────────

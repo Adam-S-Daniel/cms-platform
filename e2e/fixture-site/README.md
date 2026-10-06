@@ -20,7 +20,11 @@ with the harness checked out from the platform rather than living in the site.
 - `_e2e/canary-post.md` — the mandatory canary collection entry.
 - `pages/about.md`, `index.html`, `blog/index.html`, `tags/index.html`,
   `feed.xml` — the site-owned listing/feed surfaces (filter on the shared
-  `feed_exclude` marker).
+  `feed_exclude` marker). The tags index and the home page's tag cloud carry
+  adamdaniel.ai's markup, which the public specs read (#702).
+- `404.html` — the scaffolder's standalone seed, kept identical in shape
+  (`e2e/scaffold-preview-and-404.test.js`), so `not-found.spec.js`'s
+  header/footer check skips here on `pageUsesThemeLayout`.
 - `admin/` — copied from the platform (as `scaffold/create-site.js` does for a
   real site); the theme's `decap_config_hook.rb` renders `config.yml` +
   `config-local.yml` into `_site/admin/` at build.

@@ -4,8 +4,12 @@ title: Blog
 permalink: /blog/
 ---
 <div class="container">
-  <h1>Blog</h1>
-  {% include feed-link.html href="/feed.xml" label="Subscribe to all posts (Atom feed)" %}
+  <div class="page-header">
+    <div class="page-header-with-feed">
+      <h1>Blog</h1>
+      {% include feed-link.html href="/feed.xml" label="Subscribe to all posts (Atom feed)" %}
+    </div>
+  </div>
 
   {%- comment -%} Exclude e2e test-fixture canaries via the shared `feed_exclude`
   marker (stamped by exclude_e2e_posts.rb). They still serve at /blog/<slug>/. {%- endcomment -%}
