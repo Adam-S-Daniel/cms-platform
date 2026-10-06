@@ -27,7 +27,20 @@ const PHONE_390 = { width: 390, height: 844 };
 
 const SEED_POST_SLUG = "2026-04-25-replacement-test-post-1";
 
-async function login(page) {
+async function login(page, { collectionLabel = "Posts" } = {}) {
+  if (collectionLabel !== "Posts") {
+    // Rename the seeded collection in the served config, so the editor reads
+    // "Writing in <label> collection" (jodidaniel.com's longest is "Media
+    // Items"). Only the collection's own 4-space `label:` line matches.
+    await page.route("**/admin/config-test.yml", async (route) => {
+      const response = await route.fetch();
+      const body = (await response.text()).replace(
+        /^( {4}label: )Posts$/m,
+        `$1${collectionLabel}`,
+      );
+      await route.fulfill({ response, body });
+    });
+  }
   await page.addInitScript(() => {
     window.repoFiles = {
       _posts: {
@@ -63,7 +76,7 @@ async function login(page) {
   const loginBtn = page.getByRole("button", { name: /login/i });
   await expect(loginBtn).toBeVisible({ timeout: 60_000 });
   await loginBtn.click();
-  await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({
+  await expect(page.getByRole("link", { name: new RegExp(`^${collectionLabel}$`, "i") })).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -339,5 +352,247 @@ test.describe(
         "Desktop preview pane collapsed — the mobile breakpoint is too wide",
       ).toBeGreaterThan(200);
     });
+  },
+);
+
+// #731 — at 390x844 the editor toolbar was three stacked rows (~165px): the
+// local-mode "saves to your working copy" chip is prepended to the toolbar
+// and took the title's width, so "Writing in Media Items collection" wrapped
+// to 4-5 lines with the avatar and its divider on top of it, and the buttons
+// were 36px tall. Both the short and the longest real label are covered.
+//
+// A describe of its own, not part of the serial one above: serial skips the
+// later cases after the first failure, and each case's verdict should stand
+// alone.
+// 320px has no height assertions (Delete wraps below Save and Published
+// there); it is the width where the title does not fit, so it proves the
+// ellipsis and that the title stays inside its own link.
+test.describe(
+  "CMS admin — phone toolbar (#731)",
+  { tag: ["@admin-read"] },
+  () => {
+    for (const { collectionLabel, width } of [
+      { collectionLabel: "Posts", width: 390 },
+      { collectionLabel: "Media Items", width: 390 },
+      { collectionLabel: "Media Items", width: 320 },
+    ]) {
+      const tall = width >= 375;
+      test(`${width}px: one-line title, no overlap, 44px controls ("${collectionLabel}")`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height: PHONE_390.height });
+        await login(page, { collectionLabel });
+        await openEditor(page);
+
+        const fullTitle = `Writing in ${collectionLabel} collection`;
+        const measure = () =>
+          page.evaluate(() => {
+            const rect = (el) => {
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return {
+                left: r.left,
+                top: r.top,
+                right: r.right,
+                bottom: r.bottom,
+              };
+            };
+            const one = (sel, root = document) => root.querySelector(sel);
+            const toolbar = one(
+              '[class*="EditorContainer"] > [class*="ToolbarContainer"]',
+            );
+            const title = one('[class*="BackCollection"]', toolbar);
+            const dropdown = one(
+              '[class*="PublishedToolbarButton"]',
+              toolbar,
+            );
+            const hits = (el) => {
+              const r = el.getBoundingClientRect();
+              const hit = document.elementFromPoint(
+                r.left + r.width / 2,
+                r.top + r.height / 2,
+              );
+              return !!hit && el.contains(hit);
+            };
+            const controls = {
+              back: one('[class*="ToolbarSectionBackLink"]', toolbar),
+              avatar: one('[class*="AvatarDropdownButton"]', toolbar),
+              save: one('[class*="SaveButton"]', toolbar),
+              published: dropdown,
+              delete: one('[class*="DeleteButton"]', toolbar),
+            };
+            const boxes = {
+              arrow: rect(one('[class*="BackArrow"]', toolbar)),
+              title: rect(title),
+              status: rect(one('[class*="BackStatus"]', toolbar)),
+              chip: rect(document.getElementById("cms-local-save-indicator")),
+            };
+            const controlInfo = {};
+            for (const [name, el] of Object.entries(controls)) {
+              boxes[name] = rect(el);
+              controlInfo[name] = { reachable: hits(el) };
+            }
+            const cs = getComputedStyle(title);
+            return {
+              toolbar: rect(toolbar),
+              boxes,
+              controlInfo,
+              titleText: title.textContent.trim(),
+              titleStyle: {
+                whiteSpace: cs.whiteSpace,
+                textOverflow: cs.textOverflow,
+              },
+              // A second line would at least double the height of a ~1.2em line.
+              titleOneLine:
+                title.getBoundingClientRect().height <
+                parseFloat(cs.fontSize) * 1.6,
+              titleScrollWidth: title.scrollWidth,
+              titleClientWidth: title.clientWidth,
+              meta: rect(one('[class*="ToolbarSectionMeta"]', toolbar)),
+              back: rect(controls.back),
+              viewport: window.innerWidth,
+            };
+          });
+
+        // A box that collapsed to nothing (the title squeezed to 0px wide)
+        // overlaps nothing, so it must be named on its own.
+        const collapsed = (boxes) =>
+          Object.entries(boxes)
+            .filter(
+              ([, b]) => !b || b.right - b.left < 1 || b.bottom - b.top < 1,
+            )
+            .map(([n]) => n);
+        const overlaps = (boxes) => {
+          const names = Object.keys(boxes).filter(
+            (n) => boxes[n] && !["back"].includes(n),
+          );
+          const bad = [];
+          for (let i = 0; i < names.length; i++) {
+            for (let j = i + 1; j < names.length; j++) {
+              const a = boxes[names[i]];
+              const b = boxes[names[j]];
+              const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+              const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+              if (w > 0.5 && h > 0.5) bad.push(`${names[i]} x ${names[j]}`);
+            }
+          }
+          return bad;
+        };
+
+        // Without the local chip (the production shell): two rows of 44px.
+        // 96 = 2 x 44 plus 8px of slack for sub-pixel text metrics.
+        let m = await measure();
+        if (tall) {
+          expect(
+            m.toolbar.bottom - m.toolbar.top,
+            "toolbar height without the chip",
+          ).toBeLessThanOrEqual(96);
+        }
+
+        // With the real local-mode shim loaded, as index-local.html does. The
+        // chip sits on its own thin line under the buttons: 44 + 44 + ~27 = 115,
+        // so 124 allows it and still fails the old ~165px stack.
+        await page.addScriptTag({ url: "/admin/local-save-indicator.js" });
+        await expect(page.locator("#cms-local-save-indicator")).toBeVisible();
+        m = await measure();
+        if (tall) {
+          expect(
+            m.toolbar.bottom - m.toolbar.top,
+            "toolbar height with the local chip",
+          ).toBeLessThanOrEqual(124);
+        }
+
+        // One line, ellipsis when it does not fit, full text still in the DOM
+        // (so the link's accessible name is the whole title).
+        expect(m.titleText).toBe(fullTitle);
+        expect(m.titleStyle).toEqual({
+          whiteSpace: "nowrap",
+          textOverflow: "ellipsis",
+        });
+        expect(m.titleOneLine, "title wraps to more than one line").toBe(
+          true,
+        );
+        await expect(
+          page.getByRole("link", { name: new RegExp(fullTitle) }),
+        ).toBeVisible();
+
+        // The title is actually visible: at least its own text width, or 120px
+        // when it has to truncate (a title squeezed to 0px is "one line" too).
+        const titleWidth = m.boxes.title.right - m.boxes.title.left;
+        expect(
+          titleWidth,
+          `title is ${titleWidth}px wide; its text is ${m.titleScrollWidth}px`,
+        ).toBeGreaterThanOrEqual(Math.min(m.titleScrollWidth, 120));
+        expect(
+          m.titleClientWidth,
+          "title clipped to nothing",
+        ).toBeGreaterThanOrEqual(Math.min(m.titleScrollWidth, 120));
+        expect(collapsed(m.boxes), "boxes with no area").toEqual([]);
+        // It stays inside its own link, so it cannot run under the avatar.
+        expect(
+          m.boxes.title.right,
+          "title spills out of the back link",
+        ).toBeLessThanOrEqual(m.back.right + 1);
+        if (width < 360) {
+          // Too narrow for the text: it must be cut with an ellipsis, not wrapped.
+          expect(
+            m.titleScrollWidth,
+            "320px title should truncate",
+          ).toBeGreaterThan(m.titleClientWidth);
+        }
+
+        // No box covers another, and the divider (the avatar section's left
+        // border) is not drawn through the back link's text.
+        expect(overlaps(m.boxes), JSON.stringify(m.boxes)).toEqual([]);
+        expect(
+          m.back.right,
+          "back link runs under the avatar section",
+        ).toBeLessThanOrEqual(m.meta.left + 1);
+
+        // Every control is a 44px touch target, on-screen, and hit-testable.
+        for (const name of [
+          "back",
+          "avatar",
+          "save",
+          "published",
+          "delete",
+        ]) {
+          const b = m.boxes[name];
+          expect(b.bottom - b.top, `${name} height`).toBeGreaterThanOrEqual(
+            43.5,
+          );
+          expect(b.right - b.left, `${name} width`).toBeGreaterThanOrEqual(
+            43.5,
+          );
+          expect(b.left, `${name} off the left edge`).toBeGreaterThanOrEqual(
+            -1,
+          );
+          expect(b.right, `${name} off the right edge`).toBeLessThanOrEqual(
+            m.viewport + 1,
+          );
+          expect(
+            m.controlInfo[name].reachable,
+            `${name} is covered by another element`,
+          ).toBe(true);
+        }
+
+        // Publish stays pinned while the form scrolls (#731, PR #748).
+        await page.evaluate(() =>
+          window.scrollTo(0, document.documentElement.scrollHeight),
+        );
+        await expect
+          .poll(() => page.evaluate(() => window.scrollY))
+          .toBeGreaterThan(200);
+        m = await measure();
+        expect(
+          m.toolbar.top,
+          "toolbar left the top of the screen",
+        ).toBeLessThanOrEqual(1);
+        expect(
+          m.controlInfo.published.reachable,
+          "Publish is covered while scrolled",
+        ).toBe(true);
+      });
+    }
   },
 );

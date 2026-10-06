@@ -419,7 +419,10 @@
  * link + status, buttons, hostname + avatar) took ~185px of the first
  * screen. Here the toolbar sticks to the top and shrinks to two rows: back
  * link + avatar, then the buttons. The hostname link is dropped (the
- * editor's "View page" box and the URL hint already name the site).
+ * editor's "View page" box and the URL hint already name the site). The
+ * title is one ellipsized line, every control is a 44px target, and the
+ * shim chips (local-mode indicator, deploy pills) wrap to a line of their
+ * own under the buttons instead of squeezing the title.
  *
  * `position: sticky` needs no scrolling ancestor between the toolbar and the
  * viewport. `html, body { overflow-x: hidden }` (rule 1) makes <body> a
@@ -438,6 +441,45 @@
  * `#cms-publish-state` bar (publish-step-hint.js / publish-button.js),
  * which is still not sticky; see the PR for why. */
 @media (max-width: 600px) {
+  /* ── Title on one line, and 44px touch targets (#731) ────────────────
+   * The back link is `[arrow] [title block]`. The title block (an unnamed
+   * <div>) is a flex item that never shrank below "Writing in Media Items
+   * collection" and pushed the avatar's section over it (the divider line ran
+   * through the text). `overflow: hidden` lets it shrink (a clipping flex
+   * item's automatic minimum size is zero), and the text below is
+   * truncated to one line with an ellipsis; the text stays in the DOM, so
+   * the link's accessible name is still the full title. Decap's buttons are
+   * 36px tall; the back link 36px; lift them all to 44px. */
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] {
+    box-sizing: border-box;
+    min-height: 44px;
+    /* Rule 5 lets every section wrap; the arrow must not drop above the
+     * title at 320px. */
+    flex-wrap: nowrap !important;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] > :not([class*="BackArrow"]) {
+    overflow: hidden;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackCollection"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackStatus"] {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] button,
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarDropdown"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="PublishedToolbarButton"] {
+    height: 44px !important;
+    line-height: 44px !important;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMeta"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="SettingsWrapper"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="AvatarDropdownButton"] {
+    box-sizing: border-box;
+    height: 44px;
+  }
+
   @supports (overflow: clip) {
     body {
       overflow-x: clip !important;
@@ -474,6 +516,42 @@
     }
     [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] {
       order: 2;
+      /* Rule 5's 0.4rem gap, applied to the empty "View Live" sub-section
+       * that wraps below the buttons, left a 6px strip under them. */
+      row-gap: 0;
+      padding: 0 8px;
+    }
+    /* Tighter buttons, so Save / Published / Delete share one row down to a
+     * 375px phone (they are 364px wide at Decap's spacing, 351px here). */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] [class*="ToolbarSubSection"] {
+      column-gap: 0.25rem;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] button {
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+    }
+    /* Shim chips that prepend themselves to the toolbar with `order: -1`:
+     * the local "saves to your working copy" indicator and the deploy
+     * status pills. In the first row they took the title's width (the
+     * title squeezed to 4-5 lines and the avatar overlapped it). They now
+     * sit under the buttons, on their own line only while they exist (the
+     * deploy pills are hidden until a publish is running or failed). */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] > :not([class*="ToolbarSection"]) {
+      order: 3 !important;
+      flex: 0 1 auto !important;
+      box-sizing: border-box;
+      max-width: calc(100% - 20px);
+      margin: 0 0 6px 10px !important;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* The deploy pills are links: keep them a 44px touch target. `display`
+     * is deliberately not !important: while a pill has nothing to say its
+     * inline `display: none` must still win. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] > a:not([class*="ToolbarSection"]) {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
     }
     [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="AppHeaderSiteLink"] {
       display: none !important;
