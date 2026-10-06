@@ -289,6 +289,60 @@ test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => 
     });
   });
 
+  test("the title truncates to one line instead of squeezing the avatar (#731)", () => {
+    // Without these, "Writing in Media Items collection" wrapped to 4-5 lines
+    // beside the local-mode chip and the avatar's section sat on top of it.
+    for (const part of ["BackCollection", "BackStatus"]) {
+      const sel = `${TOOLBAR} [class*="${part}"]`;
+      expect(effective(mq600, sel, "white-space")?.value, `${part} white-space`).toBe("nowrap");
+      expect(effective(mq600, sel, "text-overflow")?.value, `${part} text-overflow`).toBe(
+        "ellipsis",
+      );
+      expect(effective(mq600, sel, "overflow")?.value, `${part} overflow`).toBe("hidden");
+    }
+    // The unnamed title block is a flex item that refused to shrink below its
+    // text; the arrow must not wrap above it at 320px either.
+    const block = `${TOOLBAR} [class*="ToolbarSectionBackLink"] > :not([class*="BackArrow"])`;
+    // `overflow: hidden` is what lets it shrink (a flex item's automatic
+    // minimum size is zero once it clips), so that is the declaration to lock.
+    expect(effective(mq600, block, "overflow")?.value).toBe("hidden");
+    expect(effective(mq600, `${TOOLBAR} [class*="ToolbarSectionBackLink"]`, "flex-wrap")).toEqual({
+      value: "nowrap",
+      important: true,
+    });
+  });
+
+  test("every toolbar control is a 44px touch target (#731)", () => {
+    // Decap's buttons and the back link were 36px tall.
+    expect(
+      effective(mq600, `${TOOLBAR} [class*="ToolbarSectionBackLink"]`, "min-height")?.value,
+    ).toBe("44px");
+    for (const sel of [
+      `${TOOLBAR} [class*="ToolbarSectionMain"] button`,
+      `${TOOLBAR} [class*="ToolbarDropdown"]`,
+      `${TOOLBAR} [class*="PublishedToolbarButton"]`,
+    ]) {
+      expect(effective(mq600, sel, "height")).toEqual({ value: "44px", important: true });
+      expect(effective(mq600, sel, "line-height")).toEqual({ value: "44px", important: true });
+    }
+    for (const part of ["ToolbarSectionMeta", "SettingsWrapper", "AvatarDropdownButton"]) {
+      expect(effective(mq600, `${TOOLBAR} [class*="${part}"]`, "height")?.value, part).toBe("44px");
+    }
+  });
+
+  test("shim chips drop under the buttons instead of taking the title's row (#731)", () => {
+    // local-save-indicator.js and deploy-status-pill.js prepend with an inline
+    // `order: -1`, which only an !important rule can beat.
+    const chip = `${TOOLBAR} > :not([class*="ToolbarSection"])`;
+    expect(rulesFor(supports, chip).length, "chip rule inside @supports").toBeGreaterThan(0);
+    expect(effective(mq600, chip, "order")).toEqual({ value: "3", important: true });
+    // The deploy pills are links, so they keep a 44px target; their `display`
+    // must not be !important or it would show a pill that is meant to be hidden.
+    const pill = `${TOOLBAR} > a:not([class*="ToolbarSection"])`;
+    expect(effective(mq600, pill, "min-height")?.value).toBe("44px");
+    expect(effective(mq600, pill, "display")).toEqual({ value: "flex", important: false });
+  });
+
   test("index-local.html's fixed commit / platform pills move off the stuck button row", () => {
     // Their inline `top: 60px / 91px; right: 12px` (z-index 10000) covered the
     // right end of Delete (measured: pill 163-378 x 60-83 over Delete
