@@ -43,6 +43,13 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-06 — cms-platform/consumer-repo-provisioning — edit
+
+- Motivation: the `CMS_E2E_PAT` table said `POST /actions/runs/{id}/pending_deployments` is an Actions endpoint covered by Actions: write; GitHub's fine-grained-token table lists it under Deployments (write), and `docs/ADMIN-AUTH-SECURITY.md` ("Where a GitHub App behaves differently", point 2) already recorded the mismatch.
+- Change: the PAT table gains a Deployments (Read and write) row for the reaper's rejection call, the "Deployments not needed" bullet is narrowed to deployment creation, and the reviewer-role note says Deployments: write.
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change. Its `Does not add Workflows, Deployments, or Checks grants` check describes the nudge-only scenario; a reviewer should confirm it still holds when the skill now lists Deployments for the reaper.
+- Outcome: pending merge.
+
 ## 2026-10-05 — cms-platform/ci-watcher-loops — edit
 
 - Motivation: in skills-evals ci-watcher-loops rounds 3 and 4 (https://github.com/Adam-S-Daniel/skills-evals/issues/89#issuecomment-5997263591, https://github.com/Adam-S-Daniel/skills-evals/issues/89#issuecomment-5998102731), with-skill trials discarded `gh workflow run`'s output and found the run with `gh run list --limit 1` (3 of 3 in round 4, 0 of 3 without the skill): an extra read, and a race that can pick another actor's run of the same workflow.

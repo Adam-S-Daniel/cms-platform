@@ -67,7 +67,8 @@ permissions**:
 | **Contents** | **Read and write** | create/delete branch refs — the publish-via-auto-merge **delete-recovery** branch, loop canary branches — and `sweep-stale-cms-prs --delete-branch` |
 | **Pull requests** | **Read and write** | open / label `cms/ready` / comment / close PRs and **enable auto-merge** (nudge, sweep, auto-resolve, the loops, the delete shim) |
 | **Issues** | **Read and write** | `cms-editorial-workflow` drives the editorial-workflow labels and status comments through the **issues** API — `issues.createLabel`, `issues.listComments`, `issues.createComment`, `issues.updateComment`. A PR is an issue to those endpoints, so `Pull requests: write` does NOT cover them |
-| **Actions** | **Read and write** | **read:** the loops poll `deploy-production` run status (`GET /repos/…/actions/workflows/…/runs`). **write:** `regression-review-reaper` rejects superseded review gates via `POST /repos/…/actions/runs/{id}/pending_deployments` (`state=rejected`) |
+| **Actions** | **Read and write** | **read:** the loops poll `deploy-production` run status (`GET /repos/…/actions/workflows/…/runs`); `regression-review-reaper` lists a run's gate with `GET /repos/…/actions/runs/{id}/pending_deployments`. **write:** kept from the earlier grant; no call in this repo's workflows that receives the PAT was found to need it (rejecting a gate needs Deployments: write, next row), so confirm before narrowing |
+| **Deployments** | **Read and write** | **write:** `regression-review-reaper` rejects superseded review gates via `POST /repos/…/actions/runs/{id}/pending_deployments` (`state=rejected`). Approving or rejecting a pending deployment needs **Deployments: write**, not Actions: GitHub's fine-grained-token table lists that POST only under Deployments (write), and `docs/ADMIN-AUTH-SECURITY.md` (GitHub App sign-in tables) records the same |
 | **Commit statuses** | **Read** | `cms-automerge-nudge` and `cms-editorial-workflow` call `repos.getCombinedStatusForRef` (`GET /repos/…/commits/{ref}/status`) to decide whether a head sha is green |
 | **Metadata** | **Read** | mandatory — auto-selected for every fine-grained PAT |
 
@@ -75,12 +76,12 @@ permissions**:
 
 - *Workflows* — `CMS_E2E_PAT` never edits `.github/workflows/*`. That single
   omission is the whole reason it stays separate from `CMS_PLATFORM_PAT`.
-- *Deployments* — nothing this token drives touches the deployments API.
-  `pending_deployments` looks like it should, but it is an **Actions** endpoint
-  (`/actions/runs/{id}/pending_deployments`) and is covered by the row above;
-  `repos.createDeployment` / `createDeploymentStatus` live in `deploy-preview`
-  and `deploy-production`, which run on `GITHUB_TOKEN`, not this PAT. Verified
-  2026-09-02 by grepping every caller that receives `CMS_E2E_PAT`.
+- *Deployments: create* — `repos.createDeployment` / `createDeploymentStatus`
+  live in `deploy-preview` and `deploy-production`, which run on
+  `GITHUB_TOKEN`, not this PAT (verified 2026-09-02 by grepping every caller that
+  receives `CMS_E2E_PAT`). The Deployments grant above is for the reviewer
+  endpoint only, which the same grep did not count as a deployments call
+  because its path is `/actions/runs/{id}/pending_deployments`.
 - *Checks* — **fine-grained PATs have no Checks permission at all.** The nudge
   does read check-runs (`checks.listForRef`); that read succeeds only because
   all three repos are PUBLIC. The same caveat applies to `Commit statuses`,
@@ -90,7 +91,7 @@ permissions**:
 - Settings → General → **Allow auto-merge** = ON (else the nudge can't enable auto-merge).
 - The PAT's user must be a **configured reviewer of the `regression-review` environment**
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
-  reject its pending deployments even with `Actions: write`.
+  reject its pending deployments even with `Deployments: write`.
 
 ## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103
 
