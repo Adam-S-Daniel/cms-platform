@@ -23,11 +23,17 @@
     "yaml": "2.9.1"
   },
   "overrides": {
-    "@hapi/joi": "npm:joi@17.13.7",
+    "@hapi/joi": "npm:joi@17.13.8",
     "decap-cms-core": {
       "immutable": "$immutable",
       "react": "19.1.0",
       "react-dom": "19.1.0"
+    },
+    "decap-server": {
+      "simple-git": "4.0.2"
+    },
+    "serve": {
+      "compression": "1.8.2"
     }
   }
 }
