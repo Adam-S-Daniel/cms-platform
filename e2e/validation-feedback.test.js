@@ -187,14 +187,14 @@ function load({
   };
   // `during` runs after the shim saw the click and before Decap's re-render
   // settles: where a toast the click raised would appear.
-  const click = (target, during) => {
-    listeners.click.fn({ target });
+  const click = (target, during, trusted = true) => {
+    listeners.click.fn(trusted === "absent" ? { target } : { target, isTrusted: trusted });
     if (during) during();
     flush();
   };
   // Enter/Space/etc. pressed on `target`, as the capture-phase listener sees it.
-  const press = (target, key, during) => {
-    listeners.keydown.fn({ target, key });
+  const press = (target, key, during, extra = {}) => {
+    listeners.keydown.fn({ target, key, isTrusted: true, ...extra });
     if (during) during();
     flush();
   };
@@ -559,6 +559,58 @@ test.describe("validation-feedback.js (#730)", () => {
     input.focus = () => order.push("focus");
     t.press(menuItem("Publish now"), "Enter");
     expect(order).toEqual(["expand", "scroll", "focus"]);
+  });
+
+  test("a scripted click (autosave on tab hide or idle) toasts and scrolls but never moves focus", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    const input = withControl(t);
+    t.click(button("Save"), undefined, false);
+    expect(t.toasts, "the report itself is unchanged").toHaveLength(1);
+    expect(t.errorEls[0].scrolled).not.toBeNull();
+    expect(input.focused, "focus stays where the editor was typing").toBeNull();
+    // ... and an event with no isTrusted at all is not taken as the editor's.
+    const u = load({ errors: ["Permalink: bad"] });
+    const field = withControl(u);
+    u.click(button("Save"), undefined, "absent");
+    expect(u.toasts).toHaveLength(1);
+    expect(field.focused).toBeNull();
+  });
+
+  test("a held Enter or Space (repeat) is not another attempt", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.press(menuItem("Publish now"), "Enter", undefined, { repeat: true });
+    t.press(menuItem("Publish now"), " ", undefined, { repeat: true });
+    expect(t.toasts).toHaveLength(0);
+    t.press(menuItem("Publish now"), "Enter", undefined, { repeat: false });
+    expect(t.toasts).toHaveLength(1);
+  });
+
+  test("a field still hidden (its row just opened) is focused once it shows, scrolled to again", () => {
+    const t = load({ errors: ["URL: bad."] });
+    const input = withControl(t);
+    let hiddenFrames = 2;
+    Object.defineProperty(input, "offsetParent", { get: () => (hiddenFrames-- > 0 ? null : {}) });
+    t.press(menuItem("Publish now"), "Enter");
+    expect(input.focused).toEqual({ preventScroll: true });
+    expect(t.errorEls[0].scrolled, "scrolled again before the focus").not.toBeNull();
+  });
+
+  test("a field that never shows is waited for only a few frames, then tried once, without throwing", () => {
+    const t = load({ errors: ["URL: bad."] });
+    const input = withControl(t);
+    let reads = 0;
+    let focusCalls = 0;
+    Object.defineProperty(input, "offsetParent", {
+      get: () => {
+        reads++;
+        return null;
+      },
+    });
+    input.focus = () => focusCalls++;
+    expect(() => t.press(menuItem("Publish now"), "Enter")).not.toThrow();
+    expect(reads, "one look now plus a bounded number of frames").toBeLessThanOrEqual(6);
+    expect(focusCalls).toBe(1);
+    expect(t.toasts).toHaveLength(1);
   });
 
   test("no error list means no focus move", () => {

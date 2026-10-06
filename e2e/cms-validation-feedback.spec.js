@@ -271,6 +271,8 @@ test.describe(
       // The row the message is about is open; the good row stays shut.
       await expect(page.getByLabel(/^URL$/).last()).toBeVisible();
       await expect(page.getByLabel(/^URL$/).first()).toBeHidden();
+      // ... and focus is inside it, on the field the message names.
+      await expect(page.getByLabel(/^URL$/).last()).toBeFocused();
     });
 
     // ── Publish by keyboard (UX round 3) ──────────────────────────────────
@@ -312,6 +314,25 @@ test.describe(
         await expect(toast).toHaveCount(0);
       });
     }
+
+    test("an autosave click on page hide reports, but never moves focus out from under the editor", async ({
+      page,
+    }) => {
+      // autosave-on-hide.js clicks the real Save button from a script when the
+      // page is hidden (an incomplete entry is skipped, a format error is not).
+      // That is not a Save the editor pressed: focus must stay in the Body.
+      await openNewPage(page, { body: true });
+      const body = page.locator('[role="textbox"][contenteditable="true"]').last();
+      await body.click();
+      await expect(body).toBeFocused();
+
+      await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+      const toast = page.locator(SHIM_TOAST);
+      await expect(toast).toBeVisible({ timeout: 15_000 });
+      await expect(toast).toContainText(/^Not saved yet\. Permalink: Must start and end with a slash/);
+      await settle(page);
+      await expect(body, "the Permalink did not take focus").toBeFocused();
+    });
 
     test("Enter on Save reports once and moves focus to the field", async ({ page }) => {
       await openNewPage(page, { body: true });
