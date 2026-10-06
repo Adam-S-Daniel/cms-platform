@@ -138,7 +138,13 @@
  *
  * A hidden tab polls nothing: an admin left open in a background tab
  * overnight must not spend the editor's rate limit on an entry nobody is
- * looking at.
+ * looking at. A refresh() the editor asked for is not a background poll,
+ * though: publish-button.js calls it after a Publish press, and an editor who
+ * pressed Publish and switched to the Live Preview tab before the PR was
+ * found used to get "could not be published right now" with no Publish
+ * control on screen, because every re-read it asked for was skipped (#644).
+ * So refresh() reads whether the tab is hidden or not; only the timer and
+ * event ticks honor the guard.
  *
  * Every fetch degrades to "no facts" rather than throwing — a rate limit, a
  * revoked token or an offline laptop leaves the surfaces showing their last
@@ -638,9 +644,12 @@
   }
 
   var inFlight = false;
-  async function tick() {
+  // `requested` is true only from refresh(). setInterval and the event
+  // listeners pass nothing or an Event, so the strict compare keeps them on
+  // the hidden-tab guard.
+  async function tick(requested) {
     if (inFlight) return;
-    if (document.hidden) return; // see "Budget" in the header
+    if (document.hidden && requested !== true) return; // see "Budget" in the header
     var entry = currentEntry();
     if (!entry) {
       if (state.entry !== null) {
@@ -680,8 +689,11 @@
       };
     },
     // Called by publish-button.js the moment it arms a PR, so the editor
-    // sees "Going live…" immediately rather than up to 30 s later.
-    refresh: tick,
+    // sees "Going live…" immediately rather than up to 30 s later. Reads even
+    // in a hidden tab — see "Budget" in the header.
+    refresh: function () {
+      return tick(true);
+    },
     currentEntry: currentEntry,
     branchFor: branchFor,
     matchesEntry: matchesEntry,

@@ -985,19 +985,30 @@
   }
 
   // ── orchestration ────────────────────────────────────────────────
+  // requestAnimationFrame never fires in a background tab, so a pass scheduled
+  // there, or scheduled just before the tab went to the back, waited until the
+  // editor returned (#644). A hidden tab paints nothing, so the next task is
+  // as good as the next frame; `pending` makes whichever runs first the only
+  // pass.
   var pending = false;
+  function runAugment() {
+    if (!pending) return;
+    pending = false;
+    try {
+      augment();
+    } catch (e) {
+      console.warn("[posts-list-enhance] augment error: " + (e && e.message ? e.message : e));
+    }
+  }
   function scheduleAugment() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () {
-      pending = false;
-      try {
-        augment();
-      } catch (e) {
-        console.warn("[posts-list-enhance] augment error: " + (e && e.message ? e.message : e));
-      }
-    });
+    if (document.hidden) setTimeout(runAugment, 0);
+    else requestAnimationFrame(runAugment);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) runAugment();
+  });
 
   function augment() {
     hideE2EQuickAdd();
