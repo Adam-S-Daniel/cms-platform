@@ -10,9 +10,40 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.146)
+## Version history (v0.1.0 → v0.1.147)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.147 — A failed field-pattern message in the admin now reads as the site wrote it and a blocked Save or Publish says so, and the media library trims uploaded file names and hides dotfiles.**
+Two changes since v0.1.146, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `theme/admin/`, `e2e/` and two `docs/` files changed apart from the pins (`git diff --stat v0.1.146 origin/main` is 12 files: five under
+`theme/admin/`, five under `e2e/` and two under `docs/`): no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`,
+`scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
+Validation feedback. [#741](https://github.com/Adam-S-Daniel/cms-platform/pull/741) (part of
+[#730](https://github.com/Adam-S-Daniel/cms-platform/issues/730), not closed) adds `theme/admin/validation-feedback.js`, loaded deferred
+after `decap-cms.js` in all three admin shells. Decap's English `regexPattern` phrase wrapped the site's own sentence (hence a doubled
+full stop) and its error styling upper-cased it (`/pages/about/` read `/PAGES/ABOUT/`); the shim rewrites the phrase to
+`%{fieldLabel}: %{pattern}` through `CMS.getLocale('en')` and turns the upper-casing off for `[class*="ControlErrorsList"]`. Decap core
+raises its toast only for a presence error, so a pattern error on Save or Publish gave no feedback: after a click on Save or a publish
+menu item the shim scrolls to the first field error and toasts its message, unless Decap raised its own toast, removes its earlier toast at
+the start of each check, and ignores the toolbar's Publish control (it only opens the menu). Each part is a silent no-op if Decap changes
+the surface it reads. `docs/PUBLISHING-UX.md` section 2.11 records the upstream limitation. New `validation-feedback.test.js` (13 tests) is
+in `PLATFORM_META_SPECS`; the browser spec `cms-validation-feedback.spec.js` (tagged `@admin-write`) is verified by CI. Site `pattern`
+messages in adamdaniel.ai and jodidaniel.com are unchanged.
+Media library tidy. [#743](https://github.com/Adam-S-Daniel/cms-platform/pull/743) (part of
+[#736](https://github.com/Adam-S-Daniel/cms-platform/issues/736), not closed) adds `theme/admin/media-library-tidy.js`, loaded
+non-deferred before `decap-cms.js` in `index.html` and `index-local.html` (not the stock-Decap rehearsal shell `index-test.html`). Decap's
+`persistMedia` names an upload `sanitizeSlug(file.name.toLowerCase(), config.slug)`, which leaves a trailing hyphen for a name like
+`Workshop Diagram (final).jpg`; capture-phase `change` and `drop` listeners rename the picked File in place with leading and trailing
+non-letter, mark and digit characters trimmed off the part before the last dot, so Decap's own sanitizer stores `workshop-diagram-final.jpg`
+(existing files are not renamed). A `window.fetch` wrap drops dotfile blobs (`.gitkeep`) from the GitHub tree listing and from
+decap-server's `getMedia` answer. The third item in #736, an entry delete leaving its image orphaned, is not fixed by design (an upload is
+shared state and Decap keeps no reference index); the reasoning is recorded in `docs/ADMIN-DELIVERY.md` under "Media library tidy". New
+`media-library-tidy.test.js` (32 tests) is in `PLATFORM_META_SPECS` and `select-specs.js`.
+Consumer effect. Both are admin-shell files a site picks up with its next bump, when the `cms-platform-theme` gem tag names v0.1.147. Bump
+only, no consumer-side edit: no reusable workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy
+redeploy and no bootstrap redeploy. Neither touches public-page theme files, so the visual-regression gate is not expected to flag the bump.
+Per `AGENTS.md`, #743 is done only with the consumer bump and a green `cms-media-roundtrip` run, which a reviewer or the owner drives.
 
 **v0.1.146 — The admin preview pane no longer crashes on collections without a `body` field, the share row's idle copy icon, phone tap targets and Mastodon prompt are fixed, bare Markdown tables get borders and padding, and Atom feeds open as a readable page in a browser.**
 Three changes since v0.1.145, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
