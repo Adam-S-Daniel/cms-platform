@@ -954,9 +954,8 @@ stale there), enabling auto-merge (the `cms/ready` label makes
    App's grant. The closest evidence is favorable: the e2e loops already sign
    Decap in with a fine-grained PAT (`e2e/decap-pat.js`).
 2. **Approving a deployment needs Deployments: write**, in both the App and the
-   fine-grained-PAT tables. `skills/consumer-repo-provisioning/SKILL.md` used to call
-   it an Actions endpoint; GitHub's tables list the POST under Deployments
-   (write), and the skill now says so. The approver must still be
+   fine-grained-PAT tables. `skills/consumer-repo-provisioning/SKILL.md` calls
+   it an Actions endpoint; GitHub's tables disagree. The approver must still be
    a required reviewer of the environment, and a user token acts as that user.
 3. **`scope` is not a GitHub App authorize parameter.** The proxy keeps sending
    `&scope=`; GitHub is expected to ignore it.
