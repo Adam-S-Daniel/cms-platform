@@ -39,8 +39,15 @@ layout: default
     other listings use. A published canary tagged like a real post must not
     appear in the tag archive, though it still serves at /blog/<slug>/.
   {%- endcomment -%}
-  {% assign tagged_posts = site.posts | where_exp: "post", "post.tags contains tag_label" | where_exp: "post", "post.feed_exclude != true" %}
-  {% if tagged_posts.size > 0 %}
+  {%- comment -%}
+    Match by slug, not by exact spelling (#754): `Quotes` and `quotes` share
+    this one /tags/<slug>/ page, so a post under either spelling belongs here.
+    auto_tag_pages.rb builds `site.tag_posts_by_slug` once (slugifying every
+    post's tags on each tag page made large builds several times slower);
+    it already leaves out the feed_exclude posts.
+  {%- endcomment -%}
+  {%- assign tagged_posts = site.tag_posts_by_slug[_tag_slug] -%}
+  {% if tagged_posts and tagged_posts.size > 0 %}
   <ul class="post-list">
     {% for post in tagged_posts %}
     {% assign words = post.content | number_of_words %}
