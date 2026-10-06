@@ -218,6 +218,15 @@
   <script src="draft-media-fallback.js"></script>
 
   <!--
+    media-library-tidy shim (#736). Same non-deferred / before-decap idiom: it
+    wraps window.fetch (to drop dotfiles such as .gitkeep from the media
+    folder listing) and installs capture-phase listeners that trim a dangling
+    separator off an uploaded file's name before Decap sanitizes it. See the
+    file's header.
+  -->
+  <script src="media-library-tidy.js"></script>
+
+  <!--
     Decap CMS — pinned to an exact version. Editorial workflow + the
     GitHub backend with our custom OAuth proxy (`base_url` +
     `auth_endpoint` in admin/config.yml) drive the cms/<branch> →

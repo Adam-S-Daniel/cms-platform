@@ -682,6 +682,10 @@ const PLATFORM_META_SPECS = [
   // admin shells and theme/_layouts/preview.html) and for preview-bridge.js's
   // payload. Both read theme/ SOURCE, absent on a consumer.
   "draft-media-fallback.test.js",
+  // #736 media library tidy: vm-sandbox tests for theme/admin/media-library-tidy.js
+  // (upload-name trim, dotfile listing filter) and its placement in the admin
+  // shells. Reads theme/ SOURCE, absent on a consumer.
+  "media-library-tidy.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
   // The production 404 page is uploaded no-cache: parses the platform's own
