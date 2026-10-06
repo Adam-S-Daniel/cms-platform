@@ -662,8 +662,10 @@
  * stale toast with a script `.click()`; neither goes through hit-testing, so
  * this rule does not affect it.
  *
- * Desktop (> 1100px) is untouched: this fix is scoped to the widths where the
- * toolbar is pinned under the container. */
+ * Why 1100px: the container overlaps the avatar and Publish at 390, 820 and
+ * 1100px (the toolbar itself is sticky only at <= 600px; the overlap needs
+ * only the top-right container over the toolbar). Desktop above 1100px is left
+ * unchanged. */
 @media (max-width: 1100px) {
   [class*="Toastify__toast-container"] {
     pointer-events: none;

@@ -54,7 +54,7 @@ async function failAPublish(page) {
   await expect(page.getByText(MISSED)).toBeVisible({ timeout: 15_000 });
 }
 
-// What a tap at the centre of `locator` would land on, as a verdict.
+// What a tap at the center of `locator` would land on, as a verdict.
 const hitTest = (locator) =>
   locator.evaluate((el) => {
     const r = el.getBoundingClientRect();
@@ -78,7 +78,7 @@ test.describe(
       const avatar = await page.locator(AVATAR).boundingBox();
       for (const box of [publish, avatar]) {
         const cy = box.y + box.height / 2;
-        expect(cy, "toast covers the control's centre").toBeLessThan(toast.y + toast.height);
+        expect(cy, "toast covers the control's center").toBeLessThan(toast.y + toast.height);
       }
 
       expect(await hitTest(page.locator(AVATAR))).toBe("self");
