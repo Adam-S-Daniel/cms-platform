@@ -23,6 +23,7 @@ const { test, expect } = require("./base");
 
 const IPHONE_16 = { width: 393, height: 852 };
 const DESKTOP = { width: 1400, height: 900 };
+const PHONE_390 = { width: 390, height: 844 };
 
 const SEED_POST_SLUG = "2026-04-25-replacement-test-post-1";
 
@@ -205,6 +206,100 @@ test.describe(
       });
       expect(padding, "CollectionMain bottom clearance (px)").toBeGreaterThanOrEqual(64);
     });
+
+    // #757.1 — on a 390px phone the fixed bottom-right "Live Preview" button
+    // floated over the Markdown / Rich Text toggle label and the Published
+    // toggle while an editor scrolled the form. The button lives in the SHELLS
+    // (admin/index.html, admin/index-local.html), not in the test-repo shell
+    // this spec drives, so the shell's own element and inline styles are lifted
+    // into the editor page with the real HTML parser; admin-mobile.css (linked
+    // by index-test.html too) is the layer under test.
+    for (const shell of ["index.html", "index-local.html"]) {
+      test(`390px phone (${shell}): the Live Preview button stays off the editor toggles`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(PHONE_390);
+        await login(page);
+        await openEditor(page);
+
+        const lifted = await page.evaluate(async (shellFile) => {
+          const html = await (await fetch(`/admin/${shellFile}`)).text();
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          const link = doc.getElementById("live-preview-link");
+          if (!link) return false;
+          for (const style of doc.querySelectorAll("style")) {
+            if (style.textContent.includes(".floating-link")) {
+              document.head.appendChild(document.importNode(style, true));
+            }
+          }
+          document.body.appendChild(document.importNode(link, true));
+          return true;
+        }, shell);
+        expect(lifted, `admin/${shell} must carry #live-preview-link`).toBe(true);
+
+        const button = page.getByRole("link", { name: "Live Preview" });
+        await expect(button).toBeVisible();
+
+        // Reachable and tappable: fully inside the viewport, >= 44 CSS px.
+        const box = await button.boundingBox();
+        const vp = page.viewportSize();
+        expect.soft(box.width, "tap target width").toBeGreaterThanOrEqual(44);
+        expect.soft(box.height, "tap target height").toBeGreaterThanOrEqual(44);
+        expect.soft(box.x + box.width, "clipped off the right edge").toBeLessThanOrEqual(vp.width);
+        expect.soft(box.y + box.height, "clipped off the bottom edge").toBeLessThanOrEqual(vp.height);
+
+        // Scroll the whole form past the button in small steps; at every stop,
+        // none of the toggle controls on screen may intersect it: the Markdown /
+        // Rich Text toggle (its row, both mode labels and its switch) and the
+        // Published toggle (its switch and its label chip).
+        const overlaps = await page.evaluate(async () => {
+          const btn = document.getElementById("live-preview-link").getBoundingClientRect();
+          const editor = document.querySelector('[class*="EditorContainer"]');
+          const targets = [
+            ...[...editor.querySelectorAll('[class*="ToolbarToggle"]')].map((n) => ["modeToggle", n]),
+            ...[...editor.querySelectorAll('button[role="switch"]')].map((n) => ["switch", n]),
+            ...[...editor.querySelectorAll("label, span")]
+              .filter((n) => n.children.length === 0 && n.textContent.trim() === "Published")
+              .map((n) => ["publishedLabel", n]),
+          ];
+          const hits = [];
+          for (let y = 0; y <= document.documentElement.scrollHeight; y += 20) {
+            window.scrollTo(0, y);
+            await new Promise((r) => requestAnimationFrame(() => r()));
+            for (const [name, n] of targets) {
+              const r = n.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              if (r.bottom < 0 || r.top > window.innerHeight) continue;
+              const w = Math.min(r.right, btn.right) - Math.max(r.left, btn.left);
+              const h = Math.min(r.bottom, btn.bottom) - Math.max(r.top, btn.top);
+              if (w > 1 && h > 1) hits.push(`${name} at scrollY=${y}`);
+            }
+          }
+          window.scrollTo(0, 0);
+          return { hits, names: [...new Set(targets.map(([name]) => name))] };
+        });
+        expect(overlaps.names, "the toggles under test must be on the page").toEqual(
+          expect.arrayContaining(["modeToggle", "switch", "publishedLabel"]),
+        );
+        expect(overlaps.hits, "Live Preview overlaps an editor toggle").toEqual([]);
+
+        // With a text field focused (keyboard up) the button steps aside, and
+        // comes back on blur. It keeps its accessible name either way.
+        const title = page.getByLabel(/^Title$/);
+        await title.focus();
+        await expect(button).toBeHidden();
+        await title.blur();
+        await expect(button).toBeVisible();
+
+        // Desktop keeps the labeled pill.
+        await page.setViewportSize(DESKTOP);
+        await expect(button).toBeVisible();
+        expect(
+          (await button.boundingBox()).width,
+          "desktop Live Preview button lost its visible label",
+        ).toBeGreaterThan(100);
+      });
+    }
 
     test("desktop layout is untouched — the preview pane still renders wide", async ({ page }) => {
       // Guard against the breakpoint creeping up and stealing the

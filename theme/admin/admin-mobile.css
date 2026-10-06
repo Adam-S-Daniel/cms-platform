@@ -360,6 +360,56 @@
     flex-wrap: wrap !important;
     row-gap: 0.4rem;
   }
+
+  /* ── 12. Live Preview is a small round icon button (cms-platform#757.1) ──
+   * Rule 8's bottom clearance only helps once the form is scrolled to its
+   * end: mid-form, the ~135px-wide "Live Preview" pill (fixed, bottom-right,
+   * z-index 10000) sat over the Markdown / Rich Text toggle's label and the
+   * Published row. Shrink it to a 44px circle (the tap-target minimum) tucked
+   * into the corner. The visible label becomes visually hidden, not removed,
+   * so the link keeps its accessible name; the shells' `title` stays too.
+   * While a text field has focus (the on-screen keyboard is up, and Android
+   * Chrome floats fixed elements just above it, over what is being typed) the
+   * button is hidden; `visibility` rather than `display` because the shells'
+   * route gate owns `display`. Checkboxes and the Published switch do not
+   * raise a keyboard, so they leave it alone. `:has()` is unsupported before
+   * Safari 15.4 / Chrome 105; there the rule is dropped and the button just
+   * stays visible. Scoped to #live-preview-link: #reviews-link is already
+   * hidden by rule 9. Source order beats the shells' inline `#live-preview-
+   * link { bottom }` / `.floating-link` rules, which come first in <head>. */
+  #live-preview-link {
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    gap: 0;
+    justify-content: center;
+    border-radius: 50%;
+    right: 0.75rem;
+  }
+  #live-preview-link svg {
+    width: 20px;
+    height: 20px;
+  }
+  #live-preview-link .floating-link-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  body:has(
+      input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="file"]):focus,
+      textarea:focus,
+      select:focus,
+      [contenteditable="true"]:focus
+    )
+    #live-preview-link {
+    visibility: hidden;
+  }
 }
 
 /* ── Phone only (<= 600px): a sticky, compact editor toolbar (#731) ───────
