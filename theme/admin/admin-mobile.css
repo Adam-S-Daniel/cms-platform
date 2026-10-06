@@ -37,6 +37,46 @@
  * layout.
  */
 
+/* ── 0. Keyboard focus ring (all widths) ─────────────────────────────
+ * Decap leaves buttons and links on the browser's default focus ring, a
+ * dark 1-2 px line (computed `outline: rgb(16,16,16) auto`). On its dark
+ * fills ("＋ Post", the Publish group) that ring is dark on dark and all but
+ * invisible (UX round 3: ad-kbd K14), and on the collection sidebar the
+ * links are exactly as wide as their scrolling list, so the outline was cut
+ * off at both sides and showed only as top and bottom lines (jd-kbd F11b).
+ *
+ * Two tones so one of them contrasts with ANY fill or page color: a white
+ * 2 px outline with a #1d4ed8 ring outside it. `:focus-visible` only, so a
+ * mouse click looks exactly as before. Scoped to Decap's root so it cannot
+ * leak into a consumer's public pages; no `!important`, Decap's Emotion
+ * rules are a single class and lose to the id. */
+#nc-root :is(button, a, [role="button"], [role="menuitem"], summary):focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 0;
+  box-shadow: 0 0 0 4px #1d4ed8;
+}
+/* Sidebar collection links sit flush in an `overflow: auto` list, so any
+ * ring drawn outside the link's box is clipped. Draw the whole ring inside
+ * it instead: a #1d4ed8 outline pulled in by its own width, with the white
+ * tone as an inset shadow. */
+#nc-root [class*="SidebarNavList"] a:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px #fff;
+}
+/* Decap's dropdown lists (Publish, Status, Account, Quick add, Filter, Add
+ * Component) are `overflow: hidden` with their items flush against the top
+ * and sides, so the general outside ring is clipped on every menu item and
+ * "Publish now" showed no focus at all (UX round 4 triage package 2, the
+ * gap left by cms-platform#773). Same inside-the-box ring as the sidebar. It
+ * has the same specificity as the general ring rule and comes after it, so
+ * it wins for menu items only; keep it below that rule. */
+#nc-root [role="menuitem"]:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px #fff;
+}
+
 @media (max-width: 768px) {
   /* ── 1. Remove the desktop min-width floor ──────────────────────────
    * The shell + editor containers size themselves for the side-by-side
@@ -349,6 +389,268 @@
     margin-top: 0 !important;
     padding-top: 0 !important;
   }
+
+  /* ── 11. Date field: Now / Clear stay on-screen (cms-platform#731) ──────
+   * Decap's datetime control is a nowrap flex row of the native
+   * `datetime-local` input (~245px intrinsic) plus the Now / Clear buttons.
+   * At 390px the pair is ~377px wide in a ~358px card, so "Clear" was cut
+   * off at the right edge. Let the buttons wrap under the input when they
+   * do not fit. */
+  [class*="DateTimeControl"] {
+    flex-wrap: wrap !important;
+    row-gap: 0.4rem;
+  }
+
+  /* ── 12. Live Preview is a small round icon button (cms-platform#757.1) ──
+   * Rule 8's bottom clearance only helps once the form is scrolled to its
+   * end: mid-form, the ~135px-wide "Live Preview" pill (fixed, bottom-right,
+   * z-index 10000) sat over the Markdown / Rich Text toggle's label and the
+   * Published row. Shrink it to a 44px circle (the tap-target minimum) tucked
+   * into the corner. The visible label becomes visually hidden, not removed,
+   * so the link keeps its accessible name; the shells' `title` stays too.
+   * While a text field has focus (the on-screen keyboard is up, and Android
+   * Chrome floats fixed elements just above it, over what is being typed) the
+   * button is hidden; `visibility` rather than `display` because the shells'
+   * route gate owns `display`. Checkboxes and the Published switch do not
+   * raise a keyboard, so they leave it alone. `:has()` is unsupported before
+   * Safari 15.4 / Chrome 105; there the rule is dropped and the button just
+   * stays visible. Scoped to #live-preview-link: #reviews-link is already
+   * hidden by rule 9. Source order beats the shells' inline `#live-preview-
+   * link { bottom }` / `.floating-link` rules, which come first in <head>. */
+  #live-preview-link {
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    gap: 0;
+    justify-content: center;
+    border-radius: 50%;
+    right: 0.75rem;
+  }
+  #live-preview-link svg {
+    width: 20px;
+    height: 20px;
+  }
+  #live-preview-link .floating-link-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  body:has(
+      input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="file"]):focus,
+      textarea:focus,
+      select:focus,
+      [contenteditable="true"]:focus
+    )
+    #live-preview-link {
+    visibility: hidden;
+  }
+}
+
+/* ── Tablet and phone (<= 1100px): the Back link stays on one line ─────────
+ * Decap's desktop toolbar is a single 66px row: Back link, buttons, host
+ * link + avatar. Its Back link (`[arrow] [title block]`) never shrank below
+ * its longest word, so at 820px (an iPad portrait) "Writing in <label>
+ * collection" and the saved-state line wrapped to four lines, clipped at the
+ * top of the bar, and a long collection label ("Accomplishments") pushed the
+ * toolbar 20px wider than the viewport, cutting off the avatar (UX round 4,
+ * triage package 7). The one-line ellipsis the phone block (#731) already
+ * gives the title now applies up to 1100px, where the buttons and the host
+ * link leave the Back link its natural width again. `overflow: hidden` lets
+ * the title block shrink (a clipping flex item's automatic minimum size is
+ * zero); the text stays in the DOM, so the link's accessible name is still
+ * the full title. */
+@media (max-width: 1100px) {
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] {
+    /* Rule 5 lets every section wrap at <= 768px; the arrow must not drop
+     * above the title at 320px. */
+    flex-wrap: nowrap !important;
+    min-width: 0;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] > :not([class*="BackArrow"]) {
+    overflow: hidden;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackCollection"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackStatus"] {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* The local-mode "saves to your working copy" chip prepends itself to the
+ * toolbar with `order: -1`; it is 260px wide and `white-space: nowrap`, so in
+ * the single tablet row it left the Back link 41px and pushed the avatar 130px
+ * off screen. Let it shrink and end in an ellipsis. Tablet only: the phone
+ * block below wraps it onto its own row, and its id selector would beat that
+ * block's `max-width`. The deploy pills are left alone: they carry a message
+ * that should not be cut at 9rem. */
+@media (min-width: 601px) and (max-width: 1100px) {
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] > #cms-local-save-indicator {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* ── Phone only (<= 600px): a sticky, compact editor toolbar (#731) ───────
+ * Rule 3 above puts the editor in normal flow, so the toolbar that holds
+ * Save / Publish / Delete scrolled away: after writing a long body an editor
+ * scrolled ~8 screens back up to publish, and the three stacked rows (back
+ * link + status, buttons, hostname + avatar) took ~185px of the first
+ * screen. Here the toolbar sticks to the top and shrinks to two rows: back
+ * link + avatar, then the buttons. The hostname link is dropped (the
+ * editor's "View page" box and the URL hint already name the site). The
+ * title is one ellipsized line, every control is a 44px target, and the
+ * shim chips (local-mode indicator, deploy pills) wrap to a line of their
+ * own under the buttons instead of squeezing the title.
+ *
+ * `position: sticky` needs no scrolling ancestor between the toolbar and the
+ * viewport. `html, body { overflow-x: hidden }` (rule 1) makes <body> a
+ * scroll container (an `overflow-x` other than visible turns `overflow-y`
+ * into auto), which pins the toolbar to a body that never scrolls, and the
+ * editor box carries `overflow: hidden` too. `overflow-x: clip` clamps the
+ * same horizontal overflow without creating a scroll container; where it is
+ * unsupported (Safari < 16) the whole block is skipped and the toolbar
+ * scrolls away as before. The toolbar is matched as a DIRECT child of the
+ * editor box so Decap's other `...Toolbar...` components are untouched.
+ *
+ * The toolbar's z-index sits above Decap's in-editor controls (their highest
+ * is 600) and below the floating links (10000) and Decap's modals (99999).
+ *
+ * Not covered: on the production shell Publish lives in the in-flow
+ * `#cms-publish-state` bar (publish-step-hint.js / publish-button.js),
+ * which is still not sticky; see the PR for why. */
+@media (max-width: 600px) {
+  /* ── Title on one line, and 44px touch targets (#731) ────────────────
+   * The back link is `[arrow] [title block]`. The title block (an unnamed
+   * <div>) is a flex item that never shrank below "Writing in Media Items
+   * collection" and pushed the avatar's section over it (the divider line ran
+   * through the text). The one-line ellipsis rules for it live in the
+   * 1100px block above. Decap's buttons are
+   * 36px tall; the back link 36px; lift them all to 44px. */
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] {
+    box-sizing: border-box;
+    min-height: 44px;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] button,
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarDropdown"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="PublishedToolbarButton"] {
+    height: 44px !important;
+    line-height: 44px !important;
+  }
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMeta"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="SettingsWrapper"],
+  [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="AvatarDropdownButton"] {
+    box-sizing: border-box;
+    height: 44px;
+  }
+
+  @supports (overflow: clip) {
+    body {
+      overflow-x: clip !important;
+    }
+    [class*="EditorContainer"] {
+      overflow: visible !important;
+    }
+    /* Decap's own app header is `position: sticky`. With body no longer a
+     * scroll container (above) it would pin to the top of every collection
+     * list screen too (~100px of fixed chrome, 127px at 320px); on main it
+     * scrolled away with the page. Keep that: the header only exists on the
+     * list and login screens, the editor has none. */
+    header[class*="AppHeader"] {
+      position: static !important;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] {
+      position: sticky !important;
+      top: 0;
+      z-index: 1000;
+      background: #fff;
+      align-items: center;
+      column-gap: 0.4rem;
+      row-gap: 0;
+    }
+    /* Row 1: back link (takes the slack) + avatar. Row 2: the buttons. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] {
+      flex: 1 1 0 !important;
+      min-width: 0 !important;
+      order: 0;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMeta"] {
+      flex: 0 0 auto !important;
+      order: 1;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] {
+      order: 2;
+      /* Rule 5's 0.4rem gap, applied to the empty "View Live" sub-section
+       * that wraps below the buttons, left a 6px strip under them. */
+      row-gap: 0;
+      padding: 0 8px;
+    }
+    /* Tighter buttons, so Save / Published / Delete share one row down to a
+     * 375px phone (they are 364px wide at Decap's spacing, 351px here). */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] [class*="ToolbarSubSection"] {
+      column-gap: 0.25rem;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] button {
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+    }
+    /* Shim chips that prepend themselves to the toolbar with `order: -1`:
+     * the local "saves to your working copy" indicator and the deploy
+     * status pills. In the first row they took the title's width (the
+     * title squeezed to 4-5 lines and the avatar overlapped it). They now
+     * sit under the buttons, on their own line only while they exist (the
+     * deploy pills are hidden until a publish is running or failed). */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] > :not([class*="ToolbarSection"]) {
+      order: 3 !important;
+      flex: 0 1 auto !important;
+      box-sizing: border-box;
+      max-width: calc(100% - 20px);
+      margin: 0 0 6px 10px !important;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* The deploy pills are links: keep them a 44px touch target. `display`
+     * is deliberately not !important: while a pill has nothing to say its
+     * inline `display: none` must still win. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] > a:not([class*="ToolbarSection"]) {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="AppHeaderSiteLink"] {
+      display: none !important;
+    }
+    /* Decap's own button margins plus the 0.4rem gaps above would push
+     * "Delete published entry" onto a third row. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] button,
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarDropdown"] {
+      margin: 0 !important;
+    }
+    /* index-local.html pins the commit / platform pills at top 60px / 91px,
+     * right 12px (z-index 10000): over the stuck button row, covering the
+     * right end of Delete. Stack them above the floating Live Preview link
+     * instead (bottom-right, as index.html does; `:not([style*="bottom"])`
+     * leaves the production shell's pills, which already set `bottom`,
+     * alone). */
+    #cms-platform-pill:not([style*="bottom"]) {
+      top: auto !important;
+      bottom: 4.25rem;
+    }
+    #cms-commit-pill:not([style*="bottom"]) {
+      top: auto !important;
+      bottom: 6rem;
+    }
+  }
 }
 
 /* ── Desktop: the publish-state bar must not make the editor scroll ───────
@@ -376,5 +678,45 @@
   }
   [class*="EditorContainer"] > #cms-publish-state {
     flex: 0 0 auto;
+  }
+}
+
+/* ── Tablet and phone (<= 1100px): taps pass through Decap's toasts ───────
+ * (UX round 4 triage package 6: ad A4, jd F13). Decap raises its toasts
+ * ("Oops, you've missed a required field", "Entry saved") in a react-toastify
+ * container at `top-right`, fixed to the viewport. Since #766 pinned the
+ * editor toolbar to the top of a phone, that container sits exactly on
+ * Publish and the avatar: on a 390px phone it is the full width and 64px tall
+ * for the 8 s a toast stays up, so the retry tap after a failed Publish hit
+ * the toast and did nothing. A toast never needs a tap (it closes itself, and
+ * its text is for reading), so the container lets pointer events fall through
+ * to whatever is under it.
+ *
+ * Checked against the shipped decap-cms 3.15.1 bundle (react-toastify):
+ * no node sets `pointer-events`. The container is `position: fixed` with the
+ * default `auto`, and the toast, its body and the close button inherit it, so
+ * `none` on the container alone silences the whole subtree. The close button
+ * is switched back to `auto` so a toast can still be dismissed by hand; it is
+ * a 14x19px corner of the toast, not the toolbar-wide strip it replaces. The
+ * toast's own click-to-close and swipe-to-dismiss no longer fire (they need
+ * the pointer); the close button and the 8 s timer remain.
+ *
+ * Selectors are react-toastify's own class names (not Emotion hashes), as
+ * substring matches like the rest of this file, so a renamed class degrades
+ * to Decap's default (toast catches taps), never worse than before.
+ * validation-feedback.js reads these nodes with querySelector and closes a
+ * stale toast with a script `.click()`; neither goes through hit-testing, so
+ * this rule does not affect it.
+ *
+ * Why 1100px: the container overlaps the avatar and Publish at 390, 820 and
+ * 1100px (the toolbar itself is sticky only at <= 600px; the overlap needs
+ * only the top-right container over the toolbar). Desktop above 1100px is left
+ * unchanged. */
+@media (max-width: 1100px) {
+  [class*="Toastify__toast-container"] {
+    pointer-events: none;
+  }
+  [class*="Toastify__toast-container"] [class*="Toastify__close-button"] {
+    pointer-events: auto;
   }
 }

@@ -57,6 +57,10 @@
 # its direct URL (then 404 after delete); this plugin must not change
 # that, and does not.
 #
+# The same stamps (plus noindex) apply to `_tags/` entries; see apply_tag.
+# A tag NAME with no `_tags/` entry is judged by its slugified name; see
+# e2e_tag_name?.
+#
 # Tests: spec/exclude_e2e_posts_test.rb and spec/exclude_e2e_posts_build_test.rb
 
 module Jekyll
@@ -66,6 +70,7 @@ module Jekyll
     # path without depending on Jekyll having computed `data['slug']` yet.
     DATE_PREFIX = /\A\d{4}-\d{2}-\d{2}-/
     E2E_SLUG_PREFIX = /\Ae2e-/
+    TAG_ROBOTS = 'noindex,nofollow'
 
     # The effective slug for a post, matching what `permalink: /blog/:slug/`
     # resolves to:
@@ -108,6 +113,56 @@ module Jekyll
       doc.data['sitemap'] = false
       doc.data['feed_exclude'] = true
     end
+
+    # Tags (#689). The tags lifecycle specs create `_tags/e2e-tags-canary-
+    # <runId>.md`; one left on main was listed on the home page and
+    # `/tags/`, in `/sitemap.xml` and in its own tag feed. The discriminator
+    # is the posts one, applied to the `_tags/` entry: an `e2e-` slug (its
+    # filename, or an explicit `slug:`) or `test_fixture: true`.
+    #
+    # Stamp a `_tags/` collection doc like a fixture post, plus `robots:
+    # noindex,nofollow` (rendered by the default layout). The tag page still
+    # BUILDS: the tags lifecycle specs wait for its URL to answer 200, then
+    # 404 after the delete. An editor-set `robots` is kept.
+    def self.apply_tag(doc)
+      apply(doc)
+      return unless doc.respond_to?(:data) && doc.data['feed_exclude'] == true
+
+      doc.data['robots'] ||= TAG_ROBOTS
+    end
+
+    # A tag that exists only as a NAME in a post's `tags:` list (no `_tags/`
+    # entry) gets the archive auto_tag_pages.rb mints at
+    # `/tags/<slugify(name)>/`, so its slug is the slugified name and the
+    # posts rule applies to that: `E2E Foo` (slug `e2e-foo`) is an e2e tag,
+    # even on a real post. A name WITH a `_tags/` entry is judged by that
+    # entry (apply_tag), not here. `slugify` is Jekyll::Utils.slugify in the
+    # build, a stand-in in the unit test.
+    def self.e2e_tag_name?(name, slugify:)
+      name.is_a?(String) && e2e_fixture?(slug: slugify.call(name), test_fixture: nil)
+    end
+
+    # Stamp a generated archive page for an e2e_tag_name? like a `_tags/`
+    # entry apply_tag matched: out of the sitemap, `feed_exclude` (no feed
+    # link in the tag and default layouts), and noindex. The page still
+    # builds, so a real post's pill for the tag does not 404.
+    def self.stamp_tag_page(data)
+      data['sitemap'] = false
+      data['feed_exclude'] = true
+      data['robots'] ||= TAG_ROBOTS
+    end
+
+    # Names of the `_tags/` entries apply_tag stamped. Every public tag
+    # surface leaves them out: the tag cloud and `/tags/` (auto_tag_pages.rb's
+    # `site.all_tags`) and the per-tag feeds (tag_feeds.rb). A post that
+    # carries such a tag still links to the entry's own (noindex) page.
+    # Call after the :post_read hook below has stamped the docs.
+    def self.excluded_tag_names(site)
+      (site.collections['tags']&.docs || [])
+        .select { |d| d.data['feed_exclude'] == true }
+        .filter_map { |d| d.data['name'] }
+        .uniq
+    end
   end
 end
 
@@ -123,5 +178,6 @@ end
 if defined?(Jekyll::Hooks)
   Jekyll::Hooks.register :site, :post_read do |site|
     site.posts.docs.each { |post| Jekyll::ExcludeE2EPosts.apply(post) }
+    (site.collections['tags']&.docs || []).each { |tag| Jekyll::ExcludeE2EPosts.apply_tag(tag) }
   end
 end

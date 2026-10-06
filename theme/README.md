@@ -43,10 +43,15 @@ cms:
   file) or by setting `cms.logo_url` in `_config.yml`. The `npx` scaffolder seeds
   a "replace me" copy of the placeholder into every new site.
 - `lib/cms-platform-theme/` — the plugins (`auto_tag_pages`, `cachebust_filter`,
-  `exclude_e2e_posts`, `featured_image_dimensions`, `normalize_empty_slug`,
-  `seo_image`, `tag_feeds`) and
+  `exclude_e2e_posts`, `featured_image_dimensions`, `feed_stylesheet`,
+  `normalize_empty_slug`, `seo_image`, `tag_feeds`) and
   `decap_config_hook` (a `post_write` hook that runs the Decap render — see
-  `admin/README.md`). `seo_image` maps a post's `featured_image:` to the `image:`
+  `admin/README.md`). `feed_stylesheet` adds an
+  `<?xml-stylesheet?>` instruction to every Atom feed (the per-tag feeds, jekyll-feed's
+  `/feed.xml` and a site-owned one) pointing at the gem's same-origin `assets/feed.xsl`, so a visitor who
+  clicks the RSS icon sees a "copy this address into your feed reader" page instead of
+  raw XML (#728); readers ignore it, and a feed that already names a stylesheet keeps it
+  ([build regression](spec/feed_stylesheet_test.rb)). `seo_image` maps a post's `featured_image:` to the `image:`
   jekyll-seo-tag reads (og:image / twitter:image, large card), falling back to an optional
   site-wide `default_image:` in `_config.yml`; an explicit `image:` wins.
   `featured_image_dimensions` gives the post hero `<img>` its `width`/`height`
@@ -63,6 +68,25 @@ cms:
   `slug` or `test_fixture: true` is honored. The
   [real Jekyll build regression](spec/exclude_e2e_posts_build_test.rb) checks
   both discriminators, public aggregation, and direct post output.
+  It applies the same rule to `_tags/` entries (#689): an `e2e-` or
+  `test_fixture: true` tag stays out of `site.all_tags` (the tag cloud and
+  `/tags/`), the sitemap and the per-tag feeds, and its page still builds with
+  `robots: noindex,nofollow`. A tag that is only a name in a post's `tags:`
+  list, with no `_tags/` entry, is judged by its slugified name: an `e2e-` one
+  gets the same treatment, even on a real post
+  ([build regression](spec/exclude_e2e_tags_build_test.rb)).
+- **Tags that differ only in case are one tag** (#754). `quotes` and `Quotes`
+  slugify alike and share `/tags/quotes/`, so `auto_tag_pages` groups every
+  spelling under its slug: one `site.all_tags` row with the combined count
+  (a post carrying both spellings counts once), one archive page and one tag
+  feed. `tag.html` and `atom_feed.xml` list every post whose tags slugify to
+  the page's slug, read from `site.tag_posts_by_slug` (built once by the
+  plugin, newest first; slugifying every post's tags on each tag page made a
+  large build several times slower). The display name is deterministic: the `_tags/` entry's
+  name if there is one, else the spelling the most posts use, a tie going to
+  the one seen first (`AutoTagPages.group`). Sites need no change: their
+  `/tags/` index and tag cloud already read `site.all_tags`
+  ([build regression](spec/tag_case_variants_build_test.rb)).
 
 Updates flow to sites via a gem-version bump — `platform-bump`'s job, not
 Dependabot's: since #242, Dependabot's `bundler` ecosystem carries an explicit
