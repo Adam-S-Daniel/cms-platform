@@ -13,9 +13,11 @@
 // holds the SHAPE of that guard from the spec's AST (a regex cannot tell a call
 // from the same words in a comment): every test() that locates `.site-header`
 // calls it, and the helper itself reads computed position and skips on
-// anything but sticky/fixed. The browser behavior (static transparent skips,
-// sticky transparent fails, sticky opaque passes) was proven against real
-// pages when the guard was added; the PR that added it records the runs.
+// anything but sticky/fixed (the condition's operators and operands are
+// checked, so an inverted guard cannot pass). The browser behavior (static
+// transparent skips, sticky transparent fails, sticky opaque passes) was proven
+// against real pages when the guard was added; the PR that added it records
+// the runs.
 const fs = require("node:fs");
 const path = require("node:path");
 const walk = require("acorn-walk");
@@ -66,15 +68,86 @@ test("every test that measures .site-header calls the sticky-or-fixed guard", ()
   expect(unguarded(src)).toEqual([]);
 });
 
+// Problems with the helper's SHAPE, as readable strings (empty = sound). The
+// skip condition must be exactly `position !== "sticky" && position !== "fixed"`
+// over `const position = await <header>.evaluate((el) => getComputedStyle(el).position)`.
+// Locking only that the words appear would pass an inverted condition
+// (`=== "sticky" || === "fixed"`), which skips the real sticky header and turns
+// every CI leg vacuous, so the operators and the operands are checked.
+function guardProblems(source) {
+  const fn = helperNode(source);
+  if (!fn) return [`${HELPER} is not declared`];
+  const problems = [];
+
+  // 1. `position` comes from computed style, measured in the page.
+  let measured = false;
+  walk.full(fn, (n) => {
+    if (n.type !== "VariableDeclarator" || !n.id || n.id.name !== "position") return;
+    const call = n.init && n.init.type === "AwaitExpression" ? n.init.argument : null;
+    const cb = call && call.type === "CallExpression" && calleeName(call.callee) !== null
+      && calleeName(call.callee).endsWith(".evaluate") ? call.arguments[0] : null;
+    const body = cb && cb.type === "ArrowFunctionExpression" ? cb.body : null;
+    measured =
+      !!body &&
+      body.type === "MemberExpression" &&
+      !body.computed &&
+      body.property.name === "position" &&
+      body.object.type === "CallExpression" &&
+      calleeName(body.object.callee) === "getComputedStyle";
+  });
+  if (!measured) {
+    problems.push("`position` is not `await x.evaluate((el) => getComputedStyle(el).position)`");
+  }
+
+  // 2. Exactly one test.skip, whose condition is the negated-both shape.
+  const skips = analyzeNode(fn).calls.filter((c) => c.name === "test.skip");
+  if (skips.length !== 1) return problems.concat(`expected one test.skip, found ${skips.length}`);
+  const cond = skips[0].args[0];
+  const operands =
+    cond && cond.type === "LogicalExpression" && cond.operator === "&&" ? [cond.left, cond.right] : null;
+  if (!operands) return problems.concat("the skip condition is not `a && b`");
+  const compared = operands.map((o) => {
+    const ok =
+      o.type === "BinaryExpression" &&
+      o.operator === "!==" &&
+      o.left.type === "Identifier" &&
+      o.left.name === "position" &&
+      o.right.type === "Literal" &&
+      typeof o.right.value === "string";
+    return ok ? o.right.value : null;
+  });
+  if (compared.some((v) => v === null) || [...compared].sort().join() !== "fixed,sticky") {
+    problems.push('the skip condition is not `position !== "sticky" && position !== "fixed"`');
+  }
+  return problems;
+}
+
 test("the guard skips on computed position unless it is sticky or fixed", () => {
-  const fn = helperNode(src);
-  expect(fn, `${HELPER} is declared in the spec`).not.toBeNull();
-  const facts = analyzeNode(fn);
-  expect(facts.calls.some((c) => c.tail === "evaluate"), "it measures in the page").toBe(true);
-  expect(facts.calls.some((c) => c.name === "getComputedStyle"), "it reads computed style").toBe(true);
-  expect(facts.memberProps.has("position"), "it reads position").toBe(true);
-  expect(facts.calls.some((c) => c.name === "test.skip"), "it skips through test.skip").toBe(true);
-  expect(facts.strings).toEqual(expect.arrayContaining(["sticky", "fixed"]));
+  expect(guardProblems(src)).toEqual([]);
+});
+
+// Mutations of the real spec source: each must be reported. The inverted one is
+// the failure that matters: it leaves every header test skipped on the theme's
+// sticky header and CI green.
+test("the guard lint rejects a flipped, partial or widened skip condition", () => {
+  const good = 'position !== "sticky" && position !== "fixed"';
+  expect(src).toContain(good);
+  const mutate = (replacement) => src.replace(good, replacement);
+  const mutants = {
+    inverted: 'position === "sticky" || position === "fixed"',
+    "or instead of and": 'position !== "sticky" || position !== "fixed"',
+    "sticky only": 'position !== "sticky"',
+    "fixed only": 'position !== "fixed"',
+    "wrong literal": 'position !== "sticky" && position !== "absolute"',
+    "other variable": 'pos !== "sticky" && pos !== "fixed"',
+    "always false": "false",
+  };
+  for (const [name, replacement] of Object.entries(mutants)) {
+    expect(guardProblems(mutate(replacement)), `mutant: ${name}`).not.toEqual([]);
+  }
+  expect(guardProblems(mutate('position !== "fixed" && position !== "sticky"'))).toEqual([]);
+  const unmeasured = src.replace("getComputedStyle(el).position", "getComputedStyle(el).display");
+  expect(guardProblems(unmeasured)).not.toEqual([]);
 });
 
 test("the detector flags a header test with no guard and ignores a mention in a comment", () => {
