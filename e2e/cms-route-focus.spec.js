@@ -35,7 +35,18 @@ async function openList(page) {
   await expect(loginBtn).toBeVisible({ timeout: 60_000 });
   await loginBtn.click();
   await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
-  await page.goto("/admin/index-test.html#/collections/posts");
+  // Reload WITHOUT the hash. Decap lands on posts by itself, and a load that
+  // already carries `#/collections/posts` starts single-entry-collection-shortcut.js's
+  // 700 ms settle timer at first paint, before Decap has rendered: on a slow
+  // runner it then finds the harness banner's one "Replacement test post 1"
+  // link with no "+ New" link beside it, takes it for a one-entry collection
+  // and jumps to an entry that does not exist, so the list never appears. Here
+  // the shim only starts its timer on the hashchange Decap makes once rendered.
+  await page.goto("/admin/index-test.html");
+  await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
+  await page.evaluate(() => {
+    location.hash = "#/collections/posts";
+  });
   await expect(page.locator(ENTRY_LINK).first()).toBeVisible({ timeout: 60_000 });
 }
 
@@ -91,7 +102,15 @@ test.describe(
 
     test("the skip link is the first Tab stop, moves focus to the content and leaves the route alone", async ({ page }) => {
       await openList(page);
-      await page.evaluate(() => document.activeElement && document.activeElement.blur());
+      // A fresh load starts sequential focus navigation at the top of the
+      // document. Decap's own redirect after the load moved focus to the
+      // heading, and blur() alone leaves the starting point there. Focusing
+      // <body> itself puts it back at the top.
+      await page.evaluate(() => {
+        document.body.tabIndex = -1;
+        document.body.focus();
+        document.body.removeAttribute("tabindex");
+      });
       await page.keyboard.press("Tab");
       const skip = page.getByRole("link", { name: "Skip to content" });
       await expect(skip).toBeFocused();

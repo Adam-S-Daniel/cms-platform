@@ -38,7 +38,15 @@ async function openList(page) {
   await expect(loginBtn).toBeVisible({ timeout: 60_000 });
   await loginBtn.click();
   await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
-  await page.goto("/admin/index-test.html#/collections/posts");
+  // Reload WITHOUT the hash, as cms-route-focus.spec.js's openList does: a load
+  // already carrying `#/collections/posts` starts single-entry-collection-shortcut.js's
+  // 700 ms timer at first paint, which on a slow boot jumps to the harness
+  // banner's nonexistent entry (one entry link, no "+ New" link yet).
+  await page.goto("/admin/index-test.html");
+  await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
+  await page.evaluate(() => {
+    location.hash = "#/collections/posts";
+  });
   await expect(page.locator(NEW_BUTTON)).toBeVisible({ timeout: 60_000 });
   await expect(page.locator(SIDEBAR_LINK).nth(1)).toBeVisible({ timeout: 60_000 });
 }
