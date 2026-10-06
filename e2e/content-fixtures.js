@@ -46,7 +46,10 @@ async function discoverTags(page) {
     // href shape: `/tags/<slug>/`
     const m = href.match(/\/tags\/([^/]+)\/?$/);
     if (!m) continue;
-    const name = (await item.locator(".tag-list-name").innerText()).trim();
+    // textContent, not innerText: the theme shows tag names uppercase through
+    // CSS (#737) and innerText applies text-transform, so it would return
+    // "WELCOME" for the stored "Welcome" that the tag page's heading carries.
+    const name = ((await item.locator(".tag-list-name").textContent()) || "").trim();
     const countText = (await item.locator(".tag-list-count").innerText()).trim();
     const c = parseInt(countText, 10);
     tags.push({ slug: m[1], name, count: Number.isNaN(c) ? 0 : c });

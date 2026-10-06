@@ -17,7 +17,20 @@
       {%- endcomment -%}
       {%- assign blog_index = site.pages | where: "url", "/blog/" | first -%}
       {%- if blog_index -%}
-      <a href="{{ '/blog/' | relative_url }}" {% if page.url contains '/blog' %}class="active"{% endif %}>Blog</a>
+      {%- comment -%}
+        Current-section state (#737): `aria-current="page"` on the section
+        index itself (/blog/), `aria-current="true"` on a page under it
+        (/blog/<slug>/), which is in the section but is not the page the link
+        points to. The test is a path-prefix match on whole segments: the old
+        `page.url contains '/blog'` also lit up /blogger/ and /tags/blog/.
+        `class="active"` stays on both for a site header override that keys on it.
+      {%- endcomment -%}
+      {%- assign _nav_href = '/blog/' -%}
+      {%- assign _nav_prefix = page.url | slice: 0, _nav_href.size -%}
+      <a href="{{ _nav_href | relative_url }}"
+         {%- if page.url == _nav_href %} class="active" aria-current="page"
+         {%- elsif _nav_prefix == _nav_href %} class="active" aria-current="true"
+         {%- endif %}>Blog</a>
       {%- endif -%}
       {% comment %} Disabled sections — uncomment a line to re-enable that page. See also: `published:` in projects/index.html, pages/about.md, pages/contact.md, and `output:` for the projects collection in _config.yml.
       <a href="{{ '/projects/' | relative_url }}" {% if page.url contains '/projects' %}class="active"{% endif %}>Projects</a>

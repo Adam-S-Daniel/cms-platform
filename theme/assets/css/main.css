@@ -290,8 +290,18 @@ main {
   border: none;
 }
 
-.site-nav a.active {
-  color: var(--text-primary);
+/* Current section (#737). The base `.site-nav a` rule runs the text-thermal
+   animation, and a running animation outranks every normal declaration, so a
+   plain `color` here never showed: the old `.active` rule was inert. The state
+   has to switch the animation off. The underline is text-decoration, not a
+   border plus padding, so marking a link moves nothing around it. */
+.site-nav a.active,
+.site-nav a[aria-current="page"],
+.site-nav a[aria-current="true"] {
+  animation: none;
+  color: var(--text-bright);
+  text-decoration: underline;
+  text-underline-offset: 0.4em;
 }
 
 /* ── Site Footer ────────────────────────────────── */
@@ -540,6 +550,21 @@ main {
 .tag-list-name {
   font-size: 0.95rem;
   letter-spacing: 0.04em;
+  text-transform: uppercase; /* same display convention as .tag-pill (#737) */
+}
+
+/* The tag page heading: shown the way the pill shows the tag. Display only;
+   the tag's name is unchanged in the data, the title and the feed label. */
+.tag-title {
+  text-transform: uppercase;
+}
+
+.tag-back {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: var(--mono);
 }
 
 .tag-list-count {
@@ -609,12 +634,22 @@ main {
 }
 
 .featured-image {
+  /* Block, not the inline default: an inline image sits on a text baseline, so
+     its line box added a descender strip under the picture (#737). */
+  display: block;
   width: 100%;
   max-height: 400px;
   object-fit: cover;
   border-radius: var(--radius-lg);
   margin-bottom: 2rem;
   border: 1px solid var(--border);
+}
+
+/* In the post header the image's own 2rem stacked on `.post-header`'s 3rem and
+   left about 90px before the body (#737). The header's margin is the one gap;
+   the Decap preview pane renders the image outside a header and keeps 2rem. */
+.post-header .featured-image {
+  margin-bottom: 0;
 }
 
 /* ── Projects Grid ──────────────────────────────── */
