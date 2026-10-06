@@ -180,6 +180,28 @@ table:not([class]) {
   display: block;
   max-width: 100%;
   overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+}
+
+/* Readable defaults for that same bare table (#729): kramdown's output has no
+   padding or borders, so "1,450 ms" ran into "slow & thorough". Same
+   `:not([class])` scope, so a classed table (adamdaniel.ai's .bws-table) keeps
+   its own cell styling. Cell alignment from a Markdown `:---:` row is an inline
+   style and still wins over the `text-align` here. */
+table:not([class]) th,
+table:not([class]) td {
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+table:not([class]) th {
+  background: var(--bg-2);
+  border-bottom-color: var(--border-bright);
+  color: var(--text-bright);
+  font-weight: 600;
 }
 
 hr {
