@@ -20,6 +20,7 @@
  * load-bearing one; the Chromium pass is a cheap second engine.
  */
 const { test, expect } = require("./base");
+const { expectReachable } = require("./ui-visibility");
 
 const IPHONE_16 = { width: 393, height: 852 };
 const DESKTOP = { width: 1400, height: 900 };
@@ -86,6 +87,48 @@ async function openEditor(page) {
   await expect(page.getByLabel(/^Title$/)).toBeVisible({ timeout: 60_000 });
   // The split-pane + toolbar settle a beat after the editor mounts.
   await page.waitForTimeout(800);
+}
+
+// Decap's native "View Live" toolbar anchor is hidden by
+// admin/native-preview-href.js, a deferred shim that re-hides it from a
+// MutationObserver + requestAnimationFrame after each toolbar render. Until
+// that pass runs, the visible anchor wraps the phone toolbar onto a third row
+// (104px instead of 88px), so a height measured right after the editor mounts
+// races the shim on a slow WebKit run. The shim's own signal is the
+// `data-native-view-live-hidden` marker plus a computed display:none; wait for
+// every native anchor to show both before measuring. A toolbar with no
+// native anchor has nothing to wait for. The height assertions stay strict:
+// a toolbar that is genuinely three rows still fails after the wait.
+async function waitForNativeViewLiveHidden(page) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const excluded = new Set([
+            "cms-live-url-banner-link",
+            "live-preview-link",
+            "cms-commit-pill",
+            "cms-prod-status-pill",
+            "cms-preview-build-pill",
+          ]);
+          const pending = [];
+          for (const tb of document.querySelectorAll('[class*="oolbar"]')) {
+            for (const a of tb.querySelectorAll('a[target="_blank"][rel*="noopener"][href]')) {
+              if (excluded.has(a.id)) continue;
+              const hidden =
+                a.getAttribute("data-native-view-live-hidden") === "1" &&
+                getComputedStyle(a).display === "none";
+              if (!hidden) pending.push(a.textContent.trim() || a.getAttribute("href"));
+            }
+          }
+          return pending;
+        }),
+      {
+        message: "native View Live anchor was never hidden by native-preview-href.js",
+        timeout: 30_000,
+      },
+    )
+    .toEqual([]);
 }
 
 test.describe(
@@ -218,6 +261,74 @@ test.describe(
         return parseFloat(getComputedStyle(main).paddingBottom);
       });
       expect(padding, "CollectionMain bottom clearance (px)").toBeGreaterThanOrEqual(64);
+    });
+
+    // #645 — the eye ("Toggle preview") used to toggle a pane rule 4 hides, so
+    // it did nothing on a phone. It now switches to a full-width preview, and
+    // the eye or "Back to editing" returns to the form.
+    async function expectPreviewView(page) {
+      const frame = page.locator('[class*="PreviewPaneFrame"]').first();
+      await expect(frame).toBeVisible();
+      const box = await frame.boundingBox();
+      const vw = page.viewportSize().width;
+      expect(box.width, "preview fills the phone width").toBeGreaterThan(vw - 8);
+      expect(box.height, "preview has a usable height").toBeGreaterThan(300);
+      await expect(page.getByLabel(/^Title$/)).toBeHidden();
+      await expect(
+        page.frameLocator('[class*="PreviewPaneFrame"]').getByText("Replacement test post 1").first(),
+      ).toBeVisible();
+      const back = page.getByRole("button", { name: "Back to editing" });
+      await expectReachable(page, back, "Back to editing");
+      await expectReachable(page, page.getByRole("button", { name: "Toggle preview" }), "eye toggle");
+      return back;
+    }
+
+    async function expectFormView(page) {
+      await expect(page.getByLabel(/^Title$/)).toBeVisible();
+      await expect(page.locator('[class*="PreviewPaneFrame"]').first()).toBeHidden();
+      await expect(page.getByRole("button", { name: "Back to editing" })).toBeHidden();
+    }
+
+    test("#645: the eye shows a full-width preview; the eye or Back returns to the form", async ({
+      page,
+    }) => {
+      await page.setViewportSize(IPHONE_16);
+      await login(page);
+      await openEditor(page);
+      await expectFormView(page);
+
+      const eye = page.getByRole("button", { name: "Toggle preview" });
+      await eye.click();
+      const back = await expectPreviewView(page);
+
+      await back.click();
+      await expectFormView(page);
+
+      await eye.click();
+      await expectPreviewView(page);
+      await eye.click();
+      await expectFormView(page);
+    });
+
+    test("#645: one tap previews even when Decap's preview was switched off", async ({ page }) => {
+      // A stored `cms.preview-visible=false` (the eye turned off on a desktop)
+      // means Decap renders no preview pane at all until the eye is tapped.
+      await page.addInitScript(() => {
+        try {
+          window.localStorage.setItem("cms.preview-visible", "false");
+        } catch (e) {
+          /* storage blocked: the default (on) path is covered above */
+        }
+      });
+      await page.setViewportSize(IPHONE_16);
+      await login(page);
+      await openEditor(page);
+      await expectFormView(page);
+
+      await page.getByRole("button", { name: "Toggle preview" }).click();
+      const back = await expectPreviewView(page);
+      await back.click();
+      await expectFormView(page);
     });
 
     // #757.1 — on a 390px phone the fixed bottom-right "Live Preview" button
@@ -481,6 +592,7 @@ test.describe(
 
         // Without the local chip (the production shell): two rows of 44px.
         // 96 = 2 x 44 plus 8px of slack for sub-pixel text metrics.
+        await waitForNativeViewLiveHidden(page);
         let m = await measure();
         if (tall) {
           expect(
@@ -494,6 +606,7 @@ test.describe(
         // so 124 allows it and still fails the old ~165px stack.
         await page.addScriptTag({ url: "/admin/local-save-indicator.js" });
         await expect(page.locator("#cms-local-save-indicator")).toBeVisible();
+        await waitForNativeViewLiveHidden(page);
         m = await measure();
         if (tall) {
           expect(
@@ -593,6 +706,117 @@ test.describe(
           "Publish is covered while scrolled",
         ).toBe(true);
       });
+    }
+  },
+);
+
+// UX round 4, triage package 7: at 820px (an iPad in portrait) Decap's single
+// 66px desktop toolbar applies, and the Back link's title block never shrank
+// below its longest word. "Writing in <label> collection" and the saved-state
+// line wrapped to four lines clipped at the top of the bar, and a long
+// collection label ("Accomplishments") made the toolbar 20px wider than the
+// viewport, so the avatar sat past the right edge. The one-line ellipsis rules
+// (#731) now reach 1100px, and the local-mode chip shrinks instead of taking
+// 260px from the title. The chip is the REAL shim, loaded the way
+// index-local.html loads it. Own describe, like the phone one: a failure here
+// must not skip the other cases.
+test.describe(
+  "CMS admin — tablet toolbar (820px)",
+  { tag: ["@admin-read"] },
+  () => {
+    for (const collectionLabel of ["Posts", "Accomplishments"]) {
+      for (const edited of [false, true]) {
+        test(`one-line Back link, nothing past the right edge ("${collectionLabel}", ${edited ? "unsaved edit" : "published entry"})`, async ({
+          page,
+        }) => {
+          await page.setViewportSize({ width: 820, height: 1180 });
+          await login(page, { collectionLabel });
+          await openEditor(page);
+          if (edited) {
+            await page.getByLabel(/^Title$/).fill("Replacement test post 1, edited");
+            await expect(
+              page.locator('[class*="BackStatus"]'),
+            ).toHaveText(/unsaved/i);
+          }
+
+          const measure = () =>
+            page.evaluate(() => {
+              const toolbar = document.querySelector(
+                '[class*="EditorContainer"] > [class*="ToolbarContainer"]',
+              );
+              const right = (el) => (el ? el.getBoundingClientRect().right : null);
+              const left = (el) => (el ? el.getBoundingClientRect().left : null);
+              const oneLine = (el) =>
+                el.getBoundingClientRect().height <
+                parseFloat(getComputedStyle(el).fontSize) * 1.6;
+              const title = toolbar.querySelector('[class*="BackCollection"]');
+              const status = toolbar.querySelector('[class*="BackStatus"]');
+              const back = toolbar.querySelector('[class*="ToolbarSectionBackLink"]');
+              const chip = document.getElementById("cms-local-save-indicator");
+              return {
+                viewport: window.innerWidth,
+                scrollWidth: toolbar.scrollWidth,
+                clientWidth: toolbar.clientWidth,
+                docScrollWidth: document.documentElement.scrollWidth,
+                avatarRight: right(
+                  toolbar.querySelector('[class*="AvatarDropdownButton"]'),
+                ),
+                titleText: title.textContent.trim(),
+                titleOneLine: oneLine(title),
+                statusOneLine: oneLine(status),
+                backHeight: back.getBoundingClientRect().height,
+                toolbarHeight: toolbar.getBoundingClientRect().height,
+                titleRight: right(title),
+                statusRight: right(status),
+                backRight: right(back),
+                chipLeft: left(chip),
+                chipRight: right(chip),
+              };
+            });
+
+          const check = (m, what) => {
+            expect(m.scrollWidth, `${what}: toolbar wider than itself`).toBeLessThanOrEqual(
+              m.clientWidth,
+            );
+            expect(m.docScrollWidth, `${what}: page scrolls sideways`).toBeLessThanOrEqual(
+              m.viewport,
+            );
+            expect(
+              m.avatarRight,
+              `${what}: avatar past the right edge`,
+            ).toBeLessThanOrEqual(m.viewport);
+            // Title and saved-state line: one line each, so the link is two
+            // lines at most and never taller than the bar.
+            expect(m.titleOneLine, `${what}: title wraps`).toBe(true);
+            expect(m.statusOneLine, `${what}: saved-state line wraps`).toBe(true);
+            expect(m.backHeight, `${what}: Back link outgrew the bar`).toBeLessThanOrEqual(
+              m.toolbarHeight + 1,
+            );
+            expect(m.titleRight, `${what}: title spills out of its link`).toBeLessThanOrEqual(
+              m.backRight + 1,
+            );
+            expect(m.statusRight, `${what}: status spills out of its link`).toBeLessThanOrEqual(
+              m.backRight + 1,
+            );
+          };
+
+          // The production shell: no chip.
+          let m = await measure();
+          expect(m.titleText).toBe(`Writing in ${collectionLabel} collection`);
+          check(m, "without the chip");
+
+          // The local shell: the real chip shim, 260px of nowrap text.
+          await page.addScriptTag({ url: "/admin/local-save-indicator.js" });
+          await expect(page.locator("#cms-local-save-indicator")).toBeVisible();
+          m = await measure();
+          check(m, "with the local chip");
+          expect(m.chipLeft, "chip off the left edge").toBeGreaterThanOrEqual(0);
+          expect(m.chipRight, "chip past the right edge").toBeLessThanOrEqual(m.viewport);
+          await expect(
+            page.getByRole("link", { name: new RegExp(m.titleText) }),
+          ).toBeVisible();
+        });
+      }
     }
   },
 );

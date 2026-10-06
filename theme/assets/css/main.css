@@ -14,6 +14,10 @@
   --bg-2: #0a1530;
   --bg-3: #111e40;
   --accent: #285aff;
+  /* --accent is 3.4-3.9:1 on --bg-0..--bg-2, fine for borders and large
+     shapes but under AA (4.5:1) for 12px text. Small accent TEXT uses this
+     lighter blue: 5.85:1 on --bg-0, 5.60:1 on --bg-1, 5.22:1 on --bg-2. */
+  --accent-text: #5a82ff;
   --accent-dim: #1a3abf;
   --accent-glow: rgb(40 90 255 / 28%);
   --text-primary: #d8e4ff;
@@ -27,10 +31,21 @@
   --radius: 4px;
   --radius-lg: 8px;
   --transition: 0.2s ease;
+  /* The sticky .site-header is 3.5rem tall (2rem padding, one 0.9rem * 1.6
+     line of logo, 1px rule) at every width; one more rem keeps a focus ring
+     clear of it. */
+  --site-header-offset: 4.5rem;
 }
 
 html, body {
   height: 100%;
+}
+
+/* A focus-induced scroll (Shift+Tab up a long page), scrollIntoView and a
+   #fragment jump (skip link, heading anchors) otherwise leave the target
+   under the sticky header (WCAG 2.4.11 Focus Not Obscured). */
+html {
+  scroll-padding-top: var(--site-header-offset);
 }
 
 body {
@@ -651,6 +666,9 @@ main {
      its line box added a descender strip under the picture (#737). */
   display: block;
   width: 100%;
+  /* The width/height attributes (#688) set the aspect ratio only; without
+     this the height attribute would pin the box at the file's pixel height. */
+  height: auto;
   max-height: 400px;
   object-fit: cover;
   border-radius: var(--radius-lg);
@@ -721,7 +739,7 @@ main {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--accent-text);
   margin-bottom: 0.8rem;
 }
 
@@ -760,11 +778,26 @@ main {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--accent-text);
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   padding: 0.2em 0.5em;
   z-index: 2;
+}
+
+/* The badge is a sibling of .project-card-inner, positioned out of flow, so
+   the first line of the card would run under it on a narrow card (320px:
+   "Claude Memory Map" under an ~85px badge). That first child is the h3 in
+   tools/index.html but the .project-tech line in the projects markup, so pad
+   whichever comes first. The badge's left edge sits ~101px (about 6.3rem) from
+   the card edge and the card's own 1.8rem padding already covers about 29px of
+   that, so 5.25rem leaves the text ~12px short of the badge and it wraps
+   instead of running under it. overflow-wrap: break-word (not `anywhere`, which
+   theme-overflow-wrap-css.test.js forbids) keeps one unbreakable word (a
+   long URL-like title or technology) from overflowing the padding. */
+.featured-badge ~ .project-card-inner > :first-child {
+  padding-right: 5.25rem;
+  overflow-wrap: break-word;
 }
 
 /* ── Page content ───────────────────────────────── */

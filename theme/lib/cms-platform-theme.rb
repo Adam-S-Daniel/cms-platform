@@ -4,6 +4,7 @@
 require_relative "cms-platform-theme/auto_tag_pages"
 require_relative "cms-platform-theme/cachebust_filter"
 require_relative "cms-platform-theme/exclude_e2e_posts"
+require_relative "cms-platform-theme/featured_image_dimensions"
 require_relative "cms-platform-theme/feed_stylesheet"
 require_relative "cms-platform-theme/normalize_empty_slug"
 require_relative "cms-platform-theme/rel_me_filter"

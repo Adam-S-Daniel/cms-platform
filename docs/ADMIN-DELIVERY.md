@@ -316,6 +316,73 @@ listing filters, the fetch wrap's pass-through, load order). The browser
 behavior of the two listeners was also checked in Chromium (real `<input
 type=file>` change and a synthetic drop); Firefox and WebKit were not.
 
+## Admin focus after a route change, a Save or a Delete, and the skip link
+
+Decap is hash-routed React: Enter on a list entry, Back, Save, Delete and a list
+row's remove "x" unmount the element that had focus, so `document.activeElement`
+becomes `<body>`. The next Tab then restarts near the top (after Back it landed on
+"Search all"), and there was no skip link (UX round 3, ad-kbd K8 / jd-kbd F5; the
+"Live Preview is last in Tab order" note, K10, is the same cause). `theme/admin/route-focus.js`
+(all three shells, deferred, after `decap-cms.js`) adds a "Skip to content" link as the
+first child of `<body>` and restores focus. Rules that keep it safe:
+
+- **It acts only while focus is on `<body>` or null**, checked on every animation
+  frame it polls and again right before it moves focus, so it never takes focus from
+  another shim (the tags box refocuses its input; `validation-feedback.js` focuses the first
+  invalid field three frames after a blocked Save, and route-focus waits six frames after a click).
+  A key or pointer press cancels a pending move (the person took over); a click from script
+  (`autosave-on-hide.js`) is ignored; a `#/search` route is left alone; nothing moves on page load.
+- **Where focus goes** (verified on Decap 3.15.1): a list or other page, `main h1` (else `main`);
+  a new entry, the first field in a `ControlContainer`; an existing entry, the toolbar's
+  `ToolbarSectionBackLink` (the editor has no `main` or heading). The skip link goes to the
+  first field of an existing entry instead. Emotion class-name substrings, same convention as
+  `list-row-affordance.js`: a missing class means a silent no-op.
+- **The skip link never follows its `href`** (a `#fragment` would change the route).
+
+Tests: `e2e/route-focus.test.js` (vm sandbox, stubbed frames, in `PLATFORM_META_SPECS`),
+`e2e/cms-route-focus.spec.js` (real Decap: Enter on an entry then Tab stays in the editor, Back
+returns to the heading, the skip link, a keyboard Save), load order in `e2e/admin-shim-load-order.test.js`.
+
+## Admin keyboard focus ring (UX round 3: ad-kbd K14, jd-kbd F11b)
+
+Decap leaves buttons and links on the browser's default focus ring (computed
+`outline: rgb(16,16,16) auto`), which vanishes on a dark fill such as "＋ Post",
+and the collection sidebar's links are exactly as wide as their `overflow: auto`
+`SidebarNavList`, so the ring was cut off at both sides. Section 0 of
+`theme/admin/admin-mobile.css` (outside the `@media` block, so every width, and
+already linked from all three shells and shipped in the gem to both consumers)
+draws a two-tone `:focus-visible` ring under `#nc-root`: a white 2px outline with
+a `#1d4ed8` shadow outside it, and for `SidebarNavList a` the same two tones kept
+inside the link (outline offset -2px, inset shadow), since anything outside it is
+clipped. Decap's dropdown menus (Publish now, Status, Account, Quick add) are
+`overflow: hidden` with flush items, so `#nc-root [role="menuitem"]` gets the same
+inside ring (UX round 4 triage package 2); it must stay after the general rule.
+`:focus-visible` only, so a mouse click is unchanged. Not covered: inputs
+(Decap styles its own), the standalone `reviews/` pages, and Decap's modal portals
+outside `#nc-root`. Test: `e2e/cms-admin-focus-ring.spec.js` (computed styles after
+real Tab presses on a dark button, a sidebar link and the keyboard-opened Publish
+menu's first item; a mouse click stays plain). It runs in CI on `chromium-desktop-3k`
+(an `@admin-write` spec, selected by `self-fixture-e2e.yml`); no admin project uses
+Firefox, so the Firefox pass is local only.
+
+## Decap's toasts let taps through at 1100px and below (UX round 4 triage package 6: ad A4, jd F13)
+
+Decap raises its toasts ("missed a required field", "Entry saved") in a react-toastify
+container at `top-right`, fixed to the viewport, for 8 s. Since #766 pinned the phone
+toolbar to the top, that container sat exactly on Publish and the avatar, so the retry
+tap after a failed Publish landed on the toast. In the shipped 3.15.1 bundle no node sets
+`pointer-events` (the container, toast, body and close button all compute `auto`), so
+the last rule of `theme/admin/admin-mobile.css` sets `pointer-events: none` on
+`[class*="Toastify__toast-container"]` at `max-width: 1100px` (inherited by the whole
+subtree) and `auto` on its `[class*="Toastify__close-button"]`. A toast can then only be
+dismissed by its close button or its timer; click-to-close and swipe-to-dismiss no longer
+fire. Desktop is untouched. `validation-feedback.js` reads these nodes with
+`querySelector` and closes a stale one with a script `.click()`, neither of which is
+hit-tested. Not covered: Decap stacks a second identical toast on a second failure.
+Test: `e2e/cms-admin-toast-passthrough.spec.js` (390x844: a hit test and a real click on
+Publish and the avatar under a live toast, the close button still closes it, and the
+rule is off above 1100px).
+
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 
 The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a

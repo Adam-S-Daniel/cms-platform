@@ -28,6 +28,7 @@ const ADMIN_DIR = path.join(REPO_ROOT, "theme", "admin");
 
 const CONFIRM_WRAP = "confirm-wrap-local-backup.js";
 const AUTOSAVE = "autosave-on-hide.js";
+const ROUTE_FOCUS = "route-focus.js";
 // The exact English confirmLoadBackup string Decap passes to window.confirm
 // (verified byte-identical in the decap-cms 3.12.2 + 3.14.1 + 3.15.1 bundles). If this
 // ever drifts from the shim's literal, the wrap stops matching → the dialog
@@ -87,6 +88,20 @@ test.describe("admin shells: #161 confirm-wrap + autosave load order", () => {
         autosave.index,
         `${label}: ${AUTOSAVE} must load AFTER decap-cms.js`,
       ).toBeGreaterThan(decap);
+    });
+  }
+
+  // route-focus.js (UX round 3, K8/F5) restores focus Decap drops and adds the
+  // skip link. Post-load behavior on Decap's rendered DOM: deferred, after
+  // decap-cms.js, and in every shell (a shell without it has no skip link).
+  for (const file of adminHtmlFiles()) {
+    const label = path.relative(REPO_ROOT, file);
+    test(`${label}: route-focus.js deferred AFTER decap`, () => {
+      const html = fs.readFileSync(file, "utf8");
+      const tag = scriptTag(html, ROUTE_FOCUS);
+      expect(tag, `${label} must load ${ROUTE_FOCUS}`).not.toBeNull();
+      expect(tag.defer, `${label}: ${ROUTE_FOCUS} must be deferred`).toBe(true);
+      expect(tag.index, `${label}: ${ROUTE_FOCUS} must load AFTER decap-cms.js`).toBeGreaterThan(decapIndex(html));
     });
   }
 

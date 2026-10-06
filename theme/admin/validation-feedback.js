@@ -65,6 +65,22 @@
  *      message alone. The toast is centered with auto margins instead of
  *      `left:50%`, which shrank it to about half the width on a phone.
  *
+ * ── Follow-ups (keyboard Publish, UX round 3) ─────────────────────────
+ *   9. Publish by keyboard (Enter or Space on "Publish now") gave no
+ *      feedback at all: the Publish menu is react-aria-menubutton, whose
+ *      items select on `keydown` and never fire a `click`, so the click
+ *      listener above never ran. A keydown on a menu item now counts as the
+ *      same attempt (a `<button>` is left to its own click: Enter on one
+ *      fires a click, and it must not report twice).
+ *  10. Focus moves to the first invalid field after the scroll, also when
+ *      Decap raised its own "missed a required field" toast: it used to stay
+ *      on the Publish button with the field's message off screen. Only for
+ *      an event the editor made (`isTrusted`): autosave-on-hide.js clicks Save
+ *      from a script on tab hide, page hide and idle, and that must never
+ *      move focus out from under her typing (the toast and scroll stay as
+ *      before). A held key (`repeat`) is not a second attempt. The toast's
+ *      close button is a real <button>, so it is already reachable by Tab.
+ *
  * Everything keys on Decap's public surface (`CMS.getLocale`, the button
  * text) or on the `ControlErrorsList` Emotion label; if Decap changes any of
  * them the affected part is a silent no-op and Decap behaves as before.
@@ -85,6 +101,9 @@
   var ROW_LABEL = '[class*="NestedObjectLabel"]';
   var ROW_TOGGLE = '[class*="StyledListItemTopBar"] button';
   var CONTROL = '[class*="ControlContainer"]';
+  // What an editor types into: the control to focus inside a failing field.
+  var FOCUSABLE =
+    'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"]';
   var DECAP_CLOSE = '[class*="Toastify__close-button"]';
   // The locale codes Decap 3.15.1 registers (its bundled phrase sets). A code
   // it lacks is a locale this shim cannot see: that toast just stays open.
@@ -95,6 +114,8 @@
   ];
   // Frames to let Decap validate and re-render after a click before looking.
   var SETTLE_FRAMES = 3;
+  // Frames to wait for a field in a just-opened list row to show before focusing it.
+  var FOCUS_FRAMES = 5;
 
   function setLocalePhrase() {
     try {
@@ -258,6 +279,29 @@
     }
   }
 
+  // Keyboard and screen-reader editors land on the field, not on the Publish
+  // button they pressed. Called after any collapsed row is open and the field
+  // is scrolled to; preventScroll keeps that scroll position. A row opened a
+  // moment ago may not have re-rendered yet, and a hidden control cannot take
+  // focus: wait a few frames for it to show, then scroll to it again.
+  function focusField(list, framesLeft) {
+    try {
+      var box = list.closest && list.closest(CONTROL);
+      var control = box && box.querySelector ? box.querySelector(FOCUSABLE) : null;
+      if (!control || typeof control.focus !== "function") return;
+      if (control.offsetParent === null && framesLeft > 0) {
+        window.requestAnimationFrame(function () {
+          focusField(list, framesLeft - 1);
+        });
+        return;
+      }
+      if (framesLeft < FOCUS_FRAMES) list.scrollIntoView({ block: "center", behavior: "auto" });
+      control.focus({ preventScroll: true });
+    } catch {
+      /* Decap's markup changed: the toast still names the field */
+    }
+  }
+
   // The toast goes on the edge of the screen the field is not near. Called
   // after the (instant) scroll, so the field is where it will stay.
   function fieldInLowerHalf(list) {
@@ -339,7 +383,10 @@
     }
   }
 
-  function report(before) {
+  // `moveFocus` is true only for an attempt the editor made: autosave-on-hide.js
+  // clicks Save from a script (tab hidden, page hide, idle), and focus jumping
+  // to another field while she types would be worse than the silence.
+  function report(before, moveFocus) {
     // An earlier "Not saved yet" must not outlive a save that went through.
     removeToast();
     var lists = document.querySelectorAll(ERROR_LIST);
@@ -352,6 +399,7 @@
     } catch {
       /* old browser: the toast still says what is wrong */
     }
+    if (moveFocus) focusField(first, FOCUS_FRAMES);
     if (raisedByDecap(before)) return;
     closeStaleDecapToasts(before);
     var where = rowPath(first);
@@ -365,15 +413,28 @@
     // Taken before Decap handles the click (this listener is in the capture
     // phase), so a toast raised BY the click is told from one left over.
     var before = decapToasts();
+    // A scripted click (autosave) is not an editor's attempt: isTrusted is
+    // false for it, and for a keydown only a real key press is true.
+    var moveFocus = e.isTrusted === true;
     var frames = SETTLE_FRAMES;
     function tick() {
       if (--frames > 0) window.requestAnimationFrame(tick);
-      else report(before);
+      else report(before, moveFocus);
     }
     window.requestAnimationFrame(tick);
+  }
+
+  // react-aria-menubutton selects a Publish menu item on Enter or Space with
+  // no click. A <button> is skipped: its own Enter and Space fire a click.
+  function afterKeydown(e) {
+    if ((e.key !== "Enter" && e.key !== " ") || e.repeat) return;
+    var item = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
+    if (!item || String(item.tagName || "").toUpperCase() === "BUTTON") return;
+    afterClick(e);
   }
 
   setLocalePhrase();
   addStyle();
   document.addEventListener("click", afterClick, true);
+  document.addEventListener("keydown", afterKeydown, true);
 })();

@@ -81,6 +81,9 @@ const PLATFORM_META_SPECS = [
   // platform-internal and testIgnored on a CONSUMER lane.
   "admin-shim-load-order.test.js",
   "confirm-wrap-local-backup.test.js",
+  // #652 — vm-sandbox test of theme/admin/hide-fixture-media.js + probe invariants
+  // (reads the platform theme/admin tree, absent on a consumer).
+  "hide-fixture-media.test.js",
   // #625 item 3 — vm-sandbox unit test reading theme/admin/autosave-on-hide.js
   // SOURCE (platform theme/admin tree, absent on a consumer), same shape as above.
   "autosave-on-hide.test.js",
@@ -148,8 +151,13 @@ const PLATFORM_META_SPECS = [
   "publish-progress-post-merge.test.js",
   "live-url-banner-follows-poller.test.js",
   "entry-status-model-progress.test.js",
+  // #644 — vm-sandboxes theme/admin SOURCE (the poller, the button and the
+  // requestAnimationFrame shims) with document.hidden stubbed; same reason.
+  "admin-hidden-tab.test.js",
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
+  "posts-list-status-dedupe.test.js",
+  "admin-config-sortable-fields-schema.test.js",
   "slug-pin.test.js",
   // cms-platform#735 — vm-sandboxes theme/admin/tags-input.js SOURCE; platform-internal likewise.
   "tags-suggest.test.js",
@@ -157,6 +165,8 @@ const PLATFORM_META_SPECS = [
   "validation-feedback.test.js",
   // vm-sandboxes theme/admin/list-row-affordance.js SOURCE (the control names).
   "list-row-affordance.test.js",
+  // UX round 3 (K8/F5) — vm-sandboxes theme/admin/route-focus.js SOURCE.
+  "route-focus.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
   "editor-component-image.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
@@ -204,6 +214,9 @@ const PLATFORM_META_SPECS = [
   // sense only in the platform self-CI, never in a consumer.
   "site-capabilities.test.js",
   "base-collections-skip-meta.test.js",
+  // UX round 4 package 3: renders theme/assets/css/main.css and the project
+  // layout's SOURCE in a static fixture (theme/ tree, absent on a consumer).
+  "theme-featured-badge.test.js",
   // #656 — parses the platform theme's own theme/assets/css/main.css, absent in
   // a consumer. Runs in self-ci node-unit-lints.
   "theme-reduced-motion.test.js",
@@ -392,6 +405,9 @@ const PLATFORM_META_SPECS = [
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
   "deploy-preview-cms-slug.test.js",
+  // #637 — executes the build run: scripts of the platform's OWN
+  // deploy-preview.yml / deploy-production.yml / site-verify.yml DEFINITIONS.
+  "deploy-preview-unpublished.test.js",
   "deploy-status-pill-robustness.test.js",
   "deploy-status-pill-stale.test.js",
   "detect-changed-pages.test.js",
@@ -700,6 +716,9 @@ const PLATFORM_META_SPECS = [
   "media-library-tidy.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
+  // cms-platform#645 — vm-sandboxes theme/admin/mobile-preview-toggle.js and
+  // parses theme/admin/admin-mobile.css; platform-internal SOURCE reads.
+  "mobile-preview-toggle.test.js",
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",

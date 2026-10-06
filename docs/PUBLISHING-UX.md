@@ -312,6 +312,25 @@ configured `locale`; a toast in a locale it cannot read stays open. The
 "×" glyph `aria-hidden`, and the toast is centered with auto margins so it
 keeps its width on a phone.
 
+Follow-up (keyboard Publish, UX round 3): Enter or Space on "Publish now" gave
+no feedback at all. The Publish menu is react-aria-menubutton, which selects an
+item on `keydown` and fires no `click`, so the shim's click listener never ran
+(the mouse path worked). A capture-phase `keydown` listener now treats Enter or
+Space on a `role="menuitem"` Save/Publish item as the same attempt (a real
+`<button>` is skipped: its own Enter fires a click, so Save reports once). After
+the scroll, focus moves to the first input in the first failing field (a
+collapsed list row is opened first), also when Decap raised its own "missed a
+required field" toast, so a keyboard or screen-reader editor lands on the field
+the message names instead of staying on the Publish button. Focus moves only
+for an event the editor made (`isTrusted`): `autosave-on-hide.js` clicks Save
+from a script on tab hide, page hide and idle, and that report still toasts and
+scrolls but must not move focus out from under her typing. A held key
+(`repeat`) is ignored, and a field in a row opened a moment ago is waited for (a
+few frames) before it is focused. Under
+`publish_mode: editorial_workflow` Decap's Publish never validates; the path
+only exists in simple mode (the local backend), which
+`e2e/cms-validation-feedback.spec.js` selects by rewriting `config-test.yml`.
+
 ---
 
 ## 3. The target model
@@ -504,7 +523,11 @@ branch, the stall, and Live on the preview), `e2e/publish-status-links.test.js`
 has merged, only a merge into a known default-branch base reads as going live
 on the live site, whatever its labels; a merge into the feature branch, or one
 whose base is unknown, reads as on its way to the preview for the merge watch,
-and after that the entry's ordinary state applies).
+and after that the entry's ordinary state applies). Within the watch, a
+feature-branch merge reads Live, "on &lt;preview host&gt; now", as soon as a
+`preview-pr-<N>` deployment covering the merge succeeds — N being the open PR
+whose head is that branch (#643); before #643 nothing read that deployment,
+so the bar said "Going live…" for the whole 30-minute watch.
 
 The old wording was never actually shown on GitHub. GitHub rejects a label
 description over 100 characters with a 422; the old one was 107, the
@@ -786,7 +809,13 @@ Four details worth keeping:
   most likely to be "simplified" into a lie, so it has its own test.
 - **A hidden tab polls nothing.** An admin left open overnight in a
   background tab must not spend the editor's rate limit on an entry nobody
-  is looking at.
+  is looking at. A Publish press is the exception (unreleased, #644): its
+  `refresh()` reads in a hidden tab too, because an editor who pressed
+  Publish and switched to the Live Preview tab got "press Publish once more"
+  with no Publish control on screen. That failure now also gives Decap's
+  control back when no button of ours is showing, and the admin shims that
+  coalesce on `requestAnimationFrame` (which never fires in a hidden tab)
+  run their pass on the next task instead while the tab is hidden.
 - **The sentence links to the run (unreleased).** "did not pass" links to
   the failed check's workflow run, and the "It is waiting for …" phrase to
   the running one (one run's page when the running checks share a run, else
