@@ -6,7 +6,8 @@
  *   2. an all-fixture list says "No posts match" instead of going blank;
  *   3. a live post's path is a link at once and never carries the
  *      "once published" tooltip;
- *   4. the Posts collection sorts by date, newest first, by default;
+ *   4. the Posts collection sorts by date, newest first, by default (Decap's
+ *      own `default_sort` on an ARRAY-shaped `sortable_fields`);
  *   5. the printed date is the front-matter date, not the file name's.
  */
 const fs = require("node:fs");
@@ -196,12 +197,19 @@ test.describe("date comes from front matter (#650 problem 5)", () => {
 });
 
 test.describe("default sort is newest first (#650 problem 4)", () => {
+  // Decap 3.15.1 rejects an object-shaped `sortable_fields` ("must be array")
+  // and never loads the admin; the supported default is an array item with
+  // `default_sort`, which the bundle's loadEntries applies when no sort is
+  // stored yet (admin-config-sortable-fields-schema.test.js checks the full
+  // schema). The date field is a string in the stored offset, so a descending
+  // sort on it is newest first.
   for (const f of ["config.base.yml", "config-local.base.yml", "config-test.yml"]) {
-    test(`${f}: posts sort by date, descending, by default`, () => {
+    test(`${f}: posts sort by date, descending, by default, as an array`, () => {
       const cfg = YAML.parse(fs.readFileSync(path.join(ADMIN, f), "utf8"));
       const posts = cfg.collections.find((c) => c.name === "posts");
-      expect(posts.sortable_fields.fields).toEqual(["date", "title"]);
-      expect(posts.sortable_fields.default).toEqual({ field: "date", direction: "Descending" });
+      expect(Array.isArray(posts.sortable_fields)).toBe(true);
+      expect(posts.sortable_fields).toEqual([{ field: "date", default_sort: "desc" }, "title"]);
+      expect(posts.fields.map((x) => x.name)).toEqual(expect.arrayContaining(["date", "title"]));
     });
   }
 });
