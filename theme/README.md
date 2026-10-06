@@ -69,6 +69,16 @@ cms:
   list, with no `_tags/` entry, is judged by its slugified name: an `e2e-` one
   gets the same treatment, even on a real post
   ([build regression](spec/exclude_e2e_tags_build_test.rb)).
+- **Tags that differ only in case are one tag** (#754). `quotes` and `Quotes`
+  slugify alike and share `/tags/quotes/`, so `auto_tag_pages` groups every
+  spelling under its slug: one `site.all_tags` row with the combined count
+  (a post carrying both spellings counts once), one archive page and one tag
+  feed. `tag.html` and `atom_feed.xml` list every post whose tags slugify to
+  the page's slug. The display name is deterministic: the `_tags/` entry's
+  name if there is one, else the spelling the most posts use, a tie going to
+  the one seen first (`AutoTagPages.group`). Sites need no change: their
+  `/tags/` index and tag cloud already read `site.all_tags`
+  ([build regression](spec/tag_case_variants_build_test.rb)).
 
 Updates flow to sites via a gem-version bump — `platform-bump`'s job, not
 Dependabot's: since #242, Dependabot's `bundler` ecosystem carries an explicit

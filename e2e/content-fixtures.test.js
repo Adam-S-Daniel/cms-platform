@@ -17,6 +17,7 @@ const {
   hrefParamStartsWith,
   visibleTitleLocator,
   discoverTags,
+  duplicateTagSlugs,
 } = require("./content-fixtures");
 
 // Lexical token extraction only (`<a ... href="...">text</a>`): the helper
@@ -315,4 +316,18 @@ test("discoverTags returns the stored tag name, not the CSS-uppercased one", asy
     locator: () => ({ count: async () => stored.length, nth: (i) => itemFor(stored[i]) }),
   };
   expect(await discoverTags(page)).toEqual([{ slug: "welcome", name: "Welcome", count: 3 }]);
+});
+
+// #754: `quotes` and `Quotes` slugify alike and share /tags/quotes/, so the
+// /tags/ index must show ONE card for them. duplicateTagSlugs is the check
+// tags.spec.js runs on what discoverTags read from the live index.
+test("duplicateTagSlugs flags two cards that share one /tags/<slug>/ (#754)", async () => {
+  const card = (name, slug) => ({ name, slug, count: 1 });
+  expect(duplicateTagSlugs([card("quotes", "quotes"), card("Quotes", "quotes"), card("RAG", "rag")])).toEqual([
+    "quotes",
+  ]);
+  expect(duplicateTagSlugs([card("Quotes", "quotes"), card("RAG", "rag")])).toEqual([]);
+  expect(duplicateTagSlugs([])).toEqual([]);
+  // A slug is lowercase by construction, but the check must not depend on it.
+  expect(duplicateTagSlugs([card("a", "Quotes"), card("b", "quotes")])).toEqual(["quotes"]);
 });

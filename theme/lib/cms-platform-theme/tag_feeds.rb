@@ -14,6 +14,9 @@
 
 # Jekyll::ExcludeE2EPosts.excluded_tag_names (#689 e2e / fixture tags).
 require_relative 'exclude_e2e_posts'
+# AutoTagPages.group: tags that differ only in case are ONE tag with ONE
+# feed at /tags/<slug>/feed.xml, named like its archive page (#754).
+require_relative 'auto_tag_pages'
 
 if defined?(Jekyll::Generator)
   module Jekyll
@@ -58,15 +61,22 @@ if defined?(Jekyll::Generator)
           # feed_exclude, so even a tag shared with a real post never
           # lists the canary.
           public_posts = site.posts.docs.reject { |p| p.data['feed_exclude'] == true }
-          from_posts = public_posts.flat_map { |p| Array(p.data['tags']) }.compact
-          # A name with no `_tags/` entry whose slug starts `e2e-` (#689)
-          # gets no feed either.
+          post_tag_lists = public_posts.map { |p| Array(p.data['tags']) }
           slugify = ->(name) { Jekyll::Utils.slugify(name) }
-          e2e_names = (from_posts - curated).select do |name|
-            Jekyll::ExcludeE2EPosts.e2e_tag_name?(name, slugify: slugify)
-          end
-          ((curated + from_posts).uniq - excluded - e2e_names).each do |name|
-            site.pages << FeedPage.new(site, name)
+          # One feed per slug, not per spelling (#754): `Quotes` and `quotes`
+          # share a URL, and the second page would overwrite the first.
+          groups = Jekyll::AutoTagPages.group(
+            curated_names: curated, post_tag_lists: post_tag_lists, slugify: slugify,
+          )
+          excluded_slugs = excluded.map { |name| slugify.call(name) }
+          groups.each do |slug, group|
+            next if excluded_slugs.include?(slug)
+            # A name with no `_tags/` entry whose slug starts `e2e-` (#689)
+            # gets no feed either.
+            next if !group['curated'] &&
+                    Jekyll::ExcludeE2EPosts.e2e_tag_name?(group['name'], slugify: slugify)
+
+            site.pages << FeedPage.new(site, group['name'])
           end
         end
       end

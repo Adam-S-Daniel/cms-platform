@@ -39,7 +39,22 @@ layout: default
     other listings use. A published canary tagged like a real post must not
     appear in the tag archive, though it still serves at /blog/<slug>/.
   {%- endcomment -%}
-  {% assign tagged_posts = site.posts | where_exp: "post", "post.tags contains tag_label" | where_exp: "post", "post.feed_exclude != true" %}
+  {%- comment -%}
+    Match by slug, not by exact spelling (#754): `Quotes` and `quotes` share
+    this one /tags/<slug>/ page, so a post under either spelling belongs here.
+    `slugify` is the filter the page URL and the post pills already use.
+  {%- endcomment -%}
+  {%- assign tagged_posts = "" | split: "" -%}
+  {%- for post in site.posts -%}
+    {%- if post.feed_exclude == true -%}{%- continue -%}{%- endif -%}
+    {%- for post_tag in post.tags -%}
+      {%- assign _post_tag_slug = post_tag | slugify -%}
+      {%- if _post_tag_slug == _tag_slug -%}
+        {%- assign tagged_posts = tagged_posts | push: post -%}
+        {%- break -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endfor -%}
   {% if tagged_posts.size > 0 %}
   <ul class="post-list">
     {% for post in tagged_posts %}

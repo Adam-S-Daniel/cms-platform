@@ -57,6 +57,21 @@ async function discoverTags(page) {
   return tags;
 }
 
+// Pure: the slugs that appear on more than one card in `tags` (the
+// `discoverTags` shape). Tags that differ only in case slugify alike and share
+// one /tags/<slug>/ URL, so they must be ONE card (#754): two cards on one
+// slug mean the archive page is shared and one spelling's posts are dropped.
+function duplicateTagSlugs(tags) {
+  const seen = new Set();
+  const dupes = new Set();
+  for (const { slug } of tags) {
+    const key = String(slug).toLowerCase();
+    if (seen.has(key)) dupes.add(key);
+    seen.add(key);
+  }
+  return [...dupes];
+}
+
 // Pure: pick the first real post permalink from a page's anchors, given as
 // `[{ href, text }]` in DOM order. A post permalink is exactly one segment
 // under /blog/ (`/blog/<slug>/`, the `permalink: /blog/:slug/` both
@@ -206,6 +221,7 @@ function visibleTitleLocator(page, title) {
 
 module.exports = {
   discoverTags,
+  duplicateTagSlugs,
   discoverPost,
   pickPostLink,
   decodeEntities,

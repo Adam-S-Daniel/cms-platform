@@ -15,7 +15,14 @@
 # `site.all_tags` is `[{name, slug, url, description, count}, ...]` sorted
 # case-insensitively by name. `description` comes from the `_tags/` entry
 # when one exists, else nil. `count` is the number of posts referencing
-# that tag.
+# that tag under any spelling.
+#
+# Tags that differ only in case (`quotes` / `Quotes`) slugify alike, so
+# they are ONE tag (#754): one row, one archive page, one combined count.
+# The display name is the `_tags/` entry's when there is one, else the
+# spelling the most posts use, a tie going to the one seen first (see
+# `AutoTagPages.group`). `_layouts/tag.html` and `_layouts/atom_feed.xml`
+# list every post whose tags slugify to the page's slug.
 #
 # Unit tests: _plugins_test/auto_tag_pages_test.rb
 
@@ -24,25 +31,73 @@ require_relative 'exclude_e2e_posts'
 
 module Jekyll
   module AutoTagPages
+    # Group every spelling of a tag under its slug (#754). `Quotes` and
+    # `quotes` slugify alike, so they share one `/tags/<slug>/` URL: they are
+    # ONE tag, with one archive, one card and one count, whatever spelling a
+    # post used. Returns `{ slug => { 'name', 'variants', 'curated' } }` in
+    # first-seen order (curated entries first, then posts in the order given).
+    #
+    # The display `name` is deterministic:
+    #   1. a `_tags/` entry's name wins (the editor chose it, and the archive
+    #      page it builds is headed with it); the first such entry in a
+    #      collision;
+    #   2. else the spelling used by the MOST posts;
+    #   3. a tie goes to the spelling seen first.
+    # `variants` lists every spelling, first seen first.
+    def self.group(curated_names:, post_tag_lists:, slugify:)
+      groups = {}
+      curated_names.compact.each do |name|
+        group = groups[slugify.call(name)] ||= { 'variants' => [], 'curated' => [] }
+        group['curated'] << name unless group['curated'].include?(name)
+        group['variants'] << name unless group['variants'].include?(name)
+      end
+
+      uses = Hash.new(0)
+      post_tag_lists.each do |list|
+        Array(list).compact.uniq.each do |name|
+          uses[name] += 1
+          group = groups[slugify.call(name)] ||= { 'variants' => [], 'curated' => [] }
+          group['variants'] << name unless group['variants'].include?(name)
+        end
+      end
+
+      groups.transform_values do |group|
+        # max_by returns the first maximum, which is the first seen.
+        most_used = group['variants'].max_by { |name| uses[name] }
+        {
+          'name' => group['curated'].first || most_used,
+          'variants' => group['variants'],
+          'curated' => !group['curated'].empty?,
+        }
+      end
+    end
+
     # Pure data shaping — kept Jekyll-free so the unit tests can call it
     # without booting a Jekyll site. The `slugify` proc lets the test
     # double in a stub; the real generator below passes Jekyll::Utils.slugify.
+    #
+    # Returns `[missing, details]`: `missing` is the display name of every tag
+    # that has no `_tags/` entry (one per slug, so one archive page to mint),
+    # `details` the `site.all_tags` rows, one per slug (see `group`).
     def self.summarise(curated:, post_tag_lists:, slugify:)
       curated_names = curated.filter_map { |c| c['name'] }
-      in_posts = post_tag_lists.flatten.compact.uniq
-      missing = in_posts - curated_names
-      all_names = (curated_names + in_posts).uniq.sort_by { |n| n.to_s.downcase }
+      groups = group(curated_names: curated_names, post_tag_lists: post_tag_lists, slugify: slugify)
+      missing = groups.values.reject { |g| g['curated'] }.map { |g| g['name'] }
 
-      details = all_names.map do |name|
-        curated_entry = curated.find { |c| c['name'] == name }
+      details = groups.map do |slug, g|
+        curated_entry = curated.find { |c| c['name'] == g['name'] }
         {
-          'name' => name,
-          'slug' => slugify.call(name),
-          'url' => "/tags/#{slugify.call(name)}/",
+          'name' => g['name'],
+          'slug' => slug,
+          'url' => "/tags/#{slug}/",
           'description' => curated_entry && curated_entry['description'],
-          'count' => post_tag_lists.count { |list| Array(list).include?(name) },
+          # Posts, not mentions: a post carrying both spellings counts once.
+          'count' => post_tag_lists.count do |list|
+            Array(list).any? { |n| g['variants'].include?(n) }
+          end,
         }
       end
+      details.sort_by! { |d| [d['name'].to_s.downcase, d['slug']] }
 
       [missing, details]
     end
@@ -85,8 +140,13 @@ if defined?(Jekyll::Generator)
 
         def generate(site)
           excluded = Jekyll::ExcludeE2EPosts.excluded_tag_names(site)
+          # Judged by slug, like the grouping: a case variant of an excluded
+          # `_tags/` entry is the same tag and must not mint a second page at
+          # the entry's own /tags/<slug>/ (#754).
+          excluded_slugs = excluded.map { |name| Jekyll::Utils.slugify(name) }
+          excluded_tag = ->(name) { excluded_slugs.include?(Jekyll::Utils.slugify(name)) }
           missing, all_tags = AutoTagPages.summarise(
-            curated: curated_tags(site).reject { |c| excluded.include?(c['name']) },
+            curated: curated_tags(site).reject { |c| excluded_tag.call(c['name']) },
             # Skip e2e / test-fixture posts (feed_exclude stamped by
             # _plugins/exclude_e2e_posts.rb): their tags must not mint a
             # public /tags/<slug>/ archive, inflate a tag's count, or add a
@@ -94,7 +154,7 @@ if defined?(Jekyll::Generator)
             # at /blog/<slug>/ — it just doesn't surface in tag aggregation.
             # e2e / test-fixture `_tags/` entries (#689) are dropped the same
             # way: no tag-cloud or /tags/ entry, and no count.
-            post_tag_lists: public_posts(site).map { |p| Array(p.data['tags']) - excluded },
+            post_tag_lists: public_posts(site).map { |p| Array(p.data['tags']).reject { |n| excluded_tag.call(n) } },
             slugify: ->(name) { Jekyll::Utils.slugify(name) },
           )
 
