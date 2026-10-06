@@ -167,6 +167,8 @@ const PLATFORM_META_SPECS = [
   "tags-suggest.test.js",
   // cms-platform#730 — vm-sandboxes theme/admin/validation-feedback.js SOURCE.
   "validation-feedback.test.js",
+  // vm-sandboxes theme/admin/list-row-affordance.js SOURCE (the control names).
+  "list-row-affordance.test.js",
   // UX round 3 (K8/F5) — vm-sandboxes theme/admin/route-focus.js SOURCE.
   "route-focus.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
