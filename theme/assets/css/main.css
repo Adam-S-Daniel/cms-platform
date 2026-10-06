@@ -151,6 +151,24 @@ pre code {
   padding: 0;
 }
 
+/* A long URL or identifier has no break opportunity, so it widens the whole
+   page (#753). `anywhere` (not `break-word`) also lowers the min-content size,
+   so a flex or grid item holding it can shrink instead of pushing the page
+   wide. It only breaks a string that would otherwise overflow, so normal
+   prose wraps exactly as before. Inline code only: a `pre` block keeps its
+   horizontal scroll, and so does the bare table (both reset below; a classed
+   table is the author's own design and is left alone). */
+.post-content,
+.post-excerpt,
+:not(pre) > code {
+  overflow-wrap: anywhere;
+}
+
+.post-content pre,
+.post-content table:not([class]) {
+  overflow-wrap: normal;
+}
+
 blockquote {
   border-left: 2px solid var(--accent);
   padding-left: 1.2rem;

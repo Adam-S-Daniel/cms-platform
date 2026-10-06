@@ -210,6 +210,9 @@ const PLATFORM_META_SPECS = [
   "theme-share-row-css.test.js",
   // #729 — same, for the bare Markdown table rules (padding, borders, header).
   "theme-table-css.test.js",
+  // #753 — the same shape for overflow-wrap on post text, excerpts and inline
+  // code in main.css. Pure-fs; self-ci node-unit-lints.
+  "theme-overflow-wrap-css.test.js",
   // #737 — the same shape for the hero gap, the current-nav state and the tag
   // name casing in main.css. Pure-fs; self-ci node-unit-lints.
   "theme-public-polish-css.test.js",
