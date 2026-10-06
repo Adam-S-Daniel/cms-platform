@@ -66,15 +66,21 @@ function resolvePreviewBaseURL() {
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
   } catch (err) {
-    // Exit code (or spawn error code) only, and no `cause`: the original
-    // message quotes gh's stderr (the API response's error text), Playwright
-    // prints a cause chain, and this lands in public consumer CI logs. When
-    // gh never started (ENOENT: not on PATH) there is no exit status at all.
+    // Exit code, signal and spawn error code only, and no `cause`: the
+    // original message quotes gh's stderr (the API response's error text),
+    // Playwright prints a cause chain, and this lands in public consumer CI
+    // logs. Check them in the order they can be told apart: a real exit
+    // status; else a signal (which can come with an error code, as in
+    // ETIMEDOUT / ENOBUFS, where gh DID start); else a spawn error code with
+    // no signal (ENOENT: not on PATH, EACCES), where gh never ran.
+    const code = typeof err.code === "string" ? err.code : "";
     const why = Number.isInteger(err.status)
       ? `gh exited ${err.status}`
-      : typeof err.code === "string"
-        ? `gh could not start: ${err.code}`
-        : `gh was killed by ${err.signal}`;
+      : typeof err.signal === "string" && err.signal
+        ? `gh was killed by ${err.signal}${code ? ` (${code})` : ""}`
+        : code
+          ? `gh could not start: ${code}`
+          : "gh failed with no exit status";
     throw new Error(
       `TARGET=preview: failed to query GitHub for the latest open PR (${why}). ` +
         `Ensure 'gh' is on PATH and authenticated, or run with TARGET=local.`,

@@ -43,6 +43,13 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-05 — cms-platform/ci-watcher-loops — edit
+
+- Motivation: in skills-evals ci-watcher-loops rounds 3 and 4 (https://github.com/Adam-S-Daniel/skills-evals/issues/89#issuecomment-5997263591, https://github.com/Adam-S-Daniel/skills-evals/issues/89#issuecomment-5998102731), with-skill trials discarded `gh workflow run`'s output and found the run with `gh run list --limit 1` (3 of 3 in round 4, 0 of 3 without the skill): an extra read, and a race that can pick another actor's run of the same workflow.
+- Change: "The fix" and the multi-step example take the run id from the run URL `gh workflow run` prints (gh >= 2.87.0, https://github.com/cli/cli/releases/tag/v2.87.0); `gh run list` is only a fallback when no URL is printed, filtered by workflow, `workflow_dispatch` event, branch, dispatching user and a created-after timestamp, and accepting a single match only. "What NOT to do" drops "always poll `gh run list --limit 1`".
+- Eval: skills-evals ci-watcher-loops touch gate, fixture skills-evals main 901cca7 (two follow-up turns, https://github.com/Adam-S-Daniel/skills-evals/pull/286), skill at 6b4d338, local, 3 trials per arm, 0 errors: objective 8.0 vs 8.0 of 8 with vs without (all eight checks 3/3 in both arms), judge 8.32 vs 7.85; `gh run list` discovery after the dispatch 0/3 with the skill (round 4: 3/3). PASS (https://github.com/Adam-S-Daniel/cms-platform/pull/680#issuecomment-5998770991). The fixture's fake `gh workflow run` prints a JSON object, not a bare URL line, so neither the URL-parse branch nor the filtered fallback was exercised: the agents read the id from the dispatch JSON. That fixture defect is since fixed (https://github.com/Adam-S-Daniel/skills-evals/pull/290, the fake now prints the run URL a real gh prints), but the eval was not re-run against it.
+- Outcome: merged 2026-10-05 (https://github.com/Adam-S-Daniel/cms-platform/pull/680, dc5a643b).
+
 ## 2026-10-05 — cms-platform/code-quality — edit
 
 - Motivation: in the skills-evals code-quality eval (issue #88 slice: add Go; https://github.com/Adam-S-Daniel/skills-evals/issues/88), all 3 with-skill trials wrote a golangci-lint v1 config (top-level `linters-settings`, no `version: "2"`) that is not the v2 schema, so golangci-width-100 scored 0/3 with the skill against 2/3 without.

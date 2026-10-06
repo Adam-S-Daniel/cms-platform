@@ -152,10 +152,33 @@ run('FeedPage carries the atom_feed layout + sitemap:false marker') do
         "expected per-tag feed permalink, got #{page.data['permalink'].inspect}",)
 end
 
+run('tags differing only in case mint ONE feed page, named like the archive (#754)') do
+  posts = FakePosts.new([
+    FakePostDoc.new({ 'tags' => ['quotes'] }),
+    FakePostDoc.new({ 'tags' => ['Quotes'] }),
+    FakePostDoc.new({ 'tags' => ['Quotes'] }),
+  ])
+  site = FakeSite.new(posts: posts)
+  Jekyll::TagFeeds::Generator.new.generate(site)
+  check(site.pages.size == 1, "expected one feed page, got #{feed_slugs(site).inspect}")
+  check(site.pages.first.data['tag_name'] == 'Quotes',
+        "expected the most-used spelling, got #{site.pages.first.data['tag_name'].inspect}",)
+  check(site.pages.first.data['permalink'] == '/tags/quotes/feed.xml',
+        "expected one permalink, got #{site.pages.first.data['permalink'].inspect}",)
+end
+
+run('a case variant of an excluded _tags entry mints no feed (#754)') do
+  tags = FakeCollection.new([FakePostDoc.new({ 'name' => 'E2E Canary', 'feed_exclude' => true })])
+  posts = FakePosts.new([FakePostDoc.new({ 'tags' => ['e2e canary'] })])
+  site = FakeSite.new(posts: posts, tags: tags)
+  Jekyll::TagFeeds::Generator.new.generate(site)
+  check(site.pages.empty?, "expected no feed pages, got #{feed_slugs(site).inspect}")
+end
+
 # ── result ─────────────────────────────────────────────────────────────────
 
 if @failures.empty?
-  puts 'tag_feeds: all 5 checks passed'
+  puts 'tag_feeds: all 7 checks passed'
 else
   warn "tag_feeds: #{@failures.length} failure(s)"
   @failures.each { |m| warn "  - #{m}" }
