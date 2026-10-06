@@ -16,18 +16,18 @@ All are tagged GitHub releases (release via `gh workflow run release.yml -f vers
 
 **v0.1.149 — The admin's validation toast stays off the field it names and says which list row failed, only the stale "missed a required field" toast is closed, the Tags box keeps a trailing space and separates an applied suggestion, long URLs and identifiers in post text wrap instead of widening the page, and tags that differ only in case merge into one tag.**
 Five changes since v0.1.148, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
-Apart from the pins, the change is `theme/` (admin shims, `main.css`, the tag layouts and the `cms-platform-theme` gem's tag generator), `e2e/` and two `docs/` files (`git diff --stat v0.1.148 origin/main` is 22 files):
+Apart from the pins, the change is `theme/` (admin shims, `main.css`, the tag layouts and the `cms-platform-theme` gem's tag generator), `e2e/` and one `docs/` file, `docs/PUBLISHING-UX.md` (`git diff --stat v0.1.148 origin/main` is 22 files: 12 under `theme/`, 9 under `e2e/` and that one):
 no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
 Validation toast. [#751](https://github.com/Adam-S-Daniel/cms-platform/pull/751) (for [#750](https://github.com/Adam-S-Daniel/cms-platform/issues/750), closed by it)
 edits `theme/admin/validation-feedback.js`. The toast now takes the screen edge the failing field is not near, has `pointer-events: none` except its Dismiss button
 (it covered the field it named and blocked clicks for 10 s), leads with the list row (`Not saved yet. Item 2 (Beta): URL: ...`, a collapsed row opened through its own toggle),
 and ignores a Decap toast that was already up before the click. That last part is the cause of "missed a required field" on a format error: Decap raises that toast only
 for a presence error, and the one the tester saw was left over from an earlier empty Publish, so the shim had stood down. A leftover error toast is closed when the shim shows its own.
-Unit tests 13 to 24, three more real-Decap browser tests, `docs/PUBLISHING-UX.md` section 2.11.
+Unit tests go from 13 to 24, three more real-Decap browser tests, `docs/PUBLISHING-UX.md` section 2.11.
 Stale-toast scope. [#758](https://github.com/Adam-S-Daniel/cms-platform/pull/758) (for [#752](https://github.com/Adam-S-Daniel/cms-platform/issues/752), closed by it)
 narrows #751's cleanup in the same file: only a stale "missed a required field" toast is closed, matched against that string in every locale Decap ships, the page `lang`
 and the browser languages, so "logged out" and "backend unavailable" toasts survive. A toast in a locale it cannot read stays open. The Dismiss button is at least 24 px
-(44 px under `(pointer: coarse)`) with an `aria-hidden` glyph, and on a phone the toast is full width inside its margins instead of about half the screen. Unit tests 24 to 31 and browser tests.
+(44 px under `(pointer: coarse)`) with an `aria-hidden` glyph, and on a phone the toast is full width inside its margins instead of about half the screen. Unit tests go from 24 to 31, plus browser tests.
 Long strings. [#759](https://github.com/Adam-S-Daniel/cms-platform/pull/759) (for [#753](https://github.com/Adam-S-Daniel/cms-platform/issues/753), closed by it)
 changes the public theme: `theme/assets/css/main.css` gives `.post-content`, `.post-excerpt` and `:not(pre) > code` `overflow-wrap: break-word`, so a long URL or identifier
 no longer widens the page (about 1660px at a 1440px viewport, about 1330px at 390px). It is `break-word`, not `anywhere`, because `anywhere` lowers min-content size
@@ -43,7 +43,7 @@ follows up #746 in `theme/admin/tags-input.js`: Decap's list widget trims the bo
 the shim now holds a single trailing space after a letter. An applied suggestion ends in `, ` and the box's trailing separator is trimmed on focus-out through the box, so Save no longer stores an empty second tag.
 Chips are at least 44px under `(pointer: coarse)`. Unit tests in `tags-suggest.test.js` and seven more real-Decap tests in `cms-tags-input.spec.js`.
 Consumer effect. The admin changes (#751, #758, #761) reach both sites with their next bump, when the `cms-platform-theme` gem tag names v0.1.149: the shims load in the `/admin` shells of both.
-#759 and #760 change public theme output, but reviewers measured no visual diff on adamdaniel.ai: 11 pages at 3 widths came out byte-identical, and the tag pages are unchanged for its single tag.
+#759 and #760 change public theme output, but reviewers measured no visual diff on adamdaniel.ai: 11 pages at 3 widths came out byte-identical apart from `/`, whose diffs match a main-vs-main control, and the tag pages are unchanged for its single tag.
 jodidaniel.com is unaffected by the theme changes: it loads no `main.css` and has no blog or tags. Tag feeds and URLs are unchanged. Bump only, no consumer-side edit:
 no reusable workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy redeploy and no bootstrap redeploy.
 
