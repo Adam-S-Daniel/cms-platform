@@ -43,9 +43,14 @@ cms:
   file) or by setting `cms.logo_url` in `_config.yml`. The `npx` scaffolder seeds
   a "replace me" copy of the placeholder into every new site.
 - `lib/cms-platform-theme/` — the plugins (`auto_tag_pages`, `cachebust_filter`,
-  `exclude_e2e_posts`, `normalize_empty_slug`, `seo_image`, `tag_feeds`) and
+  `exclude_e2e_posts`, `feed_stylesheet`, `normalize_empty_slug`, `seo_image`, `tag_feeds`) and
   `decap_config_hook` (a `post_write` hook that runs the Decap render — see
-  `admin/README.md`). `seo_image` maps a post's `featured_image:` to the `image:`
+  `admin/README.md`). `feed_stylesheet` adds an
+  `<?xml-stylesheet?>` instruction to every Atom feed (the per-tag feeds, jekyll-feed's
+  `/feed.xml` and a site-owned one) pointing at the gem's same-origin `assets/feed.xsl`, so a visitor who
+  clicks the RSS icon sees a "copy this address into your feed reader" page instead of
+  raw XML (#728); readers ignore it, and a feed that already names a stylesheet keeps it
+  ([build regression](spec/feed_stylesheet_test.rb)). `seo_image` maps a post's `featured_image:` to the `image:`
   jekyll-seo-tag reads (og:image / twitter:image, large card), falling back to an optional
   site-wide `default_image:` in `_config.yml`; an explicit `image:` wins.
   `exclude_e2e_posts` keeps e2e / test-fixture posts (slug
