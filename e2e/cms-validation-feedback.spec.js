@@ -19,6 +19,24 @@ const { test, expect } = require("./base");
 const SHIM_TOAST = "[data-validation-feedback-toast]";
 const FIELD_ERRORS = '[class*="ControlErrorsList"]';
 
+// Replace the Permalink value outright. CI (chromium-desktop-3k, run
+// 37403111175) saw a plain fill() over "bad" leave "bad/pages/validation-
+// feedback/" in the box. Likely cause (not reproduced locally): fill() selects
+// the old text and then inserts, and a Decap re-render landing between the two
+// would collapse the selection, so the insert appends. Select-all + Delete is
+// a keystroke Decap handles like any edit, and the toHaveValue checks retry
+// until the box holds exactly what was asked for, so a half-applied edit fails
+// here and not later at the save.
+async function setPermalink(page, value) {
+  const field = page.getByLabel(/^Permalink$/);
+  await field.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Delete");
+  await expect(field).toHaveValue("");
+  await field.fill(value);
+  await expect(field).toHaveValue(value);
+}
+
 async function openNewPage(page, { body }) {
   await page.addInitScript(() => {
     window.repoFiles = { _posts: {}, _tags: {}, _projects: {}, pages: {} };
@@ -34,7 +52,7 @@ async function openNewPage(page, { body }) {
   await page.goto("/admin/index-test.html#/collections/pages/new");
   await expect(page.getByLabel(/^Title$/)).toBeVisible({ timeout: 60_000 });
   await page.getByLabel(/^Title$/).fill("Validation feedback check");
-  await page.getByLabel(/^Permalink$/).fill("bad");
+  await setPermalink(page, "bad");
   if (body) {
     const editor = page.locator('[role="textbox"][contenteditable="true"]').last();
     await editor.click();
@@ -99,16 +117,22 @@ test.describe(
       await saveButton(page).click();
       await expect(page.locator(SHIM_TOAST)).toBeVisible({ timeout: 15_000 });
 
-      await page.getByLabel(/^Permalink$/).fill("/pages/validation-feedback/");
+      await setPermalink(page, "/pages/validation-feedback/");
+      // The toast is still up when the second Save is clicked (it self-removes
+      // after 10 s), so what removes it below is the shim's own report(), not
+      // its timer; otherwise the final "gone" check could pass vacuously.
+      await expect(page.locator(SHIM_TOAST)).toBeVisible();
       await saveButton(page).click();
       await expectSaved(page);
+      // Gone well inside the 10 s self-removal.
+      await expect(page.locator(SHIM_TOAST)).toHaveCount(0, { timeout: 3_000 });
       await settle(page);
       await expect(page.locator(SHIM_TOAST)).toHaveCount(0);
     });
 
     test("opening the Publish menu is not a publish attempt", async ({ page }) => {
       await openNewPage(page, { body: true });
-      await page.getByLabel(/^Permalink$/).fill("/pages/validation-feedback/");
+      await setPermalink(page, "/pages/validation-feedback/");
       await saveButton(page).click();
       await expectSaved(page);
 
