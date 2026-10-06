@@ -3,7 +3,7 @@ const { test, expect, TARGET } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
 const { guard } = require("./base-collections-guards");
-const { slugify } = require("./public-content");
+const { slugify, postPublicPath, parseFrontMatter } = require("./public-content");
 // SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source signal).
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
@@ -96,9 +96,23 @@ function isKnownBug(url) {
 // whose derived URL 404s (the admin and Jekyll disagreeing on the URL)
 // is still a failure.
 const PUBLIC_ENTRY_ROUTES = {
-  // config's `permalink: /blog/:slug/`: Jekyll drops the date prefix and
-  // slugifies the rest (same derivation as posts-list-enhance.js urlSlug).
-  posts: { folder: "_posts", urlPath: (slug) => `/blog/${slugify(slug.replace(/^\d{4}-\d{2}-\d{2}-/, ""))}/` },
+  // config's `permalink: /blog/:slug/`: the front-matter `slug:` (else the
+  // file name minus its date prefix), slugified; a front-matter `permalink:`
+  // replaces the template (same derivation as posts-list-enhance.js urlPath).
+  // A post that is missing (deleted since the admin listed it) has no front
+  // matter left to read, so it falls back to the file name.
+  posts: {
+    folder: "_posts",
+    urlPath: (slug, source) => {
+      let frontMatter = null;
+      try {
+        frontMatter = parseFrontMatter(source);
+      } catch {
+        // missing or unreadable: the file-name address is all there is
+      }
+      return postPublicPath(slug, frontMatter);
+    },
+  },
   // tags collection: `permalink: /tags/:slug/`.
   tags: { folder: "_tags", urlPath: (slug) => `/tags/${slugify(slug)}/` },
 };
@@ -131,13 +145,15 @@ function unbuiltEntryUrls(adminHrefs, adminOrigin) {
       continue;
     }
     if (slug.includes("/") || slug.includes("..")) continue;
+    const source = path.join(SITE_ROOT, route.folder, `${slug}.md`);
     let unbuilt;
     try {
-      unbuilt = fs.statSync(path.join(SITE_ROOT, route.folder, `${slug}.md`)).mtimeMs > builtAt;
+      unbuilt = fs.statSync(source).mtimeMs > builtAt;
     } catch {
       unbuilt = true; // deleted since the admin listed it: a transient spec entry
     }
-    if (unbuilt) urls.add(`${adminOrigin}${route.urlPath(slug)}`);
+    const urlPath = unbuilt ? route.urlPath(slug, source) : null;
+    if (urlPath) urls.add(`${adminOrigin}${urlPath}`);
   }
   return urls;
 }

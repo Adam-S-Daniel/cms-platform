@@ -19,6 +19,8 @@ const vm = require("node:vm");
 const { test, expect } = require("./base");
 
 const SRC = fs.readFileSync(path.resolve(__dirname, "../theme/admin/posts-list-enhance.js"), "utf8");
+const LIVE_URL_SRC = fs.readFileSync(path.resolve(__dirname, "../theme/admin/live-url-derive.js"), "utf8");
+const CONFIG_BASE = path.resolve(__dirname, "../theme/admin/config.base.yml");
 const API = "https://api.github.com/repos/owner/repo";
 const PULLS = `${API}/pulls?state=open&per_page=100`;
 const PREVIEW_ORIGIN = "https://preview-pr7.example.com";
@@ -26,7 +28,14 @@ const PREVIEW_BRANCH = "claude/feature";
 const HEAD_PULLS = `${API}/pulls?state=open&head=${encodeURIComponent(`owner:${PREVIEW_BRANCH}`)}&per_page=1`;
 const SLUG = "2026-09-28-hello";
 
-function load({ routes = {}, token = "t0k3n", branch = PREVIEW_BRANCH, destinationOrigin = PREVIEW_ORIGIN } = {}) {
+function load({
+  routes = {},
+  token = "t0k3n",
+  branch = PREVIEW_BRANCH,
+  destinationOrigin = PREVIEW_ORIGIN,
+  anchors = [],
+  withLiveUrl = false,
+} = {}) {
   const calls = [];
   const window = {
     CMS_REPO: "owner/repo",
@@ -47,6 +56,7 @@ function load({ routes = {}, token = "t0k3n", branch = PREVIEW_BRANCH, destinati
     document: {
       readyState: "complete",
       body: {},
+      querySelectorAll: () => anchors,
       addEventListener() {},
       createElement: () => ({ className: "", innerHTML: "" }),
     },
@@ -68,11 +78,14 @@ function load({ routes = {}, token = "t0k3n", branch = PREVIEW_BRANCH, destinati
     console: { info() {}, warn() {} },
   };
   vm.createContext(sandbox);
+  // live-url-derive.js owns the slugify the list reuses; the real admin loads
+  // it first (index*.html), so a test that checks slugification does too.
+  if (withLiveUrl) vm.runInContext(LIVE_URL_SRC, sandbox);
   vm.runInContext(SRC, sandbox);
   return { hook: window.__postsListEnhance, calls };
 }
 
-function card() {
+function card(extra = {}) {
   const li = {
     children: [],
     querySelector: () => li.children[0] || null,
@@ -86,14 +99,15 @@ function card() {
     state: { label: "Published", color: "#1a7f37", live: true },
     isFixture: false,
     postDate: null,
+    ...extra,
   };
 }
 
-function render(hook, pr) {
-  const c = card();
+function render(hook, pr, extra = {}) {
+  const c = card(extra);
   hook.decorate(c, {
     lastEdited: { [c.filePath]: { url: null, pr: null } },
-    prBySlug: pr ? { [SLUG]: pr } : {},
+    prBySlug: pr ? { [c.slug]: pr } : {},
   });
   return c.li.children[0].innerHTML;
 }
@@ -210,4 +224,205 @@ test.describe('posts-list-enhance.js says "Sign in" only when signed out (#642)'
     const { hook } = load();
     expect(hook.publishingBarCopy().loading).not.toMatch(/\b(deploy|PR)\b/);
   });
+});
+
+// A post's public URL follows Jekyll's rules, not just its file name:
+// `permalink: /blog/:slug/` takes :slug from the front-matter `slug:` when one
+// is set, and a front-matter `permalink:` replaces the template. adamdaniel.ai's
+// `_posts/2026-09-28-quoting-simon-willison-on-coding-agents.md` carries
+// `slug: quoting-simon-willison-on-unlocking-coding-agents-potential`, so the
+// list linked it at a 404 (cms-link-crawler.spec.js failed on the platform
+// bump, adamdaniel.ai#4137; the link became same-origin in cms-platform#682).
+const PROD_ORIGIN = "https://example.com";
+const FILE_SLUG = "2026-09-28-quoting-simon-willison-on-coding-agents";
+const FM_SLUG = "quoting-simon-willison-on-unlocking-coding-agents-potential";
+
+function publishedHref(fm = {}, { origin = PROD_ORIGIN } = {}) {
+  const { hook } = load({ destinationOrigin: origin, branch: "main", withLiveUrl: true });
+  const html = render(hook, null, { slug: FILE_SLUG, ...fm });
+  const m = /<a href="([^"]*)"[^>]*>published ↗<\/a>/.exec(html);
+  return m ? m[1] : null;
+}
+
+test.describe("posts-list-enhance.js public URL follows the front matter, as Jekyll does", () => {
+  test("no front-matter slug → the file name minus its date prefix", () => {
+    expect(publishedHref()).toBe(`${PROD_ORIGIN}/blog/quoting-simon-willison-on-coding-agents/`);
+  });
+
+  test("a front-matter slug wins over the file name", () => {
+    expect(publishedHref({ fmSlug: FM_SLUG })).toBe(`${PROD_ORIGIN}/blog/${FM_SLUG}/`);
+  });
+
+  test("a front-matter slug is slugified the way Jekyll's :slug is", () => {
+    expect(publishedHref({ fmSlug: "  Bad Slug! (Take 2)  " })).toBe(`${PROD_ORIGIN}/blog/bad-slug-take-2/`);
+  });
+
+  test("a blank front-matter slug falls back to the file name", () => {
+    expect(publishedHref({ fmSlug: "   " })).toBe(`${PROD_ORIGIN}/blog/quoting-simon-willison-on-coding-agents/`);
+  });
+
+  test("a front-matter permalink is the URL, with :slug expanded", () => {
+    expect(publishedHref({ fmPermalink: "/essays/custom/" })).toBe(`${PROD_ORIGIN}/essays/custom/`);
+    expect(publishedHref({ fmPermalink: "/essays/:slug/", fmSlug: "My Essay" })).toBe(`${PROD_ORIGIN}/essays/my-essay/`);
+    expect(publishedHref({ fmPermalink: "/essays/:slug/" })).toBe(
+      `${PROD_ORIGIN}/essays/quoting-simon-willison-on-coding-agents/`,
+    );
+  });
+
+  test("a permalink using a placeholder the list does not reproduce gets no link, not a guessed one", () => {
+    expect(publishedHref({ fmPermalink: "/:year/:slug/", fmSlug: FM_SLUG })).toBeNull();
+    expect(publishedHref({ fmPermalink: "/:categories/post/" })).toBeNull();
+    const { hook } = load({ withLiveUrl: true });
+    expect(hook.urlPath({ slug: FILE_SLUG, fmSlug: FM_SLUG, fmPermalink: "/:year/:slug/" })).toBeNull();
+    // ...and a draft's per-PR preview link is left out too.
+    const pr = { number: 42, url: "https://github.com/owner/repo/pull/42", previewOnly: false };
+    const html = render(hook, pr, { slug: FILE_SLUG, fmPermalink: "/:year/:slug/" });
+    expect(html).not.toContain("preview draft");
+    expect(html).not.toContain("Published OFF");
+  });
+
+  test("a permalink without a leading slash is served from the root, as Jekyll does", () => {
+    expect(publishedHref({ fmPermalink: "essays/custom/" })).toBe(`${PROD_ORIGIN}/essays/custom/`);
+  });
+
+  test("the draft's per-PR preview link and the not-yet-live label use the same path", () => {
+    const { hook } = load({ branch: "main", destinationOrigin: PROD_ORIGIN, withLiveUrl: true });
+    const pr = { number: 42, url: "https://github.com/owner/repo/pull/42", previewOnly: false };
+    const html = render(hook, pr, { slug: FILE_SLUG, fmSlug: FM_SLUG });
+    expect(html).toContain(`href="https://preview-pr42.example.com/blog/${FM_SLUG}/"`);
+    expect(html).not.toContain("on-coding-agents/");
+    const draft = render(hook, null, {
+      slug: FILE_SLUG,
+      fmSlug: FM_SLUG,
+      state: { label: "Draft", color: "#57606a", live: false },
+    });
+    expect(draft).toContain(`>/blog/${FM_SLUG}/</span>`);
+  });
+});
+
+test.describe("posts-list-enhance.js reads the front matter off the summary", () => {
+  const SEP = "⁣";
+
+  // Decap 3.15.1 renders the card heading as [summary text, <TitleIcons>]: two
+  // children, with the workflow badge text ("In review") inside the second.
+  // h2.textContent therefore is NOT the summary. A global-search result also
+  // puts the collection label ("Posts") in an <h2> BEFORE the title's.
+  function anchor(summary, slug = FILE_SLUG, { badge = "", search = false } = {}) {
+    const text = { nodeType: 3, nodeValue: summary };
+    const icons = { nodeType: 1, textContent: badge };
+    const h2 = { childNodes: [text, icons] };
+    Object.defineProperty(h2, "textContent", { get: () => text.nodeValue + icons.textContent });
+    const label = { childNodes: [{ nodeType: 3, nodeValue: "Posts" }] };
+    const headings = search ? [label, h2] : [h2];
+    const li = {};
+    return {
+      getAttribute: () => `#/collections/posts/entries/${slug}`,
+      closest: () => li,
+      querySelector: (sel) => (sel === "h2" ? headings[0] : null),
+      querySelectorAll: (sel) => (sel === "h2" ? headings : []),
+      textContent: h2.textContent,
+      h2,
+      text,
+      label,
+    };
+  }
+
+  test("collectCards splits the title, the state and the carried slug/permalink", () => {
+    const a = anchor(`Quoting Simon — DRAFT${SEP}${FM_SLUG}${SEP}/essays/x/`);
+    const { hook } = load({ anchors: [a] });
+    const [c] = hook.collectCards();
+    expect(c.slug).toBe(FILE_SLUG);
+    expect(c.fmSlug).toBe(FM_SLUG);
+    expect(c.fmPermalink).toBe("/essays/x/");
+    expect(c.title).toBe("Quoting Simon");
+    expect(c.state.label).toBe("Draft");
+    // The carrier never reaches the visible title.
+    expect(a.text.nodeValue).toBe("Quoting Simon");
+  });
+
+  test("a published post with no front-matter slug carries an empty tail", () => {
+    const a = anchor(`Hello${SEP}${SEP}`);
+    const { hook } = load({ anchors: [a] });
+    const [c] = hook.collectCards();
+    expect(c.fmSlug).toBe("");
+    expect(c.fmPermalink).toBe("");
+    expect(c.title).toBe("Hello");
+    expect(c.state.live).toBe(true);
+  });
+
+  test("a summary without the tail (an older config) still parses", () => {
+    const a = anchor("Hello — Scheduled");
+    const { hook } = load({ anchors: [a] });
+    const [c] = hook.collectCards();
+    expect(c.fmSlug).toBe("");
+    expect(c.title).toBe("Hello");
+    expect(c.state.label).toBe("Scheduled");
+  });
+
+  test("the visible title loses the tail and the DRAFT suffix with the 2-child heading too", () => {
+    const a = anchor(`Quoting Simon — DRAFT${SEP}${FM_SLUG}${SEP}`);
+    const { hook } = load({ anchors: [a] });
+    hook.collectCards();
+    expect(a.text.nodeValue).toBe("Quoting Simon");
+    expect(a.h2.textContent).not.toContain(SEP);
+    expect(a.h2.textContent).not.toContain(FM_SLUG);
+    // A second pass (Decap has not re-rendered) keeps the state it read.
+    const [c] = hook.collectCards();
+    expect(c.state.label).toBe("Draft");
+    expect(c.fmSlug).toBe(FM_SLUG);
+  });
+
+  test("the tail is read from the summary text node, not h2.textContent (a workflow badge cannot leak into the permalink)", () => {
+    const a = anchor(`Hello${SEP}${FM_SLUG}${SEP}`, FILE_SLUG, { badge: "In review" });
+    const { hook } = load({ anchors: [a] });
+    const [c] = hook.collectCards();
+    expect(c.fmPermalink).toBe("");
+    expect(c.fmSlug).toBe(FM_SLUG);
+  });
+
+  test("outside the posts list (global search) the tail comes off and the DRAFT suffix stays", () => {
+    const a = anchor(`Quoting Simon — DRAFT${SEP}${FM_SLUG}${SEP}/x/`, FILE_SLUG, { search: true });
+    const b = anchor("Plain title", FILE_SLUG, { search: true });
+    const { hook } = load({ anchors: [a, b] });
+    hook.hideCarrierOutsideList();
+    expect(a.text.nodeValue).toBe("Quoting Simon — DRAFT");
+    expect(a.label.childNodes[0].nodeValue).toBe("Posts");
+    expect(b.text.nodeValue).toBe("Plain title");
+  });
+
+  test("the posts summary in config.base.yml writes the tail in the layout the list reads", () => {
+    const YAML = require("yaml");
+    const cfg = YAML.parse(fs.readFileSync(CONFIG_BASE, "utf8"));
+    const summary = cfg.collections.find((c) => c.name === "posts").summary;
+    // Stand in for Decap's stringTemplate: the two field tokens get values,
+    // every other token renders empty (a published, unscheduled post).
+    const rendered = summary.replace(/\{\{([^}|]+?)(?: \|[^}]*)?\}\}/g, (_, key) =>
+      key.trim() === "fields.slug" ? FM_SLUG : key.trim() === "fields.permalink" ? "/p/" : key.trim() === "title" ? "T" : "",
+    );
+    const { hook } = load();
+    expect(hook.splitSummary(rendered)).toEqual({ text: "T", slug: FM_SLUG, permalink: "/p/" });
+  });
+});
+
+test.describe("posts-list-enhance.js urlPath is drift-locked to e2e/public-content.js postPublicPath", () => {
+  const { postPublicPath } = require("./public-content");
+  const cases = [
+    ["2026-09-28-hello", {}],
+    ["2026-09-28-hello", { slug: FM_SLUG }],
+    ["2026-09-28-hello", { slug: "  Bad Slug! (Take 2)  " }],
+    ["2026-09-28-hello", { slug: "" }],
+    ["2026-05-28-quoting-\"somewhat-less-robust\"", {}],
+    ["2026-09-28-hello", { permalink: "/essays/custom/" }],
+    ["2026-09-28-hello", { permalink: "/essays/:slug/", slug: "My Essay" }],
+    ["2026-09-28-hello", { permalink: "essays/custom/" }],
+    ["2026-09-28-hello", { permalink: "/:year/:slug/" }],
+    ["2026-09-28-hello", { permalink: "/:slugs/" }],
+  ];
+  for (const [fileSlug, fm] of cases) {
+    test(`${fileSlug} ${JSON.stringify(fm)}`, () => {
+      const { hook } = load({ withLiveUrl: true });
+      const card = { slug: fileSlug, fmSlug: fm.slug, fmPermalink: fm.permalink };
+      expect(hook.urlPath(card)).toBe(postPublicPath(fileSlug, fm));
+    });
+  }
 });
