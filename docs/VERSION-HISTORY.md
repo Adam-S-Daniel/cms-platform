@@ -10,9 +10,52 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.147)
+## Version history (v0.1.0 → v0.1.148)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.148 — Cancelling the admin's leave prompt on browser Back keeps the editor and the address bar in sync, the Tags box offers existing tags and warns on near-duplicates, the public theme gets a visible current-page nav state, a tighter hero gap and fuller tag pages, and the phone admin toolbar sticks and the date field fits.**
+Four changes since v0.1.147, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `theme/` and `e2e/` changed apart from the pins (`git diff --stat v0.1.147 origin/main` is 16 files: eight under `theme/` and eight under `e2e/`):
+no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
+Leave prompt. [#745](https://github.com/Adam-S-Daniel/cms-platform/pull/745) (for [#733](https://github.com/Adam-S-Daniel/cms-platform/issues/733), closed by it)
+fixes `theme/admin/confirm-wrap-local-backup.js`. Decap 3.15.1's hash router restores the old hash after a cancelled browser Back with `history.go(delta)`,
+taking `delta` from a private list of locations it pushed itself. Posts list rows are plain `<a href="#/...">` anchors, so an entry opened from the list, or after a
+reload, is not in that list: `delta` is 0, the address bar read `#/collections/posts` while the editor stayed up, and the back arrow then pushed to the hash
+already showing and looked dead. The confirm wrap now notes the hash a `hashchange` left and, when the leave confirm is cancelled inside that same `hashchange` and
+Decap did not call `history.go` itself, sets the hash back after the dispatch ends. Accepted prompts, the back arrow and every other confirm are untouched; the
+string match is English-only, like the existing backup-dialog match. Seven new tests in `confirm-wrap-local-backup.test.js`; `theme/admin/README.md` notes it.
+Tag suggestions. [#746](https://github.com/Adam-S-Daniel/cms-platform/pull/746) (part of
+[#735](https://github.com/Adam-S-Daniel/cms-platform/issues/735), not closed) extends `theme/admin/tags-input.js`: on first focus it reads the site's `../tags/`
+page (`.tag-list-name`, same-origin, `no-store`) and shows an aria-live status line under the Tags box that offers existing tags matching the typed text and, for
+a typed tag nearly identical to an existing one (case, plural, spaces and punctuation ignored), a warning with a "Use" button. The offers are Tab-reachable
+buttons applied with Enter. It only offers: nothing is rewritten and a missing `/tags/` page or failed fetch leaves the box as before. adamdaniel.ai's
+`tags/index.html` has the markup; jodidaniel.com has no tags field, so the shim stays inert there. Still open in #735: Decap's `list` widget shows a comma
+string, Enter then Save stores an empty trailing tag, only tags on the published index are offered, and there is no normalize-on-save. New `tags-suggest.test.js`
+(9 tests, in `PLATFORM_META_SPECS`) and eight real-Decap tests added to `cms-tags-input.spec.js`.
+Public theme polish. [#747](https://github.com/Adam-S-Daniel/cms-platform/pull/747) (part of
+[#737](https://github.com/Adam-S-Daniel/cms-platform/issues/737), not closed) changes the public theme. Hero gap: `.featured-image` was an inline image with its own
+`margin-bottom: 2rem` inside `.post-header` (`margin-bottom: 3rem`), 87.6px of space under the image at 390px and 1280px wide; it is now `display: block` with
+no margin of its own inside the header, so the gap is 48px (the Decap preview pane keeps the 2rem rule). Current-page nav: the Blog link carries
+`aria-current="page"` on `/blog/` and `aria-current="true"` under it, by whole-segment prefix (the old `contains '/blog'` also matched `/blogger/` and
+`/tags/blog/`), and the state turns off the `text-thermal` animation (a running animation outranked the old `.active` color), sets bright text and an underline,
+with no border, padding or margin so nothing shifts; `class="active"` stays so a site header override keyed on it gets the style. Tag pages: `theme/_layouts/tag.html`
+adds an "N min read" line, an "All tags" link only when the site has a `/tags/` page, and uppercase headings and `.tag-list-name` through CSS `text-transform`. Because
+`innerText` applies `text-transform`, `e2e/content-fixtures.js` `discoverTags` (which ships to consumers) now reads `textContent`. The new-tab inconsistency for the home
+hero LINKEDIN link is adamdaniel.ai's own `index.html`, left to the site. New `theme-public-polish-css.test.js` (in `PLATFORM_META_SPECS`),
+`theme/spec/public_nav_and_tag_polish_build_test.rb`, and a `discoverTags` case in `content-fixtures.test.js`.
+Phone admin chrome. [#748](https://github.com/Adam-S-Daniel/cms-platform/pull/748) (part of
+[#731](https://github.com/Adam-S-Daniel/cms-platform/issues/731), not closed) edits `theme/admin/admin-mobile.css`, loaded only by the `/admin` shells. At 600px and
+below the toolbar holding Save, Publish and Delete sticks to the top and shrinks from three rows to two (185px to 93px at 390px), inside `@supports (overflow: clip)`
+so Safari before 16 keeps the old scrolling toolbar; Decap's app header is set `static` so it does not pin to every collection list, and `index-local.html`'s
+commit and platform pills stack bottom-right so they no longer sit on the stuck Delete button. The date field wraps so "Clear" stays on screen. Publish on the production
+shell (the `#cms-publish-state` bar) is not made sticky and a long Article URL is left alone; both stay open in #731. Seven new tests in
+`admin-mobile-clearance-lint.test.js`.
+Consumer effect. The admin changes (#745, #746, #748) are files a site picks up with its next bump, when the `cms-platform-theme` gem tag names v0.1.148. #747 changes
+the public theme (nav current-page style, hero gap, tag pages), so adamdaniel.ai's `visual-regression` run will diff on `/blog/` and the posts under it, the two hero posts,
+`/tools/` and `/tools/claude-memory-map/`, and `/tags/` and each `/tags/<slug>/`; its own `_includes/header.html` override keeps `class="active"` but emits no `aria-current`
+until a site-side edit. jodidaniel.com's layouts do not load `main.css` or the theme header and footer, so it is unaffected. Bump only, no consumer-side edit: no reusable
+workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy redeploy and no bootstrap redeploy.
 
 **v0.1.147 — A failed field-pattern message in the admin now reads as the site wrote it and a blocked Save or Publish says so, and the media library trims uploaded file names and hides dotfiles.**
 Two changes since v0.1.146, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
