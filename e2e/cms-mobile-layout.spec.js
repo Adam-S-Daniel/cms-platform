@@ -240,6 +240,29 @@ test.describe(
         const button = page.getByRole("link", { name: "Live Preview" });
         await expect(button).toBeVisible();
 
+        // The label is visually clipped to a 1px box inside the circle, yet it
+        // stays in the accessible name (getByRole above). An unwrapped text
+        // node would spill "Live Preview" out of the 44px circle.
+        const label = await button.evaluate((link) => {
+          const span = link.querySelector(".floating-link-label");
+          const r = span ? span.getBoundingClientRect() : null;
+          const bareText = [...link.childNodes].filter(
+            (n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim() !== "",
+          );
+          return {
+            hasSpan: Boolean(span),
+            text: span ? span.textContent.trim() : "",
+            width: r ? r.width : null,
+            height: r ? r.height : null,
+            bareTextNodes: bareText.length,
+          };
+        });
+        expect(label.hasSpan, "the label must sit in .floating-link-label").toBe(true);
+        expect(label.bareTextNodes, "label text outside .floating-link-label spills out").toBe(0);
+        expect(label.text).toBe("Live Preview");
+        expect(label.width, "label box is clipped to <= 1px").toBeLessThanOrEqual(1);
+        expect(label.height, "label box is clipped to <= 1px").toBeLessThanOrEqual(1);
+
         // Reachable and tappable: fully inside the viewport, >= 44 CSS px.
         const box = await button.boundingBox();
         const vp = page.viewportSize();
