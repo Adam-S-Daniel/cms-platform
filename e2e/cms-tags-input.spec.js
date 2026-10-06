@@ -31,13 +31,20 @@ async function mockTagsIndex(page, names) {
   );
 }
 
+// Any uncaught page error fails the test: a handler that throws inside the
+// editor (e.g. a re-entrant re-render) must not pass unnoticed.
+let pageErrors = [];
+
 async function openNewPost(page) {
   await page.addInitScript(() => {
     window.repoFiles = { _posts: {}, _tags: {}, _projects: {}, pages: {} };
     window.repoFilesUnpublished = [];
     window.__AUTOSAVE_IDLE_MS = 3_600_000;
   });
-  page.on("pageerror", (err) => console.log(`[pageerror] ${err.name}: ${err.message}`));
+  page.on("pageerror", (err) => {
+    console.log(`[pageerror] ${err.name}: ${err.message}`);
+    pageErrors.push(`${err.name}: ${err.message}`);
+  });
   await page.goto("/admin/index-test.html");
   const loginBtn = page.getByRole("button", { name: /login/i });
   await expect(loginBtn).toBeVisible({ timeout: 60_000 });
@@ -80,6 +87,12 @@ test.describe(
   { tag: ["@admin-write"] },
   () => {
     test.describe.configure({ mode: "serial", timeout: 180_000 });
+    test.beforeEach(() => {
+      pageErrors = [];
+    });
+    test.afterEach(() => {
+      expect(pageErrors, "no uncaught page errors").toEqual([]);
+    });
 
     test("typing `a, b` saves two tags", async ({ page }) => {
       await openNewPost(page);

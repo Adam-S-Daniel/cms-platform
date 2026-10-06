@@ -31,8 +31,9 @@
  *   - warns when a tag differs from an existing one only by case, plural,
  *     spaces or hyphens (`quote`, `Quotes` vs `quotes`).
  * Each offer is a button that swaps the typed text for the existing tag; Tab
- * from the box reaches them. It only ever offers: no tag is rewritten or dropped on its own, a brand-new
- * tag is still one Enter away, and stored tags are never touched.
+ * from the box reaches them. It only ever offers: no tag is rewritten or
+ * dropped on its own, a brand-new tag is still one Enter away, and stored
+ * tags are never touched.
  *
  * The existing names are the ones the site already publishes on its tags
  * index (`/tags/`, `.tag-list-name` — the markup both the fixture site and
