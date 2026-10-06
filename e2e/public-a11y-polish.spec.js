@@ -90,4 +90,79 @@ test.describe("Public-site accessibility polish", () => {
     }
     test.skip(checked === 0, "no served post has a featured image");
   });
+
+  // WCAG 2.4.11 Focus Not Obscured: the header is `position: sticky`. A link
+  // already inside the viewport but within the header's 56px strip (scrolled
+  // there by an earlier step) gets no focus scroll at all, so Shift+Tab onto
+  // it left it hidden behind the header — unless `scroll-padding-top` shrinks
+  // the scrollport the browser measures against. The page is built here, not
+  // read from the site, so the geometry holds whatever the site's content is.
+  test.describe("focus under the sticky header (phone)", () => {
+    test.use({ viewport: { width: 390, height: 844 } });
+
+    test("Shift+Tab onto a link scrolled up behind the header brings it clear of the header", async ({
+      page,
+    }) => {
+      await page.goto("/blog/");
+      const header = page.locator(".site-header");
+      test.skip((await header.count()) === 0, "this page renders without the theme's sticky header");
+
+      await page.evaluate(() => {
+        const link = (id, text) => {
+          const a = document.createElement("a");
+          a.id = id;
+          a.href = `#${id}`;
+          a.textContent = text;
+          a.style.display = "block";
+          return a;
+        };
+        const gap = (px) => {
+          const d = document.createElement("div");
+          d.style.height = `${px}px`;
+          return d;
+        };
+        document
+          .querySelector(".site-header")
+          .after(gap(1000), link("kbd-probe", "Probe link"), gap(300), link("kbd-next", "Next link"), gap(2000));
+        // The probe sits 30px below the viewport top: inside the viewport,
+        // behind the 56px header.
+        window.scrollTo(0, document.getElementById("kbd-probe").getBoundingClientRect().top + window.scrollY - 30);
+        document.getElementById("kbd-next").focus({ preventScroll: true });
+      });
+
+      await expect(page.locator("#kbd-next")).toBeFocused();
+      const scrolledTo = await page.evaluate(() => window.scrollY);
+      expect(scrolledTo, "the page really is scrolled").toBeGreaterThan(500);
+      await page.keyboard.press("Shift+Tab");
+      await expect(page.locator("#kbd-probe")).toBeFocused();
+
+      const [top, bottom] = await Promise.all([
+        page.locator("#kbd-probe").evaluate((el) => el.getBoundingClientRect().top),
+        header.evaluate((el) => el.getBoundingClientRect().bottom),
+      ]);
+      expect(top, "the focused link starts at or below the header's bottom edge").toBeGreaterThanOrEqual(bottom);
+    });
+
+    test("a fragment jump (skip link target) lands below the header", async ({ page }) => {
+      await page.goto("/blog/");
+      const header = page.locator(".site-header");
+      test.skip((await header.count()) === 0, "this page renders without the theme's sticky header");
+      await page.evaluate(() => {
+        const spacer = document.createElement("div");
+        spacer.style.height = "2400px";
+        const target = document.createElement("h2");
+        target.id = "kbd-anchor";
+        target.textContent = "Anchor target";
+        document.querySelector(".site-footer").before(spacer, target, spacer.cloneNode());
+      });
+      await page.evaluate(() => {
+        location.hash = "#kbd-anchor";
+      });
+      const [top, bottom] = await Promise.all([
+        page.locator("#kbd-anchor").evaluate((el) => el.getBoundingClientRect().top),
+        header.evaluate((el) => el.getBoundingClientRect().bottom),
+      ]);
+      expect(top).toBeGreaterThanOrEqual(bottom);
+    });
+  });
 });

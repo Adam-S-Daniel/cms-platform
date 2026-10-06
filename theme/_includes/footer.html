@@ -11,8 +11,18 @@
       <a href="{{ '/feed.xml' | relative_url }}">RSS</a>
       {%- for _profile in site.cross_post.profiles -%}
       {%- assign _profile_url = _profile[1] | strip -%}
-      {%- if _profile_url != "" %}
-      <a href="{{ _profile_url | escape }}" rel="me">{{ _profile[0] | capitalize | escape }}</a>
+      {%- if _profile_url != "" -%}
+      {%- comment -%}
+        Brand spellings the mechanical `capitalize` gets wrong ("Linkedin",
+        "Github"); any other key keeps the capitalized form.
+      {%- endcomment -%}
+      {%- assign _profile_key = _profile[0] | downcase -%}
+      {%- case _profile_key -%}
+        {%- when "linkedin" -%}{%- assign _profile_label = "LinkedIn" -%}
+        {%- when "github" -%}{%- assign _profile_label = "GitHub" -%}
+        {%- else -%}{%- assign _profile_label = _profile[0] | capitalize -%}
+      {%- endcase %}
+      <a href="{{ _profile_url | escape }}" rel="me">{{ _profile_label | escape }}</a>
       {%- endif -%}
       {%- endfor %}
     </nav>
