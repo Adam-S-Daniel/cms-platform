@@ -254,8 +254,15 @@ test.describe(
       });
       expect(gap, `empty band above the editor toolbar: ${gap}px`).toBeLessThan(24);
 
-      await page.goto("/admin/index-test.html#/collections/posts");
-      await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
+      // Leave the editor by hash, not page.goto: a reload with the list route
+      // in the URL starts single-entry-collection-shortcut.js's 700 ms timer at
+      // first paint (see the Reviews nav test below), and on a slow runner it
+      // jumps back into the one seeded entry. An arrival from the collection's
+      // own entry is the exit that shim leaves alone.
+      await page.evaluate(() => {
+        location.hash = "#/collections/posts";
+      });
+      await expect(page.locator(NEW_BUTTON)).toBeVisible({ timeout: 60_000 });
       // The two bottom-right pills + Live Preview stack reach ~ 8.5rem; the list's
       // own clearance must at least cover the 2-line pill stack (~3rem).
       const padding = await page.evaluate(() => {
