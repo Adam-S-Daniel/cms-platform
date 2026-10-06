@@ -804,6 +804,7 @@ const SPEC_RULES = {
   "e2e/preview-bridge-payload.test.js": [/^(theme\/)?admin\/preview-bridge\.js$/],
   "e2e/preview-pane.test.js": [
     /^(theme\/)?admin\/preview-pane\.js$/,
+    /^(theme\/)?admin\/config\.base\.yml$/,
     /^(theme\/)?admin\/index.*\.html$/,
   ],
   "e2e/cms-autosave.spec.js": [
