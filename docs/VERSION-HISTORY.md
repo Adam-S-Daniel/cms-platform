@@ -10,9 +10,34 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.143)
+## Version history (v0.1.0 → v0.1.144)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.144 — The e2e title checks in `blog-post.spec.js` and `feeds-and-share.spec.js` no longer break on quotes, `&` or `<` in a post title and can no longer pass with the title absent; consumers run the stricter specs at their next bump.**
+Two changes since v0.1.143, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `e2e/` changed apart from the pins (`git diff --stat v0.1.143 origin/main` is four `e2e/` files): no `.github/workflows/`,
+`infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/`, `theme/` or `examples/` file changed.
+Title matching. [#721](https://github.com/Adam-S-Daniel/cms-platform/pull/721) (a follow-up to
+[#713](https://github.com/Adam-S-Daniel/cms-platform/pull/713)) found three specs that compared `discoverPost().title` raw
+against a selector, `feed.xml` or a share href. `blog-post.spec.js` built `:visible:text-is("${post.title}")`, where a `"` is
+a selector parse error and a `\` silently matches nothing; it now uses `visibleTitleLocator`
+(`getByText(title, { exact: true })` filtered to visible). The feed check now uses `feedHasTitle`, which decodes entities and
+smartify-normalizes both sides, because jekyll-feed renders `smartify | strip_html | normalize_whitespace | xml_escape` into
+`<title type="html">` (quotes become curly, `&` comes out escaped twice). The share-intent check read a first-word regex
+against url-encoded text (`+`, `%27`, `%26`) and could not match `Don't` or `Q&A`.
+Vacuous checks. [#722](https://github.com/Adam-S-Daniel/cms-platform/pull/722) closed two ways the new checks could pass with
+the title absent. The share check searched the whole href for the title's first word, and the slug in `url=` repeats those
+words; `hrefCarries` is replaced by `hrefParamStartsWith(href, param, text)`, which parses the href with `URLSearchParams`
+and requires the `text` parameter to equal the title or start with the title plus a space (LinkedIn takes only `url=`, so it
+keeps its slug check). `feedHasTitle` scanned every `<title>`, including the feed's own site title, with a substring test; it
+now reads only the first `<title>` inside each `<entry>`/`<item>` and requires the full normalized title to be equal.
+Both helpers live in `e2e/content-fixtures.js` with unit tests in `e2e/content-fixtures.test.js`.
+Consumer effect. These specs now run with stricter checks at a consumer's bump. #722's reviewer ran `feeds-and-share.spec.js`
+and `blog-post.spec.js` against an adamdaniel.ai build (4 posts) in the chromium-desktop-1080 and chromium-mobile projects:
+28 passed, 2 skipped (the webkit-only CSS-failure test). jodidaniel.com has no posts, so those specs skip there. Bump only,
+no consumer-side edit: no reusable workflow, composite, theme file, `oauth-proxy/lambda.py` or `infrastructure/` file
+changed, so no proxy redeploy and no bootstrap redeploy.
 
 **v0.1.143 — Eight reusable workflows that ran the runner's default `node` now pin Node 20 with `actions/setup-node`, ahead of `ubuntu-latest` moving to 26.04 on 2026-10-19 (default Node 22 to 24); a test-only follow-up covers the e2e tag sweep's root-tree truncation guard.**
 Two changes since v0.1.142, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
