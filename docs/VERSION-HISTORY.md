@@ -10,9 +10,46 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.145)
+## Version history (v0.1.0 → v0.1.146)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.146 — The admin preview pane no longer crashes on collections without a `body` field, the share row's idle copy icon, phone tap targets and Mastodon prompt are fixed, bare Markdown tables get borders and padding, and Atom feeds open as a readable page in a browser.**
+Three changes since v0.1.145, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `theme/` and `e2e/` changed apart from the pins (`git diff --stat v0.1.145 origin/main` is 15 files: eight under `theme/` and seven under `e2e/`):
+no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no
+`workflow_call` interface moved.
+Preview pane. [#738](https://github.com/Adam-S-Daniel/cms-platform/pull/738) (part of
+[#726](https://github.com/Adam-S-Daniel/cms-platform/issues/726), still open) fixes `theme/admin/preview-pane.js`: one template served
+`posts`, `pages` and `projects` and every template called `props.widgetFor("body")`, which throws for the base `projects` collection
+(its markdown field is `description`) and replaced the pane with Decap's raw error screen. Templates now render only fields the
+collection declares (`body`, else the first `markdown` field, else no content block) and a widget that throws renders nothing. A new
+generic template styles every other collection the editor opens (Tags, a site's Tools, list-like collections): heading, `description`
+as `p.subtitle`, then the markdown field or a labeled `dl` of short scalar fields. Posts and Pages render as before. #726 stays open:
+the Tools body still shows raw Liquid verbatim.
+Share row and tables. [#739](https://github.com/Adam-S-Daniel/cms-platform/pull/739) (fixes
+[#727](https://github.com/Adam-S-Daniel/cms-platform/issues/727) and
+[#729](https://github.com/Adam-S-Daniel/cms-platform/issues/729), both closed) changes `theme/assets/css/main.css` and
+`theme/_includes/share-row.html`. The hide rule for `.share-icon-success` lost to `.share-link svg { display: block }` on specificity, so
+the idle copy button showed the check mark; the rule is now `.share-link .share-icon-success`. Under `(pointer: coarse), (width <= 640px)`
+`.share-link` is a real 44px box (30.4px before; desktop is unchanged) and all five buttons still fit one line at 360px. The Mastodon
+`window.prompt()` is replaced by an inline labeled field (`aria-expanded`/`aria-controls`, remembered instance from `localStorage`, Enter
+submits, Escape or Cancel returns focus, an in-page `role="alert"` for an invalid instance); the share URL and storage key are unchanged.
+Bare `table:not([class])` gains `border-collapse`, a 1.5rem margin, cell padding and `--border` borders and a header row on `--bg-2`;
+the #540 scroll box and the `:not([class])` scope are kept, so a classed table (adamdaniel.ai's `bws-table`) is untouched.
+Feed stylesheet. [#740](https://github.com/Adam-S-Daniel/cms-platform/pull/740) (fixes
+[#728](https://github.com/Adam-S-Daniel/cms-platform/issues/728), closed) adds `theme/lib/cms-platform-theme/feed_stylesheet.rb`, a
+`:pages, :post_render` hook that inserts `<?xml-stylesheet type="text/xsl" href="<baseurl>/assets/feed.xsl"?>` after the XML declaration
+of any Atom feed (the theme's per-tag feeds, jekyll-feed's `/feed.xml`, a site-owned `feed.xml`; a feed that already names a
+stylesheet is left alone), and `theme/assets/feed.xsl`, a self-contained neutral XSLT 1.0 page ("This is a news feed, not a web page")
+that shows the feed address and the post list. The Atom content is unchanged. Chrome has announced removing built-in XSLT; when that
+lands the browser shows raw XML again, as before, and feed readers are unaffected.
+Consumer effect. All three reach a site with its next bump, when the `cms-platform-theme` gem tag names v0.1.146 (the preview pane and
+`feed.xsl` are theme files a site's build and admin pick up from the gem). Bump only, no consumer-side edit: no reusable workflow,
+composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy redeploy and no bootstrap redeploy. The visible theme
+changes (share row, tables, feed page) are salient to a consumer's `visual-regression` run, which may need the owner's approval on the
+bump PR. jodidaniel.com's layouts do not load the platform `main.css`, so the share-row and table CSS does not reach it. New pure-fs specs
+`theme-share-row-css.test.js` and `theme-table-css.test.js` are in `PLATFORM_META_SPECS` (skipped in consumer mode).
 
 **v0.1.145 — A real post carrying an `e2e-` tag name with no `_tags/` entry no longer leaks that tag into the tag cloud, `/tags/`, the sitemap or a tag feed, and the tag's archive page is stamped `noindex`.**
 One change since v0.1.144, merged with an `Independent review: CLEAN` stamp equal to the PR head.
