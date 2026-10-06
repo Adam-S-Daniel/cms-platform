@@ -48,6 +48,8 @@ class TagCaseVariantsBuildTest < Minitest::Test
     # The `_tags/release.md` entry names the tag `Release`; this post differs.
     '2024-01-07' => ['Release notes', ['release']],
     '2024-01-08' => ['Plain', ['Plain']],
+    # A case variant of an excluded `_tags/` entry (test_fixture: true).
+    '2024-01-09' => ['Fixture post', ['fixture tag']],
   }.freeze
 
   def setup
@@ -66,7 +68,13 @@ class TagCaseVariantsBuildTest < Minitest::Test
     end
     FileUtils.cp(File.join(ROOT, 'e2e', 'fixture-site', 'tags', 'index.html'),
                  File.join(@source, 'tags', 'index.html'))
-    File.write(File.join(@source, '_tags', 'release.md'), "#{{ 'name' => 'Release' }.to_yaml}---\n")
+    {
+      'release' => { 'name' => 'Release' },
+      'fixture-tag' => { 'name' => 'Fixture Tag', 'test_fixture' => true },
+      'empty-tag' => { 'name' => 'Empty Tag' },
+    }.each do |slug, data|
+      File.write(File.join(@source, '_tags', "#{slug}.md"), "#{data.to_yaml}---\n")
+    end
     POSTS.each do |date, (title, tags)|
       # The CMS always writes `published: true`; the per-tag feed filters on it.
       front_matter = { 'title' => title, 'layout' => 'post', 'published' => true, 'tags' => tags }
@@ -112,7 +120,7 @@ class TagCaseVariantsBuildTest < Minitest::Test
 
   def test_all_tags_has_one_row_per_slug_with_the_combined_count
     rows = @site.config.fetch('all_tags').to_h { |t| [t['slug'], t] }
-    assert_equal %w[ai-tools mixed plain quotes release], rows.keys.sort
+    assert_equal %w[ai-tools empty-tag mixed plain quotes release], rows.keys.sort
     assert_equal 3, rows.fetch('quotes').fetch('count')
     assert_equal 2, rows.fetch('ai-tools').fetch('count')
     assert_equal 1, rows.fetch('mixed').fetch('count'), 'one post carrying both spellings counts once'
@@ -139,6 +147,57 @@ class TagCaseVariantsBuildTest < Minitest::Test
       listed = listed_titles(href.delete_prefix('/').chomp('/')).size
       assert_equal count.to_i, listed, "#{name} (#{href}) counts #{count} but lists #{listed}"
     end
+  end
+
+  # The slug-based exclusion (auto_tag_pages.rb): `fixture tag` is a case
+  # variant of the excluded `Fixture Tag` entry, so it is that tag, not a new
+  # one. Matching the exact name would put it in all_tags and mint a second
+  # page at the entry's own URL.
+  def test_a_case_variant_of_an_excluded_tags_entry_is_excluded_too
+    slugs = @site.config.fetch('all_tags').map { |t| t['slug'] }
+    refute_includes slugs, 'fixture-tag'
+    minted = @site.pages.select { |p| p.url.start_with?('/tags/fixture-tag/') }
+    assert_empty minted.map(&:url), 'no auto page or feed at the excluded entry URL'
+    assert_equal 1, @site.collections['tags'].docs.count { |d| d.url == '/tags/fixture-tag/' }
+  end
+
+  # A tag with no post: both layouts must cope with the empty lookup.
+  def test_a_tag_with_no_posts_renders_empty_page_and_feed
+    assert_empty listed_titles('tags/empty-tag')
+    assert_includes File.read(File.join(@destination, 'tags/empty-tag/index.html')), 'No posts yet'
+    feed = REXML::Document.new(File.read(File.join(@destination, 'tags/empty-tag/feed.xml')))
+    assert_empty REXML::XPath.match(feed, '//a:entry', ATOM)
+  end
+
+  # The layouts read a list built once by the generator; slugifying every
+  # post's tags on every tag page made a 2,000-post, 300-tag build 4x slower.
+  def test_posts_by_slug_is_built_once_and_matches_the_archives
+    index = @site.config.fetch('tag_posts_by_slug')
+    assert_equal ['Quote three', 'Quote two', 'Quote one'], index.fetch('quotes').map { |p| p.data['title'] }
+    assert_equal ['Both spellings'], index.fetch('mixed').map { |p| p.data['title'] }
+    assert_equal ['Fixture post'], index.fetch('fixture-tag').map { |p| p.data['title'] }
+  end
+
+  def test_layouts_do_not_slugify_inside_a_loop
+    %w[tag.html atom_feed.xml].each do |layout|
+      root = Liquid::Template.parse(File.read(File.join(ROOT, 'theme', '_layouts', layout)).sub(/\A---.*?---\n/m, '')).root
+      assert_empty slugify_assigns_in_loops(root), "#{layout} slugifies inside a for loop"
+    end
+  end
+
+  # Walks a parsed Liquid tree; returns the `assign`s that pipe through
+  # `slugify` while inside a `for` body.
+  def slugify_assigns_in_loops(node, in_loop: false)
+    found = []
+    if node.is_a?(Liquid::Assign) && in_loop && node.from.filters.any? { |f| f.first == 'slugify' }
+      found << node
+    end
+    in_loop ||= node.is_a?(Liquid::For)
+    children = []
+    children.concat(node.nodelist) if node.respond_to?(:nodelist) && node.nodelist.is_a?(Array)
+    children.concat(node.blocks.map(&:attachment)) if node.respond_to?(:blocks)
+    children.each { |c| found.concat(slugify_assigns_in_loops(c, in_loop: in_loop)) }
+    found
   end
 
   def test_one_archive_page_per_slug

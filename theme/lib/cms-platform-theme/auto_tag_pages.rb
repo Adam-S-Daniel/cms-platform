@@ -21,8 +21,9 @@
 # they are ONE tag (#754): one row, one archive page, one combined count.
 # The display name is the `_tags/` entry's when there is one, else the
 # spelling the most posts use, a tie going to the one seen first (see
-# `AutoTagPages.group`). `_layouts/tag.html` and `_layouts/atom_feed.xml`
-# list every post whose tags slugify to the page's slug.
+# `AutoTagPages.group`). `site.tag_posts_by_slug` (slug => posts, built once
+# here) is what `_layouts/tag.html` and `_layouts/atom_feed.xml` list: every
+# post whose tags slugify to the page's slug.
 #
 # Unit tests: _plugins_test/auto_tag_pages_test.rb
 
@@ -69,6 +70,19 @@ module Jekyll
           'variants' => group['variants'],
           'curated' => !group['curated'].empty?,
         }
+      end
+    end
+
+    # Every public post under each tag slug: `{ slug => [post, ...] }`, posts
+    # in the order given, each once per slug even when it carries both
+    # spellings. The Jekyll generator stores it as `site.tag_posts_by_slug`
+    # so `_layouts/tag.html` and `atom_feed.xml` list a tag's posts with one
+    # lookup, not by slugifying every tag of every post on every tag page.
+    def self.posts_by_slug(posts, slugify:)
+      posts.each_with_object({}) do |post, index|
+        Array(post.data['tags']).compact.map { |name| slugify.call(name) }.uniq.each do |slug|
+          (index[slug] ||= []) << post
+        end
       end
     end
 
@@ -169,6 +183,12 @@ if defined?(Jekyll::Generator)
             Jekyll::ExcludeE2EPosts.stamp_tag_page(page.data) if e2e_names.include?(name)
             site.pages << page
           end
+          # Not minus `excluded`: an excluded `_tags/` entry's page still builds
+          # and lists the posts that carry its tag. Newest first, the order
+          # Liquid's `site.posts` has (`docs` is oldest first).
+          site.config['tag_posts_by_slug'] = AutoTagPages.posts_by_slug(
+            public_posts(site).reverse, slugify: slugify,
+          )
           site.config['all_tags'] = all_tags.reject { |tag| e2e_names.include?(tag['name']) }
         end
 

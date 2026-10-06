@@ -74,7 +74,9 @@ cms:
   spelling under its slug: one `site.all_tags` row with the combined count
   (a post carrying both spellings counts once), one archive page and one tag
   feed. `tag.html` and `atom_feed.xml` list every post whose tags slugify to
-  the page's slug. The display name is deterministic: the `_tags/` entry's
+  the page's slug, read from `site.tag_posts_by_slug` (built once by the
+  plugin, newest first; slugifying every post's tags on each tag page made a
+  large build several times slower). The display name is deterministic: the `_tags/` entry's
   name if there is one, else the spelling the most posts use, a tie going to
   the one seen first (`AutoTagPages.group`). Sites need no change: their
   `/tags/` index and tag cloud already read `site.all_tags`

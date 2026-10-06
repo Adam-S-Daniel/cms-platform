@@ -178,10 +178,22 @@ run('a post carrying both spellings counts once (#754)') do
   check(all.size == 1 && all.first['count'] == 1, "expected one row, count=1, got #{all.inspect}")
 end
 
+run('posts_by_slug lists each post once under every slug it carries, in order (#754)') do
+  doc = Struct.new(:data)
+  a = doc.new({ 'tags' => ['quotes'] })
+  b = doc.new({ 'tags' => ['Quotes', 'quotes', 'RAG'] })
+  c = doc.new({})
+  index = Jekyll::AutoTagPages.posts_by_slug([a, b, c], slugify: SLUGIFY)
+  check(index.keys == ['quotes', 'rag'], "expected quotes + rag, got #{index.keys.inspect}")
+  check(index['quotes'].equal?(index['quotes']) && index['quotes'] == [a, b],
+        'expected [a, b] under quotes, each once',)
+  check(index['rag'] == [b], 'expected [b] under rag')
+end
+
 # ── result ─────────────────────────────────────────────────────────────────
 
 if @failures.empty?
-  puts 'auto_tag_pages: all 12 checks passed'
+  puts 'auto_tag_pages: all 13 checks passed'
 else
   warn "auto_tag_pages: #{@failures.length} failure(s)"
   @failures.each { |m| warn "  - #{m}" }

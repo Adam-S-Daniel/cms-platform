@@ -11,6 +11,9 @@ require 'fileutils'
 require 'rexml/document'
 require 'tmpdir'
 require 'jekyll'
+# tag.html reads the posts-by-slug list auto_tag_pages.rb builds (#754).
+require_relative '../lib/cms-platform-theme/exclude_e2e_posts'
+require_relative '../lib/cms-platform-theme/auto_tag_pages'
 require_relative '../lib/cms-platform-theme/cachebust_filter'
 require_relative '../lib/cms-platform-theme/rel_me_filter'
 

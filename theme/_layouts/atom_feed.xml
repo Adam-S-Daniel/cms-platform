@@ -13,20 +13,12 @@
 {%- endcomment -%}
 {%- comment -%}
   Match by slug, not by exact spelling (#754): `Quotes` and `quotes` share one
-  feed URL, so a post under either spelling belongs in it.
+  feed URL, so a post under either spelling belongs in it. auto_tag_pages.rb
+  builds `site.tag_posts_by_slug` once (it already leaves out the
+  feed_exclude posts); no per-page slugify over every post's tags.
 {%- endcomment -%}
-{%- assign tag_posts = "" | split: "" -%}
-{%- assign published_posts = site.posts | where: 'published', true -%}
-{%- for p in published_posts -%}
-  {%- if p.feed_exclude == true -%}{%- continue -%}{%- endif -%}
-  {%- for post_tag in p.tags -%}
-    {%- assign post_tag_slug = post_tag | slugify -%}
-    {%- if post_tag_slug == tag_slug -%}
-      {%- assign tag_posts = tag_posts | push: p -%}
-      {%- break -%}
-    {%- endif -%}
-  {%- endfor -%}
-{%- endfor -%}
+{%- assign no_posts = "" | split: "" -%}
+{%- assign tag_posts = site.tag_posts_by_slug[tag_slug] | default: no_posts | where: 'published', true -%}
 {%- assign tag_posts = tag_posts | sort: 'date' | reverse -%}
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
