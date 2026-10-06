@@ -273,6 +273,28 @@ Three things this cost, all of them generalisable:
   distinguished "the merge is coming" from "the merge is never coming". That
   half is §3.4 below.
 
+### 2.11 A pattern error blocked Save and Publish with no feedback (#730)
+
+A field with `pattern: [regex, message]` that fails blocks Save and Publish,
+and Decap says nothing where the editor clicked. This is **Decap core, not
+this repo**: `persistEntry` raises `ui.toast.missingRequiredField` only when a
+field error has type `PRESENCE`; a `PATTERN` error just rejects the save, and
+the message sits under the field. Decap's English `regexPattern` phrase
+(`%{fieldLabel} didn't match the pattern: %{pattern}.`) also wrapped the
+site's own sentence, which usually ends in a period (hence "..") and was
+upper-cased by Decap's error styling (`/pages/about/` read `/PAGES/ABOUT/`).
+
+`theme/admin/validation-feedback.js` (all three shells, deferred after
+`decap-cms.js`) works around it without touching Decap internals: it rewrites
+the phrase to `%{fieldLabel}: %{pattern}` through `CMS.getLocale('en')`, turns
+the upper-casing off for `[class*="ControlErrorsList"]`, and after a click on
+Save or Publish scrolls to the first field error and toasts its message unless
+Decap raised its own toast. Each piece is a silent no-op if Decap changes the
+surface it reads. A site's `pattern` message should therefore be a complete
+sentence that says what to enter, with its own final punctuation. The upstream
+gap (no toast for non-presence errors) is a candidate for a Decap issue; this
+shim can be deleted if it closes. Unit test: `e2e/validation-feedback.test.js`.
+
 ---
 
 ## 3. The target model

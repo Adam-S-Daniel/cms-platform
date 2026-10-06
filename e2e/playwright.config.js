@@ -153,6 +153,8 @@ const PLATFORM_META_SPECS = [
   "slug-pin.test.js",
   // cms-platform#735 — vm-sandboxes theme/admin/tags-input.js SOURCE; platform-internal likewise.
   "tags-suggest.test.js",
+  // cms-platform#730 — vm-sandboxes theme/admin/validation-feedback.js SOURCE.
+  "validation-feedback.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
   "editor-component-image.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
@@ -684,6 +686,10 @@ const PLATFORM_META_SPECS = [
   // admin shells and theme/_layouts/preview.html) and for preview-bridge.js's
   // payload. Both read theme/ SOURCE, absent on a consumer.
   "draft-media-fallback.test.js",
+  // #736 media library tidy: vm-sandbox tests for theme/admin/media-library-tidy.js
+  // (upload-name trim, dotfile listing filter) and its placement in the admin
+  // shells. Reads theme/ SOURCE, absent on a consumer.
+  "media-library-tidy.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
   // The production 404 page is uploaded no-cache: parses the platform's own

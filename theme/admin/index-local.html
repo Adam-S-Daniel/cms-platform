@@ -116,6 +116,12 @@
   <script src="draft-media-fallback.js"></script>
 
   <!--
+    media-library-tidy shim (#736) — see admin/index.html. Non-deferred +
+    BEFORE decap-cms.js. Here its decap-server half applies (the getMedia
+    listing); the GitHub tree listing never occurs in this shell. -->
+  <script src="media-library-tidy.js"></script>
+
+  <!--
     Decap CMS — same pinned exact version as admin/index.html. The local
     config sets `local_backend: true` so saves go through the
     decap-server proxy (port 8081) into the working tree instead of
@@ -175,6 +181,12 @@
        cannot move a post's address — adamdaniel.ai#3857. Reads
        window.LiveURL.slugify at save time. -->
   <script src="slug-pin.js" defer></script>
+
+  <!-- Pattern-validation feedback (cms-platform#730): the site's own message
+       alone ("URL slug: Use lowercase ..."), in normal case, plus a toast and
+       a scroll to the first bad field when Save or Publish is blocked. Deferred,
+       after decap-cms.js (it edits Decap's English locale phrases). -->
+  <script src="validation-feedback.js" defer></script>
 
   <!-- Tags box: Enter ends a tag, and a space after a comma no longer eats the
        comma — cms-platform#638. Standalone: touches only the tags-field input. -->
