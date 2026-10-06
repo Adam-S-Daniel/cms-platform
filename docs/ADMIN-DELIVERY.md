@@ -343,6 +343,22 @@ Tests: `e2e/route-focus.test.js` (vm sandbox, stubbed frames, in `PLATFORM_META_
 `e2e/cms-route-focus.spec.js` (real Decap: Enter on an entry then Tab stays in the editor, Back
 returns to the heading, the skip link, a keyboard Save), load order in `e2e/admin-shim-load-order.test.js`.
 
+## Admin keyboard focus ring (UX round 3: ad-kbd K14, jd-kbd F11b)
+
+Decap leaves buttons and links on the browser's default focus ring (computed
+`outline: rgb(16,16,16) auto`), which vanishes on a dark fill such as "＋ Post",
+and the collection sidebar's links are exactly as wide as their `overflow: auto`
+`SidebarNavList`, so the ring was cut off at both sides. Section 0 of
+`theme/admin/admin-mobile.css` (outside the `@media` block, so every width, and
+already linked from all three shells and shipped in the gem to both consumers)
+draws a two-tone `:focus-visible` ring under `#nc-root`: a white 2px outline with
+a `#1d4ed8` shadow outside it, and for `SidebarNavList a` the same two tones kept
+inside the link (outline offset -2px, inset shadow), since anything outside it is
+clipped. `:focus-visible` only, so a mouse click is unchanged. Not covered: inputs
+(Decap styles its own), the standalone `reviews/` pages, and Decap's modal portals
+outside `#nc-root`. Test: `e2e/cms-admin-focus-ring.spec.js` (computed styles after
+real Tab presses on a dark button and a sidebar link; a mouse click stays plain).
+
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 
 The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a
