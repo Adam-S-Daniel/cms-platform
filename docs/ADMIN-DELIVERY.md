@@ -354,10 +354,16 @@ already linked from all three shells and shipped in the gem to both consumers)
 draws a two-tone `:focus-visible` ring under `#nc-root`: a white 2px outline with
 a `#1d4ed8` shadow outside it, and for `SidebarNavList a` the same two tones kept
 inside the link (outline offset -2px, inset shadow), since anything outside it is
-clipped. `:focus-visible` only, so a mouse click is unchanged. Not covered: inputs
+clipped. Decap's dropdown menus (Publish now, Status, Account, Quick add) are
+`overflow: hidden` with flush items, so `#nc-root [role="menuitem"]` gets the same
+inside ring (UX round 4 triage package 2); it must stay after the general rule.
+`:focus-visible` only, so a mouse click is unchanged. Not covered: inputs
 (Decap styles its own), the standalone `reviews/` pages, and Decap's modal portals
 outside `#nc-root`. Test: `e2e/cms-admin-focus-ring.spec.js` (computed styles after
-real Tab presses on a dark button and a sidebar link; a mouse click stays plain).
+real Tab presses on a dark button, a sidebar link and the keyboard-opened Publish
+menu's first item; a mouse click stays plain). It runs in CI on `chromium-desktop-3k`
+(an `@admin-write` spec, selected by `self-fixture-e2e.yml`); no admin project uses
+Firefox, so the Firefox pass is local only.
 
 ## Decap's toasts let taps through at 1100px and below (UX round 4 triage package 6: ad A4, jd F13)
 

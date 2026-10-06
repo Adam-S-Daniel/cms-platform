@@ -1,21 +1,25 @@
 // @lane: local — drives the in-browser test-repo Decap admin (index-test.html); no network, no GitHub
 const { test, expect } = require("./base");
 
-// ── What this proves (UX round 3: ad-kbd K14, jd-kbd F11b) ────────────────
+// ── What this proves (UX round 3: ad-kbd K14, jd-kbd F11b; round 4: menus) ──
 // Decap leaves buttons and links on the browser's default focus ring, a dark
 // line. On a dark fill ("＋ Post") that is dark on dark, and the collection
 // sidebar's links are as wide as their `overflow: auto` list, so the outline
 // was clipped at both sides. admin-mobile.css (linked from all three shells)
 // now draws a two-tone `:focus-visible` ring and keeps the sidebar's ring
-// inside the link. These are computed-style checks on the real Decap 3.15.1
+// inside the link. Decap's dropdown menus ("Publish now") are `overflow:
+// hidden` with flush items, so their items get the same inside ring (UX round
+// 4 triage package 2). These are computed-style checks on the real Decap 3.15.1
 // DOM after real Tab presses; a mouse click must not change.
 //
 // Harness: index-test.html (Decap's in-browser test-repo backend), one seeded
-// post. Seed/login pattern mirrors cms-route-focus.spec.js.
+// post and one seeded Ready tag (so the toolbar shows its Publish menu). Seed/login pattern mirrors cms-route-focus.spec.js.
 
 const NEW_BUTTON = '[class*="CollectionTopNewButton"]';
 const SIDEBAR_LIST = '[class*="SidebarNavList"]';
 const SIDEBAR_LINK = `${SIDEBAR_LIST} a`;
+const PUBLISH_TRIGGER = '[role="button"][class*="PublishButton"]';
+const MENU_ITEM = '[role="menuitem"]';
 const RING_BLUE = "rgb(29, 78, 216)";
 
 async function openList(page) {
@@ -37,6 +41,31 @@ async function openList(page) {
   await page.goto("/admin/index-test.html#/collections/posts");
   await expect(page.locator(NEW_BUTTON)).toBeVisible({ timeout: 60_000 });
   await expect(page.locator(SIDEBAR_LINK).nth(1)).toBeVisible({ timeout: 60_000 });
+}
+
+// An editorial-workflow entry that is Ready, so the toolbar renders Decap's
+// Publish dropdown ("Publish now" and two siblings). Nothing is published.
+async function openReadyEntry(page) {
+  await page.addInitScript(() => {
+    window.repoFiles = { _posts: {}, _tags: {}, _projects: {}, pages: {} };
+    window.repoFilesUnpublished = {
+      "tags/ready-tag": {
+        slug: "ready-tag",
+        collection: "tags",
+        status: "pending_publish",
+        diffs: [{ path: "_tags/ready-tag.md", newFile: true, content: "---\nname: Ready Tag\ndescription: ''\n---\n" }],
+      },
+    };
+    window.__AUTOSAVE_IDLE_MS = 3_600_000;
+  });
+  await page.goto("/admin/index-test.html");
+  const loginBtn = page.getByRole("button", { name: /login/i });
+  await expect(loginBtn).toBeVisible({ timeout: 60_000 });
+  await loginBtn.click();
+  await expect(page.getByRole("link", { name: /^posts$/i })).toBeVisible({ timeout: 30_000 });
+  await page.goto("/admin/index-test.html#/collections/tags/entries/ready-tag");
+  await expect(page.getByLabel(/^Name$/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(PUBLISH_TRIGGER)).toBeVisible({ timeout: 30_000 });
 }
 
 // Tab (real key presses) from the top of the page until the element matching
@@ -155,6 +184,61 @@ test.describe("Admin keyboard focus ring", { tag: ["@admin-write"] }, () => {
     const ring = await ringOf(page);
     expect(ring.focusVisible, "a click does not match :focus-visible").toBe(false);
     expect(ring.boxShadow, "no ring shadow after a click").not.toContain(RING_BLUE);
+    expect(ring.outlineColor).not.toBe(RING_BLUE);
+  });
+
+  test("a Publish menu item keeps its whole ring inside the clipping menu", async ({ page }) => {
+    await openReadyEntry(page);
+    await tabTo(page, PUBLISH_TRIGGER);
+    await page.keyboard.press("Enter");
+    const item = page.getByRole("menuitem", { name: /publish now/i });
+    await expect(item).toBeVisible({ timeout: 5_000 });
+    // Opening the menu from the keyboard moves focus onto its first item.
+    await expect(item).toBeFocused();
+    const ring = await ringOf(page);
+
+    expect(ring.focusVisible, "keyboard-opened menu item matches :focus-visible").toBe(true);
+    expect(ring.outlineStyle).toBe("solid");
+    expect(ring.outlineWidth).toBeGreaterThanOrEqual(2);
+    // Same arithmetic as the sidebar test: at or below zero the outline
+    // cannot leave the item's box, so the menu's `overflow: hidden` cannot cut it.
+    expect(ring.outlineOffset + ring.outlineWidth, "outline stays inside the item box").toBeLessThanOrEqual(0);
+    expect(ring.boxShadow, "second tone is an inset shadow, which cannot be clipped").toContain("inset");
+    expect(ring.boxShadow).toContain("rgb(255, 255, 255)");
+    expect(ring.outlineColor).toBe(RING_BLUE);
+
+    // And the geometry that made it clip: item box inside its hidden-overflow list.
+    const fits = await page.evaluate((itemSel) => {
+      const el = document.activeElement;
+      const a = el.getBoundingClientRect();
+      const list = el.parentElement;
+      const l = list.getBoundingClientRect();
+      return {
+        isMenuItem: el.matches(itemSel),
+        overflow: getComputedStyle(list).overflowX,
+        left: a.left - l.left,
+        right: l.right - a.right,
+        top: a.top - l.top,
+      };
+    }, MENU_ITEM);
+    expect(fits.isMenuItem).toBe(true);
+    expect(["auto", "scroll", "hidden"], "the menu clips").toContain(fits.overflow);
+    expect(fits.left, "item starts inside the menu").toBeGreaterThanOrEqual(0);
+    expect(fits.right, "item ends inside the menu").toBeGreaterThanOrEqual(0);
+    expect(fits.top, "first item sits inside the menu top").toBeGreaterThanOrEqual(0);
+  });
+
+  test("a mouse-opened menu leaves its item's appearance alone", async ({ page }) => {
+    await openReadyEntry(page);
+    await page.locator(PUBLISH_TRIGGER).click();
+    const item = page.getByRole("menuitem", { name: /publish now/i });
+    await expect(item).toBeVisible({ timeout: 5_000 });
+    // Focus the item without a key press; after a mouse click that is not
+    // keyboard focus, so it must not match :focus-visible or get the ring.
+    await item.evaluate((el) => el.focus());
+    const ring = await ringOf(page);
+    expect(ring.focusVisible, "a mouse-driven focus does not match :focus-visible").toBe(false);
+    expect(ring.boxShadow, "no ring shadow").not.toContain(RING_BLUE);
     expect(ring.outlineColor).not.toBe(RING_BLUE);
   });
 });
