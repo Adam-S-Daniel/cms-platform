@@ -235,6 +235,9 @@ const PLATFORM_META_SPECS = [
   // #737 — the same shape for the hero gap, the current-nav state and the tag
   // name casing in main.css. Pure-fs; self-ci node-unit-lints.
   "theme-public-polish-css.test.js",
+  // UX r5 F1 — the sticky site header's fill in main.css is opaque (no 85%
+  // alpha + backdrop blur). Pure-fs; self-ci node-unit-lints.
+  "theme-sticky-header-opaque-css.test.js",
   // #33 CONCERN B — the pure-fs guard-registry lint: reads the platform's TWO
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
