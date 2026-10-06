@@ -724,6 +724,22 @@ its editor from its own origin (#517, above) also sends `<prefix>-admin-headers`
 on every response of `admin.<apex>`; its apex `/admin/*` then only redirects,
 so run the checks below against `admin.<apex>/admin/` instead.
 
+A third policy, `<prefix>-preview-regression-cors`, is attached only to the
+preview distribution's `/regression.json` behavior (#789; otherwise a copy of
+the default, with the same functions). It repeats the baseline headers and adds
+a `CorsConfig`: `GET`/`HEAD` from `https://<apex>`, `https://www.<apex>` and,
+when `AdminDomainName` is set, `https://admin.<apex>`; no wildcard, no
+credentials, no `OPTIONS` (the dashboard's `fetch` is a plain GET, so there is
+no preflight). `/admin/reviews/` reads `preview-pr<N>.<apex>/regression.json`
+cross-origin from one of those origins, and without the header the browser
+blocked it and the dashboard showed "Visual-diff stats not available". It
+takes effect on a bootstrap redeploy (below). Check with:
+
+```bash
+curl -s -o /dev/null -D - -H 'Origin: https://<apex>' https://preview-pr<N>.<apex>/regression.json \
+  | grep -i -E '^(http|access-control-allow-origin|strict-transport-security)'
+```
+
 | Header | Everywhere | `/admin/*` |
 |---|---|---|
 | `Strict-Transport-Security` | `max-age=31536000` (`HstsMaxAgeSeconds`); `includeSubDomains` / `preload` only with `HstsScope` | same |

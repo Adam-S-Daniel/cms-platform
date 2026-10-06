@@ -486,7 +486,8 @@ Resources:
   #
   # S3 website hosting sends no security headers, so CloudFront adds them.
   # A cache behavior takes ONE policy, so the /admin/* policy repeats the
-  # baseline and adds the admin CSP. Both policies serve both distributions;
+  # baseline and adds the admin CSP. Both policies serve both distributions
+  # (a third, for preview regression.json CORS, is below, #789);
   # names derive from ResourcePrefix because they are unique per account
   # (and an account holds at most 20 custom response headers policies).
   #
@@ -573,6 +574,59 @@ Resources:
                 Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'"
                 Override: true
 
+  # CORS for the visual-regression stats (cms-platform#789). The /admin/reviews
+  # dashboard fetch()es https://preview-pr<N>.<apex>/regression.json from the
+  # site's own origin (the apex, or www, or the opt-in admin host of #517), so
+  # the browser needs an Access-Control-Allow-Origin naming that origin. Only
+  # that one file gets it: PreviewDistribution routes /regression.json to its
+  # own cache behavior carrying this policy, so no other preview path is
+  # readable cross-origin. It repeats the baseline security headers because a
+  # behavior takes ONE policy. A plain GET with `cache: 'no-store'` sends no
+  # author headers, so there is no preflight and OPTIONS is not allowed.
+  # Origins are exact (no wildcard, no credentials): a preview host's own
+  # origin is deliberately absent, since the dashboard is not served from one.
+  PreviewRegressionCorsResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ResourcePrefix}-preview-regression-cors"
+        Comment: "Baseline headers plus CORS for preview regression.json (cms-platform#789)"
+        CorsConfig:
+          AccessControlAllowCredentials: false
+          AccessControlAllowHeaders:
+            Items:
+              - Content-Type
+          AccessControlAllowMethods:
+            Items:
+              - GET
+              - HEAD
+          AccessControlAllowOrigins:
+            Items:
+              - !Sub "https://${ProductionDomainName}"
+              - !Sub "https://www.${ProductionDomainName}"
+              - !If
+                - HasAdminDomain
+                - !Sub "https://${AdminDomainName}"
+                - !Ref "AWS::NoValue"
+          OriginOverride: true
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: !Ref HstsMaxAgeSeconds
+            IncludeSubdomains: !If [HstsIncludesSubdomains, true, false]
+            Preload: !If [HstsPreloads, true, false]
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          FrameOptions:
+            FrameOption: SAMEORIGIN
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "frame-ancestors 'self'"
+            Override: true
+
   # ── CloudFront distribution for preview-pr*.<apex> ───────────────────────
   #
   # Uses the S3 website endpoint as a custom origin (not OAC) so that S3
@@ -617,6 +671,22 @@ Resources:
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
             ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt PreviewRouterFunction.FunctionARN
+              - EventType: viewer-response
+                FunctionARN: !GetAtt PreviewLocationFixerFunction.FunctionARN
+          # The dashboards' cross-origin regression.json fetch (#789): same as
+          # the default behavior but with the CORS policy, and it needs the
+          # same functions or the router never maps the host to pr-<N>/.
+          - PathPattern: /regression.json
+            TargetOriginId: s3-website
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            ResponseHeadersPolicyId: !Ref PreviewRegressionCorsResponseHeadersPolicy
             AllowedMethods: [GET, HEAD, OPTIONS]
             CachedMethods: [GET, HEAD]
             Compress: true
