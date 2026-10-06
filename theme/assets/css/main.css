@@ -151,6 +151,19 @@ pre code {
   padding: 0;
 }
 
+/* A long URL or identifier has no break opportunity, so it widens the whole
+   page (#753). `break-word` breaks only a string that would otherwise
+   overflow its line. Unlike `anywhere` it leaves min-content size alone, so a
+   table's auto layout (a bare Markdown table, a classed one such as
+   .bws-table) is computed exactly as before: no cell breaks mid-word while the
+   table fits, and a wide table still scrolls in its own box. `pre` never wraps
+   (white-space: pre), so a code block keeps its horizontal scroll. */
+.post-content,
+.post-excerpt,
+:not(pre) > code {
+  overflow-wrap: break-word;
+}
+
 blockquote {
   border-left: 2px solid var(--accent);
   padding-left: 1.2rem;
