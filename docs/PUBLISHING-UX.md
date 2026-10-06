@@ -295,6 +295,16 @@ sentence that says what to enter, with its own final punctuation. The upstream
 gap (no toast for non-presence errors) is a candidate for a Decap issue; this
 shim can be deleted if it closes. Unit test: `e2e/validation-feedback.test.js`.
 
+Follow-ups (#750): the toast goes on the screen edge the field is not near,
+passes every click through except on its own "Dismiss" button, and names the
+list row when the field sits in one ("Item 2 (Beta): URL: ..."), opening the
+row if it is collapsed. "Decap raised its own toast" means a toast that
+appeared after the click: Decap's missing-field toast outlives its click by
+8 s, and a format error retried inside that window used to find it, stand
+down, and leave "you missed a required field" on screen for a bad format
+(reproduced on Decap 3.15.1). A leftover error toast is now closed when the
+shim shows its own.
+
 ---
 
 ## 3. The target model

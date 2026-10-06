@@ -37,7 +37,39 @@ async function setPermalink(page, value) {
   await expect(field).toHaveValue(value);
 }
 
-async function openNewPage(page, { body }) {
+// Appended to config-test.yml for the #750 tests only (Pages is its last
+// collection, so these are its last fields): a list whose rows carry a
+// pattern field, and a last field that cannot scroll any higher, which is
+// where the toast used to sit on top of it.
+const EXTRA_FIELDS = `
+      - name: links
+        label: Links
+        widget: list
+        required: false
+        summary: "{{fields.label}}"
+        fields:
+          - { name: label, label: "Link label", widget: string }
+          - { name: url, label: URL, widget: string, pattern: ["^https?://", "Must be an http(s) URL"] }
+      - name: last_link
+        label: Last link
+        widget: string
+        required: false
+        pattern: ["^https?://", "Must be an http(s) URL"]
+`;
+
+async function fillBody(page) {
+  const editor = page.locator('[role="textbox"][contenteditable="true"]').last();
+  await editor.click();
+  await editor.pressSequentially("Body text.");
+}
+
+async function openNewPage(page, { body, extraFields = false }) {
+  if (extraFields) {
+    await page.route(/\/admin\/config-test\.yml$/, async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ status: 200, contentType: "text/yaml", body: (await res.text()) + EXTRA_FIELDS });
+    });
+  }
   await page.addInitScript(() => {
     window.repoFiles = { _posts: {}, _tags: {}, _projects: {}, pages: {} };
     window.repoFilesUnpublished = [];
@@ -53,11 +85,7 @@ async function openNewPage(page, { body }) {
   await expect(page.getByLabel(/^Title$/)).toBeVisible({ timeout: 60_000 });
   await page.getByLabel(/^Title$/).fill("Validation feedback check");
   await setPermalink(page, "bad");
-  if (body) {
-    const editor = page.locator('[role="textbox"][contenteditable="true"]').last();
-    await editor.click();
-    await editor.pressSequentially("Body text.");
-  }
+  if (body) await fillBody(page);
 }
 
 const saveButton = (page) => page.getByRole("button", { name: /^save$/i }).first();
@@ -151,6 +179,91 @@ test.describe(
       await expect(page.getByRole("menuitem").first()).toBeVisible({ timeout: 15_000 });
       await settle(page);
       await expect(page.locator(SHIM_TOAST)).toHaveCount(0);
+    });
+
+    // ── cms-platform#750 ──────────────────────────────────────────────────
+
+    test("a format error retried while Decap's earlier toast is up is not called a missing field", async ({
+      page,
+    }) => {
+      // Decap raises "you've missed a required field" for an EMPTY required
+      // field and keeps it for 8 s. Fixing that and retrying inside the 8 s
+      // used to find the leftover toast, and the shim stood down: the editor
+      // read "missed a required field" for a bad format.
+      await openNewPage(page, { body: false });
+      await saveButton(page).click();
+      const missed = page.getByText(/missed a required field/i);
+      await expect(missed).toBeVisible({ timeout: 15_000 });
+
+      await fillBody(page);
+      // Still up at the retry, or the check below would prove nothing.
+      await expect(missed).toBeVisible();
+      await saveButton(page).click();
+
+      const toast = page.locator(SHIM_TOAST);
+      await expect(toast).toBeVisible({ timeout: 15_000 });
+      await expect(toast).toContainText(/^Not saved yet\. Permalink: Must start and end with a slash/);
+      // Closed by the shim, well inside its own 8 s.
+      await expect(missed).toHaveCount(0, { timeout: 3_000 });
+    });
+
+    test("the toast leaves the field it names uncovered, lets clicks through, and can be dismissed", async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1280, height: 420 });
+      await openNewPage(page, { body: true, extraFields: true });
+      await setPermalink(page, "/pages/validation-feedback/");
+      // The form's last field: the one `scrollIntoView` cannot lift any higher.
+      const last = page.getByLabel(/^Last link/);
+      await last.fill("not a url");
+      await saveButton(page).click();
+
+      const toast = page.locator(SHIM_TOAST);
+      await expect(toast).toBeVisible({ timeout: 15_000 });
+      await expect(toast).toContainText(/^Not saved yet\. Last link: Must be an http\(s\) URL/);
+      await expect(last).toBeInViewport();
+
+      const field = await last.boundingBox();
+      const note = await toast.boundingBox();
+      const overlaps =
+        note.x < field.x + field.width &&
+        field.x < note.x + note.width &&
+        note.y < field.y + field.height &&
+        field.y < note.y + note.height;
+      expect(overlaps, `toast ${JSON.stringify(note)} covers field ${JSON.stringify(field)}`).toBe(false);
+
+      // A click aimed at the field lands in it, whatever the toast is doing.
+      await page.mouse.click(field.x + field.width / 2, field.y + field.height / 2);
+      await expect(last).toBeFocused();
+
+      await toast.getByRole("button", { name: "Dismiss" }).click();
+      await expect(toast).toHaveCount(0);
+    });
+
+    test("an error in a list row names the row and opens it", async ({ page }) => {
+      await openNewPage(page, { body: true, extraFields: true });
+      await setPermalink(page, "/pages/validation-feedback/");
+      const addRow = page.getByRole("button", { name: /add links/i });
+      await addRow.click();
+      await page.getByLabel(/^Link label$/).fill("Alpha");
+      await page.getByLabel(/^URL$/).fill("https://example.com/");
+      await addRow.click();
+      await page.getByLabel(/^Link label$/).last().fill("Beta");
+      await page.getByLabel(/^URL$/).last().fill("bad address");
+
+      // Collapse both rows, as an editor tidying a long list would.
+      const rows = page.locator('[class*="SortableListItem"]');
+      await rows.nth(1).locator("button").first().click();
+      await rows.nth(0).locator("button").first().click();
+      await expect(page.getByLabel(/^URL$/).last()).toBeHidden();
+
+      await saveButton(page).click();
+      const toast = page.locator(SHIM_TOAST);
+      await expect(toast).toBeVisible({ timeout: 15_000 });
+      await expect(toast).toContainText(/^Not saved yet\. Item 2 \(Beta\): URL: Must be an http\(s\) URL/);
+      // The row the message is about is open; the good row stays shut.
+      await expect(page.getByLabel(/^URL$/).last()).toBeVisible();
+      await expect(page.getByLabel(/^URL$/).first()).toBeHidden();
     });
   },
 );
