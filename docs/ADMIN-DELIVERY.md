@@ -359,6 +359,24 @@ clipped. `:focus-visible` only, so a mouse click is unchanged. Not covered: inpu
 outside `#nc-root`. Test: `e2e/cms-admin-focus-ring.spec.js` (computed styles after
 real Tab presses on a dark button and a sidebar link; a mouse click stays plain).
 
+## Decap's toasts let taps through at 1100px and below (UX round 4 triage package 6: ad A4, jd F13)
+
+Decap raises its toasts ("missed a required field", "Entry saved") in a react-toastify
+container at `top-right`, fixed to the viewport, for 8 s. Since #766 pinned the phone
+toolbar to the top, that container sat exactly on Publish and the avatar, so the retry
+tap after a failed Publish landed on the toast. In the shipped 3.15.1 bundle no node sets
+`pointer-events` (the container, toast, body and close button all compute `auto`), so
+the last rule of `theme/admin/admin-mobile.css` sets `pointer-events: none` on
+`[class*="Toastify__toast-container"]` at `max-width: 1100px` (inherited by the whole
+subtree) and `auto` on its `[class*="Toastify__close-button"]`. A toast can then only be
+dismissed by its close button or its timer; click-to-close and swipe-to-dismiss no longer
+fire. Desktop is untouched. `validation-feedback.js` reads these nodes with
+`querySelector` and closes a stale one with a script `.click()`, neither of which is
+hit-tested. Not covered: Decap stacks a second identical toast on a second failure.
+Test: `e2e/cms-admin-toast-passthrough.spec.js` (390x844: a hit test and a real click on
+Publish and the avatar under a live toast, the close button still closes it, and the
+rule is off above 1100px).
+
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 
 The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a
