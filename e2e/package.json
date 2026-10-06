@@ -15,7 +15,7 @@
     "acorn-walk": "8.3.5",
     "decap-cms-core": "3.17.1",
     "decap-server": "^3.11.3",
-    "immutable": "3.8.4",
+    "immutable": "5.1.9",
     "markdown-it": "15.0.2",
     "pngjs": "^7.0.0",
     "postcss": "8.5.28",
