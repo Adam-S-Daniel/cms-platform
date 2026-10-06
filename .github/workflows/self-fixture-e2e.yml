@@ -5,33 +5,43 @@
 # `workflow_call` reusable that only a CONSUMER runs. So until #527 no platform
 # PR executed a single `*.spec.js`: a change to the theme, the admin bundle or
 # a spec could merge here and first meet a browser in a consumer's CI. This
-# workflow runs the harness's `@lane: local` specs against `e2e/fixture-site`
-# (a neutral consuming-site fixture whose Gemfile pins the theme by local path,
-# so the WORKING TREE's theme is what gets built and tested) on the two ADMIN
-# projects, where the CMS editor specs and #527's archived-PDF test live.
+# workflow runs the harness's `@lane: local` specs against the fixture sites
+# (neutral consuming-site fixtures whose Gemfiles pin the theme by local path,
+# so the WORKING TREE's theme is what gets built and tested):
+#   - the two ADMIN projects on `e2e/fixture-site`, where the CMS editor specs
+#     and #527's archived-PDF test live;
+#   - ONE PUBLIC project (chromium-desktop-1080) on BOTH fixtures (#702). Until
+#     then no public-site spec ran here, so v0.1.139's public-a11y-polish and
+#     reduced-motion specs first ran on a consumer's platform-bump PR and broke
+#     jodidaniel.com#351. `e2e/fixture-site` renders `/` through the theme's
+#     default layout; `e2e/fixture-site-singlepage` renders it through its own
+#     `_layouts/home.html`, as jodidaniel.com does, so a theme spec that assumes
+#     the theme's markup on every `/` goes red here first. One Chromium project
+#     keeps the cost to two more parallel legs; the other public projects vary
+#     the browser or viewport, not which specs run.
 #
 # WHAT IT RUNS, per project job
 #   1. a salience check (below): a PR touching only docs/infra skips the work
 #      but still reports success;
-#   2. the harness PLACED inside the fixture (`e2e/fixture-site/e2e/`), because
+#   2. the harness PLACED inside the fixture (`e2e/<fixture>/e2e/`), because
 #      the specs read site files via `path.resolve(__dirname, "..")`;
 #   3. `bundle install` from the fixture's COMMITTED Gemfile.lock (frozen);
 #   4. `npx playwright test --project=<project>` over every `@lane: local`
 #      spec, with SITE_ROOT pointing playwright.config.js's local webServer at
 #      the fixture (jekyll build + static serve + decap-server);
-#   5. a NON-VACUITY assertion: the archived-PDF test in
-#      cms-editorial-workflow.spec.js must have PASSED on this project. A
-#      future skip must not read green — this lane is #527's proof that the
-#      test executes in platform CI.
+#   5. a NON-VACUITY assertion: the leg's proof test must have PASSED on this
+#      project (the matrix names it). Admin legs: #527's archived-PDF test in
+#      cms-editorial-workflow.spec.js. Public legs: a test that only runs where
+#      the leg's `/` shape holds (#702). A future skip must not read green.
 #
 # WHAT IT DELIBERATELY DOES NOT RUN
 #   - `@lane: real` specs. Most self-skip without CMS_E2E_PAT, but
 #     admin-bundle-parity.spec.js fetches https://adamdaniel.ai/admin/*
 #     unconditionally; this lane must not depend on production. They are
 #     filtered out by select-specs.js's filterByLane(…, "local").
-#   - the PUBLIC projects (chromium-desktop-1080 etc.). They fail on the
-#     fixture for site-identity/layout reasons (no site header, no tag pages),
-#     which is fixture work outside #527.
+#   - the other PUBLIC projects (laptop, mobile, firefox, webkit-tablet, large
+#     text, light, forced colors): same specs, other browsers and viewports;
+#     the consumer matrix still runs them.
 #
 # NETWORK. No secrets, no AWS, no production site. It does need the public
 # internet: npm, rubygems, the Ubuntu archive (via the install composite) and
@@ -77,7 +87,7 @@ permissions:
 
 jobs:
   fixture-e2e-project:
-    name: fixture-e2e-project (${{ matrix.project }})
+    name: fixture-e2e-project (${{ matrix.project }}, ${{ matrix.fixture }})
     # The wall lives HERE, never on the gate. 45 min clears the install
     # composite's bounded download worst case (~35 min) plus the measured ~5 min
     # of placement + tests; e2e/playwright-install-bounded.test.js checks it.
@@ -85,10 +95,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [chromium-desktop-3k, webkit-iphone16]
+        # Each leg names its proof test (step "Assert the leg's proof test
+        # passed"): one that RUNS only where the leg's premise holds.
+        include:
+          - project: chromium-desktop-3k
+            fixture: fixture-site
+            proof_spec: cms-editorial-workflow.spec.js
+            proof_title: opted-in archived PDF fields render host-specific copy and stay private by default
+          - project: webkit-iphone16
+            fixture: fixture-site
+            proof_spec: cms-editorial-workflow.spec.js
+            proof_title: opted-in archived PDF fields render host-specific copy and stay private by default
+          # `/` on the theme's default layout: the theme-markup checks run.
+          - project: chromium-desktop-1080
+            fixture: fixture-site
+            proof_spec: public-a11y-polish.spec.js
+            proof_title: first Tab stop is a skip link that reveals itself and moves focus to main
+          # `/` on a site-owned layout (jodidaniel.com's shape): the reduce
+          # half of reduced-motion still holds there and must run.
+          - project: chromium-desktop-1080
+            fixture: fixture-site-singlepage
+            proof_spec: reduced-motion.spec.js
+            proof_title: no infinite animation runs
     runs-on: ubuntu-latest
     env:
       PW_PROJECT: ${{ matrix.project }}
+      FIXTURE: ${{ matrix.fixture }}
       TARGET: local
       CI: 'true'
     steps:
@@ -111,7 +143,7 @@ jobs:
           set -euo pipefail
           is_salient() {
             case "$1" in
-              e2e/fixture-site/*) return 0 ;;
+              e2e/fixture-site/*|e2e/fixture-site-singlepage/*) return 0 ;;
               docs/*|infrastructure/*|oauth-proxy/*|scripts/cross_post/*|LICENSE) return 1 ;;
               *.md) return 1 ;;
               *) return 0 ;;
@@ -152,17 +184,17 @@ jobs:
         run: |
           set -euo pipefail
           rsync -a --exclude fixture-site --exclude fixture-site-singlepage --exclude node_modules \
-            e2e/ e2e/fixture-site/e2e/
+            e2e/ "e2e/${FIXTURE}/e2e/"
 
       - name: Install harness deps
         if: ${{ steps.salient.outputs.salient == 'true' }}
-        working-directory: e2e/fixture-site/e2e
+        working-directory: e2e/${{ matrix.fixture }}/e2e
         run: npm ci
 
       - name: Resolve this project's browser engine
         if: ${{ steps.salient.outputs.salient == 'true' }}
         id: engine
-        working-directory: e2e/fixture-site/e2e
+        working-directory: e2e/${{ matrix.fixture }}/e2e
         run: |
           set -euo pipefail
           engine="$(node ci-matrix.js --engine "$PW_PROJECT")"
@@ -181,9 +213,9 @@ jobs:
         uses: ./.github/actions/install-playwright-browsers
         with:
           browser: ${{ steps.engine.outputs.engine }}
-          working-directory: e2e/fixture-site/e2e
+          working-directory: e2e/${{ matrix.fixture }}/e2e
 
-      # Frozen install from the committed e2e/fixture-site/Gemfile.lock
+      # Frozen install from the fixture's committed Gemfile.lock
       # (setup-ruby turns on deployment mode when a lockfile exists), so a new
       # gem release cannot change what this lane builds with.
       - name: Setup Ruby + Bundler
@@ -192,7 +224,7 @@ jobs:
         with:
           ruby-version: '3.2'
           bundler-cache: true
-          working-directory: e2e/fixture-site
+          working-directory: e2e/${{ matrix.fixture }}
 
       # `@lane: real` specs are excluded explicitly rather than left to
       # self-skip: admin-bundle-parity.spec.js fetches production. The filter is
@@ -201,7 +233,7 @@ jobs:
       - name: Select the local-lane specs
         if: ${{ steps.salient.outputs.salient == 'true' }}
         id: select
-        working-directory: e2e/fixture-site/e2e
+        working-directory: e2e/${{ matrix.fixture }}/e2e
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -227,11 +259,11 @@ jobs:
 
       - name: Run the local-lane specs against the fixture
         if: ${{ steps.salient.outputs.salient == 'true' }}
-        working-directory: e2e/fixture-site/e2e
+        working-directory: e2e/${{ matrix.fixture }}/e2e
         env:
           # playwright.config.js's local webServer builds + serves THIS tree and
           # runs decap-server in it.
-          SITE_ROOT: ${{ github.workspace }}/e2e/fixture-site
+          SITE_ROOT: ${{ github.workspace }}/e2e/${{ matrix.fixture }}
           PW_SPECS: ${{ steps.select.outputs.specs }}
           PW_WORKERS: ${{ steps.select.outputs.workers }}
           # No consumer of per-navigation frames runs here (see e2e-tests.yml).
@@ -248,16 +280,17 @@ jobs:
           node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
           exit "$status"
 
-      # #527 criterion 2, kept live: the archived-PDF test must have RUN and
-      # PASSED on this project. Without this, a future skip (a lost opt-in, a
-      # renamed fixture collection) would leave the lane green while proving
-      # nothing.
-      - name: Assert the archived-PDF test passed
+      # #527 criterion 2, kept live and extended per leg (#702): the leg's
+      # proof test must have RUN and PASSED on this project. Without this, a
+      # future skip (a lost opt-in, a renamed fixture collection, a predicate
+      # that stops matching the fixture) would leave the lane green while
+      # proving nothing.
+      - name: Assert the leg's proof test passed
         if: ${{ steps.salient.outputs.salient == 'true' }}
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/fixture-e2e.log.json
-          REQUIRED_SPEC_FILE: cms-editorial-workflow.spec.js
-          REQUIRED_TEST_TITLE: opted-in archived PDF fields render host-specific copy and stay private by default
+          REQUIRED_SPEC_FILE: ${{ matrix.proof_spec }}
+          REQUIRED_TEST_TITLE: ${{ matrix.proof_title }}
         run: |
           set -euo pipefail
           node - <<'JS'
@@ -301,10 +334,10 @@ jobs:
         if: ${{ !cancelled() && steps.salient.outputs.salient == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: fixture-e2e-report-${{ matrix.project }}
+          name: fixture-e2e-report-${{ matrix.project }}-${{ matrix.fixture }}
           path: |
-            e2e/fixture-site/e2e/playwright-report
-            e2e/fixture-site/e2e/test-results
+            e2e/${{ matrix.fixture }}/e2e/playwright-report
+            e2e/${{ matrix.fixture }}/e2e/test-results
             /tmp/fixture-e2e.log
             /tmp/fixture-e2e.log.json
           if-no-files-found: ignore

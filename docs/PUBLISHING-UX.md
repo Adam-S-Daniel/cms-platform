@@ -273,6 +273,64 @@ Three things this cost, all of them generalisable:
   distinguished "the merge is coming" from "the merge is never coming". That
   half is §3.4 below.
 
+### 2.11 A pattern error blocked Save and Publish with no feedback (#730)
+
+A field with `pattern: [regex, message]` that fails blocks Save and Publish,
+and Decap says nothing where the editor clicked. This is **Decap core, not
+this repo**: `persistEntry` raises `ui.toast.missingRequiredField` only when a
+field error has type `PRESENCE`; a `PATTERN` error just rejects the save, and
+the message sits under the field. Decap's English `regexPattern` phrase
+(`%{fieldLabel} didn't match the pattern: %{pattern}.`) also wrapped the
+site's own sentence, which usually ends in a period (hence "..") and was
+upper-cased by Decap's error styling (`/pages/about/` read `/PAGES/ABOUT/`).
+
+`theme/admin/validation-feedback.js` (all three shells, deferred after
+`decap-cms.js`) works around it without touching Decap internals: it rewrites
+the phrase to `%{fieldLabel}: %{pattern}` through `CMS.getLocale('en')`, turns
+the upper-casing off for `[class*="ControlErrorsList"]`, and after a click on
+Save or Publish scrolls to the first field error and toasts its message unless
+Decap raised its own toast. Each piece is a silent no-op if Decap changes the
+surface it reads. A site's `pattern` message should therefore be a complete
+sentence that says what to enter, with its own final punctuation. The upstream
+gap (no toast for non-presence errors) is a candidate for a Decap issue; this
+shim can be deleted if it closes. Unit test: `e2e/validation-feedback.test.js`.
+
+Follow-ups (#750): the toast goes on the screen edge the field is not near,
+passes every click through except on its own "Dismiss" button, and names the
+list row when the field sits in one ("Item 2 (Beta): URL: ..."), opening the
+row if it is collapsed. "Decap raised its own toast" means a toast that
+appeared after the click: Decap's missing-field toast outlives its click by
+8 s, and a format error retried inside that window used to find it, stand
+down, and leave "you missed a required field" on screen for a bad format
+(reproduced on Decap 3.15.1). A leftover "missed a required field" toast is
+now closed when the shim shows its own; any other leftover error toast
+("logged out", "backend unavailable") is left open (#752). The shim matches
+the toast's text against `ui.toast.missingRequiredField` of every locale Decap
+ships (read through `CMS.getLocale`), since it cannot read the site's
+configured `locale`; a toast in a locale it cannot read stays open. The
+"Dismiss" button is at least 24 x 24 px (44 x 44 on a touch screen) with its
+"×" glyph `aria-hidden`, and the toast is centered with auto margins so it
+keeps its width on a phone.
+
+Follow-up (keyboard Publish, UX round 3): Enter or Space on "Publish now" gave
+no feedback at all. The Publish menu is react-aria-menubutton, which selects an
+item on `keydown` and fires no `click`, so the shim's click listener never ran
+(the mouse path worked). A capture-phase `keydown` listener now treats Enter or
+Space on a `role="menuitem"` Save/Publish item as the same attempt (a real
+`<button>` is skipped: its own Enter fires a click, so Save reports once). After
+the scroll, focus moves to the first input in the first failing field (a
+collapsed list row is opened first), also when Decap raised its own "missed a
+required field" toast, so a keyboard or screen-reader editor lands on the field
+the message names instead of staying on the Publish button. Focus moves only
+for an event the editor made (`isTrusted`): `autosave-on-hide.js` clicks Save
+from a script on tab hide, page hide and idle, and that report still toasts and
+scrolls but must not move focus out from under her typing. A held key
+(`repeat`) is ignored, and a field in a row opened a moment ago is waited for (a
+few frames) before it is focused. Under
+`publish_mode: editorial_workflow` Decap's Publish never validates; the path
+only exists in simple mode (the local backend), which
+`e2e/cms-validation-feedback.spec.js` selects by rewriting `config-test.yml`.
+
 ---
 
 ## 3. The target model

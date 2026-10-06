@@ -170,6 +170,70 @@
     [
       "2026-09-28-quoting-simon-willison-on-coding-agents",
       "2026-09-28-quoting-simon-willison-on-coding-agents"
+    ],
+    [
+      "Bad Slug!",
+      "bad-slug"
+    ],
+    [
+      "ZZ Test Tool!",
+      "zz-test-tool"
+    ],
+    [
+      "v1.2",
+      "v1-2"
+    ],
+    [
+      "a_b",
+      "a-b"
+    ],
+    [
+      "  Bad   Slug!  ",
+      "bad-slug"
+    ],
+    [
+      "UPPER lower MiXeD",
+      "upper-lower-mixed"
+    ],
+    [
+      "a - b - c",
+      "a-b-c"
+    ],
+    [
+      "Hello---World",
+      "hello-world"
+    ],
+    [
+      "-lead and trail-",
+      "lead-and-trail"
+    ],
+    [
+      "!!!",
+      ""
+    ],
+    [
+      "a.b.c",
+      "a-b-c"
+    ],
+    [
+      "slug/with/slashes",
+      "slug-with-slashes"
+    ],
+    [
+      "Tag Name (draft)",
+      "tag-name-draft"
+    ],
+    [
+      "über cool",
+      "über-cool"
+    ],
+    [
+      "naïve--slug",
+      "naïve-slug"
+    ],
+    [
+      "Ünï Cödé 2026",
+      "ünï-cödé-2026"
     ]
   ]
 }

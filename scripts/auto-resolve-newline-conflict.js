@@ -145,7 +145,18 @@ async function gh(endpoint, opts = {}) {
     throw err;
   }
   if (res.status === 204) return null;
-  return res.json();
+  try {
+    return await res.json();
+  } catch (e) {
+    if (!(e instanceof SyntaxError)) throw e;
+    // A JSON SyntaxError's message (and stack, which main() also logs)
+    // quotes the body; keep only the status.
+    const err = new SyntaxError(
+      `GH API ${opts.method || "GET"} ${endpoint} → ${res.status}: body is not JSON`,
+    );
+    err.status = res.status;
+    throw err;
+  }
 }
 
 async function fetchFileAtRef(repo, ref, path) {

@@ -105,6 +105,7 @@ collections:
         label: Tags
         widget: list
         required: false
+        hint: "Type a tag and press Enter, or separate tags with commas (news, release). Every tag gets its own archive page automatically; add a matching entry in the Tags collection only to give a tag a description."
       - name: featured_image
         label: Featured Image
         widget: image
@@ -221,10 +222,11 @@ collections:
         label: Permalink
         widget: string
         required: true
-        default: "/pages/"
+        # No default: a shared default makes every new page claim the same
+        # URL (#639). Decap cannot derive one from the title here.
         pattern:
-          - "^/.*/$"
-          - "Must start and end with a slash"
+          - "^/(?!pages/$).+/$"
+          - "Must start and end with a slash and name the page, e.g. /pages/about/ (not just /pages/)"
       - name: published
         label: Published
         widget: boolean
