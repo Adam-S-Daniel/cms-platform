@@ -15,13 +15,36 @@ const { test, expect } = require("./base");
 // `diffs[0].content` is the exact file text Decap would commit. Seed/login
 // pattern mirrors cms-slug-pin.spec.js.
 
+// A site's tags index (`/tags/`): the page tags-input.js reads for the tags that
+// already exist (#735). Mocked, so the spec does not depend on the site's posts.
+async function mockTagsIndex(page, names) {
+  await page.route("**/tags/", (route) =>
+    names
+      ? route.fulfill({
+          contentType: "text/html",
+          body:
+            "<ul class='tag-list'>" +
+            names.map((n) => `<li class='tag-list-item'><a class='tag-list-link' href='#'><span class='tag-list-name'>${n}</span></a></li>`).join("") +
+            "</ul>",
+        })
+      : route.fulfill({ status: 404, contentType: "text/html", body: "Not found" }),
+  );
+}
+
+// Any uncaught page error fails the test: a handler that throws inside the
+// editor (e.g. a re-entrant re-render) must not pass unnoticed.
+let pageErrors = [];
+
 async function openNewPost(page) {
   await page.addInitScript(() => {
     window.repoFiles = { _posts: {}, _tags: {}, _projects: {}, pages: {} };
     window.repoFilesUnpublished = [];
     window.__AUTOSAVE_IDLE_MS = 3_600_000;
   });
-  page.on("pageerror", (err) => console.log(`[pageerror] ${err.name}: ${err.message}`));
+  page.on("pageerror", (err) => {
+    console.log(`[pageerror] ${err.name}: ${err.message}`);
+    pageErrors.push(`${err.name}: ${err.message}`);
+  });
   await page.goto("/admin/index-test.html");
   const loginBtn = page.getByRole("button", { name: /login/i });
   await expect(loginBtn).toBeVisible({ timeout: 60_000 });
@@ -64,6 +87,12 @@ test.describe(
   { tag: ["@admin-write"] },
   () => {
     test.describe.configure({ mode: "serial", timeout: 180_000 });
+    test.beforeEach(() => {
+      pageErrors = [];
+    });
+    test.afterEach(() => {
+      expect(pageErrors, "no uncaught page errors").toEqual([]);
+    });
 
     test("typing `a, b` saves two tags", async ({ page }) => {
       await openNewPost(page);
@@ -83,6 +112,129 @@ test.describe(
       await tags.press("Enter");
       await tags.pressSequentially("ai");
       expect(await savedTags(page)).toEqual(["zz-test", "ai"]);
+    });
+
+    test("typing `quo` offers the existing tag `quotes`, and picking it saves exactly that (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes", "release"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("quo");
+      const offer = page.locator("#cms-tags-suggest").getByRole("button", { name: "quotes", exact: true });
+      await expect(offer).toBeVisible();
+      await offer.click();
+      expect(await savedTags(page)).toEqual(["quotes"]);
+    });
+
+    test("`quote` beside existing `quotes` is warned about, never rewritten on its own (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("quote");
+      const panel = page.locator("#cms-tags-suggest");
+      await expect(panel).toContainText("\u201cquote\u201d is a new tag that is nearly identical to the existing tag \u201cquotes\u201d");
+      await expect(panel.getByRole("button", { name: "Use \u201cquotes\u201d" })).toBeVisible();
+      // Left alone, the editor's own spelling is saved: nothing was changed behind their back.
+      expect(await savedTags(page)).toEqual(["quote"]);
+    });
+
+    test("the warning's button swaps `Quotes` for the existing `quotes` (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("Quotes");
+      await page.locator("#cms-tags-suggest").getByRole("button", { name: "Use \u201cquotes\u201d" }).click();
+      expect(await savedTags(page)).toEqual(["quotes"]);
+    });
+
+    // Keyboard path: the offer must be reachable with Tab and applied with Enter.
+    // The focusout re-render once rebuilt every button, including the one about to
+    // take focus, so Tab landed on <body> and Enter did nothing.
+    test("Tab from `quote` reaches the `Use \u201cquotes\u201d` button and Enter applies it (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("quote");
+      const offer = page.locator("#cms-tags-suggest").getByRole("button", { name: "Use \u201cquotes\u201d" });
+      await expect(offer).toBeVisible();
+      await page.keyboard.press("Tab");
+      await expect(offer).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(tags).toHaveValue("quotes");
+      expect(await savedTags(page)).toEqual(["quotes"]);
+    });
+
+    test("Tab from `quo` reaches the `quotes` suggestion and Enter applies it (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes", "release"]);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("quo");
+      const offer = page.locator("#cms-tags-suggest").getByRole("button", { name: "quotes", exact: true });
+      await expect(offer).toBeVisible();
+      await page.keyboard.press("Tab");
+      await expect(offer).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(tags).toHaveValue("quotes");
+      expect(await savedTags(page)).toEqual(["quotes"]);
+    });
+
+    // A tag name comes from fetched HTML: it must reach the page as text, never markup.
+    test("markup in an existing tag's name is shown as text and injects no element (#735)", async ({ page }) => {
+      const evil = "<img src=x onerror=window.__tagsXss=1>";
+      await page.route("**/tags/", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body:
+            "<ul><li><span class='tag-list-name'>quotes</span></li>" +
+            "<li><span class='tag-list-name'>" + evil.replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</span></li></ul>",
+        }),
+      );
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("<img");
+      const panel = page.locator("#cms-tags-suggest");
+      await expect(panel.getByRole("button", { name: evil, exact: true })).toBeVisible();
+      expect(await panel.locator("img").count()).toBe(0);
+      expect(await page.locator("img[onerror]").count()).toBe(0);
+      expect(await page.evaluate(() => window.__tagsXss)).toBeUndefined();
+    });
+
+    // A live region announces what is added to it, so it must exist EMPTY first
+    // and be filled in a later task, or the first announcement is skipped.
+    test("the status line is created empty and filled a frame later (#735)", async ({ page }) => {
+      await mockTagsIndex(page, ["quotes"]);
+      await openNewPost(page);
+      await page.evaluate(() => {
+        window.__panelAtInsert = null;
+        new MutationObserver((records) => {
+          for (const r of records) {
+            for (const n of r.addedNodes) {
+              if (n.id === "cms-tags-suggest" && window.__panelAtInsert === null) window.__panelAtInsert = n.childNodes.length;
+            }
+          }
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("quote");
+      await expect(page.locator("#cms-tags-suggest")).toContainText("\u201cquotes\u201d");
+      expect(await page.evaluate(() => window.__panelAtInsert)).toBe(0);
+      await expect(page.locator("#cms-tags-suggest")).toHaveAttribute("aria-live", "polite");
+    });
+
+    test("a site with no tags index gets no panel and the box works as before (#735)", async ({ page }) => {
+      await mockTagsIndex(page, null);
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await tags.pressSequentially("alpha, beta");
+      await expect(page.locator("#cms-tags-suggest")).toHaveCount(0);
+      expect(await savedTags(page)).toEqual(["alpha", "beta"]);
     });
   },
 );

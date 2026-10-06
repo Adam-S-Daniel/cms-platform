@@ -21,6 +21,26 @@
  *     supplies it.
  * If Decap changes the box's id scheme the listener simply stops matching
  * and this shim is a silent no-op.
+ *
+ * ── Existing-tag suggestions — cms-platform#735 ───────────────────────
+ * Nothing told a writer which tags already exist, so `quote` and `Quotes`
+ * could be minted beside `quotes`, each with its own archive page. A small
+ * status line under the box now:
+ *   - lists existing tags that contain what is being typed (`quo` offers
+ *     `quotes`), and
+ *   - warns when a tag differs from an existing one only by case, plural,
+ *     spaces or hyphens (`quote`, `Quotes` vs `quotes`).
+ * Each offer is a button that swaps the typed text for the existing tag; Tab
+ * from the box reaches them. It only ever offers: no tag is rewritten or
+ * dropped on its own, a brand-new tag is still one Enter away, and stored
+ * tags are never touched.
+ *
+ * The existing names are the ones the site already publishes on its tags
+ * index (`/tags/`, `.tag-list-name` — the markup both the fixture site and
+ * a consumer's tags/index.html ship; site.all_tags built by
+ * auto_tag_pages.rb), read once, same-origin, the first time the box is
+ * focused. If that page is missing or fails, there is simply nothing to
+ * offer and the box behaves exactly as before.
  */
 (function () {
   "use strict";
@@ -53,5 +73,246 @@
     }
   }
 
+  // ── Existing-tag suggestions (#735) ─────────────────────────────────
+  var MAX_SUGGESTIONS = 6;
+
+  // Two tags "match" when they differ only by case, spaces, hyphens,
+  // underscores, dots or a trailing plural s (kept off short words, so
+  // `news` is not read as `new`).
+  function keyOf(name) {
+    var k = String(name).toLowerCase().replace(/[\s\-_.]+/g, "");
+    return k.length > 4 && k.charAt(k.length - 1) === "s" ? k.slice(0, -1) : k;
+  }
+
+  function splitTags(value) {
+    return String(value || "")
+      .split(",")
+      .map(function (t) {
+        return t.trim();
+      });
+  }
+
+  // Pure: what to tell the editor about `value` given the site's `existing`
+  // tags. `near` = typed tags that are NOT an existing tag but match one
+  // (`matches` lists those); `suggest` = existing tags containing the text
+  // still being typed (the last comma-separated piece).
+  function analyze(value, existing) {
+    var tokens = splitTags(value);
+    var last = tokens.length - 1;
+    var names = existing || [];
+    var near = [];
+    for (var i = 0; i < tokens.length; i++) {
+      var tok = tokens[i];
+      if (!tok || names.indexOf(tok) !== -1) continue;
+      var matches = names.filter(function (n) {
+        return keyOf(n) === keyOf(tok);
+      });
+      if (matches.length) near.push({ index: i, typed: tok, matches: matches });
+    }
+    var suggest = [];
+    var frag = tokens[last];
+    if (frag) {
+      var lower = frag.toLowerCase();
+      var typedLower = tokens.map(function (t) {
+        return t.toLowerCase();
+      });
+      var shown = [];
+      near.forEach(function (n) {
+        if (n.index === last) shown = shown.concat(n.matches);
+      });
+      var hits = names.filter(function (n) {
+        return (
+          n.toLowerCase().indexOf(lower) !== -1 && typedLower.indexOf(n.toLowerCase()) === -1 && shown.indexOf(n) === -1
+        );
+      });
+      hits.sort(function (a, b) {
+        return Number(b.toLowerCase().indexOf(lower) === 0) - Number(a.toLowerCase().indexOf(lower) === 0);
+      });
+      suggest = hits.slice(0, MAX_SUGGESTIONS);
+    }
+    return { near: near, suggest: suggest, last: last };
+  }
+
+  // Pure: the box value after swapping piece `index` for `name`. No comma is
+  // added: a trailing one would save an empty tag if the editor stops here.
+  function replaceTag(value, index, name) {
+    var tokens = splitTags(value);
+    tokens[index] = name;
+    return tokens.join(",");
+  }
+
+  var existing = [];
+  var loading = null;
+  var panel = null;
+
+  function loadExisting() {
+    if (loading) return loading;
+    if (typeof fetch !== "function" || typeof DOMParser === "undefined" || typeof URL === "undefined") {
+      loading = Promise.resolve();
+      return loading;
+    }
+    loading = Promise.resolve()
+      .then(function () {
+        return fetch(new URL("../tags/", location.href).href, { credentials: "same-origin", cache: "no-store" });
+      })
+      .then(function (r) {
+        return r && r.ok ? r.text() : "";
+      })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, "text/html");
+        var seen = {};
+        existing = [];
+        Array.prototype.forEach.call(doc.querySelectorAll(".tag-list-name"), function (n) {
+          var name = String(n.textContent || "").trim();
+          if (name && !seen[name]) {
+            seen[name] = true;
+            existing.push(name);
+          }
+        });
+      })
+      .catch(function () {});
+    return loading;
+  }
+
+  function button(label, title, onPick) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.title = title;
+    b.style.cssText =
+      "margin:0 6px 4px 0;padding:1px 8px;border:1px solid currentColor;border-radius:999px;background:transparent;color:inherit;font:inherit;cursor:pointer;";
+    // Keep focus in the Tags box so the click does not blur it first.
+    b.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+    });
+    b.addEventListener("click", onPick);
+    return b;
+  }
+
+  // The panel is an aria-live region. A live region announces what is ADDED to
+  // it, not what it already holds when it appears, so it is created empty and
+  // filled one frame later; once it exists it is emptied, never hidden or
+  // removed, so every later change is announced too.
+  var boxEl = null; // the Tags box the panel belongs to
+  var boxWith = true; // whether suggestions (not just warnings) are shown
+
+  function nextFrame(fn) {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(fn);
+    else setTimeout(fn, 16);
+  }
+
+  // Removing the button that has focus fires `focusout` synchronously; that
+  // handler must not re-render in the middle of the removal.
+  var clearing = false;
+
+  function clearPanel() {
+    clearing = true;
+    try {
+      while (panel.firstChild) panel.removeChild(panel.firstChild);
+    } finally {
+      clearing = false;
+    }
+    panel.style.marginTop = "0";
+  }
+
+  function render(el, withSuggestions) {
+    boxEl = el;
+    boxWith = withSuggestions;
+    var a = analyze(el.value, existing);
+    if (!withSuggestions) a.suggest = [];
+    if (!a.near.length && !a.suggest.length) {
+      if (panel) clearPanel();
+      return;
+    }
+    var fresh = !panel || !panel.isConnected;
+    if (fresh) {
+      panel = document.createElement("div");
+      panel.id = "cms-tags-suggest";
+      panel.setAttribute("role", "status");
+      panel.setAttribute("aria-live", "polite");
+      panel.style.cssText = "font-size:13px;line-height:1.5;";
+    }
+    if (panel.previousSibling !== el) el.parentNode.insertBefore(panel, el.nextSibling);
+    if (fresh) {
+      clearPanel();
+      nextFrame(function () {
+        if (boxEl) render(boxEl, boxWith);
+      });
+      return;
+    }
+    clearPanel();
+    panel.style.marginTop = "6px";
+    function pick(index, name) {
+      return function () {
+        setValue(el, replaceTag(el.value, index, name));
+        el.focus();
+      };
+    }
+    a.near.forEach(function (n) {
+      var line = document.createElement("div");
+      var tag = n.matches.length > 1 ? "the existing tags " : "the existing tag ";
+      line.appendChild(
+        document.createTextNode(
+          "“" +
+            n.typed +
+            "” is a new tag that is nearly identical to " +
+            tag +
+            n.matches.map(quote).join(", ") +
+            " (ignoring case, plurals, spaces and punctuation). "
+        )
+      );
+      n.matches.forEach(function (m) {
+        line.appendChild(button("Use " + quote(m), "Replace " + quote(n.typed) + " with " + quote(m), pick(n.index, m)));
+      });
+      panel.appendChild(line);
+    });
+    if (a.suggest.length) {
+      var line2 = document.createElement("div");
+      line2.appendChild(document.createTextNode("Existing tags: "));
+      a.suggest.forEach(function (m) {
+        line2.appendChild(button(m, "Use the existing tag " + quote(m), pick(a.last, m)));
+      });
+      panel.appendChild(line2);
+    }
+  }
+
+  function quote(s) {
+    return "“" + s + "”";
+  }
+
+  function onInput(e) {
+    if (isTagsBox(e.target)) render(e.target, true);
+  }
+
+  function onFocusIn(e) {
+    var el = e.target;
+    if (!isTagsBox(el)) return;
+    render(el, true);
+    loadExisting().then(function () {
+      if (document.activeElement === el) render(el, true);
+    });
+  }
+
+  function onFocusOut(e) {
+    if (clearing) return;
+    var t = e.target;
+    var inPanel = !!panel && panel.contains(t);
+    if (!isTagsBox(t) && !inPanel) return;
+    // Focus moving between the box and its own buttons (Tab, Shift+Tab, or one
+    // button to the next) must not rebuild the panel: that would remove the
+    // very button about to take focus and drop focus on <body>.
+    var to = e.relatedTarget;
+    if (to && ((panel && panel.contains(to)) || isTagsBox(to))) return;
+    // Focus left the box and its panel: keep the near-duplicate warnings (they
+    // matter at Save time) but drop the as-you-type suggestions.
+    render(isTagsBox(t) ? t : boxEl, false);
+  }
+
   document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("input", onInput, true);
+  document.addEventListener("focusin", onFocusIn, true);
+  document.addEventListener("focusout", onFocusOut, true);
+
+  // Pure helpers, exposed for the unit test (e2e/tags-suggest.test.js).
+  window.__tagsInput = { keyOf: keyOf, analyze: analyze, replaceTag: replaceTag };
 })();

@@ -151,6 +151,8 @@ const PLATFORM_META_SPECS = [
   "admin-publish-duration-copy.test.js",
   "posts-list-branch-tip.test.js",
   "slug-pin.test.js",
+  // cms-platform#735 — vm-sandboxes theme/admin/tags-input.js SOURCE; platform-internal likewise.
+  "tags-suggest.test.js",
   // cms-platform#730 — vm-sandboxes theme/admin/validation-feedback.js SOURCE.
   "validation-feedback.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
