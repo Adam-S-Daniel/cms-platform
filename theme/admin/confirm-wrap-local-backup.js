@@ -59,6 +59,29 @@
  * owns the single fetch wrap; a second wrap risks the Safari loadEntries
  * hang), so the two shims compose.
  *
+ * ── Second job: put the URL back when the leave prompt is cancelled (#733)
+ * Decap's editor blocks navigation while the draft has unsaved changes. On a
+ * browser Back it asks window.confirm("Are you sure you want to leave this
+ * page?"); a "Cancel" is supposed to leave the editor exactly where it was.
+ * It cannot, in the common case: Decap's hash router (history v4) restores
+ * the old hash by `history.go(delta)`, with `delta` read from a private list
+ * of the locations IT pushed. Decap 3.15.x renders the Posts list rows as
+ * plain `<a href="#/…">` anchors, so opening an entry (or reloading on one)
+ * never enters that list, `delta` comes out 0, and nothing is restored: the
+ * address bar says `#/collections/posts` while the editor stays on screen, and
+ * the editor's own ← (a push to the hash it is already at) does nothing until
+ * a reload. Upstream limitation; there is no config seam.
+ *
+ * The repair is tiny and composes with Decap's own revert: this shim sees the
+ * `hashchange` first (it loads first), notes the hash we left, and — only when
+ * the leave confirm was answered "Cancel" inside that very hashchange AND
+ * Decap did not call `history.go` itself (so its revert did not run) — sets
+ * the hash back once the dispatch is over. Decap's listener then finds the
+ * address already equal to the route it still believes it is on and ignores
+ * it. Accepted prompts, ← and Link pushes, and every other confirm are
+ * untouched. Like the backup string above it matches Decap's English
+ * `editor.editor.onLeavePage` text; on a translated admin it is a no-op.
+ *
  * Loaded via a NON-deferred <script> tag in admin/index*.html *before*
  * decap-cms.js, so the wrap is in place before Decap captures any reference
  * to window.confirm.
@@ -90,6 +113,9 @@
 
   // Long enough to read two sentences, short enough not to linger over the form.
   var TOAST_MS = 7000;
+
+  // Decap's `editor.editor.onLeavePage`, English (see "Second job" above).
+  var LEAVE_STRING = "Are you sure you want to leave this page?";
 
   var origConfirm = window.confirm.bind(window);
 
@@ -146,6 +172,48 @@
     );
   }
 
+  // The hashchange being dispatched right now, if any (#733). Cleared by a
+  // zero-delay timer, i.e. once every listener — Decap's included — has run.
+  var inPop = null;
+  // True once `history.go` is wrapped, i.e. Decap's own revert is observable.
+  var canSeeRevert = false;
+
+  function fragmentOf(url) {
+    var s = String(url || "");
+    var i = s.indexOf("#");
+    return i < 0 ? "" : s.slice(i);
+  }
+
+  if (typeof window.addEventListener === "function") {
+    window.addEventListener("hashchange", function (ev) {
+      var pop = { from: fragmentOf(ev && ev.oldURL), to: fragmentOf(ev && ev.newURL), cancelled: false, reverted: false };
+      inPop = pop;
+      setTimeout(function () {
+        if (inPop === pop) inPop = null;
+        if (!canSeeRevert || !pop.cancelled || pop.reverted || !pop.from) return;
+        // Decap kept the editor but did not (or could not) restore the hash.
+        if (window.location && fragmentOf(window.location.href) === pop.to) window.location.hash = pop.from;
+      }, 0);
+    });
+  }
+
+  // Decap reverts a cancelled POP with `history.go(delta)` from inside the
+  // same hashchange dispatch; seeing that call means it is handling the
+  // restore itself and we must stay out of the way.
+  var hist = window.history;
+  if (hist && typeof hist.go === "function") {
+    var origGo = hist.go;
+    try {
+      hist.go = function () {
+        if (inPop) inPop.reverted = true;
+        return origGo.apply(this, arguments);
+      };
+      canSeeRevert = true;
+    } catch {
+      /* read-only history: Decap's revert cannot be seen, so never second-guess it */
+    }
+  }
+
   window.confirm = function (msg) {
     if (msg === BACKUP_STRING) {
       // Returning false BOTH suppresses the (misleading) dialog AND routes
@@ -170,7 +238,9 @@
     // Every other confirm (delete / publish / navigation guard / …) goes to
     // the ORIGINAL native dialog untouched — the e2e delete flows depend on
     // the native confirm surviving.
-    return origConfirm(msg);
+    var answer = origConfirm(msg);
+    if (!answer && msg === LEAVE_STRING && inPop) inPop.cancelled = true;
+    return answer;
   };
 
   function toast(msg) {

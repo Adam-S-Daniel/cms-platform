@@ -172,9 +172,23 @@
        window.LiveURL.slugify at save time. -->
   <script src="slug-pin.js" defer></script>
 
+  <!-- Pattern-validation feedback (cms-platform#730): the site's own message
+       alone ("URL slug: Use lowercase ..."), in normal case, plus a toast and
+       a scroll to the first bad field when Save or Publish is blocked. Deferred,
+       after decap-cms.js (it edits Decap's English locale phrases). -->
+  <script src="validation-feedback.js" defer></script>
+
   <!-- Tags box: Enter ends a tag, and a space after a comma no longer eats the
        comma — cms-platform#638. Standalone: touches only the tags-field input. -->
   <script src="tags-input.js" defer></script>
+
+  <!-- Focus management and a "Skip to content" link (UX round 3, ad-kbd K8 and
+       jd-kbd F5): after a route change, Save or Delete Decap unmounts the
+       focused element and focus drops to <body>. This puts it back on the new
+       view's heading, first field or Back link, ONLY while focus is on <body>,
+       so it never takes focus from the tags box or validation-feedback.js.
+       Deferred, after decap-cms.js; order against the other shims is free. -->
+  <script src="route-focus.js" defer></script>
 
   <!-- "View page on site:" banner — see admin/index.html for rationale.
        Loads after live-url-derive.js, before native-preview-href.js. -->

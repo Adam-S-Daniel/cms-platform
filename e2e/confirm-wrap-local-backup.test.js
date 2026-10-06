@@ -236,3 +236,145 @@ test.describe("media-library delete confirm (#652)", () => {
     expect(m.nativeCalls[0]).toContain("the selected file");
   });
 });
+
+// #733: cancelling Decap's leave prompt on a browser Back must leave the URL on
+// the entry. Decap's hash router restores it with `history.go(delta)` only when
+// it pushed the entry itself; the Posts list rows are plain anchors, so for them
+// nothing restores it and the address bar stays on the list while the editor
+// stays on screen (and ← becomes a no-op). The shim sets the hash back, but only
+// when the confirm was cancelled inside that hashchange AND Decap did not call
+// `history.go` itself.
+const LEAVE_STRING = "Are you sure you want to leave this page?";
+const ORIGIN = "http://localhost:4000/admin/index.html";
+const ENTRY = "#/collections/posts/entries/2026-10-05-a-post";
+const LIST = "#/collections/posts";
+
+/**
+ * A sandbox with a scriptable router: `window.history.go`, a `location` whose
+ * hash can be moved, `addEventListener`, and a setTimeout the test flushes.
+ * `decap(ev)` plays Decap's own hashchange listener, which loads AFTER the shim.
+ */
+function bootRouter({ answer, decap, canWrapGo = true }) {
+  const timers = [];
+  const goCalls = [];
+  const hashWrites = [];
+  const listeners = [];
+  const history = {};
+  const nativeGo = (n) => {
+    goCalls.push(n);
+  };
+  if (canWrapGo) history.go = nativeGo;
+  else Object.defineProperty(history, "go", { value: nativeGo, writable: false });
+  let hash = ENTRY;
+  const location = {
+    get href() {
+      return ORIGIN + hash;
+    },
+    get hash() {
+      return hash;
+    },
+    set hash(next) {
+      hashWrites.push(next);
+      hash = next;
+    },
+  };
+  const sandbox = {
+    console: { warn() {}, error() {}, log() {} },
+    setTimeout: (fn) => timers.push(fn),
+    document: { createElement: () => ({ style: {}, setAttribute() {}, remove() {} }), body: { appendChild() {} } },
+    window: {
+      confirm: () => answer,
+      addEventListener: (type, fn) => type === "hashchange" && listeners.push(fn),
+      history,
+      location,
+    },
+  };
+  sandbox.window.window = sandbox.window;
+  vm.createContext(sandbox);
+  vm.runInContext(SHIM_SOURCE, sandbox);
+
+  return {
+    hashWrites,
+    goCalls,
+    confirm: (msg) => sandbox.window.confirm(msg),
+    /** The browser moves the hash, then every hashchange listener runs, in order. */
+    backTo(to) {
+      const from = hash;
+      hash = to;
+      const ev = { oldURL: ORIGIN + from, newURL: ORIGIN + to };
+      for (const fn of listeners) fn(ev);
+      if (decap) decap(ev, sandbox.window);
+    },
+    flush() {
+      while (timers.length) timers.shift()();
+    },
+  };
+}
+
+test.describe("leave prompt cancelled on browser Back (#733)", () => {
+  test("Cancel with no revert from Decap: the hash is set back to the entry", () => {
+    const r = bootRouter({ answer: false, decap: (ev, w) => w.confirm(LEAVE_STRING) });
+    r.backTo(LIST);
+    expect(r.hashWrites).toEqual([]); // nothing happens inside the dispatch
+    r.flush();
+    expect(r.hashWrites).toEqual([ENTRY]);
+  });
+
+  test("Cancel when Decap reverts itself with history.go: the shim stays out", () => {
+    const r = bootRouter({
+      answer: false,
+      decap: (ev, w) => {
+        w.confirm(LEAVE_STRING);
+        w.history.go(1);
+      },
+    });
+    r.backTo(LIST);
+    r.flush();
+    expect(r.goCalls).toEqual([1]); // the wrapped go still reaches the real one
+    expect(r.hashWrites).toEqual([]);
+  });
+
+  test("Accepting the prompt does not touch the hash", () => {
+    const r = bootRouter({ answer: true, decap: (ev, w) => w.confirm(LEAVE_STRING) });
+    r.backTo(LIST);
+    r.flush();
+    expect(r.hashWrites).toEqual([]);
+  });
+
+  test("Another cancelled confirm during a hashchange does not touch the hash", () => {
+    const r = bootRouter({ answer: false, decap: (ev, w) => w.confirm("Are you sure you want to delete this entry?") });
+    r.backTo(LIST);
+    r.flush();
+    expect(r.hashWrites).toEqual([]);
+  });
+
+  test("A cancelled leave confirm outside a hashchange (the ← link, a push) does not touch the hash", () => {
+    const r = bootRouter({ answer: false });
+    r.backTo(LIST); // a hashchange came and went; the dispatch is over once flushed
+    r.flush();
+    expect(r.confirm(LEAVE_STRING)).toBe(false);
+    r.flush();
+    expect(r.hashWrites).toEqual([]);
+  });
+
+  test("the hash is left alone when something else already moved it", () => {
+    const r = bootRouter({
+      answer: false,
+      decap: (ev, w) => {
+        w.confirm(LEAVE_STRING);
+        w.location.hash = "#/collections/pages";
+      },
+    });
+    r.backTo(LIST);
+    r.hashWrites.length = 0;
+    r.flush();
+    expect(r.hashWrites).toEqual([]);
+  });
+
+  test("a history whose go cannot be wrapped is never second-guessed", () => {
+    const r = bootRouter({ answer: false, canWrapGo: false, decap: (ev, w) => w.confirm(LEAVE_STRING) });
+    r.backTo(LIST);
+    r.flush();
+    expect(r.hashWrites).toEqual([]);
+  });
+});

@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const cap = require("./site-capabilities");
 
 // #540 (8.4) — a wide Markdown table or a fixed-width <iframe> must not make
 // the PAGE scroll sideways on a phone, and the table's content must stay
@@ -92,6 +93,99 @@ test.describe("responsive tables and iframes (#540)", () => {
       );
       expect(frame.width).toBeGreaterThan(0);
       expect(frame.height).toBeGreaterThanOrEqual(150);
+    });
+  }
+});
+
+// #729 — a bare Markdown table also needs to be READABLE: cell padding, borders
+// in the theme's border color, a header row, and room below it. A classed table
+// (adamdaniel.ai's .bws-table) styles its own cells and must be left alone, as
+// must the horizontal-scroll box #540 gave the bare one.
+test.describe("bare Markdown table styling (#729)", () => {
+  for (const vp of [VIEWPORTS[1], VIEWPORTS[3]]) {
+    test(`${vp.name}: cells are padded and bordered, the header is distinct, classed tables are untouched`, async ({
+      page,
+    }, testInfo) => {
+      test.skip(
+        testInfo.project.name !== "chromium-mobile",
+        "Sets its own viewport; one project is enough",
+      );
+      // The cell rules live in the theme's main.css, linked by its default.html.
+      // A home page on a site-owned layout (jodidaniel.com's _layouts/home.html
+      // loads only its own stylesheet, which copies the #540 scroll rule and
+      // nothing else) never asked for them; the #540 test above still covers it.
+      // Decided from the site's source inside the test, like reduced-motion.spec.js.
+      test.skip(
+        !cap.homeUsesThemeLayout(),
+        "the home page renders through a site-owned layout that does not load the theme's main.css",
+      );
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.evaluate(() => {
+        const host = document.querySelector("main") || document.body;
+        const wrap = document.createElement("div");
+        wrap.className = "container";
+        const body = document.createElement("div");
+        body.className = "page-content";
+        body.innerHTML = `
+          <table id="md-table"><thead><tr><th>Mode</th><th>Latency</th></tr></thead>
+            <tbody><tr><td>fast</td><td style="text-align: right">1,450 ms</td></tr></tbody></table>
+          <p id="md-after">After the table.</p>
+          <table id="classed-table" class="bws-table"><tbody><tr><td>cell</td></tr></tbody></table>`;
+        wrap.appendChild(body);
+        host.appendChild(wrap);
+      });
+
+      const px = (v) => Number.parseFloat(v);
+      const cell = await page.locator("#md-table td").first().evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return {
+          padLeft: cs.paddingLeft, padTop: cs.paddingTop,
+          borderWidth: cs.borderTopWidth, borderStyle: cs.borderTopStyle, borderColor: cs.borderTopColor,
+        };
+      });
+      expect(px(cell.padLeft), "td horizontal padding").toBeGreaterThanOrEqual(8);
+      expect(px(cell.padTop), "td vertical padding").toBeGreaterThanOrEqual(4);
+      expect(cell.borderStyle).toBe("solid");
+      expect(px(cell.borderWidth)).toBeGreaterThanOrEqual(1);
+      expect(cell.borderColor, "border is the theme's --border token").toBe(
+        await page.evaluate(() => {
+          const probe = document.createElement("i");
+          probe.style.color = "var(--border)";
+          document.body.appendChild(probe);
+          const c = getComputedStyle(probe).color;
+          probe.remove();
+          return c;
+        }),
+      );
+
+      // Header: heavier than a body cell, with its own background.
+      const head = await page.locator("#md-table th").first().evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { weight: Number(cs.fontWeight), bg: cs.backgroundColor };
+      });
+      const bodyWeight = await page.locator("#md-table td").first().evaluate((el) => Number(getComputedStyle(el).fontWeight));
+      expect(head.weight).toBeGreaterThan(bodyWeight);
+      expect(head.bg).not.toBe("rgba(0, 0, 0, 0)");
+
+      // A Markdown alignment (inline style) still wins over the left default.
+      await expect(page.locator("#md-table td").nth(1)).toHaveCSS("text-align", "right");
+
+      // Room below the table: the next paragraph does not butt against it.
+      const table = await page.locator("#md-table").boundingBox();
+      const after = await page.locator("#md-after").boundingBox();
+      expect(after.y - (table.y + table.height), "gap between table and next paragraph").toBeGreaterThanOrEqual(16);
+
+      // Still its own horizontal scroll box (#540).
+      await expect(page.locator("#md-table")).toHaveCSS("overflow-x", "auto");
+
+      // A classed table keeps the browser defaults: no theme padding or border.
+      const classed = await page.locator("#classed-table td").evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { padLeft: cs.paddingLeft, borderWidth: cs.borderTopWidth };
+      });
+      expect(px(classed.padLeft)).toBeLessThan(4);
+      expect(px(classed.borderWidth)).toBe(0);
     });
   }
 });

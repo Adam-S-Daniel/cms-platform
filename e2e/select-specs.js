@@ -801,9 +801,16 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/index.*\.html$/,
     /^(theme\/)?_layouts\/preview\.html$/,
   ],
+  // #736: the tidy shim's sandbox tests also check where the shells load it.
+  "e2e/media-library-tidy.test.js": [
+    /^(theme\/)?admin\/media-library-tidy\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+    /^(theme\/)?admin\/draft-media-fallback\.js$/,
+  ],
   "e2e/preview-bridge-payload.test.js": [/^(theme\/)?admin\/preview-bridge\.js$/],
   "e2e/preview-pane.test.js": [
     /^(theme\/)?admin\/preview-pane\.js$/,
+    /^(theme\/)?admin\/config\.base\.yml$/,
     /^(theme\/)?admin\/index.*\.html$/,
   ],
   "e2e/cms-autosave.spec.js": [
