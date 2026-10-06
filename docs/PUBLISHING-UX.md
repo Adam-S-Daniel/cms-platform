@@ -523,7 +523,11 @@ branch, the stall, and Live on the preview), `e2e/publish-status-links.test.js`
 has merged, only a merge into a known default-branch base reads as going live
 on the live site, whatever its labels; a merge into the feature branch, or one
 whose base is unknown, reads as on its way to the preview for the merge watch,
-and after that the entry's ordinary state applies).
+and after that the entry's ordinary state applies). Within the watch, a
+feature-branch merge reads Live, "on &lt;preview host&gt; now", as soon as a
+`preview-pr-<N>` deployment covering the merge succeeds — N being the open PR
+whose head is that branch (#643); before #643 nothing read that deployment,
+so the bar said "Going live…" for the whole 30-minute watch.
 
 The old wording was never actually shown on GitHub. GitHub rejects a label
 description over 100 characters with a 422; the old one was 107, the

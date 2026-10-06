@@ -63,6 +63,10 @@
  *   checksUrl         the workflow run behind a failed check, else behind the
  *                     running ones, or null. Free out of the check-runs read
  *                     this tick already makes. See checksUrlFor().
+ *   checksStartedAt   after a merge, the oldest `started_at` among the check
+ *                     runs on the merged PR's head, or null: the start of the
+ *                     whole trip, so the model's countdown never goes back
+ *                     up when its clock switches to the merge (#643).
  *
  * ── The stall: an armed publish with nothing left to wait for (#371) ────
  * `armed` says the PR is queued to merge itself. Nothing said whether that
@@ -96,7 +100,10 @@
  * check-runs, pull, workflow runs; no open PR: pulls, merged pulls,
  * deployments, deployment statuses), and only while the tab is VISIBLE and
  * the route is an entry route. That is ~600/hour against an authenticated
- * 5000/hour budget, alongside deploy-status-pill.js's own ~480.
+ * 5000/hour budget, alongside deploy-status-pill.js's own ~480. Inside the
+ * merge watch, the merged head's check runs and a preview branch's PR number
+ * cost one request each, once per merge: both are remembered, as neither
+ * changes after the merge.
  *
  * ── After the merge (adamdaniel.ai#3857) ──────────────────────────────
  * Once the PR merges it is no longer open, and deploy-production registers
@@ -111,9 +118,14 @@
  * for MERGE_WATCH_MS that path reports the merge as in flight to the preview
  * (`merged` + `previewOnly` with the merge's base) and never reads the
  * production deployment: "Going live… on <apex>" for it was false (#532).
- * The poller does not see the preview's own deploy, so it says "on its way
- * to" the preview, never "on" it. After the window the merge is ignored, as
- * an old default-branch merge is.
+ * It reads the PREVIEW's deployment instead (#643): deploy-preview.yml
+ * registers one per push to the preview PR, in the environment
+ * `preview-pr-<N>`, where N is the open PR whose head is the merge's base.
+ * One covering the merge (as for production) that succeeded means the merge
+ * is on the preview, and the entry reads Live there. Before #643 nothing read
+ * it, so "Going live…" held for the whole watch, long after the preview had
+ * the change. After the window the merge is ignored, as an old
+ * default-branch merge is.
  *
  * Which branch the merge went into, in order (mergeIsPreview()):
  *   - a KNOWN base equal to the repo's default branch is production, even
@@ -317,21 +329,29 @@
       // header for why the entry's own merged PR is read here.
       var merge = await recentMerge(token, entry);
       var now = Date.now();
-      if (merge && merge.previewOnly && now - merge.mergedAt < MERGE_WATCH_MS) {
+      var watching = Boolean(merge) && now - merge.mergedAt < MERGE_WATCH_MS;
+      var checksStartedAt = watching ? await checksStartFor(token, merge.headSha) : null;
+      if (watching && merge.previewOnly) {
         // Merged into a feature branch: on its way to that branch's preview,
         // and the live site only when the branch gets there, so production's
-        // deployment says nothing about it (see "After the merge").
+        // deployment says nothing about it; the preview's does (see "After
+        // the merge").
+        var preview = await previewDeployment(token, merge.baseRef);
+        var previewState =
+          preview && (preview.sha === merge.sha || preview.createdAt >= merge.mergedAt) ? preview.state : null;
+        var previewSettled = previewState === "success" || previewState === "failure" || previewState === "error";
         return {
           facts: {
             hasOpenPr: false,
             armed: false,
-            merged: true,
+            merged: !previewSettled,
             checksFailed: false,
             mergeConflict: false,
             awaitingReviewGate: false,
-            deployState: null,
+            deployState: previewState,
             waitingOn: null,
-            startedAt: merge.mergedAt,
+            startedAt: previewSettled ? null : merge.mergedAt,
+            checksStartedAt: previewSettled ? null : checksStartedAt,
             previewOnly: true,
             baseRef: merge.baseRef,
             settledSince: noteSettled(null, false, now),
@@ -346,7 +366,8 @@
       var deploying = depState === "in_progress" || depState === "queued" || depState === "pending";
       var startedAt = dep && deploying ? dep.createdAt : null;
       var inFlight = Boolean(deploying);
-      if (merge && !merge.previewOnly && now - merge.mergedAt < MERGE_WATCH_MS) {
+      var fromMerge = false;
+      if (watching && !merge.previewOnly) {
         // A deployment covers the merge if it IS the merge commit, or was
         // created after it (deploys run per push to the default branch, in
         // order, so a later one carries this commit too).
@@ -357,8 +378,10 @@
           inFlight = true;
           depState = "pending";
           startedAt = merge.mergedAt;
+          fromMerge = true;
         } else if (deploying) {
           startedAt = merge.mergedAt;
+          fromMerge = true;
         }
       }
       return {
@@ -372,6 +395,7 @@
           deployState: depState,
           waitingOn: null,
           startedAt: inFlight ? startedAt : null,
+          checksStartedAt: fromMerge ? checksStartedAt : null,
           previewOnly: false,
           baseRef: null,
           settledSince: noteSettled(null, false, now),
@@ -524,6 +548,7 @@
       return {
         mergedAt: t,
         sha: pr.merge_commit_sha || null,
+        headSha: (pr.head && pr.head.sha) || null,
         baseRef: baseRef,
         previewOnly: mergeIsPreview(baseRef, defaultBranch),
       };
@@ -541,9 +566,60 @@
     return true;
   }
 
+  // When the merged head's checks began (see `checksStartedAt` in the
+  // header), or null. A merged head's check runs no longer change, so a
+  // known answer is remembered per sha rather than re-read every tick.
+  var checksStarts = {};
+  async function checksStartFor(token, sha) {
+    if (!sha) return null;
+    if (Object.prototype.hasOwnProperty.call(checksStarts, sha)) return checksStarts[sha];
+    var checks = await getJson(API + "/commits/" + sha + "/check-runs?per_page=100", token, "merged check-runs");
+    if (!checks || !Array.isArray(checks.check_runs)) return null;
+    var startedAt = null;
+    checks.check_runs.forEach(function (r) {
+      var t = Date.parse(r.started_at || "");
+      if (!isNaN(t) && (startedAt === null || t < startedAt)) startedAt = t;
+    });
+    checksStarts[sha] = startedAt;
+    return startedAt;
+  }
+
+  // The newest deployment of a preview branch and its latest state, or null.
+  // deploy-preview.yml registers each push to a preview PR in the
+  // environment `preview-pr-<N>` (the same name deploy-status-pill.js reads),
+  // so the PR is found by its head branch — once, as a branch's open PR
+  // number does not change under it.
+  var previewPrs = {};
+  async function previewDeployment(token, branch) {
+    if (!branch) return null;
+    if (!Object.prototype.hasOwnProperty.call(previewPrs, branch)) {
+      var owner = String(REPO || "").split("/")[0];
+      var prs = await getJson(
+        API + "/pulls?state=open&head=" + encodeURIComponent(owner + ":" + branch) + "&per_page=5",
+        token,
+        "preview pull",
+      );
+      var pr = (Array.isArray(prs) ? prs : []).filter(function (p) {
+        return p.head && p.head.ref === branch;
+      })[0];
+      if (!pr) return null;
+      previewPrs[branch] = pr.number;
+    }
+    return latestDeployment(token, "preview-pr-" + previewPrs[branch]);
+  }
+
   // The newest production deployment and its latest state, or null.
-  async function latestProductionDeployment(token) {
-    var deps = await getJson(API + "/deployments?environment=production&per_page=1", token, "deployments");
+  function latestProductionDeployment(token) {
+    return latestDeployment(token, "production");
+  }
+
+  // The newest deployment to `environment` and its latest state, or null.
+  async function latestDeployment(token, environment) {
+    var deps = await getJson(
+      API + "/deployments?environment=" + encodeURIComponent(environment) + "&per_page=1",
+      token,
+      "deployments",
+    );
     if (!Array.isArray(deps) || !deps.length) return null;
     var st = await getJson(API + "/deployments/" + deps[0].id + "/statuses?per_page=1", token, "deployment statuses");
     if (!Array.isArray(st) || !st.length) return null;
