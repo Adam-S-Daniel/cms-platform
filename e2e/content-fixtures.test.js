@@ -14,7 +14,7 @@ const {
   decodeEntities,
   normalizeTitle,
   feedHasTitle,
-  hrefCarries,
+  hrefParamStartsWith,
   visibleTitleLocator,
 } = require("./content-fixtures");
 
@@ -182,22 +182,93 @@ test("feedHasTitle is false for an absent title, an empty title and a non-title 
   expect(feedHasTitle("<feed><summary>Q&amp;A time</summary></feed>", "Q&A time")).toBe(false);
 });
 
-test("hrefCarries decodes url_encode output (+ for space, %27, %26, %E2%80%99)", () => {
-  const x = "https://twitter.com/intent/tweet?text=Don%27t+stop&url=https%3A%2F%2Fexample.com%2Fblog%2Fx%2F";
-  expect(hrefCarries(x, "Don't")).toBe(true);
-  expect(hrefCarries(x, "dont")).toBe(false);
-  const bsky = "https://bsky.app/intent/compose?text=Q%26A+time%20https%3A%2F%2Fexample.com%2F";
-  expect(hrefCarries(bsky, "Q&A")).toBe(true);
-  expect(hrefCarries(bsky, "Q&A time")).toBe(true);
-  expect(hrefCarries("?text=%22hi%22+there", '"hi"')).toBe(true);
-  expect(hrefCarries("?text=Anthropic%E2%80%99s+note", "Anthropic\u2019s")).toBe(true);
-  expect(hrefCarries("?text=a%2Bb", "a+b")).toBe(true);
-  expect(hrefCarries("?text=Less+%3C+more", "<")).toBe(true);
+// Regression: feedHasTitle once scanned every <title> with a substring test.
+// Red on the old code: the first three passed on the feed's own site title or
+// a longer entry title; the fourth passed on a <title> in an entry's body.
+test("feedHasTitle ignores the feed's own site title (a post titled like the site is not proven)", () => {
+  const siteOnly = `<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="html">Adam Daniel</title>
+  <entry><title type="html">Something else</title><link href="/blog/x/"/></entry></feed>`;
+  expect(feedHasTitle(siteOnly, "Adam")).toBe(false);
+  expect(feedHasTitle(siteOnly, "Adam Daniel")).toBe(false);
+  // The same feed with the entry actually titled "Adam" does pass.
+  expect(feedHasTitle(feedWith("Adam"), "Adam")).toBe(true);
 });
 
-test("hrefCarries tolerates a malformed escape and an empty needle", () => {
-  expect(hrefCarries("?text=100%+sure", "sure")).toBe(true);
-  expect(hrefCarries("?text=x", "")).toBe(false);
+test("feedHasTitle needs the FULL entry title, not a substring of it", () => {
+  expect(feedHasTitle(feedWith("Notes on shipping"), "Notes")).toBe(false);
+  expect(feedHasTitle(feedWith("Notes on shipping"), "on shipping")).toBe(false);
+  expect(feedHasTitle(feedWith("Notes on shipping"), "Notes on shipping")).toBe(true);
+  // Case is not folded: the feed carries the title's case unchanged.
+  expect(feedHasTitle(feedWith("Notes on shipping"), "notes on shipping")).toBe(false);
+});
+
+test("feedHasTitle reads each entry's own title and skips a <title> inside its body", () => {
+  const body = `<feed><title>Site</title>
+  <entry><title type="html">First post</title>
+    <content type="html"><![CDATA[<title>Hidden gem</title>]]></content></entry>
+  <entry><title type="html">Second post</title></entry></feed>`;
+  expect(feedHasTitle(body, "First post")).toBe(true);
+  expect(feedHasTitle(body, "Second post")).toBe(true);
+  expect(feedHasTitle(body, "Hidden gem")).toBe(false);
+  expect(feedHasTitle(body, "Site")).toBe(false);
+});
+
+test("feedHasTitle reads RSS <item> titles and not the channel title", () => {
+  const rss = `<rss><channel><title>Channel</title>
+  <item><title>Item one</title></item></channel></rss>`;
+  expect(feedHasTitle(rss, "Item one")).toBe(true);
+  expect(feedHasTitle(rss, "Channel")).toBe(false);
+});
+
+test("hrefParamStartsWith decodes url_encode output (+ for space, %27, %26, %E2%80%99)", () => {
+  const x = "https://twitter.com/intent/tweet?text=Don%27t+stop&url=https%3A%2F%2Fexample.com%2Fblog%2Fx%2F";
+  expect(hrefParamStartsWith(x, "text", "Don't stop")).toBe(true);
+  expect(hrefParamStartsWith(x, "text", "Dont stop")).toBe(false);
+  const bsky = "https://bsky.app/intent/compose?text=Q%26A+time%20https%3A%2F%2Fexample.com%2F";
+  expect(hrefParamStartsWith(bsky, "text", "Q&A time")).toBe(true);
+  expect(hrefParamStartsWith("?text=%22hi%22+there", "text", '"hi" there')).toBe(true);
+  expect(
+    hrefParamStartsWith("?text=Anthropic%E2%80%99s+note", "text", "Anthropic\u2019s note"),
+  ).toBe(true);
+  expect(hrefParamStartsWith("?text=a%2Bb", "text", "a+b")).toBe(true);
+  expect(hrefParamStartsWith("?text=Less+%3C+more", "text", "Less < more")).toBe(true);
+});
+
+test("hrefParamStartsWith tolerates a malformed escape and an empty needle", () => {
+  expect(hrefParamStartsWith("?text=100%+sure", "text", "100% sure")).toBe(true);
+  expect(hrefParamStartsWith("?text=x", "text", "")).toBe(false);
+  expect(hrefParamStartsWith("?text=x", "missing", "x")).toBe(false);
+});
+
+// Regression: the share check once looked for the title's FIRST WORD anywhere
+// in the href. A "Quoting ..." post has `quoting` in its slug, so the `url=`
+// parameter alone satisfied it. Red on the old code (hrefCarries(href,
+// "Quoting") was true for both hrefs below); the real share-row.html shapes.
+test("hrefParamStartsWith is not satisfied by the title's words appearing in the slug", () => {
+  const title = "Quoting Anthropic\u2019s \u201Csomewhat less robust\u201D";
+  const url = encodeURIComponent(
+    "https://adamdaniel.ai/blog/quoting-anthropics-somewhat-less-robust/",
+  );
+  const xNoTitle = `https://twitter.com/intent/tweet?text=&url=${url}`;
+  const xOtherTitle = `https://twitter.com/intent/tweet?text=Unrelated+words&url=${url}`;
+  const bskyNoTitle = `https://bsky.app/intent/compose?text=%20${url}`;
+  for (const href of [xNoTitle, xOtherTitle, bskyNoTitle]) {
+    expect(hrefParamStartsWith(href, "text", title), href).toBe(false);
+  }
+  // Only the first word of the title in text= is not the title either.
+  expect(
+    hrefParamStartsWith(`https://twitter.com/intent/tweet?text=Quoting&url=${url}`, "text", title),
+  ).toBe(false);
+  // The shapes share-row.html emits for the full title do pass.
+  const enc = encodeURIComponent(title).replace(/%20/g, "+");
+  expect(hrefParamStartsWith(`https://twitter.com/intent/tweet?text=${enc}&url=${url}`, "text", title)).toBe(true);
+  expect(hrefParamStartsWith(`https://bsky.app/intent/compose?text=${enc}%20${url}`, "text", title)).toBe(true);
+});
+
+test("hrefParamStartsWith does not accept a longer word that merely begins with the title", () => {
+  expect(hrefParamStartsWith("?text=Notes+on+shipping&url=x", "text", "Notes on")).toBe(true);
+  expect(hrefParamStartsWith("?text=Notesy+stuff&url=x", "text", "Notes")).toBe(false);
 });
 
 test("visibleTitleLocator hands the raw title to getByText (no selector interpolation)", () => {
