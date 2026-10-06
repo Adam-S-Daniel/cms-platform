@@ -712,6 +712,9 @@ const PLATFORM_META_SPECS = [
   "media-library-tidy.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
+  // cms-platform#645 — vm-sandboxes theme/admin/mobile-preview-toggle.js and
+  // parses theme/admin/admin-mobile.css; platform-internal SOURCE reads.
+  "mobile-preview-toggle.test.js",
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",
