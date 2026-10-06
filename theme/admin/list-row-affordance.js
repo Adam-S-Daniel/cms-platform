@@ -95,7 +95,7 @@
   var MAX_SUMMARY = 60;
   // The one invented word: Decap's "Writing in X collection" does not say the
   // link goes back. "" leaves the link with Decap's own words alone.
-  var BACK_PREFIX = "Back: ";
+  var BACK_PREFIX = "Back to ";
 
   function onLabelClick(lab) {
     return function () {

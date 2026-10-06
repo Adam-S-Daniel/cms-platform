@@ -92,9 +92,9 @@ test.describe(
       await openNewPage(page);
       await page.getByLabel(/^Title$/).fill("Control names check");
 
-      // Name is Decap's own "Writing in Pages collection", led by "Back:", and
+      // Name is Decap's own "Writing in Pages collection", led by "Back to", and
       // carries neither the arrow glyph nor the save-status badge.
-      await expect(named(page, "link", "Back: Writing in Pages collection")).toBeVisible();
+      await expect(named(page, "link", "Back to Writing in Pages collection")).toBeVisible();
 
       await expect(named(page, "switch", "Edit Content as Markdown")).toBeVisible();
       await expect(named(page, "textbox", "Content")).toBeVisible();

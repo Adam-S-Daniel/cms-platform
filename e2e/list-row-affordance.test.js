@@ -333,16 +333,16 @@ test.describe("list-row-affordance.js: the editor Back link", () => {
     load(el("div", null, null, [link]));
     expect(link.querySelector('[class*="BackArrow"]').getAttribute("aria-hidden")).toBe("true");
     expect(link.querySelector('[class*="BackStatus"]').getAttribute("aria-hidden")).toBe("true");
-    expect(link.getAttribute("aria-label")).toBe("Back: Writing in Pages collection");
+    expect(link.getAttribute("aria-label")).toBe("Back to Writing in Pages collection");
   });
 
   test("the name does not change when the save status does", () => {
     const link = backLink({ status: "Changes saved" });
     const h = load(el("div", null, null, [link]));
-    expect(link.getAttribute("aria-label")).toBe("Back: Writing in Pages collection");
+    expect(link.getAttribute("aria-label")).toBe("Back to Writing in Pages collection");
     link.querySelector('[class*="BackStatus"]').textContent = "Unsaved Changes";
     h.pass();
-    expect(link.getAttribute("aria-label")).toBe("Back: Writing in Pages collection");
+    expect(link.getAttribute("aria-label")).toBe("Back to Writing in Pages collection");
   });
 
   test("a link with no collection text is left alone (no name invented)", () => {
