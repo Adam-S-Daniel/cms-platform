@@ -900,11 +900,11 @@
         );
       } else {
         bits.push(
-          '<span style="color:#8c959f" title="Set Published to ON to ' +
+          '<span style="color:#8c959f" title="Turn Show on site on to ' +
             "render this draft at preview-pr" + esc(pr.number) + "." + esc(window.CMS_APEX) +
             " — that address uses the same publish rules as " +
             esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") + ", so a " +
-            'Published-OFF entry is built nowhere">draft — Published OFF</span>',
+            'hidden entry is built nowhere">draft — Show on site off</span>',
         );
       }
       bits.push(

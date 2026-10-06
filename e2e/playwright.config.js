@@ -162,6 +162,10 @@ const PLATFORM_META_SPECS = [
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",
+  // #636 — vm-sandboxes the theme/admin model, poller, bar, button and
+  // live-url-derive.js SOURCE for the take-down / stays-hidden wording;
+  // platform-internal likewise.
+  "entry-status-model-intent.test.js",
   // #16 — the admin-source-read lint reads the platform's playwright.config.js +
   // theme/admin SOURCE tree to police consumer-facing specs; it's a harness
   // self-test, meaningless (and ENOENT-prone) on a consumer.

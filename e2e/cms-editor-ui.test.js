@@ -16,14 +16,16 @@ const E2E_DIR = path.resolve(__dirname);
 const HELPER = "cms-editor-ui.js";
 
 // Match the Published widget queried as a given ARIA role:
-//   page.getByRole("<role>", { name: /^Published$/i ...
+//   page.getByRole("<role>", { name: /^(Show on site|Published)$/i ...
+// (the field's label since #636 is "Show on site"; "Published" is the old one)
 // Quote-agnostic; tolerant of whitespace. Deliberately requires the
 // `, { name:` so it matches real call sites, NOT prose in a comment that
 // merely mentions `getByRole("checkbox")`. Literal (not built via
 // `new RegExp`) to stay deterministic and lint-clean.
-const PUBLISHED_SWITCH_RE = /getByRole\(\s*["'`]switch["'`]\s*,\s*\{\s*name:\s*\/\^Published\$\/i/;
+const PUBLISHED_SWITCH_RE =
+  /getByRole\(\s*["'`]switch["'`]\s*,\s*\{\s*name:\s*\/\^(?:\(Show on site\|Published\)|Published)\$\/i/;
 const PUBLISHED_CHECKBOX_RE =
-  /getByRole\(\s*["'`]checkbox["'`]\s*,\s*\{\s*name:\s*\/\^Published\$\/i/;
+  /getByRole\(\s*["'`]checkbox["'`]\s*,\s*\{\s*name:\s*\/\^(?:\(Show on site\|Published\)|Published)\$\/i/;
 
 function specFiles() {
   return fs.readdirSync(E2E_DIR).filter((f) => f.endsWith(".spec.js"));

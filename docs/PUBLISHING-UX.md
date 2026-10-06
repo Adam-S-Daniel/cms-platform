@@ -28,7 +28,7 @@ meets at least five of them in a normal afternoon.
 | 1 | Workflow **status** — Draft / In review / Ready | Decap toolbar dropdown; stored as a `decap-cms/<status>` PR label | On this platform, **Ready publishes the entry** (see §2.1) | Yes — as a dropdown that looks like metadata |
 | 2 | **Publish → Publish now** | Decap toolbar split button | Merges the entry's PR → deploy → live | Yes, once the entry is saved clean |
 | 3 | The **Workflow board** (`#/workflow`) | Decap nav | The same three statuses again, as a kanban, with the same Ready gate worded differently (§2.1) | Yes, and it repeats the editor's unexplained rule |
-| 4 | `published:` front matter | The entry's own fields (adamdaniel.ai posts/pages) | Whether Jekyll renders the page at all | Yes — as a toggle labelled "Published", next to a button labelled "Publish" |
+| 4 | `published:` front matter | The entry's own fields (adamdaniel.ai posts/pages) | Whether Jekyll renders the page at all | Yes — as a toggle labelled "Published", next to a button labelled "Publish" (renamed "Show on site" in #636, §3.7) |
 | 5 | `publish_date` | The entry's own fields | A future date `publish-scheduled-posts.yml` flips `published` on | Yes |
 | 6 | Site-level gate — `site_live` (jodidaniel.com) | `_data/settings.yml`, one collection | Hides **every** bio section on the live site | Only if she opens that one collection |
 | 7 | Six **required status checks** | The consumer's branch ruleset | Whether the merge is allowed to happen at all | **No** |
@@ -636,6 +636,60 @@ PR, `publish-progress.js` reports `previewOnly: false`, so a steady Live entry
 opened from a preview admin is described with the canonical hostname. The
 browser hostname alone cannot prove that the entry belongs to a preview-only
 workflow, so the model does not infer that state.
+
+### 3.7 The words follow what the publish will DO (#636)
+
+The four badges say where an edit is in the pipeline. Until #636 nothing said
+what arrives at the end of it, so three publishes that do different things
+were worded the same:
+
+- a new post saved with the toggle off asked "Put this on <site>?", then said
+  "Going live…" and finally "Live" over a page that stayed a 404;
+- switching a live post off and publishing said the same, while the publish
+  was taking the post DOWN;
+- a saved edit to a post already on the site said it was "not on the site yet".
+
+`entry-status-model.js` now derives an **intent** from the SAVED `published`
+value and words every state with it; the badge key, colors and list chips are
+unchanged.
+
+| Intent | When | Draft | In flight | Done | Confirmation |
+|---|---|---|---|---|---|
+| show | `published` is not `false` | Draft — not on the site yet (an edit: "changes not on the site yet") | Going live… | Live | Put this on <site>? |
+| takedown | saved `false`, live version `true` | Draft — still on the site | Taking down… | Off the site | Take this off <site>? It will disappear in about 5 minutes. |
+| hidden | saved `false` otherwise | Draft — will stay hidden | Saving, stays hidden | Hidden — not on the site | This will be saved but stay hidden — "Show on site" is off. … Publish it hidden? |
+
+Where the facts come from: `publish-progress.js` reads the PR's own file list
+(`/pulls/<n>/files`, once per PR and head sha) for the front matter's
+`published:` line — `published` from a `+` or context line, `publishedBefore`
+from a `-` line — and `entryIsNew` from whether the entry's text file is added
+or modified. When the line did not change, the bar and the button fill
+`published` from the editor's own switch (`[role="switch"][id^="published-field-"]`,
+read only while nothing is unsaved, so it is the saved value). An unknown
+`publishedBefore` is never a take-down: "stays hidden" is still true of a
+take-down, while take-down wording on a never-shown entry would not be.
+
+**Publishing with the toggle off says so; it does not flip the toggle.** The
+alternative — a prompt that turns "Show on site" on — would make the Publish
+button write to the entry, which on this platform means a second commit to
+the PR mid-publish (a new head sha, a new run of every check) from a control
+that otherwise only adds a label. The message is the smaller, safer change.
+The button keeps its names ("Publish", "Yes, publish") in every intent,
+because `publishViaUi()` and every loop spec select them by name (§2.3).
+
+The toggle is labeled **Show on site** (the `published` front-matter key is
+unchanged), and Publish Date's hint no longer says UTC: Decap's datetime
+widget shows and stores local time with its offset (`format: "YYYY-MM-DD
+HH:mm:ss ZZ"`), which `scripts/publish_scheduled_posts.py` parses with `%z`.
+The hint names "your computer's own time zone" rather than a specific zone,
+because a hint is static config. Specs locate the switch by
+`/^(Show on site|Published)$/`, so a site that labels its own `published`
+field the old way keeps working.
+
+Not changed here: Decap's own toolbar "Published ▾" control (React-owned
+text, describing Decap's workflow state); the collection list chip, whose
+facts carry no `publishedBefore`; and the posts list's "Published" / "Drafts"
+view filters. `e2e/entry-status-model-intent.test.js` locks the rest.
 
 ## 4. Staged plan
 

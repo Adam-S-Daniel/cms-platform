@@ -111,10 +111,10 @@ collections:
         widget: image
         required: false
       - name: published
-        label: Published
+        label: Show on site
         widget: boolean
         default: false
-        hint: "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below."
+        hint: "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. While it is off, Publish saves the post but keeps it hidden — or set a Publish Date below to show it automatically later."
       - name: publish_date
         label: Publish Date
         widget: datetime
@@ -122,7 +122,7 @@ collections:
         date_format: "YYYY-MM-DD"
         time_format: "HH:mm"
         format: "YYYY-MM-DD HH:mm:ss ZZ"
-        hint: "Optional. Choose a future date and time (UTC) to publish this post automatically on {{CMS_CURRENT_HOST}}. Only honored when Published is off."
+        hint: "Optional. Choose a future date and time, in your computer's own time zone, to show this post on {{CMS_CURRENT_HOST}} automatically. Only used while Show on site is off."
       # Hidden marker for E2E/automated-test fixtures — see admin/config.yml.
       - name: test_fixture
         label: Automated test fixture
@@ -228,10 +228,10 @@ collections:
           - "^/(?!pages/$).+/$"
           - "Must start and end with a slash and name the page, e.g. /pages/about/ (not just /pages/)"
       - name: published
-        label: Published
+        label: Show on site
         widget: boolean
         default: false
-        hint: "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft."
+        hint: "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. While it is off, Publish saves the page but keeps it hidden."
       - name: body
         label: Content
         widget: markdown

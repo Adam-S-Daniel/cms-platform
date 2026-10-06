@@ -9,21 +9,26 @@ const ROOT = path.resolve(__dirname, "..");
 const ADMIN = path.join(ROOT, "theme", "admin");
 const CONFIGS = ["config.base.yml", "config-local.base.yml", "config-test.yml"];
 
+// #636: the toggle is "Show on site", and a publish with it off saves the
+// entry hidden. Publish Date is entered in the editor's own time zone (the
+// datetime widget shows local time and stores the offset, which
+// scripts/publish_scheduled_posts.py honors), not UTC.
+const TOGGLE_LABEL = "Show on site";
 const POST_PUBLISHED_HINT =
   "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. " +
-  "Leave off to keep it as a draft or schedule it with Publish Date below.";
+  "While it is off, Publish saves the post but keeps it hidden — or set a Publish Date below to show it automatically later.";
 const POST_DATE_HINT =
-  "Optional. Choose a future date and time (UTC) to publish this post automatically on {{CMS_CURRENT_HOST}}. " +
-  "Only honored when Published is off.";
+  "Optional. Choose a future date and time, in your computer's own time zone, to show this post on {{CMS_CURRENT_HOST}} automatically. " +
+  "Only used while Show on site is off.";
 const PAGE_PUBLISHED_HINT =
   "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. " +
-  "Leave off to keep it as a draft.";
+  "While it is off, Publish saves the page but keeps it hidden.";
 const CONTENT_PUBLISHED_HINT =
   "Turn on to show this content on {{CMS_CURRENT_HOST}} when you select Publish. " +
-  "Leave off to keep it as a draft or schedule it with Publish Date below.";
+  "While it is off, Publish saves it but keeps it hidden — or set a Publish Date below to show it automatically later.";
 const CONTENT_DATE_HINT =
-  "Optional. Choose a future date and time to publish this content automatically on {{CMS_CURRENT_HOST}}. " +
-  "Only honored when Published is off.";
+  "Optional. Choose a future date and time, in your computer's own time zone, to show this content on {{CMS_CURRENT_HOST}} automatically. " +
+  "Only used while Show on site is off.";
 
 class FakeStyle {
   constructor() {
@@ -276,8 +281,11 @@ test.describe("Decap publishing fields", () => {
       expect(slug.label).toBe("URL Slug");
       expect(slug.hint).toContain("{{CMS_CURRENT_HOST}}");
       expect(field(posts, "published").hint).toBe(POST_PUBLISHED_HINT);
+      expect(field(posts, "published").label).toBe(TOGGLE_LABEL);
       expect(field(posts, "publish_date").hint).toBe(POST_DATE_HINT);
+      expect(field(posts, "publish_date").hint).not.toMatch(/UTC/);
       expect(field(collection(config, "pages"), "published").hint).toBe(PAGE_PUBLISHED_HINT);
+      expect(field(collection(config, "pages"), "published").label).toBe(TOGGLE_LABEL);
     });
   }
 
@@ -285,6 +293,7 @@ test.describe("Decap publishing fields", () => {
     const library = YAML.parse(fs.readFileSync(path.join(ADMIN, "field_library.yml"), "utf8"));
     const pair = library.field_library.published_pair;
     expect(field({ fields: pair }, "published").hint).toBe(CONTENT_PUBLISHED_HINT);
+    expect(field({ fields: pair }, "published").label).toBe(TOGGLE_LABEL);
     expect(field({ fields: pair }, "publish_date").hint).toBe(CONTENT_DATE_HINT);
   });
 });

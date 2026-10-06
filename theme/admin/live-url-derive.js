@@ -85,9 +85,30 @@
     }).join("");
   }
 
+  // The `published` field's switch, by the id Decap gives it: the boolean
+  // widget passes its `<name>-field-<n>` id to the switch, which is also how
+  // its <label for> names it. One query, independent of the label text (the
+  // field is labeled "Show on site" since #636, "Published" before, and a
+  // site may still label its own field either way). null when absent.
+  var PUBLISHED_SWITCH = '[role="switch"][id^="published-field-"]';
+
+  function readPublishedSwitch() {
+    var toggle = null;
+    try {
+      toggle = document.querySelector(PUBLISHED_SWITCH);
+    } catch (e) {
+      return null;
+    }
+    return toggle && typeof toggle.getAttribute === "function"
+      ? toggle.getAttribute("aria-checked") === "true"
+      : null;
+  }
+
   // null = no Published toggle in this schema → treat as always live.
   // true / false = current toggle state.
   function readPublished() {
+    var byId = readPublishedSwitch();
+    if (byId !== null) return byId;
     var matches = [];
     var nodes = document.querySelectorAll("*");
     for (var i = 0; i < nodes.length; i++) {
@@ -97,7 +118,7 @@
         var n = el.childNodes[j];
         if (n.nodeType === 3) direct += n.textContent;
       }
-      if (/^\s*Published\s*$/i.test(direct)) matches.push(el);
+      if (/^\s*(?:Show on site|Published)\s*$/i.test(direct)) matches.push(el);
     }
     for (var k = 0; k < matches.length; k++) {
       var cur = matches[k];
@@ -157,6 +178,7 @@
     slugify: slugify,
     readField: readField,
     readPublished: readPublished,
+    readPublishedSwitch: readPublishedSwitch,
     getCollection: getCollection,
   };
 })();

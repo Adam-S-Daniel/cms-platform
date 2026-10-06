@@ -762,7 +762,9 @@ test.describe("gate-aware publishing copy (#625 item 1)", () => {
       });
       const text = doc.getElementById("cms-publish-state-text").textContent;
       expect(text).not.toMatch(/coming-soon/);
-      expect(text).toMatch(/Click Publish to put it/);
+      // The fallback says "them" (your saved changes) since #636: a draft can
+      // be an edit to an entry already on the site.
+      expect(text).toMatch(/Click Publish to put (it|them)/);
     });
 
     test(`${kind} confirmation says the same when gated, and is unchanged when not`, () => {
