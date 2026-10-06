@@ -97,6 +97,30 @@ test.describe("/admin/reviews/ superseded runs", { tag: ["@admin-read"] }, () =>
     expect(writes).toEqual([]);
   });
 
+  for (const status of [403, 404]) {
+    test(`a PR read that answers ${status} keeps every run's card (no head to compare)`, async ({ page }) => {
+      const writes = await installMocks(page, {
+        runs: [vrRun(CURRENT_RUN, CURRENT_SHA), vrRun(STALE_RUN, STALE_SHA)],
+        prHead: CURRENT_SHA,
+      });
+      // Registered after installMocks, so it wins for this one path: a rate
+      // limit (403) or an invisible PR (404) returns JSON with no `head`.
+      await page.route(new RegExp(`^https://api\\.github\\.com/repos/.*/pulls/${PR_NUMBER}$`), (route) =>
+        route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ message: "nope" }) }),
+      );
+
+      await page.goto("/admin/reviews/");
+      await expect(page.locator("#dashboard")).toBeVisible();
+      const cards = page.locator(`.review-card[data-pr-num="${PR_NUMBER}"]`);
+      await expect(cards).toHaveCount(2);
+      await expect(cards.nth(0)).toHaveAttribute("data-run-id", String(CURRENT_RUN));
+      await expect(cards.nth(1)).toHaveAttribute("data-run-id", String(STALE_RUN));
+      await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(2);
+      await expect(page.locator(".superseded-note")).toHaveCount(0);
+      expect(writes).toEqual([]);
+    });
+  }
+
   test("header buttons keep their labels on one line", async ({ page }) => {
     await installMocks(page, { runs: [], prHead: CURRENT_SHA });
     await page.goto("/admin/reviews/");
