@@ -395,6 +395,14 @@
     [class*="EditorContainer"] {
       overflow: visible !important;
     }
+    /* Decap's own app header is `position: sticky`. With body no longer a
+     * scroll container (above) it would pin to the top of every collection
+     * list screen too (~100px of fixed chrome, 127px at 320px); on main it
+     * scrolled away with the page. Keep that: the header only exists on the
+     * list and login screens, the editor has none. */
+    header[class*="AppHeader"] {
+      position: static !important;
+    }
     [class*="EditorContainer"] > [class*="ToolbarContainer"] {
       position: sticky !important;
       top: 0;
@@ -425,6 +433,20 @@
     [class*="EditorContainer"] > [class*="ToolbarContainer"] button,
     [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarDropdown"] {
       margin: 0 !important;
+    }
+    /* index-local.html pins the commit / platform pills at top 60px / 91px,
+     * right 12px (z-index 10000): over the stuck button row, covering the
+     * right end of Delete. Stack them above the floating Live Preview link
+     * instead (bottom-right, as index.html does; `:not([style*="bottom"])`
+     * leaves the production shell's pills, which already set `bottom`,
+     * alone). */
+    #cms-platform-pill:not([style*="bottom"]) {
+      top: auto !important;
+      bottom: 4.25rem;
+    }
+    #cms-commit-pill:not([style*="bottom"]) {
+      top: auto !important;
+      bottom: 6rem;
     }
   }
 }
