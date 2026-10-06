@@ -150,8 +150,32 @@ function isTestFixturePost(frontMatter, { filename, urlSlug } = {}) {
   return false;
 }
 
+// The path Jekyll serves a post at (`permalink: /blog/:slug/`): a front-matter
+// `permalink:` (with `:slug` expanded, a leading `/` added) wins; otherwise
+// `:slug` is the front-matter `slug:` slugified, else the file name minus its
+// `YYYY-MM-DD-` prefix. null when the address cannot be worked out here (a
+// permalink with a placeholder other than `:slug`). `fileSlug` is the `_posts/`
+// basename without `.md`; `frontMatter` is parseFrontMatterText's map.
+// The Node twin of admin/posts-list-enhance.js urlPath — drift-locked by
+// e2e/posts-list-preview-host.test.js.
+function postPublicPath(fileSlug, frontMatter) {
+  const fm = frontMatter || {};
+  const slug =
+    slugify(String(fm.slug ?? "").trim()) ||
+    slugify(String(fileSlug ?? "").replace(/^\d{4}-\d{2}-\d{2}-/, ""));
+  const permalink = String(fm.permalink ?? "").trim();
+  if (permalink) {
+    if (/:(?!slug(?![A-Za-z0-9_]))[A-Za-z_]/.test(permalink)) return null;
+    let expanded = permalink.replace(/:slug(?![A-Za-z0-9_])/g, slug);
+    if (!expanded.startsWith("/")) expanded = `/${expanded}`;
+    return expanded.replace(/\/{2,}/g, "/");
+  }
+  return slug ? `/blog/${slug}/` : null;
+}
+
 module.exports = {
   slugify,
+  postPublicPath,
   parseFrontMatter,
   parseFrontMatterText,
   isPublished,

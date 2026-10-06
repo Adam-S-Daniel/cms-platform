@@ -169,9 +169,10 @@
   }
 
   // The path a post is served at, by Jekyll's rules (`permalink: /blog/:slug/`):
-  //   1. a front-matter `permalink:` is the URL, with `:slug` expanded. Any
-  //      other placeholder (`:year`, `:categories`, ...) is not reproduced
-  //      here, so such a permalink is ignored rather than guessed at.
+  //   1. a front-matter `permalink:` is the URL, with `:slug` expanded (and a
+  //      leading `/` added, as Jekyll does). Any other placeholder (`:year`,
+  //      `:categories`, ...) is not reproduced here, so the address is
+  //      UNKNOWN: null, and the list shows no link rather than a guessed one.
   //   2. otherwise `:slug` is the front-matter `slug:` run through Jekyll's
   //      slugify (Drops::UrlDrop#slug), and only when that is empty the
   //      file name minus its date prefix. A post whose `slug:` differs from
@@ -180,12 +181,16 @@
   // `fmSlug`/`fmPermalink` come off the card (collectCards), where the summary
   // template carries them (see splitSummary). A card without them — Decap
   // gave no front matter — falls back to the file name.
+  // e2e/public-content.js postPublicPath is the Node twin; the two are
+  // drift-locked by e2e/posts-list-preview-host.test.js.
   function urlPath(card) {
     var slug = slugifyUrl(String((card && card.fmSlug) || "").trim()) || urlSlug(card && card.slug);
     var permalink = String((card && card.fmPermalink) || "").trim();
-    if (permalink.charAt(0) === "/" && !/:(?!slug(?![A-Za-z0-9_]))[A-Za-z_]/.test(permalink)) {
+    if (permalink) {
+      if (/:(?!slug(?![A-Za-z0-9_]))[A-Za-z_]/.test(permalink)) return null;
       var expanded = permalink.replace(/:slug(?![A-Za-z0-9_])/g, slug);
-      if (expanded.indexOf("//") === -1) return expanded;
+      if (expanded.charAt(0) !== "/") expanded = "/" + expanded;
+      return expanded.replace(/\/{2,}/g, "/");
     }
     return slug ? "/blog/" + slug + "/" : null;
   }
@@ -248,6 +253,27 @@
     return splitSummary(text).text.replace(SUMMARY_SUFFIX_RE, "").trim();
   }
 
+  // The heading that holds a card's summary. Decap's global search renders each
+  // result as <h2>Posts</h2> (the collection label) then the title <h2>, so it
+  // is the LAST heading, not the first.
+  function titleHeading(a) {
+    var hs = a.querySelectorAll("h2");
+    return hs.length ? hs[hs.length - 1] : null;
+  }
+
+  // The text node that holds the summary. Decap 3.15.1 renders the card
+  // heading as [summary text, <TitleIcons>] — two children — so it is the
+  // first TEXT child, never "the only child". Its nodeValue is the summary
+  // alone: h2.textContent also carries the workflow badge text ("In review").
+  function summaryNode(h2) {
+    var kids = h2 && h2.childNodes;
+    if (!kids) return null;
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i] && kids[i].nodeType === 3) return kids[i];
+    }
+    return null;
+  }
+
   // Remove the suffix from the card's visible title in place, remembering
   // the raw summary on the anchor so a later pass (the title text no longer
   // carries the suffix) still reads the original state. React only rewrites
@@ -257,10 +283,24 @@
     var prev = a.__plePrev;
     var raw = prev && current === prev.stripped ? prev.raw : current;
     var stripped = stripSummarySuffix(raw);
-    var node = h2 && h2.childNodes && h2.childNodes.length === 1 ? h2.childNodes[0] : null;
-    if (node && node.nodeType === 3 && node.nodeValue !== stripped) node.nodeValue = stripped;
+    var node = summaryNode(h2);
+    if (node && node.nodeValue !== stripped) node.nodeValue = stripped;
     a.__plePrev = { raw: raw, stripped: stripped };
     return raw;
+  }
+
+  // Every other route that lists posts — Decap's global search
+  // (`#/search/<q>`) renders the same cards — gets no dashboard, so there
+  // the status suffix stays (nothing else says DRAFT) and only the carried
+  // front matter, which is data and not copy, comes off.
+  function hideCarrierOutsideList() {
+    var anchors = document.querySelectorAll('a[href*="#/collections/posts/entries/"]');
+    for (var i = 0; i < anchors.length; i++) {
+      var node = summaryNode(titleHeading(anchors[i]));
+      if (!node) continue;
+      var at = node.nodeValue.indexOf(CARRIER);
+      if (at !== -1) node.nodeValue = node.nodeValue.slice(0, at).replace(/\s+$/, "");
+    }
   }
 
   // The post's front-matter `date:` calendar day (`2026-05-13 08:51 -0400`
@@ -303,11 +343,12 @@
         slug = m[1];
       }
       var li = a.closest("li") || a.parentElement;
-      var h2 = a.querySelector("h2");
+      var h2 = titleHeading(a);
+      var textNode = summaryNode(h2);
       var summaryText = hideSummarySuffix(
         a,
         h2,
-        (h2 ? h2.textContent : a.textContent || "").trim(),
+        (textNode ? textNode.nodeValue : h2 ? h2.textContent : a.textContent || "").trim(),
       );
       // Title is only used for fixture detection (leading-anchored), so
       // stripping the trailing status suffix is enough — there's no
@@ -1089,17 +1130,21 @@
             '">draft — open to preview</span>',
         );
       } else if (card.state.live) {
-        bits.push(
-          '<a href="https://preview-pr' +
-            esc(pr.number) +
-            "." +
-            window.CMS_APEX +
-            esc(urlPath(card)) +
-            '" target="_blank" rel="noopener" title="Per-PR preview ' +
-            "environment for the unmerged draft (open PR #" +
-            esc(pr.number) +
-            ')">preview draft ↗</a>',
-        );
+        // An address the list cannot work out (urlPath → null) gets no link.
+        var previewPath = urlPath(card);
+        if (previewPath) {
+          bits.push(
+            '<a href="https://preview-pr' +
+              esc(pr.number) +
+              "." +
+              window.CMS_APEX +
+              esc(previewPath) +
+              '" target="_blank" rel="noopener" title="Per-PR preview ' +
+              "environment for the unmerged draft (open PR #" +
+              esc(pr.number) +
+              ')">preview draft ↗</a>',
+          );
+        }
       } else {
         bits.push(
           '<span style="color:#8c959f" title="Set Published to ON to ' +
@@ -1262,7 +1307,10 @@
 
   function augment() {
     hideE2EQuickAdd();
-    if (!isPostsListRoute()) return;
+    if (!isPostsListRoute()) {
+      hideCarrierOutsideList();
+      return;
+    }
     var cards = collectCards();
     if (!cards.length) return;
     ensureStyle();
@@ -1307,8 +1355,14 @@
   // circuits, so an already-correct order produces no DOM mutation
   // and no observer re-fire. Full augment (decorate, ensureBar) keeps
   // its rAF debounce.
+  // The same pre-pass takes the carried front matter off a card title on
+  // global search before the browser paints it. Only there: any other route
+  // does no work inline (e2e/admin-hidden-tab.test.js).
   function syncFixtureReorder() {
-    if (!isPostsListRoute()) return;
+    if (!isPostsListRoute()) {
+      if (/^#\/search\//.test(window.location.hash || "")) hideCarrierOutsideList();
+      return;
+    }
     var cards = collectCards();
     if (cards.length) reorderFixturesLast(cards);
   }
@@ -1324,6 +1378,7 @@
     collectCards: collectCards,
     urlPath: urlPath,
     hideSummarySuffix: hideSummarySuffix,
+    hideCarrierOutsideList: hideCarrierOutsideList,
     frontMatterDate: frontMatterDate,
     fetchLastEdited: fetchLastEdited,
     fetchOpenPrBySlug: fetchOpenPrBySlug,

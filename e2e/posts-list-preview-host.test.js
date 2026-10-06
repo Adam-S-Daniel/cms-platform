@@ -269,9 +269,20 @@ test.describe("posts-list-enhance.js public URL follows the front matter, as Jek
     );
   });
 
-  test("a permalink using a placeholder the list does not reproduce is ignored, not guessed", () => {
-    expect(publishedHref({ fmPermalink: "/:year/:slug/", fmSlug: FM_SLUG })).toBe(`${PROD_ORIGIN}/blog/${FM_SLUG}/`);
-    expect(publishedHref({ fmPermalink: "not-absolute/", fmSlug: FM_SLUG })).toBe(`${PROD_ORIGIN}/blog/${FM_SLUG}/`);
+  test("a permalink using a placeholder the list does not reproduce gets no link, not a guessed one", () => {
+    expect(publishedHref({ fmPermalink: "/:year/:slug/", fmSlug: FM_SLUG })).toBeNull();
+    expect(publishedHref({ fmPermalink: "/:categories/post/" })).toBeNull();
+    const { hook } = load({ withLiveUrl: true });
+    expect(hook.urlPath({ slug: FILE_SLUG, fmSlug: FM_SLUG, fmPermalink: "/:year/:slug/" })).toBeNull();
+    // ...and a draft's per-PR preview link is left out too.
+    const pr = { number: 42, url: "https://github.com/owner/repo/pull/42", previewOnly: false };
+    const html = render(hook, pr, { slug: FILE_SLUG, fmPermalink: "/:year/:slug/" });
+    expect(html).not.toContain("preview draft");
+    expect(html).not.toContain("Published OFF");
+  });
+
+  test("a permalink without a leading slash is served from the root, as Jekyll does", () => {
+    expect(publishedHref({ fmPermalink: "essays/custom/" })).toBe(`${PROD_ORIGIN}/essays/custom/`);
   });
 
   test("the draft's per-PR preview link and the not-yet-live label use the same path", () => {
@@ -292,21 +303,27 @@ test.describe("posts-list-enhance.js public URL follows the front matter, as Jek
 test.describe("posts-list-enhance.js reads the front matter off the summary", () => {
   const SEP = "⁣";
 
-  function anchor(summary, slug = FILE_SLUG) {
+  // Decap 3.15.1 renders the card heading as [summary text, <TitleIcons>]: two
+  // children, with the workflow badge text ("In review") inside the second.
+  // h2.textContent therefore is NOT the summary. A global-search result also
+  // puts the collection label ("Posts") in an <h2> BEFORE the title's.
+  function anchor(summary, slug = FILE_SLUG, { badge = "", search = false } = {}) {
     const text = { nodeType: 3, nodeValue: summary };
-    const h2 = {
-      textContent: summary,
-      childNodes: [text],
-    };
-    Object.defineProperty(h2, "textContent", { get: () => text.nodeValue });
+    const icons = { nodeType: 1, textContent: badge };
+    const h2 = { childNodes: [text, icons] };
+    Object.defineProperty(h2, "textContent", { get: () => text.nodeValue + icons.textContent });
+    const label = { childNodes: [{ nodeType: 3, nodeValue: "Posts" }] };
+    const headings = search ? [label, h2] : [h2];
     const li = {};
     return {
       getAttribute: () => `#/collections/posts/entries/${slug}`,
       closest: () => li,
-      querySelector: (sel) => (sel === "h2" ? h2 : null),
-      textContent: summary,
+      querySelector: (sel) => (sel === "h2" ? headings[0] : null),
+      querySelectorAll: (sel) => (sel === "h2" ? headings : []),
+      textContent: h2.textContent,
       h2,
       text,
+      label,
     };
   }
 
@@ -342,6 +359,37 @@ test.describe("posts-list-enhance.js reads the front matter off the summary", ()
     expect(c.state.label).toBe("Scheduled");
   });
 
+  test("the visible title loses the tail and the DRAFT suffix with the 2-child heading too", () => {
+    const a = anchor(`Quoting Simon — DRAFT${SEP}${FM_SLUG}${SEP}`);
+    const { hook } = load({ anchors: [a] });
+    hook.collectCards();
+    expect(a.text.nodeValue).toBe("Quoting Simon");
+    expect(a.h2.textContent).not.toContain(SEP);
+    expect(a.h2.textContent).not.toContain(FM_SLUG);
+    // A second pass (Decap has not re-rendered) keeps the state it read.
+    const [c] = hook.collectCards();
+    expect(c.state.label).toBe("Draft");
+    expect(c.fmSlug).toBe(FM_SLUG);
+  });
+
+  test("the tail is read from the summary text node, not h2.textContent (a workflow badge cannot leak into the permalink)", () => {
+    const a = anchor(`Hello${SEP}${FM_SLUG}${SEP}`, FILE_SLUG, { badge: "In review" });
+    const { hook } = load({ anchors: [a] });
+    const [c] = hook.collectCards();
+    expect(c.fmPermalink).toBe("");
+    expect(c.fmSlug).toBe(FM_SLUG);
+  });
+
+  test("outside the posts list (global search) the tail comes off and the DRAFT suffix stays", () => {
+    const a = anchor(`Quoting Simon — DRAFT${SEP}${FM_SLUG}${SEP}/x/`, FILE_SLUG, { search: true });
+    const b = anchor("Plain title", FILE_SLUG, { search: true });
+    const { hook } = load({ anchors: [a, b] });
+    hook.hideCarrierOutsideList();
+    expect(a.text.nodeValue).toBe("Quoting Simon — DRAFT");
+    expect(a.label.childNodes[0].nodeValue).toBe("Posts");
+    expect(b.text.nodeValue).toBe("Plain title");
+  });
+
   test("the posts summary in config.base.yml writes the tail in the layout the list reads", () => {
     const YAML = require("yaml");
     const cfg = YAML.parse(fs.readFileSync(CONFIG_BASE, "utf8"));
@@ -354,4 +402,27 @@ test.describe("posts-list-enhance.js reads the front matter off the summary", ()
     const { hook } = load();
     expect(hook.splitSummary(rendered)).toEqual({ text: "T", slug: FM_SLUG, permalink: "/p/" });
   });
+});
+
+test.describe("posts-list-enhance.js urlPath is drift-locked to e2e/public-content.js postPublicPath", () => {
+  const { postPublicPath } = require("./public-content");
+  const cases = [
+    ["2026-09-28-hello", {}],
+    ["2026-09-28-hello", { slug: FM_SLUG }],
+    ["2026-09-28-hello", { slug: "  Bad Slug! (Take 2)  " }],
+    ["2026-09-28-hello", { slug: "" }],
+    ["2026-05-28-quoting-\"somewhat-less-robust\"", {}],
+    ["2026-09-28-hello", { permalink: "/essays/custom/" }],
+    ["2026-09-28-hello", { permalink: "/essays/:slug/", slug: "My Essay" }],
+    ["2026-09-28-hello", { permalink: "essays/custom/" }],
+    ["2026-09-28-hello", { permalink: "/:year/:slug/" }],
+    ["2026-09-28-hello", { permalink: "/:slugs/" }],
+  ];
+  for (const [fileSlug, fm] of cases) {
+    test(`${fileSlug} ${JSON.stringify(fm)}`, () => {
+      const { hook } = load({ withLiveUrl: true });
+      const card = { slug: fileSlug, fmSlug: fm.slug, fmPermalink: fm.permalink };
+      expect(hook.urlPath(card)).toBe(postPublicPath(fileSlug, fm));
+    });
+  }
 });
