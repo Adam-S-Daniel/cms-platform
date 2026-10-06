@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+{%- comment -%}
+  A SITE-OWNED home layout with no parent, the shape of jodidaniel.com's
+  _layouts/home.html: `/` renders through this file, never the theme's
+  default.html, so it has none of the theme's header, footer, skip link,
+  main.css or glow. The fixture-e2e public lane runs the public specs against
+  it (#702), so a theme spec that assumes the theme's markup on every site's
+  `/` fails in platform CI instead of on a consumer's platform-bump PR.
+  Like jodidaniel.com's (assets/css/jodidaniel.css), the body carries a 135deg
+  linear gradient with a faint fractal-noise dither, and the content sits in
+  `.site-wrapper`: glow-banding.spec.js hides that wrapper and samples the
+  background, and it runs on a site-owned home too.
+{%- endcomment -%}
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ site.title }}</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, sans-serif;
+      line-height: 1.5;
+      background: linear-gradient(135deg, #1a3a5c 0%, #2d5a7b 25%, #3d7a9c 50%, #4a8dad 75%, #5ba0be 100%);
+    }
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.035;
+      pointer-events: none;
+      z-index: -1;
+    }
+    .site-wrapper { margin: 0 auto; max-width: 40rem; padding: 2rem 1rem; background: #fff; }
+  </style>
+</head>
+<body>
+  <div class="site-wrapper">
+    <main>
+      {{ content }}
+    </main>
+  </div>
+</body>
+</html>

@@ -34,6 +34,7 @@ function load({
   const frames = [];
   const subscribers = [];
   const session = {};
+  const windowListeners = {};
   if (cachedPr != null) {
     session["cms-live-url-pr-cache-v1"] = JSON.stringify({ at: Date.now(), data: { [SLUG]: cachedPr } });
     session["cms-ple-remote-cache-v1"] = JSON.stringify({
@@ -54,7 +55,7 @@ function load({
     },
     LiveURL: data ? { compute: () => data } : undefined,
     location: { hash: `#/collections/posts/entries/${SLUG}`, origin: access },
-    addEventListener() {},
+    addEventListener: (type, fn) => { windowListeners[type] = fn; },
   };
   if (poller) {
     window.CMSPublishProgress = {
@@ -71,7 +72,7 @@ function load({
       body: {},
       readyState: "complete",
       addEventListener() {},
-      getElementById: (id) => id === "cms-live-url" ? banner : null,
+      getElementById: (id) => id === "cms-live-url" ? (typeof banner === "function" ? banner() : banner) : null,
       querySelector: () => null,
       querySelectorAll: () => [],
     },
@@ -94,7 +95,7 @@ function load({
   expect(hook && typeof hook.previewAwareURL, "live-url-banner.js must expose previewAwareURL for tests").toBe(
     "function",
   );
-  return { hook, subscribers, render: () => frames.splice(0).forEach((fn) => fn()) };
+  return { hook, subscribers, hashchange: () => windowListeners.hashchange(), render: () => frames.splice(0).forEach((fn) => fn()) };
 }
 
 const snap = (prNumber, slug = SLUG) => ({
@@ -159,6 +160,19 @@ test("live banner names the actual per-PR preview URL rather than the publicatio
   render();
   expect(banner.innerHTML).toContain("View page on preview-pr42.example.com:");
   expect(banner.innerHTML).toContain('href="https://preview-pr42.example.com/blog/hello/"');
+});
+
+test("a fresh banner element gets the markup even when it is identical to the last render (#641)", () => {
+  // Decap remounts the form on /new -> /entries/<slug>; the old node is
+  // discarded and ensureBanner() returns a new, empty one.
+  let current = { style: {}, innerHTML: "" };
+  const { render, hashchange } = load({ banner: () => current, data: { published: false, url: null } });
+  render();
+  expect(current.innerHTML).toContain("Not yet published.");
+  current = { style: {}, innerHTML: "" };
+  hashchange();
+  render();
+  expect(current.innerHTML).toContain("Not yet published.");
 });
 
 // #642: a draft saved on a preview admin opens a PR whose base is the

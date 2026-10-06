@@ -93,6 +93,14 @@ jobs:
           ref: ${{ inputs.platform_ref }}
           path: .cms-platform
 
+      # Pinned: the cms-recursion-gate composite runs node (ubuntu-latest's
+      # default Node moves from 22 to 24 with Ubuntu 26.04,
+      # actions/runner-images#14748).
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
       - name: Recursion gate
         id: gate
         uses: ./.cms-platform/.github/actions/cms-recursion-gate
@@ -195,7 +203,12 @@ jobs:
       # path-filtered required check (adamdaniel.ai#1861). Idempotent +
       # FAIL-OPEN: a clean repo / missing PAT (forks, Dependabot) / API
       # hiccup is a no-op and never breaks the loop.
+      #
+      # On main it also sweeps `_tags/` for e2e tags a tags lifecycle run
+      # left behind (#689) and reports the count as `leftover_e2e_tags`,
+      # which the last step of this job fails on.
       - name: Self-heal orphaned canary markers
+        id: self-heal
         env:
           CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
         run: ./.cms-platform/scripts/reset-orphaned-canary.sh
@@ -345,3 +358,20 @@ jobs:
             done
           done
           echo "::notice::Cleanup complete (fail-open)"
+
+      # #689: an e2e tag on main is live on the public site, so a leftover
+      # fails this daily run (scheduled-run-health turns that into an issue)
+      # even though the self-heal above already opened its removal PR. Runs
+      # last and on always() so the loop's own result is still recorded;
+      # skipped when the self-heal did not report (no PAT, fail-open exit).
+      - name: Fail on leftover e2e tags on main
+        if: ${{ always() && steps.self-heal.outputs.leftover_e2e_tags != '' && steps.self-heal.outputs.leftover_e2e_tags != '0' }}
+        env:
+          LEFTOVER: ${{ steps.self-heal.outputs.leftover_e2e_tags }}
+        run: |
+          if [ "${LEFTOVER}" = "error" ]; then
+            echo "::error::Could not check _tags/ on main for leftover e2e tags (see the self-heal step's log)."
+          else
+            echo "::error::${LEFTOVER} leftover e2e tag file(s) on main; see the self-heal step's log for paths and removal PRs."
+          fi
+          exit 1

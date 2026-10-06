@@ -134,10 +134,66 @@ run('nil and empty post tag lists are tolerated') do
         'expected missing to be an Array',)
 end
 
+run('tags differing only in case are one tag: one row, one missing name, combined count (#754)') do
+  posts = [['quotes'], ['Quotes'], ['Quotes', 'RAG']]
+  missing, all = Jekyll::AutoTagPages.summarise(
+    curated: [], post_tag_lists: posts, slugify: SLUGIFY,
+  )
+  check(all.map { |t| t['slug'] } == ['quotes', 'rag'],
+        "expected one row per slug, got #{all.inspect}",)
+  quotes = all.find { |t| t['slug'] == 'quotes' }
+  check(quotes['count'] == 3, "expected combined count=3, got #{quotes['count']}")
+  check(quotes['url'] == '/tags/quotes/', "expected /tags/quotes/, got #{quotes['url']}")
+  check(missing.sort == ['Quotes', 'RAG'],
+        "expected ONE missing name per slug (one page to mint), got #{missing.inspect}",)
+end
+
+run('display name: the most-used spelling, a tie going to the one seen first (#754)') do
+  most_used = Jekyll::AutoTagPages.summarise(
+    curated: [], post_tag_lists: [['quotes'], ['Quotes'], ['Quotes']], slugify: SLUGIFY,
+  ).last.first['name']
+  check(most_used == 'Quotes', "expected the most-used spelling Quotes, got #{most_used.inspect}")
+  tie = Jekyll::AutoTagPages.summarise(
+    curated: [], post_tag_lists: [['quotes'], ['Quotes']], slugify: SLUGIFY,
+  ).last.first['name']
+  check(tie == 'quotes', "expected the first-seen spelling on a tie, got #{tie.inspect}")
+end
+
+run('a curated name wins the display name and its slug is never missing (#754)') do
+  curated = [{ 'name' => 'Release', 'description' => 'Ships' }]
+  missing, all = Jekyll::AutoTagPages.summarise(
+    curated: curated, post_tag_lists: [['release'], ['release']], slugify: SLUGIFY,
+  )
+  check(missing.empty?, "the _tags/ entry already serves the slug, got missing=#{missing.inspect}")
+  check(all.size == 1 && all.first['name'] == 'Release' && all.first['count'] == 2,
+        "expected one Release row with count=2, got #{all.inspect}",)
+  check(all.first['description'] == 'Ships',
+        "expected the entry's description, got #{all.first['description'].inspect}",)
+end
+
+run('a post carrying both spellings counts once (#754)') do
+  _missing, all = Jekyll::AutoTagPages.summarise(
+    curated: [], post_tag_lists: [['quotes', 'Quotes']], slugify: SLUGIFY,
+  )
+  check(all.size == 1 && all.first['count'] == 1, "expected one row, count=1, got #{all.inspect}")
+end
+
+run('posts_by_slug lists each post once under every slug it carries, in order (#754)') do
+  doc = Struct.new(:data)
+  a = doc.new({ 'tags' => ['quotes'] })
+  b = doc.new({ 'tags' => ['Quotes', 'quotes', 'RAG'] })
+  c = doc.new({})
+  index = Jekyll::AutoTagPages.posts_by_slug([a, b, c], slugify: SLUGIFY)
+  check(index.keys == ['quotes', 'rag'], "expected quotes + rag, got #{index.keys.inspect}")
+  check(index['quotes'].equal?(index['quotes']) && index['quotes'] == [a, b],
+        'expected [a, b] under quotes, each once',)
+  check(index['rag'] == [b], 'expected [b] under rag')
+end
+
 # ── result ─────────────────────────────────────────────────────────────────
 
 if @failures.empty?
-  puts 'auto_tag_pages: all 8 checks passed'
+  puts 'auto_tag_pages: all 13 checks passed'
 else
   warn "auto_tag_pages: #{@failures.length} failure(s)"
   @failures.each { |m| warn "  - #{m}" }

@@ -34,6 +34,14 @@ PRs (`cms/<col>/<entry>` branches), a draft-cycle-stable `cms-<slug>/` alias.
 Registers the `deploy/preview` commit status Decap's editor reads, plus GH
 Deployment rows. Posts/refreshes a single marker-tagged PR comment.
 
+A Decap editorial PR's preview is built with `jekyll build --unpublished`
+(#637), so a new draft saved with Published OFF (`published: false`) renders at
+its real URL on `preview-pr<N>.<apex>`, and appears in that preview's listings,
+feeds and sitemap, as does any other `published: false` entry already on the
+base branch. Every other PR's preview, and production, keep Jekyll's default:
+`published: false` entries are not built. Preview responses carry
+`X-Robots-Tag: noindex, nofollow`.
+
 Because the helper scripts (`cms-preview-slug.sh`, `patch-preview-config.sh`)
 are platform-owned and absent from the site repo, this workflow checks the
 platform repo out into `.cms-platform/` (a dot-dir Jekyll ignores). **Pin

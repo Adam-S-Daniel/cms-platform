@@ -278,11 +278,19 @@
   // every `banner.innerHTML = …` write and schedule another render,
   // detaching the anchor mid-click and producing a "click → element
   // detached" flake against the very thing this banner is for.
+  // The cache belongs to ONE banner element: Decap unmounts the form on a
+  // /new -> /entries/<slug> route change, so ensureBanner() builds a fresh,
+  // empty node and an identical nextHTML must still be written into it.
   var lastHTML = null;
+  var lastBanner = null;
 
   function render() {
     var banner = ensureBanner();
     if (!banner) return;
+    if (banner !== lastBanner) {
+      lastBanner = banner;
+      lastHTML = null;
+    }
     var data = compute();
     if (!data) {
       if (banner.style.display !== "none") banner.style.display = "none";
@@ -346,15 +354,26 @@
     }
   }
 
+  // requestAnimationFrame never fires in a background tab, so a pass scheduled
+  // there, or scheduled just before the tab went to the back, waited until the
+  // editor returned (#644). A hidden tab paints nothing, so the next task is
+  // as good as the next frame; `pending` makes whichever runs first the only
+  // pass.
   var pending = false;
+  function runRender() {
+    if (!pending) return;
+    pending = false;
+    render();
+  }
   function scheduleRender() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () {
-      pending = false;
-      render();
-    });
+    if (document.hidden) setTimeout(runRender, 0);
+    else requestAnimationFrame(runRender);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) runRender();
+  });
 
   // Mutations re-render the banner when the form mounts / fields update.
   new MutationObserver(scheduleRender).observe(document.body, {

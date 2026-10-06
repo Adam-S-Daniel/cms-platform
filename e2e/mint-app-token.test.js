@@ -17,6 +17,9 @@
 //     CMS-context skip named the wrong knobs — the v0.1.76 rule is that the
 //     notice must let "never onboarded" be told from "misconfigured", and a
 //     wrong name defeats that. Each caller pre-checks and names its own.
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
@@ -69,6 +72,39 @@ test.describe("scripts/mint-app-token.js (#172, #238)", () => {
     });
     expect(code, out).toBe(1);
     expect(out).toMatch(/::error::Could not mint/);
+  });
+
+  test("a malformed access_tokens body never reaches the ::error:: line", () => {
+    // That body IS the token, and the error is logged before ::add-mask::.
+    // fetch is stubbed by a preload: the installation lookup answers JSON,
+    // the mint answers a short non-JSON body that a JSON SyntaxError would
+    // quote in full.
+    const LEAK = "ghs_leak.example";
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mint-app-token-"));
+    try {
+      const preload = path.join(tmp, "stub-fetch.js");
+      fs.writeFileSync(
+        preload,
+        `globalThis.fetch = async (url) => /access_tokens/.test(url)
+          ? new Response(${JSON.stringify(LEAK)}, { status: 201 })
+          : new Response('{"id":1}', { status: 200 });\n`,
+      );
+      const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+      const { code, out } = run(
+        ["--owner", "o", "--repo", "r", "--permissions", "contents=read"],
+        {
+          APP_CLIENT_ID: "Iv1.deadbeef",
+          APP_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }),
+          GITHUB_API_URL: "https://api.example.com",
+          NODE_OPTIONS: `--require ${preload}`,
+        },
+      );
+      expect(out).not.toContain(LEAK);
+      expect(code, out).toBe(1);
+      expect(out).toMatch(/::error::Could not mint.*access_tokens -> HTTP 201, body is not JSON/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   test("--permissions is mandatory and must be key=value pairs", () => {

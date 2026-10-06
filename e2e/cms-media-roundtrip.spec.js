@@ -71,8 +71,8 @@
  * the flat media_folder resolves on a local Jekyll build. This spec proves
  * it on the REAL production site through the REAL GitHub backend and the
  * REAL deploy pipeline, including the standalone Media library's delete
- * path. The Contents-API afterAll safety net is test-harness HYGIENE
- * (existence-only delete of a leftover post/upload), not the behaviour
+ * path. The afterAll safety net is test-harness HYGIENE (existence-only
+ * removal PRs for a leftover post/upload), not the behavior
  * under test — see AGENTS.md's harness-hygiene carve-out.
  *
  * Gating:
@@ -92,7 +92,12 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { closeStaleDecapPrOnBranch, removeFixtureViaPr } = require("./cms-fixture-pr");
+const {
+  closeStaleDecapPrOnBranch,
+  closeOpenPrsAddingFile,
+  readFileOnRef,
+  removeFixtureViaPr,
+} = require("./cms-fixture-pr");
 const {
   addLabel,
   gh,
@@ -117,7 +122,12 @@ const {
   openMediaLibrary,
   closeMediaLibrary,
 } = require("./cms-editor-ui");
-const { EPHEMERAL_DATE, missingTestPostMarkers, buildMediaRoundtripPost } = require("./prod-mutate-fixture");
+const {
+  EPHEMERAL_DATE,
+  missingTestPostMarkers,
+  buildMediaRoundtripPost,
+  mediaUploadRemovalSlug,
+} = require("./prod-mutate-fixture");
 
 // Parameterized target: CMS_TARGET=preview (+ PR_NUMBER) drives the PR's
 // preview-pr<N> surface; anything else keeps the prod default, so the
@@ -171,32 +181,20 @@ test.describe.configure({
 let pendingFixture = null;
 
 async function fileExistsOnMain(filePath) {
-  try {
-    await gh(`/repos/${HOST_REPO}/contents/${encodeURI(filePath)}?ref=main`);
-    return true;
-  } catch (e) {
-    if (/\b404\b/.test(String(e.message))) return false;
-    throw e;
-  }
+  return (await readFileOnRef({ ref: "main", filePath: encodeURI(filePath) })) !== null;
 }
 
-// Best-effort: delete a media file from main via the Contents API. Only
-// used by the afterAll safety net to remove a per-run upload the UI delete
-// leg didn't manage to remove. Never part of the behaviour under test.
-async function deleteFileFromMainIfPresent(filePath, message) {
-  let current;
-  try {
-    current = await gh(`/repos/${HOST_REPO}/contents/${encodeURI(filePath)}?ref=main`);
-  } catch (e) {
-    if (e && e.status === 404) return false; // already gone — good
-    throw e;
+function logInFlight(inFlightPath, { closed, merged }) {
+  if (closed.length > 0) {
+    console.warn(
+      `[cleanup-harness] closed in-flight PR(s) ${closed.map((n) => `#${n}`).join(", ")} still adding ${inFlightPath}`,
+    );
   }
-  await gh(`/repos/${HOST_REPO}/contents/${encodeURI(filePath)}`, {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, sha: current.sha, branch: "main" }),
-  });
-  return true;
+  if (merged.length > 0) {
+    console.warn(
+      `[cleanup-harness] PR(s) ${merged.map((n) => `#${n}`).join(", ")} merged ${inFlightPath} before the close took effect`,
+    );
+  }
 }
 
 test(
@@ -723,10 +721,10 @@ test(
 // DELETE legs ARE the cleanup. If the test completed, the post + upload
 // are gone and the harness no-ops. If the test threw mid-flow, remove a
 // leftover ephemeral post (via a labelled removal PR — same auto-merge
-// path) and any leftover per-run upload (direct Contents-API delete). A
+// path) and any leftover per-run upload (its own removal PR, #697). A
 // failure here leaks at most ONE inert post + ONE upload the daily sweeper
 // reaps — never a corrupt shared baseline. Per AGENTS.md's harness-hygiene
-// carve-out, this API path is cleanup, not the behaviour under test.
+// carve-out, this API path is cleanup, not the behavior under test.
 test.afterAll(async () => {
   if (PROD_CANARY) return;
   if (!getPat()) return;
@@ -734,22 +732,46 @@ test.afterAll(async () => {
   if (!pendingFixture) return; // test never ran (skipped)
 
   // Bump the hook timeout off Playwright's 30s default. This safety net
-  // reads main + opens a labelled removal PR + deletes a leftover upload
-  // via the GitHub API; 30s is too tight under runner contention even
-  // with skipWaitForMerge below. 2 min covers the worst case without the
-  // hook ever blocking on the 25-min waitForMerge (the failure mode the
-  // ephemeral prod-mutate twin's afterAll hit).
+  // reads main and opens up to two labelled removal PRs via the GitHub API;
+  // 30s is too tight under runner contention even with skipWaitForMerge
+  // below. 2 min covers the worst case without the hook ever blocking on
+  // the 25-min waitForMerge (the failure mode the ephemeral prod-mutate
+  // twin's afterAll hit).
   test.setTimeout(2 * 60 * 1000);
 
   const { filePath, slug, runId, imagePath } = pendingFixture;
 
-  // Leftover ephemeral post → labelled removal PR.
-  const postStillThere = await fileExistsOnMain(filePath).catch(() => false);
-  if (postStillThere) {
-    console.warn(
-      `[cleanup-harness] ${filePath} still on main; opening removal PR (existence-only delete, #1771 step 4)`,
-    );
-    try {
+  // #697 — every step below runs even when an earlier one failed, so a
+  // failed post read or close still leaves the upload leg its turn. The
+  // failures are thrown together at the end.
+  const failures = [];
+
+  // #689 — stop this run's in-flight PRs FIRST. The create leg labels its
+  // PR cms/ready, and that PR adds BOTH the post and the upload, so a run
+  // that fails before the merge leaves it armed: a main-only check reads
+  // "gone" and the PR merges both afterwards. Both paths carry this run's
+  // runId, so only this run's own PRs can match; the delete legs' PRs only
+  // REMOVE the files and are left alone. The upload is checked on its own
+  // too, in case Decap committed it in a separate PR. Strict: an API error
+  // throws instead of reading as "nothing in flight".
+  try {
+    logInFlight(filePath, await closeOpenPrsAddingFile({ base: "main", filePath }));
+  } catch (e) {
+    failures.push(e);
+  }
+  try {
+    logInFlight(imagePath, await closeOpenPrsAddingFile({ base: "main", filePath: imagePath }));
+  } catch (e) {
+    failures.push(e);
+  }
+
+  // Leftover ephemeral post → labelled removal PR. Only a 404 means absent;
+  // any other read error is a failure.
+  try {
+    if ((await readFileOnRef({ ref: "main", filePath })) !== null) {
+      console.warn(
+        `[cleanup-harness] ${filePath} still on main; opening removal PR (existence-only delete, #1771 step 4)`,
+      );
       await removeFixtureViaPr({
         slug,
         runId,
@@ -766,24 +788,52 @@ test.afterAll(async () => {
         // blew the (now 2-min) hook timeout.
         skipWaitForMerge: true,
       });
-      console.warn(`[cleanup-harness] removed ${filePath} via removal PR`);
-    } catch (e) {
-      console.warn(`[cleanup-harness] could not remove ${filePath}: ${describeError(e)}`);
+      console.warn(`[cleanup-harness] opened removal PR for ${filePath}`);
+    } else {
+      console.log(
+        `[cleanup-harness] ${filePath} not on main and no open PR adds it — no safety net needed`,
+      );
     }
-  } else {
-    console.log(
-      `[cleanup-harness] ${filePath} gone from main; UI delete succeeded — no safety net needed`,
+  } catch (e) {
+    failures.push(
+      new Error(`[cleanup-harness] could not clear ${filePath} from main: ${describeError(e)}`),
     );
   }
 
-  // Leftover per-run upload → direct Contents-API delete (the name is
-  // unique to this run so this can't touch real media).
+  // Leftover per-run upload → its own labelled removal PR (#697). A direct
+  // Contents-API DELETE on main is refused by the default-branch ruleset
+  // (pull_request rule, no bypass actors). mediaUploadRemovalSlug keeps
+  // this PR's branch apart from the post's removal PR.
   try {
-    await deleteFileFromMainIfPresent(
-      imagePath,
-      `test(media-roundtrip): harness safety-net delete of leftover upload ${path.basename(imagePath)}`,
-    );
+    if ((await readFileOnRef({ ref: "main", filePath: imagePath })) !== null) {
+      console.warn(`[cleanup-harness] ${imagePath} still on main; opening removal PR`);
+      await removeFixtureViaPr({
+        slug: mediaUploadRemovalSlug(slug),
+        runId,
+        filePath: imagePath,
+        message: `test(media-roundtrip): cleanup leftover upload ${path.basename(imagePath)}`,
+        prTitle: `test(media-roundtrip): cleanup leftover upload run ${runId}`,
+        prBody:
+          "Existence-only cleanup PR opened by `cms-media-roundtrip.spec.js` after a test " +
+          "failure left the per-run upload on main. Auto-merges via `cms/ready`.",
+        skipWaitForMerge: true,
+      });
+      console.warn(`[cleanup-harness] opened removal PR for ${imagePath}`);
+    } else {
+      console.log(`[cleanup-harness] ${imagePath} not on main — no safety net needed`);
+    }
   } catch (e) {
-    console.warn(`[cleanup-harness] couldn't remove ${imagePath}: ${describeError(e)}`);
+    failures.push(
+      new Error(`[cleanup-harness] could not clear ${imagePath} from main: ${describeError(e)}`),
+    );
+  }
+
+  if (failures.length > 0) {
+    throw failures.length === 1
+      ? failures[0]
+      : new AggregateError(
+          failures,
+          `[cleanup-harness] ${failures.length} cleanup steps failed: ${failures.map((e) => e.message).join(" | ")}`,
+        );
   }
 });

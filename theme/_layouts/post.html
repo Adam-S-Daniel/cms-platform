@@ -23,7 +23,14 @@ layout: default
       </div>
       <h1>{{ page.title }}</h1>
       {% if page.featured_image and page.featured_image != "" %}
-      <img class="featured-image" src="{{ page.featured_image | relative_url }}" alt="{{ page.title }}">
+      {%- comment -%}
+        width/height come from front matter or the image file
+        (lib/cms-platform-theme/featured_image_dimensions.rb), which sets both
+        or neither, so the box is reserved before the image loads (#688). The
+        hero is above the fold: decode async, but never loading="lazy".
+      {%- endcomment %}
+      <img class="featured-image" src="{{ page.featured_image | relative_url }}"
+        {%- if page.featured_image_width and page.featured_image_height %} width="{{ page.featured_image_width }}" height="{{ page.featured_image_height }}"{% endif %} decoding="async" alt="">
       {% endif %}
     </header>
 

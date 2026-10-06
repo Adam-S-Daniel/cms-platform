@@ -180,6 +180,108 @@ async function closeStaleDecapPrOnBranch({ repo = HOST_REPO, branch }) {
   }
 }
 
+/**
+ * #689 — close every OPEN `cms/` PR into `base` that still ADDS or edits
+ * `filePath`, and prove each one ended closed or merged.
+ *
+ * A Decap create PR can outlive its run: on 2026-08-06 (adamdaniel.ai run
+ * 31107474927) the tags spec's create leg timed out while adamdaniel.ai#2938
+ * was still open, the afterAll saw the tag absent from main and returned, and
+ * #2938 auto-merged 12 minutes later, leaving `_tags/e2e-tags-canary-…` on
+ * main for two months. A safety net must therefore stop the in-flight PR
+ * before it trusts a "not on main" read.
+ *
+ * `filePath` must be run-unique (a slug carrying this run's id), so any PR
+ * that adds it is this run's own; a PR that only REMOVES it is left alone.
+ * Every read is strict (transient 5xx/429 retried, all pages read): a list,
+ * files or re-read error throws, because a swallowed error here reads as "nothing in
+ * flight". A failed close is judged by the re-read, never assumed.
+ *
+ * Returns `{ closed: [n…], merged: [n…] }`: PRs this call closed, and PRs
+ * that merged before the close took effect (the caller's file-on-base check
+ * then sees the file and removes it).
+ */
+async function closeOpenPrsAddingFile({ repo = HOST_REPO, base, filePath, ghImpl = gh } = {}) {
+  if (!base || !filePath) {
+    throw new Error("closeOpenPrsAddingFile requires base and filePath.");
+  }
+  // Read the WHOLE open-PR list before closing anything, so a close cannot
+  // shift a later page and hide a PR from the scan.
+  const prs = await listAllPages(
+    ghImpl,
+    `/repos/${repo}/pulls?state=open&base=${encodeURIComponent(base)}`,
+  );
+  const closed = [];
+  const merged = [];
+  for (const pr of prs) {
+    const ref = pr && pr.head && pr.head.ref;
+    if (typeof ref !== "string" || !ref.startsWith("cms/")) continue;
+    const files = await listAllPages(ghImpl, `/repos/${repo}/pulls/${pr.number}/files`);
+    const adds = files.some((f) => f && f.filename === filePath && f.status !== "removed");
+    if (!adds) continue;
+    try {
+      await ghImpl(`/repos/${repo}/pulls/${pr.number}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: "closed" }),
+      });
+    } catch (_) {
+      // A PR that merged between the list and the close answers 422; the
+      // re-read below tells that apart from a close that really failed.
+    }
+    const after = await ghImpl(`/repos/${repo}/pulls/${pr.number}`, { retries: 2 });
+    if (after && after.merged === true) {
+      merged.push(pr.number);
+    } else if (after && after.state === "closed") {
+      closed.push(pr.number);
+      // Only delete a branch that lives in THIS repo: a fork PR's head ref
+      // names a branch elsewhere, and a same-named branch here is not its.
+      const headRepo = pr.head.repo && pr.head.repo.full_name;
+      if (headRepo === repo) {
+        try {
+          await ghImpl(`/repos/${repo}/git/refs/heads/${ref}`, { method: "DELETE" });
+        } catch (_) {
+          /* the branch is harmless once its PR is closed; the sweep prunes it */
+        }
+      }
+    } else {
+      throw new Error(
+        `closeOpenPrsAddingFile: PR #${pr.number} adding ${filePath} is still open after the close`,
+      );
+    }
+  }
+  return { closed, merged };
+}
+
+// Every item of a paginated GitHub list endpoint (per_page=100 until a short
+// page). Strict: a page error or a non-array page throws.
+async function listAllPages(ghImpl, basePath) {
+  const sep = basePath.includes("?") ? "&" : "?";
+  const all = [];
+  for (let page = 1; ; page += 1) {
+    const items = await ghImpl(`${basePath}${sep}per_page=100&page=${page}`, { retries: 2 });
+    if (!Array.isArray(items)) {
+      throw new TypeError(`listAllPages: page ${page} is not an array`);
+    }
+    all.push(...items);
+    if (items.length < 100) return all;
+  }
+}
+
+/**
+ * #689 — read `filePath` on `ref`: the Contents API object, or null when it
+ * answers 404. Any other error throws. A safety net that treated every error
+ * as "absent" reported "no cleanup needed" without having looked.
+ */
+async function readFileOnRef({ repo = HOST_REPO, ref, filePath, ghImpl = gh } = {}) {
+  try {
+    return await ghImpl(`/repos/${repo}/contents/${filePath}?ref=${encodeURIComponent(ref)}`);
+  } catch (e) {
+    if (e && e.status === 404) return null;
+    throw e;
+  }
+}
+
 /** Best-effort PR close + branch delete. Used when a fixture flow times
  * out; leaves the repo cleaner than an open zombie PR but doesn't
  * throw if either step fails — the cleanup workflow picks up the
@@ -354,6 +456,9 @@ module.exports = {
   seedFixtureViaPr,
   removeFixtureViaPr,
   closeStaleDecapPrOnBranch,
+  closeOpenPrsAddingFile,
+  listAllPages,
+  readFileOnRef,
   // Exported for unit tests / debugging
   createBranchFromMain,
   putFileOnBranch,

@@ -96,7 +96,7 @@ checks on a plain PR). It runs six FAST lanes on `pull_request` + `push` to `mai
 1. **actionlint** over `.github/workflows/*.yml` (downloads the pinned binary; hard-fail; REQUIRED).
 2. **ruby-theme-specs** — `theme/spec/*_test.rb`, each run with plain `ruby`, no
    bundle (hard-fail; REQUIRED). The lane installs `liquid` 4.0.4 for the real
-   RUM include render, plus `jekyll` 4.4.1 and `jekyll-sitemap` 1.4.0 for
+   RUM include render, plus `jekyll` 4.4.1, `jekyll-sitemap` 1.4.0 and `jekyll-seo-tag` 2.9.0 for
    [the fixture exclusion build regression](../theme/spec/exclude_e2e_posts_build_test.rb).
    That regression uses a temporary site to exercise front matter loading,
    generators, and public aggregation output; other specs stub the surfaces they touch.
@@ -130,22 +130,33 @@ since #525.
 `e2e/fixture-site` (a neutral consuming site whose Gemfile pins the theme by
 local path, so the working tree's theme is built), installs gems from the
 fixture's COMMITTED `Gemfile.lock` in frozen mode, and runs every `@lane: local`
-spec on `chromium-desktop-3k` and `webkit-iphone16` — one job per project, each
-behind a `timeout-minutes` wall. `@lane: real` specs are excluded explicitly
-(`admin-bundle-parity.spec.js` fetches production). A step then fails the job
-unless `cms-editorial-workflow.spec.js`'s archived-PDF test PASSED, so a future
-skip cannot read green. An early salience step skips the work, with success, on
-a PR that touches only `docs/`, `infrastructure/`, `oauth-proxy/`,
-`scripts/cross_post/`, `LICENSE` or `*.md` outside the fixture. The REQUIRED
-context is the `fixture-e2e` gate (`needs:` + `if: always()`, no wall), which is
-red unless both project jobs succeeded. The lane needs no secrets and touches no
+spec on four matrix legs, each behind a `timeout-minutes` wall: the admin
+projects `chromium-desktop-3k` and `webkit-iphone16` on `e2e/fixture-site`, and
+since #702 ONE public project, `chromium-desktop-1080`, on both
+`e2e/fixture-site` (`/` on the theme's default layout) and
+`e2e/fixture-site-singlepage` (`/` on its own `_layouts/home.html`, the shape of
+jodidaniel.com). Before #702 no public spec ran here, so v0.1.139's public-theme
+specs first ran on a consumer bump and broke jodidaniel.com#351. `@lane: real`
+specs are excluded explicitly (`admin-bundle-parity.spec.js` fetches
+production). A step then fails the job unless the leg's proof test PASSED (the
+matrix names it: the archived-PDF test in `cms-editorial-workflow.spec.js` on
+the admin legs, a public test that runs only where the leg's `/` shape holds on
+the public ones), so a future skip cannot read green. An early salience step
+skips the work, with success, on a PR that touches only `docs/`,
+`infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE` or `*.md`
+outside the fixtures. The REQUIRED context is the `fixture-e2e` gate (`needs:` +
+`if: always()`, no wall), which is red unless every matrix leg succeeded; the
+public legs joined that matrix rather than adding a context, so the required set
+did not change. The lane needs no secrets and touches no
 production site, but it does need the public internet: npm, rubygems, the Ubuntu
 archive, and `unpkg.com`, which every `admin/index*.html` loads `decap-cms.js`
 from at runtime (accepted for #527, as every consumer's admin already depends on
-it). The public projects are not run here: they fail on the fixture for
-site-identity and layout reasons, which is fixture work outside #527. A change
-to the theme gemspec's dependencies must re-lock `e2e/fixture-site/Gemfile.lock`
-(`bundle lock` there) in the same PR, or the frozen install fails.
+it). The other seven public projects vary only the browser or viewport, so they
+stay in CONSUMER e2e. A public spec that cannot hold on a fixture skips on a
+predicate read from the site's source (`site-capabilities.js`), never on the
+fixture's name. A change to the theme gemspec's dependencies must re-lock both
+fixtures' `Gemfile.lock` (`bundle lock` in each) in the same PR, or the frozen
+install fails.
 
 `self-release-review-gate.yml` (#526, acceptance criterion 3; owner decision
 2026-10-05) enforces the independent review of a RELEASE-BEARING PR: one whose

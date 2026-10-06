@@ -127,8 +127,16 @@ collections:
     # e2e/posts-list-date-lint.test.js, and against the rendered config
     # by e2e/cms-post-list-summary.spec.js.
     summary: "{{title}}{{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}"
+    # Newest first by default (#650): without a default, Decap lists in
+    # repository order, so a just-saved post jumped to the top until a reload
+    # dropped it to the bottom. Decap 3.15.1's schema wants `sortable_fields`
+    # to be an ARRAY (an object throws "must be array" and the admin never
+    # loads); an array item may be `{field, default_sort: asc|desc}`, which
+    # the bundle's loadEntries applies when no sort is stored yet.
+    # e2e/posts-list-status-dedupe.test.js pins this shape.
     sortable_fields:
-      - date
+      - field: date
+        default_sort: desc
       - title
     # `Automated tests` matches posts carrying `test_fixture: true` (the
     # E2E canary fixtures). Decap 3.15.1 has no declarative default-on/off
@@ -182,7 +190,7 @@ collections:
         label: Tags
         widget: list
         required: false
-        hint: "Type a tag and press Enter. New tags get an auto-generated archive page (the auto_tag_pages plugin) — no need to create them up front. Add a matching entry in the Tags collection if you want to give the tag a description."
+        hint: "Type a tag and press Enter, or separate tags with commas (news, release). Every tag gets its own archive page automatically; add a matching entry in the Tags collection only to give a tag a description."
 
       - name: featured_image
         label: Featured Image
@@ -341,11 +349,12 @@ collections:
         label: Permalink
         widget: string
         required: true
-        default: "/pages/"
-        hint: "The URL path the page lives at. Convention is /pages/<slug>/, but you can use any path. Must start and end with a slash."
+        # No default: a shared default makes every new page claim the same
+        # URL (#639). Decap cannot derive one from the title here.
+        hint: "The URL path the page lives at, unique per page, e.g. /pages/about/. Must start and end with a slash. A page is not added to the site menu automatically; link to it from the menu or another page."
         pattern:
-          - "^/.*/$"
-          - "Must start and end with a slash, e.g. /pages/about/"
+          - "^/(?!pages/$).+/$"
+          - "Must start and end with a slash and name the page, e.g. /pages/about/ (not just /pages/)"
 
       - name: published
         label: Published
