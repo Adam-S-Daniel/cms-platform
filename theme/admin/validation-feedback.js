@@ -65,6 +65,19 @@
  *      message alone. The toast is centered with auto margins instead of
  *      `left:50%`, which shrank it to about half the width on a phone.
  *
+ * ── Follow-ups (keyboard Publish, UX round 3) ─────────────────────────
+ *   9. Publish by keyboard (Enter or Space on "Publish now") gave no
+ *      feedback at all: the Publish menu is react-aria-menubutton, whose
+ *      items select on `keydown` and never fire a `click`, so the click
+ *      listener above never ran. A keydown on a menu item now counts as the
+ *      same attempt (a `<button>` is left to its own click: Enter on one
+ *      fires a click, and it must not report twice).
+ *  10. Focus moves to the first invalid field after the scroll, also when
+ *      Decap raised its own "missed a required field" toast: it used to stay
+ *      on the Publish button with the field's message off screen. The
+ *      toast's close button is a real <button>, so it is already reachable
+ *      by Tab.
+ *
  * Everything keys on Decap's public surface (`CMS.getLocale`, the button
  * text) or on the `ControlErrorsList` Emotion label; if Decap changes any of
  * them the affected part is a silent no-op and Decap behaves as before.
@@ -85,6 +98,9 @@
   var ROW_LABEL = '[class*="NestedObjectLabel"]';
   var ROW_TOGGLE = '[class*="StyledListItemTopBar"] button';
   var CONTROL = '[class*="ControlContainer"]';
+  // What an editor types into: the control to focus inside a failing field.
+  var FOCUSABLE =
+    'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"]';
   var DECAP_CLOSE = '[class*="Toastify__close-button"]';
   // The locale codes Decap 3.15.1 registers (its bundled phrase sets). A code
   // it lacks is a locale this shim cannot see: that toast just stays open.
@@ -258,6 +274,19 @@
     }
   }
 
+  // Keyboard and screen-reader editors land on the field, not on the Publish
+  // button they pressed. Called after any collapsed row is open and the field
+  // is scrolled to; preventScroll keeps that scroll position.
+  function focusField(list) {
+    try {
+      var box = list.closest && list.closest(CONTROL);
+      var control = box && box.querySelector ? box.querySelector(FOCUSABLE) : null;
+      if (control && typeof control.focus === "function") control.focus({ preventScroll: true });
+    } catch {
+      /* Decap's markup changed: the toast still names the field */
+    }
+  }
+
   // The toast goes on the edge of the screen the field is not near. Called
   // after the (instant) scroll, so the field is where it will stay.
   function fieldInLowerHalf(list) {
@@ -352,6 +381,7 @@
     } catch {
       /* old browser: the toast still says what is wrong */
     }
+    focusField(first);
     if (raisedByDecap(before)) return;
     closeStaleDecapToasts(before);
     var where = rowPath(first);
@@ -373,7 +403,17 @@
     window.requestAnimationFrame(tick);
   }
 
+  // react-aria-menubutton selects a Publish menu item on Enter or Space with
+  // no click. A <button> is skipped: its own Enter and Space fire a click.
+  function afterKeydown(e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var item = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
+    if (!item || String(item.tagName || "").toUpperCase() === "BUTTON") return;
+    afterClick(e);
+  }
+
   setLocalePhrase();
   addStyle();
   document.addEventListener("click", afterClick, true);
+  document.addEventListener("keydown", afterKeydown, true);
 })();

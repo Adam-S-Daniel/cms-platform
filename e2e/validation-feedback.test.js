@@ -32,6 +32,7 @@ function fakeEl(props = {}) {
     removed: false,
     scrolled: null,
     clicked: 0,
+    focused: null,
     listeners: {},
     ...props,
     setAttribute(k, v) {
@@ -60,6 +61,9 @@ function fakeEl(props = {}) {
     scrollIntoView(opts) {
       this.scrolled = opts;
     },
+    focus(opts) {
+      this.focused = opts || {};
+    },
     appendChild(c) {
       this.children.push(c);
     },
@@ -78,6 +82,24 @@ function button(text, attrs = {}) {
   const b = fakeEl({ textContent: text });
   Object.assign(b.attrs, attrs);
   b.closest = () => b;
+  return b;
+}
+
+// A react-aria-menubutton item: a non-button element with role=menuitem,
+// found by closest('[role="menuitem"]') and by the shim's click-target query.
+function menuItem(text, tagName = "LI") {
+  const el = fakeEl({ textContent: text, tagName });
+  el.attrs.role = "menuitem";
+  el.closest = () => el;
+  return el;
+}
+
+// A real <button> (the Save button, the Publish menu's trigger): it is not a
+// menuitem, so closest('[role="menuitem"]') finds nothing.
+function plainButton(text, attrs = {}) {
+  const b = button(text, attrs);
+  b.tagName = "BUTTON";
+  b.closest = (sel) => (sel === '[role="menuitem"]' ? null : b);
   return b;
 }
 
@@ -170,6 +192,12 @@ function load({
     if (during) during();
     flush();
   };
+  // Enter/Space/etc. pressed on `target`, as the capture-phase listener sees it.
+  const press = (target, key, during) => {
+    listeners.keydown.fn({ target, key });
+    if (during) during();
+    flush();
+  };
   const raiseDecapToast = () => decapToasts.push(decapToastEl());
   const addDecapToast = (text, extra = {}) => {
     const el = decapToastEl(text);
@@ -183,7 +211,7 @@ function load({
     errorEls.length = 0;
     next.forEach((t) => errorEls.push(fakeEl({ textContent: t })));
   };
-  return { widget, listeners, toasts, styles, errorEls, click, setErrors, decapToasts, stale, raiseDecapToast, addDecapToast };
+  return { widget, listeners, toasts, styles, errorEls, click, press, setErrors, decapToasts, stale, raiseDecapToast, addDecapToast };
 }
 
 test.describe("validation-feedback.js (#730)", () => {
@@ -409,6 +437,165 @@ test.describe("validation-feedback.js (#730)", () => {
     t.click(button("Save"));
     expect(t.toasts).toHaveLength(1);
     expect(close.clicked).toBe(0);
+  });
+
+  // ── Publish by keyboard (UX round 3) ────────────────────────────────────
+  // react-aria-menubutton selects a menu item on keydown and fires no click.
+
+  test("listens for keydown in the capture phase", () => {
+    expect(load().listeners.keydown.capture).toBe(true);
+  });
+
+  test("Enter on the 'Publish now' menu item reports the field error, as a click does", () => {
+    const t = load({ errors: ["Event website: Must be a valid http(s) URL."] });
+    t.press(menuItem("Publish now"), "Enter");
+    expect(t.errorEls[0].scrolled).toEqual({ block: "center", behavior: "auto" });
+    expect(t.toasts).toHaveLength(1);
+    expect(messageOf(t.toasts[0])).toBe("Not saved yet. Event website: Must be a valid http(s) URL.");
+  });
+
+  test("Space on the 'Publish now' menu item reports it too", () => {
+    const t = load({ errors: ["Event website: Must be a valid http(s) URL."] });
+    t.press(menuItem("Publish now"), " ");
+    expect(t.toasts).toHaveLength(1);
+  });
+
+  test("a keydown report waits for Decap to re-render, like a click", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.listeners.keydown.fn({ target: menuItem("Publish now"), key: "Enter" });
+    expect(t.toasts, "nothing before the frames run").toHaveLength(0);
+  });
+
+  test("a keydown does not double up with Decap's own toast", () => {
+    const t = load({ errors: ["Content is required."] });
+    t.press(menuItem("Publish now"), "Enter", t.raiseDecapToast);
+    expect(t.toasts).toHaveLength(0);
+    expect(t.errorEls[0].scrolled).not.toBeNull();
+  });
+
+  test("other keys on the menu item (arrows, Tab, Escape) are not an attempt", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    for (const key of ["ArrowDown", "ArrowUp", "Tab", "Escape", "a"]) t.press(menuItem("Publish now"), key);
+    expect(t.toasts).toHaveLength(0);
+    expect(t.errorEls[0].scrolled).toBeNull();
+  });
+
+  test("Enter on a menu item that is not a Save or Publish is not an attempt", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.press(menuItem("Delete unpublished entry"), "Enter");
+    t.press(menuItem("Set status to Ready"), " ");
+    expect(t.toasts).toHaveLength(0);
+  });
+
+  test("Enter on a <button> is left to its own click, so a Save reports once", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    // The browser turns Enter on a button into a click: only that reports.
+    t.press(plainButton("Save"), "Enter");
+    expect(t.toasts, "the keydown alone adds nothing").toHaveLength(0);
+    t.click(plainButton("Save"));
+    expect(t.toasts).toHaveLength(1);
+    // A menu item that is itself a <button> clicks on Enter too.
+    const u = load({ errors: ["Permalink: bad"] });
+    u.press(menuItem("Publish now", "BUTTON"), "Enter");
+    expect(u.toasts).toHaveLength(0);
+  });
+
+  test("Enter on the Publish trigger only opens the menu: not an attempt", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.press(plainButton("Publish", { "aria-haspopup": "true" }), "Enter");
+    expect(t.toasts).toHaveLength(0);
+    expect(t.errorEls[0].scrolled).toBeNull();
+  });
+
+  test("a keydown on something with no closest() (the document) does nothing, without throwing", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    expect(() => t.press({}, "Enter")).not.toThrow();
+    expect(() => t.press(undefined, "Enter")).not.toThrow();
+    expect(t.toasts).toHaveLength(0);
+  });
+
+  // A failing field's control, as Decap nests it: the error list sits in the
+  // field's container, which also holds the input.
+  function withControl(t) {
+    const input = fakeEl();
+    const box = fakeEl();
+    box.querySelector = (sel) => (/input|textarea|contenteditable/.test(sel) ? input : null);
+    t.errorEls[0].ancestors = { [CONTROL]: box };
+    return input;
+  }
+
+  test("focus moves to the first invalid field's control, without scrolling again", () => {
+    const t = load({ errors: ["Permalink: bad", "Slug: bad"] });
+    const input = withControl(t);
+    t.press(menuItem("Publish now"), "Enter");
+    expect(input.focused).toEqual({ preventScroll: true });
+    expect(t.toasts).toHaveLength(1);
+  });
+
+  test("focus moves also on a click, for Save as for Publish", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    const input = withControl(t);
+    t.click(button("Save"));
+    expect(input.focused).toEqual({ preventScroll: true });
+  });
+
+  test("focus moves when Decap raised its own toast (a missing required field)", () => {
+    const t = load({ errors: ["Content is required."] });
+    const input = withControl(t);
+    t.press(menuItem("Publish now"), "Enter", t.raiseDecapToast);
+    expect(t.toasts, "Decap's toast stands alone").toHaveLength(0);
+    expect(input.focused).toEqual({ preventScroll: true });
+  });
+
+  test("a collapsed row is opened before focus goes into it, and the scroll comes first", () => {
+    const rows = [row({ summary: "Alpha", collapsed: true })];
+    listOf(rows);
+    const t = load({ errors: ["URL: bad."] });
+    const input = withControl(t);
+    t.errorEls[0].ancestors[ROW] = rows[0].el;
+    const order = [];
+    rows[0].toggle.click = () => order.push("expand");
+    t.errorEls[0].scrollIntoView = () => order.push("scroll");
+    input.focus = () => order.push("focus");
+    t.press(menuItem("Publish now"), "Enter");
+    expect(order).toEqual(["expand", "scroll", "focus"]);
+  });
+
+  test("no error list means no focus move", () => {
+    const t = load({ errors: [] });
+    const input = fakeEl();
+    t.press(menuItem("Publish now"), "Enter");
+    expect(input.focused).toBeNull();
+    expect(t.toasts).toHaveLength(0);
+  });
+
+  test("a field with no control, or one that cannot focus, still toasts and does not throw", () => {
+    const none = load({ errors: ["Permalink: bad"] });
+    const empty = fakeEl();
+    empty.querySelector = () => null;
+    none.errorEls[0].ancestors = { [CONTROL]: empty };
+    expect(() => none.press(menuItem("Publish now"), "Enter")).not.toThrow();
+    expect(none.toasts).toHaveLength(1);
+
+    const broken = load({ errors: ["Permalink: bad"] });
+    const input = fakeEl();
+    input.focus = () => {
+      throw new Error("detached");
+    };
+    const box = fakeEl();
+    box.querySelector = () => input;
+    broken.errorEls[0].ancestors = { [CONTROL]: box };
+    expect(() => broken.press(menuItem("Publish now"), "Enter")).not.toThrow();
+    expect(broken.toasts).toHaveLength(1);
+  });
+
+  test("the toast's close button is a real <button>, reachable and pressable by keyboard", () => {
+    const t = load({ errors: ["Permalink: bad"] });
+    t.press(menuItem("Publish now"), "Enter");
+    const [, close] = t.toasts[0].children;
+    // createElement is stubbed to a plain fake, so read what the shim set.
+    expect(close.attrs.type).toBe("button");
+    expect(close.attrs.tabindex, "never taken out of the tab order").toBeUndefined();
   });
 
   // ── cms-platform#752 ────────────────────────────────────────────────────
