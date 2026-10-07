@@ -119,6 +119,18 @@ The platform-only [code-block-language.test.js](../e2e/code-block-language.test.
 reproduction also verifies `python` survives both toggles and the saved file.
 Recheck the stock reproduction when upgrading Decap before removing the shim.
 
+The six pure-Node regressions can be rerun from `e2e/` without a site build or
+server. The tests cover first selection, existing and standalone fields, widget
+metadata, and each shell's script load order. The offline pinned-bundle browser
+reproduction separately checks the serializer and saved fence.
+
+Before running the command, put a sentinel `claude` executable that exits 97
+first on `PATH`; verify it recorded zero calls afterward:
+
+```sh
+unshare --user --map-current-user --pid --fork --mount-proc -- npx playwright test --config=playwright.unit.config.js code-block-language.test.js
+```
+
 **`write-commit-json.sh`** writes `_site/admin/commit.json` (the commit pill's
 `fetch('commit.json')` resolves under `_site/admin/` now that admin is served
 from there; CI deploys do this automatically — the script is for local dev).
