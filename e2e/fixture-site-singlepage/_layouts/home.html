@@ -33,6 +33,11 @@
       pointer-events: none;
       z-index: -1;
     }
+    /* Site-owned layouts adopt the platform overflow rules in their own CSS;
+       they do not load main.css. Keep this seam explicit in fixture coverage. */
+    iframe { box-sizing: border-box; max-width: 100%; }
+    iframe[width][height] { height: auto; aspect-ratio: 16 / 9; }
+    table:not([class]) { display: block; max-width: 100%; overflow-x: auto; }
     .site-wrapper { margin: 0 auto; max-width: 40rem; padding: 2rem 1rem; background: #fff; }
   </style>
 </head>

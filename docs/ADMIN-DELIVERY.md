@@ -95,6 +95,48 @@ whole design:
 `e2e/decap-config-render-parity.test.js` — keep the injected globals and the
 `index*` / `reviews/*` globs **identical** in both, or the lint fails.
 
+### Code block language initialization (#732)
+
+The shipped Decap 3.15.1 bundle reproduces [the lost-language bug](https://github.com/Adam-S-Daniel/cms-platform/issues/732)
+without platform scripts: a new Code Block starts with no language, choosing
+Python colors the editor, but a Rich Text → Markdown → Rich Text round trip
+writes a bare fence and restores Mode to `none`. The test-repo backend saves
+the same bare fence. The upstream
+[CodeControl initialization path](https://github.com/decaporg/decap-cms/blob/bc76c05a80ab70d6b5c7cdaafc7d10cf56939c02/packages/decap-cms-widget-code/src/CodeControl.js)
+leaves `isLangInitialized` false when the initial language is empty; it then
+mistakes the first user selection for initialization and suppresses `onChange`.
+
+[code-block-language.js](../theme/admin/code-block-language.js), loaded after Decap in all three shells,
+extends the stock code widget through `CMS.getWidget` / `CMS.registerWidget`.
+It marks an empty-language editor component initialized after stock mounting,
+so the first user selection reaches the unchanged Markdown serializer.
+Standalone code fields and existing languages retain stock initialization;
+preview, schema, map support and CodeMirror options remain intact. Registry
+output keys `control` / `preview` must be removed before object registration,
+because Decap spreads extra options over the derived component keys.
+The platform-only [code-block-language.test.js](../e2e/code-block-language.test.js) runs in required
+[Self CI](../.github/workflows/self-ci.yml)'s `node-unit-lints` lane. A pinned, offline test-repo browser
+reproduction also verifies `python` survives both toggles and the saved file.
+Recheck the stock reproduction when upgrading Decap before removing the shim.
+
+The 34 pure-Node regressions can be rerun from `e2e/` without a site build or
+server. The lifecycle model queues state updates as the pinned stock widget
+does: mounting an existing language suppresses its initial notification, while
+the fixed empty block emits its first user selection. A stock baseline test
+reproduces the lost first selection. The tests also cover standalone fields and
+widget metadata. An HTML parser checks active executable scripts and their
+load order in every shell, with negative cases for comments, templates,
+noscript, non-JavaScript types, disabled scripts, asynchronous loading and
+unsafe deferred ordering. The offline pinned-bundle browser reproduction
+separately checks the serializer and saved fence.
+
+Before running the command, put the blocking sentinel executable first on
+`PATH`; verify it recorded zero calls afterward:
+
+```sh
+unshare --user --map-current-user --pid --fork --mount-proc -- npx playwright test --config=playwright.unit.config.js code-block-language.test.js
+```
+
 **`write-commit-json.sh`** writes `_site/admin/commit.json` (the commit pill's
 `fetch('commit.json')` resolves under `_site/admin/` now that admin is served
 from there; CI deploys do this automatically — the script is for local dev).

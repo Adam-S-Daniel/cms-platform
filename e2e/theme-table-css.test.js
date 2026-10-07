@@ -30,6 +30,18 @@ function decl(rule, prop) {
 
 const remPx = (v) => (/^([\d.]+)rem$/.test(v || "") ? Number(RegExp.$1) * 16 : NaN);
 
+test("dimensioned iframes scale with a video ratio while interactive heights remain authored", () => {
+  const base = rulesFor("iframe");
+  expect(base).toHaveLength(1);
+  expect(decl(base[0], "max-width")).toBe("100%");
+  expect(decl(base[0], "box-sizing")).toBe("border-box");
+  expect(decl(base[0], "height")).toBeNull();
+  const dimensioned = rulesFor("iframe[width][height]");
+  expect(dimensioned).toHaveLength(1);
+  expect(decl(dimensioned[0], "height")).toBe("auto");
+  expect(decl(dimensioned[0], "aspect-ratio")).toBe("16 / 9");
+});
+
 test("the bare table keeps its horizontal scroll box and gains margin and border-collapse", () => {
   const rules = rulesFor("table:not([class])");
   expect(rules, "a table:not([class]) rule").toHaveLength(1);

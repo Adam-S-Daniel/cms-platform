@@ -9,7 +9,7 @@
       <th>Unbreakable_column_heading_five</th>
       <th>Unbreakable_column_heading_six</th>
       <th>Unbreakable_column_heading_seven</th>
-      <th>Unbreakable_column_heading_eight</th>
+      <th>Final column</th>
     </tr>
   </thead>
   <tbody>
@@ -21,10 +21,16 @@
       <td>cell_five_with_a_long_unbreakable_value</td>
       <td>cell_six_with_a_long_unbreakable_value</td>
       <td>cell_seven_with_a_long_unbreakable_value</td>
-      <td id="responsive-overflow-last-cell">cell_eight_with_a_long_unbreakable_value</td>
+      <td id="responsive-overflow-last-cell">last cell</td>
     </tr>
   </tbody>
 </table>
 
 <h2>Fixed-width iframe</h2>
 <iframe id="responsive-overflow-iframe" title="Fixed-width embed fixture" width="800" height="450" srcdoc="<p>Fixed-width embed fixture</p>"></iframe>
+
+<h2>Interactive iframe with authored height</h2>
+<iframe id="responsive-overflow-interactive" title="Interactive embed fixture" style="width: 100%; height: 240px" srcdoc="<p>Interactive embed fixture</p>"></iframe>
+
+<h2>Embed with an explicit aspect ratio</h2>
+<iframe id="responsive-overflow-square" title="Square embed fixture" width="800" height="800" style="aspect-ratio: 1 / 1" srcdoc="<p>Square embed fixture</p>"></iframe>
