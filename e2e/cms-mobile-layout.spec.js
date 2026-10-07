@@ -2,7 +2,7 @@
 /**
  * @file e2e/cms-mobile-layout.spec.js
  *
- * Locks the responsive behaviour of admin/admin-mobile.css against
+ * Locks the responsive behavior of admin/admin-mobile.css against
  * regression. Decap 3.15.1 is desktop-first: on an iPhone 16 (393 CSS px)
  * the shell renders ~800px wide (dead horizontal scroll), the editor is a
  * fixed side-by-side react-split-pane whose preview iframe wastes half the
@@ -26,12 +26,170 @@ const IPHONE_16 = { width: 393, height: 852 };
 const DESKTOP = { width: 1400, height: 900 };
 const PHONE_390 = { width: 390, height: 844 };
 
+// Production puts Publish in a sibling bar, rather than Decap's toolbar.
+// Use the real served shims and shared status model with a fixed draft
+// snapshot: the test backend has no GitHub PR, and this layout test must
+// neither poll GitHub nor send a publish request.
+async function installProductionPublish(page) {
+  const githubRequests = [];
+  await page.route("https://api.github.com/**", async (route) => {
+    githubRequests.push(route.request().method());
+    await route.abort();
+  });
+  await page.evaluate(() => {
+    window.CMSPublishProgress = {
+      get: () => ({ ready: true, facts: { hasOpenPr: true, armed: false } }),
+      subscribe: () => {},
+    };
+    window.CMS_SITE_ORIGIN = "https://example.com";
+  });
+  await page.addScriptTag({ url: "/admin/publish-button.js" });
+  await expect(page.locator("#cms-publish-state")).toHaveAttribute("data-state", "draft");
+  await expect(page.locator("#cms-publish-button")).toBeEnabled();
+  return githubRequests;
+}
+
+async function expectPinnedPublish(page) {
+  // Do not use expectReachable here: its scrollIntoView could conceal a
+  // bar that scrolled away. Probe the position the editor actually sees.
+  await expect(async () => {
+    const geometry = await page.evaluate(() => {
+      const toolbar = document.querySelector('[class*="EditorContainer"] > [class*="ToolbarContainer"]');
+      const bar = document.getElementById("cms-publish-state");
+      const toolbarBox = toolbar.getBoundingClientRect();
+      const barBox = bar.getBoundingClientRect();
+      const style = getComputedStyle(bar);
+      const controls = [...bar.querySelectorAll("button")].map((button) => {
+        const r = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return {
+          name: button.textContent,
+          left: r.left,
+          right: r.right,
+          top: r.top,
+          bottom: r.bottom,
+          width: r.width,
+          height: r.height,
+          reachable: Boolean(hit && button.contains(hit)),
+        };
+      });
+      return {
+        scrollY: window.scrollY,
+        toolbarTop: toolbarBox.top,
+        toolbarHeight: toolbarBox.height,
+        toolbarBottom: toolbarBox.bottom,
+        barTop: barBox.top,
+        offset: parseFloat(style.top),
+        position: style.position,
+        controls,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      };
+    });
+    expect(geometry.scrollY, "the form must really scroll").toBeGreaterThan(400);
+    expect(geometry.position).toBe("sticky");
+    expect(geometry.toolbarTop).toBeCloseTo(0, 0);
+    expect(geometry.offset).toBeCloseTo(geometry.toolbarHeight, 0);
+    expect(geometry.barTop, "the Publish bar overlaps the toolbar").toBeGreaterThanOrEqual(geometry.toolbarBottom - 0.5);
+    expect(geometry.barTop).toBeCloseTo(geometry.toolbarBottom, 0);
+    expect(geometry.controls.length).toBeGreaterThan(0);
+    for (const control of geometry.controls) {
+      expect(control.left, `${control.name} left edge`).toBeGreaterThanOrEqual(0);
+      expect(control.right, `${control.name} right edge`).toBeLessThanOrEqual(geometry.width);
+      expect(control.top, `${control.name} top edge`).toBeGreaterThanOrEqual(geometry.toolbarBottom - 0.5);
+      expect(control.bottom, `${control.name} bottom edge`).toBeLessThanOrEqual(geometry.height);
+      expect(control.width, `${control.name} tap target width`).toBeGreaterThanOrEqual(44);
+      expect(control.height, `${control.name} tap target height`).toBeGreaterThanOrEqual(44);
+      expect(control.reachable, `${control.name} is covered after scrolling`).toBe(true);
+    }
+  }).toPass({ timeout: 15_000 });
+}
+
+async function expectCompactNativeToolbar(page, { chip = false, scrolled = false, workflow = false } = {}) {
+  await expect(page.getByRole("link", { name: /^Back to Writing in / })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Account options dropdown", exact: true })).toBeVisible();
+  await expect(async () => {
+    const layout = await page.evaluate(() => {
+      const toolbar = document.querySelector('[class*="EditorContainer"] > [class*="ToolbarContainer"]');
+      const back = toolbar.querySelector('[class*="ToolbarSectionBackLink"]');
+      const metadata = back.querySelector(':scope > :not([class*="BackArrow"])');
+      const rect = toolbar.getBoundingClientRect();
+      const nodes = [...new Set([back, ...toolbar.querySelectorAll('button, [role="button"], [aria-haspopup="true"]')])];
+      const visible = nodes.filter((node) => {
+        const r = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      });
+      const overlaps = [];
+      for (let i = 0; i < visible.length; i++) {
+        for (let j = i + 1; j < visible.length; j++) {
+          const a = visible[i];
+          const b = visible[j];
+          if (a.contains(b) || b.contains(a)) continue;
+          const ar = a.getBoundingClientRect();
+          const br = b.getBoundingClientRect();
+          if (Math.min(ar.right, br.right) - Math.max(ar.left, br.left) > 0.5 &&
+              Math.min(ar.bottom, br.bottom) - Math.max(ar.top, br.top) > 0.5) {
+            overlaps.push([a.textContent.trim(), b.textContent.trim()]);
+          }
+        }
+      }
+      const controls = visible.map((node) => {
+        const r = node.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { name: node.getAttribute("aria-label") || node.textContent.trim(), left: r.left, right: r.right, top: r.top, width: r.width, height: r.height, reachable: Boolean(hit && node.contains(hit)) };
+      });
+      const carets = visible.filter((node) => node.matches('[role="button"][aria-haspopup="true"]') && node.closest('[class*="ToolbarSectionMain"]')).map((node) => {
+        const rect = node.getBoundingClientRect();
+        const arrow = getComputedStyle(node, "::after");
+        const border = getComputedStyle(node).borderRightWidth;
+        const arrowWidth = parseFloat(arrow.width) + (arrow.boxSizing === "border-box" ? 0 :
+          parseFloat(arrow.paddingLeft) + parseFloat(arrow.paddingRight) + parseFloat(arrow.borderLeftWidth) + parseFloat(arrow.borderRightWidth));
+        const caretRight = rect.right - parseFloat(border) - parseFloat(arrow.right);
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        const rights = [];
+        let text;
+        while ((text = walker.nextNode())) {
+          if (!text.textContent.trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          rights.push(range.getBoundingClientRect().right);
+        }
+        return { name: node.textContent.trim(), textRight: Math.max(...rights), caretLeft: caretRight - arrowWidth, caretRight, triggerRight: rect.right };
+      });
+      const metaStyle = getComputedStyle(metadata);
+      const status = toolbar.querySelector('[class*="StatusButton"]:not([data-one-door-hidden="1"])');
+      const workflow = Boolean(status && getComputedStyle(status).display !== "none");
+      return { height: rect.height, top: rect.top, controls, overlaps, carets, workflow, viewport: innerWidth, metadata: { width: metaStyle.width, height: metaStyle.height, clipPath: metaStyle.clipPath, position: metaStyle.position, display: metaStyle.display } };
+    });
+    expect(layout.workflow, "only a saved rehearsal workflow draft may use the extra rows").toBe(workflow);
+    expect(layout.height, "native controls need one row; rehearsal workflow controls may wrap").toBeLessThanOrEqual(workflow ? (chip ? 164 : 136) : (chip ? 76 : 48));
+    expect(layout.controls.length, "native Back, primary action, and account controls must be present").toBeGreaterThanOrEqual(3);
+    expect(layout.overlaps, "native controls must not paint over each other").toEqual([]);
+    for (const caret of layout.carets) {
+      expect(caret.textRight, `${caret.name} label must stay clear of its dropdown caret`).toBeLessThanOrEqual(caret.caretLeft - 2);
+      expect(caret.caretRight, `${caret.name} caret must stay inside its trigger`).toBeLessThanOrEqual(caret.triggerRight);
+    }
+    expect(layout.metadata).toEqual({ width: "1px", height: "1px", clipPath: "inset(50%)", position: "absolute", display: expect.not.stringMatching(/^none$/) });
+    const firstTop = layout.controls[0].top;
+    for (const control of layout.controls) {
+      if (!workflow) expect(control.top, `${control.name} needs the same native row`).toBeCloseTo(firstTop, 0);
+      expect(control.width, `${control.name} target width`).toBeGreaterThanOrEqual(43.5);
+      expect(control.height, `${control.name} target height`).toBeGreaterThanOrEqual(43.5);
+      expect(control.left, `${control.name} left edge`).toBeGreaterThanOrEqual(0);
+      expect(control.right, `${control.name} right edge`).toBeLessThanOrEqual(layout.viewport);
+      expect(control.reachable, `${control.name} is covered`).toBe(true);
+    }
+    if (scrolled) expect(layout.top, "native toolbar must stay pinned").toBeCloseTo(0, 0);
+  }).toPass({ timeout: 15_000 });
+}
+
 const SEED_POST_SLUG = "2026-04-25-replacement-test-post-1";
 // Decap's "+ New" button on a collection list (absent from the entry editor).
 const NEW_BUTTON = '[class*="CollectionTopNewButton"]';
 
-async function login(page, { collectionLabel = "Posts" } = {}) {
-  if (collectionLabel !== "Posts") {
+async function login(page, { collectionLabel = "Posts", publishMode = "editorial_workflow" } = {}) {
+  if (collectionLabel !== "Posts" || publishMode !== "editorial_workflow") {
     // Rename the seeded collection in the served config, so the editor reads
     // "Writing in <label> collection" (jodidaniel.com's longest is "Media
     // Items"). Only the collection's own 4-space `label:` line matches.
@@ -40,7 +198,7 @@ async function login(page, { collectionLabel = "Posts" } = {}) {
       const body = (await response.text()).replace(
         /^( {4}label: )Posts$/m,
         `$1${collectionLabel}`,
-      );
+      ).replace(/^publish_mode: editorial_workflow$/m, `publish_mode: ${publishMode}`);
       await route.fulfill({ response, body });
     });
   }
@@ -87,20 +245,122 @@ async function login(page, { collectionLabel = "Posts" } = {}) {
 async function openEditor(page) {
   await page.goto(`/admin/index-test.html#/collections/posts/entries/${SEED_POST_SLUG}`);
   await expect(page.getByLabel(/^Title$/)).toBeVisible({ timeout: 60_000 });
-  // The split-pane + toolbar settle a beat after the editor mounts.
-  await page.waitForTimeout(800);
+  await waitForNativeViewLiveHidden(page);
 }
+
+test.describe("CMS admin — production Publish bar (#731)", { tag: ["@admin-read"] }, () => {
+  for (const width of [320, 390]) {
+    test(`${width}px: production Publish and confirmation stay below the scrolling toolbar`, async ({ page }) => {
+      await page.setViewportSize({ width, height: PHONE_390.height });
+      await login(page, { collectionLabel: "Media Items" });
+      await openEditor(page);
+      await waitForNativeViewLiveHidden(page);
+      const githubRequests = await installProductionPublish(page);
+      const bar = page.locator("#cms-publish-state");
+      await expect(bar).toHaveCSS("background-color", "rgb(253, 243, 216)");
+      expect(githubRequests, "layout must never read or publish through GitHub").toEqual([]);
+      await page.evaluate(() => window.scrollTo(0, 700));
+      await expectPinnedPublish(page);
+
+      // The pinned bar must stay below the toolbar's stacking layer too:
+      // native entry and account menus extend into its rectangle.
+      for (const trigger of [
+        page.getByRole("button", { name: "Published", exact: true }),
+        page.getByRole("button", { name: "Account options dropdown", exact: true }),
+      ]) {
+        await trigger.click();
+        const items = page.locator('[role="menuitem"]:visible');
+        await expect(items.first()).toBeVisible();
+        await expect(async () => {
+          const hits = await items.evaluateAll((nodes) => nodes.map((node) => {
+            const r = node.getBoundingClientRect();
+            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            return { name: node.textContent.trim(), reachable: Boolean(hit && node.contains(hit)) };
+          }));
+          expect(hits.length, "a native toolbar menu must be open").toBeGreaterThan(0);
+          for (const item of hits) expect(item.reachable, `${item.name} is covered by the Publish bar`).toBe(true);
+        }).toPass({ timeout: 15_000 });
+        await trigger.click();
+        await expect(items).toHaveCount(0);
+      }
+
+      // Open only the inline confirmation. Never click Yes: no request to
+      // publish, GitHub read, or real credential is needed to test layout.
+      await page.locator("#cms-publish-button").click();
+      await expect(bar.getByRole("button", { name: "Yes, publish", exact: true })).toBeVisible();
+      await expectPinnedPublish(page);
+      await bar.getByRole("button", { name: "Cancel", exact: true }).click();
+
+      // index-local.html adds a chip after mounting the toolbar. Its real
+      // shim changes the row count, so the offset must update without a
+      // route change. Resizing keeps the measured offset aligned while the
+      // native controls retain one row.
+      const toolbar = page.locator('[class*="EditorContainer"] > [class*="ToolbarContainer"]');
+      const initialHeight = (await toolbar.boundingBox()).height;
+      await page.addScriptTag({ url: "/admin/local-save-indicator.js" });
+      await expect(page.locator("#cms-local-save-indicator")).toBeVisible();
+      await expect.poll(async () => (await toolbar.boundingBox()).height).toBeGreaterThan(initialHeight);
+      await expectPinnedPublish(page);
+      if (width === 390) {
+        await page.setViewportSize({ width: 320, height: PHONE_390.height });
+        await expectPinnedPublish(page);
+      }
+
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await expectPinnedPublish(page);
+
+      // A state-model transition can leave a control in an otherwise idle
+      // row. Exercise that CSS path with the real button still in its slot:
+      // idle has an inline transparent background, but fields cannot show
+      // through a sticky action row. Restore the actual model afterward.
+      await page.evaluate(() => {
+        window.__mobileLayoutDerive = window.CMSEntryStatus.derive;
+        window.CMSEntryStatus.derive = () => window.__mobileLayoutDerive({});
+        window.dispatchEvent(new Event("resize"));
+      });
+      await expect(bar).toHaveAttribute("data-state", "idle");
+      expect(["transparent", "rgba(0, 0, 0, 0)"]).toContain(
+        await bar.evaluate((el) => el.style.backgroundColor),
+      );
+      await expect(bar).toHaveCSS("background-color", "rgb(255, 255, 255)");
+      await expectPinnedPublish(page);
+      await page.evaluate(() => {
+        window.CMSEntryStatus.derive = window.__mobileLayoutDerive;
+        delete window.__mobileLayoutDerive;
+        window.dispatchEvent(new Event("resize"));
+      });
+      await expect(bar).toHaveAttribute("data-state", "draft");
+      await expect(bar).toHaveCSS("background-color", "rgb(253, 243, 216)");
+      expect(githubRequests, "layout must never read or publish through GitHub").toEqual([]);
+    });
+  }
+
+  for (const width of [601, 1400]) {
+    test(`${width}px: production Publish bar keeps its ordinary desktop flow`, async ({ page }) => {
+      await page.setViewportSize({ width, height: DESKTOP.height });
+      await login(page);
+      await openEditor(page);
+      const githubRequests = await installProductionPublish(page);
+      const bar = page.locator("#cms-publish-state");
+      await expect(bar).toHaveCSS("position", "static");
+      await expect(bar).toHaveCSS("top", "auto");
+      await expect(bar).toHaveCSS("background-color", "rgb(253, 243, 216)");
+      await expectReachable(page, page.locator("#cms-publish-button"), "desktop Publish");
+      expect(githubRequests, "layout must never read or publish through GitHub").toEqual([]);
+    });
+  }
+});
 
 // Decap's native "View Live" toolbar anchor is hidden by
 // admin/native-preview-href.js, a deferred shim that re-hides it from a
 // MutationObserver + requestAnimationFrame after each toolbar render. Until
-// that pass runs, the visible anchor wraps the phone toolbar onto a third row
-// (104px instead of 88px), so a height measured right after the editor mounts
+// that pass runs, the visible anchor adds a native action, so measuring the
+// toolbar immediately after the editor mounts
 // races the shim on a slow WebKit run. The shim's own signal is the
 // `data-native-view-live-hidden` marker plus a computed display:none; wait for
 // every native anchor to show both before measuring. A toolbar with no
 // native anchor has nothing to wait for. The height assertions stay strict:
-// a toolbar that is genuinely three rows still fails after the wait.
+// a toolbar that genuinely exceeds its allowed rows still fails after the wait.
 async function waitForNativeViewLiveHidden(page) {
   await expect
     .poll(
@@ -211,15 +471,15 @@ test.describe(
       ).toEqual([]);
     });
 
-    test("Save and Delete toolbar controls are on-screen and full-label", async ({ page }) => {
+    test("Save and Delete toolbar controls are on-screen with full accessible names", async ({ page }) => {
       await page.setViewportSize(IPHONE_16);
       await login(page);
       await openEditor(page);
 
       // The Save button and the "Delete published entry" control must be
       // visible AND inside the viewport (the desktop toolbar pushed them
-      // off the right edge). Their full labels prove they didn't collapse
-      // to a truncated sliver ("S." / "Delete …").
+      // off the right edge). Delete's phone icon keeps its full accessible
+      // name, while Save keeps its visible label.
       for (const name of [/^Save$/, /Delete published entry/]) {
         const btn = page.getByRole("button", { name }).first();
         await expect(btn).toBeVisible();
@@ -475,249 +735,128 @@ test.describe(
   },
 );
 
-// #731 — at 390x844 the editor toolbar was three stacked rows (~165px): the
-// local-mode "saves to your working copy" chip is prepended to the toolbar
-// and took the title's width, so "Writing in Media Items collection" wrapped
-// to 4-5 lines with the avatar and its divider on top of it, and the buttons
-// were 36px tall. Both the short and the longest real label are covered.
-//
-// A describe of its own, not part of the serial one above: serial skips the
-// later cases after the first failure, and each case's verdict should stand
-// alone.
-// 320px has no height assertions (Delete wraps below Save and Published
-// there); it is the width where the title does not fit, so it proves the
-// ellipsis and that the title stays inside its own link.
-test.describe(
-  "CMS admin — phone toolbar (#731)",
-  { tag: ["@admin-read"] },
-  () => {
-    for (const { collectionLabel, width } of [
-      { collectionLabel: "Posts", width: 390 },
-      { collectionLabel: "Media Items", width: 390 },
-      { collectionLabel: "Media Items", width: 320 },
-    ]) {
-      const tall = width >= 375;
-      test(`${width}px: one-line title, no overlap, 44px controls ("${collectionLabel}")`, async ({
-        page,
-      }) => {
+// #731 — native Back, Save, Published/Delete, and account controls share
+// one 44px phone row. Long collection names remain in the Back link's
+// accessible name; local-mode details get their own line underneath.
+test.describe("CMS admin — phone toolbar (#731)", { tag: ["@admin-read"] }, () => {
+  test.describe.configure({ timeout: 180_000 });
+  for (const { collectionLabel, width } of [
+    { collectionLabel: "Posts", width: 390 },
+    { collectionLabel: "Media Items", width: 390 },
+    { collectionLabel: "Media Items", width: 320 },
+  ]) {
+    test(`${width}px: one native row, full accessible names, 44px controls ("${collectionLabel}")`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: PHONE_390.height });
+      await login(page, { collectionLabel });
+      await openEditor(page);
+      await expectCompactNativeToolbar(page);
+      if (width === 390 && collectionLabel === "Media Items") {
+        await page.screenshot({ path: testInfo.outputPath("phone-toolbar-published.png") });
+      }
+      await expect(page.getByRole("link", { name: new RegExp(`Writing in ${collectionLabel} collection`) })).toBeVisible();
+      const remove = page.getByRole("button", { name: "Delete published entry", exact: true });
+      await expect(remove).toBeVisible();
+      const icon = await remove.evaluate((button) => {
+        const style = getComputedStyle(button, "::after");
+        return { content: style.content, width: style.width, height: style.height, mask: style.maskImage || style.webkitMaskImage };
+      });
+      expect(icon.content).toBe('""');
+      expect(icon.width).toBe("18px");
+      expect(icon.height).toBe("18px");
+      expect(icon.mask).toContain("data:image/svg+xml,");
+
+      // Native Delete still opens its confirmation, and dismissing it leaves
+      // the fixture intact. No deletion, publish, or GitHub operation occurs.
+      const dialogPromise = page.waitForEvent("dialog");
+      const click = remove.click();
+      const dialog = await dialogPromise;
+      expect(dialog.type()).toBe("confirm");
+      await dialog.dismiss();
+      await click;
+      await expect(page.getByLabel(/^Title$/)).toHaveValue("Replacement test post 1");
+
+      await page.addScriptTag({ url: "/admin/local-save-indicator.js" });
+      await expect(page.locator("#cms-local-save-indicator")).toBeVisible();
+      await expectCompactNativeToolbar(page, { chip: true });
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(200);
+      await expectCompactNativeToolbar(page, { chip: true, scrolled: true });
+    });
+  }
+});
+
+test.describe("CMS admin — compact phone Save states (#731)", { tag: ["@admin-read"] }, () => {
+  test.describe.configure({ timeout: 180_000 });
+  for (const publishMode of ["simple", "editorial_workflow"]) {
+    for (const width of [320, 390]) {
+      test(`${width}px ${publishMode}: native ${publishMode === "simple" ? "Publish" : "Save"} works for edits and new entries`, async ({ page }, testInfo) => {
+        await page.clock.setFixedTime(new Date("2026-04-25T20:33:00Z"));
         await page.setViewportSize({ width, height: PHONE_390.height });
-        await login(page, { collectionLabel });
-        await openEditor(page);
-
-        const fullTitle = `Writing in ${collectionLabel} collection`;
-        const measure = () =>
-          page.evaluate(() => {
-            const rect = (el) => {
-              if (!el) return null;
-              const r = el.getBoundingClientRect();
-              return {
-                left: r.left,
-                top: r.top,
-                right: r.right,
-                bottom: r.bottom,
-              };
-            };
-            const one = (sel, root = document) => root.querySelector(sel);
-            const toolbar = one(
-              '[class*="EditorContainer"] > [class*="ToolbarContainer"]',
-            );
-            const title = one('[class*="BackCollection"]', toolbar);
-            const dropdown = one(
-              '[class*="PublishedToolbarButton"]',
-              toolbar,
-            );
-            const hits = (el) => {
-              const r = el.getBoundingClientRect();
-              const hit = document.elementFromPoint(
-                r.left + r.width / 2,
-                r.top + r.height / 2,
-              );
-              return !!hit && el.contains(hit);
-            };
-            const controls = {
-              back: one('[class*="ToolbarSectionBackLink"]', toolbar),
-              avatar: one('[class*="AvatarDropdownButton"]', toolbar),
-              save: one('[class*="SaveButton"]', toolbar),
-              published: dropdown,
-              delete: one('[class*="DeleteButton"]', toolbar),
-            };
-            const boxes = {
-              arrow: rect(one('[class*="BackArrow"]', toolbar)),
-              title: rect(title),
-              status: rect(one('[class*="BackStatus"]', toolbar)),
-              chip: rect(document.getElementById("cms-local-save-indicator")),
-            };
-            const controlInfo = {};
-            for (const [name, el] of Object.entries(controls)) {
-              boxes[name] = rect(el);
-              controlInfo[name] = { reachable: hits(el) };
-            }
-            const cs = getComputedStyle(title);
-            return {
-              toolbar: rect(toolbar),
-              boxes,
-              controlInfo,
-              titleText: title.textContent.trim(),
-              titleStyle: {
-                whiteSpace: cs.whiteSpace,
-                textOverflow: cs.textOverflow,
-              },
-              // A second line would at least double the height of a ~1.2em line.
-              titleOneLine:
-                title.getBoundingClientRect().height <
-                parseFloat(cs.fontSize) * 1.6,
-              titleScrollWidth: title.scrollWidth,
-              titleClientWidth: title.clientWidth,
-              meta: rect(one('[class*="ToolbarSectionMeta"]', toolbar)),
-              back: rect(controls.back),
-              viewport: window.innerWidth,
-            };
-          });
-
-        // A box that collapsed to nothing (the title squeezed to 0px wide)
-        // overlaps nothing, so it must be named on its own.
-        const collapsed = (boxes) =>
-          Object.entries(boxes)
-            .filter(
-              ([, b]) => !b || b.right - b.left < 1 || b.bottom - b.top < 1,
-            )
-            .map(([n]) => n);
-        const overlaps = (boxes) => {
-          const names = Object.keys(boxes).filter(
-            (n) => boxes[n] && !["back"].includes(n),
-          );
-          const bad = [];
-          for (let i = 0; i < names.length; i++) {
-            for (let j = i + 1; j < names.length; j++) {
-              const a = boxes[names[i]];
-              const b = boxes[names[j]];
-              const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-              const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-              if (w > 0.5 && h > 0.5) bad.push(`${names[i]} x ${names[j]}`);
-            }
-          }
-          return bad;
-        };
-
-        // Without the local chip (the production shell): two rows of 44px.
-        // 96 = 2 x 44 plus 8px of slack for sub-pixel text metrics.
-        await waitForNativeViewLiveHidden(page);
-        let m = await measure();
-        if (tall) {
-          expect(
-            m.toolbar.bottom - m.toolbar.top,
-            "toolbar height without the chip",
-          ).toBeLessThanOrEqual(96);
-        }
-
-        // With the real local-mode shim loaded, as index-local.html does. The
-        // chip sits on its own thin line under the buttons: 44 + 44 + ~27 = 115,
-        // so 124 allows it and still fails the old ~165px stack.
-        await page.addScriptTag({ url: "/admin/local-save-indicator.js" });
-        await expect(page.locator("#cms-local-save-indicator")).toBeVisible();
-        await waitForNativeViewLiveHidden(page);
-        m = await measure();
-        if (tall) {
-          expect(
-            m.toolbar.bottom - m.toolbar.top,
-            "toolbar height with the local chip",
-          ).toBeLessThanOrEqual(124);
-        }
-
-        // One line, ellipsis when it does not fit, full text still in the DOM
-        // (so the link's accessible name is the whole title).
-        expect(m.titleText).toBe(fullTitle);
-        expect(m.titleStyle).toEqual({
-          whiteSpace: "nowrap",
-          textOverflow: "ellipsis",
+        const githubRequests = [];
+        await page.route("https://api.github.com/**", async (route) => {
+          githubRequests.push(route.request().method());
+          await route.abort();
         });
-        expect(m.titleOneLine, "title wraps to more than one line").toBe(
-          true,
-        );
-        await expect(
-          page.getByRole("link", { name: new RegExp(fullTitle) }),
-        ).toBeVisible();
-
-        // The title is actually visible: at least its own text width, or 120px
-        // when it has to truncate (a title squeezed to 0px is "one line" too).
-        const titleWidth = m.boxes.title.right - m.boxes.title.left;
-        expect(
-          titleWidth,
-          `title is ${titleWidth}px wide; its text is ${m.titleScrollWidth}px`,
-        ).toBeGreaterThanOrEqual(Math.min(m.titleScrollWidth, 120));
-        expect(
-          m.titleClientWidth,
-          "title clipped to nothing",
-        ).toBeGreaterThanOrEqual(Math.min(m.titleScrollWidth, 120));
-        expect(collapsed(m.boxes), "boxes with no area").toEqual([]);
-        // It stays inside its own link, so it cannot run under the avatar.
-        expect(
-          m.boxes.title.right,
-          "title spills out of the back link",
-        ).toBeLessThanOrEqual(m.back.right + 1);
-        if (width < 360) {
-          // Too narrow for the text: it must be cut with an ellipsis, not wrapped.
-          expect(
-            m.titleScrollWidth,
-            "320px title should truncate",
-          ).toBeGreaterThan(m.titleClientWidth);
+        await login(page, { collectionLabel: "Media Items", publishMode });
+        await openEditor(page);
+        await expectCompactNativeToolbar(page);
+        const title = page.getByLabel(/^Title$/);
+        const save = page.getByRole("button", { name: publishMode === "simple" ? "Publish" : "Save", exact: true });
+        await title.fill("Edited phone fixture");
+        await title.blur();
+        await expect(save).toBeEnabled();
+        await expect(page.locator('[class*="BackStatus"]')).toHaveText(/unsaved/i);
+        await expectCompactNativeToolbar(page);
+        await save.click();
+        if (publishMode === "simple") {
+          await page.getByRole("menuitem", { name: "Publish now", exact: true }).click();
+          await expect(page.locator('[class*="BackStatus"]')).toHaveText(/saved/i);
+        } else {
+          await expect(save).toBeDisabled();
+        }
+        await expect(title).toHaveValue("Edited phone fixture");
+        await expect.poll(() => page.evaluate(() => JSON.stringify([window.repoFiles, Object.values(window.repoFilesUnpublished || {})]).includes("Edited phone fixture"))).toBe(true);
+        await expectCompactNativeToolbar(page, { workflow: publishMode === "editorial_workflow" });
+        if (publishMode === "editorial_workflow") {
+          // Production removes its Status control through the served shim.
+          // The hidden marker must disable the rehearsal-only wrap rule.
+          await page.addScriptTag({ url: "/admin/one-door-publish.js" });
+          await expect(page.locator('[class*="StatusButton"]')).toHaveAttribute("data-one-door-hidden", "1");
+          const productionGitHubRequests = await installProductionPublish(page);
+          await expectCompactNativeToolbar(page);
+          expect(productionGitHubRequests, "production layout must not poll or publish").toEqual([]);
         }
 
-        // No box covers another, and the divider (the avatar section's left
-        // border) is not drawn through the back link's text.
-        expect(overlaps(m.boxes), JSON.stringify(m.boxes)).toEqual([]);
-        expect(
-          m.back.right,
-          "back link runs under the avatar section",
-        ).toBeLessThanOrEqual(m.meta.left + 1);
-
-        // Every control is a 44px touch target, on-screen, and hit-testable.
-        for (const name of [
-          "back",
-          "avatar",
-          "save",
-          "published",
-          "delete",
-        ]) {
-          const b = m.boxes[name];
-          expect(b.bottom - b.top, `${name} height`).toBeGreaterThanOrEqual(
-            43.5,
-          );
-          expect(b.right - b.left, `${name} width`).toBeGreaterThanOrEqual(
-            43.5,
-          );
-          expect(b.left, `${name} off the left edge`).toBeGreaterThanOrEqual(
-            -1,
-          );
-          expect(b.right, `${name} off the right edge`).toBeLessThanOrEqual(
-            m.viewport + 1,
-          );
-          expect(
-            m.controlInfo[name].reachable,
-            `${name} is covered by another element`,
-          ).toBe(true);
+        await page.goto("/admin/index-test.html#/collections/posts/new");
+        await expect(title).toBeVisible({ timeout: 60_000 });
+        await expect(title).toHaveValue("");
+        await page.getByLabel(/^Date$/).fill("2026-04-25T16:33");
+        await waitForNativeViewLiveHidden(page);
+        await expectCompactNativeToolbar(page);
+        if (width === 320) {
+          await page.screenshot({ path: testInfo.outputPath("phone-toolbar-new-entry.png") });
         }
-
-        // Publish stays pinned while the form scrolls (#731, PR #748).
-        await page.evaluate(() =>
-          window.scrollTo(0, document.documentElement.scrollHeight),
-        );
-        await expect
-          .poll(() => page.evaluate(() => window.scrollY))
-          .toBeGreaterThan(200);
-        m = await measure();
-        expect(
-          m.toolbar.top,
-          "toolbar left the top of the screen",
-        ).toBeLessThanOrEqual(1);
-        expect(
-          m.controlInfo.published.reachable,
-          "Publish is covered while scrolled",
-        ).toBe(true);
+        await title.fill("New phone fixture");
+        await page.getByRole("textbox", { name: "Body", exact: true }).fill("A deterministic fixture body.");
+        await title.blur();
+        await expect(save).toBeEnabled();
+        await expectCompactNativeToolbar(page);
+        await save.click();
+        if (publishMode === "simple") {
+          await page.getByRole("menuitem", { name: "Publish now", exact: true }).click();
+          await expect(page.locator('[class*="BackStatus"]')).toHaveText(/saved/i);
+        } else {
+          await expect(save).toBeDisabled();
+        }
+        await expect.poll(() => page.evaluate(() => JSON.stringify([window.repoFiles, Object.values(window.repoFilesUnpublished || {})]).includes("New phone fixture"))).toBe(true);
+        // The new-entry route keeps its compact controls after the first save;
+        // workflow Status belongs to the existing draft editor checked above.
+        await expectCompactNativeToolbar(page);
+        expect(githubRequests, "the test backend must never reach GitHub").toEqual([]);
       });
     }
-  },
-);
+  }
+});
 
 // UX round 4, triage package 7: at 820px (an iPad in portrait) Decap's single
 // 66px desktop toolbar applies, and the Back link's title block never shrank

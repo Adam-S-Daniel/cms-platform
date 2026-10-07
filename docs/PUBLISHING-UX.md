@@ -1006,6 +1006,52 @@ after the fix at 1280x800 on the entry editor: toolbar y=126, editor
 126–800, Save reachable, `documentElement.scrollHeight` 800. A site with no
 banner never gets the class and sees no layout change at all.
 
+### Phone toolbar and Publish placement
+
+On phones at 600px and below with `overflow: clip` support, the production
+Publish bar stays sticky below the native toolbar (part of
+[issue #731](https://github.com/Adam-S-Daniel/cms-platform/issues/731)).
+[publish-step-hint.js](../theme/admin/publish-step-hint.js) measures the toolbar
+on each synchronization and on resize, so a deploy pill or local save chip
+changes the offset instead of covering Save or Delete. The idle bar has an
+opaque background when it holds a control; the other states keep their
+existing colors. The same `overflow: clip` support gate as the sticky toolbar
+applies, and the bar's
+buttons have 44px minimum touch targets.
+
+The simple-mode and published-entry toolbars fit one action row at that
+breakpoint: an arrow-only Back link, compact action labels (Save or Publish,
+depending on mode), a trash icon for Delete, and the account button. The full
+Back title and Delete label remain in the accessible names.
+The saved-status text stays in the DOM but is visually hidden; Decap's native
+ARIA attributes and the status bar's announcements stay in place. The native
+controls and handlers stay in place. Local save chips and active deploy
+details keep their own rows when present. This
+compacts the native toolbar; the production Publish/status bar remains a
+separate row below it.
+
+The full editorial workflow can also expose Status and Check for Preview.
+When its native Status control is visible, the extra actions wrap on a
+separate row so every control remains reachable. The production shell's
+one-door publishing hides that Status control, so this fallback does not
+expand its compact toolbar. This Status-specific fallback uses `:has()`;
+the browser regressions cover current Chromium and WebKit with both
+`:has()` and `overflow: clip` support.
+
+On current Chromium and WebKit, phone validation toasts sit halfway down the
+viewport, keeping their 44px dismiss target clear of the sticky toolbar and
+bottom notices even when their text wraps.
+[cms-admin-toast-passthrough.spec.js](../e2e/cms-admin-toast-passthrough.spec.js)
+checks toolbar separation, account-menu clicks, and dismissal at 320px and 390px.
+
+The phone regression in
+[cms-mobile-layout.spec.js](../e2e/cms-mobile-layout.spec.js) loads the production
+bar and button from the served `/admin/` assets into the test-repo editor,
+with a synthetic poller snapshot and no GitHub calls. It checks geometry,
+hit testing, resize, and the desktop breakpoint. This covers placement;
+production publishing still requires the live validation loop after a
+release and consumer bump.
+
 ### What is deliberately NOT covered by a browser spec
 
 Phases 2–4 load on the production shell only, and the only served shell a
@@ -1015,9 +1061,9 @@ Decap still behaves the way these shims assume. Reading the shim sources off
 the platform tree and injecting them into a synthetic page would break the
 consumer-context rule the moment it ran on a consumer lane.
 
-So the pure parts are exported and unit-tested instead — the status model,
-and the route/branch matchers a Decap change would move — and the rest is
-locked structurally by `e2e/admin-publishing-ux.test.js`. This is stated
+For the remaining behavior, the pure parts are exported and unit-tested —
+the status model and the route/branch matchers a Decap change would move — and
+the rest is locked structurally by `e2e/admin-publishing-ux.test.js`. This is stated
 here rather than left as an apparent gap, because "there is no browser spec"
 is otherwise indistinguishable from an oversight.
 

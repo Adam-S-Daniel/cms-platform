@@ -250,6 +250,28 @@ test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => 
     );
   });
 
+  test("the production Publish row sticks below the measured toolbar with an opaque surface", () => {
+    const bar = '[class*="EditorContainer"] > #cms-publish-state';
+    const idle = `${bar}[data-state="idle"]`;
+    expect(rulesFor(supports, bar).length, "bar rule inside the phone supports block").toBeGreaterThan(0);
+    expect(effective(mq600, bar, "position")).toEqual({ value: "sticky", important: false });
+    expect(effective(mq600, bar, "top")?.value).toBe("var(--cms-editor-toolbar-height)");
+    const z = Number(effective(mq600, bar, "z-index")?.value);
+    expect(z).toBeGreaterThan(600);
+    expect(z).toBeLessThan(Number(effective(mq600, TOOLBAR, "z-index")?.value));
+    // Non-idle inline tones retain their state colors; only transparent idle
+    // needs priority over the inline style to keep controls readable on scroll.
+    expect(effective(mq600, bar, "background")).toEqual({ value: "#fff", important: false });
+    expect(effective(mq600, idle, "background")).toEqual({ value: "#fff", important: true });
+    for (const selector of [bar, idle]) {
+      for (const rule of rulesFor(root, selector)) {
+        const names = rule.nodes.filter((n) => n.type === "decl").map((n) => n.prop);
+        if (!names.some((name) => ["position", "top", "z-index", "background"].includes(name))) continue;
+        expect(rule.parent, "phone-only sticky paint rules must stay in @supports").toBe(supports);
+      }
+    }
+  });
+
   test("nothing between the toolbar and the viewport is a scroll container", () => {
     // `html, body { overflow-x: hidden }` (rule 1) turns body's overflow-y into
     // auto, and Decap's editor box is `overflow: hidden`; either breaks sticky.
@@ -278,21 +300,67 @@ test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => 
     expect(root.index(mq600)).toBeGreaterThan(root.index(mq768));
   });
 
-  test("the toolbar is compact: back link and avatar share a row, the hostname is hidden", () => {
+  test("the native phone toolbar fits one grid row between 44px back and account controls", () => {
     const sel = (part) => `${TOOLBAR} [class*="${part}"]`;
+    expect(effective(supports, TOOLBAR, "display")).toEqual({ value: "grid", important: true });
+    expect(effective(supports, TOOLBAR, "grid-template-columns")?.value).toBe("44px minmax(0, 1fr) 44px");
     expect(effective(mq600, sel("AppHeaderSiteLink"), "display")).toEqual({
       value: "none",
       important: true,
     });
-    // `flex: 1 1 100%` (rule 5) is what forces one section per row.
+    // Rule 5 otherwise forces full-width toolbar sections that stack.
     expect(effective(mq600, sel("ToolbarSectionBackLink"), "flex")).toEqual({
-      value: "1 1 0",
+      value: "0 0 44px",
       important: true,
     });
     expect(effective(mq600, sel("ToolbarSectionMeta"), "flex")).toEqual({
-      value: "0 0 auto",
+      value: "0 0 44px",
       important: true,
     });
+    for (const [part, column] of [["ToolbarSectionBackLink", "1"], ["ToolbarSectionMain", "2"], ["ToolbarSectionMeta", "3"]]) {
+      expect(effective(supports, sel(part), "grid-column")?.value, part).toBe(column);
+    }
+    for (const selector of [sel("ToolbarSectionMain"), `${sel("ToolbarSectionMain")} [class*="ToolbarSubSection"]`]) {
+      expect(effective(supports, selector, "flex")).toEqual({ value: selector === sel("ToolbarSectionMain") ? "0 1 auto" : "0 0 auto", important: true });
+      expect(effective(supports, selector, "flex-wrap")).toEqual({ value: "nowrap", important: true });
+    }
+    expect(effective(supports, sel("ToolbarSectionMain"), "column-gap")?.value).toBe("0");
+    expect(effective(supports, `${sel("ToolbarSectionMain")} [class*="PreviewButtonContainer"]`, "margin-right")?.value).toBe("0");
+    expect(effective(supports, `${sel("ToolbarSectionMain")} [class*="PreviewButtonContainer"] > button > span`, "margin-right")?.value).toBe("0");
+    expect(effective(supports, `${TOOLBAR} [class*="ToolbarDropdown"]:has(> div > [class*="StatusButton"][data-one-door-hidden="1"])`, "display")?.value).toBe("none");
+    const workflow = `${TOOLBAR}:has([class*="StatusButton"]:not([data-one-door-hidden="1"]))`;
+    expect(effective(supports, `${workflow} [class*="ToolbarSectionMain"]`, "grid-column")?.value).toBe("1 / -1");
+    for (const part of ["ToolbarSectionMain", "ToolbarSubSection"]) {
+      expect(effective(supports, `${workflow} [class*="${part}"]`, "flex-wrap")).toEqual({ value: "wrap", important: true });
+    }
+    expect(effective(supports, `${sel("ToolbarSectionMain")} [role="button"]`, "height")).toEqual({ value: "44px", important: true });
+    expect(effective(supports, `${sel("ToolbarSectionMain")} [role="button"][aria-haspopup="true"]`, "padding-right")).toEqual({ value: "24px", important: true });
+  });
+
+  test("the phone back link keeps its accessible collection name and clips native status metadata", () => {
+    const metadata = `${TOOLBAR} [class*="ToolbarSectionBackLink"] > :not([class*="BackArrow"])`;
+    expect(effective(supports, metadata, "position")?.value).toBe("absolute");
+    expect(effective(supports, metadata, "width")?.value).toBe("1px");
+    expect(effective(supports, metadata, "height")?.value).toBe("1px");
+    expect(effective(supports, metadata, "clip-path")?.value).toBe("inset(50%)");
+    for (const rule of rulesFor(supports, metadata)) {
+      expect(rule.nodes.filter((node) => node.type === "decl").map((node) => node.prop)).not.toContain("display");
+    }
+  });
+
+  test("phone Delete has a 44px icon target without replacing its accessible text", () => {
+    const button = `${TOOLBAR} [class*="ToolbarSectionMain"] button[class*="DeleteButton"]`;
+    expect(effective(supports, button, "font-size")).toEqual({ value: "0", important: true });
+    for (const property of ["width", "max-width"]) {
+      expect(effective(supports, button, property)).toEqual({ value: "44px", important: true });
+    }
+    expect(effective(supports, button, "flex")).toEqual({ value: "0 0 44px", important: true });
+    expect(effective(supports, button, "min-width")).toEqual({ value: "44px", important: true });
+    expect(effective(supports, `${TOOLBAR} [class*="ToolbarSectionMain"] button`, "min-width")).toEqual({ value: "44px", important: true });
+    expect(effective(supports, `${button}::after`, "content")?.value).toBe('""');
+    for (const property of ["mask", "-webkit-mask"]) {
+      expect(effective(supports, `${button}::after`, property)?.value).toContain("data:image/svg+xml,");
+    }
   });
 
   test("the title truncates to one line instead of squeezing the avatar (#731, tablet width too)", () => {
@@ -356,6 +424,7 @@ test.describe("admin-mobile.css — phone toolbar and date field (#731)", () => 
     const chip = `${TOOLBAR} > :not([class*="ToolbarSection"])`;
     expect(rulesFor(supports, chip).length, "chip rule inside @supports").toBeGreaterThan(0);
     expect(effective(mq600, chip, "order")).toEqual({ value: "3", important: true });
+    expect(effective(supports, chip, "grid-column")?.value).toBe("1 / -1");
     // The deploy pills are links, so they keep a 44px target; their `display`
     // must not be !important or it would show a pill that is meant to be hidden.
     const pill = `${TOOLBAR} > a:not([class*="ToolbarSection"])`;
