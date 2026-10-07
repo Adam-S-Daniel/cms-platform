@@ -17,8 +17,8 @@ const cap = require("./site-capabilities");
 // stylesheet it actually serves, and no consumer needs a fixture page.
 //
 // The viewport is set explicitly (like cms-mobile-layout.spec.js) so one
-// project covers phone / tablet / desktop; chromium-mobile is the project
-// that carries it, the others would repeat the identical pass.
+// project covers phone / tablet / desktop. chromium-mobile covers consumers;
+// chromium-desktop-1080 carries it in required platform fixture CI.
 
 const FIXTURE = fs.readFileSync(path.join(__dirname, "fixtures", "responsive-overflow.html"), "utf8");
 
@@ -35,8 +35,8 @@ test.describe("responsive tables and iframes (#540)", () => {
       page,
     }, testInfo) => {
       test.skip(
-        testInfo.project.name !== "chromium-mobile",
-        "Sets its own viewport; one project is enough",
+        !["chromium-mobile", "chromium-desktop-1080"].includes(testInfo.project.name),
+        "Sets its own viewport; run in the consumer and fixture public projects",
       );
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
@@ -46,6 +46,7 @@ test.describe("responsive tables and iframes (#540)", () => {
         const host = document.querySelector("main") || document.body;
         const wrap = document.createElement("div");
         wrap.className = "container";
+        wrap.id = "responsive-overflow-fixture";
         const body = document.createElement("div");
         body.className = "page-content";
         body.innerHTML = html;
@@ -53,7 +54,8 @@ test.describe("responsive tables and iframes (#540)", () => {
         host.appendChild(wrap);
       }, FIXTURE);
 
-      const table = page.locator(".page-content table");
+      const table = page.locator("#responsive-overflow-fixture table");
+      const content = page.locator("#responsive-overflow-fixture .page-content");
       const iframe = page.locator("#responsive-overflow-iframe");
       await expect(table).toBeVisible();
       await expect(iframe).toBeVisible();
@@ -82,17 +84,37 @@ test.describe("responsive tables and iframes (#540)", () => {
         el.scrollLeft = el.scrollWidth;
       });
       const lastCell = await page.locator("#responsive-overflow-last-cell").boundingBox();
-      expect(lastCell.x + lastCell.width, "last table cell can be scrolled into view").toBeLessThanOrEqual(
-        vp.width,
+      const tableBounds = await table.boundingBox();
+      expect(lastCell.x, "last cell left edge can be scrolled into view").toBeGreaterThanOrEqual(tableBounds.x - 1);
+      expect(lastCell.x + lastCell.width, "last cell right edge can be scrolled into view").toBeLessThanOrEqual(
+        tableBounds.x + tableBounds.width + 1,
       );
+      const contentBounds = await content.boundingBox();
+      expect(tableBounds.x).toBeGreaterThanOrEqual(contentBounds.x - 1);
+      expect(tableBounds.x + tableBounds.width).toBeLessThanOrEqual(contentBounds.x + contentBounds.width + 1);
 
-      // 3. The iframe shrinks to its container but keeps a usable height.
+      // 3. Dimensioned embeds scale their declared border box.
       const frame = await iframe.boundingBox();
-      expect(frame.x + frame.width, "iframe stays within the viewport").toBeLessThanOrEqual(
-        vp.width,
+      expect(frame.x, "iframe starts within the content container").toBeGreaterThanOrEqual(contentBounds.x - 1);
+      expect(frame.x + frame.width, "iframe stays within the content container").toBeLessThanOrEqual(
+        contentBounds.x + contentBounds.width + 1,
       );
-      expect(frame.width).toBeGreaterThan(0);
-      expect(frame.height).toBeGreaterThanOrEqual(150);
+      const dimensions = await iframe.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
+      });
+      expect(dimensions.width).toBeGreaterThan(0);
+      expect(Math.abs(dimensions.height - dimensions.width * 450 / 800), "800 by 450 embed retains 16:9 sizing ratio").toBeLessThanOrEqual(1);
+      await expect(page.frameLocator("#responsive-overflow-iframe").locator("p")).toHaveText("Fixed-width embed fixture");
+
+      // Interactive frames without dimensions retain their explicit height;
+      // authors can set an inline ratio for nonstandard fixed-size embeds.
+      await expect(page.locator("#responsive-overflow-interactive")).toHaveCSS("height", "240px");
+      const square = await page.locator("#responsive-overflow-square").evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
+      });
+      expect(Math.abs(square.width - square.height), "explicit square aspect ratio wins").toBeLessThanOrEqual(1);
     });
   }
 });
