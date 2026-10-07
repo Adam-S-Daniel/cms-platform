@@ -10,9 +10,14 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.159)
+## Version history (v0.1.0 → v0.1.160)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.160 — Editor preview renders supported iframe embeds.**
+One pull request merge since v0.1.159: [#698](https://github.com/Adam-S-Daniel/cms-platform/pull/698), for [#687](https://github.com/Adam-S-Daniel/cms-platform/issues/687). The unrestricted merge range also contains an internal main-sync merge; the first-parent range contains only #698. There are no Dependabot merges in the range.
+Editor preview embeds. The preview pane renders allowlisted iframe HTML blocks while continuing to sanitize ordinary Markdown. It reads only the declared Markdown field, preserves collections with no Markdown field, and does not alter the saved body. Fenced and indented code examples remain inert, including quoted tab-indented fences. The allowlist drops event handlers, `srcdoc`, and script/style nodes; it accepts HTTP(S) and relative URLs after stripping control characters. Targeted links retain `rel="noopener noreferrer"`. The lightweight parser is not full CommonMark: inline paragraph iframes are not extracted, and split reference links and continuous list numbering have known limits.
+Consumer effect. Consumers receive the preview renderer with v0.1.160 once they pin and build against that release. The related `frame-src` change in [`infrastructure/bootstrap/template.yaml`](https://github.com/Adam-S-Daniel/cms-platform/blob/main/infrastructure/bootstrap/template.yaml) allows only self, the site's apex and its subdomains in both report-only and enforcing CSP policies. That policy takes effect only when a site redeploys its bootstrap stack; a platform version bump alone does not apply it. Under `AdminCspMode=enforce`, third-party iframe embeds can remain blank. No consumer rollout or live verification is claimed.
 
 **v0.1.159 — Tags with an empty slug no longer mint /tags//.**
 One PR merge since v0.1.158: [#813](https://github.com/Adam-S-Daniel/cms-platform/pull/813), for [#812](https://github.com/Adam-S-Daniel/cms-platform/issues/812). Both the unrestricted and first-parent merge ranges contain exactly this merge; there are no Dependabot merges in the range.
