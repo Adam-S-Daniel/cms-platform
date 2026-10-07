@@ -529,6 +529,51 @@ test.describe("preview-pane.js", () => {
     }
   });
 
+  test("list padding preserves indented iframe code on initial and continuation lines", () => {
+    for (const body of [
+      '-     <iframe src="/code"></iframe>',
+      '1.     <iframe src="/code"></iframe>',
+      '> -     <iframe src="/code"></iframe>',
+      '- Intro\n      <iframe src="/code"></iframe>',
+      '1. Intro\n       <iframe src="/code"></iframe>',
+      '> - Intro\n>       <iframe src="/code"></iframe>',
+      '-     Intro\n      <iframe src="/code"></iframe>',
+      '-\t  <iframe src="/code"></iframe>',
+      '-\tIntro\n\n\t\t<iframe src="/code"></iframe>',
+    ]) {
+      expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body), body).toBeNull();
+      expect(find(renderPost(body), (n) => n.type === "iframe"), body).toHaveLength(0);
+    }
+    for (const padding of [" ", "  ", "   ", "    ", "\t", "\t "]) {
+      const body = `-${padding}<iframe src="/live"></iframe>`;
+      expect(find(renderPost(body), (n) => n.type === "iframe").map((n) => n.props.src), body).toEqual(["/live"]);
+    }
+    expect(find(renderPost('-\tIntro\n\n\t<iframe src="/live"></iframe>'), (n) => n.type === "iframe")
+      .map((n) => n.props.src)).toEqual(["/live"]);
+    for (const body of [
+      '-     ```html\n  <iframe src="/live"></iframe>',
+      '1.     ```html\n   <iframe src="/live"></iframe>',
+      '> -     ```html\n>   <iframe src="/live"></iframe>',
+      '-     Intro\n      ```html\n  <iframe src="/live"></iframe>',
+      '> -     Intro\n>       ```html\n>   <iframe src="/live"></iframe>',
+    ]) {
+      expect(find(renderPost(body), (n) => n.type === "iframe").map((n) => n.props.src), body).toEqual(["/live"]);
+    }
+  });
+
+  test("a backtick in a fence info string leaves the next valid fence in control", () => {
+    const direct = '```foo`bar\n<iframe src="/live"></iframe>';
+    expect(find(renderPost(direct), (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
+    for (const prefix of ["", "- ", "> ", "> - "]) {
+      const continuation = prefix.includes("-") ? (prefix.includes(">") ? ">   " : "  ") : prefix;
+      const body = `${prefix}\`\`\`foo\`bar\n${continuation}text\n${continuation}\`\`\`\n${continuation}<iframe src="/code"></iframe>\n${continuation}\`\`\``;
+      expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body), body).toBeNull();
+      expect(find(renderPost(body), (n) => n.type === "iframe"), body).toHaveLength(0);
+    }
+    const body = '~~~foo`bar\n<iframe src="/code"></iframe>\n~~~\n<iframe src="/live"></iframe>';
+    expect(find(renderPost(body), (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
+  });
+
   test("a quote fence ends at the quote boundary and the outer fence starts anew", () => {
     const body = '> ```\n```\n<iframe src="/code"></iframe>';
     expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();

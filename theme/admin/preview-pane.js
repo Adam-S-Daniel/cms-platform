@@ -124,6 +124,36 @@
     return null;
   }
 
+  // CommonMark counts list padding in columns. More than four columns means
+  // only one column is padding; the rest is content indentation (possibly code).
+  function listMarker(line, baseColumn) {
+    var match = /^ {0,3}([-+*]|\d{1,9}[.)])([ \t]+)/.exec(line);
+    if (!match) return null;
+    var column = baseColumn + match[0].length - match[2].length;
+    var spaces = "";
+    for (var i = 0; i < match[2].length; i++) {
+      var width = match[2].charAt(i) === "\t" ? 4 - (column % 4) : 1;
+      spaces += " ".repeat(width);
+      column += width;
+    }
+    var padding = spaces.length > 4 ? 1 : spaces.length;
+    return {
+      marker: match[1],
+      indent: match[0].length - match[2].length + padding,
+      text: spaces.slice(padding) + line.slice(match[0].length),
+    };
+  }
+
+  function stripIndent(line, columns, baseColumn) {
+    var used = 0;
+    var i = 0;
+    while (used < columns && i < line.length && /[ \t]/.test(line.charAt(i))) {
+      used += line.charAt(i) === "\t" ? 4 - ((baseColumn + used) % 4) : 1;
+      i++;
+    }
+    return used < columns ? null : " ".repeat(used - columns) + line.slice(i);
+  }
+
   // Strip Markdown container markers only for block recognition. The original
   // lines remain in markdown; extracted embeds keep their container metadata.
   function contentLine(line, listIndent) {
@@ -134,13 +164,14 @@
       rest = rest.slice(quote[0].length);
       quotes++;
     }
-    var list = /^ {0,3}([-+*]|\d{1,9}[.)])([ \t]+)/.exec(rest);
+    var list = listMarker(rest, line.length - rest.length);
     if (list) {
-      return { text: rest.slice(list[0].length), quotes: quotes, list: list[1], indent: list[0].length, continued: false };
+      return { text: list.text, quotes: quotes, list: list.marker, indent: list.indent, continued: false };
     }
     var continued = false;
-    if (listIndent && rest.slice(0, listIndent).trim() === "" && rest.length >= listIndent) {
-      rest = rest.slice(listIndent);
+    var stripped = listIndent ? stripIndent(rest, listIndent, line.length - rest.length) : null;
+    if (stripped !== null) {
+      rest = stripped;
       continued = true;
     }
     return { text: rest, quotes: quotes, list: null, indent: 0, continued: continued };
@@ -148,16 +179,20 @@
 
   function fencedLine(line, fence) {
     var rest = line;
+    var column = 0;
     for (var i = 0; i < fence.containers.length; i++) {
       var container = fence.containers[i];
       if (container === ">") {
         var quote = /^ {0,3}> ?/.exec(rest);
         if (!quote) return null;
         rest = rest.slice(quote[0].length);
+        column += quote[0].length;
       } else {
         if (isBlank(rest)) return i === fence.containers.length - 1 ? "" : null;
-        if (rest.slice(0, container).trim() !== "" || rest.length < container) return null;
-        rest = rest.slice(container);
+        var stripped = stripIndent(rest, container, column);
+        if (stripped === null) return null;
+        rest = stripped;
+        column += container;
       }
     }
     return rest;
@@ -166,26 +201,32 @@
   function openingFence(line, listIndent) {
     var rest = line;
     var containers = [];
-    if (listIndent && rest.slice(0, listIndent).trim() === "" && rest.length >= listIndent) {
+    var column = 0;
+    var stripped = listIndent ? stripIndent(rest, listIndent, column) : null;
+    if (stripped !== null) {
       containers.push(listIndent);
-      rest = rest.slice(listIndent);
+      rest = stripped;
+      column += listIndent;
     }
     while (rest) {
       var quote = /^ {0,3}> ?/.exec(rest);
       if (quote) {
         containers.push(">");
         rest = rest.slice(quote[0].length);
+        column += quote[0].length;
         continue;
       }
-      var list = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(rest);
+      var list = listMarker(rest, column);
       if (list) {
-        containers.push(list[0].length);
-        rest = rest.slice(list[0].length);
+        containers.push(list.indent);
+        rest = list.text;
+        column += list.indent;
         continue;
       }
       break;
     }
     var open = FENCE_OPEN.exec(rest);
+    if (open && open[1].charAt(0) === "`" && rest.slice(open[0].length).indexOf("`") !== -1) return null;
     return open ? { marker: open[1], containers: containers } : null;
   }
 
