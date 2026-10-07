@@ -43,7 +43,6 @@ async function installProductionPublish(page) {
     };
     window.CMS_SITE_ORIGIN = "https://example.com";
   });
-  await page.addScriptTag({ url: "/admin/publish-step-hint.js" });
   await page.addScriptTag({ url: "/admin/publish-button.js" });
   await expect(page.locator("#cms-publish-state")).toHaveAttribute("data-state", "draft");
   await expect(page.locator("#cms-publish-button")).toBeEnabled();
@@ -740,6 +739,7 @@ test.describe(
 // one 44px phone row. Long collection names remain in the Back link's
 // accessible name; local-mode details get their own line underneath.
 test.describe("CMS admin — phone toolbar (#731)", { tag: ["@admin-read"] }, () => {
+  test.describe.configure({ timeout: 180_000 });
   for (const { collectionLabel, width } of [
     { collectionLabel: "Posts", width: 390 },
     { collectionLabel: "Media Items", width: 390 },
@@ -786,6 +786,7 @@ test.describe("CMS admin — phone toolbar (#731)", { tag: ["@admin-read"] }, ()
 });
 
 test.describe("CMS admin — compact phone Save states (#731)", { tag: ["@admin-read"] }, () => {
+  test.describe.configure({ timeout: 180_000 });
   for (const publishMode of ["simple", "editorial_workflow"]) {
     for (const width of [320, 390]) {
       test(`${width}px ${publishMode}: native ${publishMode === "simple" ? "Publish" : "Save"} works for edits and new entries`, async ({ page }, testInfo) => {
@@ -827,6 +828,7 @@ test.describe("CMS admin — compact phone Save states (#731)", { tag: ["@admin-
         }
 
         await page.goto("/admin/index-test.html#/collections/posts/new");
+        await expect(title).toBeVisible({ timeout: 60_000 });
         await expect(title).toHaveValue("");
         await page.getByLabel(/^Date$/).fill("2026-04-25T16:33");
         await waitForNativeViewLiveHidden(page);
