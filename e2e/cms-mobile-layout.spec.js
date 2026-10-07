@@ -249,6 +249,9 @@ async function openEditor(page) {
 }
 
 test.describe("CMS admin — production Publish bar (#731)", { tag: ["@admin-read"] }, () => {
+  // These real menu clicks, confirmation, scrolls, and live chip insertion
+  // share the same browser budget as the other admin interaction describes.
+  test.describe.configure({ timeout: 180_000 });
   for (const width of [320, 390]) {
     test(`${width}px: production Publish and confirmation stay below the scrolling toolbar`, async ({ page }) => {
       await page.setViewportSize({ width, height: PHONE_390.height });
@@ -789,71 +792,72 @@ test.describe("CMS admin — compact phone Save states (#731)", { tag: ["@admin-
   test.describe.configure({ timeout: 180_000 });
   for (const publishMode of ["simple", "editorial_workflow"]) {
     for (const width of [320, 390]) {
-      test(`${width}px ${publishMode}: native ${publishMode === "simple" ? "Publish" : "Save"} works for edits and new entries`, async ({ page }, testInfo) => {
-        await page.clock.setFixedTime(new Date("2026-04-25T20:33:00Z"));
-        await page.setViewportSize({ width, height: PHONE_390.height });
-        const githubRequests = [];
-        await page.route("https://api.github.com/**", async (route) => {
-          githubRequests.push(route.request().method());
-          await route.abort();
-        });
-        await login(page, { collectionLabel: "Media Items", publishMode });
-        await openEditor(page);
-        await expectCompactNativeToolbar(page);
-        const title = page.getByLabel(/^Title$/);
-        const save = page.getByRole("button", { name: publishMode === "simple" ? "Publish" : "Save", exact: true });
-        await title.fill("Edited phone fixture");
-        await title.blur();
-        await expect(save).toBeEnabled();
-        await expect(page.locator('[class*="BackStatus"]')).toHaveText(/unsaved/i);
-        await expectCompactNativeToolbar(page);
-        await save.click();
-        if (publishMode === "simple") {
-          await page.getByRole("menuitem", { name: "Publish now", exact: true }).click();
-          await expect(page.locator('[class*="BackStatus"]')).toHaveText(/saved/i);
-        } else {
-          await expect(save).toBeDisabled();
-        }
-        await expect(title).toHaveValue("Edited phone fixture");
-        await expect.poll(() => page.evaluate(() => JSON.stringify([window.repoFiles, Object.values(window.repoFilesUnpublished || {})]).includes("Edited phone fixture"))).toBe(true);
-        await expectCompactNativeToolbar(page, { workflow: publishMode === "editorial_workflow" });
-        if (publishMode === "editorial_workflow") {
-          // Production removes its Status control through the served shim.
-          // The hidden marker must disable the rehearsal-only wrap rule.
-          await page.addScriptTag({ url: "/admin/one-door-publish.js" });
-          await expect(page.locator('[class*="StatusButton"]')).toHaveAttribute("data-one-door-hidden", "1");
-          const productionGitHubRequests = await installProductionPublish(page);
+      for (const entry of ["existing", "new"]) {
+        test(`${width}px ${publishMode}: native ${publishMode === "simple" ? "Publish" : "Save"} works for ${entry} entries`, async ({ page }, testInfo) => {
+          await page.clock.setFixedTime(new Date("2026-04-25T20:33:00Z"));
+          await page.setViewportSize({ width, height: PHONE_390.height });
+          const githubRequests = [];
+          await page.route("https://api.github.com/**", async (route) => {
+            githubRequests.push(route.request().method());
+            await route.abort();
+          });
+          await login(page, { collectionLabel: "Media Items", publishMode });
+          // Each save starts in a fresh editor. Navigating from an edited
+          // entry while its asynchronous save is still finishing can trigger
+          // Decap's unsaved-change guard and leave the previous title in place.
+          if (entry === "existing") {
+            await openEditor(page);
+          } else {
+            await page.goto("/admin/index-test.html#/collections/posts/new");
+            await expect(page.getByLabel(/^Title$/)).toBeVisible({ timeout: 60_000 });
+            await expect(page.getByLabel(/^Title$/)).toHaveValue("");
+            await page.getByLabel(/^Date$/).fill("2026-04-25T16:33");
+            await waitForNativeViewLiveHidden(page);
+          }
           await expectCompactNativeToolbar(page);
-          expect(productionGitHubRequests, "production layout must not poll or publish").toEqual([]);
-        }
-
-        await page.goto("/admin/index-test.html#/collections/posts/new");
-        await expect(title).toBeVisible({ timeout: 60_000 });
-        await expect(title).toHaveValue("");
-        await page.getByLabel(/^Date$/).fill("2026-04-25T16:33");
-        await waitForNativeViewLiveHidden(page);
-        await expectCompactNativeToolbar(page);
-        if (width === 320) {
-          await page.screenshot({ path: testInfo.outputPath("phone-toolbar-new-entry.png") });
-        }
-        await title.fill("New phone fixture");
-        await page.getByRole("textbox", { name: "Body", exact: true }).fill("A deterministic fixture body.");
-        await title.blur();
-        await expect(save).toBeEnabled();
-        await expectCompactNativeToolbar(page);
-        await save.click();
-        if (publishMode === "simple") {
-          await page.getByRole("menuitem", { name: "Publish now", exact: true }).click();
-          await expect(page.locator('[class*="BackStatus"]')).toHaveText(/saved/i);
-        } else {
-          await expect(save).toBeDisabled();
-        }
-        await expect.poll(() => page.evaluate(() => JSON.stringify([window.repoFiles, Object.values(window.repoFilesUnpublished || {})]).includes("New phone fixture"))).toBe(true);
-        // The new-entry route keeps its compact controls after the first save;
-        // workflow Status belongs to the existing draft editor checked above.
-        await expectCompactNativeToolbar(page);
-        expect(githubRequests, "the test backend must never reach GitHub").toEqual([]);
-      });
+          const title = page.getByLabel(/^Title$/);
+          const save = page.getByRole("button", { name: publishMode === "simple" ? "Publish" : "Save", exact: true });
+          const savedTitle = entry === "existing" ? "Edited phone fixture" : "New phone fixture";
+          if (entry === "new" && width === 320) {
+            await page.screenshot({ path: testInfo.outputPath("phone-toolbar-new-entry.png") });
+          }
+          await title.fill(savedTitle);
+          if (entry === "new") {
+            await page.getByRole("textbox", { name: "Body", exact: true }).fill("A deterministic fixture body.");
+          }
+          await title.blur();
+          await expect(save).toBeEnabled();
+          await expect(page.locator('[class*="BackStatus"]')).toHaveText(/^unsaved changes$/i);
+          await expectCompactNativeToolbar(page);
+          await save.click();
+          if (publishMode === "simple") {
+            await page.getByRole("menuitem", { name: "Publish now", exact: true }).click();
+            // "Unsaved Changes" contains "saved" too. Require Decap's actual
+            // saved state before assessing the post-save controls.
+            await expect(page.locator('[class*="BackStatus"]')).toHaveText(/^changes saved$/i);
+          } else {
+            await expect(save).toBeDisabled();
+          }
+          await expect(title).toHaveValue(savedTitle);
+          await expect.poll(() => page.evaluate((expectedTitle) =>
+            JSON.stringify([window.repoFiles, Object.values(window.repoFilesUnpublished || {})]).includes(expectedTitle),
+          savedTitle)).toBe(true);
+          // Rehearsal Status appears only after saving an existing workflow
+          // entry. New entries retain their one-row controls after first save.
+          const workflow = publishMode === "editorial_workflow" && entry === "existing";
+          await expectCompactNativeToolbar(page, { workflow });
+          if (workflow) {
+            // Production removes Status through the served shim; the hidden
+            // marker disables the rehearsal-only wrap rule.
+            await page.addScriptTag({ url: "/admin/one-door-publish.js" });
+            await expect(page.locator('[class*="StatusButton"]')).toHaveAttribute("data-one-door-hidden", "1");
+            const productionGitHubRequests = await installProductionPublish(page);
+            await expectCompactNativeToolbar(page);
+            expect(productionGitHubRequests, "production layout must not poll or publish").toEqual([]);
+          }
+          expect(githubRequests, "the test backend must never reach GitHub").toEqual([]);
+        });
+      }
     }
   }
 });
