@@ -289,6 +289,8 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
     expect(d.get("base-uri")).toEqual(["'none'"]);
     expect(d.get("default-src")).toEqual(["'self'"]);
     // blob: lets Decap fetch() an uploaded image back before committing it (#627).
+    // An iframe embed in Decap's preview pane, which inherits this policy (#687).
+    expect(d.get("frame-src")).toEqual(["'self'", `https://${APEX}`, `https://*.${APEX}`]);
     expect(d.get("connect-src")).toEqual([
       "'self'",
       "blob:",

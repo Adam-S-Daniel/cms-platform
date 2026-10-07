@@ -770,7 +770,11 @@ The full `/admin` policy, and why each part is there:
 - `img-src 'self' data: blob: https://<apex> https://*.<apex>
   https://avatars.githubusercontent.com`, `media-src 'self' blob:
   https://<apex> https://*.<apex>` (the dashboards' `regression.mp4`),
-  `font-src 'self' data:`, `frame-src 'self'`, `default-src 'self'`.
+  `font-src 'self' data:`, `default-src 'self'`.
+- `frame-src 'self' https://<apex> https://*.<apex>` — an iframe embed in an
+  entry's body, which the preview pane renders since #687. The site's own
+  origins only: the live site sets no `frame-src` at all, but a bare `https:`
+  is exactly what the invariant test refuses.
 - `object-src 'none'`, `base-uri 'none'` (no shell has a `<base>`).
 
 A new third-party script, stylesheet or `fetch` target under `theme/admin/`
@@ -780,6 +784,15 @@ the `/admin` policy, so a third-party image, script or iframe inside an
 entry's body (an HTML Embed, a hotlinked image) previews blank once a site
 enforces, while the published page still shows it. An iframe that loads a
 same-origin URL such as `/assets/tools/<slug>/` gets that page's own policy.
+
+`theme/admin/preview-pane.js` renders an iframe embed itself (#687): Decap's
+markdown preview runs DOMPurify with its default config, which drops
+`<iframe>`. Only raw HTML blocks that hold an `<iframe>` take that path, and
+they are rebuilt as React elements from an allowlist (`iframe`, `a`, `img`
+and plain text-level and block tags; `class`, `style`, `title` plus each
+tag's own attributes), with `http(s)` or relative URLs only — no event
+handlers, `srcdoc`, `<script>` or `<style>`. Everything else in the body still
+goes through Decap's sanitized markdown preview.
 
 It narrows where a script can quietly send what it reads; it cannot stop a
 script that navigates the page away, and the GitHub API it must allow is
