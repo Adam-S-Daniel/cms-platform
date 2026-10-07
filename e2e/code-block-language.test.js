@@ -38,7 +38,7 @@ function load() {
       // Same option-spread order as Decap's public object registration API.
       const { name, controlComponent: control, previewComponent: preview, schema,
         allowMapValue, globalStyles, ...options } = w;
-      registrations.push({ control, preview, schema, allowMapValue, globalStyles, ...options });
+      registrations.push({ name, control, preview, schema, allowMapValue, globalStyles, ...options });
     } } },
     document: { readyState: "complete" }, Date, setTimeout() {},
   });
@@ -72,16 +72,16 @@ test("preexisting languages and standalone code fields keep stock initialization
 test("widget registration retains the stock preview and configuration", () => {
   const { widget, registered, registrations } = load();
   expect(registrations).toHaveLength(1);
-  for (const key of ["schema", "allowMapValue", "globalStyles", "codeMirrorConfig"]) {
-    expect(registered[key]).toBe(widget[key]);
+  expect(registered.name).toBe("code");
+  for (const [key, value] of Object.entries(widget)) {
+    if (key !== "control") expect(registered[key]).toBe(value);
   }
-  expect(registered.preview).toBe(widget.preview);
   expect(registered.control).not.toBe(widget.control);
   expect(new registered.control({})).toBeInstanceOf(widget.control);
 });
 
-test("all three admin shells load the fix after Decap", () => {
-  for (const name of ["index.html", "index-local.html", "index-test.html"]) {
+for (const name of ["index.html", "index-local.html", "index-test.html"]) {
+  test(`${name} loads the fix after Decap`, () => {
     const html = fs.readFileSync(path.join(__dirname, "../theme/admin", name), "utf8");
     // Script src is a lexical HTML attribute, not JavaScript code shape.
     const sources = Array.from(html.matchAll(/<script\s+src="([^"]+)"/g), m => m[1]);
@@ -89,5 +89,5 @@ test("all three admin shells load the fix after Decap", () => {
     const decapIndex = sources.findIndex(s => s.endsWith("/decap-cms.js"));
     expect(decapIndex).toBeGreaterThanOrEqual(0);
     expect(sources.indexOf("code-block-language.js")).toBeGreaterThan(decapIndex);
-  }
-});
+  });
+}
