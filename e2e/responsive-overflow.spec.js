@@ -93,7 +93,9 @@ test.describe("responsive tables and iframes (#540)", () => {
       expect(tableBounds.x).toBeGreaterThanOrEqual(contentBounds.x - 1);
       expect(tableBounds.x + tableBounds.width).toBeLessThanOrEqual(contentBounds.x + contentBounds.width + 1);
 
-      // 3. Dimensioned embeds scale their declared border box.
+      // 3. Every layout keeps the embed and its content reachable. Only the
+      // theme's main.css promises proportional sizing; a site-owned layout
+      // can retain the authored height while constraining the width.
       const frame = await iframe.boundingBox();
       expect(frame.x, "iframe starts within the content container").toBeGreaterThanOrEqual(contentBounds.x - 1);
       expect(frame.x + frame.width, "iframe stays within the content container").toBeLessThanOrEqual(
@@ -104,7 +106,9 @@ test.describe("responsive tables and iframes (#540)", () => {
         return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
       });
       expect(dimensions.width).toBeGreaterThan(0);
-      expect(Math.abs(dimensions.height - dimensions.width * 450 / 800), "800 by 450 embed retains 16:9 sizing ratio").toBeLessThanOrEqual(1);
+      if (cap.homeUsesThemeLayout()) {
+        expect(Math.abs(dimensions.height - dimensions.width * 450 / 800), "800 by 450 embed retains 16:9 sizing ratio").toBeLessThanOrEqual(1);
+      }
       await expect(page.frameLocator("#responsive-overflow-iframe").locator("p")).toHaveText("Fixed-width embed fixture");
 
       // Interactive frames without dimensions retain their explicit height;
@@ -114,7 +118,9 @@ test.describe("responsive tables and iframes (#540)", () => {
         const style = getComputedStyle(el);
         return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
       });
-      expect(Math.abs(square.width - square.height), "explicit square aspect ratio wins").toBeLessThanOrEqual(1);
+      if (cap.homeUsesThemeLayout()) {
+        expect(Math.abs(square.width - square.height), "explicit square aspect ratio wins").toBeLessThanOrEqual(1);
+      }
     });
   }
 });
