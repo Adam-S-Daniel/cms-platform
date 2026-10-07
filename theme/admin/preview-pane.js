@@ -98,7 +98,7 @@
   }
 
   function closesFence(line, fence) {
-    var m = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+    var m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
     return !!m && m[1].charAt(0) === fence.charAt(0) && m[1].length >= fence.length;
   }
 
@@ -154,22 +154,39 @@
     return used < columns ? null : " ".repeat(used - columns) + line.slice(i);
   }
 
+  function quoteLine(line, baseColumn) {
+    var marker = /^ {0,3}>/.exec(line);
+    if (!marker) return null;
+    var after = line.slice(marker[0].length);
+    if (after.charAt(0) === " ") {
+      return { text: after.slice(1), columns: marker[0].length + 1 };
+    }
+    if (after.charAt(0) === "\t") {
+      var tabWidth = 4 - ((baseColumn + marker[0].length) % 4);
+      // Consume one padding column after >; keep the tab's other columns as indent.
+      return { text: " ".repeat(tabWidth - 1) + after.slice(1), columns: marker[0].length + 1 };
+    }
+    return { text: after, columns: marker[0].length };
+  }
+
   // Strip Markdown container markers only for block recognition. The original
   // lines remain in markdown; extracted embeds keep their container metadata.
   function contentLine(line, listIndent) {
     var rest = line;
     var quotes = 0;
     var quote;
-    while ((quote = /^ {0,3}> ?/.exec(rest))) {
-      rest = rest.slice(quote[0].length);
+    var column = 0;
+    while ((quote = quoteLine(rest, column))) {
+      rest = quote.text;
+      column += quote.columns;
       quotes++;
     }
-    var list = listMarker(rest, line.length - rest.length);
+    var list = listMarker(rest, column);
     if (list) {
       return { text: list.text, quotes: quotes, list: list.marker, indent: list.indent, continued: false };
     }
     var continued = false;
-    var stripped = listIndent ? stripIndent(rest, listIndent, line.length - rest.length) : null;
+    var stripped = listIndent ? stripIndent(rest, listIndent, column) : null;
     if (stripped !== null) {
       rest = stripped;
       continued = true;
@@ -183,10 +200,10 @@
     for (var i = 0; i < fence.containers.length; i++) {
       var container = fence.containers[i];
       if (container === ">") {
-        var quote = /^ {0,3}> ?/.exec(rest);
+        var quote = quoteLine(rest, column);
         if (!quote) return null;
-        rest = rest.slice(quote[0].length);
-        column += quote[0].length;
+        rest = quote.text;
+        column += quote.columns;
       } else {
         if (isBlank(rest)) return i === fence.containers.length - 1 ? "" : null;
         var stripped = stripIndent(rest, container, column);
@@ -209,11 +226,11 @@
       column += listIndent;
     }
     while (rest) {
-      var quote = /^ {0,3}> ?/.exec(rest);
+      var quote = quoteLine(rest, column);
       if (quote) {
         containers.push(">");
-        rest = rest.slice(quote[0].length);
-        column += quote[0].length;
+        rest = quote.text;
+        column += quote.columns;
         continue;
       }
       var list = listMarker(rest, column);

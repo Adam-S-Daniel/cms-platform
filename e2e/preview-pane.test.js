@@ -529,6 +529,41 @@ test.describe("preview-pane.js", () => {
     }
   });
 
+  test("a quoted tilde fence with tab padding keeps its iframe as code", () => {
+    const body = '>\t~~~html\n> <iframe src="/code"></iframe>\n> ~~~';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
+    expect(find(renderPost(body), (n) => n.type === "iframe")).toHaveLength(0);
+    const after = '>\t~~~html\n>\t<iframe src="/code"></iframe>\n>\t~~~\n<iframe src="/live"></iframe>';
+    expect(find(renderPost(after), (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
+  });
+
+  test("a quoted backtick fence with tab padding keeps its iframe as code", () => {
+    const body = '>\t```html\n> <iframe src="/code"></iframe>\n> ```';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
+    expect(find(renderPost(body), (n) => n.type === "iframe")).toHaveLength(0);
+    const after = '>\t```html\n>\t<iframe src="/code"></iframe>\n>\t```\n<iframe src="/live"></iframe>';
+    expect(find(renderPost(after), (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
+  });
+
+  test("a nonbreaking space after a closing fence leaves the iframe in code", () => {
+    const body = '```html\n```\u00a0\n<iframe src="/code"></iframe>\n```';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
+    expect(find(renderPost(body), (n) => n.type === "iframe")).toHaveLength(0);
+  });
+
+  test("a vertical tab after a closing fence leaves the iframe in code", () => {
+    const body = '~~~html\n~~~\u000b\n<iframe src="/code"></iframe>\n~~~';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
+    expect(find(renderPost(body), (n) => n.type === "iframe")).toHaveLength(0);
+  });
+
+  test("spaces and tabs after a valid closing fence allow the next embed", () => {
+    for (const marker of ["```", "~~~"]) {
+      const body = `${marker}html\nexample\n${marker} \t\n<iframe src="/live"></iframe>`;
+      expect(find(renderPost(body), (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
+    }
+  });
+
   test("list padding preserves indented iframe code on initial and continuation lines", () => {
     for (const body of [
       '-     <iframe src="/code"></iframe>',
