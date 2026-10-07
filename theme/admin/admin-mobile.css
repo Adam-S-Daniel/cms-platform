@@ -610,6 +610,19 @@
  * It sticks directly beneath the toolbar, using the height measured by
  * publish-step-hint.js so wrapping and deploy pills cannot overlap it. */
 @media (max-width: 600px) {
+  /* Keep the dismiss target clear of the sticky toolbar during toast bounces
+   * and of bottom notices whose height can grow as their text wraps. */
+  [class*="Toastify__toast-container"] {
+    top: 50% !important;
+    bottom: auto !important;
+  }
+  [class*="Toastify__toast-container"] [class*="Toastify__close-button"] {
+    box-sizing: border-box;
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
+  }
   /* ── Title on one line, and 44px touch targets (#731) ────────────────
    * The back link is `[arrow] [title block]`. The title block (an unnamed
    * <div>) is a flex item that never shrank below "Writing in Media Items
@@ -892,7 +905,7 @@
  * default `auto`, and the toast, its body and the close button inherit it, so
  * `none` on the container alone silences the whole subtree. The close button
  * is switched back to `auto` so a toast can still be dismissed by hand; it is
- * a 14x19px corner of the toast, not the toolbar-wide strip it replaces. The
+ * a corner of the toast (44px on phones), not the toolbar-wide strip it replaces. The
  * toast's own click-to-close and swipe-to-dismiss no longer fire (they need
  * the pointer); the close button and the 8 s timer remain.
  *
@@ -903,9 +916,9 @@
  * stale toast with a script `.click()`; neither goes through hit-testing, so
  * this rule does not affect it.
  *
- * Why 1100px: the container overlaps the avatar and Publish at 390, 820 and
- * 1100px (the toolbar itself is sticky only at <= 600px; the overlap needs
- * only the top-right container over the toolbar). Desktop above 1100px is left
+ * Why 1100px: the default container overlaps the avatar and Publish at 820
+ * and 1100px. Phones <= 600px move it halfway down the viewport,
+ * so the close target also clears the sticky toolbar. Desktop above 1100px is left
  * unchanged. */
 @media (max-width: 1100px) {
   [class*="Toastify__toast-container"] {

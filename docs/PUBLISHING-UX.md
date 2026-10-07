@@ -1038,6 +1038,12 @@ expand its compact toolbar. This Status-specific fallback uses `:has()`;
 the browser regressions cover current Chromium and WebKit with both
 `:has()` and `overflow: clip` support.
 
+On current Chromium and WebKit, phone validation toasts sit halfway down the
+viewport, keeping their 44px dismiss target clear of the sticky toolbar and
+bottom notices even when their text wraps.
+[cms-admin-toast-passthrough.spec.js](../e2e/cms-admin-toast-passthrough.spec.js)
+checks toolbar separation, account-menu clicks, and dismissal at 320px and 390px.
+
 The phone regression in
 [cms-mobile-layout.spec.js](../e2e/cms-mobile-layout.spec.js) loads the production
 bar and button from the served `/admin/` assets into the test-repo editor,
