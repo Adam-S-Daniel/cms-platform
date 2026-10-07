@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
-# Real Jekyll build regression for tags that differ only in case (#754).
+# Real Jekyll build regressions for tags that differ only in case (#754) and
+# blank tag names (#812).
 # `quotes` and `Quotes` slugify alike, so they share /tags/quotes/. Before the
 # fix /tags/ showed two identical cards, two pages were minted at one URL (the
 # later one won) and its layout matched the exact spelling, so the page
@@ -81,13 +82,14 @@ class TagCaseVariantsBuildTest < Minitest::Test
       File.write(File.join(@source, '_posts', "#{date}-#{title.downcase.tr(' ', '-')}.md"),
                  "#{front_matter.to_yaml}---\nBody of #{title}.\n")
     end
-    @site = Jekyll::Site.new(Jekyll.configuration(
+    @config = Jekyll.configuration(
       'source' => @source, 'destination' => @destination, 'url' => 'https://example.com',
       'title' => 'Example', 'permalink' => '/blog/:slug/', 'timezone' => 'UTC',
-      'quiet' => true, 'plugins' => [],
+      'quiet' => true, 'plugins' => [], 'time' => Time.utc(2024, 2, 1),
       'collections' => { 'tags' => { 'output' => true, 'permalink' => '/tags/:slug/' } },
       'defaults' => [{ 'scope' => { 'path' => '', 'type' => 'tags' }, 'values' => { 'layout' => 'tag' } }]
-    )).tap(&:process)
+    )
+    rebuild_site
   end
 
   def teardown
@@ -116,6 +118,17 @@ class TagCaseVariantsBuildTest < Minitest::Test
 
   def listed_titles(rel)
     REXML::XPath.match(html(rel), "//li[@class='post-item']//h2[@class='post-title']/a").map { |a| a.texts.join }
+  end
+
+  def add_post_and_rebuild(tags:, title: 'Blank tag edge')
+    front_matter = { 'title' => title, 'layout' => 'post', 'published' => true, 'tags' => tags }
+    File.write(File.join(@source, '_posts', "2024-01-10-#{title.downcase.tr(' ', '-')}.md"),
+               "#{front_matter.to_yaml}---\nBody of #{title}.\n")
+    rebuild_site
+  end
+
+  def rebuild_site
+    @site = Jekyll::Site.new(@config).tap(&:process)
   end
 
   def test_all_tags_has_one_row_per_slug_with_the_combined_count
@@ -178,25 +191,34 @@ class TagCaseVariantsBuildTest < Minitest::Test
     assert_equal ['Fixture post'], index.fetch('fixture-tag').map { |p| p.data['title'] }
   end
 
-  def test_layouts_do_not_slugify_inside_a_loop
+  def test_layouts_slugify_only_current_post_categories_inside_loops
     %w[tag.html atom_feed.xml].each do |layout|
       root = Liquid::Template.parse(File.read(File.join(ROOT, 'theme', '_layouts', layout)).sub(/\A---.*?---\n/m, '')).root
-      assert_empty slugify_assigns_in_loops(root), "#{layout} slugifies inside a for loop"
+      assigns = slugify_assigns_in_loops(root)
+      if layout == 'tag.html'
+        assert_empty assigns
+      else
+        assert_operator assigns.size, :<=, 1
+        assigns.each do |assign, loops|
+          assert_equal 't', assign.from.name.name
+          assert_equal 'post', loops.last.collection_name.name
+          assert_equal ['tags'], loops.last.collection_name.lookups
+          assert_equal ['tag_posts', 'post'], loops.map { |loop| loop.collection_name.name }
+        end
+      end
     end
   end
 
-  # Walks a parsed Liquid tree; returns the `assign`s that pipe through
-  # `slugify` while inside a `for` body.
-  def slugify_assigns_in_loops(node, in_loop: false)
+  def slugify_assigns_in_loops(node, loops: [])
     found = []
-    if node.is_a?(Liquid::Assign) && in_loop && node.from.filters.any? { |f| f.first == 'slugify' }
-      found << node
+    if node.is_a?(Liquid::Assign) && !loops.empty? && node.from.filters.any? { |f| f.first == 'slugify' }
+      found << [node, loops]
     end
-    in_loop ||= node.is_a?(Liquid::For)
+    loops = loops + [node] if node.is_a?(Liquid::For)
     children = []
     children.concat(node.nodelist) if node.respond_to?(:nodelist) && node.nodelist.is_a?(Array)
     children.concat(node.blocks.map(&:attachment)) if node.respond_to?(:blocks)
-    children.each { |c| found.concat(slugify_assigns_in_loops(c, in_loop: in_loop)) }
+    children.each { |c| found.concat(slugify_assigns_in_loops(c, loops: loops)) }
     found
   end
 
@@ -228,5 +250,172 @@ class TagCaseVariantsBuildTest < Minitest::Test
     titles = REXML::XPath.match(feed, '//a:entry/a:title', ATOM).map { |t| t.texts.join }
     assert_equal ['Quote three', 'Quote two', 'Quote one'], titles
     assert_equal 'Example: Quotes', REXML::XPath.first(feed, '/a:feed/a:title', ATOM).texts.join
+  end
+
+  def test_blank_post_names_do_not_add_a_tag_row_or_inflate_quotes
+    add_post_and_rebuild(tags: ['quotes', '', ' '])
+
+    rows = @site.config.fetch('all_tags')
+    assert_equal 4, rows.find { |tag| tag['slug'] == 'quotes' }.fetch('count')
+    refute rows.any? { |tag| tag['name'].to_s.strip.empty? }, "blank tag rows: #{rows.inspect}"
+  end
+
+  def test_blank_post_names_mint_no_empty_archive_or_feed_and_keep_the_valid_tag
+    add_post_and_rebuild(tags: ['quotes', '', ' '])
+
+    refute @site.pages.any? { |page| page.url == '/tags//' }, 'no page at the empty tag URL'
+    refute @site.pages.any? { |page| page.url == '/tags//feed.xml' }, 'no feed page at the empty tag URL'
+    refute @site.pages.any? { |page| page.data['permalink'] == '/tags//' }, 'no raw empty archive permalink'
+    refute @site.pages.any? { |page| page.data['permalink'] == '/tags//feed.xml' }, 'no raw empty feed permalink'
+    refute File.exist?(File.join(@destination, 'tags', 'feed.xml')), 'no generated empty-tag feed file'
+    assert_includes @site.config.fetch('tag_posts_by_slug').fetch('quotes').map { |post| post.data['title'] },
+                    'Blank tag edge'
+    assert_includes listed_titles('tags/quotes'), 'Blank tag edge'
+    quotes_feed = REXML::Document.new(File.read(File.join(@destination, 'tags/quotes/feed.xml')))
+    titles = REXML::XPath.match(quotes_feed, '//a:entry/a:title', ATOM).map { |node| node.texts.join }
+    assert_includes titles, 'Blank tag edge'
+  end
+
+  def test_post_pills_render_only_nonblank_names
+    add_post_and_rebuild(tags: ['quotes', '', ' '])
+
+    post = @site.posts.docs.find { |doc| doc.data['title'] == 'Blank tag edge' }
+    post_doc = html(post.url.delete_prefix('/').chomp('/'))
+    pill_hrefs = REXML::XPath.match(post_doc, "//a[@class='tag-pill']").map { |node| node.attributes['href'] }
+    assert_equal ['/tags/quotes/'], pill_hrefs
+  end
+
+  def test_atom_categories_render_only_nonblank_names
+    add_post_and_rebuild(tags: ['quotes', '', ' '])
+
+    feed = REXML::Document.new(File.read(File.join(@destination, 'tags/quotes/feed.xml')))
+    entry = REXML::XPath.first(feed, "//a:entry[a:title='Blank tag edge']", ATOM)
+    categories = REXML::XPath.match(entry, 'a:category', ATOM).map { |node| node.attributes['term'] }
+    assert_equal ['quotes'], categories
+  end
+
+  def test_blank_curated_names_do_not_add_rows_feeds_or_suppress_quotes
+    File.write(File.join(@source, '_tags', 'blank-name.md'), "---\nname: ''\n---\n")
+    File.write(File.join(@source, '_tags', 'null-name.md'), "---\nname: null\n---\n")
+    add_post_and_rebuild(tags: ['quotes', '', ' '])
+
+    rows = @site.config.fetch('all_tags')
+    refute rows.any? { |tag| tag['name'].to_s.strip.empty? }, "blank curated rows: #{rows.inspect}"
+    assert rows.any? { |tag| tag['slug'] == 'quotes' }, 'blank curated entries did not suppress quotes'
+    refute @site.pages.any? { |page| page.url == '/tags//' }, 'no auto archive at the empty tag URL'
+    refute @site.pages.any? { |page| page.url == '/tags//feed.xml' }, 'no feed page at the empty tag URL'
+    refute @site.pages.any? { |page| page.data['permalink'] == '/tags//' }, 'no raw empty archive permalink'
+    refute @site.pages.any? { |page| page.data['permalink'] == '/tags//feed.xml' }, 'no raw empty feed permalink'
+    refute File.exist?(File.join(@destination, 'tags', 'feed.xml')), 'no generated empty-tag feed file'
+    assert File.exist?(File.join(@destination, 'tags/quotes/feed.xml')), 'quotes feed remains generated'
+  end
+
+  def test_blank_curated_documents_are_not_kept_or_rendered
+    File.write(File.join(@source, '_tags', 'blank-name.md'), "---\nname: ''\n---\n")
+    File.write(File.join(@source, '_tags', 'null-name.md'), "---\nname: null\n---\n")
+    rebuild_site
+
+    blank_docs = @site.collections['tags'].docs.select { |doc| doc.data['name'].to_s.strip.empty? }
+    assert_empty blank_docs, 'blank curated documents must not remain in the public tags collection'
+    refute File.exist?(File.join(@destination, 'tags/blank-name/index.html')),
+           'blank-name collection document has no rendered output'
+    refute File.exist?(File.join(@destination, 'tags/null-name/index.html')),
+           'null-name collection document has no rendered output'
+  end
+
+  def test_blank_curated_document_does_not_overwrite_a_valid_archive
+    File.write(File.join(@source, '_tags', 'quotes.md'), "---\nname: ''\n---\n")
+    rebuild_site
+
+    archive_docs = @site.collections['tags'].docs.count { |doc| doc.url == '/tags/quotes/' }
+    archive_pages = @site.pages.count { |page| page.url == '/tags/quotes/' }
+    assert_equal 1, archive_docs + archive_pages, 'only one actual document or generated page owns the quotes URL'
+    assert_equal ['Quote three', 'Quote two', 'Quote one'], listed_titles('tags/quotes')
+    heading = REXML::XPath.first(html('tags/quotes'), "//h1[@class='tag-title']")
+    assert_equal 'Quotes', heading.texts.join
+  end
+
+  def test_blank_excluded_curated_name_does_not_suppress_quotes
+    File.write(File.join(@source, '_tags', 'blank-fixture.md'), "---\nname: ' '\ntest_fixture: true\n---\n")
+    add_post_and_rebuild(tags: ['quotes', '', ' '])
+
+    assert Jekyll::ExcludeE2EPosts.excluded_tag_names(@site).none? { |name| name.to_s.strip.empty? },
+           'blank fixture name must not enter the exclusion list'
+    rows = @site.config.fetch('all_tags')
+    refute rows.any? { |tag| tag['name'].to_s.strip.empty? }, "blank excluded tag rows: #{rows.inspect}"
+    assert rows.any? { |tag| tag['slug'] == 'quotes' }, 'blank fixture entry did not suppress quotes'
+    refute @site.pages.any? { |page| page.data['permalink'] == '/tags//' }, 'no raw empty archive permalink'
+    refute @site.pages.any? { |page| page.data['permalink'] == '/tags//feed.xml' }, 'no raw empty feed permalink'
+    assert File.exist?(File.join(@destination, 'tags/quotes/feed.xml')), 'quotes feed remains generated'
+  end
+  # Exact rendered bytes from dc0b3429 for the same normal tags.
+  def test_normal_post_tag_region_preserves_base_bytes
+    add_post_and_rebuild(tags: ['quotes', 'AI Tools'], title: 'Normal tags')
+    rendered = File.read(File.join(@destination, 'blog/normal-tags/index.html'))
+    region = rendered.split('<div class="post-tags">', 2).last.split('</div>', 2).first
+    expected = "\n          <a class=\"tag-pill\" href=\"/tags/quotes/\">quotes</a>\n          <a class=\"tag-pill\" href=\"/tags/ai-tools/\">AI Tools</a>\n          \n        "
+    assert_equal expected, region
+  end
+
+  def test_normal_feed_categories_preserve_base_bytes
+    add_post_and_rebuild(tags: ['quotes', 'AI Tools'], title: 'Normal tags')
+    rendered = File.read(File.join(@destination, 'tags/quotes/feed.xml'))
+    entry = rendered.split('<title type="html">Normal tags</title>', 2).last
+    region = entry.split('</content>', 2).last.split('<summary', 2).first
+    assert_equal "\n    <category term=\"quotes\" />\n    <category term=\"AI Tools\" />\n    ", region
+  end
+
+  def assert_only_valid_tags(tags)
+    add_post_and_rebuild(tags: ['quotes', *tags])
+    refute @site.config.fetch('all_tags').any? { |tag| tag['slug'].empty? }
+    refute @site.config.fetch('tag_posts_by_slug').key?('')
+    refute @site.pages.any? { |page| ['/tags//', '/tags//feed.xml'].include?(page.data['permalink']) }
+    refute File.exist?(File.join(@destination, 'tags/feed.xml'))
+    assert_equal [['quotes', '/tags/quotes/', '4']], cards(html('tags')).select { |_, href, _| href == '/tags/quotes/' }
+    post = html('blog/blank-tag-edge')
+    assert_equal ['/tags/quotes/'], REXML::XPath.match(post, "//a[@class='tag-pill']").map { |node| node.attributes['href'] }
+    feed = REXML::Document.new(File.read(File.join(@destination, 'tags/quotes/feed.xml')))
+    entry = REXML::XPath.first(feed, "//a:entry[a:title='Blank tag edge']", ATOM)
+    assert_equal ['quotes'], REXML::XPath.match(entry, 'a:category', ATOM).map { |node| node.attributes['term'] }
+  end
+
+  def test_empty_slug_post_names_are_skipped_everywhere
+    assert_only_valid_tags(["\u00a0", '!!!', '🙂'])
+  end
+
+  def test_empty_slug_curated_and_excluded_names_are_removed
+    ["\u00a0", '!!!', '🙂'].each_with_index do |name, i|
+      [false, true].each do |excluded|
+        File.write(File.join(@source, '_tags', "invalid-#{i}-#{excluded}.md"), "#{{ 'name' => name, 'test_fixture' => excluded }.to_yaml}---\n")
+      end
+    end
+    assert_only_valid_tags(["\u00a0", '!!!', '🙂'])
+    refute @site.collections['tags'].docs.any? { |doc| Jekyll::Utils.slugify(doc.data['name'].to_s).empty? }
+    refute Dir.glob(File.join(@destination, 'tags/invalid-*/index.html')).any?
+  end
+
+  def assert_scalar_tag_builds(value, tags: ['quotes', value])
+    add_post_and_rebuild(tags: tags)
+    slug = value.to_s
+    assert_includes listed_titles("tags/#{slug}"), 'Blank tag edge'
+    assert File.exist?(File.join(@destination, "tags/#{slug}/feed.xml"))
+    assert_includes cards(html('tags')).map { |_, href, _| href }, "/tags/#{slug}/"
+    assert_includes REXML::XPath.match(html('blog/blank-tag-edge'), "//a[@class='tag-pill']").map { |node| node.attributes['href'] }, "/tags/#{slug}/"
+    feed = REXML::Document.new(File.read(File.join(@destination, "tags/#{slug}/feed.xml")))
+    assert_includes REXML::XPath.match(feed, '//a:category', ATOM).map { |node| node.attributes['term'] }, slug
+  end
+
+  def test_integer_tag_builds_an_archive_feed_index_row_and_pill
+    assert_scalar_tag_builds(2024)
+  end
+
+  def test_boolean_tag_builds_an_archive_feed_index_row_and_pill
+    assert_scalar_tag_builds(true)
+    # Jekyll normalizes a bare boolean tags value to an empty array.
+    add_post_and_rebuild(tags: true)
+    post = @site.posts.docs.find { |doc| doc.data['title'] == 'Blank tag edge' }
+    assert_empty post.data['tags']
+    refute @site.config.fetch('all_tags').any? { |tag| tag['slug'] == 'true' }
+    assert File.exist?(File.join(@destination, 'blog/blank-tag-edge/index.html'))
   end
 end

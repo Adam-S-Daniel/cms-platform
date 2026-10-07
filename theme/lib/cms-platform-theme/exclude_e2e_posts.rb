@@ -139,7 +139,9 @@ module Jekyll
     # entry (apply_tag), not here. `slugify` is Jekyll::Utils.slugify in the
     # build, a stand-in in the unit test.
     def self.e2e_tag_name?(name, slugify:)
-      name.is_a?(String) && e2e_fixture?(slug: slugify.call(name), test_fixture: nil)
+      return false if name.to_s.strip.empty?
+
+      e2e_fixture?(slug: slugify.call(name.to_s), test_fixture: nil)
     end
 
     # Stamp a generated archive page for an e2e_tag_name? like a `_tags/`
@@ -158,9 +160,11 @@ module Jekyll
     # carries such a tag still links to the entry's own (noindex) page.
     # Call after the :post_read hook below has stamped the docs.
     def self.excluded_tag_names(site)
+      # Blank names cannot identify a public tag (#812).
       (site.collections['tags']&.docs || [])
         .select { |d| d.data['feed_exclude'] == true }
         .filter_map { |d| d.data['name'] }
+        .reject { |name| name.to_s.strip.empty? }
         .uniq
     end
   end

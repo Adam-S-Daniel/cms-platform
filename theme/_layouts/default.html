@@ -14,7 +14,7 @@
   {%- comment -%} An e2e / test-fixture tag (#689, feed_exclude) has no feed. {%- endcomment -%}
   {%- if page.layout == 'tag' and page.feed_exclude != true -%}
   {%- assign _tag = page.tag_name | default: page.name -%}
-  {%- assign _tag_slug = _tag | slugify -%}
+  {%- assign _tag_slug = _tag | append: '' | slugify -%}
   <link rel="alternate" type="application/atom+xml" title="{{ site.title }}: {{ _tag }}" href="{{ '/tags/' | append: _tag_slug | append: '/feed.xml' | relative_url }}">
   {%- endif -%}
   {% include analytics/cloudwatch-rum.html %}

@@ -9,7 +9,7 @@ layout: default
 {% endcomment %}
 {% assign tag_label = page.tag_name | default: page.name %}
 <div class="container">
-  {%- assign _tag_slug = tag_label | slugify -%}
+  {%- assign _tag_slug = tag_label | append: '' | slugify -%}
   {%- assign _tag_feed = '/tags/' | append: _tag_slug | append: '/feed.xml' -%}
   {%- assign _feed_label = 'Subscribe to “' | append: tag_label | append: '” posts (Atom feed)' -%}
   <div class="page-header">

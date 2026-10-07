@@ -1,7 +1,7 @@
 ---
 ---
 {%- assign tag = page.tag_name -%}
-{%- assign tag_slug = tag | slugify -%}
+{%- assign tag_slug = tag | append: '' | slugify -%}
 {%- assign feed_url = '/tags/' | append: tag_slug | append: '/feed.xml' | absolute_url -%}
 {%- assign html_url = '/tags/' | append: tag_slug | append: '/' | absolute_url -%}
 {%- comment -%}
@@ -58,7 +58,12 @@
     </author>
     {%- endif %}
     {%- for t in post.tags %}
+    {%- assign category = t | strip -%}
+    {%- assign category_slug = t | append: '' | slugify -%}
+    {%- comment -%} Tag names with no slug have no Atom category (#812). {%- endcomment -%}
+    {%- if category != '' and category_slug != '' %}
     <category term="{{ t | xml_escape }}" />
+    {%- endif -%}
     {%- endfor %}
     {%- if post.excerpt and post.excerpt != "" %}
     <summary type="html">{{ post.excerpt | strip_html | normalize_whitespace | xml_escape }}</summary>

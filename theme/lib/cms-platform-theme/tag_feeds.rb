@@ -25,7 +25,7 @@ if defined?(Jekyll::Generator)
         def initialize(site, name)
           @site = site
           @base = site.source
-          slug = Jekyll::Utils.slugify(name)
+          slug = Jekyll::Utils.slugify(name.to_s)
           @dir = "tags/#{slug}/"
           @name = 'feed.xml'
           @basename = 'feed'
@@ -62,13 +62,13 @@ if defined?(Jekyll::Generator)
           # lists the canary.
           public_posts = site.posts.docs.reject { |p| p.data['feed_exclude'] == true }
           post_tag_lists = public_posts.map { |p| Array(p.data['tags']) }
-          slugify = ->(name) { Jekyll::Utils.slugify(name) }
+          slugify = ->(name) { Jekyll::Utils.slugify(name.to_s) }
           # One feed per slug, not per spelling (#754): `Quotes` and `quotes`
           # share a URL, and the second page would overwrite the first.
           groups = Jekyll::AutoTagPages.group(
             curated_names: curated, post_tag_lists: post_tag_lists, slugify: slugify,
           )
-          excluded_slugs = excluded.map { |name| slugify.call(name) }
+          excluded_slugs = excluded.map { |name| slugify.call(name.to_s) }.reject(&:empty?)
           groups.each do |slug, group|
             next if excluded_slugs.include?(slug)
             # A name with no `_tags/` entry whose slug starts `e2e-` (#689)

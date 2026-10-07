@@ -47,8 +47,14 @@ module Jekyll
     # `variants` lists every spelling, first seen first.
     def self.group(curated_names:, post_tag_lists:, slugify:)
       groups = {}
+      # Tag names with an empty slug (#812) have no public archive.
       curated_names.compact.each do |name|
-        group = groups[slugify.call(name)] ||= { 'variants' => [], 'curated' => [] }
+        next if name.to_s.strip.empty?
+
+        slug = slugify.call(name.to_s)
+        next if slug.empty?
+
+        group = groups[slug] ||= { 'variants' => [], 'curated' => [] }
         group['curated'] << name unless group['curated'].include?(name)
         group['variants'] << name unless group['variants'].include?(name)
       end
@@ -56,8 +62,13 @@ module Jekyll
       uses = Hash.new(0)
       post_tag_lists.each do |list|
         Array(list).compact.uniq.each do |name|
+          next if name.to_s.strip.empty?
+
+          slug = slugify.call(name.to_s)
+          next if slug.empty?
+
           uses[name] += 1
-          group = groups[slugify.call(name)] ||= { 'variants' => [], 'curated' => [] }
+          group = groups[slug] ||= { 'variants' => [], 'curated' => [] }
           group['variants'] << name unless group['variants'].include?(name)
         end
       end
@@ -80,7 +91,8 @@ module Jekyll
     # lookup, not by slugifying every tag of every post on every tag page.
     def self.posts_by_slug(posts, slugify:)
       posts.each_with_object({}) do |post, index|
-        Array(post.data['tags']).compact.map { |name| slugify.call(name) }.uniq.each do |slug|
+        Array(post.data['tags']).reject { |name| name.to_s.strip.empty? }
+                               .map { |name| slugify.call(name.to_s) }.reject(&:empty?).uniq.each do |slug|
           (index[slug] ||= []) << post
         end
       end
@@ -129,7 +141,7 @@ if defined?(Jekyll::Generator)
         def initialize(site, name)
           @site = site
           @base = site.source
-          slug = Jekyll::Utils.slugify(name)
+          slug = Jekyll::Utils.slugify(name.to_s)
           @dir = "tags/#{slug}/"
           @name = 'index.html'
           @basename = 'index'
@@ -153,12 +165,24 @@ if defined?(Jekyll::Generator)
         priority :low
 
         def generate(site)
+          # Nameless or empty-slug curated docs have no public archive (#812).
+          site.collections['tags']&.docs&.reject! do |doc|
+            name = doc.data['name'].to_s
+            name.strip.empty? || Jekyll::Utils.slugify(name).empty?
+          end
+
           excluded = Jekyll::ExcludeE2EPosts.excluded_tag_names(site)
           # Judged by slug, like the grouping: a case variant of an excluded
           # `_tags/` entry is the same tag and must not mint a second page at
           # the entry's own /tags/<slug>/ (#754).
-          excluded_slugs = excluded.map { |name| Jekyll::Utils.slugify(name) }
-          excluded_tag = ->(name) { excluded_slugs.include?(Jekyll::Utils.slugify(name)) }
+          excluded_slugs = excluded.map { |name| Jekyll::Utils.slugify(name.to_s) }.reject(&:empty?)
+          # Do not send blank names through Jekyll's slugifier (#812).
+          excluded_tag = lambda do |name|
+            next true if name.to_s.strip.empty?
+
+            slug = Jekyll::Utils.slugify(name.to_s)
+            slug.empty? || excluded_slugs.include?(slug)
+          end
           missing, all_tags = AutoTagPages.summarise(
             curated: curated_tags(site).reject { |c| excluded_tag.call(c['name']) },
             # Skip e2e / test-fixture posts (feed_exclude stamped by
@@ -169,14 +193,14 @@ if defined?(Jekyll::Generator)
             # e2e / test-fixture `_tags/` entries (#689) are dropped the same
             # way: no tag-cloud or /tags/ entry, and no count.
             post_tag_lists: public_posts(site).map { |p| Array(p.data['tags']).reject { |n| excluded_tag.call(n) } },
-            slugify: ->(name) { Jekyll::Utils.slugify(name) },
+            slugify: ->(name) { Jekyll::Utils.slugify(name.to_s) },
           )
 
           # A name with no `_tags/` entry whose slug starts `e2e-` (#689)
           # still gets its archive, so a real post's pill does not 404, but
           # stamped noindex / out of the sitemap and left out of
           # `site.all_tags` (the tag cloud and /tags/).
-          slugify = ->(name) { Jekyll::Utils.slugify(name) }
+          slugify = ->(name) { Jekyll::Utils.slugify(name.to_s) }
           e2e_names = missing.select { |name| Jekyll::ExcludeE2EPosts.e2e_tag_name?(name, slugify: slugify) }
           missing.each do |name|
             page = TagPage.new(site, name)
