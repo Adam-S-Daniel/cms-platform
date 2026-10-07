@@ -202,7 +202,7 @@ used the candidate theme from the working tree. The site-owned layout used a
 local CSS overlay containing both candidate iframe rules, including
 `box-sizing: border-box`; adopting those rules in the consumer remains a
 separate requirement. The existing overflow spec injected the same static
-fixture into each rendered layout's `main`. All eight overflow assertions per
+fixture into each rendered layout's `main`. All eight overflow cases per
 layout passed (two projects at 360, 390, 768, and 1280 pixels), including table
 scroll reachability, container containment, the default 16:9 iframe ratio,
 an author's explicit ratio override, and an interactive frame's authored
@@ -210,6 +210,14 @@ height. Removing the dimensioned-iframe rule made all eight assertions fail
 on sizing ratios; removing the table scroll rule made all eight fail on
 overflow. The parsed CSS regression also failed when its dimensioned-iframe
 rule was removed.
+
+A follow-up verification run covered the two platform fixture layouts, with
+eight passing cases per layout and zero skips. Removing iframe sizing or table
+scrolling from generated CSS made all eight cases fail on each layout. Restoring
+the old mobile-only project predicate skipped every desktop fixture case; a
+per-project count check rejected that result. Restored fixture runs passed.
+These reruns corroborate the browser assertions but do not repeat the pinned
+consumer-layout builds above.
 
 This is local candidate compatibility evidence, not deployed validation or
 owner acceptance. Release, adoption of the iframe rules in the site-owned
