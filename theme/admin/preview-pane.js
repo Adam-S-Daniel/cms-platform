@@ -85,15 +85,13 @@
 
   // ── Raw HTML embeds (#687) ───────────────────────────────────────────────
   //
-  // The body is split by line, the way CommonMark finds an HTML block: outside
-  // a code fence, a line starting with `<` after a blank line (or a line
-  // starting with `<iframe`) opens a block that runs to the next blank line.
-  // Only blocks holding an <iframe> are taken out; everything else, including
-  // an <iframe> shown inside a code fence, stays markdown.
+  // Follow CommonMark's HTML block endings so a comment cannot swallow the
+  // fence after it. Only raw tag blocks holding an iframe leave markdown.
   var FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
-  var HTML_BLOCK_START = /^ {0,3}<(?:[A-Za-z]|\/[A-Za-z]|!--)/;
-  var IFRAME_LINE_START = /^ {0,3}<iframe[\s>/]/i;
   var IFRAME_OPEN = /<iframe[\s>/]/i;
+  var BLOCK_TAG = /^(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)$/i;
+  var COMPLETE_OPEN_TAG = /^<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*\/?>\s*$/;
+  var COMPLETE_CLOSE_TAG = /^<\/[A-Za-z][A-Za-z0-9-]*\s*>\s*$/;
 
   function isBlank(line) {
     return /^\s*$/.test(line);
@@ -104,6 +102,93 @@
     return !!m && m[1].charAt(0) === fence.charAt(0) && m[1].length >= fence.length;
   }
 
+  function htmlBlock(line, prevBlank) {
+    var start = /^ {0,3}</.exec(line);
+    if (!start) return null;
+    var html = line.slice(start[0].length - 1);
+    if (/^<(?:script|pre|style|textarea)(?:\s|>|\/)/i.test(html)) {
+      var tag = /^<([A-Za-z]+)/.exec(html)[1];
+      return { end: new RegExp("</" + tag + ">", "i"), raw: false };
+    }
+    if (html.indexOf("<!--") === 0) return { end: /-->/, raw: false };
+    if (html.indexOf("<?") === 0) return { end: /\?>/, raw: false };
+    if (/^<![A-Z]/.test(html)) return { end: />/, raw: false };
+    if (html.indexOf("<![CDATA[") === 0) return { end: /\]\]>/, raw: false };
+    var tag = /^<\/?([A-Za-z][\w-]*)(?=[\s/>]|$)/.exec(html);
+    if (tag && BLOCK_TAG.test(tag[1])) return { end: null, raw: true };
+    // A type 7 block cannot interrupt a paragraph. Require a complete tag;
+    // an inline '<iframe' in prose must never become a separate block.
+    if (prevBlank && (COMPLETE_OPEN_TAG.test(html) || COMPLETE_CLOSE_TAG.test(html))) {
+      return { end: null, raw: true };
+    }
+    return null;
+  }
+
+  // Strip Markdown container markers only for block recognition. The original
+  // lines remain in markdown; extracted embeds keep their container metadata.
+  function contentLine(line, listIndent) {
+    var rest = line;
+    var quotes = 0;
+    var quote;
+    while ((quote = /^ {0,3}> ?/.exec(rest))) {
+      rest = rest.slice(quote[0].length);
+      quotes++;
+    }
+    var list = /^ {0,3}([-+*]|\d{1,9}[.)])([ \t]+)/.exec(rest);
+    if (list) {
+      return { text: rest.slice(list[0].length), quotes: quotes, list: list[1], indent: list[0].length, continued: false };
+    }
+    var continued = false;
+    if (listIndent && rest.slice(0, listIndent).trim() === "" && rest.length >= listIndent) {
+      rest = rest.slice(listIndent);
+      continued = true;
+    }
+    return { text: rest, quotes: quotes, list: null, indent: 0, continued: continued };
+  }
+
+  function fencedLine(line, fence) {
+    var rest = line;
+    for (var i = 0; i < fence.containers.length; i++) {
+      var container = fence.containers[i];
+      if (container === ">") {
+        var quote = /^ {0,3}> ?/.exec(rest);
+        if (!quote) return null;
+        rest = rest.slice(quote[0].length);
+      } else {
+        if (isBlank(rest)) return i === fence.containers.length - 1 ? "" : null;
+        if (rest.slice(0, container).trim() !== "" || rest.length < container) return null;
+        rest = rest.slice(container);
+      }
+    }
+    return rest;
+  }
+
+  function openingFence(line, listIndent) {
+    var rest = line;
+    var containers = [];
+    if (listIndent && rest.slice(0, listIndent).trim() === "" && rest.length >= listIndent) {
+      containers.push(listIndent);
+      rest = rest.slice(listIndent);
+    }
+    while (rest) {
+      var quote = /^ {0,3}> ?/.exec(rest);
+      if (quote) {
+        containers.push(">");
+        rest = rest.slice(quote[0].length);
+        continue;
+      }
+      var list = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(rest);
+      if (list) {
+        containers.push(list[0].length);
+        rest = rest.slice(list[0].length);
+        continue;
+      }
+      break;
+    }
+    var open = FENCE_OPEN.exec(rest);
+    return open ? { marker: open[1], containers: containers } : null;
+  }
+
   // -> null when the body has no iframe block, else
   //    [{ kind: "markdown" | "html", text }] in document order.
   function splitBody(body) {
@@ -112,6 +197,8 @@
     var segments = [];
     var markdown = [];
     var fence = null;
+    var listIndent = 0;
+    var activeList = null;
     var prevBlank = true;
     var found = false;
     var i = 0;
@@ -122,27 +209,56 @@
     while (i < lines.length) {
       var line = lines[i];
       if (fence) {
-        if (closesFence(line, fence)) fence = null;
-        markdown.push(line);
-        prevBlank = false;
-        i++;
-        continue;
+        var fenced = fencedLine(line, fence);
+        if (fenced !== null) {
+          if (closesFence(fenced, fence.marker)) fence = null;
+          markdown.push(line);
+          prevBlank = false;
+          i++;
+          continue;
+        }
+        fence = null;
       }
-      var open = FENCE_OPEN.exec(line);
+      var content = contentLine(line, listIndent);
+      var source = content.text;
+      var priorListIndent = listIndent;
+      if (isBlank(line)) {
+        // A blank line can occur inside a list item; a later indented line
+        // still belongs to it. An unindented nonblank line ends it below.
+      } else if (content.list) {
+        listIndent = content.indent;
+        activeList = content.list;
+      } else if (!isBlank(source) && !/^\s/.test(line.replace(/^ {0,3}> ?/, ""))) {
+        listIndent = 0;
+        activeList = null;
+      }
+      var open = openingFence(line, priorListIndent);
       if (open) {
-        fence = open[1];
+        fence = open;
         markdown.push(line);
         prevBlank = false;
         i++;
         continue;
       }
-      if ((prevBlank && HTML_BLOCK_START.test(line)) || IFRAME_LINE_START.test(line)) {
+      var html = htmlBlock(source, prevBlank);
+      if (html) {
         var block = [];
-        while (i < lines.length && !isBlank(lines[i])) block.push(lines[i++]);
-        var text = block.join("\n");
-        if (IFRAME_OPEN.test(text)) {
+        var rendered = [];
+        var blockList = activeList;
+        var blockQuotes = content.quotes;
+        while (i < lines.length) {
+          var part = contentLine(lines[i], listIndent);
+          if (block.length && (part.quotes !== blockQuotes || part.list || (blockList && !part.continued))) break;
+          if (!html.end && isBlank(part.text)) break;
+          block.push(lines[i]);
+          rendered.push(part.text);
+          i++;
+          if (html.end && html.end.test(part.text)) break;
+        }
+        var text = rendered.join("\n");
+        if (html.raw && hasIframeTag(text)) {
           flush();
-          segments.push({ kind: "html", text: text });
+          segments.push({ kind: "html", text: text, quotes: content.quotes, list: activeList });
           found = true;
         } else {
           markdown = markdown.concat(block);
@@ -265,6 +381,23 @@
     /<!--[\s\S]*?(?:-->|$)|<\/([A-Za-z][\w:-]*)\s*>|<([A-Za-z][\w:-]*)((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*)\s*\/?>/g;
   var ATTR_TOKEN = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
+  function hasIframeTag(html) {
+    var m;
+    TAG_TOKEN.lastIndex = 0;
+    while ((m = TAG_TOKEN.exec(html))) {
+      if (!m[2]) continue;
+      var tag = m[2].toLowerCase();
+      if (DROP_WITH_CONTENT[tag]) {
+        var end = html.toLowerCase().indexOf("</" + tag, TAG_TOKEN.lastIndex);
+        var gt = end === -1 ? -1 : html.indexOf(">", end);
+        TAG_TOKEN.lastIndex = gt === -1 ? html.length : gt + 1;
+      } else if (tag === "iframe") {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function elementProps(tag, rawAttrs, key) {
     var props = { key: key };
     var allowed = GLOBAL_ATTRS.concat(ALLOWED_TAGS[tag]);
@@ -343,10 +476,16 @@
     return segments.map(function (segment, n) {
       if (segment.kind === "html") {
         var key = "embed-" + n;
-        return h.apply(
+        var embed = h.apply(
           null,
           ["div", { key: key, className: "cms-preview-html" }].concat(renderHtmlBlock(h, segment.text, key)),
         );
+        if (segment.list) {
+          var listTag = /^\d/.test(segment.list) ? "ol" : "ul";
+          embed = h(listTag, { key: key + "-list" }, h("li", null, embed));
+        }
+        for (var q = 0; q < segment.quotes; q++) embed = h("blockquote", { key: key + "-quote-" + q }, embed);
+        return embed;
       }
       return h(
         "div",

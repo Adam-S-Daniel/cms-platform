@@ -348,7 +348,7 @@ test.describe("preview-pane.js", () => {
     expect(() => (tree = b.templates.projects(props))).not.toThrow();
     expect(find(tree, (n) => n.type === "iframe")).toHaveLength(1);
     expect(calls).toEqual([
-      { name: "description", value: "Intro paragraph.\n", title: "Robot" },
+      { name: "description", value: "Intro paragraph.\n\n<!-- html-embed:start -->", title: "Robot" },
       { name: "description", value: "\nClosing paragraph.", title: "Robot" },
     ]);
   });
@@ -371,7 +371,7 @@ test.describe("preview-pane.js", () => {
     const tree = b.templates.articles(props);
     expect(find(tree, (n) => n.type === "iframe")).toHaveLength(1);
     expect(calls).toEqual([
-      { name: "article", value: "Intro paragraph.\n" },
+      { name: "article", value: "Intro paragraph.\n\n<!-- html-embed:start -->" },
       { name: "article", value: "\nClosing paragraph." },
     ]);
   });
@@ -428,7 +428,7 @@ test.describe("preview-pane.js", () => {
     expect(textOf(a)).toBe("Open it →");
     // The markdown around it still goes through Decap's markdown preview.
     const md = find(tree, (n) => n.type === "markdown-preview").map((n) => n.props.value);
-    expect(md).toEqual(["Intro paragraph.\n", "\nClosing paragraph."]);
+    expect(md).toEqual(["Intro paragraph.\n\n<!-- html-embed:start -->", "\nClosing paragraph."]);
   });
 
   test("a body without an iframe block renders through widgetFor unchanged", () => {
@@ -442,6 +442,144 @@ test.describe("preview-pane.js", () => {
     const body = 'Example:\n\n```html\n<iframe src="/x"></iframe>\n```\n';
     expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
     expect(find(renderPost(body), (n) => n.type === "iframe")).toHaveLength(0);
+  });
+
+  test("an HTML comment ends before the following fenced iframe", () => {
+    const body = '<!-- example -->\n```html\n<iframe src="/x"></iframe>\n```';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
+    expect(find(renderPost(body), (n) => n.type === "iframe")).toHaveLength(0);
+    expect(find(renderPost(body), (n) => n.type === "markdown-preview").map((n) => n.props.value)).toEqual(["WHOLE-BODY"]);
+  });
+
+  test("an iframe spelling inside an HTML comment is never extracted", () => {
+    const body = '<div>\n<!-- <iframe src="/example"></iframe> -->\n</div>';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
+    expect(find(renderPost(body), (n) => n.type === "markdown-preview").map((n) => n.props.value)).toEqual(["WHOLE-BODY"]);
+  });
+
+  test("terminated HTML blocks leave a following iframe example in markdown", () => {
+    for (const prefix of [
+      "<?demo?>",
+      "<!DOCTYPE html>",
+      "<![CDATA[example]]>",
+      "<script>example</script>",
+      "<pre>example</pre>",
+      "<style>example</style>",
+      "<textarea>example</textarea>",
+    ]) {
+      const body = `${prefix}\n~~~html\n<iframe src="/x"></iframe>\n~~~`;
+      expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body), prefix).toBeNull();
+      expect(find(renderPost(body), (n) => n.type === "iframe"), prefix).toHaveLength(0);
+    }
+  });
+
+  test("HTML blocks ending at a blank line preserve a following fenced example", () => {
+    for (const prefix of ["<div>example</div>", "<custom-tag>example</custom-tag>"]) {
+      const body = `${prefix}\n\n~~~html\n<iframe src="/x"></iframe>\n~~~`;
+      expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body), prefix).toBeNull();
+      expect(find(renderPost(body), (n) => n.type === "iframe"), prefix).toHaveLength(0);
+    }
+  });
+
+  test("fenced examples and real embeds keep their document order", () => {
+    const body = '<!-- example -->\n```html\n<iframe src="/code"></iframe>\n```\n\n<iframe src="/live"></iframe>\n\nAfter.';
+    const tree = renderPost(body);
+    expect(find(tree, (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
+    const markdown = find(tree, (n) => n.type === "markdown-preview").map((n) => n.props.value);
+    expect(markdown).toEqual(['<!-- example -->\n```html\n<iframe src="/code"></iframe>\n```\n', '\nAfter.']);
+  });
+
+  test("list and blockquote embeds remain live inside their containers", () => {
+    for (const [body, container] of [
+      ['- <iframe src="/x"></iframe>', "li"],
+      ['> <iframe src="/x"></iframe>', "blockquote"],
+    ]) {
+      const tree = renderPost(body);
+      expect(find(tree, (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/x"]);
+      const [parent] = find(tree, (n) => n.type === container);
+      expect(find(parent, (n) => n.type === "iframe")).toHaveLength(1);
+    }
+  });
+
+  test("an HTML block stops when its quote or list item ends", () => {
+    const bodies = [
+      '> <!-- note\n<iframe src="/real"></iframe>',
+      '> <div>\n> <iframe src="/quoted"></iframe>\n```html\n<iframe src="/code"></iframe>\n```',
+      '- <div>\n  <iframe src="/first"></iframe>\n- <iframe src="/second"></iframe>',
+    ];
+    const expected = [["/real"], ["/quoted"], ["/first", "/second"]];
+    for (let i = 0; i < bodies.length; i++) {
+      const tree = renderPost(bodies[i]);
+      expect(find(tree, (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(expected[i]);
+      if (i === 1) {
+        const markdown = find(tree, (n) => n.type === "markdown-preview").map((n) => n.props.value);
+        expect(markdown.join("\n")).toContain('```html\n<iframe src="/code"></iframe>\n```');
+      }
+    }
+  });
+
+  test("fenced and indented examples inside containers remain markdown", () => {
+    for (const body of [
+      '> ```html\n> <iframe src="/x"></iframe>\n> ```',
+      '- ```html\n  <iframe src="/x"></iframe>\n  ```',
+      '    <iframe src="/x"></iframe>',
+    ]) {
+      expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body), body).toBeNull();
+      expect(find(renderPost(body), (n) => n.type === "iframe"), body).toHaveLength(0);
+    }
+  });
+
+  test("a quote fence ends at the quote boundary and the outer fence starts anew", () => {
+    const body = '> ```\n```\n<iframe src="/code"></iframe>';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body)).toBeNull();
+    expect(find(renderPost(body), (n) => n.type === "iframe")).toHaveLength(0);
+  });
+
+  test("container-looking lines inside a fence remain code", () => {
+    for (const body of [
+      '```html\n- <iframe src="/code"></iframe>\n```',
+      '```html\n> <iframe src="/code"></iframe>\n```',
+      '> ```html\n> > <iframe src="/code"></iframe>\n> ```',
+      '- ```html\n  - <iframe src="/code"></iframe>\n  ```',
+      '- > ```html\n  > <iframe src="/code"></iframe>\n  > ```',
+      '- - ```html\n    <iframe src="/code"></iframe>\n    ```',
+      '> - > ```html\n>   > <iframe src="/code"></iframe>\n>   > ```',
+      '- > ```html\n  > > <iframe src="/code"></iframe>\n  > ```',
+    ]) {
+      expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body), body).toBeNull();
+      expect(find(renderPost(body), (n) => n.type === "iframe"), body).toHaveLength(0);
+    }
+  });
+
+  test("a quote fence cannot suppress a real embed after the quote ends", () => {
+    const body = '> ```\n<iframe src="/live"></iframe>';
+    expect(find(renderPost(body), (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
+  });
+
+  test("a list item embed remains in the item across a blank line", () => {
+    const body = '- Intro\n\n  <iframe src="/live"></iframe>';
+    const tree = renderPost(body);
+    const [item] = find(tree, (n) => n.type === "li");
+    expect(find(item, (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
+  });
+
+  test("a block tag interrupts prose but an inline or type 7 tag does not", () => {
+    expect(find(renderPost('Intro\n<div><iframe src="/x"></iframe></div>'), (n) => n.type === "iframe")).toHaveLength(1);
+    for (const body of [
+      'Intro <iframe src="/x"></iframe>',
+      'Intro\n<custom-tag><iframe src="/x"></iframe></custom-tag>',
+    ]) {
+      expect(boot().window.adamdaniel_cms_preview_pane.splitBody(body), body).toBeNull();
+    }
+  });
+
+  test("type 7 requires a complete valid tag before it can contain an embed", () => {
+    const invalid = '<custom-tag ???>\n```html\n<iframe src="/code"></iframe>\n```';
+    expect(boot().window.adamdaniel_cms_preview_pane.splitBody(invalid)).toBeNull();
+    expect(find(renderPost(invalid), (n) => n.type === "iframe")).toHaveLength(0);
+
+    const valid = '<custom-tag data-kind="example">\n<iframe src="/live"></iframe>';
+    expect(find(renderPost(valid), (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["/live"]);
   });
 
   test("the embed renderer drops scripts, handlers, srcdoc and unsafe URLs", () => {
