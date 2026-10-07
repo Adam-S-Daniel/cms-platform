@@ -17,6 +17,7 @@
     "decap-server": "^3.11.3",
     "immutable": "5.1.9",
     "markdown-it": "15.0.2",
+    "parse5": "8.0.1",
     "pngjs": "^7.0.0",
     "postcss": "8.5.28",
     "serve": "^14.2.6",

@@ -175,6 +175,8 @@ const PLATFORM_META_SPECS = [
   "route-focus.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
   "editor-component-image.test.js",
+  // #732 — platform-only code widget registration and initialization regression.
+  "code-block-language.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",
