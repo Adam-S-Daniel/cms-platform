@@ -10,9 +10,14 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.158)
+## Version history (v0.1.0 → v0.1.159)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.159 — Tags with an empty slug no longer mint /tags//.**
+One PR merge since v0.1.158: [#813](https://github.com/Adam-S-Daniel/cms-platform/pull/813), for [#812](https://github.com/Adam-S-Daniel/cms-platform/issues/812). Both the unrestricted and first-parent merge ranges contain exactly this merge; there are no Dependabot merges in the range.
+Empty-slug tags. [#813](https://github.com/Adam-S-Daniel/cms-platform/pull/813) skips any tag whose slug is empty — blank, whitespace-only (including a non-breaking space), punctuation-only and emoji-only names — in `auto_tag_pages.rb`, `tag_feeds.rb` and `exclude_e2e_posts.rb`, so such a tag no longer mints a `""` all_tags row, a `/tags//` archive or feed, or a post pill linking to it. A curated `_tags` doc whose name has no slug is now dropped; on main it either orphaned a page headed with its filename or overwrote a real archive at its URL, so `/tags/<file>/` for such a doc now 404s. Decap requires `name`, so only hand-edited files can hit this. `default.html`, `tag.html` and `atom_feed.xml` slugify `tag | append: ''`, so number and boolean tags slugify as strings instead of crashing the build. Output for ordinary tags is byte-identical: an independent reviewer's base-vs-fix build of 11 output files matched under `diff -r`.
+Consumer effect. This changes theme plugins and layouts, so it reaches consumers' built pages once they pin v0.1.159. Site-owned templates that call `tag | slugify` directly are unchanged and still crash on a number tag; [#814](https://github.com/Adam-S-Daniel/cms-platform/issues/814) tracks them and remains open. No v0.1.159 consumer rollout or live verification has occurred. Nothing in this range changes `theme/admin/`, the OAuth proxy or infrastructure.
 
 **v0.1.158 — Site verifier self-tests and consumer browser-test fixes.**
 Two PR merges since v0.1.157: [#809](https://github.com/Adam-S-Daniel/cms-platform/pull/809) and [#810](https://github.com/Adam-S-Daniel/cms-platform/pull/810). Both the unrestricted and first-parent merge ranges contain exactly these two merges; there are no Dependabot merges in the range.
