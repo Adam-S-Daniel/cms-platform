@@ -10,9 +10,15 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.157)
+## Version history (v0.1.0 → v0.1.158)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.158 — Site verifier self-tests and consumer browser-test fixes.**
+Two PR merges since v0.1.157: [#809](https://github.com/Adam-S-Daniel/cms-platform/pull/809) and [#810](https://github.com/Adam-S-Daniel/cms-platform/pull/810). Both the unrestricted and first-parent merge ranges contain exactly these two merges; there are no Dependabot merges in the range.
+Site verifier self-tests. [#809](https://github.com/Adam-S-Daniel/cms-platform/pull/809) runs a site's optional `scripts/test-verify-build-artifacts.rb` through Bundler before its Jekyll build in `site-verify.yml`. A failing matrix leg fails the required gate; an absent script produces a notice and succeeds. Ruby setup detection is independent of the build-artifact verifier's presence. The source evidence found self-tests in adamdaniel.ai and no equivalent in jodidaniel.com; selection and invocation were checked with a stub, but the full consumer matrix was not executed.
+Consumer browser tests. [#810](https://github.com/Adam-S-Daniel/cms-platform/pull/810), from `fix/v0157-consumer-e2e`, changes only e2e tests, fixtures and documentation. Embed ratio assertions apply only to the theme's home layout, while all layouts retain containment and accessibility assertions. The single-page fixture mirrors legacy iframe styling. Phone saves are split into eight independent cases and wait for the exact “Changes Saved” badge; production Publish tests have a 180-second budget. Local browser checks passed in the source PR; this is test coverage repair, not a runtime theme change.
+Consumer effect. v0.1.158 supersedes the failed v0.1.157 consumer bumps [adamdaniel.ai #4154](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4154) and [jodidaniel.com #392](https://github.com/jodidaniel/jodidaniel.com/pull/392), whose e2e checks failed. The site-verifier workflow and browser-test changes reach consumers through their platform pins; the optional verifier self-tests run only where the site owns that script. No v0.1.158 consumer rollout or live verification has occurred. Nothing in this range changes `theme/admin/`, the OAuth proxy or infrastructure.
 
 **v0.1.157 — Proportional dimensioned embeds, code-block language persistence, phone admin layout fixes, and managed guidance synchronization.**
 Four first-parent PR merges since v0.1.156: [#804](https://github.com/Adam-S-Daniel/cms-platform/pull/804), [#805](https://github.com/Adam-S-Daniel/cms-platform/pull/805), [#806](https://github.com/Adam-S-Daniel/cms-platform/pull/806), and [#807](https://github.com/Adam-S-Daniel/cms-platform/pull/807). There are no Dependabot merges in the range; the additional merge on the phone-admin branch synchronizes main rather than introducing a separate change.
