@@ -585,12 +585,13 @@
  * Save / Publish / Delete scrolled away: after writing a long body an editor
  * scrolled ~8 screens back up to publish, and the three stacked rows (back
  * link + status, buttons, hostname + avatar) took ~185px of the first
- * screen. Here the toolbar sticks to the top and shrinks to two rows: back
- * link + avatar, then the buttons. The hostname link is dropped (the
- * editor's "View page" box and the URL hint already name the site). The
- * title is one ellipsized line, every control is a 44px target, and the
- * shim chips (local-mode indicator, deploy pills) wrap to a line of their
- * own under the buttons instead of squeezing the title.
+ * screen. Here the toolbar sticks to the top and keeps its native controls
+ * on one row: back arrow, action buttons, and avatar. The hostname link is
+ * dropped (the editor's "View page" box and URL hint already name the site).
+ * The Back link keeps its full accessible name, while saved-status text
+ * retains Decap's existing ARIA attributes in the DOM. Every control is a
+ * 44px target. Shim chips (local-mode indicator, deploy pills) wrap to a line
+ * of their own under the buttons instead of squeezing the controls.
  *
  * `position: sticky` needs no scrolling ancestor between the toolbar and the
  * viewport. `html, body { overflow-x: hidden }` (rule 1) makes <body> a
@@ -605,9 +606,9 @@
  * The toolbar's z-index sits above Decap's in-editor controls (their highest
  * is 600) and below the floating links (10000) and Decap's modals (99999).
  *
- * Not covered: on the production shell Publish lives in the in-flow
- * `#cms-publish-state` bar (publish-step-hint.js / publish-button.js),
- * which is still not sticky; see the PR for why. */
+ * On production Publish lives in the sibling `#cms-publish-state` bar.
+ * It sticks directly beneath the toolbar, using the height measured by
+ * publish-step-hint.js so wrapping and deploy pills cannot overlap it. */
 @media (max-width: 600px) {
   /* ── Title on one line, and 44px touch targets (#731) ────────────────
    * The back link is `[arrow] [title block]`. The title block (an unnamed
@@ -650,38 +651,152 @@
     }
     [class*="EditorContainer"] > [class*="ToolbarContainer"] {
       position: sticky !important;
+      display: grid !important;
+      grid-template-columns: 44px minmax(0, 1fr) 44px;
       top: 0;
       z-index: 1000;
       background: #fff;
       align-items: center;
-      column-gap: 0.4rem;
+      column-gap: 4px;
       row-gap: 0;
     }
-    /* Row 1: back link (takes the slack) + avatar. Row 2: the buttons. */
+    [class*="EditorContainer"] > #cms-publish-state {
+      position: sticky;
+      top: var(--cms-editor-toolbar-height);
+      /* Keep native toolbar dropdowns above this later sibling. */
+      z-index: 999;
+      background: #fff;
+    }
+    /* Idle can still contain Publish controls. Its inline transparent tone
+     * must not let scrolling fields show through; other state tones are opaque. */
+    [class*="EditorContainer"] > #cms-publish-state[data-state="idle"] {
+      background: #fff !important;
+    }
+    [class*="EditorContainer"] > #cms-publish-state button {
+      min-height: 44px;
+      min-width: 44px;
+    }
+    /* Native controls fit one row even at 320px. The back arrow retains the
+     * collection name for assistive technology without spending visual space. */
     [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] {
-      flex: 1 1 0 !important;
+      flex: 0 0 44px !important;
+      grid-column: 1;
+      width: 44px;
+      padding: 0;
+      justify-content: center !important;
       min-width: 0 !important;
       order: 0;
     }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionBackLink"] > :not([class*="BackArrow"]) {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="BackArrow"] {
+      margin: 0;
+    }
     [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMeta"] {
-      flex: 0 0 auto !important;
-      order: 1;
+      flex: 0 0 44px !important;
+      grid-column: 3;
+      width: 44px;
+      padding: 0;
+      border-left: 0;
+      order: 2;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="SettingsWrapper"] {
+      width: 44px;
+      padding: 0;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="AvatarDropdownButton"] {
+      width: 44px !important;
+      padding: 6px !important;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="AvatarDropdownButton"] img {
+      width: 32px;
+      height: 32px;
     }
     [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] {
-      order: 2;
+      grid-column: 2;
+      flex: 0 1 auto !important;
+      flex-wrap: nowrap !important;
+      order: 1;
       /* Rule 5's 0.4rem gap, applied to the empty "View Live" sub-section
        * that wraps below the buttons, left a 6px strip under them. */
       row-gap: 0;
-      padding: 0 8px;
+      column-gap: 0;
+      padding: 0;
     }
-    /* Tighter buttons, so Save / Published / Delete share one row down to a
-     * 375px phone (they are 364px wide at Decap's spacing, 351px here). */
+    /* Keep the Save and Published labels readable while the Delete icon
+     * leaves room for both controls on a 320px phone. */
     [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] [class*="ToolbarSubSection"] {
+      flex: 0 0 auto !important;
+      flex-wrap: nowrap !important;
       column-gap: 0.25rem;
     }
+    /* After Save, the native preview action can share this row. Its
+     * desktop margin otherwise shrinks the neighboring action section
+     * until Delete and Check for Preview paint over each other. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] [class*="PreviewButtonContainer"] {
+      margin-right: 0;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] [class*="PreviewButtonContainer"] > button > span {
+      margin-right: 0;
+    }
+    /* one-door-publish.js hides this native Status control. Its now-empty
+     * wrapper still occupied a flex gap beside Save and Delete. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarDropdown"]:has(> div > [class*="StatusButton"][data-one-door-hidden="1"]) {
+      display: none;
+    }
     [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] button {
-      padding-left: 8px !important;
-      padding-right: 8px !important;
+      min-width: 44px !important;
+      font-size: 12px !important;
+      padding-left: 4px !important;
+      padding-right: 4px !important;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] [role="button"] {
+      min-width: 44px !important;
+      height: 44px !important;
+      line-height: 44px !important;
+      font-size: 12px !important;
+      padding-left: 4px !important;
+      padding-right: 4px !important;
+    }
+    /* Decap's dropdown caret is 10px wide and sits 10px from the right.
+     * Reserve its space plus a gap so it cannot paint over the label. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] [role="button"][aria-haspopup="true"] {
+      padding-right: 24px !important;
+    }
+    /* Rehearsal workflow drafts also expose Status and Check for Preview.
+     * Keep all of those controls reachable on extra rows. Production's
+     * one-door shim marks its hidden Status control, so it keeps one row. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"]:has([class*="StatusButton"]:not([data-one-door-hidden="1"])) [class*="ToolbarSectionMain"] {
+      grid-column: 1 / -1;
+      order: 3;
+      flex-wrap: wrap !important;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"]:has([class*="StatusButton"]:not([data-one-door-hidden="1"])) [class*="ToolbarSubSection"] {
+      flex-wrap: wrap !important;
+    }
+    /* Keep Decap's full Delete label in its accessible name. The icon is an
+     * empty pseudo-element, so it contributes no extra spoken text. */
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] button[class*="DeleteButton"] {
+      font-size: 0 !important;
+      width: 44px !important;
+      min-width: 44px !important;
+      max-width: 44px !important;
+      flex: 0 0 44px !important;
+    }
+    [class*="EditorContainer"] > [class*="ToolbarContainer"] [class*="ToolbarSectionMain"] button[class*="DeleteButton"]::after {
+      content: "";
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      vertical-align: middle;
+      background: currentColor;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 3h8v2h5v2H3V5h5zm-3 6h14l-1 12H6zm4 2v8h2v-8zm4 0v8h2v-8z'/%3E%3C/svg%3E") center / contain no-repeat;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 3h8v2h5v2H3V5h5zm-3 6h14l-1 12H6zm4 2v8h2v-8zm4 0v8h2v-8z'/%3E%3C/svg%3E") center / contain no-repeat;
     }
     /* Shim chips that prepend themselves to the toolbar with `order: -1`:
      * the local "saves to your working copy" indicator and the deploy
@@ -690,6 +805,7 @@
      * sit under the buttons, on their own line only while they exist (the
      * deploy pills are hidden until a publish is running or failed). */
     [class*="EditorContainer"] > [class*="ToolbarContainer"] > :not([class*="ToolbarSection"]) {
+      grid-column: 1 / -1;
       order: 3 !important;
       flex: 0 1 auto !important;
       box-sizing: border-box;

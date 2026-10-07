@@ -79,11 +79,12 @@
  * on desktop `ToolbarContainer` is `position: absolute` and
  * `EditorContainer` carries a matching `padding-top`, so an in-flow
  * sibling lands directly beneath the toolbar and pushes the editor pane
- * down; on the phone layout the toolbar is `position: static` and wraps,
- * and the same sibling flows after it. Neither case needs a hard-coded
- * offset, which is what makes it safe across Decap's own responsive
- * breakpoints. Verified to survive a React re-render (leave the entry,
- * come back) and to be removed on the collection-list route.
+ * down. On supported phone browsers the toolbar sticks to the viewport,
+ * and admin-mobile.css sticks this sibling directly beneath its measured
+ * height. Both rows remain in flow without a hard-coded offset, so native
+ * controls and extra shim chips can change the toolbar's height safely.
+ * Verified to survive a React
+ * re-render (leave the entry, come back) and to be removed on the collection-list route.
  *
  * It is ALSO why the Publish button lives here rather than in the toolbar:
  * a fifth toolbar control squeezes the other four at 1024 wide, and this
@@ -451,6 +452,16 @@
       toolbar.parentElement.insertBefore(el, toolbar.nextSibling);
     }
 
+    // The phone toolbar can wrap, resize, or gain a deploy pill. Measure its
+    // current height on every sync instead of assuming a fixed row count.
+    // Compare before writing: this style change also wakes our observer.
+    if (typeof toolbar.getBoundingClientRect === "function") {
+      var toolbarHeight = toolbar.getBoundingClientRect().height;
+      if (typeof toolbarHeight === "number" && isFinite(toolbarHeight) && toolbarHeight >= 0) {
+        setStyle(el, "--cms-editor-toolbar-height", toolbarHeight + "px");
+      }
+    }
+
     // No state to report: keep the row, paint nothing (see ROW_MIN_HEIGHT).
     if (!view) view = { state: "idle", label: "", detail: "", modifiers: [] };
     var tone = TONE[view.state] || TONE.draft;
@@ -491,6 +502,7 @@
 
   // REQUIRED re-sync, not belt-and-braces — see the block comment above.
   setInterval(render, SYNC_INTERVAL_MS);
+  window.addEventListener("resize", render);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", render);

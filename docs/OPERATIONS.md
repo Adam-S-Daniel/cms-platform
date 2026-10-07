@@ -21,6 +21,11 @@ node scaffold/create-site.js /tmp/x --yes --domain d --repo d --owner o   # scaf
 # workflows: python3 -c 'import yaml,...' parse + bash -n the run: blocks
 ```
 
+Playwright clears its `outputDir` before a run. Keep scratch configurations,
+served fixtures, mutation sources, and safety stubs outside that directory;
+set an explicit output directory for each scratch configuration. Otherwise a
+verifier can delete its own inputs before collecting any tests.
+
 ## Environment gotchas (this machine / web)
 
 - **The local checkout can be STALE/detached** — before any analysis or work,

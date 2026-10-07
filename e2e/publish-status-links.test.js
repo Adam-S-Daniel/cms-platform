@@ -220,6 +220,7 @@ test.describe("publish-progress — which run the link points at", () => {
 class FakeStyle {
   constructor() {
     this.values = new Map();
+    this.writes = [];
   }
   set cssText(value) {
     this.values.clear();
@@ -235,6 +236,7 @@ class FakeStyle {
     return this.values.get(name) || "";
   }
   setProperty(name, value) {
+    this.writes.push([name, String(value)]);
     this.values.set(name, String(value));
   }
 }
@@ -307,8 +309,12 @@ function findAll(node, pred, out = []) {
 
 function loadBar(barFacts, windowExtra = {}, options = {}) {
   const intervals = [];
+  const observers = [];
+  const listeners = {};
   const root = new FakeNode("div");
-  const toolbar = new FakeNode("div");
+  let toolbar = new FakeNode("div");
+  let toolbarHeight = options.toolbarHeight;
+  if (toolbarHeight !== undefined) toolbar.getBoundingClientRect = () => ({ height: toolbarHeight });
   const save = new FakeNode("button");
   save.disabled = true; // saved: nothing unsaved
   root.appendChild(toolbar);
@@ -344,7 +350,9 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
   const sandbox = {
     window: {
       location: windowExtra.location || new URL("https://example.com/admin/"),
-      addEventListener() {},
+      addEventListener(type, fn) {
+        (listeners[type] = listeners[type] || []).push(fn);
+      },
       CMSPublishProgress: {
         get: () => ({ ready: true, facts: barFacts, prNumber: 7 }),
         subscribe() {},
@@ -354,6 +362,7 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
     document: doc,
     URL,
     MutationObserver: class {
+      constructor(fn) { observers.push(fn); }
       observe() {}
     },
     setInterval(fn) {
@@ -380,8 +389,75 @@ function loadBar(barFacts, windowExtra = {}, options = {}) {
   for (const f of scripts) vm.runInContext(read(f), sandbox);
   const tick = () => intervals.forEach((fn) => fn());
   tick();
-  return { doc, tick, win: sandbox.window };
+  return {
+    doc, tick, win: sandbox.window,
+    resize: () => (listeners.resize || []).forEach((fn) => fn()),
+    mutate: () => observers.forEach((fn) => fn()),
+    setToolbarHeight: (height) => { toolbarHeight = height; },
+    replaceToolbar: (height) => {
+      toolbar.remove();
+      toolbar = new FakeNode("div");
+      toolbar.getBoundingClientRect = () => ({ height });
+      root.insertBefore(toolbar, root.firstChild);
+    },
+  };
 }
+
+test.describe("publish-step-hint — sticky phone offset (#731)", () => {
+  test("the offset follows the measured toolbar on resize, mutation, and interval sync", () => {
+    const bar = loadBar(facts({ hasOpenPr: true }), {}, { toolbarHeight: 93, publish: false });
+    const el = bar.doc.getElementById("cms-publish-state");
+    expect(el.style.getPropertyValue("--cms-editor-toolbar-height")).toBe("93px");
+    bar.setToolbarHeight(137.5);
+    bar.resize();
+    expect(el.style.getPropertyValue("--cms-editor-toolbar-height")).toBe("137.5px");
+    bar.setToolbarHeight(181);
+    bar.mutate();
+    expect(el.style.getPropertyValue("--cms-editor-toolbar-height")).toBe("181px");
+    bar.setToolbarHeight(93);
+    bar.tick();
+    expect(el.style.getPropertyValue("--cms-editor-toolbar-height")).toBe("93px");
+  });
+
+  test("unchanged heights never write again, including observer-triggered sync", () => {
+    const bar = loadBar(facts({ hasOpenPr: true }), {}, { toolbarHeight: 93, publish: false });
+    const el = bar.doc.getElementById("cms-publish-state");
+    el.style.writes = [];
+    bar.resize();
+    bar.mutate();
+    bar.tick();
+    expect(el.style.writes).toEqual([]);
+  });
+
+  test("a replaced toolbar updates the existing bar's offset", () => {
+    const bar = loadBar(facts({ hasOpenPr: true }), {}, { toolbarHeight: 93, publish: false });
+    const el = bar.doc.getElementById("cms-publish-state");
+    bar.replaceToolbar(144);
+    bar.mutate();
+    expect(bar.doc.getElementById("cms-publish-state")).toBe(el);
+    expect(el.style.getPropertyValue("--cms-editor-toolbar-height")).toBe("144px");
+  });
+
+  test("invalid measurements cannot replace the last valid height; zero is valid", () => {
+    const bar = loadBar(facts({ hasOpenPr: true }), {}, { toolbarHeight: 93, publish: false });
+    const el = bar.doc.getElementById("cms-publish-state");
+    for (const height of [NaN, Infinity, -1, "144", undefined, null]) {
+      bar.setToolbarHeight(height);
+      bar.resize();
+      expect(el.style.getPropertyValue("--cms-editor-toolbar-height")).toBe("93px");
+    }
+    bar.setToolbarHeight(0);
+    bar.resize();
+    expect(el.style.getPropertyValue("--cms-editor-toolbar-height")).toBe("0px");
+  });
+
+  test("a DOM without measurement support still renders the publish bar", () => {
+    const bar = loadBar(facts({ hasOpenPr: true }), {}, { publish: false });
+    const el = bar.doc.getElementById("cms-publish-state");
+    expect(el.style.getPropertyValue("--cms-editor-toolbar-height")).toBe("");
+    expect(el.textContent).toContain("Click Publish");
+  });
+});
 
 test.describe("publish-step-hint — the run link", () => {
   test("“did not pass” renders as a link to the run, opening in a new tab", () => {
