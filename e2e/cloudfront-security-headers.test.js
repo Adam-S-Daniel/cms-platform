@@ -7,6 +7,10 @@
 // repeats the baseline and adds the admin Content-Security-Policy, sent as
 // Report-Only until AdminCspMode is flipped to `enforce`.
 //
+// cms-platform#789 — the preview distribution also routes /regression.json
+// to its own behavior, whose policy repeats the baseline and adds a CorsConfig
+// so /admin/reviews can fetch it cross-origin (see the last describe block).
+//
 // Unlike preview-custom-error-response.test.js, the values asserted here ARE
 // wrapped in intrinsics (`!If`, `!Sub`, `!Ref`), so the parse keeps them as
 // their long forms (`{ "Fn::If": [...] }`) instead of dropping the tag, and
@@ -175,7 +179,9 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
   }
 
   test("the preview /admin/* behavior keeps the viewer-request router", () => {
-    const [admin] = template.Resources.PreviewDistribution.Properties.DistributionConfig.CacheBehaviors;
+    const admin = template.Resources.PreviewDistribution.Properties.DistributionConfig.CacheBehaviors.find(
+      (b) => b.PathPattern === "/admin/*",
+    );
     const events = (admin.FunctionAssociations || []).map((f) => f.EventType);
     expect(events).toContain("viewer-request");
   });
@@ -307,4 +313,99 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
       }
     }
   });
+});
+
+// cms-platform#789: /admin/reviews fetch()es preview-pr<N>.<apex>/regression.json
+// from the site's origin, and the preview hosts sent no Access-Control-Allow-Origin.
+test.describe("preview regression.json CORS (cms-platform#789)", () => {
+  const template = loadTemplate();
+  const POLICY_ID = "PreviewRegressionCorsResponseHeadersPolicy";
+  const POLICY = { Ref: POLICY_ID };
+  const previewConfig = () => template.Resources.PreviewDistribution.Properties.DistributionConfig;
+  const cors = (overrides) => renderedPolicy(template, POLICY_ID, parameters(template, overrides)).CorsConfig;
+
+  test("PreviewDistribution routes /regression.json to the CORS policy, otherwise equal to the default behavior", () => {
+    const matches = (previewConfig().CacheBehaviors || []).filter((b) => b.PathPattern === "/regression.json");
+    expect(matches.length, "exactly one /regression.json cache behavior").toBe(1);
+    const { PathPattern, ResponseHeadersPolicyId, ...rest } = matches[0];
+    expect(ResponseHeadersPolicyId).toEqual(POLICY);
+    const { ResponseHeadersPolicyId: _baseline, ...defaults } = previewConfig().DefaultCacheBehavior;
+    // The router maps the host to pr-<N>/; without it the fetch reads the bucket root.
+    expect(rest.FunctionAssociations.map((f) => f.EventType)).toContain("viewer-request");
+    expect(rest).toEqual(defaults);
+  });
+
+  test("the default and /admin/* behaviors do not carry the CORS policy", () => {
+    expect(previewConfig().DefaultCacheBehavior.ResponseHeadersPolicyId).toEqual(BASELINE);
+    const admin = previewConfig().CacheBehaviors.find((b) => b.PathPattern === "/admin/*");
+    expect(admin.ResponseHeadersPolicyId).toEqual(ADMIN);
+  });
+
+  test("ProductionDistribution does not serve the CORS policy", () => {
+    const prod = template.Resources.ProductionDistribution.Properties.DistributionConfig;
+    const behaviors = [prod.DefaultCacheBehavior, ...(prod.CacheBehaviors || [])];
+    for (const b of behaviors) expect(b.ResponseHeadersPolicyId).not.toEqual(POLICY);
+  });
+
+  test("the policy name derives from ResourcePrefix and differs from the other policies", () => {
+    const raw = template.Resources[POLICY_ID].Properties.ResponseHeadersPolicyConfig.Name;
+    expect(raw["Fn::Sub"]).toContain("${ResourcePrefix}");
+    const params = parameters(template);
+    const names = [POLICY_ID, "BaselineResponseHeadersPolicy", "AdminResponseHeadersPolicy"].map(
+      (id) => render(template, template.Resources[id].Properties.ResponseHeadersPolicyConfig.Name, params),
+    );
+    expect(new Set(names).size).toBe(3);
+  });
+
+  test("allows GET and HEAD from the site's apex and www only, without credentials", () => {
+    const c = cors();
+    expect(c.AccessControlAllowOrigins.Items).toEqual([`https://${APEX}`, `https://www.${APEX}`]);
+    expect(c.AccessControlAllowMethods.Items).toEqual(["GET", "HEAD"]);
+    expect(c.AccessControlAllowCredentials).toBe(false);
+    expect(c.OriginOverride).toBe(true);
+  });
+
+  test("the opt-in admin origin (AdminDomainName) is allowed only when set", () => {
+    const admin = `admin.${APEX}`;
+    expect(cors({ AdminDomainName: admin }).AccessControlAllowOrigins.Items).toEqual([
+      `https://${APEX}`,
+      `https://www.${APEX}`,
+      `https://${admin}`,
+    ]);
+    expect(cors({ AdminDomainName: "" }).AccessControlAllowOrigins.Items).toHaveLength(2);
+  });
+
+  test("origins derive from the template parameters, not a hardcoded site", () => {
+    const other = "another-site.test";
+    const items = cors({ ProductionDomainName: other, AdminDomainName: `admin.${other}` })
+      .AccessControlAllowOrigins.Items;
+    expect(items).toEqual([`https://${other}`, `https://www.${other}`, `https://admin.${other}`]);
+    for (const origin of items) expect(origin).not.toContain(APEX);
+  });
+
+  test("no wildcard origin, method or credentials, and no preflight method", () => {
+    const c = cors({ AdminDomainName: `admin.${APEX}` });
+    for (const origin of c.AccessControlAllowOrigins.Items) {
+      expect(origin, "an exact https origin, never a wildcard").toMatch(/^https:\/\/[a-z0-9.-]+$/);
+      expect(origin).not.toContain("*");
+    }
+    expect(c.AccessControlAllowMethods.Items).not.toContain("ALL");
+    expect(c.AccessControlAllowMethods.Items).not.toContain("OPTIONS");
+    expect(c.AccessControlAllowCredentials).toBe(false);
+    expect(c.AccessControlAllowHeaders.Items).not.toContain("*");
+    expect(c.AccessControlExposeHeaders).toBeUndefined();
+  });
+
+  for (const mode of ["report-only", "enforce"]) {
+    test(`keeps every baseline security header, overridden (AdminCspMode=${mode})`, () => {
+      const params = parameters(template, { AdminCspMode: mode });
+      const policy = renderedPolicy(template, POLICY_ID, params);
+      const base = renderedPolicy(template, "BaselineResponseHeadersPolicy", params);
+      expect(headersOf(policy)).toEqual(headersOf(base));
+      expect(policy.SecurityHeadersConfig).toEqual(base.SecurityHeadersConfig);
+      for (const [name, value] of Object.entries(policy.SecurityHeadersConfig)) {
+        expect(value.Override, `${name}.Override`).toBe(true);
+      }
+    });
+  }
 });

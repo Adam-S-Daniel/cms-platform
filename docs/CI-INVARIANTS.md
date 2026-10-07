@@ -1603,8 +1603,12 @@ Four decisions in it that are not obvious from the YAML:
   tree has `scripts/verify-build-artifacts.rb` the reusable builds the site
   (`JEKYLL_ENV=production`, the deploy's build, on deploy-preview's default
   Ruby) and runs it; otherwise it prints a `::notice::` and succeeds.
-  adamdaniel.ai has no such script and no-ops in ~10s. Generalising to a
-  non-Ruby verifier waits for a second case.
+  Independently, it runs the fixed self-test list
+  (`scripts/test-verify-build-artifacts.rb`) with `bundle exec ruby` before
+  building, using the same Ruby and cached bundle. Ruby setup runs when either
+  the verifier or self-tests exist; absent self-tests produce a notice and
+  succeed. Both consumers have verifiers, and adamdaniel.ai has self-tests.
+  Generalizing to a non-Ruby verifier waits for a second case.
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through

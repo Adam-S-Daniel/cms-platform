@@ -10,9 +10,698 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.138)
+## Version history (v0.1.0 → v0.1.159)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.159 — Tags with an empty slug no longer mint /tags//.**
+One PR merge since v0.1.158: [#813](https://github.com/Adam-S-Daniel/cms-platform/pull/813), for [#812](https://github.com/Adam-S-Daniel/cms-platform/issues/812). Both the unrestricted and first-parent merge ranges contain exactly this merge; there are no Dependabot merges in the range.
+Empty-slug tags. [#813](https://github.com/Adam-S-Daniel/cms-platform/pull/813) skips any tag whose slug is empty — blank, whitespace-only (including a non-breaking space), punctuation-only and emoji-only names — in `auto_tag_pages.rb`, `tag_feeds.rb` and `exclude_e2e_posts.rb`, so such a tag no longer mints a `""` all_tags row, a `/tags//` archive or feed, or a post pill linking to it. A curated `_tags` doc whose name has no slug is now dropped; on main it either orphaned a page headed with its filename or overwrote a real archive at its URL, so `/tags/<file>/` for such a doc now 404s. Decap requires `name`, so a missing or blank name comes only from a hand-edited file, but Decap accepts names such as `!!!`, an emoji or a non-breaking space, whose slug is also empty. `default.html`, `tag.html` and `atom_feed.xml` slugify `tag | append: ''`, so number and boolean tags slugify as strings instead of crashing the build. Output for ordinary tags is byte-identical: an independent reviewer's base-vs-fix build of 11 output files matched under `diff -r`.
+Consumer effect. This changes theme plugins and layouts, so it reaches consumers' built pages once they pin v0.1.159. Site-owned templates that call `tag | slugify` directly are unchanged and still crash on a number tag; [#814](https://github.com/Adam-S-Daniel/cms-platform/issues/814) tracks them and remains open. No v0.1.159 consumer rollout or live verification has occurred. Nothing in this range changes `theme/admin/`, the OAuth proxy or infrastructure.
+
+**v0.1.158 — Site verifier self-tests and consumer browser-test fixes.**
+Two PR merges since v0.1.157: [#809](https://github.com/Adam-S-Daniel/cms-platform/pull/809) and [#810](https://github.com/Adam-S-Daniel/cms-platform/pull/810). Both the unrestricted and first-parent merge ranges contain exactly these two merges; there are no Dependabot merges in the range.
+Site verifier self-tests. [#809](https://github.com/Adam-S-Daniel/cms-platform/pull/809) runs a site's optional `scripts/test-verify-build-artifacts.rb` through Bundler before its Jekyll build in `site-verify.yml`. A failing matrix leg fails the required gate; an absent script produces a notice and succeeds. Ruby setup detection is independent of the build-artifact verifier's presence. The source evidence found self-tests in adamdaniel.ai and no equivalent in jodidaniel.com; selection and invocation were checked with a stub, but the full consumer matrix was not executed.
+Consumer browser tests. [#810](https://github.com/Adam-S-Daniel/cms-platform/pull/810), from `fix/v0157-consumer-e2e`, changes only e2e tests, fixtures and documentation. Embed ratio assertions apply only to the theme's home layout, while all layouts retain containment and accessibility assertions. The single-page fixture mirrors legacy iframe styling. Phone saves are split into eight independent cases and wait for the exact “Changes Saved” badge; production Publish tests have a 180-second budget. Local browser checks passed in the source PR; this is test coverage repair, not a runtime theme change.
+Consumer effect. v0.1.158 supersedes the failed v0.1.157 consumer bumps [adamdaniel.ai #4154](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4154) and [jodidaniel.com #392](https://github.com/jodidaniel/jodidaniel.com/pull/392), whose e2e checks failed. The site-verifier workflow and browser-test changes reach consumers through their platform pins; the optional verifier self-tests run only where the site owns that script. No v0.1.158 consumer rollout or live verification has occurred. Nothing in this range changes `theme/admin/`, the OAuth proxy or infrastructure.
+
+**v0.1.157 — Proportional dimensioned embeds, code-block language persistence, phone admin layout fixes, and managed guidance synchronization.**
+Four first-parent PR merges since v0.1.156: [#804](https://github.com/Adam-S-Daniel/cms-platform/pull/804), [#805](https://github.com/Adam-S-Daniel/cms-platform/pull/805), [#806](https://github.com/Adam-S-Daniel/cms-platform/pull/806), and [#807](https://github.com/Adam-S-Daniel/cms-platform/pull/807). There are no Dependabot merges in the range; the additional merge on the phone-admin branch synchronizes main rather than introducing a separate change.
+Responsive tables and embeds. [#804](https://github.com/Adam-S-Daniel/cms-platform/pull/804) (part of [#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540)) makes dimensioned embeds responsive with a 16:9 default, border-box sizing and an explicit aspect-ratio override; undimensioned interactive frames retain their height, and bare tables retain contained scrolling. Fixture CI now includes desktop coverage. Consumer evidence uses pinned consumer layout sources, neutral synthetic content, and a candidate overlay against a site-owned stylesheet, not a deployed change or owner acceptance; #540 remains open for the release and consumer stylesheet adoption.
+Managed guidance. [#805](https://github.com/Adam-S-Daniel/cms-platform/pull/805) synchronizes the managed AGENTS.md guidance while preserving repo-specific additions. This is guidance synchronization only; the PR provides no consumer runtime-effect claim.
+Code-block language. [#806](https://github.com/Adam-S-Daniel/cms-platform/pull/806) (part of [#732](https://github.com/Adam-S-Daniel/cms-platform/issues/732)) mitigates Decap 3.15.1's empty starting-language bug through an extension of the stock widget in all three admin shells. Python selection persists through Rich Text ↔ Markdown switching and saving. The PR adds an exact parse5 development dependency and tests; consumer rollout and live validation were not performed in that PR.
+Phone admin. [#807](https://github.com/Adam-S-Daniel/cms-platform/pull/807) (part of [#731](https://github.com/Adam-S-Daniel/cms-platform/issues/731)) fits native phone actions in one row at 320px and 390px, positions the Publish row from the measured toolbar offset during scrolling, resizing, local-save and deploy-detail states, gives controls 44px targets, and adjusts caret and preview spacing. Toast dismissal stays separate from account taps with its own 44px target; the editor-readiness test is corrected. The PR records Chromium and WebKit coverage; release, consumer rollout and live publishing remain pending.
+**v0.1.156 — The e2e harness's lockfile no longer resolves the vulnerable `simple-git`, `compression` and `joi` releases behind six Dependabot alerts, so a consumer's e2e `npm ci` in its platform copy picks up the fixed tree.**
+One change since v0.1.155: [#802](https://github.com/Adam-S-Daniel/cms-platform/pull/802) (Dependabot alerts [#24](https://github.com/Adam-S-Daniel/cms-platform/security/dependabot/24), [#25](https://github.com/Adam-S-Daniel/cms-platform/security/dependabot/25), [#28](https://github.com/Adam-S-Daniel/cms-platform/security/dependabot/28), [#29](https://github.com/Adam-S-Daniel/cms-platform/security/dependabot/29), [#30](https://github.com/Adam-S-Daniel/cms-platform/security/dependabot/30) and [#31](https://github.com/Adam-S-Daniel/cms-platform/security/dependabot/31), all development scope and transitive), merged on the owner's direct merge OK with no independent-review stamp in its body, after 13 green checks and 1 skipped at head `373269c1` (the merge's second parent). There are no Dependabot merges in the range. It changes the e2e harness only: no theme file, workflow, `workflow_call` input, secret or output changed.
+Apart from the pins, the change is two `e2e/` files (`git diff --stat v0.1.155 origin/main` is 2 files, 42 insertions and 31 deletions: `e2e/package.json` and `e2e/package-lock.json`; `git diff --name-only v0.1.155 origin/main -- .github infrastructure oauth-proxy scaffold scripts skills examples` is empty):
+Overrides. No Decap release fixes these: `decap-server` 3.11.3 (the newest stable, published 2026-09-22) still declares `simple-git ^3.0.0` and `@hapi/joi ^17.0.2`, and `serve` 14.2.6 still pins `compression 1.8.1`. So `e2e/package.json` gains three narrow npm `overrides`, each pinned exact: `decap-server` > `simple-git` 4.0.2 (which brings `@simple-git/argv-parser` 2.0.1, alerts #28, #29, #30 and #31), `serve` > `compression` 1.8.2 (alert #24), and the existing `@hapi/joi` alias moved from `npm:joi@17.13.7` to `npm:joi@17.13.8` (alert #25). `npm audit --package-lock-only` went from 16 vulnerabilities (2 critical, 2 high, 12 moderate) to 10 (0 critical, 0 high, 10 moderate).
+Known break, and when to drop the override. simple-git 4 removes the default export that `decap-server`'s `localGit` middleware calls, so `decap-server` in `MODE=git` now fails at startup with `TypeError: (0 , l.default) is not a function`. Nothing in the platform sets `MODE=git`: `e2e/playwright.config.js` starts `decap-server` without `MODE`, and its default fs mode only `require`s simple-git and never calls it. Drop the `decap-server` > `simple-git` override once a `decap-server` release declares a simple-git 4 range, because the override is then redundant and would otherwise keep pinning 4.0.2 past newer fixes; likewise drop the `compression` override once `serve` declares 1.8.2 or later, and keep the `@hapi/joi` alias until `decap-server` stops declaring `@hapi/joi`. If anything needs `MODE=git` before then, remove the override first.
+Not fixed. Alert [#27](https://github.com/Adam-S-Daniel/cms-platform/security/dependabot/27) (`sprintf-js` <=1.1.3, via `decap-cms-core` > `gray-matter` > `js-yaml` 3 > `argparse` 1) has no patched release and is proposed for dismissal as unused code: js-yaml 3 calls argparse only from its CLI. [#21](https://github.com/Adam-S-Daniel/cms-platform/security/dependabot/21) (`uuid` via `decap-cms-lib-auth`) stays open.
+Consumer effect. A consumer's `e2e-tests.yml` calls this repo's reusable workflow, which checks the platform out into `.cms-platform/` and runs `npm ci` in `.cms-platform/e2e`, so adamdaniel.ai and jodidaniel.com get the fixed lockfile once their callers pin v0.1.156 (their `platform-bump` PR). Neither site has an e2e lockfile of its own, and the change reaches no deployed site: no theme, workflow, proxy or infrastructure edit, so no consumer-side edit, no proxy redeploy and no bootstrap redeploy.
+**v0.1.155 — The three sticky-header accessibility specs skip a page whose `.site-header` is not sticky or fixed, so a site with a static header (jodidaniel.com) no longer fails them.**
+One change since v0.1.154: [#800](https://github.com/Adam-S-Daniel/cms-platform/pull/800) (part of [jodidaniel.com#388](https://github.com/jodidaniel/jodidaniel.com/pull/388), that site's bump to v0.1.154), merged on the owner's direct merge OK with no independent-review stamp in its body, after checks that were green at head `2474237d` (the merge's second parent). It is spec and lint only: no theme file, workflow input, secret or output changed.
+Apart from the pins, the change is three `e2e/` files (`git diff --stat v0.1.154 origin/main` is 3 files, 183 insertions and 0 deletions; `git diff --name-only v0.1.154 origin/main -- .github infrastructure oauth-proxy scaffold scripts skills examples` is empty; one is a new file, `e2e/public-a11y-sticky-header-guard.test.js`):
+Sticky-header specs. v0.1.154's [#792](https://github.com/Adam-S-Daniel/cms-platform/pull/792) added three header checks to `e2e/public-a11y-polish.spec.js` ("sticky header is opaque" on four width and scheme legs, and two "focus under the sticky header" tests) whose only skip was a `.site-header` count of 0. jodidaniel.com has no blog, so `/blog/` is its site-owned 404 layout, whose `.site-header` is `position: static` with a transparent background: the opacity test failed on all four legs and the two focus tests passed only vacuously. `skipUnlessStickyHeader(header)` now reads the header's computed `position` and skips with the measured value unless it is `sticky` or `fixed`; every assertion is unchanged, so a sticky or fixed header with alpha below 1 still fails.
+Guard lint. `e2e/public-a11y-sticky-header-guard.test.js` (in `PLATFORM_META_SPECS`, run by self-ci `node-unit-lints`) parses the spec's AST and requires every `test()` that locates `.site-header` to call the guard and the guard's single `test.skip` condition to be exactly `position !== "sticky" && position !== "fixed"`, so an inverted condition (which would skip the theme's real sticky header and make every CI leg vacuous) is reported; a mutation test runs it over seven wrong conditions.
+Consumer effect. The theme is untouched. A consumer's `public-a11y-polish.spec.js` run is the platform's, so jodidaniel.com#388 goes green on a bump to this release (the three tests skip there with the page's measured `position: static`); adamdaniel.ai renders the theme's sticky header, so its tests keep running and asserting.
+**v0.1.154 — The phone admin gets a Reviews link in its header, /admin/reviews/ stops offering a superseded run for review and can read the preview's regression stats (once a consumer redeploys its bootstrap stack), a failed regression-review reaper reject turns the job red instead of a green warning, the sticky site header is opaque, and the Posts list links a post at its front-matter slug.**
+Nine changes since v0.1.153: five carry an independent-review stamp in the PR body equal to the PR head and to the merge's second parent ([#786](https://github.com/Adam-S-Daniel/cms-platform/pull/786), [#787](https://github.com/Adam-S-Daniel/cms-platform/pull/787), [#791](https://github.com/Adam-S-Daniel/cms-platform/pull/791), [#792](https://github.com/Adam-S-Daniel/cms-platform/pull/792), [#793](https://github.com/Adam-S-Daniel/cms-platform/pull/793)); [#790](https://github.com/Adam-S-Daniel/cms-platform/pull/790) and [#795](https://github.com/Adam-S-Daniel/cms-platform/pull/795) carry none. Five change shipped behavior (#786, #787, #790, #792, #793), one is the reaper's step logic (#791) and one is test-only (#795). The other two are Dependabot bumps, auto-merged without a stamp: [#798](https://github.com/Adam-S-Daniel/cms-platform/pull/798) (`immutable`, e2e only) and [#799](https://github.com/Adam-S-Daniel/cms-platform/pull/799) (`ruby/setup-ruby`, nine workflows).
+Apart from the pins, the change is nine `theme/` files, 21 `e2e/` files, ten `.github/workflows/` files, one `infrastructure/` template and one `docs/` file (`git diff --stat v0.1.153 2ae65212` is 42 files, 1,687 insertions and 97 deletions, `2ae65212` being the #799 merge on `main`; six are new files: `theme/admin/reviews-nav-link.js`, `e2e/admin-reviews-superseded.spec.js`, `e2e/cms-posts-list-front-matter.spec.js`, `e2e/regression-review-reaper-reject-failure.test.js`, `e2e/theme-sticky-header-opaque-css.test.js` and the fixture post `e2e/fixture-site/_posts/2025-12-01-slug-differs-from-file-name.md`):
+`.github/workflows/regression-review-reaper.yml` changed in its step logic only and the other nine workflows changed one `uses:` line each (#799), so no `workflow_call` input, secret or output moved, and `infrastructure/bootstrap/template.yaml` gained a response headers policy and a cache behavior.
+Phone Reviews link. [#786](https://github.com/Adam-S-Daniel/cms-platform/pull/786) (no issue; the owner asked for it from his phone) adds `theme/admin/reviews-nav-link.js`, loaded by `admin/index.html` only, which inserts a "Reviews" item after Contents in Decap's header nav; `admin-mobile.css` shows it at 768px and below, where the floating `#reviews-link` is already hidden, so exactly one Reviews link is on screen at any width. The order on both consumers is Contents, Reviews, Media. Desktop and the 820px tablet are unchanged.
+Reviews dashboard. [#787](https://github.com/Adam-S-Daniel/cms-platform/pull/787) (no issue) reads the PR's current head and offers Approve and Request Changes only for the waiting run whose `head_sha` equals it; an older waiting run becomes a one-line "superseded" note with no buttons, and a failed PR read keeps the card as before (it had listed one PR twice on a phone). The header buttons also stop wrapping at phone width. [#790](https://github.com/Adam-S-Daniel/cms-platform/pull/790) (part of issue [#789](https://github.com/Adam-S-Daniel/cms-platform/issues/789), which stays open) adds `PreviewRegressionCorsResponseHeadersPolicy` and a `/regression.json` behavior on `PreviewDistribution` so the dashboard's cross-origin read of `preview-pr<N>.<apex>/regression.json` carries `Access-Control-Allow-Origin` for the apex, `www` and (when set) the admin host; no wildcard, no credentials, no `OPTIONS`. `docs/ADMIN-AUTH-SECURITY.md` documents it with a curl check. It takes effect only when each consumer's bootstrap stack is redeployed (owner action, not done by this release); until then the cards keep saying "Visual-diff stats not available".
+Reaper. [#791](https://github.com/Adam-S-Daniel/cms-platform/pull/791) (part of issue [#788](https://github.com/Adam-S-Daniel/cms-platform/issues/788), which stays open: the token fix is an owner action) makes a failed `pending_deployments` reject visible. The step re-reads the run's pending deployments: gone is a notice and stays green, still waiting or unreadable is an `::error::` with the HTTP status (never the body) and the job ends `exit 1` after processing the remaining runs. It is not a required context on either consumer, so a red reaper cannot block a merge. Consumers see it only after a bump to this release.
+Theme. [#792](https://github.com/Adam-S-Daniel/cms-platform/pull/792) (no issue) makes `.site-header` `background: var(--bg-0)` at full opacity and drops its blur, so scrolled text no longer ghosts through it. A visual change on adamdaniel.ai wherever content scrolls under the header, so its visual-regression baselines need approval; jodidaniel.com's layouts load no `.site-header`.
+Posts list. [#793](https://github.com/Adam-S-Daniel/cms-platform/pull/793) (no issue) links a post at its front-matter `permalink`/`slug` instead of the file name's slug (the list had linked `/blog/<file slug>/`, a 404, for a post whose `slug:` differs). The posts `summary:` template in `config.base.yml`, `config-local.base.yml` and `config-test.yml` carries `{{fields.slug}}` and `{{fields.permalink}}` after invisible separators; `posts-list-enhance.js` strips them before the title shows and uses them for the published, not-yet-live and per-PR preview links; a permalink with a placeholder other than `:slug` gets no link rather than a guess.
+Test-only. [#795](https://github.com/Adam-S-Daniel/cms-platform/pull/795) (no issue) stops the Reviews nav spec, the posts-list front-matter spec and the 742px list-clearance test reloading into `single-entry-collection-shortcut.js`'s 700 ms jump; no product file changed.
+Dependabot. [#798](https://github.com/Adam-S-Daniel/cms-platform/pull/798) moves `immutable` from 3.8.4 to 5.1.9 in `e2e/package.json` and `e2e/package-lock.json` (a dev dependency of the e2e harness), so it reaches no consumer. [#799](https://github.com/Adam-S-Daniel/cms-platform/pull/799) moves the `ruby/setup-ruby` pin from 1.325.0 to 1.327.0 (`14594264cd68ce8a2345dd349bc3d138a4ef85c8`) in nine workflows, seven of them reusable (`cms-editorial-workflow.yml`, `deploy-preview.yml`, `deploy-production.yml`, `e2e-tests.yml`, `oauth-proxy-build.yml`, `site-verify.yml`, `visual-regression.yml`, all `workflow_call`) and two this repo's own (`self-ci.yml`, `self-fixture-e2e.yml`), so a consumer's calls to those seven run the new action once its caller pins v0.1.154.
+Consumer effect. The theme changes (#786, #787, #792, #793) reach a site once its `cms-platform-theme` gem tag names v0.1.154; no consumer-side edit. #790 also needs each consumer's bootstrap stack redeployed (`infrastructure/bootstrap/deploy.sh`, owner action); #791 reaches a consumer's reaper once its caller pins this release.
+**v0.1.153 — On a preview admin the "View page on" banner, the Posts list links and freshness line, and Decap's "Check for Preview" button stop pointing at a preview host that is never built, the editor's list-row controls, Back link, Markdown switch and body textbox get real accessible names, and the admin-auth security doc is brought up to date.**
+Three changes since v0.1.152, each merged with an independent-review stamp equal to the PR head: two shipped behavior (both `theme/admin/`) and one docs-only.
+Apart from the pins, the change is four `theme/admin/` files, six `e2e/` files and two `docs/` files (`git diff --stat v0.1.152 origin/main` is 12 files, 1,449 insertions and 55 deletions: 4 under `theme/`, 6 under `e2e/` and 2 under `docs/`, `docs/ADMIN-AUTH-SECURITY.md` and `docs/PUBLISHING-UX.md`; four are new files, all under `e2e/`: `check-for-preview-preview-only.test.js`, `cms-control-names.spec.js`, `list-row-affordance.test.js` and `posts-list-preview-host.test.js`):
+no `.github/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed apart from the pins, so no reusable-workflow input, secret or output moved.
+Preview-host links. [#682](https://github.com/Adam-S-Daniel/cms-platform/pull/682) (cms-platform issue [#642](https://github.com/Adam-S-Daniel/cms-platform/issues/642), closed by it)
+fixes four surfaces that assumed every open editorial PR has its own `preview-pr<N>` host. A draft saved on a preview admin opens a PR into the preview's own branch (label `cms/preview-only`), and `deploy-preview.yml`'s caller builds only PRs into the default branch, so that PR never gets a host or a `deploy/preview` status. Preview-only is the label, or a base that is not the default branch (the same rule as `publish-progress.js`'s `previewOnly`).
+`live-url-banner.js`: a preview-only PR keeps the configured publication URL, which is the preview this admin is bound to, on all three lookup paths (the poller snapshot, the Posts list cache and the banner's own `/pulls` lookup). `native-preview-href.js`: when the poller reports the open entry's PR as preview-only, Decap's `RefreshPreviewButton` ("Check for Preview", which would wait forever for a status nothing sets) is hidden with CSS, never removed from the DOM, and a "Use Live Preview" link takes its place when the floating Live Preview link is on offer for that collection; any other entry gets the button back.
+`posts-list-enhance.js`: the "published ↗" links use `CMSHostname.destinationOrigin`, so they point at the preview on a preview admin and at production on production, and a preview-only draft gets a pointer to Live Preview instead of a dead host. On a preview admin (served branch not `CMS_PRODUCTION_BRANCH`) the freshness line reads the `preview-pr-<N>` deployment of the open PR whose head is the served branch, with one extra `/pulls?head=` call (`cache: "no-cache"`), and says the status is unknown when that PR cannot be found instead of reporting production. `publishingSummaryHTML(null)` no longer says "Sign in to see publishing details" to a signed-in editor: "Sign in" shows only without a token, a read in flight shows "Loading publishing details…", and no deployment found shows "update status unknown".
+`docs/PUBLISHING-UX.md` §3.5 describes it. 26 new tests: 6 in `e2e/live-url-banner-follows-poller.test.js`, 14 in the new `e2e/posts-list-preview-host.test.js` and 6 in the new `e2e/check-for-preview-preview-only.test.js` (the two new files are in `PLATFORM_META_SPECS`). Not run against a real preview host: where the pointer lands in the toolbar and the `preview-pr-<N>` deployment read are unverified, and the trigger of the old false "Sign in" is a hypothesis that was not reproduced.
+Control names. [#770](https://github.com/Adam-S-Daniel/cms-platform/pull/770) (no issue; keyboard and screen-reader UX round 3 findings F2 names, F4 and K11b)
+extends `theme/admin/list-row-affordance.js`, already loaded by the three admin shells, so no shell, bundle or load-order change. Decap's icon-only list controls reached a screen reader with no name, or the same name on every row. Each list row's controls are now named from the row's position among its siblings and the summary Decap shows (shortened to 60 characters): `Expand or collapse item 2 (Beta)`, `Move item 2 (Beta)`, `Delete item 2 (Beta)`; a nested list's rows take their own position. The editor's Back link has its arrow and save badge `aria-hidden` and its name is Decap's own `Writing in Pages collection` led by `Back to ` (Decap 3.15.1 has no string that says the link goes back; `BACK_PREFIX = "Back to "` is the only invented copy and `""` would restore Decap's words). The Rich Text / Markdown switch becomes `Edit Content as Markdown` and the body textbox `Content`, from the field's own label. A name Decap sets itself is never overwritten (only a control with no `aria-label`, or one this shim wrote, is renamed), and the observer now watches text so a name follows the summary as the editor types.
+Not changed: the delete-without-confirm half of F2 (owner decision), keyboard reordering (F3) and a separate polite status for the "Changes saved" badge, which a screen reader no longer hears from the Back link. New `e2e/list-row-affordance.test.js` (22 tests, in `PLATFORM_META_SPECS`) and `e2e/cms-control-names.spec.js` (`@admin-read`, real Decap 3.15.1 by accessible name, 2 tests).
+Docs. [#782](https://github.com/Adam-S-Daniel/cms-platform/pull/782) refreshes `docs/ADMIN-AUTH-SECURITY.md` (docs only; no behavior change; no closing keyword on issues [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516), [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517) or [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515), which stay as they were). The #515 row now says the security headers are deployed and enforced on both sites, the #516 row says `read:user` has been the platform default since #548 (the live proxies' `GITHUB_SCOPE` is unverified), the #517 row says the opt-in shipped in #549 and no site has taken it, and the `sanitize_preview` default is corrected from `false` to `true` (Decap 3.15.1's own source), with the residual that the default belongs to Decap and is neither pinned nor tested here.
+Consumer effect. Nothing in the range touches a reusable-workflow input, the proxy or `infrastructure/`, so this is a bump with no consumer-side edit, no proxy redeploy and no bootstrap redeploy. Both behavior changes reach a site's `/admin` once its `cms-platform-theme` gem tag names v0.1.153; neither site overrides anything under `admin/` except `collections.site.yml`. #782 reaches nobody.
+adamdaniel.ai keeps the base posts, pages and projects collections (no `base_collections` setting) and adds Tools. #682 reaches it fully: its Posts list links and freshness line follow the admin's host, and the "View page on" banner (posts, pages, projects, tags and tools are the routable collections) and "Check for Preview" change on a preview admin. A "Use Live Preview" pointer appears only for posts, pages and projects, so a preview-only Tool draft has the button hidden and no pointer. #770 changes the Back link's name on every entry and the Markdown switch and body textbox names on the posts, pages, projects and Tools bodies, plus the row names of its list widgets (posts' Tags and projects' Images; whether a simple string list renders rows that the shim names was not checked).
+On jodidaniel.com most of it does nothing visible. Its `cms.base_collections: []` drops the base Posts collection, so the Posts list links and freshness line (#682, gated to `#/collections/posts`) have no surface, and none of its collections is routable, so the "View page on" banner is not offered. It has `editor.preview: false` on every collection and no Live Preview offer, so if Decap renders "Check for Preview" for a preview-only draft there, the button is hidden with no pointer in its place; whether Decap renders it for these collections was not checked in a browser. From #770 it gets the Back link name on every entry and row names for its list widgets (About's Bio Paragraphs and In-Page Nav Links, Contact Links, Site Settings' Other Names and Other Profile Pages); it has no Markdown widget, so the switch and body textbox names do not apply.
+
+**v0.1.152 — A merge onto a preview host reads Live once its deployment lands, Publish and the admin's shims keep working in a hidden tab, a Decap draft's preview builds its own unpublished entry, the "View page on" banner covers the Tools collection, the post hero reserves its box before the image loads, the media picker hides the preview-media sentinel and the delete confirm names the file, the phone's eye opens a full-width preview, and the Posts list opens newest first with one status chip.**
+Eleven changes since v0.1.151: ten reviewed PRs (eight shipped behavior, two test-only), each merged with an `Independent review: CLEAN` stamp equal to the PR head, and one Dependabot security bump to the e2e harness's lockfile, auto-merged without a stamp.
+Apart from the pins, the change is `theme/` (admin shims, CSS and configs, the public `post.html` and `preview.html` layouts, one line of `main.css` and a new Jekyll hook under `lib/`), `e2e/`, one reusable workflow with its README, and one `docs/` file, `docs/PUBLISHING-UX.md` (`git diff --stat v0.1.151 origin/main` is 48 files, 3,143 insertions and 111 deletions: 26 under `theme/`, 19 under `e2e/`, 2 under `.github/workflows/` and that one; ten are new files, `theme/admin/hide-fixture-media.js`, `theme/admin/mobile-preview-toggle.js`, `theme/lib/cms-platform-theme/featured_image_dimensions.rb`, `theme/spec/featured_image_dimensions_test.rb` and six `e2e/*.test.js` files):
+no `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed. `.github/workflows/deploy-preview.yml` did change (one build step, #679), but no `workflow_call` input, secret or output moved.
+Going live on a preview. [#685](https://github.com/Adam-S-Daniel/cms-platform/pull/685) (cms-platform issue [#643](https://github.com/Adam-S-Daniel/cms-platform/issues/643))
+teaches the merge watch in `theme/admin/publish-progress.js` to finish on a preview host. When a merge's base is a preview branch it finds that preview's open PR (`/pulls?state=open&head=<owner>:<baseRef>`), reads `deployments?environment=preview-pr-<N>` (the name `deploy-preview.yml` registers and `deploy-status-pill.js` reads) and shows Live on `CMSHostname.destination()` once a deployment covering the merge succeeds (its sha equals the merge commit, or it was created after it). A failed PR lookup leaves "Going live". Before this nothing read that deployment, so the bar said "Going live" for the whole 30-minute watch.
+Two fixes in `entry-status-model.js` apply to every publish, production included: the all-checks-passed state is its own sentence ("Both automatic safety checks passed; now putting it live", "The automatic safety check passed…", "All N automatic safety checks passed…") instead of "It is waiting for all 2 automatic safety checks passed", and the countdown rounds up and never goes back up (after a merge it is capped by a new `checksStartedAt` fact, the start of the oldest check run on the merged head), so "longer than usual" no longer shows 30 seconds after a merge.
+`docs/PUBLISHING-UX.md` §3.6 now says a preview merge finishes once `preview-pr-<N>` covers it. 13 new or extended tests in `e2e/entry-status-model-progress.test.js` and `e2e/publish-progress-post-merge.test.js`. Not run against a live preview publish, so the real deploy timing and the bar flipping in a browser are unverified.
+Hidden tab. [#686](https://github.com/Adam-S-Daniel/cms-platform/pull/686) (cms-platform issue [#644](https://github.com/Adam-S-Daniel/cms-platform/issues/644))
+changes `tick(requested)` in `publish-progress.js` to skip a hidden tab only when the call is not a `refresh()`, and `refresh()` now calls `tick(true)`; the interval, `hashchange` and `visibilitychange` ticks still honor the guard, so the background budget is unchanged. Before, every re-read `doPublish` asked for was skipped, so an editor who pressed Publish and switched to the Live Preview tab (the `/preview/` page) never got a PR number and read "press Publish once more" with no Publish control on screen.
+New `showDecapPublish()` in `publish-button.js` hands Decap's own Publish back on that error when none of our buttons is showing (never one-door's Status control, which carries the same marker), and the steady-state branch that re-hid Decap's control 500 ms later now re-hides it only for plans that show a replacement (`busy`, `disabled`, `confirm`, `publish`). The five shims that coalesce on `requestAnimationFrame`, which never fires in a hidden tab (`native-preview-href.js`, `live-url-banner.js`, `posts-list-enhance.js`, `one-door-publish.js`, `collection-controls-trim.js`), run their pass with `setTimeout(run, 0)` while `document.hidden`; a visible tab is unchanged. The busy note names `CMSHostname.destination()` instead of production while facts are null.
+New `e2e/admin-hidden-tab.test.js` (21 tests, registered in `PLATFORM_META_SPECS`) with `document.hidden` stubbed in vm sandboxes; nothing was run in a real background tab, where Chrome slows timers, so the retry timing there is unmeasured.
+Draft previews. [#679](https://github.com/Adam-S-Daniel/cms-platform/pull/679) (cms-platform issue [#637](https://github.com/Adam-S-Daniel/cms-platform/issues/637))
+changes the "Build Jekyll (preview mode)" step of the reusable `.github/workflows/deploy-preview.yml` to run `jekyll build --unpublished` when the PR's head ref is a Decap editorial branch (`cms/*`, so the `cms_slug` step's output, bound through `env:` as `CMS_SLUG`, is non-empty). A new post's Published toggle defaults to off, and without the flag Jekyll dropped it, so the draft's own `preview-pr<N>.<apex>/blog/<slug>/` returned 404. Every other PR's preview and production (`deploy-production.yml`, `site-verify.yml`, which a new test pins to never pass the flag) keep Jekyll's default, because the preview-env loops `cms-unpublish-republish-preview` and `cms-publish-loop-prod-mutate-preview` assert that a `published: false` fixture 4xxs on their non-`cms/*` parent PR's preview; a code PR that adds a `published: false` post still will not show it.
+Side effect on a `cms/*` preview: every `published: false` entry already on the base branch builds too and shows in that preview's listing, feed, sitemap and tag pages (`e2e-` slug posts stay out of those through `exclude_e2e_posts.rb` but their own pages are served). Preview responses already carry `X-Robots-Tag: noindex, nofollow`. New `e2e/deploy-preview-unpublished.test.js` (5 tests), the env-binding count in `e2e/deploy-preview-cms-slug.test.js` went from 6 to 7, and `.github/workflows/README.md` documents it. Checked with a real Jekyll build on a throwaway site, not with a preview deploy. The admin's own wording still calls a hidden draft unbuilt ("is built nowhere", "Not yet published."); that is a separate decision.
+Tools collection. [#693](https://github.com/Adam-S-Daniel/cms-platform/pull/693) (cms-platform issue [#677](https://github.com/Adam-S-Daniel/cms-platform/issues/677))
+adds `tools` to `ROUTABLE_COLLECTIONS` and the path map in `theme/admin/live-url-derive.js` (`/tools/<slug>/`, from the `slug` field, then the slugified title; adamdaniel.ai's seam has `preview_path: /tools/{{slug}}/` and `_config.yml` the permalink `/tools/:slug/`), so the "View page on site" banner shows for a Tool entry. The floating Live Preview button is unchanged: `PREVIEWABLE_COLLECTIONS` in `theme/admin/index.html` is still posts, pages and projects, and `/preview/` has no tools template, so a Tool entry gets no Live Preview button (the PR text says it does; the code does not). `e2e/live-url-derive-routable.test.js` covers the slug field winning over the title, the empty-slug fallback and `tools` in the access-origin by site-URL matrix.
+Post hero size. [#696](https://github.com/Adam-S-Daniel/cms-platform/pull/696) (cms-platform issue [#688](https://github.com/Adam-S-Daniel/cms-platform/issues/688))
+adds `theme/lib/cms-platform-theme/featured_image_dimensions.rb` (`:site, :post_read`, required from `cms-platform-theme.rb`). For each page or document with a `featured_image` it leaves `featured_image_width` and `featured_image_height` both set to positive integers or both unset: front matter when both are valid, else the local image file's header (PNG, GIF, WebP VP8, VP8L and VP8X, and JPEG's first SOF with the sides swapped for EXIF orientation 5 to 8; stdlib only, no new gem), else neither (a CDN or other-host URL, a missing file, a path that escapes the root).
+`theme/_layouts/post.html` now emits `width` and `height` on the hero `<img>` only when both are known, and always `decoding="async"` (no `loading` attribute, so the hero stays eager). `.featured-image` gets `height: auto` in `theme/assets/css/main.css`, so the attributes set only the aspect ratio and the hero renders as before minus the layout shift; without it the `height` attribute would pin the box at the file's pixel height and `object-fit: cover` would crop. `theme/_layouts/preview.html` gets a static `decoding="async"` and a `setHeroSize()` that mirrors the entry's front-matter keys (a draft upload has no file header to read). No Decap field was added.
+`theme/spec/featured_image_dimensions_test.rb` (6 runs, 101 assertions) covers the formats, EXIF orientation, path resolution, the front-matter override, partial front matter and the rendered `post.html` with and without dimensions. Layout shift was not measured in a browser.
+Fixture media. [#710](https://github.com/Adam-S-Daniel/cms-platform/pull/710) (part of cms-platform issue [#652](https://github.com/Adam-S-Daniel/cms-platform/issues/652), which stays open)
+adds the deferred shim `theme/admin/hide-fixture-media.js` (loaded in `index.html`, `index-local.html` and `index-test.html`), which hides media-library and picker cards whose file name starts with `e2e-preview-`, re-evaluated on every pass in both directions because Decap's grid is virtualized. The file stays on disk: `assets/images/uploads/e2e-preview-media-probe.png` is a required sentinel (`scaffold/create-site.js` seeds it, `checkMediaProbeSentinel` requires it, `preview-media-resolves.spec.js` fetches it). The prefix is `e2e-preview-`, not `e2e-`, because `cms-media-roundtrip.spec.js` uploads `e2e-media-roundtrip-*.png` and must still see it.
+`confirm-wrap-local-backup.js` (still the only `window.confirm` wrap) rewrites Decap's "delete selected media" confirm to `Permanently delete “<name>” from <destination>? This removes it from the live site now, even if you are editing a draft, and it cannot be undone.`, falling back to "the selected file" when the card is no longer on screen. The issue's second item, removing the asset from consumer sites, is deliberately not done because it is the sentinel. New `e2e/hide-fixture-media.test.js` (8 tests) and 4 new tests in `e2e/confirm-wrap-local-backup.test.js`; nothing was run in a real browser against Decap, and the card selectors come from reading the decap-cms 3.15.1 bundle.
+Phone preview. [#691](https://github.com/Adam-S-Daniel/cms-platform/pull/691) (cms-platform issue [#645](https://github.com/Adam-S-Daniel/cms-platform/issues/645))
+adds the shim `theme/admin/mobile-preview-toggle.js` (deferred, right after `preview-pane.js` in the three shells) and rule 13 in `theme/admin/admin-mobile.css`. Below 768px rule 4 hides `.SplitPane .Pane2`, so Decap's eye ("Toggle preview") changed nothing visible. Now the eye switches between the form and a full-width preview with a "Back to editing" bar, through a `cms-mobile-preview` class on `<html>` that is set only while Decap really has the preview pane mounted. With Decap's preview on (the default) the shim takes the tap and leaves Decap's state and `cms.preview-visible` alone; with a stored `false` the tap goes through to Decap and a MutationObserver enters the preview once the pane mounts; the class drops on unmount and on `hashchange`; above 768px the shim does nothing.
+Two new `@admin-read` tests in `e2e/cms-mobile-layout.spec.js` (`webkit-iphone16` and `chromium-desktop-3k`) and the new `e2e/mobile-preview-toggle.test.js`. Not checked on a real iPhone; the eye still shows as active in the form view, and it is matched by its English `title`.
+Posts list. [#707](https://github.com/Adam-S-Daniel/cms-platform/pull/707) (part of cms-platform issue [#650](https://github.com/Adam-S-Daniel/cms-platform/issues/650), which stays open)
+changes `theme/admin/posts-list-enhance.js` to show one status per card (the " — DRAFT" and " — Scheduled" suffixes are stripped from the visible title, and a `published: false` entry with no open editorial PR reads "Draft" instead of "Live" plus "Hidden"), to render a `#cms-ple-empty` "No posts match" message when every card is a hidden test fixture, to give a live post with no open editorial PR its "published ↗" link on first paint, and to show the calendar day in the `date:` field's own offset (read through aliased `object(expression: "refs/heads/main:<path>")` blobs added to the existing GraphQL request).
+`config.base.yml`, `config-local.base.yml` and `config-test.yml` list posts newest first with Decap 3.15.1's own array form, `sortable_fields: [{field: date, default_sort: desc}, title]`. The PR's first head wrote an object form, which Decap's schema rejects (`'collections[0].sortable_fields' must be array`) and broke the admin's load in `fixture-e2e`; `e2e/admin-config-sortable-fields-schema.test.js` (7 tests) now validates every shipped `sortable_fields` against that schema and `e2e/posts-list-status-dedupe.test.js` (13) pins the shape. A default sort makes Decap read every entry before showing the list.
+Not done and still open on #650: Decap's own purple DRAFT and yellow IN REVIEW tags, merging Decap's "Filter by" with the shim's checkbox, filtering "Unpublished Entries", and the UTC rollover between a file name's date prefix and the front-matter date. The GraphQL blob read has not run against real GitHub.
+Test-only. [#779](https://github.com/Adam-S-Daniel/cms-platform/pull/779) makes the phone toolbar height cases in `e2e/cms-mobile-layout.spec.js` wait until `native-preview-href.js` has hidden Decap's native "View Live" anchor before measuring (until then the anchor wraps the toolbar onto a third row, 104px instead of 88px, which a slow `webkit-iphone16` run measured). [#780](https://github.com/Adam-S-Daniel/cms-platform/pull/780) stops two admin specs racing the page: `e2e/cms-admin-toast-passthrough.spec.js` waits for react-toastify's enter animation to settle before hit-testing (the close button overshoots over the avatar for a few tens of ms), and `openList` in `e2e/cms-route-focus.spec.js` and `e2e/cms-admin-focus-ring.spec.js` reloads without the hash so `single-entry-collection-shortcut.js`'s 700 ms timer does not jump to the harness banner's entry. Both touch only `e2e/`, so nothing in them reaches a consumer. Dependabot's [#781](https://github.com/Adam-S-Daniel/cms-platform/pull/781) moves `proxy-addr` from 2.0.7 to 2.0.8 in `e2e/package-lock.json` (a dev dependency of the e2e harness), so it reaches no consumer either.
+Consumer effect. Nothing in the range touches a reusable-workflow input, the proxy or `infrastructure/`, so this is a bump with no consumer-side edit, no proxy redeploy and no bootstrap redeploy. The admin changes (#685, #686, #710, #691, #707, #693) reach a site's `/admin` when its `cms-platform-theme` gem tag names v0.1.152; neither site overrides anything under `admin/` except `collections.site.yml`. #696 reaches public output through the same gem. #679 reaches a site only through its own `deploy-preview.yml` `uses:` pin (both sites' is `@v0.1.151` on `main` today), because a reusable workflow runs from the ref its caller names; the gem does not carry it.
+adamdaniel.ai: #707 changes its Posts list (the base `posts` collection is kept; no `base_collections` setting) to newest first with one status chip. #693 adds the "View page on site" banner to its Tools collection (`admin/collections.site.yml`, `preview_path: /tools/{{slug}}/`; a Tool has no Published toggle, so the banner shows the live link); the Live Preview button still does not appear for a Tool. #696 changes the markup of the public post hero `<img>` on its three published posts with a local `featured_image` (`introducing-gha-bench` with `img_9581-vignette.webp`, the Thariq Shihipar quote with `800x800bb.webp`, the Codex auto-review post with `img_1309.jpeg`): each gains `width`, `height` and `decoding="async"`, read from the file (the PR measured 1460x716 and 1407x768 for the two photos; the 800x800 WebP header reads 800 by 800), and the CSS keeps the render as it was, so a human look at one post hero at 390px and at desktop width after the bump is the useful check. Its other posts have no `featured_image`, or an empty one, and get neither attribute. #679: its `cms/*` previews will also build `pages/about.md`, `pages/contact.md`, `projects/index.html` and the two `e2e-` canary posts, all `published: false`, and serve them at their own URLs (noindex). #685 and #686 change its Publish bar and shims; #710 hides `e2e-preview-media-probe.png` from its media picker and names the file in the delete confirm.
+On jodidaniel.com most of the range does nothing visible. Its `cms.base_collections: []` drops the base Posts, Pages, Projects, Tags and e2e collections from `/admin`, so #707 (the Posts list and its `sortable_fields` live only in the base `posts` collection) and #693 (it has no `tools` collection, and its `media` is not a routable collection) have no surface there, and it has no `_posts`, no `featured_image` anywhere and no `post` layout, so #696's hook finds nothing and no public page's markup changes except `/preview/`, whose source gains `decoding="async"` and `setHeroSize()` for the hero in the Posts variant it never shows (`main.css` gains one `.featured-image` declaration that none of its pages use). Every collection it keeps sets `editor.preview: false`, so no preview pane mounts and #691's shim has nothing to act on. #679 changes nothing in its previews: no file in the repo is `published: false` and none of its admin collections has a Published field. What it does get: #685 and #686 (the publish bar, and Publish plus the shims in a hidden tab, on a feature-branch merge's preview deploy), and #710, since `e2e-preview-media-probe.png` sits in its `assets/images/uploads` next to `jodi-daniel.jpg`, so the sentinel leaves its picker and the delete confirm names the file.
+
+**v0.1.151 — The admin's keyboard focus ring is visible on dark buttons and stays inside the sidebar links and every dropdown item (Publish now included), Decap's toasts no longer swallow taps on the phone and tablet toolbar, the tablet editor toolbar keeps the Back link to one line and the avatar on screen, and the public theme's FEATURED badge stays off the card title with small accent text lifted to AA contrast.**
+Five changes since v0.1.150, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Apart from the pins, the change is `theme/` (admin CSS, the public `main.css` and two layouts), `e2e/` and one `docs/` file, `docs/ADMIN-DELIVERY.md` (`git diff --stat v0.1.150 origin/main` is 11 files, 900 insertions and 27 deletions: 4 under `theme/`, 6 under `e2e/` and that one; three are new files, `e2e/cms-admin-focus-ring.spec.js`, `e2e/cms-admin-toast-passthrough.spec.js` and `e2e/theme-featured-badge.test.js`):
+no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
+Focus ring. [#773](https://github.com/Adam-S-Daniel/cms-platform/pull/773) (no cms-platform issue; UX round 3 package 9)
+adds section 0 to `theme/admin/admin-mobile.css`, outside any `@media` block, so it applies at every width. Nothing in the admin styled `:focus-visible`, so buttons and links kept Chrome's default dark ring (computed `outline: rgb(16,16,16) auto`), all but invisible on the dark "+ Post" fill, and the collection sidebar links, exactly as wide as their `overflow: auto` list, had the outline cut off at both sides.
+`#nc-root :is(button, a, [role="button"], [role="menuitem"], summary):focus-visible` now draws a white 2px outline with a `#1d4ed8` 4px shadow, and `#nc-root [class*="SidebarNavList"] a:focus-visible` draws the same two tones inside the link (blue outline with `outline-offset: -2px`, inset white shadow). `:focus-visible` only, so a mouse click looks as before. Text inputs, the standalone `reviews/` dashboards and Decap's modal portals outside `#nc-root` are not covered.
+New real-Decap `e2e/cms-admin-focus-ring.spec.js` (4 tests), and a section in `docs/ADMIN-DELIVERY.md`.
+Menu-item focus ring. [#776](https://github.com/Adam-S-Daniel/cms-platform/pull/776) (no cms-platform issue; UX round 4 package 2, the gap #773 left)
+adds `#nc-root [role="menuitem"]:focus-visible` right after the sidebar rule: Decap's dropdown lists (Publish, Status, Account, Quick add, Filter, Add Component) are `overflow: hidden` with their items flush against the top and sides, so #773's outside ring was clipped and a keyboard-focused "Publish now" showed no ring. The rule draws the ring inside the item (blue 2px outline at `outline-offset: -2px`, inset white band); it has the same specificity as the general rule and must stay below it.
+`cms-admin-focus-ring.spec.js` grows to 6 tests (a keyboard-opened Publish menu gets the inside ring; a mouse-opened one does not) and the `ADMIN-DELIVERY.md` section now covers menu items.
+Toasts. [#775](https://github.com/Adam-S-Daniel/cms-platform/pull/775) (no cms-platform issue; UX round 4 package 6; related to [#658](https://github.com/Adam-S-Daniel/cms-platform/issues/658) item 2, which stays open)
+appends a rule to `admin-mobile.css`, inside `@media (max-width: 1100px)`: Decap's react-toastify container (`position: fixed`, top right) gets `pointer-events: none` and its close button `pointer-events: auto`. Since #766 pins the phone toolbar to the top, the container sat exactly over Publish and the avatar for the 8 seconds a toast stays up, so the retry tap after a failed Publish landed on the toast.
+Trade-off: at 1100px and below a toast closes only through its close button (a 14x19px corner) or the timer, and click-to-close and swipe-to-dismiss no longer fire. The never-auto-closing sign-out and backend-down toasts now close only through that button there. Above 1100px the toast still covers the avatar. `validation-feedback.js` is unaffected (it queries the toasts and calls `.click()`, with no hit test).
+New `e2e/cms-admin-toast-passthrough.spec.js` (3 tests, real Decap at 390x844) and a section in `docs/ADMIN-DELIVERY.md`.
+Tablet toolbar. [#777](https://github.com/Adam-S-Daniel/cms-platform/pull/777) (no cms-platform issue; UX round 4 package 7)
+moves the Back-link truncation rules (`nowrap`, one-line ellipsis, `overflow: hidden` on the title block) from the `max-width: 600px` phone block of `admin-mobile.css` into a new `max-width: 1100px` block, declarations unchanged; the phone block keeps only the 44px `min-height`. At 820px, with no local-shell chip, the Back link wrapped to four clipped lines and a long collection label ("Accomplishments") made the toolbar 840px wide in an 820px viewport, cutting off the avatar.
+A second block at 601 to 1100px lets the local-mode "saves to your working copy" chip shrink (`min-width: 0`, `max-width: 9rem`, ellipsis); the deploy pills are left alone. After, at 820px, the title and saved-state line are one line each (the title reads "Writing in Ac...", the saved state "CHANGES S...", though the accessible name is still the full title), `scrollWidth <= clientWidth` and the avatar is inside the viewport. Not done: wrapping the chip below the buttons at tablet width.
+Four new tablet cases in `e2e/cms-mobile-layout.spec.js` (a "tablet toolbar (820px)" describe) and a reworked truncation test in `admin-mobile-clearance-lint.test.js`.
+Featured badge. [#774](https://github.com/Adam-S-Daniel/cms-platform/pull/774) (no cms-platform issue; UX round 4 package 3)
+changes the public theme. `theme/assets/css/main.css` gets a token `--accent-text: #5a82ff` (5.85:1 on `--bg-0`, 5.60:1 on `--bg-1`, 5.22:1 on `--bg-2`; `--accent` `#285aff` is 3.68:1 on `--bg-1`, under the 4.5:1 AA floor for 12px text) used for `.featured-badge`, `.project-tech`, and the Featured pill in `theme/_layouts/project.html` and `theme/_layouts/preview.html`; `--accent` stays on every border, outline and large shape.
+The same file gets `.featured-badge ~ .project-card-inner > :first-child { padding-right: 5.25rem; overflow-wrap: break-word; }`, so at 320px the first line of a card no longer runs under the absolutely positioned badge (the h3 in a `tools/index.html`-shaped card, the `.project-tech` line in a projects-shaped one). No markup changed, and a card without a badge is untouched.
+New `e2e/theme-featured-badge.test.js` (15 tests, a static fixture with the theme's real `main.css`), registered in `PLATFORM_META_SPECS` in `e2e/playwright.config.js`, because it reads `theme/` source that a consumer lacks.
+Consumer effect. Nothing in the range touches a workflow, a reusable-workflow input, the proxy or `infrastructure/`, so this is a bump only, with no consumer-side edit, no proxy redeploy and no bootstrap redeploy. The admin changes (#773, #775, #776, #777) reach the `/admin` of both sites when their `cms-platform-theme` gem tag names v0.1.151; neither site overrides anything under `admin/` except `collections.site.yml`, and no public page loads `admin-mobile.css`.
+#774 changes public output on adamdaniel.ai in exactly one place: `/tools/`, where the Claude Memory Map card (`_tools/claude-memory-map.md` is the only tool and has `featured: true`) gets a lighter blue FEATURED badge (`#285aff` to `#5a82ff`) and, because the badge precedes `.project-card-inner` in `tools/index.html`, a right padding on the title that makes a narrow title wrap short of the badge. A human look at `/tools/` at 320px after adamdaniel.ai bumps is the useful check; no visual diff was measured outside the PR's own screenshots. The other places the change reaches are not rendered there: the `projects` collection is `output: false`, `projects/index.html` is `published: false`, the home page's Featured Projects section is inside a comment, and adamdaniel.ai's own `_layouts/tool.html` carries no accent text. The new `:root` token is also defined (unused) on every default-layout page. In adamdaniel.ai's admin (no `base_collections` setting, so the base `projects` collection is kept) the Live Preview tab (`/preview/?collection=projects`, which `preview.html`'s inline script fills on each Save) of a Projects entry shows the technology line as `.project-tech` and, for a featured entry, the Featured pill, both in the lighter blue (`#5a82ff`); the Decap side pane (`theme/admin/preview-pane.js`) shows only the technology line.
+On jodidaniel.com nothing from #774 is visible: its `home` and `media` layouts load only `jodidaniel.css`, no file of its own uses `featured-badge`, `project-tech` or `--accent-text`, and its `main.css` pages are `404.html` (none of the changed rules) and `/preview/`, which carries the changed markup (`.project-tech` and the Featured pill) only in its hidden Projects variant. Its admin hides the base Projects collection (`cms.base_collections: []` is a keep-list, so `projects` is dropped), and every collection it keeps sets `preview: false`, so neither preview of a Projects entry is reachable there.
+
+**v0.1.150 — The admin restores keyboard focus after a route change, Save or Delete and gets a skip link, a blocked Publish pressed by keyboard is reported and focuses the bad field, the phone admin's Live Preview button and toolbar stop covering the form, the "View page on" banner links the slug Jekyll serves, the Tags box lets other shims see its keystroke, and the public theme keeps focus clear of the sticky header, drops an empty nav landmark and spells LinkedIn and GitHub.**
+Seven changes since v0.1.149, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Apart from the pins, the change is `theme/` (admin shims, shells and CSS, plus the public header, footer and `main.css`), `e2e/` and two `docs/` files, `docs/ADMIN-DELIVERY.md` and `docs/PUBLISHING-UX.md` (`git diff --stat v0.1.149 origin/main` is 27 files, 2,258 insertions and 44 deletions: 12 under `theme/`, 13 under `e2e/` and those two; three are new files, `theme/admin/route-focus.js`, `e2e/route-focus.test.js` and `e2e/cms-route-focus.spec.js`):
+no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
+Tags box. [#764](https://github.com/Adam-S-Daniel/cms-platform/pull/764) (for [#762](https://github.com/Adam-S-Daniel/cms-platform/issues/762))
+changes `theme/admin/tags-input.js` `onInput` from `stopImmediatePropagation()` to `stopPropagation()`. The shim holds a typed trailing space (#756) by stopping the `input` event before Decap's trim runs, but it listens on `document` in the capture phase,
+and so do `live-url-banner.js` and `autosave-on-hide.js`, which the immediate stop cut off from the keystroke. The event still never reaches Decap's React root, so the held space behaves as before; later `document` listeners now see it.
+One new real-Decap test in `cms-tags-input.spec.js` (a later listener sees every `input`, including the one ending in the held space, and the box still saves `field notes`) and two new unit tests in `tags-suggest.test.js`.
+Phone Live Preview button. [#765](https://github.com/Adam-S-Daniel/cms-platform/pull/765) (part of [#757](https://github.com/Adam-S-Daniel/cms-platform/issues/757), item 1 only; item 2, the tag-page nav highlight, is not in this release and #757 stays open)
+adds rule 12 to `theme/admin/admin-mobile.css`, inside the existing `max-width: 768px` block: on a phone `#live-preview-link` becomes a 44px round icon button (its text is visually hidden in a new `<span class="floating-link-label">` in `index.html` and `index-local.html`, so the accessible name stays "Live Preview")
+and is `visibility: hidden` while a text field has focus, through `body:has(...)`. Before, the roughly 135 by 37px pill covered the Markdown / Rich Text toggle while scrolling. Desktop is untouched. Two new browser tests in `cms-mobile-layout.spec.js`, one per shell, at 390x844.
+Phone toolbar. [#766](https://github.com/Adam-S-Daniel/cms-platform/pull/766) (part of [#731](https://github.com/Adam-S-Daniel/cms-platform/issues/731); the issue stays open, because the toolbar is two rows and not the one row it asks for)
+changes the `max-width: 600px` block of `theme/admin/admin-mobile.css`: the title and status are one ellipsized line, the back link, Save, Published, Delete and avatar are 44px targets, and the local-mode "saves to your working copy" chip and the deploy pills drop to their own line under the buttons (`order: 3 !important`, since they set `order` inline).
+By the PR's Chromium measurements at 390x844 the local-shell toolbar for "Media Items" goes from 169.8px (title in 4 to 5 lines, overlapping the avatar) to 115.4px, and the production shell from 94px to 88px. Not done: at 360px Delete still wraps to a second line, the local shell keeps a thin third line for the chip, and the production shell's `#cms-publish-state` bar is still not sticky.
+Three new browser tests in `cms-mobile-layout.spec.js` ("Posts" at 390px, "Media Items" at 390px and 320px) and three new tests in `admin-mobile-clearance-lint.test.js`.
+Slug banner. [#767](https://github.com/Adam-S-Daniel/cms-platform/pull/767) (no cms-platform issue)
+changes `theme/admin/live-url-derive.js` `compute()` from `explicitSlug || slugify(fallback)` to `slugify(explicitSlug) || slugify(fallback)`. Jekyll 4.4.1 runs a front-matter `slug` through `Utils.slugify` for the `:slug` permalink placeholder, so a typed `Bad Slug!` made the "View page on" banner link `/blog/Bad Slug!/` (a 404) while the site serves `/blog/bad-slug/`.
+`e2e/jekyll-slugify-golden.json` gains 16 cases (42 to 58), generated with Jekyll's own `Utils.slugify`, and `live-url-derive-routable.test.js` gains four tests. A slug of only punctuation (`!!!`) still falls back to the title URL although Jekyll serves `/blog//`; left as is.
+Public theme accessibility. [#768](https://github.com/Adam-S-Daniel/cms-platform/pull/768) (no cms-platform issue)
+changes three things in the public theme. `theme/assets/css/main.css` gets `--site-header-offset: 4.5rem` and `html { scroll-padding-top: var(--site-header-offset) }`, so a focus-driven scroll or a `#fragment` jump no longer leaves the target under the sticky header.
+`theme/_includes/header.html` renders the whole `<nav aria-label="Main navigation">` only when the site has a `/blog/` page, so a site without one no longer ships an empty landmark. `theme/_includes/footer.html` labels the `linkedin` and `github` profile keys `LinkedIn` and `GitHub` (any other key keeps `capitalize`; the keys in site data are unchanged).
+Two new browser tests in `public-a11y-polish.spec.js` (390x844) and, in `theme/spec/public_a11y_polish_build_test.rb` (real Jekyll build), two new tests plus an extended footer assertion.
+Keyboard Publish. [#769](https://github.com/Adam-S-Daniel/cms-platform/pull/769) (no cms-platform issue; follows #750)
+changes `theme/admin/validation-feedback.js`. It listened only for `click`, but the Publish dropdown's items (react-aria-menubutton) select on `keydown`, so Enter or Space on "Publish now" with an invalid field showed no toast and left focus on the Publish button. A capture-phase `keydown` listener now treats Enter or Space on a Save or Publish menu item as the same attempt (a real `<button>` is skipped, since its Enter already fires a click; a held key is ignored),
+and `report()` moves focus to the first control in the first failing field, after a collapsed list row is opened. Focus moves only for a trusted event, so `autosave-on-hide.js`'s scripted click still toasts but never pulls focus out of the field being typed in.
+21 new unit tests in `validation-feedback.test.js` (31 to 52), new real-Decap tests in `cms-validation-feedback.spec.js` and `docs/PUBLISHING-UX.md` section 2.11 extended. The production shell is unchanged: its `publish-button.js` already routes Enter and Space, and under `editorial_workflow` an invalid edit cannot reach Publish.
+Route focus. [#771](https://github.com/Adam-S-Daniel/cms-platform/pull/771) (no cms-platform issue)
+adds `theme/admin/route-focus.js`, loaded deferred after `decap-cms.js` in `index.html`, `index-local.html` and `index-test.html`. Decap unmounts the focused element on Enter on a list entry, Back, Save, Delete and a list row's remove button, so focus fell to `<body>`. The shim adds a "Skip to content" link as the first child of `<body>` (visible only while focused, never followed, so the hash Decap routes on is not changed)
+and, only while focus is on `<body>`, moves it after a `hashchange` or a trusted click that removed or disabled its control: to `main h1` (else `main`) on a list page, the first field on a new entry, the toolbar Back link on an existing one. It waits six animation frames after a click so `validation-feedback.js` lands first, and a key or pointer press cancels a pending move.
+The selectors are Emotion class substrings from Decap 3.15.1, so a renamed class makes the shim a silent no-op. New `route-focus.test.js` (21 tests, in `PLATFORM_META_SPECS`), five real-Decap tests in `cms-route-focus.spec.js`, three load-order tests in `admin-shim-load-order.test.js` (one per shell) and a section in `docs/ADMIN-DELIVERY.md`.
+Delete and a list row's remove button are covered only by the unit tests, and the production shell `index.html` was not driven live.
+Consumer effect. The admin changes (#764, #765, #766, #767, #769, #771) reach both sites with their next bump, when the `cms-platform-theme` gem tag names v0.1.150: the shims and shells load in the `/admin` of both. #768 changes public theme output and no one measured a visual diff:
+the `main.css` rule moves no box, and the footer spelling changes visible text only where a site sets `cross_post.profiles` keys `linkedin` or `github`. adamdaniel.ai sets `cross_post.profiles.linkedin` and does not override `_includes/footer.html`, so every default-layout page's footer link changes from "Linkedin" to "LinkedIn" and the bump PR's `visual-regression` run will show that text diff. adamdaniel.ai overrides `_includes/header.html`, so the nav change does not reach it;
+jodidaniel.com has no `/blog/`, so its theme-layout pages (the 404 and `/preview/`) lose an empty landmark, and its `home` and `media` layouts load only `jodidaniel.css`, so `main.css` does not touch them. Bump only, no consumer-side edit:
+no reusable workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy redeploy and no bootstrap redeploy.
+
+**v0.1.149 — The admin's validation toast stays off the field it names and says which list row failed, only the stale "missed a required field" toast is closed, the Tags box keeps a trailing space and separates an applied suggestion, long URLs and identifiers in post text wrap instead of widening the page, and tags that differ only in case merge into one tag.**
+Five changes since v0.1.148, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Apart from the pins, the change is `theme/` (admin shims, `main.css`, the tag layouts and the `cms-platform-theme` gem's tag generator), `e2e/` and one `docs/` file, `docs/PUBLISHING-UX.md` (`git diff --stat v0.1.148 origin/main` is 22 files: 12 under `theme/`, 9 under `e2e/` and that one):
+no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
+Validation toast. [#751](https://github.com/Adam-S-Daniel/cms-platform/pull/751) (for [#750](https://github.com/Adam-S-Daniel/cms-platform/issues/750), closed by it)
+edits `theme/admin/validation-feedback.js`. The toast now takes the screen edge the failing field is not near, has `pointer-events: none` except its Dismiss button
+(it covered the field it named and blocked clicks for 10 s), leads with the list row (`Not saved yet. Item 2 (Beta): URL: ...`, a collapsed row opened through its own toggle),
+and ignores a Decap toast that was already up before the click. That last part is the cause of "missed a required field" on a format error: Decap raises that toast only
+for a presence error, and the one the tester saw was left over from an earlier empty Publish, so the shim had stood down. A leftover error toast is closed when the shim shows its own.
+Unit tests go from 13 to 24, three more real-Decap browser tests, `docs/PUBLISHING-UX.md` section 2.11.
+Stale-toast scope. [#758](https://github.com/Adam-S-Daniel/cms-platform/pull/758) (for [#752](https://github.com/Adam-S-Daniel/cms-platform/issues/752), closed by it)
+narrows #751's cleanup in the same file: only a stale "missed a required field" toast is closed, matched against that string in every locale Decap ships, the page `lang`
+and the browser languages, so "logged out" and "backend unavailable" toasts survive. A toast in a locale it cannot read stays open. The Dismiss button is at least 24 px
+(44 px under `(pointer: coarse)`) with an `aria-hidden` glyph, and on a phone the toast is full width inside its margins instead of about half the screen. Unit tests go from 24 to 31, plus browser tests.
+Long strings. [#759](https://github.com/Adam-S-Daniel/cms-platform/pull/759) (for [#753](https://github.com/Adam-S-Daniel/cms-platform/issues/753), closed by it)
+changes the public theme: `theme/assets/css/main.css` gives `.post-content`, `.post-excerpt` and `:not(pre) > code` `overflow-wrap: break-word`, so a long URL or identifier
+no longer widens the page (about 1660px at a 1440px viewport, about 1330px at 390px). It is `break-word`, not `anywhere`, because `anywhere` lowers min-content size
+and broke table cells mid-word; `pre` keeps its horizontal scroll. New `theme-overflow-wrap-css.test.js` (6 tests, in `PLATFORM_META_SPECS`).
+Tag case. [#760](https://github.com/Adam-S-Daniel/cms-platform/pull/760) (for [#754](https://github.com/Adam-S-Daniel/cms-platform/issues/754), closed by it)
+changes the theme's tag generation: `theme/lib/cms-platform-theme/auto_tag_pages.rb` and `tag_feeds.rb` group spellings by slug, so `quotes` and `Quotes` give one `site.all_tags` row
+(count is posts, a post with both spellings counts once), one tag page and one feed. The display name is the `_tags/` entry's name, else the spelling most posts use, a tie going to the one seen first.
+The generator builds `site.tag_posts_by_slug` once and `theme/_layouts/tag.html` and `atom_feed.xml` do one lookup (slugifying every post's tags per tag page made a 2,000-post, 300-tag build 4x slower).
+Before, both spellings minted a page at one URL, the later overwriting the earlier, and the archive dropped the other spelling's posts. New `tag_case_variants_build_test.rb` (real Jekyll build, 9 tests),
+extended `auto_tag_pages_test.rb` and `tag_feeds_test.rb`, `duplicateTagSlugs` in `e2e/content-fixtures.js` (which ships to consumers) and a card-count assertion in `tags.spec.js`.
+Tags box. [#761](https://github.com/Adam-S-Daniel/cms-platform/pull/761) (for [#756](https://github.com/Adam-S-Daniel/cms-platform/issues/756), closed by it)
+follows up #746 in `theme/admin/tags-input.js`: Decap's list widget trims the box on every keystroke, so a space typed at the end of a tag was swallowed (`Field Notes` became `FieldNotes`);
+the shim now holds a single trailing space after a letter. An applied suggestion ends in `, ` and the box's trailing separator is trimmed on focus-out through the box, so Save no longer stores an empty second tag.
+Chips are at least 44px under `(pointer: coarse)`. Unit tests in `tags-suggest.test.js` and seven more real-Decap tests in `cms-tags-input.spec.js`.
+Consumer effect. The admin changes (#751, #758, #761) reach both sites with their next bump, when the `cms-platform-theme` gem tag names v0.1.149: the shims load in the `/admin` shells of both.
+#759 and #760 change public theme output, but reviewers measured no visual diff on adamdaniel.ai: 11 pages at 3 widths came out byte-identical apart from `/`, whose diffs match a main-vs-main control, and the tag pages are unchanged for its single tag.
+jodidaniel.com is unaffected by the theme changes: it loads no `main.css` and has no blog or tags. Tag feeds and URLs are unchanged. Bump only, no consumer-side edit:
+no reusable workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy redeploy and no bootstrap redeploy.
+
+**v0.1.148 — Cancelling the admin's leave prompt on browser Back keeps the editor and the address bar in sync, the Tags box offers existing tags and warns on near-duplicates, the public theme gets a visible current-page nav state, a tighter hero gap and fuller tag pages, and the phone admin toolbar sticks and the date field fits.**
+Four changes since v0.1.147, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `theme/` and `e2e/` changed apart from the pins (`git diff --stat v0.1.147 origin/main` is 16 files: eight under `theme/` and eight under `e2e/`):
+no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
+Leave prompt. [#745](https://github.com/Adam-S-Daniel/cms-platform/pull/745) (for [#733](https://github.com/Adam-S-Daniel/cms-platform/issues/733), closed by it)
+fixes `theme/admin/confirm-wrap-local-backup.js`. Decap 3.15.1's hash router restores the old hash after a cancelled browser Back with `history.go(delta)`,
+taking `delta` from a private list of locations it pushed itself. Posts list rows are plain `<a href="#/...">` anchors, so an entry opened from the list, or after a
+reload, is not in that list: `delta` is 0, the address bar read `#/collections/posts` while the editor stayed up, and the back arrow then pushed to the hash
+already showing and looked dead. The confirm wrap now notes the hash a `hashchange` left and, when the leave confirm is cancelled inside that same `hashchange` and
+Decap did not call `history.go` itself, sets the hash back after the dispatch ends. Accepted prompts, the back arrow and every other confirm are untouched; the
+string match is English-only, like the existing backup-dialog match. Seven new tests in `confirm-wrap-local-backup.test.js`; `theme/admin/README.md` notes it.
+Tag suggestions. [#746](https://github.com/Adam-S-Daniel/cms-platform/pull/746) (part of
+[#735](https://github.com/Adam-S-Daniel/cms-platform/issues/735), not closed) extends `theme/admin/tags-input.js`: on first focus it reads the site's `../tags/`
+page (`.tag-list-name`, same-origin, `no-store`) and shows an aria-live status line under the Tags box that offers existing tags matching the typed text and, for
+a typed tag nearly identical to an existing one (case, plural, spaces and punctuation ignored), a warning with a "Use" button. The offers are Tab-reachable
+buttons applied with Enter. It only offers: nothing is rewritten and a missing `/tags/` page or failed fetch leaves the box as before. adamdaniel.ai's
+`tags/index.html` has the markup; jodidaniel.com has no tags field, so the shim stays inert there. Still open in #735: Decap's `list` widget shows a comma
+string, Enter then Save stores an empty trailing tag, only tags on the published index are offered, and there is no normalize-on-save. New `tags-suggest.test.js`
+(9 tests, in `PLATFORM_META_SPECS`) and eight real-Decap tests added to `cms-tags-input.spec.js`.
+Public theme polish. [#747](https://github.com/Adam-S-Daniel/cms-platform/pull/747) (part of
+[#737](https://github.com/Adam-S-Daniel/cms-platform/issues/737), not closed) changes the public theme. Hero gap: `.featured-image` was an inline image with its own
+`margin-bottom: 2rem` inside `.post-header` (`margin-bottom: 3rem`), 87.6px of space under the image at 390px and 1280px wide; it is now `display: block` with
+no margin of its own inside the header, so the gap is 48px (the Decap preview pane keeps the 2rem rule). Current-page nav: the Blog link carries
+`aria-current="page"` on `/blog/` and `aria-current="true"` under it, by whole-segment prefix (the old `contains '/blog'` also matched `/blogger/` and
+`/tags/blog/`), and the state turns off the `text-thermal` animation (a running animation outranked the old `.active` color), sets bright text and an underline,
+with no border, padding or margin so nothing shifts; `class="active"` stays so a site header override keyed on it gets the style. Tag pages: `theme/_layouts/tag.html`
+adds an "N min read" line, an "All tags" link only when the site has a `/tags/` page, and uppercase headings and `.tag-list-name` through CSS `text-transform`. Because
+`innerText` applies `text-transform`, `e2e/content-fixtures.js` `discoverTags` (which ships to consumers) now reads `textContent`. The new-tab inconsistency for the home
+hero LINKEDIN link is adamdaniel.ai's own `index.html`, left to the site. New `theme-public-polish-css.test.js` (in `PLATFORM_META_SPECS`),
+`theme/spec/public_nav_and_tag_polish_build_test.rb`, and a `discoverTags` case in `content-fixtures.test.js`.
+Phone admin chrome. [#748](https://github.com/Adam-S-Daniel/cms-platform/pull/748) (part of
+[#731](https://github.com/Adam-S-Daniel/cms-platform/issues/731), not closed) edits `theme/admin/admin-mobile.css`, loaded only by the `/admin` shells. At 600px and
+below the toolbar holding Save, Publish and Delete sticks to the top and shrinks from three rows to two (185px to 93px at 390px), inside `@supports (overflow: clip)`
+so Safari before 16 keeps the old scrolling toolbar; Decap's app header is set `static` so it does not pin to every collection list, and `index-local.html`'s
+commit and platform pills stack bottom-right so they no longer sit on the stuck Delete button. The date field wraps so "Clear" stays on screen. Publish on the production
+shell (the `#cms-publish-state` bar) is not made sticky and a long Article URL is left alone; both stay open in #731. Seven new tests in
+`admin-mobile-clearance-lint.test.js`.
+Consumer effect. The admin changes (#745, #746, #748) are files a site picks up with its next bump, when the `cms-platform-theme` gem tag names v0.1.148. #747 changes
+the public theme (nav current-page style, hero gap, tag pages), so adamdaniel.ai's `visual-regression` run will diff on `/blog/` and the posts under it, the two hero posts,
+`/tools/` and `/tools/claude-memory-map/`, and `/tags/` and each `/tags/<slug>/`; its own `_includes/header.html` override keeps `class="active"` but emits no `aria-current`
+until a site-side edit. jodidaniel.com's layouts do not load `main.css` or the theme header and footer, so it is unaffected. Bump only, no consumer-side edit: no reusable
+workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy redeploy and no bootstrap redeploy.
+
+**v0.1.147 — A failed field-pattern message in the admin now reads as the site wrote it and a blocked Save or Publish says so, and the media library trims uploaded file names and hides dotfiles.**
+Two changes since v0.1.146, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `theme/admin/`, `e2e/` and two `docs/` files changed apart from the pins (`git diff --stat v0.1.146 origin/main` is 12 files: five under
+`theme/admin/`, five under `e2e/` and two under `docs/`): no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`,
+`scripts/`, `skills/` or `examples/` file changed, so no `workflow_call` interface moved.
+Validation feedback. [#741](https://github.com/Adam-S-Daniel/cms-platform/pull/741) (part of
+[#730](https://github.com/Adam-S-Daniel/cms-platform/issues/730), not closed) adds `theme/admin/validation-feedback.js`, loaded deferred
+after `decap-cms.js` in all three admin shells. Decap's English `regexPattern` phrase wrapped the site's own sentence (hence a doubled
+full stop) and its error styling upper-cased it (`/pages/about/` read `/PAGES/ABOUT/`); the shim rewrites the phrase to
+`%{fieldLabel}: %{pattern}` through `CMS.getLocale('en')` and turns the upper-casing off for `[class*="ControlErrorsList"]`. Decap core
+raises its toast only for a presence error, so a pattern error on Save or Publish gave no feedback: after a click on Save or a publish
+menu item the shim scrolls to the first field error and toasts its message, unless Decap raised its own toast, removes its earlier toast at
+the start of each check, and ignores the toolbar's Publish control (it only opens the menu). Each part is a silent no-op if Decap changes
+the surface it reads. `docs/PUBLISHING-UX.md` section 2.11 records the upstream limitation. New `validation-feedback.test.js` (13 tests) is
+in `PLATFORM_META_SPECS`; the browser spec `cms-validation-feedback.spec.js` (tagged `@admin-write`) is verified by CI. Site `pattern`
+messages in adamdaniel.ai and jodidaniel.com are unchanged.
+Media library tidy. [#743](https://github.com/Adam-S-Daniel/cms-platform/pull/743) (part of
+[#736](https://github.com/Adam-S-Daniel/cms-platform/issues/736), not closed) adds `theme/admin/media-library-tidy.js`, loaded
+non-deferred before `decap-cms.js` in `index.html` and `index-local.html` (not the stock-Decap rehearsal shell `index-test.html`). Decap's
+`persistMedia` names an upload `sanitizeSlug(file.name.toLowerCase(), config.slug)`, which leaves a trailing hyphen for a name like
+`Workshop Diagram (final).jpg`; capture-phase `change` and `drop` listeners rename the picked File in place with leading and trailing
+non-letter, mark and digit characters trimmed off the part before the last dot, so Decap's own sanitizer stores `workshop-diagram-final.jpg`
+(existing files are not renamed). A `window.fetch` wrap drops dotfile blobs (`.gitkeep`) from the GitHub tree listing and from
+decap-server's `getMedia` answer. The third item in #736, an entry delete leaving its image orphaned, is not fixed by design (an upload is
+shared state and Decap keeps no reference index); the reasoning is recorded in `docs/ADMIN-DELIVERY.md` under "Media library tidy". New
+`media-library-tidy.test.js` (32 tests) is in `PLATFORM_META_SPECS` and `select-specs.js`.
+Consumer effect. Both are admin-shell files a site picks up with its next bump, when the `cms-platform-theme` gem tag names v0.1.147. Bump
+only, no consumer-side edit: no reusable workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy
+redeploy and no bootstrap redeploy. Neither touches public-page theme files, so the visual-regression gate is not expected to flag the bump.
+Per `AGENTS.md`, #743 is done only with the consumer bump and a green `cms-media-roundtrip` run, which a reviewer or the owner drives.
+
+**v0.1.146 — The admin preview pane no longer crashes on collections without a `body` field, the share row's idle copy icon, phone tap targets and Mastodon prompt are fixed, bare Markdown tables get borders and padding, and Atom feeds open as a readable page in a browser.**
+Three changes since v0.1.145, each merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `theme/` and `e2e/` changed apart from the pins (`git diff --stat v0.1.145 origin/main` is 15 files: eight under `theme/` and seven under `e2e/`):
+no `.github/workflows/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed, so no
+`workflow_call` interface moved.
+Preview pane. [#738](https://github.com/Adam-S-Daniel/cms-platform/pull/738) (part of
+[#726](https://github.com/Adam-S-Daniel/cms-platform/issues/726), still open) fixes `theme/admin/preview-pane.js`: one template served
+`posts`, `pages` and `projects` and every template called `props.widgetFor("body")`, which throws for the base `projects` collection
+(its markdown field is `description`) and replaced the pane with Decap's raw error screen. Templates now render only fields the
+collection declares (`body`, else the first `markdown` field, else no content block) and a widget that throws renders nothing. A new
+generic template styles every other collection the editor opens (Tags, a site's Tools, list-like collections): heading, `description`
+as `p.subtitle`, then the markdown field or a labeled `dl` of short scalar fields. Posts and Pages render as before. #726 stays open:
+the Tools body still shows raw Liquid verbatim.
+Share row and tables. [#739](https://github.com/Adam-S-Daniel/cms-platform/pull/739) (fixes
+[#727](https://github.com/Adam-S-Daniel/cms-platform/issues/727) and
+[#729](https://github.com/Adam-S-Daniel/cms-platform/issues/729), both closed) changes `theme/assets/css/main.css` and
+`theme/_includes/share-row.html`. The hide rule for `.share-icon-success` lost to `.share-link svg { display: block }` on specificity, so
+the idle copy button showed the check mark; the rule is now `.share-link .share-icon-success`. Under `(pointer: coarse), (width <= 640px)`
+`.share-link` is a real 44px box (30.4px before; desktop is unchanged) and all five buttons still fit one line at 360px. The Mastodon
+`window.prompt()` is replaced by an inline labeled field (`aria-expanded`/`aria-controls`, remembered instance from `localStorage`, Enter
+submits, Escape or Cancel returns focus, an in-page `role="alert"` for an invalid instance); the share URL and storage key are unchanged.
+Bare `table:not([class])` gains `border-collapse`, a 1.5rem margin, cell padding and `--border` borders and a header row on `--bg-2`;
+the #540 scroll box and the `:not([class])` scope are kept, so a classed table (adamdaniel.ai's `bws-table`) is untouched.
+Feed stylesheet. [#740](https://github.com/Adam-S-Daniel/cms-platform/pull/740) (fixes
+[#728](https://github.com/Adam-S-Daniel/cms-platform/issues/728), closed) adds `theme/lib/cms-platform-theme/feed_stylesheet.rb`, a
+`:pages, :post_render` hook that inserts `<?xml-stylesheet type="text/xsl" href="<baseurl>/assets/feed.xsl"?>` after the XML declaration
+of any Atom feed (the theme's per-tag feeds, jekyll-feed's `/feed.xml`, a site-owned `feed.xml`; a feed that already names a
+stylesheet is left alone), and `theme/assets/feed.xsl`, a self-contained neutral XSLT 1.0 page ("This is a news feed, not a web page")
+that shows the feed address and the post list. The Atom content is unchanged. Chrome has announced removing built-in XSLT; when that
+lands the browser shows raw XML again, as before, and feed readers are unaffected.
+Consumer effect. All three reach a site with its next bump, when the `cms-platform-theme` gem tag names v0.1.146 (the preview pane and
+`feed.xsl` are theme files a site's build and admin pick up from the gem). Bump only, no consumer-side edit: no reusable workflow,
+composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy redeploy and no bootstrap redeploy. The visible theme
+changes (share row, tables, feed page) are salient to a consumer's `visual-regression` run, which may need the owner's approval on the
+bump PR. jodidaniel.com's layouts do not load the platform `main.css`, so the share-row and table CSS does not reach it. New pure-fs specs
+`theme-share-row-css.test.js` and `theme-table-css.test.js` are in `PLATFORM_META_SPECS` (skipped in consumer mode).
+
+**v0.1.145 — A real post carrying an `e2e-` tag name with no `_tags/` entry no longer leaks that tag into the tag cloud, `/tags/`, the sitemap or a tag feed, and the tag's archive page is stamped `noindex`.**
+One change since v0.1.144, merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `theme/` changed apart from the pins (`git diff --stat v0.1.144 origin/main` is six `theme/` files: the README, three files under
+`theme/lib/cms-platform-theme/` and two specs): no `.github/workflows/`, `e2e/`, `infrastructure/`, `oauth-proxy/`, `scaffold/`,
+`scripts/`, `skills/` or `examples/` file changed.
+Tag names. [#716](https://github.com/Adam-S-Daniel/cms-platform/pull/716) (v0.1.142) hid `e2e-` and `test_fixture` tags, but
+only when they had a `_tags/` document. A real post whose `tags:` list held a name like `E2E Namedonly` (slug `e2e-namedonly`)
+and had no `_tags/` entry still appeared in `site.all_tags` (the home tag cloud and `/tags/`), in `sitemap.xml`, and got its own
+`/tags/<slug>/feed.xml`, and its archive page carried no `robots` meta. [#724](https://github.com/Adam-S-Daniel/cms-platform/pull/724)
+(part of [#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689), now closed; it supersedes the remaining piece of
+[#695](https://github.com/Adam-S-Daniel/cms-platform/pull/695), closed) judges such a name by its slugified name with the posts
+rule: new `ExcludeE2EPosts.e2e_tag_name?` and `stamp_tag_page`. `auto_tag_pages.rb` still builds the archive, so the real post's
+tag pill does not 404, but stamps it `robots: noindex,nofollow`, `sitemap: false` and `feed_exclude: true` (the tag and default
+layouts then drop the feed link) and leaves the name out of `site.all_tags`; `tag_feeds.rb` mints no feed for it. A name that has a
+`_tags/` entry is still judged by that entry (filename, `slug:`, `test_fixture`), as in v0.1.142. New cases in
+`theme/spec/exclude_e2e_tags_build_test.rb` (a real Jekyll build; 5 failures on the previous main, 9 of 9 pass) and
+`theme/spec/exclude_e2e_posts_test.rb`.
+Consumer effect. The change reaches a site with its next bump, when the `cms-platform-theme` gem tag names v0.1.145.
+#724's reviewer scanned both consumers' `_posts/` and `_tags/` on main: adamdaniel.ai's only tag is `quotes` (its `_tags/` holds
+only `.gitkeep`) and jodidaniel.com has no `_posts/` or `_tags/`, so no tag is hidden on either site today. Bump only, no
+consumer-side edit: no reusable workflow, composite, `oauth-proxy/lambda.py` or `infrastructure/` file changed, so no proxy
+redeploy and no bootstrap redeploy. After the bump, a consumer's site deploy publishes the theme change; nothing else is needed.
+
+**v0.1.144 — The e2e title checks in `blog-post.spec.js` and `feeds-and-share.spec.js` no longer break on quotes, `&` or `<` in a post title and can no longer pass with the title absent; consumers run the stricter specs at their next bump.**
+Two changes since v0.1.143, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
+Only `e2e/` changed apart from the pins (`git diff --stat v0.1.143 origin/main` is four `e2e/` files): no `.github/workflows/`,
+`infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/`, `theme/` or `examples/` file changed.
+Title matching. [#721](https://github.com/Adam-S-Daniel/cms-platform/pull/721) (a follow-up to
+[#713](https://github.com/Adam-S-Daniel/cms-platform/pull/713)) found three specs that compared `discoverPost().title` raw
+against a selector, `feed.xml` or a share href. `blog-post.spec.js` built `:visible:text-is("${post.title}")`, where a `"` is
+a selector parse error and a `\` silently matches nothing; it now uses `visibleTitleLocator`
+(`getByText(title, { exact: true })` filtered to visible). The feed check now uses `feedHasTitle`, which decodes entities and
+smartify-normalizes both sides, because jekyll-feed renders `smartify | strip_html | normalize_whitespace | xml_escape` into
+`<title type="html">` (quotes become curly, `&` comes out escaped twice). The share-intent check read a first-word regex
+against url-encoded text (`+`, `%27`, `%26`) and could not match `Don't` or `Q&A`.
+Vacuous checks. [#722](https://github.com/Adam-S-Daniel/cms-platform/pull/722) closed two ways the new checks could pass with
+the title absent. The share check searched the whole href for the title's first word, and the slug in `url=` repeats those
+words; `hrefCarries` is replaced by `hrefParamStartsWith(href, param, text)`, which parses the href with `URLSearchParams`
+and requires the `text` parameter to equal the title or start with the title plus a space (LinkedIn takes only `url=`, so it
+keeps its slug check). `feedHasTitle` scanned every `<title>`, including the feed's own site title, with a substring test; it
+now reads only the first `<title>` inside each `<entry>`/`<item>` and requires the full normalized title to be equal.
+Both helpers live in `e2e/content-fixtures.js` with unit tests in `e2e/content-fixtures.test.js`.
+Consumer effect. These specs now run with stricter checks at a consumer's bump. #722's reviewer ran `feeds-and-share.spec.js`
+and `blog-post.spec.js` against an adamdaniel.ai build (4 posts) in the chromium-desktop-1080 and chromium-mobile projects:
+28 passed, 2 skipped (the webkit-only CSS-failure test). jodidaniel.com has no posts, so those specs skip there. Bump only,
+no consumer-side edit: no reusable workflow, composite, theme file, `oauth-proxy/lambda.py` or `infrastructure/` file
+changed, so no proxy redeploy and no bootstrap redeploy.
+
+**v0.1.143 — Eight reusable workflows that ran the runner's default `node` now pin Node 20 with `actions/setup-node`, ahead of `ubuntu-latest` moving to 26.04 on 2026-10-19 (default Node 22 to 24); a test-only follow-up covers the e2e tag sweep's root-tree truncation guard.**
+Two changes since v0.1.142, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
+No `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/`, `theme/` or `examples/` file changed apart
+from the pins (`git diff --stat v0.1.142 origin/main` is `.github/workflows/` and `e2e/`).
+Node pin. [#715](https://github.com/Adam-S-Daniel/cms-platform/pull/715) (v0.1.142) pinned python, ruby and shellcheck and
+recorded "several jobs still call the runner's default `node` without `setup-node`". Each such job now runs
+`actions/setup-node` (the same full SHA and `node-version: "20"` every other Node job in this repo already uses) before its
+first `node` step. Ten jobs in ten workflows; eight are reusable workflows that adamdaniel.ai and jodidaniel.com call at a
+pinned `platform_ref`: `dependabot-rearm-sweep.yml` (`rearm`), `dev-hooks-sync.yml` (`sync`), `platform-bump.yml` (`bump`,
+the first step, so the mint-before-checkout order is unchanged), `visual-regression.yml` (`detect`), `cross-post.yml` (it
+calls the `await-prod-deploy` composite, which runs `node`), and the `recursion-gate` job of `cms-media-roundtrip.yml`,
+`cms-publish-loop-host.yml` and `cms-publish-loop-prod.yml` (they call the `cms-recursion-gate` composite, whose step
+pipes into `node -e`). The other two, `repo-settings-apply.yml` (`close-approval-issue`) and
+`self-release-review-gate.yml` (`release-review-gate`), are this repo's own and took effect on merge. The jobs holding a
+minted or write-scoped token (`rearm`, `sync`, `bump`, `cross-post`, `close-approval-issue`) set `package-manager-cache: false`.
+The four composites that run node or npx (`await-prod-deploy`, `cms-recursion-gate`, `install-playwright-browsers`,
+`post-failure-comment`) do not set Node up themselves, because a composite cannot choose its caller's Node; their callers
+must. `e2e/workflow-runtime-pinned.test.js` (#715's guard) now also requires an earlier `actions/setup-node` step before a
+`node`/`npm`/`npx` command in any job, over the parsed YAML, accepts `NAME=value` prefixes before the command word, and
+pins the four node-needing composites so the caller check cannot pass vacuously
+([#719](https://github.com/Adam-S-Daniel/cms-platform/pull/719), part of
+[runner-images#14748](https://github.com/actions/runner-images/issues/14748)).
+Not covered: node reached indirectly (a `run:` that calls a script that calls node) is invisible to the command-word check.
+Tags test. `e2e/leftover-e2e-tags.test.js` gains two cases for the root-tree `truncated` guard in `listTagsDir`: a truncated
+root tree with no `_tags` entry rejects, and a truncated root tree that still lists `_tags` is swept normally. No production
+code changed ([#718](https://github.com/Adam-S-Daniel/cms-platform/pull/718), part of
+[#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689), which stays open until the consumer bumps land).
+Consumers get the Node pin with their next platform bump, once their `uses:@` pins name v0.1.143. No reusable workflow's
+`workflow_call` inputs, secrets or outputs changed (37 workflows with a `workflow_call` trigger compared between v0.1.142
+and `origin/main`, none differs), so the bump needs no edit beyond the pins; the eight workflows above run Node 20, not the
+image default, from then on. `oauth-proxy/lambda.py` and `infrastructure/` did not move, so no proxy redeploy and no
+bootstrap redeploy. Ship this release before the Ubuntu 26.04 rollout starts on 2026-10-19.
+
+**v0.1.142 — Leftover `e2e-` tags no longer surface on the public site, the sweep that finds them lists `_tags` past 1,000 entries, and the reusable workflows pin python and ruby instead of taking the runner image's, ahead of `ubuntu-latest` moving to 26.04 on 2026-10-19.**
+Two changes since v0.1.141, both merged with an `Independent review: CLEAN` stamp equal to the PR head.
+No `infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/`, `skills/` or `examples/` file changed apart from the pins
+(`git diff --stat v0.1.141 origin/main` is `.github/workflows/`, `e2e/`, `theme/`).
+Runtime pins. `ubuntu-latest` (x64) rolls to Ubuntu 26.04 from 2026-10-19 to 2026-11-19
+([actions/runner-images#14748](https://github.com/actions/runner-images/issues/14748)): system python3 3.12 to 3.14,
+ruby 3.2 to 3.3, shellcheck 0.9 to 0.11. Four reusable workflows called the system interpreter and now pin it
+(`runs-on` is unchanged): `publish-scheduled-posts.yml` and `secrets-scan.yml` (its allowlist canary needs `tomllib`)
+run `actions/setup-python` 3.12; `platform-bump.yml` does the same and also installs `pyyaml==6.0.3`, because
+`scripts/reconcile-nudge-contexts.py` imports PyYAML and fails soft (a MANUAL warning in the bump PR body) on a
+setup-python interpreter without it; `oauth-proxy-build.yml` runs `ruby/setup-ruby` 3.2 before its `ruby -ryaml` step.
+`self-ci.yml` (the platform's own CI, not a reusable) installs a checksummed shellcheck 0.11.0, so the required
+actionlint lane no longer follows the image. `release.yml`'s manifest-skew error text now names what
+`examples-site-pins-current.test.js` enforces (the Current release line, the platform pins, `PLATFORM_VERSION`, and
+the two manifests equal). New `e2e/workflow-runtime-pinned.test.js` (registered in `PLATFORM_META_SPECS`) fails a job in
+any workflow or composite action that runs python3/pip, ruby/gem/bundle or actionlint without an earlier pinning
+step ([#715](https://github.com/Adam-S-Daniel/cms-platform/pull/715), part of runner-images#14748).
+Not changed: several jobs still call the runner's default `node` without `setup-node`.
+Tags. The tags lifecycle specs create `_tags/e2e-tags-canary-<runId>.md`; one left on `main` was listed in the tag
+cloud and on `/tags/`, in `/sitemap.xml` and in its own tag feed. `exclude_e2e_posts.rb` now stamps `_tags/` entries
+with the posts rule (an `e2e-` slug or `test_fixture: true`): `sitemap: false`, `feed_exclude: true` and, unless the
+editor set one, `robots: noindex,nofollow`. `auto_tag_pages.rb` leaves stamped tags out of `site.all_tags` and out of
+every count, `tag_feeds.rb` mints no feed for them, and the `tag.html` and `default.html` layouts drop the feed link
+and `<link rel="alternate">`. The tag page itself still builds (with `noindex`), because the tags lifecycle specs wait
+for its URL to answer 200 and then 404. The leftover sweep (`e2e/leftover-e2e-tags.js`) listed `_tags` through
+`GET /contents/_tags`, which returns at most 1,000 entries, so a leftover sorted past the cut read as clean; it now
+walks the git trees API (root tree, then the `_tags` subtree), and a `truncated` tree throws so the caller reports
+`error`, not a false zero. New `theme/spec/exclude_e2e_tags_build_test.rb` runs a real Jekyll build
+([#716](https://github.com/Adam-S-Daniel/cms-platform/pull/716), part of
+[#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689), which stays open until the consumer bumps land).
+Consumers get both with their next platform bump. The `setup-python`/`setup-ruby` steps take effect on a consumer's
+workflow runs once its `uses:@` pins name v0.1.142. The theme change hides `e2e-` tags from `all_tags`, the sitemap and
+the feeds: adamdaniel.ai's `_tags/` holds only `.gitkeep` and jodidaniel.com has no `_tags/`, so neither changes today.
+`oauth-proxy/lambda.py` and `infrastructure/` did not move, so no proxy redeploy (the build probe compares the live
+handler's digest with `lambda.py`'s, and `oauth-proxy-build.yml`'s new step only changes how the probe reads
+`_config.yml`) and no bootstrap redeploy. Ship this release before the Ubuntu 26.04 rollout starts on 2026-10-19.
+
+**v0.1.141 — A harness helper that skipped every blog-post, share-row and feed-content test (it took the nav's `/blog/` link for a post) now finds the post; platform self-CI runs a public project on both fixture sites; the media round trip's leftover upload is removed through a PR, not a direct write to `main`.**
+Test-harness release: nothing under `theme/`, `infrastructure/`,
+`oauth-proxy/`, `scaffold/`, `scripts/`, `examples/` or `skills/` changed apart
+from the pins, and the only `.github/` change is `self-fixture-e2e.yml`, the
+platform's own CI, not a reusable workflow
+(`git diff --stat v0.1.140 origin/main` is `e2e/`, `.github/workflows/self-fixture-e2e.yml`,
+`AGENTS.md`, `docs/CONTRIBUTING.md` and `docs/skill-impact.md`).
+Post discovery. `discoverPost` in `e2e/content-fixtures.js` took the first
+`a[href^="/blog/"][href$="/"]`, which is the site header's nav link `/blog/`
+(first in the DOM on every default-layout page); the slug match on the next line
+rejected it and the helper returned `null`, so every test that needs a post hit
+`test.skip("no published posts")`. New pure `pickPostLink(anchors)` returns the
+first anchor whose href is exactly `/blog/<slug>/` (non-empty slug, no query or
+fragment) and skips paginator `/blog/page<N>/` listings; `discoverPost` collects
+every anchor and delegates to it. `e2e/content-fixtures.test.js` covers it (5
+tests). The tests this un-skips on a consumer with a blog are the `blog-post`
+specs, the share-row tests, the "/feed.xml content includes every published
+post" test and the feed-link icon tests in `feeds-and-share.spec.js`.
+jodidaniel.com has no blog, so they still skip there
+([#713](https://github.com/Adam-S-Daniel/cms-platform/pull/713), which found the
+gap in [#712](https://github.com/Adam-S-Daniel/cms-platform/pull/712)'s review).
+Public specs on the fixtures. Platform self-CI ran no public-site spec, so
+v0.1.139's public specs first ran on a consumer's bump PR and broke
+jodidaniel.com. The `fixture-e2e-project` matrix in `self-fixture-e2e.yml` gains
+two legs, `chromium-desktop-1080` on `e2e/fixture-site` (`/` on the theme layout)
+and on `e2e/fixture-site-singlepage` (`/` on a site-owned `_layouts/home.html`,
+jodidaniel.com's shape), each with a named proof test that must pass; the
+required `fixture-e2e` gate is unchanged. To make the specs hold on the fixtures:
+`feeds-and-share.spec.js` reads the feed title from the site's `_config.yml`
+(`title`, else `name`, and fails if neither is set) instead of the literal
+"Adam Daniel"; `not-found.spec.js` skips its header/footer test when the new
+`pageUsesThemeLayout(siteRoot, relPath)` in `e2e/site-capabilities.js` says
+`404.html` does not use the theme layout (`homeUsesThemeLayout` now delegates to
+it; both consumers use `layout: default`, so it still runs there);
+`site-link-crawler.spec.js` ignores a `/tags/` link only on an `e2e-` slug post
+page (`<article class="post">`), because `auto_tag_pages.rb` never builds an
+archive for those; the fixtures' home, blog index and tags index markup now
+match adamdaniel.ai's. The load-time AST lint follows spec-local wrappers
+transitively and covers every `*.spec.js`
+([#712](https://github.com/Adam-S-Daniel/cms-platform/pull/712), fixes
+[#702](https://github.com/Adam-S-Daniel/cms-platform/issues/702)).
+Media safety net. `cms-media-roundtrip.spec.js` removed a leftover per-run
+upload with a Contents-API `DELETE` on `main`, which the ruleset refuses (empty
+`bypass_actors`), so it only warned. It now removes the upload through
+`removeFixtureViaPr` with its own slug (`mediaUploadRemovalSlug`, the post's
+slug plus `-upload`, so the two removal PRs get different branches). Each close,
+read and removal in that `afterAll` runs in its own `try`, so the upload leg
+runs even when the post leg fails; failures are rethrown (one as is, two or more
+as an `AggregateError`). New checks in `e2e/leftover-e2e-tags.test.js` over the
+five safety-net specs: no `.catch`/`.then`/`.finally` on `readFileOnRef`, a
+`catch` around a close, read or removal must throw or record the error and throw
+later, and no Contents-API write to `main`
+([#709](https://github.com/Adam-S-Daniel/cms-platform/pull/709), fixes
+[#697](https://github.com/Adam-S-Daniel/cms-platform/issues/697)). Not changed:
+`cms-delete-published.spec.js`'s `tryHardDelete` still waits on the merge.
+Guards and docs. `e2e/examples-site-pins-current.test.js` gains contract 8:
+AGENTS.md's "Current release: `vX.Y.Z` (`v0.1.0`–`vX.Y.Z` are tagged" sentence
+must name `plugin.json`'s version in both positions, so a release prep that
+forgets the line goes red
+([#708](https://github.com/Adam-S-Daniel/cms-platform/pull/708)).
+`docs/skill-impact.md` records the touch-gate result for the v0.1.140
+`ci-watcher-loops` change, which was "outstanding" at that release
+([#705](https://github.com/Adam-S-Daniel/cms-platform/pull/705), part of
+[skills-evals#89](https://github.com/Adam-S-Daniel/skills-evals/issues/89)).
+Consumers get the harness changes with their next platform bump (specs and
+harness are read from the platform checkout at the pinned ref), and nothing a
+bootstrap template, the oauth proxy, the gem or the reusable workflows ship
+moved, so no bootstrap redeploy. adamdaniel.ai's bump now runs the blog-post,
+share-row and feed-content tests that skipped before; they ran and passed in the
+#713 review against a local build of adamdaniel.ai with this theme. jodidaniel.com's
+bump should show no change (no blog, home page already skipped for the theme
+specs).
+
+**v0.1.140 — The three other e2e safety nets also close the run's own in-flight Decap PR before trusting `main`; the theme's home-page specs skip a consumer whose `/` is a site-owned layout, which fixes the v0.1.139 bump failure on jodidaniel.com; the `ci-watcher-loops` skill takes a dispatched run's id from the URL `gh workflow run` prints.**
+Test-harness and skill release: nothing under `.github/`, `theme/`,
+`infrastructure/`, `oauth-proxy/`, `scaffold/`, `scripts/` or `examples/`
+changed apart from the pins (`git diff --stat v0.1.139 origin/main` is `e2e/`,
+two docs files and one `SKILL.md`).
+Safety nets. v0.1.139 gave the two tags lifecycle specs an `afterAll` that
+first closes this run's open create PR and reads the ref strictly. The other
+three specs that create a throw-away fixture through Decap and label its PR
+`cms/ready` still read only `main` with a catch-all, so a run that failed
+before the merge read "gone" and the armed PR could merge the fixture
+afterwards. `cms-publish-loop-prod-mutate.spec.js`, `cms-delete-published.spec.js`
+and `cms-media-roundtrip.spec.js` now run `closeOpenPrsAddingFile` (matched on
+the run-stamped path, exact compare; a PR that only removes the file, which is
+the delete leg's, is left alone) and then `readFileOnRef` (only a 404 means
+absent), and a failure to open the removal PR throws instead of warning. The
+media hook closes twice, for the post path and for the upload path, to cover an
+upload Decap committed in a separate PR. `fileExistsOnMain` in the three specs
+uses `readFileOnRef` instead of a regex on the error message. The AST lint in
+`e2e/leftover-e2e-tags.test.js` now covers all five specs: each close must name
+the spec's own fixture paths and come before the hook's first `readFileOnRef`
+([#694](https://github.com/Adam-S-Daniel/cms-platform/pull/694), part of
+[#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689), which stays
+open: its site-side exclusion criterion is not in this release). Not changed:
+the media hook's `deleteFileFromMainIfPresent` is a direct Contents-API
+`DELETE` on `main` that the ruleset probably rejects, and its failure still only
+warns. No live e2e was run for #694.
+Theme specs on a site-owned home. `public-a11y-polish.spec.js` (skip link,
+footer follow link) and `reduced-motion.spec.js` (the no-preference control)
+load `/` and assert markup from the theme's `default.html` and `main.css`.
+jodidaniel.com's `index.html` uses `layout: home`, its own `_layouts/home.html`
+that never chains to the theme default, so 4 tests failed on all 8 projects in
+its v0.1.139 bump PR
+([jodidaniel.com#351](https://github.com/jodidaniel/jodidaniel.com/pull/351)).
+New `homeUsesThemeLayout(siteRoot, themeLayoutsDir)` in
+`e2e/site-capabilities.js` decides from the site's SOURCE, never from the
+rendered page lacking the markup (that would hide a regression on
+adamdaniel.ai): it finds the home page file (a top-level page with
+`permalink: /` or `/index.html`, else `index.html`, `index.md`,
+`index.markdown`), takes its `layout:` or the `_config.yml` `defaults:` layout
+that applies, follows the layout chain site before theme, and returns true when
+the chain reaches a `default` the site has not overridden. It returns false for
+no home file, no front matter, `layout: null` or `none`, a layout found
+nowhere, a cycle, a site layout with no parent, or a site `default.html`
+override. Theme layouts are read only to follow a chain through a theme layout
+other than `default`, from `<harness>/../theme/_layouts` or
+`<site>/.cms-platform/theme/_layouts` (the consumer lane copies the harness to
+`<site>/e2e`), at the harness's platform ref, not the site's installed gem; if
+they are needed and missing the predicate throws, so the specs call it inside
+each test (an AST lint in `site-capabilities.test.js` keeps it out of
+file-load scope). The 4 tests call `test.skip(!homeUsesThemeLayout(), ...)`;
+the reduce half of `reduced-motion.spec.js` and the `/blog/` checks are
+unchanged. `e2e/select-specs.js` also selects both specs when `index.*` or
+`e2e/site-capabilities.js` changes, and `reduced-motion` on a `_layouts/`
+change; `docs/CONSUMER-COMPATIBILITY.md` documents the predicate
+([#701](https://github.com/Adam-S-Daniel/cms-platform/pull/701)). Round 2 of
+that review caught a first version that threw at spec load in the copied-harness
+lane (0 tests loaded); the shipped one was run with `--list` against read-only
+copies of both consumers, 56 tests each, true for adamdaniel.ai, false for
+jodidaniel.com. No browser e2e was run locally.
+Skill. `skills/ci-watcher-loops/SKILL.md` discarded `gh workflow run`'s output
+and then found the run with a bare `gh run list --workflow=... --limit 1`,
+which is an extra read and races: the newest run of the workflow can be another
+actor's (skills-evals#89 rounds 3 and 4, 3 of 3 with-skill trials in round 4).
+"The fix" and the multi-step Monitor example now capture the dispatch output and
+take the run id from the run URL it prints (gh 2.87.0 or newer; with stdout not
+a TTY it prints that URL alone). Only when no URL is printed does a fallback
+run `gh run list` filtered by `--workflow`, `--event workflow_dispatch`,
+`--branch`, `--user` and a `--created ">=$SINCE"` timestamp taken before the
+dispatch, with `--limit 2` and a jq that accepts exactly one match; an empty
+`RUN` stops the script (`STEP2_NO_RUN_ID` in the multi-step example) instead of
+polling forever. The "Or, equivalently" variant is removed and "What NOT to do"
+now says never a bare `--limit 1`. The chained-capture pitfall, the background
+watcher guidance and the 60 s floor are unchanged
+([#680](https://github.com/Adam-S-Daniel/cms-platform/pull/680), part of
+[skills-evals#89](https://github.com/Adam-S-Daniel/skills-evals/issues/89)).
+The touch-gate eval for it passed, recorded in
+[a comment on #680](https://github.com/Adam-S-Daniel/cms-platform/pull/680#issuecomment-5998770991)
+(N=3 per arm, objective 8.0 vs 8.0 of 8,
+judge 8.32 vs 7.85) but on a fixture whose fake `gh workflow run` prints JSON,
+so neither the URL-parse branch nor the fallback was exercised.
+Consumers get the harness changes with their next platform bump: the specs and
+harness are read from the platform checkout at the pinned ref, and nothing
+under `infrastructure/`, `oauth-proxy/`, `examples/` or `scaffold/` changed
+apart from the pins, so no bootstrap redeploy. The skill is an agent-side
+file (the plugin root's `skills/` directory, versioned by the manifests this
+release bumps), not something a site build or workflow reads. jodidaniel.com's
+v0.1.140 bump should pass e2e because the 4 theme specs now skip there.
+adamdaniel.ai's bump should show no new visual diffs: the theme is unchanged and
+the v0.1.139 screenshots were approved and deployed
+([adamdaniel.ai#4102](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4102)).
+
+**v0.1.139 — A tags canary's in-flight PR can no longer outlive its run and leave an `e2e-` tag on a consumer's main; the public theme gets one meta description, share images, a skip link and reduced-motion support; the admin editor gets five fixes.**
+The tags lifecycle specs' `afterAll` safety net looked only at `main`, and any
+error on `GET contents/_tags/<slug>.md?ref=main`, not just a 404, counted as
+"not on main". In adamdaniel.ai's run 31107474927 the create leg timed out
+while the Decap create PR (adamdaniel.ai#2938) was still open and armed with
+`cms/ready`; the hook read 404 and returned, the PR auto-merged 12 minutes
+later, and `_tags/e2e-tags-canary-1786027176024.md` stayed on the public site
+until adamdaniel.ai#4090. `scripts/reset-orphaned-canary.sh` healed only
+`_e2e/` markers, so nothing swept it. New `closeOpenPrsAddingFile` and
+`readFileOnRef` in `e2e/cms-fixture-pr.js`: both tags specs' `afterAll` hooks
+now close this run's open create PR (matched on the exact run-stamped path,
+head branch deleted only when it is in this repo), re-read it to prove it is
+closed, and read the ref strictly (only a 404 means absent), and a failure to
+open the cleanup PR throws instead of warning. New `e2e/leftover-e2e-tags.js`:
+on main, `reset-orphaned-canary.sh` lists `_tags/`, opens a labelled removal PR
+for a run-stamped canary tag older than 3 hours (deduped against an open
+`cms/e2e-fixture/remove-<slug>-` PR), reports but never touches a tag stamped
+more than 10 minutes in the future or any other `e2e-` tag, and writes the
+count to the step output `leftover_e2e_tags` (`error` when the check failed;
+the script still exits 0). `cms-publish-loop-host.yml` gains a last `always()`
+step that fails the job on a non-zero or `error` count, so the daily run goes
+red and `scheduled-run-health` opens its issue. A site with no `_tags/`
+(jodidaniel.com) lists 404 and reports 0. The prod loop runs the same sweep and
+opens the same removal PRs but only the host loop fails on the count. The
+site-side exclusion half of
+[#689](https://github.com/Adam-S-Daniel/cms-platform/issues/689) (keeping an
+`e2e-` tag out of the sitemap, tag feeds and indexing) is not in this release,
+and three other specs keep the main-only safety net
+(`cms-publish-loop-prod-mutate`, `cms-delete-published`,
+`cms-media-roundtrip`)
+([#690](https://github.com/Adam-S-Daniel/cms-platform/pull/690)).
+`e2e/base.js`'s `resolvePreviewBaseURL()` checked the spawn error code before
+the signal, so a `gh` that Node itself killed (timeout `ETIMEDOUT`, buffer
+overflow `ENOBUFS`) read "could not start". It now reports exit status, then
+signal with the error code (`gh was killed by SIGTERM (ENOBUFS)`), then a
+signal-less spawn code, then `gh failed with no exit status`; still no stderr,
+stdout or `cause`
+([#684](https://github.com/Adam-S-Daniel/cms-platform/pull/684), follow-up to
+[#681](https://github.com/Adam-S-Daniel/cms-platform/pull/681)).
+Public theme. `theme/_layouts/default.html` no longer hard-codes
+`<meta name="description">`: it emitted the site tagline ahead of
+jekyll-seo-tag's page description and crawlers take the first, so every post
+showed the tagline; `{% seo %}` is now the only source
+([#666](https://github.com/Adam-S-Daniel/cms-platform/pull/666), for
+[#654](https://github.com/Adam-S-Daniel/cms-platform/issues/654)). New plugin
+`theme/lib/cms-platform-theme/seo_image.rb` sets a page's `image:` from
+`featured_image:`, else an optional site-wide `default_image:` in
+`_config.yml`, so jekyll-seo-tag emits `og:image` and `twitter:image` and a
+`summary_large_image` card; an explicit `image:` wins
+([#671](https://github.com/Adam-S-Daniel/cms-platform/pull/671), for
+[#655](https://github.com/Adam-S-Daniel/cms-platform/issues/655)). Both build
+real Jekyll sites in new `theme/spec/` tests, so the `ruby-theme-specs` lane
+installs `jekyll-seo-tag` 2.9.0. Accessibility: a skip-to-content link as the
+first Tab stop (`main` gets `tabindex="-1"`), the post's featured image is
+decorative (`alt=""`, and the `/preview/` shell stops mirroring the title into
+it), small text raised to at least 0.75rem, and a footer "Follow" nav with the
+Atom feed plus each `cross_post.profiles` entry as `rel="me"`
+([#669](https://github.com/Adam-S-Daniel/cms-platform/pull/669), for
+[#657](https://github.com/Adam-S-Daniel/cms-platform/issues/657)); a
+`prefers-reduced-motion: reduce` block in `theme/assets/css/main.css` stops the
+always-running glow, color-cycle and shimmer animations and parks the glow at
+`opacity: 0.3` (`postcss` 8.5.28 is a new exact-pinned `e2e` devDependency for
+its lint)
+([#668](https://github.com/Adam-S-Daniel/cms-platform/pull/668), for
+[#656](https://github.com/Adam-S-Daniel/cms-platform/issues/656)). The preview
+host's 404 page (`deploy-preview.yml`) keeps its palette in per-scheme custom
+properties, which fixes light text on a white card in dark mode; a new lint
+requires 4.5:1 for every pair in both schemes, and the page reaches a preview
+on its next deploy
+([#667](https://github.com/Adam-S-Daniel/cms-platform/pull/667), for
+[#651](https://github.com/Adam-S-Daniel/cms-platform/issues/651)).
+Admin editor. New `theme/admin/tags-input.js`: Enter in the Tags box ends the
+current tag, and a space typed right after a comma is dropped, so `alpha, beta`
+no longer saves `alphabeta`; the Tags hint (`config.base.yml`,
+`config-local.base.yml`, `config-test.yml`) now describes that
+([#675](https://github.com/Adam-S-Daniel/cms-platform/pull/675), for
+[#638](https://github.com/Adam-S-Daniel/cms-platform/issues/638)). New
+`theme/admin/preview-pane.js` registers the site stylesheet and a preview
+template for posts, pages and projects, so the in-editor preview is no longer
+raw fields in default Times with an unformatted date
+([#673](https://github.com/Adam-S-Daniel/cms-platform/pull/673), for
+[#653](https://github.com/Adam-S-Daniel/cms-platform/issues/653)). New
+`theme/admin/editor-component-image.js` re-registers the Image component with
+a `toBlock` that writes nothing when no image was chosen, instead of a literal
+`![]()` line
+([#670](https://github.com/Adam-S-Daniel/cms-platform/pull/670), for
+[#648](https://github.com/Adam-S-Daniel/cms-platform/issues/648)). The "View
+page on site" banner (`live-url-banner.js`) is written into the fresh element
+Decap builds on the `/new` to `/entries/<slug>` route change instead of being
+skipped by its render cache, which left an empty strip until reload
+([#674](https://github.com/Adam-S-Daniel/cms-platform/pull/674), for
+[#641](https://github.com/Adam-S-Daniel/cms-platform/issues/641)). On desktop
+(`min-width: 769px`, `admin-mobile.css`) the editor container is a flex column
+so the Draft bar no longer makes it taller than its box and focus scrolls stop
+sliding the Save/Publish toolbar off the top
+([#678](https://github.com/Adam-S-Daniel/cms-platform/pull/678), for
+[#640](https://github.com/Adam-S-Daniel/cms-platform/issues/640)). The three
+new admin scripts are loaded in all three admin shells.
+Consumers get all of it with their next platform bump: the theme and admin
+config ship in the gem the bump moves, the reusable workflows are pinned by the
+bump, and nothing under `infrastructure/`, `oauth-proxy/`, `examples/` or
+`scaffold/` changed apart from the pins, so no bootstrap redeploy. Expect the
+host loop's first daily run after the bump to go red if a consumer's `_tags/`
+still holds an `e2e-` file.
 
 **v0.1.138 — A malformed API response can no longer put its body into public output or a minted token into a log line; the Pages permalink field no longer defaults to a shared `/pages/`.**
 A 2xx response whose body is not JSON makes `Response.json()` throw a

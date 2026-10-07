@@ -273,6 +273,64 @@ Three things this cost, all of them generalisable:
   distinguished "the merge is coming" from "the merge is never coming". That
   half is §3.4 below.
 
+### 2.11 A pattern error blocked Save and Publish with no feedback (#730)
+
+A field with `pattern: [regex, message]` that fails blocks Save and Publish,
+and Decap says nothing where the editor clicked. This is **Decap core, not
+this repo**: `persistEntry` raises `ui.toast.missingRequiredField` only when a
+field error has type `PRESENCE`; a `PATTERN` error just rejects the save, and
+the message sits under the field. Decap's English `regexPattern` phrase
+(`%{fieldLabel} didn't match the pattern: %{pattern}.`) also wrapped the
+site's own sentence, which usually ends in a period (hence "..") and was
+upper-cased by Decap's error styling (`/pages/about/` read `/PAGES/ABOUT/`).
+
+`theme/admin/validation-feedback.js` (all three shells, deferred after
+`decap-cms.js`) works around it without touching Decap internals: it rewrites
+the phrase to `%{fieldLabel}: %{pattern}` through `CMS.getLocale('en')`, turns
+the upper-casing off for `[class*="ControlErrorsList"]`, and after a click on
+Save or Publish scrolls to the first field error and toasts its message unless
+Decap raised its own toast. Each piece is a silent no-op if Decap changes the
+surface it reads. A site's `pattern` message should therefore be a complete
+sentence that says what to enter, with its own final punctuation. The upstream
+gap (no toast for non-presence errors) is a candidate for a Decap issue; this
+shim can be deleted if it closes. Unit test: `e2e/validation-feedback.test.js`.
+
+Follow-ups (#750): the toast goes on the screen edge the field is not near,
+passes every click through except on its own "Dismiss" button, and names the
+list row when the field sits in one ("Item 2 (Beta): URL: ..."), opening the
+row if it is collapsed. "Decap raised its own toast" means a toast that
+appeared after the click: Decap's missing-field toast outlives its click by
+8 s, and a format error retried inside that window used to find it, stand
+down, and leave "you missed a required field" on screen for a bad format
+(reproduced on Decap 3.15.1). A leftover "missed a required field" toast is
+now closed when the shim shows its own; any other leftover error toast
+("logged out", "backend unavailable") is left open (#752). The shim matches
+the toast's text against `ui.toast.missingRequiredField` of every locale Decap
+ships (read through `CMS.getLocale`), since it cannot read the site's
+configured `locale`; a toast in a locale it cannot read stays open. The
+"Dismiss" button is at least 24 x 24 px (44 x 44 on a touch screen) with its
+"×" glyph `aria-hidden`, and the toast is centered with auto margins so it
+keeps its width on a phone.
+
+Follow-up (keyboard Publish, UX round 3): Enter or Space on "Publish now" gave
+no feedback at all. The Publish menu is react-aria-menubutton, which selects an
+item on `keydown` and fires no `click`, so the shim's click listener never ran
+(the mouse path worked). A capture-phase `keydown` listener now treats Enter or
+Space on a `role="menuitem"` Save/Publish item as the same attempt (a real
+`<button>` is skipped: its own Enter fires a click, so Save reports once). After
+the scroll, focus moves to the first input in the first failing field (a
+collapsed list row is opened first), also when Decap raised its own "missed a
+required field" toast, so a keyboard or screen-reader editor lands on the field
+the message names instead of staying on the Publish button. Focus moves only
+for an event the editor made (`isTrusted`): `autosave-on-hide.js` clicks Save
+from a script on tab hide, page hide and idle, and that report still toasts and
+scrolls but must not move focus out from under her typing. A held key
+(`repeat`) is ignored, and a field in a row opened a moment ago is waited for (a
+few frames) before it is focused. Under
+`publish_mode: editorial_workflow` Decap's Publish never validates; the path
+only exists in simple mode (the local backend), which
+`e2e/cms-validation-feedback.spec.js` selects by rewriting `config-test.yml`.
+
 ---
 
 ## 3. The target model
@@ -389,6 +447,20 @@ update names the canonical hostname; a preview update names the current preview
 hostname. Their visible labels and help text describe publishing and updates,
 while workflow names, job ids and deployment states remain internal diagnostics.
 
+A draft saved on a preview admin opens a PR into the preview's own branch, and
+`deploy-preview.yml`'s caller builds only PRs into the default branch, so that
+PR never gets a `preview-pr<N>` host or a `deploy/preview` status (#642). For
+such a PR (the same `previewOnly` signal) the "View page on" banner keeps the
+configured publication URL, the Posts list points at Live Preview instead of
+linking a host that does not exist, and Decap's "Check for Preview" button is
+hidden behind a Live Preview pointer (`native-preview-href.js`). The Posts
+list's "published ↗" links use `destinationOrigin()`, and on a preview admin
+(served branch ≠ `CMS_PRODUCTION_BRANCH`) its freshness line reads the
+`preview-pr-<N>` deployment of the open PR whose head is the served branch,
+never production's. The bar says "Sign in" only when there is no token; a
+signed-in editor whose read has not landed sees a loading note, and one whose
+read found no deployment sees *update status unknown*.
+
 Publication links use `CMSHostname.destinationOrigin()`: the HTTP(S) origin of
 the served config's `site_url`, including protocol and port, with paths and
 credentials removed. They resolve it when rendered, so a delayed config read
@@ -465,7 +537,11 @@ branch, the stall, and Live on the preview), `e2e/publish-status-links.test.js`
 has merged, only a merge into a known default-branch base reads as going live
 on the live site, whatever its labels; a merge into the feature branch, or one
 whose base is unknown, reads as on its way to the preview for the merge watch,
-and after that the entry's ordinary state applies).
+and after that the entry's ordinary state applies). Within the watch, a
+feature-branch merge reads Live, "on &lt;preview host&gt; now", as soon as a
+`preview-pr-<N>` deployment covering the merge succeeds — N being the open PR
+whose head is that branch (#643); before #643 nothing read that deployment,
+so the bar said "Going live…" for the whole 30-minute watch.
 
 The old wording was never actually shown on GitHub. GitHub rejects a label
 description over 100 characters with a 422; the old one was 107, the
@@ -747,7 +823,13 @@ Four details worth keeping:
   most likely to be "simplified" into a lie, so it has its own test.
 - **A hidden tab polls nothing.** An admin left open overnight in a
   background tab must not spend the editor's rate limit on an entry nobody
-  is looking at.
+  is looking at. A Publish press is the exception (unreleased, #644): its
+  `refresh()` reads in a hidden tab too, because an editor who pressed
+  Publish and switched to the Live Preview tab got "press Publish once more"
+  with no Publish control on screen. That failure now also gives Decap's
+  control back when no button of ours is showing, and the admin shims that
+  coalesce on `requestAnimationFrame` (which never fires in a hidden tab)
+  run their pass on the next task instead while the tab is hidden.
 - **The sentence links to the run (unreleased).** "did not pass" links to
   the failed check's workflow run, and the "It is waiting for …" phrase to
   the running one (one run's page when the running checks share a run, else
@@ -924,6 +1006,52 @@ after the fix at 1280x800 on the entry editor: toolbar y=126, editor
 126–800, Save reachable, `documentElement.scrollHeight` 800. A site with no
 banner never gets the class and sees no layout change at all.
 
+### Phone toolbar and Publish placement
+
+On phones at 600px and below with `overflow: clip` support, the production
+Publish bar stays sticky below the native toolbar (part of
+[issue #731](https://github.com/Adam-S-Daniel/cms-platform/issues/731)).
+[publish-step-hint.js](../theme/admin/publish-step-hint.js) measures the toolbar
+on each synchronization and on resize, so a deploy pill or local save chip
+changes the offset instead of covering Save or Delete. The idle bar has an
+opaque background when it holds a control; the other states keep their
+existing colors. The same `overflow: clip` support gate as the sticky toolbar
+applies, and the bar's
+buttons have 44px minimum touch targets.
+
+The simple-mode and published-entry toolbars fit one action row at that
+breakpoint: an arrow-only Back link, compact action labels (Save or Publish,
+depending on mode), a trash icon for Delete, and the account button. The full
+Back title and Delete label remain in the accessible names.
+The saved-status text stays in the DOM but is visually hidden; Decap's native
+ARIA attributes and the status bar's announcements stay in place. The native
+controls and handlers stay in place. Local save chips and active deploy
+details keep their own rows when present. This
+compacts the native toolbar; the production Publish/status bar remains a
+separate row below it.
+
+The full editorial workflow can also expose Status and Check for Preview.
+When its native Status control is visible, the extra actions wrap on a
+separate row so every control remains reachable. The production shell's
+one-door publishing hides that Status control, so this fallback does not
+expand its compact toolbar. This Status-specific fallback uses `:has()`;
+the browser regressions cover current Chromium and WebKit with both
+`:has()` and `overflow: clip` support.
+
+On current Chromium and WebKit, phone validation toasts sit halfway down the
+viewport, keeping their 44px dismiss target clear of the sticky toolbar and
+bottom notices even when their text wraps.
+[cms-admin-toast-passthrough.spec.js](../e2e/cms-admin-toast-passthrough.spec.js)
+checks toolbar separation, account-menu clicks, and dismissal at 320px and 390px.
+
+The phone regression in
+[cms-mobile-layout.spec.js](../e2e/cms-mobile-layout.spec.js) loads the production
+bar and button from the served `/admin/` assets into the test-repo editor,
+with a synthetic poller snapshot and no GitHub calls. It checks geometry,
+hit testing, resize, and the desktop breakpoint. This covers placement;
+production publishing still requires the live validation loop after a
+release and consumer bump.
+
 ### What is deliberately NOT covered by a browser spec
 
 Phases 2–4 load on the production shell only, and the only served shell a
@@ -933,9 +1061,9 @@ Decap still behaves the way these shims assume. Reading the shim sources off
 the platform tree and injecting them into a synthetic page would break the
 consumer-context rule the moment it ran on a consumer lane.
 
-So the pure parts are exported and unit-tested instead — the status model,
-and the route/branch matchers a Decap change would move — and the rest is
-locked structurally by `e2e/admin-publishing-ux.test.js`. This is stated
+For the remaining behavior, the pure parts are exported and unit-tested —
+the status model and the route/branch matchers a Decap change would move — and
+the rest is locked structurally by `e2e/admin-publishing-ux.test.js`. This is stated
 here rather than left as an apparent gap, because "there is no browser spec"
 is otherwise indistinguishable from an oversight.
 

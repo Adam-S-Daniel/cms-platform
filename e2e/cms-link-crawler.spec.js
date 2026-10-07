@@ -1,7 +1,9 @@
 // @lane: local — crawls the local /admin shell; @parity-eligible via TARGET=
 const { test, expect, TARGET } = require("./base");
+const fs = require("node:fs");
 const path = require("node:path");
 const { guard } = require("./base-collections-guards");
+const { slugify, postPublicPath, parseFrontMatter } = require("./public-content");
 // SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source signal).
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 
@@ -69,6 +71,91 @@ const KNOWN_BUGS = [
 
 function isKnownBug(url) {
   return KNOWN_BUGS.some((re) => re.test(url));
+}
+
+// Public links to entries the served site was never built with.
+//
+// The local webServer serves a `_site` built at startup (and rebuilt only
+// when a spec runs jekyll-build.js), while decap-server reads and writes the
+// live working tree. The newest build's `_site/index.html` mtime is the
+// cut-off: a source written after it is not in what is served. Other specs in
+// the same run create entries through the CMS (cms-html-embed's
+// `e2e-html-embed` post, cms-smoke's `decap-smoke-test` tag, …), so the
+// admin lists entries the static site has no page for. Since #682 the
+// admin's public links (the posts list's "published ↗", the live-URL
+// banner) use the served config's site_url, which locally is this same
+// origin, so the crawler HEADs them and gets a 404 that says nothing about
+// the admin: the entry simply postdates the build. Which entries exist at
+// crawl time depends on what ran before, hence the intermittent red.
+//
+// Such a link is out of scope only when ALL of these hold, so a real
+// regression still fails: the status is 404; the URL is exactly the public
+// URL this spec derives for an entry the admin listed (a link with the
+// wrong shape, e.g. KNOWN_BUGS' date-prefixed slug, never matches); and
+// that entry's source is missing or newer than the build. A built entry
+// whose derived URL 404s (the admin and Jekyll disagreeing on the URL)
+// is still a failure.
+const PUBLIC_ENTRY_ROUTES = {
+  // config's `permalink: /blog/:slug/`: the front-matter `slug:` (else the
+  // file name minus its date prefix), slugified; a front-matter `permalink:`
+  // replaces the template (same derivation as posts-list-enhance.js urlPath).
+  // A post that is missing (deleted since the admin listed it) has no front
+  // matter left to read, so it falls back to the file name.
+  posts: {
+    folder: "_posts",
+    urlPath: (slug, source) => {
+      let frontMatter = null;
+      try {
+        frontMatter = parseFrontMatter(source);
+      } catch {
+        // missing or unreadable: the file-name address is all there is
+      }
+      return postPublicPath(slug, frontMatter);
+    },
+  },
+  // tags collection: `permalink: /tags/:slug/`.
+  tags: { folder: "_tags", urlPath: (slug) => `/tags/${slugify(slug)}/` },
+};
+
+function unbuiltEntryUrls(adminHrefs, adminOrigin) {
+  const urls = new Set();
+  if (TARGET !== "local") return urls;
+  let builtAt;
+  try {
+    builtAt = fs.statSync(path.join(SITE_ROOT, "_site", "index.html")).mtimeMs;
+  } catch {
+    return urls; // no local build to compare against
+  }
+  for (const href of adminHrefs) {
+    let url;
+    try {
+      url = new URL(href);
+    } catch {
+      continue;
+    }
+    // Decap's entry route, `/admin/index-local[.html]#/collections/<c>/entries/<slug>`.
+    if (url.origin !== adminOrigin || !url.pathname.startsWith("/admin/")) continue;
+    const m = /^#\/collections\/([^/]+)\/entries\/([^/?#]+)$/.exec(url.hash);
+    const route = m && Object.hasOwn(PUBLIC_ENTRY_ROUTES, m[1]) && PUBLIC_ENTRY_ROUTES[m[1]];
+    if (!route) continue;
+    let slug;
+    try {
+      slug = decodeURIComponent(m[2]);
+    } catch {
+      continue;
+    }
+    if (slug.includes("/") || slug.includes("..")) continue;
+    const source = path.join(SITE_ROOT, route.folder, `${slug}.md`);
+    let unbuilt;
+    try {
+      unbuilt = fs.statSync(source).mtimeMs > builtAt;
+    } catch {
+      unbuilt = true; // deleted since the admin listed it: a transient spec entry
+    }
+    const urlPath = unbuilt ? route.urlPath(slug, source) : null;
+    if (urlPath) urls.add(`${adminOrigin}${urlPath}`);
+  }
+  return urls;
 }
 
 // URLs we deliberately don't crawl. `mailto:`/`javascript:`/bare `#`
@@ -166,6 +253,9 @@ test.describe(
       async function harvest() {
         const hrefs = await page.$$eval("a[href]", (els) => els.map((a) => a.href));
         for (const href of hrefs) harvested.add(href);
+        // The open entry's own route, for unbuiltEntryUrls(): an entry
+        // created after the list was harvested is still known here.
+        harvested.add(page.url());
       }
 
       // Walk every declared collection. The loop opens the list, harvests,
@@ -195,8 +285,10 @@ test.describe(
         "Expected at least one same-origin <a href> to crawl after walking every collection",
       ).toBeGreaterThan(0);
 
+      const unbuilt = unbuiltEntryUrls(harvested, adminOrigin);
       const failures = [];
       const knownBugHits = [];
+      const unbuiltHits = [];
       for (const url of candidates) {
         let status;
         try {
@@ -206,6 +298,10 @@ test.describe(
           });
           status = response.status();
           if (ACCEPTED_STATUSES.has(status)) continue;
+          if (status === 404 && unbuilt.has(url)) {
+            unbuiltHits.push(`${url} → 404 (entry postdates the site build; see unbuiltEntryUrls)`);
+            continue;
+          }
           if (isKnownBug(url)) {
             knownBugHits.push(`${url} → ${status} (allowlisted; see KNOWN_BUGS)`);
             continue;
@@ -214,6 +310,13 @@ test.describe(
         } catch (err) {
           failures.push(`${url} → request error: ${err.message}`);
         }
+      }
+
+      if (unbuiltHits.length) {
+        console.log(
+          `[cms-link-crawler] links to entries the served site was built without (${unbuiltHits.length}):\n  ` +
+            unbuiltHits.join("\n  "),
+        );
       }
 
       if (knownBugHits.length) {

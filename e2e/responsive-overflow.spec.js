@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("./base");
+const cap = require("./site-capabilities");
 
 // #540 (8.4) — a wide Markdown table or a fixed-width <iframe> must not make
 // the PAGE scroll sideways on a phone, and the table's content must stay
@@ -16,8 +17,8 @@ const { test, expect } = require("./base");
 // stylesheet it actually serves, and no consumer needs a fixture page.
 //
 // The viewport is set explicitly (like cms-mobile-layout.spec.js) so one
-// project covers phone / tablet / desktop; chromium-mobile is the project
-// that carries it, the others would repeat the identical pass.
+// project covers phone / tablet / desktop. chromium-mobile covers consumers;
+// chromium-desktop-1080 carries it in required platform fixture CI.
 
 const FIXTURE = fs.readFileSync(path.join(__dirname, "fixtures", "responsive-overflow.html"), "utf8");
 
@@ -34,8 +35,8 @@ test.describe("responsive tables and iframes (#540)", () => {
       page,
     }, testInfo) => {
       test.skip(
-        testInfo.project.name !== "chromium-mobile",
-        "Sets its own viewport; one project is enough",
+        !["chromium-mobile", "chromium-desktop-1080"].includes(testInfo.project.name),
+        "Sets its own viewport; run in the consumer and fixture public projects",
       );
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
@@ -45,6 +46,7 @@ test.describe("responsive tables and iframes (#540)", () => {
         const host = document.querySelector("main") || document.body;
         const wrap = document.createElement("div");
         wrap.className = "container";
+        wrap.id = "responsive-overflow-fixture";
         const body = document.createElement("div");
         body.className = "page-content";
         body.innerHTML = html;
@@ -52,7 +54,8 @@ test.describe("responsive tables and iframes (#540)", () => {
         host.appendChild(wrap);
       }, FIXTURE);
 
-      const table = page.locator(".page-content table");
+      const table = page.locator("#responsive-overflow-fixture table");
+      const content = page.locator("#responsive-overflow-fixture .page-content");
       const iframe = page.locator("#responsive-overflow-iframe");
       await expect(table).toBeVisible();
       await expect(iframe).toBeVisible();
@@ -81,17 +84,136 @@ test.describe("responsive tables and iframes (#540)", () => {
         el.scrollLeft = el.scrollWidth;
       });
       const lastCell = await page.locator("#responsive-overflow-last-cell").boundingBox();
-      expect(lastCell.x + lastCell.width, "last table cell can be scrolled into view").toBeLessThanOrEqual(
-        vp.width,
+      const tableBounds = await table.boundingBox();
+      expect(lastCell.x, "last cell left edge can be scrolled into view").toBeGreaterThanOrEqual(tableBounds.x - 1);
+      expect(lastCell.x + lastCell.width, "last cell right edge can be scrolled into view").toBeLessThanOrEqual(
+        tableBounds.x + tableBounds.width + 1,
+      );
+      const contentBounds = await content.boundingBox();
+      expect(tableBounds.x).toBeGreaterThanOrEqual(contentBounds.x - 1);
+      expect(tableBounds.x + tableBounds.width).toBeLessThanOrEqual(contentBounds.x + contentBounds.width + 1);
+
+      // 3. Every layout keeps the embed and its content reachable. Only the
+      // theme's main.css promises proportional sizing; a site-owned layout
+      // can retain the authored height while constraining the width.
+      const frame = await iframe.boundingBox();
+      expect(frame.x, "iframe starts within the content container").toBeGreaterThanOrEqual(contentBounds.x - 1);
+      expect(frame.x + frame.width, "iframe stays within the content container").toBeLessThanOrEqual(
+        contentBounds.x + contentBounds.width + 1,
+      );
+      const dimensions = await iframe.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
+      });
+      expect(dimensions.width).toBeGreaterThan(0);
+      if (cap.homeUsesThemeLayout()) {
+        expect(Math.abs(dimensions.height - dimensions.width * 450 / 800), "800 by 450 embed retains 16:9 sizing ratio").toBeLessThanOrEqual(1);
+      }
+      await expect(page.frameLocator("#responsive-overflow-iframe").locator("p")).toHaveText("Fixed-width embed fixture");
+
+      // Interactive frames without dimensions retain their explicit height;
+      // authors can set an inline ratio for nonstandard fixed-size embeds.
+      await expect(page.locator("#responsive-overflow-interactive")).toHaveCSS("height", "240px");
+      const square = await page.locator("#responsive-overflow-square").evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
+      });
+      if (cap.homeUsesThemeLayout()) {
+        expect(Math.abs(square.width - square.height), "explicit square aspect ratio wins").toBeLessThanOrEqual(1);
+      }
+    });
+  }
+});
+
+// #729 — a bare Markdown table also needs to be READABLE: cell padding, borders
+// in the theme's border color, a header row, and room below it. A classed table
+// (adamdaniel.ai's .bws-table) styles its own cells and must be left alone, as
+// must the horizontal-scroll box #540 gave the bare one.
+test.describe("bare Markdown table styling (#729)", () => {
+  for (const vp of [VIEWPORTS[1], VIEWPORTS[3]]) {
+    test(`${vp.name}: cells are padded and bordered, the header is distinct, classed tables are untouched`, async ({
+      page,
+    }, testInfo) => {
+      test.skip(
+        testInfo.project.name !== "chromium-mobile",
+        "Sets its own viewport; one project is enough",
+      );
+      // The cell rules live in the theme's main.css, linked by its default.html.
+      // A home page on a site-owned layout (jodidaniel.com's _layouts/home.html
+      // loads only its own stylesheet, which copies the #540 scroll rule and
+      // nothing else) never asked for them; the #540 test above still covers it.
+      // Decided from the site's source inside the test, like reduced-motion.spec.js.
+      test.skip(
+        !cap.homeUsesThemeLayout(),
+        "the home page renders through a site-owned layout that does not load the theme's main.css",
+      );
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.evaluate(() => {
+        const host = document.querySelector("main") || document.body;
+        const wrap = document.createElement("div");
+        wrap.className = "container";
+        const body = document.createElement("div");
+        body.className = "page-content";
+        body.innerHTML = `
+          <table id="md-table"><thead><tr><th>Mode</th><th>Latency</th></tr></thead>
+            <tbody><tr><td>fast</td><td style="text-align: right">1,450 ms</td></tr></tbody></table>
+          <p id="md-after">After the table.</p>
+          <table id="classed-table" class="bws-table"><tbody><tr><td>cell</td></tr></tbody></table>`;
+        wrap.appendChild(body);
+        host.appendChild(wrap);
+      });
+
+      const px = (v) => Number.parseFloat(v);
+      const cell = await page.locator("#md-table td").first().evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return {
+          padLeft: cs.paddingLeft, padTop: cs.paddingTop,
+          borderWidth: cs.borderTopWidth, borderStyle: cs.borderTopStyle, borderColor: cs.borderTopColor,
+        };
+      });
+      expect(px(cell.padLeft), "td horizontal padding").toBeGreaterThanOrEqual(8);
+      expect(px(cell.padTop), "td vertical padding").toBeGreaterThanOrEqual(4);
+      expect(cell.borderStyle).toBe("solid");
+      expect(px(cell.borderWidth)).toBeGreaterThanOrEqual(1);
+      expect(cell.borderColor, "border is the theme's --border token").toBe(
+        await page.evaluate(() => {
+          const probe = document.createElement("i");
+          probe.style.color = "var(--border)";
+          document.body.appendChild(probe);
+          const c = getComputedStyle(probe).color;
+          probe.remove();
+          return c;
+        }),
       );
 
-      // 3. The iframe shrinks to its container but keeps a usable height.
-      const frame = await iframe.boundingBox();
-      expect(frame.x + frame.width, "iframe stays within the viewport").toBeLessThanOrEqual(
-        vp.width,
-      );
-      expect(frame.width).toBeGreaterThan(0);
-      expect(frame.height).toBeGreaterThanOrEqual(150);
+      // Header: heavier than a body cell, with its own background.
+      const head = await page.locator("#md-table th").first().evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { weight: Number(cs.fontWeight), bg: cs.backgroundColor };
+      });
+      const bodyWeight = await page.locator("#md-table td").first().evaluate((el) => Number(getComputedStyle(el).fontWeight));
+      expect(head.weight).toBeGreaterThan(bodyWeight);
+      expect(head.bg).not.toBe("rgba(0, 0, 0, 0)");
+
+      // A Markdown alignment (inline style) still wins over the left default.
+      await expect(page.locator("#md-table td").nth(1)).toHaveCSS("text-align", "right");
+
+      // Room below the table: the next paragraph does not butt against it.
+      const table = await page.locator("#md-table").boundingBox();
+      const after = await page.locator("#md-after").boundingBox();
+      expect(after.y - (table.y + table.height), "gap between table and next paragraph").toBeGreaterThanOrEqual(16);
+
+      // Still its own horizontal scroll box (#540).
+      await expect(page.locator("#md-table")).toHaveCSS("overflow-x", "auto");
+
+      // A classed table keeps the browser defaults: no theme padding or border.
+      const classed = await page.locator("#classed-table td").evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { padLeft: cs.paddingLeft, borderWidth: cs.borderTopWidth };
+      });
+      expect(px(classed.padLeft)).toBeLessThan(4);
+      expect(px(classed.borderWidth)).toBe(0);
     });
   }
 });

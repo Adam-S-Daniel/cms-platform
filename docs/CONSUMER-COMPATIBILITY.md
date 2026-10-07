@@ -40,6 +40,29 @@ of the harness uses). Parses YAML with the real `yaml` lib.
 - `hasE2ECanaries(siteRoot)` / `hasRenderedCanary(siteRoot, slug)` /
   `hasSourcePosts(siteRoot)` / `isSinglePageConsumer(siteRoot)` — canary +
   posts presence.
+- `homeUsesThemeLayout(siteRoot)` — **SOURCE** signal: does `/` render
+  through the THEME's `default.html`? It follows the site's `index.*` front
+  matter (or its `_config.yml` `defaults:`) through `_layouts/`, site before
+  theme. jodidaniel.com's `layout: home` is a site-owned full document, so a
+  spec asserting the theme default's markup on `/` (skip link, footer follow
+  links, the `main.css` glow) skips there; a site overriding `default.html`
+  itself also reads false. Never skip on the rendered page lacking the markup:
+  that hides the regression on a site that does use the theme. A top-level
+  page with `permalink: /` counts as the home page over `index.*`. Theme
+  layouts resolve from `<harness>/../theme` or `<site>/.cms-platform/theme` (the
+  local lane COPIES the harness to `<site>/e2e`), at the harness's platform ref,
+  not the site's installed gem; only a chain through a theme layout other than
+  `default` reads them. Call it INSIDE a test: if those files are needed and
+  missing it throws, which at spec-file load would empty a consumer's suite.
+
+`responsive-overflow.spec.js` checks page and content containment on every
+layout, but only `homeUsesThemeLayout()` promises the theme's proportional
+iframe sizing. A site-owned layout can constrain an iframe's width and keep
+its authored height. The single-page fixture therefore keeps legacy
+`max-width` iframe styling and an ordinary border-box reset, without copying
+the newer theme ratios. This catches the assumption that broke the
+[v0.1.157 single-page consumer job](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37577972501/job/112651017756)
+in the platform's own `fixture-e2e` public lane.
 
 **The skip pattern** — a precise `test.skip()` (or `beforeEach` skip) keyed on
 the helper, with a message that names the collection + `cms.base_collections` +

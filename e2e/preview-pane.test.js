@@ -12,28 +12,43 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const acorn = require("acorn");
+const yaml = require("yaml");
 const walk = require("acorn-walk");
 const { test, expect } = require("./base");
 
 const ADMIN = path.resolve(__dirname, "../theme/admin");
 const SRC = fs.readFileSync(path.join(ADMIN, "preview-pane.js"), "utf8");
 
-function boot() {
+function boot({ hash = "", lookup = true } = {}) {
   const styles = [];
   const templates = {};
+  const listeners = { window: {}, document: {} };
+  const listen = (where) => (type, fn) => (listeners[where][type] ||= []).push(fn);
   const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat() });
   const window = {
-    location: { href: "https://site.example.com/admin/index.html" },
+    location: { href: "https://site.example.com/admin/index.html", hash },
+    addEventListener: listen("window"),
     h,
     CMS: {
       registerPreviewStyle: (value, opts) => styles.push({ value, opts }),
       registerPreviewTemplate: (name, component) => (templates[name] = component),
+      getPreviewTemplate: lookup ? (name) => templates[name] : undefined,
     },
   };
-  const sandbox = { window, document: { readyState: "complete" }, URL, Date, setTimeout };
+  const document = { readyState: "complete", addEventListener: listen("document") };
+  const sandbox = { window, document, URL, Date, setTimeout };
   vm.createContext(sandbox);
   vm.runInContext(SRC, sandbox);
-  return { styles, templates, window };
+  // A press on a link: what Decap's collection list and "+ New" button are.
+  const press = (href) =>
+    (listeners.document.pointerdown || []).forEach((fn) =>
+      fn({ target: { closest: () => ({ getAttribute: () => href }) } }),
+    );
+  const navigate = (newHash) => {
+    window.location.hash = newHash;
+    (listeners.window.hashchange || []).forEach((fn) => fn({}));
+  };
+  return { styles, templates, window, press, navigate, listeners };
 }
 
 // A minimal stand-in for Decap's Immutable entry: getIn(["data", k]) and
@@ -41,6 +56,48 @@ function boot() {
 function dataMap(data) {
   return { get: (k) => data[k], set: (k, v) => dataMap({ ...data, [k]: v }) };
 }
+
+// Decap's real contract (decap-cms-core PreviewPane.widgetFor): a name that is
+// not one of the collection's fields THROWS ("Cannot read properties of
+// undefined (reading 'get')"), and the throw replaces the pane with Decap's raw
+// error screen. `fields` is what Decap passes every template as props.fields.
+function decapProps(fields, data, extra = {}) {
+  return {
+    entry: entry(data),
+    fields: { toJS: () => fields },
+    widgetFor(name) {
+      if (!fields.some((f) => f.name === name)) {
+        throw new TypeError("Cannot read properties of undefined (reading 'get')");
+      }
+      return "WIDGET:" + name;
+    },
+    getAsset: String,
+    ...extra,
+  };
+}
+
+// The fields of theme/admin/config.base.yml's collections the preview assumes.
+const PROJECT_FIELDS = [
+  { name: "title", widget: "string" },
+  { name: "technology", widget: "string" },
+  { name: "url_link", widget: "string" },
+  { name: "featured", widget: "boolean" },
+  { name: "images", widget: "list" },
+  { name: "description", widget: "markdown" },
+];
+const TOOL_FIELDS = [
+  { name: "title", widget: "string" },
+  { name: "slug", label: "URL slug", widget: "string" },
+  { name: "description", widget: "text" },
+  { name: "featured", widget: "boolean" },
+  { name: "embed_src", label: "Embed source path", widget: "string" },
+  { name: "source_url", widget: "string" },
+  { name: "body", widget: "markdown" },
+];
+const TAG_FIELDS = [
+  { name: "name", widget: "string" },
+  { name: "description", widget: "text" },
+];
 
 function entry(data) {
   return { getIn: ([, k]) => data[k], get: (k) => (k === "data" ? dataMap(data) : undefined) };
@@ -107,6 +164,144 @@ test.describe("preview-pane.js", () => {
     }
   });
 
+  test("a project has no body field: the preview renders its description and never throws (#726)", () => {
+    const b = boot();
+    const props = decapProps(PROJECT_FIELDS, { title: "Robot", technology: "Python" });
+    let tree;
+    expect(() => (tree = b.templates.projects(props))).not.toThrow();
+    const all = textOf(tree);
+    expect(all).toContain("Robot");
+    expect(all).toContain("Python");
+    // The markdown field a Project does have is the one rendered.
+    expect(all).toContain("WIDGET:description");
+    expect(all).not.toContain("WIDGET:body");
+  });
+
+  test("a collection with no markdown field at all still renders (no body div, no throw)", () => {
+    const b = boot();
+    for (const c of ["posts", "pages", "projects"]) {
+      const props = decapProps([{ name: "title", widget: "string" }], { title: "Only a title" });
+      let tree;
+      expect(() => (tree = b.templates[c](props)), c).not.toThrow();
+      expect(textOf(tree), c).toContain("Only a title");
+      expect(find(tree, (n) => n.props.className === "post-content"), c).toHaveLength(0);
+    }
+  });
+
+  test("a collection WITH a body renders exactly what it did before", () => {
+    const b = boot();
+    const fields = [
+      { name: "title", widget: "string" },
+      { name: "body", widget: "markdown" },
+    ];
+    for (const c of ["posts", "pages"]) {
+      const tree = b.templates[c](decapProps(fields, { title: "Hi" }));
+      const [content] = find(tree, (n) => n.props.className === "post-content");
+      expect(textOf(content), c).toBe("WIDGET:body");
+    }
+  });
+
+  test("a widget that throws leaves the rest of the pane standing", () => {
+    const b = boot();
+    const props = decapProps(PROJECT_FIELDS, { title: "Robot" }, {
+      widgetFor() {
+        throw new Error("widget failed");
+      },
+    });
+    expect(textOf(b.templates.projects(props))).toContain("Robot");
+  });
+
+  test("every collection the platform declares renders against its real field list", () => {
+    // The platform's own folder collections, read from config.base.yml, are the
+    // field lists a template is really handed (the list in this file's constants
+    // would otherwise drift from it).
+    const doc = yaml.parse(fs.readFileSync(path.join(ADMIN, "config.base.yml"), "utf8"));
+    const b = boot();
+    for (const c of doc.collections) {
+      b.press("#/collections/" + c.name);
+      const template = b.templates[c.name];
+      expect(typeof template, c.name).toBe("function");
+      const data = Object.fromEntries((c.fields || []).map((f) => [f.name, "x"]));
+      const props = decapProps(c.fields || [], data);
+      expect(() => template(props), c.name).not.toThrow();
+    }
+  });
+
+  test("a site's own collection (Tools) gets a styled generic pane, not a field dump", () => {
+    const b = boot();
+    expect(b.templates.tools).toBeUndefined();
+    b.press("#/collections/tools");
+    const props = decapProps(TOOL_FIELDS, {
+      title: "Calc",
+      slug: "calc",
+      description: "A calculator.",
+      embed_src: "/assets/tools/calc/",
+    });
+    const tree = b.templates.tools(props);
+    expect(find(tree, (n) => n.type === "h1").map(textOf)).toEqual(["Calc"]);
+    expect(find(tree, (n) => n.props.className === "subtitle").map(textOf)).toEqual(["A calculator."]);
+    const [content] = find(tree, (n) => n.props.className === "post-content");
+    expect(textOf(content)).toBe("WIDGET:body");
+    expect(find(tree, (n) => n.props.className === "container cms-preview-pane")).toHaveLength(1);
+    const all = textOf(tree);
+    expect(all).not.toContain("URL slug");
+    expect(all).not.toContain("Embed source path");
+    expect(all).not.toContain("/assets/tools/calc/");
+  });
+
+  test("Tags show their name and description", () => {
+    const b = boot();
+    b.press("#/collections/tags/new");
+    const tree = b.templates.tags(decapProps(TAG_FIELDS, { name: "Python", description: "Snakes." }));
+    expect(find(tree, (n) => n.type === "h1").map(textOf)).toEqual(["Python"]);
+    expect(textOf(tree)).toContain("Snakes.");
+  });
+
+  test("a collection with neither markdown nor description lists its short fields, labeled", () => {
+    const b = boot();
+    b.press("#/collections/events");
+    const fields = [
+      { name: "title", widget: "string" },
+      { name: "location", label: "Location", widget: "string" },
+      { name: "weight", label: "Order", widget: "number" },
+      { name: "links", label: "Links", widget: "list" },
+    ];
+    const tree = b.templates.events(decapProps(fields, { title: "Summit", location: "Kansas City, MO", weight: 2 }));
+    expect(find(tree, (n) => n.type === "dt").map(textOf)).toEqual(["Location", "Order"]);
+    expect(find(tree, (n) => n.type === "dd").map(textOf)).toEqual(["Kansas City, MO", "2"]);
+  });
+
+  test("the generic template is registered for the route's collection, once, and never over another", () => {
+    const b = boot({ hash: "#/collections/tools/new" });
+    expect(typeof b.templates.tools).toBe("function");
+    const first = b.templates.tools;
+    b.navigate("#/collections/tools/entries/calc");
+    expect(b.templates.tools).toBe(first);
+    // A template a site registered itself is left alone.
+    const own = () => "own";
+    b.templates.gadgets = own;
+    b.press("#/collections/gadgets");
+    expect(b.templates.gadgets).toBe(own);
+    // The specific templates are never replaced, and non-collection links register nothing.
+    const posts = b.templates.posts;
+    b.press("#/collections/posts");
+    b.press("#/search/tools");
+    b.press("https://example.com/");
+    expect(b.templates.posts).toBe(posts);
+    expect(Object.keys(b.templates).sort()).toEqual(["gadgets", "pages", "posts", "projects", "tools"]);
+  });
+
+  test("the own-template guard holds without Decap's template lookup", () => {
+    // getPreviewTemplate would also keep posts/pages/projects, so take it away:
+    // only claim()'s own list stands between a link press and the generic
+    // template replacing the specific one.
+    const b = boot({ lookup: false });
+    const own = { posts: b.templates.posts, pages: b.templates.pages, projects: b.templates.projects };
+    for (const c of Object.keys(own)) b.press("#/collections/" + c);
+    b.navigate("#/collections/projects/new");
+    for (const c of Object.keys(own)) expect(b.templates[c], c).toBe(own[c]);
+  });
+
   test("pane CSS constrains images and clears the floating buttons", () => {
     const b = boot();
     const raw = b.styles.find((s) => s.opts && s.opts.raw).value;
@@ -137,6 +332,85 @@ test.describe("preview-pane.js", () => {
     const b = boot();
     return b.templates.posts({ entry: entry({ title: "T", body }), widgetFor, getAsset: String });
   }
+
+  test("a project iframe renders from description without requesting an absent body field", () => {
+    const b = boot();
+    const props = decapProps(PROJECT_FIELDS, { title: "Robot", description: EMBED_BODY });
+    const declaredWidget = props.widgetFor;
+    const calls = [];
+    props.widgetFor = (name, fields, values) => {
+      declaredWidget(name);
+      calls.push({ name, value: values.get(name), title: values.get("title") });
+      return widgetFor(name, fields, values);
+    };
+    expect(() => declaredWidget("body")).toThrow();
+    let tree;
+    expect(() => (tree = b.templates.projects(props))).not.toThrow();
+    expect(find(tree, (n) => n.type === "iframe")).toHaveLength(1);
+    expect(calls).toEqual([
+      { name: "description", value: "Intro paragraph.\n", title: "Robot" },
+      { name: "description", value: "\nClosing paragraph.", title: "Robot" },
+    ]);
+  });
+
+  test("a generic collection renders an iframe from its renamed markdown field", () => {
+    const b = boot();
+    b.press("#/collections/articles");
+    const props = decapProps([
+      { name: "title", widget: "string" },
+      { name: "article", widget: "markdown" },
+    ], { title: "An article", article: EMBED_BODY });
+    const declaredWidget = props.widgetFor;
+    const calls = [];
+    props.widgetFor = (name, fields, values) => {
+      declaredWidget(name);
+      calls.push({ name, value: values.get(name) });
+      return widgetFor(name, fields, values);
+    };
+    expect(() => declaredWidget("body")).toThrow();
+    const tree = b.templates.articles(props);
+    expect(find(tree, (n) => n.type === "iframe")).toHaveLength(1);
+    expect(calls).toEqual([
+      { name: "article", value: "Intro paragraph.\n" },
+      { name: "article", value: "\nClosing paragraph." },
+    ]);
+  });
+
+  test("a field-free collection ignores a stray body iframe without calling a widget", () => {
+    const b = boot();
+    b.press("#/collections/empty");
+    for (const collection of ["posts", "pages", "projects", "empty"]) {
+      let calls = 0;
+      const props = decapProps([], { title: "Still standing", body: EMBED_BODY }, {
+        widgetFor() {
+          calls++;
+          throw new Error("No fields are declared");
+        },
+      });
+      const tree = b.templates[collection](props);
+      expect(calls, collection).toBe(0);
+      expect(textOf(tree), collection).toContain("Still standing");
+      expect(find(tree, (n) => n.props.className === "post-content"), collection).toHaveLength(0);
+      expect(find(tree, (n) => n.type === "iframe"), collection).toHaveLength(0);
+    }
+  });
+
+  test("a widget that throws during split markdown leaves the pane standing", () => {
+    const b = boot();
+    let calls = 0;
+    const props = decapProps(PROJECT_FIELDS, { title: "Robot", description: EMBED_BODY }, {
+      widgetFor(name, fields, values) {
+        calls++;
+        if (calls === 2) throw new Error("Closing markdown failed");
+        return widgetFor(name, fields, values);
+      },
+    });
+    let tree;
+    expect(() => (tree = b.templates.projects(props))).not.toThrow();
+    expect(calls).toBe(2);
+    expect(textOf(tree)).toContain("Robot");
+    expect(find(tree, (n) => n.props.className === "post-content")).toHaveLength(0);
+  });
 
   test("an iframe embed in the body renders as an <iframe> in the template output", () => {
     const tree = renderPost(EMBED_BODY);
@@ -176,7 +450,7 @@ test.describe("preview-pane.js", () => {
       '<iframe src="javascript:alert(1)" srcdoc="<script>alert(1)</script>" onload="alert(1)"></iframe>',
       '<iframe src=" java\tscript:alert(1)"></iframe>',
       '<iframe src="data:text/html,hi"></iframe>',
-      '<iframe src="https://www.youtube-nocookie.com/embed/x" allowfullscreen></iframe>',
+      '<iframe src="https://example.com/embed/x" allowfullscreen></iframe>',
       "<script>alert(1)</script><style>body{}</style>",
       '<img src="/a.png" onerror="alert(1)"><a href="javascript:alert(1)">x</a>',
       '<object data="/x"><embed src="/x"></object><custom-el>kept text</custom-el>',
@@ -188,7 +462,7 @@ test.describe("preview-pane.js", () => {
       undefined,
       undefined,
       undefined,
-      "https://www.youtube-nocookie.com/embed/x",
+      "https://example.com/embed/x",
     ]);
     expect(iframes[3].props.allowFullScreen).toBe(true);
     const types = new Set(find(tree, () => true).map((n) => n.type));

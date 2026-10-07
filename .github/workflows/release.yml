@@ -107,7 +107,7 @@ jobs:
           for manifest in ${expected:+plugin.json .claude-plugin/plugin.json}; do
             declared=$(jq -r '.version // ""' "$manifest")
             if [ "$declared" != "$expected" ]; then
-              echo "::error file=${manifest}::${manifest} declares version '${declared}' but this run cuts ${VERSION} (expected '${expected}'). The release PR bumps ALL of: both plugin manifests, AGENTS.md's 'Current release:' line, every platform pin in examples/site/.github/workflows (uses:@ref AND with: platform_ref:), and scaffold/create-site.js's PLATFORM_VERSION — the last two enforced by e2e/examples-site-pins-current.test.js in the REQUIRED node-unit-lints lane, so skipping them reds self-CI right after the tag is cut. Fix them all, then re-dispatch."
+              echo "::error file=${manifest}::${manifest} declares version '${declared}' but this run cuts ${VERSION} (expected '${expected}'). The release PR bumps ALL of: both plugin manifests, AGENTS.md's 'Current release:' line, every platform pin in examples/site/.github/workflows (uses:@ref AND with: platform_ref:), and scaffold/create-site.js's PLATFORM_VERSION — the Current release line, the platform pins and PLATFORM_VERSION are enforced by e2e/examples-site-pins-current.test.js (which also holds the two manifests equal) in the REQUIRED node-unit-lints lane, so skipping them reds self-CI right after the tag is cut. Fix them all, then re-dispatch."
               skew=1
             fi
           done

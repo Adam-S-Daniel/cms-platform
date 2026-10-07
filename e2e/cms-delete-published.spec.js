@@ -44,7 +44,7 @@
  *
  * No back doors — both halves are UI-driven per AGENTS.md "Never
  * bypass the UI in a UI test." On test failure, the afterAll
- * harness consults `fileExistsOnMain` and opens a parallel
+ * harness closes this run's in-flight create PR, checks main, and opens a parallel
  * `cms/e2e-fixture/remove-…` PR if the throw-away fixture is still
  * on main.
  */
@@ -60,7 +60,7 @@ const {
   makeDeployQueueExtender,
   describeError,
 } = require("./github-actions-poll");
-const { removeFixtureViaPr } = require("./cms-fixture-pr");
+const { closeOpenPrsAddingFile, readFileOnRef, removeFixtureViaPr } = require("./cms-fixture-pr");
 const {
   reopenForPublishedDelete,
   confirmEditorDelete,
@@ -118,17 +118,11 @@ test.describe.configure({
 let pendingFixture = null;
 
 async function fileExistsOnMain(filePath) {
-  try {
-    await gh(`/repos/${HOST_REPO}/contents/${filePath}?ref=main`);
-    return true;
-  } catch (e) {
-    if (/\b404\b/.test(String(e.message))) return false;
-    throw e;
-  }
+  return (await readFileOnRef({ ref: "main", filePath })) !== null;
 }
 
 async function tryHardDelete(filePath, slug, runId, message) {
-  // Best-effort cleanup. The Decap UI's delete normally removes the
+  // Cleanup fallback; throws if the removal PR fails. The Decap UI's delete normally removes the
   // fixture via the cms/<col>/<slug> auto-merge path during the test
   // flow; this fallback runs only on test failure when the file is
   // still on main. Direct DELETE /contents/{path} on main is blocked
@@ -149,7 +143,10 @@ async function tryHardDelete(filePath, slug, runId, message) {
     });
     console.warn(`[cleanup] removed ${filePath} via fixture-cleanup PR`);
   } catch (e) {
-    console.warn(`[cleanup] could not remove ${filePath}: ${describeError(e)}`);
+    // Loud: the fixture is on main and nothing is removing it.
+    throw new Error(
+      `[cleanup] ${filePath} is on main and the fixture-cleanup PR failed: ${describeError(e)}`,
+    );
   }
 }
 
@@ -500,7 +497,7 @@ test(
 
 // Safety-net harness: the spec's forward leg IS the cleanup (UI delete
 // removes the file from main). If the test body completes successfully,
-// the file is gone and `fileExistsOnMain` returns false — harness
+// the file is gone from main and no open PR adds it — harness
 // no-ops. If the test failed mid-flow (workflow stuck, shim 422 not
 // caught, etc.), the throw-away fixture is still on main and the
 // harness opens a fixture-cleanup PR so the next run starts clean.
@@ -510,10 +507,30 @@ test.afterAll(async () => {
   if (!pendingFixture) return; // test never ran (skipped)
   if (!getPat()) return; // PAT-less runs can't write anyway
   const { filePath, slug, runId } = pendingFixture;
-  const stillThere = await fileExistsOnMain(filePath).catch(() => false);
+
+  // #689 — stop this run's in-flight create PR FIRST. The seed leg labels
+  // it cms/ready, so a run that fails before the merge leaves it armed: a
+  // main-only check reads "gone" and the PR merges the fixture afterwards.
+  // The path carries this run's runId, so only this run's own PR can match;
+  // the delete leg's PR only REMOVES the file and is left alone. Strict: an
+  // API error throws instead of reading as "nothing in flight".
+  const { closed, merged } = await closeOpenPrsAddingFile({ base: "main", filePath });
+  if (closed.length > 0) {
+    console.warn(
+      `[cleanup-harness] closed in-flight PR(s) ${closed.map((n) => `#${n}`).join(", ")} still adding ${filePath}`,
+    );
+  }
+  if (merged.length > 0) {
+    console.warn(
+      `[cleanup-harness] PR(s) ${merged.map((n) => `#${n}`).join(", ")} merged ${filePath} before the close took effect`,
+    );
+  }
+
+  // Then check main. Only a 404 means absent; any other error throws.
+  const stillThere = (await readFileOnRef({ ref: "main", filePath })) !== null;
   if (!stillThere) {
     console.log(
-      `[cleanup-harness] ${filePath} gone from main; UI delete succeeded — no safety net needed`,
+      `[cleanup-harness] ${filePath} not on main and no open PR adds it — no safety net needed`,
     );
     return;
   }

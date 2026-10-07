@@ -1,4 +1,4 @@
-// @lane: local — pure-fs lint over two workflow files plus two bash scripts
+// @lane: local — pure-fs lint over two workflow files plus their bash scripts
 // lifted out of them and executed in scratch dirs. No browser, no network, no
 // build. Runs in self-ci.yml's node-unit-lints lane (picked up by exclusion).
 //
@@ -58,8 +58,9 @@ const CALLER_PATH = path.join(REPO_ROOT, "examples", "site", ".github", "workflo
 const E2E_CALLER_PATH = path.join(REPO_ROOT, "examples", "site", ".github", "workflows", "e2e-tests.yml");
 const MANIFEST_PATH = path.join(REPO_ROOT, "repo-settings.yml");
 
-// The convention the reusable keys on. One path, fixed, so there is no input.
+// The conventions the reusable keys on. Fixed paths, so there is no input.
 const VERIFIER_PATH = "scripts/verify-build-artifacts.rb";
+const SELF_TEST_PATH = "scripts/test-verify-build-artifacts.rb";
 const WORK_JOB = "verify";
 const GATE_JOB = "site-verify";
 const CALLER_JOB = "site-verify";
@@ -80,6 +81,7 @@ const isDetect = (s) => s.id === "detect";
 const isSetupRuby = (s) => /^ruby\/setup-ruby@/.test(String(s.uses || ""));
 const isBuild = (s) => /\bjekyll build\b/.test(stepRun(s));
 const isRunVerifier = (s) => stepRun(s).includes(`ruby ${VERIFIER_PATH}`);
+const isRunSelfTests = (s) => s.name === "Run the site's verifier self-tests";
 
 // Every scratch dir this file makes, reaped in afterAll — this runs in the
 // REQUIRED lane on every developer machine and CI runner, forever.
@@ -97,9 +99,15 @@ function scratch() {
 // script's own `set -euo pipefail` is inside it), in `cwd`, with `env` on top
 // of a minimal environment. Returns { status, stdout }.
 function runScript(script, { cwd, env }) {
-  const r = spawnSync("bash", ["-c", script], {
+  const scriptPath = path.join(scratch(), "step.sh");
+  fs.writeFileSync(scriptPath, script);
+  const r = spawnSync("bash", [scriptPath], {
     cwd,
-    env: { PATH: process.env.PATH, ...env },
+    env: {
+      PATH: process.env.PATH,
+      ...(process.env.CLAUDE_SENTINEL_LOG ? { CLAUDE_SENTINEL_LOG: process.env.CLAUDE_SENTINEL_LOG } : {}),
+      ...env,
+    },
     encoding: "utf8",
   });
   return { status: r.status, stdout: `${r.stdout || ""}${r.stderr || ""}` };
@@ -119,8 +127,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     expect(
       call.inputs,
       "convention, not configuration — the verifier lives at ONE path by convention, so there " +
-        "is no input a consumer can misconfigure. adamdaniel.ai has none and no-ops; " +
-        "jodidaniel.com has one and runs it",
+        "is no input a consumer can misconfigure",
     ).toBeUndefined();
     expect(call.secrets, "and it needs no credential of any kind").toBeUndefined();
     expect(reusable().permissions, "read-only: it builds and reads, never writes").toEqual({
@@ -192,7 +199,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     }
   });
 
-  test("the work job's steps are checkout → detect → (setup-ruby → build → verifier), in that order", () => {
+  test("the work job's steps are checkout → detect → setup-ruby → self-tests → build → verifier", () => {
     const steps = workSteps();
     const checkout = findStep(steps, isCheckout, "a checkout of the CALLER's tree");
     expect(
@@ -201,25 +208,27 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     ).toBeUndefined();
     const detect = findStep(steps, isDetect, "a step with id `detect`");
     const ruby = findStep(steps, isSetupRuby, "a ruby/setup-ruby step");
+    const selfTests = findStep(steps, isRunSelfTests, "a verifier self-test step");
     const build = findStep(steps, isBuild, "a `jekyll build` step");
     const verifier = findStep(steps, isRunVerifier, `a \`ruby ${VERIFIER_PATH}\` step`);
-    const order = [checkout, detect, ruby, build, verifier].map((s) => steps.indexOf(s));
+    const order = [checkout, detect, ruby, selfTests, build, verifier].map((s) => steps.indexOf(s));
     expect(order, "and they run in dependency order").toEqual([...order].sort((a, b) => a - b));
 
-    // The convention is enforced by the `if:` wiring, not by prose: every step
-    // that costs money or can fail for a build reason is gated on the detect
-    // output, and the two that establish it are not.
+    // Ruby supports either script independently. The build and verifier need
+    // the verifier; self-tests inspect their fixed paths and report absence.
     const gated = `steps.detect.outputs.verifier == 'true'`;
-    for (const s of [ruby, build, verifier]) {
+    expect(ruby.if).toBe(`${gated} || steps.detect.outputs.selftests == 'true'`);
+    for (const s of [build, verifier]) {
       expect(
         String(s.if || ""),
         `step ${JSON.stringify(s.name || s.uses)} must run only when the verifier is present`,
       ).toBe(gated);
     }
-    for (const s of [checkout, detect]) {
+    for (const s of [checkout, detect, selfTests]) {
       expect(s.if, `step ${JSON.stringify(s.name || s.uses)} must be unconditional`).toBeUndefined();
     }
-    expect(steps.length, "no other step: there is nothing else this job should do").toBe(5);
+    expect(selfTests["continue-on-error"], "self-test failures must fail the work job").toBeUndefined();
+    expect(steps.length, "no other step: there is nothing else this job should do").toBe(6);
   });
 
   test("the detect script BEHAVES: false + notice when absent, true when present (executed)", () => {
@@ -227,12 +236,13 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     const script = stepRun(detect);
     expect(script, "the detect step keys on the one conventional path").toContain(VERIFIER_PATH);
 
-    // ABSENT — adamdaniel.ai's shape today. Must succeed, must say so.
+    // ABSENT — a site with neither script. Must succeed, must say so.
     const absent = scratch();
     const absentOut = path.join(absent, "github_output");
     const a = runScript(script, { cwd: absent, env: { GITHUB_OUTPUT: absentOut } });
     expect(a.status, `absent verifier must not fail the job. Output:\n${a.stdout}`).toBe(0);
     expect(fs.readFileSync(absentOut, "utf8")).toContain("verifier=false");
+    expect(fs.readFileSync(absentOut, "utf8")).toContain("selftests=false");
     expect(
       a.stdout,
       "and it must SAY it found nothing — a silent no-op is indistinguishable from a run that " +
@@ -248,6 +258,65 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     expect(p.status).toBe(0);
     expect(fs.readFileSync(presentOut, "utf8")).toContain("verifier=true");
     expect(fs.readFileSync(presentOut, "utf8")).not.toContain("verifier=false");
+    expect(fs.readFileSync(presentOut, "utf8")).toContain("selftests=false");
+  });
+
+  test("self-test detection is independent of verifier presence", () => {
+    const script = stepRun(findStep(workSteps(), isDetect, "a detect step"));
+    for (const hasVerifier of [false, true]) {
+      const cwd = scratch();
+      fs.mkdirSync(path.join(cwd, "scripts"));
+      fs.writeFileSync(path.join(cwd, SELF_TEST_PATH), "# self-test fixture\n");
+      if (hasVerifier) fs.writeFileSync(path.join(cwd, VERIFIER_PATH), "# verifier fixture\n");
+      const output = path.join(cwd, "github_output");
+      const result = runScript(script, { cwd, env: { GITHUB_OUTPUT: output } });
+      expect(result.status, result.stdout).toBe(0);
+      expect(fs.readFileSync(output, "utf8").trim().split("\n")).toEqual([
+        `verifier=${hasVerifier}`, "selftests=true",
+      ]);
+    }
+  });
+
+  function selfTestFixture(hasSelfTests) {
+    const cwd = scratch();
+    fs.mkdirSync(path.join(cwd, "scripts"));
+    // An unrelated script must not expand the fixed self-test list.
+    fs.writeFileSync(path.join(cwd, "scripts/test-unrelated.rb"), "# decoy\n");
+    if (hasSelfTests) fs.writeFileSync(path.join(cwd, SELF_TEST_PATH), "# self-test fixture\n");
+    const bin = path.join(cwd, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "bundle"),
+      '#!/bin/bash\nset -euo pipefail\nprintf "%s\\n" "$@" >> "$BUNDLE_CALLS"\nexit "${BUNDLE_EXIT:-0}"\n',
+      { mode: 0o755 });
+    return { cwd, env: { PATH: `${bin}:${process.env.PATH}`, BUNDLE_CALLS: path.join(cwd, "bundle_calls") } };
+  }
+
+  test("absent self-tests skip with a notice without invoking bundle", () => {
+    const fixture = selfTestFixture(false);
+    const script = stepRun(findStep(workSteps(), isRunSelfTests, "a verifier self-test step"));
+    const result = runScript(script, fixture);
+    expect(result.status, result.stdout).toBe(0);
+    expect(result.stdout).toContain("::notice");
+    expect(fs.existsSync(fixture.env.BUNDLE_CALLS)).toBe(false);
+  });
+
+  test("present self-tests run the fixed script with bundle exec ruby", () => {
+    const fixture = selfTestFixture(true);
+    const script = stepRun(findStep(workSteps(), isRunSelfTests, "a verifier self-test step"));
+    const result = runScript(script, fixture);
+    expect(result.status, result.stdout).toBe(0);
+    expect(fs.readFileSync(fixture.env.BUNDLE_CALLS, "utf8").trim().split("\n")).toEqual([
+      "exec", "ruby", SELF_TEST_PATH,
+    ]);
+    expect(result.stdout).not.toContain("::notice");
+  });
+
+  test("a self-test failure propagates its nonzero exit", () => {
+    const fixture = selfTestFixture(true);
+    fixture.env.BUNDLE_EXIT = "43";
+    const script = stepRun(findStep(workSteps(), isRunSelfTests, "a verifier self-test step"));
+    const result = runScript(script, fixture);
+    expect(result.status, result.stdout).toBe(43);
   });
 
   test("the build is the DEPLOY's build: same Ruby, same JEKYLL_ENV, same action pins", () => {

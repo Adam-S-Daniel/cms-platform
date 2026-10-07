@@ -197,7 +197,7 @@ test.describe("publish-progress.js: where a merge goes depends on the PR's base 
     const got = derive(facts);
     expect(got.badge).toBe("going-live");
     expect(got.detail).toBe(PREVIEW_IN_FLIGHT);
-    expect(got.detail, "the poller cannot see the preview's deploy finish").not.toMatch(/ now\./);
+    expect(got.detail, "no preview deployment covers the merge yet").not.toMatch(/ now\./);
   });
 
   test("labeled cms/preview-only but merged into the default branch (retargeted) → going live", async () => {
@@ -242,5 +242,114 @@ test.describe("publish-progress.js: where a merge goes depends on the PR's base 
     );
     expect(facts.previewOnly).toBe(true);
     expect(facts.merged).toBe(true);
+  });
+});
+
+// #643: on a preview admin the merge watch never ended. The bar read "Going
+// live… (taking a little longer than usual) … It is waiting for
+// preview-pr4072.<apex> to finish updating." 188 s after the page served
+// 200, and after a reload, because nothing read the preview's own deploy.
+// deploy-preview.yml registers one per push to the preview PR, in the
+// environment `preview-pr-<N>`.
+const PREVIEW_PULL = `${API}/pulls?state=open&head=owner%3Afeature%2Fx&per_page=5`;
+const PREVIEW_DEPLOYS = `${API}/deployments?environment=preview-pr-4072&per_page=1`;
+const HEAD_SHA = "4e40000000000000000000000000000000000000";
+const HEAD_CHECKS = `${API}/commits/${HEAD_SHA}/check-runs?per_page=100`;
+
+function previewRoutes({ previewDeploy, headSha, checkRuns } = {}) {
+  const r = routes({ base: { ref: "feature/x", repo }, deploy: PREVIOUS_DEPLOY });
+  if (headSha) r[CLOSED][0].head.sha = headSha;
+  if (checkRuns) r[HEAD_CHECKS] = { check_runs: checkRuns };
+  r[PREVIEW_PULL] = [{ number: 4072, head: { ref: "feature/x" } }];
+  if (previewDeploy) {
+    r[PREVIEW_DEPLOYS] = [{ id: 9, sha: previewDeploy.sha, created_at: previewDeploy.createdAt }];
+    r[statuses(9)] = [{ state: previewDeploy.state }];
+  } else {
+    r[PREVIEW_DEPLOYS] = [];
+  }
+  return r;
+}
+
+function deriveOnPreview(facts, now = NOW) {
+  const sandbox = { window: {}, Math, isFinite };
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, "../theme/admin/entry-status-model.js"), "utf8"), sandbox);
+  return sandbox.window.CMSEntryStatus.derive(facts, {
+    now,
+    currentHostname: "preview-pr4072.example.com",
+    canonicalHostname: "example.com",
+  });
+}
+
+test.describe("publish-progress.js: a merge into a preview branch finishes when the preview has it (#643)", () => {
+  test("the preview deployed the merge → Live, on the preview host now", async () => {
+    const { facts, calls } = await factsFor(
+      previewRoutes({ previewDeploy: { sha: MERGE_SHA, createdAt: "2026-09-28T13:41:00Z", state: "success" } }),
+      Date.UTC(2026, 8, 28, 13, 41, 10),
+    );
+    // The harness records the second tick only: the PR number came from the
+    // first one's head-branch lookup, and is remembered rather than re-read.
+    expect(calls, "the preview PR's environment is read").toContain(PREVIEW_DEPLOYS);
+    expect(calls, "a branch's preview PR is looked up once").not.toContain(PREVIEW_PULL);
+    expect(calls, "production says nothing about a preview merge").not.toContain(DEPLOYS);
+    expect(facts.merged).toBe(false);
+    expect(facts.deployState).toBe("success");
+    expect(facts.previewOnly).toBe(true);
+    const got = deriveOnPreview(facts);
+    expect(got.badge).toBe("live");
+    expect(got.detail).toBe(
+      "This is on preview-pr4072.example.com now. " +
+        "It will not reach example.com until the work on “feature/x” goes live there.",
+    );
+  });
+
+  test("a later push's preview deploy also covers the merge → Live", async () => {
+    const { facts } = await factsFor(
+      previewRoutes({ previewDeploy: { sha: PREV_SHA, createdAt: "2026-09-28T13:42:00Z", state: "success" } }),
+      Date.UTC(2026, 8, 28, 13, 43, 0),
+    );
+    expect(facts.merged).toBe(false);
+    expect(deriveOnPreview(facts).badge).toBe("live");
+  });
+
+  test("the preview still on the deploy from BEFORE the merge → still going live", async () => {
+    const { facts } = await factsFor(
+      previewRoutes({ previewDeploy: { sha: PREV_SHA, createdAt: "2026-09-28T13:30:00Z", state: "success" } }),
+    );
+    expect(facts.merged).toBe(true);
+    expect(facts.deployState).toBe(null);
+    expect(deriveOnPreview(facts).badge).toBe("going-live");
+  });
+
+  test("the preview PR lookup failing degrades to going live, never an error", async () => {
+    const r = previewRoutes({ previewDeploy: { sha: MERGE_SHA, createdAt: "2026-09-28T13:41:00Z", state: "success" } });
+    delete r[PREVIEW_PULL];
+    const { facts, calls } = await factsFor(r);
+    expect(calls).not.toContain(PREVIEW_DEPLOYS);
+    expect(facts.merged).toBe(true);
+  });
+
+  test("the merged head's first check start is reported, so the countdown cannot jump back up", async () => {
+    const { facts, calls } = await factsFor(
+      previewRoutes({
+        headSha: HEAD_SHA,
+        checkRuns: [
+          { name: "e2e / x", status: "completed", started_at: "2026-09-28T13:37:00Z" },
+          { name: "parity / x", status: "completed", started_at: "2026-09-28T13:36:20Z" },
+        ],
+      }),
+    );
+    expect(calls, "a merged head's checks are read once, then remembered").not.toContain(HEAD_CHECKS);
+    expect(facts.merged).toBe(true);
+    expect(facts.checksStartedAt).toBe(Date.parse("2026-09-28T13:36:20Z"));
+  });
+
+  test("a default-branch merge reports the trip start too", async () => {
+    const r = routes({ deploy: PREVIOUS_DEPLOY });
+    r[CLOSED][0].head.sha = HEAD_SHA;
+    r[HEAD_CHECKS] = { check_runs: [{ name: "e2e / x", status: "completed", started_at: "2026-09-28T13:36:20Z" }] };
+    const { facts } = await factsFor(r);
+    expect(facts.merged).toBe(true);
+    expect(facts.checksStartedAt).toBe(Date.parse("2026-09-28T13:36:20Z"));
   });
 });

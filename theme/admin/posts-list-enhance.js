@@ -29,11 +29,18 @@
  *     there); rendered BEFORE "preview draft" when both are present;
  *   - "preview draft ↗" — the per-PR preview environment for the
  *     post's open editorial-workflow PR, if any (GitHub REST, one
- *     `pulls` call) — `https://preview-pr<N>.adamdaniel.ai/blog/<slug>/`;
+ *     `pulls` call) — `https://preview-pr<N>.adamdaniel.ai/blog/<slug>/`.
+ *     Only a PR into the default branch gets one: a draft saved on a
+ *     preview admin (`cms/preview-only`) gets a pointer to Live Preview
+ *     instead of a link to a host that is never built (#642);
  *   - "view draft changes" — the GitHub diff (Files-changed tab) of
  *     that same open editorial-workflow PR;
  *   - a control bar showing when the site itself last deployed
  *     (GitHub REST, one `deployments` call) plus a manual ↻ Refresh.
+ *     On a preview admin (served branch ≠ window.CMS_PRODUCTION_BRANCH,
+ *     the branch-binding-banner.js verdict) "the site" is that preview:
+ *     its `preview-pr-<N>` deployment, found through the open PR whose
+ *     head is the served branch (one more `pulls` call), never production.
  *
  * Batched remote data (the three calls above, never one-per-row) is
  * cached in sessionStorage and refreshed (a) on the ↻ button and
@@ -150,15 +157,59 @@
   // `window.LiveURL` is always defined here — same load-order contract
   // live-url-banner.js relies on). The cross-runtime twin in
   // e2e/public-content.js is drift-locked to it by e2e/slugify-parity.test.js.
-  function urlSlug(fileSlug) {
-    var dateStripped = String(fileSlug || "").replace(/^\d{4}-\d{2}-\d{2}-/, "");
+  // This is only the FILENAME half of the rule; urlPath() below puts the
+  // front-matter `slug:` ahead of it, as Jekyll does.
+  function slugifyUrl(s) {
     var L = window.LiveURL;
-    return L && L.slugify ? L.slugify(dateStripped) : dateStripped;
+    return L && L.slugify ? L.slugify(s) : String(s == null ? "" : s);
   }
 
-  function publicUrl(fileSlug) {
-    var s = urlSlug(fileSlug);
-    return s ? SITE_ORIGIN + "/blog/" + s + "/" : null;
+  function urlSlug(fileSlug) {
+    return slugifyUrl(String(fileSlug || "").replace(/^\d{4}-\d{2}-\d{2}-/, ""));
+  }
+
+  // The path a post is served at, by Jekyll's rules (`permalink: /blog/:slug/`):
+  //   1. a front-matter `permalink:` is the URL, with `:slug` expanded (and a
+  //      leading `/` added, as Jekyll does). Any other placeholder (`:year`,
+  //      `:categories`, ...) is not reproduced here, so the address is
+  //      UNKNOWN: null, and the list shows no link rather than a guessed one.
+  //   2. otherwise `:slug` is the front-matter `slug:` run through Jekyll's
+  //      slugify (Drops::UrlDrop#slug), and only when that is empty the
+  //      file name minus its date prefix. A post whose `slug:` differs from
+  //      its file name (adamdaniel.ai's quoting-simon-willison post) is live
+  //      at the `slug:` address; the file-name address is a 404.
+  // `fmSlug`/`fmPermalink` come off the card (collectCards), where the summary
+  // template carries them (see splitSummary). A card without them — Decap
+  // gave no front matter — falls back to the file name.
+  // e2e/public-content.js postPublicPath is the Node twin; the two are
+  // drift-locked by e2e/posts-list-preview-host.test.js.
+  function urlPath(card) {
+    var slug = slugifyUrl(String((card && card.fmSlug) || "").trim()) || urlSlug(card && card.slug);
+    var permalink = String((card && card.fmPermalink) || "").trim();
+    if (permalink) {
+      if (/:(?!slug(?![A-Za-z0-9_]))[A-Za-z_]/.test(permalink)) return null;
+      var expanded = permalink.replace(/:slug(?![A-Za-z0-9_])/g, slug);
+      if (expanded.charAt(0) !== "/") expanded = "/" + expanded;
+      return expanded.replace(/\/{2,}/g, "/");
+    }
+    return slug ? "/blog/" + slug + "/" : null;
+  }
+
+  // Where a publish from THIS admin goes — the preview on a preview admin,
+  // production otherwise (site-hostname.js's destination*()). Linking a
+  // preview admin's posts to production sent editors to the wrong site (#642).
+  function destinationOrigin() {
+    var names = window.CMSHostname;
+    return names && typeof names.destinationOrigin === "function" ? names.destinationOrigin(SITE_ORIGIN) : SITE_ORIGIN;
+  }
+
+  function destinationName() {
+    return window.CMSHostname ? window.CMSHostname.destination() : "the published destination";
+  }
+
+  function publicUrl(card) {
+    var path = urlPath(card);
+    return path ? destinationOrigin() + path : null;
   }
 
   // The summary template is
@@ -173,6 +224,93 @@
     if (scheduled) return { label: "Scheduled", color: "#9a6700", live: false };
     if (draft) return { label: "Draft", color: "#57606a", live: false };
     return { label: "Published", color: "#1a7f37", live: true };
+  }
+
+  // The summary template's " — DRAFT" / " — Scheduled" clauses are a DATA
+  // carrier for stateFromSummary() (Decap exposes no front-matter path to
+  // this list), not copy for the editor: the status chip says it once.
+  var SUMMARY_SUFFIX_RE = /\s*—\s*(DRAFT|Scheduled)\b.*$/;
+
+  // The same template also carries the post's front-matter `slug:` and
+  // `permalink:` — the only way the list can know the post's real address
+  // (a card's href is the file name; Decap exposes no front-matter path to
+  // this list, and the GitHub reads below need a token the local backend
+  // does not have). Each rides after an INVISIBLE SEPARATOR (U+2063), which
+  // no title contains: `<title>[ — DRAFT][ — Scheduled]<SEP><slug><SEP><permalink>`.
+  // config*.yml's `summary:` writes it as `{{fields.slug}}`/`{{fields.permalink}}`.
+  var CARRIER = "\u2063";
+
+  function splitSummary(text) {
+    var parts = String(text || "").split(CARRIER);
+    return {
+      text: parts[0],
+      slug: (parts[1] || "").trim(),
+      permalink: (parts[2] || "").trim(),
+    };
+  }
+
+  function stripSummarySuffix(text) {
+    return splitSummary(text).text.replace(SUMMARY_SUFFIX_RE, "").trim();
+  }
+
+  // The heading that holds a card's summary. Decap's global search renders each
+  // result as <h2>Posts</h2> (the collection label) then the title <h2>, so it
+  // is the LAST heading, not the first.
+  function titleHeading(a) {
+    var hs = a.querySelectorAll("h2");
+    return hs.length ? hs[hs.length - 1] : null;
+  }
+
+  // The text node that holds the summary. Decap 3.15.1 renders the card
+  // heading as [summary text, <TitleIcons>] — two children — so it is the
+  // first TEXT child, never "the only child". Its nodeValue is the summary
+  // alone: h2.textContent also carries the workflow badge text ("In review").
+  function summaryNode(h2) {
+    var kids = h2 && h2.childNodes;
+    if (!kids) return null;
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i] && kids[i].nodeType === 3) return kids[i];
+    }
+    return null;
+  }
+
+  // Remove the suffix from the card's visible title in place, remembering
+  // the raw summary on the anchor so a later pass (the title text no longer
+  // carries the suffix) still reads the original state. React only rewrites
+  // the text node when the summary string changes, and then it brings the
+  // suffix back for the next pass to strip again.
+  function hideSummarySuffix(a, h2, current) {
+    var prev = a.__plePrev;
+    var raw = prev && current === prev.stripped ? prev.raw : current;
+    var stripped = stripSummarySuffix(raw);
+    var node = summaryNode(h2);
+    if (node && node.nodeValue !== stripped) node.nodeValue = stripped;
+    a.__plePrev = { raw: raw, stripped: stripped };
+    return raw;
+  }
+
+  // Every other route that lists posts — Decap's global search
+  // (`#/search/<q>`) renders the same cards — gets no dashboard, so there
+  // the status suffix stays (nothing else says DRAFT) and only the carried
+  // front matter, which is data and not copy, comes off.
+  function hideCarrierOutsideList() {
+    var anchors = document.querySelectorAll('a[href*="#/collections/posts/entries/"]');
+    for (var i = 0; i < anchors.length; i++) {
+      var node = summaryNode(titleHeading(anchors[i]));
+      if (!node) continue;
+      var at = node.nodeValue.indexOf(CARRIER);
+      if (at !== -1) node.nodeValue = node.nodeValue.slice(0, at).replace(/\s+$/, "");
+    }
+  }
+
+  // The post's front-matter `date:` calendar day (`2026-05-13 08:51 -0400`
+  // -> `2026-05-13`), read in the offset the editor wrote it in — the same
+  // day the site prints. Null when the text has no front matter or date.
+  function frontMatterDate(text) {
+    var fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ""));
+    if (!fm) return null;
+    var d = /^date:\s*["']?(\d{4}-\d{2}-\d{2})/m.exec(fm[1]);
+    return d ? d[1] : null;
   }
 
   function timeAgo(iso) {
@@ -205,12 +343,17 @@
         slug = m[1];
       }
       var li = a.closest("li") || a.parentElement;
-      var h2 = a.querySelector("h2");
-      var summaryText = (h2 ? h2.textContent : a.textContent || "").trim();
+      var h2 = titleHeading(a);
+      var textNode = summaryNode(h2);
+      var summaryText = hideSummarySuffix(
+        a,
+        h2,
+        (textNode ? textNode.nodeValue : h2 ? h2.textContent : a.textContent || "").trim(),
+      );
       // Title is only used for fixture detection (leading-anchored), so
       // stripping the trailing status suffix is enough — there's no
       // parenthesized date to strip anymore.
-      var title = summaryText.replace(/\s*—\s*(DRAFT|Scheduled)\b.*$/, "").trim() || slug;
+      var title = stripSummarySuffix(summaryText) || slug;
       var isFixture = FIXTURE_SLUG_RE.test(slug) || FIXTURE_TITLE_RE.test(title);
       // The on-disk slug's YYYY-MM-DD- prefix is the engine-proof date
       // source (see config.base.yml's summary comment for why the
@@ -221,6 +364,8 @@
         a: a,
         li: li,
         slug: slug,
+        fmSlug: splitSummary(summaryText).slug,
+        fmPermalink: splitSummary(summaryText).permalink,
         filePath: "_posts/" + slug + ".md",
         title: title,
         summaryText: summaryText,
@@ -288,6 +433,18 @@
         " associatedPullRequests(first: 1) { nodes { number url } } } }"
       );
     });
+    // The front-matter `date:` is the date the site prints; the file name's
+    // prefix can differ from it. One aliased blob read per file, in the SAME
+    // request (still one GraphQL call regardless of post count).
+    var blobs = files.map(function (fp, idx) {
+      return (
+        "b" +
+        idx +
+        ": object(expression: " +
+        JSON.stringify("refs/heads/main:" + fp) +
+        ") { ... on Blob { text } }"
+      );
+    });
     var query =
       "query {\n  repository(owner: " +
       JSON.stringify(REPO.split("/")[0]) +
@@ -295,7 +452,9 @@
       JSON.stringify(REPO.split("/")[1]) +
       ') {\n    ref(qualifiedName: "refs/heads/main") {\n      target {\n        ... on Commit {\n          ' +
       parts.join("\n          ") +
-      "\n        }\n      }\n    }\n  }\n}";
+      "\n        }\n      }\n    }\n    " +
+      blobs.join("\n    ") +
+      "\n  }\n}";
     var out = {};
     try {
       var res = await fetch(GQL, {
@@ -324,7 +483,9 @@
             node.associatedPullRequests &&
             node.associatedPullRequests.nodes &&
             node.associatedPullRequests.nodes[0];
+          var blob = j.data.repository["b" + idx];
           out[fp] = {
+            fmDate: frontMatterDate(blob && blob.text),
             date: node.committedDate,
             url: node.url,
             pr: prNode ? { number: prNode.number, url: prNode.url } : null,
@@ -339,9 +500,51 @@
     return out;
   }
 
-  async function fetchSiteDeploy(token) {
+  // Which GitHub deployment environment is "the site" for this admin, and
+  // whether this admin is a preview. A preview admin's served branch differs
+  // from the production branch (the branch-binding-banner.js verdict, read
+  // from config, never from the hostname); its site is the `preview-pr-<N>`
+  // environment deploy-preview.yml registers for the open PR whose head is
+  // that branch. `environment` is null when that PR cannot be found — the
+  // bar then says it does not know, rather than reporting production.
+  async function deployTarget(token) {
+    var production = { environment: "production", onPreview: false };
+    var names = window.CMSHostname;
+    var productionBranch = window.CMS_PRODUCTION_BRANCH;
+    if (!names || typeof names.binding !== "function" || !productionBranch) return production;
+    var bound = null;
     try {
-      var dRes = await fetch(REST + "/deployments?environment=production&per_page=1", {
+      bound = await names.binding();
+    } catch {
+      return production;
+    }
+    if (!bound || !bound.branch || bound.branch === productionBranch) return production;
+    var owner = String(REPO || "").split("/")[0];
+    try {
+      var res = await fetch(
+        REST + "/pulls?state=open&head=" + encodeURIComponent(owner + ":" + bound.branch) + "&per_page=1",
+        {
+          cache: "no-cache",
+          headers: {
+            Authorization: "token " + token,
+            Accept: "application/vnd.github+json",
+          },
+        },
+      );
+      var prs = await safeJson(res);
+      if (Array.isArray(prs) && prs.length && prs[0].number) {
+        return { environment: "preview-pr-" + prs[0].number, onPreview: true };
+      }
+    } catch {
+      /* degrade — unknown, never production */
+    }
+    return { environment: null, onPreview: true };
+  }
+
+  async function fetchSiteDeploy(token, environment) {
+    if (!environment) return null;
+    try {
+      var dRes = await fetch(REST + "/deployments?environment=" + encodeURIComponent(environment) + "&per_page=1", {
         cache: "no-cache",
         headers: {
           Authorization: "token " + token,
@@ -426,6 +629,10 @@
           var labels = (pr.labels || []).map(function (l) {
             return typeof l === "string" ? l : l.name;
           });
+          // No per-PR preview is built for a PR whose base is not the
+          // default branch — publish-progress.js's `previewOnly` signal.
+          var baseRef = (pr.base && pr.base.ref) || null;
+          var defaultBranch = (pr.base && pr.base.repo && pr.base.repo.default_branch) || null;
           map[mm[1]] = {
             number: pr.number,
             url: pr.html_url,
@@ -434,6 +641,9 @@
               Boolean(pr.auto_merge) ||
               labels.indexOf("cms/ready") !== -1 ||
               labels.indexOf("decap-cms/pending_publish") !== -1,
+            previewOnly:
+              labels.indexOf("cms/preview-only") !== -1 ||
+              Boolean(baseRef && defaultBranch && baseRef !== defaultBranch),
           };
         }
       });
@@ -496,12 +706,14 @@
     var token = getToken();
     if (!token) return null;
     var lastEdited = await fetchLastEdited(token, cards);
-    var siteDeploy = await fetchSiteDeploy(token);
+    var target = await deployTarget(token);
+    var siteDeploy = await fetchSiteDeploy(token, target.environment);
     var prBySlug = await fetchOpenPrBySlug(token);
     var checksFailedBySha = await fetchChecksForPrs(token, prBySlug);
     var data = {
       lastEdited: lastEdited,
       siteDeploy: siteDeploy,
+      onPreview: target.onPreview,
       prBySlug: prBySlug,
       checksFailedBySha: checksFailedBySha,
     };
@@ -582,6 +794,7 @@
   function publishingBarCopy() {
     return {
       signedOut: "Sign in to see publishing details",
+      loading: "Loading publishing details…",
       refreshTitle: "Refresh latest edits and publishing details",
     };
   }
@@ -626,6 +839,21 @@
     return esc(destination) + " " + stateWord + esc(when);
   }
 
+  // The bar's summary. "Sign in" only when there IS no token: a signed-in
+  // editor whose first read has not landed, or whose read found no
+  // deployment (a failed read, or a deployment with no status yet), was told
+  // to sign in — the false negative #642 reported after a delete, which
+  // lands on the list before any read for it has finished.
+  function publishingBarHTML(remote, signedIn) {
+    var copy = publishingBarCopy();
+    if (!signedIn) return publishingSummaryHTML(null);
+    if (!remote) return '<span style="color:#8c959f">' + copy.loading + "</span>";
+    var names = window.CMSHostname;
+    var host = names ? (remote.onPreview ? names.destination() : names.canonical()) : "Published destination";
+    if (!remote.siteDeploy) return esc(host) + " " + UNKNOWN_STATE_WORD;
+    return publishingSummaryHTML(remote.siteDeploy, host);
+  }
+
   function ensureBar(cards, fixtureCount) {
     var ul = listUl(cards);
     if (!ul || !ul.parentNode) return;
@@ -638,11 +866,8 @@
     } else if (bar.nextElementSibling !== ul && bar.parentNode === ul.parentNode) {
       ul.parentNode.insertBefore(bar, ul);
     }
-    var deploy =
-      (memCache && memCache.siteDeploy) ||
-      (readCache() && readCache().data && readCache().data.siteDeploy);
-    var deployHost = window.CMSHostname ? window.CMSHostname.canonical() : "Published destination";
-    var deployHtml = publishingSummaryHTML(deploy, deployHost);
+    var cached = readCache();
+    var deployHtml = publishingBarHTML(memCache || (cached && cached.data) || null, Boolean(getToken()));
     var copy = publishingBarCopy();
     var nextHTML =
       '<strong style="color:#24292f">Posts</strong>' +
@@ -756,24 +981,25 @@
     // this list can read the entry's own front matter from — Decap exposes
     // no supported path to it (see this file's header).
     var modifiers = [];
-    if (card.state.label === "Draft") modifiers.push(model.MODIFIER_LABELS.hidden);
+    var badge = derived.badge;
+    // `published: false` with nothing in flight is a Draft, full stop. The
+    // derived badge reads "Live" for an entry that merged long ago and was
+    // later unpublished, which beside a "Hidden" chip said two things about
+    // one card (#650). Say "Draft" once and drop the redundant chip.
+    if (card.state.label === "Draft") {
+      if (badge === model.BADGE.LIVE) badge = model.BADGE.DRAFT;
+      if (badge !== model.BADGE.DRAFT) modifiers.push(model.MODIFIER_LABELS.hidden);
+    }
     if (card.state.label === "Scheduled") modifiers.push(model.MODIFIER_LABELS.scheduled);
     return {
-      label: model.SHORT_LABELS[derived.badge] || derived.label,
-      color: model.BADGE_COLORS[derived.badge] || card.state.color,
+      label: model.SHORT_LABELS[badge] || derived.label,
+      color: model.BADGE_COLORS[badge] || card.state.color,
       modifiers: modifiers,
     };
   }
 
-  function decorate(card, remote) {
-    var li = card.li;
-    if (!li) return;
-    var meta = li.querySelector(":scope > .cms-ple-meta");
-    if (!meta) {
-      meta = document.createElement("div");
-      meta.className = "cms-ple-meta";
-      li.appendChild(meta);
-    }
+  // The card's meta-row markup. Pure (no DOM), so the unit test can pin it.
+  function metaHTML(card, remote) {
     var bits = [];
     var badge = badgeFor(card, remote);
     bits.push(
@@ -786,13 +1012,19 @@
     badge.modifiers.forEach(function (m) {
       bits.push('<span class="cms-ple-modifier">' + esc(m) + "</span>");
     });
-    if (card.postDate) {
+    // Prefer the front-matter date (what the site prints); the file name's
+    // prefix is only the fallback while that has not been read yet.
+    var fmDate = remote && remote.lastEdited && remote.lastEdited[card.filePath];
+    fmDate = fmDate && fmDate.fmDate;
+    if (fmDate) {
+      bits.push('<span title="Post date (from the post\'s front matter)">' + esc(fmDate) + "</span>");
+    } else if (card.postDate) {
       bits.push('<span title="Post date (from the post\'s file name)">' + esc(card.postDate) + "</span>");
     }
     if (card.isFixture) {
       bits.push('<span class="cms-ple-fixture-tag">automated test</span>');
     }
-    var pub = publicUrl(card.slug);
+    var pub = publicUrl(card);
     // `card.state.live` alone is NOT "is it live on prod": a post can carry
     // `published: true` while its edit still sits in an unmerged editorial
     // PR (never reached `main`), the same summary-state-vs-reality mismatch
@@ -806,22 +1038,30 @@
     // (the pre-existing degraded view) rather than treating every card as
     // unconfirmed.
     var le = remote && remote.lastEdited && remote.lastEdited[card.filePath];
-    var confirmedOnMain = !remote || le;
+    var pr =
+      remote &&
+      remote.prBySlug &&
+      (remote.prBySlug[card.slug] || remote.prBySlug[urlSlug(card.slug)]);
+    // A live-per-summary post with NO open editorial PR is on `main` whether
+    // or not the (capped, best-effort) history lookup answered, so it keeps
+    // its link and never gets the "once published" tooltip, which is only
+    // true of a post whose edit is still in an open PR (#650).
+    var confirmedOnMain = !remote || le || !pr;
     if (pub && card.state.live && confirmedOnMain) {
       bits.push(
         '<a href="' +
           esc(pub) +
           '" target="_blank" rel="noopener" ' +
           'title="Open the post on ' +
-          esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") +
+          esc(destinationName()) +
           '">published ↗</a>',
       );
     } else if (pub) {
       bits.push(
         '<span title="Available on ' +
-          esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") +
+          esc(destinationName()) +
           ' once published" style="color:#8c959f">' +
-          esc("/blog/" + urlSlug(card.slug) + "/") +
+          esc(urlPath(card)) +
           "</span>",
       );
     }
@@ -871,10 +1111,6 @@
       );
     }
 
-    var pr =
-      remote &&
-      remote.prBySlug &&
-      (remote.prBySlug[card.slug] || remote.prBySlug[urlSlug(card.slug)]);
     if (pr) {
       // The per-PR preview build mirrors production's publish semantics
       // (see this file's header + e2e/cms-unpublish-republish-preview.spec.js):
@@ -884,20 +1120,31 @@
       // open), so it's the correct gate for whether preview-pr<N> actually
       // serves this slug — unlike the "published ↗" gate above (which needs
       // the separate on-main confirmation), there's no unmerged-PR ambiguity
-      // here: `pr` IS that PR.
-      if (card.state.live) {
+      // here: `pr` IS that PR. A preview-only PR has no preview-pr<N> at all
+      // (#642), so it points at Live Preview, which renders it on Save.
+      if (pr.previewOnly) {
         bits.push(
-          '<a href="https://preview-pr' +
-            esc(pr.number) +
-            "." +
-            window.CMS_APEX +
-            "/blog/" +
-            esc(urlSlug(card.slug)) +
-            '/" target="_blank" rel="noopener" title="Per-PR preview ' +
-            "environment for the unmerged draft (open PR #" +
-            esc(pr.number) +
-            ')">preview draft ↗</a>',
+          '<span style="color:#8c959f" title="Drafts saved here get no preview address of their own. ' +
+            "Open the post and use Live Preview to see it; publishing puts it on " +
+            esc(destinationName()) +
+            '">draft — open to preview</span>',
         );
+      } else if (card.state.live) {
+        // An address the list cannot work out (urlPath → null) gets no link.
+        var previewPath = urlPath(card);
+        if (previewPath) {
+          bits.push(
+            '<a href="https://preview-pr' +
+              esc(pr.number) +
+              "." +
+              window.CMS_APEX +
+              esc(previewPath) +
+              '" target="_blank" rel="noopener" title="Per-PR preview ' +
+              "environment for the unmerged draft (open PR #" +
+              esc(pr.number) +
+              ')">preview draft ↗</a>',
+          );
+        }
       } else {
         bits.push(
           '<span style="color:#8c959f" title="Set Published to ON to ' +
@@ -916,9 +1163,57 @@
           '">view draft changes</a>',
       );
     }
-    var next = bits.join("");
-    // eslint-disable-next-line no-unsanitized/property -- every dynamic value pushed into `bits` (PR numbers, URLs, slugs, timestamps) is run through the HTML-escaping `esc()` helper; the rest is static markup.
+    return bits.join("");
+  }
+
+  function decorate(card, remote) {
+    var li = card.li;
+    if (!li) return;
+    var meta = li.querySelector(":scope > .cms-ple-meta");
+    if (!meta) {
+      meta = document.createElement("div");
+      meta.className = "cms-ple-meta";
+      li.appendChild(meta);
+    }
+    var next = metaHTML(card, remote);
+    // eslint-disable-next-line no-unsanitized/property -- every dynamic value in `metaHTML`'s markup (PR numbers, URLs, slugs, dates, timestamps) is run through the HTML-escaping `esc()` helper; the rest is static markup.
     if (meta.innerHTML !== next) meta.innerHTML = next;
+  }
+
+  // The list's own empty state. Every card is a hidden automated-test
+  // fixture (the default, or the "Automated tests" filter while the toggle
+  // is off), so the list would otherwise be blank with no explanation (#650).
+  function emptyStateText(cards, show) {
+    if (show || !cards.length) return "";
+    for (var i = 0; i < cards.length; i++) if (!cards[i].isFixture) return "";
+    return (
+      "No posts match. " +
+      cards.length +
+      " automated-test " +
+      (cards.length === 1 ? "post is" : "posts are") +
+      " hidden — tick “Show automated-test posts” to see " +
+      (cards.length === 1 ? "it." : "them.")
+    );
+  }
+
+  function ensureEmptyState(cards) {
+    var ul = listUl(cards);
+    if (!ul || !ul.parentNode) return;
+    var text = emptyStateText(cards, showFixtures());
+    var el = document.getElementById("cms-ple-empty");
+    if (!text) {
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+      return;
+    }
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "cms-ple-empty";
+      el.setAttribute("data-testid", "posts-list-empty");
+      el.setAttribute("role", "status");
+      el.setAttribute("style", "margin:0 0 0.6rem;padding:0.6rem 0.7rem;color:#57606a;font-size:0.8rem;");
+      ul.parentNode.insertBefore(el, ul);
+    }
+    if (el.textContent !== text) el.textContent = text;
   }
 
   // Move fixture rows to the END of the list (still in the DOM, still
@@ -985,23 +1280,37 @@
   }
 
   // ── orchestration ────────────────────────────────────────────────
+  // requestAnimationFrame never fires in a background tab, so a pass scheduled
+  // there, or scheduled just before the tab went to the back, waited until the
+  // editor returned (#644). A hidden tab paints nothing, so the next task is
+  // as good as the next frame; `pending` makes whichever runs first the only
+  // pass.
   var pending = false;
+  function runAugment() {
+    if (!pending) return;
+    pending = false;
+    try {
+      augment();
+    } catch (e) {
+      console.warn("[posts-list-enhance] augment error: " + (e && e.message ? e.message : e));
+    }
+  }
   function scheduleAugment() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () {
-      pending = false;
-      try {
-        augment();
-      } catch (e) {
-        console.warn("[posts-list-enhance] augment error: " + (e && e.message ? e.message : e));
-      }
-    });
+    if (document.hidden) setTimeout(runAugment, 0);
+    else requestAnimationFrame(runAugment);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) runAugment();
+  });
 
   function augment() {
     hideE2EQuickAdd();
-    if (!isPostsListRoute()) return;
+    if (!isPostsListRoute()) {
+      hideCarrierOutsideList();
+      return;
+    }
     var cards = collectCards();
     if (!cards.length) return;
     ensureStyle();
@@ -1016,6 +1325,7 @@
     }
     reorderFixturesLast(cards);
     ensureBar(cards, fixtureCount);
+    ensureEmptyState(cards);
   }
 
   // First land on the list (incl. returning from an entry editor):
@@ -1045,8 +1355,14 @@
   // circuits, so an already-correct order produces no DOM mutation
   // and no observer re-fire. Full augment (decorate, ensureBar) keeps
   // its rAF debounce.
+  // The same pre-pass takes the carried front matter off a card title on
+  // global search before the browser paints it. Only there: any other route
+  // does no work inline (e2e/admin-hidden-tab.test.js).
   function syncFixtureReorder() {
-    if (!isPostsListRoute()) return;
+    if (!isPostsListRoute()) {
+      if (/^#\/search\//.test(window.location.hash || "")) hideCarrierOutsideList();
+      return;
+    }
     var cards = collectCards();
     if (cards.length) reorderFixturesLast(cards);
   }
@@ -1055,9 +1371,23 @@
   // publish-button.js's window.__publishButton.
   window.__postsListEnhance = {
     badgeFor: badgeFor,
+    metaHTML: metaHTML,
+    emptyStateText: emptyStateText,
+    stripSummarySuffix: stripSummarySuffix,
+    splitSummary: splitSummary,
+    collectCards: collectCards,
+    urlPath: urlPath,
+    hideSummarySuffix: hideSummarySuffix,
+    hideCarrierOutsideList: hideCarrierOutsideList,
+    frontMatterDate: frontMatterDate,
+    fetchLastEdited: fetchLastEdited,
     fetchOpenPrBySlug: fetchOpenPrBySlug,
     publishingBarCopy: publishingBarCopy,
+    publishingBarHTML: publishingBarHTML,
     publishingSummaryHTML: publishingSummaryHTML,
+    decorate: decorate,
+    deployTarget: deployTarget,
+    refreshRemote: refreshRemote,
   };
 
   window.addEventListener("hashchange", onRoute);

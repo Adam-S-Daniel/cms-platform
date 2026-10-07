@@ -210,16 +210,24 @@
   // switches, saves and field edits, and an unthrottled observer callback
   // would re-run these three queries on every keystroke.
   var pending = false;
+  function run() {
+    if (!pending) return;
+    pending = false;
+    apply();
+  }
   function schedule() {
     if (pending) return;
     pending = true;
-    var run = function () {
-      pending = false;
-      apply();
-    };
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    // A background tab fires no animation frame (#644), so there the next
+    // task runs the pass, and a tab hidden with a frame still pending runs it
+    // at once (below). The guard in run() keeps it to one pass.
+    if (document.hidden) setTimeout(run, 0);
+    else if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
     else setTimeout(run, 16);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) run();
+  });
 
   try {
     new MutationObserver(schedule).observe(document.documentElement, {

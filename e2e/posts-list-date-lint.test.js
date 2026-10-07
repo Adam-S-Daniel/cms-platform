@@ -29,7 +29,8 @@ const CONFIGS = ["config.base.yml", "config-local.base.yml", "config-test.yml"].
 const EXPECTED_SUMMARY =
   "{{title}}" +
   "{{published | ternary('', ' — DRAFT')}}" +
-  "{{publish_date | ternary(' — Scheduled', '')}}";
+  "{{publish_date | ternary(' — Scheduled', '')}}" +
+  "\u2063{{fields.slug}}\u2063{{fields.permalink}}";
 
 function findCollection(cfg, name) {
   return ((cfg && cfg.collections) || []).find((c) => c && c.name === name) || null;

@@ -9,15 +9,27 @@ layout: default
 {% endcomment %}
 {% assign tag_label = page.tag_name | default: page.name %}
 <div class="container">
-  {%- assign _tag_slug = tag_label | slugify -%}
+  {%- assign _tag_slug = tag_label | append: '' | slugify -%}
   {%- assign _tag_feed = '/tags/' | append: _tag_slug | append: '/feed.xml' -%}
   {%- assign _feed_label = 'Subscribe to “' | append: tag_label | append: '” posts (Atom feed)' -%}
   <div class="page-header">
     <div class="page-header-with-feed">
-      <h1>{{ tag_label }}</h1>
+      <h1 class="tag-title">{{ tag_label }}</h1>
+      {%- comment -%} An e2e / test-fixture tag (#689) has no feed (tag_feeds.rb skips it). {%- endcomment -%}
+      {%- unless page.feed_exclude == true -%}
       {% include feed-link.html href=_tag_feed label=_feed_label %}
+      {%- endunless -%}
     </div>
     <p class="subtitle">Tag</p>
+    {%- comment -%}
+      Way back to the tag index (#737). Like the header's Blog link, shown
+      only when the site HAS that page: the tag index is site-owned
+      (tags/index.html), so a site without one must not get a dead link.
+    {%- endcomment -%}
+    {%- assign _tags_index = site.pages | where: "url", "/tags/" | first -%}
+    {%- if _tags_index %}
+    <p class="tag-back"><a href="{{ '/tags/' | relative_url }}">&larr; All tags</a></p>
+    {%- endif %}
   </div>
 
   {%- comment -%}
@@ -27,15 +39,25 @@ layout: default
     other listings use. A published canary tagged like a real post must not
     appear in the tag archive, though it still serves at /blog/<slug>/.
   {%- endcomment -%}
-  {% assign tagged_posts = site.posts | where_exp: "post", "post.tags contains tag_label" | where_exp: "post", "post.feed_exclude != true" %}
-  {% if tagged_posts.size > 0 %}
+  {%- comment -%}
+    Match by slug, not by exact spelling (#754): `Quotes` and `quotes` share
+    this one /tags/<slug>/ page, so a post under either spelling belongs here.
+    auto_tag_pages.rb builds `site.tag_posts_by_slug` once (slugifying every
+    post's tags on each tag page made large builds several times slower);
+    it already leaves out the feed_exclude posts.
+  {%- endcomment -%}
+  {%- assign tagged_posts = site.tag_posts_by_slug[_tag_slug] -%}
+  {% if tagged_posts and tagged_posts.size > 0 %}
   <ul class="post-list">
     {% for post in tagged_posts %}
+    {% assign words = post.content | number_of_words %}
+    {% assign reading_time = words | divided_by: 200 | plus: 1 %}
     <li class="post-item">
       <div class="post-meta">
         <time class="post-date" datetime="{{ post.date | date_to_xmlschema }}">
           {{ post.date | date: "%B %-d, %Y" }}
         </time>
+        <span class="post-reading-time">{{ reading_time }} min read</span>
       </div>
       <h2 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h2>
       {% if post.excerpt %}

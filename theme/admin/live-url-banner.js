@@ -20,6 +20,14 @@
  * URL. Without an open PR, or when lookup fails, it keeps the configured
  * publication URL. With no derivable URL the label uses destination().
  *
+ * A PR whose base is NOT the repo's default branch never gets a
+ * `preview-pr<N>` host: deploy-preview's caller builds only PRs into the
+ * default branch. That is every draft saved on a preview admin (base = the
+ * preview's own branch, labeled `cms/preview-only`), so such a PR keeps the
+ * configured publication URL — the preview this admin is bound to (#642).
+ * Same signal as publish-progress.js's `previewOnly`: the label, or
+ * base.ref !== base.repo.default_branch.
+ *
  * The open-PR map is read from admin/posts-list-enhance.js's shared
  * sessionStorage cache when it's warm (an editor who reached the post
  * via the list pays zero extra network); otherwise one `pulls?state=
@@ -98,6 +106,18 @@
     }
   }
 
+  var PREVIEW_ONLY_LABEL = "cms/preview-only";
+
+  // True when no per-PR preview is ever built for this PR (see the header).
+  function isPreviewOnlyPr(pr) {
+    var labels = (pr.labels || []).map(function (l) {
+      return typeof l === "string" ? l : l && l.name;
+    });
+    var baseRef = (pr.base && pr.base.ref) || null;
+    var defaultBranch = (pr.base && pr.base.repo && pr.base.repo.default_branch) || null;
+    return labels.indexOf(PREVIEW_ONLY_LABEL) !== -1 || Boolean(baseRef && defaultBranch && baseRef !== defaultBranch);
+  }
+
   function stripDate(slug) {
     return String(slug || "").replace(/^\d{4}-\d{2}-\d{2}-/, "");
   }
@@ -110,10 +130,12 @@
     if (prBySlug) return true;
     var ple = freshCache(PLE_CACHE_KEY);
     if (ple && ple.data && ple.data.prBySlug) {
-      // posts-list-enhance stores { number, url }; we only need number.
+      // posts-list-enhance stores { number, url, previewOnly }; we only
+      // need the number, and only for a PR that gets a per-PR preview.
       var m = {};
       Object.keys(ple.data.prBySlug).forEach(function (k) {
         var v = ple.data.prBySlug[k];
+        if (v && typeof v === "object" && v.previewOnly) return;
         m[k] = v && typeof v === "object" ? v.number : v;
       });
       prBySlug = m;
@@ -151,7 +173,7 @@
             // Key by the trailing slug (with optional date prefix), the
             // same shape posts-list-enhance.js's fetchOpenPrBySlug uses.
             var mm = /(?:^|\/)((?:\d{4}-\d{2}-\d{2}-)?[a-z0-9-]+)$/i.exec(ref);
-            if (/^cms\//i.test(ref) && mm) {
+            if (/^cms\//i.test(ref) && mm && !isPreviewOnlyPr(pr)) {
               map[mm[1]] = pr.number;
             }
           });
@@ -178,11 +200,12 @@
   // answered for THIS entry. The one-shot lookup below never refreshes, so
   // after a publish merged the link stayed on the torn-down preview host
   // until a reload (adamdaniel.ai#3857); the poller's answer wins when it has
-  // one.
+  // one. A preview-only PR answers null: it has no per-PR preview host.
   function pollerPrNumber(slug) {
     var p = window.CMSPublishProgress;
     var snap = p && typeof p.get === "function" ? p.get() : null;
     if (!snap || !snap.ready || !snap.entry || snap.entry.slug !== slug) return undefined;
+    if (snap.facts && snap.facts.previewOnly) return null;
     return snap.prNumber == null ? null : snap.prNumber;
   }
 
@@ -331,15 +354,26 @@
     }
   }
 
+  // requestAnimationFrame never fires in a background tab, so a pass scheduled
+  // there, or scheduled just before the tab went to the back, waited until the
+  // editor returned (#644). A hidden tab paints nothing, so the next task is
+  // as good as the next frame; `pending` makes whichever runs first the only
+  // pass.
   var pending = false;
+  function runRender() {
+    if (!pending) return;
+    pending = false;
+    render();
+  }
   function scheduleRender() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () {
-      pending = false;
-      render();
-    });
+    if (document.hidden) setTimeout(runRender, 0);
+    else requestAnimationFrame(runRender);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) runRender();
+  });
 
   // Mutations re-render the banner when the form mounts / fields update.
   new MutationObserver(scheduleRender).observe(document.body, {

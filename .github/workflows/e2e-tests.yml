@@ -249,7 +249,7 @@ jobs:
 
       - name: Setup Ruby + Bundler (local lane)
         if: ${{ inputs.target == 'local' }}
-        uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
         with:
           ruby-version: "3.2"
           bundler-cache: true   # bundle install + cache, keyed on the SITE Gemfile

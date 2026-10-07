@@ -15,31 +15,115 @@
 # `site.all_tags` is `[{name, slug, url, description, count}, ...]` sorted
 # case-insensitively by name. `description` comes from the `_tags/` entry
 # when one exists, else nil. `count` is the number of posts referencing
-# that tag.
+# that tag under any spelling.
+#
+# Tags that differ only in case (`quotes` / `Quotes`) slugify alike, so
+# they are ONE tag (#754): one row, one archive page, one combined count.
+# The display name is the `_tags/` entry's when there is one, else the
+# spelling the most posts use, a tie going to the one seen first (see
+# `AutoTagPages.group`). `site.tag_posts_by_slug` (slug => posts, built once
+# here) is what `_layouts/tag.html` and `_layouts/atom_feed.xml` list: every
+# post whose tags slugify to the page's slug.
 #
 # Unit tests: _plugins_test/auto_tag_pages_test.rb
 
+# Jekyll::ExcludeE2EPosts.excluded_tag_names (#689 e2e / fixture tags).
+require_relative 'exclude_e2e_posts'
+
 module Jekyll
   module AutoTagPages
+    # Group every spelling of a tag under its slug (#754). `Quotes` and
+    # `quotes` slugify alike, so they share one `/tags/<slug>/` URL: they are
+    # ONE tag, with one archive, one card and one count, whatever spelling a
+    # post used. Returns `{ slug => { 'name', 'variants', 'curated' } }` in
+    # first-seen order (curated entries first, then posts in the order given).
+    #
+    # The display `name` is deterministic:
+    #   1. a `_tags/` entry's name wins (the editor chose it, and the archive
+    #      page it builds is headed with it); the first such entry in a
+    #      collision;
+    #   2. else the spelling used by the MOST posts;
+    #   3. a tie goes to the spelling seen first.
+    # `variants` lists every spelling, first seen first.
+    def self.group(curated_names:, post_tag_lists:, slugify:)
+      groups = {}
+      # Tag names with an empty slug (#812) have no public archive.
+      curated_names.compact.each do |name|
+        next if name.to_s.strip.empty?
+
+        slug = slugify.call(name.to_s)
+        next if slug.empty?
+
+        group = groups[slug] ||= { 'variants' => [], 'curated' => [] }
+        group['curated'] << name unless group['curated'].include?(name)
+        group['variants'] << name unless group['variants'].include?(name)
+      end
+
+      uses = Hash.new(0)
+      post_tag_lists.each do |list|
+        Array(list).compact.uniq.each do |name|
+          next if name.to_s.strip.empty?
+
+          slug = slugify.call(name.to_s)
+          next if slug.empty?
+
+          uses[name] += 1
+          group = groups[slug] ||= { 'variants' => [], 'curated' => [] }
+          group['variants'] << name unless group['variants'].include?(name)
+        end
+      end
+
+      groups.transform_values do |group|
+        # max_by returns the first maximum, which is the first seen.
+        most_used = group['variants'].max_by { |name| uses[name] }
+        {
+          'name' => group['curated'].first || most_used,
+          'variants' => group['variants'],
+          'curated' => !group['curated'].empty?,
+        }
+      end
+    end
+
+    # Every public post under each tag slug: `{ slug => [post, ...] }`, posts
+    # in the order given, each once per slug even when it carries both
+    # spellings. The Jekyll generator stores it as `site.tag_posts_by_slug`
+    # so `_layouts/tag.html` and `atom_feed.xml` list a tag's posts with one
+    # lookup, not by slugifying every tag of every post on every tag page.
+    def self.posts_by_slug(posts, slugify:)
+      posts.each_with_object({}) do |post, index|
+        Array(post.data['tags']).reject { |name| name.to_s.strip.empty? }
+                               .map { |name| slugify.call(name.to_s) }.reject(&:empty?).uniq.each do |slug|
+          (index[slug] ||= []) << post
+        end
+      end
+    end
+
     # Pure data shaping — kept Jekyll-free so the unit tests can call it
     # without booting a Jekyll site. The `slugify` proc lets the test
     # double in a stub; the real generator below passes Jekyll::Utils.slugify.
+    #
+    # Returns `[missing, details]`: `missing` is the display name of every tag
+    # that has no `_tags/` entry (one per slug, so one archive page to mint),
+    # `details` the `site.all_tags` rows, one per slug (see `group`).
     def self.summarise(curated:, post_tag_lists:, slugify:)
       curated_names = curated.filter_map { |c| c['name'] }
-      in_posts = post_tag_lists.flatten.compact.uniq
-      missing = in_posts - curated_names
-      all_names = (curated_names + in_posts).uniq.sort_by { |n| n.to_s.downcase }
+      groups = group(curated_names: curated_names, post_tag_lists: post_tag_lists, slugify: slugify)
+      missing = groups.values.reject { |g| g['curated'] }.map { |g| g['name'] }
 
-      details = all_names.map do |name|
-        curated_entry = curated.find { |c| c['name'] == name }
+      details = groups.map do |slug, g|
+        curated_entry = curated.find { |c| c['name'] == g['name'] }
         {
-          'name' => name,
-          'slug' => slugify.call(name),
-          'url' => "/tags/#{slugify.call(name)}/",
+          'name' => g['name'],
+          'slug' => slug,
+          'url' => "/tags/#{slug}/",
           'description' => curated_entry && curated_entry['description'],
-          'count' => post_tag_lists.count { |list| Array(list).include?(name) },
+          # Posts, not mentions: a post carrying both spellings counts once.
+          'count' => post_tag_lists.count do |list|
+            Array(list).any? { |n| g['variants'].include?(n) }
+          end,
         }
       end
+      details.sort_by! { |d| [d['name'].to_s.downcase, d['slug']] }
 
       [missing, details]
     end
@@ -57,7 +141,7 @@ if defined?(Jekyll::Generator)
         def initialize(site, name)
           @site = site
           @base = site.source
-          slug = Jekyll::Utils.slugify(name)
+          slug = Jekyll::Utils.slugify(name.to_s)
           @dir = "tags/#{slug}/"
           @name = 'index.html'
           @basename = 'index'
@@ -81,19 +165,55 @@ if defined?(Jekyll::Generator)
         priority :low
 
         def generate(site)
+          # Nameless or empty-slug curated docs have no public archive (#812).
+          site.collections['tags']&.docs&.reject! do |doc|
+            name = doc.data['name'].to_s
+            name.strip.empty? || Jekyll::Utils.slugify(name).empty?
+          end
+
+          excluded = Jekyll::ExcludeE2EPosts.excluded_tag_names(site)
+          # Judged by slug, like the grouping: a case variant of an excluded
+          # `_tags/` entry is the same tag and must not mint a second page at
+          # the entry's own /tags/<slug>/ (#754).
+          excluded_slugs = excluded.map { |name| Jekyll::Utils.slugify(name.to_s) }.reject(&:empty?)
+          # Do not send blank names through Jekyll's slugifier (#812).
+          excluded_tag = lambda do |name|
+            next true if name.to_s.strip.empty?
+
+            slug = Jekyll::Utils.slugify(name.to_s)
+            slug.empty? || excluded_slugs.include?(slug)
+          end
           missing, all_tags = AutoTagPages.summarise(
-            curated: curated_tags(site),
+            curated: curated_tags(site).reject { |c| excluded_tag.call(c['name']) },
             # Skip e2e / test-fixture posts (feed_exclude stamped by
             # _plugins/exclude_e2e_posts.rb): their tags must not mint a
             # public /tags/<slug>/ archive, inflate a tag's count, or add a
             # tag-cloud pill. A canary tagged like a real post still serves
             # at /blog/<slug>/ — it just doesn't surface in tag aggregation.
-            post_tag_lists: public_posts(site).map { |p| Array(p.data['tags']) },
-            slugify: ->(name) { Jekyll::Utils.slugify(name) },
+            # e2e / test-fixture `_tags/` entries (#689) are dropped the same
+            # way: no tag-cloud or /tags/ entry, and no count.
+            post_tag_lists: public_posts(site).map { |p| Array(p.data['tags']).reject { |n| excluded_tag.call(n) } },
+            slugify: ->(name) { Jekyll::Utils.slugify(name.to_s) },
           )
 
-          missing.each { |name| site.pages << TagPage.new(site, name) }
-          site.config['all_tags'] = all_tags
+          # A name with no `_tags/` entry whose slug starts `e2e-` (#689)
+          # still gets its archive, so a real post's pill does not 404, but
+          # stamped noindex / out of the sitemap and left out of
+          # `site.all_tags` (the tag cloud and /tags/).
+          slugify = ->(name) { Jekyll::Utils.slugify(name.to_s) }
+          e2e_names = missing.select { |name| Jekyll::ExcludeE2EPosts.e2e_tag_name?(name, slugify: slugify) }
+          missing.each do |name|
+            page = TagPage.new(site, name)
+            Jekyll::ExcludeE2EPosts.stamp_tag_page(page.data) if e2e_names.include?(name)
+            site.pages << page
+          end
+          # Not minus `excluded`: an excluded `_tags/` entry's page still builds
+          # and lists the posts that carry its tag. Newest first, the order
+          # Liquid's `site.posts` has (`docs` is oldest first).
+          site.config['tag_posts_by_slug'] = AutoTagPages.posts_by_slug(
+            public_posts(site).reverse, slugify: slugify,
+          )
+          site.config['all_tags'] = all_tags.reject { |tag| e2e_names.include?(tag['name']) }
         end
 
         private

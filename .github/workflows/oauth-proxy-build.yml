@@ -72,6 +72,15 @@ jobs:
           path: site
           persist-credentials: false
 
+      # The step below parses _config.yml with the stdlib `ruby -ryaml`. Pin the
+      # interpreter (same version as every other ruby job here) instead of the
+      # runner image's system ruby, which moves with the image (3.2 -> 3.3 on
+      # Ubuntu 26.04, rolling out from 2026-10-19).
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
+        with:
+          ruby-version: '3.2'
+
       - name: Read the proxy URL
         id: site
         working-directory: site
