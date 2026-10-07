@@ -15,15 +15,19 @@ require_relative '../lib/cms-platform-theme/auto_tag_pages'
 # Jekyll::Utils.slugify's "default" mode without loading Jekyll — the shared,
 # golden-tested port (support/jekyll_slugify.rb).
 require_relative 'support/jekyll_slugify'
-SLUGIFY = ->(name) { SpecJekyllSlugify.slugify(name.to_s) }
+SLUGIFY = ->(name) { raise TypeError, 'slugify requires String' unless name.is_a?(String); SpecJekyllSlugify.slugify(name) }
 
 @failures = []
+@checks = 0
+@runs = 0
 
 def check(condition, message)
+  @checks += 1
   @failures << message unless condition
 end
 
 def run(label)
+  @runs += 1
   yield
 rescue StandardError => e
   @failures << "#{label}: raised #{e.class}: #{e.message}"
@@ -120,18 +124,35 @@ run('empty inputs produce empty outputs without raising') do
         "expected empty outputs, got missing=#{missing.inspect}, all=#{all.inspect}",)
 end
 
-run('nil and empty post tag lists are tolerated') do
+run('nil and empty post tag lists are tolerated and blank names are ignored') do
   curated = [{ 'name' => 'Python' }]
-  posts = [nil, [], ['Python', nil], ['']]
+  blank_object = Object.new
+  def blank_object.to_s
+    " \t"
+  end
+  posts = [nil, [], ['Python', nil], ['', ' ', "\t", blank_object]]
   missing, all = Jekyll::AutoTagPages.summarise(
     curated: curated, post_tag_lists: posts.map { |p| Array(p) }, slugify: SLUGIFY,
   )
-  # Empty string is technically a "tag" — treated as a separate entry. The
-  # important invariant is that we don't crash and Python is found.
-  check(all.any? { |t| t['name'] == 'Python' && t['count'] == 1 },
-        "expected Python with count=1, got #{all.inspect}",)
+  check(missing.empty? && all == [{
+    'name' => 'Python', 'slug' => 'python', 'url' => '/tags/python/',
+    'description' => nil, 'count' => 1,
+  }], "expected only Python with count=1 and no missing tags, got missing=#{missing.inspect}, all=#{all.inspect}")
   check(missing.is_a?(Array),
         'expected missing to be an Array',)
+end
+
+run('blank curated names are ignored even when the curated list has only blanks') do
+  blank_object = Object.new
+  def blank_object.to_s
+    "\n "
+  end
+  missing, all = Jekyll::AutoTagPages.summarise(
+    curated: [{ 'name' => '' }, { 'name' => '  ' }, { 'name' => nil }, { 'name' => blank_object }],
+    post_tag_lists: [], slugify: SLUGIFY,
+  )
+  check(missing.empty? && all.empty?,
+        "expected blank curated names to contribute nothing, got missing=#{missing.inspect}, all=#{all.inspect}",)
 end
 
 run('tags differing only in case are one tag: one row, one missing name, combined count (#754)') do
@@ -178,24 +199,55 @@ run('a post carrying both spellings counts once (#754)') do
   check(all.size == 1 && all.first['count'] == 1, "expected one row, count=1, got #{all.inspect}")
 end
 
-run('posts_by_slug lists each post once under every slug it carries, in order (#754)') do
+run('posts_by_slug ignores blank names and preserves valid names on the same post') do
   doc = Struct.new(:data)
   a = doc.new({ 'tags' => ['quotes'] })
   b = doc.new({ 'tags' => ['Quotes', 'quotes', 'RAG'] })
   c = doc.new({})
-  index = Jekyll::AutoTagPages.posts_by_slug([a, b, c], slugify: SLUGIFY)
-  check(index.keys == ['quotes', 'rag'], "expected quotes + rag, got #{index.keys.inspect}")
+  blank_object = Object.new
+  def blank_object.to_s
+    '  '
+  end
+  d = doc.new({ 'tags' => ['', ' ', nil, blank_object, 'Useful'] })
+  e = doc.new({ 'tags' => [nil, "\t"] })
+  slugified = []
+  slugify = ->(name) { slugified << name; SLUGIFY.call(name) }
+  index = Jekyll::AutoTagPages.posts_by_slug([a, b, c, d, e], slugify: slugify)
+  check(index.keys == ['quotes', 'rag', 'useful'], "expected quotes + rag + useful, got #{index.keys.inspect}")
   check(index['quotes'].equal?(index['quotes']) && index['quotes'] == [a, b],
         'expected [a, b] under quotes, each once',)
   check(index['rag'] == [b], 'expected [b] under rag')
+  check(index['useful'] == [d], 'expected the valid tag to remain indexed')
+  check(!slugified.any? { |name| name.to_s.strip.empty? },
+        "expected blank tag names not to be slugified, got #{slugified.inspect}",)
+  check(!index.key?(''), "expected no blank slug key, got #{index.keys.inspect}")
+end
+
+run('empty slugs are ignored in grouping and indexing') do
+  invalid = ["\u00a0", '!!!', '🙂']
+  groups = Jekyll::AutoTagPages.group(curated_names: invalid, post_tag_lists: [['quotes', *invalid]], slugify: SLUGIFY)
+  check(groups.keys == ['quotes'], "expected only quotes group, got #{groups.keys.inspect}")
+  missing, all = Jekyll::AutoTagPages.summarise(curated: invalid.map { |name| { 'name' => name } }, post_tag_lists: [['quotes', *invalid]], slugify: SLUGIFY)
+  check(missing == ['quotes'] && all.map { |tag| tag['slug'] } == ['quotes'], 'empty-slug names must not contribute rows or missing archives')
+  doc = Struct.new(:data).new({ 'tags' => ['quotes', *invalid] })
+  index = Jekyll::AutoTagPages.posts_by_slug([doc], slugify: SLUGIFY)
+  check(index.keys == ['quotes'] && index['quotes'] == [doc], 'empty slugs must not be indexed')
+end
+
+run('numeric and boolean names reach slugify as strings') do
+  groups = Jekyll::AutoTagPages.group(curated_names: [2024, true], post_tag_lists: [['quotes', 2024, true]], slugify: SLUGIFY)
+  check(groups.keys == ['2024', 'true', 'quotes'], 'scalar names must group under their string slugs')
+  doc = Struct.new(:data).new({ 'tags' => ['quotes', 2024, true] })
+  check(Jekyll::AutoTagPages.posts_by_slug([doc], slugify: SLUGIFY).keys == ['quotes', '2024', 'true'], 'scalar names must be indexed')
+  check(!Jekyll::ExcludeE2EPosts.e2e_tag_name?(2024, slugify: SLUGIFY), 'numeric tag is not an e2e fixture')
 end
 
 # ── result ─────────────────────────────────────────────────────────────────
 
 if @failures.empty?
-  puts 'auto_tag_pages: all 13 checks passed'
+  puts "auto_tag_pages: all #{@checks} checks passed across #{@runs} cases"
 else
-  warn "auto_tag_pages: #{@failures.length} failure(s)"
+  warn "auto_tag_pages: #{@failures.length} failure(s) across #{@runs} cases and #{@checks} checks"
   @failures.each { |m| warn "  - #{m}" }
   exit 1
 end

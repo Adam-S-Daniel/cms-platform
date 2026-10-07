@@ -32,7 +32,8 @@ module Jekyll
   module Utils
     # Jekyll's "default" mode — the shared, golden-tested port.
     def self.slugify(name)
-      SpecJekyllSlugify.slugify(name.to_s)
+      raise TypeError, 'slugify requires String' unless name.is_a?(String)
+      SpecJekyllSlugify.slugify(name)
     end
   end
 end
@@ -73,12 +74,16 @@ class FakeSite
 end
 
 @failures = []
+@checks = 0
+@runs = 0
 
 def check(condition, message)
+  @checks += 1
   @failures << message unless condition
 end
 
 def run(label)
+  @runs += 1
   yield
 rescue StandardError => e
   @failures << "#{label}: raised #{e.class}: #{e.message}"
@@ -86,7 +91,7 @@ end
 
 # Pull the slugs that the generator decided to mint a feed page for.
 def feed_slugs(site)
-  site.pages.map { |p| Jekyll::Utils.slugify(p.data['tag_name']) }
+  site.pages.map { |p| Jekyll::Utils.slugify(p.data['tag_name'].to_s) }
 end
 
 # ── cases ──────────────────────────────────────────────────────────────────
@@ -128,6 +133,59 @@ run('curated _tags entries always mint a feed even with no public post') do
         "curated tag must mint a feed page, got #{slugs.inspect}",)
   check(!slugs.include?('canary-only'),
         "canary-only tag must not mint a feed page, got #{slugs.inspect}",)
+end
+
+run('blank post tag names mint no feed while valid tags remain') do
+  blank_object = Object.new
+  def blank_object.to_s
+    " \t"
+  end
+  posts = FakePosts.new([
+    FakePostDoc.new({ 'tags' => ['Quotes', '', ' ', nil, blank_object] }),
+    FakePostDoc.new({ 'tags' => [nil, "\n"] }),
+  ])
+  site = FakeSite.new(posts: posts)
+  Jekyll::TagFeeds::Generator.new.generate(site)
+  slugs = feed_slugs(site)
+  check(slugs == ['quotes'], "expected only the quotes feed, got #{slugs.inspect}")
+end
+
+run('blank curated names mint no feed while nonblank curated names remain') do
+  blank_object = Object.new
+  def blank_object.to_s
+    "\n "
+  end
+  tags = FakeCollection.new([
+    FakePostDoc.new({ 'name' => '' }),
+    FakePostDoc.new({ 'name' => '  ' }),
+    FakePostDoc.new({ 'name' => nil }),
+    FakePostDoc.new({ 'name' => blank_object }),
+    FakePostDoc.new({ 'name' => 'Curated' }),
+  ])
+  site = FakeSite.new(posts: FakePosts.new([]), tags: tags)
+  Jekyll::TagFeeds::Generator.new.generate(site)
+  slugs = feed_slugs(site)
+  check(slugs == ['curated'], "expected only the nonblank curated feed, got #{slugs.inspect}")
+end
+
+run('blank feed_exclude curated names do not add exclusions; valid exclusions still apply') do
+  tags = FakeCollection.new([
+    FakePostDoc.new({ 'name' => '' }),
+    FakePostDoc.new({ 'name' => '  ', 'feed_exclude' => true }),
+    FakePostDoc.new({ 'name' => nil }),
+    FakePostDoc.new({ 'name' => 'Hidden', 'feed_exclude' => true }),
+  ])
+  posts = FakePosts.new([
+    FakePostDoc.new({ 'tags' => ['', 'Visible'] }),
+    FakePostDoc.new({ 'tags' => ['Hidden'] }),
+  ])
+  site = FakeSite.new(posts: posts, tags: tags)
+  Jekyll::TagFeeds::Generator.new.generate(site)
+  slugs = feed_slugs(site)
+  excluded_names = Jekyll::ExcludeE2EPosts.excluded_tag_names(site)
+  check(slugs == ['visible'], "expected only visible feed, got #{slugs.inspect}")
+  check(excluded_names.none? { |name| name.to_s.strip.empty? },
+        "blank curated names must not enter the exclusion list, got #{excluded_names.inspect}",)
 end
 
 run('feed_exclude only excludes when literally true (not a string)') do
@@ -175,12 +233,33 @@ run('a case variant of an excluded _tags entry mints no feed (#754)') do
   check(site.pages.empty?, "expected no feed pages, got #{feed_slugs(site).inspect}")
 end
 
+run('empty-slug post and curated names mint no feed') do
+  invalid = ["\u00a0", '!!!', '🙂']
+  tags = FakeCollection.new(invalid.map { |name| FakePostDoc.new({ 'name' => name }) })
+  site = FakeSite.new(posts: FakePosts.new([FakePostDoc.new({ 'tags' => ['quotes', *invalid] })]), tags: tags)
+  Jekyll::TagFeeds::Generator.new.generate(site)
+  check(feed_slugs(site) == ['quotes'], 'empty-slug names must mint only the valid quotes feed')
+end
+
+run('empty-slug excluded names do not suppress valid feeds') do
+  tags = FakeCollection.new(["\u00a0", '!!!', '🙂'].map { |name| FakePostDoc.new({ 'name' => name, 'feed_exclude' => true }) })
+  site = FakeSite.new(posts: FakePosts.new([FakePostDoc.new({ 'tags' => ['quotes', '!!!'] })]), tags: tags)
+  Jekyll::TagFeeds::Generator.new.generate(site)
+  check(feed_slugs(site) == ['quotes'], 'empty-slug exclusions must not suppress quotes')
+end
+
+run('numeric and boolean tags mint string-slug feeds') do
+  site = FakeSite.new(posts: FakePosts.new([FakePostDoc.new({ 'tags' => ['quotes', 2024, true] })]))
+  Jekyll::TagFeeds::Generator.new.generate(site)
+  check(feed_slugs(site).sort == ['2024', 'quotes', 'true'], 'scalar tags must mint their feeds')
+end
+
 # ── result ─────────────────────────────────────────────────────────────────
 
 if @failures.empty?
-  puts 'tag_feeds: all 7 checks passed'
+  puts "tag_feeds: all #{@checks} checks passed across #{@runs} cases"
 else
-  warn "tag_feeds: #{@failures.length} failure(s)"
+  warn "tag_feeds: #{@failures.length} failure(s) across #{@runs} cases and #{@checks} checks"
   @failures.each { |m| warn "  - #{m}" }
   exit 1
 end
