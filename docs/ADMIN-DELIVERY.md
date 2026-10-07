@@ -119,13 +119,19 @@ The platform-only [code-block-language.test.js](../e2e/code-block-language.test.
 reproduction also verifies `python` survives both toggles and the saved file.
 Recheck the stock reproduction when upgrading Decap before removing the shim.
 
-The six pure-Node regressions can be rerun from `e2e/` without a site build or
-server. The tests cover first selection, existing and standalone fields, widget
-metadata, and each shell's script load order. The offline pinned-bundle browser
-reproduction separately checks the serializer and saved fence.
+The 34 pure-Node regressions can be rerun from `e2e/` without a site build or
+server. The lifecycle model queues state updates as the pinned stock widget
+does: mounting an existing language suppresses its initial notification, while
+the fixed empty block emits its first user selection. A stock baseline test
+reproduces the lost first selection. The tests also cover standalone fields and
+widget metadata. An HTML parser checks active executable scripts and their
+load order in every shell, with negative cases for comments, templates,
+noscript, non-JavaScript types, disabled scripts, asynchronous loading and
+unsafe deferred ordering. The offline pinned-bundle browser reproduction
+separately checks the serializer and saved fence.
 
-Before running the command, put a sentinel `claude` executable that exits 97
-first on `PATH`; verify it recorded zero calls afterward:
+Before running the command, put the blocking sentinel executable first on
+`PATH`; verify it recorded zero calls afterward:
 
 ```sh
 unshare --user --map-current-user --pid --fork --mount-proc -- npx playwright test --config=playwright.unit.config.js code-block-language.test.js
