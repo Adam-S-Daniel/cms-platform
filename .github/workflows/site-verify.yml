@@ -19,10 +19,12 @@
 #
 # CONVENTION, NOT CONFIGURATION. There are NO inputs. If the caller's tree has
 # `scripts/verify-build-artifacts.rb`, this builds the site and runs it;
-# otherwise it prints a notice and succeeds. adamdaniel.ai has no such script
-# today, so it no-ops there in ~10s. Nothing for a consumer to misconfigure.
-# Generalising to a non-Ruby verifier is deliberately out of scope: Jekyll
-# guarantees Ruby, and there is exactly one such script in the fleet.
+# otherwise it prints a notice and succeeds. Independently, it runs the fixed
+# self-test list (`scripts/test-verify-build-artifacts.rb`) when present, using
+# the site's bundle before building. Both consumers have verifiers;
+# adamdaniel.ai also has verifier self-tests. Nothing to misconfigure.
+# Generalizing to a non-Ruby verifier is deliberately out of scope: Jekyll
+# guarantees Ruby.
 #
 # JOB SHAPE, dictated by e2e/required-context-cancellable.test.js's four causes
 # rather than by taste. The `verify` job does the work and carries the wall;
@@ -58,7 +60,7 @@ jobs:
       # The CALLER's tree: the site whose verifier and build are under test.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Detect the site's verifier
+      - name: Detect the site's verifier and self-tests
         id: detect
         # Presence is the whole contract. A site that has no verifier is not
         # wrong, it has nothing to verify; a site that has one runs it. The
@@ -72,9 +74,14 @@ jobs:
             echo "verifier=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=site-verify::No scripts/verify-build-artifacts.rb in this repo — nothing to verify (this is not an error)."
           fi
+          if [ -f scripts/test-verify-build-artifacts.rb ]; then
+            echo "selftests=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "selftests=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Ruby
-        if: steps.detect.outputs.verifier == 'true'
+        if: steps.detect.outputs.verifier == 'true' || steps.detect.outputs.selftests == 'true'
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
         with:
           # Tracks deploy-preview.yml's `ruby_version` default, so the tree
@@ -82,6 +89,20 @@ jobs:
           # e2e/site-verify.test.js holds the two equal.
           ruby-version: "3.2"
           bundler-cache: true
+
+      - name: Run the site's verifier self-tests
+        run: |
+          set -euo pipefail
+          found=false
+          for script in scripts/test-verify-build-artifacts.rb; do
+            if [ -f "$script" ]; then
+              found=true
+              bundle exec ruby "$script"
+            fi
+          done
+          if [ "$found" = false ]; then
+            echo "::notice title=site-verify::No verifier self-test script in this repo — skipping self-tests (this is not an error)."
+          fi
 
       - name: Build the site
         if: steps.detect.outputs.verifier == 'true'
