@@ -71,6 +71,11 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Setup Ruby for candidate Gemfile parsing
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
+        with:
+          ruby-version: "3.2"
+
       - name: Install the YAML parser
         # The checker parses workflows with the `yaml` lib (anchors resolved) —
         # NOT regex. `--prefix .cms-platform` installs it into the PLATFORM

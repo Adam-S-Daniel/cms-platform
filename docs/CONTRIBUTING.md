@@ -164,8 +164,8 @@ install fails.
 base (every STABLE release needs one, because `release.yml` refuses a stable
 tag that disagrees with the manifests), or whose head branch is `release/*`. A
 prerelease is cut from `main` as-is with no PR (`release.yml` skips the manifest
-guard for it), so this check does not gate it; that is the job of #526
-criterion 4's release gate, which does not exist yet. Such a PR is red until its body carries, on a line of its own,
+guard for it), so this check does not gate it. Such a PR is red until its body
+carries, on a line of its own,
 
 ```text
 Independent review: CLEAN at <the PR's current head sha, all 40 characters>
@@ -183,8 +183,58 @@ here, #222) because the stamp is a body edit that changes no SHA; it reads the
 body from `$GITHUB_EVENT_PATH`, the manifests through the API at the merge base
 and the head, and fails closed when either read fails. The logic is
 `scripts/release-review-gate.js`, locked by `e2e/self-release-review-gate.test.js`.
-It does not run the consumers' checks against the candidate or gate the tag
-itself; those parts of #526 are separate.
+Stable tag creation separately requires both consumers' exact-candidate results
+through [`scripts/release-candidate-gate.js`](../scripts/release-candidate-gate.js)
+in [`release.yml`](../.github/workflows/release.yml). This is a promotion gate:
+production pins stay on their existing stable release while candidates run.
+
+After the release-bearing PR has merged with independent review and green
+self-CI, record the full platform `main` commit SHA. Prepare an open **draft** PR
+into `main` in each repository bound to `consumer-main` in
+[`repo-settings.yml`](../repo-settings.yml). Keep both draft PRs unmerged. Pin
+their `platform.lock`, every platform workflow `uses:@` and `platform_ref:` input
+to that full SHA. Set the theme gem's `Gemfile` option to `ref: "<full SHA>"`
+(instead of `tag:`), then refresh `Gemfile.lock` so its platform GIT source has
+both `ref:` and `revision:` equal to that SHA. Each consumer's e2e caller must
+run `target: local` with `browser: all`, using that candidate's harness; a green
+platform fixture run cannot substitute for either consumer's own validation.
+Wait for the consumer PR checks, including any regression review, to succeed.
+
+Dispatch the stable release from that same platform `main` revision with
+`candidate_adamdaniel_ai_pr` and `candidate_jodidaniel_com_pr` set to those PR
+numbers. The gate reads immutable consumer heads, validates every platform pin,
+and requires success for the union of manifest and live required contexts plus
+every candidate e2e matrix work job and site verifier work job. It reads both
+check runs and legacy statuses, follows pagination, honors required App bindings,
+and refuses missing, pending, failed, cancelled, neutral or skipped validations.
+Work results must come from GitHub Actions, and their job details must show the
+actual Playwright test step succeeded. A consumer with a verifier must also have
+successful build and verifier steps; the documented no-verifier case is allowed.
+Optional actuator skips are allowed; optional failed or cancelled results are
+refused. Candidate heads and production branch revisions are re-read before
+promotion. Production Gemfile, lockfile and workflow pins must agree with the old production
+reference; a production pin already resolving to the candidate also fails.
+Unreadable or malformed API data fails closed. A sanitized
+`release-candidate-results` artifact records the selected revisions and successful
+validation contexts before tag creation; a failed gate prevents the stable tag
+and the bump fanout.
+
+The existing per-owner `BUMP_DISPATCH_ADAMDANIEL_AI` and
+`BUMP_DISPATCH_JODIDANIEL_COM` credentials need Contents, Pull requests and Checks
+read on their respective consumer in addition to Actions read/write for dispatch and job-step validation.
+Without a configured credential, the gate tries the workflow token's read
+access; an authorization failure blocks promotion without exposing API bodies.
+Credential permissions and live consumer results must be verified operationally;
+deterministic mocked matrices alone do not establish that access.
+
+If platform `main` changes before dispatch, re-pin both draft branches and collect
+fresh consumer results for the new candidate. After promotion, normal
+`platform-bump` PRs adopt the stable tag atomically; the validation draft PRs
+remain unmerged. Prereleases bypass this stable promotion gate and remain excluded
+from `releases/latest` and automatic consumer fanout. These deterministic gate
+matrices and workflow ordering are locked by
+[`e2e/release-candidate-gate.test.js`](../e2e/release-candidate-gate.test.js),
+registered as a platform meta spec and run by Self CI's `node-unit-lints` lane.
 
 The nine REQUIRED contexts are `repo-settings.yml`'s `ruleset_library.platform-main.
 rules[required_status_checks]`: the six self-CI job ids, `scan / scan`,

@@ -1,7 +1,7 @@
 ---
 name: platform-release-and-bump
 description: Cut a new cms-platform release (vX.Y.Z) and reconcile BOTH consumer repos (adamdaniel.ai, jodidaniel.com) to it in single-version lockstep. Use when you've merged a platform fix and need it to flow to consumers, when bumping platform_ref, or when the pin-consistency guard fails after a partial bump. Covers the release dispatch, the exact set of references to bump (platform_ref, gem tag+revision, workflow and composite @ref pins), the pin-consistency check, and the lockstep invariant. Trigger on "cut a release", "release vX.Y.Z", "bump platform_ref", "reconcile consumers", "platform-pin-consistency", or "flow the fix to consumers".
-compatibility: Requires gh CLI authed to Adam-S-Daniel (repo + workflow scope) and Node 20. Run from ~/repos/{cms-platform,adamdaniel.ai,jodidaniel.com}.
+compatibility: Requires gh CLI authed to Adam-S-Daniel (repo + workflow scope), Node 20 and Ruby 3.2 with Ripper for candidate Gemfile parsing. Run from ~/repos/{cms-platform,adamdaniel.ai,jodidaniel.com}.
 ---
 
 # Cut a platform release + reconcile consumers (lockstep)
@@ -16,13 +16,32 @@ pin-consistency guard, issue #29). So a platform change is a 3-step cascade:
 ## 1. Cut the release
 
 The release workflow tags `main` HEAD + creates a GitHub Release. Merge your
-fix to `main` and confirm `main`'s self-CI is green FIRST, then:
+fix and the atomic release-version bump to `main` with independent review and
+confirm `main`'s self-CI is green FIRST. Before cutting a stable release, create
+an open draft PR into `main` in **each** consumer. Keep production pins fixed.
+Pin each draft's `platform.lock`, platform workflow `uses:@` and `platform_ref:`
+inputs to the full platform `main` commit SHA. In `Gemfile`, use `ref: "<SHA>"`
+for the platform theme, and refresh `Gemfile.lock` so its `ref:` and `revision:`
+equal that SHA. Run each consumer's own checks with the candidate e2e caller's
+`target: local` and `browser: all`. Wait for the required checks and actual e2e
+matrix/site verifier work jobs to succeed. Never merge these validation drafts.
+See [`docs/CONTRIBUTING.md`](../../docs/CONTRIBUTING.md) for the complete promotion
+gate contract. Then dispatch with both candidate PR numbers:
 
 ```bash
-gh workflow run release.yml -R Adam-S-Daniel/cms-platform -f version=vX.Y.Z --ref main
+gh workflow run release.yml -R Adam-S-Daniel/cms-platform -f version=vX.Y.Z --ref main \
+  -f candidate_adamdaniel_ai_pr='<draft-pr-number>' \
+  -f candidate_jodidaniel_com_pr='<draft-pr-number>'
 # the release tag == main HEAD; grab its SHA (you need it for the composite pin):
 gh api repos/Adam-S-Daniel/cms-platform/git/refs/tags/vX.Y.Z --jq '.object.sha'
 ```
+
+The dispatched SHA must equal the platform commit tested by both drafts. A new
+platform `main` commit requires fresh candidate pins and results. The gate fails
+closed on unreadable, missing, pending, failed, cancelled or skipped validations,
+uploads a sanitized `release-candidate-results` artifact, and only then permits
+the stable tag and fanout. Prereleases (`-f prerelease=true` with a suffixed tag)
+skip this promotion gate and fanout and do not change production pins.
 
 ## 2. Bump each consumer
 
@@ -43,7 +62,8 @@ the pin-consistency guard fails. The two consumers differ slightly:
   carve-out took the reusables, and the 2026-08-20 fleet retirement of the pin
   comment took the composites (see the `github-actions-sha-pinning` skill). A
   bump replaces version STRINGS now; if you find yourself hunting 40-hex SHAs in
-  a consumer's workflows, you are working from the old model.
+  a stable adoption's workflows, you are working from the old model. Draft
+  candidate validation above deliberately uses full commit SHA pins.
 
 The robust, idempotent way is the same script the workflow runs. It moves only
 real pins (a parser finds them; prose that names the old version stays as it

@@ -26,8 +26,8 @@
 // stable release needs such a PR), or its head branch is `release/*` (the
 // release PR convention, e.g. release/v0.1.133). A PRERELEASE is cut from main
 // as-is with no PR (release.yml skips the manifest guard for it), so this check
-// does not gate it; that belongs to #526 criterion 4's release gate, which does
-// not exist yet. Comparing
+// does not gate it. Stable tag promotion is independently enforced by
+// release-candidate-gate.js against both consumers' candidate checks. Comparing
 // against the MERGE BASE, not the base tip, keeps a stale feature branch that
 // predates a release from reading as one.
 //

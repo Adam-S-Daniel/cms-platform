@@ -138,6 +138,115 @@ function gemfileLock(tag) {
   ].join("\n");
 }
 
+test.describe("check-platform-pin-consistency.js — exact candidate SHAs (#526)", () => {
+  const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef0123";
+  const declaration = (options = `git: "https://github.com/${SLUG}", ref: "${SHA}"`) =>
+    `gem "cms-platform-theme", ${options}\n`;
+  const lock = (ref = SHA, revision = SHA) => [
+    "GIT", `  remote: https://github.com/${SLUG}`, `  revision: ${revision}`,
+    `  ref: ${ref}`, "  specs:", "    cms-platform-theme (0.1.4)", "", "PLATFORMS", "  ruby", "",
+  ].join("\n");
+  function candidate(gem = declaration(), locked = lock(), canonical = SHA) {
+    const root = mkConsumer();
+    write(root, "platform.lock", platformLock(canonical));
+    write(root, ".github/workflows/deploy.yml", reusableCaller("deploy", canonical));
+    write(root, "Gemfile", gem);
+    write(root, "Gemfile.lock", locked);
+    writeSentinel(root);
+    return run(root);
+  }
+
+  for (const [name, gem] of [
+    ["literal ref", declaration()],
+    ["multiline literal ref", `gem "cms-platform-theme",\n  git: "https://github.com/${SLUG}",\n  ref: "${SHA}"\n`],
+    ["parenthesized call", `gem("cms-platform-theme", git: "https://github.com/${SLUG}.git", ref: "${SHA}")\n`],
+    ["explicit options hash", `gem "cms-platform-theme", {git: "https://github.com/${SLUG}", ref: "${SHA}"}\n`],
+  ]) {
+    test(`accepts an exact candidate SHA with ${name}`, () => {
+      const result = candidate(gem);
+      expect(result.status, result.stderr).toBe(0);
+    });
+  }
+
+  for (const [name, gem] of [
+    ["wrong ref", declaration(`git: "https://github.com/${SLUG}", ref: "${OTHER_SHA}"`)],
+    ["computed ref", `candidate = "${SHA}"\n${declaration(`git: "https://github.com/${SLUG}", ref: candidate`)}`],
+    ["interpolated ref", declaration(`git: "https://github.com/${SLUG}", ref: "#{'${SHA}'}"`)],
+    ["comment-only declaration", `# ${declaration()}`],
+    ["duplicate declarations", declaration() + declaration()],
+    ["duplicate ref options", declaration(`git: "https://github.com/${SLUG}", ref: "${OTHER_SHA}", ref: "${SHA}"`)],
+    ["missing ref", declaration(`git: "https://github.com/${SLUG}"`)],
+    ["tag pin", declaration(`git: "https://github.com/${SLUG}", tag: "${SHA}"`)],
+    ["branch alongside ref", declaration(`git: "https://github.com/${SLUG}", ref: "${SHA}", branch: "main"`)],
+    ["untrusted remote", declaration(`git: "https://example.com/${SLUG}", ref: "${SHA}"`)],
+    ["computed options", `options = {git: "https://github.com/${SLUG}", ref: "${SHA}"}\ngem "cms-platform-theme", **options\n`],
+    ["computed positional constraint", `constraint = ">= 0"\ngem "cms-platform-theme", constraint, git: "https://github.com/${SLUG}", ref: "${SHA}"\n`],
+    ["invalid Ruby syntax", `${declaration()}end\n`],
+  ]) {
+    test(`rejects candidate Gemfile with ${name}`, () => {
+      const result = candidate(gem);
+      expect(result.status, result.stdout).toBe(1);
+      expect(result.stderr).toContain("Gemfile");
+    });
+  }
+
+  for (const [name, locked] of [
+    ["wrong ref", lock(OTHER_SHA)],
+    ["wrong resolved revision", lock(SHA, OTHER_SHA)],
+    ["missing ref", lock().replace(`  ref: ${SHA}\n`, "")],
+    ["missing revision", lock().replace(`  revision: ${SHA}\n`, "")],
+    ["duplicate revision", lock().replace("  specs:", `  revision: ${SHA}\n  specs:`)],
+    ["duplicate source", lock() + lock()],
+    ["tag alongside ref", lock().replace("  specs:", `  tag: ${SHA}\n  specs:`)],
+    ["missing platform source", lock().replace(SLUG, "Acme-Org/other")],
+    ["untrusted remote", lock().replace("https://github.com/", "https://example.com/")],
+  ]) {
+    test(`rejects candidate lockfile with ${name}`, () => {
+      const result = candidate(declaration(), locked);
+      expect(result.status, result.stdout).toBe(1);
+      expect(result.stderr).toContain("Gemfile.lock");
+    });
+  }
+
+  test("keeps stable releases tag-pinned rather than accepting a ref pin", () => {
+    const result = candidate(declaration(), lock(), "v0.1.7");
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stderr).toContain("no tag:");
+  });
+
+  test("fails closed when Ruby cannot parse the candidate Gemfile", () => {
+    const { parseCandidateGemfile } = require(SCRIPT);
+    const rubyBin = mkConsumer();
+    write(rubyBin, "ruby", "#!/bin/sh\nexit 97\n");
+    fs.chmodSync(path.join(rubyBin, "ruby"), 0o755);
+    const previous = process.env.PATH;
+    // Keep the run's claude sentinel ahead of the fixture executable.
+    const [sentinel, ...remaining] = previous.split(path.delimiter);
+    process.env.PATH = [sentinel, rubyBin, ...remaining].join(path.delimiter);
+    try {
+      expect(() => parseCandidateGemfile(declaration(), SLUG)).toThrow("requires Ruby with Ripper");
+    } finally {
+      process.env.PATH = previous;
+      fs.rmSync(rubyBin, { recursive: true, force: true });
+    }
+  });
+
+  test("requires Ruby setup in both jobs running the candidate parser", () => {
+    const YAML = require("yaml");
+    for (const [file, job] of [
+      ["platform-pin-consistency.yml", "pin-consistency"], ["self-ci.yml", "node-unit-lints"],
+    ]) {
+      const workflow = YAML.parse(fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", file), "utf8"));
+      const steps = workflow.jobs[job].steps;
+      const ruby = steps.find((step) => step.uses?.startsWith("ruby/setup-ruby@"));
+      expect(ruby, `${file}/${job}`).toBeTruthy();
+      expect(ruby.with["ruby-version"]).toBe("3.2");
+      expect(steps.indexOf(ruby)).toBeLessThan(steps.findIndex((step) =>
+        typeof step.run === "string" && (step.run.includes("check-platform-pin-consistency.js") || step.run.includes("playwright test"))));
+    }
+  });
+});
+
 test.describe("check-platform-pin-consistency.js — CONSISTENT fixture (#29)", () => {
   test("exits 0 with an OK summary when every reference == platform_ref", () => {
     const root = mkConsumer();
