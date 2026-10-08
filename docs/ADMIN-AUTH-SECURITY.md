@@ -453,7 +453,7 @@ is therefore expensive. What was weighed:
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
 | Security headers | **Deployed and enforced on both consumer sites** — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515). Measured 2026-10-06 over HTTPS with TLS verification on: `/`, `/admin/` and `/admin/reviews/` on adamdaniel.ai and jodidaniel.com answer HSTS, `nosniff`, `Referrer-Policy`, `X-Frame-Options` and `frame-ancestors 'self'`; the `/admin/` pages carry the full policy in the enforcing `Content-Security-Policy` header and no `Content-Security-Policy-Report-Only` header. The template default for a NEW site is still `AdminCspMode=report-only` | Both distributions send HSTS, `nosniff`, `Referrer-Policy` and same-origin framing once a site redeploys its bootstrap stack; `/admin/*` adds a CSP, Report-Only until `AdminCspMode=enforce`. Decap's `new Function` and the per-site inline scripts keep `script-src` loose; the gain is `connect-src`, `object-src`, `base-uri` and `frame-ancestors`. See [Security headers](#security-headers) below. |
 | Narrower permissions | Evaluated, spike pending — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516); `read:user` replaces `user` in the proxy's default scope (platform default since #548). **Unverified: the live proxies' `GITHUB_SCOPE`** — the proxies were redeployed 2026-10-04 at v0.1.126, after #548, so `read:user` is probable, but nobody has observed it; the check is [below](#the-interim-step-readuser-instead-of-user) | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. The source evaluation, the minimal permission set and the spike kit are in [GitHub App sign-in](#github-app-sign-in-516) below. |
-| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); the opt-in shipped in #549 and **no site has opted in** (`/admin/` answers 200 from the apex on both, 2026-10-06); off until a site follows the runbook below | Public pages share the origin, and so do their scripts. The CloudWatch RUM client is no longer fetched from AWS: the gem ships the exact release and pages load it from the site's own origin (rule below), which takes the RUM CDN out of the page but not the client out of the token's reach. Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
+| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); own-origin distribution/router shipped in [#549](https://github.com/Adam-S-Daniel/cms-platform/pull/549) and exact same-origin vendored RUM shipped in [#551](https://github.com/Adam-S-Daniel/cms-platform/pull/551). Neither consumer has opted in as of 2026-10-07: both public admin routes answer 200 with no redirect (see [rollout status](#rollout-status-and-owner-decision)); off until a site follows the [per-site runbook](#runbook-per-site). | Public pages share the origin, and so do their scripts. The CloudWatch RUM client is no longer fetched from AWS: the gem ships the exact release and pages load it from the site's own origin (rule below), which takes the RUM CDN out of the page but not the client out of the token's reach. Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
 
 ## Serving the editor from its own origin (opt-in, #517)
@@ -624,6 +624,29 @@ admin origin.
   redirects followed, so it compares the same bytes. None of this has run
   against an opted-in site yet: the first prod loop after cut-over is the
   proof.
+
+### Rollout status and owner decision
+
+Read-only HTTPS checks on 2026-10-07 found neither consumer opted in. Both
+configuration files omit `cms.admin_origin`, and both `platform.lock` files
+name `v0.1.160`:
+
+| Consumer | Configuration | Platform pin | Public route observations |
+|---|---|---|---|
+| adamdaniel.ai | [`_config.yml`](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/_config.yml) | [`platform.lock`](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/platform.lock) | [`/admin/`](https://adamdaniel.ai/admin/) and [`/admin/reviews/`](https://adamdaniel.ai/admin/reviews/) both returned HTTP 200 with an empty `redirect_url`. |
+| jodidaniel.com | [`_config.yml`](https://github.com/jodidaniel/jodidaniel.com/blob/main/_config.yml) | [`platform.lock`](https://github.com/jodidaniel/jodidaniel.com/blob/main/platform.lock) | [`/admin/`](https://jodidaniel.com/admin/) and [`/admin/reviews/`](https://jodidaniel.com/admin/reviews/) both returned HTTP 200 with an empty `redirect_url`. |
+
+The pins alone do not activate the feature. The owner needs to choose whether
+to retain the current apex exposure knowingly or authorize a per-site
+migration. The recommendation is to pilot the dedicated origin on the
+user-owned consumer, validate it using the [runbook](#runbook-per-site), then
+migrate both consumers. That is a recommendation, not an owner-approved
+decision. No AWS settings, DNS or certificate state, OAuth allowlist,
+interactive sign-in, or token revocation was verified in this check, and no
+infrastructure rollout was performed. Until each site completes real
+per-site validation and revokes pre-cutover credentials, [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517)
+remains open. The remaining exposure is described in [What it closes, and
+what it does not](#what-it-closes-and-what-it-does-not).
 
 ### Runbook, per site
 
