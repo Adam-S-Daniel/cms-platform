@@ -1193,6 +1193,12 @@ with the pre-fix file and the post-fix file, in the same session.
 
 ## 7. Related
 
+The [Decap caret-selection diagnostic](DECAP-CARET-SELECTION.md) for
+[issue #755](https://github.com/Adam-S-Daniel/cms-platform/issues/755) isolates
+misplaced characters after a rapid caret click in the pinned stock bundle,
+including with preview hidden. It records the upstream Slate selection boundary
+and an offline browser regression; no platform selection shim is included.
+
 - `theme/admin/entry-status-model.js` — the four badges + two modifiers, and
   the only place any surface derives status words from. Pure; unit-tested in
   `e2e/entry-status-model.test.js`.

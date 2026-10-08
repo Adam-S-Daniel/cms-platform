@@ -386,7 +386,8 @@ REQUIRED: **actionlint**, **ruby-theme-specs**, **node-unit-lints** (pure-fs
 more required contexts come from siblings: `scan / scan`, **`fixture-e2e`**
 (#527: the `@lane: local` specs on the two admin projects against
 `e2e/fixture-site`; #702 added `chromium-desktop-1080` against both fixtures,
-one `/` on the theme layout and one on a site-owned layout) and
+one `/` on the theme layout and one on a site-owned layout; #755's separate
+offline caret diagnostic runs on the full fixture's Chromium admin leg) and
 **`release-review-gate`** (#526: the review stamp above; the one PR workflow
 that fires on `edited`, because the stamp is a body edit).
 `self-dependabot-auto-merge.yml` also triggers on every PR, but its job is a

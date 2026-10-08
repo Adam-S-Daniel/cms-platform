@@ -33,6 +33,8 @@
 #      project (the matrix names it). Admin legs: #527's archived-PDF test in
 #      cms-editorial-workflow.spec.js. Public legs: a test that only runs where
 #      the leg's `/` shape holds (#702). A future skip must not read green.
+#   6. on the full fixture's Chromium admin leg, #755's offline stock-versus-
+#      platform caret diagnostic, with the shell's pinned bundle verified by SRI.
 #
 # WHAT IT DELIBERATELY DOES NOT RUN
 #   - `@lane: real` specs. Most self-skip without CMS_E2E_PAT, but
@@ -215,6 +217,60 @@ jobs:
           browser: ${{ steps.engine.outputs.engine }}
           working-directory: e2e/${{ matrix.fixture }}/e2e
 
+      # The diagnostic needs platform SOURCE rather than the fixture's built
+      # admin. Reuse the installed harness dependencies, then cache the exact
+      # shell pin outside Playwright's cleaned output directories.
+      - name: Prepare the pinned Decap caret diagnostic
+        if: ${{ steps.salient.outputs.salient == 'true' && matrix.fixture == 'fixture-site' && matrix.project == 'chromium-desktop-3k' }}
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          ln -s "${FIXTURE}/e2e/node_modules" node_modules
+          node prepare-decap-caret.js
+
+      - name: Run the offline Decap caret diagnostic
+        if: ${{ steps.salient.outputs.salient == 'true' && matrix.fixture == 'fixture-site' && matrix.project == 'chromium-desktop-3k' }}
+        working-directory: e2e
+        env:
+          DECAP_DIAGNOSTIC_BUNDLE: ${{ github.workspace }}/e2e/node_modules/.cache/decap-caret/decap-cms.js
+        run: |
+          set -euo pipefail
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/decap-caret.log.json
+          status=0
+          npx playwright test --config=playwright.caret.config.js --reporter=list,html,json \
+            > /tmp/decap-caret.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
+
+      - name: Assert every caret diagnostic case passed
+        if: ${{ steps.salient.outputs.salient == 'true' && matrix.fixture == 'fixture-site' && matrix.project == 'chromium-desktop-3k' }}
+        run: |
+          node - <<'JS'
+          const fs = require("node:fs");
+          try {
+            const report = JSON.parse(fs.readFileSync("/tmp/decap-caret.log.json", "utf8"));
+            const { expected, unexpected, flaky, skipped } = report.stats;
+            const tests = [];
+            function visit(suite) {
+              for (const spec of suite.specs || []) {
+                if (String(spec.file || "").endsWith("decap-caret-selection.spec.js")) tests.push(...spec.tests);
+              }
+              for (const child of suite.suites || []) visit(child);
+            }
+            for (const suite of report.suites) visit(suite);
+            if (expected !== 8 || unexpected !== 0 || flaky !== 0 || skipped !== 0 || report.errors.length !== 0) {
+              throw new Error("Incomplete diagnostic matrix");
+            }
+            if (tests.length !== 8 || tests.some((t) => t.expectedStatus !== "passed" || t.results.at(-1)?.status !== "passed")) {
+              throw new Error("A diagnostic case did not pass");
+            }
+            console.log("All eight caret diagnostic cases passed");
+          } catch (_) {
+            console.log("::error::caret diagnostic did not pass all eight cases without skips");
+            process.exit(1);
+          }
+          JS
+
       # Frozen install from the fixture's committed Gemfile.lock
       # (setup-ruby turns on deployment mode when a lockfile exists), so a new
       # gem release cannot change what this lane builds with.
@@ -336,6 +392,10 @@ jobs:
         with:
           name: fixture-e2e-report-${{ matrix.project }}-${{ matrix.fixture }}
           path: |
+            e2e/test-results
+            e2e/playwright-report
+            /tmp/decap-caret.log
+            /tmp/decap-caret.log.json
             e2e/${{ matrix.fixture }}/e2e/playwright-report
             e2e/${{ matrix.fixture }}/e2e/test-results
             /tmp/fixture-e2e.log
