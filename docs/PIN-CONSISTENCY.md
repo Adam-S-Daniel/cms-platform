@@ -448,6 +448,13 @@ reads only the comment, so a tag-pinned own-account ref, a `./local` path and a
 `docker://` ref are inherently untouched; there is no carve-out to get wrong.
 A trailing comment that is not a version (`# zizmor: ignore[...]`) stays legal.
 
+Measured on both consumers (moved here from the `platform-release-and-bump`
+skill, cms-platform#819): every cross-repo platform ref ends in the release tag,
+with no SHA pin and no pin comment — 2026-08-20 at v0.1.88, re-checked
+2026-10-04 at v0.1.130. The same 2026-08-20 measurement, at `platform_ref`
+v0.1.86, read 90 and 57 checks where that skill quoted "96", degrading to "61"
+— so the skill quotes no count and points at the summary line instead.
+
 ## platform-bump moves files and one dictated input, not just pins (#315)
 
 A release can require three kinds of consumer-side change, and for a long time

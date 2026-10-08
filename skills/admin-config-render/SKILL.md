@@ -11,8 +11,8 @@ shells and the `reviews/` dashboards. As of **v0.1.4** it ships **inside the
 build output by a render step. A consuming site no longer vendors `admin/`; it
 keeps only the seam `admin/collections.site.yml`.
 
-Full mechanics live in **AGENTS.md -> "Admin delivery (gem-shipped, v0.1.4+)"**.
-Read that before changing anything here. This skill is the working playbook.
+Full mechanics live in **`docs/ADMIN-DELIVERY.md`** (AGENTS.md's "Admin
+delivery" section is a pointer to it). Read that before changing anything here. This skill is the working playbook.
 
 ## The two render paths (keep them in lockstep)
 

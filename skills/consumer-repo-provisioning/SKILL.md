@@ -92,34 +92,26 @@ permissions**:
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
   reject its pending deployments even with `Actions: write`.
 
-## `CMS_PLATFORM_PAT` — REMOVED in v0.1.103
+## `CMS_PLATFORM_PAT` — removed, do not create it
 
-> **This PAT no longer exists as a credential path.** v0.1.103 removed the
-> `gh_token` INPUT from `platform-bump` and `dev-hooks-sync`, not just the read
-> — so a caller still passing it fails at **startup**, and the caller's line
-> must be dropped in the SAME commit as the pin bump (`structuralShape()`
-> compares the caller's `secrets:` map against the template at that consumer's
-> pinned ref). Provision the App instead; there is nothing else to set.
->
-> **Both live consumers deleted it on 2026-09-02** — the PAT *and* the repo
-> secret — after the App path was verified on all four reader × consumer
-> combinations. Delete the secret, don't just let the PAT expire: `||` in a
-> GitHub expression falls through on *empty*, not on *invalid*, so a
-> dead-but-present value wins a fallback and 401s.
->
-> Without the App on v0.1.103+, `platform-bump` **fails loudly** naming both
-> knobs — its credential is load-bearing, since the bump rewrites
-> `.github/workflows/*` and `GITHUB_TOKEN` cannot hold `workflows:write` —
-> while `dev-hooks-sync` **warns** and opens its PR on `GITHUB_TOKEN`, which
-> fires no CI.
+**The CMS automation App below is the only push credential** for the two
+reusables that edit `.github/workflows/*`, `platform-bump` and `dev-hooks-sync`
+— a push-back credential there needs **Workflows: write**, the one permission
+`CMS_E2E_PAT` deliberately lacks. Neither reusable has a `gh_token` input, so a
+caller still passing one fails at **startup**: drop that line in the SAME commit
+as the pin bump (`structuralShape()` compares the caller's `secrets:` map
+against the template at that consumer's pinned ref).
 
-The two reusables that took it, `platform-bump` and `dev-hooks-sync`, edit
-`.github/workflows/*`, so their push-back credential needs **Workflows: write**
-(the one permission `CMS_E2E_PAT` deliberately lacks) — the App below carries it.
-A third consumer of the PAT, `dependabot-comment-sync`, was **deleted on
-2026-08-20** along with the version pin comment it refreshed: the comment goes
-stale silently and then actively lies, so a wrong label is worse than no label.
-A third-party `uses:` now ends at `@<sha>`.
+If a consumer still holds a `CMS_PLATFORM_PAT` secret, **delete the secret**,
+don't just let the PAT expire: `||` in a GitHub expression falls through on
+*empty*, not on *invalid*, so a dead-but-present value wins a fallback and 401s.
+
+Without the App, `platform-bump` **fails loudly** naming both knobs — its
+credential is load-bearing, since the bump rewrites `.github/workflows/*` and
+`GITHUB_TOKEN` cannot hold `workflows:write` — while `dev-hooks-sync` **warns**
+and opens its PR on `GITHUB_TOKEN`, which fires no CI. (The removal and the
+consumers' verified cut-over: `docs/VERSION-HISTORY.md` v0.1.103; the deleted
+`dependabot-comment-sync` consumer: `docs/CI-INVARIANTS.md`.)
 
 ## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the CMS automation App (replaces `CMS_PLATFORM_PAT`, #238)
 
@@ -221,10 +213,9 @@ those needs a live measurement with a real App key before the swap, so
 `CMS_E2E_PAT` stays a PAT and is rotated on its calendar. The analysis is in
 cms-platform#238.
 
-> Related, and worth stating because the opposite claim was recorded here for a
-> while: **`GITHUB_TOKEN` CAN merge a workflow-file PR.** PR #182 (31 changed
-> files, all under `.github/workflows/`) merged as `github-actions[bot]` 3 s
-> after its last required check went green. What GitHub refuses is *writing*
+> Related: **`GITHUB_TOKEN` CAN merge a workflow-file PR** (PR #182, 31 files
+> all under `.github/workflows/`, merged as `github-actions[bot]`; evidence in
+> `docs/CI-INVARIANTS.md`). What GitHub refuses is *writing*
 > workflow files without the `workflows` permission (hence this App), and
 > `enablePullRequestAutoMerge` **from the schedule context** — the discriminator
 > there is the EVENT CONTEXT, not the token class.
@@ -331,11 +322,13 @@ one secret per resource owner:
 Consumed by `release.yml`'s "Fan out bump dispatches to consumers" step:
 right after `gh release create`, it dispatches each consumer's
 `platform-bump.yml` (`gh workflow run platform-bump.yml -R <consumer>`) so
-bumps don't wait for the weekly Monday cron. Fine-grained PATs are minted per
-RESOURCE OWNER, so each consumer owner supplies its own secret: **Actions:
-Read and write** on that ONE consumer repo, nothing else. FAIL-OPEN: a
-missing/expired token only degrades that consumer to its weekly
-platform-bump cron (a `::warning`, never a job failure).
+a consumer's bump starts the moment the release exists — `platform-bump.yml`
+has no schedule, so this dispatch is the only automatic trigger. Fine-grained
+PATs are minted per RESOURCE OWNER, so each consumer owner supplies its own
+secret: **Actions: Read and write** on that ONE consumer repo, nothing else.
+FAIL-OPEN: a missing/expired token is a `::warning`, never a job failure — and
+that consumer gets no bump until someone dispatches it by hand
+(`gh workflow run platform-bump.yml -R <owner>/<repo>`).
 
 ## Quick checklist for a new consumer
 
