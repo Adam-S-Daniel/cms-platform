@@ -1056,6 +1056,58 @@ hit testing, resize, and the desktop breakpoint. This covers placement;
 production publishing still requires the live validation loop after a
 release and consumer bump.
 
+#### Deployed follow-up (2026-10-07)
+
+The follow-up fixes in [PR #748](https://github.com/Adam-S-Daniel/cms-platform/pull/748),
+[PR #766](https://github.com/Adam-S-Daniel/cms-platform/pull/766),
+[PR #807](https://github.com/Adam-S-Daniel/cms-platform/pull/807), and
+[PR #810](https://github.com/Adam-S-Daniel/cms-platform/pull/810) are merged.
+Both [adamdaniel.ai's platform.lock](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/platform.lock)
+and [jodidaniel.com's platform.lock](https://github.com/jodidaniel/jodidaniel.com/blob/main/platform.lock)
+on `main` pin v0.1.160. The deployed
+[adamdaniel.ai mobile stylesheet](https://adamdaniel.ai/admin/admin-mobile.css)
+and [jodidaniel.com mobile stylesheet](https://jodidaniel.com/admin/admin-mobile.css)
+byte-match that release, as do their deployed
+[adamdaniel.ai publish-step-hint.js](https://adamdaniel.ai/admin/publish-step-hint.js)
+and [jodidaniel.com publish-step-hint.js](https://jodidaniel.com/admin/publish-step-hint.js).
+This establishes delivery of those release files; `main` also contains later
+settled-Live-row behavior, so this does not establish full parity with current
+platform `main`.
+
+The deployed [adamdaniel.ai test editor shell](https://adamdaniel.ai/admin/index-test.html),
+[jodidaniel.com test editor shell](https://jodidaniel.com/admin/index-test.html),
+[adamdaniel.ai test config](https://adamdaniel.ai/admin/config-test.yml), and
+[jodidaniel.com test config](https://jodidaniel.com/admin/config-test.yml) return
+HTTP 404, so the existing test-backend spec cannot run directly against either
+origin. The latest successful [adamdaniel.ai run](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37707841191)
+and [jodidaniel.com run](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37707568448)
+had `prod-mutate` jobs skipped: [adamdaniel.ai job](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37707841191/job/113086459598)
+and [jodidaniel.com job](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37707568448/job/113085560934).
+Therefore authenticated editor geometry at 320px and 390px and a real publish
+cycle remain unverified. In the authenticated [adamdaniel.ai admin](https://adamdaniel.ai/admin/)
+and [jodidaniel.com admin](https://jodidaniel.com/admin/), confirm the native
+controls fit one row while the production Publish bar remains separate, every
+control is reachable before and after scrolling and resizing, and the date
+Clear control and long URLs stay contained. Complete a real publish cycle under
+the [repository definition of done](CONTRIBUTING.md#definition-of-done-non-trivial-changes).
+Fixture tests simulate production shims; they do not verify live OAuth or
+publishing.
+
+The earlier [adamdaniel.ai prod-mutate job](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37649028541/job/112887317710)
+did run successfully, but its [run-head platform.lock](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/3d4c54dee0c635ccde0f504eb4efe29e65e92db4/platform.lock)
+pins v0.1.159. It does not validate the later v0.1.160 deployment or the
+requested phone geometry. The five most recent
+[jodidaniel.com publish-loop runs](https://github.com/jodidaniel/jodidaniel.com/actions/workflows/cms-publish-loop-prod.yml)
+all skipped `prod-mutate` when rechecked for this follow-up.
+
+Live acceptance for [issue #731](https://github.com/Adam-S-Daniel/cms-platform/issues/731)
+is **blocked in this unattended follow-up**: no authenticated browser session
+was established, and the run explicitly prohibits workflow dispatch and
+remote repository writes. Completing it requires an authorized
+live-validation session on both admins, including the geometry checks above
+and a real publish loop on the deployed release. Keep the issue open until
+that evidence exists; asset delivery and local tests do not complete it.
+
 ### What is deliberately NOT covered by a browser spec
 
 Phases 2–4 load on the production shell only, and the only served shell a
@@ -1102,14 +1154,25 @@ the publish throws `Cannot read properties of undefined (reading 'reduce')`
 inside the bundle, nothing reaches disk, and no toast reports it — the editor
 just stays dirty. Visiting the first entry without editing it is enough to arm
 it. Opening the entry first in the session, or going list → entry, both work.
-Reproduced byte-identically with and without the platform's shims, so it is
-Decap's, not ours — https://github.com/Adam-S-Daniel/cms-platform/issues/342
-tracks it upstream (no Decap issue exists yet).
+Reproduced byte-identically with and without the platform's shims —
+[platform issue #342](https://github.com/Adam-S-Daniel/cms-platform/issues/342)
+tracks the investigation. The previous claim that there was no matching
+upstream report was too narrow: [Decap issue #4147](https://github.com/decaporg/decap-cms/issues/4147)
+is open and describes stale fields after direct entry-to-entry navigation,
+including pasting the second URL into the address bar. Its
+[maintainer diagnosis](https://github.com/decaporg/decap-cms/issues/4147#issuecomment-674748265)
+identifies entry loading on component mount and the need to load again when
+the collection or slug changes. It does not establish the later serialization
+error or destructive target; those need the evidence below.
 
-An editor cannot reach it: the editor chrome renders no sidebar, and the back
-link goes to the COLLECTION route. A spec reaches it by default, because specs
-navigate with `page.goto("…#/collections/…/entries/…")`. So, for any spec that
-publishes:
+The normal editor Back link goes to the COLLECTION route, but direct hash
+navigation is also reachable by changing the address. The
+[October 5 evidence](https://github.com/Adam-S-Daniel/cms-platform/issues/342#issuecomment-5996697973)
+shows the second entry's URL with the previous form and a visible "Delete
+published entry" control. Low frequency does not remove that target ambiguity.
+[PR #629](https://github.com/Adam-S-Daniel/cms-platform/pull/629) reloads the
+specific site-gate settings link from an editor; it is not a general fix for
+entry-to-entry navigation. For any spec that publishes:
 
 - **One publish per page.** A scenario that publishes a second entry gets its
   own `test()` (Playwright's `page` fixture is per-test) or an explicit
@@ -1131,6 +1194,98 @@ https://github.com/Adam-S-Daniel/cms-platform/issues/382
 page, then publish" detector belongs. The
 `browser-testing` skill carries the same rule beside the other Decap-driving
 gotchas.
+
+#### Pinned-source diagnosis (2026-10-07)
+
+The historical stack frame `vu (decap-cms.js:17:7105)` maps through the
+[3.15.1 source map](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js.map)
+to `decap-cms-core/dist/esm/lib/serializeEntryValues.js`, line 30, column 30
+(zero-based column). `vu` is **`runSerializer`**, the helper used by
+`serializeValues` and `deserializeValues`; it is not a Redux reducer. The
+throwing operation is `fields.reduce`. The
+[bundle](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js) has SHA-384 SRI
+`sha384-in6eHztHveqQ7uMZ1fDaKlDmacQLFuLH2wWrFTiymyuS8zQ5bixwL8U3AeRi8h/L`,
+matching the admin shells. This resolves the reported stack without changing
+the pinned version or attempting another publish.
+
+The same map embeds the relevant source paths:
+
+| Source under `decap-cms-core/dist/esm/` | Code reading and implication |
+|---|---|
+| `components/Editor/Editor.js:75–94` | `componentDidMount` loads the route's entry. |
+| `components/Editor/Editor.js:142–165` | `componentDidUpdate` handles backups, notes, and new entries, but does not load a different existing entry when its route changes. Reusing the mounted editor can leave the old draft in place. |
+| `components/Editor/Editor.js:287–310` | `handleDeleteEntry` passes its current collection and slug props to the delete action, while the form renders `entryDraft`. A stale form alone cannot identify the delete target. |
+| `actions/entries.js:791–802` | `getSerializedEntry` selects fields using the current collection and the draft entry's slug, then calls `serializeValues`. |
+| `reducers/collections.js:64–70` | A file collection selects fields by its named file entry; a slug belonging to the previous collection can return no fields. |
+
+The last two rows explain a plausible path from a stale cross-collection draft
+to undefined `fields` at `runSerializer`. That is a source-based inference
+from the historical error, not a fresh Save/Publish reproduction. The
+read-only browser diagnostic checks route, displayed data, and action props
+separately; no destructive handler is invoked.
+
+#### Read-only reproduction and action-target evidence
+
+Use Decap's `test-repo` backend in editorial workflow mode, with two published
+seed files: `_posts/2026-01-01-alpha.md` (Title **Alpha**) and
+`_posts/2026-01-02-beta.md` (Title **Beta**). Both use ordinary title, slug,
+date, and body fields; there are no unpublished entries. Log in, open Alpha
+from the collection, then assign the Beta entry hash directly. Do not edit a
+field or activate Save, Publish, or Delete.
+
+The comparison uses the rendered production `index.html` and a stock HTML
+shell containing only UTF-8 metadata, the config link, and the same SRI-pinned
+Decap script. The stock shell loads no platform scripts. Both shells show:
+
+| Navigation | Address entry | Title field / draft entry | Bound Delete target |
+|---|---|---|---|
+| Open Alpha from the collection | Alpha | Alpha / Alpha | Alpha |
+| Change Alpha's hash directly to Beta | Beta | **Alpha / Alpha** | **Beta** |
+| Return to the collection, then open Beta | Beta | Beta / Beta | Beta |
+
+An actual `page.reload()` at Beta also restores agreement in the platform
+shell. Navigating to another hash with `page.goto()` is still a
+same-document navigation and is not evidence that a reload occurred.
+
+These are observations against neutral in-browser seeds, not deletions. No
+page error is needed to expose the mismatch: it is already present before a
+toolbar action. The npm distribution supplies the exact bundle and lazy
+chunks locally; the diagnostic verifies SRI and intercepts all page requests
+so nothing can reach a real backend.
+
+Inspect the Title field and the live Editor class instance separately. The
+diagnostic locates that instance through React Fiber and reads
+`stateNode.props`; **`fiber.memoizedProps` alone is not reliable**, because a
+DOM-attached Fiber can refer to the previous alternate after a commit. Wait
+until the live instance's route slug is Beta before inspecting the form. This
+is the barrier that distinguishes a stale draft from a router update still in
+progress.
+
+The rendered "Delete published entry" button's React `onClick` is checked
+against that instance's `handleDeleteEntry`, without calling it. The handler's
+current collection and slug are therefore the source-backed delete target;
+the displayed form and `entryDraft` are independent measurements. Save uses
+the draft through `persistEntry(collection)`, so the delete finding must not
+be generalized to every toolbar action. No backend deletion or publication
+is attempted, and the seeded file contents must remain unchanged.
+
+The four diagnostic cases extend
+[`cms-route-focus.spec.js`](../e2e/cms-route-focus.spec.js): stock and platform
+direct navigation, a collection intermediary, and a full reload. The direct
+cases first require the exact mismatch and unchanged seeds, then mark only
+the final agreement assertion as an expected failure. A broken setup or an
+incorrectly identified handler fails before that annotation. The working
+paths require agreement normally. Thus a green diagnostic run records an
+unresolved upstream defect; it does not certify safe direct navigation.
+The spec's `@lane: local` and `@admin-read` tags include the new cases in the
+required [`fixture-e2e` workflow](../.github/workflows/self-fixture-e2e.yml)
+on its two admin projects.
+
+This evidence is suitable for the existing
+[upstream report](https://github.com/decaporg/decap-cms/issues/4147). A general
+platform reload guard remains a separate decision: it must account for dirty
+drafts and navigation cancellation before a hash change has already moved the
+address. This diagnostic does not add one.
 
 ## 5. Options considered and rejected
 
