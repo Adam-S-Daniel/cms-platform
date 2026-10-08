@@ -236,6 +236,36 @@ matrices and workflow ordering are locked by
 [`e2e/release-candidate-gate.test.js`](../e2e/release-candidate-gate.test.js),
 registered as a platform meta spec and run by Self CI's `node-unit-lints` lane.
 
+### Remediation tracker reconciliation (2026-10-07)
+
+[The 18-finding umbrella](https://github.com/Adam-S-Daniel/cms-platform/issues/523)
+also links five latency defects. A read-only review of all 23 child issues and
+their comments found 17 closed and six open. Its unchecked boxes are not a
+current completion record; reconcile them from the child evidence after review.
+Keep the umbrella open while these acceptance gaps remain:
+
+| Open child | Shipped work and remaining evidence |
+|---|---|
+| [Preview OAuth sign-in (#524)](https://github.com/Adam-S-Daniel/cms-platform/issues/524) | [The deploy warning and explicit preview opt-out merged](https://github.com/Adam-S-Daniel/cms-platform/pull/560). Local allowlist configuration, the live proxy build, and production/preview sign-in on both consumers still need verification. A platform release does not deploy the proxy. |
+| [Release gating (#526)](https://github.com/Adam-S-Daniel/cms-platform/issues/526) | [The current-head independent review stamp merged](https://github.com/Adam-S-Daniel/cms-platform/pull/620). The release workflow still creates a stable tag without requiring each consumer's checks against that exact candidate. The stamp alone does not establish the automated acceptance criteria. |
+| [Bot-closure investigation (_agent-guidance#227)](https://github.com/Adam-S-Daniel/_agent-guidance/issues/227) | [Branch-reuse prevention merged](https://github.com/Adam-S-Daniel/_agent-guidance/pull/252), and [the investigation records delayed branch-deletion processing](https://github.com/Adam-S-Daniel/_agent-guidance/issues/227#issuecomment-5996840529). Credential-use inventory, close-reason policy and remaining cleanup evidence belong to that still-open external issue. Prevention does not resolve all its criteria. |
+| [Latency tracker (#529)](https://github.com/Adam-S-Daniel/cms-platform/issues/529) | All five defects have child links in [the latency design](CONTENT-PUBLISH-LATENCY.md#defects-found-that-outlive-the-shelving); three children are closed. The two open children below prevent treating the group as complete. The focused content lane remains shelved. |
+| [Responsive tables/iframes (#540)](https://github.com/Adam-S-Daniel/cms-platform/issues/540) | [Proportional embeds and required fixture coverage merged](https://github.com/Adam-S-Daniel/cms-platform/pull/804). [The latency design records local consumer-layout evidence](CONTENT-PUBLISH-LATENCY.md#local-candidate-verification-for-responsive-content-540). Consumer CSS adoption and acceptance still need evidence; the owner must decide whether fixtures plus served CSS satisfy the criterion when no live page exercises the elements. |
+| [Critical-path checkout latency (#541)](https://github.com/Adam-S-Daniel/cms-platform/issues/541) | [Shallow checkout and merge-base handling merged](https://github.com/Adam-S-Daniel/cms-platform/pull/565). [The recorded before/after measurements](CONTENT-PUBLISH-LATENCY.md#defects-found-that-outlive-the-shelving) cover adamdaniel.ai only; they do not establish jodidaniel.com verification or timing. |
+
+[UI-published fixture markers (#531)](https://github.com/Adam-S-Daniel/cms-platform/issues/531)
+is closed: [the final browser coverage merged](https://github.com/Adam-S-Daniel/cms-platform/pull/613),
+and the required Ruby lane builds and checks fixture exclusion. Its earlier
+comments describing missing coverage predate that implementation. Similarly,
+[PDF fixture coverage (#527)](https://github.com/Adam-S-Daniel/cms-platform/issues/527)
+is closed; the required fixture lane now exists. Do not reopen these source fixes
+solely because the umbrella's original boxes remain unchecked.
+
+This reconciliation verifies issue states, linked merge records, checked-in
+workflow boundaries and the live platform required-context list. It does not
+establish a new deployment, interactive sign-in, consumer acceptance or latency
+measurement. Those actions need their own evidence before closure.
+
 The nine REQUIRED contexts are `repo-settings.yml`'s `ruleset_library.platform-main.
 rules[required_status_checks]`: the six self-CI job ids, `scan / scan`,
 `fixture-e2e` and `release-review-gate`. Two

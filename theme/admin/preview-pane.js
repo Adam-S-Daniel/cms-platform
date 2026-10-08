@@ -8,11 +8,12 @@
  *     links, so typography and `img { max-width: 100% }` match by construction)
  *     plus a few lines of pane-only CSS, and
  *   - a template per previewable collection (posts, pages, projects) that
- *     renders the same markup as the Live Preview layout
+ *     uses markup based on the Live Preview layout
  *     (theme/_layouts/preview.html), with the date formatted for people, and
  *   - a generic template for every other collection the editor opens (tags, a
  *     site's own Tools, ...): title, description and the markdown field, so the
- *     pane is not Decap's unstyled field dump (#726).
+ *     pane is not Decap's unstyled field dump (#726). This is a content preview;
+ *     a consumer's actual site layout may differ. Liquid needs a site build.
  *
  * A template renders only fields its collection declares. Decap's
  * `widgetFor(name)` THROWS when `name` is not a field, and an error thrown
@@ -66,7 +67,8 @@
     ".cms-preview-pane { padding-top: 3.5rem; box-sizing: border-box; overflow-wrap: anywhere; }" +
     ".cms-preview-pane img, .cms-preview-pane iframe { max-width: 100%; }" +
     ".cms-preview-pane dt { font-weight: 600; margin-top: 1rem; }" +
-    ".cms-preview-pane dd { margin: 0.25rem 0 0; }";
+    ".cms-preview-pane dd { margin: 0.25rem 0 0; }" +
+    ".cms-preview-limitation, .cms-preview-content-note { font-size: 0.875rem; line-height: 1.5; }";
 
   // "2026-10-05 09:40:00 -0400" -> "October 5, 2026". Read from the leading
   // YYYY-MM-DD, never `new Date(string)`: that stored form is not ISO-8601 and
@@ -593,7 +595,21 @@
     } catch (_) {
       return [];
     }
-    return [h("div", { className: "post-content" }, content)];
+    var nodes = [h("div", { className: "post-content" }, content)];
+    var fields = fieldsOf(props);
+    var declared = fields && findField(fields, name);
+    var value = field(props.entry, name);
+    // Lexical delimiters only: the browser never evaluates Liquid, including
+    // examples inside code fences. Inspect only the selected markdown field.
+    if (declared && declared.widget === "markdown" && typeof value === "string" && /\{[{%]/.test(value)) {
+      nodes.unshift(h(
+        "p",
+        { className: "cms-preview-limitation" },
+        "This browser pane previews Markdown. Liquid requires a site build. " +
+          "Save, then open the PR's deployed preview when available to check the final page and site layout.",
+      ));
+    }
+    return nodes;
   }
 
   function makeTemplate(h, collection) {
@@ -651,8 +667,9 @@
   }
 
   // Any collection without its own template: the heading (`title`, or `name`
-  // for Tags), the `description` as the subtitle the site's own tool/project
-  // pages use, and the markdown field. Only when the entry has neither a
+  // for Tags), the `description` as a subtitle, and the markdown field. This
+  // content preview does not reproduce a consumer's actual site layout.
+  // Only when the entry has neither a
   // markdown field nor a description (a site's list-like collections) are its
   // other short fields listed, labeled, so the pane is not just a heading.
   function makeGenericTemplate(h) {
@@ -661,7 +678,10 @@
       var fields = fieldsOf(props);
       var bodyName = bodyFieldName(props);
       var heading = field(entry, "title") || field(entry, "name");
-      var children = [h("h1", null, heading ? String(heading) : "")];
+      var children = [
+        h("p", { className: "cms-preview-content-note" }, "Content preview. Your site layout may differ."),
+        h("h1", null, heading ? String(heading) : ""),
+      ];
 
       var description = bodyName === "description" ? "" : scalarText(field(entry, "description"));
       if (description) children.push(h("p", { className: "subtitle" }, description));
