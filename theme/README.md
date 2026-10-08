@@ -88,12 +88,33 @@ cms:
   `/tags/` index and tag cloud already read `site.all_tags`
   ([build regression](spec/tag_case_variants_build_test.rb)).
 - Post layouts and site-owned post lists can render tag links with
-  `{% include tag-pills.html tags=post.tags %}`. The include accepts an optional
-  `limit` (for example, `limit=3`, counting input tags), converts scalar tags
-  to strings before slugifying, and omits tags with empty names or slugs
+  [`tag-pills.html`](_includes/tag-pills.html). It accepts `tags`, an optional
+  `limit` (for example, `limit=3`, counting input tags), and an optional
+  `indent` string. The caller's indentation precedes the first pill; `indent`
+  supplies indentation after each pill and defaults to ten spaces. The include
+  converts scalar tags to strings before slugifying and omits tags with empty
+  names or slugs without leaving a blank line
   ([#814](https://github.com/Adam-S-Daniel/cms-platform/issues/814)).
-  Consumer templates can adopt it after a release carries the include; both
-  consumer sites still need their own template updates.
+
+After a release carries the include, replace the four-line tag loop in
+[adamdaniel.ai's blog listing](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/blog/index.html)
+with this ten-space-indented line:
+
+```liquid
+          {% include tag-pills.html tags=post.tags %}
+```
+
+Replace the four-line, three-tag loop on
+[adamdaniel.ai's homepage](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/index.html)
+with this fourteen-space-indented line:
+
+```liquid
+              {% include tag-pills.html tags=post.tags limit=3 indent="              " %}
+```
+
+The homepage's explicit `indent` preserves the existing pill and trailing
+whitespace indentation. The blog uses the ten-space default. Both consumer
+sites still need their own template updates.
 
 Updates flow to sites via a gem-version bump — `platform-bump`'s job, not
 Dependabot's: since #242, Dependabot's `bundler` ecosystem carries an explicit
