@@ -139,7 +139,7 @@ function gemfileLock(tag) {
 }
 
 test.describe("check-platform-pin-consistency.js — exact candidate SHAs (#526)", () => {
-  const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef0123";
+  const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef01";
   const declaration = (options = `git: "https://github.com/${SLUG}", ref: "${SHA}"`) =>
     `gem "cms-platform-theme", ${options}\n`;
   const lock = (ref = SHA, revision = SHA) => [
@@ -825,7 +825,9 @@ test.describe("workflow-content parity — a PRERELEASE pin is the same version 
   test("hash-looking permissions and secrets retain their exact values", () => {
     const YAML = require("yaml");
     const baseline = YAML.parse(caller("v0.1.88"));
-    const otherSha = "abcdef0123456789abcdef0123456789abcdef0123";
+    const otherSha = "abcdef0123456789abcdef0123456789abcdef01";
+    expect(SHA).toHaveLength(40);
+    expect(otherSha).toHaveLength(40);
     baseline.permissions.contents = SHA;
     baseline.jobs.x.permissions = { contents: SHA };
     baseline.jobs.x.secrets = { FIXTURE_VALUE: SHA };
