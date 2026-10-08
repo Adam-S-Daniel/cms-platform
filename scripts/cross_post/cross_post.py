@@ -759,6 +759,20 @@ def linkedin_commentary(post: dict, max_chars: int = 2900) -> str:
 
     if len(commentary) > max_chars:
         commentary = build("", False)
+    if len(commentary) > max_chars:
+        title_prefix = []
+        escaped_budget = max(0, max_chars - 1)
+        escaped_length = 0
+        for char in post.get("title", ""):
+            char_length = 2 if char in _LITTLE_TEXT_RESERVED else 1
+            if escaped_length + char_length > escaped_budget:
+                break
+            title_prefix.append(char)
+            escaped_length += char_length
+        title_prefix = "".join(title_prefix)
+        if " " in title_prefix:
+            title_prefix = title_prefix.rsplit(" ", 1)[0].rstrip()
+        commentary = little_text_escape(title_prefix) + ("…" if max_chars > 0 else "")
 
     return commentary
 
