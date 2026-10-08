@@ -675,22 +675,20 @@ const OPTIONAL_WITH_KEYS = {
 
 function structuralShape(text, basename = null) {
   const YAML = loadYaml();
-  // The version suffix is part of the version. A consumer validating a fix can
-  // be pinned at a PRERELEASE (`v0.1.89-rc.1`) while the canonical examples/site
-  // template at that same ref still pins the last full release — normalizing only
-  // `vX.Y.Z` left `@vREF-rc.1` vs `@vREF` and reported the RC pin as content DRIFT,
-  // which is the pin half of an RC being unusable at all.
-  const normalized = text
-    .replace(/@v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g, "@vREF")
-    .replace(/\b[0-9a-f]{40}\b/g, "SHA40");
-  const obj = YAML.parse(normalized) || {};
+  const obj = YAML.parse(text) || {};
   const jobs = obj.jobs || {};
   const shape = { permissions: obj.permissions || null, jobs: {} };
   const optional = (basename && OPTIONAL_WITH_KEYS[basename]) || [];
   for (const [jn, job] of Object.entries(jobs)) {
     const j = job || {};
+    // Compare the platform call interface independently of its release,
+    // prerelease, or candidate SHA. Exact pins are checked separately; external
+    // refs and permission/secret values must retain their original meaning.
+    const classified = classifyUses(j.uses);
+    const normalizeRef = classified &&
+      (FULL_SHA.test(classified.ref) || /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(classified.ref));
     shape.jobs[jn] = {
-      uses: j.uses || null,
+      uses: normalizeRef ? `${j.uses.slice(0, j.uses.lastIndexOf("@"))}@vREF` : j.uses || null,
       withKeys: Object.keys((j.with && typeof j.with === "object" && j.with) || {})
         .filter((k) => !optional.includes(k))
         .sort(),
