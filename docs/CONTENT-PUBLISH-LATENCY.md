@@ -172,7 +172,8 @@ accountable destination. Two trackers are still open:
 [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540)
 is waiting on consumer verification, and
 [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541)
-tracks row five, whose fix shipped in v0.1.126 but whose issue is not closed.
+stays open for the remaining second-consumer validation of row five, whose fix
+shipped in v0.1.126.
 Each defect stood on its own, with or
 without the lane, and each has its own tracker in the owning repository
 ([cms-platform#529](https://github.com/Adam-S-Daniel/cms-platform/issues/529)
@@ -184,7 +185,99 @@ groups them).
 | Site verifier is mostly unarmed | jodidaniel.com `scripts/verify-build-artifacts.rb` | With the gate closed, most assertion groups printed "did NOT run"; they ran only on a tree with `site_live: true`. **Fixed and closed 2026-10-04 by [jodidaniel.com#313](https://github.com/jodidaniel/jodidaniel.com/pull/313), which verifies the open-gate build too.** | [jodidaniel.com#306](https://github.com/jodidaniel/jodidaniel.com/issues/306) |
 | Site verify is a no-op | adamdaniel.ai `site-verify` | The site had no verifier script, so the required check succeeded in about 7 s without building. **Fixed and closed 2026-10-04 by [adamdaniel.ai#4006](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4006), a site-owned post-build verifier.** | [adamdaniel.ai#3970](https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3970) |
 | No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolled the whole page on a phone, and an author could not fix it from the CMS. **Rule added by [cms-platform#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555), released in v0.1.126. The follow-up scales dimensioned iframes at a default 16:9 ratio; authors may override `aspect-ratio` inline for other formats, while interactive frames without both dimensions keep their authored height. [The overflow spec](https://github.com/Adam-S-Daniel/cms-platform/blob/main/e2e/responsive-overflow.spec.js) now runs in `chromium-desktop-1080`, the required fixture public lane, as well as `chromium-mobile` on consumers. It checks four viewport widths, table scroll reachability, iframe sizing ratios and containment, and iframe content accessibility on the theme and site-owned fixture layouts. A site-owned layout must adopt these rules in its own stylesheet because it does not load the theme CSS; the single-page fixture models that seam. Local consumer-layout evidence is recorded below. The tracker stays open pending release, consumer CSS adoption, and owner acceptance: neither consumer has a built page with a bare Markdown table or fixed-width iframe, so closure needs a consumer page or owner acceptance of fixtures plus served CSS ([owner comment, 2026-10-05](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705)).** | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
-| Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** a `fetch-depth: 2` checkout plus `e2e/ensure-merge-base.js`, which deepens only until the merge base is proven. Measured on adamdaniel.ai `pull_request` runs, three before (v0.1.125) and three after (v0.1.126), medians: `detect` 16 s to 9 s (checkout 10 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483694/job/111374795291), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052769/job/111385134290)); `parity-probe` 28 s to 16 s (checkout 10 s to 1 s; noisy, the first runs took 69-71 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483680/job/111374795567), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052742/job/111385134369)); `media-probe` 19 s to 13 s (checkout 9 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483634/job/111374795274), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052774/job/111385134381)). jodidaniel.com was not measured. | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
+| Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** a `fetch-depth: 2` checkout plus `e2e/ensure-merge-base.js`, which deepens only until the merge base is proven. Measured on adamdaniel.ai `pull_request` runs, three before (v0.1.125) and three after (v0.1.126), medians: `detect` 16 s to 9 s (checkout 10 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483694/job/111374795291), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052769/job/111385134290)); `parity-probe` 28 s to 16 s (checkout 10 s to 1 s; noisy, the first runs took 69-71 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483680/job/111374795567), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052742/job/111385134369)); `media-probe` 19 s to 13 s (checkout 9 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483634/job/111374795274), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052774/job/111385134381)). [Second-consumer checkout evidence](#second-consumer-checkout-evidence-541) for jodidaniel.com is recorded below; #541 remains open for further consumer validation. | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
+
+### Second-consumer checkout evidence (#541)
+
+A read-only audit of jodidaniel.com `pull_request` runs on 2026-10-07 listed
+the three relevant workflows for runs created 2026-10-02 through 2026-10-05.
+For the selected attempt 1 samples, the platform versions were checked against
+`referenced_workflows` and `platform.lock`. The v0.1.126 adoption PR
+[jodidaniel.com#315](https://github.com/jodidaniel/jodidaniel.com/pull/315)
+merged at 2026-10-04 10:09:22 UTC.
+
+The first pair is the same non-rendering guidance/hook-sync workload category
+on each side. Before was [PR #314](https://github.com/jodidaniel/jodidaniel.com/pull/314),
+whose net diff contains only `.claude/hooks/fleet-guidance.md`; after was
+[PR #318](https://github.com/jodidaniel/jodidaniel.com/pull/318),
+whose net diff contains only `.claude/settings.json`. The head changed from v0.1.125
+([d2fcd4d](https://github.com/jodidaniel/jodidaniel.com/blob/d2fcd4d40d62c2c34b3b1544b4de7f926a312ed3/.claude/hooks/fleet-guidance.md),
+2026-10-04 05:00:27 UTC; `.claude/hooks/fleet-guidance.md`) to v0.1.126
+([f485cb1](https://github.com/jodidaniel/jodidaniel.com/blob/f485cb11b5f0e7fa62b8c618e0170185c5f4530c/.claude/settings.json),
+2026-10-04 12:13:56 UTC; `.claude/settings.json`). The changes differ, so this
+is a workload-category comparison rather than an identical-diff comparison.
+
+Durations below are `completed_at - started_at`, in whole seconds. Job duration
+includes job startup and teardown but excludes queue time; step durations use
+the same subtraction. A `0 s` value is below timestamp resolution. Each row
+links to both sampled jobs.
+
+| Job | Before (v0.1.125) | After (v0.1.126) | Checkout before → after | Classification step before → after |
+|---|---|---|---:|---:|
+| Non-rendering `detect` | [6 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37178627548/job/111366428806) | [9 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37201391467/job/111433641324) | 1 → 1 s | 1 s salience → 0 s salience; history fetch 0 → 1 s history helper |
+| Non-rendering `parity-probe` | [18 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37178627528/job/111366428709) | [14 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37201391537/job/111433641678) | 2 → 0 s | 1 → 1 s selection |
+| Non-rendering `media-probe` | [13 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37178627478/job/111366428505) | [10 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37201391471/job/111433641234) | 1 → 1 s | 1 → 1 s salience |
+
+All six sampled probe/detect jobs succeeded. Logs show parity count `0` on both
+parity probes, visual generation skipped on both runs, and the preview media
+probe skipped on both because `salient=false`. These runs preserve the
+early-skip outcome; they do not validate preview rendering, media resolution,
+or parity content.
+
+A second pair samples the release-bump workload category: before was
+[PR #310](https://github.com/jodidaniel/jodidaniel.com/pull/310), which adds
+`oauth-proxy-build.yml` along with pin and Gemfile/platform.lock changes;
+after was [PR #315](https://github.com/jodidaniel/jodidaniel.com/pull/315),
+which also changes `assets/css/jodidaniel.css` and `docs/CI-AND-PLATFORM.md`,
+adds `infrastructure/bootstrap/deploy.sh`, and updates pins, the Gemfile, and
+`platform.lock`. The pair is v0.1.125 at head
+[bd4ecc2](https://github.com/jodidaniel/jodidaniel.com/blob/bd4ecc2d7de16707cc2cdd1cc833ee9549e11ec3/platform.lock)
+(2026-10-02 19:48:39 UTC) and v0.1.126 at head
+[cf02567](https://github.com/jodidaniel/jodidaniel.com/blob/cf0256748bc4d8c0f70f3127e49f2af05760be73/platform.lock)
+(2026-10-04 10:05:49 UTC). The referenced workflows and `platform.lock`
+identified the versions. This samples the same release-bump category, but the
+releases and changed content differ; it is not an identical-output or
+controlled timing comparison.
+
+| Job | Before (v0.1.125) | After (v0.1.126) | Checkout before → after | Classification step before → after |
+|---|---|---|---:|---:|
+| Bump `detect` | [10 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37056524333/job/111002471157) | [11 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37194257154/job/111412704880) | 2 → 1 s | 2 → 0 s salience; history fetch 0 → 4 s helper |
+| Bump `parity-probe` | [50 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37056524070/job/111002470580) | [55 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37194257016/job/111412704851) | 1 → 1 s | 0 → 1 s selection |
+| Bump `media-probe` | [12 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37056524076/job/111002470411) | [11 s](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37194256837/job/111412704042) | 1 → 1 s | 1 → 1 s salience |
+
+Visual generation ran successfully on both bump runs, including the build,
+changed-page detection, and screenshots; each run reports 40 passed and no
+skips ([before](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37056524333/job/111002651854),
+[after](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37194257154/job/111412744005)).
+The parity preview wait and test steps also succeeded on both. Each parity run
+reports 1 passed and 8 skipped; the
+passed case is
+[`console-clean.spec.js`](https://github.com/Adam-S-Daniel/cms-platform/blob/f3920c6e099c0386829bb5c64343d238de964d2e/e2e/console-clean.spec.js),
+which checks for console errors and
+page errors on `/`. The skipped cases are sitemap, draft isolation, and image
+alt text. This does not establish full parity or bundle validation, or that
+rendered bytes were unchanged. Both sampled bump heads have `site_live: false`
+(verified in the before
+[`_data/settings.yml`](https://github.com/jodidaniel/jodidaniel.com/blob/bd4ecc2d7de16707cc2cdd1cc833ee9549e11ec3/_data/settings.yml)
+and after
+[`_data/settings.yml`](https://github.com/jodidaniel/jodidaniel.com/blob/cf0256748bc4d8c0f70f3127e49f2af05760be73/_data/settings.yml)),
+so the passing `/` console check observes the closed-gate page, not the full
+public content. The media probe remained skipped on both runs.
+
+These samples do not establish a speedup. The pre-change checkout was
+already 1-2 seconds, while the post-change history helper took 4 seconds in
+the bump `detect` job. The remaining evidence gap is that these samples include
+no executed media-resolution test, skip broader parity cases, and do not hold
+the content and media workload identical before and after. Keep
+[cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541)
+open.
+
+Further validation needs owner authorization for controlled preview PRs or
+dispatches; those actions are not authorized as unattended package work. A
+useful comparison would cover non-rendering, render-salient, and actual
+uploaded-media fixtures, comparing full-history and shallow merge-base runs
+with the same base, head, and net diff, and recording test counts plus job and
+step links. This is proposed evidence, not work authorized or completed here.
 
 ### Local candidate verification for responsive content (#540)
 
