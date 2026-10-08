@@ -1,10 +1,9 @@
 # frozen_string_literal: true
 
-# Real Liquid regression for the post-layout tag-pill href. Run:
+# Real Liquid regression for the shared tag-pill include. Run:
 #   ruby theme/spec/post_tag_pill_url_test.rb
 #
-# Jekyll's Liquid parser and filters are used so the test exercises the same
-# assign, strip, slugify and relative_url behavior as the rendered layout.
+# Jekyll's Liquid parser and filters exercise the rendered include's guards.
 
 require 'minitest/autorun'
 require 'rexml/document'
@@ -12,16 +11,18 @@ require 'jekyll'
 
 class PostTagPillUrlTest < Minitest::Test
   LAYOUT = File.expand_path('../_layouts/post.html', __dir__)
+  BLOG = File.expand_path('../../e2e/fixture-site/blog/index.html', __dir__)
+  INCLUDE = File.expand_path('../_includes/tag-pills.html', __dir__)
 
   def setup
-    assert File.exist?(LAYOUT), "layout must exist at #{LAYOUT}"
-    @src = File.read(LAYOUT)
+    assert File.exist?(INCLUDE), "include must exist at #{INCLUDE}"
+    @src = File.read(INCLUDE)
   end
 
   def tag_loop(node)
     if node.is_a?(Liquid::For)
       collection = node.collection_name
-      return node if node.variable_name == 'tag' && collection.name == 'page' && collection.lookups == ['tags']
+      return node if node.variable_name == 'tag' && collection.name == 'include' && collection.lookups == ['tags']
     end
 
     children = []
@@ -36,15 +37,31 @@ class PostTagPillUrlTest < Minitest::Test
 
   def tag_pill_href_for(tag_value)
     loop_node = tag_loop(Liquid::Template.parse(@src).root)
-    refute_nil loop_node, "could not find the page.tags loop in #{LAYOUT}"
+    refute_nil loop_node, "could not find the include.tags loop in #{INCLUDE}"
 
     template = Liquid::Template.new
     template.root = loop_node
     site = Struct.new(:config, :filter_cache).new({ 'baseurl' => '' }, {})
-    rendered = template.render!({ 'page' => { 'tags' => [tag_value] } }, registers: { site: site })
+    rendered = template.render!({ 'include' => { 'tags' => [tag_value] } }, registers: { site: site })
     document = REXML::Document.new("<div>#{rendered}</div>")
     anchor = REXML::XPath.first(document, "//a[@class='tag-pill']")
     anchor && anchor.attributes['href']
+  end
+
+  def includes_in(node)
+    found = node.is_a?(Jekyll::Tags::IncludeTag) ? [node.instance_variable_get(:@file)] : []
+    children = []
+    children.concat(node.nodelist) if node.respond_to?(:nodelist) && node.nodelist.is_a?(Array)
+    children.concat(node.blocks.map(&:attachment)) if node.respond_to?(:blocks)
+    children.each { |child| found.concat(includes_in(child)) }
+    found
+  end
+
+  def test_post_layout_and_site_blog_use_shared_tag_include
+    [LAYOUT, BLOG].each do |source|
+      root = Liquid::Template.parse(File.read(source)).root
+      assert_includes includes_in(root), 'tag-pills.html', source
+    end
   end
 
   def test_simple_tag_links_to_its_tags_page_with_trailing_slash

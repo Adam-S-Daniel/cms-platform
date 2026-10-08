@@ -109,7 +109,7 @@ class FeaturedImageDimensionsTest < Minitest::Test
     %w[default.html post.html].each do |layout|
       FileUtils.cp(File.join(ROOT, 'theme', '_layouts', layout), File.join(source, '_layouts', layout))
     end
-    %w[feed-link.html favicon.html rel-me.html header.html footer.html share-row.html analytics/cloudwatch-rum.html].each do |include|
+    %w[feed-link.html favicon.html rel-me.html header.html footer.html share-row.html tag-pills.html analytics/cloudwatch-rum.html].each do |include|
       destination = File.join(source, '_includes', include)
       FileUtils.mkdir_p(File.dirname(destination))
       FileUtils.cp(File.join(ROOT, 'theme', '_includes', include), destination)
