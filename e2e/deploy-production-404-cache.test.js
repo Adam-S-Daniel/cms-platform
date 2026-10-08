@@ -22,47 +22,16 @@
  * satisfy (or trip) the lint.
  */
 const { test, expect } = require("./base");
-const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
+const {
+  readWorkflow,
+  parseYaml,
+  awsCommands,
+  flagValues,
+  isLongCache,
+  isUncacheable,
+} = require("./workflow-yaml-utils");
 
 const WORKFLOW = "deploy-production.yml";
-
-// Shell words of every `aws ...` command in a run script: continuations are
-// joined, full-line comments dropped, and quotes stripped from each word.
-// Lexical by design — it reads shell tokens, not code structure.
-function awsCommands(script) {
-  const joined = String(script || "").replace(/\\\r?\n/g, " ");
-  const out = [];
-  for (const raw of joined.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const words = (line.match(/"[^"]*"|'[^']*'|\S+/g) || []).map((w) =>
-      w.replace(/^(["'])(.*)\1$/, "$2"),
-    );
-    const at = words.indexOf("aws");
-    if (at !== -1) out.push(words.slice(at));
-  }
-  return out;
-}
-
-function flagValues(words, flag) {
-  const values = [];
-  words.forEach((w, i) => {
-    if (w === flag && i + 1 < words.length) values.push(words[i + 1]);
-    else if (w.startsWith(flag + "=")) values.push(w.slice(flag.length + 1));
-  });
-  return values;
-}
-
-function isLongCache(value) {
-  const v = String(value).toLowerCase();
-  const m = /max-age\s*=\s*(\d+)/.exec(v);
-  return !/no-cache|no-store/.test(v) && Boolean(m) && Number(m[1]) > 0;
-}
-
-function isUncacheable(value) {
-  const v = String(value).toLowerCase();
-  return /no-cache|no-store/.test(v) || /(^|[\s,])max-age\s*=\s*0(\b|$)/.test(v);
-}
 
 // One finding per job holding the site's max-age sync. Returns a list of
 // problems (empty when the workflow is correct).

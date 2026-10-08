@@ -200,10 +200,17 @@ jobs:
         run: bash ./.cms-platform/scripts/publish-opted-in-pdfs.sh ./_site
 
       - name: Sync to S3
-        # `--exclude` keeps the local-dev / e2e-test admin variants out of
-        # the public bucket. `aws s3 sync --delete --exclude X` will NOT
-        # delete X from the destination, so the explicit `aws s3 rm` below
-        # cleans up copies on buckets predating this exclude.
+        # `admin/*` is excluded and uploaded by the "Upload admin (not
+        # cacheable)" step below with a no-cache header. Under the day-long
+        # max-age here, an editor's browser kept the old admin page, and the
+        # old response-header CSP that came with it, for up to 24 hours after
+        # a release (#663). The admin scripts and styles are referenced by
+        # unversioned URLs, so the whole prefix must revalidate, not just the
+        # HTML. An excluded key is also spared by `--delete`; the admin step
+        # prunes removed admin files itself. `aws s3 sync --delete --exclude X`
+        # will NOT delete X from the destination, so the explicit `aws s3 rm`
+        # below cleans up local-dev / e2e-test admin variants on buckets
+        # predating the dev-only excludes.
         #
         # `404.html` is excluded here too and uploaded by the next step with a
         # no-cache header. CloudFront answers every missing key with this
@@ -219,10 +226,7 @@ jobs:
             --delete \
             --cache-control "public, max-age=86400" \
             --exclude '404.html' \
-            --exclude 'admin/index-local.html' \
-            --exclude 'admin/config-local.yml' \
-            --exclude 'admin/index-test.html' \
-            --exclude 'admin/config-test.yml'
+            --exclude 'admin/*'
 
       - name: Upload 404 page (not cacheable)
         # See the exclude above: the error page must never be cached, or a
@@ -235,6 +239,27 @@ jobs:
               --content-type "text/html; charset=utf-8"
           else
             echo "No _site/404.html; nothing to upload."
+          fi
+
+      - name: Upload admin (not cacheable)
+        # See the exclude above: the admin shell, its config and its
+        # unversioned scripts must revalidate on every navigation, so a
+        # release or a CSP header change reaches editors on their next plain
+        # load. `--delete` prunes removed admin files, since the root sync no
+        # longer reaches admin/. The dev-only excludes keep the local and test
+        # shells out of the public bucket; "Remove stale dev-only admin
+        # objects" below still cleans up older copies.
+        run: |
+          if [ -d ./_site/admin ]; then
+            aws s3 sync ./_site/admin "s3://${PRODUCTION_BUCKET}/admin/" \
+              --delete \
+              --cache-control "no-cache, must-revalidate" \
+              --exclude 'index-local.html' \
+              --exclude 'config-local.yml' \
+              --exclude 'index-test.html' \
+              --exclude 'config-test.yml'
+          else
+            echo "No _site/admin; nothing to upload."
           fi
 
       - name: Remove stale dev-only admin objects

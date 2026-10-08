@@ -842,6 +842,18 @@ that, which changes nothing a deployed site uses.
 
    `/` shows five headers; each `/admin/` URL also shows
    `content-security-policy-report-only`.
+
+   Production uploads everything under `/admin/` with
+   `Cache-Control: no-cache, must-revalidate` (#663), so after a CSP or admin
+   change an editor's next plain navigation gets the new page and headers. An
+   editor whose browser cached the admin under a release before that fix
+   shipped needs one reload (or waits out the old day-long max-age). Check it:
+
+   ```bash
+   curl -sI https://<apex>/admin/ | grep -i '^cache-control'
+   ```
+
+   It should print `cache-control: no-cache, must-revalidate`.
 3. Do an editor round-trip with the browser console open on `/admin/`: sign
    in, open and edit an entry, watch the preview pane, upload an image and
    open the media library, save, publish; then sign in on `/admin/reviews/`
