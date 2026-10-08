@@ -1093,6 +1093,21 @@ the [repository definition of done](CONTRIBUTING.md#definition-of-done-non-trivi
 Fixture tests simulate production shims; they do not verify live OAuth or
 publishing.
 
+The earlier [adamdaniel.ai prod-mutate job](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37649028541/job/112887317710)
+did run successfully, but its [run-head platform.lock](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/3d4c54dee0c635ccde0f504eb4efe29e65e92db4/platform.lock)
+pins v0.1.159. It does not validate the later v0.1.160 deployment or the
+requested phone geometry. The five most recent
+[jodidaniel.com publish-loop runs](https://github.com/jodidaniel/jodidaniel.com/actions/workflows/cms-publish-loop-prod.yml)
+all skipped `prod-mutate` when rechecked for this follow-up.
+
+Live acceptance for [issue #731](https://github.com/Adam-S-Daniel/cms-platform/issues/731)
+is **blocked in this unattended follow-up**: no authenticated browser session
+was established, and the run explicitly prohibits workflow dispatch and
+remote repository writes. Completing it requires an authorized
+live-validation session on both admins, including the geometry checks above
+and a real publish loop on the deployed release. Keep the issue open until
+that evidence exists; asset delivery and local tests do not complete it.
+
 ### What is deliberately NOT covered by a browser spec
 
 Phases 2–4 load on the production shell only, and the only served shell a
