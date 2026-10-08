@@ -72,6 +72,79 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { execFileSync } = require("node:child_process");
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+// Ripper parses Ruby without evaluating the Gemfile or its Bundler DSL. This
+// path is deliberately limited to candidate SHAs; stable tag checks retain
+// their existing behavior.
+function parseCandidateGemfile(text, slug, productionRef = null) {
+  let ast;
+  try {
+    ast = JSON.parse(execFileSync("ruby", ["-rripper", "-rjson", "-e",
+      "puts JSON.generate(Ripper.sexp(STDIN.read))"], {
+      input: text, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+    }));
+  } catch {
+    throw new Error("candidate Gemfile requires Ruby with Ripper and valid Ruby syntax");
+  }
+  if (!ast) throw new Error("candidate Gemfile is not valid Ruby syntax");
+  const calls = [];
+  function visit(node) {
+    if (!Array.isArray(node)) return;
+    if (node[0] === "command" && node[1]?.[1] === "gem") calls.push(node[2]);
+    if (node[0] === "method_add_arg" && node[1]?.[0] === "fcall" && node[1][1]?.[1] === "gem") {
+      const args = node[2];
+      calls.push(args?.[0] === "arg_paren" ? args[1] : args);
+    }
+    for (const child of node) if (Array.isArray(child)) visit(child);
+  }
+  function literal(node) {
+    if (node?.[0] !== "string_literal" || node[1]?.[0] !== "string_content") return null;
+    const pieces = node[1].slice(1);
+    if (pieces.some((piece) => piece?.[0] !== "@tstring_content" || piece[1].includes("\\"))) return null;
+    return pieces.map((piece) => piece[1]).join("");
+  }
+  visit(ast);
+  const declarations = [];
+  for (const call of calls) {
+    if (call?.[0] !== "args_add_block" || call[2] !== false || !Array.isArray(call[1])) {
+      throw new Error("candidate Gemfile must use literal gem arguments");
+    }
+    const args = call[1];
+    const name = literal(args[0]);
+    if (name === null) throw new Error("candidate Gemfile must use literal gem names");
+    if (name !== "cms-platform-theme") continue;
+    const hash = args.at(-1);
+    if (args.slice(1, -1).some((arg) => literal(arg) === null)) {
+      throw new Error("candidate platform gem arguments must be literal strings");
+    }
+    const pairs = hash?.[0] === "bare_assoc_hash" ? hash[1]
+      : hash?.[0] === "hash" && hash[1]?.[0] === "assoclist_from_args" ? hash[1][1] : null;
+    if (!Array.isArray(pairs)) throw new Error("candidate platform gem requires literal options");
+    const options = new Map();
+    for (const pair of pairs) {
+      const key = pair?.[0] === "assoc_new" && pair[1]?.[0] === "@label"
+        ? pair[1][1].slice(0, -1) : null;
+      const value = literal(pair?.[2]);
+      if (!key || value === null || options.has(key)) {
+        throw new Error("candidate platform gem options must be unique literal strings");
+      }
+      options.set(key, value);
+    }
+    const remote = options.get("git");
+    if (![ `https://github.com/${slug}`, `https://github.com/${slug}.git` ].includes(remote)
+        || options.has("branch") || (productionRef === null
+          ? !FULL_SHA.test(options.get("ref") || "") || options.has("tag")
+          : (options.has("tag") === options.has("ref")) || (options.get("tag") ?? options.get("ref")) !== productionRef)) {
+      throw new Error("platform gem requires its exact HTTPS platform URL and an unambiguous matching pin");
+    }
+    declarations.push({ ref: options.get("ref") ?? options.get("tag") });
+  }
+  if (declarations.length !== 1) throw new Error("candidate Gemfile must declare exactly one platform gem");
+  return declarations[0];
+}
 
 // ── Resolve the `yaml` parser robustly ───────────────────────────────────────
 // This script ships in the platform and is run by consumers from a
@@ -331,6 +404,15 @@ function checkGemfile() {
   const gf = path.join(ROOT, "Gemfile");
   if (!fs.existsSync(gf)) return; // gem-less consumer → not a violation
   const text = fs.readFileSync(gf, "utf8");
+  if (FULL_SHA.test(platformRef)) {
+    try {
+      record(gf, 'gem "cms-platform-theme" ref:', parseCandidateGemfile(text, SLUG).ref);
+    } catch (error) {
+      checked += 1;
+      violations.push({ file: "Gemfile", kind: "candidate gem ref:", found: error.message, expected: platformRef });
+    }
+    return;
+  }
   // Find the gem line(s) referencing cms-platform-theme on the platform git source.
   // A gem block can wrap lines, so scan logical statements (collapse continuations
   // ending in a comma onto the next line).
@@ -378,6 +460,7 @@ function checkGemfileLock() {
   if (!fs.existsSync(lf)) return;
   const text = fs.readFileSync(lf, "utf8");
   const lines = text.split("\n");
+  let candidateSources = 0;
   // Walk top-level sections; a GIT section starts at column 0 with "GIT".
   for (let i = 0; i < lines.length; i++) {
     if (lines[i] !== "GIT") continue;
@@ -385,10 +468,21 @@ function checkGemfileLock() {
     let remote = null;
     let tag = null;
     let tagLine = -1;
+    const candidateFields = new Map();
     let k = i + 1;
     for (; k < lines.length; k++) {
       const ln = lines[k];
       if (ln.length && !/^\s/.test(ln)) break; // next top-level section
+      // Bundler's lockfile is a data format, rather than Ruby source code.
+      if (ln.startsWith("  ") && !ln.startsWith("    ")) {
+        const colon = ln.indexOf(":");
+        if (colon > 2) {
+          const key = ln.slice(2, colon);
+          const values = candidateFields.get(key) || [];
+          values.push(ln.slice(colon + 1).trim());
+          candidateFields.set(key, values);
+        }
+      }
       const rm = ln.match(/^\s*remote:\s*(\S+)\s*$/);
       if (rm) remote = rm[1];
       const tg = ln.match(/^\s*tag:\s*(\S+)\s*$/);
@@ -403,6 +497,21 @@ function checkGemfileLock() {
         remote === `https://github.com/${SLUG}.git` ||
         remote.replace(/\.git$/, "").endsWith(`/${SLUG}`));
     if (matchesSlug) {
+      if (FULL_SHA.test(platformRef)) {
+        candidateSources += 1;
+        const exactRemote = [`https://github.com/${SLUG}`, `https://github.com/${SLUG}.git`].includes(remote);
+        for (const key of ["remote", "ref", "revision"]) {
+          const values = candidateFields.get(key) || [];
+          record(lf, `candidate GIT source ${key}: (cms-platform)`,
+            values.length === 1 && (key !== "remote" || exactRemote)
+              ? key === "remote" ? platformRef : values[0] : "(missing, duplicate, or invalid field)");
+        }
+        if (candidateFields.has("tag") || candidateFields.has("branch")) {
+          record(lf, "candidate GIT source pin shape", "(tag or branch pin)");
+        }
+        i = k - 1;
+        continue;
+      }
       if (tag === null) {
         violations.push({
           file: "Gemfile.lock",
@@ -417,6 +526,9 @@ function checkGemfileLock() {
       }
     }
     i = k - 1;
+  }
+  if (FULL_SHA.test(platformRef) && candidateSources !== 1) {
+    record(lf, "candidate GIT source count", `(found ${candidateSources}, expected exactly one)`);
   }
 }
 
@@ -563,22 +675,25 @@ const OPTIONAL_WITH_KEYS = {
 
 function structuralShape(text, basename = null) {
   const YAML = loadYaml();
-  // The version suffix is part of the version. A consumer validating a fix can
-  // be pinned at a PRERELEASE (`v0.1.89-rc.1`) while the canonical examples/site
-  // template at that same ref still pins the last full release — normalizing only
-  // `vX.Y.Z` left `@vREF-rc.1` vs `@vREF` and reported the RC pin as content DRIFT,
-  // which is the pin half of an RC being unusable at all.
-  const normalized = text
-    .replace(/@v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g, "@vREF")
-    .replace(/\b[0-9a-f]{40}\b/g, "SHA40");
-  const obj = YAML.parse(normalized) || {};
+  const obj = YAML.parse(text) || {};
   const jobs = obj.jobs || {};
   const shape = { permissions: obj.permissions || null, jobs: {} };
   const optional = (basename && OPTIONAL_WITH_KEYS[basename]) || [];
   for (const [jn, job] of Object.entries(jobs)) {
     const j = job || {};
+    // Compare the platform call interface independently of its release,
+    // prerelease, or candidate SHA. Exact pins are checked separately; external
+    // refs and permission/secret values must retain their original meaning.
+    // GitHub owner/repo identities are case-insensitive. Classify that identity
+    // canonically while keeping the original target spelling in the shape.
+    const usesForClassification = typeof j.uses === "string" &&
+      j.uses.toLowerCase().startsWith(`${SLUG.toLowerCase()}/`)
+      ? `${SLUG}${j.uses.slice(SLUG.length)}` : j.uses;
+    const classified = classifyUses(usesForClassification);
+    const normalizeRef = classified &&
+      (FULL_SHA.test(classified.ref) || /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(classified.ref));
     shape.jobs[jn] = {
-      uses: j.uses || null,
+      uses: normalizeRef ? `${j.uses.slice(0, j.uses.lastIndexOf("@"))}@vREF` : j.uses || null,
       withKeys: Object.keys((j.with && typeof j.with === "object" && j.with) || {})
         .filter((k) => !optional.includes(k))
         .sort(),
@@ -820,7 +935,7 @@ function requireCanonicalError(where) {
 }
 
 // Requireable for the unit test (see RUN_AS_CLI above): pure, no filesystem.
-module.exports = { okSummary, requireCanonicalError, structuralShape };
+module.exports = { okSummary, requireCanonicalError, structuralShape, parseCandidateGemfile };
 
 if (RUN_AS_CLI) {
   checkGemfile();
