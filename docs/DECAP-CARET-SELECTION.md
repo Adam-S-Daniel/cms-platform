@@ -113,6 +113,13 @@ not evidence that this specific current defect has already been acknowledged.
 
 ## Event-driven regression and control
 
+[The dedicated configuration](../e2e/playwright.caret.config.js) matches only
+the root diagnostic spec by its absolute path. Fixture placement copies the
+harness into nested `e2e` directories; those copies must not become additional
+cases. [The discovery regression](../e2e/decap-caret-diagnostic.test.js) runs
+Playwright's test listing with both fixture copies present and requires exactly
+eight root cases.
+
 [The dedicated browser regression](../e2e/decap-caret-selection.spec.js) first
 observes the actual Slate selection at Alpha offset 2 through a read-only React
 fiber reference. It then temporarily prevents `selectionchange` listeners from

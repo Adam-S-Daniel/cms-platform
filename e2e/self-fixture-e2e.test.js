@@ -437,7 +437,11 @@ test.describe("self-fixture-e2e.yml: offline caret diagnostic (#755)", () => {
     expect(configs).toHaveLength(1);
     expect(configs[0].type).toBe("ObjectExpression");
     const properties = Object.fromEntries(configs[0].properties.map((p) => [p.key.name || p.key.value, p.value]));
-    expect(properties.testMatch.value).toBe(diagnostic);
+    expect(properties.testMatch.type).toBe("CallExpression");
+    expect(calleeName(properties.testMatch.callee)).toBe("path.join");
+    expect(properties.testMatch.arguments.map((argument) => argument.type)).toEqual(["Identifier", "Literal"]);
+    expect(properties.testMatch.arguments[0].name).toBe("__dirname");
+    expect(properties.testMatch.arguments[1].value).toBe(diagnostic);
     expect(properties.testIgnore).toBeUndefined();
     expect(properties.webServer).toBeUndefined();
     const ignored = require("./playwright.config").testIgnore;
