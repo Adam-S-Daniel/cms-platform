@@ -684,7 +684,12 @@ function structuralShape(text, basename = null) {
     // Compare the platform call interface independently of its release,
     // prerelease, or candidate SHA. Exact pins are checked separately; external
     // refs and permission/secret values must retain their original meaning.
-    const classified = classifyUses(j.uses);
+    // GitHub owner/repo identities are case-insensitive. Classify that identity
+    // canonically while keeping the original target spelling in the shape.
+    const usesForClassification = typeof j.uses === "string" &&
+      j.uses.toLowerCase().startsWith(`${SLUG.toLowerCase()}/`)
+      ? `${SLUG}${j.uses.slice(SLUG.length)}` : j.uses;
+    const classified = classifyUses(usesForClassification);
     const normalizeRef = classified &&
       (FULL_SHA.test(classified.ref) || /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(classified.ref));
     shape.jobs[jn] = {

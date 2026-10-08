@@ -813,7 +813,10 @@ test.describe("workflow-content parity — a PRERELEASE pin is the same version 
   });
 
   test("a full candidate SHA normalizes to the same shape as a release pin", () => {
-    expect(structuralShape(caller(SHA))).toEqual(structuralShape(caller("v0.1.88")));
+    for (const slug of ["Adam-S-Daniel/cms-platform", "ADAM-S-DANIEL/CMS-PLATFORM"]) {
+      const withSlug = (ref) => caller(ref).replace("Adam-S-Daniel/cms-platform", slug);
+      expect(structuralShape(withSlug(SHA))).toEqual(structuralShape(withSlug("v0.1.88")));
+    }
   });
 
   test("external repository refs retain their exact shape", () => {
