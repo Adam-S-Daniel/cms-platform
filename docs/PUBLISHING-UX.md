@@ -1080,7 +1080,7 @@ The deployed [adamdaniel.ai test editor shell](https://adamdaniel.ai/admin/index
 [jodidaniel.com test config](https://jodidaniel.com/admin/config-test.yml) return
 HTTP 404, so the existing test-backend spec cannot run directly against either
 origin. The latest successful [adamdaniel.ai run](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37707841191)
-and [jodidaniel.com run](https://github.com/Adam-S-Daniel/jodidaniel.com/actions/runs/37707568448)
+and [jodidaniel.com run](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37707568448)
 had `prod-mutate` jobs skipped: [adamdaniel.ai job](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37707841191/job/113086459598)
 and [jodidaniel.com job](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37707568448/job/113085560934).
 Therefore authenticated editor geometry at 320px and 390px and a real publish
@@ -1089,7 +1089,7 @@ and [jodidaniel.com admin](https://jodidaniel.com/admin/), confirm the native
 controls fit one row while the production Publish bar remains separate, every
 control is reachable before and after scrolling and resizing, and the date
 Clear control and long URLs stay contained. Complete a real publish cycle under
-the [repository definition of done](CONTRIBUTING.md#definition-of-done).
+the [repository definition of done](CONTRIBUTING.md#definition-of-done-non-trivial-changes).
 Fixture tests simulate production shims; they do not verify live OAuth or
 publishing.
 
