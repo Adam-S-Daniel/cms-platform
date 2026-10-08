@@ -198,17 +198,15 @@
     "going-live": { bg: "#e7f0fb", fg: "#10345f", rule: "#8fb8e8" },
     "needs-attention": { bg: "#fdecea", fg: "#7a1c12", rule: "#e8a49b" },
     unsaved: { bg: "#fdf3d8", fg: "#5c4813", rule: "#e8c766" },
-    // Nothing to say: the row stays (see ROW_MIN_HEIGHT) but paints nothing.
+    // A settled live entry can collapse the row when it has no action.
     idle: { bg: "transparent", fg: "inherit", rule: "transparent" },
   };
 
   // The bar's own row height: one line of the Publish button (0.8rem line,
   // 2 x 0.45rem padding, 2px border) inside the bar's 2 x 0.5rem padding and
-  // 1px rule. The row exists on EVERY editor route at this minimum, even when
-  // it has nothing to say, so the bar appearing never pushes the form down
-  // (#625 item 6: "the bar's first appearance pushes every field down about
-  // 46px"). An in-flow reserved row is the only no-shift option that cannot
-  // overlay a control — see the PLACEMENT block above.
+  // 1px rule. Reserve it while a new entry or an unresolved editor state can
+  // still acquire a status. A settled, unmodified Live entry needs no blank
+  // band; its next unsaved edit may bring the bar back into flow.
   var ROW_MIN_HEIGHT = "calc(2.7rem + 3px)";
 
   // Decap's toolbar says "Changes saved" whenever Save is disabled, which on a
@@ -307,7 +305,9 @@
       // state of an entry nobody is publishing. Showing a green bar on every
       // such entry is noise, not information — the bar earns its row only
       // when there is something to say.
-      if (derived.badge === "live" && !derived.modifiers.length) return null;
+      if (derived.badge === "live" && !derived.modifiers.length) {
+        return { state: "idle", label: "", detail: "", modifiers: [], settledLive: true };
+      }
       // The Draft sentence ends "Click Publish to put it on <site>", and
       // publish-button.js's confirmation beside it asks "Put this on <site>?".
       // Both at once say the same thing twice, so the sentence steps aside
@@ -462,17 +462,22 @@
       }
     }
 
-    // No state to report: keep the row, paint nothing (see ROW_MIN_HEIGHT).
+    // An unknown state may still become Draft; reserve its row until facts
+    // settle. A confirmed Live entry with no action collapses it below.
     if (!view) view = { state: "idle", label: "", detail: "", modifiers: [] };
     var tone = TONE[view.state] || TONE.draft;
     setStyle(el, "background", tone.bg);
     setStyle(el, "color", tone.fg);
-    setStyle(el, "border-bottom", "1px solid " + tone.rule);
-
     // An idle row is invisible — unless publish-button.js has put a control in
     // its slot, which must never be hidden with the row.
     var slotEl = document.getElementById(ACTIONS_ID);
     var idleEmpty = view.state === "idle" && !(slotEl && slotEl.firstChild);
+    var collapsed = idleEmpty && view.settledLive && !onNewEntryRoute();
+    setStyle(el, "min-height", collapsed ? "0px" : ROW_MIN_HEIGHT);
+    setStyle(el, "height", collapsed ? "0px" : "auto");
+    setStyle(el, "padding", collapsed ? "0px" : "0.5rem 1rem");
+    setStyle(el, "overflow", collapsed ? "hidden" : "visible");
+    setStyle(el, "border-bottom", collapsed ? "0px solid transparent" : "1px solid " + tone.rule);
     setStyle(el, "visibility", idleEmpty ? "hidden" : "visible");
 
     var badge = document.getElementById(BADGE_ID);

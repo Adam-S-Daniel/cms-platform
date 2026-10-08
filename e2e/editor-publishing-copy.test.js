@@ -124,7 +124,7 @@ function findById(node, id) {
   return null;
 }
 
-function loadEditorCopy({ hash = "#/collections/posts/entries/a", saveDisabled = false, hasOpenPr = true } = {}) {
+function loadEditorCopy({ hash = "#/collections/posts/entries/a", saveDisabled = false, hasOpenPr = true, settledLive = false, liveModifiers = [] } = {}) {
   const intervals = [];
   const doc = {
     readyState: "complete",
@@ -170,6 +170,9 @@ function loadEditorCopy({ hash = "#/collections/posts/entries/a", saveDisabled =
         }),
         subscribe() {},
       },
+      ...(settledLive ? { CMSEntryStatus: {
+        derive: () => ({ badge: "live", modifiers: liveModifiers.map((label) => ({ label })), label: "Live", detail: "" }),
+      } } : {}),
     },
     document: doc,
     MutationObserver: class {
@@ -194,6 +197,9 @@ function loadEditorCopy({ hash = "#/collections/posts/entries/a", saveDisabled =
     savedStatus,
     setHash: (value) => {
       sandbox.window.location.hash = value;
+    },
+    setSaveDisabled: (value) => {
+      save.disabled = value;
     },
   };
 }
@@ -248,20 +254,66 @@ test.describe("editor publishing copy", () => {
     expect(ctx.savedStatus.style.getPropertyValue("visibility")).not.toBe("hidden");
   });
 
-  // #625 item 6: the bar's first appearance pushed every field down ~46 px.
-  // The bar keeps its row on every editor route, so appearing adds no shift.
-  test("the bar's row is reserved even when it has nothing to say", () => {
-    const live = loadEditorCopy({ saveDisabled: true, hasOpenPr: false });
+  // #625 item 6: new entries reserve the bar before their state arrives,
+  // while a settled Live entry should not leave a blank band under the toolbar.
+  test("a settled Live entry collapses its empty row and restores it on edit", () => {
+    const live = loadEditorCopy({ saveDisabled: true, hasOpenPr: false, settledLive: true });
     const bar = live.doc.getElementById("cms-publish-state");
-    expect(bar, "the row stays so fields never move").not.toBeNull();
+    const slot = live.doc.getElementById("cms-publish-state-actions");
+    expect(bar, "keep the bar node for later edits").not.toBeNull();
     expect(bar.getAttribute("data-state")).toBe("idle");
-    expect(bar.style.getPropertyValue("min-height")).toBe("calc(2.7rem + 3px)");
+    expect(bar.style.getPropertyValue("min-height")).toBe("0px");
+    expect(bar.style.getPropertyValue("height")).toBe("0px");
+    expect(bar.style.getPropertyValue("padding")).toBe("0px");
+    expect(bar.style.getPropertyValue("border-bottom")).toBe("0px solid transparent");
     expect(bar.style.getPropertyValue("visibility")).toBe("hidden");
+    const writes = bar.style.writeCount;
+    live.intervals[0]();
+    expect(bar.style.writeCount, "steady renders must not feed the observer").toBe(writes);
+
+    const action = live.doc.createElement("button");
+    slot.appendChild(action);
+    live.intervals[0]();
+    expect(bar.style.getPropertyValue("height"), "a late action needs its row").toBe("auto");
+    expect(bar.style.getPropertyValue("visibility")).toBe("visible");
+    expect(slot.firstChild).toBe(action);
+    slot.removeChild(action);
+    live.intervals[0]();
+    expect(bar.style.getPropertyValue("height")).toBe("0px");
+
+    live.setSaveDisabled(false);
+    live.intervals[0]();
+    expect(live.doc.getElementById("cms-publish-state-actions")).toBe(slot);
+    expect(bar.style.getPropertyValue("min-height")).toBe("calc(2.7rem + 3px)");
+    expect(bar.style.getPropertyValue("height")).toBe("auto");
+    expect(bar.style.getPropertyValue("visibility")).toBe("visible");
+    live.setSaveDisabled(true);
+    live.intervals[0]();
+    expect(bar.style.getPropertyValue("height")).toBe("0px");
+  });
+
+  test("an unresolved or new entry reserves space for status and actions", () => {
+    const unknown = loadEditorCopy({ saveDisabled: true, hasOpenPr: false });
+    const bar = unknown.doc.getElementById("cms-publish-state");
+    expect(bar.style.getPropertyValue("min-height")).toBe("calc(2.7rem + 3px)");
+    expect(bar.style.getPropertyValue("height")).toBe("auto");
+
+    const fresh = loadEditorCopy({ hash: "#/collections/media/new", saveDisabled: true, settledLive: true });
+    expect(fresh.doc.getElementById("cms-publish-state").style.getPropertyValue("min-height"))
+      .toBe("calc(2.7rem + 3px)");
 
     const drafted = loadEditorCopy({ saveDisabled: false });
     const shown = drafted.doc.getElementById("cms-publish-state");
     expect(shown.style.getPropertyValue("min-height")).toBe("calc(2.7rem + 3px)");
     expect(shown.style.getPropertyValue("visibility")).not.toBe("hidden");
+  });
+
+  test("a Live entry with a modifier keeps the status row", () => {
+    const live = loadEditorCopy({ saveDisabled: true, settledLive: true, liveModifiers: ["Hidden"] });
+    const bar = live.doc.getElementById("cms-publish-state");
+    expect(bar.style.getPropertyValue("min-height")).toBe("calc(2.7rem + 3px)");
+    expect(bar.style.getPropertyValue("visibility")).toBe("visible");
+    expect(live.doc.getElementById("cms-publish-state-modifiers").textContent).toBe("Hidden");
   });
 });
 

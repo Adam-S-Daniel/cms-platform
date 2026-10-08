@@ -864,9 +864,13 @@ Four details worth keeping:
     560 px toast for 14 s over the form).
   - *Draft label (5).* "Draft — only you can see this" was untrue (the draft is
     a public PR); it is now "Draft — not on the site yet".
-  - *No layout shift (6).* The bar keeps its row (`min-height`) on every editor
-    route, empty and invisible when it has nothing to say, so its first
-    appearance no longer pushes the fields down ~46 px. Publish is already
+  - *No layout shift (6), refined by [#658](https://github.com/Adam-S-Daniel/cms-platform/issues/658).*
+    The bar reserves its row (`min-height`) on new entries and while an
+    existing entry's state is unresolved, so the first status does not push
+    the fields down ~46 px. Once the poller confirms an unmodified Live entry
+    with no modifier or action, the empty row collapses. Editing that entry
+    brings the bar back into flow; the bar and its actions node stay mounted.
+    Publish is already
     rendered in the bar once the poller has found the entry's PR; Decap's own
     toolbar "Publish ▾" is only visible before that (the hide-nothing-until-
     there-is-a-replacement rule above), so it is not moved.
