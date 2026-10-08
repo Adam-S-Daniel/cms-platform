@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
-# Real Jekyll build regression for two of the public-theme polish items in
+# Real Jekyll build regression for two public-theme polish items in
 # cms-platform#737: the header's current-page state and the tag page's parity
-# with the blog index (reading time, a way back to /tags/). The rendered pages
+# with the blog index (reading time, a way back to /tags/). The /tags/ nav
+# current-section state is covered for cms-platform#757. The rendered pages
 # are parsed with REXML, not matched with a regex.
 # Run with: ruby theme/spec/public_nav_and_tag_polish_build_test.rb
 
@@ -58,6 +59,10 @@ class PublicNavAndTagPolishBuildTest < Minitest::Test
     write(source, 'blog/index.html', "---\nlayout: default\ntitle: Blog\npermalink: /blog/\n---\nBlog index\n")
     write(source, 'blogger.html', "---\nlayout: default\ntitle: Blogger\npermalink: /blogger/\n---\nNot the blog\n")
     write(source, 'about.html', "---\nlayout: default\ntitle: About\npermalink: /about/\n---\nAbout\n")
+    write(source, 'about/tags/index.html',
+          "---\nlayout: default\ntitle: Nested tags\npermalink: /about/tags/\n---\nNested tags\n")
+    write(source, 'tags-extra.html',
+          "---\nlayout: default\ntitle: Similar tags path\npermalink: /tags-extra/\n---\nSimilar tags path\n")
     write(source, 'tags/quotes.html',
           "---\nlayout: tag\ntag_name: Quotes\npermalink: /tags/quotes/\nfeed_exclude: true\n---\n")
     if tags_index
@@ -95,6 +100,7 @@ class PublicNavAndTagPolishBuildTest < Minitest::Test
 
   def test_blog_link_is_the_current_page_on_the_blog_index
     link = nav_link(parse(build(tags_index: false), 'blog'))
+    assert_equal '/blog/', link.attributes['href']
     assert_equal 'Blog', link.texts.join
     assert_equal 'page', link.attributes['aria-current']
   end
@@ -109,10 +115,29 @@ class PublicNavAndTagPolishBuildTest < Minitest::Test
 
   def test_blog_link_is_not_current_elsewhere
     out = build(tags_index: false)
-    %w[about blogger tags/quotes].each do |rel|
+    %w[about about/tags tags-extra blogger].each do |rel|
       link = nav_link(parse(out, rel))
       assert_equal 'Blog', link.texts.join, rel
-      assert_nil link.attributes['aria-current'], "#{rel} is not under /blog/"
+      assert_nil link.attributes['aria-current'], "#{rel} is outside /blog/ and /tags/"
+      refute_includes link.attributes['class'].to_s.split, 'active', rel
+    end
+  end
+
+  def test_blog_link_is_current_true_on_tags_index
+    link = nav_link(parse(build(tags_index: true), 'tags'))
+    assert_equal '/blog/', link.attributes['href']
+    assert_equal 'Blog', link.texts.join
+    assert_equal 'true', link.attributes['aria-current']
+    assert_includes link.attributes['class'].split, 'active'
+  end
+
+  def test_blog_link_is_current_true_on_tag_page_with_or_without_tags_index
+    [false, true].each do |tags_index|
+      link = nav_link(parse(build(tags_index: tags_index), 'tags/quotes'))
+      assert_equal '/blog/', link.attributes['href']
+      assert_equal 'Blog', link.texts.join
+      assert_equal 'true', link.attributes['aria-current']
+      assert_includes link.attributes['class'].split, 'active'
     end
   end
 
