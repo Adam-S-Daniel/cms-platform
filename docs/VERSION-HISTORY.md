@@ -245,7 +245,7 @@ Follow-up check (2026-10-07). [#747](https://github.com/Adam-S-Daniel/cms-platfo
 `6ff477d6627ae9c7dcf54cd535bee262f0a31e3e`, the [home hero LinkedIn link](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/6ff477d6627ae9c7dcf54cd535bee262f0a31e3e/index.html) uses `target="_blank"`; the [theme footer](https://github.com/Adam-S-Daniel/cms-platform/blob/016dcf5ba416bc96899138d5f949370b598bb7ce/theme/_includes/footer.html) uses same-tab `rel="me"` links.
 The owner still needs to choose consistent same-tab external links or explicit new tabs; same-tab is a recommendation and preserves browser modifier-key choice.
 Under the same-tab choice, removing `target="_blank"` from the consumer link resolves this mismatch without a theme patch.
-Tag-page Blog highlighting is a separate decision in [#757](https://github.com/Adam-S-Daniel/cms-platform/issues/757); the theme's Blog prefix rule does not settle it.
+Tag-page Blog highlighting was approved and implemented by [#822](https://github.com/Adam-S-Daniel/cms-platform/pull/822), closing [#757](https://github.com/Adam-S-Daniel/cms-platform/issues/757): `/tags/` and `/tags/<tag>/` now mark Blog current with `aria-current="true"` and `class="active"`; only `/blog/` uses `aria-current="page"`. The consumer link-tab decision above remains pending.
 Phone admin chrome. [#748](https://github.com/Adam-S-Daniel/cms-platform/pull/748) (part of
 [#731](https://github.com/Adam-S-Daniel/cms-platform/issues/731), not closed) edits `theme/admin/admin-mobile.css`, loaded only by the `/admin` shells. At 600px and
 below the toolbar holding Save, Publish and Delete sticks to the top and shrinks from three rows to two (185px to 93px at 390px), inside `@supports (overflow: clip)`
