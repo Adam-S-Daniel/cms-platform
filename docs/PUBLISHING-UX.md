@@ -1102,14 +1102,25 @@ the publish throws `Cannot read properties of undefined (reading 'reduce')`
 inside the bundle, nothing reaches disk, and no toast reports it — the editor
 just stays dirty. Visiting the first entry without editing it is enough to arm
 it. Opening the entry first in the session, or going list → entry, both work.
-Reproduced byte-identically with and without the platform's shims, so it is
-Decap's, not ours — https://github.com/Adam-S-Daniel/cms-platform/issues/342
-tracks it upstream (no Decap issue exists yet).
+Reproduced byte-identically with and without the platform's shims —
+[platform issue #342](https://github.com/Adam-S-Daniel/cms-platform/issues/342)
+tracks the investigation. The previous claim that there was no matching
+upstream report was too narrow: [Decap issue #4147](https://github.com/decaporg/decap-cms/issues/4147)
+is open and describes stale fields after direct entry-to-entry navigation,
+including pasting the second URL into the address bar. Its
+[maintainer diagnosis](https://github.com/decaporg/decap-cms/issues/4147#issuecomment-674748265)
+identifies entry loading on component mount and the need to load again when
+the collection or slug changes. It does not establish the later serialization
+error or destructive target; those need the evidence below.
 
-An editor cannot reach it: the editor chrome renders no sidebar, and the back
-link goes to the COLLECTION route. A spec reaches it by default, because specs
-navigate with `page.goto("…#/collections/…/entries/…")`. So, for any spec that
-publishes:
+The normal editor Back link goes to the COLLECTION route, but direct hash
+navigation is also reachable by changing the address. The
+[October 5 evidence](https://github.com/Adam-S-Daniel/cms-platform/issues/342#issuecomment-5996697973)
+shows the second entry's URL with the previous form and a visible "Delete
+published entry" control. Low frequency does not remove that target ambiguity.
+[PR #629](https://github.com/Adam-S-Daniel/cms-platform/pull/629) reloads the
+specific site-gate settings link from an editor; it is not a general fix for
+entry-to-entry navigation. For any spec that publishes:
 
 - **One publish per page.** A scenario that publishes a second entry gets its
   own `test()` (Playwright's `page` fixture is per-test) or an explicit
@@ -1131,6 +1142,98 @@ https://github.com/Adam-S-Daniel/cms-platform/issues/382
 page, then publish" detector belongs. The
 `browser-testing` skill carries the same rule beside the other Decap-driving
 gotchas.
+
+#### Pinned-source diagnosis (2026-10-07)
+
+The historical stack frame `vu (decap-cms.js:17:7105)` maps through the
+[3.15.1 source map](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js.map)
+to `decap-cms-core/dist/esm/lib/serializeEntryValues.js`, line 30, column 30
+(zero-based column). `vu` is **`runSerializer`**, the helper used by
+`serializeValues` and `deserializeValues`; it is not a Redux reducer. The
+throwing operation is `fields.reduce`. The
+[bundle](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js) has SHA-384 SRI
+`sha384-in6eHztHveqQ7uMZ1fDaKlDmacQLFuLH2wWrFTiymyuS8zQ5bixwL8U3AeRi8h/L`,
+matching the admin shells. This resolves the reported stack without changing
+the pinned version or attempting another publish.
+
+The same map embeds the relevant source paths:
+
+| Source under `decap-cms-core/dist/esm/` | Code reading and implication |
+|---|---|
+| `components/Editor/Editor.js:75–94` | `componentDidMount` loads the route's entry. |
+| `components/Editor/Editor.js:142–165` | `componentDidUpdate` handles backups, notes, and new entries, but does not load a different existing entry when its route changes. Reusing the mounted editor can leave the old draft in place. |
+| `components/Editor/Editor.js:287–310` | `handleDeleteEntry` passes its current collection and slug props to the delete action, while the form renders `entryDraft`. A stale form alone cannot identify the delete target. |
+| `actions/entries.js:791–802` | `getSerializedEntry` selects fields using the current collection and the draft entry's slug, then calls `serializeValues`. |
+| `reducers/collections.js:64–70` | A file collection selects fields by its named file entry; a slug belonging to the previous collection can return no fields. |
+
+The last two rows explain a plausible path from a stale cross-collection draft
+to undefined `fields` at `runSerializer`. That is a source-based inference
+from the historical error, not a fresh Save/Publish reproduction. The
+read-only browser diagnostic checks route, displayed data, and action props
+separately; no destructive handler is invoked.
+
+#### Read-only reproduction and action-target evidence
+
+Use Decap's `test-repo` backend in editorial workflow mode, with two published
+seed files: `_posts/2026-01-01-alpha.md` (Title **Alpha**) and
+`_posts/2026-01-02-beta.md` (Title **Beta**). Both use ordinary title, slug,
+date, and body fields; there are no unpublished entries. Log in, open Alpha
+from the collection, then assign the Beta entry hash directly. Do not edit a
+field or activate Save, Publish, or Delete.
+
+The comparison uses the rendered production `index.html` and a stock HTML
+shell containing only UTF-8 metadata, the config link, and the same SRI-pinned
+Decap script. The stock shell loads no platform scripts. Both shells show:
+
+| Navigation | Address entry | Title field / draft entry | Bound Delete target |
+|---|---|---|---|
+| Open Alpha from the collection | Alpha | Alpha / Alpha | Alpha |
+| Change Alpha's hash directly to Beta | Beta | **Alpha / Alpha** | **Beta** |
+| Return to the collection, then open Beta | Beta | Beta / Beta | Beta |
+
+An actual `page.reload()` at Beta also restores agreement in the platform
+shell. Navigating to another hash with `page.goto()` is still a
+same-document navigation and is not evidence that a reload occurred.
+
+These are observations against neutral in-browser seeds, not deletions. No
+page error is needed to expose the mismatch: it is already present before a
+toolbar action. The npm distribution supplies the exact bundle and lazy
+chunks locally; the diagnostic verifies SRI and intercepts all page requests
+so nothing can reach a real backend.
+
+Inspect the Title field and the live Editor class instance separately. The
+diagnostic locates that instance through React Fiber and reads
+`stateNode.props`; **`fiber.memoizedProps` alone is not reliable**, because a
+DOM-attached Fiber can refer to the previous alternate after a commit. Wait
+until the live instance's route slug is Beta before inspecting the form. This
+is the barrier that distinguishes a stale draft from a router update still in
+progress.
+
+The rendered "Delete published entry" button's React `onClick` is checked
+against that instance's `handleDeleteEntry`, without calling it. The handler's
+current collection and slug are therefore the source-backed delete target;
+the displayed form and `entryDraft` are independent measurements. Save uses
+the draft through `persistEntry(collection)`, so the delete finding must not
+be generalized to every toolbar action. No backend deletion or publication
+is attempted, and the seeded file contents must remain unchanged.
+
+The four diagnostic cases extend
+[`cms-route-focus.spec.js`](../e2e/cms-route-focus.spec.js): stock and platform
+direct navigation, a collection intermediary, and a full reload. The direct
+cases first require the exact mismatch and unchanged seeds, then mark only
+the final agreement assertion as an expected failure. A broken setup or an
+incorrectly identified handler fails before that annotation. The working
+paths require agreement normally. Thus a green diagnostic run records an
+unresolved upstream defect; it does not certify safe direct navigation.
+The spec's `@lane: local` and `@admin-read` tags include the new cases in the
+required [`fixture-e2e` workflow](../.github/workflows/self-fixture-e2e.yml)
+on its two admin projects.
+
+This evidence is suitable for the existing
+[upstream report](https://github.com/decaporg/decap-cms/issues/4147). A general
+platform reload guard remains a separate decision: it must account for dirty
+drafts and navigation cancellation before a hash change has already moved the
+address. This diagnostic does not add one.
 
 ## 5. Options considered and rejected
 
