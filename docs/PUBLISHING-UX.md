@@ -1056,6 +1056,43 @@ hit testing, resize, and the desktop breakpoint. This covers placement;
 production publishing still requires the live validation loop after a
 release and consumer bump.
 
+#### Deployed follow-up (2026-10-07)
+
+The follow-up fixes in [PR #748](https://github.com/Adam-S-Daniel/cms-platform/pull/748),
+[PR #766](https://github.com/Adam-S-Daniel/cms-platform/pull/766),
+[PR #807](https://github.com/Adam-S-Daniel/cms-platform/pull/807), and
+[PR #810](https://github.com/Adam-S-Daniel/cms-platform/pull/810) are merged.
+Both [adamdaniel.ai's platform.lock](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/platform.lock)
+and [jodidaniel.com's platform.lock](https://github.com/jodidaniel/jodidaniel.com/blob/main/platform.lock)
+on `main` pin v0.1.160. The deployed
+[adamdaniel.ai mobile stylesheet](https://adamdaniel.ai/admin/admin-mobile.css)
+and [jodidaniel.com mobile stylesheet](https://jodidaniel.com/admin/admin-mobile.css)
+byte-match that release, as do their deployed
+[adamdaniel.ai publish-step-hint.js](https://adamdaniel.ai/admin/publish-step-hint.js)
+and [jodidaniel.com publish-step-hint.js](https://jodidaniel.com/admin/publish-step-hint.js).
+This establishes delivery of those release files; `main` also contains later
+settled-Live-row behavior, so this does not establish full parity with current
+platform `main`.
+
+The deployed [adamdaniel.ai test editor shell](https://adamdaniel.ai/admin/index-test.html),
+[jodidaniel.com test editor shell](https://jodidaniel.com/admin/index-test.html),
+[adamdaniel.ai test config](https://adamdaniel.ai/admin/config-test.yml), and
+[jodidaniel.com test config](https://jodidaniel.com/admin/config-test.yml) return
+HTTP 404, so the existing test-backend spec cannot run directly against either
+origin. The latest successful [adamdaniel.ai run](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37707841191)
+and [jodidaniel.com run](https://github.com/Adam-S-Daniel/jodidaniel.com/actions/runs/37707568448)
+had `prod-mutate` jobs skipped: [adamdaniel.ai job](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37707841191/job/113086459598)
+and [jodidaniel.com job](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37707568448/job/113085560934).
+Therefore authenticated editor geometry at 320px and 390px and a real publish
+cycle remain unverified. In the authenticated [adamdaniel.ai admin](https://adamdaniel.ai/admin/)
+and [jodidaniel.com admin](https://jodidaniel.com/admin/), confirm the native
+controls fit one row while the production Publish bar remains separate, every
+control is reachable before and after scrolling and resizing, and the date
+Clear control and long URLs stay contained. Complete a real publish cycle under
+the [repository definition of done](CONTRIBUTING.md#definition-of-done).
+Fixture tests simulate production shims; they do not verify live OAuth or
+publishing.
+
 ### What is deliberately NOT covered by a browser spec
 
 Phases 2–4 load on the production shell only, and the only served shell a
