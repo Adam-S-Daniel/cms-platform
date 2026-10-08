@@ -28,6 +28,9 @@ const { parseYaml, readWorkflow } = require("./workflow-yaml-utils");
 const { runStep } = require("./workflow-step-harness");
 const { createSandbox } = require("./git-fixture");
 const { filterByLane } = require("./select-specs");
+const vm = require("node:vm");
+const { parse, calleeName } = require("./spec-ast");
+const walk = require("acorn-walk");
 
 const FILE = "self-fixture-e2e.yml";
 const WORK = "fixture-e2e-project";
@@ -380,5 +383,105 @@ test.describe("self-fixture-e2e.yml: each leg's proof test must have PASSED (#52
     expect(assertStep({ suites: [] }).status).toBe(1);
     expect(assertStep("{not json").status).toBe(1);
     expect(assertStep(undefined).status).toBe(1);
+  });
+});
+
+test.describe("self-fixture-e2e.yml: offline caret diagnostic (#755)", () => {
+  const PREPARE = "Prepare the pinned Decap caret diagnostic";
+  const RUN = "Run the offline Decap caret diagnostic";
+  const PROOF = "Assert every caret diagnostic case passed";
+
+  test("the diagnostic and its proof run on exactly one salient Chromium leg", () => {
+    const work = job(WORK);
+    const steps = work.steps;
+    const install = steps.findIndex((s) => s.name === "Install Playwright browser + system deps");
+    const prepare = step(WORK, PREPARE);
+    const run = step(WORK, RUN);
+    const proof = step(WORK, PROOF);
+    const prepareAt = steps.findIndex((s) => s.name === PREPARE);
+    const runAt = steps.findIndex((s) => s.name === RUN);
+    expect(prepareAt).toBeGreaterThan(install);
+    expect(runAt).toBeGreaterThan(prepareAt);
+    expect(steps.findIndex((s) => s.name === PROOF)).toBeGreaterThan(runAt);
+    for (const s of [prepare, run, proof]) {
+      expect(s["continue-on-error"]).toBeUndefined();
+      const expression = s.if.slice(3, -2).trim();
+      parse(expression);
+      for (const salient of ["false", "true"]) {
+        const selected = work.strategy.matrix.include.filter((matrix) =>
+          vm.runInNewContext(expression, {
+            matrix, steps: { salient: { outputs: { salient } } },
+          }, { timeout: 1000 }),
+        );
+        expect(selected.map((l) => `${l.project} @ ${l.fixture}`)).toEqual(
+          salient === "true" ? ["chromium-desktop-3k @ fixture-site"] : [],
+        );
+      }
+    }
+    expect(prepare["working-directory"]).toBe("e2e");
+    expect(prepare.run).toContain('ln -s "${FIXTURE}/e2e/node_modules" node_modules');
+    expect(prepare.run).toContain("node prepare-decap-caret.js");
+    expect(run["working-directory"]).toBe("e2e");
+    expect(run.env.DECAP_DIAGNOSTIC_BUNDLE).toBe("${{ github.workspace }}/e2e/node_modules/.cache/decap-caret/decap-cms.js");
+    expect(run.run).toContain("--config=playwright.caret.config.js");
+    expect(job(GATE).needs).toBe(WORK);
+  });
+
+  test("the dedicated config selects the diagnostic; normal config excludes it", () => {
+    const diagnostic = "decap-caret-selection.spec.js";
+    const ast = parse(fs.readFileSync(path.join(HARNESS, "playwright.caret.config.js"), "utf8"));
+    const configs = [];
+    walk.simple(ast, { CallExpression(node) {
+      if (calleeName(node.callee) === "defineConfig") configs.push(node.arguments[0]);
+    } });
+    expect(configs).toHaveLength(1);
+    expect(configs[0].type).toBe("ObjectExpression");
+    const properties = Object.fromEntries(configs[0].properties.map((p) => [p.key.name || p.key.value, p.value]));
+    expect(properties.testMatch.type).toBe("CallExpression");
+    expect(calleeName(properties.testMatch.callee)).toBe("path.join");
+    expect(properties.testMatch.arguments.map((argument) => argument.type)).toEqual(["Identifier", "Literal"]);
+    expect(properties.testMatch.arguments[0].name).toBe("__dirname");
+    expect(properties.testMatch.arguments[1].value).toBe(diagnostic);
+    expect(properties.testIgnore).toBeUndefined();
+    expect(properties.webServer).toBeUndefined();
+    const ignored = require("./playwright.config").testIgnore;
+    expect([].concat(ignored).some((pattern) => pattern.test(diagnostic))).toBe(true);
+  });
+
+  test("the diagnostic proof rejects skips, missing cases, failures, and absent reports", () => {
+    const sb = createSandbox("caret-proof-");
+    try {
+      const file = path.join(sb.root, "report.json");
+      const proof = { ...step(WORK, PROOF) };
+      proof.run = proof.run.replaceAll("/tmp/decap-caret.log.json", file);
+      function verify(report) {
+        if (report === undefined) fs.rmSync(file, { force: true });
+        else fs.writeFileSync(file, JSON.stringify(report));
+        return runStep(proof, { cwd: sb.root, scratch: path.join(sb.root, "assert"), env: sb.env }).status;
+      }
+      const passed = { expectedStatus: "passed", results: [{ status: "passed" }] };
+      const green = {
+        stats: { expected: 8, unexpected: 0, flaky: 0, skipped: 0 }, errors: [],
+        suites: [{ specs: [{ file: "decap-caret-selection.spec.js", tests: Array.from({ length: 8 }, () => passed) }] }],
+      };
+      expect(verify(green)).toBe(0);
+      for (const stats of [
+        { ...green.stats, expected: 0, skipped: 8 },
+        { ...green.stats, expected: 7 },
+        { ...green.stats, unexpected: 1 },
+        { ...green.stats, flaky: 1 },
+      ]) expect(verify({ ...green, stats })).toBe(1);
+      expect(verify({ ...green, errors: [{}] })).toBe(1);
+      const expectedFailure = {
+        ...green, suites: [{ specs: [{ file: "decap-caret-selection.spec.js", tests: [
+          ...Array.from({ length: 7 }, () => passed),
+          { expectedStatus: "failed", results: [{ status: "failed" }] },
+        ] }] }],
+      };
+      expect(verify(expectedFailure)).toBe(1);
+      expect(verify(undefined)).toBe(1);
+    } finally {
+      sb.cleanup();
+    }
   });
 });

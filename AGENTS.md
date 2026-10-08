@@ -99,7 +99,7 @@ same Jekyll + Decap + AWS stack and improvements sync **both ways**. Design:
 (consumer 1, the dogfood) and **jodidaniel.com** (consumer 2, a single-page
 bio).
 
-**Current release: `v0.1.160`** (`v0.1.0`–`v0.1.160` are tagged; cut one with
+**Current release: `v0.1.162`** (`v0.1.0`–`v0.1.162` are tagged; cut one with
 `gh workflow run release.yml -f version=vX.Y.Z`). The bump is ONE atomic edit in
 the release PR, before the dispatch: this line, both plugin manifests
 (`plugin.json` + `.claude-plugin/plugin.json`), the `docs/VERSION-HISTORY.md`
@@ -114,6 +114,13 @@ PR (a manifest `version` change, or a `release/*` branch) also needs
 reviewer independent of the author after reviewing that head (#526 criterion 3,
 owner decision 2026-10-05): the REQUIRED `release-review-gate` check fails
 without it, and a new push makes the stamp stale.
+Before a stable tag, `release.yml` also requires open draft candidate PR numbers
+for BOTH consumers, each pinned to the dispatched platform commit's full SHA.
+`scripts/release-candidate-gate.js` validates their own required results and all
+e2e/site-verifier work jobs while production pins stay fixed. Missing, skipped,
+failed or cancelled validation refuses promotion. See
+[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for preparing the drafts and the
+`release-candidate-results` artifact; prereleases bypass this stable gate.
 
 ## The model
 
@@ -386,7 +393,8 @@ REQUIRED: **actionlint**, **ruby-theme-specs**, **node-unit-lints** (pure-fs
 more required contexts come from siblings: `scan / scan`, **`fixture-e2e`**
 (#527: the `@lane: local` specs on the two admin projects against
 `e2e/fixture-site`; #702 added `chromium-desktop-1080` against both fixtures,
-one `/` on the theme layout and one on a site-owned layout) and
+one `/` on the theme layout and one on a site-owned layout; #755's separate
+offline caret diagnostic runs on the full fixture's Chromium admin leg) and
 **`release-review-gate`** (#526: the review stamp above; the one PR workflow
 that fires on `edited`, because the stamp is a body edit).
 `self-dependabot-auto-merge.yml` also triggers on every PR, but its job is a

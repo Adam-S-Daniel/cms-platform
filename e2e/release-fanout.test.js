@@ -11,9 +11,9 @@ const { parseYaml, allStrings } = require("./workflow-yaml-utils");
 //
 // The fail-open shape is the load-bearing part: a missing token, a failed
 // dispatch, or a repo without auto-merge must degrade to the PRE-chaining
-// behavior (human merge / hand dispatch) via ::warning — never fail the
-// release job or the bump job. Losing that property would let a consumer
-// outage (or an expired PAT) block cutting releases at all.
+// behavior (human merge / hand dispatch) via ::warning after promotion. A
+// dispatch outage must not invalidate a published release or fail the bump job.
+// Stable promotion separately requires both consumers' candidate results.
 
 const RELEASE = path.join(__dirname, "..", ".github", "workflows", "release.yml");
 const BUMP = path.join(__dirname, "..", ".github", "workflows", "platform-bump.yml");
