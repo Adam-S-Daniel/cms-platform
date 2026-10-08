@@ -87,6 +87,13 @@ cms:
   the one seen first (`AutoTagPages.group`). Sites need no change: their
   `/tags/` index and tag cloud already read `site.all_tags`
   ([build regression](spec/tag_case_variants_build_test.rb)).
+- Post layouts and site-owned post lists can render tag links with
+  `{% include tag-pills.html tags=post.tags %}`. The include accepts an optional
+  `limit` (for example, `limit=3`, counting input tags), converts scalar tags
+  to strings before slugifying, and omits tags with empty names or slugs
+  ([#814](https://github.com/Adam-S-Daniel/cms-platform/issues/814)).
+  Consumer templates can adopt it after a release carries the include; both
+  consumer sites still need their own template updates.
 
 Updates flow to sites via a gem-version bump — `platform-bump`'s job, not
 Dependabot's: since #242, Dependabot's `bundler` ecosystem carries an explicit

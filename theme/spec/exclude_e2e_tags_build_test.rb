@@ -56,7 +56,7 @@ class ExcludeE2ETagsBuildTest < Minitest::Test
     %w[default.html post.html tag.html atom_feed.xml].each do |layout|
       FileUtils.cp(File.join(ROOT, 'theme', '_layouts', layout), File.join(@source, '_layouts', layout))
     end
-    %w[feed-link.html favicon.html rel-me.html header.html footer.html share-row.html
+    %w[feed-link.html favicon.html rel-me.html header.html footer.html share-row.html tag-pills.html
        analytics/cloudwatch-rum.html].each do |include|
       destination = File.join(@source, '_includes', include)
       FileUtils.mkdir_p(File.dirname(destination))

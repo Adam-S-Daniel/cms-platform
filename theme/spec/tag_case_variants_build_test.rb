@@ -57,11 +57,11 @@ class TagCaseVariantsBuildTest < Minitest::Test
     @tmpdir = Dir.mktmpdir('tag-case-variants-build-')
     @source = File.join(@tmpdir, 'source')
     @destination = File.join(@tmpdir, 'output')
-    %w[_posts _tags _layouts _includes tags].each { |d| FileUtils.mkdir_p(File.join(@source, d)) }
+    %w[_posts _tags _layouts _includes blog tags].each { |d| FileUtils.mkdir_p(File.join(@source, d)) }
     %w[default.html post.html tag.html atom_feed.xml].each do |layout|
       FileUtils.cp(File.join(ROOT, 'theme', '_layouts', layout), File.join(@source, '_layouts', layout))
     end
-    %w[feed-link.html favicon.html rel-me.html header.html footer.html share-row.html
+    %w[feed-link.html favicon.html rel-me.html header.html footer.html share-row.html tag-pills.html
        analytics/cloudwatch-rum.html].each do |include|
       destination = File.join(@source, '_includes', include)
       FileUtils.mkdir_p(File.dirname(destination))
@@ -69,6 +69,8 @@ class TagCaseVariantsBuildTest < Minitest::Test
     end
     FileUtils.cp(File.join(ROOT, 'e2e', 'fixture-site', 'tags', 'index.html'),
                  File.join(@source, 'tags', 'index.html'))
+    FileUtils.cp(File.join(ROOT, 'e2e', 'fixture-site', 'blog', 'index.html'),
+                 File.join(@source, 'blog', 'index.html'))
     {
       'release' => { 'name' => 'Release' },
       'fixture-tag' => { 'name' => 'Fixture Tag', 'test_fixture' => true },
@@ -118,6 +120,20 @@ class TagCaseVariantsBuildTest < Minitest::Test
 
   def listed_titles(rel)
     REXML::XPath.match(html(rel), "//li[@class='post-item']//h2[@class='post-title']/a").map { |a| a.texts.join }
+  end
+
+  def tag_pills(rel)
+    REXML::XPath.match(html(rel), "//a[@class='tag-pill']").map do |node|
+      [node.texts.join, node.attributes['href']]
+    end
+  end
+
+  def blog_post_tag_pills(title)
+    item = REXML::XPath.match(html('blog'), "//li[@class='post-item']").find do |node|
+      REXML::XPath.first(node, ".//h3[@class='post-title']/a")&.texts&.join == title
+    end
+    refute_nil item, "blog listing must contain #{title}"
+    REXML::XPath.match(item, ".//a[@class='tag-pill']").map { |node| [node.texts.join, node.attributes['href']] }
   end
 
   def add_post_and_rebuild(tags:, title: 'Blank tag edge')
@@ -279,10 +295,8 @@ class TagCaseVariantsBuildTest < Minitest::Test
   def test_post_pills_render_only_nonblank_names
     add_post_and_rebuild(tags: ['quotes', '', ' '])
 
-    post = @site.posts.docs.find { |doc| doc.data['title'] == 'Blank tag edge' }
-    post_doc = html(post.url.delete_prefix('/').chomp('/'))
-    pill_hrefs = REXML::XPath.match(post_doc, "//a[@class='tag-pill']").map { |node| node.attributes['href'] }
-    assert_equal ['/tags/quotes/'], pill_hrefs
+    assert_equal [['quotes', '/tags/quotes/']], tag_pills('blog/blank-tag-edge')
+    assert_equal [['quotes', '/tags/quotes/']], blog_post_tag_pills('Blank tag edge')
   end
 
   def test_atom_categories_render_only_nonblank_names
@@ -374,6 +388,7 @@ class TagCaseVariantsBuildTest < Minitest::Test
     assert_equal [['quotes', '/tags/quotes/', '4']], cards(html('tags')).select { |_, href, _| href == '/tags/quotes/' }
     post = html('blog/blank-tag-edge')
     assert_equal ['/tags/quotes/'], REXML::XPath.match(post, "//a[@class='tag-pill']").map { |node| node.attributes['href'] }
+    assert_equal [['quotes', '/tags/quotes/']], blog_post_tag_pills('Blank tag edge')
     feed = REXML::Document.new(File.read(File.join(@destination, 'tags/quotes/feed.xml')))
     entry = REXML::XPath.first(feed, "//a:entry[a:title='Blank tag edge']", ATOM)
     assert_equal ['quotes'], REXML::XPath.match(entry, 'a:category', ATOM).map { |node| node.attributes['term'] }
@@ -400,7 +415,9 @@ class TagCaseVariantsBuildTest < Minitest::Test
     assert_includes listed_titles("tags/#{slug}"), 'Blank tag edge'
     assert File.exist?(File.join(@destination, "tags/#{slug}/feed.xml"))
     assert_includes cards(html('tags')).map { |_, href, _| href }, "/tags/#{slug}/"
-    assert_includes REXML::XPath.match(html('blog/blank-tag-edge'), "//a[@class='tag-pill']").map { |node| node.attributes['href'] }, "/tags/#{slug}/"
+    expected = [slug, "/tags/#{slug}/"]
+    assert_includes tag_pills('blog/blank-tag-edge'), expected
+    assert_includes blog_post_tag_pills('Blank tag edge'), expected
     feed = REXML::Document.new(File.read(File.join(@destination, "tags/#{slug}/feed.xml")))
     assert_includes REXML::XPath.match(feed, '//a:category', ATOM).map { |node| node.attributes['term'] }, slug
   end
@@ -417,5 +434,24 @@ class TagCaseVariantsBuildTest < Minitest::Test
     assert_empty post.data['tags']
     refute @site.config.fetch('all_tags').any? { |tag| tag['slug'] == 'true' }
     assert File.exist?(File.join(@destination, 'blog/blank-tag-edge/index.html'))
+  end
+
+  def test_shared_include_limits_input_tags_and_does_not_leak_limit
+    File.write(File.join(@source, 'tag-limit.html'), <<~HTML)
+      ---
+      layout: default
+      permalink: /tag-limit/
+      tags: ['', quotes, ' ', 'AI Tools', 2024]
+      ---
+      <section id="limited">{% include tag-pills.html tags=page.tags limit=3 %}</section>
+      <section id="all">{% include tag-pills.html tags=page.tags %}</section>
+    HTML
+    rebuild_site
+
+    doc = html('tag-limit')
+    limited = REXML::XPath.match(doc, "//section[@id='limited']/a").map { |node| [node.texts.join, node.attributes['href']] }
+    all = REXML::XPath.match(doc, "//section[@id='all']/a").map { |node| [node.texts.join, node.attributes['href']] }
+    assert_equal [['quotes', '/tags/quotes/']], limited
+    assert_equal [['quotes', '/tags/quotes/'], ['AI Tools', '/tags/ai-tools/'], ['2024', '/tags/2024/']], all
   end
 end

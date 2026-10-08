@@ -1,0 +1,8 @@
+{% for tag in include.tags limit: include.limit %}
+{%- assign tag_label = tag | strip -%}
+{%- comment -%} Tag names with no slug have no pill or archive (#812). {%- endcomment -%}
+{%- assign tag_slug = tag | append: '' | slugify -%}
+{%- if tag_label != '' and tag_slug != '' -%}
+          <a class="tag-pill" href="{{ '/tags/' | append: tag_slug | append: '/' | relative_url }}">{{ tag }}</a>
+{%- endif %}
+          {% endfor %}
