@@ -183,7 +183,7 @@ groups them).
 | Quoted paths reach the salience check | `visual-regression.yml` `detect`, `e2e/detect-changed-pages.js` | A salient file with a non-ASCII name read as non-salient. Harmless in practice only because the affected names were under `_posts/`. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** both readers now take NUL-delimited paths (`git diff --name-only -z`), so accented, spaced, quoted and newline names classify correctly; so do `preview-media.yml` and `e2e/select-specs.js`, which shared the defect. | [cms-platform#539](https://github.com/Adam-S-Daniel/cms-platform/issues/539) |
 | Site verifier is mostly unarmed | jodidaniel.com `scripts/verify-build-artifacts.rb` | With the gate closed, most assertion groups printed "did NOT run"; they ran only on a tree with `site_live: true`. **Fixed and closed 2026-10-04 by [jodidaniel.com#313](https://github.com/jodidaniel/jodidaniel.com/pull/313), which verifies the open-gate build too.** | [jodidaniel.com#306](https://github.com/jodidaniel/jodidaniel.com/issues/306) |
 | Site verify is a no-op | adamdaniel.ai `site-verify` | The site had no verifier script, so the required check succeeded in about 7 s without building. **Fixed and closed 2026-10-04 by [adamdaniel.ai#4006](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4006), a site-owned post-build verifier.** | [adamdaniel.ai#3970](https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3970) |
-| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolled the whole page on a phone, and an author could not fix it from the CMS. **Rule added by [cms-platform#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555), released in v0.1.126. The follow-up scales dimensioned iframes at a default 16:9 ratio; authors may override `aspect-ratio` inline for other formats, while interactive frames without both dimensions keep their authored height. [The overflow spec](https://github.com/Adam-S-Daniel/cms-platform/blob/main/e2e/responsive-overflow.spec.js) now runs in `chromium-desktop-1080`, the required fixture public lane, as well as `chromium-mobile` on consumers. It checks four viewport widths, table scroll reachability, iframe sizing ratios and containment, and iframe content accessibility on the theme and site-owned fixture layouts. A site-owned layout must adopt these rules in its own stylesheet because it does not load the theme CSS; the single-page fixture models that seam. Local consumer-layout evidence is recorded below. The tracker stays open pending release, consumer CSS adoption, and owner acceptance: neither consumer has a built page with a bare Markdown table or fixed-width iframe, so closure needs a consumer page or owner acceptance of fixtures plus served CSS ([owner comment, 2026-10-05](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705)).** | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
+| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolled the whole page on a phone, and an author could not fix it from the CMS. **The fix shipped in v0.1.126 via [cms-platform#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555); the follow-up adds proportional sizing for dimensioned iframes. [The overflow spec](https://github.com/Adam-S-Daniel/cms-platform/blob/main/e2e/responsive-overflow.spec.js) checks iframe ratios only when `homeUsesThemeLayout()`; table reachability and containment are checked on both theme and site-owned fixture layouts. The ratio assertion therefore does not prove sizing on a consumer's own layout. [jodidaniel.com's site-owned home layout](https://github.com/jodidaniel/jodidaniel.com/blob/e75f43a2716c86917875de9532e6bd28fdd4c441/_layouts/home.html) inlines its own stylesheet. The remaining gap is consumer CSS adoption and owner acceptance; see the dated live inspection below. Closure needs a representative consumer page or owner acceptance of fixtures plus served CSS ([owner comment, 2026-10-05](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705)).** | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
 | Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** a `fetch-depth: 2` checkout plus `e2e/ensure-merge-base.js`, which deepens only until the merge base is proven. Measured on adamdaniel.ai `pull_request` runs, three before (v0.1.125) and three after (v0.1.126), medians: `detect` 16 s to 9 s (checkout 10 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483694/job/111374795291), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052769/job/111385134290)); `parity-probe` 28 s to 16 s (checkout 10 s to 1 s; noisy, the first runs took 69-71 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483680/job/111374795567), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052742/job/111385134369)); `media-probe` 19 s to 13 s (checkout 9 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483634/job/111374795274), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052774/job/111385134381)). jodidaniel.com was not measured. | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
 
 ### Local candidate verification for responsive content (#540)
@@ -219,19 +219,39 @@ per-project count check rejected that result. Restored fixture runs passed.
 These reruns corroborate the browser assertions but do not repeat the pinned
 consumer-layout builds above.
 
-This is local candidate compatibility evidence, not deployed validation or
-owner acceptance. Release, adoption of the iframe rules in the site-owned
-consumer stylesheet, and the [owner's requested acceptance evidence](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705)
-remain before closure.
+The local builds above are historical candidate compatibility evidence, not
+deployed validation or owner acceptance. Since then, the fix has shipped and
+both consumers' checked-in `platform.lock` files name v0.1.160 ([jodidaniel.com
+snapshot](https://github.com/jodidaniel/jodidaniel.com/blob/e75f43a2716c86917875de9532e6bd28fdd4c441/platform.lock),
+[adamdaniel.ai snapshot](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/6ff477d6627ae9c7dcf54cd535bee262f0a31e3e/platform.lock)). Those pins and
+the platform's served theme CSS do not establish adoption by a site-owned
+layout.
+
+**Live CSS inspection (2026-10-07, static read-only):** [adamdaniel.ai's
+served `main.css`](https://adamdaniel.ai/assets/css/main.css) returned HTTP 200;
+PostCSS found `box-sizing: border-box` and `max-width: 100%` on iframes,
+`height: auto` and `aspect-ratio: 16 / 9` on `iframe[width][height]`, plus
+contained scrolling for bare tables. [jodidaniel.com's served
+stylesheet](https://jodidaniel.com/assets/css/jodidaniel.css) also returned
+HTTP 200; PostCSS found iframe `max-width` and the same bare-table containment,
+but no dimensioned-iframe sizing rule. [Its home page](https://jodidaniel.com/)
+returned HTTP 200; Python's HTMLParser found one inline style block and no
+linked stylesheets, and that inline CSS lacks a dimensioned-iframe selector.
+No browser assertions were run against either live consumer page, and there is
+no owner acceptance recorded. The remaining work is site-owned CSS adoption
+where needed and the
+[owner's requested acceptance evidence](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705):
+representative pages or owner acceptance of fixtures plus served CSS.
 
 Also noted: neither consumer has a `tests/` directory, though jodidaniel.com's
 deploy callers already list `tests/**`.
 
 ## Not verified
 
-- No new assertion was run against either deployed site. The local neutral
-  consumer-layout builds above do not build either consumer's real content or
-  validate deployment.
+- No browser assertion was run against either deployed site. The dated
+  read-only HTTP/CSS inspection above is static evidence only; the local
+  neutral consumer-layout builds do not build either consumer's real content
+  or validate deployment.
 - Whether the publish loops depend on E2E job names.
 - adamdaniel.ai's `admin/collections.site.yml` was not read.
 
