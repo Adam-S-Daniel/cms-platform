@@ -22,6 +22,14 @@ on:
         description: 'Cut a PRERELEASE instead. Marked prerelease on GitHub, so releases/latest skips it and NO consumer is bumped — pin ONE consumer PR at it to validate a fix on a real preview before cutting the real release.'
         type: boolean
         default: false
+      candidate_adamdaniel_ai_pr:
+        description: 'Stable only: open draft candidate PR in Adam-S-Daniel/adamdaniel.ai, pinned to this dispatched platform commit.'
+        type: string
+        required: false
+      candidate_jodidaniel_com_pr:
+        description: 'Stable only: open draft candidate PR in jodidaniel/jodidaniel.com, pinned to this dispatched platform commit.'
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -34,6 +42,48 @@ jobs:
       # release itself is cut server-side by `gh`, which needs no worktree.
       - name: Check out the ref being tagged
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Node for candidate validation
+        if: ${{ inputs.prerelease != true }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: Install candidate gate dependencies
+        if: ${{ inputs.prerelease != true }}
+        run: npm ci --prefix e2e --ignore-scripts
+
+      - name: Set up Ruby for candidate Gemfile parsing
+        if: ${{ inputs.prerelease != true }}
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
+        with:
+          ruby-version: "3.2"
+
+      - name: Validate both consumer release candidates
+        if: ${{ inputs.prerelease != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          CANDIDATE_SHA: ${{ github.sha }}
+          CANDIDATE_ADAMDANIEL_AI_PR: ${{ inputs.candidate_adamdaniel_ai_pr }}
+          CANDIDATE_JODIDANIEL_COM_PR: ${{ inputs.candidate_jodidaniel_com_pr }}
+          # Existing per-owner dispatch credentials also need consumer Contents,
+          # Pull requests and Checks read permissions for candidate validation.
+          # Unreadable results fail closed; these credentials never update pins.
+          TOKEN_ADAMDANIEL_AI: ${{ secrets.BUMP_DISPATCH_ADAMDANIEL_AI }}
+          TOKEN_JODIDANIEL_COM: ${{ secrets.BUMP_DISPATCH_JODIDANIEL_COM }}
+          CANDIDATE_REPORT: ${{ runner.temp }}/release-candidate-results.json
+        run: node scripts/release-candidate-gate.js
+
+      - name: Upload candidate validation results
+        if: ${{ always() && inputs.prerelease != true }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-candidate-results
+          path: ${{ runner.temp }}/release-candidate-results.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Create the release
         env:
@@ -135,12 +185,13 @@ jobs:
       # platform-bump.yml caller.
       #
       # FAIL-OPEN by design: a missing/expired token or a failed dispatch is a
-      # warning, never a job failure, so a consumer outage cannot block cutting
-      # a release. With no cron behind it, that consumer stays on the old
+      # warning, never a job failure: a dispatch outage does not invalidate the
+      # already published release. With no cron behind it, that consumer stays on the old
       # version until someone re-dispatches by hand — the `::warning::` names
       # the exact command. Fine-grained PATs are
       # minted per RESOURCE OWNER, so each consumer owner supplies its own
-      # secret: Actions read+write on that one repo, nothing else.
+      # secret: Actions read+write on that one repo; candidate validation above
+      # additionally requires Contents, Pull requests and Checks read.
       # A prerelease is validated on ONE consumer PR, pinned by hand. Dispatching
       # the consumers' platform-bump would be a no-op today (it resolves
       # releases/latest, which skips prereleases, and would exit "already on

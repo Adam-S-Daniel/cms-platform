@@ -391,6 +391,7 @@ const PLATFORM_META_SPECS = [
   // both fail-open). Reads the PLATFORM workflow files — platform self-CI
   // only.
   "release-fanout.test.js",
+  "release-candidate-gate.test.js",
   "decap-config-render-parity.test.js",
   // #5 GOAL 2 — drives scripts/render-decap-config.rb + reads theme/admin
   // (config.base.yml + field_library.yml) to render a $ref fixture and assert

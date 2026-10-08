@@ -114,6 +114,13 @@ PR (a manifest `version` change, or a `release/*` branch) also needs
 reviewer independent of the author after reviewing that head (#526 criterion 3,
 owner decision 2026-10-05): the REQUIRED `release-review-gate` check fails
 without it, and a new push makes the stamp stale.
+Before a stable tag, `release.yml` also requires open draft candidate PR numbers
+for BOTH consumers, each pinned to the dispatched platform commit's full SHA.
+`scripts/release-candidate-gate.js` validates their own required results and all
+e2e/site-verifier work jobs while production pins stay fixed. Missing, skipped,
+failed or cancelled validation refuses promotion. See
+[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for preparing the drafts and the
+`release-candidate-results` artifact; prereleases bypass this stable gate.
 
 ## The model
 
