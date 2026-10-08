@@ -20,7 +20,7 @@ permalink: /blog/
       <h3 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h3>
       {% if post.tags %}
       <div class="post-tags">
-        {% include tag-pills.html tags=post.tags %}
+        {% include tag-pills.html tags=post.tags indent="        " %}
       </div>
       {% endif %}
     </li>

@@ -866,13 +866,38 @@ worker count: at four workers, CPU and wall medians fall about **7%** and
 measurements establish the targeted CPU reduction and a modest local
 four-worker improvement, without establishing a faster GitHub job.
 
-Three **before-only CI** `Run pure-fs harness lints` step samples are
-[79 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242331905/job/111553363207),
-[56 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242134166/job/111552804256), and
-[53 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37240324345/job/111547578693).
-Post-change CI samples remain unavailable because this sprint did not push or
-dispatch workflows. The issue's three-run CI before/after requirement remains
-open until the proposed change runs there.
+The change shipped in [PR #609](https://github.com/Adam-S-Daniel/cms-platform/pull/609),
+merged at [6d1d4b7](https://github.com/Adam-S-Daniel/cms-platform/commit/6d1d4b7896ccc60a648bdd2d30e8740c5afe81b3).
+The table records the three before and three after `Run pure-fs harness lints`
+step samples. Each link opens the job that ran the step; the commit link names
+the source revision. All six steps succeeded with four workers.
+
+| Side | Revision | Step time | Files | Passed / skipped / total |
+|---|---|---:|---:|---:|
+| Before | [3818240](https://github.com/Adam-S-Daniel/cms-platform/commit/381824060a448677eb78dc7cda5bf2889271d60f) | [79 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242331905/job/111553363207) | 183 | 3,639 / 114 / 3,753 |
+| Before | [90fedf7](https://github.com/Adam-S-Daniel/cms-platform/commit/90fedf7e9b3b7a2436ff71fdf74a12f262ba88f7) | [56 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242134166/job/111552804256) | 183 | 3,639 / 114 / 3,753 |
+| Before | [15936c0](https://github.com/Adam-S-Daniel/cms-platform/commit/15936c05b32748819caa0e59555f91049ea4ef82) | [53 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37240324345/job/111547578693) | 180 | 3,615 / 114 / 3,729 |
+| After | [6d1d4b7](https://github.com/Adam-S-Daniel/cms-platform/commit/6d1d4b7896ccc60a648bdd2d30e8740c5afe81b3) | [77 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37259568214/job/111603740967) | 185 | 3,765 / 114 / 3,879 |
+| After | [31de067](https://github.com/Adam-S-Daniel/cms-platform/commit/31de067025856523f7a05e7a1ca91e742903e272) | [77 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37260196293/job/111605608315) | 185 | 3,765 / 114 / 3,879 |
+| After | [f009dc2](https://github.com/Adam-S-Daniel/cms-platform/commit/f009dc2462a7fe56f4e90ed34d62bfc6e6b9f977) | [78 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37265257024/job/111620607810) | 185 | 3,777 / 114 / 3,891 |
+
+An Acorn AST comparison of the five files found the same 220 syntactic test
+registration sites and 657 `expect()` call sites at all six revisions. It also
+compared the generated-case inputs: the scaffold `SHAPES` array has the same
+14 entries, and the scheduled-health `CALLERS` array has the same two entries
+and titles. Expanding those loops gives the same 237 Playwright registrations
+per revision: 14 + 15 + 24 + 102 + 82. The YAML parser found an identical
+`Run pure-fs harness lints` command, deny list, and worker settings
+(`PW_PROJECT=chromium-light`, `PW_WORKERS=100%`) at all six revisions. These
+checks establish equivalent selected five-file workloads; they do not claim
+that every assertion body is semantically unchanged.
+
+The full lane's workload is not identical: the file and test totals above
+include other specs added between the samples. The raw CI medians are 56 s
+before and 77 s after, with the after median 37.5% higher. These noisy samples
+have different full-lane workloads, so they establish neither a CI speedup nor
+a causal CI regression. The targeted local CPU reduction above remains the
+established result.
 
 ### act learnings (from this measurement session)
 
