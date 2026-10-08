@@ -31,19 +31,15 @@ the pin-consistency guard fails. The two consumers differ slightly:
 
 - **Both consumers** pin every cross-repo platform ref — reusable workflow and
   composite action alike — by **`@vX.Y.Z`** TAG, so only the version string
-  changes. Measured 2026-08-20 at v0.1.88 and re-checked 2026-10-04 at
-  v0.1.130: every ref in both repos ends in the release tag, with no SHA pin
-  and no pin comment. The ref count moves with every workflow added or
-  removed, so read it off the pin-consistency summary line, not this file.
+  changes: every ref ends in the release tag, with no SHA pin and no pin
+  comment. The ref count moves with every workflow added or removed, so read
+  it off the pin-consistency summary line, not this file.
 - **jodidaniel.com additionally** has `Gemfile.lock`'s git `revision:`, which is
   the resolved commit SHA and must move to the new release commit too.
-- **Historical, and why a stale doc here bites:** adamdaniel.ai once SHA-pinned
-  its reusables with a trailing `# vX.Y.Z (date)` comment, and composites were
-  SHA-pinned with the version in that comment. Both forms are gone — the tag
-  carve-out took the reusables, and the 2026-08-20 fleet retirement of the pin
-  comment took the composites (see the `github-actions-sha-pinning` skill). A
-  bump replaces version STRINGS now; if you find yourself hunting 40-hex SHAs in
-  a consumer's workflows, you are working from the old model.
+- **A bump replaces version STRINGS, never SHAs** (bar `Gemfile.lock`'s
+  `revision:` above). If you find yourself hunting 40-hex SHAs or `# vX.Y.Z`
+  comments in a consumer's workflows, you are working from the retired
+  SHA-plus-comment model (see the `github-actions-sha-pinning` skill).
 
 The robust, idempotent way is the same script the workflow runs. It moves only
 real pins (a parser finds them; prose that names the old version stays as it
@@ -111,10 +107,9 @@ it skips the workflow-SET and workflow-CONTENT parity that police a consumer's
 on, which is why the flag, not the reader, has to be the thing that enforces it.
 Don't look for a fixed check COUNT here — it is
 derived from how many pin references the consumer's tree carries and moves with
-every workflow added or removed, which is why the numbers this paragraph used to
-quote ("96", degrading to "61") were both stale when measured on 2026-08-20 (90
-and 57, on both consumers, at `platform_ref` v0.1.86). Read the count off the
-script's own summary line, which prints the real one every run.
+every workflow added or removed (a count quoted here once went stale: see
+`docs/PIN-CONSISTENCY.md`). Read the count off the script's own summary line,
+which prints the real one every run.
 
 If it reports a mismatch, a reference was missed (commonly `Gemfile.lock`'s
 `revision:` on jodidaniel, or a stale version token in a LEFTOVER `# vX.Y.Z`
@@ -187,11 +182,9 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   keys the template gained are added with the template's comments, keys it
   dropped are removed, changed values take the template's; the consumer's own
   comments and formatting are kept, and the result is re-parsed before it is
-  saved. The PR body names each reconciled job. **Before this (v0.1.113 →
-  v0.1.114) it was a hand edit:** #467 added `app_private_key` to the
-  `dependabot-rearm-sweep` template, and both bump PRs (adamdaniel.ai#3891,
-  jodidaniel.com#281) failed `workflow-content: DRIFT ... secrets: map` until
-  it was added by hand. **When it still needs a hand edit:** the PR body
+  saved. The PR body names each reconciled job (the bump PRs that failed
+  `workflow-content: DRIFT ... secrets: map` before it existed:
+  `docs/PIN-CONSISTENCY.md`). **When it still needs a hand edit:** the PR body
   carries a `:warning:` naming a `secrets:` map that could NOT be reconciled
   (a flow-style job, an anchored map — the run log's `MANUAL` line says which),
   or the bump targets a release older than the script. Then add or drop the
@@ -202,9 +195,7 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   the class of drift that let jodidaniel's sweep caller silently lose its
   `CMS_E2E_PAT` map and `startup_failure` for weeks — now caught, and fixed,
   at the bump.
-- **Since v0.1.76 the workflow callers' `pull_request` types omit `edited`**
-  (#222 part 2; the v0.1.76 bump carried that 9-file edit alongside the pin
-  rewrite, and no bump crosses it now). **`deploy-preview.yml` is the ONE
+- **The workflow callers' `pull_request` types omit `edited`** (#222 part 2). **`deploy-preview.yml` is the ONE
   exception and KEEPS `closed`** — it is the only caller declaring it, and the
   reusable's teardown (S3 `rm --recursive` + CloudFront invalidation +
   bot-comment update) fires only on that action; the replacement lint asserts

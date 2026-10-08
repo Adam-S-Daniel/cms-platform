@@ -43,6 +43,83 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-08 — cms-platform/sveltia-cms-playwright-demo — remove
+
+- Motivation: the 2026-10-08 prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found the skill describes Sveltia CMS, which this platform no longer runs (Decap replaced it; browser-testing's "Why not Sveltia" keeps the reason), while its description loads every session. A re-grep found no reference in this repo or its plugin manifests; outside it, consumers' `skills.lock` pin it (their re-pin step), and adamdaniel.ai `docs/SKILLS.md` and skills-evals `DESIGN.md` / `evals/non-coverage.yml` still name it.
+- Change: the `skills/sveltia-cms-playwright-demo/` directory is deleted (PR pending).
+- Eval: exempt (DESIGN.md non-coverage table: skip, historical reference to retired tech)
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/browser-testing — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found the "Platform CI shape" bullets claiming 10 matrix jobs and no `--shard`, where `e2e/ci-matrix.js --matrix` emits 14 entries with both admin projects sharded three ways; a step citing a nonexistent AGENTS.md "E2E testing table"; and a section documenting a deleted showcase script.
+- Change: the CI-shape bullets, the parallelism bullet and the failure-comment marker (`e2e-failure-summary-<slot>`) match `e2e-tests.yml`; "Adding a new matrix dimension" now says to paste `node ci-matrix.js --matrix` into the workflow's static `matrix.include` (`e2e/ci-matrix.test.js`); the "Visual showcase — REMOVED" section is gone, its surviving fact (the ARIA-contract snapshots are the only committed ones) moved into "Visual regression" with a pointer to `docs/VERSION-HISTORY.md` v0.1.34; the two freshness-allow entries for its citations are dropped (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/post-failure-comment — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found the rationale asserting agents have no `gh` CLI, which other skills drive, and a "Files" bullet citing an AGENTS.md section that does not exist.
+- Change: the rationale names what reading a log needs (an authenticated `gh run view --log-failed` or an Actions-capable connector) and who lacks it; the dangling AGENTS.md bullet is removed (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/aws-bootstrap — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found "Both distributions set ErrorCachingMinTTL: 0" where `infrastructure/bootstrap/template.yaml` has a third, conditional `AdminDistribution` with the same setting, plus migration-relative wording ("Unlike an earlier single-site setup", "the old ErrorCachingMinTTL: 300").
+- Change: the resource table gains the admin distribution row; the TTL section states the current rule for all three distributions and why, with the incident pointed at `docs/VERSION-HISTORY.md` v0.1.13 (PR pending).
+- Eval: exempt (DESIGN.md non-coverage table: freshness lint)
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/consumer-repo-provisioning — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found the fan-out secret's failure mode described as degrading to a "weekly platform-bump cron" that `examples/site/.github/workflows/platform-bump.yml` does not have (release.yml's own warning says "no cron backstop"), and the `CMS_PLATFORM_PAT` section and a GITHUB_TOKEN note written as history.
+- Change: a missing dispatch token now means no bump until a manual `gh workflow run platform-bump.yml`; the `CMS_PLATFORM_PAT` section states only the surviving rules, pointing at `docs/VERSION-HISTORY.md` v0.1.103 and `docs/CI-INVARIANTS.md` for the history; its freshness-allow marker follows the renamed heading (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/github-actions-sha-pinning — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found a citation of an AGENTS.md "Pinning GitHub Actions" section that this repo's AGENTS.md does not have, and Rule 2 plus the Dependabot section framed as a reversal history.
+- Change: the source of the universal rule is now the managed AGENTS.md "The floor" plus the fleet guidance in user memory; Rule 2, its no-exception subsection, the self-repair subsection and the consumer-cooldown paragraph state the rule and its reasons, with the incidents (#179, #194, #220) and superseded rationales pointed at `docs/CI-INVARIANTS.md` (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/ci-watcher-loops — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found two polling floors for one point: 60 s under "When poll intervals matter", 30 s under "What NOT to do".
+- Change: the "What NOT to do" bullet now defers to the 60 s floor (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/admin-config-render — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found "Full mechanics live in AGENTS.md", whose "Admin delivery" section is only a pointer to `docs/ADMIN-DELIVERY.md`.
+- Change: the skill points at `docs/ADMIN-DELIVERY.md` directly (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/editorial-label-audit — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found a section describing the pre-v0.1.48 transient-red state rather than the current rule.
+- Change: the section states the label-at-creation rule for every non-Decap `cms/*` PR writer, with the fixed incident pointed at `docs/VERSION-HISTORY.md` v0.1.48 (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/platform-release-and-bump — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found dated measurements, quoted check counts and version-relative wording ("Since v0.1.76", "Before this (v0.1.113 → v0.1.114)") that rot.
+- Change: those passages state the current fact; the measurements moved to `docs/PIN-CONSISTENCY.md`, the #467 incident is pointed at its existing account there (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
+## 2026-10-08 — cms-platform/code-quality — edit
+
+- Motivation: the prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found the callout recounting the v0.1.82 sync transport instead of how the skill reaches a repo now.
+- Change: one sentence now says the skill ships in the marketplace bundle and can load where none of the toolchain exists (PR pending).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change.
+- Outcome: pending merge.
+
 ## 2026-10-05 — cms-platform/ci-watcher-loops — edit
 
 - Motivation: in skills-evals ci-watcher-loops rounds 3 and 4 (https://github.com/Adam-S-Daniel/skills-evals/issues/89#issuecomment-5997263591, https://github.com/Adam-S-Daniel/skills-evals/issues/89#issuecomment-5998102731), with-skill trials discarded `gh workflow run`'s output and found the run with `gh run list --limit 1` (3 of 3 in round 4, 0 of 3 without the skill): an extra read, and a race that can pick another actor's run of the same workflow.
