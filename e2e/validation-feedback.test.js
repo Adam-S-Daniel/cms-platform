@@ -128,6 +128,7 @@ function load({
   const de = { ui: { toast: { missingRequiredField: MISSING_DE } } };
   const frames = [];
   const listeners = {};
+  let toastObserver;
   const toasts = [];
   const styles = [];
   // An entry is one error list: a string, or an array of <li> texts (which
@@ -153,6 +154,7 @@ function load({
   const document = {
     head,
     body,
+    documentElement: fakeEl(),
     createElement: () => fakeEl(),
     addEventListener(type, fn, capture) {
       listeners[type] = { fn, capture };
@@ -163,6 +165,9 @@ function load({
       return null;
     },
     querySelectorAll(sel) {
+      if (sel === '[class*="Toastify__toast--error"]') {
+        return decapToasts.filter((t) => t.className.includes("Toastify__toast--error"));
+      }
       if (sel.includes("Toastify")) return decapToasts;
       return sel.includes("ControlErrorsList") ? errorEls : [];
     },
@@ -175,6 +180,10 @@ function load({
       innerHeight,
     },
     document,
+    MutationObserver: class {
+      constructor(fn) { toastObserver = fn; }
+      observe() {}
+    },
     setTimeout: () => 1,
     console: { info() {}, warn() {} },
   };
@@ -206,15 +215,58 @@ function load({
     decapToasts.push(el);
     return el;
   };
+  const addMessageToast = (text, className = "Toastify__toast Toastify__toast--error") => {
+    let value = text;
+    let writes = 0;
+    const leaf = {
+      nodeType: 3,
+      get nodeValue() { return value; },
+      set nodeValue(next) { value = next; writes++; },
+    };
+    const inner = { nodeType: 1, childNodes: [leaf] };
+    const message = {
+      nodeType: 1,
+      childNodes: [inner],
+      get textContent() { return value; },
+    };
+    const close = fakeEl();
+    const toast = addDecapToast(text, { className });
+    toast.found = {
+      '[class*="Toastify__toast-body"]': message,
+      '[class*="Toastify__close-button"]': close,
+    };
+    return { toast, message, close, get writes() { return writes; } };
+  };
   // The state Decap's re-render leaves behind: what a later click will see.
   const setErrors = (next) => {
     errorEls.length = 0;
     next.forEach((t) => errorEls.push(fakeEl({ textContent: t })));
   };
-  return { widget, listeners, toasts, styles, errorEls, click, press, setErrors, decapToasts, stale, raiseDecapToast, addDecapToast };
+  return {
+    widget, listeners, toasts, styles, errorEls, click, press, setErrors, decapToasts,
+    stale, raiseDecapToast, addDecapToast, addMessageToast, flushToastMutations: () => toastObserver(),
+  };
 }
 
 test.describe("validation-feedback.js (#730)", () => {
+  test("only the exact English fetch failure gets plain save copy, without losing Dismiss", () => {
+    const t = load();
+    const failed = t.addMessageToast("Failed to persist entry: TypeError: Failed to fetch");
+    const unrelated = t.addMessageToast("Failed to persist entry: permission denied");
+    const translated = t.addMessageToast("Speichern fehlgeschlagen: TypeError: Failed to fetch");
+    const success = t.addMessageToast("Failed to persist entry: TypeError: Failed to fetch", "Toastify__toast Toastify__toast--success");
+    t.flushToastMutations();
+    expect(failed.message.textContent).toBe(
+      "Couldn't save. Your changes are still in this editor. Check your connection and try again before leaving this page.",
+    );
+    expect(failed.toast.querySelector('[class*="Toastify__close-button"]')).toBe(failed.close);
+    expect(unrelated.message.textContent).toBe("Failed to persist entry: permission denied");
+    expect(translated.message.textContent).toBe("Speichern fehlgeschlagen: TypeError: Failed to fetch");
+    expect(success.message.textContent).toBe("Failed to persist entry: TypeError: Failed to fetch");
+    t.flushToastMutations();
+    expect(failed.writes, "the observer's own change must not be repeated").toBe(1);
+  });
+
   test("replaces Decap's regexPattern phrase so the site's message shows alone", () => {
     const { widget } = load();
     expect(widget.regexPattern).toBe("%{fieldLabel}: %{pattern}");

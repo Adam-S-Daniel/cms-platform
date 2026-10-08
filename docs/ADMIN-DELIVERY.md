@@ -425,6 +425,27 @@ Test: `e2e/cms-admin-toast-passthrough.spec.js` (390x844: a hit test and a real 
 Publish and the avatar under a live toast, the close button still closes it, and the
 rule is off above 1100px).
 
+## Notices stay clear of Decap toasts ([#658](https://github.com/Adam-S-Daniel/cms-platform/issues/658))
+
+On a page with a branch or coming-soon notice,
+[notice-toast-clearance.js](../theme/admin/notice-toast-clearance.js)
+measures the bottom of both in-flow notices as they appear, wrap, scroll, or
+disappear. [admin-notice-band.css](../theme/admin/admin-notice-band.css) places Decap's
+top-right toasts below that edge, with the existing halfway-down phone
+position as a minimum; its 44px Dismiss target stays clear of the sticky
+toolbar. The rule uses react-toastify names,
+so an upstream rename leaves Decap's default layout in place.
+
+Decap interpolates arbitrary save errors into one `ui.toast.onFailToPersist`
+locale phrase. [validation-feedback.js](../theme/admin/validation-feedback.js)
+therefore changes only the exact
+English `Failed to persist entry: TypeError: Failed to fetch` toast body to
+plain words. The message says the unsaved changes are still in the current
+editor and asks for a connection check and retry before leaving; the fetch
+error alone does not establish an image as the cause or promise recovery after
+navigation. Other failures and locales retain Decap's copy. The change edits
+only the body's text node, preserving its Dismiss button.
+
 ## The /admin logo is SITE-owned; the gem ships a neutral placeholder (#25)
 
 The rule (issue #25): the /admin logo is SITE-OWNED and the gem ships only a

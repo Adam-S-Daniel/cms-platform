@@ -81,6 +81,13 @@
  *      before). A held key (`repeat`) is not a second attempt. The toast's
  *      close button is a real <button>, so it is already reachable by Tab.
  *
+ * ── Save failure copy (cms-platform#658) ───────────────────────────────
+ * Decap 3.15.1 interpolates any persist error into one locale phrase. Only
+ * its exact English network failure is rewritten here; the fetch error does
+ * not identify an image as the cause or prove that anything reached storage.
+ * The observer changes one text node inside the toast body, leaving Decap's
+ * close button and every unrelated or translated error untouched.
+ *
  * Everything keys on Decap's public surface (`CMS.getLocale`, the button
  * text) or on the `ControlErrorsList` Emotion label; if Decap changes any of
  * them the affected part is a silent no-op and Decap behaves as before.
@@ -105,6 +112,11 @@
   var FOCUSABLE =
     'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"]';
   var DECAP_CLOSE = '[class*="Toastify__close-button"]';
+  var FETCH_FAILURE = "Failed to persist entry: TypeError: Failed to fetch";
+  var FETCH_FAILURE_COPY =
+    "Couldn't save. Your changes are still in this editor. Check your connection and try again before leaving this page.";
+  var DECAP_ERROR_TOAST = '[class*="Toastify__toast--error"]';
+  var DECAP_TOAST_BODY = '[class*="Toastify__toast-body"]';
   // The locale codes Decap 3.15.1 registers (its bundled phrase sets). A code
   // it lacks is a locale this shim cannot see: that toast just stays open.
   var DECAP_LOCALES = [
@@ -219,6 +231,31 @@
       } catch {
         /* the stale toast is only noise; leave it */
       }
+    }
+  }
+
+  function rewriteFetchFailure() {
+    var errors = document.querySelectorAll(DECAP_ERROR_TOAST);
+    for (var i = 0; i < errors.length; i++) {
+      var body = errors[i].querySelector(DECAP_TOAST_BODY);
+      if (!body || String(body.textContent || "").trim() !== FETCH_FAILURE) continue;
+      // react-toastify 3.15.1 wraps the message in a div. Edit only its
+      // single text leaf; replacing body.textContent would discard children.
+      var stack = [body];
+      var leaf = null;
+      while (stack.length) {
+        var node = stack.pop();
+        if (node.nodeType === 3) {
+          if (String(node.nodeValue || "").trim() !== FETCH_FAILURE || leaf) {
+            leaf = null;
+            break;
+          }
+          leaf = node;
+        } else if (node.childNodes) {
+          for (var j = node.childNodes.length - 1; j >= 0; j--) stack.push(node.childNodes[j]);
+        }
+      }
+      if (leaf && leaf.nodeValue !== FETCH_FAILURE_COPY) leaf.nodeValue = FETCH_FAILURE_COPY;
     }
   }
 
@@ -435,6 +472,16 @@
 
   setLocalePhrase();
   addStyle();
+  try {
+    new MutationObserver(rewriteFetchFailure).observe(document.documentElement, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    rewriteFetchFailure();
+  } catch {
+    /* Decap keeps its own message if the toast surface is unavailable. */
+  }
   document.addEventListener("click", afterClick, true);
   document.addEventListener("keydown", afterKeydown, true);
 })();
