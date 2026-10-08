@@ -58,3 +58,12 @@ body.cms-notice-band > #nc-root {
   position: relative;
   flex: 1 1 auto;
 }
+
+/* Decap's success toast normally enters at the viewport's top-right, over
+ * the in-flow branch and coming-soon notices. Their wrapped height is
+ * measured by notice-toast-clearance.js; keep the toast below that edge.
+ * The 50% floor preserves the phone placement from admin-mobile.css. */
+body.cms-notice-band:has(> #cms-branch-binding-banner, > #cms-site-gate-banner)
+  [class*="Toastify__toast-container--top-right"] {
+  top: max(50%, calc(var(--cms-admin-notice-bottom, 0px) + 12px)) !important;
+}
