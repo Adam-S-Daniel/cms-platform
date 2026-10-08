@@ -57,11 +57,11 @@ class TagCaseVariantsBuildTest < Minitest::Test
     @tmpdir = Dir.mktmpdir('tag-case-variants-build-')
     @source = File.join(@tmpdir, 'source')
     @destination = File.join(@tmpdir, 'output')
-    %w[_posts _tags _layouts _includes tags].each { |d| FileUtils.mkdir_p(File.join(@source, d)) }
+    %w[_posts _tags _layouts _includes tags blog].each { |d| FileUtils.mkdir_p(File.join(@source, d)) }
     %w[default.html post.html tag.html atom_feed.xml].each do |layout|
       FileUtils.cp(File.join(ROOT, 'theme', '_layouts', layout), File.join(@source, '_layouts', layout))
     end
-    %w[feed-link.html favicon.html rel-me.html header.html footer.html share-row.html
+    %w[feed-link.html favicon.html rel-me.html header.html footer.html share-row.html tag-pills.html
        analytics/cloudwatch-rum.html].each do |include|
       destination = File.join(@source, '_includes', include)
       FileUtils.mkdir_p(File.dirname(destination))
@@ -69,6 +69,8 @@ class TagCaseVariantsBuildTest < Minitest::Test
     end
     FileUtils.cp(File.join(ROOT, 'e2e', 'fixture-site', 'tags', 'index.html'),
                  File.join(@source, 'tags', 'index.html'))
+    FileUtils.cp(File.join(ROOT, 'e2e', 'fixture-site', 'blog', 'index.html'),
+                 File.join(@source, 'blog', 'index.html'))
     {
       'release' => { 'name' => 'Release' },
       'fixture-tag' => { 'name' => 'Fixture Tag', 'test_fixture' => true },
@@ -417,5 +419,30 @@ class TagCaseVariantsBuildTest < Minitest::Test
     assert_empty post.data['tags']
     refute @site.config.fetch('all_tags').any? { |tag| tag['slug'] == 'true' }
     assert File.exist?(File.join(@destination, 'blog/blank-tag-edge/index.html'))
+  end
+
+  def test_fixture_blog_pills_skip_blank_labels_and_empty_slugs
+    add_post_and_rebuild(tags: ['quotes', "\u00a0", '!!!', '🙂', '', nil])
+    item = REXML::XPath.match(html('blog'), "//li[@class='post-item']").find do |node|
+      REXML::XPath.first(node, ".//h3/a").text == 'Blank tag edge'
+    end
+    assert_equal ['/tags/quotes/'], REXML::XPath.match(item, ".//a[@class='tag-pill']").map { |node| node.attributes['href'] }
+  end
+
+  def test_post_and_fixture_blog_tag_regions_preserve_normal_bytes
+    [['quotes', 'AI Tools'], ['Quotes', 'release']].each_with_index do |tags, index|
+      add_post_and_rebuild(tags: tags, title: "Normal tags #{index}")
+      post = File.read(File.join(@destination, "blog/normal-tags-#{index}/index.html"))
+      blog = File.read(File.join(@destination, 'blog/index.html'))
+      item = blog.split('<li class="post-item">').find { |fragment| fragment.include?("/blog/normal-tags-#{index}/") }
+      [[post, 10, 8], [item, 8, 6]].each do |rendered, indent, closing_indent|
+        region = rendered.split('<div class="post-tags">', 2).last.split('</div>', 2).first
+        # Exact pre-include bytes, including each loop's trailing indentation.
+        expected = "\n" + tags.map do |tag|
+          "#{' ' * indent}<a class=\"tag-pill\" href=\"/tags/#{Jekyll::Utils.slugify(tag)}/\">#{tag}</a>\n"
+        end.join + "#{' ' * indent}\n#{' ' * closing_indent}"
+        assert_equal expected, region
+      end
+    end
   end
 end

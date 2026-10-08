@@ -88,6 +88,34 @@ cms:
   `/tags/` index and tag cloud already read `site.all_tags`
   ([build regression](spec/tag_case_variants_build_test.rb)).
 
+## Shared tag pills
+
+Theme and site templates use [`tag-pills.html`](_includes/tag-pills.html) with
+`tags=page.tags` or `tags=post.tags`. Each tag is stringified before `slugify`;
+a stripped-empty label or empty slug renders no pill. The displayed label
+keeps the original tag. Optional `limit=3` counts input tags, including skipped
+names, like Liquid's original `for` limit. Optional `indent` supplies the
+spaces after each pill's newline, preserving existing rendered bytes.
+
+After the release carrying this include reaches the consumer, a follow-up PR
+in adamdaniel.ai should replace the entire tag loop in
+[`blog/index.html`, lines 38–41](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/blog/index.html#L38)
+with this exact line (10 leading spaces and 10 spaces inside `indent`):
+
+```liquid
+          {% include tag-pills.html tags=post.tags indent="          " %}
+```
+
+Replace the entire limited tag loop in
+[`index.html`, lines 49–52](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/index.html#L49)
+with this exact line (14 leading spaces and 14 spaces inside `indent`):
+
+```liquid
+              {% include tag-pills.html tags=post.tags limit=3 indent="              " %}
+```
+
+These replacements are deferred; the consumer files are unchanged.
+
 Updates flow to sites via a gem-version bump — `platform-bump`'s job, not
 Dependabot's: since #242, Dependabot's `bundler` ecosystem carries an explicit
 `ignore` for this gem (see `docs/SYNC.md` in cms-platform).

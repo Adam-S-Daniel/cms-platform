@@ -1,49 +1,47 @@
 # frozen_string_literal: true
 
-# Real Liquid regression for the post-layout tag-pill href. Run:
+# Real Liquid regression for the shared tag-pill include. Run:
 #   ruby theme/spec/post_tag_pill_url_test.rb
 #
 # Jekyll's Liquid parser and filters are used so the test exercises the same
-# assign, strip, slugify and relative_url behavior as the rendered layout.
+# assign, strip, slugify and relative_url behavior as theme and site templates.
 
 require 'minitest/autorun'
 require 'rexml/document'
 require 'jekyll'
+require 'tmpdir'
+require 'fileutils'
 
 class PostTagPillUrlTest < Minitest::Test
-  LAYOUT = File.expand_path('../_layouts/post.html', __dir__)
-
   def setup
-    assert File.exist?(LAYOUT), "layout must exist at #{LAYOUT}"
-    @src = File.read(LAYOUT)
+    @tmpdir = Dir.mktmpdir('tag-pills-liquid-')
+    FileUtils.mkdir_p(File.join(@tmpdir, '_includes'))
+    include_path = File.expand_path('../_includes/tag-pills.html', __dir__)
+    FileUtils.cp(include_path, File.join(@tmpdir, '_includes')) if File.exist?(include_path)
+    @site = Jekyll::Site.new(Jekyll.configuration(
+      'source' => @tmpdir, 'destination' => File.join(@tmpdir, '_site'),
+      'baseurl' => '', 'quiet' => true, 'plugins' => []
+    ))
   end
 
-  def tag_loop(node)
-    if node.is_a?(Liquid::For)
-      collection = node.collection_name
-      return node if node.variable_name == 'tag' && collection.name == 'page' && collection.lookups == ['tags']
-    end
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if @tmpdir
+  end
 
-    children = []
-    children.concat(node.nodelist) if node.respond_to?(:nodelist) && node.nodelist.is_a?(Array)
-    children.concat(node.blocks.map(&:attachment)) if node.respond_to?(:blocks)
-    children.each do |child|
-      found = tag_loop(child)
-      return found if found
-    end
-    nil
+  def render_pills(tags, limit: nil)
+    source = if limit.nil?
+               "{% include tag-pills.html tags=tags %}"
+             else
+               "{% include tag-pills.html tags=tags limit=limit %}"
+             end
+    rendered = Liquid::Template.parse(source).render!(
+      { 'tags' => tags, 'limit' => limit }, registers: { site: @site }
+    )
+    REXML::XPath.match(REXML::Document.new("<div>#{rendered}</div>"), "//a[@class='tag-pill']")
   end
 
   def tag_pill_href_for(tag_value)
-    loop_node = tag_loop(Liquid::Template.parse(@src).root)
-    refute_nil loop_node, "could not find the page.tags loop in #{LAYOUT}"
-
-    template = Liquid::Template.new
-    template.root = loop_node
-    site = Struct.new(:config, :filter_cache).new({ 'baseurl' => '' }, {})
-    rendered = template.render!({ 'page' => { 'tags' => [tag_value] } }, registers: { site: site })
-    document = REXML::Document.new("<div>#{rendered}</div>")
-    anchor = REXML::XPath.first(document, "//a[@class='tag-pill']")
+    anchor = render_pills([tag_value]).first
     anchor && anchor.attributes['href']
   end
 
@@ -79,5 +77,26 @@ class PostTagPillUrlTest < Minitest::Test
 
   def test_nil_tag_renders_no_pill
     assert_nil tag_pill_href_for(nil)
+  end
+
+  def test_number_tag_is_stringified_before_slugify
+    anchor = render_pills([2024]).first
+    assert_equal '/tags/2024/', anchor.attributes['href']
+    assert_equal '2024', anchor.text
+  end
+
+  def test_empty_slug_tags_render_no_pill
+    assert_empty render_pills(["\u00a0", '!!!', '🙂', '', nil])
+  end
+
+  def test_limit_counts_input_tags_including_invalid_tags
+    anchors = render_pills(['quotes', '', 'AI Tools', 'release'], limit: 3)
+    assert_equal ['/tags/quotes/', '/tags/ai-tools/'], anchors.map { |anchor| anchor.attributes['href'] }
+    assert_empty render_pills(['quotes'], limit: 0)
+  end
+
+  def test_omitting_limit_renders_all_valid_tags_and_preserves_labels
+    anchors = render_pills(['quotes', ' AI Tools ', 'release', 2024])
+    assert_equal ['quotes', ' AI Tools ', 'release', '2024'], anchors.map(&:text)
   end
 end

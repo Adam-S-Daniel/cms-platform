@@ -29,7 +29,7 @@ Liquid::Template.register_tag('seo', NavTagPolishSeoStandIn)
 class PublicNavAndTagPolishBuildTest < Minitest::Test
   ROOT = File.expand_path('../..', __dir__)
   LAYOUTS = %w[default.html post.html tag.html].freeze
-  INCLUDES = %w[favicon.html rel-me.html header.html footer.html share-row.html feed-link.html
+  INCLUDES = %w[favicon.html rel-me.html header.html footer.html share-row.html tag-pills.html feed-link.html
                 analytics/cloudwatch-rum.html].freeze
   WORDS_FOR_TWO_MINUTES = ('word ' * 250).freeze # 250 / 200 + 1 == 2
 

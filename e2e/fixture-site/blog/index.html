@@ -20,10 +20,7 @@ permalink: /blog/
       <h3 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h3>
       {% if post.tags %}
       <div class="post-tags">
-        {% for tag in post.tags %}
-        {%- assign tag_slug = tag | slugify -%}
-        <a class="tag-pill" href="{{ '/tags/' | append: tag_slug | append: '/' | relative_url }}">{{ tag }}</a>
-        {% endfor %}
+        {% include tag-pills.html tags=post.tags indent="        " %}
       </div>
       {% endif %}
     </li>
