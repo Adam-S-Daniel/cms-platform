@@ -240,6 +240,12 @@ adds an "N min read" line, an "All tags" link only when the site has a `/tags/` 
 `innerText` applies `text-transform`, `e2e/content-fixtures.js` `discoverTags` (which ships to consumers) now reads `textContent`. The new-tab inconsistency for the home
 hero LINKEDIN link is adamdaniel.ai's own `index.html`, left to the site. New `theme-public-polish-css.test.js` (in `PLATFORM_META_SPECS`),
 `theme/spec/public_nav_and_tag_polish_build_test.rb`, and a `discoverTags` case in `content-fixtures.test.js`.
+Follow-up check (2026-10-07). [#747](https://github.com/Adam-S-Daniel/cms-platform/pull/747) merged fixes for items 1, 2 (the theme Blog nav), and 4 in
+[#737](https://github.com/Adam-S-Daniel/cms-platform/issues/737), which remains open; the [owner's recheck](https://github.com/Adam-S-Daniel/cms-platform/issues/737#issuecomment-6009484280) identifies item 3 as consumer-owned. At consumer commit
+`6ff477d6627ae9c7dcf54cd535bee262f0a31e3e`, the [home hero LinkedIn link](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/6ff477d6627ae9c7dcf54cd535bee262f0a31e3e/index.html) uses `target="_blank"`; the [theme footer](https://github.com/Adam-S-Daniel/cms-platform/blob/016dcf5ba416bc96899138d5f949370b598bb7ce/theme/_includes/footer.html) uses same-tab `rel="me"` links.
+The owner still needs to choose consistent same-tab external links or explicit new tabs; same-tab is a recommendation and preserves browser modifier-key choice.
+Under the same-tab choice, removing `target="_blank"` from the consumer link resolves this mismatch without a theme patch.
+Tag-page Blog highlighting is a separate decision in [#757](https://github.com/Adam-S-Daniel/cms-platform/issues/757); the theme's Blog prefix rule does not settle it.
 Phone admin chrome. [#748](https://github.com/Adam-S-Daniel/cms-platform/pull/748) (part of
 [#731](https://github.com/Adam-S-Daniel/cms-platform/issues/731), not closed) edits `theme/admin/admin-mobile.css`, loaded only by the `/admin` shells. At 600px and
 below the toolbar holding Save, Publish and Delete sticks to the top and shrinks from three rows to two (185px to 93px at 390px), inside `@supports (overflow: clip)`
