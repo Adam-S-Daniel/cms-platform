@@ -371,6 +371,33 @@ class TagCaseVariantsBuildTest < Minitest::Test
     assert_equal expected, region
   end
 
+  def test_normal_fixture_blog_tag_region_preserves_base_bytes
+    add_post_and_rebuild(tags: ['quotes', 'AI Tools'], title: 'Normal tags')
+    rendered = File.read(File.join(@destination, 'blog/index.html'))
+    item = rendered.split('>Normal tags</a>', 2).last.split('</li>', 2).first
+    region = item.split('<div class="post-tags">', 2).last.split('</div>', 2).first
+    expected = "\n        <a class=\"tag-pill\" href=\"/tags/quotes/\">quotes</a>\n        <a class=\"tag-pill\" href=\"/tags/ai-tools/\">AI Tools</a>\n        \n      "
+    assert_equal expected, region
+  end
+
+  def test_skipped_tags_leave_post_and_blog_regions_byte_identical_to_filtered_tags
+    valid = ['quotes', 'AI Tools']
+    add_post_and_rebuild(tags: valid)
+    baseline_post = File.read(File.join(@destination, 'blog/blank-tag-edge/index.html')).split('<div class="post-tags">', 2).last.split('</div>', 2).first
+    baseline_blog = File.read(File.join(@destination, 'blog/index.html')).split('>Blank tag edge</a>', 2).last.split('</li>', 2).first
+
+    [
+      ['', *valid], [*valid, ' '], [valid.first, '!!!', valid.last],
+      ['', valid.first, '🙂', valid.last, ' ']
+    ].each do |tags|
+      add_post_and_rebuild(tags: tags)
+      post = File.read(File.join(@destination, 'blog/blank-tag-edge/index.html')).split('<div class="post-tags">', 2).last.split('</div>', 2).first
+      blog = File.read(File.join(@destination, 'blog/index.html')).split('>Blank tag edge</a>', 2).last.split('</li>', 2).first
+      assert_equal baseline_post, post, "post region changed for #{tags.inspect}"
+      assert_equal baseline_blog, blog, "blog item changed for #{tags.inspect}"
+    end
+  end
+
   def test_normal_feed_categories_preserve_base_bytes
     add_post_and_rebuild(tags: ['quotes', 'AI Tools'], title: 'Normal tags')
     rendered = File.read(File.join(@destination, 'tags/quotes/feed.xml'))
@@ -444,6 +471,9 @@ class TagCaseVariantsBuildTest < Minitest::Test
       tags: ['', quotes, ' ', 'AI Tools', 2024]
       ---
       <section id="limited">{% include tag-pills.html tags=page.tags limit=3 %}</section>
+      <section id="custom">
+                    {% include tag-pills.html tags=page.tags limit=3 indent="              " %}
+      </section>
       <section id="all">{% include tag-pills.html tags=page.tags %}</section>
     HTML
     rebuild_site
@@ -453,5 +483,12 @@ class TagCaseVariantsBuildTest < Minitest::Test
     all = REXML::XPath.match(doc, "//section[@id='all']/a").map { |node| [node.texts.join, node.attributes['href']] }
     assert_equal [['quotes', '/tags/quotes/']], limited
     assert_equal [['quotes', '/tags/quotes/'], ['AI Tools', '/tags/ai-tools/'], ['2024', '/tags/2024/']], all
+    rendered = File.read(File.join(@destination, 'tag-limit/index.html'))
+    custom_region = rendered.split('<section id="custom">', 2).last.split('</section>', 2).first
+    assert_equal "\n              <a class=\"tag-pill\" href=\"/tags/quotes/\">quotes</a>\n              \n", custom_region
+    all_region = rendered.split('<section id="all">', 2).last.split('</section>', 2).first
+    assert_equal "<a class=\"tag-pill\" href=\"/tags/quotes/\">quotes</a>\n          " \
+                 "<a class=\"tag-pill\" href=\"/tags/ai-tools/\">AI Tools</a>\n          " \
+                 "<a class=\"tag-pill\" href=\"/tags/2024/\">2024</a>\n          ", all_region
   end
 end

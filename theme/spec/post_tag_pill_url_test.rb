@@ -48,6 +48,16 @@ class PostTagPillUrlTest < Minitest::Test
     anchor && anchor.attributes['href']
   end
 
+  def render_tag_loop(tags, **options)
+    loop_node = tag_loop(Liquid::Template.parse(@src).root)
+    refute_nil loop_node, "could not find the include.tags loop in #{INCLUDE}"
+    template = Liquid::Template.new
+    template.root = loop_node
+    site = Struct.new(:config, :filter_cache).new({ 'baseurl' => '' }, {})
+    template.render!({ 'include' => { 'tags' => tags }.merge(options.transform_keys(&:to_s)) },
+                     registers: { site: site })
+  end
+
   def includes_in(node)
     found = node.is_a?(Jekyll::Tags::IncludeTag) ? [node.instance_variable_get(:@file)] : []
     children = []
@@ -96,5 +106,29 @@ class PostTagPillUrlTest < Minitest::Test
 
   def test_nil_tag_renders_no_pill
     assert_nil tag_pill_href_for(nil)
+  end
+
+  def test_skipped_tag_emits_no_bytes_at_any_position
+    valid = ['quotes', 'AI Tools']
+    expected = render_tag_loop(valid)
+    invalid = ['', nil, " \t", "\u00a0", '!!!', '🙂']
+    invalid.each do |tag|
+      assert_equal expected, render_tag_loop([tag, *valid]), "leading #{tag.inspect}"
+      assert_equal expected, render_tag_loop([valid.first, tag, valid.last]), "middle #{tag.inspect}"
+      assert_equal expected, render_tag_loop([*valid, tag]), "trailing #{tag.inspect}"
+    end
+    assert_equal render_tag_loop([]), render_tag_loop(invalid), 'all invalid tags must emit no bytes'
+  end
+
+  def test_indent_and_limit_apply_only_to_the_current_include
+    custom = render_tag_loop(['', 'quotes', '!!!', 'AI Tools'], indent: ' ' * 14, limit: 3)
+    assert_equal "<a class=\"tag-pill\" href=\"/tags/quotes/\">quotes</a>\n#{' ' * 14}", custom
+    following_default = render_tag_loop(['quotes', 'AI Tools'])
+    assert_equal "<a class=\"tag-pill\" href=\"/tags/quotes/\">quotes</a>\n#{' ' * 10}" \
+                 "<a class=\"tag-pill\" href=\"/tags/ai-tools/\">AI Tools</a>\n#{' ' * 10}", following_default
+  end
+
+  def test_include_has_no_final_newline
+    refute @src.end_with?("\n")
   end
 end
