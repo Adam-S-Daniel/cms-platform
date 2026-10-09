@@ -737,6 +737,10 @@ const PLATFORM_META_SPECS = [
   // (upload-name trim, dotfile listing filter) and its placement in the admin
   // shells. Reads theme/ SOURCE, absent on a consumer.
   "media-library-tidy.test.js",
+  // #647 — vm-sandbox + real-redux unit tests for
+  // theme/admin/media-library-draft-sync.js and its <script> placement in the
+  // three admin shells. Reads theme/ SOURCE, absent on a consumer.
+  "media-library-draft-sync.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
   // cms-platform#645 — vm-sandboxes theme/admin/mobile-preview-toggle.js and

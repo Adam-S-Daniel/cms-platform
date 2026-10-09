@@ -344,6 +344,25 @@ live: the pre-Save step in `e2e/cms-media-roundtrip.spec.js`. The other half of
 the incident, a cached 404 outliving the publish, is in `docs/OPERATIONS.md`
 § "The production 404 page is never cacheable".
 
+### The image picker is empty when the editor is the first route (#647)
+
+Inside the editor, Decap's picker lists the DRAFT's copy of the media library
+(`selectMediaFiles` reads `entryDraft.entry.mediaFiles`), filled from
+`state.mediaLibrary.files` when the draft is built. On a tab whose first route
+is `#/collections/<c>/new` or an entry with an open editorial draft, Decap
+builds the draft before the library has loaded (`createEmptyDraft` reads state
+before its own wait; `loadUnpublishedEntry` never waits), so the picker says
+"No images found" until the tab visits the collection list. Re-loading the
+library when the picker opens would not help: the picker never reads it.
+
+`theme/admin/media-library-draft-sync.js` loads non-deferred before
+`decap-cms.js` in all three shells and defines the Redux DevTools compose hook
+Decap's store reads at bundle load. It holds a draft-creating action while the
+library loads and adds the library's files to it, the way Decap's own
+`loadEntry` waits. Unit tests: `e2e/media-library-draft-sync.test.js`; browser:
+the #647 describe in `e2e/cms-editorial-workflow.spec.js`, which opens the
+editor route directly.
+
 ## Media library tidy (#736): upload names, `.gitkeep`, and the image a deleted entry leaves
 
 Three rough edges in Decap's media library, all in Decap core with no config

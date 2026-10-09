@@ -122,6 +122,11 @@
   <script src="media-library-tidy.js"></script>
 
   <!--
+    media-library-draft-sync shim (#647) — see admin/index.html. Non-deferred
+    + BEFORE decap-cms.js so Decap's store picks up its compose hook. -->
+  <script src="media-library-draft-sync.js"></script>
+
+  <!--
     Decap CMS — same pinned exact version as admin/index.html. The local
     config sets `local_backend: true` so saves go through the
     decap-server proxy (port 8081) into the working tree instead of
