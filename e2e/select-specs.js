@@ -544,6 +544,15 @@ const SPEC_RULES = {
     /^scripts\/cms-preview-slug\.sh$/,
     /^\.github\/workflows\/deploy-preview\.yml$/,
   ],
+  // Locks that only deploy-production invalidates CloudFront. Pure-node; reads
+  // every workflow and composite action, the example callers and the bootstrap
+  // template, plus itself.
+  "e2e/cloudfront-invalidation-budget.test.js": [
+    /^\.github\/(workflows|actions)\//,
+    /^examples\/site\/\.github\/workflows\//,
+    /^infrastructure\/bootstrap\/template\.yaml$/,
+    /^e2e\/cloudfront-invalidation-budget\.test\.js$/,
+  ],
   // Prod-mutation playground (G4). Skips itself unless CMS_E2E_PAT is
   // set, so PR runs are safe — the spec just emits a skip and exits.
   // Selecting it on its own infra changes here keeps the PR matrix
