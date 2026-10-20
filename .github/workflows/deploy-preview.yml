@@ -591,7 +591,6 @@ jobs:
     env:
       AWS_REGION: ${{ inputs.aws_region }}
       PREVIEW_BUCKET: ${{ inputs.preview_bucket }}
-      CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.PREVIEW_CLOUDFRONT_ID }}
       # Job-level, matching the deploy job above — the two teardown steps
       # below read "$PR_NUMBER" instead of expanding an expression into
       # their command text.
