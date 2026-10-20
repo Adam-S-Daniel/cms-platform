@@ -669,6 +669,13 @@ async function deployLaneActivity({
 //
 // BACK-COMPAT: with `getPr` ABSENT the extender behaves EXACTLY as before
 // — every one of the 13 bare call sites keeps today's verdicts.
+//
+// DISPATCH GRACE — a merge anchor that is younger than `dispatchGraceMs`
+// with no deploy run for it yet is 'merged-awaiting-deploy-dispatch'
+// (realMiss false, bounded extension), not 'no-deploy-fired': GitHub
+// creates the push-triggered deploy run asynchronously, and a budget that
+// expires seconds after the merge would otherwise blame a chain that is
+// about to fire. Unanchored (no mergedAt / getPr) calls are unaffected.
 function makeDeployQueueExtender({
   repo = HOST_REPO,
   workflow = "deploy-production.yml",
@@ -676,6 +683,13 @@ function makeDeployQueueExtender({
   minExtendMs = 3 * 60 * 1000,
   maxTotalExtendMs = 30 * 60 * 1000,
   recentWindowMs = 5 * 60 * 1000,
+  // How long after the merge an idle lane with no deploy run for it still
+  // reads "the push-triggered deploy run has not been created yet" rather
+  // than "the chain never fired". GitHub creates the `push` run for a merge
+  // commit asynchronously: adamdaniel.ai run 39299445166 merged its delete
+  // PR at 18:24:58 and deploy-production's run appeared at 18:27:02 (124s
+  // later), after the spec's budget had already expired at 18:26:10.
+  dispatchGraceMs = 5 * 60 * 1000,
   mergedAt,
   getMergedAt,
   // #215: async () => PR object | null. When supplied it is the single
@@ -684,6 +698,7 @@ function makeDeployQueueExtender({
   getPr,
   activity,
   _gh = gh,
+  _now = Date.now,
 } = {}) {
   let extendedTotal = 0;
   const resolvePr = async () => {
@@ -855,6 +870,21 @@ function makeDeployQueueExtender({
         extendedTotal += grant;
         console.warn(
           `[deploy-queue] URL still not reflected after ${Math.round(elapsedMs / 1000)}s and the ${workflow} lane is idle, but ${pending.why} — an unmerged PR cannot have a deploy, so this is NOT a chain miss; extending ${Math.round(grant / 1000)}s (ext #${extensionCount + 1}, ${Math.round(extendedTotal / 1000)}s total) (#215).`,
+        );
+        return grant;
+      }
+      // The PR merged only moments ago: GitHub may simply not have created
+      // the push-triggered deploy run yet (observed lag: 124s). Grant a
+      // bounded extension while the merge is younger than dispatchGraceMs;
+      // past that, fall through to the real-miss verdict below.
+      const mergedAtMs = typeof ma === "number" ? ma : Date.parse(ma || "");
+      const sinceMergeMs = _now() - mergedAtMs;
+      if (anchored && Number.isFinite(mergedAtMs) && sinceMergeMs >= 0 && sinceMergeMs < dispatchGraceMs) {
+        extender.verdict = { kind: "merged-awaiting-deploy-dispatch", realMiss: false, sinceMergeMs };
+        const grant = Math.min(minExtendMs, remaining);
+        extendedTotal += grant;
+        console.warn(
+          `[deploy-queue] URL still not reflected after ${Math.round(elapsedMs / 1000)}s and no ${workflow} run exists for this merge yet, but the merge landed only ${Math.round(sinceMergeMs / 1000)}s ago — the push-triggered run may not be created yet; extending ${Math.round(grant / 1000)}s (ext #${extensionCount + 1}, ${Math.round(extendedTotal / 1000)}s total).`,
         );
         return grant;
       }
