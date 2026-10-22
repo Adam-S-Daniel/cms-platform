@@ -88,17 +88,21 @@ platform_repo: ${SLUG}
 platform_ref: ${pin}
 `;
 
+// Bundler pins a release tag with `tag:` and a commit (a release candidate's
+// full SHA) with `ref:`.
+const bundlerKey = (pin) => (/^[0-9a-f]{40}$/.test(pin) ? "ref" : "tag");
+
 const gemfile = (pin) => `source "https://rubygems.org"
 # Theme pinned since ${OLD} (see docs).
 gem "jekyll", "~> 4.3"
-gem "cms-platform-theme", git: "https://github.com/${SLUG}", glob: "theme/*.gemspec", tag: "${pin}"
+gem "cms-platform-theme", git: "https://github.com/${SLUG}", glob: "theme/*.gemspec", ${bundlerKey(pin)}: "${pin}"
 gem "other-theme", git: "https://github.com/other-org/other-theme", tag: "${OLD}"
 `;
 
 const gemfileLock = (pin, sha) => `GIT
   remote: https://github.com/${SLUG}
   revision: ${sha}
-  tag: ${pin}
+  ${bundlerKey(pin)}: ${pin}
   glob: theme/*.gemspec
   specs:
     cms-platform-theme (0.1.4)
@@ -332,6 +336,93 @@ gem "cms-platform-theme", git: "https://github.com/${SLUG}", tag: "${v}"
     const r = run(root, OLD, "1.5");
     expect(r.status, out(r)).toBe(1);
     expect(r.stdout).toMatch(/does not re-parse to the expected pins/);
+    expect(snapshot(root, Object.keys(files))).toEqual(files);
+  });
+});
+
+test.describe("rewrite-platform-pins.js — a commit-SHA target writes Bundler's `ref:` (release candidates)", () => {
+  // A release candidate pins every reference to a platform `main` commit. The
+  // checker's candidate path accepts the Gemfile option only as `ref:` and the
+  // lock block only as `revision:` + `ref:`; the v0.1.164 drafts
+  // (adamdaniel.ai#4365, jodidaniel.com#411) were hand-fixed from the `tag:
+  // "<sha>"` this script used to write. A later stable bump must move the
+  // candidate shape back to `tag:`.
+  const CAND = "ab".repeat(20);
+  const CAND2 = "cd".repeat(20);
+  const run = (root, from, to, extra = []) =>
+    spawnSync(process.execPath, [REWRITE, "--root", root, "--slug", SLUG, "--from", from, "--to", to, ...extra], {
+      encoding: "utf8",
+    });
+
+  for (const [label, from, fromSha, to, extra, toSha] of [
+    ["tag -> sha", OLD, OLD_SHA, CAND, [], CAND],
+    ["sha -> sha", CAND, CAND, CAND2, [], CAND2],
+    ["sha -> tag", CAND, CAND, NEW, ["--new-sha", NEW_SHA], NEW_SHA],
+    ["tag -> tag", OLD, OLD_SHA, NEW, ["--new-sha", NEW_SHA], NEW_SHA],
+  ]) {
+    test(`${label}: every pin moves, the Bundler key follows the target, decoys stay`, () => {
+      const root = materialize(tree(from, fromSha));
+      const r = run(root, from, to, extra);
+      expect(r.status, out(r)).toBe(0);
+      expect(r.stdout).toContain(`SUMMARY: moved ${PIN_COUNT} pin(s) in 4 file(s) from ${from} to ${to}`);
+      const want = tree(to, toSha);
+      expect(snapshot(root, Object.keys(want))).toEqual(want);
+      const key = bundlerKey(to);
+      const gone = key === "ref" ? "tag" : "ref";
+      const got = snapshot(root, ["Gemfile", "Gemfile.lock"]);
+      expect(got.Gemfile).toContain(`glob: "theme/*.gemspec", ${key}: "${to}"`);
+      expect(got.Gemfile).not.toContain(`${gone}: "${to}"`);
+      expect(got["Gemfile.lock"]).toContain(`  revision: ${toSha}\n  ${key}: ${to}\n  glob:`);
+      // The other gem's tag pin is not the platform's and never changes key.
+      expect(got["Gemfile.lock"]).toContain(`revision: ${OTHER_SHA}\n  tag: ${OLD}`);
+      expect(got.Gemfile).toContain(`other-theme", tag: "${OLD}"`);
+    });
+  }
+
+  test("the candidate-shaped result passes the checker's candidate path and the stale-ref scan", () => {
+    // The platform's own dictated callers, a Gemfile and lock, at the current
+    // release, re-pinned to a candidate SHA the way platform-bump does it.
+    const version = `v${JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "plugin.json"), "utf8")).version}`;
+    const canonical = path.join(REPO_ROOT, "examples", "site", ".github", "workflows");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-rewrite-cand-"));
+    fs.cpSync(path.join(REPO_ROOT, "examples", "site", ".github"), path.join(root, ".github"), { recursive: true });
+    write(root, "platform.lock", `platform_repo: ${SLUG}\nplatform_ref: ${version}\n`);
+    write(root, "Gemfile", `gem "cms-platform-theme", git: "https://github.com/${SLUG}", glob: "theme/*.gemspec", tag: "${version}"\n`);
+    write(root, "Gemfile.lock", `GIT\n  remote: https://github.com/${SLUG}\n  revision: ${OLD_SHA}\n  tag: ${version}\n  glob: theme/*.gemspec\n  specs:\n    cms-platform-theme (0.1.4)\n\nPLATFORMS\n  ruby\n`);
+    write(root, SENTINEL_REL, fs.readFileSync(SENTINEL_SRC));
+    const r = run(root, version, CAND);
+    expect(r.status, out(r)).toBe(0);
+    const got = snapshot(root, ["Gemfile", "Gemfile.lock", "platform.lock"]);
+    expect(got.Gemfile).toContain(`ref: "${CAND}"`);
+    expect(got["Gemfile.lock"]).toContain(`  revision: ${CAND}\n  ref: ${CAND}\n`);
+    expect(got["platform.lock"]).toContain(`platform_ref: ${CAND}\n`);
+
+    const files = ["platform.lock", "Gemfile", "Gemfile.lock",
+      ...fs.readdirSync(path.join(root, ".github", "workflows")).map((n) => `.github/workflows/${n}`)];
+    const stale = files.flatMap((rel) =>
+      scanStalePlatformRefs(fs.readFileSync(path.join(root, rel), "utf8"), { ref: CAND, slug: SLUG, file: rel }),
+    );
+    expect(stale, "verify-consumer-pins.sh step 2 must find no stale platform ref").toEqual([]);
+    const c = checker(root, canonical);
+    expect(c.status, out(c)).toBe(0);
+    expect(c.stdout).toContain("Pins are consistent.");
+  });
+
+  test("a --new-sha that disagrees with a commit-SHA --to is refused", () => {
+    const root = materialize(tree(OLD, OLD_SHA));
+    const r = run(root, OLD, CAND, ["--new-sha", NEW_SHA]);
+    expect(r.status, out(r)).toBe(2);
+    expect(r.stderr).toContain("--new-sha must equal a commit-SHA --to");
+    expect(snapshot(root, ["Gemfile.lock"])["Gemfile.lock"]).toBe(gemfileLock(OLD, OLD_SHA));
+  });
+
+  test("a platform GIT block naming both `tag:` and `ref:` is refused and nothing is written", () => {
+    const files = tree(OLD, OLD_SHA);
+    files["Gemfile.lock"] = files["Gemfile.lock"].replace(`  tag: ${OLD}\n  glob:`, `  tag: ${OLD}\n  ref: ${OLD}\n  glob:`);
+    const root = materialize(files);
+    const r = run(root, OLD, CAND);
+    expect(r.status, out(r)).toBe(1);
+    expect(r.stdout).toMatch(/^ERROR Gemfile\.lock: the cms-platform GIT block names more than one/m);
     expect(snapshot(root, Object.keys(files))).toEqual(files);
   });
 });

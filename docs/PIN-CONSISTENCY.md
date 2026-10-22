@@ -237,6 +237,12 @@ prose that names the old version, cms-platform#530), then confirm with
 the bump branch. Caller SEEDING only matters if the release newly dictated a
 workflow the consumer lacks; a release that adds none needs no seeding step.
 
+The Bundler pins' KEY follows `--to`: a full 40-hex commit SHA (a release
+candidate, `docs/CONTRIBUTING.md`) is written `ref: "<sha>"` in the `Gemfile`
+and `revision: <sha>` + `ref: <sha>` in the `Gemfile.lock` platform GIT block,
+the only shape the checker's candidate path accepts; a release tag is written
+`tag:`, so a stable bump from a candidate-shaped tree moves it back.
+
 ### The bump runs the reusable pinned by the consumer (v0.1.126, #559)
 
 The code that performs a bump comes from the consumer's CURRENT
