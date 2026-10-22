@@ -118,7 +118,9 @@ Before a stable tag, `release.yml` also requires open draft candidate PR numbers
 for BOTH consumers, each pinned to the dispatched platform commit's full SHA.
 `scripts/release-candidate-gate.js` validates their own required results and all
 e2e/site-verifier work jobs while production pins stay fixed. Missing, skipped,
-failed or cancelled validation refuses promotion. See
+failed or cancelled validation refuses promotion. One `release-candidates.yml`
+dispatch on `main` prepares both drafts through `platform-bump`'s
+`candidate_sha` mode, once each consumer's caller has it. See
 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for preparing the drafts and the
 `release-candidate-results` artifact; prereleases bypass this stable gate.
 

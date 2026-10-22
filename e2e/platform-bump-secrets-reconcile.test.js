@@ -291,6 +291,172 @@ ${secretsBlock}`;
   });
 });
 
+test.describe("reconcile-caller-secrets.js — `with:` keys and workflow_dispatch inputs", () => {
+  // pin-consistency compares each job's `with:` KEY set too, so a forwarded
+  // input the template gains (platform-bump's `candidate_sha`, release
+  // candidates) reddens the first bump PR unless the reconcile adds it, along
+  // with the dispatch input its value reads.
+  const BUMP_OLD = `name: Platform bump
+on:
+  # Site note: dispatched by the release fanout.
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  bump:
+    uses: ${SLUG}/.github/workflows/platform-bump.yml@${V}
+    secrets:
+      # Site note: the App key.
+      app_private_key: \${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+`;
+  const BUMP_NEW = `name: Platform bump
+on:
+  workflow_dispatch:
+    inputs:
+      # Empty: the normal bump.
+      candidate_sha:
+        description: 'Release candidate only.'
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  bump:
+    uses: ${SLUG}/.github/workflows/platform-bump.yml@${V}
+    with:
+      candidate_sha: \${{ inputs.candidate_sha }}
+    secrets:
+      app_private_key: \${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+`;
+
+  test("a caller lacking candidate_sha gets the dispatch input AND the with: line, and pin-consistency passes", () => {
+    const fx = fixture({ "platform-bump.yml": [BUMP_NEW, BUMP_OLD] });
+    const before = checker(fx);
+    expect(before.status, out(before)).not.toBe(0);
+    expect(before.stderr).toMatch(/job `bump` with: keys \(canonical \[candidate_sha\] vs \[\]\)/);
+
+    const r = reconcile(fx);
+    expect(r.status, out(r)).toBe(0);
+    expect(r.stdout).toMatch(/^UPDATED platform-bump\.yml job bump with: added candidate_sha$/m);
+    expect(r.stdout).toMatch(/^UPDATED platform-bump\.yml workflow_dispatch inputs: added candidate_sha$/m);
+    const text = fs.readFileSync(fx.wf("platform-bump.yml"), "utf8");
+    // Template text and comments arrive; the consumer's site comments stay.
+    expect(text).toBe(`name: Platform bump
+on:
+  # Site note: dispatched by the release fanout.
+  workflow_dispatch:
+    inputs:
+      # Empty: the normal bump.
+      candidate_sha:
+        description: 'Release candidate only.'
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  bump:
+    uses: ${SLUG}/.github/workflows/platform-bump.yml@${V}
+    with:
+      candidate_sha: \${{ inputs.candidate_sha }}
+    secrets:
+      # Site note: the App key.
+      app_private_key: \${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+`);
+    const after = checker(fx);
+    expect(after.status, out(after)).toBe(0);
+    // Idempotent.
+    const again = reconcile(fx);
+    expect(again.stdout).not.toMatch(/^UPDATED/m);
+    expect(fs.readFileSync(fx.wf("platform-bump.yml"), "utf8")).toBe(text);
+  });
+
+  test("the real examples/site platform-bump caller, as consumers have it, becomes the template byte for byte", () => {
+    const template = fs.readFileSync(path.join(__dirname, "..", "examples", "site", ".github", "workflows", "platform-bump.yml"), "utf8");
+    // The consumer shape before candidate mode: no dispatch inputs, no with:.
+    const doc = require("yaml").parseDocument(template);
+    doc.get("on").set("workflow_dispatch", null);
+    doc.get("jobs").get("bump").delete("with");
+    const consumer = template
+      .split("\n")
+      .filter((l, i, all) => {
+        const start = all.findIndex((x) => x === "    inputs:");
+        const end = all.findIndex((x) => x === "permissions:");
+        return !(i >= start && i < end) && l !== "    with:" && l !== "      candidate_sha: ${{ inputs.candidate_sha }}";
+      })
+      .join("\n");
+    expect(require("yaml").parse(consumer)).toEqual(doc.toJS());
+    const fx = fixture({ "platform-bump.yml": [template, consumer] });
+    const r = reconcile(fx);
+    expect(r.status, out(r)).toBe(0);
+    expect(fs.readFileSync(fx.wf("platform-bump.yml"), "utf8")).toBe(template);
+  });
+
+  test("a stale with: key the template dropped is removed with its comment; kept keys and comments stay", () => {
+    const canonical = BUMP_NEW;
+    const consumer = BUMP_NEW.replace(
+      "    with:\n      candidate_sha: ${{ inputs.candidate_sha }}\n",
+      "    with:\n      # Site note: forwarded.\n      candidate_sha: ${{ inputs.candidate_sha }}\n      # Retired in a later release.\n      stale_key: true\n",
+    );
+    const fx = fixture({ "platform-bump.yml": [canonical, consumer] });
+    const r = reconcile(fx);
+    expect(r.status, out(r)).toBe(0);
+    expect(r.stdout).toMatch(/^UPDATED platform-bump\.yml job bump with: removed stale_key$/m);
+    expect(fs.readFileSync(fx.wf("platform-bump.yml"), "utf8")).toBe(
+      BUMP_NEW.replace(
+        "    with:\n      candidate_sha: ${{ inputs.candidate_sha }}\n",
+        "    with:\n      # Site note: forwarded.\n      candidate_sha: ${{ inputs.candidate_sha }}\n",
+      ),
+    );
+    expect(checker(fx).status).toBe(0);
+  });
+
+  test("a with: map that only held stale keys goes away whole, and a stale dispatch input is dropped", () => {
+    const consumer = BUMP_OLD.replace("  workflow_dispatch:\n", "  workflow_dispatch:\n    inputs:\n      old_flag:\n        type: boolean\n")
+      .replace("    secrets:\n", "    with:\n      stale_key: true\n    secrets:\n");
+    const canonical = BUMP_OLD;
+    const fx = fixture({ "platform-bump.yml": [canonical, consumer] });
+    const r = reconcile(fx);
+    expect(r.status, out(r)).toBe(0);
+    expect(fs.readFileSync(fx.wf("platform-bump.yml"), "utf8")).toBe(BUMP_OLD);
+  });
+
+  test("a caller already matching is byte-identical, with optional keys (deploy-production) left alone", () => {
+    const template = fs.readFileSync(path.join(__dirname, "..", "examples", "site", ".github", "workflows", "deploy-production.yml"), "utf8");
+    // A site that opted in to the commented-out optional keys.
+    const consumer = template.replace(/^(\s*)# (media_archive_bucket: .*)$/m, "$1$2");
+    expect(consumer).not.toBe(template);
+    const fx = fixture({ "platform-bump.yml": [BUMP_NEW, BUMP_NEW], "deploy-production.yml": [template, consumer] });
+    const r = reconcile(fx);
+    expect(r.status, out(r)).toBe(0);
+    expect(r.stdout).not.toMatch(/^UPDATED/m);
+    expect(fs.readFileSync(fx.wf("platform-bump.yml"), "utf8")).toBe(BUMP_NEW);
+    expect(fs.readFileSync(fx.wf("deploy-production.yml"), "utf8")).toBe(consumer);
+  });
+
+  test("an added platform_ref takes the job's own uses: ref; a site-identity placeholder is MANUAL", () => {
+    const tpl = (withBlock) => `on:\n  workflow_dispatch:\njobs:\n  probe:\n    uses: ${SLUG}/.github/workflows/canary-prod.yml@${V}\n${withBlock}`;
+    const pinned = "0123456789abcdef0123456789abcdef01234567";
+    const consumerRef = tpl("    with:\n      apex: site.test\n").replace(`@${V}`, `@${pinned}`);
+    const fx = fixture({ "canary-prod.yml": [tpl(`    with:\n      apex: example.com\n      platform_ref: ${V}\n`), consumerRef] });
+    expect(reconcile(fx).status).toBe(0);
+    expect(fs.readFileSync(fx.wf("canary-prod.yml"), "utf8")).toBe(
+      tpl(`    with:\n      apex: site.test\n      platform_ref: ${pinned}\n`).replace(`@${V}`, `@${pinned}`),
+    );
+
+    const lacking = tpl("    with:\n      platform_ref: v0.1.114\n");
+    const fx2 = fixture({ "canary-prod.yml": [tpl(`    with:\n      apex: example.com\n      platform_ref: ${V}\n`), lacking] });
+    const r2 = reconcile(fx2);
+    expect(r2.status, out(r2)).toBe(3);
+    expect(r2.stdout).toMatch(/^MANUAL canary-prod\.yml: job probe: the template's `with: apex` is a site-identity placeholder; set it by hand — left unchanged$/m);
+    expect(fs.readFileSync(fx2.wf("canary-prod.yml"), "utf8")).toBe(lacking);
+  });
+});
+
 test.describe("platform-bump reusable — wires the secrets reconcile into the bump commit", () => {
   const run = parseYaml(readWorkflow("platform-bump.yml")).jobs.bump.steps.find((s) => s.id === "bump").run;
 
