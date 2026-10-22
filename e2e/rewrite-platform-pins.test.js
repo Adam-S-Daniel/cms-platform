@@ -669,7 +669,10 @@ case "$2" in
 esac
 `, { mode: 0o755 });
     const lines = run.split("\n");
-    const start = lines.findIndex((l) => l.trim().startsWith("NEW_SHA=$(gh"));
+    // The tag lookup sits in the else arm of the candidate-mode branch, so the
+    // lifted block starts at that branch (run here with no candidate).
+    const lookup = lines.findIndex((l) => l.trim().startsWith("NEW_SHA=$(gh"));
+    const start = lines.findLastIndex((l, i) => i < lookup && l.trim() === 'if [ -n "$CANDIDATE_SHA" ]; then');
     const rewrite = lines.findIndex((l, i) => i > start && l.trim() === 'if [ -n "$CUR" ]; then');
     const indent = lines[rewrite].match(/^\s*/)[0];
     const end = lines.findIndex((l, i) => i > rewrite && l === `${indent}fi`);
@@ -681,7 +684,7 @@ esac
         cwd: root, encoding: "utf8",
         env: {
           PATH: bin, HOME: scratch, NODE_PATH: path.join(__dirname, "node_modules"),
-          RUNNER_TEMP: path.join(scratch, "tmp"), PLATFORM: SLUG, LATEST: NEW, CUR: OLD,
+          RUNNER_TEMP: path.join(scratch, "tmp"), PLATFORM: SLUG, LATEST: NEW, CUR: OLD, CANDIDATE_SHA: "",
           INITIAL_SHA: initial, TAG_TYPE: type, DEREFERENCED_SHA: dereferenced,
           STUB_LOG: log, REWRITE_SCRIPT: REWRITE,
         },

@@ -203,6 +203,38 @@ run `target: local` with `browser: all`, using that candidate's harness; a green
 platform fixture run cannot substitute for either consumer's own validation.
 Wait for the consumer PR checks, including any regression review, to succeed.
 
+One dispatch prepares both drafts:
+
+```bash
+gh workflow run release-candidates.yml -R Adam-S-Daniel/cms-platform --ref main
+```
+
+[`release-candidates.yml`](../.github/workflows/release-candidates.yml) refuses
+any ref but `main`, then dispatches each consumer's `platform-bump` with
+`candidate_sha` set to the dispatched commit, using the same
+`BUMP_DISPATCH_*` credentials as the release fanout (a missing one fails the run
+here). In candidate mode the reusable `platform-bump.yml` makes the same atomic
+bump to that commit instead of the latest release (pins, `platform.lock`,
+Gemfile `ref:` and lock, seeding, retiring and reconciliation against
+`examples/site` at that commit), force-pushes `candidate/v<plugin.json version
+at that commit>` and opens a draft PR titled `Release candidate: cms-platform
+vX.Y.Z (do not merge)`. If that PR is already open, the push re-pins it and a
+comment records the new SHA; the body is not edited (#222), and the PR is put
+back to draft if someone marked it ready. Candidate mode never enables auto-merge,
+adds a label or closes another PR. The workflow then waits up to 10 minutes for
+an open draft on each consumer whose head's `platform.lock` names the commit, and
+its run summary lists both PRs and the exact `release.yml` dispatch line. It does
+not wait for the consumers' checks; the release gate judges those.
+
+Bootstrap: a consumer accepts `candidate_sha` only once its `platform-bump.yml`
+caller declares the input and forwards it, and the reusable that caller pins has
+candidate mode. Callers are pinned to a release tag, so the first stable release
+after candidate mode landed still needs hand-built drafts (above). Those drafts
+and that release's bump PRs must also adopt the caller's new `candidate_sha`
+dispatch input and `with:` line from `examples/site`: pin-consistency compares a
+caller's `with:` keys against the template at the pinned ref, and
+`platform-bump` does not reconcile `with:` keys.
+
 Dispatch the stable release from that same platform `main` revision with
 `candidate_adamdaniel_ai_pr` and `candidate_jodidaniel_com_pr` set to those PR
 numbers. The gate reads immutable consumer heads, validates every platform pin,
@@ -230,7 +262,8 @@ access; an authorization failure blocks promotion without exposing API bodies.
 Credential permissions and live consumer results must be verified operationally;
 deterministic mocked matrices alone do not establish that access.
 
-If platform `main` changes before dispatch, re-pin both draft branches and collect
+If platform `main` changes before dispatch, re-pin both draft branches (re-run
+`release-candidates.yml` once both consumers have candidate mode) and collect
 fresh consumer results for the new candidate. After promotion, normal
 `platform-bump` PRs adopt the stable tag atomically; the validation draft PRs
 remain unmerged. Prereleases bypass this stable promotion gate and remain excluded
