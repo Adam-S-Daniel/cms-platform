@@ -86,9 +86,11 @@ description: >-
   exited and dpkg is clean. The log says which ran: `apt path: offline (exact
   cache hit)` or `apt path: online (<reason>)`. Separately, the apt.conf.d
   drop-in that sets DPkg::Lock::Timeout also sets `Acquire::http(s)::Timeout
-  "15"` and `Acquire::Retries "5"`, so apt itself abandons an IDLE connection
-  and retries; that cannot catch a trickle, and did not catch run 39851509261's
-  stall (that apt was already timing out idle requests at its 30 s default).
+  "15"`, so apt itself abandons an IDLE connection. On hosted x64 Ubuntu that
+  only restates the image's own zz-retries drop-in (the same 15 s, plus
+  `Acquire::Retries "1"` for mirror failover), which was already in force
+  during run 39851509261, so it is a floor for other images, not the fix: an
+  idle timeout cannot catch a trickle, and that stall evaded it.
 
   Bash, plus `actions/cache/restore` + `actions/cache/save` pinned to a full
   SHA (the fleet SHA-pin convention; no other transitive `uses:`).
@@ -267,19 +269,26 @@ runs:
     # which is the only way to reach the one inside `playwright install-deps`.
     # Fail-open: if we cannot write the drop-in we still try the install.
     #
-    # The same drop-in tells apt's OWN transport to give up on an IDLE fetch
-    # (2026-10-22, docs/E2E-PARALLELISM.md "Mirror-independent apt").
+    # The same drop-in sets apt's OWN idle timeout (2026-10-22,
+    # docs/E2E-PARALLELISM.md "Mirror-independent apt").
     # `Acquire::http(s)::Timeout` is an INACTIVITY timer (connect, TLS
-    # handshake, and every wait for the next byte), not a deadline: healthy
-    # `apt-get update` takes 6 s at the median and 28 s at the worst across ~20
-    # index files, so 15 s of total silence on one connection never happens on a
-    # healthy mirror, and the measured slow mirror (~83-100 KB/s) never goes
-    # silent at all, so this never abandons a slow-but-flowing fetch. apt then
-    # retries on a fresh connection, `Acquire::Retries` times. That is apt
-    # abandoning a fetch from INSIDE, so nothing is killed, nothing is orphaned
-    # and the dpkg lock is never left held (#210). It CANNOT catch a trickle:
-    # a server sending a byte every few seconds resets the timer forever
-    # (reproduced locally, both a header trickle and a body trickle).
+    # handshake, and every wait for the next byte), not a deadline. A healthy
+    # `apt-get update` fetches ALL its index files in 6 s (median) to 28 s (max),
+    # so one connection never sits silent for 15 s on a healthy mirror, and the
+    # measured slow mirror (~83-100 KB/s) never goes silent at all, so this never
+    # abandons a slow-but-flowing fetch. apt abandons the fetch from INSIDE, so
+    # nothing is killed or orphaned and the dpkg lock is never left held (#210).
+    # It CANNOT catch a trickle: any byte resets the timer (reproduced locally,
+    # with a header trickle and a body trickle).
+    #
+    # On GitHub-hosted x64 Ubuntu this is a FLOOR, not a change: since
+    # actions/runner-images#14726 (2026-09-15) the image's own
+    # /etc/apt/apt.conf.d/zz-retries sets the same 15 s, plus
+    # `Acquire::Retries "1"`, and sorts after this file, so it wins. That
+    # Retries is deliberate (apt spends every retry on the same URI before it
+    # tries the next mirror in /etc/apt/apt-mirrors.txt, runner-images#14594), so
+    # this drop-in does NOT set Retries. The 15 s keeps an image without
+    # zz-retries (self-hosted, an older image) off apt's 30 s default.
     - name: Configure apt (wait for the dpkg lock; give up on an idle fetch)
       shell: bash
       env:
@@ -287,30 +296,23 @@ runs:
       run: |
         set -uo pipefail
         conf=/etc/apt/apt.conf.d/99-playwright-install-lock-timeout
-        # Idle timeout 15 s: a healthy update fetches ALL its index files in 6 s
-        # (median) to 28 s (max), so no single connection sits silent for 15 s on a
-        # healthy mirror; it is half apt's 30 s default. Measured locally: apt gives up one attempt
-        # at ~2x the timeout plus ~1 s, so 15 s abandons an idle connection in
-        # ~31 s (the default takes ~65 s). Retries 5: each retry is a fresh
-        # connection, and the worst idle case per file stays ~4 min against a 45-min
-        # job wall.
         conf_body="$(printf '%s\n' \
           "DPkg::Lock::Timeout \"${PW_APT_LOCK_TIMEOUT_S}\";" \
           'Acquire::http::Timeout "15";' \
-          'Acquire::https::Timeout "15";' \
-          'Acquire::Retries "5";')"
-        ok="apt will wait up to ${PW_APT_LOCK_TIMEOUT_S}s for the dpkg lock, abandon a fetch idle for 15s, and retry it up to 5 times."
+          'Acquire::https::Timeout "15";')"
+        ok="apt will wait up to ${PW_APT_LOCK_TIMEOUT_S}s for the dpkg lock and abandon a fetch idle for 15s (unless a later drop-in says otherwise; effective values below)."
         if [ -w /etc/apt/apt.conf.d ]; then
           printf '%s\n' "$conf_body" > "$conf" && echo "$ok"
         elif command -v sudo >/dev/null 2>&1; then
           printf '%s\n' "$conf_body" | sudo tee "$conf" >/dev/null \
             && echo "$ok" \
-            || echo "::warning::could not write ${conf}; a dpkg-lock race can still fail the install, and an idle mirror gets apt's default timeout."
+            || echo "::warning::could not write ${conf}; a dpkg-lock race can still fail the install."
         else
           echo "::warning::no write access to /etc/apt/apt.conf.d and no sudo; a dpkg-lock race can still fail the install."
         fi
-        # What apt will ACTUALLY use, after every drop-in (the runner image ships its
-        # own): a later file or a typo would otherwise be invisible.
+        # What apt will ACTUALLY use after every drop-in: the runner image ships
+        # its own (zz-retries), and a later file or a typo would otherwise be
+        # invisible.
         apt-config dump 2>/dev/null | grep -Ei '^(DPkg::Lock::Timeout|Acquire::(http|https)::Timeout|Acquire::Retries|APT::Acquire::Retries) ' || true
 
     - name: Install Playwright system deps + browser (two phases, retried)

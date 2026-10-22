@@ -610,7 +610,7 @@ test("nothing that runs apt or dpkg is ever wrapped in `timeout`, on any path", 
   expect(sawDownloadBound, "positive control: the download phase must reach the timeout stub").toBe(true);
 });
 
-test("apt's own transport abandons an idle fetch: Acquire timeouts + retries in the same drop-in", () => {
+test("apt's own transport abandons an idle fetch: Acquire timeouts in the same drop-in, Retries left to the image", () => {
   // Written next to DPkg::Lock::Timeout so they reach the apt-get INSIDE
   // `playwright install-deps`. An inactivity timeout, so it never abandons the
   // measured slow-but-flowing mirror; it cannot catch a trickle either.
@@ -626,9 +626,11 @@ test("apt's own transport abandons an idle fetch: Acquire timeouts + retries in 
     expect(s, `${key}: above a healthy mirror's longest silence`).toBeGreaterThanOrEqual(10);
     expect(s, `${key}: below apt's 30 s default, or it buys nothing`).toBeLessThan(30);
   }
-  const retries = val("Acquire::Retries");
-  expect(retries).toBeGreaterThanOrEqual(1);
-  expect(retries).toBeLessThanOrEqual(10);
+  // The hosted image sets `Acquire::Retries "1"` on purpose: apt spends every
+  // retry on the same URI before trying the next mirror in apt-mirrors.txt
+  // (actions/runner-images#14594). A higher count here would delay that
+  // failover wherever this drop-in wins.
+  expect(run, "leave Acquire::Retries to the runner image (mirror failover)").not.toMatch(/Acquire::Retries\s+"/);
 });
 
 test("the offline path reads the EXACT-hit output, and every cache step is fail-open", () => {

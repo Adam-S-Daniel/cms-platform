@@ -541,9 +541,14 @@ far as the log can say:
   it, and nothing (`Hit:3`, `Get:3` or `Err:3`) followed. The Packages indexes
   that `Get:4` and `Get:5` made necessary never started either; apt prints
   `Get:` when a file starts arriving, so they were stuck behind it.
-- **Not a plain idle connection.** The same apt timed out two idle requests at
-  exactly 30.0 s each (`Ign:2`, `Ign:3`), so its 30 s idle timeout was active,
-  and a fully silent socket would have tripped it again within a minute.
+- **Not a plain idle connection.** That runner image already sets
+  `Acquire::http(s)::Timeout "15"` and `Acquire::Retries "1"` in its own
+  `/etc/apt/apt.conf.d/zz-retries` (actions/runner-images#14726, 2026-09-15;
+  this PR's CI prints the effective values). The same apt gave up on two
+  requests after exactly 30.0 s each (`Ign:2`, `Ign:3`). That is the idle
+  timeout working: locally apt abandons one try at about twice the timeout
+  plus a second. A fully silent socket would have tripped it again within a
+  minute.
 - **Consistent with a header trickle.** Reproduced locally (apt 2.8.3 in
   `ubuntu:24.04`, against a fake mirror): a server that answers `HTTP/1.1 200
   OK` and then sends one header byte every 5 s makes apt print **nothing at
@@ -603,6 +608,23 @@ run, saved by that run; only the default branch saves, and a pull request's
 cache scope is invisible to main and to every other PR. That is the same trust
 the cache's restore already had in the job's own workspace.
 
+*Measured on CI.* The PR's first `self-fixture-e2e` run (run 39868918943, the
+same offline code as the final head) took the offline path on all eight legs,
+using main's existing `v1` entries for image `20261012.334.1`. For example,
+chromium-desktop-3k 3/3 installed 15 `.deb`s ("2 upgraded, 9 newly installed"),
+and 8 s after the offline apt started, the dry-run check reported "All system
+dependencies are installed." Install-step seconds per leg, against the same legs in run
+39851509261 attempt 1 (online, exact `.deb` hits, the incident run):
+
+| leg | online (39851509261) | offline (39868918943) |
+|---|---|---|
+| 1080 full / singlepage | 22 / 13 | 19 / 14 |
+| 3k 1/3, 2/3, 3/3 | 20 / 38 / **2695 (cancelled)** | 10 / 10 / 11 |
+| webkit 1/3, 2/3, 3/3 | 22 / 42 / 33 | 19 / 28 / 23 |
+
+The step also includes the browser download, which is mostly a no-op here
+because the browser binaries came from their own cache.
+
 *Fallback.* Anything other than an exact hit, a failed offline `apt-get`, or a
 failed dry-run runs the online phase exactly as before: unbounded, retried,
 waiting on the dpkg lock. The offline `apt-get` is a direct child that has
@@ -612,32 +634,47 @@ path: `apt path: offline (exact cache hit)`, or `apt path: online (cache miss
 | partial cache hit (<key> ...) | offline failed: <reason> | the apt .deb cache
 is disabled)`.
 
-**Change 2: apt abandons an idle fetch itself.** The apt.conf.d drop-in that
+**Change 2: apt's own idle timeout, as a floor.** The apt.conf.d drop-in that
 sets `DPkg::Lock::Timeout` now also sets:
 
 ```
 Acquire::http::Timeout "15";
 Acquire::https::Timeout "15";
-Acquire::Retries "5";
 ```
 
 `Acquire::*::Timeout` is an inactivity timer (connect, TLS handshake, each wait
 for the next byte). A healthy `apt-get update` fetches ALL its index files in
 6 s at the median and 28 s at the max, so 15 s of silence on one connection does
-not happen on a healthy mirror, and the measured slow mirror (~83-100 KB/s)
-never goes silent, so this never abandons a slow-but-flowing fetch (locally, a
-20 B/s body survived a 10 s timeout for 400 s). Measured locally, apt gives up
-one try at about twice the timeout plus a second: the default (30 s) took
-65 s against an idle server, 10 s took 21-26 s, so 15 s is ~31 s. Five retries
-on fresh connections keep the worst idle case per file to about four minutes
-against a 45-minute job wall. The step prints the effective values from
-`apt-config dump`, so a runner-image drop-in that overrides them is visible.
-This is apt abandoning a fetch from inside, so nothing is killed and nothing
-is orphaned (#210).
+not happen on a healthy mirror. The measured slow mirror (~83-100 KB/s) never
+goes silent, so this never abandons a slow-but-flowing fetch (locally, a 20 B/s
+body survived a 10 s timeout for 400 s). Measured locally, apt gives up one try
+at about twice the timeout plus a second: the 30 s default took 65 s against an
+idle server and 10 s took 21-26 s, so 15 s is ~31 s. This is apt abandoning a
+fetch from inside, so nothing is killed and nothing is orphaned (#210).
 
-**What change 2 cannot do:** catch a trickle. Any byte resets the timer. It
-would NOT have caught run 39851509261's stall, for the reason above. Change 1
-would have: that job had an exact hit.
+**On GitHub-hosted x64 Ubuntu this changes nothing, by measurement.** The first
+CI run of this change printed the effective values (`apt-config dump`, now in
+the step's log):
+
+```
+Acquire::http::Timeout "15";
+Acquire::Retries "1";
+Acquire::https::Timeout "15";
+DPkg::Lock::Timeout "300";
+```
+
+The `"1"` is not ours. The first draft also set `Acquire::Retries "5"`, and it
+lost. The image writes these values into `/etc/apt/apt.conf.d/zz-retries`, which
+sorts after this composite's `99-...` file and wins (actions/runner-images#14726,
+#14594). `Retries "1"` is deliberate there: apt spends every retry on the same
+URI before it moves to the next mirror in `/etc/apt/apt-mirrors.txt`, so a
+higher count delays failover. This drop-in therefore does not set Retries
+(lint-locked), and its timeout is a floor for an image without `zz-retries`
+(self-hosted, older), not a fix for hosted runners.
+
+**What change 2 cannot do:** catch a trickle. Any byte resets the timer. Run
+39851509261's apt already had these exact settings and stalled anyway. Change 1
+would have avoided it: that job had an exact hit.
 
 *Rejected: making a stall's nature visible through apt.conf.d.*
 `APT::Status-Fd` prints `dlstatus:` about four times a second while any fetch
