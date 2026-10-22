@@ -471,7 +471,44 @@ Two more changes ride along:
   `test-results` (half of a ~320 MB 3k artifact; the HTML report carries the
   same screenshots). A failed leg still does.
 
-**Measured:** MEASUREMENTS_PENDING
+**Measured** on the PR's own head, run 39847475147, five attempts (the first
+run plus four full reruns). All five were green. Job seconds:
+
+| attempt | 3k 1/3 | 3k 2/3 | 3k 3/3 | webkit 1/3 | webkit 2/3 | webkit 3/3 | 1080 full (+caret) | 1080 singlepage | **critical path** | runner-s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 124 | 288¹ | 177 | 115 | 181 | 117 | 199¹ | 86 | **288** | 1290 |
+| 2 | 121 | 156 | 283¹ | 151 | 272² | 130 | 88 | 189¹ | **283** | 1393 |
+| 3 | 132 | 182 | 183 | 113 | 324 | 136 | 92 | 76 | **324** | 1242 |
+| 4 | 108 | 195 | 242¹ | 130 | 188 | 135 | 138 | 69 | **242** | 1208 |
+| 5 | 124 | 204 | 175 | 115 | 253 | 130 | 103 | 96 | **253** | 1202 |
+
+¹ an apt-tail install of 101-134 s (normally 12-43 s). ² one flaky retry (below).
+
+* **Critical path: median 283 s, against 438 s (−35%)**, and 242-324 s
+  against a baseline range of 374-585 s (24 runs).
+* **Runner time goes UP:** median 1242 runner-seconds a run (20.7 min)
+  against 983 (16.4 min), +26%. That is three admin jobs per project each
+  paying the ~45-60 s fixed cost. It is the same trade the consumer matrix makes.
+* **Every attempt ran every test.** The shard totals were identical across all
+  five attempts: 3k 63 + 64 + 64 = 191, webkit 40 + 39 + 39 = 118. The proof
+  test landed in shard 1/3 of both projects and passed there each time, and
+  the other shards named it as owned by 1/3. The caret diagnostic ran once a
+  run, 8/8, in 14-21 s.
+* **One flaky test in 5 × 309 admin tests:** attempt 2, webkit 2/3,
+  `cms-mobile-layout.spec.js` "compact phone Save states (#731) › 320px
+  editorial_workflow: native Save works for new entries". It failed with
+  `route.fetch: socket hang up (ECONNRESET)` against `localhost:4000` and
+  passed on retry. That describe was never `serial`, so this is not the
+  un-pinning. None of the four un-pinned groups failed or flaked.
+* **The new pole is `webkit-iphone16` shard 2/3**, at 124-213 s of tests
+  against 49-85 s for its siblings: `--shard` balances by count. Next is
+  `chromium-desktop-3k` 2/3 at 102-151 s. "Re-check before changing it" above
+  applies: a shard over ~100 s of tests is the cue to look at that shard's
+  per-test durations before raising `ADMIN_SHARDS`.
+* **The upload shrank** once `test-results` is dropped on green. One green
+  attempt uploaded 3k 48 + 36 + 67 = 151 MB (it was 299 MB), webkit 8 + 6 + 7 =
+  21 MB (was 61 MB), and 225 MB a run in all (was 485 MB, main run
+  39829458882).
 
 ## Rejected: skipping tests per diff
 
