@@ -434,6 +434,82 @@ entry is a red `ci-matrix.test.js`.
 slowest admin shard, the pole has moved and the shard count buys nothing more;
 if an admin shard's suite exceeds ~100 s, consider `ADMIN_SHARDS = 4`.
 
+## The platform's own `fixture-e2e` lane gets the same admin shard (2026-10-22)
+
+`self-fixture-e2e.yml` ran each admin project as ONE job, so its two admin legs
+were the required `fixture-e2e` gate's whole critical path. Baseline, median of
+14 successful runs (2026-10-20..22): `chromium-desktop-3k @ fixture-site`
+**438 s** per job (355 s of tests, 191 tests, 6 workers), `webkit-iphone16 @
+fixture-site` 380 s (323 s of tests, 118 tests); over 43 of 45 runs since
+2026-10-08 the medians were 7.2 and 6.2 minutes.
+
+The tail was not the test count but four `test.describe.configure({ mode:
+"serial" })` groups, each pinned to ONE worker while the other five idled:
+`cms-tags-input.spec.js` (19 tests, ~150 s on 3k), `cms-validation-feedback.spec.js`
+(13 tests, ~115 s), `cms-mobile-layout.spec.js`'s "mobile layout (iPhone 16)"
+(233 s on webkit) and `cms-editorial-workflow.spec.js`'s existing-entry group
+(139 s on 3k, 214 s on webkit). All four drive the in-browser test-repo backend
+(`index-test.html`): every test seeds `window.repoFiles` in a fresh page and
+logs in itself, writes no file, and reads no value another test set (the only
+module state, `cms-tags-input`'s `pageErrors`, is reset per test and is
+per-worker anyway). `serial` bought nothing but the pin, so it is gone from all
+four. The other `serial` groups were not reviewed here; most drive
+decap-server's working tree, a Jekyll build or a live PR, where order can
+matter.
+
+Two more changes ride along:
+
+* **The admin legs are `--shard=i/3` jobs**, exactly the consumer shape
+  (`ADMIN_SHARDS` in `e2e/ci-matrix.js`; above). The proof test is asserted by
+  the one shard whose `npx playwright test --list --shard` holds it; every
+  shard lists all three, so a proof test in NO shard fails every shard.
+  `e2e/self-fixture-e2e.test.js` derives the expected legs from
+  `ADMIN_SHARDS`, so a dropped shard is red.
+* **#755's caret diagnostic moved** to the unsharded `chromium-desktop-1080 @
+  fixture-site` leg (its config pins Chromium, the viewport and one worker),
+  so it still runs once per run; and a green leg no longer uploads
+  `test-results` (half of a ~320 MB 3k artifact; the HTML report carries the
+  same screenshots). A failed leg still does.
+
+**Measured** on the PR's own head, run 39847475147, five attempts (the first
+run plus four full reruns). All five were green. Job seconds:
+
+| attempt | 3k 1/3 | 3k 2/3 | 3k 3/3 | webkit 1/3 | webkit 2/3 | webkit 3/3 | 1080 full (+caret) | 1080 singlepage | **critical path** | runner-s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 124 | 288¹ | 177 | 115 | 181 | 117 | 199¹ | 86 | **288** | 1290 |
+| 2 | 121 | 156 | 283¹ | 151 | 272² | 130 | 88 | 189¹ | **283** | 1393 |
+| 3 | 132 | 182 | 183 | 113 | 324 | 136 | 92 | 76 | **324** | 1242 |
+| 4 | 108 | 195 | 242¹ | 130 | 188 | 135 | 138 | 69 | **242** | 1208 |
+| 5 | 124 | 204 | 175 | 115 | 253 | 130 | 103 | 96 | **253** | 1202 |
+
+¹ an apt-tail install of 101-134 s (normally 12-43 s). ² one flaky retry (below).
+
+* **Critical path: median 283 s, against 438 s (−35%)**, and 242-324 s
+  against a baseline range of 374-585 s (24 runs).
+* **Runner time goes UP:** median 1242 runner-seconds a run (20.7 min)
+  against 983 (16.4 min), +26%. That is three admin jobs per project each
+  paying the ~45-60 s fixed cost. It is the same trade the consumer matrix makes.
+* **Every attempt ran every test.** The shard totals were identical across all
+  five attempts: 3k 63 + 64 + 64 = 191, webkit 40 + 39 + 39 = 118. The proof
+  test landed in shard 1/3 of both projects and passed there each time, and
+  the other shards named it as owned by 1/3. The caret diagnostic ran once a
+  run, 8/8, in 14-21 s.
+* **One flaky test in 5 × 309 admin tests:** attempt 2, webkit 2/3,
+  `cms-mobile-layout.spec.js` "compact phone Save states (#731) › 320px
+  editorial_workflow: native Save works for new entries". It failed with
+  `route.fetch: socket hang up (ECONNRESET)` against `localhost:4000` and
+  passed on retry. That describe was never `serial`, so this is not the
+  un-pinning. None of the four un-pinned groups failed or flaked.
+* **The new pole is `webkit-iphone16` shard 2/3**, at 124-213 s of tests
+  against 49-85 s for its siblings: `--shard` balances by count. Next is
+  `chromium-desktop-3k` 2/3 at 102-151 s. "Re-check before changing it" above
+  applies: a shard over ~100 s of tests is the cue to look at that shard's
+  per-test durations before raising `ADMIN_SHARDS`.
+* **The upload shrank** once `test-results` is dropped on green. One green
+  attempt uploaded 3k 48 + 36 + 67 = 151 MB (it was 299 MB), webkit 8 + 6 + 7 =
+  21 MB (was 61 MB), and 225 MB a run in all (was 485 MB, main run
+  39829458882).
+
 ## Rejected: skipping tests per diff
 
 `e2e/select-specs.js` can narrow the suite to a diff's salient specs, and the
