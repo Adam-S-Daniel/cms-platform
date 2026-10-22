@@ -437,3 +437,220 @@ test("the seeder's thin caller runs daily and on demand, never on a PR", () => {
     new RegExp(`^Adam-S-Daniel/cms-platform/\\.github/workflows/${SEEDER.replace(".", "\\.")}@v\\d+\\.\\d+\\.\\d+$`),
   );
 });
+
+// ── Mirror-independent apt (docs/E2E-PARALLELISM.md, 2026-10-22) ────────────
+// Run 39851509261's chromium-desktop-3k shard 3/3 restored an EXACT .deb cache
+// hit and then sat 44 minutes in the `apt-get update` that `install-deps`
+// always runs, until the 45-minute job wall cancelled it. Two changes: an exact
+// hit installs the cached .debs offline (no update, no mirror), and apt's own
+// transport abandons an idle fetch. These tests run the composite's REAL bash
+// against stub `npx`/`sudo`/`apt-get`/`dpkg`/`timeout`/`sleep`/`id` binaries
+// placed first on PATH, so they assert what the script DOES, not how it is
+// spelled. No stub signals anything and `sleep` returns at once.
+const os = require("node:os");
+const { spawnSync } = require("node:child_process");
+
+const STUBS = {
+  // Every stub appends one line to $STUB_LOG, then behaves per its env knob.
+  npx: `echo "npx $*" >> "$STUB_LOG"
+case "$*" in
+  *"install-deps --dry-run"*) exit "\${STUB_DRYRUN_RC:-0}" ;;
+  *"install-deps"*) exit "\${STUB_ONLINE_RC:-0}" ;;
+  *) exit 0 ;;
+esac`,
+  sudo: `echo "sudo $*" >> "$STUB_LOG"
+exec "$@"`,
+  "apt-get": `echo "apt-get $*" >> "$STUB_LOG"
+exit "\${STUB_APT_RC:-0}"`,
+  dpkg: `echo "dpkg $*" >> "$STUB_LOG"
+if [ "$1" = "--audit" ]; then printf '%s' "\${STUB_AUDIT:-}"; fi
+exit 0`,
+  // Positive control for the no-timeout invariant: the download phase MUST
+  // reach this stub, so a run that logs no timeout call at all is broken.
+  timeout: `echo "timeout $*" >> "$STUB_LOG"
+shift
+exec "$@"`,
+  sleep: `echo "sleep $*" >> "$STUB_LOG"`,
+  id: `echo 1001`,
+};
+
+function runInstallStep(env) {
+  const step = compositeStep(/npx playwright/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pw-install-step-"));
+  try {
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    for (const [name, body] of Object.entries(STUBS)) {
+      fs.writeFileSync(path.join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+    }
+    const debDir = path.join(dir, "debs");
+    fs.mkdirSync(debDir);
+    for (const f of ["libnss3_3.98_amd64.deb", "xvfb_21.1_amd64.deb"]) fs.writeFileSync(path.join(debDir, f), "");
+    const script = path.join(dir, "step.sh");
+    fs.writeFileSync(script, String(step.run));
+    const log = path.join(dir, "log");
+    fs.writeFileSync(log, "");
+    const r = spawnSync("bash", [script], {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        HOME: dir,
+        STUB_LOG: log,
+        PW_INSTALL_BROWSER: "chromium",
+        PW_INSTALL_DEPS_ONLY: "false",
+        PW_INSTALL_ATTEMPTS: "3",
+        PW_INSTALL_TIMEOUT_S: "420",
+        PW_INSTALL_FINAL_TIMEOUT_S: "1200",
+        PW_APT_LOCK_TIMEOUT_S: "300",
+        PW_APT_DEB_CACHE: "true",
+        PW_APT_DEB_DIR: debDir,
+        PW_APT_EXACT_HIT: "",
+        PW_APT_MATCHED_KEY: "",
+        ...env,
+      },
+    });
+    return {
+      status: r.status,
+      out: `${r.stdout}${r.stderr}`,
+      calls: fs.readFileSync(log, "utf8").split("\n").filter(Boolean),
+    };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const isOffline = (c) => /^apt-get install .*--no-download/.test(c);
+const isOnline = (c) => /^npx playwright install-deps chromium$/.test(c);
+const isUpdate = (c) => /^apt-get update/.test(c);
+
+const SCENARIOS = {
+  "exact hit": { PW_APT_EXACT_HIT: "true", PW_APT_MATCHED_KEY: "k-exact" },
+  "exact hit, offline apt fails": { PW_APT_EXACT_HIT: "true", PW_APT_MATCHED_KEY: "k-exact", STUB_APT_RC: "100" },
+  "exact hit, offline apt fails, dpkg left unconfigured": {
+    PW_APT_EXACT_HIT: "true",
+    PW_APT_MATCHED_KEY: "k-exact",
+    STUB_APT_RC: "100",
+    STUB_AUDIT: "The following packages are only half configured",
+  },
+  "exact hit, Playwright still reports missing deps": {
+    PW_APT_EXACT_HIT: "true",
+    PW_APT_MATCHED_KEY: "k-exact",
+    STUB_DRYRUN_RC: "1",
+  },
+  "restore-keys fallback": { PW_APT_EXACT_HIT: "false", PW_APT_MATCHED_KEY: "k-older-image" },
+  miss: { PW_APT_EXACT_HIT: "false", PW_APT_MATCHED_KEY: "" },
+  "cache disabled": { PW_APT_DEB_CACHE: "false", PW_APT_EXACT_HIT: "", PW_APT_DEB_DIR: "" },
+};
+
+test("an EXACT cache hit installs the cached .debs offline: no apt-get update, no install-deps", () => {
+  const r = runInstallStep(SCENARIOS["exact hit"]);
+  expect(r.status, r.out).toBe(0);
+  const offline = r.calls.filter(isOffline);
+  expect(offline.length, `the cached .debs must be installed with --no-download\n${r.calls.join("\n")}`).toBe(1);
+  // By PATH, not by name: names resolve against the image's stale lists (22 of
+  // 109 chromium .debs mismatched with 7-week-old lists, so names exited 100).
+  expect(offline[0]).toMatch(
+    /--no-install-recommends --no-download \S+\/libnss3_3\.98_amd64\.deb \S+\/xvfb_21\.1_amd64\.deb$/,
+  );
+  expect(r.calls.filter(isOnline), "the online install-deps must not run after a good offline install").toEqual([]);
+  expect(r.calls.filter(isUpdate), "the offline path never refreshes the index").toEqual([]);
+  // Success is Playwright's own verdict, taken AFTER the install.
+  const verify = r.calls.indexOf("npx playwright install-deps --dry-run chromium");
+  expect(verify, "the offline install must be verified by `install-deps --dry-run`").toBeGreaterThan(
+    r.calls.findIndex(isOffline),
+  );
+  expect(r.out).toContain("apt path: offline (exact cache hit)");
+});
+
+for (const name of ["restore-keys fallback", "miss", "cache disabled"]) {
+  test(`no offline install without an exact hit: ${name}`, () => {
+    const r = runInstallStep(SCENARIOS[name]);
+    expect(r.status, r.out).toBe(0);
+    expect(r.calls.filter(isOffline), r.calls.join("\n")).toEqual([]);
+    expect(r.calls.filter(isOnline).length, "today's online path must run").toBe(1);
+    expect(r.out).toMatch(/apt path: online \((partial cache hit|cache miss|the apt \.deb cache is disabled)/);
+  });
+}
+
+for (const name of [
+  "exact hit, offline apt fails",
+  "exact hit, offline apt fails, dpkg left unconfigured",
+  "exact hit, Playwright still reports missing deps",
+]) {
+  test(`a failed offline install falls back to the unchanged online path: ${name}`, () => {
+    const r = runInstallStep(SCENARIOS[name]);
+    expect(r.status, `fail-open: the lane must still go green\n${r.out}`).toBe(0);
+    const off = r.calls.findIndex(isOffline);
+    const on = r.calls.findIndex(isOnline);
+    expect(off, r.calls.join("\n")).toBeGreaterThanOrEqual(0);
+    expect(on, "the online install-deps must run after an offline failure").toBeGreaterThan(off);
+    expect(r.out).toMatch(/apt path: online \(offline failed: /);
+    const repair = r.calls.indexOf("dpkg --configure -a");
+    if (name.includes("unconfigured")) {
+      expect(repair, "an unconfigured dpkg must be finished BEFORE the online apt").toBeGreaterThan(off);
+      expect(repair).toBeLessThan(on);
+    } else {
+      expect(repair, "dpkg is only repaired when `dpkg --audit` reports something").toBe(-1);
+    }
+  });
+}
+
+test("nothing that runs apt or dpkg is ever wrapped in `timeout`, on any path", () => {
+  // The #210 invariant, asserted on what the script EXECUTES: across every
+  // path, `timeout` may wrap only the browser download.
+  let sawDownloadBound = false;
+  for (const [name, env] of Object.entries(SCENARIOS)) {
+    const r = runInstallStep(env);
+    for (const c of r.calls.filter((x) => x.startsWith("timeout "))) {
+      expect(c, `${name}: \`${c}\` puts apt under a bound (job 92989057569)`).not.toMatch(/apt-get|dpkg|install-deps/);
+      if (/^timeout \d+ npx playwright install chromium$/.test(c)) sawDownloadBound = true;
+    }
+  }
+  expect(sawDownloadBound, "positive control: the download phase must reach the timeout stub").toBe(true);
+});
+
+test("apt's own transport abandons an idle fetch: Acquire timeouts + retries in the same drop-in", () => {
+  // Written next to DPkg::Lock::Timeout so they reach the apt-get INSIDE
+  // `playwright install-deps`. An inactivity timeout, so it never abandons the
+  // measured slow-but-flowing mirror; it cannot catch a trickle either.
+  const step = compositeSteps().find((st) => /DPkg::Lock::Timeout/.test(String(st.run || "")));
+  const run = String(step.run);
+  const val = (key) => {
+    const m = run.match(new RegExp(`'${key.replace(/[.:]/g, "\\$&")} "(\\d+)";'`));
+    expect(m, `the apt.conf.d drop-in must set ${key}`).toBeTruthy();
+    return Number(m[1]);
+  };
+  for (const key of ["Acquire::http::Timeout", "Acquire::https::Timeout"]) {
+    const s = val(key);
+    expect(s, `${key}: above a healthy mirror's longest silence`).toBeGreaterThanOrEqual(10);
+    expect(s, `${key}: below apt's 30 s default, or it buys nothing`).toBeLessThan(30);
+  }
+  const retries = val("Acquire::Retries");
+  expect(retries).toBeGreaterThanOrEqual(1);
+  expect(retries).toBeLessThanOrEqual(10);
+});
+
+test("the offline path reads the EXACT-hit output, and every cache step is fail-open", () => {
+  const steps = compositeSteps();
+  const install = compositeStep(/npx playwright/);
+  // `cache-hit` is 'true' only for the primary key; restore-keys report 'false'.
+  expect(install.env.PW_APT_EXACT_HIT).toBe("${{ steps.debrestore.outputs.cache-hit }}");
+  expect(install.env.PW_APT_DEB_DIR).toBe("${{ steps.debkey.outputs.dir }}");
+  const cacheActions = steps.filter((st) => /^actions\/cache\/(restore|save)@/.test(String(st.uses || "")));
+  expect(cacheActions.length).toBe(2);
+  for (const s of cacheActions) {
+    expect(s["continue-on-error"], `${s.uses}: a cache-service error must never fail the lane`).toBe(true);
+  }
+  // The cache's own bash steps never abort: no `set -e`, no nonzero exit.
+  const bashCacheSteps = steps.filter((st) => st.id === "debkey" || /^(Seed|Collect) apt/.test(String(st.name)));
+  expect(bashCacheSteps.length).toBe(3);
+  for (const s of bashCacheSteps) {
+    const code = String(s.run)
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    expect(code, `${s.name}: set -e turns a cache hiccup into a red lane`).not.toMatch(/set -[a-z]*e/);
+    expect(code, `${s.name}: must not exit nonzero`).not.toMatch(/\bexit [1-9]/);
+  }
+});

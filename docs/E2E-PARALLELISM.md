@@ -510,6 +510,141 @@ run plus four full reruns). All five were green. Job seconds:
   21 MB (was 61 MB), and 225 MB a run in all (was 485 MB, main run
   39829458882).
 
+## Mirror-independent apt (2026-10-22)
+
+The `.deb` cache above removed the archive FETCH. It did not remove the
+`apt-get update` that `playwright install-deps` always runs first, and on
+2026-10-22 the mirror stalled that instead.
+
+**The incident.** cms-platform run 39851509261 (PR #865), attempt 1, job
+120078645574 (`chromium-desktop-3k` shard 3/3 @ fixture-site). The restore was
+an EXACT hit (`Cache restored from key:
+playwright-apt-debs-v1-ubuntu24-chromium-pw1.64.0-20261012.334.1`, 15 `.deb`s,
+32 MB), so the archive was never going to be the problem. Inside
+`install-deps (apt)` attempt 1:
+
+```
+20:45:26  Get:6-9 packages.microsoft.com ...           (instant)
+20:45:56  Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease          (+30.0 s)
+20:46:26  Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease  (+30.0 s)
+20:46:26  Get:4 ... noble-backports InRelease [126 kB]
+20:46:26  Get:5 ... noble-security InRelease [126 kB]
+20:46:26  Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+21:30:18  ##[error]The operation was canceled.   (the 45-minute job wall)
+```
+
+The required `fixture-e2e` gate then failed. **What kind of stall it was**, as
+far as the log can say:
+
+- **Which file:** `noble-updates InRelease`. It is the one index file whose
+  outcome never printed: `Ign:3` means its first try failed and apt re-queued
+  it, and nothing (`Hit:3`, `Get:3` or `Err:3`) followed. The Packages indexes
+  that `Get:4` and `Get:5` made necessary never started either; apt prints
+  `Get:` when a file starts arriving, so they were stuck behind it.
+- **Not a plain idle connection.** The same apt timed out two idle requests at
+  exactly 30.0 s each (`Ign:2`, `Ign:3`), so its 30 s idle timeout was active,
+  and a fully silent socket would have tripped it again within a minute.
+- **Consistent with a header trickle.** Reproduced locally (apt 2.8.3 in
+  `ubuntu:24.04`, against a fake mirror): a server that answers `HTTP/1.1 200
+  OK` and then sends one header byte every 5 s makes apt print **nothing at
+  all** for 400 s, even with `Acquire::http::Timeout "10"`. A body trickle
+  prints `Get:1 ... [10.0 MB]` and then nothing. A fully idle server or a
+  stalled TLS handshake is abandoned on time. The log cannot prove a trickle
+  (no byte counts), but it rules out the case apt's own timeout handles.
+
+**Change 1: install offline on an exact hit.** When `cache-hit` is `true`
+(the primary key, so this ImageVersion + engine + Playwright version; a
+restore-keys fallback reports `false`), the install step runs
+
+```
+sudo env DEBIAN_FRONTEND=noninteractive \
+  apt-get install -y --no-install-recommends --no-download <every cached .deb, by path>
+```
+
+then `npx playwright install-deps --dry-run <engine>`, which in Playwright
+1.64 is an offline `apt-get install -s --no-install-recommends <its package
+list>` and exits nonzero if any `Inst` line remains. Only both succeeding
+counts as offline success. No `apt-get update`, no mirror.
+
+*Why by path and not by package name.* The question was whether the saved set
+installs offline against the image's existing, possibly stale
+`/var/lib/apt/lists`. Measured in `--network none` containers, with the set
+downloaded against current lists and the install run against lists from
+`snapshot.ubuntu.com/ubuntu/20260901T000000Z` (7 weeks stale):
+
+| | chromium (109 debs, 95 MB) | webkit (387 debs, 213 MB) |
+|---|---|---|
+| cached `.deb`s whose version ≠ the stale lists' candidate | 22 | 46 |
+| by NAME: `apt-get install --no-download <Playwright's list>` | **exit 100** ("Unable to fetch some archives") | **exit 100** ("held broken packages") |
+| by PATH, stale lists | **exit 0**, 109 installed, 17 s | **exit 0**, 385 installed + 2 upgraded, 60 s |
+| by PATH, NO lists at all | **exit 0**, 109 installed | (not run) |
+| Playwright's dry-run check afterwards | 0 missing | 0 missing |
+
+So installing by name needs fresh indexes and is not viable. Caching
+`/var/lib/apt/lists` alongside the `.deb`s would make it work, but it is not
+needed: by path, apt reads each package's dependencies from the `.deb` itself
+and checks them against dpkg's status, which on an exact key is the same image
+the set was saved from. The key stays `v1`, the cache contents do not change,
+and main's existing entries serve as exact hits. Two more measured facts:
+
+- **The archive dir matters.** With `--no-download`, apt takes even a local
+  `.deb` from `/var/cache/apt/archives`: unseeded, the same 109 paths exited
+  100; after the composite's existing seed step copied them in, all installed.
+  A failed seed is therefore just a fallback.
+- **An incomplete set fails cleanly.** With one `.deb` removed (`libnspr4`), apt
+  exited 100 in its planning step: nothing installed (92 packages before and
+  after), `dpkg --audit` empty, the dpkg lock free. The composite's real bash,
+  run in the same container, logged `apt path: online (offline failed:
+  apt-get --no-download exited 100)` and went on to the online phase.
+
+*Trust.* The offline path installs `.deb`s that no freshly fetched signed index
+re-checks. They are the files apt downloaded and verified on a default-branch
+run, saved by that run; only the default branch saves, and a pull request's
+cache scope is invisible to main and to every other PR. That is the same trust
+the cache's restore already had in the job's own workspace.
+
+*Fallback.* Anything other than an exact hit, a failed offline `apt-get`, or a
+failed dry-run runs the online phase exactly as before: unbounded, retried,
+waiting on the dpkg lock. The offline `apt-get` is a direct child that has
+exited by then, so it cannot be holding the lock. If `dpkg --audit` reports
+anything, `dpkg --configure -a` runs first (best-effort). The log names the
+path: `apt path: offline (exact cache hit)`, or `apt path: online (cache miss
+| partial cache hit (<key> ...) | offline failed: <reason> | the apt .deb cache
+is disabled)`.
+
+**Change 2: apt abandons an idle fetch itself.** The apt.conf.d drop-in that
+sets `DPkg::Lock::Timeout` now also sets:
+
+```
+Acquire::http::Timeout "15";
+Acquire::https::Timeout "15";
+Acquire::Retries "5";
+```
+
+`Acquire::*::Timeout` is an inactivity timer (connect, TLS handshake, each wait
+for the next byte). A healthy `apt-get update` fetches ALL its index files in
+6 s at the median and 28 s at the max, so 15 s of silence on one connection does
+not happen on a healthy mirror, and the measured slow mirror (~83-100 KB/s)
+never goes silent, so this never abandons a slow-but-flowing fetch (locally, a
+20 B/s body survived a 10 s timeout for 400 s). Measured locally, apt gives up
+one try at about twice the timeout plus a second: the default (30 s) took
+65 s against an idle server, 10 s took 21-26 s, so 15 s is ~31 s. Five retries
+on fresh connections keep the worst idle case per file to about four minutes
+against a 45-minute job wall. The step prints the effective values from
+`apt-config dump`, so a runner-image drop-in that overrides them is visible.
+This is apt abandoning a fetch from inside, so nothing is killed and nothing
+is orphaned (#210).
+
+**What change 2 cannot do:** catch a trickle. Any byte resets the timer. It
+would NOT have caught run 39851509261's stall, for the reason above. Change 1
+would have: that job had an exact hit.
+
+*Rejected: making a stall's nature visible through apt.conf.d.*
+`APT::Status-Fd` prints `dlstatus:` about four times a second while any fetch
+is open, and the percentage stayed `0.0000` through a 20 B/s trickle, so it is
+noisy and still cannot tell a trickle from silence. `Debug::Acquire::http` logs
+every header. Neither was added.
+
 ## Rejected: skipping tests per diff
 
 `e2e/select-specs.js` can narrow the suite to a diff's salient specs, and the
@@ -777,7 +912,7 @@ gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs | grep -E '✓|✘'
 # apt split inside the install step: fetch size and time, and whether the
 # .deb cache hit ("Need to get 0 B/<n> MB") or which entry it restored
 gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs \
-  | grep -E 'Need to get|Fetched|Cache restored from key|restored \.debs|apt \.deb cache key'
+  | grep -E 'Need to get|Fetched|Cache restored from key|restored \.debs|apt \.deb cache key|apt path:'
 ```
 
 To try a different worker count without cutting a release, pass the reusable's
