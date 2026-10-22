@@ -195,7 +195,10 @@ into `main` in each repository bound to `consumer-main` in
 their `platform.lock`, every platform workflow `uses:@` and `platform_ref:` input
 to that full SHA. Set the theme gem's `Gemfile` option to `ref: "<full SHA>"`
 (instead of `tag:`), then refresh `Gemfile.lock` so its platform GIT source has
-both `ref:` and `revision:` equal to that SHA. Each consumer's e2e caller must
+both `ref:` and `revision:` equal to that SHA.
+[`scripts/rewrite-platform-pins.js`](../scripts/rewrite-platform-pins.js) writes
+exactly that shape when `--to` is a full 40-hex SHA, and writes `tag:` again
+when a later bump targets a release tag. Each consumer's e2e caller must
 run `target: local` with `browser: all`, using that candidate's harness; a green
 platform fixture run cannot substitute for either consumer's own validation.
 Wait for the consumer PR checks, including any regression review, to succeed.
