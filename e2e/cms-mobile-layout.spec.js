@@ -671,8 +671,15 @@ test.describe(
         // none of the toggle controls on screen may intersect it: the Markdown /
         // Rich Text toggle (its row, both mode labels and its switch) and the
         // Published toggle (its switch and its label chip).
-        const overlaps = await page.evaluate(async () => {
-          const btn = document.getElementById("live-preview-link").getBoundingClientRect();
+        //
+        // Each stop is measured synchronously: an instant scrollTo moves the
+        // scroll offset at once, and getBoundingClientRect forces the layout that
+        // places sticky and fixed boxes for it, so no frame needs to render
+        // in between. Awaiting a requestAnimationFrame per 20px stop (~100
+        // stops) cost 10-80 s on a loaded WebKit runner and measured nothing
+        // more; nothing under test moves on a scroll event.
+        const overlaps = await page.evaluate(() => {
+          const link = document.getElementById("live-preview-link");
           const editor = document.querySelector('[class*="EditorContainer"]');
           const targets = [
             ...[...editor.querySelectorAll('[class*="ToolbarToggle"]')].map((n) => ["modeToggle", n]),
@@ -683,8 +690,8 @@ test.describe(
           ];
           const hits = [];
           for (let y = 0; y <= document.documentElement.scrollHeight; y += 20) {
-            window.scrollTo(0, y);
-            await new Promise((r) => requestAnimationFrame(() => r()));
+            window.scrollTo({ top: y, behavior: "instant" });
+            const btn = link.getBoundingClientRect();
             for (const [name, n] of targets) {
               const r = n.getBoundingClientRect();
               if (r.width === 0 || r.height === 0) continue;
