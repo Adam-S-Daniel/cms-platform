@@ -130,9 +130,10 @@ since #525.
 `e2e/fixture-site` (a neutral consuming site whose Gemfile pins the theme by
 local path, so the working tree's theme is built), installs gems from the
 fixture's COMMITTED `Gemfile.lock` in frozen mode, and runs every `@lane: local`
-spec on four matrix legs, each behind a `timeout-minutes` wall: the admin
-projects `chromium-desktop-3k` and `webkit-iphone16` on `e2e/fixture-site`, and
-since #702 ONE public project, `chromium-desktop-1080`, on both
+spec on eight matrix legs, each behind a `timeout-minutes` wall: the admin
+projects `chromium-desktop-3k` and `webkit-iphone16` on `e2e/fixture-site`, each
+split into three `--shard` legs since 2026-10-22 (the consumer shape; see
+`docs/E2E-PARALLELISM.md`), and since #702 ONE public project, `chromium-desktop-1080`, on both
 `e2e/fixture-site` (`/` on the theme's default layout) and
 `e2e/fixture-site-singlepage` (`/` on its own `_layouts/home.html`, the shape of
 jodidaniel.com). Before #702 no public spec ran here, so v0.1.139's public-theme
@@ -140,8 +141,9 @@ specs first ran on a consumer bump and broke jodidaniel.com#351. `@lane: real`
 specs are excluded explicitly (`admin-bundle-parity.spec.js` fetches
 production). A step then fails the job unless the leg's proof test PASSED (the
 matrix names it: the archived-PDF test in `cms-editorial-workflow.spec.js` on
-the admin legs, a public test that runs only where the leg's `/` shape holds on
-the public ones), so a future skip cannot read green. An early salience step
+the admin legs, asserted by the one shard whose `--list` holds it, a public test
+that runs only where the leg's `/` shape holds on the public ones), so a future
+skip cannot read green. An early salience step
 skips the work, with success, on a PR that touches only `docs/`,
 `infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE` or `*.md`
 outside the fixtures. The REQUIRED context is the `fixture-e2e` gate (`needs:` +

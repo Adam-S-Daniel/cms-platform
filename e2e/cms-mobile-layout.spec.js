@@ -402,7 +402,9 @@ test.describe(
   // chromium-desktop-3k + webkit-iphone16. See playwright.config.js.
   { tag: ["@admin-read"] },
   () => {
-    test.describe.configure({ mode: "serial", timeout: 180_000 });
+    // Not serial (2026-10-22): each test seeds its own in-browser test-repo
+    // backend in a fresh page and writes no file, so no test depends on another.
+    test.describe.configure({ timeout: 180_000 });
 
     test("entry editor fits the viewport with no dead horizontal scroll", async ({ page }) => {
       await page.setViewportSize(IPHONE_16);
