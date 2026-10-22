@@ -229,11 +229,15 @@ not wait for the consumers' checks; the release gate judges those.
 Bootstrap: a consumer accepts `candidate_sha` only once its `platform-bump.yml`
 caller declares the input and forwards it, and the reusable that caller pins has
 candidate mode. Callers are pinned to a release tag, so the first stable release
-after candidate mode landed still needs hand-built drafts (above). Those drafts
-and that release's bump PRs must also adopt the caller's new `candidate_sha`
-dispatch input and `with:` line from `examples/site`: pin-consistency compares a
-caller's `with:` keys against the template at the pinned ref, and
-`platform-bump` does not reconcile `with:` keys.
+after candidate mode landed still needs hand-built drafts (above), and those
+drafts must carry the caller's new `candidate_sha` dispatch input and `with:`
+line from `examples/site` (pin-consistency compares a caller's `with:` keys with
+the template at the pinned ref). That release's bump PRs need no hand edit:
+`platform-bump`'s caller reconciliation
+([`scripts/reconcile-caller-secrets.js`](../scripts/reconcile-caller-secrets.js),
+run at the target ref in normal and candidate mode alike) adds and drops each
+caller's dictated `with:` keys and `workflow_dispatch` inputs alongside its
+`secrets:` map.
 
 Dispatch the stable release from that same platform `main` revision with
 `candidate_adamdaniel_ai_pr` and `candidate_jodidaniel_com_pr` set to those PR

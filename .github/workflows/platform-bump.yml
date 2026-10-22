@@ -615,6 +615,9 @@ jobs:
           # structuralShape() (fetched beside it), writes a splice of the
           # `secrets:` lines only, and re-parses the result before saving.
           # Seeded callers already match; retired ones are gone.
+          # The same pass reconciles each job's `with:` KEY set (the checker
+          # compares it too) and the `workflow_dispatch` inputs a forwarded
+          # value reads, so a caller gaining `candidate_sha` rides this commit.
           SECRETS_NOTE=""
           SECRETS_TOOLS="${RUNNER_TEMP:-/tmp}/secrets-reconcile"
           rm -rf "$SECRETS_TOOLS"
@@ -651,12 +654,12 @@ jobs:
             printf 'Caller reconciliation diagnostic: %s\n' "$(escape_workflow_data "$SECRETS_OUT")"
             SECRETS_UPDATED=$(sed -n 's/^UPDATED //p' <<<"$SECRETS_OUT" | paste -sd ';' -)
             if [ -n "$SECRETS_UPDATED" ]; then
-              SECRETS_NOTE=" Reconciled thin-caller \`secrets:\` maps with the template: ${SECRETS_UPDATED//;/; }."
+              SECRETS_NOTE=" Reconciled thin-caller \`secrets:\` maps, \`with:\` keys and dispatch inputs with the template: ${SECRETS_UPDATED//;/; }."
             fi
             if [ "$SECRETS_RC" -ne 0 ]; then
               # Fail soft, like the required_contexts pass: pin-consistency
               # still catches a stale map, and the PR body says where to look.
-              SECRETS_NOTE="${SECRETS_NOTE} :warning: some \`secrets:\` maps could NOT be reconciled automatically (see the platform-bump run log) — align them with examples/site at $LATEST before merging."
+              SECRETS_NOTE="${SECRETS_NOTE} :warning: some callers' \`secrets:\` maps, \`with:\` keys or dispatch inputs could NOT be reconciled automatically (see the platform-bump run log) — align them with examples/site at $LATEST before merging."
               echo "::warning::secrets reconciliation exited $SECRETS_RC — see the MANUAL lines above"
             fi
           else
