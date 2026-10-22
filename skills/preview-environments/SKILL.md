@@ -25,7 +25,6 @@ PR push
   → Jekyll build (no --baseurl; root-relative URLs)
   → patch-preview-config.sh → repoint admin/config.yml for this PR
   → aws s3 sync → s3://${ResourcePrefix}-previews/pr-{N}/
-  → CloudFront invalidation /pr-{N}/*
   → Bot comment updated: https://preview-pr{N}.${ApexDomain}/
 
 Request-time (every visitor hit)
@@ -33,8 +32,8 @@ Request-time (every visitor hit)
   → Route53 wildcard *.${ApexDomain} → Preview CloudFront
   → CloudFront Function (viewer-request): host → S3-prefix
     req.uri = '/pr-21/blog/foo/'
-  → CloudFront cache keyed by /pr-21/blog/foo/
-  → (on miss) S3 website endpoint serves /pr-21/blog/foo/index.html
+  → CachingDisabled: nothing is stored, so every request goes to the origin
+  → S3 website endpoint serves /pr-21/blog/foo/index.html
   → CloudFront Function (viewer-response): strip `/pr-21/` from
     any Location header so S3's trailing-slash redirects
     (e.g. /admin → /pr-21/admin/) hide the internal prefix from the
@@ -44,7 +43,6 @@ PR close/merge
   → deploy-preview.yml `teardown-preview` job (gated on
     github.event.action == 'closed')
   → aws s3 rm s3://${ResourcePrefix}-previews/pr-{N}/ --recursive
-  → CloudFront invalidation /pr-{N}/*
   → Bot comment: "🗑️ Preview environment cleaned up."
 ```
 
@@ -89,7 +87,7 @@ prefix-to-subdomain mapping transparently at request time.
 ## CloudFront cache behaviour
 
 - Cache policy: `CachingDisabled` (AWS-managed `4135ea2d-6df8-44a3-9df3-4b5a84be39ad`) — previews always serve fresh content
-- Invalidations run on every push and on teardown, against `/pr-{N}/*` — the post-rewrite URI is what CloudFront caches by
+- No invalidation runs for previews: nothing is cached, so there is nothing to invalidate. Each invalidation path counts against the account's 1,000 free paths per month (October 2026 ran out), so never add one for the preview distribution; see `docs/OPERATIONS.md` § CloudFront invalidation budget
 - Origin: S3 website endpoint (`${ResourcePrefix}-previews.s3-website-us-east-1.amazonaws.com`) via `http-only` custom origin
 
 ## Bot comment
@@ -110,13 +108,6 @@ gh pr checks <pr-number>      # run from the site repo, or add --repo <owner>/<r
 **Check what's in S3 for a PR:**
 ```bash
 aws s3 ls "s3://${ResourcePrefix}-previews/pr-<N>/" --region us-east-1
-```
-
-**Manually invalidate CloudFront cache:**
-```bash
-aws cloudfront create-invalidation \
-  --distribution-id "$PREVIEW_CLOUDFRONT_ID" \
-  --paths "/pr-<N>/*"
 ```
 
 **Check CloudFront distribution status:**
@@ -150,7 +141,7 @@ Either the CloudFront Function isn't attached to the distribution's viewer-reque
 S3 302s directory requests to `…/admin/`, but without the response-side function the `Location` header leaks the internal `/pr-{N}/` prefix and the browser navigates into a nonexistent URL space. The `${AWS::StackName}-preview-location-fixer` Function at viewer-response strips that prefix; if it's missing, re-run `infrastructure/bootstrap/deploy.sh`. Verify with `curl -I https://preview-pr{N}.${ApexDomain}/admin` — `Location` should be `/admin/`, not `/pr-{N}/admin/`.
 
 **Old preview content still showing:**
-CloudFront cache not yet invalidated, or the invalidation is in progress. Wait ~30s or manually invalidate (see above).
+The preview distribution caches nothing (CachingDisabled), so a stale preview means the deploy has not finished syncing to S3. Check the `deploy-preview` run and the `aws s3 ls` listing above; do not invalidate.
 
 **Teardown left orphaned S3 files:**
 ```bash

@@ -428,6 +428,11 @@ const PLATFORM_META_SPECS = [
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
   "deploy-preview-cms-slug.test.js",
+  // 2026-10 free-tier incident — reads the platform's OWN workflow and
+  // composite-action DEFINITIONS plus infrastructure/bootstrap/template.yaml
+  // to lock that only deploy-production invalidates CloudFront; platform-internal,
+  // self-CI only.
+  "cloudfront-invalidation-budget.test.js",
   // #637 — executes the build run: scripts of the platform's OWN
   // deploy-preview.yml / deploy-production.yml / site-verify.yml DEFINITIONS.
   "deploy-preview-unpublished.test.js",

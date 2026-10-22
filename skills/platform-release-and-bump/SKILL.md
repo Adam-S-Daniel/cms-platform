@@ -226,8 +226,7 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   (#222 part 2; the v0.1.76 bump carried that 9-file edit alongside the pin
   rewrite, and no bump crosses it now). **`deploy-preview.yml` is the ONE
   exception and KEEPS `closed`** — it is the only caller declaring it, and the
-  reusable's teardown (S3 `rm --recursive` + CloudFront invalidation +
-  bot-comment update) fires only on that action; the replacement lint asserts
+  reusable's teardown (S3 `rm --recursive` + bot-comment update) fires only on that action; the replacement lint asserts
   `closed` POSITIVELY, so applying the generic diff there fails self-CI. Residual risk to record
   beside `delete_branch_on_merge=true`: dropping `edited` reverts #145 / PR #166,
   whose case is a PR **retargeted onto a different base** — that fires
