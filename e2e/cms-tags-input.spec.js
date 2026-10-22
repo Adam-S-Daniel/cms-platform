@@ -182,6 +182,62 @@ test.describe(
       expect(await savedTags(page)).toEqual(["quotes"]);
     });
 
+    // The panel is created empty and filled a frame later (the live-region rule
+    // below). When the tags index arrived mid-word, the next keystroke filled
+    // the new panel at once, and the still-pending frame then rebuilt it: a Tab
+    // taken in between landed on a button that was replaced under it, so focus
+    // dropped to <body> (`unexpected value "inactive"` on chromium-desktop-3k,
+    // adamdaniel.ai#4343, #4324). The frame is held only to pin that order; every
+    // step is still a real key press.
+    test("a re-render while a suggestion has focus keeps focus on that suggestion (#735)", async ({ page }) => {
+      let sendTagsIndex;
+      const tagsIndexSent = new Promise((resolve) => (sendTagsIndex = resolve));
+      await page.route("**/tags/", async (route) => {
+        await tagsIndexSent;
+        await route.fulfill({
+          contentType: "text/html",
+          body: "<ul><li><span class='tag-list-name'>quotes</span></li><li><span class='tag-list-name'>release</span></li></ul>",
+        });
+      });
+      await page.addInitScript(() => {
+        const raf = window.requestAnimationFrame.bind(window);
+        let held = null;
+        window.requestAnimationFrame = (fn) => (held ? held.push(fn) || 0 : raf(fn));
+        window.__holdFrames = () => {
+          held = [];
+        };
+        // Resolves once every held frame callback has run.
+        window.__releaseFrames = () =>
+          new Promise((resolve) =>
+            raf((t) => {
+              const fns = held || [];
+              held = null;
+              fns.forEach((fn) => fn(t));
+              resolve(fns.length);
+            }),
+          );
+      });
+      await openNewPost(page);
+      const tags = page.getByLabel(/^Tags/);
+      await tags.click();
+      await page.keyboard.type("q");
+      await page.evaluate(() => window.__holdFrames());
+      sendTagsIndex();
+      // The index arrived: the panel exists, empty, with its fill frame pending.
+      const panel = page.locator("#cms-tags-suggest");
+      await expect(panel).toBeAttached();
+      await page.keyboard.type("uo");
+      const offer = panel.getByRole("button", { name: "quotes", exact: true });
+      await expect(offer).toBeVisible();
+      await page.keyboard.press("Tab");
+      await expect(offer).toBeFocused();
+      expect(await page.evaluate(() => window.__releaseFrames()), "the panel's fill frame was still pending").toBeGreaterThan(0);
+      await expect(offer).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(tags).toHaveValue("quotes, ");
+      expect(await savedTags(page)).toEqual(["quotes"]);
+    });
+
     // #756: Decap trims the box on every keystroke, so a space typed after a
     // letter used to vanish and `Field Notes` became `FieldNotes`.
     test("a space typed inside a tag stays: `Field Notes` saves as one tag with its space (#756)", async ({ page }) => {
