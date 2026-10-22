@@ -303,6 +303,11 @@ ruleset_library:
             # `Independent review: CLEAN at <current head sha>`; every other PR
             # passes it.
             - context: release-review-gate
+            # why: _agent-guidance ADR 0021 — agent-checks.yml runs
+            # .githooks/agent-checks over every commit a PR adds, the check a
+            # local `--no-verify` skips. Reported as `agent-checks` on PRs
+            # (job id, no `name:` override).
+            - context: agent-checks
     bypass_actors: []
 
   # why: = live adamdaniel.ai ruleset 13985217 as-found 2026-07-10 — the
