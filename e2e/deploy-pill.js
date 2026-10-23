@@ -234,6 +234,13 @@ async function waitForChangeReflected({
         `Waited ${elapsedS}s and NO deploy-production run fired for your merge — the chain never ` +
         `fired (auto-merge / editorial-workflow / deploy-trigger problem), rather than the ` +
         `change simply being slow to deploy.`;
+    } else if (verdict && verdict.kind === "merged-awaiting-deploy-dispatch") {
+      // The cms PR merged just before the budget ran out and GitHub had not
+      // yet created the push-triggered deploy-production run for it.
+      detail =
+        `Waited ${elapsedS}s. The cms PR merged only ${Math.round((verdict.sinceMergeMs || 0) / 1000)}s ` +
+        `before the last probe and no deploy-production run existed for it yet — the extension ` +
+        `ceiling was reached while waiting for GitHub to create the push-triggered deploy run.`;
     } else if (verdict && verdict.kind === "pr-awaiting-required-check") {
       // #215: the cms PR had NOT merged yet, so no deploy run could exist
       // for it — the deploy chain is not the failing leg, whatever check is
