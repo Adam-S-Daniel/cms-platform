@@ -95,19 +95,24 @@ const LIVE = {
 };
 
 // repo -> its captured live Actions-permissions fixtures (GET
-// actions/permissions + GET .../fork-pr-contributor-approval, 2026-07-13).
+// actions/permissions + GET .../fork-pr-contributor-approval, 2026-07-13;
+// GET .../actions/permissions/workflow, 2026-10-23 for #868 — CONVERGED,
+// unlike the two as-found 2026-07-13 captures).
 const LIVE_ACTIONS = {
   "Adam-S-Daniel/cms-platform": {
     permissions: "cms-platform.actions-permissions.json",
     fork: "cms-platform.fork-pr-approval.json",
+    workflow: "cms-platform.workflow-permissions.json",
   },
   "Adam-S-Daniel/adamdaniel.ai": {
     permissions: "adamdaniel.actions-permissions.json",
     fork: "adamdaniel.fork-pr-approval.json",
+    workflow: "adamdaniel.workflow-permissions.json",
   },
   "jodidaniel/jodidaniel.com": {
     permissions: "jodidaniel.actions-permissions.json",
     fork: "jodidaniel.fork-pr-approval.json",
+    workflow: "jodidaniel.workflow-permissions.json",
   },
 };
 
@@ -144,14 +149,16 @@ function fakeApi(routes) {
   };
 }
 
-// Build the fetchLive-shaped { permissions, forkApproval } bundle from the
-// captures; `mutate.permissions` / `mutate.forkApproval` override for the
-// negative cases (e.g. a {skipped:true} private-repo fork endpoint).
+// Build the fetchLive-shaped { permissions, forkApproval, workflow } bundle
+// from the captures; `mutate.permissions` / `mutate.forkApproval` /
+// `mutate.workflow` override for the negative cases (e.g. a {skipped:true}
+// private-repo fork endpoint).
 function liveActions(repo, mutate = {}) {
   const m = LIVE_ACTIONS[repo];
   return {
     permissions: { ...fixture(m.permissions), ...(mutate.permissions || {}) },
     forkApproval: mutate.forkApproval || fixture(m.fork),
+    workflow: { ...fixture(m.workflow), ...(mutate.workflow || {}) },
   };
 }
 
@@ -909,6 +916,270 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     expect(informational).toEqual([]);
   });
 
+  // ── GITHUB_TOKEN workflow defaults (#868) ─────────────────────────────────
+  // default_workflow_permissions + can_approve_pull_request_reviews share ONE
+  // endpoint (actions/permissions/workflow). Unlike the two 2026-07-13
+  // captures above, these fixtures are CONVERGED (read/false on all three).
+  const WORKFLOW_KEYS = [
+    "can_approve_pull_request_reviews",
+    "default_workflow_permissions",
+  ];
+  function workflowFindings(script, manifest, repo, mutate) {
+    const findings = [];
+    const informational = [];
+    script.diffActionsPermissions(
+      repo,
+      script.effectiveActionsPermissions(manifest, repo),
+      liveActions(repo, mutate),
+      findings,
+      informational,
+    );
+    return {
+      findings: findings.filter((f) => WORKFLOW_KEYS.includes(f.key)),
+      all: findings,
+      informational,
+    };
+  }
+
+  test("(m2) workflow permissions: the converged captures show ZERO drift on all three repos", () => {
+    const script = loadScript();
+    const manifest = loadManifest();
+    for (const repo of Object.keys(LIVE_ACTIONS)) {
+      const { findings, informational } = workflowFindings(script, manifest, repo);
+      expect(findings, `${repo}: ${JSON.stringify(findings)}`).toEqual([]);
+      expect(informational).toEqual([]);
+    }
+  });
+
+  test("(m3) workflow permissions: `write` / `true` live is drift, endpoint-tagged, on every repo", () => {
+    const script = loadScript();
+    const manifest = loadManifest();
+    for (const repo of Object.keys(LIVE_ACTIONS)) {
+      const { findings } = workflowFindings(script, manifest, repo, {
+        workflow: {
+          default_workflow_permissions: "write",
+          can_approve_pull_request_reviews: true,
+        },
+      });
+      expect(findings).toEqual([
+        {
+          repo,
+          kind: "actions-permission-drift",
+          key: "default_workflow_permissions",
+          endpoint: "actions/permissions/workflow",
+          live: "write",
+          desired: "read",
+        },
+        {
+          repo,
+          kind: "actions-permission-drift",
+          key: "can_approve_pull_request_reviews",
+          endpoint: "actions/permissions/workflow",
+          live: true,
+          desired: false,
+        },
+      ]);
+    }
+    // Each key is diffed on its own: drifting only one reports only that one.
+    const repo = "Adam-S-Daniel/adamdaniel.ai";
+    expect(
+      workflowFindings(script, manifest, repo, {
+        workflow: { can_approve_pull_request_reviews: true },
+      }).findings.map((f) => f.key),
+    ).toEqual(["can_approve_pull_request_reviews"]);
+    expect(
+      workflowFindings(script, manifest, repo, {
+        workflow: { default_workflow_permissions: "write" },
+      }).findings.map((f) => f.key),
+    ).toEqual(["default_workflow_permissions"]);
+  });
+
+  function workflowPlan(script, manifest, repo, mutate) {
+    const liveAP = liveActions(repo, mutate);
+    const { all, informational } = workflowFindings(script, manifest, repo, mutate);
+    const plan = script.buildFixPlan(manifest, [
+      {
+        repo,
+        findings: all,
+        informational,
+        liveRepo: fixture(LIVE[repo].repo),
+        liveRulesets: LIVE[repo].rulesets.map(fixture),
+        liveActionsPermissions: liveAP,
+      },
+    ]);
+    expect(plan.length).toBe(1);
+    return plan[0].actionsPuts.filter((p) =>
+      p.endpoint.endsWith("/actions/permissions/workflow"),
+    );
+  }
+
+  test("(m4) --fix plan: ONE workflow PUT carrying BOTH fields, echoing the live value of the undrifted one", () => {
+    const script = loadScript();
+    const manifest = loadManifest();
+    const repo = "jodidaniel/jodidaniel.com";
+    // Only can_approve drifts; default_workflow_permissions is echoed.
+    const onlyApprove = workflowPlan(script, manifest, repo, {
+      workflow: { can_approve_pull_request_reviews: true },
+    });
+    expect(onlyApprove).toEqual([
+      {
+        endpoint: "repos/jodidaniel/jodidaniel.com/actions/permissions/workflow",
+        keys: ["can_approve_pull_request_reviews"],
+        liveByKey: { can_approve_pull_request_reviews: true },
+        body: {
+          default_workflow_permissions: "read", // echoed live
+          can_approve_pull_request_reviews: false, // desired
+        },
+      },
+    ]);
+
+    // The echo is the LIVE value, not the manifest's: live `write` on an
+    // undiffed default_workflow_permissions must travel back as `write`.
+    const echo = (() => {
+      const liveAP = liveActions(repo, {
+        workflow: {
+          default_workflow_permissions: "write",
+          can_approve_pull_request_reviews: true,
+        },
+      });
+      // Desired only names can_approve here, so default_workflow_permissions
+      // is not diffed and must be echoed from live (`write`).
+      const desired = { can_approve_pull_request_reviews: false };
+      const findings = [];
+      script.diffActionsPermissions(repo, desired, liveAP, findings, []);
+      return script.buildFixPlan(manifest, [
+        {
+          repo,
+          findings,
+          informational: [],
+          liveRepo: fixture(LIVE[repo].repo),
+          liveRulesets: LIVE[repo].rulesets.map(fixture),
+          liveActionsPermissions: liveAP,
+        },
+      ])[0].actionsPuts;
+    })();
+    expect(echo).toEqual([
+      {
+        endpoint: "repos/jodidaniel/jodidaniel.com/actions/permissions/workflow",
+        keys: ["can_approve_pull_request_reviews"],
+        liveByKey: { can_approve_pull_request_reviews: true },
+        body: {
+          default_workflow_permissions: "write",
+          can_approve_pull_request_reviews: false,
+        },
+      },
+    ]);
+
+    // Both drifted: still ONE PUT, both desired values.
+    const both = workflowPlan(script, manifest, repo, {
+      workflow: {
+        default_workflow_permissions: "write",
+        can_approve_pull_request_reviews: true,
+      },
+    });
+    expect(both.length).toBe(1);
+    expect(both[0].keys).toEqual([
+      "default_workflow_permissions",
+      "can_approve_pull_request_reviews",
+    ]);
+    expect(both[0].body).toEqual({
+      default_workflow_permissions: "read",
+      can_approve_pull_request_reviews: false,
+    });
+
+    // Converged: no workflow PUT at all.
+    expect(workflowPlan(script, manifest, repo)).toEqual([]);
+  });
+
+  test("(m5) the write-risk classifier sees one write per DRIFTED workflow key, never the echoed one, and fails closed on them", () => {
+    const risk = loadRisk();
+    const plan = [
+      {
+        repo: "o/r",
+        actionsPuts: [
+          {
+            endpoint: "repos/o/r/actions/permissions/workflow",
+            keys: ["can_approve_pull_request_reviews"],
+            liveByKey: { can_approve_pull_request_reviews: true },
+            body: {
+              default_workflow_permissions: "read",
+              can_approve_pull_request_reviews: false,
+            },
+          },
+        ],
+      },
+    ];
+    const c = risk.classifyPlan(plan);
+    expect(c.writes).toEqual([
+      {
+        repo: "o/r",
+        kind: "actions-permission",
+        key: "can_approve_pull_request_reviews",
+        live: true,
+        desired: false,
+      },
+    ]);
+    // Not on the non-weakening allowlist, so a human approves it.
+    expect(c.gated.map((w) => w.key)).toEqual([
+      "can_approve_pull_request_reviews",
+    ]);
+  });
+
+  test("(m6) fetchActionsPermissions: a malformed workflow-permissions response is an OPERATIONAL failure, never drift", () => {
+    const script = loadScript();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const base = {
+      [`repos/${repo}/actions/permissions`]: fixture(
+        "cms-platform.actions-permissions.json",
+      ),
+      [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
+        fixture("cms-platform.fork-pr-approval.json"),
+    };
+    const malformed = [
+      { message: "Not Found" },
+      { default_workflow_permissions: "read" },
+      { can_approve_pull_request_reviews: false },
+      { default_workflow_permissions: 1, can_approve_pull_request_reviews: false },
+      { default_workflow_permissions: "read", can_approve_pull_request_reviews: "false" },
+      null,
+    ];
+    for (const body of malformed) {
+      const api = fakeApi({
+        ...base,
+        [`repos/${repo}/actions/permissions/workflow`]: body,
+      });
+      expect(
+        () => script.fetchActionsPermissions(repo, null, api),
+        JSON.stringify(body),
+      ).toThrow(/actions\/permissions\/workflow response lacks/);
+    }
+    // A hard error on the endpoint propagates (no skip case here).
+    const api403 = fakeApi({
+      ...base,
+      [`repos/${repo}/actions/permissions/workflow`]: () => {
+        const e = new Error("gh: HTTP 403 Resource not accessible");
+        e.stderr = "HTTP 403";
+        throw e;
+      },
+    });
+    expect(() => script.fetchActionsPermissions(repo, null, api403)).toThrow(/403/);
+    // The well-formed capture passes through untouched.
+    const ok = script.fetchActionsPermissions(
+      repo,
+      null,
+      fakeApi({
+        ...base,
+        [`repos/${repo}/actions/permissions/workflow`]: fixture(
+          "cms-platform.workflow-permissions.json",
+        ),
+      }),
+    );
+    expect(ok.workflow).toEqual({
+      default_workflow_permissions: "read",
+      can_approve_pull_request_reviews: false,
+    });
+  });
+
   // ── READ-ONLY DEGRADED path (the Contents-gating fix) ─────────────────────
   // A read-only Administration:Read CI token gets a repo object with the
   // merge-setting keys ENTIRELY ABSENT (GitHub gates them behind Contents
@@ -936,6 +1207,9 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       // public repo -> the fork endpoint returns a value (no 422 here).
       [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
         fixture("cms-platform.fork-pr-approval.json"),
+      [`repos/${repo}/actions/permissions/workflow`]: fixture(
+        "cms-platform.workflow-permissions.json",
+      ),
     });
 
     // The removed canary must NOT abort a correctly read-only token.
@@ -1075,6 +1349,10 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
           e.stderr = "not allowed for private repositories (HTTP 422)";
           throw e;
         },
+      [`repos/${repo}/actions/permissions/workflow`]: {
+        default_workflow_permissions: "read",
+        can_approve_pull_request_reviews: false,
+      },
     });
     let out;
     expect(() => {
@@ -1473,6 +1751,9 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       ),
       [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
         fixture("adamdaniel.fork-pr-approval.json"),
+      [`repos/${repo}/actions/permissions/workflow`]: fixture(
+        "adamdaniel.workflow-permissions.json",
+      ),
       // Deliberately NO route for an environments endpoint — if fetchLive
       // called one anyway, fakeApi's "unrouted endpoint" throw catches it.
     });
@@ -1494,6 +1775,9 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       ),
       [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
         fixture("cms-platform.fork-pr-approval.json"),
+      [`repos/${repo}/actions/permissions/workflow`]: fixture(
+        "cms-platform.workflow-permissions.json",
+      ),
       [`repos/${repo}/environments/repo-settings`]: LIVE_ENV_MATCHED,
     });
     const live = script.fetchLive(repo, null, api, ["repo-settings"]);
@@ -2274,6 +2558,9 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       ),
       [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
         fixture("adamdaniel.fork-pr-approval.json"),
+      [`repos/${repo}/actions/permissions/workflow`]: fixture(
+        "adamdaniel.workflow-permissions.json",
+      ),
       // Deliberately NO route for vulnerability-alerts / automated-security-
       // fixes — if fetchLive called either anyway, fakeApi's "unrouted
       // endpoint" throw catches it, exactly like the environments-gating
@@ -2297,6 +2584,9 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
       ),
       [`repos/${repo}/actions/permissions/fork-pr-contributor-approval`]:
         fixture("cms-platform.fork-pr-approval.json"),
+      [`repos/${repo}/actions/permissions/workflow`]: fixture(
+        "cms-platform.workflow-permissions.json",
+      ),
       [`repos/${repo}/vulnerability-alerts`]: () => "",
       [`repos/${repo}/automated-security-fixes`]: { enabled: true },
     });
