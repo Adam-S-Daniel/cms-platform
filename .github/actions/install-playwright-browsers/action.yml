@@ -70,6 +70,28 @@ description: >-
   cache step is fail-open: a miss, a failed restore or a failed save is
   exactly today's mirror fetch.
 
+  OFFLINE ON AN EXACT HIT, AND APT'S OWN IDLE TIMEOUT (2026-10-22,
+  docs/E2E-PARALLELISM.md "Mirror-independent apt"). The .deb cache removed
+  the archive fetch but not the `apt-get update` that `install-deps` always
+  runs first, and the mirror can stall THAT too: cms-platform run 39851509261's
+  chromium-desktop-3k shard 3/3 restored an exact hit, then printed nothing for
+  44 minutes after `Hit:2 ... noble InRelease` until the 45-minute job wall
+  cancelled it, which failed the required `fixture-e2e` gate. So on an EXACT key
+  hit (this image + engine + Playwright; never a restore-keys fallback) the
+  install step installs the cached `.deb`s BY PATH with
+  `apt-get install --no-download`, touching no index and no mirror, and accepts
+  it only if Playwright's own `install-deps --dry-run` then reports nothing
+  missing. Any failure, or anything short of an exact hit, runs today's online
+  phase unchanged, after the offline apt (a direct child, never killed) has
+  exited and dpkg is clean. The log says which ran: `apt path: offline (exact
+  cache hit)` or `apt path: online (<reason>)`. Separately, the apt.conf.d
+  drop-in that sets DPkg::Lock::Timeout also sets `Acquire::http(s)::Timeout
+  "15"`, so apt itself abandons an IDLE connection. On hosted x64 Ubuntu that
+  only restates the image's own zz-retries drop-in (the same 15 s, plus
+  `Acquire::Retries "1"` for mirror failover), which was already in force
+  during run 39851509261, so it is a floor for other images, not the fix: an
+  idle timeout cannot catch a trickle, and that stall evaded it.
+
   Bash, plus `actions/cache/restore` + `actions/cache/save` pinned to a full
   SHA (the fleet SHA-pin convention; no other transitive `uses:`).
 
@@ -197,9 +219,14 @@ runs:
         echo "save=${save}" >> "$GITHUB_OUTPUT"
         echo "apt .deb cache key: ${prefix}${ImageVersion:-unknown} (save on a miss: ${save})"
 
+    # Fail-open twice over: actions/cache/restore already turns a cache-service
+    # error into a warning and a miss, and continue-on-error covers anything
+    # else. A miss is today's mirror fetch; a broken restore that still claims an
+    # exact hit is caught by the offline path's own verification below.
     - name: Restore apt .debs
       id: debrestore
       if: ${{ inputs.apt-deb-cache == 'true' }}
+      continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: ${{ steps.debkey.outputs.dir }}
@@ -241,23 +268,52 @@ runs:
     # and an apt.conf.d drop-in applies it to apt invocations we do not control —
     # which is the only way to reach the one inside `playwright install-deps`.
     # Fail-open: if we cannot write the drop-in we still try the install.
-    - name: Let apt wait for the dpkg lock instead of failing
+    #
+    # The same drop-in sets apt's OWN idle timeout (2026-10-22,
+    # docs/E2E-PARALLELISM.md "Mirror-independent apt").
+    # `Acquire::http(s)::Timeout` is an INACTIVITY timer (connect, TLS
+    # handshake, and every wait for the next byte), not a deadline. A healthy
+    # `apt-get update` fetches ALL its index files in 6 s (median) to 28 s (max),
+    # so one connection never sits silent for 15 s on a healthy mirror, and the
+    # measured slow mirror (~83-100 KB/s) never goes silent at all, so this never
+    # abandons a slow-but-flowing fetch. apt abandons the fetch from INSIDE, so
+    # nothing is killed or orphaned and the dpkg lock is never left held (#210).
+    # It CANNOT catch a trickle: any byte resets the timer (reproduced locally,
+    # with a header trickle and a body trickle).
+    #
+    # On GitHub-hosted x64 Ubuntu this is a FLOOR, not a change: since
+    # actions/runner-images#14726 (2026-09-15) the image's own
+    # /etc/apt/apt.conf.d/zz-retries sets the same 15 s, plus
+    # `Acquire::Retries "1"`, and sorts after this file, so it wins. That
+    # Retries is deliberate (apt spends every retry on the same URI before it
+    # tries the next mirror in /etc/apt/apt-mirrors.txt, runner-images#14594), so
+    # this drop-in does NOT set Retries. The 15 s keeps an image without
+    # zz-retries (self-hosted, an older image) off apt's 30 s default.
+    - name: Configure apt (wait for the dpkg lock; give up on an idle fetch)
       shell: bash
       env:
         PW_APT_LOCK_TIMEOUT_S: ${{ inputs.apt-lock-timeout-seconds }}
       run: |
         set -uo pipefail
         conf=/etc/apt/apt.conf.d/99-playwright-install-lock-timeout
-        line="DPkg::Lock::Timeout \"${PW_APT_LOCK_TIMEOUT_S}\";"
+        conf_body="$(printf '%s\n' \
+          "DPkg::Lock::Timeout \"${PW_APT_LOCK_TIMEOUT_S}\";" \
+          'Acquire::http::Timeout "15";' \
+          'Acquire::https::Timeout "15";')"
+        ok="apt will wait up to ${PW_APT_LOCK_TIMEOUT_S}s for the dpkg lock and abandon a fetch idle for 15s (unless a later drop-in says otherwise; effective values below)."
         if [ -w /etc/apt/apt.conf.d ]; then
-          printf '%s\n' "$line" > "$conf" && echo "apt will wait up to ${PW_APT_LOCK_TIMEOUT_S}s for the dpkg lock."
+          printf '%s\n' "$conf_body" > "$conf" && echo "$ok"
         elif command -v sudo >/dev/null 2>&1; then
-          printf '%s\n' "$line" | sudo tee "$conf" >/dev/null \
-            && echo "apt will wait up to ${PW_APT_LOCK_TIMEOUT_S}s for the dpkg lock." \
+          printf '%s\n' "$conf_body" | sudo tee "$conf" >/dev/null \
+            && echo "$ok" \
             || echo "::warning::could not write ${conf}; a dpkg-lock race can still fail the install."
         else
           echo "::warning::no write access to /etc/apt/apt.conf.d and no sudo; a dpkg-lock race can still fail the install."
         fi
+        # What apt will ACTUALLY use after every drop-in: the runner image ships
+        # its own (zz-retries), and a later file or a typo would otherwise be
+        # invisible.
+        apt-config dump 2>/dev/null | grep -Ei '^(DPkg::Lock::Timeout|Acquire::(http|https)::Timeout|Acquire::Retries|APT::Acquire::Retries) ' || true
 
     - name: Install Playwright system deps + browser (two phases, retried)
       shell: bash
@@ -269,6 +325,13 @@ runs:
         PW_INSTALL_TIMEOUT_S: ${{ inputs.timeout-seconds }}
         PW_INSTALL_FINAL_TIMEOUT_S: ${{ inputs.final-timeout-seconds }}
         PW_APT_LOCK_TIMEOUT_S: ${{ inputs.apt-lock-timeout-seconds }}
+        # The offline apt path's inputs (see apt_offline below). `cache-hit` is
+        # 'true' ONLY for an exact match of the primary key (this image + engine
+        # + Playwright); a restore-keys fallback reports 'false'.
+        PW_APT_EXACT_HIT: ${{ steps.debrestore.outputs.cache-hit }}
+        PW_APT_MATCHED_KEY: ${{ steps.debrestore.outputs.cache-matched-key }}
+        PW_APT_DEB_DIR: ${{ steps.debkey.outputs.dir }}
+        PW_APT_DEB_CACHE: ${{ inputs.apt-deb-cache }}
       run: |
         set -uo pipefail
         # `set -e` is deliberately NOT set: it would abort the retry loop on the
@@ -368,8 +431,89 @@ runs:
              "apt phase unbounded (job timeout is its backstop);" \
              "download bound ${PW_INSTALL_TIMEOUT_S}s, final attempt ${PW_INSTALL_FINAL_TIMEOUT_S}s."
 
+        # OFFLINE APT PATH (2026-10-22, docs/E2E-PARALLELISM.md "Mirror-independent
+        # apt"). On an EXACT cache hit the restored .debs are the
+        # set apt installed on this same runner image for this engine and
+        # Playwright version, so install them BY PATH with --no-download: no
+        # `apt-get update`, no mirror, no index at all. That is what removes the
+        # stall .debs alone could not (run 39851509261: an exact hit, then 44
+        # minutes of silence inside the `apt-get update` that install-deps always
+        # runs). By path, not by package name: names resolve against the image's
+        # possibly stale /var/lib/apt/lists, and measured with 7-week-old lists
+        # 22 of 109 cached chromium .debs were not the version those lists
+        # offered, so `apt-get install --no-download <names>` exited 100. By path
+        # it installed all 109 with the same stale lists, and with NO lists. It
+        # relies on the seed step above having copied the set into
+        # /var/cache/apt/archives: with --no-download apt takes even a local
+        # .deb from its archive dir (measured: unseeded, the same 109 exited 100;
+        # seeded, all installed). A failed seed is therefore just a fallback.
+        #
+        # apt-get here is a DIRECT child that runs to completion, unbounded like
+        # the online phase (#210: never kill apt). It cannot hang on the network
+        # (--no-download), it waits on the dpkg lock like every apt here, and an
+        # incomplete set fails in apt's planning step before dpkg runs (measured:
+        # exit 100, nothing installed, `dpkg --audit` clean, lock free). Success
+        # is judged by Playwright's OWN check, `install-deps --dry-run` (an
+        # offline `apt-get install -s` of its package list), never by apt's exit
+        # code alone. Any failure returns 1, and the caller runs the unchanged
+        # online phase — after this apt has exited, with dpkg repaired if needed.
+        APT_OFFLINE_WHY=""
+        apt_offline() {
+          local debs=() out status sudo=()
+          if [ "${PW_APT_DEB_CACHE:-}" != "true" ]; then
+            APT_OFFLINE_WHY="the apt .deb cache is disabled"; return 1
+          fi
+          if [ "${PW_APT_EXACT_HIT:-}" != "true" ]; then
+            if [ -n "${PW_APT_MATCHED_KEY:-}" ]; then
+              APT_OFFLINE_WHY="partial cache hit (${PW_APT_MATCHED_KEY} is a restore-keys fallback, not this image's exact key)"
+            else
+              APT_OFFLINE_WHY="cache miss"
+            fi
+            return 1
+          fi
+          if [ -n "${PW_APT_DEB_DIR:-}" ] && [ -d "$PW_APT_DEB_DIR" ]; then
+            mapfile -t debs < <(find "$PW_APT_DEB_DIR" -maxdepth 1 -type f -name '*.deb' | sort)
+          fi
+          [ "$(id -u)" -eq 0 ] || sudo=(sudo)
+          out="$(mktemp)"
+          if [ "${#debs[@]}" -gt 0 ]; then
+            echo "[install-deps (apt)] offline: installing ${#debs[@]} cached .debs by path with --no-download (no apt-get update, no mirror):"
+            status=0
+            "${sudo[@]}" env DEBIAN_FRONTEND=noninteractive \
+              apt-get install -y --no-install-recommends --no-download "${debs[@]}" </dev/null 2>&1 | tee "$out" || status=$?
+            if [ "$status" -ne 0 ]; then
+              APT_OFFLINE_WHY="offline failed: apt-get --no-download exited ${status}"
+              rm -f "$out"
+              # apt has EXITED (it is our direct child and we waited for it). If dpkg
+              # was left with unconfigured packages, finish them now so the online
+              # apt starts from a clean state; best-effort, never fatal.
+              if [ -n "$(dpkg --audit 2>/dev/null || true)" ]; then
+                echo "::warning::the offline apt left packages unconfigured; running dpkg --configure -a before the online path."
+                "${sudo[@]}" env DEBIAN_FRONTEND=noninteractive dpkg --configure -a </dev/null \
+                  || echo "::warning::dpkg --configure -a exited nonzero; the online apt will configure them itself."
+              fi
+              return 1
+            fi
+          else
+            echo "[install-deps (apt)] offline: the exact cache entry holds no .debs; checking whether the image already has everything."
+          fi
+          status=0
+          npx playwright install-deps --dry-run "$PW_INSTALL_BROWSER" 2>&1 | tee "$out" || status=$?
+          rm -f "$out"
+          if [ "$status" -ne 0 ]; then
+            APT_OFFLINE_WHY="offline failed: Playwright's own check (install-deps --dry-run) still reports missing system dependencies (exit ${status})"
+            return 1
+          fi
+          return 0
+        }
+
         # PHASE A — apt. Runs first; the download only happens if it succeeded.
-        run_phase deps "install-deps (apt)" || exit 1
+        if apt_offline; then
+          echo "apt path: offline (exact cache hit) — no apt-get update, no mirror."
+        else
+          echo "apt path: online (${APT_OFFLINE_WHY})"
+          run_phase deps "install-deps (apt)" || exit 1
+        fi
 
         if [ "$PW_INSTALL_DEPS_ONLY" = "true" ]; then
           echo "deps-only: OS libraries installed, skipping the browser download."

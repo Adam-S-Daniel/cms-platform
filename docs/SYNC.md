@@ -328,6 +328,15 @@ skewed with no guard analogous to `platform-pin-consistency`.
     value applies. As-found 2026-07-13 the consumers already require SHA
     pinning; cms-platform did not, and all three sat at
     `first_time_contributors` — the drift the next `--fix` corrects.
+  - `default_workflow_permissions` (`read`) and
+    `can_approve_pull_request_reviews` (`false`) →
+    `repos/{owner}/{repo}/actions/permissions/workflow` (#868) — the
+    `GITHUB_TOKEN` default scope and whether a workflow may approve a PR.
+    One endpoint carries both, so drift on either is **one** `--fix` PUT with
+    both fields: the desired value for the drifted key, the live value echoed
+    for the other. A response missing either field is an operational failure,
+    never drift. As-found 2026-10-23: `read` / `false` on all three, matching
+    repo-settings' `fleet.yml`.
 - `scripts/audit-repo-settings.js` — read-only drift audit (exit 2 on
   drift), `--issue` tracking-issue lifecycle (single `ci`-labelled issue
   found via a hidden marker, fingerprint-deduped comments, auto-close on a

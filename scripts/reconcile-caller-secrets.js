@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Reconcile each consumer thin caller's per-job `secrets:` map with the
-// canonical examples/site template.
+// Reconcile each consumer thin caller's per-job `secrets:` map, its per-job
+// `with:` KEY set and its `workflow_dispatch` inputs with the canonical
+// examples/site template (the last two: see "`with:` keys" below).
 //
 // WHY THIS EXISTS. platform-bump moves pins, seeds new callers, retires old
 // ones and reconciles `required_contexts`, but nothing moved a caller's
@@ -275,6 +276,221 @@ function spliceJob(src, canonSrc, jn) {
   return replace(sp.keyLine, sp.last, jobLevel(clines.slice(cp.keyLine, cp.last + 1))).join("\n");
 }
 
+// ── `with:` keys and `workflow_dispatch` inputs ─────────────────────────────
+//
+// pin-consistency also compares each job's `with:` KEY SET (structuralShape's
+// `withKeys`, which already leaves out OPTIONAL_WITH_KEYS), so a key the
+// template gained or dropped reddens the bump PR exactly as a secrets key did.
+// A forwarded key such as platform-bump's `candidate_sha: ${{
+// inputs.candidate_sha }}` also needs the caller's `workflow_dispatch` input it
+// reads. Both are reconciled here by KEY: an added key brings the template's
+// text and comments, a dropped key goes with the comments directly above it,
+// and a key both sides have keeps the consumer's value (a `with:` value is
+// often site identity, which is why the checker compares keys, not values).
+//
+// An added key's value comes from the template, with two exceptions: an added
+// `platform_ref` takes the job's own `uses:@` ref (it is a pin, and the pin
+// rewrite already moved `uses:`), and a template value naming the
+// de-identified placeholder site is site identity nobody can derive, so that
+// caller is reported MANUAL rather than handed `example.com`.
+const PLACEHOLDER = /example[.-]com/;
+
+const keyOf = (pair) => (pair && pair.key ? pair.key.value : undefined);
+
+// Merge `add` into, and `drop` out of, the block map that is `pair`'s value,
+// or insert a new pair (`insert`: { at, col, unit }) when the consumer has
+// none. `render(item)` gives an added template item's lines, template-indented.
+// Returns the new consumer lines.
+function mergeMap({ lines, starts, clines, cstarts, pair, pairFloor, cpair, cpairFloor, add, drop, render, insert }) {
+  if (!add.length && !drop.length) return lines;
+  const span = pair ? pairSpan(pair, starts, lines, pairFloor) : null;
+  if (!cpair) {
+    // The template has no such map at all: only drops can apply.
+    if (!span) return lines;
+    return [...lines.slice(0, span.first), ...lines.slice(span.last + 1)];
+  }
+  if (!YAML.isMap(cpair.value) || cpair.value.flow) throw new Manual(`the template's \`${keyOf(cpair)}:\` is not a block map`);
+  const cspan = pairSpan(cpair, cstarts, clines, cpairFloor);
+  const citems = itemSpans(cpair.value, cstarts, clines, cspan.keyLine);
+  const cpcol = indentOf(clines[cspan.keyLine]);
+  const ccol = citems.length ? indentOf(clines[citems[0].keyLine]) : cpcol + 2;
+  const cunit = ccol - cpcol;
+  const added = (to) =>
+    citems
+      .filter((c) => add.includes(c.key))
+      .map((c) => ({ key: c.key, lines: reindent(render(c), { base: ccol, unit: cunit }, to) }));
+
+  if (!span) {
+    if (!add.length) return lines;
+    const header = reindent(clines.slice(cspan.first, cspan.keyLine + 1), { base: cpcol, unit: cunit }, { base: insert.col, unit: insert.unit });
+    const body = added({ base: insert.col + insert.unit, unit: insert.unit }).flatMap((x) => x.lines);
+    return [...lines.slice(0, insert.at), ...header, ...body, ...lines.slice(insert.at)];
+  }
+
+  const val = pair.value;
+  if (!YAML.isMap(val) || val.flow || !val.items.length || val.anchor) {
+    throw new Manual(`\`${keyOf(pair)}:\` is not a plain block map`);
+  }
+  const items = itemSpans(val, starts, lines, span.keyLine);
+  const col = indentOf(lines[items[0].keyLine]);
+  const unit = col - indentOf(lines[span.keyLine]);
+  const out = items.filter((x) => !drop.includes(x.key)).map((x) => ({ key: x.key, lines: lines.slice(x.first, x.last + 1) }));
+  for (const a of added({ base: col, unit })) {
+    // After the nearest key that precedes it in the template and is kept here.
+    const order = citems.map((c) => c.key);
+    const before = order.slice(0, order.indexOf(a.key)).reverse();
+    const anchor = before.map((k) => out.findIndex((x) => x.key === k)).find((i) => i !== -1);
+    out.splice(anchor === undefined ? 0 : anchor + 1, 0, a);
+  }
+  if (!out.length) return [...lines.slice(0, span.first), ...lines.slice(span.last + 1)];
+  return [...lines.slice(0, items[0].first), ...out.flatMap((x) => x.lines), ...lines.slice(items[items.length - 1].last + 1)];
+}
+
+function setDiff(a, b) {
+  return a.filter((k) => !b.includes(k));
+}
+
+// One job's `with:` key splice. Returns { text, expected } where `expected`
+// maps each added key to the value it must parse to.
+function spliceWith(src, canonSrc, jn, add, drop) {
+  const doc = parse(src);
+  const cdoc = parse(canonSrc);
+  const starts = lineStarts(src);
+  const lines = src.split("\n");
+  const cstarts = lineStarts(canonSrc);
+  const clines = canonSrc.split("\n");
+  const jobPair = jobsOf(doc, "the caller").items.find((p) => String(p.key.value) === jn);
+  const cjobPair = jobsOf(cdoc, "the template").items.find((p) => String(p.key.value) === jn);
+  if (!YAML.isMap(jobPair.value) || jobPair.value.flow) throw new Manual(`job ${jn} is not a block map`);
+  if (!YAML.isMap(cjobPair.value) || cjobPair.value.flow) throw new Manual(`the template's job ${jn} is not a block map`);
+  const jobLine = lineOf(starts, jobPair.key.range[0]);
+  const cjobLine = lineOf(cstarts, cjobPair.key.range[0]);
+  const spans = itemSpans(jobPair.value, starts, lines, jobLine);
+  const cspans = itemSpans(cjobPair.value, cstarts, clines, cjobLine);
+  const wp = spans.find((x) => x.key === "with");
+  const cwp = cspans.find((x) => x.key === "with");
+  const cwith = cdoc.toJS().jobs[jn].with || {};
+  const uses = String(jobPair.value.get("uses") ?? "");
+  const expected = {};
+  const render = (c) => {
+    if (c.key === "platform_ref") {
+      if (c.keyLine !== c.last || !uses.includes("@")) throw new Manual(`job ${jn}: cannot derive an added platform_ref`);
+      const ref = uses.slice(uses.lastIndexOf("@") + 1);
+      expected[c.key] = ref;
+      return [...clines.slice(c.first, c.keyLine), `${" ".repeat(indentOf(clines[c.keyLine]))}platform_ref: ${ref}`];
+    }
+    const v = cwith[c.key];
+    if (typeof v === "string" && PLACEHOLDER.test(v)) {
+      throw new Manual(`job ${jn}: the template's \`with: ${c.key}\` is a site-identity placeholder; set it by hand`);
+    }
+    expected[c.key] = v;
+    return clines.slice(c.first, c.last + 1);
+  };
+  // Where a missing `with:` goes: after the nearest key that precedes it in the
+  // template and exists here (the secrets insert's rule), else after `uses:`.
+  let at = jobLine + 1;
+  if (cwp) {
+    const before = cspans.slice(0, cspans.indexOf(cwp)).reverse();
+    const anchor = before.map((c) => spans.find((x) => x.key === c.key)).find(Boolean);
+    if (anchor) at = anchor.last + 1;
+    else if (spans.length) at = cspans.indexOf(cwp) === 0 ? spans[0].first : spans[spans.length - 1].last + 1;
+  }
+  const s = style(null, jobPair, starts, lines);
+  const next = mergeMap({
+    lines, starts, clines, cstarts,
+    pair: wp && wp.pair, pairFloor: wp ? (spans[spans.indexOf(wp) - 1]?.last ?? jobLine) : 0,
+    cpair: cwp && cwp.pair, cpairFloor: cwp ? (cspans[cspans.indexOf(cwp) - 1]?.last ?? cjobLine) : 0,
+    add, drop, render,
+    insert: { at, col: s.itemCol, unit: s.unit },
+  });
+  return { text: next.join("\n"), expected };
+}
+
+// The `on:` pair (YAML 1.1 readers turn the key into `true`; this parser keeps it).
+function onPair(doc) {
+  return YAML.isMap(doc.contents) ? doc.contents.items.find((p) => keyOf(p) === "on" || keyOf(p) === true) : undefined;
+}
+function dispatchPair(doc) {
+  const on = onPair(doc);
+  if (!on || !YAML.isMap(on.value) || on.value.flow) return undefined;
+  return { on, wd: on.value.items.find((p) => keyOf(p) === "workflow_dispatch") };
+}
+function inputKeys(obj) {
+  const on = obj && (obj.on ?? obj[true]);
+  const wd = on && typeof on === "object" ? on.workflow_dispatch : undefined;
+  return wd && typeof wd === "object" && wd.inputs && typeof wd.inputs === "object" ? Object.keys(wd.inputs) : [];
+}
+
+// The `workflow_dispatch` inputs splice, when BOTH sides have that trigger.
+// Returns null when there is nothing to do.
+function spliceInputs(src, canonSrc) {
+  const doc = parse(src);
+  const cdoc = parse(canonSrc);
+  const d = dispatchPair(doc);
+  const cd = dispatchPair(cdoc);
+  if (!d || !d.wd || !cd || !cd.wd) return null;
+  const have = inputKeys(doc.toJS());
+  const want = inputKeys(cdoc.toJS());
+  const add = setDiff(want, have);
+  const drop = setDiff(have, want);
+  if (!add.length && !drop.length) return null;
+  const starts = lineStarts(src);
+  const lines = src.split("\n");
+  const cstarts = lineStarts(canonSrc);
+  const clines = canonSrc.split("\n");
+  const wdLine = lineOf(starts, d.wd.key.range[0]);
+  const cwdLine = lineOf(cstarts, cd.wd.key.range[0]);
+  const wdCol = indentOf(lines[wdLine]);
+  const unit = wdCol - indentOf(lines[lineOf(starts, d.on.key.range[0])]);
+  const wdVal = d.wd.value;
+  const cwdVal = cd.wd.value;
+  let pair;
+  let at = wdLine + 1;
+  let pairFloor = wdLine;
+  if (YAML.isMap(wdVal) && !wdVal.flow) {
+    const spans = itemSpans(wdVal, starts, lines, wdLine);
+    const ip = spans.find((x) => x.key === "inputs");
+    pair = ip && ip.pair;
+    if (ip) pairFloor = spans[spans.indexOf(ip) - 1]?.last ?? wdLine;
+    else if (spans.length) at = spans[spans.length - 1].last + 1;
+  } else if (!(YAML.isScalar(wdVal) && wdVal.value === null) && wdVal !== null) {
+    throw new Manual("`workflow_dispatch:` is neither empty nor a block map");
+  }
+  let cpair;
+  let cpairFloor = cwdLine;
+  if (YAML.isMap(cwdVal) && !cwdVal.flow) {
+    const cspans = itemSpans(cwdVal, cstarts, clines, cwdLine);
+    const cip = cspans.find((x) => x.key === "inputs");
+    cpair = cip && cip.pair;
+    if (cip) cpairFloor = cspans[cspans.indexOf(cip) - 1]?.last ?? cwdLine;
+  }
+  const next = mergeMap({
+    lines, starts, clines, cstarts, pair, pairFloor, cpair, cpairFloor, add, drop,
+    render: (c) => clines.slice(c.first, c.last + 1),
+    insert: { at, col: wdCol + unit, unit },
+  });
+  return { text: next.join("\n"), add, drop };
+}
+
+// The parsed document with every `with:` and dispatch input reduced to the
+// keys a splice must keep, so "changed nothing else" can be compared whole.
+function project(obj, keep) {
+  const o = structuredClone(obj || {});
+  for (const [jn, job] of Object.entries(o.jobs || {})) {
+    if (!job || typeof job !== "object" || !job.with) continue;
+    for (const k of Object.keys(job.with)) if (!(keep.with[jn] || []).includes(k)) delete job.with[k];
+    if (!Object.keys(job.with).length) delete job.with;
+  }
+  const onKey = "on" in o ? "on" : true in o ? true : null;
+  const wd = onKey !== null && o[onKey] && typeof o[onKey] === "object" ? o[onKey].workflow_dispatch : undefined;
+  if (wd && typeof wd === "object" && wd.inputs) {
+    for (const k of Object.keys(wd.inputs)) if (!keep.inputs.includes(k)) delete wd.inputs[k];
+    if (!Object.keys(wd.inputs).length) delete wd.inputs;
+    if (!Object.keys(wd).length) o[onKey].workflow_dispatch = null;
+  }
+  return o;
+}
+
 // Everything except each job's `secrets` must be unchanged by a splice.
 function withoutSecrets(src) {
   const obj = YAML.parse(src) || {};
@@ -307,7 +523,77 @@ function reconcileFile(name, canonSrc, src) {
     report.push(`job ${jn}: ${diffKeys(want, have)}`);
     text = next;
   }
+
+  // `with:` key sets, as the checker sees them.
+  for (const jn of Object.keys(canonShape.jobs)) {
+    const shape = structuralShape(text, name);
+    if (!shape.jobs[jn]) continue;
+    const want = canonShape.jobs[jn].withKeys;
+    const have = shape.jobs[jn].withKeys;
+    const add = setDiff(want, have);
+    const drop = setDiff(have, want);
+    if (!add.length && !drop.length) continue;
+    const { text: next, expected } = spliceWith(text, canonSrc, jn, add, drop);
+    verifySplice(text, next, `job ${jn}`, (after) => {
+      if (stable(structuralShape(next, name).jobs[jn]?.withKeys) !== stable(want)) return false;
+      const w = (after.jobs[jn] && after.jobs[jn].with) || {};
+      return add.every((k) => stable(w[k]) === stable(expected[k]));
+    }, (keep, before) => {
+      for (const [j, job] of Object.entries(before.jobs || {})) {
+        const ks = Object.keys((job && job.with) || {});
+        keep.with[j] = j === jn ? ks.filter((k) => !drop.includes(k)) : ks;
+      }
+    });
+    const parts = [];
+    if (add.length) parts.push(`added ${add.join(", ")}`);
+    if (drop.length) parts.push(`removed ${drop.join(", ")}`);
+    report.push(`job ${jn} with: ${parts.join("; ")}`);
+    text = next;
+  }
+
+  // The `workflow_dispatch` inputs a forwarded `with:` value can read.
+  const inputs = spliceInputs(text, canonSrc);
+  if (inputs) {
+    const cinputs = (() => {
+      const o = YAML.parse(canonSrc) || {};
+      return (((o.on ?? o[true]) || {}).workflow_dispatch || {}).inputs || {};
+    })();
+    verifySplice(text, inputs.text, "workflow_dispatch inputs", (after) => {
+      const got = inputKeys(after);
+      const want = Object.keys(cinputs);
+      const ai = ((after.on ?? after[true]) || {}).workflow_dispatch?.inputs || {};
+      return stable([...got].sort()) === stable([...want].sort()) && inputs.add.every((k) => stable(ai[k]) === stable(cinputs[k]));
+    }, (keep, before) => {
+      keep.inputs = inputKeys(before).filter((k) => !inputs.drop.includes(k));
+    });
+    const parts = [];
+    if (inputs.add.length) parts.push(`added ${inputs.add.join(", ")}`);
+    if (inputs.drop.length) parts.push(`removed ${inputs.drop.join(", ")}`);
+    report.push(`workflow_dispatch inputs: ${parts.join("; ")}`);
+    text = inputs.text;
+  }
   return { text, report };
+}
+
+// A key splice must re-parse, satisfy `ok(after)`, and leave everything else
+// (every other key, every kept value, secrets included) exactly as it was.
+function verifySplice(before, next, label, ok, keepKeys) {
+  let b;
+  let a;
+  try {
+    parse(next);
+    b = YAML.parse(before) || {};
+    a = YAML.parse(next) || {};
+  } catch {
+    throw new Manual(`${label}: the spliced file no longer parses`);
+  }
+  if (!ok(a)) throw new Manual(`${label}: the splice did not verify`);
+  const keep = { with: {}, inputs: inputKeys(b) };
+  for (const [j, job] of Object.entries(b.jobs || {})) keep.with[j] = Object.keys((job && job.with) || {});
+  keepKeys(keep, b);
+  if (stable(project(a, keep)) !== stable(project(b, keep))) {
+    throw new Manual(`${label}: the splice changed more than its keys`);
+  }
 }
 
 function main() {

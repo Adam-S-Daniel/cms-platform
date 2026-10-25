@@ -282,6 +282,12 @@
       });
       return;
     }
+    // A rebuild while one of the panel's own buttons has focus (the pending
+    // fill frame above, after the next keystroke already filled the panel and
+    // Tab moved onto a button) must hand focus to the new equivalent button,
+    // or it falls to <body> and Enter does nothing.
+    var active = document.activeElement;
+    var refocus = active && active.tagName === "BUTTON" && panel.contains(active) ? active.title : null;
     clearPanel();
     panel.style.marginTop = "6px";
     function pick(index, name) {
@@ -315,6 +321,12 @@
         line2.appendChild(button(m, "Use the existing tag " + quote(m), pick(a.last, m)));
       });
       panel.appendChild(line2);
+    }
+    if (refocus !== null) {
+      var again = Array.prototype.filter.call(panel.querySelectorAll("button"), function (b) {
+        return b.title === refocus;
+      })[0];
+      if (again) again.focus();
     }
   }
 
