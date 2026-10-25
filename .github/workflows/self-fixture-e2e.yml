@@ -5,33 +5,52 @@
 # `workflow_call` reusable that only a CONSUMER runs. So until #527 no platform
 # PR executed a single `*.spec.js`: a change to the theme, the admin bundle or
 # a spec could merge here and first meet a browser in a consumer's CI. This
-# workflow runs the harness's `@lane: local` specs against `e2e/fixture-site`
-# (a neutral consuming-site fixture whose Gemfile pins the theme by local path,
-# so the WORKING TREE's theme is what gets built and tested) on the two ADMIN
-# projects, where the CMS editor specs and #527's archived-PDF test live.
+# workflow runs the harness's `@lane: local` specs against the fixture sites
+# (neutral consuming-site fixtures whose Gemfiles pin the theme by local path,
+# so the WORKING TREE's theme is what gets built and tested):
+#   - the two ADMIN projects on `e2e/fixture-site`, where the CMS editor specs
+#     and #527's archived-PDF test live;
+#   - ONE PUBLIC project (chromium-desktop-1080) on BOTH fixtures (#702). Until
+#     then no public-site spec ran here, so v0.1.139's public-a11y-polish and
+#     reduced-motion specs first ran on a consumer's platform-bump PR and broke
+#     jodidaniel.com#351. `e2e/fixture-site` renders `/` through the theme's
+#     default layout; `e2e/fixture-site-singlepage` renders it through its own
+#     `_layouts/home.html`, as jodidaniel.com does, so a theme spec that assumes
+#     the theme's markup on every `/` goes red here first. One Chromium project
+#     keeps the cost to two more parallel legs; the other public projects vary
+#     the browser or viewport, not which specs run.
 #
 # WHAT IT RUNS, per project job
 #   1. a salience check (below): a PR touching only docs/infra skips the work
 #      but still reports success;
-#   2. the harness PLACED inside the fixture (`e2e/fixture-site/e2e/`), because
+#   2. the harness PLACED inside the fixture (`e2e/<fixture>/e2e/`), because
 #      the specs read site files via `path.resolve(__dirname, "..")`;
 #   3. `bundle install` from the fixture's COMMITTED Gemfile.lock (frozen);
-#   4. `npx playwright test --project=<project>` over every `@lane: local`
-#      spec, with SITE_ROOT pointing playwright.config.js's local webServer at
-#      the fixture (jekyll build + static serve + decap-server);
-#   5. a NON-VACUITY assertion: the archived-PDF test in
-#      cms-editorial-workflow.spec.js must have PASSED on this project. A
-#      future skip must not read green — this lane is #527's proof that the
-#      test executes in platform CI.
+#   4. `npx playwright test --project=<project> [--shard=<i>/<n>]` over every
+#      `@lane: local` spec, with SITE_ROOT pointing playwright.config.js's local
+#      webServer at the fixture (jekyll build + static serve + decap-server).
+#      The two ADMIN legs run as ADMIN_SHARDS (3) `--shard` jobs each, the
+#      shape e2e-tests.yml gives consumers (docs/E2E-PARALLELISM.md,
+#      2026-10-22); the public legs stay whole;
+#   5. a NON-VACUITY assertion: the leg's proof test must have PASSED on this
+#      project (the matrix names it). Admin legs: #527's archived-PDF test in
+#      cms-editorial-workflow.spec.js, asserted by the ONE shard that owns it
+#      (`--list --shard` for every shard; owned by none fails every shard).
+#      Public legs: a test that only runs where the leg's `/` shape holds
+#      (#702). A future skip must not read green.
+#   6. on the full fixture's unsharded Chromium public leg (1080), #755's
+#      offline stock-versus-platform caret diagnostic, with the shell's pinned
+#      bundle verified by SRI. Its config pins its own browser, viewport and
+#      worker, so the leg's project does not matter; unsharded, so it runs once.
 #
 # WHAT IT DELIBERATELY DOES NOT RUN
 #   - `@lane: real` specs. Most self-skip without CMS_E2E_PAT, but
 #     admin-bundle-parity.spec.js fetches https://adamdaniel.ai/admin/*
 #     unconditionally; this lane must not depend on production. They are
 #     filtered out by select-specs.js's filterByLane(…, "local").
-#   - the PUBLIC projects (chromium-desktop-1080 etc.). They fail on the
-#     fixture for site-identity/layout reasons (no site header, no tag pages),
-#     which is fixture work outside #527.
+#   - the other PUBLIC projects (laptop, mobile, firefox, webkit-tablet, large
+#     text, light, forced colors): same specs, other browsers and viewports;
+#     the consumer matrix still runs them.
 #
 # NETWORK. No secrets, no AWS, no production site. It does need the public
 # internet: npm, rubygems, the Ubuntu archive (via the install composite) and
@@ -77,7 +96,9 @@ permissions:
 
 jobs:
   fixture-e2e-project:
-    name: fixture-e2e-project (${{ matrix.project }})
+    # `slot` is the project, or `<project>-shard-<i>-of-<n>` for an admin
+    # shard, so every job name and artifact name stays unique.
+    name: fixture-e2e-project (${{ matrix.slot }}, ${{ matrix.fixture }})
     # The wall lives HERE, never on the gate. 45 min clears the install
     # composite's bounded download worst case (~35 min) plus the measured ~5 min
     # of placement + tests; e2e/playwright-install-bounded.test.js checks it.
@@ -85,10 +106,69 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [chromium-desktop-3k, webkit-iphone16]
+        # Each leg names its proof test (step "Assert the leg's proof test
+        # passed"): one that RUNS only where the leg's premise holds. Each
+        # admin project is ADMIN_SHARDS (e2e/ci-matrix.js) `--shard` legs; a
+        # dropped shard would silently stop running a third of its tests, so
+        # e2e/self-fixture-e2e.test.js derives the expected set.
+        include:
+          - project: chromium-desktop-3k
+            shard: 1/3
+            slot: chromium-desktop-3k-shard-1-of-3
+            fixture: fixture-site
+            proof_spec: cms-editorial-workflow.spec.js
+            proof_title: opted-in archived PDF fields render host-specific copy and stay private by default
+          - project: chromium-desktop-3k
+            shard: 2/3
+            slot: chromium-desktop-3k-shard-2-of-3
+            fixture: fixture-site
+            proof_spec: cms-editorial-workflow.spec.js
+            proof_title: opted-in archived PDF fields render host-specific copy and stay private by default
+          - project: chromium-desktop-3k
+            shard: 3/3
+            slot: chromium-desktop-3k-shard-3-of-3
+            fixture: fixture-site
+            proof_spec: cms-editorial-workflow.spec.js
+            proof_title: opted-in archived PDF fields render host-specific copy and stay private by default
+          - project: webkit-iphone16
+            shard: 1/3
+            slot: webkit-iphone16-shard-1-of-3
+            fixture: fixture-site
+            proof_spec: cms-editorial-workflow.spec.js
+            proof_title: opted-in archived PDF fields render host-specific copy and stay private by default
+          - project: webkit-iphone16
+            shard: 2/3
+            slot: webkit-iphone16-shard-2-of-3
+            fixture: fixture-site
+            proof_spec: cms-editorial-workflow.spec.js
+            proof_title: opted-in archived PDF fields render host-specific copy and stay private by default
+          - project: webkit-iphone16
+            shard: 3/3
+            slot: webkit-iphone16-shard-3-of-3
+            fixture: fixture-site
+            proof_spec: cms-editorial-workflow.spec.js
+            proof_title: opted-in archived PDF fields render host-specific copy and stay private by default
+          # `/` on the theme's default layout: the theme-markup checks run.
+          - project: chromium-desktop-1080
+            shard: ''
+            slot: chromium-desktop-1080
+            fixture: fixture-site
+            proof_spec: public-a11y-polish.spec.js
+            proof_title: first Tab stop is a skip link that reveals itself and moves focus to main
+          # `/` on a site-owned layout (jodidaniel.com's shape): the reduce
+          # half of reduced-motion still holds there and must run.
+          - project: chromium-desktop-1080
+            shard: ''
+            slot: chromium-desktop-1080
+            fixture: fixture-site-singlepage
+            proof_spec: reduced-motion.spec.js
+            proof_title: no infinite animation runs
     runs-on: ubuntu-latest
     env:
       PW_PROJECT: ${{ matrix.project }}
+      # The `--shard` value for an admin leg ("1/3"…), "" for a public leg.
+      PW_SHARD: ${{ matrix.shard }}
+      FIXTURE: ${{ matrix.fixture }}
       TARGET: local
       CI: 'true'
     steps:
@@ -111,7 +191,7 @@ jobs:
           set -euo pipefail
           is_salient() {
             case "$1" in
-              e2e/fixture-site/*) return 0 ;;
+              e2e/fixture-site/*|e2e/fixture-site-singlepage/*) return 0 ;;
               docs/*|infrastructure/*|oauth-proxy/*|scripts/cross_post/*|LICENSE) return 1 ;;
               *.md) return 1 ;;
               *) return 0 ;;
@@ -137,7 +217,7 @@ jobs:
 
       - name: Setup Node
         if: ${{ steps.salient.outputs.salient == 'true' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
           cache: npm
@@ -152,17 +232,17 @@ jobs:
         run: |
           set -euo pipefail
           rsync -a --exclude fixture-site --exclude fixture-site-singlepage --exclude node_modules \
-            e2e/ e2e/fixture-site/e2e/
+            e2e/ "e2e/${FIXTURE}/e2e/"
 
       - name: Install harness deps
         if: ${{ steps.salient.outputs.salient == 'true' }}
-        working-directory: e2e/fixture-site/e2e
+        working-directory: e2e/${{ matrix.fixture }}/e2e
         run: npm ci
 
       - name: Resolve this project's browser engine
         if: ${{ steps.salient.outputs.salient == 'true' }}
         id: engine
-        working-directory: e2e/fixture-site/e2e
+        working-directory: e2e/${{ matrix.fixture }}/e2e
         run: |
           set -euo pipefail
           engine="$(node ci-matrix.js --engine "$PW_PROJECT")"
@@ -181,18 +261,75 @@ jobs:
         uses: ./.github/actions/install-playwright-browsers
         with:
           browser: ${{ steps.engine.outputs.engine }}
-          working-directory: e2e/fixture-site/e2e
+          working-directory: e2e/${{ matrix.fixture }}/e2e
 
-      # Frozen install from the committed e2e/fixture-site/Gemfile.lock
+      # The diagnostic needs platform SOURCE rather than the fixture's built
+      # admin. Reuse the installed harness dependencies, then cache the exact
+      # shell pin outside Playwright's cleaned output directories. It runs on
+      # the full fixture's chromium-desktop-1080 leg: Chromium (what
+      # playwright.caret.config.js pins) is already installed there, and that
+      # leg is unsharded, so the diagnostic runs exactly once per run.
+      - name: Prepare the pinned Decap caret diagnostic
+        if: ${{ steps.salient.outputs.salient == 'true' && matrix.fixture == 'fixture-site' && matrix.project == 'chromium-desktop-1080' }}
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          ln -s "${FIXTURE}/e2e/node_modules" node_modules
+          node prepare-decap-caret.js
+
+      - name: Run the offline Decap caret diagnostic
+        if: ${{ steps.salient.outputs.salient == 'true' && matrix.fixture == 'fixture-site' && matrix.project == 'chromium-desktop-1080' }}
+        working-directory: e2e
+        env:
+          DECAP_DIAGNOSTIC_BUNDLE: ${{ github.workspace }}/e2e/node_modules/.cache/decap-caret/decap-cms.js
+        run: |
+          set -euo pipefail
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/decap-caret.log.json
+          status=0
+          npx playwright test --config=playwright.caret.config.js --reporter=list,html,json \
+            > /tmp/decap-caret.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
+
+      - name: Assert every caret diagnostic case passed
+        if: ${{ steps.salient.outputs.salient == 'true' && matrix.fixture == 'fixture-site' && matrix.project == 'chromium-desktop-1080' }}
+        run: |
+          node - <<'JS'
+          const fs = require("node:fs");
+          try {
+            const report = JSON.parse(fs.readFileSync("/tmp/decap-caret.log.json", "utf8"));
+            const { expected, unexpected, flaky, skipped } = report.stats;
+            const tests = [];
+            function visit(suite) {
+              for (const spec of suite.specs || []) {
+                if (String(spec.file || "").endsWith("decap-caret-selection.spec.js")) tests.push(...spec.tests);
+              }
+              for (const child of suite.suites || []) visit(child);
+            }
+            for (const suite of report.suites) visit(suite);
+            if (expected !== 8 || unexpected !== 0 || flaky !== 0 || skipped !== 0 || report.errors.length !== 0) {
+              throw new Error("Incomplete diagnostic matrix");
+            }
+            if (tests.length !== 8 || tests.some((t) => t.expectedStatus !== "passed" || t.results.at(-1)?.status !== "passed")) {
+              throw new Error("A diagnostic case did not pass");
+            }
+            console.log("All eight caret diagnostic cases passed");
+          } catch (_) {
+            console.log("::error::caret diagnostic did not pass all eight cases without skips");
+            process.exit(1);
+          }
+          JS
+
+      # Frozen install from the fixture's committed Gemfile.lock
       # (setup-ruby turns on deployment mode when a lockfile exists), so a new
       # gem release cannot change what this lane builds with.
       - name: Setup Ruby + Bundler
         if: ${{ steps.salient.outputs.salient == 'true' }}
-        uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a
         with:
           ruby-version: '3.2'
           bundler-cache: true
-          working-directory: e2e/fixture-site
+          working-directory: e2e/${{ matrix.fixture }}
 
       # `@lane: real` specs are excluded explicitly rather than left to
       # self-skip: admin-bundle-parity.spec.js fetches production. The filter is
@@ -201,7 +338,7 @@ jobs:
       - name: Select the local-lane specs
         if: ${{ steps.salient.outputs.salient == 'true' }}
         id: select
-        working-directory: e2e/fixture-site/e2e
+        working-directory: e2e/${{ matrix.fixture }}/e2e
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -227,11 +364,11 @@ jobs:
 
       - name: Run the local-lane specs against the fixture
         if: ${{ steps.salient.outputs.salient == 'true' }}
-        working-directory: e2e/fixture-site/e2e
+        working-directory: e2e/${{ matrix.fixture }}/e2e
         env:
           # playwright.config.js's local webServer builds + serves THIS tree and
           # runs decap-server in it.
-          SITE_ROOT: ${{ github.workspace }}/e2e/fixture-site
+          SITE_ROOT: ${{ github.workspace }}/e2e/${{ matrix.fixture }}
           PW_SPECS: ${{ steps.select.outputs.specs }}
           PW_WORKERS: ${{ steps.select.outputs.workers }}
           # No consumer of per-navigation frames runs here (see e2e-tests.yml).
@@ -239,49 +376,100 @@ jobs:
         run: |
           set -o pipefail
           read -r -a specs <<< "$PW_SPECS"
+          shard_args=()
+          if [ -n "${PW_SHARD:-}" ]; then
+            shard_args=(--shard="$PW_SHARD")
+            # Which shard owns each test, for "Assert the leg's proof test
+            # passed": list EVERY shard of this project over the same specs
+            # (no browser, no webServer). Output stays out of the public log.
+            mkdir -p /tmp/fixture-e2e.log.shards
+            total="${PW_SHARD#*/}"
+            for ((i = 1; i <= total; i++)); do
+              PLAYWRIGHT_JSON_OUTPUT_FILE="/tmp/fixture-e2e.log.shards/${i}.json" \
+                npx playwright test --list --project="$PW_PROJECT" --shard="${i}/${total}" \
+                --reporter=json "${specs[@]}" \
+                >> /tmp/fixture-e2e.log.shards/list.log 2>&1 || echo "shard ${i}/${total}: --list failed"
+            done
+          fi
+          echo "shard=${PW_SHARD:-<none>}"
           export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/fixture-e2e.log.json
           status=0
           # Raw output goes to the uploaded artifact; only aggregate counts reach
           # the public log (summarize-playwright.js, e2e/playwright-log-privacy.test.js).
-          npx playwright test --project="$PW_PROJECT" --reporter=list,html,json "${specs[@]}" \
+          npx playwright test --project="$PW_PROJECT" "${shard_args[@]}" --reporter=list,html,json "${specs[@]}" \
             > /tmp/fixture-e2e.log 2>&1 || status=$?
           node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
           exit "$status"
 
-      # #527 criterion 2, kept live: the archived-PDF test must have RUN and
-      # PASSED on this project. Without this, a future skip (a lost opt-in, a
-      # renamed fixture collection) would leave the lane green while proving
-      # nothing.
-      - name: Assert the archived-PDF test passed
+      # #527 criterion 2, kept live and extended per leg (#702): the leg's
+      # proof test must have RUN and PASSED on this project. Without this, a
+      # future skip (a lost opt-in, a renamed fixture collection, a predicate
+      # that stops matching the fixture) would leave the lane green while
+      # proving nothing.
+      #
+      # A sharded leg runs a third of the project, so the proof test is
+      # asserted by the ONE shard whose `--list` holds it; every other shard
+      # names that owner and passes, and the gate still needs the owner green.
+      # Owned by no shard (or by more than one, or a missing list) fails EVERY
+      # shard, so a proof test that left the project cannot read green.
+      - name: Assert the leg's proof test passed
         if: ${{ steps.salient.outputs.salient == 'true' }}
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/fixture-e2e.log.json
-          REQUIRED_SPEC_FILE: cms-editorial-workflow.spec.js
-          REQUIRED_TEST_TITLE: opted-in archived PDF fields render host-specific copy and stay private by default
+          SHARD_LISTS_DIR: /tmp/fixture-e2e.log.shards
+          REQUIRED_SPEC_FILE: ${{ matrix.proof_spec }}
+          REQUIRED_TEST_TITLE: ${{ matrix.proof_title }}
         run: |
           set -euo pipefail
           node - <<'JS'
           const fs = require("node:fs");
+          const path = require("node:path");
           const { PLAYWRIGHT_JSON_OUTPUT_FILE: file, REQUIRED_SPEC_FILE: specFile,
-                  REQUIRED_TEST_TITLE: title, PW_PROJECT: project } = process.env;
-          let report;
-          try {
-            report = JSON.parse(fs.readFileSync(file, "utf8"));
-          } catch (_) {
-            console.log(`::error::no readable Playwright JSON report at ${file}`);
-            process.exit(1);
-          }
-          const found = [];
-          const walk = (suite) => {
-            for (const spec of suite.specs || []) {
-              if (spec.title !== title || !String(spec.file || "").endsWith(specFile)) continue;
-              for (const t of spec.tests || []) {
-                if (t.projectName === project) found.push(t);
-              }
+                  REQUIRED_TEST_TITLE: title, PW_PROJECT: project,
+                  PW_SHARD: shard = "", SHARD_LISTS_DIR: listsDir } = process.env;
+          const read = (f) => {
+            try {
+              return JSON.parse(fs.readFileSync(f, "utf8"));
+            } catch (_) {
+              console.log(`::error::no readable Playwright JSON report at ${f}`);
+              process.exit(1);
             }
-            for (const child of suite.suites || []) walk(child);
           };
-          for (const suite of report.suites || []) walk(suite);
+          const proofTests = (report) => {
+            const found = [];
+            const walk = (suite) => {
+              for (const spec of suite.specs || []) {
+                if (spec.title !== title || !String(spec.file || "").endsWith(specFile)) continue;
+                for (const t of spec.tests || []) {
+                  if (t.projectName === project) found.push(t);
+                }
+              }
+              for (const child of suite.suites || []) walk(child);
+            };
+            for (const suite of report.suites || []) walk(suite);
+            return found;
+          };
+          if (shard) {
+            const m = /^([1-9]\d*)\/([1-9]\d*)$/.exec(shard);
+            if (!m || Number(m[1]) > Number(m[2])) {
+              console.log(`::error::PW_SHARD ${JSON.stringify(shard)} is not <i>/<n>`);
+              process.exit(1);
+            }
+            const [index, total] = [Number(m[1]), Number(m[2])];
+            const owners = [];
+            for (let i = 1; i <= total; i++) {
+              if (proofTests(read(path.join(listsDir, `${i}.json`))).length) owners.push(i);
+            }
+            if (owners.length !== 1) {
+              console.log(`::error::${specFile} › "${title}" is listed in ${owners.length} of ${total} shards of ${project}, not exactly one`);
+              process.exit(1);
+            }
+            if (owners[0] !== index) {
+              console.log(`${specFile} › "${title}" belongs to shard ${owners[0]}/${total} of ${project}; asserted there`);
+              process.exit(0);
+            }
+          }
+          const found = proofTests(read(file));
           if (found.length === 0) {
             console.log(`::error::${specFile} › "${title}" did not run on ${project}`);
             process.exit(1);
@@ -297,16 +485,30 @@ jobs:
           console.log(`${specFile} › "${title}" passed on ${project}`);
           JS
 
+      # Upload less on a green leg (2026-10-22): `test-results` duplicates what
+      # the HTML report already carries (it copies every screenshot and
+      # attachment, a retried attempt's included), and was half of a ~320 MB chromium-desktop-3k
+      # artifact. Only a FAILED leg keeps it for the upload below; nothing
+      # reads it after this point on a green one.
+      - name: Drop test-results from a green leg's upload
+        if: ${{ success() && steps.salient.outputs.salient == 'true' }}
+        run: rm -rf e2e/test-results "e2e/${FIXTURE}/e2e/test-results"
+
       - name: Upload Playwright report
         if: ${{ !cancelled() && steps.salient.outputs.salient == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: fixture-e2e-report-${{ matrix.project }}
+          name: fixture-e2e-report-${{ matrix.slot }}-${{ matrix.fixture }}
           path: |
-            e2e/fixture-site/e2e/playwright-report
-            e2e/fixture-site/e2e/test-results
+            e2e/test-results
+            e2e/playwright-report
+            /tmp/decap-caret.log
+            /tmp/decap-caret.log.json
+            e2e/${{ matrix.fixture }}/e2e/playwright-report
+            e2e/${{ matrix.fixture }}/e2e/test-results
             /tmp/fixture-e2e.log
             /tmp/fixture-e2e.log.json
+            /tmp/fixture-e2e.log.shards
           if-no-files-found: ignore
           retention-days: 7
 

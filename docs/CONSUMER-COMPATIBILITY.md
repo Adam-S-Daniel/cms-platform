@@ -55,6 +55,15 @@ of the harness uses). Parses YAML with the real `yaml` lib.
   `default` reads them. Call it INSIDE a test: if those files are needed and
   missing it throws, which at spec-file load would empty a consumer's suite.
 
+`responsive-overflow.spec.js` checks page and content containment on every
+layout, but only `homeUsesThemeLayout()` promises the theme's proportional
+iframe sizing. A site-owned layout can constrain an iframe's width and keep
+its authored height. The single-page fixture therefore keeps legacy
+`max-width` iframe styling and an ordinary border-box reset, without copying
+the newer theme ratios. This catches the assumption that broke the
+[v0.1.157 single-page consumer job](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37577972501/job/112651017756)
+in the platform's own `fixture-e2e` public lane.
+
 **The skip pattern** — a precise `test.skip()` (or `beforeEach` skip) keyed on
 the helper, with a message that names the collection + `cms.base_collections` +
 `(#33)`:

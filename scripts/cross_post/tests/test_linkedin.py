@@ -177,6 +177,27 @@ def test_linkedin_commentary_default_cap_is_2900():
     assert "…" in commentary
 
 
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("word " * 1000, "word " * 578 + "word…"),
+        ("x" * 3000, "x" * 2899 + "…"),
+        ("x" * 2898 + "_" + "tail", "x" * 2898 + "…"),
+        ("_" * 1500, r"\_" * 1449 + "…"),
+    ],
+    ids=["words", "single-word", "escape-at-boundary", "escaped-title"],
+)
+def test_linkedin_commentary_caps_escaped_title_fallback(title, expected):
+    post = make_post(title=title, excerpt="An excerpt.", tags=["ai"])
+    commentary = cross_post.linkedin_commentary(post)
+
+    assert len(commentary) <= 2900
+    assert commentary == expected
+    assert "An excerpt." not in commentary
+    assert "{hashtag" not in commentary
+    assert post["title"] == title
+
+
 # --- linkedin_token_age / check_linkedin_token ----------------------------------
 
 

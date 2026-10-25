@@ -32,7 +32,7 @@ const STALE_AFTER_MS = 3 * 60 * 60 * 1000;
 const FUTURE_SKEW_MS = 10 * 60 * 1000;
 
 /**
- * Split a `_tags` directory listing (Contents API entries) into the e2e tag
+ * Split a `_tags` directory listing (`{ type, name }` entries) into the e2e tag
  * files that are stale run-stamped canaries (safe to remove), fresh ones (a
  * run may still own them), future-stamped ones and any other `e2e-` file
  * (the last two are reported, never removed).
@@ -61,32 +61,63 @@ function classifyE2eTags(entries, nowMs) {
 }
 
 /**
+ * List the entries of `_tags` on `ref` as `{ type: "file" | "dir", name }`,
+ * or null when `ref` has no `_tags` directory (or `ref` itself is absent).
+ *
+ * This reads the git trees API, not the Contents API: a Contents API
+ * directory listing stops at 1,000 entries, so on a site with more tags a
+ * leftover past that cut would read clean. A non-recursive tree has no such
+ * cap; a `truncated` tree throws rather than reading partial.
+ */
+async function listTagsDir(ghImpl, repo, ref) {
+  let root;
+  try {
+    root = await ghImpl(`/repos/${repo}/git/trees/${encodeURIComponent(ref)}`, { retries: 2 });
+  } catch (e) {
+    if (e && e.status === 404) return null;
+    throw e;
+  }
+  if (!root || !Array.isArray(root.tree)) {
+    throw new TypeError(`${ref} root tree listing is not a tree`);
+  }
+  const dir = root.tree.find((t) => t && t.path === TAGS_DIR);
+  if (!dir && root.truncated) {
+    throw new Error(`${ref} root tree listing is truncated`);
+  }
+  if (!dir) return null;
+  if (dir.type !== "tree" || typeof dir.sha !== "string") {
+    throw new TypeError(`${TAGS_DIR}@${ref} listing is not a directory`);
+  }
+  const listing = await ghImpl(`/repos/${repo}/git/trees/${dir.sha}`, { retries: 2 });
+  if (!listing || !Array.isArray(listing.tree)) {
+    throw new TypeError(`${TAGS_DIR}@${ref} listing is not a tree`);
+  }
+  if (listing.truncated) {
+    throw new Error(`${TAGS_DIR}@${ref} tree listing is truncated`);
+  }
+  return listing.tree.map((t) => ({
+    type: t.type === "blob" ? "file" : t.type === "tree" ? "dir" : t.type,
+    name: t.path,
+  }));
+}
+
+/**
  * List `_tags` on `ref`, open a fire-and-forget removal PR for each stale
  * canary tag, and return what is left over.
  *
  * Returns `{ leftover, removed, fresh, future, other }` where `leftover`
  * counts the stale, future-stamped and other files (each one a defect to report, even when its removal
  * PR is already open) and `removed` lists the files this call opened a
- * removal PR for. A 404 on the listing
- * means the site has no `_tags` directory: nothing left over. Any other
+ * removal PR for. No `_tags` directory (or a 404 on the ref's tree) means
+ * nothing left over. Any other
  * listing error throws, and so does a failed removal, so the caller can
  * report "could not verify" instead of a false clean.
  */
 async function sweepLeftoverE2eTags({ repo, ref = "main", ghImpl, removeImpl, nowMs, log = console.log }) {
-  let entries;
-  try {
-    entries = await ghImpl(`/repos/${repo}/contents/${TAGS_DIR}?ref=${encodeURIComponent(ref)}`, {
-      retries: 2,
-    });
-  } catch (e) {
-    if (e && e.status === 404) {
-      log(`[leftover-e2e-tags] ${TAGS_DIR}@${ref}: no ${TAGS_DIR} directory — nothing to check.`);
-      return { leftover: 0, removed: [], fresh: [], future: [], other: [] };
-    }
-    throw e;
-  }
-  if (!Array.isArray(entries)) {
-    throw new TypeError(`${TAGS_DIR}@${ref} listing is not a directory`);
+  const entries = await listTagsDir(ghImpl, repo, ref);
+  if (entries === null) {
+    log(`[leftover-e2e-tags] ${TAGS_DIR}@${ref}: no ${TAGS_DIR} directory — nothing to check.`);
+    return { leftover: 0, removed: [], fresh: [], future: [], other: [] };
   }
   const { stale, fresh, future, other } = classifyE2eTags(entries, nowMs);
   for (const p of fresh) {

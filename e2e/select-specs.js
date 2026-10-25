@@ -381,6 +381,8 @@ const SPEC_RULES = {
   "e2e/cms-link-crawler.spec.js": [
     /^(theme\/)?admin\//,
     /^_posts\//,
+    /^_tags\//,
+    /^e2e\/public-content\.js$/,
     /^e2e\/site-capabilities\.js$/,
     /^e2e\/base-collections-guards\.js$/,
   ],
@@ -541,6 +543,15 @@ const SPEC_RULES = {
   "e2e/deploy-preview-cms-slug.test.js": [
     /^scripts\/cms-preview-slug\.sh$/,
     /^\.github\/workflows\/deploy-preview\.yml$/,
+  ],
+  // Locks that only deploy-production invalidates CloudFront. Pure-node; reads
+  // every workflow and composite action, the example callers and the bootstrap
+  // template, plus itself.
+  "e2e/cloudfront-invalidation-budget.test.js": [
+    /^\.github\/(workflows|actions)\//,
+    /^examples\/site\/\.github\/workflows\//,
+    /^infrastructure\/bootstrap\/template\.yaml$/,
+    /^e2e\/cloudfront-invalidation-budget\.test\.js$/,
   ],
   // Prod-mutation playground (G4). Skips itself unless CMS_E2E_PAT is
   // set, so PR runs are safe — the spec just emits a skip and exits.
@@ -801,9 +812,22 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/index.*\.html$/,
     /^(theme\/)?_layouts\/preview\.html$/,
   ],
+  // #736: the tidy shim's sandbox tests also check where the shells load it.
+  "e2e/media-library-tidy.test.js": [
+    /^(theme\/)?admin\/media-library-tidy\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+    /^(theme\/)?admin\/draft-media-fallback\.js$/,
+  ],
+  // #647 media-library draft sync: the unit sandbox also checks where the
+  // three admin shells load it.
+  "e2e/media-library-draft-sync.test.js": [
+    /^(theme\/)?admin\/media-library-draft-sync\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+  ],
   "e2e/preview-bridge-payload.test.js": [/^(theme\/)?admin\/preview-bridge\.js$/],
   "e2e/preview-pane.test.js": [
     /^(theme\/)?admin\/preview-pane\.js$/,
+    /^(theme\/)?admin\/config\.base\.yml$/,
     /^(theme\/)?admin\/index.*\.html$/,
   ],
   "e2e/cms-autosave.spec.js": [

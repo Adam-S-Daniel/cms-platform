@@ -54,6 +54,8 @@
 //   6. `scaffold/create-site.js`'s `PLATFORM_VERSION` fallback equals
 //      `v<version>` — the value an OFFLINE scaffold stamps into every pin.
 //   7. `scaffold/README.md` names no platform version but the canonical one.
+//   8. AGENTS.md's "Current release: `vX.Y.Z` (`v0.1.0`–`vX.Y.Z` are tagged"
+//      sentence names the canonical version in BOTH positions.
 //
 // Contract 3 also rejects a MIS-CASED platform slug (`adam-s-daniel/…`, which
 // GitHub happily resolves) outright, with "fix the casing" rather than a version
@@ -80,7 +82,8 @@
 // It is already locked at both ends: to its twin manifest by
 // plugin-manifests.test.js, and to the git tag by release.yml (which REFUSES to
 // cut a tag disagreeing with the manifests). AGENTS.md's "Current release:" line
-// is unlocked PROSE — do not anchor to it.
+// is PROSE, so it is a guarded COPY of that value (contract 8), never the
+// anchor itself.
 //
 // ── WHY THIS CANNOT DEADLOCK A RELEASE ────────────────────────────────────
 // It compares IN-REPO VALUES ONLY and never resolves a ref, so a release PR may
@@ -136,6 +139,7 @@ const TEMPLATE_WORKFLOWS = path.join(REPO_ROOT, "examples", "site", ".github", "
 const ROOT_MANIFEST = path.join(REPO_ROOT, "plugin.json");
 const CLAUDE_MANIFEST = path.join(REPO_ROOT, ".claude-plugin", "plugin.json");
 const SCAFFOLD_README = path.join(REPO_ROOT, "scaffold", "README.md");
+const AGENTS_MD = path.join(REPO_ROOT, "AGENTS.md");
 const { PLATFORM_REPO, substitute } = require("../scaffold/create-site.js");
 
 const rel = (p) => path.relative(REPO_ROOT, p);
@@ -376,5 +380,33 @@ test.describe("examples/site template pins the CANONICAL platform version", () =
         `  • Genuinely the current version? Then it must read ${canonical}, and you have ` +
         `signed up to bump it in every release PR — prefer one of the two above.`,
     ).toEqual([]);
+  });
+
+  test("AGENTS.md's 'Current release' sentence names the canonical version twice", () => {
+    const canonical = `v${readVersion(ROOT_MANIFEST)}`;
+    const text = fs.readFileSync(AGENTS_MD, "utf8");
+    // One lexical token of prose, which wraps across a line break: the bolded
+    // current version, then the upper end of the "`v0.1.0`–`vX.Y.Z` are tagged"
+    // range. Whitespace is \s+ so a re-wrap of the paragraph does not matter.
+    const match = text.match(
+      /\*\*Current release: `(v\d+\.\d+\.\d+)`\*\*\s+\(`v0\.1\.0`\u2013`(v\d+\.\d+\.\d+)`\s+are\s+tagged/,
+    );
+
+    expect(
+      match,
+      `${rel(AGENTS_MD)} no longer carries the "**Current release: \`vX.Y.Z\`** (\`v0.1.0\`\u2013` +
+        `\`vX.Y.Z\` are tagged" sentence this guard reads. If you reworded it on purpose, update ` +
+        `the pattern here in the same PR — do not delete the assertion, or the release bump ` +
+        `loses its only lock on this line.`,
+    ).not.toBeNull();
+
+    const [, current, newestTag] = match;
+    expect(
+      { current, newestTag },
+      `${rel(AGENTS_MD)}'s "Current release" sentence is stale: the plugin manifests say ` +
+        `${canonical}. The release PR bumps this line with the manifests — update BOTH ` +
+        `versions in the sentence (the bolded current release and the top of the ` +
+        `"\`v0.1.0\`\u2013\`vX.Y.Z\` are tagged" range) to ${canonical}.`,
+    ).toEqual({ current: canonical, newestTag: canonical });
   });
 });

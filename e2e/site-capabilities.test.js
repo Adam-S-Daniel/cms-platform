@@ -15,7 +15,7 @@ const { test, expect } = require("./base");
 const os = require("node:os");
 const walk = require("acorn-walk");
 const cap = require("./site-capabilities");
-const { parse, calleeName, stringValue } = require("./spec-ast");
+const { parse, calleeName, calleeTail, stringValue } = require("./spec-ast");
 
 const HARNESS = __dirname;
 const FULL = path.join(HARNESS, "fixture-site");
@@ -338,9 +338,29 @@ test.describe("site-capabilities: homeUsesThemeLayout", () => {
     });
   }
 
-  test("both platform fixtures render home through the theme default", () => {
+  // The two fixtures cover both answers, so the fixture-e2e public lane runs
+  // the theme-markup checks on one and their skips on the other (#702).
+  test("the full fixture renders home through the theme default; the single-page one does not", () => {
     expect(cap.homeUsesThemeLayout(FULL, THEME)).toBe(true);
-    expect(cap.homeUsesThemeLayout(SINGLEPAGE, THEME)).toBe(true);
+    expect(cap.homeUsesThemeLayout(SINGLEPAGE, THEME)).toBe(false);
+  });
+
+  test("pageUsesThemeLayout answers for any page: the scaffolded 404 seed is standalone", () => {
+    const site = siteTree({
+      "404.html": "---\npermalink: /404.html\ntitle: Page Not Found\n---\n" + DOC,
+      "about.html": page("layout: page"),
+    });
+    try {
+      expect(cap.pageUsesThemeLayout(site, "404.html", THEME)).toBe(false);
+      expect(cap.pageUsesThemeLayout(site, "about.html", THEME)).toBe(true);
+      expect(cap.pageUsesThemeLayout(site, "missing.html", THEME)).toBe(false);
+      // The fixture carries the scaffolder's seed; both consumers wrap theirs
+      // in `layout: default`, as the single-page fixture does.
+      expect(cap.pageUsesThemeLayout(FULL, "404.html", THEME)).toBe(false);
+      expect(cap.pageUsesThemeLayout(SINGLEPAGE, "404.html", THEME)).toBe(true);
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+    }
   });
 
   test("a top-level page with `permalink: /` is the home page, over index.*", () => {
@@ -406,25 +426,111 @@ test.describe("site-capabilities: homeUsesThemeLayout", () => {
   });
 
   // A throw at spec-file load empties the whole consumer suite (Playwright
-  // loads zero tests), so the specs must call the predicate inside tests only.
-  // AST, not regex: where a call sits is code SHAPE.
-  test("the gated specs call homeUsesThemeLayout only inside a function, never at load", () => {
-    for (const spec of ["public-a11y-polish.spec.js", "reduced-motion.spec.js"]) {
-      const src = fs.readFileSync(path.join(HARNESS, spec), "utf8");
-      const calls = [];
-      walk.ancestor(parse(src), {
-        CallExpression(node, ancestors) {
-          const name = calleeName(node.callee) || "";
-          if (name.endsWith("homeUsesThemeLayout")) calls.push([...ancestors]);
-        },
-      });
-      expect(calls.length, `${spec} must gate on homeUsesThemeLayout`).toBeGreaterThan(0);
-      for (const ancestors of calls) {
-        expect(
-          ancestors.some((a) => /Function/.test(a.type)),
-          `${spec}: homeUsesThemeLayout must not run at file load`,
-        ).toBe(true);
-      }
+  // loads zero tests), so the specs must call the predicates inside tests only.
+  // AST, not regex: where a call sits is code SHAPE. A spec-local wrapper that
+  // calls a predicate (public-a11y-polish's skipUnlessHomeUsesTheme) is a
+  // predicate too, transitively (#702), and a describe callback or an IIFE runs
+  // at load, so neither counts as deferring the call.
+  test("the gated specs call the layout predicates only inside a test, never at load", () => {
+    const gated = [];
+    for (const spec of fs.readdirSync(HARNESS).filter((f) => f.endsWith(".spec.js")).sort()) {
+      const loadTime = layoutPredicateLoadTimeCalls(fs.readFileSync(path.join(HARNESS, spec), "utf8"));
+      if (loadTime === null) continue;
+      gated.push(spec);
+      expect(loadTime, `${spec}: a layout predicate must not run at file load`).toEqual([]);
+    }
+    for (const spec of [
+      "not-found.spec.js",
+      "public-a11y-polish.spec.js",
+      "reduced-motion.spec.js",
+    ]) {
+      expect(gated, `${spec} must gate on a layout predicate`).toContain(spec);
     }
   });
+
+  test("the load-time lint catches a direct call, a wrapper call, a describe body and an IIFE", () => {
+    const wrapper = `
+      const cap = require("./site-capabilities");
+      function skipUnless() { test.skip(!cap.homeUsesThemeLayout(), "x"); }
+      const viaArrow = () => skipUnless();
+    `;
+    const red = {
+      direct: `const cap = require("./site-capabilities"); const on = cap.homeUsesThemeLayout();`,
+      page: `const cap = require("./site-capabilities"); cap.pageUsesThemeLayout(".", "404.html");`,
+      "top-level wrapper": `${wrapper} skipUnless();`,
+      "two-level wrapper": `${wrapper} viaArrow();`,
+      "describe body": `${wrapper} test.describe("d", () => { skipUnless(); });`,
+      "describe.serial body": `${wrapper} test.describe.serial("d", function () { viaArrow(); });`,
+      iife: `${wrapper} (() => { skipUnless(); })();`,
+    };
+    for (const [name, src] of Object.entries(red)) {
+      expect(layoutPredicateLoadTimeCalls(src), name).not.toEqual([]);
+    }
+    const green = `${wrapper}
+      test.describe("d", () => {
+        test.beforeEach(() => skipUnless());
+        test("t", async () => { viaArrow(); cap.pageUsesThemeLayout(".", "404.html"); });
+      });`;
+    expect(layoutPredicateLoadTimeCalls(green)).toEqual([]);
+    expect(layoutPredicateLoadTimeCalls(`const x = 1;`)).toBeNull();
+  });
 });
+
+const LAYOUT_PREDICATES = ["homeUsesThemeLayout", "pageUsesThemeLayout"];
+
+// The calls to a layout predicate (or to a spec-local function that reaches
+// one) that run at file load, as `line:col` strings; null when the source
+// never calls one.
+function layoutPredicateLoadTimeCalls(src) {
+  const ast = parse(src);
+  const tail = (call) => calleeTail(calleeName(call.callee));
+  // Spec-local named functions: `function f() {}` and `const f = () => {}`.
+  const fns = new Map();
+  walk.full(ast, (node) => {
+    if (node.type === "FunctionDeclaration" && node.id) fns.set(node.id.name, node);
+    if (
+      node.type === "VariableDeclarator" &&
+      node.id.type === "Identifier" &&
+      node.init &&
+      /Function/.test(node.init.type)
+    ) {
+      fns.set(node.id.name, node.init);
+    }
+  });
+  const names = new Set(LAYOUT_PREDICATES);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [name, fn] of fns) {
+      if (names.has(name)) continue;
+      let reaches = false;
+      walk.full(fn.body, (n) => {
+        if (n.type === "CallExpression" && names.has(tail(n))) reaches = true;
+      });
+      if (reaches) {
+        names.add(name);
+        grew = true;
+      }
+    }
+  }
+  const calls = [];
+  walk.ancestor(ast, {
+    CallExpression(node, ancestors) {
+      if (names.has(tail(node))) calls.push([...ancestors]);
+    },
+  });
+  if (calls.length === 0) return null;
+  const deferred = (ancestors) =>
+    ancestors.some((fn, i) => {
+      if (!/Function/.test(fn.type)) return false;
+      const parent = ancestors[i - 1];
+      if (!parent || parent.type !== "CallExpression") return true;
+      if (parent.callee === fn) return false; // an IIFE runs where it stands
+      return !/(^|\.)describe(\.|$)/.test(calleeName(parent.callee) || ""); // describe bodies run at load
+    });
+  return calls
+    .filter((ancestors) => !deferred(ancestors))
+    .map((ancestors) => {
+      const { line, column } = ancestors[ancestors.length - 1].loc.start;
+      return `${line}:${column}`;
+    });
+}

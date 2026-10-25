@@ -64,7 +64,10 @@ const CONFIGS = [RENDERED_CONFIG];
 const EXPECTED_SUMMARY =
   "{{title}}" +
   "{{published | ternary('', ' — DRAFT')}}" +
-  "{{publish_date | ternary(' — Scheduled', '')}}";
+  "{{publish_date | ternary(' — Scheduled', '')}}" +
+  // The post's front-matter `slug:` / `permalink:` ride after U+2063 so the
+  // list can link the post at its real address (posts-list-enhance.js).
+  "\u2063{{fields.slug}}\u2063{{fields.permalink}}";
 
 const DRAFT_CLAUSE = "{{published | ternary('', ' — DRAFT')}}";
 const SCHEDULED_CLAUSE = "{{publish_date | ternary(' — Scheduled', '')}}";

@@ -38,6 +38,10 @@
 #   - approval_policy -> repos/{owner}/{repo}/actions/permissions/
 #     fork-pr-contributor-approval (HTTP 422 on a PRIVATE repo -> the audit
 #     SKIPS it as an operational skip, never drift).
+#   - default_workflow_permissions + can_approve_pull_request_reviews ->
+#     repos/{owner}/{repo}/actions/permissions/workflow (#868). One endpoint
+#     carries both, so drift on either is ONE PUT with both fields: the
+#     desired value for the drifted key, the live value echoed for the other.
 #
 # ENVIRONMENTS are a FOURTH managed surface: GET/PUT
 # `repos/{owner}/{repo}/environments/{name}`, declared per repo under
@@ -141,8 +145,8 @@ settings_defaults:
   web_commit_signoff_required: false
 
 # Actions-permissions defaults (the THIRD managed surface — own GET/PUT
-# endpoints, keyed to MANAGED_ACTIONS_PERMISSION_KEYS; see the header). Both
-# leaves are enforced identically on all three repos, so they live only here.
+# endpoints, keyed to MANAGED_ACTIONS_PERMISSION_KEYS; see the header). Every
+# leaf is enforced identically on all three repos, so they live only here.
 actions_permissions_defaults:
   # why: require every workflow `uses:` to be pinned to a full-length commit
   # SHA — the repo-level enforcement of AGENTS.md's "SHA-pin every workflow
@@ -166,6 +170,20 @@ actions_permissions_defaults:
   # are currently public so the value applies. As-found 2026-07-13 on all three:
   # first_time_contributors — the drift this leaf corrects on the next `--fix`.
   approval_policy: all_external_contributors
+  # why: GITHUB_TOKEN stays read-only unless a job asks for more. Every job on
+  # all three repos declares its own `permissions:` (0 of 70 / 36 / 36 inherit
+  # the default, audited 2026-10-23 in #868), so this is a backstop for a new
+  # job that forgets its block. Managed on GET/PUT
+  # repos/{owner}/{repo}/actions/permissions/workflow. Matches repo-settings'
+  # fleet.yml `defaults.actions`. As-found 2026-10-23: `read` on all three.
+  default_workflow_permissions: read
+  # why: no workflow approves a PR with GITHUB_TOKEN. Every bot PR is opened or
+  # merged by the CMS automation App or by CMS_E2E_PAT, and Dependabot's
+  # `gh pr merge --auto` needs only contents/pull-requests write. `true` would
+  # let any workflow approve its own PR past a review requirement. Same
+  # endpoint as default_workflow_permissions (one PUT carries both). Matches
+  # the fleet. As-found 2026-10-23: `false` on all three.
+  can_approve_pull_request_reviews: false
 
 # Security-analysis defaults (the FIFTH managed surface — own GET/PUT/DELETE
 # endpoint PER KEY, method-carries-the-value, no request body; see the
@@ -303,6 +321,11 @@ ruleset_library:
             # `Independent review: CLEAN at <current head sha>`; every other PR
             # passes it.
             - context: release-review-gate
+            # why: _agent-guidance ADR 0021 — agent-checks.yml runs
+            # .githooks/agent-checks over every commit a PR adds, the check a
+            # local `--no-verify` skips. Reported as `agent-checks` on PRs
+            # (job id, no `name:` override).
+            - context: agent-checks
     bypass_actors: []
 
   # why: = live adamdaniel.ai ruleset 13985217 as-found 2026-07-10 — the

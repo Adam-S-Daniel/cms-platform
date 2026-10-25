@@ -178,6 +178,14 @@ function composePost({ title, slug, body, featuredImage = "" }) {
   return `${frontMatter}\n${body}`;
 }
 
+// #697 — the slug for the media round trip's upload removal PR. The post's
+// slug equals the upload's basename, and removeFixtureViaPr names its branch
+// from slug + runId, so a shared slug would recreate the branch under the
+// post's open removal PR.
+function mediaUploadRemovalSlug(postSlug) {
+  return `${postSlug}-upload`;
+}
+
 module.exports = {
   EPHEMERAL_DATE,
   TEST_POST_MARKERS,
@@ -186,5 +194,6 @@ module.exports = {
   MEDIA_ROUNDTRIP_SLUG_PREFIX,
   buildProdMutatePost,
   buildMediaRoundtripPost,
+  mediaUploadRemovalSlug,
   composePost,
 };

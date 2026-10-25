@@ -126,9 +126,26 @@ collections:
     # verbatim across all three configs by
     # e2e/posts-list-date-lint.test.js, and against the rendered config
     # by e2e/cms-post-list-summary.spec.js.
-    summary: "{{title}}{{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}"
+    #
+    # The tail after the two U+2063 (invisible separator) escapes carries the
+    # post's front-matter `slug:` and `permalink:` to admin/posts-list-enhance.js,
+    # which strips it from the visible title and builds the "published" link from
+    # it. A card's own href is the FILE name, and Jekyll's `permalink:
+    # /blog/:slug/` uses the front-matter `slug:` when one is set, so a post whose
+    # `slug:` differs from its file name was linked at a 404. `{{fields.<name>}}`
+    # reads the entry's data (decap-cms-lib-widgets stringTemplate), so it works
+    # for `permalink`, which has no field widget, and it renders '' when absent.
+    summary: "{{title}}{{published | ternary('', ' — DRAFT')}}{{publish_date | ternary(' — Scheduled', '')}}\u2063{{fields.slug}}\u2063{{fields.permalink}}"
+    # Newest first by default (#650): without a default, Decap lists in
+    # repository order, so a just-saved post jumped to the top until a reload
+    # dropped it to the bottom. Decap 3.15.1's schema wants `sortable_fields`
+    # to be an ARRAY (an object throws "must be array" and the admin never
+    # loads); an array item may be `{field, default_sort: asc|desc}`, which
+    # the bundle's loadEntries applies when no sort is stored yet.
+    # e2e/posts-list-status-dedupe.test.js pins this shape.
     sortable_fields:
-      - date
+      - field: date
+        default_sort: desc
       - title
     # `Automated tests` matches posts carrying `test_fixture: true` (the
     # E2E canary fixtures). Decap 3.15.1 has no declarative default-on/off

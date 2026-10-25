@@ -306,9 +306,19 @@ function homeSourceFile(siteRoot) {
 function homeUsesThemeLayout(siteRoot = defaultSiteRoot(), themeLayoutsDir) {
   const home = homeSourceFile(siteRoot);
   if (!home) return false;
-  const fm = readFrontMatter(path.join(siteRoot, home));
+  return pageUsesThemeLayout(siteRoot, home, themeLayoutsDir);
+}
+
+// The same decision for any page source `relPath` (relative to the site root),
+// e.g. `404.html`: false when the file is missing or has no front matter. The
+// scaffolder seeds a standalone 404.html that wraps itself in no layout
+// (#23), so the theme's header and footer are not the site's promise there.
+// Throws exactly like homeUsesThemeLayout: call it inside a test only.
+function pageUsesThemeLayout(siteRoot, relPath, themeLayoutsDir) {
+  if (!fs.existsSync(path.join(siteRoot, relPath))) return false;
+  const fm = readFrontMatter(path.join(siteRoot, relPath));
   if (fm == null) return false;
-  let name = Object.hasOwn(fm, "layout") ? fm.layout : defaultLayoutFor(siteRoot, home);
+  let name = Object.hasOwn(fm, "layout") ? fm.layout : defaultLayoutFor(siteRoot, relPath);
 
   const siteLayoutsDir = path.join(siteRoot, "_layouts");
   const seen = new Set();
@@ -324,7 +334,7 @@ function homeUsesThemeLayout(siteRoot = defaultSiteRoot(), themeLayoutsDir) {
       if (!themeLayoutsDir || !fs.existsSync(themeLayoutsDir)) {
         const tried = themeLayoutsDir ? [themeLayoutsDir] : themeLayoutsDirCandidates(siteRoot);
         throw new Error(
-          `homeUsesThemeLayout: layout "${name}" is not site-owned and no theme layouts ` +
+          `${relPath}: layout "${name}" is not site-owned and no theme layouts ` +
             `directory was found (tried: ${tried.join(", ")})`,
         );
       }
@@ -399,6 +409,7 @@ module.exports = {
   themeLayoutsDirCandidates,
   resolveThemeLayoutsDir,
   homeUsesThemeLayout,
+  pageUsesThemeLayout,
   renderedAdminConfigPath,
   isBuilt,
   adminCollections,

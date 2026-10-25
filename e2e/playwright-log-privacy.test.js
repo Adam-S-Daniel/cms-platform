@@ -23,7 +23,7 @@ const RUNS = new Map([
   ["parity-preview.yml", "parity-preview"],
   ["cms-media-roundtrip.yml", "media-roundtrip"],
   ["visual-regression.yml", "visual-regression"],
-  ["self-fixture-e2e.yml", "fixture-e2e"],
+  ["self-fixture-e2e.yml", ["fixture-e2e", "decap-caret"]],
 ]);
 // These lanes already attempted an artifact upload when their job was canceled.
 const CANCELED_UPLOADS = new Set([
@@ -42,15 +42,17 @@ const JSON_REPORT = JSON.stringify({
   suites: [{ title: HOSTILE }],
 });
 
-function browserAndUpload(workflow) {
+function browserAndUpload(workflow, stem) {
   const steps = Object.values(parseYaml(readWorkflow(workflow)).jobs)
     .flatMap((job) => job.steps || []);
   const runs = steps.filter((step) => String(step.run || "").includes("npx playwright test"));
   const uploads = steps.filter((step) =>
     String(step.uses || "").startsWith("actions/upload-artifact@"));
-  expect(runs, workflow).toHaveLength(1);
+  expect(runs, workflow).toHaveLength([].concat(RUNS.get(workflow)).length);
   expect(uploads, workflow).toHaveLength(1);
-  return { run: runs[0], upload: uploads[0] };
+  const selected = runs.filter((step) => String(step.run).includes(`/tmp/${stem}.log`));
+  expect(selected, `${workflow}: ${stem} must have exactly one captured invocation`).toHaveLength(1);
+  return { run: selected[0], upload: uploads[0] };
 }
 
 function uploadRunsFor(condition, { canceled, failed }) {
@@ -172,12 +174,14 @@ test("workflow inventory covers every browser Playwright invocation", () => {
       }
     }
   }
-  expect(actual.sort()).toEqual([...RUNS.keys()].sort());
+  const expected = [...RUNS].flatMap(([workflow, stems]) => [].concat(stems).map(() => workflow));
+  expect(actual.sort()).toEqual(expected.sort());
 });
 
-for (const [workflow, stem] of RUNS) {
-  test(`${workflow} captures browser output and uploads diagnostics on completed runs`, () => {
-    const { run, upload } = browserAndUpload(workflow);
+const CAPTURES = [...RUNS].flatMap(([workflow, stems]) => [].concat(stems).map((stem) => [workflow, stem]));
+for (const [workflow, stem] of CAPTURES) {
+  test(`${workflow} (${stem}) captures browser output and uploads diagnostics on completed runs`, () => {
+    const { run, upload } = browserAndUpload(workflow, stem);
     const log = `/tmp/${stem}.log`;
     const script = run.run;
     const paths = String(upload.with.path).split("\n").map((item) => item.trim());
