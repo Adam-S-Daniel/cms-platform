@@ -132,7 +132,7 @@ Verified 2026-09-30 on Claude Code 2.1.285: a default-timeout Bash watcher (`sle
 ## What NOT to do
 
 - **Don't use `gh run watch`** in an unattended watcher: it prints progress to stdout but doesn't exit until the run finishes, making it hard to chain into the rest of a watcher.
-- **Don't poll faster than 30 s** against the GitHub API. Even 30 s is borderline for a watcher that runs concurrently with other agent work.
+- **Don't poll faster than the 60 s floor above** against the GitHub API — a watcher shares its token's rate limit with the rest of the agent's work.
 - **Don't rely on `gh workflow run`'s exit code** to tell you the run started. It only confirms the dispatch was accepted; the run might be queued, skipped (recursion guard), or rejected. Take the run id from the URL it prints (gh ≥ 2.87.0) — that is the run it created. Without a URL, find the run with the filtered `gh run list` in [the fix](#the-fix-split-the-assignment) after a 5 – 8 s wait, never a bare `gh run list --limit 1`, which can return another actor's run.
 - **Don't put critical state in chained `$(...)` captures** without testing first. Variable pollution from `&&`-chained commands is the #1 cause of silent watcher hangs in this repo.
 
