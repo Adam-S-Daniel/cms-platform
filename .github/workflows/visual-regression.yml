@@ -59,13 +59,14 @@ on:
         type: string
         default: main
     secrets:
-      # OIDC role assumed for the S3 upload + CloudFront invalidation.
+      # OIDC role assumed for the S3 upload.
       # Optional: when unset the AWS steps no-op (they also gate on
       # PREVIEW_BUCKET being set).
       AWS_ROLE_ARN:
         required: false
-      # CloudFront distribution for the preview bucket. Optional — the
-      # invalidation step gates on it being set.
+      # CloudFront distribution for the preview bucket. Optional — used only
+      # to build the preview URL. The preview distribution caches nothing
+      # (CachingDisabled), so no step invalidates it.
       PREVIEW_CLOUDFRONT_ID:
         required: false
       # Optional PAT for any platform-side API calls. Declared so a caller
@@ -397,13 +398,6 @@ jobs:
             "s3://${PREVIEW_BUCKET}/pr-${PR_NUMBER}/regression.json" \
             --cache-control "no-cache, must-revalidate" \
             --content-type "application/json"
-
-      - name: Invalidate CloudFront cache for video and diffs
-        if: github.actor != 'dependabot[bot]' && env.PREVIEW_BUCKET != '' && env.CLOUDFRONT_DISTRIBUTION_ID != ''
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --paths "/pr-${PR_NUMBER}/regression.mp4" "/pr-${PR_NUMBER}/regression.json"
 
       - name: Post regression video comment
         if: github.actor != 'dependabot[bot]'

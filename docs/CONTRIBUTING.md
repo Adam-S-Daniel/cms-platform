@@ -130,9 +130,10 @@ since #525.
 `e2e/fixture-site` (a neutral consuming site whose Gemfile pins the theme by
 local path, so the working tree's theme is built), installs gems from the
 fixture's COMMITTED `Gemfile.lock` in frozen mode, and runs every `@lane: local`
-spec on four matrix legs, each behind a `timeout-minutes` wall: the admin
-projects `chromium-desktop-3k` and `webkit-iphone16` on `e2e/fixture-site`, and
-since #702 ONE public project, `chromium-desktop-1080`, on both
+spec on eight matrix legs, each behind a `timeout-minutes` wall: the admin
+projects `chromium-desktop-3k` and `webkit-iphone16` on `e2e/fixture-site`, each
+split into three `--shard` legs since 2026-10-22 (the consumer shape; see
+`docs/E2E-PARALLELISM.md`), and since #702 ONE public project, `chromium-desktop-1080`, on both
 `e2e/fixture-site` (`/` on the theme's default layout) and
 `e2e/fixture-site-singlepage` (`/` on its own `_layouts/home.html`, the shape of
 jodidaniel.com). Before #702 no public spec ran here, so v0.1.139's public-theme
@@ -140,8 +141,9 @@ specs first ran on a consumer bump and broke jodidaniel.com#351. `@lane: real`
 specs are excluded explicitly (`admin-bundle-parity.spec.js` fetches
 production). A step then fails the job unless the leg's proof test PASSED (the
 matrix names it: the archived-PDF test in `cms-editorial-workflow.spec.js` on
-the admin legs, a public test that runs only where the leg's `/` shape holds on
-the public ones), so a future skip cannot read green. An early salience step
+the admin legs, asserted by the one shard whose `--list` holds it, a public test
+that runs only where the leg's `/` shape holds on the public ones), so a future
+skip cannot read green. An early salience step
 skips the work, with success, on a PR that touches only `docs/`,
 `infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE` or `*.md`
 outside the fixtures. The REQUIRED context is the `fixture-e2e` gate (`needs:` +
@@ -195,10 +197,49 @@ into `main` in each repository bound to `consumer-main` in
 their `platform.lock`, every platform workflow `uses:@` and `platform_ref:` input
 to that full SHA. Set the theme gem's `Gemfile` option to `ref: "<full SHA>"`
 (instead of `tag:`), then refresh `Gemfile.lock` so its platform GIT source has
-both `ref:` and `revision:` equal to that SHA. Each consumer's e2e caller must
+both `ref:` and `revision:` equal to that SHA.
+[`scripts/rewrite-platform-pins.js`](../scripts/rewrite-platform-pins.js) writes
+exactly that shape when `--to` is a full 40-hex SHA, and writes `tag:` again
+when a later bump targets a release tag. Each consumer's e2e caller must
 run `target: local` with `browser: all`, using that candidate's harness; a green
 platform fixture run cannot substitute for either consumer's own validation.
 Wait for the consumer PR checks, including any regression review, to succeed.
+
+One dispatch prepares both drafts:
+
+```bash
+gh workflow run release-candidates.yml -R Adam-S-Daniel/cms-platform --ref main
+```
+
+[`release-candidates.yml`](../.github/workflows/release-candidates.yml) refuses
+any ref but `main`, then dispatches each consumer's `platform-bump` with
+`candidate_sha` set to the dispatched commit, using the same
+`BUMP_DISPATCH_*` credentials as the release fanout (a missing one fails the run
+here). In candidate mode the reusable `platform-bump.yml` makes the same atomic
+bump to that commit instead of the latest release (pins, `platform.lock`,
+Gemfile `ref:` and lock, seeding, retiring and reconciliation against
+`examples/site` at that commit), force-pushes `candidate/v<plugin.json version
+at that commit>` and opens a draft PR titled `Release candidate: cms-platform
+vX.Y.Z (do not merge)`. If that PR is already open, the push re-pins it and a
+comment records the new SHA; the body is not edited (#222), and the PR is put
+back to draft if someone marked it ready. Candidate mode never enables auto-merge,
+adds a label or closes another PR. The workflow then waits up to 10 minutes for
+an open draft on each consumer whose head's `platform.lock` names the commit, and
+its run summary lists both PRs and the exact `release.yml` dispatch line. It does
+not wait for the consumers' checks; the release gate judges those.
+
+Bootstrap: a consumer accepts `candidate_sha` only once its `platform-bump.yml`
+caller declares the input and forwards it, and the reusable that caller pins has
+candidate mode. Callers are pinned to a release tag, so the first stable release
+after candidate mode landed still needs hand-built drafts (above), and those
+drafts must carry the caller's new `candidate_sha` dispatch input and `with:`
+line from `examples/site` (pin-consistency compares a caller's `with:` keys with
+the template at the pinned ref). That release's bump PRs need no hand edit:
+`platform-bump`'s caller reconciliation
+([`scripts/reconcile-caller-secrets.js`](../scripts/reconcile-caller-secrets.js),
+run at the target ref in normal and candidate mode alike) adds and drops each
+caller's dictated `with:` keys and `workflow_dispatch` inputs alongside its
+`secrets:` map.
 
 Dispatch the stable release from that same platform `main` revision with
 `candidate_adamdaniel_ai_pr` and `candidate_jodidaniel_com_pr` set to those PR
@@ -227,7 +268,8 @@ access; an authorization failure blocks promotion without exposing API bodies.
 Credential permissions and live consumer results must be verified operationally;
 deterministic mocked matrices alone do not establish that access.
 
-If platform `main` changes before dispatch, re-pin both draft branches and collect
+If platform `main` changes before dispatch, re-pin both draft branches (re-run
+`release-candidates.yml` once both consumers have candidate mode) and collect
 fresh consumer results for the new candidate. After promotion, normal
 `platform-bump` PRs adopt the stable tag atomically; the validation draft PRs
 remain unmerged. Prereleases bypass this stable promotion gate and remain excluded

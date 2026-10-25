@@ -142,6 +142,17 @@ rewrite:
   template's map and leave everything else unchanged, or the file is left
   alone and reported `MANUAL`.
 
+The same pass reconciles each job's `with:` KEY set (the `withKeys` this
+checker compares, so `OPTIONAL_WITH_KEYS` are never touched) and the
+`workflow_dispatch` inputs, by key: an added key brings the template's text and
+comments, a dropped key goes with the comments directly above it, and a key both
+sides have keeps the consumer's value (a `with:` value is often site identity).
+An added `platform_ref` takes the job's own `uses:@` ref, and an added key whose
+template value is the de-identified `example.com` placeholder is reported
+`MANUAL`. This is what lets platform-bump's `candidate_sha` input (release
+candidates, `docs/CONTRIBUTING.md`) reach both consumers in the first bump PR
+with no hand edit.
+
 A `MANUAL` result (a flow-style job, an anchored or aliased map) or a skipped
 pass (inputs unreadable at the new ref) puts a `:warning:` in the bump PR body;
 this guard still catches the stale map, so fix it by hand in that PR. Tests:
@@ -236,6 +247,12 @@ prose that names the old version, cms-platform#530), then confirm with
 `scripts/verify-consumer-pins.sh --platform-dir <platform>` before force-pushing
 the bump branch. Caller SEEDING only matters if the release newly dictated a
 workflow the consumer lacks; a release that adds none needs no seeding step.
+
+The Bundler pins' KEY follows `--to`: a full 40-hex commit SHA (a release
+candidate, `docs/CONTRIBUTING.md`) is written `ref: "<sha>"` in the `Gemfile`
+and `revision: <sha>` + `ref: <sha>` in the `Gemfile.lock` platform GIT block,
+the only shape the checker's candidate path accepts; a release tag is written
+`tag:`, so a stable bump from a candidate-shaped tree moves it back.
 
 ### The bump runs the reusable pinned by the consumer (v0.1.126, #559)
 
