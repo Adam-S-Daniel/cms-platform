@@ -190,8 +190,9 @@ test ! -s "$CLAUDE_SENTINEL_LOG"
 ```
 
 The required [Self fixture E2E workflow](../.github/workflows/self-fixture-e2e.yml)
-runs the preparation and dedicated offline regression on its Chromium admin
-fixture-site leg. The normal consumer matrix excludes this platform-only spec.
+runs the preparation and dedicated offline regression once, on its unsharded
+`chromium-desktop-1080` fixture-site leg (on the Chromium admin leg until that
+leg was sharded, 2026-10-22). The normal consumer matrix excludes this platform-only spec.
 The [integrity unit tests](../e2e/decap-caret-diagnostic.test.js) run in the
 required Self CI `node-unit-lints` lane.
 

@@ -13,7 +13,7 @@ on:
     # No `edited`: a skipped caller emits NO check-run, so an `edited` run WITHDRAWS
     # contexts an earlier run reported green — only a new SHA restores them (#222).
     # `closed` IS load-bearing — the reusable's teardown-preview job keys on it
-    # (S3 rm --recursive + CloudFront invalidation + the bot comment update).
+    # (S3 rm --recursive + the bot comment update).
     types: [opened, synchronize, reopened, closed]
     branches: [main]
     # Customize per site (mirror deploy-production's list for what can't change
@@ -37,14 +37,14 @@ permissions:
 
 jobs:
   preview:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-preview.yml@v0.1.163
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/deploy-preview.yml@v0.1.164
     with:
       apex_domain: example.com
       preview_bucket: example-com-previews
       # Keep unique per site so multiple sites' bots never clobber comments.
       bot_marker: example-com-preview-bot
       # Pin to the SAME ref as the `uses:` pin above so the helper scripts match.
-      platform_ref: v0.1.163
+      platform_ref: v0.1.164
       # Archived media PDFs (opt-in; see cms-platform docs/MEDIA-ARCHIVE.md).
       # Uncomment once the bootstrap stack carries MediaArchiveBucketName, so an
       # editor can check a newly-ticked `pdf_public` on the preview first.
