@@ -404,6 +404,45 @@ is the marker, because both checks shipped in the same build. Finish with one
 real sign-in on `/admin`, one on `/admin/reviews/`, and one on a preview admin
 if the site lists the preview entry.
 
+### Preview sign-in rollout status (2026-10-07)
+
+[#524](https://github.com/Adam-S-Daniel/cms-platform/issues/524) remains open.
+[PR #560](https://github.com/Adam-S-Daniel/cms-platform/pull/560) merged the
+preview-origin warning, validation, deliberate `PREVIEW_SIGN_IN=disabled`
+opt-out, and offline regression coverage. The remaining work is per-site
+configuration and completed sign-in evidence; no owner choice has been made.
+
+Both consumers' platform pins name `v0.1.160`
+([adamdaniel.ai](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/platform.lock),
+[jodidaniel.com](https://github.com/jodidaniel/jodidaniel.com/blob/main/platform.lock)).
+On 2026-10-07, both public health endpoints answered HTTP 200 with `status: ok`,
+`service: cms-oauth-proxy`, `release: v0.1.126`, and
+`handler_sha256: 8ce2c00d6fe4b3dd35753b811e914e17878a3c5a8730d987e36709c9b0b96dc3`
+([adamdaniel.ai health](https://sq8d4876v8.execute-api.us-east-1.amazonaws.com/prod/health),
+[jodidaniel.com health](https://zkrofo300b.execute-api.us-east-1.amazonaws.com/prod/health)).
+That digest matches the
+[v0.1.160 handler](https://github.com/Adam-S-Daniel/cms-platform/blob/v0.1.160/oauth-proxy/lambda.py).
+The latest build probes also succeeded
+([adamdaniel.ai probe](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37637837180),
+[jodidaniel.com probe](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37637980483)).
+These checks establish handler parity only: they do not establish deployed
+`AllowedOrigins` or `SiteApex`, use of the updated deploy wrapper, or successful
+consent and token return. Private local parameters were not read, AWS
+configuration was not inspected or changed, and no real sign-in was performed.
+
+**Operator remainder:** recommend enabling previews as requested in
+[#524](https://github.com/Adam-S-Daniel/cms-platform/issues/524). Preserve each
+site's intended production origins and add its respective
+`https://preview-*.adamdaniel.ai` or `https://preview-*.jodidaniel.com` entry with
+the correct `APEX_DOMAIN`; alternatively, deliberately opt out with
+`PREVIEW_SIGN_IN=disabled` and no preview entries. Verify both local and live
+stack allowlists, then update and redeploy only if needed using the
+[credential-preserving runbook](#deploying-without-touching-the-credentials).
+For both sites, complete consent and token return on production `/admin/`,
+production `/admin/reviews/`, and an intended `preview-prN` admin when enabled.
+Keep [#524](https://github.com/Adam-S-Daniel/cms-platform/issues/524) open until
+the chosen configuration and live sign-in evidence are recorded.
+
 ### Should CI deploy the proxy? Not yet (decided 2026-10-02)
 
 [#518](https://github.com/Adam-S-Daniel/cms-platform/issues/518) asked whether

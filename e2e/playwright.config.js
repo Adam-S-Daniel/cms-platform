@@ -35,6 +35,10 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // basenames; the regex below matches them anywhere under the testDir.
 const CONSUMER = !!process.env.SITE_ROOT;
 const PLATFORM_META_SPECS = [
+  // #755: platform admin SOURCE; the browser spec uses the offline caret config,
+  // and unit checks run in node-unit-lints.
+  "decap-caret-selection.spec.js",
+  "decap-caret-diagnostic.test.js",
   // Executes Decap save serialization against the platform-owned posts form.
   "cms-ui-front-matter.test.js",
   // Reads the platform's own deploy workflows, bootstrap CloudFormation and
@@ -391,6 +395,10 @@ const PLATFORM_META_SPECS = [
   // both fail-open). Reads the PLATFORM workflow files — platform self-CI
   // only.
   "release-fanout.test.js",
+  "release-candidate-gate.test.js",
+  // Reads and executes release-candidates.yml and platform-bump.yml's candidate
+  // mode (the PLATFORM workflow definitions) — platform self-CI only.
+  "release-candidates.test.js",
   "decap-config-render-parity.test.js",
   // #5 GOAL 2 — drives scripts/render-decap-config.rb + reads theme/admin
   // (config.base.yml + field_library.yml) to render a $ref fixture and assert
@@ -423,6 +431,11 @@ const PLATFORM_META_SPECS = [
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
   "deploy-preview-cms-slug.test.js",
+  // 2026-10 free-tier incident — reads the platform's OWN workflow and
+  // composite-action DEFINITIONS plus infrastructure/bootstrap/template.yaml
+  // to lock that only deploy-production invalidates CloudFront; platform-internal,
+  // self-CI only.
+  "cloudfront-invalidation-budget.test.js",
   // #637 — executes the build run: scripts of the platform's OWN
   // deploy-preview.yml / deploy-production.yml / site-verify.yml DEFINITIONS.
   "deploy-preview-unpublished.test.js",
@@ -732,6 +745,10 @@ const PLATFORM_META_SPECS = [
   // (upload-name trim, dotfile listing filter) and its placement in the admin
   // shells. Reads theme/ SOURCE, absent on a consumer.
   "media-library-tidy.test.js",
+  // #647 — vm-sandbox + real-redux unit tests for
+  // theme/admin/media-library-draft-sync.js and its <script> placement in the
+  // three admin shells. Reads theme/ SOURCE, absent on a consumer.
+  "media-library-draft-sync.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
   // cms-platform#645 — vm-sandboxes theme/admin/mobile-preview-toggle.js and
@@ -753,14 +770,14 @@ const META_SPECS_RE = new RegExp(
     ")$",
 );
 
-// regression-video.spec.js is ALWAYS ignored (it's a video-fixture
-// generator, not a test — and it's also in the meta list above). In
+// The video fixture generator and the separately configured offline caret
+// diagnostic are ALWAYS ignored here. In
 // CONSUMER mode we additionally ignore every meta spec. Playwright's
 // `testIgnore` accepts an array of regexes (OR-combined), so we pass the
 // always-on regression ignore plus the meta-specs ignore only when CONSUMER.
 const TEST_IGNORE = CONSUMER
-  ? [/regression-video\.spec\.js/, META_SPECS_RE]
-  : /regression-video\.spec\.js/;
+  ? [/regression-video\.spec\.js/, /decap-caret-selection\.spec\.js/, META_SPECS_RE]
+  : [/regression-video\.spec\.js/, /decap-caret-selection\.spec\.js/];
 
 // Absolute path to the harness's own node_modules/.bin. The local webServer
 // commands `cd ${SITE_ROOT}` first (so `decap-server` resolves site files +

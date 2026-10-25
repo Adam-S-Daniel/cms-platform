@@ -95,6 +95,37 @@ whole design:
 `e2e/decap-config-render-parity.test.js` — keep the injected globals and the
 `index*` / `reviews/*` globs **identical** in both, or the lint fails.
 
+### In-editor content previews and Liquid (#726)
+
+[preview-pane.js](../theme/admin/preview-pane.js) renders declared Markdown
+fields through Decap's widget and safely renders allowed iframe blocks. It
+does not evaluate Liquid or build the site. For a selected Markdown field
+containing `{{` or `{%`, an in-flow note explains this limitation and directs
+the editor to save and open the PR's deployed preview **when available** to
+check the final page and site layout. Delimiters inside code examples also
+show the note; this is a lexical reminder, not a Liquid parser.
+
+The generic template for site-owned collections identifies itself as a
+**content preview**: shared styling does not reproduce a consumer's actual
+layout. The browser pane and the **Live Preview** button are not build-backed
+Liquid previews. The existing build-backed route is the saved PR's deployed
+preview, exposed through Decap's **Check for Preview** when a successful
+`deploy/preview` status is available. The
+[thin deploy-preview caller](../examples/site/.github/workflows/deploy-preview.yml)
+builds PRs targeting `main`; a draft saved from a feature-branch preview admin
+targets that feature branch and receives no separate deployment status (see
+[Publishing UX, preview-only edits](PUBLISHING-UX.md#35-on-a-preview-the-website-is-the-wrong-noun)).
+The note supplies no invented URL and promises no deployment for those drafts.
+
+[Issue #726](https://github.com/Adam-S-Daniel/cms-platform/issues/726) still
+requires the owner's decision on whether this content-preview limitation
+satisfies the related Tools concern or a fuller build-backed preview is needed.
+The platform mitigation documents the boundary without executing Liquid in
+the browser. [preview-pane.test.js](../e2e/preview-pane.test.js) covers neutral
+Liquid variables and tags, renamed Markdown fields, unchanged widget input,
+iframe rendering, and the generic-layout disclaimer in the required
+`node-unit-lints` lane of [Self CI](../.github/workflows/self-ci.yml).
+
 ### Code block language initialization (#732)
 
 The shipped Decap 3.15.1 bundle reproduces [the lost-language bug](https://github.com/Adam-S-Daniel/cms-platform/issues/732)
@@ -312,6 +343,25 @@ decompose (ø, ß, ł) miss source 1 and fall through to source 2. Unit tests:
 live: the pre-Save step in `e2e/cms-media-roundtrip.spec.js`. The other half of
 the incident, a cached 404 outliving the publish, is in `docs/OPERATIONS.md`
 § "The production 404 page is never cacheable".
+
+### The image picker is empty when the editor is the first route (#647)
+
+Inside the editor, Decap's picker lists the DRAFT's copy of the media library
+(`selectMediaFiles` reads `entryDraft.entry.mediaFiles`), filled from
+`state.mediaLibrary.files` when the draft is built. On a tab whose first route
+is `#/collections/<c>/new` or an entry with an open editorial draft, Decap
+builds the draft before the library has loaded (`createEmptyDraft` reads state
+before its own wait; `loadUnpublishedEntry` never waits), so the picker says
+"No images found" until the tab visits the collection list. Re-loading the
+library when the picker opens would not help: the picker never reads it.
+
+`theme/admin/media-library-draft-sync.js` loads non-deferred before
+`decap-cms.js` in all three shells and defines the Redux DevTools compose hook
+Decap's store reads at bundle load. It holds a draft-creating action while the
+library loads and adds the library's files to it, the way Decap's own
+`loadEntry` waits. Unit tests: `e2e/media-library-draft-sync.test.js`; browser:
+the #647 describe in `e2e/cms-editorial-workflow.spec.js`, which opens the
+editor route directly.
 
 ## Media library tidy (#736): upload names, `.gitkeep`, and the image a deleted entry leaves
 

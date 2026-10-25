@@ -130,9 +130,10 @@ since #525.
 `e2e/fixture-site` (a neutral consuming site whose Gemfile pins the theme by
 local path, so the working tree's theme is built), installs gems from the
 fixture's COMMITTED `Gemfile.lock` in frozen mode, and runs every `@lane: local`
-spec on four matrix legs, each behind a `timeout-minutes` wall: the admin
-projects `chromium-desktop-3k` and `webkit-iphone16` on `e2e/fixture-site`, and
-since #702 ONE public project, `chromium-desktop-1080`, on both
+spec on eight matrix legs, each behind a `timeout-minutes` wall: the admin
+projects `chromium-desktop-3k` and `webkit-iphone16` on `e2e/fixture-site`, each
+split into three `--shard` legs since 2026-10-22 (the consumer shape; see
+`docs/E2E-PARALLELISM.md`), and since #702 ONE public project, `chromium-desktop-1080`, on both
 `e2e/fixture-site` (`/` on the theme's default layout) and
 `e2e/fixture-site-singlepage` (`/` on its own `_layouts/home.html`, the shape of
 jodidaniel.com). Before #702 no public spec ran here, so v0.1.139's public-theme
@@ -140,8 +141,9 @@ specs first ran on a consumer bump and broke jodidaniel.com#351. `@lane: real`
 specs are excluded explicitly (`admin-bundle-parity.spec.js` fetches
 production). A step then fails the job unless the leg's proof test PASSED (the
 matrix names it: the archived-PDF test in `cms-editorial-workflow.spec.js` on
-the admin legs, a public test that runs only where the leg's `/` shape holds on
-the public ones), so a future skip cannot read green. An early salience step
+the admin legs, asserted by the one shard whose `--list` holds it, a public test
+that runs only where the leg's `/` shape holds on the public ones), so a future
+skip cannot read green. An early salience step
 skips the work, with success, on a PR that touches only `docs/`,
 `infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE` or `*.md`
 outside the fixtures. The REQUIRED context is the `fixture-e2e` gate (`needs:` +
@@ -164,8 +166,8 @@ install fails.
 base (every STABLE release needs one, because `release.yml` refuses a stable
 tag that disagrees with the manifests), or whose head branch is `release/*`. A
 prerelease is cut from `main` as-is with no PR (`release.yml` skips the manifest
-guard for it), so this check does not gate it; that is the job of #526
-criterion 4's release gate, which does not exist yet. Such a PR is red until its body carries, on a line of its own,
+guard for it), so this check does not gate it. Such a PR is red until its body
+carries, on a line of its own,
 
 ```text
 Independent review: CLEAN at <the PR's current head sha, all 40 characters>
@@ -183,8 +185,128 @@ here, #222) because the stamp is a body edit that changes no SHA; it reads the
 body from `$GITHUB_EVENT_PATH`, the manifests through the API at the merge base
 and the head, and fails closed when either read fails. The logic is
 `scripts/release-review-gate.js`, locked by `e2e/self-release-review-gate.test.js`.
-It does not run the consumers' checks against the candidate or gate the tag
-itself; those parts of #526 are separate.
+Stable tag creation separately requires both consumers' exact-candidate results
+through [`scripts/release-candidate-gate.js`](../scripts/release-candidate-gate.js)
+in [`release.yml`](../.github/workflows/release.yml). This is a promotion gate:
+production pins stay on their existing stable release while candidates run.
+
+After the release-bearing PR has merged with independent review and green
+self-CI, record the full platform `main` commit SHA. Prepare an open **draft** PR
+into `main` in each repository bound to `consumer-main` in
+[`repo-settings.yml`](../repo-settings.yml). Keep both draft PRs unmerged. Pin
+their `platform.lock`, every platform workflow `uses:@` and `platform_ref:` input
+to that full SHA. Set the theme gem's `Gemfile` option to `ref: "<full SHA>"`
+(instead of `tag:`), then refresh `Gemfile.lock` so its platform GIT source has
+both `ref:` and `revision:` equal to that SHA.
+[`scripts/rewrite-platform-pins.js`](../scripts/rewrite-platform-pins.js) writes
+exactly that shape when `--to` is a full 40-hex SHA, and writes `tag:` again
+when a later bump targets a release tag. Each consumer's e2e caller must
+run `target: local` with `browser: all`, using that candidate's harness; a green
+platform fixture run cannot substitute for either consumer's own validation.
+Wait for the consumer PR checks, including any regression review, to succeed.
+
+One dispatch prepares both drafts:
+
+```bash
+gh workflow run release-candidates.yml -R Adam-S-Daniel/cms-platform --ref main
+```
+
+[`release-candidates.yml`](../.github/workflows/release-candidates.yml) refuses
+any ref but `main`, then dispatches each consumer's `platform-bump` with
+`candidate_sha` set to the dispatched commit, using the same
+`BUMP_DISPATCH_*` credentials as the release fanout (a missing one fails the run
+here). In candidate mode the reusable `platform-bump.yml` makes the same atomic
+bump to that commit instead of the latest release (pins, `platform.lock`,
+Gemfile `ref:` and lock, seeding, retiring and reconciliation against
+`examples/site` at that commit), force-pushes `candidate/v<plugin.json version
+at that commit>` and opens a draft PR titled `Release candidate: cms-platform
+vX.Y.Z (do not merge)`. If that PR is already open, the push re-pins it and a
+comment records the new SHA; the body is not edited (#222), and the PR is put
+back to draft if someone marked it ready. Candidate mode never enables auto-merge,
+adds a label or closes another PR. The workflow then waits up to 10 minutes for
+an open draft on each consumer whose head's `platform.lock` names the commit, and
+its run summary lists both PRs and the exact `release.yml` dispatch line. It does
+not wait for the consumers' checks; the release gate judges those.
+
+Bootstrap: a consumer accepts `candidate_sha` only once its `platform-bump.yml`
+caller declares the input and forwards it, and the reusable that caller pins has
+candidate mode. Callers are pinned to a release tag, so the first stable release
+after candidate mode landed still needs hand-built drafts (above), and those
+drafts must carry the caller's new `candidate_sha` dispatch input and `with:`
+line from `examples/site` (pin-consistency compares a caller's `with:` keys with
+the template at the pinned ref). That release's bump PRs need no hand edit:
+`platform-bump`'s caller reconciliation
+([`scripts/reconcile-caller-secrets.js`](../scripts/reconcile-caller-secrets.js),
+run at the target ref in normal and candidate mode alike) adds and drops each
+caller's dictated `with:` keys and `workflow_dispatch` inputs alongside its
+`secrets:` map.
+
+Dispatch the stable release from that same platform `main` revision with
+`candidate_adamdaniel_ai_pr` and `candidate_jodidaniel_com_pr` set to those PR
+numbers. The gate reads immutable consumer heads, validates every platform pin,
+and requires success for the union of manifest and live required contexts plus
+every candidate e2e matrix work job and site verifier work job. It reads both
+check runs and legacy statuses, follows pagination, honors required App bindings,
+and refuses missing, pending, failed, cancelled, neutral or skipped validations.
+Work results must come from GitHub Actions, and their job details must show the
+actual Playwright test step succeeded. A consumer with a verifier must also have
+successful build and verifier steps; the documented no-verifier case is allowed.
+Optional actuator skips are allowed; optional failed or cancelled results are
+refused. Candidate heads and production branch revisions are re-read before
+promotion. Production Gemfile, lockfile and workflow pins must agree with the old production
+reference; a production pin already resolving to the candidate also fails.
+Unreadable or malformed API data fails closed. A sanitized
+`release-candidate-results` artifact records the selected revisions and successful
+validation contexts before tag creation; a failed gate prevents the stable tag
+and the bump fanout.
+
+The existing per-owner `BUMP_DISPATCH_ADAMDANIEL_AI` and
+`BUMP_DISPATCH_JODIDANIEL_COM` credentials need Contents, Pull requests and Checks
+read on their respective consumer in addition to Actions read/write for dispatch and job-step validation.
+Without a configured credential, the gate tries the workflow token's read
+access; an authorization failure blocks promotion without exposing API bodies.
+Credential permissions and live consumer results must be verified operationally;
+deterministic mocked matrices alone do not establish that access.
+
+If platform `main` changes before dispatch, re-pin both draft branches (re-run
+`release-candidates.yml` once both consumers have candidate mode) and collect
+fresh consumer results for the new candidate. After promotion, normal
+`platform-bump` PRs adopt the stable tag atomically; the validation draft PRs
+remain unmerged. Prereleases bypass this stable promotion gate and remain excluded
+from `releases/latest` and automatic consumer fanout. These deterministic gate
+matrices and workflow ordering are locked by
+[`e2e/release-candidate-gate.test.js`](../e2e/release-candidate-gate.test.js),
+registered as a platform meta spec and run by Self CI's `node-unit-lints` lane.
+
+### Remediation tracker reconciliation (2026-10-07)
+
+[The 18-finding umbrella](https://github.com/Adam-S-Daniel/cms-platform/issues/523)
+also links five latency defects. A read-only review of all 23 child issues and
+their comments found 17 closed and six open. Its unchecked boxes are not a
+current completion record; reconcile them from the child evidence after review.
+Keep the umbrella open while these acceptance gaps remain:
+
+| Open child | Shipped work and remaining evidence |
+|---|---|
+| [Preview OAuth sign-in (#524)](https://github.com/Adam-S-Daniel/cms-platform/issues/524) | [The deploy warning and explicit preview opt-out merged](https://github.com/Adam-S-Daniel/cms-platform/pull/560). Local allowlist configuration, the live proxy build, and production/preview sign-in on both consumers still need verification. A platform release does not deploy the proxy. |
+| [Release gating (#526)](https://github.com/Adam-S-Daniel/cms-platform/issues/526) | [The current-head independent review stamp merged](https://github.com/Adam-S-Daniel/cms-platform/pull/620). The release workflow still creates a stable tag without requiring each consumer's checks against that exact candidate. The stamp alone does not establish the automated acceptance criteria. |
+| [Bot-closure investigation (_agent-guidance#227)](https://github.com/Adam-S-Daniel/_agent-guidance/issues/227) | [Branch-reuse prevention merged](https://github.com/Adam-S-Daniel/_agent-guidance/pull/252), and [the investigation records delayed branch-deletion processing](https://github.com/Adam-S-Daniel/_agent-guidance/issues/227#issuecomment-5996840529). Credential-use inventory, close-reason policy and remaining cleanup evidence belong to that still-open external issue. Prevention does not resolve all its criteria. |
+| [Latency tracker (#529)](https://github.com/Adam-S-Daniel/cms-platform/issues/529) | All five defects have child links in [the latency design](CONTENT-PUBLISH-LATENCY.md#defects-found-that-outlive-the-shelving); three children are closed. The two open children below prevent treating the group as complete. The focused content lane remains shelved. |
+| [Responsive tables/iframes (#540)](https://github.com/Adam-S-Daniel/cms-platform/issues/540) | [Proportional embeds and required fixture coverage merged](https://github.com/Adam-S-Daniel/cms-platform/pull/804). [The latency design records local consumer-layout evidence](CONTENT-PUBLISH-LATENCY.md#local-candidate-verification-for-responsive-content-540). Consumer CSS adoption and acceptance still need evidence; the owner must decide whether fixtures plus served CSS satisfy the criterion when no live page exercises the elements. |
+| [Critical-path checkout latency (#541)](https://github.com/Adam-S-Daniel/cms-platform/issues/541) | [Shallow checkout and merge-base handling merged](https://github.com/Adam-S-Daniel/cms-platform/pull/565). [The recorded before/after measurements](CONTENT-PUBLISH-LATENCY.md#defects-found-that-outlive-the-shelving) cover adamdaniel.ai only; they do not establish jodidaniel.com verification or timing. |
+
+[UI-published fixture markers (#531)](https://github.com/Adam-S-Daniel/cms-platform/issues/531)
+is closed: [the final browser coverage merged](https://github.com/Adam-S-Daniel/cms-platform/pull/613),
+and the required Ruby lane builds and checks fixture exclusion. Its earlier
+comments describing missing coverage predate that implementation. Similarly,
+[PDF fixture coverage (#527)](https://github.com/Adam-S-Daniel/cms-platform/issues/527)
+is closed; the required fixture lane now exists. Do not reopen these source fixes
+solely because the umbrella's original boxes remain unchecked.
+
+This reconciliation verifies issue states, linked merge records, checked-in
+workflow boundaries and the live platform required-context list. It does not
+establish a new deployment, interactive sign-in, consumer acceptance or latency
+measurement. Those actions need their own evidence before closure.
 
 The nine REQUIRED contexts are `repo-settings.yml`'s `ruleset_library.platform-main.
 rules[required_status_checks]`: the six self-CI job ids, `scan / scan`,

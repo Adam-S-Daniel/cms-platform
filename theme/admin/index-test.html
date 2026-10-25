@@ -132,6 +132,11 @@
     it, suppressing the misleading "restore local backup?" dialog. -->
   <script src="confirm-wrap-local-backup.js"></script>
 
+  <!--
+    media-library-draft-sync shim (#647) — see admin/index.html. Non-deferred
+    + BEFORE decap-cms.js so Decap's store picks up its compose hook. -->
+  <script src="media-library-draft-sync.js"></script>
+
   <script src="https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js" integrity="sha384-in6eHztHveqQ7uMZ1fDaKlDmacQLFuLH2wWrFTiymyuS8zQ5bixwL8U3AeRi8h/L" crossorigin="anonymous"></script>
 
   <!-- Issue #329 owner-persona fix set — see admin/index.html for the full

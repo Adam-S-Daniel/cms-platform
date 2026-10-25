@@ -43,6 +43,13 @@ on:
   workflow_call:
     inputs:
       platform_repo: { type: string, default: Adam-S-Daniel/cms-platform }
+      # CANDIDATE MODE (release.yml's stable gate, docs/CONTRIBUTING.md). Empty
+      # (the default): bump to the latest release, exactly as before. A full
+      # 40-hex platform commit SHA: do the SAME atomic bump to that commit
+      # instead, push it to `candidate/v<plugin.json version at that SHA>` and
+      # open (or re-pin) a DRAFT PR that must never merge. Anything else fails.
+      # Dispatched by cms-platform's release-candidates.yml.
+      candidate_sha: { type: string, default: '' }
     secrets:
       # The push-back credential, resolved App → PAT → GITHUB_TOKEN (#238):
       #   app_private_key — the CMS automation GitHub App's private key. With
@@ -89,7 +96,7 @@ jobs:
       # (actions/runner-images#14748). Needs no checkout, so it does not
       # disturb the mint-before-checkout order below.
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           package-manager-cache: false
@@ -176,6 +183,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           PLATFORM: ${{ inputs.platform_repo }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           # Escape workflow-command data before printing repository-controlled text.
@@ -186,6 +194,31 @@ jobs:
             value=${value//$'\n'/%0A}
             printf '%s' "$value"
           }
+          # Candidate mode (the `candidate_sha` input). Validated before any use:
+          # the value reaches API paths, a branch name and the consumer's files.
+          # The version label comes from plugin.json AT that commit, never from
+          # the caller, so the branch and title name what the commit declares.
+          CANDIDATE_SHA="${CANDIDATE_SHA:-}"
+          CANDIDATE_VERSION=""
+          if [ -n "$CANDIDATE_SHA" ]; then
+            if ! [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::candidate_sha must be a full 40-character lowercase commit SHA — refusing to bump."
+              exit 1
+            fi
+            FOUND_SHA=$(gh api "repos/$PLATFORM/commits/$CANDIDATE_SHA" --jq '.sha' 2>/dev/null) || FOUND_SHA=""
+            if [ "$FOUND_SHA" != "$CANDIDATE_SHA" ]; then
+              echo "::error::$CANDIDATE_SHA is not a readable commit of $PLATFORM — refusing to pin a candidate to it."
+              exit 1
+            fi
+            CANDIDATE_VERSION=$(gh api "repos/$PLATFORM/contents/plugin.json?ref=$CANDIDATE_SHA" --jq '.content' 2>/dev/null \
+              | base64 -d | jq -r '.version // ""') || CANDIDATE_VERSION=""
+            if ! [[ "$CANDIDATE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::plugin.json at $CANDIDATE_SHA does not declare a release version (X.Y.Z) — refusing to label the candidate."
+              exit 1
+            fi
+            CANDIDATE_VERSION="v$CANDIDATE_VERSION"
+            echo "candidate mode: pinning $PLATFORM@$CANDIDATE_SHA ($CANDIDATE_VERSION)"
+          fi
           # Resolve the latest release. The OLD form here —
           #   LATEST=$(gh release view --repo "$PLATFORM" --json tagName -q .tagName 2>/dev/null || echo "")
           #   [ -n "$LATEST" ] || { echo "no release on $PLATFORM yet"; exit 0; }
@@ -220,8 +253,14 @@ jobs:
           # Only the HTTP status code is echoed below, never the response
           # body — an API error body can quote account/repo detail into this
           # (public) Actions log (AGENTS.md "Sanitize error output").
+          #
+          # In candidate mode the target is the validated commit instead, and
+          # LATEST carries that SHA through every pass below: the pin rewrite,
+          # the seeding, retiring and reconcile reads all take it as their ref.
           REL_ERR="${RUNNER_TEMP:-/tmp}/platform-release-lookup.err"
-          if ! LATEST=$(gh api "repos/$PLATFORM/releases/latest" --jq '.tag_name // ""' 2>"$REL_ERR"); then
+          if [ -n "$CANDIDATE_SHA" ]; then
+            LATEST="$CANDIDATE_SHA"
+          elif ! LATEST=$(gh api "repos/$PLATFORM/releases/latest" --jq '.tag_name // ""' 2>"$REL_ERR"); then
             REL_CODE=$(sed -n -E 's/.*\(HTTP ([0-9]{3})\).*/\1/p' "$REL_ERR" | head -1)
             if [ "$REL_CODE" = "404" ]; then
               echo "::notice::$PLATFORM has no published release yet — nothing to bump."
@@ -274,25 +313,38 @@ jobs:
           # A gate that failed CLOSED would silently skip a legitimate scheduled
           # bump on a transient blip — worse than the race it guards, which the
           # job-level `concurrency:` above already covers in the common case.
-          EXISTING=$(gh pr list --state open --head "$BRANCH" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
-          if [ -n "$EXISTING" ]; then
-            echo "bump PR #${EXISTING} for $LATEST is already open on $BRANCH — nothing to do"
-            exit 0
+          #
+          # Candidate mode skips this gate and never touches the bump branch: its
+          # branch is `candidate/<version>`, and an open candidate PR is the
+          # thing a re-pin UPDATES (a force-push plus a comment, never a body
+          # edit, for the reason above).
+          if [ -n "$CANDIDATE_SHA" ]; then
+            BRANCH="candidate/$CANDIDATE_VERSION"
+          else
+            EXISTING=$(gh pr list --state open --head "$BRANCH" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
+            if [ -n "$EXISTING" ]; then
+              echo "bump PR #${EXISTING} for $LATEST is already open on $BRANCH — nothing to do"
+              exit 0
+            fi
           fi
 
           # Resolve the release tag -> its COMMIT sha (deref an annotated tag) for
-          # the Gemfile.lock git `revision:`.
-          NEW_SHA=$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.sha')
-          if ! [[ "$NEW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::the release tag object SHA must be exactly 40 lowercase hexadecimal characters — refusing to fetch or bump."
-            exit 1
-          fi
-          if [ "$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.type')" = "tag" ]; then
-            NEW_SHA=$(gh api "repos/$PLATFORM/git/tags/$NEW_SHA" --jq '.object.sha')
-          fi
-          if ! [[ "$NEW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::the release commit SHA must be exactly 40 lowercase hexadecimal characters — refusing to fetch or bump."
-            exit 1
+          # the Gemfile.lock git `revision:`. A candidate already IS the commit.
+          if [ -n "$CANDIDATE_SHA" ]; then
+            NEW_SHA="$CANDIDATE_SHA"
+          else
+            NEW_SHA=$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.sha')
+            if ! [[ "$NEW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::the release tag object SHA must be exactly 40 lowercase hexadecimal characters — refusing to fetch or bump."
+              exit 1
+            fi
+            if [ "$(gh api "repos/$PLATFORM/git/refs/tags/$LATEST" --jq '.object.type')" = "tag" ]; then
+              NEW_SHA=$(gh api "repos/$PLATFORM/git/tags/$NEW_SHA" --jq '.object.sha')
+            fi
+            if ! [[ "$NEW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::the release commit SHA must be exactly 40 lowercase hexadecimal characters — refusing to fetch or bump."
+              exit 1
+            fi
           fi
           # Move every PIN from $CUR to $LATEST — and only pins (#530). This used
           # to be a global `perl s/CUR/LATEST/g` over each pin-bearing file, on
@@ -563,6 +615,9 @@ jobs:
           # structuralShape() (fetched beside it), writes a splice of the
           # `secrets:` lines only, and re-parses the result before saving.
           # Seeded callers already match; retired ones are gone.
+          # The same pass reconciles each job's `with:` KEY set (the checker
+          # compares it too) and the `workflow_dispatch` inputs a forwarded
+          # value reads, so a caller gaining `candidate_sha` rides this commit.
           SECRETS_NOTE=""
           SECRETS_TOOLS="${RUNNER_TEMP:-/tmp}/secrets-reconcile"
           rm -rf "$SECRETS_TOOLS"
@@ -599,12 +654,12 @@ jobs:
             printf 'Caller reconciliation diagnostic: %s\n' "$(escape_workflow_data "$SECRETS_OUT")"
             SECRETS_UPDATED=$(sed -n 's/^UPDATED //p' <<<"$SECRETS_OUT" | paste -sd ';' -)
             if [ -n "$SECRETS_UPDATED" ]; then
-              SECRETS_NOTE=" Reconciled thin-caller \`secrets:\` maps with the template: ${SECRETS_UPDATED//;/; }."
+              SECRETS_NOTE=" Reconciled thin-caller \`secrets:\` maps, \`with:\` keys and dispatch inputs with the template: ${SECRETS_UPDATED//;/; }."
             fi
             if [ "$SECRETS_RC" -ne 0 ]; then
               # Fail soft, like the required_contexts pass: pin-consistency
               # still catches a stale map, and the PR body says where to look.
-              SECRETS_NOTE="${SECRETS_NOTE} :warning: some \`secrets:\` maps could NOT be reconciled automatically (see the platform-bump run log) — align them with examples/site at $LATEST before merging."
+              SECRETS_NOTE="${SECRETS_NOTE} :warning: some callers' \`secrets:\` maps, \`with:\` keys or dispatch inputs could NOT be reconciled automatically (see the platform-bump run log) — align them with examples/site at $LATEST before merging."
               echo "::warning::secrets reconciliation exited $SECRETS_RC — see the MANUAL lines above"
             fi
           else
@@ -625,7 +680,17 @@ jobs:
           git config user.email cms-platform-bot@users.noreply.github.com
           git checkout -b "$BRANCH"
           git add -A
-          git commit -m "chore: bump cms-platform to $LATEST"
+          if [ -n "$CANDIDATE_SHA" ]; then
+            # The force-push below may only ever replace a throwaway candidate
+            # branch, never the bump branch or anything a human wrote.
+            if ! [[ "$BRANCH" =~ ^candidate/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::candidate mode computed branch ${BRANCH@Q}, not candidate/vX.Y.Z — refusing to push."
+              exit 1
+            fi
+            git commit -m "chore: pin cms-platform release candidate $CANDIDATE_VERSION ($CANDIDATE_SHA)"
+          else
+            git commit -m "chore: bump cms-platform to $LATEST"
+          fi
           git push -f origin "$BRANCH"
           SEED_NOTE=""
           if [ "${#SEEDED[@]}" -gt 0 ]; then
@@ -638,6 +703,48 @@ jobs:
             SEED_NOTE="${SEED_NOTE} Seeded missing delegating deploy wrapper(s): ${SEEDED_WRAPPERS[*]}."
           fi
           SEED_NOTE="${SEED_NOTE}${CONTEXT_NOTE}${SECRETS_NOTE}"
+
+          # Candidate mode ends here: a DRAFT PR that release.yml's gate reads and
+          # nobody merges. It never gets auto-merge, a label, a ready-for-review
+          # flip or the superseded-bump cleanup below; that cleanup only matches
+          # `platform/bump-*`, so a normal bump never closes a candidate either.
+          # An open candidate PR for this version is re-pinned in place: the
+          # force-push above moved its head, and a COMMENT records the new SHA,
+          # because a body edit fires `pull_request: edited` (#222 above).
+          if [ -n "$CANDIDATE_SHA" ]; then
+            CANDIDATE_URL="https://github.com/$PLATFORM/commit/$CANDIDATE_SHA"
+            if ! CANDIDATE_PR=$(gh pr list --state open --head "$BRANCH" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null); then
+              echo "::error::could not list open PRs for $BRANCH — refusing to guess whether the candidate PR exists."
+              exit 1
+            fi
+            if [ -z "$CANDIDATE_PR" ]; then
+              gh pr create --draft --base "$GITHUB_REF_NAME" --head "$BRANCH" \
+                --title "Release candidate: cms-platform $CANDIDATE_VERSION (do not merge)" \
+                --body "Draft candidate for cms-platform's stable-release gate (\`scripts/release-candidate-gate.js\`, [docs/CONTRIBUTING.md](https://github.com/$PLATFORM/blob/main/docs/CONTRIBUTING.md)). **Do not merge.** After $CANDIDATE_VERSION is tagged, the normal \`platform-bump\` PR adopts the stable tag, and this draft stays unmerged.
+
+          Pins every platform reference to $PLATFORM \`main\` at [\`$CANDIDATE_SHA\`]($CANDIDATE_URL) (\`plugin.json\` $CANDIDATE_VERSION):
+          - \`platform.lock\`, every platform workflow \`uses:@\` and \`platform_ref:\`;
+          - the theme gem's \`ref:\`, with \`Gemfile.lock\` \`ref:\` and \`revision:\` equal to the SHA.
+          ${SEED_NOTE}
+
+          Opened by \`platform-bump\` in candidate mode. A re-pin to a newer \`main\` commit force-pushes this branch and comments the new SHA; the head's \`platform.lock\` is authoritative."
+              CANDIDATE_PR=$(gh pr view "$BRANCH" --json number --jq .number)
+            else
+              gh pr comment "$CANDIDATE_PR" --body "Re-pinned every platform reference to [\`$CANDIDATE_SHA\`]($CANDIDATE_URL) (\`plugin.json\` $CANDIDATE_VERSION). Still a draft; do not merge.${SEED_NOTE}"
+              if [ "$(gh pr view "$CANDIDATE_PR" --json isDraft --jq .isDraft)" != "true" ]; then
+                gh pr ready "$CANDIDATE_PR" --undo
+              fi
+            fi
+            if ! [[ "$CANDIDATE_PR" =~ ^[0-9]+$ ]]; then
+              echo "::error::could not resolve the candidate PR number for $BRANCH."
+              exit 1
+            fi
+            echo "candidate PR #$CANDIDATE_PR on $BRANCH pins $CANDIDATE_SHA"
+            echo "Release candidate $CANDIDATE_VERSION: draft PR #$CANDIDATE_PR (\`$BRANCH\`) pins \`$CANDIDATE_SHA\`." \
+              >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 0
+          fi
+
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
             --title "Bump cms-platform to $LATEST" \
             --body "Atomic single-version bump of every cms-platform reference (\`platform_ref:\` + \`platform.lock\`, the \`uses:@\` reusable-workflow pins, the \`cms-platform-theme\` Gemfile \`tag:\`, and \`Gemfile.lock\` \`tag:\` + \`revision:\`) to $LATEST. The pin-consistency guard (#29) passes on this PR alone.${SEED_NOTE}" \

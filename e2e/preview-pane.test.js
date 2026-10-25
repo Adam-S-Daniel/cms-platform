@@ -257,6 +257,99 @@ test.describe("preview-pane.js", () => {
     expect(textOf(tree)).toContain("Snakes.");
   });
 
+  for (const [kind, body] of [
+    ["variable", "Hello {{ site.title }}."],
+    ["tag", '{% include example.html %}\n[Example](https://example.com/)'],
+  ]) {
+    for (const collection of ["posts", "tools"]) {
+      test(`${collection} explains the build requirement for a Liquid ${kind} without evaluating it`, () => {
+        const b = boot();
+        b.press("#/collections/" + collection);
+        const calls = [];
+        const props = decapProps(TOOL_FIELDS, { title: "Example", body }, {
+          widgetFor(name, fields, values) {
+            calls.push({ name, fields, values });
+            return body;
+          },
+        });
+        const tree = b.templates[collection](props);
+        expect(calls).toEqual([{ name: "body", fields: undefined, values: undefined }]);
+        expect(find(tree, (n) => n.props.className === "post-content").map(textOf)).toEqual([body]);
+        const [note] = find(tree, (n) => n.props.className === "cms-preview-limitation");
+        expect(note.type).toBe("p");
+        expect(textOf(note)).toContain("This browser pane previews Markdown. Liquid requires a site build.");
+        expect(textOf(note)).toContain("Save, then open the PR's deployed preview when available");
+        expect(textOf(note)).toContain("final page and site layout");
+        expect(find(note, (n) => n.type === "a")).toHaveLength(0);
+      });
+    }
+  }
+
+  test("Liquid notices follow the selected renamed markdown field in built-in and generic templates", () => {
+    const b = boot();
+    b.press("#/collections/articles");
+    for (const [collection, name] of [["projects", "description"], ["articles", "article"]]) {
+      const body = "{{ page.title }}";
+      const fields = [{ name, widget: "markdown" }];
+      const tree = b.templates[collection](decapProps(fields, { [name]: body }));
+      expect(find(tree, (n) => n.props.className === "cms-preview-limitation"), collection).toHaveLength(1);
+      expect(find(tree, (n) => n.props.className === "post-content").map(textOf), collection).toEqual(["WIDGET:" + name]);
+    }
+  });
+
+  test("ordinary Markdown has no Liquid limitation notice", () => {
+    const b = boot();
+    b.press("#/collections/tools");
+    for (const collection of ["posts", "tools"]) {
+      const tree = b.templates[collection](decapProps(TOOL_FIELDS, { body: "**Hello** [example](https://example.net/)" }));
+      expect(find(tree, (n) => n.props.className === "cms-preview-limitation"), collection).toHaveLength(0);
+    }
+  });
+
+  test("Liquid notices ignore absent, undeclared, non-markdown, and unselected fields", () => {
+    const b = boot();
+    const cases = [
+      decapProps([{ name: "title", widget: "string" }], { title: "{{ site.title }}", body: "{% include example.html %}" }),
+      { entry: entry({ body: "{{ site.title }}" }), widgetFor: () => "BODY", getAsset: String },
+      decapProps([{ name: "body", widget: "string" }], { body: "{{ site.title }}" }),
+      decapProps(TOOL_FIELDS, { body: "Plain text", description: "{{ site.title }}" }),
+      decapProps([...TOOL_FIELDS, { name: "other", widget: "markdown" }], { body: "Plain text", other: "{{ site.title }}" }),
+    ];
+    for (const props of cases) {
+      const tree = b.templates.posts(props);
+      expect(find(tree, (n) => n.props.className === "cms-preview-limitation")).toHaveLength(0);
+    }
+  });
+
+  test("a Liquid notice preserves guarded iframe rendering and unchanged Markdown segments", () => {
+    const b = boot();
+    const body = '{{ site.title }}\n\n<iframe src="https://example.com/tool/" title="Example"></iframe>';
+    const calls = [];
+    const tree = b.templates.posts(decapProps(TOOL_FIELDS, { body }, {
+      widgetFor(name, fields, values) {
+        calls.push({ name, value: values.get(name) });
+        return widgetFor(name, fields, values);
+      },
+    }));
+    expect(find(tree, (n) => n.props.className === "cms-preview-limitation")).toHaveLength(1);
+    expect(find(tree, (n) => n.type === "iframe").map((n) => n.props.src)).toEqual(["https://example.com/tool/"]);
+    expect(calls).toEqual([{ name: "body", value: "{{ site.title }}\n" }]);
+  });
+
+  test("only generic templates explain that a content preview can differ from the site layout", () => {
+    const b = boot();
+    b.press("#/collections/tools");
+    const props = decapProps(TOOL_FIELDS, { title: "Example", body: "Plain text" });
+    const generic = b.templates.tools(props);
+    const [note] = find(generic, (n) => n.props.className === "cms-preview-content-note");
+    expect(note.type).toBe("p");
+    expect(textOf(note)).toBe("Content preview. Your site layout may differ.");
+    expect(find(generic, (n) => n.props.className === "container cms-preview-pane")[0].children).toContain(note);
+    for (const collection of ["posts", "pages", "projects"]) {
+      expect(find(b.templates[collection](props), (n) => n.props.className === "cms-preview-content-note"), collection).toHaveLength(0);
+    }
+  });
+
   test("a collection with neither markdown nor description lists its short fields, labeled", () => {
     const b = boot();
     b.press("#/collections/events");

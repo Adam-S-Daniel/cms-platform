@@ -18,10 +18,16 @@
 //         or `<slug>/.github/actions/<name>@<ref>` (composite) — the `<ref>`;
 //       * a `platform_ref:` whose value is a plain string with no `${{ }}`.
 //   - platform.lock: the `platform_ref:` value (same YAML pass).
-//   - Gemfile: the `tag:` of the `gem "cms-platform-theme"` statement that
-//     names the platform slug.
-//   - Gemfile.lock: the `tag:` of the GIT block whose `remote:` is the
-//     platform; that block's `revision:` moves to the release's commit with it.
+//   - Gemfile: the `tag:` (or `ref:`) of the `gem "cms-platform-theme"`
+//     statement that names the platform slug.
+//   - Gemfile.lock: the `tag:` (or `ref:`) of the GIT block whose `remote:` is
+//     the platform; that block's `revision:` moves to the release's commit with it.
+// A Bundler pin's KEY follows the target. A full 40-hex commit SHA is a
+// release CANDIDATE (docs/CONTRIBUTING.md), and Bundler pins a commit with
+// `ref:`, the only shape the checker's candidate path accepts: the Gemfile
+// option becomes `ref: "<sha>"` and the lock block reads `revision: <sha>` then
+// `ref: <sha>`. Any other target is a release tag, written `tag:`, so a later
+// stable bump moves a candidate-shaped tree back. YAML pins have no key to change.
 // Plus one shape the checker cannot see but scripts/stale-platform-refs.js
 // (verify-consumer-pins.sh's step 2) does: a COMMENTED-OUT pin — a YAML comment
 // whose whole body is itself YAML holding one of the two workflow shapes above.
@@ -50,6 +56,7 @@
 // Usage:
 //   node scripts/rewrite-platform-pins.js --from vOLD --to vNEW
 //        [--new-sha <40-hex>] [--slug OWNER/REPO] [--root DIR]
+// With a 40-hex --to, --new-sha defaults to it and may not name another commit.
 // Prints `REWROTE <file>: <n> pin(s)` per changed file and a closing SUMMARY.
 // Exit codes: 0 done (including "nothing to move"), 1 a file could not be
 // rewritten (nothing written), 2 bad usage.
@@ -199,8 +206,15 @@ function lineStarts(src) {
   return starts;
 }
 
-// Gemfile: the `tag:` in the cms-platform-theme gem statement naming the slug.
-// Statements join across `,`/`\` continuations, exactly as the checker joins them.
+// The Bundler option a pin to `ref` is written under: `ref` for a commit SHA
+// (a release candidate), `tag` for a release tag.
+function bundlerKey(ref) {
+  return SHA_RE.test(ref) ? "ref" : "tag";
+}
+
+// Gemfile: the `tag:` (or `ref:`) in the cms-platform-theme gem statement
+// naming the slug. Statements join across `,`/`\` continuations, exactly as
+// the checker joins them. `keyAt` is where the option's key starts.
 function gemfilePins(src, slug) {
   const lines = src.split("\n");
   const starts = lineStarts(src);
@@ -214,10 +228,10 @@ function gemfilePins(src, slug) {
     }
     if (/gem\s+['"]cms-platform-theme['"]/.test(stmt) && stmt.includes(slug)) {
       for (let k = i; k <= j; k++) {
-        const m = /\btag:\s*(['"])([^'"]+)\1/.exec(lines[k]);
+        const m = /\b(tag|ref):\s*(['"])([^'"]+)\2/.exec(lines[k]);
         if (!m) continue;
-        const col = m.index + m[0].length - 1 - m[2].length;
-        pins.push({ ref: m[2], offset: () => starts[k] + col });
+        const col = m.index + m[0].length - 1 - m[3].length;
+        pins.push({ ref: m[3], key: m[1], keyAt: starts[k] + m.index, offset: () => starts[k] + col });
         break;
       }
       i = j;
@@ -234,8 +248,9 @@ function isPlatformRemote(remote, slug) {
   );
 }
 
-// Gemfile.lock: the platform GIT block's `tag:` (a pin) and `revision:` (the
-// commit that tag resolves to, which has to move with it).
+// Gemfile.lock: the platform GIT block's `tag:` or `ref:` (a pin) and
+// `revision:` (the commit that pin resolves to, which has to move with it).
+// A block naming both is ambiguous and refused rather than guessed at.
 function gemfileLockBlocks(src, slug) {
   const lines = src.split("\n");
   const starts = lineStarts(src);
@@ -245,18 +260,26 @@ function gemfileLockBlocks(src, slug) {
     let remote = null;
     let tag = null;
     let revision = null;
+    let pinLines = 0;
     let k = i + 1;
     for (; k < lines.length; k++) {
       const ln = lines[k];
       if (ln.length && !/^\s/.test(ln)) break;
       const rm = /^\s*remote:\s*(\S+)\s*$/.exec(ln);
       if (rm) remote = rm[1];
-      const tg = /^(\s*tag:\s*)(\S+)\s*$/.exec(ln);
-      if (tg) tag = { ref: tg[2], at: starts[k] + tg[1].length };
+      const tg = /^(\s*)(tag|ref):(\s*)(\S+)\s*$/.exec(ln);
+      if (tg) {
+        pinLines += 1;
+        const keyAt = starts[k] + tg[1].length;
+        tag = { ref: tg[4], key: tg[2], keyAt, at: keyAt + tg[2].length + 1 + tg[3].length };
+      }
       const rv = /^(\s*revision:\s*)(\S+)\s*$/.exec(ln);
       if (rv) revision = { sha: rv[2], at: starts[k] + rv[1].length };
     }
-    if (remote && isPlatformRemote(remote, slug)) blocks.push({ tag, revision });
+    if (remote && isPlatformRemote(remote, slug)) {
+      if (pinLines > 1) throw new RewriteError("the cms-platform GIT block names more than one `tag:`/`ref:` pin");
+      blocks.push({ tag, revision });
+    }
     i = k - 1;
   }
   return blocks;
@@ -280,6 +303,15 @@ function pinEdits(pins, from, to) {
   return pins.filter((p) => p.ref === from).map((p) => ({ at: p.offset(), from, to }));
 }
 
+// A Bundler pin's value edit, plus its key edit when the target's kind
+// (tag vs commit) differs from the key it is written under now.
+function bundlerEdits(pin, from, to) {
+  const edits = [{ at: pin.at ?? pin.offset(), from, to }];
+  const key = bundlerKey(to);
+  if (pin.key !== key) edits.push({ at: pin.keyAt, from: pin.key, to: key });
+  return edits;
+}
+
 // One file's new text (or the same text when it holds no pin at --from).
 function rewriteText(kind, src, opts) {
   const { from, to, newSha, slug } = opts;
@@ -297,15 +329,16 @@ function rewriteText(kind, src, opts) {
     return { text, count: edits.length };
   }
   if (kind === "gemfile") {
-    const edits = pinEdits(gemfilePins(src, slug), from, to);
-    return { text: edits.length ? splice(src, edits) : src, count: edits.length };
+    const pins = gemfilePins(src, slug).filter((p) => p.ref === from);
+    const edits = pins.flatMap((p) => bundlerEdits(p, from, to));
+    return { text: edits.length ? splice(src, edits) : src, count: pins.length };
   }
   // gemfile.lock
   const edits = [];
   let count = 0;
   for (const b of gemfileLockBlocks(src, slug)) {
     if (!b.tag || b.tag.ref !== from) continue;
-    edits.push({ at: b.tag.at, from, to });
+    edits.push(...bundlerEdits(b.tag, from, to));
     count += 1;
     if (newSha && b.revision && b.revision.sha !== newSha) {
       edits.push({ at: b.revision.at, from: b.revision.sha, to: newSha });
@@ -367,7 +400,7 @@ function cli(argv) {
     args[a.slice(2)] = argv[++i];
   }
   const { from, to } = args;
-  const newSha = args["new-sha"] || "";
+  let newSha = args["new-sha"] || "";
   if (!from || !to || !REF_RE.test(from) || !REF_RE.test(to)) {
     process.stderr.write(
       "rewrite-platform-pins: --from and --to are required release refs (letters, digits, '.', '_', '-')\n",
@@ -377,6 +410,15 @@ function cli(argv) {
   if (newSha && !SHA_RE.test(newSha)) {
     process.stderr.write("rewrite-platform-pins: --new-sha must be a 40-character lowercase commit SHA\n");
     return 2;
+  }
+  // A candidate's lock revision IS the commit it pins; a second SHA could only
+  // disagree with it.
+  if (to && SHA_RE.test(to)) {
+    if (newSha && newSha !== to) {
+      process.stderr.write("rewrite-platform-pins: --new-sha must equal a commit-SHA --to\n");
+      return 2;
+    }
+    newSha = to;
   }
   if (args.slug && !/^[\w.-]+\/[\w.-]+$/.test(args.slug)) {
     process.stderr.write("rewrite-platform-pins: --slug must be OWNER/REPO\n");

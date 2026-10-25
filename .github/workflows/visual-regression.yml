@@ -59,13 +59,14 @@ on:
         type: string
         default: main
     secrets:
-      # OIDC role assumed for the S3 upload + CloudFront invalidation.
+      # OIDC role assumed for the S3 upload.
       # Optional: when unset the AWS steps no-op (they also gate on
       # PREVIEW_BUCKET being set).
       AWS_ROLE_ARN:
         required: false
-      # CloudFront distribution for the preview bucket. Optional — the
-      # invalidation step gates on it being set.
+      # CloudFront distribution for the preview bucket. Optional — used only
+      # to build the preview URL. The preview distribution caches nothing
+      # (CachingDisabled), so no step invalidates it.
       PREVIEW_CLOUDFRONT_ID:
         required: false
       # Optional PAT for any platform-side API calls. Declared so a caller
@@ -161,7 +162,7 @@ jobs:
       # under node (ubuntu-latest's default Node moves from 22 to 24 with
       # Ubuntu 26.04, actions/runner-images#14748).
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
       - name: Fetch history to the merge base
@@ -256,13 +257,13 @@ jobs:
           path: .cms-platform
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a
         with:
           ruby-version: '3.2'
           bundler-cache: true
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
           cache: 'npm'
@@ -398,13 +399,6 @@ jobs:
             --cache-control "no-cache, must-revalidate" \
             --content-type "application/json"
 
-      - name: Invalidate CloudFront cache for video and diffs
-        if: github.actor != 'dependabot[bot]' && env.PREVIEW_BUCKET != '' && env.CLOUDFRONT_DISTRIBUTION_ID != ''
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --paths "/pr-${PR_NUMBER}/regression.mp4" "/pr-${PR_NUMBER}/regression.json"
-
       - name: Post regression video comment
         if: github.actor != 'dependabot[bot]'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
@@ -519,7 +513,7 @@ jobs:
 
       - name: Upload video artifact
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: regression-video
           path: |
