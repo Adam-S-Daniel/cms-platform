@@ -222,12 +222,21 @@ const WORKFLOW_PERMISSION_KEYS = [
 // `security_and_analysis`, and there is no dedicated GET/PUT for it — so it
 // is deliberately OUT OF SCOPE for this script and stays a manual settings-UI
 // toggle. Do not go looking for a way to manage it here; there isn't one.
+//
+// `codeql_default_setup` (2026-10-26) is the one key on this surface that is
+// NOT method-carries-the-value: GET/PATCH repos/{owner}/{repo}/code-scanning/
+// default-setup, read as `state === "configured"` and written as a PATCH with
+// a JSON body `{state: "configured" | "not-configured"}`. `languages` is
+// never sent, so GitHub keeps detecting them. It has no ordering dependency
+// on the two Dependabot keys.
 const MANAGED_SECURITY_ANALYSIS_KEYS = [
   "vulnerability_alerts",
   "automated_security_fixes",
+  "codeql_default_setup",
 ];
 const VULNERABILITY_ALERTS_ENDPOINT = "vulnerability-alerts";
 const AUTOMATED_SECURITY_FIXES_ENDPOINT = "automated-security-fixes";
+const CODEQL_DEFAULT_SETUP_ENDPOINT = "code-scanning/default-setup";
 
 // The SSOT of Environment keys the manifest may declare and --fix may PUT.
 // A FOURTH surface — GET/PUT repos/{owner}/{repo}/environments/{name}, one
@@ -800,6 +809,10 @@ const SECURITY_ANALYSIS_FIELDS = {
   automated_security_fixes: {
     liveKey: "automatedSecurityFixes",
     endpoint: AUTOMATED_SECURITY_FIXES_ENDPOINT,
+  },
+  codeql_default_setup: {
+    liveKey: "codeqlDefaultSetup",
+    endpoint: CODEQL_DEFAULT_SETUP_ENDPOINT,
   },
 };
 
@@ -1440,7 +1453,7 @@ function fetchLive(
     ? fetchEnvironments(repo, declaredEnvNames, token, api)
     : {};
   const liveSecurityAnalysis = desiredSecurityKeys.length
-    ? fetchSecurityAnalysis(repo, token, api)
+    ? fetchSecurityAnalysis(repo, token, api, desiredSecurityKeys)
     : {};
   return {
     liveRepo,
@@ -1613,8 +1626,45 @@ function fetchSecurityAnalysisKey(repo, endpoint, token, api) {
   }
 }
 
-function fetchSecurityAnalysis(repo, token, api = ghApi) {
-  return {
+// CodeQL default setup: GET returns 200 JSON `{state, languages,
+// query_suite, ...}`. Unlike the two Dependabot endpoints, a 404 here is NOT
+// read as "off" — "off" is `state: "not-configured"` in a 200 — so a 403 or
+// 404 is an operational skip (a token without the grant, or a repo where
+// code scanning is unavailable), never drift.
+function fetchCodeqlDefaultSetup(repo, token, api) {
+  const endpoint = CODEQL_DEFAULT_SETUP_ENDPOINT;
+  let raw;
+  try {
+    raw = api(`repos/${repo}/${endpoint}`, { token });
+  } catch (e) {
+    const text = `${(e && e.stderr) || ""}${(e && e.message) || ""}`;
+    if (/HTTP 40[34]/.test(text)) {
+      return {
+        skipped: true,
+        reason: `${endpoint} returned ${text.match(/HTTP 40[34]/)[0]} — the read token lacks this surface, or code scanning is unavailable`,
+      };
+    }
+    throw e;
+  }
+  let parsed;
+  try {
+    parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || typeof parsed.state !== "string") {
+    throw shapeError(
+      `repos/${repo}/${endpoint} returned an unexpected shape (no string 'state')`,
+    );
+  }
+  return { enabled: parsed.state === "configured" };
+}
+
+// `keys` is the manifest's declared security keys; the CodeQL endpoint is
+// read only when it is declared, so a manifest that never asks for it never
+// makes the call.
+function fetchSecurityAnalysis(repo, token, api = ghApi, keys = []) {
+  const live = {
     vulnerabilityAlerts: fetchSecurityAnalysisKey(
       repo,
       VULNERABILITY_ALERTS_ENDPOINT,
@@ -1628,6 +1678,10 @@ function fetchSecurityAnalysis(repo, token, api = ghApi) {
       api,
     ),
   };
+  if (keys.includes("codeql_default_setup")) {
+    live.codeqlDefaultSetup = fetchCodeqlDefaultSetup(repo, token, api);
+  }
+  return live;
 }
 
 // The Environments surface: GET repos/{owner}/{repo}/environments/{name}, one
@@ -2165,8 +2219,18 @@ function buildFixPlan(manifest, results) {
     const securityFindings = r.findings.filter(
       (f) => f.kind === "security-analysis-drift",
     );
-    const ENABLE_ORDER = ["vulnerability_alerts", "automated_security_fixes"];
-    const DISABLE_ORDER = ["automated_security_fixes", "vulnerability_alerts"];
+    // codeql_default_setup depends on neither; it goes last on enable and
+    // first on disable only so the order is fixed.
+    const ENABLE_ORDER = [
+      "vulnerability_alerts",
+      "automated_security_fixes",
+      "codeql_default_setup",
+    ];
+    const DISABLE_ORDER = [
+      "codeql_default_setup",
+      "automated_security_fixes",
+      "vulnerability_alerts",
+    ];
     const securityWrites = [
       ...ENABLE_ORDER.map((key) =>
         securityFindings.find((f) => f.key === key && f.desired),
@@ -2174,12 +2238,22 @@ function buildFixPlan(manifest, results) {
       ...DISABLE_ORDER.map((key) =>
         securityFindings.find((f) => f.key === key && !f.desired),
       ).filter(Boolean),
-    ].map((f) => ({
-      endpoint: `repos/${r.repo}/${SECURITY_ANALYSIS_FIELDS[f.key].endpoint}`,
-      method: f.desired ? "PUT" : "DELETE",
-      key: f.key,
-      desired: f.desired,
-    }));
+    ].map((f) =>
+      f.key === "codeql_default_setup"
+        ? {
+            endpoint: `repos/${r.repo}/${SECURITY_ANALYSIS_FIELDS[f.key].endpoint}`,
+            method: "PATCH",
+            key: f.key,
+            desired: f.desired,
+            body: { state: f.desired ? "configured" : "not-configured" },
+          }
+        : {
+            endpoint: `repos/${r.repo}/${SECURITY_ANALYSIS_FIELDS[f.key].endpoint}`,
+            method: f.desired ? "PUT" : "DELETE",
+            key: f.key,
+            desired: f.desired,
+          },
+    );
     if (
       Object.keys(patchBody).length ||
       manualOnly.length ||
@@ -2362,8 +2436,10 @@ function applyFixPlan(plan) {
     // deliberately omitted here rather than passed as `{}` or `undefined`
     // explicitly; applyWrite's `body === undefined` branch below is what
     // that omission triggers.
+    // The one exception is codeql_default_setup, a PATCH with a JSON body;
+    // its entry carries `body`, every other entry leaves it undefined.
     for (const w of p.securityWrites || []) {
-      applyWrite(w.endpoint, w.method);
+      applyWrite(w.endpoint, w.method, w.body);
     }
   }
 }
@@ -2637,6 +2713,7 @@ module.exports = {
   MANAGED_SECURITY_ANALYSIS_KEYS,
   VULNERABILITY_ALERTS_ENDPOINT,
   AUTOMATED_SECURITY_FIXES_ENDPOINT,
+  CODEQL_DEFAULT_SETUP_ENDPOINT,
   KNOWN_RULE_TYPES,
   RULESET_SERVER_KEYS,
   RULESET_BODY_KEYS,
