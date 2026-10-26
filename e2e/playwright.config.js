@@ -763,6 +763,10 @@ const PLATFORM_META_SPECS = [
   "deploy-production-404-cache.test.js",
   // The production admin prefix is uploaded no-cache (#663): same reason.
   "deploy-production-admin-cache.test.js",
+  // #635 — ASCII, length-capped entry file names: parses the theme/admin
+  // SOURCE configs and runs theme/admin/draft-media-fallback.js, absent on a
+  // consumer.
+  "decap-slug-ascii-config.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is
