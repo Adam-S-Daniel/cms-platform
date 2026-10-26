@@ -520,7 +520,7 @@ test.describe(
         'xpath=ancestor::div[contains(@class,"ControlContainer")][1]',
       );
       await expect(publishDateControl).toContainText(
-        `publish this post automatically on ${currentHost}`,
+        `show this post on ${currentHost} automatically`,
       );
 
       const liveURL = page.getByTestId("cms-live-url-banner-link");
