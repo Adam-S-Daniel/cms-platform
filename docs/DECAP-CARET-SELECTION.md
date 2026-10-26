@@ -22,10 +22,10 @@ shell at `http://localhost:4355/admin/caret.html`; no server listens on that por
 Every browser request is fulfilled locally or answered with an empty 404.
 
 The stock comparison loads only
-[Decap 3.15.1](https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js), exactly as
+[Decap 3.17.1](https://unpkg.com/decap-cms@3.17.1/dist/decap-cms.js), exactly as
 pinned in [the local admin shell](../theme/admin/index-local.html). Its verified
 SRI is
-`sha384-in6eHztHveqQ7uMZ1fDaKlDmacQLFuLH2wWrFTiymyuS8zQ5bixwL8U3AeRi8h/L`.
+`sha384-d2pbrhjc5asvSK35gKkrgRIk0Wq+2CQynWnXtSsYWQawXCgBXhcAK737jBAKXT4T`.
 The platform comparison loads all 29 external script files from that same
 shell, in its original order with its deferred flags. It excludes the shell's
 inline branding/status scripts and CSS, and uses the same minimal configuration

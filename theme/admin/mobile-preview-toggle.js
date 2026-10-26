@@ -4,12 +4,15 @@
  *
  * ── The defect ─────────────────────────────────────────────────────────
  * admin-mobile.css (rule 4) hides react-split-pane's `.Pane2` below 768px so
- * the form gets the full width. Decap's eye flips its `previewVisible` state,
+ * the form gets the full width. Decap's eye turns its right pane on or off,
  * which only swaps between two layouts:
  *   - on:  <SplitPane> .Pane1 = form, .Pane2 = PreviewPaneContainer (iframe)
  *   - off: <NoPreviewContainer> form only, no SplitPane at all
- * (EditorInterface `EditorContent` in decap-cms 3.15.1; the state defaults to
- * on and persists in localStorage `cms.preview-visible`). Both layouts look
+ * (EditorInterface `EditorContent`. decap-cms 3.15.1 kept a `previewVisible`
+ * flag in localStorage `cms.preview-visible`; 3.17.1 keeps one right-pane
+ * mode, "i18n" | "notes" | "preview" | "none", in `cms.right-pane`, and an
+ * unset or unavailable mode falls back to the first available pane, which is
+ * the preview on these sites.) Both layouts look
  * identical on a phone, because the only thing that differs is a pane the CSS
  * can never show. The eye was a visible no-op.
  *
@@ -27,7 +30,7 @@
  *     tap is taken here (capture phase, before React's root listener) and
  *     only flips the class, so Decap's state and its stored preference stay
  *     as they were.
- *   - Decap preview OFF (a stored `false`): the tap goes through to Decap,
+ *   - Decap preview OFF (a stored `none`): the tap goes through to Decap,
  *     which mounts the split pane; the observer sets the class once the pane
  *     exists.
  *   - In preview: the tap is taken here and clears the class. Decap's preview
@@ -39,7 +42,7 @@
  *
  * ── Selectors ──────────────────────────────────────────────────────────
  * The eye is matched by its `title` inside Decap's `ViewControls` (the label
- * Decap 3.15.1 renders for `editor.editorInterface.togglePreview` in English,
+ * Decap 3.17.1 renders for `editor.editorInterface.togglePreview` in English,
  * the only locale these sites configure). If Decap renames it the match
  * misses and the eye goes back to upstream behavior: degrade-safe. The pane
  * is react-split-pane's `.Pane2` holding Decap's `PreviewPaneContainer`;

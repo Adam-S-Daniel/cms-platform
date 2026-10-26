@@ -163,7 +163,7 @@ test.describe(
 const FIRST = { slug: "2026-01-01-alpha", title: "Alpha" };
 const SECOND = { slug: "2026-01-02-beta", title: "Beta" };
 const DIAGNOSTIC_ORIGIN = "https://example.com";
-const DECAP_PREFIX = "https://unpkg.com/decap-cms@3.15.1/dist/";
+const DECAP_PREFIX = "https://unpkg.com/decap-cms@3.17.1/dist/";
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const BUILT_SITE = path.join(SITE_ROOT, "_site");
 const DECAP_DIST = path.join(__dirname, "node_modules", "decap-cms", "dist");
@@ -200,7 +200,7 @@ async function pinnedDecapScript() {
   }
   visit(parse(shell));
   if (pinned.length !== 1 || !pinned[0].integrity) {
-    throw new Error("Built admin shell lacks one pinned Decap 3.15.1 script with SRI");
+    throw new Error("Built admin shell lacks one pinned Decap 3.17.1 script with SRI");
   }
   const bundle = fs.readFileSync(path.join(DECAP_DIST, "decap-cms.js"));
   const digest = `sha384-${crypto.createHash("sha384").update(bundle).digest("base64")}`;

@@ -992,7 +992,8 @@ that, which changes nothing a deployed site uses.
 Status: **evaluated from source, not yet measured.** Nothing below has run
 with a real `ghu_` token; the spike at the end is what decides it.
 
-**Sources.** `decap-cms@3.15.1` (the version all three shells pin) was published
+**Sources.** `decap-cms@3.15.1` (the version all three shells pinned when this was
+written; they moved to 3.17.1 later) was published
 2026-07-24 and bundles `decap-cms-backend-github@3.8.0`,
 `decap-cms-lib-auth@3.2.1` and `decap-cms-core@3.17.1`: each is the floor of
 its caret range and the newest release before that date, and the strings cited
