@@ -751,6 +751,10 @@ const PLATFORM_META_SPECS = [
   "media-library-draft-sync.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
+  // #646 — runs preview-pane.js + preview-bridge.js and the render script of
+  // theme/_layouts/preview.html against each other over a fake channel, and
+  // parses the theme/admin config SOURCES for Body hints. Platform tree only.
+  "preview-request-handshake.test.js",
   // cms-platform#645 — vm-sandboxes theme/admin/mobile-preview-toggle.js and
   // parses theme/admin/admin-mobile.css; platform-internal SOURCE reads.
   "mobile-preview-toggle.test.js",
