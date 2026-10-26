@@ -26,15 +26,17 @@
  *   posts    -> /blog/<slug>/
  *   tags     -> /tags/<slug>/
  *   projects -> /projects/<slug>/
+ *   tools    -> /tools/<slug>/   (site-owned collection, `_tools`)
  *   pages    -> the permalink field's value (verbatim)
  *
  * The slug-derivation chain is intentional: an editor's explicit `slug`
- * field always wins (if set), then the title is slugified as the fallback,
+ * field always wins (if set, slugified as Jekyll's `:slug` does), then the
+ * title is slugified as the fallback,
  * then `name` for tags. This mirrors what Decap actually writes to disk
  * AFTER stripping the `_posts/` `YYYY-MM-DD-` date prefix Jekyll adds.
  *
  * ROUTABLE_COLLECTIONS (cms-platform#328.3) — compute() only knows how to
- * derive a URL for the four collection shapes above. Any OTHER collection —
+ * derive a URL for the five collection shapes above. Any OTHER collection —
  * a file/singleton collection (Header/Hero, Site Settings) or a folder
  * collection with no per-entry route (the section-collection shape both
  * single-page consumers' custom seams use) — has nothing to derive, no
@@ -52,7 +54,7 @@
 (function () {
   "use strict";
 
-  var ROUTABLE_COLLECTIONS = { pages: true, posts: true, tags: true, projects: true };
+  var ROUTABLE_COLLECTIONS = { pages: true, posts: true, tags: true, projects: true, tools: true };
 
   function getCollection() {
     var m = /#\/collections\/([^/]+)/.exec(window.location.hash || "");
@@ -132,12 +134,17 @@
 
     var explicitSlug = (readField("slug") || "").trim();
     var fallback = readField("title") || readField("name") || "";
-    var slug = explicitSlug || slugify(fallback);
+    // Jekyll runs the front-matter slug through its default slugify too (the
+    // `:slug` placeholder, Drops::UrlDrop#slug), so a typed "Bad Slug!" is
+    // served at /blog/bad-slug/. Slugify it here or the link 404s. An already
+    // slugified value (every slug-pin.js writes) is returned unchanged.
+    var slug = slugify(explicitSlug) || slugify(fallback);
 
     var path = {
       posts: "/blog/",
       tags: "/tags/",
       projects: "/projects/",
+      tools: "/tools/",
     }[collection];
 
     return {

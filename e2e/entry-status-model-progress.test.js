@@ -136,9 +136,31 @@ test.describe("entry-status-model — checks in plain English, as x of y", () =>
       "the automatic safety checks to start",
     );
     expect(m.derive(armed({ checks: { total: 9, pending: [] } }), { now: NOW }).waitingOn).toBe(
-      "all 9 automatic safety checks passed; now putting it live",
+      "All 9 automatic safety checks passed; now putting it live",
     );
   });
+
+  // #643: "It is waiting for all 2 automatic safety checks passed; now
+  // putting it live." Passing is done, not awaited, so it is its own sentence,
+  // with the right subject for the count.
+  for (const [total, sentence] of [
+    [1, "The automatic safety check passed; now putting it live."],
+    [2, "Both automatic safety checks passed; now putting it live."],
+    [9, "All 9 automatic safety checks passed; now putting it live."],
+  ]) {
+    test(`all ${total} passed, not merged yet: "${sentence}"`, () => {
+      const m = loadModel();
+      const got = m.derive(armed({ checks: { total, pending: [] } }), {
+        now: NOW,
+        currentHostname: "example.com",
+        canonicalHostname: "example.com",
+      });
+      expect(got.detail).toBe(
+        "This is on its way to example.com. " + sentence + " You can close this tab — it carries on without you.",
+      );
+      expect(got.detail).not.toMatch(/waiting for (all|both|the automatic safety check passed)/i);
+    });
+  }
 });
 
 test.describe("entry-status-model — the ETA counts to LIVE, from measured durations", () => {
@@ -173,5 +195,59 @@ test.describe("entry-status-model — the ETA counts to LIVE, from measured dura
     const got = m.derive(armed({}), { now: NOW });
     expect(got.minutesLeft).toBeNull();
     expect(got.label).toBe("Going live… (usually about 5 minutes)");
+  });
+});
+
+// #643: on a preview the bar read "about 2 minutes" → "about 1 minute" →
+// "taking a little longer than usual" within 2.5 minutes. Two causes:
+// rounding to nearest ran a one-minute post-merge estimate out after 30 s,
+// and the switch of clock at the merge (first check → merge) could take the
+// reading back UP from an overrun.
+test.describe("entry-status-model — the ETA never goes back up and never runs out early (#643)", () => {
+  const merged = (o) => Object.assign({ merged: true, deployState: "pending" }, o);
+
+  test("45 s after the merge the one-minute deploy estimate has not run out", () => {
+    const m = loadModel();
+    const got = m.derive(merged({ startedAt: NOW - 45 * 1000 }), { now: NOW });
+    expect(got.minutesLeft).toBe(1);
+    expect(got.label).toBe("Going live… (about 1 minute left)");
+  });
+
+  test("4.75 minutes into the checks there is still about 1 minute, not an overrun", () => {
+    const m = loadModel();
+    expect(m.derive(armed({ startedAt: NOW - 4.75 * MIN }), { now: NOW }).minutesLeft).toBe(1);
+  });
+
+  test("checks that overran stay 'longer than usual' after the merge", () => {
+    const m = loadModel();
+    const before = m.derive(armed({ startedAt: NOW - 6 * MIN, checks: { total: 2, pending: [] } }), { now: NOW });
+    expect(before.label).toBe("Going live… (taking a little longer than usual)");
+    const after = m.derive(merged({ startedAt: NOW, checksStartedAt: NOW - 6 * MIN }), { now: NOW });
+    expect(after.minutesLeft).toBeNull();
+    expect(after.label).toBe("Going live… (taking a little longer than usual)");
+  });
+
+  test("sampled every 15 s across a merge, the reading only ever goes down", () => {
+    const m = loadModel();
+    const start = NOW;
+    const mergedAt = start + 3.5 * MIN;
+    const rank = (got) => (got.minutesLeft === null ? 0 : got.minutesLeft);
+    let last = Infinity;
+    for (let t = start; t <= start + 7 * MIN; t += 15 * 1000) {
+      const facts =
+        t < mergedAt
+          ? armed({ startedAt: start })
+          : merged({ startedAt: mergedAt, checksStartedAt: start });
+      const got = m.derive(facts, { now: t });
+      expect(rank(got), `at +${(t - start) / 1000}s: ${got.label}`).toBeLessThanOrEqual(last);
+      if (got.minutesLeft === null) {
+        // An estimate has really elapsed: the deploy's, or the whole trip's.
+        const spent =
+          (t >= mergedAt && t - mergedAt >= m.DEPLOY_NOMINAL_MIN * MIN) ||
+          t - start >= (m.CHECKS_NOMINAL_MIN + m.DEPLOY_NOMINAL_MIN) * MIN;
+        expect(spent, `overrun at +${(t - start) / 1000}s before any estimate elapsed`).toBe(true);
+      }
+      last = rank(got);
+    }
   });
 });

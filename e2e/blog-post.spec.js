@@ -1,6 +1,6 @@
 // @lane: local — exercises the locally-rendered blog post page; @parity-eligible via TARGET=
 const { test, expect } = require("./base");
-const { discoverPost } = require("./content-fixtures");
+const { discoverPost, visibleTitleLocator } = require("./content-fixtures");
 
 // Acceptance for the blog-post layout. Tests are deliberately
 // content-agnostic — they verify the rendered SHAPE of any post page
@@ -24,7 +24,7 @@ test.describe("Blog post page", () => {
     await expect(titleElements).toHaveCount(1);
 
     // No other visible element should duplicate the title text.
-    const visibleTitles = page.locator(`:visible:text-is("${post.title}"):not(title):not(meta)`);
+    const visibleTitles = visibleTitleLocator(page, post.title);
     await expect(visibleTitles).toHaveCount(1);
   });
 

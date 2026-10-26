@@ -9,6 +9,7 @@ const {
   isPublished,
   isTestFixturePost,
   hasE2eSlugSignature,
+  postPublicPath,
 } = require("./public-content");
 const {
   EPHEMERAL_DATE,
@@ -166,5 +167,29 @@ test.describe("public-content crawl-set predicate (#1771 Cat-2)", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+test.describe("postPublicPath — the URL Jekyll serves a post at", () => {
+  test("a front-matter slug wins over the file name, and is slugified", () => {
+    const fm = parseFrontMatterText("---\ntitle: T\nslug: Front Matter Slug!\n---\nb");
+    expect(postPublicPath("2026-01-15-file-name", fm)).toBe("/blog/front-matter-slug/");
+  });
+
+  test("no slug, or a blank one, uses the file name minus its date prefix", () => {
+    expect(postPublicPath("2026-01-15-file-name", parseFrontMatterText("---\ntitle: T\n---\nb"))).toBe("/blog/file-name/");
+    expect(postPublicPath("2026-01-15-file-name", parseFrontMatterText("---\nslug: ''\n---\nb"))).toBe("/blog/file-name/");
+    expect(postPublicPath("2026-01-15-file-name", null)).toBe("/blog/file-name/");
+  });
+
+  test("a permalink replaces the template; an unsupported placeholder is unknown (null)", () => {
+    expect(postPublicPath("2026-01-15-a", { permalink: "/x/:slug/", slug: "B" })).toBe("/x/b/");
+    expect(postPublicPath("2026-01-15-a", { permalink: "/:year/:slug/" })).toBeNull();
+  });
+
+  test("the fixture site's post whose slug differs from its file name is served at its slug", () => {
+    const file = path.join(__dirname, "fixture-site", "_posts", "2025-12-01-slug-differs-from-file-name.md");
+    const fm = parseFrontMatterText(fs.readFileSync(file, "utf8"));
+    expect(postPublicPath("2025-12-01-slug-differs-from-file-name", fm)).toBe("/blog/front-matter-slug-wins/");
   });
 });

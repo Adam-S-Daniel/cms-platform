@@ -3,9 +3,9 @@
 // PLATFORM-INTERNAL: reads the platform's own workflow definition.
 //
 // cms-platform#527: self-fixture-e2e.yml is the one platform lane that runs
-// `*.spec.js` in a browser (the `@lane: local` specs on the two admin projects,
-// against e2e/fixture-site). Its value rests on a few things that each break
-// silently:
+// `*.spec.js` in a browser (the `@lane: local` specs on the two admin projects
+// against e2e/fixture-site, and since #702 on one public project against both
+// fixtures). Its value rests on a few things that each break silently:
 //
 //   - the GATE: `fixture-e2e` is a REQUIRED context, so it must report on every
 //     PR (always(), no wall, no concurrency) and must actually translate the
@@ -15,8 +15,8 @@
 //   - the LANE FILTER: `@lane: real` specs must be excluded, because
 //     admin-bundle-parity.spec.js fetches production unconditionally;
 //   - SALIENCE: a docs-only PR may skip the work, but anything unknown runs it;
-//   - NON-VACUITY: the archived-PDF test must have PASSED, so a future skip
-//     cannot leave #527's proof green while proving nothing.
+//   - NON-VACUITY: each leg's proof test must have PASSED (the archived-PDF
+//     test on the admin legs), so a future skip cannot read green.
 //
 // The shape checks parse the YAML (workflow-yaml-utils); the behavior checks
 // execute the workflow's own `run:` scripts (workflow-step-harness), so they
@@ -25,9 +25,12 @@ const { test, expect } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
 const { parseYaml, readWorkflow } = require("./workflow-yaml-utils");
-const { runStep } = require("./workflow-step-harness");
+const { runStep, writeStubs } = require("./workflow-step-harness");
 const { createSandbox } = require("./git-fixture");
 const { filterByLane } = require("./select-specs");
+const vm = require("node:vm");
+const { parse, calleeName } = require("./spec-ast");
+const walk = require("acorn-walk");
 
 const FILE = "self-fixture-e2e.yml";
 const WORK = "fixture-e2e-project";
@@ -121,13 +124,96 @@ test.describe("self-fixture-e2e.yml: the required gate (#527)", () => {
 });
 
 test.describe("self-fixture-e2e.yml: the work job (#527)", () => {
-  test("runs exactly the two admin projects, one engine each, with a wall", () => {
+  test("runs the two admin projects on the full fixture and one public project on both (#702)", () => {
     const w = job(WORK);
-    expect(w.strategy.matrix.project).toEqual(["chromium-desktop-3k", "webkit-iphone16"]);
+    const legs = w.strategy.matrix.include.map((l) => `${l.slot} @ ${l.fixture}`);
+    expect(legs).toEqual([
+      "chromium-desktop-3k-shard-1-of-3 @ fixture-site",
+      "chromium-desktop-3k-shard-2-of-3 @ fixture-site",
+      "chromium-desktop-3k-shard-3-of-3 @ fixture-site",
+      "webkit-iphone16-shard-1-of-3 @ fixture-site",
+      "webkit-iphone16-shard-2-of-3 @ fixture-site",
+      "webkit-iphone16-shard-3-of-3 @ fixture-site",
+      "chromium-desktop-1080 @ fixture-site",
+      "chromium-desktop-1080 @ fixture-site-singlepage",
+    ]);
+    expect(Object.keys(w.strategy.matrix), "legs come only from `include`").toEqual(["include"]);
     expect(w.strategy["fail-fast"]).toBe(false);
     expect(w["timeout-minutes"]).toBeGreaterThan(0);
+    expect(w.name, "job names stay unique per shard").toBe(
+      "fixture-e2e-project (${{ matrix.slot }}, ${{ matrix.fixture }})",
+    );
     expect(w.env.PW_PROJECT).toBe("${{ matrix.project }}");
+    expect(w.env.PW_SHARD).toBe("${{ matrix.shard }}");
+    expect(w.env.FIXTURE).toBe("${{ matrix.fixture }}");
     expect(w.env.TARGET).toBe("local");
+  });
+
+  // Admin projects carry a `grep` (ADMIN_TAGS_*); public ones a `grepInvert`.
+  function isAdminProject(name) {
+    const p = require("./playwright.config").projects.find((x) => x.name === name);
+    expect(p, `${name} is a playwright.config.js project`).toBeTruthy();
+    return p.grep !== undefined;
+  }
+
+  // 2026-10-22: the admin legs are `--shard`ed exactly as e2e-tests.yml shards
+  // them for consumers (ci-matrix.js's ADMIN_SHARDS). A dropped, duplicated or
+  // renumbered shard silently stops running part of a project, so the
+  // expected set is DERIVED, not copied.
+  test("every admin leg runs as ADMIN_SHARDS shards, each exactly once; public legs are whole", () => {
+    const { ADMIN_SHARDS } = require("./ci-matrix");
+    expect(ADMIN_SHARDS).toBeGreaterThan(1);
+    const legs = job(WORK).strategy.matrix.include;
+    const byProject = new Map();
+    for (const leg of legs) {
+      const key = `${leg.project} @ ${leg.fixture}`;
+      if (!byProject.has(key)) byProject.set(key, []);
+      byProject.get(key).push(leg);
+    }
+    const adminKeys = [...byProject.keys()].filter((k) => isAdminProject(k.split(" @ ")[0]));
+    expect(adminKeys.sort()).toEqual(["chromium-desktop-3k @ fixture-site", "webkit-iphone16 @ fixture-site"]);
+    for (const [key, group] of byProject) {
+      const project = key.split(" @ ")[0];
+      if (isAdminProject(project)) {
+        const want = Array.from({ length: ADMIN_SHARDS }, (_, i) => `${i + 1}/${ADMIN_SHARDS}`);
+        expect(group.map((l) => l.shard), `${key}: one leg per shard`).toEqual(want);
+        for (const leg of group) {
+          const [i, n] = leg.shard.split("/");
+          expect(leg.slot).toBe(`${project}-shard-${i}-of-${n}`);
+        }
+      } else {
+        expect(group.map((l) => l.shard), `${key} runs unsharded`).toEqual([""]);
+        expect(group[0].slot).toBe(project);
+      }
+    }
+    const names = legs.map((l) => `${l.slot} @ ${l.fixture}`);
+    expect(new Set(names).size, "slot + fixture names every job and artifact uniquely").toBe(names.length);
+  });
+
+  test("admin legs run on the full fixture; the public legs cover both home shapes", () => {
+    const cap = require("./site-capabilities");
+    const theme = cap.themeLayoutsDirCandidates()[0];
+    const shapes = [];
+    for (const leg of job(WORK).strategy.matrix.include) {
+      expect(fs.existsSync(path.join(HARNESS, leg.fixture, "_config.yml")), leg.fixture).toBe(true);
+      if (isAdminProject(leg.project)) {
+        expect(leg.fixture, `${leg.project} is an admin leg`).toBe("fixture-site");
+      } else {
+        shapes.push(cap.homeUsesThemeLayout(path.join(HARNESS, leg.fixture), theme));
+      }
+    }
+    // One public leg whose `/` is the theme's default layout, one whose `/` is
+    // a site-owned layout (jodidaniel.com's shape, the #702 incident).
+    expect(shapes.sort()).toEqual([false, true]);
+  });
+
+  test("every leg's proof test exists by that title in the spec it names", () => {
+    for (const leg of job(WORK).strategy.matrix.include) {
+      const src = fs.readFileSync(path.join(HARNESS, leg.proof_spec), "utf8");
+      expect(src, `${leg.project} @ ${leg.fixture}: ${leg.proof_spec}`).toContain(
+        JSON.stringify(leg.proof_title),
+      );
+    }
   });
 
   test("every step after salience is gated on it, so a skip still reports success", () => {
@@ -143,27 +229,105 @@ test.describe("self-fixture-e2e.yml: the work job (#527)", () => {
 
   test("the harness is placed INSIDE the fixture and SITE_ROOT points at the fixture", () => {
     const place = step(WORK, "Place the harness inside the fixture");
-    expect(place.run).toMatch(/rsync\b[^\n]*\\\n\s*e2e\/ e2e\/fixture-site\/e2e\//);
+    expect(place.run).toMatch(/rsync\b[^\n]*\\\n\s*e2e\/ "e2e\/\$\{FIXTURE\}\/e2e\/"/);
     for (const ex of ["fixture-site", "fixture-site-singlepage", "node_modules"]) {
       expect(place.run).toContain(`--exclude ${ex}`);
     }
     const run = step(WORK, "Run the local-lane specs against the fixture");
-    expect(run["working-directory"]).toBe("e2e/fixture-site/e2e");
-    expect(run.env.SITE_ROOT).toBe("${{ github.workspace }}/e2e/fixture-site");
-    expect(stepWithId(WORK, "select")["working-directory"]).toBe("e2e/fixture-site/e2e");
+    expect(run["working-directory"]).toBe("e2e/${{ matrix.fixture }}/e2e");
+    expect(run.env.SITE_ROOT).toBe("${{ github.workspace }}/e2e/${{ matrix.fixture }}");
+    expect(stepWithId(WORK, "select")["working-directory"]).toBe("e2e/${{ matrix.fixture }}/e2e");
     const ruby = step(WORK, "Setup Ruby + Bundler");
-    expect(ruby.with["working-directory"]).toBe("e2e/fixture-site");
+    expect(ruby.with["working-directory"]).toBe("e2e/${{ matrix.fixture }}");
     expect(ruby.with["bundler-cache"]).toBe(true);
   });
 
-  test("the fixture's Gemfile.lock is committed, not ignored (frozen install)", () => {
-    const lock = path.join(HARNESS, "fixture-site", "Gemfile.lock");
-    expect(fs.existsSync(lock), "e2e/fixture-site/Gemfile.lock must be tracked").toBe(true);
-    const src = fs.readFileSync(lock, "utf8");
-    expect(src).toContain("PATH\n  remote: ../../theme\n");
-    for (const ignore of [path.join(REPO_ROOT, ".gitignore"), path.join(HARNESS, "fixture-site", ".gitignore")]) {
-      const lines = fs.readFileSync(ignore, "utf8").split("\n").map((l) => l.trim());
-      expect(lines.filter((l) => /(^|\/)Gemfile\.lock$/.test(l)), ignore).toEqual([]);
+  // What the run step hands Playwright, with a stub `npx` recording each call.
+  function runInvocations(shard) {
+    const sb = createSandbox("fixture-e2e-run-");
+    try {
+      const s = { ...step(WORK, "Run the local-lane specs against the fixture") };
+      const log = path.join(sb.root, "fixture-e2e.log");
+      s.run = s.run.replaceAll("/tmp/fixture-e2e.log", log);
+      fs.copyFileSync(path.join(HARNESS, "summarize-playwright.js"), path.join(sb.root, "summarize-playwright.js"));
+      const calls = path.join(sb.root, "calls");
+      const bin = writeStubs(path.join(sb.root, "bin"), {
+        npx: `printf '%s ' "$@" >> "${calls}"; printf '\\n' >> "${calls}"; exit 0`,
+      });
+      const r = runStep(s, {
+        cwd: sb.root,
+        scratch: path.join(sb.root, "run"),
+        env: { ...sb.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, PW_PROJECT: "webkit-iphone16", PW_SHARD: shard },
+        stepEnv: { SITE_ROOT: sb.root, PW_SPECS: "a.spec.js b.spec.js", PW_WORKERS: "6", DISABLE_PER_TEST_VIDEOS: "1" },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      return fs.readFileSync(calls, "utf8").trim().split("\n").map((l) => l.trim());
+    } finally {
+      sb.cleanup();
+    }
+  }
+
+  // 2026-10-22: a green leg uploads the HTML + JSON report only; a failed leg
+  // also uploads `test-results`. Artifact names stay unique per shard.
+  test("a green leg drops test-results before the upload; a failed leg keeps it", () => {
+    const steps = job(WORK).steps;
+    const DROP = "Drop test-results from a green leg's upload";
+    const drop = step(WORK, DROP);
+    const upload = steps.find((s) => String(s.uses || "").startsWith("actions/upload-artifact@"));
+    expect(steps.findIndex((s) => s.name === DROP), "drop runs before the upload").toBe(steps.indexOf(upload) - 1);
+    expect(upload.with.name).toBe("fixture-e2e-report-${{ matrix.slot }}-${{ matrix.fixture }}");
+    const paths = String(upload.with.path).split("\n").map((p) => p.trim()).filter(Boolean);
+    for (const p of ["e2e/${{ matrix.fixture }}/e2e/playwright-report", "/tmp/fixture-e2e.log.json", "/tmp/fixture-e2e.log.shards"]) {
+      expect(paths).toContain(p);
+    }
+    const expression = String(drop.if).slice(3, -2).trim();
+    parse(expression);
+    const runs = (ok, salient) =>
+      Boolean(vm.runInNewContext(expression, {
+        success: () => ok, failure: () => !ok, cancelled: () => false, always: () => true, steps: { salient: { outputs: { salient } } },
+      }, { timeout: 1000 }));
+    expect(runs(true, "true")).toBe(true);
+    expect(runs(false, "true"), "a failed leg keeps test-results").toBe(false);
+    expect(runs(true, "false")).toBe(false);
+
+    const sb = createSandbox("fixture-e2e-drop-");
+    try {
+      const dirs = ["e2e/test-results", "e2e/fixture-site/e2e/test-results", "e2e/fixture-site/e2e/playwright-report", "e2e/playwright-report"];
+      for (const d of dirs) {
+        fs.mkdirSync(path.join(sb.root, d), { recursive: true });
+        fs.writeFileSync(path.join(sb.root, d, "x.png"), "x");
+      }
+      const r = runStep(drop, { cwd: sb.root, scratch: path.join(sb.root, "drop"), env: { ...sb.env, FIXTURE: "fixture-site" } });
+      expect(r.status, r.stderr).toBe(0);
+      expect(dirs.map((d) => fs.existsSync(path.join(sb.root, d)))).toEqual([false, false, true, true]);
+    } finally {
+      sb.cleanup();
+    }
+  });
+
+  test("a shard leg runs its own shard, after listing every shard for the proof owner", () => {
+    expect(runInvocations("2/3")).toEqual([
+      "playwright test --list --project=webkit-iphone16 --shard=1/3 --reporter=json a.spec.js b.spec.js",
+      "playwright test --list --project=webkit-iphone16 --shard=2/3 --reporter=json a.spec.js b.spec.js",
+      "playwright test --list --project=webkit-iphone16 --shard=3/3 --reporter=json a.spec.js b.spec.js",
+      "playwright test --project=webkit-iphone16 --shard=2/3 --reporter=list,html,json a.spec.js b.spec.js",
+    ]);
+    expect(runInvocations("")).toEqual([
+      "playwright test --project=webkit-iphone16 --reporter=list,html,json a.spec.js b.spec.js",
+    ]);
+  });
+
+  test("each fixture's Gemfile.lock is committed, not ignored (frozen install)", () => {
+    for (const fixture of new Set(job(WORK).strategy.matrix.include.map((l) => l.fixture))) {
+      const lock = path.join(HARNESS, fixture, "Gemfile.lock");
+      expect(fs.existsSync(lock), `e2e/${fixture}/Gemfile.lock must be tracked`).toBe(true);
+      const src = fs.readFileSync(lock, "utf8");
+      expect(src).toContain("PATH\n  remote: ../../theme\n");
+      for (const ignore of [path.join(REPO_ROOT, ".gitignore"), path.join(HARNESS, fixture, ".gitignore")]) {
+        if (!fs.existsSync(ignore)) continue;
+        const lines = fs.readFileSync(ignore, "utf8").split("\n").map((l) => l.trim());
+        expect(lines.filter((l) => /(^|\/)Gemfile\.lock$/.test(l)), ignore).toEqual([]);
+      }
     }
   });
 });
@@ -224,6 +388,7 @@ test.describe("self-fixture-e2e.yml: salience is a fail-safe deny-list (#527)", 
     { files: { "oauth-proxy/lambda.py": "x\n", "scripts/cross_post/cross_post.py": "x\n" }, salient: false },
     { files: { "docs/x.md": "x\n", "theme/_layouts/post.html": "x\n" }, salient: true },
     { files: { "e2e/fixture-site/_posts/2026-01-01-new.md": "x\n" }, salient: true },
+    { files: { "e2e/fixture-site-singlepage/_notes/welcome.md": "x\n" }, salient: true },
     { files: { "e2e/cms-editorial-workflow.spec.js": "x\n" }, salient: true },
     { files: { ".github/workflows/self-fixture-e2e.yml": "x\n" }, salient: true },
     { files: { "theme/admin/café.js": "x\n" }, salient: true },
@@ -261,7 +426,7 @@ test.describe("self-fixture-e2e.yml: salience is a fail-safe deny-list (#527)", 
   });
 });
 
-test.describe("self-fixture-e2e.yml: the archived-PDF test must have PASSED (#527)", () => {
+test.describe("self-fixture-e2e.yml: each leg's proof test must have PASSED (#527, #702)", () => {
   const TITLE = "opted-in archived PDF fields render host-specific copy and stay private by default";
   const SPEC = "cms-editorial-workflow.spec.js";
 
@@ -284,20 +449,28 @@ test.describe("self-fixture-e2e.yml: the archived-PDF test must have PASSED (#52
     };
   }
 
-  function assertStep(json) {
-    const s = step(WORK, "Assert the archived-PDF test passed");
-    expect(s.env.REQUIRED_SPEC_FILE).toBe(SPEC);
-    expect(s.env.REQUIRED_TEST_TITLE).toBe(TITLE);
+  // `lists` (sharded legs only): shard index -> that shard's `--list` report,
+  // or a string written verbatim; an index left out has no list file.
+  function assertStep(json, { shard = "", lists = {} } = {}) {
+    const s = step(WORK, "Assert the leg's proof test passed");
+    expect(s.env.REQUIRED_SPEC_FILE).toBe("${{ matrix.proof_spec }}");
+    expect(s.env.REQUIRED_TEST_TITLE).toBe("${{ matrix.proof_title }}");
     const sb = createSandbox("fixture-e2e-assert-");
     try {
       const file = path.join(sb.root, "results.json");
       if (json !== undefined) fs.writeFileSync(file, typeof json === "string" ? json : JSON.stringify(json));
+      const listsDir = path.join(sb.root, "shards");
+      fs.mkdirSync(listsDir);
+      for (const [i, list] of Object.entries(lists)) {
+        fs.writeFileSync(path.join(listsDir, `${i}.json`), typeof list === "string" ? list : JSON.stringify(list));
+      }
       return runStep(s, {
         cwd: sb.root,
         scratch: path.join(sb.root, "assert"),
-        env: { ...sb.env, PW_PROJECT: "webkit-iphone16" },
+        env: { ...sb.env, PW_PROJECT: "webkit-iphone16", PW_SHARD: shard },
         stepEnv: {
           PLAYWRIGHT_JSON_OUTPUT_FILE: file,
+          SHARD_LISTS_DIR: listsDir,
           REQUIRED_SPEC_FILE: SPEC,
           REQUIRED_TEST_TITLE: TITLE,
         },
@@ -309,8 +482,53 @@ test.describe("self-fixture-e2e.yml: the archived-PDF test must have PASSED (#52
 
   const passed = { projectName: "webkit-iphone16", status: "expected", results: [{ status: "passed" }] };
 
-  test("the test's title still exists in the spec it names", () => {
-    expect(fs.readFileSync(path.join(HARNESS, SPEC), "utf8")).toContain(JSON.stringify(TITLE));
+  test("every admin shard leg still proves the archived-PDF test (#527)", () => {
+    const { ADMIN_SHARDS } = require("./ci-matrix");
+    const admin = job(WORK).strategy.matrix.include.filter((l) =>
+      ["chromium-desktop-3k", "webkit-iphone16"].includes(l.project),
+    );
+    expect(admin.length).toBe(2 * ADMIN_SHARDS);
+    for (const leg of admin) {
+      expect([leg.proof_spec, leg.proof_title]).toEqual([SPEC, TITLE]);
+    }
+  });
+
+  // A `--list` report holds the test with no results; the other shards' lists
+  // hold other tests only.
+  const listed = report([{ projectName: "webkit-iphone16", status: "skipped", results: [] }]);
+  const elsewhere = { suites: [{ title: "other.spec.js", file: "other.spec.js", specs: [] }] };
+
+  test("a shard leg asserts the proof test only where `--list` puts it", () => {
+    // The owning shard asserts it passed (also after a retry).
+    expect(assertStep(report([passed]), { shard: "2/3", lists: { 1: elsewhere, 2: listed, 3: elsewhere } }).status).toBe(0);
+    const flaky = { ...passed, status: "flaky", results: [{ status: "failed" }, { status: "passed" }] };
+    expect(assertStep(report([flaky]), { shard: "2/3", lists: { 1: elsewhere, 2: listed, 3: elsewhere } }).status).toBe(0);
+    // Another shard owns it: this one passes without its own report holding it.
+    expect(assertStep(report([]), { shard: "1/3", lists: { 1: elsewhere, 2: listed, 3: elsewhere } }).status).toBe(0);
+    expect(assertStep(report([]), { shard: "3/3", lists: { 1: elsewhere, 2: listed, 3: elsewhere } }).status).toBe(0);
+  });
+
+  test("a shard leg fails when the owner did not pass, no shard owns it, or a list is missing", () => {
+    const lists = { 1: elsewhere, 2: listed, 3: elsewhere };
+    const failed = { ...passed, status: "unexpected", results: [{ status: "failed" }] };
+    expect(assertStep(report([failed]), { shard: "2/3", lists }).status).toBe(1);
+    const skipped = { ...passed, status: "skipped", results: [{ status: "skipped" }] };
+    expect(assertStep(report([skipped]), { shard: "2/3", lists }).status).toBe(1);
+    expect(assertStep(report([]), { shard: "2/3", lists }).status).toBe(1);
+    expect(assertStep(undefined, { shard: "2/3", lists }).status).toBe(1);
+    // In NO shard: every shard goes red, so the gate cannot read green.
+    for (const shard of ["1/3", "2/3", "3/3"]) {
+      expect(assertStep(report([passed]), { shard, lists: { 1: elsewhere, 2: elsewhere, 3: elsewhere } }).status).toBe(1);
+    }
+    // Listed only for another project, in two shards, or a list missing/unreadable.
+    const otherProject = report([{ projectName: "chromium-desktop-3k", status: "skipped", results: [] }]);
+    expect(assertStep(report([passed]), { shard: "2/3", lists: { 1: elsewhere, 2: otherProject, 3: elsewhere } }).status).toBe(1);
+    expect(assertStep(report([passed]), { shard: "2/3", lists: { 1: listed, 2: listed, 3: elsewhere } }).status).toBe(1);
+    expect(assertStep(report([passed]), { shard: "1/3", lists: { 1: elsewhere, 2: listed } }).status).toBe(1);
+    expect(assertStep(report([passed]), { shard: "1/3", lists: { 1: elsewhere, 2: listed, 3: "{not json" } }).status).toBe(1);
+    for (const shard of ["2", "0/3", "4/3", "x/y"]) {
+      expect(assertStep(report([passed]), { shard, lists }).status, shard).toBe(1);
+    }
   });
 
   test("passes when the test passed on this project (also after a retry)", () => {
@@ -329,5 +547,120 @@ test.describe("self-fixture-e2e.yml: the archived-PDF test must have PASSED (#52
     expect(assertStep({ suites: [] }).status).toBe(1);
     expect(assertStep("{not json").status).toBe(1);
     expect(assertStep(undefined).status).toBe(1);
+  });
+});
+
+test.describe("self-fixture-e2e.yml: offline caret diagnostic (#755)", () => {
+  const PREPARE = "Prepare the pinned Decap caret diagnostic";
+  const RUN = "Run the offline Decap caret diagnostic";
+  const PROOF = "Assert every caret diagnostic case passed";
+
+  test("the diagnostic and its proof run on exactly one salient Chromium leg", () => {
+    const work = job(WORK);
+    const steps = work.steps;
+    const install = steps.findIndex((s) => s.name === "Install Playwright browser + system deps");
+    const prepare = step(WORK, PREPARE);
+    const run = step(WORK, RUN);
+    const proof = step(WORK, PROOF);
+    const prepareAt = steps.findIndex((s) => s.name === PREPARE);
+    const runAt = steps.findIndex((s) => s.name === RUN);
+    expect(prepareAt).toBeGreaterThan(install);
+    expect(runAt).toBeGreaterThan(prepareAt);
+    expect(steps.findIndex((s) => s.name === PROOF)).toBeGreaterThan(runAt);
+    for (const s of [prepare, run, proof]) {
+      expect(s["continue-on-error"]).toBeUndefined();
+      const expression = s.if.slice(3, -2).trim();
+      parse(expression);
+      for (const salient of ["false", "true"]) {
+        const selected = work.strategy.matrix.include.filter((matrix) =>
+          vm.runInNewContext(expression, {
+            matrix, steps: { salient: { outputs: { salient } } },
+          }, { timeout: 1000 }),
+        );
+        // 2026-10-22: moved off the (now sharded) 3k admin leg to the
+        // UNSHARDED full-fixture 1080 leg, so it runs exactly once per run.
+        expect(selected.map((l) => `${l.slot} @ ${l.fixture}`)).toEqual(
+          salient === "true" ? ["chromium-desktop-1080 @ fixture-site"] : [],
+        );
+        for (const leg of selected) {
+          expect(leg.shard, "the diagnostic leg must not be sharded").toBe("");
+          // The leg installs Chromium, the engine playwright.caret.config.js pins.
+          expect(require("./ci-matrix").engineFor(leg.project)).toBe("chromium");
+        }
+      }
+    }
+    expect(prepare["working-directory"]).toBe("e2e");
+    expect(prepare.run).toContain('ln -s "${FIXTURE}/e2e/node_modules" node_modules');
+    expect(prepare.run).toContain("node prepare-decap-caret.js");
+    expect(run["working-directory"]).toBe("e2e");
+    expect(run.env.DECAP_DIAGNOSTIC_BUNDLE).toBe("${{ github.workspace }}/e2e/node_modules/.cache/decap-caret/decap-cms.js");
+    expect(run.run).toContain("--config=playwright.caret.config.js");
+    expect(job(GATE).needs).toBe(WORK);
+  });
+
+  test("the dedicated config selects the diagnostic; normal config excludes it", () => {
+    const diagnostic = "decap-caret-selection.spec.js";
+    const ast = parse(fs.readFileSync(path.join(HARNESS, "playwright.caret.config.js"), "utf8"));
+    const configs = [];
+    walk.simple(ast, { CallExpression(node) {
+      if (calleeName(node.callee) === "defineConfig") configs.push(node.arguments[0]);
+    } });
+    expect(configs).toHaveLength(1);
+    expect(configs[0].type).toBe("ObjectExpression");
+    const properties = Object.fromEntries(configs[0].properties.map((p) => [p.key.name || p.key.value, p.value]));
+    expect(properties.testMatch.type).toBe("CallExpression");
+    expect(calleeName(properties.testMatch.callee)).toBe("path.join");
+    expect(properties.testMatch.arguments.map((argument) => argument.type)).toEqual(["Identifier", "Literal"]);
+    expect(properties.testMatch.arguments[0].name).toBe("__dirname");
+    expect(properties.testMatch.arguments[1].value).toBe(diagnostic);
+    expect(properties.testIgnore).toBeUndefined();
+    expect(properties.webServer).toBeUndefined();
+    // It pins its own browser, viewport and single worker, so the leg that
+    // hosts it (and that leg's project) cannot change what it measures.
+    expect(properties.workers).toMatchObject({ type: "Literal", value: 1 });
+    expect(properties.projects).toBeUndefined();
+    expect(properties.use.type).toBe("ObjectExpression");
+    const use = Object.fromEntries(properties.use.properties.map((p) => [p.key.name || p.key.value, p.value]));
+    expect(use.browserName).toMatchObject({ type: "Literal", value: "chromium" });
+    expect(use.viewport.type).toBe("ObjectExpression");
+    const ignored = require("./playwright.config").testIgnore;
+    expect([].concat(ignored).some((pattern) => pattern.test(diagnostic))).toBe(true);
+  });
+
+  test("the diagnostic proof rejects skips, missing cases, failures, and absent reports", () => {
+    const sb = createSandbox("caret-proof-");
+    try {
+      const file = path.join(sb.root, "report.json");
+      const proof = { ...step(WORK, PROOF) };
+      proof.run = proof.run.replaceAll("/tmp/decap-caret.log.json", file);
+      function verify(report) {
+        if (report === undefined) fs.rmSync(file, { force: true });
+        else fs.writeFileSync(file, JSON.stringify(report));
+        return runStep(proof, { cwd: sb.root, scratch: path.join(sb.root, "assert"), env: sb.env }).status;
+      }
+      const passed = { expectedStatus: "passed", results: [{ status: "passed" }] };
+      const green = {
+        stats: { expected: 8, unexpected: 0, flaky: 0, skipped: 0 }, errors: [],
+        suites: [{ specs: [{ file: "decap-caret-selection.spec.js", tests: Array.from({ length: 8 }, () => passed) }] }],
+      };
+      expect(verify(green)).toBe(0);
+      for (const stats of [
+        { ...green.stats, expected: 0, skipped: 8 },
+        { ...green.stats, expected: 7 },
+        { ...green.stats, unexpected: 1 },
+        { ...green.stats, flaky: 1 },
+      ]) expect(verify({ ...green, stats })).toBe(1);
+      expect(verify({ ...green, errors: [{}] })).toBe(1);
+      const expectedFailure = {
+        ...green, suites: [{ specs: [{ file: "decap-caret-selection.spec.js", tests: [
+          ...Array.from({ length: 7 }, () => passed),
+          { expectedStatus: "failed", results: [{ status: "failed" }] },
+        ] }] }],
+      };
+      expect(verify(expectedFailure)).toBe(1);
+      expect(verify(undefined)).toBe(1);
+    } finally {
+      sb.cleanup();
+    }
   });
 });

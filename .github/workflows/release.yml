@@ -22,6 +22,14 @@ on:
         description: 'Cut a PRERELEASE instead. Marked prerelease on GitHub, so releases/latest skips it and NO consumer is bumped — pin ONE consumer PR at it to validate a fix on a real preview before cutting the real release.'
         type: boolean
         default: false
+      candidate_adamdaniel_ai_pr:
+        description: 'Stable only: open draft candidate PR in Adam-S-Daniel/adamdaniel.ai, pinned to this dispatched platform commit.'
+        type: string
+        required: false
+      candidate_jodidaniel_com_pr:
+        description: 'Stable only: open draft candidate PR in jodidaniel/jodidaniel.com, pinned to this dispatched platform commit.'
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -34,6 +42,48 @@ jobs:
       # release itself is cut server-side by `gh`, which needs no worktree.
       - name: Check out the ref being tagged
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Node for candidate validation
+        if: ${{ inputs.prerelease != true }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+
+      - name: Install candidate gate dependencies
+        if: ${{ inputs.prerelease != true }}
+        run: npm ci --prefix e2e --ignore-scripts
+
+      - name: Set up Ruby for candidate Gemfile parsing
+        if: ${{ inputs.prerelease != true }}
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a
+        with:
+          ruby-version: "3.2"
+
+      - name: Validate both consumer release candidates
+        if: ${{ inputs.prerelease != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          CANDIDATE_SHA: ${{ github.sha }}
+          CANDIDATE_ADAMDANIEL_AI_PR: ${{ inputs.candidate_adamdaniel_ai_pr }}
+          CANDIDATE_JODIDANIEL_COM_PR: ${{ inputs.candidate_jodidaniel_com_pr }}
+          # Existing per-owner dispatch credentials also need consumer Contents,
+          # Pull requests and Checks read permissions for candidate validation.
+          # Unreadable results fail closed; these credentials never update pins.
+          TOKEN_ADAMDANIEL_AI: ${{ secrets.BUMP_DISPATCH_ADAMDANIEL_AI }}
+          TOKEN_JODIDANIEL_COM: ${{ secrets.BUMP_DISPATCH_JODIDANIEL_COM }}
+          CANDIDATE_REPORT: ${{ runner.temp }}/release-candidate-results.json
+        run: node scripts/release-candidate-gate.js
+
+      - name: Upload candidate validation results
+        if: ${{ always() && inputs.prerelease != true }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: release-candidate-results
+          path: ${{ runner.temp }}/release-candidate-results.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Create the release
         env:
@@ -107,7 +157,7 @@ jobs:
           for manifest in ${expected:+plugin.json .claude-plugin/plugin.json}; do
             declared=$(jq -r '.version // ""' "$manifest")
             if [ "$declared" != "$expected" ]; then
-              echo "::error file=${manifest}::${manifest} declares version '${declared}' but this run cuts ${VERSION} (expected '${expected}'). The release PR bumps ALL of: both plugin manifests, AGENTS.md's 'Current release:' line, every platform pin in examples/site/.github/workflows (uses:@ref AND with: platform_ref:), and scaffold/create-site.js's PLATFORM_VERSION — the last two enforced by e2e/examples-site-pins-current.test.js in the REQUIRED node-unit-lints lane, so skipping them reds self-CI right after the tag is cut. Fix them all, then re-dispatch."
+              echo "::error file=${manifest}::${manifest} declares version '${declared}' but this run cuts ${VERSION} (expected '${expected}'). The release PR bumps ALL of: both plugin manifests, AGENTS.md's 'Current release:' line, every platform pin in examples/site/.github/workflows (uses:@ref AND with: platform_ref:), and scaffold/create-site.js's PLATFORM_VERSION — the Current release line, the platform pins and PLATFORM_VERSION are enforced by e2e/examples-site-pins-current.test.js (which also holds the two manifests equal) in the REQUIRED node-unit-lints lane, so skipping them reds self-CI right after the tag is cut. Fix them all, then re-dispatch."
               skew=1
             fi
           done
@@ -135,12 +185,13 @@ jobs:
       # platform-bump.yml caller.
       #
       # FAIL-OPEN by design: a missing/expired token or a failed dispatch is a
-      # warning, never a job failure, so a consumer outage cannot block cutting
-      # a release. With no cron behind it, that consumer stays on the old
+      # warning, never a job failure: a dispatch outage does not invalidate the
+      # already published release. With no cron behind it, that consumer stays on the old
       # version until someone re-dispatches by hand — the `::warning::` names
       # the exact command. Fine-grained PATs are
       # minted per RESOURCE OWNER, so each consumer owner supplies its own
-      # secret: Actions read+write on that one repo, nothing else.
+      # secret: Actions read+write on that one repo; candidate validation above
+      # additionally requires Contents, Pull requests and Checks read.
       # A prerelease is validated on ONE consumer PR, pinned by hand. Dispatching
       # the consumers' platform-bump would be a no-op today (it resolves
       # releases/latest, which skips prereleases, and would exit "already on

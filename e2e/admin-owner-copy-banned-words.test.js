@@ -91,7 +91,7 @@ function offenders(strings) {
   return out;
 }
 
-const PLE_FUNCS = ["publishingBarCopy", "publishingStateWord", "publishingSummaryHTML", "ensureBar", "decorate"];
+const PLE_FUNCS = ["publishingBarCopy", "publishingStateWord", "publishingSummaryHTML", "ensureBar", "metaHTML", "decorate"];
 
 test.describe("owner-facing admin copy avoids developer vocabulary outside Advanced (#649)", () => {
   test("posts-list-enhance.js row and bar strings", () => {

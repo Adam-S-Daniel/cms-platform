@@ -144,6 +144,19 @@ test.describe("repo-settings.yml — manifest shape (#109)", () => {
     }
   });
 
+  test("actions_permissions: GITHUB_TOKEN defaults to read and cannot approve PRs on all three (#868)", () => {
+    const { effectiveActionsPermissions, loadManifest } = loadScript();
+    const manifest = loadManifest(MANIFEST_PATH);
+    for (const repo of CANONICAL_REPOS) {
+      const ap = effectiveActionsPermissions(manifest, repo);
+      expect(ap.default_workflow_permissions, `${repo} GITHUB_TOKEN default`).toBe("read");
+      expect(
+        ap.can_approve_pull_request_reviews,
+        `${repo} must not let GITHUB_TOKEN approve PRs`,
+      ).toBe(false);
+    }
+  });
+
   test("every actions_permissions leaf carries a `# why:` comment", () => {
     const defaults = doc.get("actions_permissions_defaults", true);
     expect(mapPairs(defaults).length).toBeGreaterThan(0);

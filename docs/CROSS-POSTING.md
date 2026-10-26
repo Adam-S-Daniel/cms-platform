@@ -240,7 +240,9 @@ profile through LinkedIn's versioned REST API:
   excerpt are backslash-escaped (`little_text_escape`) and each tag becomes a
   `{hashtag|\#|Word}` template. The commentary carries no URL — the article
   card does — and is capped at 2900 characters (excerpt truncated at a word
-  boundary, then hashtags dropped).
+  boundary, then hashtags dropped; if the escaped title alone exceeds the cap,
+  it is truncated after counting escaped characters, preserving complete
+  escapes and preferring a word boundary).
 - **`LinkedIn-Version`.** Every `/rest` call sends
   `LinkedIn-Version: <LINKEDIN_API_VERSION>` (a `YYYYMM` constant in
   `cross_post.py`) plus `X-Restli-Protocol-Version: 2.0.0`. LinkedIn sunsets

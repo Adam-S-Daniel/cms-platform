@@ -67,9 +67,14 @@ jobs:
           path: .cms-platform
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
+
+      - name: Setup Ruby for candidate Gemfile parsing
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a
+        with:
+          ruby-version: "3.2"
 
       - name: Install the YAML parser
         # The checker parses workflows with the `yaml` lib (anchors resolved) —

@@ -1,7 +1,7 @@
 // @lane: local — exercises the locally-rendered tag pages; @parity-eligible via TARGET=
 const path = require("node:path");
 const { test, expect } = require("./base");
-const { discoverTags } = require("./content-fixtures");
+const { discoverTags, duplicateTagSlugs } = require("./content-fixtures");
 const cap = require("./site-capabilities");
 
 // SITE_ROOT for the capability gate (same root the harness sits at in a
@@ -79,6 +79,19 @@ test.describe("Tag archive pages", () => {
       const response = await page.goto(`/tags/${slug}/`);
       expect(response.status(), `/tags/${slug}/ should respond 200`).toBe(200);
       await expect(page.locator(".page-header h1")).toHaveText(name);
+    }
+  });
+
+  // #754: tags that differ only in case are one tag (one slug, one URL). The
+  // index must show one card for them, and the archive must list every post
+  // the card counts, whatever spelling each post used.
+  test("each tag is ONE card, and its archive lists as many posts as the card counts", async ({ page }) => {
+    const tags = await discoverTags(page);
+    test.skip(tags.length === 0, "no tags exist on the site — nothing to assert against");
+    expect(duplicateTagSlugs(tags), "two /tags/ cards share one /tags/<slug>/ page").toEqual([]);
+    for (const { slug, count } of tags) {
+      await page.goto(`/tags/${slug}/`);
+      await expect(page.locator(".post-list .post-item"), `/tags/${slug}/ post count`).toHaveCount(count);
     }
   });
 

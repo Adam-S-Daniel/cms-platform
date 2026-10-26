@@ -1,7 +1,9 @@
 // @lane: local — exercises the locally-served Atom/RSS feeds + per-post share row
+const fs = require("node:fs");
 const path = require("node:path");
+const YAML = require("yaml");
 const { test, expect } = require("./base");
-const { discoverTags, discoverPost } = require("./content-fixtures");
+const { discoverTags, discoverPost, feedHasTitle, hrefParamStartsWith } = require("./content-fixtures");
 const cap = require("./site-capabilities");
 
 // SITE_ROOT for the #33 capability gate (build-INDEPENDENT, so it's correct in
@@ -24,6 +26,21 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // rather than failing because a specific fixture name was removed.
 
 const ATOM_NS = 'xmlns="http://www.w3.org/2005/Atom"';
+
+// The feed's <title> is the site's own `title` (else `name`) from _config.yml —
+// what both the site-owned feed.xml and jekyll-feed emit. Read from the SITE,
+// never hardcoded: a spec naming one consumer's identity fails every other
+// site (the fixture lane, #702).
+function siteFeedTitle() {
+  const cfg = YAML.parse(fs.readFileSync(path.join(SITE_ROOT, "_config.yml"), "utf8")) || {};
+  const title = cfg.title || cfg.name;
+  expect(title, `${SITE_ROOT}/_config.yml must set title (or name) for the feed`).toBeTruthy();
+  return String(title);
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 async function fetchText(page, url) {
   const response = await page.request.get(url);
@@ -53,7 +70,8 @@ test.describe("Atom feeds", () => {
     expect(body).toMatch(
       /<link[^>]+(rel="self"[^>]+href="[^"]*feed\.xml|href="[^"]*feed\.xml"[^>]+rel="self")/,
     );
-    expect(body).toMatch(/<title[^>]*>.*Adam Daniel.*<\/title>/);
+    const xmlTitle = siteFeedTitle().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    expect(body).toMatch(new RegExp(`<title[^>]*>.*${escapeRegExp(xmlTitle)}.*</title>`));
   });
 
   test("each discovered tag emits a valid per-tag Atom feed at /tags/<slug>/feed.xml", async ({
@@ -88,11 +106,11 @@ test.describe("Atom feeds", () => {
     expect(body, `feed.xml should reference ${post.url} (the discovered post)`).toMatch(
       new RegExp(`href="[^"]*${post.url.replace(/\//g, "\\/")}"`),
     );
-    // The post's title should appear in an <entry><title>…</title>.
-    // Escape any regex special chars in the title.
-    const escapedTitle = post.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    expect(body, `feed.xml should contain the post title "${post.title}"`).toMatch(
-      new RegExp(`<title[^>]*>[^<]*${escapedTitle}`),
+    // The post's title should appear in an <entry><title>…</title>. The
+    // feed spells it smartified and entity-escaped, so compare decoded text
+    // (see `feedHasTitle`), not the raw string.
+    expect(feedHasTitle(body, post.title), `feed.xml should contain the post title "${post.title}"`).toBe(
+      true,
     );
   });
 
@@ -259,16 +277,19 @@ test.describe("Share row on a post", () => {
     const bskyHref = await bluesky.getAttribute("href");
     expect(bskyHref).toContain(post.slug);
 
-    // The title must be carried (form- or percent-encoded) on every
-    // intent that takes a quoted body. Build a regex from the first
-    // non-empty word of the title — covers both encoding styles
-    // without depending on a specific fixture's exact phrasing.
-    const firstWord = post.title.split(/\s+/).find((w) => w.length > 0);
-    if (firstWord) {
-      const wordRe = new RegExp(firstWord.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      expect(xHref, "X intent URL is missing the post title").toMatch(wordRe);
-      expect(bskyHref, "Bluesky intent URL is missing the post title").toMatch(wordRe);
-    }
+    // The title must lead the `text` parameter of every intent that takes a
+    // quoted body. Check that parameter, not the whole href: the slug in
+    // `url=` repeats the title's own words, so a whole-href search passes with
+    // the title absent. The full title is compared (decoded, so `+`, `%27`,
+    // `%26`, … all work), not a first word.
+    expect(
+      hrefParamStartsWith(xHref, "text", post.title),
+      "X intent text= is missing the post title",
+    ).toBe(true);
+    expect(
+      hrefParamStartsWith(bskyHref, "text", post.title),
+      "Bluesky intent text= is missing the post title",
+    ).toBe(true);
   });
 
   test("Mastodon and Copy buttons are buttons (not links) and carry data attrs", async ({
@@ -314,8 +335,193 @@ test.describe("Share row on a post", () => {
     await copy.click();
 
     await expect(copy).toHaveClass(/share-copied/);
+    // Copied: only the check shows (#727).
+    await expect(copy.locator(".share-icon-success")).toBeVisible();
+    await expect(copy.locator(".share-icon-default")).toBeHidden();
 
     const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
     expect(clipboardText).toMatch(new RegExp(`/blog/${post.slug}/?$`));
+  });
+  test("idle Copy button shows only the link icon, not the check mark (#727)", async ({ page }) => {
+    const post = await discoverPost(page);
+    test.skip(!post, "no published posts on the site");
+    await page.goto(post.url);
+
+    const copy = page.locator(".share-copy");
+    await expect(copy).toBeVisible();
+    await expect(copy.locator(".share-icon-default")).toBeVisible();
+    await expect(copy.locator(".share-icon-success")).toBeHidden();
+    // No other share button shows a second glyph either.
+    for (const svgs of await page.locator(".share-link:not(.share-copy)").all()) {
+      await expect(svgs.locator("svg:visible")).toHaveCount(1);
+    }
+  });
+
+  test("share buttons are at least 44x44 CSS px on a phone, on one line (#727)", async ({ page }) => {
+    const post = await discoverPost(page);
+    test.skip(!post, "no published posts on the site");
+    await page.setViewportSize({ width: 360, height: 740 });
+    await page.goto(post.url);
+
+    const boxes = [];
+    for (const link of await page.locator(".share-row .share-link").all()) {
+      await expect(link).toBeVisible();
+      boxes.push(await link.boundingBox());
+    }
+    expect(boxes).toHaveLength(5);
+    for (const box of boxes) {
+      expect(box.width, "button width").toBeGreaterThanOrEqual(44);
+      expect(box.height, "button height").toBeGreaterThanOrEqual(44);
+    }
+    // Neighbors do not overlap, and all five stay on one line.
+    for (let i = 1; i < boxes.length; i += 1) {
+      expect(boxes[i].x, `button ${i} starts after button ${i - 1} ends`).toBeGreaterThanOrEqual(
+        boxes[i - 1].x + boxes[i - 1].width,
+      );
+      expect(Math.abs(boxes[i].y - boxes[0].y), "same row").toBeLessThan(1);
+    }
+    // The icons themselves are not enlarged.
+    const icon = await page.locator(".share-copy .share-icon-default").boundingBox();
+    expect(icon.width).toBeLessThanOrEqual(16);
+  });
+
+  test("desktop share buttons keep their compact size (#727)", async ({ page }) => {
+    const post = await discoverPost(page);
+    test.skip(!post, "no published posts on the site");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(post.url);
+    const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
+    test.skip(coarse, "touch device: the 44px target applies at any width");
+    const box = await page.locator(".share-copy").boundingBox();
+    expect(box.width).toBeLessThan(40);
+    expect(box.height).toBeLessThan(40);
+  });
+
+  test.describe("Mastodon instance field (#727)", () => {
+    // Record every dialog (a regression to window.prompt) and every
+    // window.open call (the share intent) instead of letting either happen.
+    async function arm(page) {
+      const dialogs = [];
+      page.on("dialog", async (d) => {
+        dialogs.push(d.type());
+        await d.dismiss();
+      });
+      await page.addInitScript(() => {
+        window.__opened = [];
+        window.open = (...args) => {
+          window.__opened.push(args);
+          return null;
+        };
+      });
+      return dialogs;
+    }
+
+    test("opens an inline field, not a browser dialog, and shares to the typed instance", async ({
+      page,
+    }) => {
+      const post = await discoverPost(page);
+      test.skip(!post, "no published posts on the site");
+      const dialogs = await arm(page);
+      await page.goto(post.url);
+
+      const masto = page.locator(".share-mastodon");
+      const form = page.locator(".share-mastodon-form");
+      await expect(form).toBeHidden();
+      await expect(masto).toHaveAttribute("aria-expanded", "false");
+
+      await masto.click();
+      await expect(form).toBeVisible();
+      await expect(masto).toHaveAttribute("aria-expanded", "true");
+      const input = page.getByLabel("Your Mastodon instance");
+      await expect(input).toBeFocused();
+
+      await input.fill("https://mastodon.example/");
+      await input.press("Enter");
+
+      await expect(form).toBeHidden();
+      await expect(masto).toBeFocused();
+      expect(dialogs, "no alert/prompt dialog opened").toEqual([]);
+
+      const opened = await page.evaluate(() => window.__opened);
+      expect(opened).toHaveLength(1);
+      const [target, , features] = opened[0];
+      const url = new URL(target);
+      expect(url.origin).toBe("https://mastodon.example");
+      expect(url.pathname).toBe("/share");
+      const text = url.searchParams.get("text");
+      expect(text).toContain(post.title);
+      expect(text).toMatch(new RegExp(`/blog/${post.slug}/?$`));
+      expect(features).toContain("noopener");
+
+      // Remembered for next time.
+      const stored = await page.evaluate(() => window.localStorage.getItem("mastodon-instance"));
+      expect(stored).toBe("mastodon.example");
+      await masto.click();
+      await expect(input).toHaveValue("mastodon.example");
+    });
+
+    test("an invalid instance shows an error and shares nothing; Escape closes", async ({ page }) => {
+      const post = await discoverPost(page);
+      test.skip(!post, "no published posts on the site");
+      const dialogs = await arm(page);
+      await page.goto(post.url);
+
+      const masto = page.locator(".share-mastodon");
+      await masto.click();
+      const input = page.getByLabel("Your Mastodon instance");
+      await input.fill("not an instance");
+      await input.press("Enter");
+
+      const error = page.locator(".share-mastodon-error");
+      await expect(error).toBeVisible();
+      await expect(error).toHaveAttribute("role", "alert");
+      await expect(input).toHaveAttribute("aria-invalid", "true");
+      await expect(input).toBeFocused();
+      expect(await page.evaluate(() => window.__opened)).toEqual([]);
+
+      await input.press("Escape");
+      await expect(page.locator(".share-mastodon-form")).toBeHidden();
+      await expect(masto).toBeFocused();
+      expect(dialogs).toEqual([]);
+    });
+
+    test("a repeat invalid submit re-announces the error; Escape also closes from the toggle", async ({
+      page,
+    }) => {
+      const post = await discoverPost(page);
+      test.skip(!post, "no published posts on the site");
+      await arm(page);
+      await page.goto(post.url);
+
+      const masto = page.locator(".share-mastodon");
+      await masto.click();
+      const input = page.getByLabel("Your Mastodon instance");
+      const error = page.locator(".share-mastodon-error");
+      await input.fill("nope");
+      await input.press("Enter");
+      await expect(error).toHaveText(/Enter an instance address/);
+
+      // Same text again: a live region only speaks on a change, so the node
+      // must be emptied and refilled. Record its text mutations.
+      await error.evaluate((el) => {
+        window.__errorTexts = [];
+        new MutationObserver(() => window.__errorTexts.push(el.textContent)).observe(el, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      });
+      await input.press("Enter");
+      await expect(error).toHaveText(/Enter an instance address/);
+      const texts = await page.evaluate(() => window.__errorTexts);
+      expect(texts, "the alert text was cleared, then set again").toContain("");
+      expect(texts[texts.length - 1]).toMatch(/Enter an instance address/);
+
+      // Escape with focus back on the toggle button closes the form too.
+      await masto.focus();
+      await masto.press("Escape");
+      await expect(page.locator(".share-mastodon-form")).toBeHidden();
+      await expect(masto).toHaveAttribute("aria-expanded", "false");
+    });
   });
 });

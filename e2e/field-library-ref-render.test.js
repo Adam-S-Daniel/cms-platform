@@ -187,7 +187,8 @@ test.describe("field_library $ref render (issue #5 GOAL 2)", () => {
     expect(rendered).toContain(
       'summary: "{{title}}' +
         "{{published | ternary('', ' — DRAFT')}}" +
-        "{{publish_date | ternary(' — Scheduled', '')}}\"",
+        "{{publish_date | ternary(' — Scheduled', '')}}" +
+        '\\u2063{{fields.slug}}\\u2063{{fields.permalink}}"',
     );
     expect(rendered).toContain('format: "YYYY-MM-DD HH:mm:ss ZZ"');
     expect(rendered).toContain('media_folder: "assets/images/uploads"');

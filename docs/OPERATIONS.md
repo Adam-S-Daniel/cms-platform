@@ -21,6 +21,11 @@ node scaffold/create-site.js /tmp/x --yes --domain d --repo d --owner o   # scaf
 # workflows: python3 -c 'import yaml,...' parse + bash -n the run: blocks
 ```
 
+Playwright clears its `outputDir` before a run. Keep scratch configurations,
+served fixtures, mutation sources, and safety stubs outside that directory;
+set an explicit output directory for each scratch configuration. Otherwise a
+verifier can delete its own inputs before collecting any tests.
+
 ## Environment gotchas (this machine / web)
 
 - **The local checkout can be STALE/detached** — before any analysis or work,
@@ -177,6 +182,22 @@ shipping `404.html` keeps the last uploaded copy until someone removes it.
 `e2e/deploy-production-404-cache.test.js` holds both halves;
 `e2e/cms-media-roundtrip.spec.js` checks the live header. `deploy-preview.yml`
 already uploads everything no-cache.
+
+## CloudFront invalidation budget
+
+The AWS free tier covers 1,000 invalidation paths per month per AWS account,
+shared by every site's distributions in it. Each path counts once and a
+wildcard counts as one. October 2026 hit 100% (AWS free-tier alert dated
+2026-10-19). Successful invalidation steps from October 1 to 19, read from
+the job step records: about 1,450 preview deploy and teardown paths (1 per
+call, 2 on a `cms/*` branch), about 270 visual-regression paths (2 per call)
+and 413 production `/*` paths. The preview distribution uses CachingDisabled
+and never stores a response, so every preview path was wasted.
+
+Only `deploy-production.yml` invalidates now: one `/*` path per production
+deploy. `e2e/cloudfront-invalidation-budget.test.js` enforces that. Never add an
+invalidation of the preview or admin distribution; change its cache policy
+first, and update the test, if one ever becomes cacheable.
 
 ## Before deleting anything from a consumer, grep the PLATFORM too
 

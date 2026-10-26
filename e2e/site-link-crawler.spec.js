@@ -112,6 +112,23 @@ function resolveTarget(href, pageFile, baseurl) {
   return [abs, path.join(abs, "index.html"), `${abs}.html`];
 }
 
+// An e2e / test-fixture post (an `e2e-` slug: exclude_e2e_posts.rb's
+// signature) still renders its tag pills, but auto_tag_pages.rb deliberately
+// mints no /tags/<slug>/ archive from it ("it just doesn't surface in tag
+// aggregation"). A pill from such a post to an archive that does not exist is
+// that design, not a missing section; e2e/fixture-site's seed post carries one
+// (#702). Only a POST page qualifies (the theme's post.html `<article
+// class="post">`): any other page, a leaked /tags/e2e-*/ archive included,
+// linking to a missing tag archive still fails.
+function isFixturePostTagLink(pageFile, html, href, baseurl) {
+  if (path.basename(pageFile) !== "index.html") return false;
+  if (!path.basename(path.dirname(pageFile)).startsWith("e2e-")) return false;
+  if (!/<article\b[^>]*\bclass="post"/.test(html)) return false;
+  let p = href.split("#")[0].split("?")[0];
+  if (baseurl && p.startsWith(`${baseurl}/`)) p = p.slice(baseurl.length);
+  return p.startsWith("/tags/");
+}
+
 test.describe("public site internal links", () => {
   test("every <a href> into this site resolves to a built file", () => {
     expect(
@@ -139,6 +156,7 @@ test.describe("public site internal links", () => {
           continue;
         }
         if (!candidates.some((c) => fs.existsSync(c) && fs.statSync(c).isFile())) {
+          if (isFixturePostTagLink(pageFile, html, href, baseurl)) continue;
           broken.push({ page: pageFile, href, why: "no such file in the build" });
         }
       }

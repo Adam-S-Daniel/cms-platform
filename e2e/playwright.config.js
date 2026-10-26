@@ -35,6 +35,10 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // basenames; the regex below matches them anywhere under the testDir.
 const CONSUMER = !!process.env.SITE_ROOT;
 const PLATFORM_META_SPECS = [
+  // #755: platform admin SOURCE; the browser spec uses the offline caret config,
+  // and unit checks run in node-unit-lints.
+  "decap-caret-selection.spec.js",
+  "decap-caret-diagnostic.test.js",
   // Executes Decap save serialization against the platform-owned posts form.
   "cms-ui-front-matter.test.js",
   // Reads the platform's own deploy workflows, bootstrap CloudFormation and
@@ -43,6 +47,8 @@ const PLATFORM_META_SPECS = [
   "media-archive-publish-gate.test.js",
   // Executes repository-controlled log text in the platform's workflow steps.
   "workflow-command-log.test.js",
+  // Runs the platform reaper workflow's reject step against a stubbed gh (#788).
+  "regression-review-reaper-reject-failure.test.js",
   // Platform-internal: admin-JS augmentation + the deploy-preview workflow-shape
   // assertion; and the exclude-plugin's synthetic-build test. Validated in the
   // platform's own self-CI (against the platform tree), not a consumer site.
@@ -72,6 +78,8 @@ const PLATFORM_META_SPECS = [
   // SOURCE (the mobile-breakpoint clearance/affordance fixes); meaningless
   // on a consumer, which ships only the gem-rendered admin CSS.
   "admin-mobile-clearance-lint.test.js",
+  // Parses the platform's admin CSS and shim for notice-safe Decap toasts.
+  "admin-toast-notice-layout.test.js",
   "admin-reviews-return-lint.test.js",
   "admin-pin-invariant.test.js",
   // #161 — the confirm-wrap + autosave shim load-order lint (reads the three
@@ -81,6 +89,9 @@ const PLATFORM_META_SPECS = [
   // platform-internal and testIgnored on a CONSUMER lane.
   "admin-shim-load-order.test.js",
   "confirm-wrap-local-backup.test.js",
+  // #652 — vm-sandbox test of theme/admin/hide-fixture-media.js + probe invariants
+  // (reads the platform theme/admin tree, absent on a consumer).
+  "hide-fixture-media.test.js",
   // #625 item 3 — vm-sandbox unit test reading theme/admin/autosave-on-hide.js
   // SOURCE (platform theme/admin tree, absent on a consumer), same shape as above.
   "autosave-on-hide.test.js",
@@ -148,13 +159,32 @@ const PLATFORM_META_SPECS = [
   "publish-progress-post-merge.test.js",
   "live-url-banner-follows-poller.test.js",
   "entry-status-model-progress.test.js",
+  // #644 — vm-sandboxes theme/admin SOURCE (the poller, the button and the
+  // requestAnimationFrame shims) with document.hidden stubbed; same reason.
+  "admin-hidden-tab.test.js",
   "admin-publish-duration-copy.test.js",
   // #649 — AST lint over theme/admin SOURCE (owner-facing copy; platform tree only).
   "admin-owner-copy-banned-words.test.js",
   "posts-list-branch-tip.test.js",
+  // #642 — vm-sandbox posts-list-enhance.js and native-preview-href.js SOURCE
+  // on a preview admin; same reason as the entries above.
+  "posts-list-preview-host.test.js",
+  "check-for-preview-preview-only.test.js",
+  "posts-list-status-dedupe.test.js",
+  "admin-config-sortable-fields-schema.test.js",
   "slug-pin.test.js",
+  // cms-platform#735 — vm-sandboxes theme/admin/tags-input.js SOURCE; platform-internal likewise.
+  "tags-suggest.test.js",
+  // cms-platform#730 — vm-sandboxes theme/admin/validation-feedback.js SOURCE.
+  "validation-feedback.test.js",
+  // vm-sandboxes theme/admin/list-row-affordance.js SOURCE (the control names).
+  "list-row-affordance.test.js",
+  // UX round 3 (K8/F5) — vm-sandboxes theme/admin/route-focus.js SOURCE.
+  "route-focus.test.js",
   // cms-platform#648 — vm-sandboxes theme/admin/editor-component-image.js SOURCE.
   "editor-component-image.test.js",
+  // #732 — platform-only code widget registration and initialization regression.
+  "code-block-language.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",
@@ -200,9 +230,31 @@ const PLATFORM_META_SPECS = [
   // sense only in the platform self-CI, never in a consumer.
   "site-capabilities.test.js",
   "base-collections-skip-meta.test.js",
+  // UX round 4 package 3: renders theme/assets/css/main.css and the project
+  // layout's SOURCE in a static fixture (theme/ tree, absent on a consumer).
+  "theme-featured-badge.test.js",
   // #656 — parses the platform theme's own theme/assets/css/main.css, absent in
   // a consumer. Runs in self-ci node-unit-lints.
   "theme-reduced-motion.test.js",
+  // #727 — the same shape for the share row's rules in main.css (idle copy icon
+  // specificity, 44px touch targets). Pure-fs; self-ci node-unit-lints.
+  "theme-share-row-css.test.js",
+  // #729 — same, for the bare Markdown table rules (padding, borders, header).
+  "theme-table-css.test.js",
+  // #753 — the same shape for overflow-wrap on post text, excerpts and inline
+  // code in main.css. Pure-fs; self-ci node-unit-lints.
+  "theme-overflow-wrap-css.test.js",
+  // #737 — the same shape for the hero gap, the current-nav state and the tag
+  // name casing in main.css. Pure-fs; self-ci node-unit-lints.
+  "theme-public-polish-css.test.js",
+  // UX r5 F1 — the sticky site header's fill in main.css is opaque (no 85%
+  // alpha + backdrop blur). Pure-fs; self-ci node-unit-lints.
+  "theme-sticky-header-opaque-css.test.js",
+  // jodidaniel.com#388 — AST lint that public-a11y-polish.spec.js's `.site-header`
+  // tests skip unless the header is sticky or fixed. It polices the platform's
+  // own spec source, like status-dropdown-selector.test.js, so it runs in
+  // self-ci node-unit-lints rather than on a consumer lane.
+  "public-a11y-sticky-header-guard.test.js",
   // #33 CONCERN B — the pure-fs guard-registry lint: reads the platform's TWO
   // fixtures' _config.yml + the harness spec sources + playwright.config.js's
   // own PLATFORM_META_SPECS. Platform-internal; runs in self-ci node-unit-lints.
@@ -345,6 +397,10 @@ const PLATFORM_META_SPECS = [
   // both fail-open). Reads the PLATFORM workflow files — platform self-CI
   // only.
   "release-fanout.test.js",
+  "release-candidate-gate.test.js",
+  // Reads and executes release-candidates.yml and platform-bump.yml's candidate
+  // mode (the PLATFORM workflow definitions) — platform self-CI only.
+  "release-candidates.test.js",
   "decap-config-render-parity.test.js",
   // #5 GOAL 2 — drives scripts/render-decap-config.rb + reads theme/admin
   // (config.base.yml + field_library.yml) to render a $ref fixture and assert
@@ -377,6 +433,14 @@ const PLATFORM_META_SPECS = [
   "deploy-commit-metadata.test.js",
   "deploy-pill.test.js",
   "deploy-preview-cms-slug.test.js",
+  // 2026-10 free-tier incident — reads the platform's OWN workflow and
+  // composite-action DEFINITIONS plus infrastructure/bootstrap/template.yaml
+  // to lock that only deploy-production invalidates CloudFront; platform-internal,
+  // self-CI only.
+  "cloudfront-invalidation-budget.test.js",
+  // #637 — executes the build run: scripts of the platform's OWN
+  // deploy-preview.yml / deploy-production.yml / site-verify.yml DEFINITIONS.
+  "deploy-preview-unpublished.test.js",
   "deploy-status-pill-robustness.test.js",
   "deploy-status-pill-stale.test.js",
   "detect-changed-pages.test.js",
@@ -643,6 +707,11 @@ const PLATFORM_META_SPECS = [
   // internal: a consumer doesn't ship those reusable definitions.
   "workflow-loop-branch-cleanup.test.js",
   "workflow-prod-loop-serialized.test.js",
+  // Every job that runs python3/pip, ruby/gem/bundle or actionlint pins the
+  // runtime through a setup step (runner-images#14748: ubuntu-latest rolls to
+  // 26.04 from 2026-10-19). Reads the PLATFORM's own workflow and composite
+  // action definitions — a consumer has neither.
+  "workflow-runtime-pinned.test.js",
   // #145 — reads the canonical examples/site thin-caller DEFINITIONS + the
   // platform's own self-dependabot-auto-merge.yml / self-secrets-scan.yml to
   // lock the base-retarget `edited` trigger + caller-job gate. Platform-
@@ -674,8 +743,19 @@ const PLATFORM_META_SPECS = [
   // admin shells and theme/_layouts/preview.html) and for preview-bridge.js's
   // payload. Both read theme/ SOURCE, absent on a consumer.
   "draft-media-fallback.test.js",
+  // #736 media library tidy: vm-sandbox tests for theme/admin/media-library-tidy.js
+  // (upload-name trim, dotfile listing filter) and its placement in the admin
+  // shells. Reads theme/ SOURCE, absent on a consumer.
+  "media-library-tidy.test.js",
+  // #647 — vm-sandbox + real-redux unit tests for
+  // theme/admin/media-library-draft-sync.js and its <script> placement in the
+  // three admin shells. Reads theme/ SOURCE, absent on a consumer.
+  "media-library-draft-sync.test.js",
   "preview-bridge-payload.test.js",
   "preview-pane.test.js",
+  // cms-platform#645 — vm-sandboxes theme/admin/mobile-preview-toggle.js and
+  // parses theme/admin/admin-mobile.css; platform-internal SOURCE reads.
+  "mobile-preview-toggle.test.js",
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",
@@ -692,14 +772,14 @@ const META_SPECS_RE = new RegExp(
     ")$",
 );
 
-// regression-video.spec.js is ALWAYS ignored (it's a video-fixture
-// generator, not a test — and it's also in the meta list above). In
+// The video fixture generator and the separately configured offline caret
+// diagnostic are ALWAYS ignored here. In
 // CONSUMER mode we additionally ignore every meta spec. Playwright's
 // `testIgnore` accepts an array of regexes (OR-combined), so we pass the
 // always-on regression ignore plus the meta-specs ignore only when CONSUMER.
 const TEST_IGNORE = CONSUMER
-  ? [/regression-video\.spec\.js/, META_SPECS_RE]
-  : /regression-video\.spec\.js/;
+  ? [/regression-video\.spec\.js/, /decap-caret-selection\.spec\.js/, META_SPECS_RE]
+  : [/regression-video\.spec\.js/, /decap-caret-selection\.spec\.js/];
 
 // Absolute path to the harness's own node_modules/.bin. The local webServer
 // commands `cd ${SITE_ROOT}` first (so `decap-server` resolves site files +
