@@ -39,6 +39,12 @@
 # the byte-lock check behave exactly as they do today; the best case is
 # the lane is un-wedged before the heavy run even starts.
 #
+# On main it also sweeps `_tags/` for e2e tag files a tags lifecycle run
+# left behind (#689, e2e/leftover-e2e-tags.js): a stale run-stamped canary
+# tag gets a labelled removal PR, and the count of leftovers goes to the
+# step output `leftover_e2e_tags` ("error" when the check failed), which the
+# host loop turns into a red run. The script itself still exits 0.
+#
 # IDEMPOTENT: it writes only for a canary whose CURRENT body on the target
 # ref actually contains a marker. On an already-clean canary it does
 # nothing; running it twice back-to-back is a no-op the second time.
@@ -83,9 +89,13 @@ E2E_DIR="${E2E_DIR}" node -e '
   const path = require("path");
   const e2eDir = process.env.E2E_DIR;
   const { CANARIES, buildBaselineBody } = require(path.join(e2eDir, "canary-content.js"));
-  const { gh } = require(path.join(e2eDir, "github-actions-poll.js"));
-  const { seedFixtureViaPr } = require(path.join(e2eDir, "cms-fixture-pr.js"));
+  // Public CI logs: describeError logs only a status code plus the error
+  // type, never an error message, stack or API response body.
+  const { gh, describeError } = require(path.join(e2eDir, "github-actions-poll.js"));
+  const { seedFixtureViaPr, removeFixtureViaPr } = require(path.join(e2eDir, "cms-fixture-pr.js"));
   const { HOST_REPO } = require(path.join(e2eDir, "decap-pat.js"));
+  const { sweepLeftoverE2eTags } = require(path.join(e2eDir, "leftover-e2e-tags.js"));
+  const fs = require("fs");
 
   // Honour the caller-supplied repo (consuming sites set CMS_REPO via
   // github.repository) and fall back to the harness default, mirroring
@@ -101,6 +111,7 @@ E2E_DIR="${E2E_DIR}" node -e '
   // check, and this self-heal). Dash-joined lowercase id, no leading/trailing
   // dash (post / preview-page / spike-project).
   const MARKER_RE = /e2e-publish-loop:[a-z]+(?:-[a-z]+)*:\d+/;
+
 
   function toBase64(text) {
     return Buffer.from(text, "utf8").toString("base64");
@@ -146,7 +157,39 @@ E2E_DIR="${E2E_DIR}" node -e '
     });
   }
 
+  // #689: the count of leftover e2e tags on main, for the host loop to fail
+  // on. "error" when the check itself could not complete.
+  function writeLeftoverOutput(value) {
+    if (!process.env.GITHUB_OUTPUT) return;
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `leftover_e2e_tags=${value}\n`);
+  }
+
+  async function sweepTags() {
+    try {
+      const res = await sweepLeftoverE2eTags({
+        repo,
+        ref,
+        ghImpl: gh,
+        removeImpl: removeFixtureViaPr,
+        nowMs: Date.now(),
+      });
+      console.log(
+        `[reset-orphaned-canary] leftover e2e tags on ${ref}: ${res.leftover} ` +
+          `(${res.removed.length} removal PR(s) opened).`,
+      );
+      writeLeftoverOutput(String(res.leftover));
+    } catch (e) {
+      console.warn(
+        `::warning::reset-orphaned-canary: leftover e2e tag check errored: ${describeError(e)}`,
+      );
+      writeLeftoverOutput("error");
+    }
+  }
+
   (async () => {
+    // Tags are swept only on main: a preview head branch dies with its PR,
+    // and the preview spec cleans its own tag up on that branch.
+    if (!branch) await sweepTags();
     let healed = 0;
     for (const c of CANARIES) {
       let current;
@@ -156,7 +199,7 @@ E2E_DIR="${E2E_DIR}" node -e '
         // A 404 means the canary file is not present on this ref (a
         // consuming site may not carry every canary; a feature branch may
         // pre-date it) — nothing to heal.
-        console.log(`[reset-orphaned-canary] ${c.path}@${ref}: skip (${(e && e.message) || e})`);
+        console.log(`[reset-orphaned-canary] ${c.path}@${ref}: skip (${describeError(e)})`);
         continue;
       }
       const decoded = Buffer.from(current.content, "base64").toString("utf8");
@@ -189,7 +232,7 @@ E2E_DIR="${E2E_DIR}" node -e '
     // Fail-open: never break the loop on the self-heal. The spec-side
     // setup-reset (step 0) + the byte-lock check remain the backstop.
     console.warn(
-      `::warning::reset-orphaned-canary: self-heal errored (continuing, fail-open): ${(e && e.stack) || e}`,
+      `::warning::reset-orphaned-canary: self-heal errored (continuing, fail-open): ${describeError(e)}`,
     );
     process.exit(0);
   });

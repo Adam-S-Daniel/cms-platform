@@ -1,5 +1,31 @@
 <footer class="site-footer">
   <div class="container">
+    <nav class="footer-follow" aria-label="Follow">
+      {%- comment -%}
+        Follow links for a reader at the end of a post: the Atom feed (every
+        site has /feed.xml) plus each profile in `cross_post.profiles`. The
+        profile URLs were already validated as absolute https by the
+        `rel_me_urls` filter in <head> (rel-me.html), which fails the build
+        on a bad one, so they are safe to link here.
+      {%- endcomment -%}
+      <a href="{{ '/feed.xml' | relative_url }}">RSS</a>
+      {%- for _profile in site.cross_post.profiles -%}
+      {%- assign _profile_url = _profile[1] | strip -%}
+      {%- if _profile_url != "" -%}
+      {%- comment -%}
+        Brand spellings the mechanical `capitalize` gets wrong ("Linkedin",
+        "Github"); any other key keeps the capitalized form.
+      {%- endcomment -%}
+      {%- assign _profile_key = _profile[0] | downcase -%}
+      {%- case _profile_key -%}
+        {%- when "linkedin" -%}{%- assign _profile_label = "LinkedIn" -%}
+        {%- when "github" -%}{%- assign _profile_label = "GitHub" -%}
+        {%- else -%}{%- assign _profile_label = _profile[0] | capitalize -%}
+      {%- endcase %}
+      <a href="{{ _profile_url | escape }}" rel="me">{{ _profile_label | escape }}</a>
+      {%- endif -%}
+      {%- endfor %}
+    </nav>
     <p>&copy; {{ 'now' | date: "%Y" }} {{ site.author.name | default: site.title }}</p>
   </div>
 </footer>

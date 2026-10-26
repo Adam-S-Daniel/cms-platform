@@ -27,35 +27,36 @@ All resource names below are derived; `${ResourcePrefix}` and
 | ACM certificate (production) | `${ProductionDomainName}` + `www.${ProductionDomainName}` | DNS-validated |
 | CloudFront distribution (preview) | (id is a stack output, `PreviewDistributionId`) | Fronts the preview S3 bucket; `${AWS::StackName}-preview-router` Function maps host → `/pr-{N}/` S3 prefix at viewer-request, `${AWS::StackName}-preview-location-fixer` Function strips the same prefix from `Location` headers at viewer-response |
 | CloudFront distribution (production) | (id is a stack output, `ProductionDistributionId`) | Fronts the production S3 bucket; aliases `${ProductionDomainName}` + `www.${ProductionDomainName}` |
+| CloudFront distribution (admin) — only when `AdminDomainName` is set | (no id output; `AdminURL` is the output) | Serves only `/admin/` from the production bucket's REST endpoint at `${AdminDomainName}`, with caching disabled; brings its own ACM certificate, `${AWS::StackName}-admin-site` Function and Route53 A-alias. Empty `AdminDomainName` (the default) creates none of it |
 | Route53 records | `*.${ProductionDomainName}`, `${ProductionDomainName}`, `www.${ProductionDomainName}` | Wildcard alias → preview CloudFront; apex + www → production CloudFront |
 | OIDC provider | `token.actions.githubusercontent.com` | Conditional via `CreateOIDCProvider` — skip if it already exists in the account |
 | IAM role | `${ResourcePrefix}-github-actions` | Assumed by GitHub Actions via OIDC; trust scoped to `repo:${GitHubOrg}/${GitHubRepo}:*` |
 
-Unlike an earlier single-site setup, the bootstrap stack now manages the
-preview AND production buckets and distributions directly — nothing is
-created out-of-band.
+The bootstrap stack manages every bucket and distribution above directly —
+nothing is created out-of-band.
 
 ## CloudFront does NOT negative-cache 404s (`ErrorCachingMinTTL: 0`)
 
-Both distributions set `CustomErrorResponses → ErrorCachingMinTTL: 0` for 403
-and 404 (template, v0.1.13 / cms#39). This is load-bearing for the prod-canary
-loops: a loop polls `/blog/<future-dated-slug>/` BEFORE the canary deploys, so
-S3 returns 404; with the old `ErrorCachingMinTTL: 300` CloudFront would
-**negative-cache** that 404 for 5 min (re-cached on each poll), so after the
-page landed on S3 + the `/*` invalidation the reflect-poll still read the stale
-cached 404 → "URL never reflected" (cms#21 / adamdaniel#1815). The
+All three distributions (preview, production, and the optional admin one) set
+`CustomErrorResponses → ErrorCachingMinTTL: 0` for 403 and 404. This is
+load-bearing for the prod-canary loops: a loop polls
+`/blog/<future-dated-slug>/` BEFORE the canary deploys, so S3 returns 404; any
+nonzero TTL makes CloudFront **negative-cache** that 404 (re-cached on each
+poll), so after the page lands on S3 + the `/*` invalidation the reflect-poll
+still reads the stale cached 404 → "URL never reflected". The
 `CachingOptimized` policy ignores query strings, so e2e-side cache-busting can't
-help — the fix has to be in the template. New sites inherit it automatically.
+help — the TTL has to be 0 in the template. (The incident and the 300 → 0 fix:
+cms#21 / adamdaniel#1815, v0.1.13 / cms#39 in `docs/VERSION-HISTORY.md`.)
 
-**Applying the fix to a LIVE distribution requires a stack redeploy** (the
-template change alone does nothing until deployed): `bash
+**A template change reaches a LIVE distribution only through a stack
+redeploy:** `bash
 infrastructure/bootstrap/deploy.sh` for that site. Direct live-distribution
 mutation is denied by the auto-mode classifier — go via the template + stack
 deploy. Verify:
 
 ```bash
 aws cloudfront get-distribution-config --id <ProductionDistributionId>   --query 'DistributionConfig.CustomErrorResponses.Items[].{code:ErrorCode,ttl:ErrorCachingMinTTL}'
-# → both 403 and 404 must show ttl: 0
+# → both 403 and 404 must show ttl: 0 (same check for PreviewDistributionId)
 ```
 
 ## Deployment

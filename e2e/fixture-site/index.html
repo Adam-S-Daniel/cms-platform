@@ -10,7 +10,15 @@ title: Home
   exclude_e2e_posts.rb on any `e2e-`-slug or `test_fixture: true` post). They
   still serve at /blog/<slug>/ but must not surface on the homepage. {%- endcomment -%}
   {% assign published_posts = site.posts | where: "published", true | where_exp: "post", "post.feed_exclude != true" %}
-  <h2>Latest Posts</h2>
+  {%- comment -%} Same markup as adamdaniel.ai's homepage: the heading and the
+  feed-link icon share a `.page-header-with-feed` row (e2e/feeds-and-share.spec.js
+  asserts the icon is visible beside "Latest Posts"). {%- endcomment -%}
+  <div class="page-header">
+    <div class="page-header-with-feed">
+      <h2>Latest Posts</h2>
+      {% include feed-link.html href="/feed.xml" label="Subscribe to all posts (Atom feed)" %}
+    </div>
+  </div>
   <ul class="post-list">
     {% for post in published_posts %}
     <li class="post-item">
@@ -20,3 +28,20 @@ title: Home
   </ul>
   <p><a href="{{ '/blog/' | relative_url }}">Blog</a> · <a href="{{ '/tags/' | relative_url }}">Tags</a></p>
 </div>
+
+{%- comment -%} The homepage tag cloud a real consumer ships (adamdaniel.ai's
+index.html); tags.spec.js expects it whenever /tags/ lists a tag (#702). {%- endcomment -%}
+{% assign all_tags = site.all_tags %}
+{% if all_tags and all_tags.size > 0 %}
+<section class="tag-cloud-section">
+  <div class="container">
+    <h2>Tags</h2>
+    <div class="tag-cloud">
+      {% for tag in all_tags %}
+      <a class="tag-pill" href="{{ tag.url | relative_url }}">{{ tag.name }}<span class="tag-cloud-count" aria-hidden="true"> · {{ tag.count }}</span></a>
+      {% endfor %}
+    </div>
+    <p><a href="{{ '/tags/' | relative_url }}">All Tags →</a></p>
+  </div>
+</section>
+{% endif %}

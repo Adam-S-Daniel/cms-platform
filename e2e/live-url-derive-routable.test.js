@@ -111,6 +111,20 @@ test.describe("live-url-derive.js compute() — routable-collection gate (#328.3
     expect(data.url).toBe("https://example.com/projects/widget-builder/");
   });
 
+  test("derives /tools/<slug>/ for tools from the slug field (site-owned collection)", () => {
+    const { LiveURL, window } = loadLiveURL({ title: "Some Other Title", slug: "word-counter" });
+    window.location.hash = "#/collections/tools/entries/word-counter";
+    const data = LiveURL.compute();
+    expect(data, "tools has a preview_path route — compute() must return an object").not.toBeNull();
+    expect(data.url).toBe("https://example.com/tools/word-counter/");
+  });
+
+  test("tools falls back to the slugified title when the slug field is empty", () => {
+    const { LiveURL, window } = loadLiveURL({ title: "Word Counter" });
+    window.location.hash = "#/collections/tools/entries/word-counter";
+    expect(LiveURL.compute().url).toBe("https://example.com/tools/word-counter/");
+  });
+
   test("still derives a real URL for pages via the permalink field (routable, unaffected by the fix)", () => {
     const { LiveURL, window } = loadLiveURL({ permalink: "/about/" });
     window.location.hash = "#/collections/pages/entries/about";
@@ -123,6 +137,51 @@ test.describe("live-url-derive.js compute() — routable-collection gate (#328.3
     const { LiveURL, window } = loadLiveURL({ title: "x" });
     window.location.hash = "";
     expect(LiveURL.compute()).toBeNull();
+  });
+});
+
+// A typed URL Slug is not served verbatim: Jekyll's `:slug` placeholder
+// (Drops::UrlDrop#slug) runs it through Utils.slugify, so `Bad Slug!` is
+// served at /blog/bad-slug/. The banner must link what Jekyll serves. The
+// expected values are the real-Jekyll golden file, not hand-written.
+const SLUG_GOLDEN = JSON.parse(fs.readFileSync(path.join(__dirname, "jekyll-slugify-golden.json"), "utf8"));
+
+test.describe("live-url-derive.js compute() — a typed slug is slugified the way Jekyll serves it", () => {
+  test("Bad Slug! links /blog/bad-slug/, not the raw slug", () => {
+    const { LiveURL, window } = loadLiveURL({ title: "Some Title", slug: "Bad Slug!" });
+    window.location.hash = "#/collections/posts/entries/new";
+    expect(LiveURL.compute().url).toBe("https://example.com/blog/bad-slug/");
+  });
+
+  test("every non-empty golden case, typed as the slug, links Jekyll's slug (posts and projects)", () => {
+    const checked = [];
+    for (const [input, expected] of SLUG_GOLDEN.cases) {
+      if (!expected) continue; // a slug with no letters or digits: Jekyll serves /blog//, nothing to link
+      for (const [collection, route] of [["posts", "/blog/"], ["projects", "/projects/"]]) {
+        const { LiveURL, window } = loadLiveURL({ title: "Ignored Title", slug: input });
+        window.location.hash = `#/collections/${collection}/entries/new`;
+        expect(
+          LiveURL.compute().url,
+          `${collection} slug ${JSON.stringify(input)}`,
+        ).toBe(`https://example.com${route}${expected}/`);
+        checked.push(input);
+      }
+    }
+    expect(checked.length, "the golden corpus must exercise the typed-slug path").toBeGreaterThan(40);
+  });
+
+  test("an already-pinned slug (slug-pin.js's output, Unicode kept) is unchanged", () => {
+    const { LiveURL, window } = loadLiveURL({ title: "Café Notes", slug: "café-notes" });
+    window.location.hash = "#/collections/posts/entries/cafe-notes";
+    expect(LiveURL.compute().url).toBe("https://example.com/blog/café-notes/");
+  });
+
+  test("an empty or whitespace-only slug still derives from the title", () => {
+    for (const slug of ["", "   "]) {
+      const { LiveURL, window } = loadLiveURL({ title: "Hello World", slug });
+      window.location.hash = "#/collections/posts/entries/new";
+      expect(LiveURL.compute().url, `slug ${JSON.stringify(slug)}`).toBe("https://example.com/blog/hello-world/");
+    }
   });
 });
 
@@ -141,7 +200,7 @@ for (const [access, siteURL] of [
     window.location.hash = "#/collections/posts/entries/hello";
     expect(LiveURL.compute().url).toBe(access + "/blog/hello/");
     await window.CMSHostname.binding();
-    for (const [collection, route] of [["posts", "/blog/hello/"], ["tags", "/tags/hello/"], ["projects", "/projects/hello/"], ["pages", "/about/"]]) {
+    for (const [collection, route] of [["posts", "/blog/hello/"], ["tags", "/tags/hello/"], ["projects", "/projects/hello/"], ["tools", "/tools/hello/"], ["pages", "/about/"]]) {
       window.location.hash = `#/collections/${collection}/entries/hello`;
       expect(LiveURL.compute().url).toBe(siteURL + route);
     }

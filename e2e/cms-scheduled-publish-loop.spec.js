@@ -84,7 +84,7 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { getPat, HOST_REPO } = require("./decap-pat");
 const { seedFixtureViaPr, removeFixtureViaPr } = require("./cms-fixture-pr");
-const { gh, waitForMerge, fetchPublicUrl } = require("./github-actions-poll");
+const { gh, waitForMerge, fetchPublicUrl, describeError } = require("./github-actions-poll");
 const { prodTarget } = require("./cms-host");
 const { loudBail } = require("./fixture-baseline");
 const { EPHEMERAL_DATE } = require("./prod-mutate-fixture");
@@ -436,7 +436,7 @@ test("scheduled-publish loop — draft seeds, scheduler flips it live via PR + a
           files = await gh(`/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`);
         } catch (err) {
           console.warn(
-            `[scheduled-publish] transient files read on PR #${pr.number}: ${err && err.message}`,
+            `[scheduled-publish] transient files read on PR #${pr.number}: ${describeError(err)}`,
           );
           continue;
         }
@@ -536,6 +536,6 @@ test.afterAll(async () => {
     });
     console.warn(`[cleanup-harness] removed ${filePath} via removal PR`);
   } catch (e) {
-    console.warn(`[cleanup-harness] could not remove ${filePath}: ${e && e.message}`);
+    console.warn(`[cleanup-harness] could not remove ${filePath}: ${describeError(e)}`);
   }
 });

@@ -78,6 +78,7 @@ const {
   gh,
   makePreviewCanaryRecoverer,
   waitForCmsPullRequest,
+  describeError,
 } = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { previewTarget } = require("./cms-host");
@@ -211,9 +212,9 @@ test(
       try {
         current = await fetchFixtureFromBranch(PR_HEAD_REF);
       } catch (e) {
+        // No `cause`: Playwright prints the cause chain to the public log.
         throw new Error(
-          `Fixture ${FIXTURE_PATH} is missing on ${PR_HEAD_REF} (${e && e.message}). It ships on main; restore it or re-cut the PR branch.`,
-          { cause: e },
+          `Fixture ${FIXTURE_PATH} is missing on ${PR_HEAD_REF} (${describeError(e)}). It ships on main; restore it or re-cut the PR branch.`,
         );
       }
       const remoteBody = Buffer.from(current.content, "base64").toString("utf8");
@@ -402,7 +403,7 @@ test.afterAll(async () => {
     current = await fetchFixtureFromBranch(PR_HEAD_REF);
   } catch (e) {
     console.warn(
-      `[cleanup-harness] couldn't read ${FIXTURE_PATH} from ${PR_HEAD_REF}; skipping safety net: ${e && e.message}`,
+      `[cleanup-harness] couldn't read ${FIXTURE_PATH} from ${PR_HEAD_REF}; skipping safety net: ${describeError(e)}`,
     );
     return;
   }

@@ -78,7 +78,7 @@ test.describe(
       await expect(titleField).toBeVisible({ timeout: 60_000 });
       await titleField.fill(SMOKE_TITLE);
 
-      // Permalink is required — defaults to "/pages/", we replace with the
+      // Permalink is required and has no default (#639), so we type the
       // full slug-bearing path the live page should resolve at.
       const permalinkField = page.getByLabel(/^Permalink$/);
       await permalinkField.fill(SMOKE_PERMALINK);

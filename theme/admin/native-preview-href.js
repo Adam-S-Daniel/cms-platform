@@ -54,6 +54,18 @@
  *     the form pane, not the toolbar, so it normally wouldn't match
  *     anyway; it's excluded defensively and to honour the original
  *     pre-#184 contract now that the banner is restored.
+ *
+ * ── "Check for Preview" on a preview-only draft (#642) ────────────
+ * Decap's "Check for Preview" button (`RefreshPreviewButton`, decap-cms
+ * 3.15.1) waits for the `deploy/preview` commit status deploy-preview.yml
+ * sets. That workflow builds only PRs into the default branch, so a PR
+ * whose base is anything else — every draft saved on a preview admin,
+ * labeled `cms/preview-only` — never gets one, and the button spins on
+ * every click forever. When publish-progress.js reports the open entry's
+ * PR as `previewOnly`, the button is CSS-hidden (same idiom as above) and
+ * a pointer to Live Preview — which renders the draft on every Save —
+ * takes its place. Any other entry gets the button back. Shells without
+ * the poller (index-test.html, index-local.html) are never changed.
  */
 (function () {
   "use strict";
@@ -76,6 +88,9 @@
     // hidden along with the View Live link.
     "cms-prod-status-pill",
     "cms-preview-build-pill",
+    // The Live Preview pointer that stands in for "Check for Preview" on a
+    // preview-only draft (below) — this shim's own anchor.
+    "cms-live-preview-pointer",
   ];
 
   function findToolbarAnchors() {
@@ -132,15 +147,103 @@
     }
   }
 
+  // ── "Check for Preview" on a preview-only draft (see the header) ──
+  var CHECK_PREVIEW = '[class*="RefreshPreviewButton"]';
+  var CHECK_HIDDEN_ATTR = "data-cms-check-preview-hidden";
+  var POINTER_ID = "cms-live-preview-pointer";
+
+  // Whether the entry on screen has an open PR that no deploy preview is
+  // ever built for, per the poller. Its answer must be for THIS entry: a
+  // snapshot left over from the previous route decides nothing.
+  function entryIsPreviewOnly() {
+    var p = window.CMSPublishProgress;
+    var snap = p && typeof p.get === "function" ? p.get() : null;
+    if (!snap || !snap.ready || !snap.entry || !snap.facts) return false;
+    var entry = typeof p.currentEntry === "function" ? p.currentEntry() : null;
+    if (!entry || entry.collection !== snap.entry.collection || entry.slug !== snap.entry.slug) return false;
+    return Boolean(snap.facts.hasOpenPr && snap.facts.previewOnly);
+  }
+
+  // Only the properties hide() style-writes, so restoring is exact. Writes
+  // nothing in the steady state (either direction), so the observer below
+  // does not re-fire on its own changes.
+  function setCheckHidden(el, hidden) {
+    var marked = el.getAttribute(CHECK_HIDDEN_ATTR) === "1";
+    if (hidden === marked) return;
+    if (hidden) {
+      el.style.setProperty("display", "none", "important");
+      el.style.setProperty("visibility", "hidden", "important");
+      el.style.setProperty("pointer-events", "none", "important");
+      el.setAttribute("aria-hidden", "true");
+      el.setAttribute(CHECK_HIDDEN_ATTR, "1");
+    } else {
+      el.style.removeProperty("display");
+      el.style.removeProperty("visibility");
+      el.style.removeProperty("pointer-events");
+      el.removeAttribute("aria-hidden");
+      el.removeAttribute(CHECK_HIDDEN_ATTR);
+    }
+  }
+
+  // The floating Live Preview link's current target, or null while it is
+  // not offered (index.html hides it off the editor route and for a
+  // collection /preview/ cannot render) — a pointer to a hidden button
+  // would be a pointer to nothing.
+  function livePreviewHref() {
+    var link = document.getElementById("live-preview-link");
+    if (!link || link.style.display === "none") return null;
+    return link.getAttribute("href");
+  }
+
+  function syncCheckForPreview() {
+    var hide = entryIsPreviewOnly();
+    var buttons = document.querySelectorAll(CHECK_PREVIEW);
+    var pointer = document.getElementById(POINTER_ID);
+    var href = hide ? livePreviewHref() : null;
+    for (var i = 0; i < buttons.length; i++) setCheckHidden(buttons[i], hide);
+    var anchor = hide && href && buttons.length ? buttons[0] : null;
+    if (!anchor) {
+      // This shim's own node, never one React owns.
+      if (pointer && pointer.parentNode) pointer.parentNode.removeChild(pointer);
+      return;
+    }
+    if (!pointer) {
+      pointer = document.createElement("a");
+      pointer.id = POINTER_ID;
+      pointer.target = "_blank";
+      pointer.rel = "noopener";
+      pointer.title =
+        "No preview address is built for drafts saved here. " +
+        "Live Preview shows this entry each time you Save.";
+      pointer.textContent = "Use Live Preview";
+    }
+    if (pointer.getAttribute("href") !== href) pointer.setAttribute("href", href);
+    if (pointer.previousSibling !== anchor || pointer.parentNode !== anchor.parentNode) {
+      anchor.parentNode.insertBefore(pointer, anchor.nextSibling);
+    }
+  }
+
+  // requestAnimationFrame never fires in a background tab, so a pass scheduled
+  // there, or scheduled just before the tab went to the back, waited until the
+  // editor returned (#644). A hidden tab paints nothing, so the next task is
+  // as good as the next frame; `pending` makes whichever runs first the only
+  // pass.
   var pending = false;
+  function runHide() {
+    if (!pending) return;
+    pending = false;
+    hide();
+    syncCheckForPreview();
+  }
   function scheduleHide() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () {
-      pending = false;
-      hide();
-    });
+    if (document.hidden) setTimeout(runHide, 0);
+    else requestAnimationFrame(runHide);
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) runHide();
+  });
 
   // Mutations re-hide when Decap (re)renders the toolbar — including
   // the initial mount, hash navigations between entries, and field
@@ -151,5 +254,13 @@
   });
   // Hash changes navigate between entries — re-hide for the new context.
   window.addEventListener("hashchange", scheduleHide);
+  // The poller's answer arrives after the toolbar mounts. publish-progress.js
+  // loads before this script on every shell that has it (`defer`, document
+  // order), so it is already defined here.
+  if (window.CMSPublishProgress && typeof window.CMSPublishProgress.subscribe === "function") {
+    window.CMSPublishProgress.subscribe(scheduleHide);
+  }
+  // Test hook (e2e/check-for-preview-preview-only.test.js).
+  window.__nativePreviewHref = { syncCheckForPreview: syncCheckForPreview };
   scheduleHide();
 })();

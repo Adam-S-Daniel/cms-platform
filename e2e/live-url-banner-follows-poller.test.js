@@ -20,16 +20,30 @@ const SRC = fs.readFileSync(path.resolve(__dirname, "../theme/admin/live-url-ban
 const SLUG = "2026-09-28-hello";
 const PROD = "https://example.com/blog/hello/";
 
-function load({ poller, cachedPr, banner = null, data, access = "https://example.com", destinationOrigin = "https://example.com" } = {}) {
+function load({
+  poller,
+  cachedPr,
+  pleEntry,
+  token = null,
+  openPrs,
+  banner = null,
+  data,
+  access = "https://example.com",
+  destinationOrigin = "https://example.com",
+} = {}) {
   const frames = [];
   const subscribers = [];
   const session = {};
+  const windowListeners = {};
   if (cachedPr != null) {
     session["cms-live-url-pr-cache-v1"] = JSON.stringify({ at: Date.now(), data: { [SLUG]: cachedPr } });
     session["cms-ple-remote-cache-v1"] = JSON.stringify({
       at: Date.now(),
       data: { prBySlug: { [SLUG]: { number: cachedPr } } },
     });
+  }
+  if (pleEntry) {
+    session["cms-ple-remote-cache-v1"] = JSON.stringify({ at: Date.now(), data: { prBySlug: { [SLUG]: pleEntry } } });
   }
   const window = {
     CMS_REPO: "owner/repo",
@@ -41,7 +55,7 @@ function load({ poller, cachedPr, banner = null, data, access = "https://example
     },
     LiveURL: data ? { compute: () => data } : undefined,
     location: { hash: `#/collections/posts/entries/${SLUG}`, origin: access },
-    addEventListener() {},
+    addEventListener: (type, fn) => { windowListeners[type] = fn; },
   };
   if (poller) {
     window.CMSPublishProgress = {
@@ -58,7 +72,7 @@ function load({ poller, cachedPr, banner = null, data, access = "https://example
       body: {},
       readyState: "complete",
       addEventListener() {},
-      getElementById: (id) => id === "cms-live-url" ? banner : null,
+      getElementById: (id) => id === "cms-live-url" ? (typeof banner === "function" ? banner() : banner) : null,
       querySelector: () => null,
       querySelectorAll: () => [],
     },
@@ -68,8 +82,10 @@ function load({ poller, cachedPr, banner = null, data, access = "https://example
     requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; },
     setTimeout: () => 0,
     sessionStorage: { getItem: (k) => session[k] || null, setItem() {} },
-    localStorage: { getItem: () => null },
-    fetch: () => new Promise(() => {}), // never answers — the cache or poller must decide
+    localStorage: { getItem: (k) => (k === "decap-cms-user" && token ? JSON.stringify({ token }) : null) },
+    // Never answers unless a test scripts the open PRs — the cache or poller must decide.
+    fetch: () =>
+      openPrs ? Promise.resolve({ ok: true, json: () => Promise.resolve(openPrs) }) : new Promise(() => {}),
     URL,
     console: { info() {}, warn() {} },
   };
@@ -79,7 +95,7 @@ function load({ poller, cachedPr, banner = null, data, access = "https://example
   expect(hook && typeof hook.previewAwareURL, "live-url-banner.js must expose previewAwareURL for tests").toBe(
     "function",
   );
-  return { hook, subscribers, render: () => frames.splice(0).forEach((fn) => fn()) };
+  return { hook, subscribers, hashchange: () => windowListeners.hashchange(), render: () => frames.splice(0).forEach((fn) => fn()) };
 }
 
 const snap = (prNumber, slug = SLUG) => ({
@@ -144,4 +160,79 @@ test("live banner names the actual per-PR preview URL rather than the publicatio
   render();
   expect(banner.innerHTML).toContain("View page on preview-pr42.example.com:");
   expect(banner.innerHTML).toContain('href="https://preview-pr42.example.com/blog/hello/"');
+});
+
+test("a fresh banner element gets the markup even when it is identical to the last render (#641)", () => {
+  // Decap remounts the form on /new -> /entries/<slug>; the old node is
+  // discarded and ensureBanner() returns a new, empty one.
+  let current = { style: {}, innerHTML: "" };
+  const { render, hashchange } = load({ banner: () => current, data: { published: false, url: null } });
+  render();
+  expect(current.innerHTML).toContain("Not yet published.");
+  current = { style: {}, innerHTML: "" };
+  hashchange();
+  render();
+  expect(current.innerHTML).toContain("Not yet published.");
+});
+
+// #642: a draft saved on a preview admin opens a PR whose base is the
+// preview's own branch (labeled `cms/preview-only`). deploy-preview builds
+// only PRs into the default branch, so `preview-pr<N>` for that PR never
+// exists — the banner keeps the configured publication URL (the preview).
+const PREVIEW_URL = "https://preview-pr7.example.com/blog/hello/";
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+const openPr = (base) => ({
+  number: 9,
+  head: { ref: `cms/posts/${SLUG}` },
+  base: { ref: base, repo: { default_branch: "main" } },
+  labels: [],
+});
+
+test.describe("live-url-banner.js keeps the configured host for a PR into a non-default branch (#642)", () => {
+  test("the poller reports the PR preview-only → no preview-pr<N> host", () => {
+    const { hook } = load({ poller: { ...snap(42), facts: { hasOpenPr: true, previewOnly: true } } });
+    expect(hook.previewAwareURL(PREVIEW_URL)).toBe(PREVIEW_URL);
+  });
+
+  test("the posts list's cache marks the PR preview-only → no preview-pr<N> host", () => {
+    const { hook } = load({ pleEntry: { number: 42, previewOnly: true } });
+    expect(hook.previewAwareURL(PREVIEW_URL)).toBe(PREVIEW_URL);
+  });
+
+  test("the banner's own lookup: base is not the default branch → no preview-pr<N> host", async () => {
+    const { hook } = load({ token: "t0k3n", openPrs: [openPr("claude/feature")] });
+    hook.previewAwareURL(PREVIEW_URL); // starts the one-shot lookup
+    await flush();
+    expect(hook.previewAwareURL(PREVIEW_URL)).toBe(PREVIEW_URL);
+  });
+
+  test("the banner's own lookup: the cms/preview-only label alone → no preview-pr<N> host", async () => {
+    const pr = { ...openPr("main"), labels: [{ name: "cms/preview-only" }] };
+    const { hook } = load({ token: "t0k3n", openPrs: [pr] });
+    hook.previewAwareURL(PREVIEW_URL);
+    await flush();
+    expect(hook.previewAwareURL(PREVIEW_URL)).toBe(PREVIEW_URL);
+  });
+
+  test("the banner's own lookup: base IS the default branch → still the per-PR preview host", async () => {
+    const { hook } = load({ token: "t0k3n", openPrs: [openPr("main")] });
+    hook.previewAwareURL(PROD);
+    await flush();
+    expect(hook.previewAwareURL(PROD)).toBe("https://preview-pr9.example.com/blog/hello/");
+  });
+
+  test("the rendered banner names the preview it is bound to, not the draft PR's host", () => {
+    const banner = { style: {}, innerHTML: "" };
+    const { render } = load({
+      poller: { ...snap(4076), facts: { hasOpenPr: true, previewOnly: true } },
+      banner,
+      data: { published: true, url: PREVIEW_URL },
+      access: "https://preview-pr7.example.com",
+      destinationOrigin: "https://preview-pr7.example.com",
+    });
+    render();
+    expect(banner.innerHTML).toContain("View page on preview-pr7.example.com:");
+    expect(banner.innerHTML).toContain(`href="${PREVIEW_URL}"`);
+    expect(banner.innerHTML).not.toContain("preview-pr4076");
+  });
 });

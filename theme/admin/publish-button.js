@@ -238,6 +238,37 @@
     }
   }
 
+  // The undo of hideDecapPublish(), for the error path only (#644). A failed
+  // Publish leaves the slot holding a sentence that says "press Publish once
+  // more", and when plan() offers no button of ours ("unknown", "none") the
+  // only Publish there is to press is Decap's, which the busy state hid.
+  // Restores only what this file hid: the marker plus Decap's selector, never
+  // one-door-publish.js's Status control, which carries the same marker.
+  function showDecapPublish() {
+    var nodes;
+    try {
+      nodes = document.querySelectorAll(DECAP_PUBLISH + "[" + HIDDEN_ATTR + "]");
+    } catch (e) {
+      return;
+    }
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (el.id === BUTTON_ID || (el.closest && el.closest("#" + SLOT_ID))) continue;
+      el.style.removeProperty("display");
+      el.style.removeProperty("visibility");
+      el.style.removeProperty("pointer-events");
+      el.removeAttribute("aria-hidden");
+      el.removeAttribute("tabindex");
+      el.removeAttribute(HIDDEN_ATTR);
+    }
+  }
+
+  // The plan() kinds that put a Publish of our own (or a busy note standing in
+  // for one) on screen, and so are the only ones that may hide Decap's.
+  function replacesDecapPublish(kind) {
+    return kind === "busy" || kind === "disabled" || kind === "confirm" || kind === "publish";
+  }
+
   // ── The publish action ────────────────────────────────────────────────
   async function arm(prNumber, token) {
     var repo = window.CMS_REPO;
@@ -558,7 +589,13 @@
     var facts = state && state.ready ? state.facts : null;
 
     if (mode === "busy") {
-      return { kind: "busy", note: "Sending it to " + destination(facts || {}).noun + "…" };
+      // With no facts yet, destination({}) would name production even on a
+      // preview deploy (#644). CMSHostname.destination() is where a publish
+      // from this admin goes, read from its own config, so it is the honest
+      // noun until the poller answers.
+      var noun =
+        facts || !window.CMSHostname ? destination(facts || {}).noun : window.CMSHostname.destination();
+      return { kind: "busy", note: "Sending it to " + noun + "…" };
     }
 
     if (hasUnsavedChanges()) {
@@ -655,7 +692,10 @@
     if (signature === renderedSignature && slot.firstChild) {
       // Steady state: mutate nothing. In particular do NOT replace the button
       // — a node swapped between mousedown and mouseup eats the click.
-      if (p.kind !== "unknown") hideDecapPublish();
+      // Only a plan that renders a replacement re-hides: this used to say
+      // `!== "unknown"`, which re-hid Decap's control under "none" on every
+      // tick after the first and undid the restore below (#644).
+      if (replacesDecapPublish(p.kind)) hideDecapPublish();
       return;
     }
     renderedSignature = signature;
@@ -663,6 +703,10 @@
     while (slot.firstChild) slot.removeChild(slot.firstChild);
 
     if (lastError) disabledNote(slot, lastError);
+
+    // A failure with no button of ours to retry with: give Decap's back, which
+    // onDecapMenuActivate() routes through doPublish() (see showDecapPublish).
+    if (lastError && !replacesDecapPublish(p.kind)) showDecapPublish();
 
     if (p.kind === "unknown") return; // hide nothing — see plan()
 

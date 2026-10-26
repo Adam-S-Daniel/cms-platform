@@ -434,6 +434,254 @@ entry is a red `ci-matrix.test.js`.
 slowest admin shard, the pole has moved and the shard count buys nothing more;
 if an admin shard's suite exceeds ~100 s, consider `ADMIN_SHARDS = 4`.
 
+## The platform's own `fixture-e2e` lane gets the same admin shard (2026-10-22)
+
+`self-fixture-e2e.yml` ran each admin project as ONE job, so its two admin legs
+were the required `fixture-e2e` gate's whole critical path. Baseline, median of
+14 successful runs (2026-10-20..22): `chromium-desktop-3k @ fixture-site`
+**438 s** per job (355 s of tests, 191 tests, 6 workers), `webkit-iphone16 @
+fixture-site` 380 s (323 s of tests, 118 tests); over 43 of 45 runs since
+2026-10-08 the medians were 7.2 and 6.2 minutes.
+
+The tail was not the test count but four `test.describe.configure({ mode:
+"serial" })` groups, each pinned to ONE worker while the other five idled:
+`cms-tags-input.spec.js` (19 tests, ~150 s on 3k), `cms-validation-feedback.spec.js`
+(13 tests, ~115 s), `cms-mobile-layout.spec.js`'s "mobile layout (iPhone 16)"
+(233 s on webkit) and `cms-editorial-workflow.spec.js`'s existing-entry group
+(139 s on 3k, 214 s on webkit). All four drive the in-browser test-repo backend
+(`index-test.html`): every test seeds `window.repoFiles` in a fresh page and
+logs in itself, writes no file, and reads no value another test set (the only
+module state, `cms-tags-input`'s `pageErrors`, is reset per test and is
+per-worker anyway). `serial` bought nothing but the pin, so it is gone from all
+four. The other `serial` groups were not reviewed here; most drive
+decap-server's working tree, a Jekyll build or a live PR, where order can
+matter.
+
+Two more changes ride along:
+
+* **The admin legs are `--shard=i/3` jobs**, exactly the consumer shape
+  (`ADMIN_SHARDS` in `e2e/ci-matrix.js`; above). The proof test is asserted by
+  the one shard whose `npx playwright test --list --shard` holds it; every
+  shard lists all three, so a proof test in NO shard fails every shard.
+  `e2e/self-fixture-e2e.test.js` derives the expected legs from
+  `ADMIN_SHARDS`, so a dropped shard is red.
+* **#755's caret diagnostic moved** to the unsharded `chromium-desktop-1080 @
+  fixture-site` leg (its config pins Chromium, the viewport and one worker),
+  so it still runs once per run; and a green leg no longer uploads
+  `test-results` (half of a ~320 MB 3k artifact; the HTML report carries the
+  same screenshots). A failed leg still does.
+
+**Measured** on the PR's own head, run 39847475147, five attempts (the first
+run plus four full reruns). All five were green. Job seconds:
+
+| attempt | 3k 1/3 | 3k 2/3 | 3k 3/3 | webkit 1/3 | webkit 2/3 | webkit 3/3 | 1080 full (+caret) | 1080 singlepage | **critical path** | runner-s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 124 | 288¹ | 177 | 115 | 181 | 117 | 199¹ | 86 | **288** | 1290 |
+| 2 | 121 | 156 | 283¹ | 151 | 272² | 130 | 88 | 189¹ | **283** | 1393 |
+| 3 | 132 | 182 | 183 | 113 | 324 | 136 | 92 | 76 | **324** | 1242 |
+| 4 | 108 | 195 | 242¹ | 130 | 188 | 135 | 138 | 69 | **242** | 1208 |
+| 5 | 124 | 204 | 175 | 115 | 253 | 130 | 103 | 96 | **253** | 1202 |
+
+¹ an apt-tail install of 101-134 s (normally 12-43 s). ² one flaky retry (below).
+
+* **Critical path: median 283 s, against 438 s (−35%)**, and 242-324 s
+  against a baseline range of 374-585 s (24 runs).
+* **Runner time goes UP:** median 1242 runner-seconds a run (20.7 min)
+  against 983 (16.4 min), +26%. That is three admin jobs per project each
+  paying the ~45-60 s fixed cost. It is the same trade the consumer matrix makes.
+* **Every attempt ran every test.** The shard totals were identical across all
+  five attempts: 3k 63 + 64 + 64 = 191, webkit 40 + 39 + 39 = 118. The proof
+  test landed in shard 1/3 of both projects and passed there each time, and
+  the other shards named it as owned by 1/3. The caret diagnostic ran once a
+  run, 8/8, in 14-21 s.
+* **One flaky test in 5 × 309 admin tests:** attempt 2, webkit 2/3,
+  `cms-mobile-layout.spec.js` "compact phone Save states (#731) › 320px
+  editorial_workflow: native Save works for new entries". It failed with
+  `route.fetch: socket hang up (ECONNRESET)` against `localhost:4000` and
+  passed on retry. That describe was never `serial`, so this is not the
+  un-pinning. None of the four un-pinned groups failed or flaked.
+* **The new pole is `webkit-iphone16` shard 2/3**, at 124-213 s of tests
+  against 49-85 s for its siblings: `--shard` balances by count. Next is
+  `chromium-desktop-3k` 2/3 at 102-151 s. "Re-check before changing it" above
+  applies: a shard over ~100 s of tests is the cue to look at that shard's
+  per-test durations before raising `ADMIN_SHARDS`.
+* **The upload shrank** once `test-results` is dropped on green. One green
+  attempt uploaded 3k 48 + 36 + 67 = 151 MB (it was 299 MB), webkit 8 + 6 + 7 =
+  21 MB (was 61 MB), and 225 MB a run in all (was 485 MB, main run
+  39829458882).
+
+## Mirror-independent apt (2026-10-22)
+
+The `.deb` cache above removed the archive FETCH. It did not remove the
+`apt-get update` that `playwright install-deps` always runs first, and on
+2026-10-22 the mirror stalled that instead.
+
+**The incident.** cms-platform run 39851509261 (PR #865), attempt 1, job
+120078645574 (`chromium-desktop-3k` shard 3/3 @ fixture-site). The restore was
+an EXACT hit (`Cache restored from key:
+playwright-apt-debs-v1-ubuntu24-chromium-pw1.64.0-20261012.334.1`, 15 `.deb`s,
+32 MB), so the archive was never going to be the problem. Inside
+`install-deps (apt)` attempt 1:
+
+```
+20:45:26  Get:6-9 packages.microsoft.com ...           (instant)
+20:45:56  Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease          (+30.0 s)
+20:46:26  Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease  (+30.0 s)
+20:46:26  Get:4 ... noble-backports InRelease [126 kB]
+20:46:26  Get:5 ... noble-security InRelease [126 kB]
+20:46:26  Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+21:30:18  ##[error]The operation was canceled.   (the 45-minute job wall)
+```
+
+The required `fixture-e2e` gate then failed. **What kind of stall it was**, as
+far as the log can say:
+
+- **Which file:** `noble-updates InRelease`. It is the one index file whose
+  outcome never printed: `Ign:3` means its first try failed and apt re-queued
+  it, and nothing (`Hit:3`, `Get:3` or `Err:3`) followed. The Packages indexes
+  that `Get:4` and `Get:5` made necessary never started either; apt prints
+  `Get:` when a file starts arriving, so they were stuck behind it.
+- **Not a plain idle connection.** That runner image already sets
+  `Acquire::http(s)::Timeout "15"` and `Acquire::Retries "1"` in its own
+  `/etc/apt/apt.conf.d/zz-retries` (actions/runner-images#14726, 2026-09-15;
+  this PR's CI prints the effective values). The same apt gave up on two
+  requests after exactly 30.0 s each (`Ign:2`, `Ign:3`). That is the idle
+  timeout working: locally apt abandons one try at about twice the timeout
+  plus a second. A fully silent socket would have tripped it again within a
+  minute.
+- **Consistent with a header trickle.** Reproduced locally (apt 2.8.3 in
+  `ubuntu:24.04`, against a fake mirror): a server that answers `HTTP/1.1 200
+  OK` and then sends one header byte every 5 s makes apt print **nothing at
+  all** for 400 s, even with `Acquire::http::Timeout "10"`. A body trickle
+  prints `Get:1 ... [10.0 MB]` and then nothing. A fully idle server or a
+  stalled TLS handshake is abandoned on time. The log cannot prove a trickle
+  (no byte counts), but it rules out the case apt's own timeout handles.
+
+**Change 1: install offline on an exact hit.** When `cache-hit` is `true`
+(the primary key, so this ImageVersion + engine + Playwright version; a
+restore-keys fallback reports `false`), the install step runs
+
+```
+sudo env DEBIAN_FRONTEND=noninteractive \
+  apt-get install -y --no-install-recommends --no-download <every cached .deb, by path>
+```
+
+then `npx playwright install-deps --dry-run <engine>`, which in Playwright
+1.64 is an offline `apt-get install -s --no-install-recommends <its package
+list>` and exits nonzero if any `Inst` line remains. Only both succeeding
+counts as offline success. No `apt-get update`, no mirror.
+
+*Why by path and not by package name.* The question was whether the saved set
+installs offline against the image's existing, possibly stale
+`/var/lib/apt/lists`. Measured in `--network none` containers, with the set
+downloaded against current lists and the install run against lists from
+`snapshot.ubuntu.com/ubuntu/20260901T000000Z` (7 weeks stale):
+
+| | chromium (109 debs, 95 MB) | webkit (387 debs, 213 MB) |
+|---|---|---|
+| cached `.deb`s whose version ≠ the stale lists' candidate | 22 | 46 |
+| by NAME: `apt-get install --no-download <Playwright's list>` | **exit 100** ("Unable to fetch some archives") | **exit 100** ("held broken packages") |
+| by PATH, stale lists | **exit 0**, 109 installed, 17 s | **exit 0**, 385 installed + 2 upgraded, 60 s |
+| by PATH, NO lists at all | **exit 0**, 109 installed | (not run) |
+| Playwright's dry-run check afterwards | 0 missing | 0 missing |
+
+So installing by name needs fresh indexes and is not viable. Caching
+`/var/lib/apt/lists` alongside the `.deb`s would make it work, but it is not
+needed: by path, apt reads each package's dependencies from the `.deb` itself
+and checks them against dpkg's status, which on an exact key is the same image
+the set was saved from. The key stays `v1`, the cache contents do not change,
+and main's existing entries serve as exact hits. Two more measured facts:
+
+- **The archive dir matters.** With `--no-download`, apt takes even a local
+  `.deb` from `/var/cache/apt/archives`: unseeded, the same 109 paths exited
+  100; after the composite's existing seed step copied them in, all installed.
+  A failed seed is therefore just a fallback.
+- **An incomplete set fails cleanly.** With one `.deb` removed (`libnspr4`), apt
+  exited 100 in its planning step: nothing installed (92 packages before and
+  after), `dpkg --audit` empty, the dpkg lock free. The composite's real bash,
+  run in the same container, logged `apt path: online (offline failed:
+  apt-get --no-download exited 100)` and went on to the online phase.
+
+*Trust.* The offline path installs `.deb`s that no freshly fetched signed index
+re-checks. They are the files apt downloaded and verified on a default-branch
+run, saved by that run; only the default branch saves, and a pull request's
+cache scope is invisible to main and to every other PR. That is the same trust
+the cache's restore already had in the job's own workspace.
+
+*Measured on CI.* The PR's first `self-fixture-e2e` run (run 39868918943, the
+same offline code as the final head) took the offline path on all eight legs,
+using main's existing `v1` entries for image `20261012.334.1`. For example,
+chromium-desktop-3k 3/3 installed 15 `.deb`s ("2 upgraded, 9 newly installed"),
+and 8 s after the offline apt started, the dry-run check reported "All system
+dependencies are installed." Install-step seconds per leg, against the same legs in run
+39851509261 attempt 1 (online, exact `.deb` hits, the incident run):
+
+| leg | online (39851509261) | offline (39868918943) |
+|---|---|---|
+| 1080 full / singlepage | 22 / 13 | 19 / 14 |
+| 3k 1/3, 2/3, 3/3 | 20 / 38 / **2695 (cancelled)** | 10 / 10 / 11 |
+| webkit 1/3, 2/3, 3/3 | 22 / 42 / 33 | 19 / 28 / 23 |
+
+The step also includes the browser download, which is mostly a no-op here
+because the browser binaries came from their own cache.
+
+*Fallback.* Anything other than an exact hit, a failed offline `apt-get`, or a
+failed dry-run runs the online phase exactly as before: unbounded, retried,
+waiting on the dpkg lock. The offline `apt-get` is a direct child that has
+exited by then, so it cannot be holding the lock. If `dpkg --audit` reports
+anything, `dpkg --configure -a` runs first (best-effort). The log names the
+path: `apt path: offline (exact cache hit)`, or `apt path: online (cache miss
+| partial cache hit (<key> ...) | offline failed: <reason> | the apt .deb cache
+is disabled)`.
+
+**Change 2: apt's own idle timeout, as a floor.** The apt.conf.d drop-in that
+sets `DPkg::Lock::Timeout` now also sets:
+
+```
+Acquire::http::Timeout "15";
+Acquire::https::Timeout "15";
+```
+
+`Acquire::*::Timeout` is an inactivity timer (connect, TLS handshake, each wait
+for the next byte). A healthy `apt-get update` fetches ALL its index files in
+6 s at the median and 28 s at the max, so 15 s of silence on one connection does
+not happen on a healthy mirror. The measured slow mirror (~83-100 KB/s) never
+goes silent, so this never abandons a slow-but-flowing fetch (locally, a 20 B/s
+body survived a 10 s timeout for 400 s). Measured locally, apt gives up one try
+at about twice the timeout plus a second: the 30 s default took 65 s against an
+idle server and 10 s took 21-26 s, so 15 s is ~31 s. This is apt abandoning a
+fetch from inside, so nothing is killed and nothing is orphaned (#210).
+
+**On GitHub-hosted x64 Ubuntu this changes nothing, by measurement.** The first
+CI run of this change printed the effective values (`apt-config dump`, now in
+the step's log):
+
+```
+Acquire::http::Timeout "15";
+Acquire::Retries "1";
+Acquire::https::Timeout "15";
+DPkg::Lock::Timeout "300";
+```
+
+The `"1"` is not ours. The first draft also set `Acquire::Retries "5"`, and it
+lost. The image writes these values into `/etc/apt/apt.conf.d/zz-retries`, which
+sorts after this composite's `99-...` file and wins (actions/runner-images#14726,
+#14594). `Retries "1"` is deliberate there: apt spends every retry on the same
+URI before it moves to the next mirror in `/etc/apt/apt-mirrors.txt`, so a
+higher count delays failover. This drop-in therefore does not set Retries
+(lint-locked), and its timeout is a floor for an image without `zz-retries`
+(self-hosted, older), not a fix for hosted runners.
+
+**What change 2 cannot do:** catch a trickle. Any byte resets the timer. Run
+39851509261's apt already had these exact settings and stalled anyway. Change 1
+would have avoided it: that job had an exact hit.
+
+*Rejected: making a stall's nature visible through apt.conf.d.*
+`APT::Status-Fd` prints `dlstatus:` about four times a second while any fetch
+is open, and the percentage stayed `0.0000` through a 20 B/s trickle, so it is
+noisy and still cannot tell a trickle from silence. `Debug::Acquire::http` logs
+every header. Neither was added.
+
 ## Rejected: skipping tests per diff
 
 `e2e/select-specs.js` can narrow the suite to a diff's salient specs, and the
@@ -701,7 +949,7 @@ gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs | grep -E '✓|✘'
 # apt split inside the install step: fetch size and time, and whether the
 # .deb cache hit ("Need to get 0 B/<n> MB") or which entry it restored
 gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs \
-  | grep -E 'Need to get|Fetched|Cache restored from key|restored \.debs|apt \.deb cache key'
+  | grep -E 'Need to get|Fetched|Cache restored from key|restored \.debs|apt \.deb cache key|apt path:'
 ```
 
 To try a different worker count without cutting a release, pass the reusable's
@@ -866,13 +1114,38 @@ worker count: at four workers, CPU and wall medians fall about **7%** and
 measurements establish the targeted CPU reduction and a modest local
 four-worker improvement, without establishing a faster GitHub job.
 
-Three **before-only CI** `Run pure-fs harness lints` step samples are
-[79 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242331905/job/111553363207),
-[56 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242134166/job/111552804256), and
-[53 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37240324345/job/111547578693).
-Post-change CI samples remain unavailable because this sprint did not push or
-dispatch workflows. The issue's three-run CI before/after requirement remains
-open until the proposed change runs there.
+The change shipped in [PR #609](https://github.com/Adam-S-Daniel/cms-platform/pull/609),
+merged at [6d1d4b7](https://github.com/Adam-S-Daniel/cms-platform/commit/6d1d4b7896ccc60a648bdd2d30e8740c5afe81b3).
+The table records the three before and three after `Run pure-fs harness lints`
+step samples. Each link opens the job that ran the step; the commit link names
+the source revision. All six steps succeeded with four workers.
+
+| Side | Revision | Step time | Files | Passed / skipped / total |
+|---|---|---:|---:|---:|
+| Before | [3818240](https://github.com/Adam-S-Daniel/cms-platform/commit/381824060a448677eb78dc7cda5bf2889271d60f) | [79 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242331905/job/111553363207) | 183 | 3,639 / 114 / 3,753 |
+| Before | [90fedf7](https://github.com/Adam-S-Daniel/cms-platform/commit/90fedf7e9b3b7a2436ff71fdf74a12f262ba88f7) | [56 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37242134166/job/111552804256) | 183 | 3,639 / 114 / 3,753 |
+| Before | [15936c0](https://github.com/Adam-S-Daniel/cms-platform/commit/15936c05b32748819caa0e59555f91049ea4ef82) | [53 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37240324345/job/111547578693) | 180 | 3,615 / 114 / 3,729 |
+| After | [6d1d4b7](https://github.com/Adam-S-Daniel/cms-platform/commit/6d1d4b7896ccc60a648bdd2d30e8740c5afe81b3) | [77 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37259568214/job/111603740967) | 185 | 3,765 / 114 / 3,879 |
+| After | [31de067](https://github.com/Adam-S-Daniel/cms-platform/commit/31de067025856523f7a05e7a1ca91e742903e272) | [77 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37260196293/job/111605608315) | 185 | 3,765 / 114 / 3,879 |
+| After | [f009dc2](https://github.com/Adam-S-Daniel/cms-platform/commit/f009dc2462a7fe56f4e90ed34d62bfc6e6b9f977) | [78 s](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/37265257024/job/111620607810) | 185 | 3,777 / 114 / 3,891 |
+
+An Acorn AST comparison of the five files found the same 220 syntactic test
+registration sites and 657 `expect()` call sites at all six revisions. It also
+compared the generated-case inputs: the scaffold `SHAPES` array has the same
+14 entries, and the scheduled-health `CALLERS` array has the same two entries
+and titles. Expanding those loops gives the same 237 Playwright registrations
+per revision: 14 + 15 + 24 + 102 + 82. The YAML parser found an identical
+`Run pure-fs harness lints` command, deny list, and worker settings
+(`PW_PROJECT=chromium-light`, `PW_WORKERS=100%`) at all six revisions. These
+checks establish equivalent selected five-file workloads; they do not claim
+that every assertion body is semantically unchanged.
+
+The full lane's workload is not identical: the file and test totals above
+include other specs added between the samples. The raw CI medians are 56 s
+before and 77 s after, with the after median 37.5% higher. These noisy samples
+have different full-lane workloads, so they establish neither a CI speedup nor
+a causal CI regression. The targeted local CPU reduction above remains the
+established result.
 
 ### act learnings (from this measurement session)
 

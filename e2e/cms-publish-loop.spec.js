@@ -62,6 +62,7 @@ const {
   getPullRequest,
   waitForCmsPullRequest,
   makeDeployQueueExtender,
+  describeError,
 } = require("./github-actions-poll");
 const { seedFixtureViaPr, closeStaleDecapPrOnBranch } = require("./cms-fixture-pr");
 const { waitForChangeReflected } = require("./deploy-pill");
@@ -555,7 +556,7 @@ test.afterAll(async ({}, testInfo) => {
     current = await fetchCanaryFromMain();
   } catch (e) {
     console.warn(
-      `[cleanup-harness] couldn't read ${CanaryFile.path} from main; skipping safety-net check: ${e && e.message}`,
+      `[cleanup-harness] couldn't read ${CanaryFile.path} from main; skipping safety-net check: ${describeError(e)}`,
     );
     return;
   }
