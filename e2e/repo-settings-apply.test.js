@@ -2,7 +2,7 @@
 //
 // This is the ONLY workflow in the fleet that holds a credential able to
 // rewrite repo settings and rulesets across two owners, so its safety
-// properties are asserted rather than assumed. Five of them are traps that
+// properties are asserted rather than assumed. Six of them are traps that
 // look fine until the day they matter:
 //
 //  1. The plan must run UNGATED and the gated apply GATED. An environment gate
@@ -21,6 +21,11 @@
 //  5. The concurrency group must be PER OWNER. A constant group across a
 //     two-leg matrix makes the legs cancel each other, non-deterministically,
 //     on every run.
+//  6. Every job that reads the App key must sit in a `main`-only environment
+//     and VERIFY that through the API before it reads the key (#870). As a
+//     repo secret the key is readable from any branch; an environment secret
+//     behind a `main`-only deployment-branch policy is not. And as in 3, a
+//     missing environment is silently created with no policy at all.
 //
 // PLATFORM-INTERNAL: reads .github/workflows + .github/actions + scripts/,
 // absent on a consumer.
@@ -44,6 +49,40 @@ const CONVERGE = path.join(
   "action.yml",
 );
 const GATE_ISSUE = path.join(ROOT, "scripts", "gate-approval-issue.js");
+const VERIFY_ENV = path.join(ROOT, "scripts", "verify-repo-settings-environment.js");
+const KEY_REF = "secrets.REPO_SETTINGS_APP_PRIVATE_KEY";
+const REVIEWER_ENV = "repo-settings";
+const AUTO_ENV = "repo-settings-auto";
+
+// `environment:` is either a bare name or a `{ name, url }` mapping.
+function envName(job) {
+  const e = job && job.environment;
+  return e && typeof e === "object" ? e.name : e;
+}
+// Does this parsed node (a job or a step) reference the key anywhere in its
+// values — `env:`, `with:`, `run:`? Searched over the PARSED document, so a
+// comment naming the key never counts.
+function refsKey(node) {
+  return JSON.stringify(node || {}).includes(KEY_REF);
+}
+// The verifier's invocation in a `run:` block, tokenized: the script is
+// called as one command line, so a whitespace split (quotes stripped) of the
+// line naming it is the argv. Comment lines are skipped, so a comment that
+// mentions the script never counts as running it. null when absent.
+function verifierInvocation(run) {
+  for (const raw of String(run || "").split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("#")) continue;
+    const argv = line.split(/\s+/).map((t) => t.replace(/^["']|["']$/g, ""));
+    if (argv[0] !== "node" || argv[1] !== "scripts/verify-repo-settings-environment.js") continue;
+    const i = argv.indexOf("--environment");
+    return {
+      environment: i !== -1 ? argv[i + 1] : undefined,
+      requireReviewers: argv.includes("--require-reviewers"),
+    };
+  }
+  return null;
+}
 
 function wfText() {
   return readWorkflow(WF);
@@ -80,17 +119,18 @@ function jobShell(job) {
 }
 
 test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", () => {
-  test("the GATED apply sits behind the environment and the plan job does NOT", () => {
+  test("the GATED apply sits behind the reviewer environment and the plan job does NOT", () => {
     const jobs = wfDoc().jobs;
     expect(
-      jobs["apply-gated"].environment,
+      envName(jobs["apply-gated"]),
       "apply-gated must sit behind the repo-settings environment",
-    ).toBe("repo-settings");
+    ).toBe(REVIEWER_ENV);
     expect(
-      jobs.plan.environment,
-      "plan must NOT be gated — a gate pauses the job before its first step, so the plan " +
-        "would be invisible to the reviewer at approval time",
-    ).toBeUndefined();
+      envName(jobs.plan),
+      "plan must NOT be reviewer-gated — a gate pauses the job before its first step, so the " +
+        "plan would be invisible to the reviewer at approval time. Its environment is the " +
+        "reviewer-less, main-only one (#870).",
+    ).toBe(AUTO_ENV);
     expect(jobs["apply-gated"].needs, "apply-gated must depend on plan").toContain(
       "plan",
     );
@@ -99,15 +139,15 @@ test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", (
     );
   });
 
-  test("exactly ONE apply lane is environment-gated", () => {
+  test("exactly ONE job sits behind the REVIEWER environment", () => {
     // The ungated lane is safe only because of what it refuses to write (see
     // the --refuse-weakening test below). Gating both would be harmless;
     // gating NEITHER would hand an unattended admin write to every plan.
+    // Since #870 the other key-reading jobs DO declare an environment, the
+    // reviewer-less `repo-settings-auto`, so the gate is told apart by name.
     const jobs = wfDoc().jobs;
-    const gatedLanes = Object.entries(jobs)
-      .filter(([name]) => name.startsWith("apply"))
-      .filter(([, j]) => j.environment);
-    expect(gatedLanes.map(([n]) => n)).toEqual(["apply-gated"]);
+    const gated = Object.entries(jobs).filter(([, j]) => envName(j) === REVIEWER_ENV);
+    expect(gated.map(([n]) => n)).toEqual(["apply-gated"]);
   });
 
   test("the two apply lanes are mutually exclusive on the SAME output", () => {
@@ -180,26 +220,21 @@ test.describe("repo-settings-apply.yml — the apply-in-CI safety properties", (
   });
 
   test("the gated apply refuses to run if the environment has no required reviewer", () => {
-    // NB: do NOT assert merely that "required_reviewers" appears somewhere. The
-    // step's own error message contains that word, so a bare substring check
-    // passes even with the guard neutered — verified by neutering it. Pin the
-    // GUARD (the case pattern) and the refusal (exit 1), not the prose.
+    // The guard's LOGIC is unit-tested against fake API JSON in the #870
+    // describe below; this pins the WIRING: the gated lane runs the verifier
+    // against its own environment WITH --require-reviewers, before the write.
     // ONE parse: `parseYaml` returns a fresh object per call, so a `verify`
     // taken from a second parse is never identity-equal to a member of the
     // first one's step list — and `indexOf` would silently return -1.
     const steps = wfDoc().jobs["apply-gated"].steps || [];
-    const verify = steps.find((s) =>
-      /environments\/repo-settings/.test(String(s.run || "")),
-    );
-    expect(verify, "no step in apply-gated queries the environment").toBeTruthy();
+    const verify = steps.find((s) => verifierInvocation(s.run));
+    expect(verify, "no step in apply-gated runs the environment verifier").toBeTruthy();
+    const inv = verifierInvocation(verify.run);
+    expect(inv.environment).toBe(REVIEWER_ENV);
     expect(
-      /\*,required_reviewers,\*\)/.test(String(verify.run)),
-      "the guard must MATCH on required_reviewers — an undeclared environment is auto-created " +
-        "with no protection rules, so reaching this step proves nothing on its own",
-    ).toBe(true);
-    expect(
-      /exit 1/.test(String(verify.run)),
-      "the gate-missing branch must exit non-zero, not merely warn",
+      inv.requireReviewers,
+      "the gated lane must pass --require-reviewers — an undeclared environment is " +
+        "auto-created with no protection rules, so reaching this step proves nothing on its own",
     ).toBe(true);
     // It must run BEFORE the converge step, or the write happens either way.
     const iVerify = steps.indexOf(verify);
@@ -629,5 +664,163 @@ test.describe("the rendered write answers 'what is that?' (#397 review)", () => 
       changes: [{ facet: "allow_rebase_merge", live: true, desired: false }],
     });
     expect(lines[0]).toBe("- **o/r** — repo flag `allow_rebase_merge` -> false");
+  });
+});
+
+// #870: REPO_SETTINGS_APP_PRIVATE_KEY can write Administration, Actions and
+// Issues on every repo under both owners. As a repo secret in a public repo it
+// is readable from any branch, including a PR branch that edits this
+// workflow. Scoped to environments whose deployment-branch policy allows only
+// `main`, it is not — PROVIDED each environment really is configured that
+// way, which is what the self-check below verifies at run time.
+test.describe("the App key is readable only from main-only environments (#870)", () => {
+  const verifier = () => require(VERIFY_ENV);
+  const EXPECTED = {
+    plan: AUTO_ENV,
+    "apply-auto": AUTO_ENV,
+    "apply-gated": REVIEWER_ENV,
+  };
+
+  test("every job that references the key declares an environment", () => {
+    const jobs = wfDoc().jobs;
+    const keyJobs = Object.entries(jobs).filter(([, j]) => refsKey(j));
+    // Non-vacuous: the key is read by three jobs today.
+    expect(keyJobs.length, "no job references the key — this test would pass vacuously").toBeGreaterThan(0);
+    for (const [name, job] of keyJobs) {
+      expect(
+        envName(job),
+        `job "${name}" reads ${KEY_REF} but declares no environment, so the key it reads ` +
+          "is not branch-scoped and a run on ANY branch can reach it",
+      ).toBeTruthy();
+    }
+  });
+
+  test("plan and apply-auto use repo-settings-auto; apply-gated uses repo-settings", () => {
+    const jobs = wfDoc().jobs;
+    const actual = Object.fromEntries(
+      Object.entries(jobs)
+        .filter(([, j]) => refsKey(j))
+        .map(([n, j]) => [n, envName(j)]),
+    );
+    // Exact equality also pins WHICH jobs read the key: close-approval-issue
+    // must not start reading it without this test (and its environment) moving.
+    expect(actual).toEqual(EXPECTED);
+  });
+
+  test("each key-reading job verifies its own environment before any step reads the key", () => {
+    const jobs = wfDoc().jobs;
+    for (const [name, env] of Object.entries(EXPECTED)) {
+      const steps = jobs[name].steps || [];
+      const iVerify = steps.findIndex((s) => verifierInvocation(s.run));
+      expect(iVerify, `job "${name}" never runs scripts/verify-repo-settings-environment.js`).toBeGreaterThanOrEqual(0);
+      const inv = verifierInvocation(steps[iVerify].run);
+      expect(
+        inv.environment,
+        `job "${name}" must verify the environment it declares (${env})`,
+      ).toBe(env);
+      expect(
+        inv.requireReviewers,
+        `job "${name}": --require-reviewers belongs only to the reviewer environment`,
+      ).toBe(env === REVIEWER_ENV);
+      const keySteps = steps.map((s, i) => (refsKey(s) ? i : -1)).filter((i) => i !== -1);
+      expect(keySteps.length, `job "${name}" has no step reading the key`).toBeGreaterThan(0);
+      for (const i of keySteps) {
+        expect(
+          i,
+          `job "${name}" step ${i} (${JSON.stringify(steps[i].name || steps[i].uses)}) reads the key ` +
+            `before the environment check at step ${iVerify}`,
+        ).toBeGreaterThan(iVerify);
+      }
+      // The verifier step itself must never hold the key.
+      expect(refsKey(steps[iVerify])).toBe(false);
+    }
+  });
+
+  // ── checkEnvironment against fake API JSON ──────────────────────────────
+  const envBody = (overrides = {}) => ({
+    name: AUTO_ENV,
+    protection_rules: [{ type: "branch_policy" }],
+    deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+    ...overrides,
+  });
+  const policies = (...list) => ({
+    total_count: list.length,
+    branch_policies: list.map(([type, name]) => ({ id: 1, name, type })),
+  });
+  const check = (args) =>
+    verifier().checkEnvironment({ name: AUTO_ENV, ...args });
+
+  test("checkEnvironment: the good config passes", () => {
+    expect(check({ env: envBody(), policies: policies(["branch", "main"]) })).toEqual([]);
+    expect(
+      verifier().checkEnvironment({
+        name: REVIEWER_ENV,
+        env: envBody({
+          name: REVIEWER_ENV,
+          protection_rules: [
+            { type: "required_reviewers", reviewers: [{ type: "User" }] },
+            { type: "branch_policy" },
+          ],
+        }),
+        policies: policies(["branch", "main"]),
+        requireReviewers: true,
+      }),
+    ).toEqual([]);
+  });
+
+  test("checkEnvironment: a missing environment fails", () => {
+    const p = check({ env: null, policies: null });
+    expect(p.length).toBe(1);
+    expect(p[0]).toMatch(/does not exist/);
+  });
+
+  test("checkEnvironment: no branch policy fails", () => {
+    // Deployment branches = "No restriction": GitHub returns a null policy.
+    expect(check({ env: envBody({ deployment_branch_policy: null }), policies: policies() }).length).toBeGreaterThan(0);
+    // Custom policies switched on, but the list is empty.
+    expect(check({ env: envBody(), policies: policies() })).toEqual([
+      expect.stringMatching(/exactly one deployment branch policy.*found 0/),
+    ]);
+    // "Protected branches only" is not the main-only policy either.
+    expect(
+      check({
+        env: envBody({ deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } }),
+        policies: policies(["branch", "main"]),
+      }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("checkEnvironment: a different branch fails", () => {
+    expect(check({ env: envBody(), policies: policies(["branch", "develop"]) }).length).toBe(1);
+    expect(check({ env: envBody(), policies: policies(["branch", "*"]) }).length).toBe(1);
+    // A TAG policy named main is not the branch main.
+    expect(check({ env: envBody(), policies: policies(["tag", "main"]) }).length).toBe(1);
+  });
+
+  test("checkEnvironment: an extra policy fails", () => {
+    expect(
+      check({ env: envBody(), policies: policies(["branch", "main"], ["branch", "release/*"]) }),
+    ).toEqual([expect.stringMatching(/found 2/)]);
+    // A paginated count larger than the page also fails, rather than trusting page 1.
+    expect(
+      check({ env: envBody(), policies: { total_count: 2, branch_policies: [{ name: "main", type: "branch" }] } }).length,
+    ).toBe(1);
+  });
+
+  test("checkEnvironment: --require-reviewers fails without a required_reviewers rule", () => {
+    const p = verifier().checkEnvironment({
+      name: REVIEWER_ENV,
+      env: envBody({ name: REVIEWER_ENV }),
+      policies: policies(["branch", "main"]),
+      requireReviewers: true,
+    });
+    expect(p).toEqual([expect.stringMatching(/no required_reviewers rule/)]);
+  });
+
+  test("the verifier never echoes an API response body", () => {
+    // Same public-log rule as mint-app-token and gate-approval-issue.
+    const src = fs.readFileSync(VERIFY_ENV, "utf8");
+    expect(/e\.stdout|JSON\.stringify\(e\)|\$\{e\.stderr\}/.test(src)).toBe(false);
+    expect(/HTTP \(\\d\{3\}\)/.test(src)).toBe(true);
   });
 });
