@@ -971,3 +971,73 @@ test.describe("API response bodies never reach logs or thrown messages", () => {
     expect(rec.verdict.why).toBe("HTTP 403 Error");
   });
 });
+
+// ── Dispatch grace: a merge seconds old with no deploy run YET ─────────
+//
+// GitHub creates the push-triggered deploy-production run asynchronously.
+// adamdaniel.ai run 39299445166: the delete PR merged at 18:24:58, the
+// spec's URL budget expired at 18:26:10 with no deploy run for the merge,
+// and the extender called it "no-deploy-fired" — the run appeared at
+// 18:27:02. A merge younger than `dispatchGraceMs` must extend instead.
+test.describe("makeDeployQueueExtender dispatch grace after a fresh merge", () => {
+  const MIN = 60 * 1000;
+  const NOW = Date.parse("2026-10-19T18:26:10Z");
+  const idleLane = async () => ({ inFlight: 0, recent: 0, deployCompletedSinceMerge: false, runsSinceMerge: 0 });
+  const mergedPr = (mergedAt) => async () => ({ number: 4323, merged: true, merged_at: mergedAt, head: { sha: "s" } });
+
+  test("a merge 72s old with no deploy run yet EXTENDS (not a real miss)", async () => {
+    const ext = makeDeployQueueExtender({
+      getPr: mergedPr("2026-10-19T18:24:58Z"),
+      activity: idleLane,
+      minExtendMs: 3 * MIN,
+      maxTotalExtendMs: 30 * MIN,
+      _now: () => NOW,
+    });
+    const grant = await ext({ elapsedMs: 12 * MIN, extensionCount: 0 });
+    expect(grant).toBe(3 * MIN);
+    expect(ext.verdict.kind).toBe("merged-awaiting-deploy-dispatch");
+    expect(ext.verdict.realMiss).toBe(false);
+  });
+
+  test("the same works anchored on a plain mergedAt (no getPr)", async () => {
+    const ext = makeDeployQueueExtender({
+      mergedAt: NOW - 30_000,
+      activity: idleLane,
+      _now: () => NOW,
+    });
+    expect(await ext({ elapsedMs: 12 * MIN, extensionCount: 0 })).toBeGreaterThan(0);
+    expect(ext.verdict.kind).toBe("merged-awaiting-deploy-dispatch");
+  });
+
+  test("past the grace window a merged PR + idle lane is STILL no-deploy-fired", async () => {
+    const ext = makeDeployQueueExtender({
+      getPr: mergedPr(new Date(NOW - 6 * MIN).toISOString()),
+      activity: idleLane,
+      dispatchGraceMs: 5 * MIN,
+      _now: () => NOW,
+    });
+    expect(await ext({ elapsedMs: 12 * MIN, extensionCount: 0 })).toBe(0);
+    expect(ext.verdict.kind).toBe("no-deploy-fired");
+    expect(ext.verdict.realMiss).toBe(true);
+  });
+
+  test("unanchored (no mergedAt, no getPr) keeps the legacy quiescent verdict", async () => {
+    const ext = makeDeployQueueExtender({ activity: idleLane, _now: () => NOW });
+    expect(await ext({ elapsedMs: 12 * MIN, extensionCount: 0 })).toBe(0);
+    expect(ext.verdict.kind).toBe("no-deploy-fired");
+  });
+
+  test("the grace is bounded by maxTotalExtendMs", async () => {
+    const ext = makeDeployQueueExtender({
+      getPr: mergedPr(new Date(NOW - 10_000).toISOString()),
+      activity: idleLane,
+      minExtendMs: 3 * MIN,
+      maxTotalExtendMs: 4 * MIN,
+      _now: () => NOW,
+    });
+    const grants = [];
+    for (let i = 0; i < 5; i++) grants.push(await ext({ elapsedMs: 12 * MIN, extensionCount: i }));
+    expect(grants.reduce((a, b) => a + b, 0)).toBe(4 * MIN);
+    expect(grants[grants.length - 1]).toBe(0);
+  });
+});
