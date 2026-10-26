@@ -155,8 +155,11 @@ test.describe("Decap CMS config invariants", () => {
       expect(published, "posts.published field must exist").not.toBeNull();
       // Editors must be able to predict which field wins — the hint should
       // call out that `published: true` publishes immediately and that the
-      // scheduled date only fires when this toggle is left off.
-      expect(String(published.hint || "").toLowerCase()).toMatch(/leave.*off|off.*to schedule/);
+      // scheduled date only fires when this toggle is left off. #636 words
+      // that as "While it is off, … set a Publish Date below".
+      expect(String(published.hint || "").toLowerCase()).toMatch(
+        /leave.*off|off.*to schedule|while it is off.*publish date/,
+      );
     });
 
     test(`${label}: posts.body hint does not send writers to a raw /preview/ path`, () => {
