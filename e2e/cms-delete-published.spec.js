@@ -312,6 +312,8 @@ test(
     // (mirrors cms-publish-loop-prod-mutate.spec.js). addLabel is
     // belt-and-braces; the Publish-Now shim already labels cms/ready.
     let createPrNumber = null;
+    // The cms/* delete PR found (and labelled) in step 4b, if Decap opened one.
+    let deletePrNumber = null;
     await test.step("Wait for Decap to open the create cms/... PR, label cms/ready", async () => {
       const pr = await waitForCmsPullRequest({
         base: "main",
@@ -435,6 +437,7 @@ test(
               console.warn(`[delete-published] could not label PR #${pr.number}: ${describeError(e)}`);
             }
             labelled = true;
+            deletePrNumber = pr.number;
             break;
           }
         }
@@ -475,7 +478,14 @@ test(
         // validate-content + auto-merge + deploy-production + CDN
         // propagation) with margin, in case runners are saturated.
         urlTimeoutMs: 12 * 60 * 1000,
-        onBudgetExhausted: makeDeployQueueExtender(),
+        // The 12 min include the delete PR's whole required-check run
+        // (site-verify alone took 10.5 min in adamdaniel.ai run 39299445166).
+        // With the delete PR captured, an unmerged PR extends instead of
+        // reading as "the chain never fired" (#215), and a merge seconds
+        // before the probe waits for GitHub to create the deploy run.
+        onBudgetExhausted: makeDeployQueueExtender(
+          deletePrNumber ? { getPr: () => getPullRequest({ prNumber: deletePrNumber }) } : {},
+        ),
       });
     });
 
