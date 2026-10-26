@@ -404,6 +404,45 @@ is the marker, because both checks shipped in the same build. Finish with one
 real sign-in on `/admin`, one on `/admin/reviews/`, and one on a preview admin
 if the site lists the preview entry.
 
+### Preview sign-in rollout status (2026-10-07)
+
+[#524](https://github.com/Adam-S-Daniel/cms-platform/issues/524) remains open.
+[PR #560](https://github.com/Adam-S-Daniel/cms-platform/pull/560) merged the
+preview-origin warning, validation, deliberate `PREVIEW_SIGN_IN=disabled`
+opt-out, and offline regression coverage. The remaining work is per-site
+configuration and completed sign-in evidence; no owner choice has been made.
+
+Both consumers' platform pins name `v0.1.160`
+([adamdaniel.ai](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/platform.lock),
+[jodidaniel.com](https://github.com/jodidaniel/jodidaniel.com/blob/main/platform.lock)).
+On 2026-10-07, both public health endpoints answered HTTP 200 with `status: ok`,
+`service: cms-oauth-proxy`, `release: v0.1.126`, and
+`handler_sha256: 8ce2c00d6fe4b3dd35753b811e914e17878a3c5a8730d987e36709c9b0b96dc3`
+([adamdaniel.ai health](https://sq8d4876v8.execute-api.us-east-1.amazonaws.com/prod/health),
+[jodidaniel.com health](https://zkrofo300b.execute-api.us-east-1.amazonaws.com/prod/health)).
+That digest matches the
+[v0.1.160 handler](https://github.com/Adam-S-Daniel/cms-platform/blob/v0.1.160/oauth-proxy/lambda.py).
+The latest build probes also succeeded
+([adamdaniel.ai probe](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37637837180),
+[jodidaniel.com probe](https://github.com/jodidaniel/jodidaniel.com/actions/runs/37637980483)).
+These checks establish handler parity only: they do not establish deployed
+`AllowedOrigins` or `SiteApex`, use of the updated deploy wrapper, or successful
+consent and token return. Private local parameters were not read, AWS
+configuration was not inspected or changed, and no real sign-in was performed.
+
+**Operator remainder:** recommend enabling previews as requested in
+[#524](https://github.com/Adam-S-Daniel/cms-platform/issues/524). Preserve each
+site's intended production origins and add its respective
+`https://preview-*.adamdaniel.ai` or `https://preview-*.jodidaniel.com` entry with
+the correct `APEX_DOMAIN`; alternatively, deliberately opt out with
+`PREVIEW_SIGN_IN=disabled` and no preview entries. Verify both local and live
+stack allowlists, then update and redeploy only if needed using the
+[credential-preserving runbook](#deploying-without-touching-the-credentials).
+For both sites, complete consent and token return on production `/admin/`,
+production `/admin/reviews/`, and an intended `preview-prN` admin when enabled.
+Keep [#524](https://github.com/Adam-S-Daniel/cms-platform/issues/524) open until
+the chosen configuration and live sign-in evidence are recorded.
+
 ### Should CI deploy the proxy? Not yet (decided 2026-10-02)
 
 [#518](https://github.com/Adam-S-Daniel/cms-platform/issues/518) asked whether
@@ -443,16 +482,17 @@ the probe shows deploys trailing releases by more than a release cycle.
 
 Once issued, the token sits in `localStorage`, readable by every script on the
 origin, and it is an OAuth App token: scope `repo,user,workflow` (or
-`repo,read:user,workflow` from a proxy deployed after #516), every repository
+`repo,read:user,workflow` from a proxy deployed after #516; which one the
+live proxies send is not verified, see the permissions row), every repository
 the editor can reach, no expiry. A script that should not be there
 is therefore expensive. What was weighed:
 
 | Measure | Status | Why |
 |---|---|---|
 | Subresource Integrity on the Decap bundle | **Shipped.** All three shells load `decap-cms` from unpkg with `integrity` + `crossorigin`; `e2e/admin-pin-invariant.test.js` locks it. | It is the only third-party script in the admin, and it runs with the token in reach. The browser now refuses a bundle whose bytes differ from the release that was reviewed. |
-| Security headers | **In the template, not yet deployed** — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515) | Both distributions send HSTS, `nosniff`, `Referrer-Policy` and same-origin framing once a site redeploys its bootstrap stack; `/admin/*` adds a CSP, Report-Only until `AdminCspMode=enforce`. Decap's `new Function` and the per-site inline scripts keep `script-src` loose; the gain is `connect-src`, `object-src`, `base-uri` and `frame-ancestors`. See [Security headers](#security-headers) below. |
-| Narrower permissions | Evaluated, spike pending — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516); `read:user` replaces `user` in the proxy's default scope | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. The source evaluation, the minimal permission set and the spike kit are in [GitHub App sign-in](#github-app-sign-in-516) below. |
-| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); off until a site follows the runbook below | Public pages share the origin, and so do their scripts. The CloudWatch RUM client is no longer fetched from AWS: the gem ships the exact release and pages load it from the site's own origin (rule below), which takes the RUM CDN out of the page but not the client out of the token's reach. Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
+| Security headers | **Deployed and enforced on both consumer sites** — [#515](https://github.com/Adam-S-Daniel/cms-platform/issues/515). Measured 2026-10-06 over HTTPS with TLS verification on: `/`, `/admin/` and `/admin/reviews/` on adamdaniel.ai and jodidaniel.com answer HSTS, `nosniff`, `Referrer-Policy`, `X-Frame-Options` and `frame-ancestors 'self'`; the `/admin/` pages carry the full policy in the enforcing `Content-Security-Policy` header and no `Content-Security-Policy-Report-Only` header. The template default for a NEW site is still `AdminCspMode=report-only` | Both distributions send HSTS, `nosniff`, `Referrer-Policy` and same-origin framing once a site redeploys its bootstrap stack; `/admin/*` adds a CSP, Report-Only until `AdminCspMode=enforce`. Decap's `new Function` and the per-site inline scripts keep `script-src` loose; the gain is `connect-src`, `object-src`, `base-uri` and `frame-ancestors`. See [Security headers](#security-headers) below. |
+| Narrower permissions | Evaluated, spike pending — [#516](https://github.com/Adam-S-Daniel/cms-platform/issues/516); `read:user` replaces `user` in the proxy's default scope (platform default since #548). **Unverified: the live proxies' `GITHUB_SCOPE`** — the proxies were redeployed 2026-10-04 at v0.1.126, after #548, so `read:user` is probable, but nobody has observed it; the check is [below](#the-interim-step-readuser-instead-of-user) | An OAuth App cannot be limited to one repository. The real narrowing is a GitHub App user token (site repo only, fine-grained, optionally expiring), which changes how every editor signs in. The source evaluation, the minimal permission set and the spike kit are in [GitHub App sign-in](#github-app-sign-in-516) below. |
+| A separate origin for the editor | **Opt-in, per site** — [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517); own-origin distribution/router shipped in [#549](https://github.com/Adam-S-Daniel/cms-platform/pull/549) and exact same-origin vendored RUM shipped in [#551](https://github.com/Adam-S-Daniel/cms-platform/pull/551). Neither consumer has opted in as of 2026-10-07: both public admin routes answer 200 with no redirect (see [rollout status](#rollout-status-and-owner-decision)); off until a site follows the [per-site runbook](#runbook-per-site). | Public pages share the origin, and so do their scripts. The CloudWatch RUM client is no longer fetched from AWS: the gem ships the exact release and pages load it from the site's own origin (rule below), which takes the RUM CDN out of the page but not the client out of the token's reach. Opted in, the editor is served by a distribution of its own that never returns a page with public-page script, and the apex only redirects to it. That closes public-page scripts' reach to the tokens once the old ones are revoked; content rendered inside the editor and the per-PR preview admins are not covered (see "What it closes, and what it does not"). |
 | Dashboards keeping their own copy (`gh_reviews_token`) | Left as is | Decap's own `decap-cms-user` sits beside it on the same origin, so dropping or moving the second copy would not shrink what a script can read. |
 
 ## Serving the editor from its own origin (opt-in, #517)
@@ -558,13 +598,25 @@ admin origin.
 **Not closed:**
 
 - **Content rendered inside the editor.** Decap draws the markdown preview
-  pane in a same-origin frame, and the platform leaves Decap's
-  `sanitize_preview` at its default (`false`), so an HTML embed
-  (`editor-component-html-embed.js`) with an event-handler attribute, such as
-  an `<img onerror>`, runs in the admin origin when the entry is opened;
-  `<script>` tags do not (they arrive through `innerHTML`). Anyone who can put
-  content on a `cms/*` branch reaches every editor who opens it. Not verified
-  in a browser here.
+  pane in a same-origin frame, so the HTML it renders runs in the admin
+  origin. The platform does not set `sanitize_preview` on any field (no file
+  in this repo mentions it), so Decap's default applies, and in the pinned
+  `decap-cms@3.15.1` that default is **`true`**: `MarkdownPreview.js` (in
+  `decap-cms-widget-markdown`) and `RichtextPreview.js` read
+  `field?.get('sanitize_preview') ?? true` and, when true, pass the HTML
+  through `DOMPurify.sanitize(html)` with no custom configuration. Read from
+  the bundle whose sha384 matches the shells' `integrity` attribute
+  (`dist/decap-cms.js`, source map `sourcesContent`; checked 2026-10-06).
+  DOMPurify's defaults drop event-handler attributes such as `onerror` and
+  `<script>` and `<iframe>` elements, so an HTML embed
+  (`editor-component-html-embed.js`) cannot run script in the preview at the
+  default. What stays open is that this protection is Decap's default and
+  not something the platform pins or tests: a field config that sets
+  `sanitize_preview: false` would let such an embed run in the admin origin,
+  and a Decap upgrade could change the default. Anyone who can put content
+  on a `cms/*` branch reaches every editor who opens it only if that happens.
+  Not verified in a browser here; an earlier version of this bullet claimed
+  the default was `false`, which the pinned source contradicts.
 - **Per-PR preview admins are unchanged.** `preview-prN.<apex>` and
   `preview-cms-<slug>.<apex>` each serve their admin next to that build's
   public pages. Preview builds run with `JEKYLL_ENV=preview`, so they load no
@@ -588,9 +640,10 @@ admin origin.
   window the editor opened), which is not built.
 - **Framing and CSP need the bootstrap redeploy.** `frame-ancestors 'self'`
   and the admin CSP reach `admin.<apex>` only once the stack carrying #515 is
-  deployed, and the CSP only reports until `AdminCspMode=enforce`; with its
-  `'unsafe-inline'` and `'unsafe-eval'` it does not stop the preview-pane
-  embed above.
+  deployed (it is, on both consumer sites, 2026-10-06), and the CSP only
+  reports until `AdminCspMode=enforce` (both sites enforce); with its
+  `'unsafe-inline'` and `'unsafe-eval'` it would not stop an
+  event-handler attribute that got past the preview sanitizer above.
 - **Tokens issued before the cut-over.** They stay in the apex's
   `localStorage` (`decap-cms-user`, `gh_reviews_token`), readable by every
   apex script, and the editor on its new origin cannot clear another origin's
@@ -610,6 +663,29 @@ admin origin.
   redirects followed, so it compares the same bytes. None of this has run
   against an opted-in site yet: the first prod loop after cut-over is the
   proof.
+
+### Rollout status and owner decision
+
+Read-only HTTPS checks on 2026-10-07 found neither consumer opted in. Both
+configuration files omit `cms.admin_origin`, and both `platform.lock` files
+name `v0.1.160`:
+
+| Consumer | Configuration | Platform pin | Public route observations |
+|---|---|---|---|
+| adamdaniel.ai | [`_config.yml`](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/_config.yml) | [`platform.lock`](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/platform.lock) | [`/admin/`](https://adamdaniel.ai/admin/) and [`/admin/reviews/`](https://adamdaniel.ai/admin/reviews/) both returned HTTP 200 with an empty `redirect_url`. |
+| jodidaniel.com | [`_config.yml`](https://github.com/jodidaniel/jodidaniel.com/blob/main/_config.yml) | [`platform.lock`](https://github.com/jodidaniel/jodidaniel.com/blob/main/platform.lock) | [`/admin/`](https://jodidaniel.com/admin/) and [`/admin/reviews/`](https://jodidaniel.com/admin/reviews/) both returned HTTP 200 with an empty `redirect_url`. |
+
+The pins alone do not activate the feature. The owner needs to choose whether
+to retain the current apex exposure knowingly or authorize a per-site
+migration. The recommendation is to pilot the dedicated origin on the
+user-owned consumer, validate it using the [runbook](#runbook-per-site), then
+migrate both consumers. That is a recommendation, not an owner-approved
+decision. No AWS settings, DNS or certificate state, OAuth allowlist,
+interactive sign-in, or token revocation was verified in this check, and no
+infrastructure rollout was performed. Until each site completes real
+per-site validation and revokes pre-cutover credentials, [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517)
+remains open. The remaining exposure is described in [What it closes, and
+what it does not](#what-it-closes-and-what-it-does-not).
 
 ### Runbook, per site
 
@@ -710,6 +786,22 @@ its editor from its own origin (#517, above) also sends `<prefix>-admin-headers`
 on every response of `admin.<apex>`; its apex `/admin/*` then only redirects,
 so run the checks below against `admin.<apex>/admin/` instead.
 
+A third policy, `<prefix>-preview-regression-cors`, is attached only to the
+preview distribution's `/regression.json` behavior (#789; otherwise a copy of
+the default, with the same functions). It repeats the baseline headers and adds
+a `CorsConfig`: `GET`/`HEAD` from `https://<apex>`, `https://www.<apex>` and,
+when `AdminDomainName` is set, `https://admin.<apex>`; no wildcard, no
+credentials, no `OPTIONS` (the dashboard's `fetch` is a plain GET, so there is
+no preflight). `/admin/reviews/` reads `preview-pr<N>.<apex>/regression.json`
+cross-origin from one of those origins, and without the header the browser
+blocked it and the dashboard showed "Visual-diff stats not available". It
+takes effect on a bootstrap redeploy (below). Check with:
+
+```bash
+curl -s -o /dev/null -D - -H 'Origin: https://<apex>' https://preview-pr<N>.<apex>/regression.json \
+  | grep -i -E '^(http|access-control-allow-origin|strict-transport-security)'
+```
+
 | Header | Everywhere | `/admin/*` |
 |---|---|---|
 | `Strict-Transport-Security` | `max-age=31536000` (`HstsMaxAgeSeconds`); `includeSubDomains` / `preload` only with `HstsScope` | same |
@@ -740,7 +832,11 @@ The full `/admin` policy, and why each part is there:
 - `img-src 'self' data: blob: https://<apex> https://*.<apex>
   https://avatars.githubusercontent.com`, `media-src 'self' blob:
   https://<apex> https://*.<apex>` (the dashboards' `regression.mp4`),
-  `font-src 'self' data:`, `frame-src 'self'`, `default-src 'self'`.
+  `font-src 'self' data:`, `default-src 'self'`.
+- `frame-src 'self' https://<apex> https://*.<apex>` — an iframe embed in an
+  entry's body, which the preview pane renders since #687. The site's own
+  origins only: the live site sets no `frame-src` at all, but a bare `https:`
+  is exactly what the invariant test refuses.
 - `object-src 'none'`, `base-uri 'none'` (no shell has a `<base>`).
 
 A new third-party script, stylesheet or `fetch` target under `theme/admin/`
@@ -750,6 +846,15 @@ the `/admin` policy, so a third-party image, script or iframe inside an
 entry's body (an HTML Embed, a hotlinked image) previews blank once a site
 enforces, while the published page still shows it. An iframe that loads a
 same-origin URL such as `/assets/tools/<slug>/` gets that page's own policy.
+
+`theme/admin/preview-pane.js` renders an iframe embed itself (#687): Decap's
+markdown preview runs DOMPurify with its default config, which drops
+`<iframe>`. Only raw HTML blocks that hold an `<iframe>` take that path, and
+they are rebuilt as React elements from an allowlist (`iframe`, `a`, `img`
+and plain text-level and block tags; `class`, `style`, `title` plus each
+tag's own attributes), with `http(s)` or relative URLs only — no event
+handlers, `srcdoc`, `<script>` or `<style>`. Everything else in the body still
+goes through Decap's sanitized markdown preview.
 
 It narrows where a script can quietly send what it reads; it cannot stop a
 script that navigates the page away, and the GitHub API it must allow is

@@ -106,7 +106,12 @@ const { guard } = require("./base-collections-guards");
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { closeStaleDecapPrOnBranch, removeFixtureViaPr } = require("./cms-fixture-pr");
+const {
+  closeStaleDecapPrOnBranch,
+  closeOpenPrsAddingFile,
+  readFileOnRef,
+  removeFixtureViaPr,
+} = require("./cms-fixture-pr");
 const {
   addLabel,
   gh,
@@ -166,13 +171,7 @@ test.describe.configure({
 let pendingFixture = null;
 
 async function fileExistsOnMain(filePath) {
-  try {
-    await gh(`/repos/${HOST_REPO}/contents/${filePath}?ref=main`);
-    return true;
-  } catch (e) {
-    if (/\b404\b/.test(String(e.message))) return false;
-    throw e;
-  }
+  return (await readFileOnRef({ ref: "main", filePath })) !== null;
 }
 
 test(
@@ -522,8 +521,8 @@ test(
 // ── Test-harness cleanup safety net — existence-only DELETE ───────────
 // #1771 step 4 makes this an existence-only delete, NOT a content
 // restore: the forward DELETE leg IS the cleanup. If the test body
-// completed, the post is gone from main and `fileExistsOnMain` returns
-// false → the harness no-ops. If the test threw mid-flow, the
+// completed, the post is gone from main and no open PR adds it → the
+// harness no-ops (it closes this run's in-flight create PR first, #689). If the test threw mid-flow, the
 // uniquely-named ephemeral post may still be on main; open a labelled
 // removal PR (same auto-merge path the forward leg uses) so the next run
 // starts clean. A 500 here leaks ONE inert, uniquely-named orphan the
@@ -548,10 +547,30 @@ test.afterAll(async () => {
   test.setTimeout(2 * 60 * 1000);
 
   const { filePath, slug, runId } = pendingFixture;
-  const stillThere = await fileExistsOnMain(filePath).catch(() => false);
+
+  // #689 — stop this run's in-flight create PR FIRST. The create leg labels
+  // it cms/ready, so a run that fails before the merge leaves it armed: a
+  // main-only check reads "gone" and the PR merges the post afterwards. The
+  // path carries this run's runId, so only this run's own PR can match; the
+  // delete leg's PR only REMOVES the file and is left alone. Strict: an API
+  // error throws instead of reading as "nothing in flight".
+  const { closed, merged } = await closeOpenPrsAddingFile({ base: "main", filePath });
+  if (closed.length > 0) {
+    console.warn(
+      `[cleanup-harness] closed in-flight PR(s) ${closed.map((n) => `#${n}`).join(", ")} still adding ${filePath}`,
+    );
+  }
+  if (merged.length > 0) {
+    console.warn(
+      `[cleanup-harness] PR(s) ${merged.map((n) => `#${n}`).join(", ")} merged ${filePath} before the close took effect`,
+    );
+  }
+
+  // Then check main. Only a 404 means absent; any other error throws.
+  const stillThere = (await readFileOnRef({ ref: "main", filePath })) !== null;
   if (!stillThere) {
     console.log(
-      `[cleanup-harness] ${filePath} gone from main; UI delete succeeded — no safety net needed`,
+      `[cleanup-harness] ${filePath} not on main and no open PR adds it — no safety net needed`,
     );
     return;
   }
@@ -577,6 +596,9 @@ test.afterAll(async () => {
     });
     console.warn(`[cleanup-harness] removed ${filePath} via removal PR`);
   } catch (e) {
-    console.warn(`[cleanup-harness] could not remove ${filePath}: ${describeError(e)}`);
+    // Loud: the post is on main and nothing is removing it.
+    throw new Error(
+      `[cleanup-harness] ${filePath} is on main and the removal PR could not be opened: ${describeError(e)}`,
+    );
   }
 });

@@ -1,10 +1,10 @@
 # Build + dependency artifacts for the single-page opt-out self-test fixture.
 # The fixture's SOURCE is committed; everything Jekyll/bundler/decap-server
-# produces at validation time is not.
+# produces at validation time is not. Gemfile.lock IS tracked: the fixture-e2e
+# public leg installs from it in frozen mode (#702), like e2e/fixture-site's.
 _site/
 .jekyll-cache/
 .sass-cache/
-Gemfile.lock
 vendor/
 .bundle/
 # Rendered Decap configs — the theme's decap_config_hook.rb writes these

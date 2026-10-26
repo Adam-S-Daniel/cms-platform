@@ -90,23 +90,19 @@ reports the dialog):
    the PR is closed, relabeled, or otherwise resolved).
 4. Reload `/admin`; the dialog should not reappear.
 
-## Resolved at the source: ephemeral cleanup PRs no longer cause transient red
+## Non-Decap `cms/*` PRs are labeled at creation
 
-Pre-v0.1.48, the audit could go transiently red because it scans EVERY open
-`cms/*` PR, including the prod loops' **ephemeral fixture-cleanup PRs**
-(`cms/e2e-fixture/remove-*` / `cms/e2e-fixture/seed-*` branches) — if a daily
-run fired while one was mid-flight, before it picked up a
-`decap-cms/<status>` label, the audit flagged it, then went green again once
-the PR auto-merged or closed.
-
-Since v0.1.48, every non-Decap `cms/*` PR writer — the publish-via-auto-merge
-shim's delete-recovery PRs, `cms-fixture-pr.js` seed/remove fixture PRs, and
+The audit scans EVERY open `cms/*` PR, including ones Decap did not open. So
+every non-Decap `cms/*` PR writer — the publish-via-auto-merge shim's
+delete-recovery PRs, `cms-fixture-pr.js` seed/remove fixture PRs
+(`cms/e2e-fixture/remove-*` / `cms/e2e-fixture/seed-*`), and
 `sweep-stale-cms-prs.yml`'s two cleanup PRs — applies
-`decap-cms/pending_publish` at PR-creation time, alongside `cms/ready`. They
-are correctly labelled from the moment they exist, so they no longer cause
-transient reds, and the self-heal above cleans up any straggler regardless. A
-red audit run now genuinely means self-heal failed and needs investigation —
-see Remediation above.
+`decap-cms/pending_publish` at PR-creation time, alongside `cms/ready`. A new
+writer of `cms/*` PRs must do the same, or a run that fires while its PR is
+mid-flight flags it. The self-heal above cleans up any straggler regardless,
+so a red audit run means self-heal failed and needs investigation — see
+Remediation above. (The transient reds this fixed: `docs/VERSION-HISTORY.md`
+v0.1.48.)
 
 Related: stuck `cms/*` PRs that won't auto-merge are the upstream cause — see the
 `cms-stuck-pr-triage` skill for diagnosing the auto-merge failure itself.

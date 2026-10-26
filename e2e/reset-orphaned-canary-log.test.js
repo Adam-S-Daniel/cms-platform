@@ -46,8 +46,16 @@ globalThis.fetch = async (url, init = {}) => {
     // removal PR open; "tagsremove500" fails opening one.
     case "tagsopenpr":
     case "tagsremove500":
-      if (method === "GET" && url.includes("/contents/_tags?")) {
-        return Response.json([{ type: "file", name: "e2e-tags-canary-1000000000000.md" }]);
+      // The sweep lists _tags through the git trees API: main's root
+      // tree, then the _tags subtree.
+      if (method === "GET" && url.endsWith("/git/trees/main")) {
+        return Response.json({ tree: [{ path: "_tags", type: "tree", sha: "tagsha" }] });
+      }
+      if (method === "GET" && url.endsWith("/git/trees/tagsha")) {
+        return Response.json({
+          truncated: false,
+          tree: [{ path: "e2e-tags-canary-1000000000000.md", type: "blob", sha: "x" }],
+        });
       }
       if (method === "GET" && url.includes("/pulls?")) {
         return Response.json(
