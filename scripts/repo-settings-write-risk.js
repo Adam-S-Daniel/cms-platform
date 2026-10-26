@@ -222,11 +222,26 @@ function classifyRulesetPut(w) {
   const live = w.live || {};
   const desired = w.desired || {};
   // GitHub omits bypass_actors from GET ruleset responses unless the token has
-  // repository-ruleset write access. A PUT replaces the full body, so no write
-  // is provably non-weakening until that field was actually observed — even
-  // when the manifest wants no bypass actors. The approved apply replans with
-  // a write-scoped token before it reaches this classifier again.
-  if (!Array.isArray(live.bypass_actors))
+  // repository-ruleset write access. A PUT replaces the full body, so when the
+  // live list was never observed we cannot prove which actors a desired list
+  // ADDS — with ONE exception: a desired list that is declared and EMPTY can
+  // only remove actors, whatever live holds, and the key loop below already
+  // treats removals as safe. That narrowing matters because the read-only plan
+  // token is the one that always hits this branch: without it a PUT that only
+  // adds a required check to a bypass-free ruleset (cms-platform's `main`) sat
+  // behind a human click for a delta that cannot weaken anything (run
+  // 37265875259). An OMITTED or null desired list stays gated (how GitHub
+  // treats a missing field on PUT is not something we prove), as does a
+  // non-empty one (it could add an actor). A live value that is present but
+  // malformed (null) also stays gated: only the hidden-field case (undefined)
+  // is the plan token's blind spot, and a shape we did not expect is not.
+  // This does not weaken the write-time guarantee: `apply-auto` mints a
+  // write-scoped token, replans, and re-runs this classifier through
+  // `--refuse-weakening`, where live bypass_actors IS visible.
+  const desiredBypassEmpty =
+    Array.isArray(desired.bypass_actors) && desired.bypass_actors.length === 0;
+  const liveBypassUnobserved = !Array.isArray(live.bypass_actors);
+  if (liveBypassUnobserved && !(live.bypass_actors === undefined && desiredBypassEmpty))
     return gated(
       `ruleset "${w.name}": cannot verify live bypass_actors before a full ruleset PUT`,
     );
@@ -248,6 +263,14 @@ function classifyRulesetPut(w) {
         break;
       case "bypass_actors": {
         // Only REMOVALS are safe. An added actor is a new way around the rules.
+        // Unobserved live list: the early gate let us here only because the
+        // desired list is `[]`, so there is nothing to add and nothing to diff.
+        if (liveBypassUnobserved) {
+          reasons.push(
+            "bypass_actors -> [] (removal-only; live list not visible to the plan token)",
+          );
+          break;
+        }
         const liveSet = new Set((live.bypass_actors || []).map((a) => JSON.stringify(canon(a))));
         const added = (desired.bypass_actors || []).filter(
           (a) => !liveSet.has(JSON.stringify(canon(a))),
@@ -456,7 +479,24 @@ function planWrites(plan) {
         name: post.name,
         desired: post.body,
       });
-    for (const put of p.actionsPuts || [])
+    for (const put of p.actionsPuts || []) {
+      // The workflow-permissions PUT (#868) carries several drifted keys in
+      // one body (`keys` + `liveByKey`); every other actions PUT carries one
+      // (`key` + `live`). Each drifted key is classified on its own. The
+      // echoed, undrifted field is not a change, so it is not a write.
+      if (Array.isArray(put.keys)) {
+        for (const key of put.keys) {
+          const live = (put.liveByKey || {})[key];
+          writes.push({
+            repo: p.repo,
+            kind: "actions-permission",
+            key,
+            live: live === undefined ? null : live,
+            desired: put.body[key],
+          });
+        }
+        continue;
+      }
       writes.push({
         repo: p.repo,
         kind: "actions-permission",
@@ -464,6 +504,7 @@ function planWrites(plan) {
         live: (put.live === undefined ? null : put.live),
         desired: put.body[put.key],
       });
+    }
     for (const put of p.envPuts || [])
       writes.push({
         repo: p.repo,

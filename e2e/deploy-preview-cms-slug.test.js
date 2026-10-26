@@ -21,8 +21,8 @@ const { parseYaml, allStrings } = require("./workflow-yaml-utils");
 //   2. The deploy job syncs the alias prefix `cms-<slug>/` and registers
 //      a `preview-cms-<slug>` GitHub Deployment.
 //   3. The teardown job removes the alias prefix.
-//   4. The CloudFront invalidation step lists both prefixes when the
-//      branch is a `cms/<col>/<slug>` branch.
+//   4. No step invalidates CloudFront: the preview distribution is
+//      CachingDisabled, so an invalidation would only spend quota.
 //   5. The PR-comment step surfaces the slug-derived URL as an
 //      additional row when applicable.
 //
@@ -134,15 +134,19 @@ test.describe("deploy-preview workflow: per-CMS-slug preview alias", () => {
     );
   });
 
-  test("invalidation step is gated to the cms-<slug> path conditionally", () => {
-    // Both deploy + teardown invalidation steps should add the
-    // `/cms-${SLUG}/*` path only when SLUG is non-empty. Look for the
-    // shared pattern.
-    const matches = workflowStrings().match(/PATHS\+=\("\/cms-\$\{SLUG\}\/\*"\)/g) || [];
-    expect(
-      matches.length,
-      "expected both deploy + teardown to conditionally add the cms-slug path to the invalidation batch",
-    ).toBe(2);
+  test("no step invalidates CloudFront (the preview distribution caches nothing)", () => {
+    // PreviewDistribution uses CachingDisabled, so an invalidation of /pr-N/*
+    // or /cms-<slug>/* is pure waste against the 1,000-path monthly free tier
+    // (cloudfront-invalidation-budget.test.js holds the whole-repo rule).
+    const offenders = [];
+    for (const [jobName, job] of Object.entries(workflow().jobs || {})) {
+      for (const step of (job && job.steps) || []) {
+        if (typeof (step && step.run) === "string" && step.run.includes("create-invalidation")) {
+          offenders.push(`${jobName} → ${step.name}`);
+        }
+      }
+    }
+    expect(offenders, "deploy-preview.yml must not run create-invalidation").toEqual([]);
   });
 
   test("no `run:` body interpolates the cms_slug output directly", () => {
@@ -171,7 +175,7 @@ test.describe("deploy-preview workflow: per-CMS-slug preview alias", () => {
 
   test("every step that consumes the cms slug binds it through `env:`", () => {
     // The positive half of the guard above: a future edit that simply DELETES
-    // the slug usage would pass the negative lint. Assert the four consuming
+    // the slug usage would pass the negative lint. Assert the five consuming
     // steps still receive it, and via env.
     const bound = [];
     for (const job of Object.values(workflow().jobs || {})) {
@@ -187,14 +191,16 @@ test.describe("deploy-preview workflow: per-CMS-slug preview alias", () => {
         }
       }
     }
-    // Six consumers, all via env: the two github-script steps that were
-    // always env-bound (deployment registration + PR comment), plus the four
-    // shell steps converted by #259 — deploy's alias sync and invalidation,
-    // teardown's alias delete and invalidation.
+    // Five consumers, all via env: the two github-script steps that were
+    // always env-bound (deployment registration + PR comment), the two
+    // shell steps converted by #259 — deploy's alias sync and teardown's
+    // alias delete — and the Jekyll build, which adds --unpublished for a
+    // cms/* draft (#637, deploy-preview-unpublished.test.js). The
+    // invalidation steps that used to be the other two are gone.
     expect(
       bound.length,
-      `expected 6 env-bound cms-slug consumers, found ${bound.length}: ${bound.join(", ")}`,
-    ).toBe(6);
+      `expected 5 env-bound cms-slug consumers, found ${bound.length}: ${bound.join(", ")}`,
+    ).toBe(5);
   });
 
   test("PR-comment renders the cms-slug alias URL when applicable", () => {

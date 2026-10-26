@@ -23,14 +23,14 @@ Git tags are mutable — a compromised maintainer can move a tag to arbitrary co
 # WRONG — mutable tag
 - uses: actions/checkout@v4
 
-# WRONG — trailing version comment (retired 2026-08-20; see Rule 2)
+# WRONG — trailing version comment (see Rule 2)
 - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (2026-07-17)
 
 # RIGHT — immutable SHA, nothing after it
 - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 ```
 
-Every **third-party** `uses:` line must be a full 40-character commit SHA. AGENTS.md's "Pinning GitHub Actions" section — synced fleet-wide from `_agent-guidance` — is the source of that universal rule; what this skill adds is the cms-platform-specific mechanics, starting with the one shape the rule does NOT reach.
+Every **third-party** `uses:` line must be a full 40-character commit SHA. That universal rule comes from `_agent-guidance` — the managed half of this repo's `AGENTS.md` restates it under "The floor", and the full fleet guidance in user memory has it under "Pinning GitHub Actions"; what this skill adds is the cms-platform-specific mechanics, starting with the one shape the rule does NOT reach.
 
 ### The carve-out: a CROSS-REPO reference to cms-platform stays on the release TAG
 
@@ -45,11 +45,11 @@ So the checker recognises **two** shapes under **one** discipline: a platform re
 
 Note what did NOT change: a composite is still a piece of code executing on a runner with the job's token, and a tag is still mutable. The carve-out is safe here for the same reason it is safe for the reusables — the tag points at a repo **this account owns and controls**, and `platform-bump.yml` moves every one of those refs to a single release atomically. Nothing third-party is ever a tag.
 
-## Rule 2: No trailing version comment on ANY pin (reversed 2026-08-20)
+## Rule 2: No trailing version comment on ANY pin
 
 **A `uses:` line ends at its ref — `@<sha>` for a third-party action, `@<tag>` for a platform ref. Do not append `# vX.Y.Z`, `# vX.Y.Z (YYYY-MM-DD)`, or any other version label to either.**
 
-This reverses the previous rule, which required a dated comment. The measured reason: the comment goes stale silently and then actively **lies**, and a wrong label is worse than no label because it is read and believed. Dependabot's rewriting of it is **inconsistent and cannot be relied on** — it rewrote a bare `# v5` to `# v7.0.0` in GHA-bench#52 while leaving `# v4` stale on the line above **in the same file**, and left every `# vX.Y.Z (YYYY-MM-DD)` comment untouched in skills-evals #38/#39/#40 while moving their SHAs. The result was `actions/checkout` at v7.0.1 labelled `# v4.3.1` in one file and `# v6.0.0` in two others in the same repo.
+Why: the comment goes stale silently and then actively **lies**, and a wrong label is worse than no label because it is read and believed. Dependabot's rewriting of it is **inconsistent and cannot be relied on** — it rewrote a bare `# v5` to `# v7.0.0` in GHA-bench#52 while leaving `# v4` stale on the line above **in the same file**, and left every `# vX.Y.Z (YYYY-MM-DD)` comment untouched in skills-evals #38/#39/#40 while moving their SHAs. The result was `actions/checkout` at v7.0.1 labelled `# v4.3.1` in one file and `# v6.0.0` in two others in the same repo.
 
 The SHA is the truth. **When you need the version, resolve it:**
 
@@ -61,16 +61,14 @@ or read it off the Dependabot PR title.
 
 The machinery that existed to keep the comments honest — `.github/workflows/dependabot-comment-sync.yml`, its self-caller, the consumer template, and `scripts/sync-action-pin-comments.sh` — is **deleted**. Do not reintroduce a comment-writing job: `sync-action-pin-comments.sh` treated the comment as OPTIONAL in its match, so it rewrote a comment-LESS line to GROW one, and a single manual run would undo the fleet change.
 
-### There are NO surviving version comments — including on a platform ref
+### No exception for a platform ref
 
-An earlier revision of this rule kept ONE exception: a cms-platform **composite** pin stayed `@<sha>  # v0.1.88`, on the argument that there the comment was not a label but the **pin-consistency GATE**, machine-checked on every PR and therefore unable to go quietly stale.
+The rule has no carve-out, not even for a cms-platform **composite**, whose comment was once the pin-consistency gate:
 
-That exception is **retired**. It was true that the comment was checked — and still the wrong design, for two reasons:
+- **A version in the `@ref` keeps the checker free of comment parsing.** A comment-reading pass for one shape is the "one justified regex exception" that AGENTS.md's "AST always, never regex" rule exists to resist.
+- **A single carve-out is what makes a fleet rule fail to land.** "Never a version comment, except here" invites the next agent to decide their case is also the exception, and invites comment-writing machinery back to service that one shape — and that machinery grew a comment on comment-LESS lines too.
 
-- **It kept a comment-parsing pass alive in the checker** for exactly one shape, which is the "one justified regex exception" that AGENTS.md's "AST always, never regex" rule exists to resist. Moving the version into the `@ref` deletes the exception instead of documenting it.
-- **A single carve-out is what makes a fleet rule fail to land.** A rule stated as "never a version comment, except here" invites the next agent to decide their case is also the exception, and invites comment-writing machinery back to service that one shape. `sync-action-pin-comments.sh` matched the comment as OPTIONAL, so it rewrote comment-LESS lines to GROW one — a single run against a repo kept "for the composite's sake" would have undone the fleet change everywhere.
-
-So: **a `uses:` line ends at its ref, in all three repos, with no exceptions.** If you find a version comment on one, it is a leftover, and `scripts/verify-consumer-pins.sh`'s stale-token check is what turns a drifted one into a finding rather than an invisible lie.
+So: **a `uses:` line ends at its ref, in all three repos, with no exceptions.** If you find a version comment on one, it is a leftover, and `scripts/verify-consumer-pins.sh`'s stale-token check is what turns a drifted one into a finding rather than an invisible lie. (How the composite exception was retired: `docs/CI-INVARIANTS.md` and `docs/PIN-CONSISTENCY.md`.)
 
 ## Rule 3: 7-day cooling-off period
 
@@ -121,11 +119,9 @@ Within whichever repo you are in, the rules reach every `uses:` line under `.git
 
 Dependabot's github-actions ecosystem updates the `@<sha>` ref. It is now the ONLY thing it needs to update, because a third-party pin carries no comment (Rule 2). Nothing about a Dependabot PR needs a follow-up commit any more, and no `workflows`-scoped credential is needed to service one.
 
-### Why a drifted comment could never self-repair — the evidence behind Rule 2's reversal
+### Why a drifted comment can never self-repair
 
-**Dependabot only rewrites a pin comment that matches the version it is bumping FROM.** Once the comment and the SHA disagree, every subsequent bump leaves the comment alone and the gap WIDENS. Both live instances on cms-platform, found when comment-sync was first dogfooded on this repo (it had been shipped to consumers and never run here): PR #179 carried `actions/setup-node` **v7.0.0**'s SHA behind `# v6.4.0 (2026-04-20)` across 18 files, and PR #194 bumped 6.2.2 → 6.2.3 while its comment still said `v6.1.1` — so the rewrite could never match. This is structurally the SAME trap as #220's frozen `platform_ref`, where a generic `CUR`→`LATEST` literal replace could not match an already-drifted value either.
-
-The account first answered this with an out-of-band sync that read the SHA's ACTUAL tag. The 2026-08-20 measurement retired that answer in favour of removing the field: Dependabot's behaviour is not merely incomplete but **inconsistent** (it refreshed one comment and not its neighbour in the same file — GHA-bench#52), so no amount of syncing makes the label trustworthy, and an untrustworthy label that is nonetheless believed is a net negative. The general lesson survives its instance: **a repair keyed on the old value cannot fix a value that has already drifted past it** — and the cheapest repair is often deleting the derived field rather than keeping it in sync.
+**Dependabot only rewrites a pin comment that matches the version it is bumping FROM.** Once the comment and the SHA disagree, every later bump leaves the comment alone and the gap widens — and because Dependabot is also inconsistent within one file, no out-of-band sync makes the label trustworthy. The general lesson: **a repair keyed on the old value cannot fix a value that has already drifted past it** — and the cheapest repair is often deleting the derived field rather than keeping it in sync. (The live instances, #179 and #194, and the same trap in #220's frozen `platform_ref`: `docs/CI-INVARIANTS.md`.)
 
 ### The cooling-off is MECHANISED on cms-platform (and only there) — flat on `github-actions`, GRADUATED on `npm`
 
@@ -155,4 +151,4 @@ Four facts worth carrying:
 - **Leave `semver-minor-days` / `semver-patch-days` undefined on the `npm` entry** (`github-actions` cannot carry any of the three). GitHub's documented precedence falls an undefined `semver-*-days` back to `default-days`, so spelling them out only invites the three numbers to drift apart. (`include:` / `exclude:` per-dependency lists exist too; nothing here needs them.)
 - **Cooldown is version-updates-only.** A security advisory bypasses it by GitHub's spec, so it still opens — and auto-merges — the moment the matrix is green. Cooldown never delays a fix.
 
-**Do NOT add a cooldown to a CONSUMER's `github-actions` ecosystem — and the reason matters, because the first one recorded was wrong, and the second one is gone too.** The original claim was that a consumer cooldown "would delay every release's adoption"; that mechanism does not hold. Release adoption is landed by `platform-bump.yml`, which opens the bump PR itself (the last five releases all arrived as `platform/bump-vX.Y.Z`), so Dependabot is not on the adoption path. The actual primary reason is verified and simpler: **neither consumer pins a single third-party action** — every `uses:` in both repos targets `Adam-S-Daniel/cms-platform/.github/workflows/*.yml` — so a consumer cooldown has no supply-chain surface to hold and would be inert config that reads as policy. A second reason recorded here used to be that Dependabot was a backstop that bumped a platform pin when `platform-bump` hadn't run, and cooling that off would delay our own release — **that reason is gone as of #244**: the `github-actions` ecosystem now carries an explicit, unscoped `ignore` for `Adam-S-Daniel/cms-platform/*`, so there is no cms-platform Dependabot activity there for a cooldown to gate at all, structurally the same position #242 already put the `bundler` ecosystem in for the `cms-platform-theme` gem — `platform-bump` is the sole bumper of every cms-platform reference either ecosystem could otherwise touch (see cms-platform `docs/SYNC.md`).
+**Do NOT add a cooldown to a CONSUMER's `github-actions` ecosystem.** **Neither consumer pins a single third-party action** — every `uses:` in both repos targets `Adam-S-Daniel/cms-platform/.github/workflows/*.yml` — so a consumer cooldown has no supply-chain surface to hold and would be inert config that reads as policy. Nor does it touch release adoption: `platform-bump.yml` opens the bump PR itself, and the consumer's `github-actions` ecosystem carries an explicit, unscoped `ignore` for `Adam-S-Daniel/cms-platform/*` (#244; #242 did the same for the `cms-platform-theme` gem under `bundler`), so there is no cms-platform Dependabot activity there for a cooldown to gate — `platform-bump` is the sole bumper of every cms-platform reference (see cms-platform `docs/SYNC.md`). The superseded rationales are recorded in `docs/CI-INVARIANTS.md`.

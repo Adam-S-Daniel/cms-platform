@@ -34,13 +34,15 @@ const READY_LABEL_PATH = "/repos/owner/repo/issues/42/labels";
 const DECAP_NOT_READY = 'Please update status to "Ready" before publishing.';
 
 // ── A deliberately tiny DOM ───────────────────────────────────────────
-// Selectors supported: compounds of `tag`, `#id`, `[attr="v"]` and
-// `[attr*="v"]` — every form publish-button.js's menu route uses.
+// Selectors supported: compounds of `tag`, `#id`, `[attr="v"]`,
+// `[attr*="v"]` and `[attr]` — every form publish-button.js's menu route
+// and its error-path restore use.
 function parseSelector(sel) {
   const parts = [];
-  const re = /#([\w-]+)|\[([\w-]+)(\*?)="([^"]*)"\]|^([a-z]+)/g;
-  for (const [, id, name, star, value, tag] of sel.matchAll(re)) {
+  const re = /#([\w-]+)|\[([\w-]+)(\*?)="([^"]*)"\]|\[([\w-]+)\]|^([a-z]+)/g;
+  for (const [, id, name, star, value, present, tag] of sel.matchAll(re)) {
     if (id) parts.push((el) => el.attrs.id === id);
+    else if (present) parts.push((el) => present in el.attrs);
     else if (name) {
       parts.push((el) =>
         star ? String(el.attrs[name] || "").includes(value) : el.attrs[name] === value,
@@ -62,6 +64,9 @@ class El {
       getPropertyValue: (n) => props[n] || "",
       setProperty: (n, v) => {
         props[n] = v;
+      },
+      removeProperty: (n) => {
+        delete props[n];
       },
     };
     for (const c of children) this.append(c);
@@ -89,6 +94,9 @@ class El {
   }
   setAttribute(n, v) {
     this.attrs[n] = String(v);
+  }
+  removeAttribute(n) {
+    delete this.attrs[n];
   }
   matches(sel) {
     return parseSelector(sel)(this);

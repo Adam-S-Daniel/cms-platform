@@ -80,6 +80,7 @@ const {
   waitForCmsPullRequest,
   waitForMerge,
   waitForWorkflowRun,
+  describeError,
 } = require("./github-actions-poll");
 const { seedFixtureViaPr } = require("./cms-fixture-pr");
 const { guard } = require("./base-collections-guards");
@@ -322,7 +323,7 @@ test.afterAll(async () => {
     current = await fetchCanaryFromMain();
   } catch (e) {
     console.warn(
-      `[cleanup-harness] couldn't read ${CANARY.path} from main; skipping safety net: ${e && e.message}`,
+      `[cleanup-harness] couldn't read ${CANARY.path} from main; skipping safety net: ${describeError(e)}`,
     );
     return;
   }

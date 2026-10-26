@@ -1,7 +1,7 @@
 ---
 name: platform-release-and-bump
 description: Cut a new cms-platform release (vX.Y.Z) and reconcile BOTH consumer repos (adamdaniel.ai, jodidaniel.com) to it in single-version lockstep. Use when you've merged a platform fix and need it to flow to consumers, when bumping platform_ref, or when the pin-consistency guard fails after a partial bump. Covers the release dispatch, the exact set of references to bump (platform_ref, gem tag+revision, workflow and composite @ref pins), the pin-consistency check, and the lockstep invariant. Trigger on "cut a release", "release vX.Y.Z", "bump platform_ref", "reconcile consumers", "platform-pin-consistency", or "flow the fix to consumers".
-compatibility: Requires gh CLI authed to Adam-S-Daniel (repo + workflow scope) and Node 20. Run from ~/repos/{cms-platform,adamdaniel.ai,jodidaniel.com}.
+compatibility: Requires gh CLI authed to Adam-S-Daniel (repo + workflow scope), Node 20 and Ruby 3.2 with Ripper for candidate Gemfile parsing. Run from ~/repos/{cms-platform,adamdaniel.ai,jodidaniel.com}.
 ---
 
 # Cut a platform release + reconcile consumers (lockstep)
@@ -16,13 +16,32 @@ pin-consistency guard, issue #29). So a platform change is a 3-step cascade:
 ## 1. Cut the release
 
 The release workflow tags `main` HEAD + creates a GitHub Release. Merge your
-fix to `main` and confirm `main`'s self-CI is green FIRST, then:
+fix and the atomic release-version bump to `main` with independent review and
+confirm `main`'s self-CI is green FIRST. Before cutting a stable release, create
+an open draft PR into `main` in **each** consumer. Keep production pins fixed.
+Pin each draft's `platform.lock`, platform workflow `uses:@` and `platform_ref:`
+inputs to the full platform `main` commit SHA. In `Gemfile`, use `ref: "<SHA>"`
+for the platform theme, and refresh `Gemfile.lock` so its `ref:` and `revision:`
+equal that SHA. Run each consumer's own checks with the candidate e2e caller's
+`target: local` and `browser: all`. Wait for the required checks and actual e2e
+matrix/site verifier work jobs to succeed. Never merge these validation drafts.
+See [`docs/CONTRIBUTING.md`](../../docs/CONTRIBUTING.md) for the complete promotion
+gate contract. Then dispatch with both candidate PR numbers:
 
 ```bash
-gh workflow run release.yml -R Adam-S-Daniel/cms-platform -f version=vX.Y.Z --ref main
+gh workflow run release.yml -R Adam-S-Daniel/cms-platform -f version=vX.Y.Z --ref main \
+  -f candidate_adamdaniel_ai_pr='<draft-pr-number>' \
+  -f candidate_jodidaniel_com_pr='<draft-pr-number>'
 # the release tag == main HEAD; grab its SHA (you need it for the composite pin):
 gh api repos/Adam-S-Daniel/cms-platform/git/refs/tags/vX.Y.Z --jq '.object.sha'
 ```
+
+The dispatched SHA must equal the platform commit tested by both drafts. A new
+platform `main` commit requires fresh candidate pins and results. The gate fails
+closed on unreadable, missing, pending, failed, cancelled or skipped validations,
+uploads a sanitized `release-candidate-results` artifact, and only then permits
+the stable tag and fanout. Prereleases (`-f prerelease=true` with a suffixed tag)
+skip this promotion gate and fanout and do not change production pins.
 
 ## 2. Bump each consumer
 
@@ -31,19 +50,17 @@ the pin-consistency guard fails. The two consumers differ slightly:
 
 - **Both consumers** pin every cross-repo platform ref — reusable workflow and
   composite action alike — by **`@vX.Y.Z`** TAG, so only the version string
-  changes. Measured 2026-08-20 at v0.1.88 and re-checked 2026-10-04 at
-  v0.1.130: every ref in both repos ends in the release tag, with no SHA pin
-  and no pin comment. The ref count moves with every workflow added or
-  removed, so read it off the pin-consistency summary line, not this file.
+  changes: every ref ends in the release tag, with no SHA pin and no pin
+  comment. The ref count moves with every workflow added or removed, so read
+  it off the pin-consistency summary line, not this file.
 - **jodidaniel.com additionally** has `Gemfile.lock`'s git `revision:`, which is
   the resolved commit SHA and must move to the new release commit too.
-- **Historical, and why a stale doc here bites:** adamdaniel.ai once SHA-pinned
-  its reusables with a trailing `# vX.Y.Z (date)` comment, and composites were
-  SHA-pinned with the version in that comment. Both forms are gone — the tag
-  carve-out took the reusables, and the 2026-08-20 fleet retirement of the pin
-  comment took the composites (see the `github-actions-sha-pinning` skill). A
-  bump replaces version STRINGS now; if you find yourself hunting 40-hex SHAs in
-  a consumer's workflows, you are working from the old model.
+- **A bump replaces version STRINGS, never SHAs** (bar `Gemfile.lock`'s
+  `revision:` above, and draft candidate validation above, which deliberately
+  uses full commit SHA pins). If you find yourself hunting 40-hex SHAs or
+  `# vX.Y.Z` comments in a stable adoption's workflows, you are working from
+  the retired SHA-plus-comment model (see the `github-actions-sha-pinning`
+  skill).
 
 The robust, idempotent way is the same script the workflow runs. It moves only
 real pins (a parser finds them; prose that names the old version stays as it
@@ -111,10 +128,9 @@ it skips the workflow-SET and workflow-CONTENT parity that police a consumer's
 on, which is why the flag, not the reader, has to be the thing that enforces it.
 Don't look for a fixed check COUNT here — it is
 derived from how many pin references the consumer's tree carries and moves with
-every workflow added or removed, which is why the numbers this paragraph used to
-quote ("96", degrading to "61") were both stale when measured on 2026-08-20 (90
-and 57, on both consumers, at `platform_ref` v0.1.86). Read the count off the
-script's own summary line, which prints the real one every run.
+every workflow added or removed (a count quoted here once went stale: see
+`docs/PIN-CONSISTENCY.md`). Read the count off the script's own summary line,
+which prints the real one every run.
 
 If it reports a mismatch, a reference was missed (commonly `Gemfile.lock`'s
 `revision:` on jodidaniel, or a stale version token in a LEFTOVER `# vX.Y.Z`
@@ -187,11 +203,9 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   keys the template gained are added with the template's comments, keys it
   dropped are removed, changed values take the template's; the consumer's own
   comments and formatting are kept, and the result is re-parsed before it is
-  saved. The PR body names each reconciled job. **Before this (v0.1.113 →
-  v0.1.114) it was a hand edit:** #467 added `app_private_key` to the
-  `dependabot-rearm-sweep` template, and both bump PRs (adamdaniel.ai#3891,
-  jodidaniel.com#281) failed `workflow-content: DRIFT ... secrets: map` until
-  it was added by hand. **When it still needs a hand edit:** the PR body
+  saved. The PR body names each reconciled job (the bump PRs that failed
+  `workflow-content: DRIFT ... secrets: map` before it existed:
+  `docs/PIN-CONSISTENCY.md`). **When it still needs a hand edit:** the PR body
   carries a `:warning:` naming a `secrets:` map that could NOT be reconciled
   (a flow-style job, an anchored map — the run log's `MANUAL` line says which),
   or the bump targets a release older than the script. Then add or drop the
@@ -202,12 +216,9 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   the class of drift that let jodidaniel's sweep caller silently lose its
   `CMS_E2E_PAT` map and `startup_failure` for weeks — now caught, and fixed,
   at the bump.
-- **Since v0.1.76 the workflow callers' `pull_request` types omit `edited`**
-  (#222 part 2; the v0.1.76 bump carried that 9-file edit alongside the pin
-  rewrite, and no bump crosses it now). **`deploy-preview.yml` is the ONE
+- **The workflow callers' `pull_request` types omit `edited`** (#222 part 2). **`deploy-preview.yml` is the ONE
   exception and KEEPS `closed`** — it is the only caller declaring it, and the
-  reusable's teardown (S3 `rm --recursive` + CloudFront invalidation +
-  bot-comment update) fires only on that action; the replacement lint asserts
+  reusable's teardown (S3 `rm --recursive` + bot-comment update) fires only on that action; the replacement lint asserts
   `closed` POSITIVELY, so applying the generic diff there fails self-CI. Residual risk to record
   beside `delete_branch_on_merge=true`: dropping `edited` reverts #145 / PR #166,
   whose case is a PR **retargeted onto a different base** — that fires

@@ -62,6 +62,7 @@ const {
   makePreviewCanaryRecoverer,
   waitForMerge,
   makeDeployQueueExtender,
+  describeError,
 } = require("./github-actions-poll");
 const {
   reopenForPublishedDelete,
@@ -396,7 +397,7 @@ test(
             );
           } catch (e) {
             console.warn(
-              `[cms-delete-published-preview] transient pulls list error: ${e && e.message}`,
+              `[cms-delete-published-preview] transient pulls list error: ${describeError(e)}`,
             );
           }
           const cmsPrs = (prs || []).filter(
@@ -409,7 +410,7 @@ test(
             } catch (e) {
               console.warn(
                 `[cms-delete-published-preview] could not read PR #${pr.number} files: ${
-                  e && e.message
+                  describeError(e)
                 }`,
               );
               continue;
@@ -429,7 +430,7 @@ test(
               } catch (e) {
                 console.warn(
                   `[cms-delete-published-preview] could not label PR #${pr.number}: ${
-                    e && e.message
+                    describeError(e)
                   }`,
                 );
               }
@@ -516,7 +517,7 @@ test.afterAll(async () => {
   } catch (e) {
     console.warn(
       `[cleanup-harness] couldn't read ${filePath} from ${PR_HEAD_REF}; skipping safety net: ${
-        e && e.message
+        describeError(e)
       }`,
     );
     return;
@@ -539,7 +540,7 @@ test.afterAll(async () => {
     console.warn(`[cleanup-harness] removed ${filePath} from ${PR_HEAD_REF}`);
   } catch (e) {
     console.warn(
-      `[cleanup-harness] could not remove ${filePath} from ${PR_HEAD_REF}: ${e && e.message}`,
+      `[cleanup-harness] could not remove ${filePath} from ${PR_HEAD_REF}: ${describeError(e)}`,
     );
   }
 });

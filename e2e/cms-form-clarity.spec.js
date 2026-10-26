@@ -93,7 +93,7 @@ const PROD_HINTS = {
   pages: {
     title: "The page heading — also used as the browser tab title",
     permalink:
-      "The URL path the page lives at. Convention is /pages/<slug>/, but you can use any path. Must start and end with a slash.",
+      "The URL path the page lives at, unique per page, e.g. /pages/about/. Must start and end with a slash. A page is not added to the site menu automatically; link to it from the menu or another page.",
     published:
       "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft.",
     body: "Page content. For a real-layout preview that updates on every Save, open /preview/?collection=pages in a second tab.",

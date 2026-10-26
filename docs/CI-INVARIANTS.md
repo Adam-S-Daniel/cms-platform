@@ -683,8 +683,13 @@ though their live admin bypasses had not changed.
 
 The read-only audit reports the ruleset and field as `UNVERIFIABLE` and never
 plans a bypass-only write from that absence. It still plans other visible drift
-on the same ruleset; because a ruleset `PUT` replaces the full body, the
-write-risk classifier gates that plan with `cannot verify live bypass_actors`.
+on the same ruleset. Because a ruleset `PUT` replaces the full body, the
+write-risk classifier gates that plan with `cannot verify live bypass_actors`
+only when the manifest's list for that ruleset is non-empty or omitted (it could
+add an actor). A declared empty list (`bypass_actors: []`) can only remove
+actors, so such a `PUT` is classified on its other deltas and applies unattended
+when they are safe (cms-platform's `main` gaining a required check, run
+37265875259).
 The approved apply mints a write-scoped token and replans before writing.
 Approval does not expand the earlier planner token or grant lasting credential
 scope, so bypass-only drift cannot be detected by the scheduled read-only scan.
@@ -1598,8 +1603,12 @@ Four decisions in it that are not obvious from the YAML:
   tree has `scripts/verify-build-artifacts.rb` the reusable builds the site
   (`JEKYLL_ENV=production`, the deploy's build, on deploy-preview's default
   Ruby) and runs it; otherwise it prints a `::notice::` and succeeds.
-  adamdaniel.ai has no such script and no-ops in ~10s. Generalising to a
-  non-Ruby verifier waits for a second case.
+  Independently, it runs the fixed self-test list
+  (`scripts/test-verify-build-artifacts.rb`) with `bundle exec ruby` before
+  building, using the same Ruby and cached bundle. Ruby setup runs when either
+  the verifier or self-tests exist; absent self-tests produce a notice and
+  succeed. Both consumers have verifiers, and adamdaniel.ai has self-tests.
+  Generalizing to a non-Ruby verifier waits for a second case.
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through

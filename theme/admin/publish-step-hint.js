@@ -79,11 +79,12 @@
  * on desktop `ToolbarContainer` is `position: absolute` and
  * `EditorContainer` carries a matching `padding-top`, so an in-flow
  * sibling lands directly beneath the toolbar and pushes the editor pane
- * down; on the phone layout the toolbar is `position: static` and wraps,
- * and the same sibling flows after it. Neither case needs a hard-coded
- * offset, which is what makes it safe across Decap's own responsive
- * breakpoints. Verified to survive a React re-render (leave the entry,
- * come back) and to be removed on the collection-list route.
+ * down. On supported phone browsers the toolbar sticks to the viewport,
+ * and admin-mobile.css sticks this sibling directly beneath its measured
+ * height. Both rows remain in flow without a hard-coded offset, so native
+ * controls and extra shim chips can change the toolbar's height safely.
+ * Verified to survive a React
+ * re-render (leave the entry, come back) and to be removed on the collection-list route.
  *
  * It is ALSO why the Publish button lives here rather than in the toolbar:
  * a fifth toolbar control squeezes the other four at 1024 wide, and this
@@ -167,14 +168,23 @@
       detail: "Save your changes to enable Publish.",
     },
     draft: {
-      label: "Draft — only you can see this",
+      label: "Draft — not on the site yet",
       // The served config can settle after startup; read its destination
       // each time the bar renders rather than caching the access host.
       detail: function () {
+        var where = window.CMSHostname ? window.CMSHostname.destination() : "this address";
+        // Gated (coming-soon) site: the 5-minute promise would be false for
+        // visitors. Same sentence entry-status-model.js uses (#625 item 1).
+        if (HAS_REAL_DEPLOY && siteGated()) {
+          return (
+            "This is a draft — it is not on " + where + " yet. Click Publish to add it to the site, " +
+            "but visitors keep seeing the coming-soon page until the site is switched on."
+          );
+        }
         return HAS_REAL_DEPLOY
           ? "This is a draft — it is not on " +
-            (window.CMSHostname ? window.CMSHostname.destination() : "this address") +
-            " yet. Click Publish to put it there. It then takes about 5 minutes to appear."
+              where +
+              " yet. Click Publish to put it there. It then takes about 5 minutes to appear."
           : "This is a draft — it is not published yet. To publish it, click Publish.";
       },
     },
@@ -188,7 +198,64 @@
     "going-live": { bg: "#e7f0fb", fg: "#10345f", rule: "#8fb8e8" },
     "needs-attention": { bg: "#fdecea", fg: "#7a1c12", rule: "#e8a49b" },
     unsaved: { bg: "#fdf3d8", fg: "#5c4813", rule: "#e8c766" },
+    // A settled live entry can collapse the row when it has no action.
+    idle: { bg: "transparent", fg: "inherit", rule: "transparent" },
   };
+
+  // The bar's own row height: one line of the Publish button (0.8rem line,
+  // 2 x 0.45rem padding, 2px border) inside the bar's 2 x 0.5rem padding and
+  // 1px rule. Reserve it while a new entry or an unresolved editor state can
+  // still acquire a status. A settled, unmodified Live entry needs no blank
+  // band; its next unsaved edit may bring the bar back into flow.
+  var ROW_MIN_HEIGHT = "calc(2.7rem + 3px)";
+
+  // Decap's toolbar says "Changes saved" whenever Save is disabled, which on a
+  // brand-new entry nobody has saved is untrue (#625 item 2). Hidden with
+  // visibility (not display) so the toolbar does not reflow, and only while the
+  // route is a new-entry route and the text is that status — restored the
+  // moment either stops being true. Matched by the BackStatus component-name
+  // substring (same Emotion-hash-churn rule as the selectors below); a Decap
+  // release that renames it makes this a silent no-op, never a page error.
+  var NEW_ENTRY_ROUTE = /#\/collections\/[^/?#]+\/new(?:[/?]|$)/;
+  var SAVED_STATUS = '[class*="BackStatus"]';
+  var SAVED_HIDDEN_ATTR = "data-cms-saved-status-hidden";
+
+  function onNewEntryRoute() {
+    var hash = window.location && window.location.hash;
+    return typeof hash === "string" && NEW_ENTRY_ROUTE.test(hash);
+  }
+
+  function syncSavedStatus() {
+    var nodes;
+    try {
+      nodes = document.querySelectorAll(SAVED_STATUS);
+    } catch (e) {
+      return;
+    }
+    var fresh = onNewEntryRoute();
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      var saved = /^\s*changes saved\s*$/i.test(node.textContent || "");
+      var hidden = node.getAttribute(SAVED_HIDDEN_ATTR) === "1";
+      // Compare before writing: this runs inside the shim's own observer.
+      if (fresh && saved && !hidden) {
+        node.style.setProperty("visibility", "hidden");
+        node.setAttribute(SAVED_HIDDEN_ATTR, "1");
+      } else if (hidden && !(fresh && saved)) {
+        node.style.removeProperty("visibility");
+        node.setAttribute(SAVED_HIDDEN_ATTR, "0");
+      }
+    }
+  }
+
+  // Is the site in coming-soon mode? site-gate-banner.js resolves that and
+  // shows its banner exactly while it applies, so the banner's presence is the
+  // state — no second request (#625 item 1). Not gated / unknown → false.
+  function siteGated() {
+    var model = window.CMSEntryStatus;
+    if (model && typeof model.isSiteGated === "function") return model.isSiteGated(document);
+    return Boolean(document.getElementById("cms-site-gate-banner"));
+  }
 
   function q(selector) {
     try {
@@ -232,12 +299,15 @@
         contact: window.CMS_SUPPORT_CONTACT || null,
         currentHostname: window.CMSHostname && window.CMSHostname.destination(),
         canonicalHostname: window.CMSHostname && window.CMSHostname.canonical(),
+        gated: siteGated(),
       });
       // "Live" with no toolbar publish control and no open PR is the steady
       // state of an entry nobody is publishing. Showing a green bar on every
       // such entry is noise, not information — the bar earns its row only
       // when there is something to say.
-      if (derived.badge === "live" && !derived.modifiers.length) return null;
+      if (derived.badge === "live" && !derived.modifiers.length) {
+        return { state: "idle", label: "", detail: "", modifiers: [], settledLive: true };
+      }
       // The Draft sentence ends "Click Publish to put it on <site>", and
       // publish-button.js's confirmation beside it asks "Put this on <site>?".
       // Both at once say the same thing twice, so the sentence steps aside
@@ -297,6 +367,7 @@
         "align-items:center",
         "gap:0.5rem 0.75rem",
         "padding:0.5rem 1rem",
+        "min-height:" + ROW_MIN_HEIGHT,
         "font:600 0.8rem/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif",
       ].join(";") + ";";
 
@@ -362,14 +433,9 @@
 
   function render() {
     if (!document.body) return;
+    syncSavedStatus();
     var view = currentView();
     var existing = document.getElementById(BAR_ID);
-
-    if (!view) {
-      if (existing) existing.remove();
-      return;
-    }
-
     var toolbar = q(TOOLBAR);
     if (!toolbar || !toolbar.parentElement) {
       // No editor toolbar on this route (collection list, login, the
@@ -386,10 +452,33 @@
       toolbar.parentElement.insertBefore(el, toolbar.nextSibling);
     }
 
+    // The phone toolbar can wrap, resize, or gain a deploy pill. Measure its
+    // current height on every sync instead of assuming a fixed row count.
+    // Compare before writing: this style change also wakes our observer.
+    if (typeof toolbar.getBoundingClientRect === "function") {
+      var toolbarHeight = toolbar.getBoundingClientRect().height;
+      if (typeof toolbarHeight === "number" && isFinite(toolbarHeight) && toolbarHeight >= 0) {
+        setStyle(el, "--cms-editor-toolbar-height", toolbarHeight + "px");
+      }
+    }
+
+    // An unknown state may still become Draft; reserve its row until facts
+    // settle. A confirmed Live entry with no action collapses it below.
+    if (!view) view = { state: "idle", label: "", detail: "", modifiers: [] };
     var tone = TONE[view.state] || TONE.draft;
     setStyle(el, "background", tone.bg);
     setStyle(el, "color", tone.fg);
-    setStyle(el, "border-bottom", "1px solid " + tone.rule);
+    // An idle row is invisible — unless publish-button.js has put a control in
+    // its slot, which must never be hidden with the row.
+    var slotEl = document.getElementById(ACTIONS_ID);
+    var idleEmpty = view.state === "idle" && !(slotEl && slotEl.firstChild);
+    var collapsed = idleEmpty && view.settledLive && !onNewEntryRoute();
+    setStyle(el, "min-height", collapsed ? "0px" : ROW_MIN_HEIGHT);
+    setStyle(el, "height", collapsed ? "0px" : "auto");
+    setStyle(el, "padding", collapsed ? "0px" : "0.5rem 1rem");
+    setStyle(el, "overflow", collapsed ? "hidden" : "visible");
+    setStyle(el, "border-bottom", collapsed ? "0px solid transparent" : "1px solid " + tone.rule);
+    setStyle(el, "visibility", idleEmpty ? "hidden" : "visible");
 
     var badge = document.getElementById(BADGE_ID);
     setText(badge, view.label);
@@ -418,6 +507,7 @@
 
   // REQUIRED re-sync, not belt-and-braces — see the block comment above.
   setInterval(render, SYNC_INTERVAL_MS);
+  window.addEventListener("resize", render);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", render);

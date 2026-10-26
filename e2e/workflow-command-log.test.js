@@ -156,7 +156,7 @@ if (a[0] === 'api') {
       python3: `printf '%s' "$FIXTURE_CONTEXT"\nexit ${disposition === "MANUAL" ? 1 : 0}`,
       node: "printf '%s' \"$FIXTURE_CALLERS\"",
       git: 'if [ "$1" = diff ]; then exit 1; fi\nexit 0',
-    }, { GH_TOKEN: "fixture", PLATFORM: "fixture/platform" }, {
+    }, { GH_TOKEN: "fixture", PLATFORM: "fixture/platform", CANDIDATE_SHA: "" }, {
       FIXTURE_GH: gh, GH_CALL_LOG: ghLog, FIXTURE_CONTEXT: context, FIXTURE_CALLERS: secrets,
       GITHUB_REPOSITORY: "fixture/site", GITHUB_REF_NAME: "main",
     });

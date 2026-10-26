@@ -381,6 +381,8 @@ const SPEC_RULES = {
   "e2e/cms-link-crawler.spec.js": [
     /^(theme\/)?admin\//,
     /^_posts\//,
+    /^_tags\//,
+    /^e2e\/public-content\.js$/,
     /^e2e\/site-capabilities\.js$/,
     /^e2e\/base-collections-guards\.js$/,
   ],
@@ -542,6 +544,15 @@ const SPEC_RULES = {
     /^scripts\/cms-preview-slug\.sh$/,
     /^\.github\/workflows\/deploy-preview\.yml$/,
   ],
+  // Locks that only deploy-production invalidates CloudFront. Pure-node; reads
+  // every workflow and composite action, the example callers and the bootstrap
+  // template, plus itself.
+  "e2e/cloudfront-invalidation-budget.test.js": [
+    /^\.github\/(workflows|actions)\//,
+    /^examples\/site\/\.github\/workflows\//,
+    /^infrastructure\/bootstrap\/template\.yaml$/,
+    /^e2e\/cloudfront-invalidation-budget\.test\.js$/,
+  ],
   // Prod-mutation playground (G4). Skips itself unless CMS_E2E_PAT is
   // set, so PR runs are safe — the spec just emits a skip and exits.
   // Selecting it on its own infra changes here keeps the PR matrix
@@ -656,6 +667,15 @@ const SPEC_RULES = {
   "e2e/blog-post.spec.js": [/^_posts\//, /^blog\//],
   "e2e/tags.spec.js": [/^_tags\//, /^tags\//, /^e2e\/site-capabilities\.js$/],
   "e2e/not-found.spec.js": [/^404\.html$/],
+  // Its `/` checks skip on a home page that bypasses the theme default layout,
+  // read from the site's index front matter + _layouts by site-capabilities.js.
+  "e2e/public-a11y-polish.spec.js": [
+    /^_layouts\//,
+    /^_includes\//,
+    /^assets\/css\//,
+    /^index\.(html|md|markdown)$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
   // @parity specs that hit Jekyll output through the deployed preview
   // surface. Path-rules cover the inputs that can shift what's served.
   // The sitemap/feed/console-clean/image-alt specs ALSO read `_site/`
@@ -738,6 +758,14 @@ const SPEC_RULES = {
   "e2e/glow-banding.spec.js": [
     // CSS-only spec; otherwise idle. Picks up via fanout.
   ],
+  // Its no-preference control skips on a home page that bypasses the theme
+  // default layout (site-capabilities.js homeUsesThemeLayout).
+  "e2e/reduced-motion.spec.js": [
+    /^(theme\/)?assets\/css\//,
+    /^_layouts\//,
+    /^index\.(html|md|markdown)$/,
+    /^e2e\/site-capabilities\.js$/,
+  ],
   "e2e/preview-bridge.spec.js": [
     /^(theme\/)?admin\/preview-bridge\.js$/,
     /^_layouts\/preview\.html$/,
@@ -775,6 +803,7 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/index.*\.html$/,
   ],
   "e2e/confirm-wrap-local-backup.test.js": [/^(theme\/)?admin\/confirm-wrap-local-backup\.js$/],
+  "e2e/autosave-on-hide.test.js": [/^(theme\/)?admin\/autosave-on-hide\.js$/],
   // Draft media fallback: the shim's unit sandbox also checks where the admin
   // shells and the Live Preview layout load it; the payload test reads the
   // preview bridge it depends on.
@@ -783,7 +812,24 @@ const SPEC_RULES = {
     /^(theme\/)?admin\/index.*\.html$/,
     /^(theme\/)?_layouts\/preview\.html$/,
   ],
+  // #736: the tidy shim's sandbox tests also check where the shells load it.
+  "e2e/media-library-tidy.test.js": [
+    /^(theme\/)?admin\/media-library-tidy\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+    /^(theme\/)?admin\/draft-media-fallback\.js$/,
+  ],
+  // #647 media-library draft sync: the unit sandbox also checks where the
+  // three admin shells load it.
+  "e2e/media-library-draft-sync.test.js": [
+    /^(theme\/)?admin\/media-library-draft-sync\.js$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+  ],
   "e2e/preview-bridge-payload.test.js": [/^(theme\/)?admin\/preview-bridge\.js$/],
+  "e2e/preview-pane.test.js": [
+    /^(theme\/)?admin\/preview-pane\.js$/,
+    /^(theme\/)?admin\/config\.base\.yml$/,
+    /^(theme\/)?admin\/index.*\.html$/,
+  ],
   "e2e/cms-autosave.spec.js": [
     /^(theme\/)?admin\/(confirm-wrap-local-backup|autosave-on-hide)\.js$/,
     /^(theme\/)?admin\/index-test\.html$/,

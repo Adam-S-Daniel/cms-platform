@@ -19,7 +19,9 @@
  *     with a `# why:` comment. Effective flags per repo = shallow
  *     merge(settings_defaults, repos.<r>.settings); ruleset bodies mirror
  *     the REST ruleset PUT payload and live in a shared ruleset_library;
- *     Actions-permissions (sha_pinning_required + fork-PR approval_policy) are
+ *     Actions-permissions (sha_pinning_required + fork-PR approval_policy +
+ *     the GITHUB_TOKEN workflow defaults default_workflow_permissions /
+ *     can_approve_pull_request_reviews) are
  *     a THIRD surface — their own GET/PUT endpoints (NOT repos/{owner}/{repo}),
  *     shallow merge(actions_permissions_defaults, repos.<r>.actions_permissions),
  *     keyed to MANAGED_ACTIONS_PERMISSION_KEYS. The sha_pinning PUT echoes the
@@ -178,13 +180,31 @@ const FIX_FORBIDDEN_KEYS = ["default_branch"];
 //     read/exit contract. The correct value for "all outside collaborators" is
 //     the SHORT form `all_external_contributors` (verified against the live
 //     API — NOT `require_approval_for_all_outside_collaborators`).
+//   - default_workflow_permissions + can_approve_pull_request_reviews ->
+//     GET/PUT WORKFLOW_PERMISSIONS_ENDPOINT (#868). ONE endpoint carries both
+//     fields, so drift on either emits ONE PUT whose body holds BOTH: the
+//     desired value for a drifted key, the LIVE value echoed for the other —
+//     the same echo rule as the sha_pinning_required PUT, so fixing one can
+//     never silently rewrite the other.
 const MANAGED_ACTIONS_PERMISSION_KEYS = [
   "sha_pinning_required",
   "approval_policy",
+  "default_workflow_permissions",
+  "can_approve_pull_request_reviews",
 ];
 const ACTIONS_PERMISSIONS_ENDPOINT = "actions/permissions";
 const FORK_PR_APPROVAL_ENDPOINT =
   "actions/permissions/fork-pr-contributor-approval";
+// GET/PUT repos/{owner}/{repo}/actions/permissions/workflow. Body (both fields
+// optional on the PUT; both present on the 200 GET; the PUT answers 204):
+//   { default_workflow_permissions: "read" | "write",
+//     can_approve_pull_request_reviews: boolean }
+// https://docs.github.com/en/rest/actions/permissions?apiVersion=2022-11-28#set-default-workflow-permissions-for-a-repository
+const WORKFLOW_PERMISSIONS_ENDPOINT = "actions/permissions/workflow";
+const WORKFLOW_PERMISSION_KEYS = [
+  "default_workflow_permissions",
+  "can_approve_pull_request_reviews",
+];
 
 // The SSOT of Dependabot security-analysis keys the manifest may declare and
 // --fix may enable/disable. A FIFTH surface, and it looks nothing like the
@@ -707,10 +727,13 @@ function diffRepo({
 //   - approval_policy (FORK_PR_APPROVAL_ENDPOINT): when fetchLive marked the
 //     endpoint {skipped:true} (HTTP 422 on a PRIVATE repo), this is an
 //     operational SKIP — an informational line, NEVER a drift finding.
-// `live` is fetchLive's { permissions, forkApproval } bundle.
+//   - default_workflow_permissions / can_approve_pull_request_reviews
+//     (WORKFLOW_PERMISSIONS_ENDPOINT): plain scalar compares.
+// `live` is fetchLive's { permissions, forkApproval, workflow } bundle.
 function diffActionsPermissions(repo, desired, live, findings, informational) {
   const perms = (live && live.permissions) || {};
   const fork = (live && live.forkApproval) || {};
+  const workflow = (live && live.workflow) || {};
   if ("sha_pinning_required" in (desired || {})) {
     const liveVal = perms.sha_pinning_required;
     if (!deepEqual(liveVal, desired.sha_pinning_required)) {
@@ -746,6 +769,20 @@ function diffActionsPermissions(repo, desired, live, findings, informational) {
           desired: desired.approval_policy,
         });
       }
+    }
+  }
+  for (const key of WORKFLOW_PERMISSION_KEYS) {
+    if (!(key in (desired || {}))) continue;
+    const liveVal = workflow[key];
+    if (!deepEqual(liveVal, desired[key])) {
+      findings.push({
+        repo,
+        kind: "actions-permission-drift",
+        key,
+        endpoint: WORKFLOW_PERMISSIONS_ENDPOINT,
+        live: liveVal === undefined ? null : liveVal,
+        desired: desired[key],
+      });
     }
   }
 }
@@ -1414,7 +1451,7 @@ function fetchLive(
   };
 }
 
-// The Actions-permissions surface (two standalone endpoints). This is THE
+// The Actions-permissions surface (three standalone endpoints). This is THE
 // Administration:Read gate for the whole scan (fetchLive always calls it):
 // GET actions/permissions requires Administration:Read with NO public
 // exemption, so a response missing the admin-visible `enabled` boolean means
@@ -1422,8 +1459,12 @@ function fetchLive(
 // drift against undefined. The fork-pr-contributor-approval endpoint returns
 // HTTP 422 on a PRIVATE repo ("not allowed for private repositories"); that ONE
 // case is an operational SKIP ({skipped:true}), distinguished from any other
-// error which re-throws as an operational failure. `api` is injectable
-// (defaults to the real gh-backed ghApi) so the gate is unit-testable.
+// error which re-throws as an operational failure. The workflow endpoint
+// (#868) has no skip case: any error re-throws, and a 200 whose body lacks a
+// string `default_workflow_permissions` or a boolean
+// `can_approve_pull_request_reviews` is an OPERATIONAL failure too, never
+// drift against undefined. `api` is injectable (defaults to the real
+// gh-backed ghApi) so the gate is unit-testable.
 function fetchActionsPermissions(repo, token, api = ghApi) {
   const permissions = JSON.parse(
     api(`repos/${repo}/${ACTIONS_PERMISSIONS_ENDPOINT}`, { token }),
@@ -1451,7 +1492,21 @@ function fetchActionsPermissions(repo, token, api = ghApi) {
       throw e;
     }
   }
-  return { permissions, forkApproval };
+  const workflow = JSON.parse(
+    api(`repos/${repo}/${WORKFLOW_PERMISSIONS_ENDPOINT}`, { token }),
+  );
+  if (
+    !workflow ||
+    typeof workflow.default_workflow_permissions !== "string" ||
+    typeof workflow.can_approve_pull_request_reviews !== "boolean"
+  ) {
+    throw new Error(
+      `repos/${repo}/${WORKFLOW_PERMISSIONS_ENDPOINT} response lacks a string ` +
+        `'default_workflow_permissions' or a boolean 'can_approve_pull_request_reviews' ` +
+        `— cannot audit the GITHUB_TOKEN workflow defaults on ${repo}`,
+    );
+  }
+  return { permissions, forkApproval, workflow };
 }
 
 // The Dependabot security-analysis surface: two standalone endpoints,
@@ -1989,10 +2044,14 @@ function buildFixPlan(manifest, results) {
     // Actions-permissions PUTs — a surface SEPARATE from the flag PATCH body.
     // sha_pinning_required ECHOES the live enabled/allowed_actions so the PUT
     // can never disable Actions or narrow the allowed-actions policy;
-    // approval_policy PUTs only its own field.
+    // approval_policy PUTs only its own field. The two workflow-permission keys
+    // share ONE endpoint, so they become ONE PUT (pushed after this loop).
     const livePerms =
       (r.liveActionsPermissions && r.liveActionsPermissions.permissions) || {};
+    const liveWorkflow =
+      (r.liveActionsPermissions && r.liveActionsPermissions.workflow) || {};
     const actionsPuts = [];
+    const workflowDrift = [];
     for (const f of r.findings) {
       if (f.kind !== "actions-permission-drift") continue;
       if (f.key === "sha_pinning_required") {
@@ -2013,7 +2072,26 @@ function buildFixPlan(manifest, results) {
           live: f.live,
           body: { approval_policy: f.desired },
         });
+      } else if (WORKFLOW_PERMISSION_KEYS.includes(f.key)) {
+        workflowDrift.push(f);
       }
+    }
+    if (workflowDrift.length) {
+      // Desired value for each drifted key, the LIVE value echoed for the
+      // other, so a PUT that fixes one can never rewrite the other.
+      const body = {};
+      for (const key of WORKFLOW_PERMISSION_KEYS) body[key] = liveWorkflow[key];
+      const liveByKey = {};
+      for (const f of workflowDrift) {
+        body[f.key] = f.desired;
+        liveByKey[f.key] = f.live;
+      }
+      actionsPuts.push({
+        endpoint: `repos/${r.repo}/${WORKFLOW_PERMISSIONS_ENDPOINT}`,
+        keys: workflowDrift.map((f) => f.key),
+        liveByKey,
+        body,
+      });
     }
     // Environments — a FOURTH surface, one PUT per DRIFTED-OR-ABSENT name with
     // the full manifest body (there is one endpoint per environment, not per
@@ -2170,8 +2248,10 @@ function printFixPlan(plan, informational = []) {
       console.log(`     full body: ${JSON.stringify(sortRuleset(put.body))}`);
     }
     for (const put of p.actionsPuts || []) {
+      const keys = Array.isArray(put.keys) ? put.keys : [put.key];
       console.log(
-        `   PUT ${put.endpoint}  ${put.key} -> ${JSON.stringify(put.body[put.key])}` +
+        `   PUT ${put.endpoint}  ` +
+          keys.map((k) => `${k} -> ${JSON.stringify(put.body[k])}`).join(", ") +
           ` (full body: ${JSON.stringify(put.body)})`,
       );
     }
@@ -2551,6 +2631,7 @@ module.exports = {
   MANAGED_ACTIONS_PERMISSION_KEYS,
   ACTIONS_PERMISSIONS_ENDPOINT,
   FORK_PR_APPROVAL_ENDPOINT,
+  WORKFLOW_PERMISSIONS_ENDPOINT,
   MANAGED_ENVIRONMENT_KEYS,
   ENV_FIX_FORBIDDEN,
   MANAGED_SECURITY_ANALYSIS_KEYS,

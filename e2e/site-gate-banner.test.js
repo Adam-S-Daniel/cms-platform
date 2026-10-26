@@ -44,6 +44,10 @@ function fakeNode(tag) {
     id: "",
     href: "",
     attrs: {},
+    listeners: {},
+    addEventListener(type, fn) {
+      (el.listeners[type] = el.listeners[type] || []).push(fn);
+    },
     style: { cssText: "" },
     classes: new Set(),
     classList: { add: (c) => el.classes.add(c), contains: (c) => el.classes.has(c) },
@@ -104,7 +108,7 @@ const flush = () => new Promise((r) => setImmediate(r));
  * `site_live` value per branch in the repository (a missing branch → 404,
  * an Error → the request fails), `session` any sessionStorage already there.
  */
-async function loadAdmin({ adminURL, served, flags, session = {} }) {
+async function loadAdmin({ adminURL, served, flags, session = {}, hash = "" }) {
   const body = fakeNode("body");
   const find = (node, id) => {
     if (node.nodeType !== 1) return null;
@@ -124,10 +128,22 @@ async function loadAdmin({ adminURL, served, flags, session = {} }) {
     addEventListener() {},
   };
   const store = new Map(Object.entries(session));
+  const location = new URL(adminURL);
+  if (hash) location.hash = hash;
+  const reloads = [];
+  const pushes = [];
+  const history = {
+    pushState: (_s, _t, url) => {
+      pushes.push(url);
+      location.hash = url;
+    },
+  };
+  location.reload = () => reloads.push(location.hash);
   const githubReads = [];
   const sandbox = {
     window: {
-      location: new URL(adminURL),
+      location,
+      history,
       CMS_REPO: REPO,
       CMS_SITE_ORIGIN: "https://example.com",
       CMS_APEX: "example.com",
@@ -170,7 +186,7 @@ async function loadAdmin({ adminURL, served, flags, session = {} }) {
   vm.runInContext(fs.readFileSync(HOSTNAME, "utf8"), sandbox);
   vm.runInContext(fs.readFileSync(GATE, "utf8"), sandbox);
   for (let i = 0; i < 6; i += 1) await flush();
-  return { banner: () => document.getElementById(GATE_ID), githubReads, store, body, api: sandbox.window.CMSSiteGate };
+  return { banner: () => document.getElementById(GATE_ID), location, reloads, pushes, githubReads, store, body, api: sandbox.window.CMSSiteGate };
 }
 
 const production = (flags, extra = {}) =>
@@ -261,6 +277,48 @@ test.describe("site-gate-banner.js — reads the branch this admin is bound to (
     );
     expect(pre.githubReads).toEqual([]);
     expect(pre.banner()).not.toBeNull();
+  });
+});
+
+// #624 — Decap 3.15.1 mounts an entry editor on an entry→entry hash change
+// without loading the entry: the form is empty under "Changes saved" (F5
+// fixes it). The banner link is an entry route rendered inside the entry
+// editor, so it must force a full page load when clicked from an entry route.
+test.describe("site-gate-banner.js — the link survives entry → entry navigation (#624)", () => {
+  const link = (pre) => pre.banner().children.find((c) => c.tagName === "A");
+  const click = (pre) => {
+    const ev = { prevented: false, button: 0, preventDefault() { this.prevented = true; } };
+    for (const fn of link(pre).listeners.click || []) fn(ev);
+    return ev;
+  };
+
+  test("clicked from inside an entry: lands on the target hash with a full reload", async () => {
+    const pre = await production({ main: "false" }, { hash: "#/collections/media/entries/some-item" });
+    const ev = click(pre);
+    expect(ev.prevented, "the in-app hash change is what leaves the form blank").toBe(true);
+    expect(pre.pushes, "pushState, so no hashchange reaches Decap's router").toEqual([GATE_DECL.entry]);
+    expect(pre.reloads, "reloaded once, at the target").toEqual([GATE_DECL.entry]);
+  });
+
+  test("clicked from a non-entry route: left to the browser, no reload", async () => {
+    for (const hash of ["", "#/", "#/collections/media", "#/collections/media/new"]) {
+      const pre = await production({ main: "false" }, { hash });
+      const ev = click(pre);
+      expect(ev.prevented, `hash ${JSON.stringify(hash)}`).toBe(false);
+      expect(pre.reloads).toEqual([]);
+      expect(pre.pushes).toEqual([]);
+    }
+  });
+
+  test("a modified click (new tab) is left alone even inside an entry", async () => {
+    const pre = await production({ main: "false" }, { hash: "#/collections/media/entries/x" });
+    const fns = link(pre).listeners.click || [];
+    for (const mod of ["ctrlKey", "metaKey", "shiftKey"]) {
+      const ev = { [mod]: true, button: 0, preventDefault() { this.prevented = true; } };
+      fns.forEach((fn) => fn(ev));
+      expect(ev.prevented, mod).toBeUndefined();
+    }
+    expect(pre.reloads).toEqual([]);
   });
 });
 

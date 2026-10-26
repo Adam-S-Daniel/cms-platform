@@ -19,7 +19,7 @@
  * FOUR badges, exactly one of which applies at a time:
  *
  *   live            On the public site right now.
- *   draft           Saved, not on the site. Only you can see this.
+ *   draft           Saved, not on the site yet.
  *   going-live      Publish requested, in flight.
  *   needs-attention Something stopped it.
  *
@@ -142,13 +142,23 @@
   // null is REQUIRED behavior, not a gap: a made-up number here would be the
   // §2.4 defect in a new costume. Before the merge the remaining trip is the
   // rest of the checks PLUS the deploy; after it, the deploy alone.
+  //
+  // It never goes back up and never runs out early (#643). It rounds UP, so
+  // "about 1 minute" lasts the whole last minute: rounding to nearest
+  // declared the estimate run out with half a minute of it left, and after a
+  // merge (a one-minute deploy estimate) that meant "longer than usual" 30 s
+  // in. And after the merge it is also capped by what was left of the whole
+  // trip, from `checksStartedAt`, so a switch of clock at the merge cannot
+  // turn "longer than usual" back into "about 1 minute".
   function remainingMinutes(facts, now) {
     var f = facts || {};
     var elapsed = elapsedMinutes(f.startedAt, now);
     if (elapsed === null) return null;
-    var nominal = f.merged ? DEPLOY_NOMINAL_MIN : CHECKS_NOMINAL_MIN + DEPLOY_NOMINAL_MIN;
-    var left = Math.round(nominal - elapsed);
-    return left >= 1 ? left : null;
+    var trip = CHECKS_NOMINAL_MIN + DEPLOY_NOMINAL_MIN;
+    var left = (f.merged ? DEPLOY_NOMINAL_MIN : trip) - elapsed;
+    var sinceTripStart = f.merged ? elapsedMinutes(f.checksStartedAt, now) : null;
+    if (sinceTripStart !== null) left = Math.min(left, trip - sinceTripStart);
+    return left > 0 ? Math.ceil(left) : null;
   }
 
   function overran(facts, now) {
@@ -200,7 +210,6 @@
     var total = checks.total || 0;
     var pending = Array.isArray(checks.pending) ? checks.pending : [];
     if (!total) return "the automatic safety checks to start";
-    if (!pending.length) return "all " + total + " automatic safety checks passed; now putting it live";
     var names = pending.map(function (key) {
       return checkName(key, destinationName);
     });
@@ -208,6 +217,21 @@
       return "the last of " + total + " automatic safety checks (" + names[0] + ")";
     }
     return pending.length + " of " + total + " automatic safety checks to finish (" + joinNames(names) + ")";
+  }
+
+  // Every check passed and only the merge is left: a finished fact, so it is
+  // its own sentence rather than the object of "It is waiting for", which
+  // read "It is waiting for all 2 automatic safety checks passed" (#643).
+  // Null while any check is pending or none has started.
+  function checksPassed(checks) {
+    var total = checks.total || 0;
+    var pending = Array.isArray(checks.pending) ? checks.pending : [];
+    if (!total || pending.length) return null;
+    var subject =
+      total === 1
+        ? "The automatic safety check"
+        : (total === 2 ? "Both " : "All " + total + " ") + "automatic safety checks";
+    return subject + " passed; now putting it live";
   }
 
   // ── Modifiers ─────────────────────────────────────────────────────────
@@ -399,6 +423,28 @@
   // (claiming progress that is not happening) rather than the §2.4 defect of
   // claiming failure that is not real. Both are lies; this orders them so
   // neither is told.
+  // ── The site gate (#625 item 1) ───────────────────────────────────────
+  // A site can be GATED (coming-soon mode): everything published is kept, but
+  // visitors see only the coming-soon page until the site is switched on, so
+  // "it then takes about 5 minutes to appear" would promise what they never
+  // see. site-gate-banner.js already resolves that state (branch-aware, cached)
+  // and shows its banner exactly while the site is gated; the banner's presence
+  // IS the state, so every publishing surface reads it from there instead of
+  // making a second GitHub request. No banner (not gated, no gate declared,
+  // not yet resolved) reads as not gated: saying nothing is the safe default.
+  var GATE_BANNER_ID = "cms-site-gate-banner";
+  var GATED_NOTE =
+    "visitors keep seeing the coming-soon page until the site is switched on";
+
+  function isSiteGated(doc) {
+    try {
+      var d = arguments.length ? doc : typeof document !== "undefined" ? document : null;
+      return Boolean(d && typeof d.getElementById === "function" && d.getElementById(GATE_BANNER_ID));
+    } catch (e) {
+      return false;
+    }
+  }
+
   function derive(facts, options) {
     var f = facts || {};
     var opts = options || {};
@@ -438,11 +484,14 @@
 
     if (inFlight) {
       var mins = remainingMinutes(f, now);
+      var passed = !f.merged && f.checks ? checksPassed(f.checks) : null;
       var waiting = f.merged
         ? dest.noun + " to finish updating"
-        : f.checks
-          ? waitingOnChecks(f.checks, dest.noun)
-          : f.waitingOn || "the automatic safety checks to finish";
+        : passed
+          ? passed
+          : f.checks
+            ? waitingOnChecks(f.checks, dest.noun)
+            : f.waitingOn || "the automatic safety checks to finish";
       var when =
         mins !== null
           ? "about " + mins + " minute" + (mins === 1 ? "" : "s") + " left"
@@ -453,7 +502,7 @@
         badge: BADGE.GOING_LIVE,
         label: "Going live… (" + when + ")",
         detail:
-          "This is on its way to " + dest.noun + ". It is waiting for " + waiting + ". " +
+          "This is on its way to " + dest.noun + ". " + (passed ? "" : "It is waiting for ") + waiting + ". " +
           "You can close this tab — it carries on without you." +
           (dest.preview ? " " + dest.laterNote : ""),
         // Checks phase only: once merged, `waiting` is the deploy, not a check.
@@ -470,11 +519,13 @@
     if (f.hasOpenPr) {
       return {
         badge: BADGE.DRAFT,
-        label: "Draft — only you can see this",
-        detail:
-          "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
-          "put it on " + dest.noun + "." +
-          (dest.preview ? " " + dest.laterNote : ""),
+        label: "Draft — not on the site yet",
+        detail: opts.gated
+          ? "This is saved, but it is not on " + dest.noun + " yet. Click Publish to add it to " +
+            "the site — " + GATED_NOTE + "."
+          : "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
+            "put it on " + dest.noun + "." +
+            (dest.preview ? " " + dest.laterNote : ""),
         detailLink: null,
         waitingOn: null,
         minutesLeft: null,
@@ -485,7 +536,9 @@
     return {
       badge: BADGE.LIVE,
       label: "Live",
-      detail: "This is on " + dest.noun + " now." + (dest.preview ? " " + dest.laterNote : ""),
+      detail: opts.gated
+        ? "This is saved on " + dest.noun + ", but " + GATED_NOTE + "."
+        : "This is on " + dest.noun + " now." + (dest.preview ? " " + dest.laterNote : ""),
       detailLink: null,
       waitingOn: null,
       minutesLeft: null,
@@ -504,6 +557,8 @@
     DEPLOY_NOMINAL_MIN: DEPLOY_NOMINAL_MIN,
     STALL_GRACE_MIN: STALL_GRACE_MIN,
     derive: derive,
+    isSiteGated: isSiteGated,
+    GATED_NOTE: GATED_NOTE,
     isStalled: isStalled,
     destination: destination,
     modifiersFor: modifiersFor,

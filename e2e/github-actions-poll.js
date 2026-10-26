@@ -71,6 +71,17 @@ function backoffDelayMs(attempt) {
   return Math.round(Math.random() * ceiling);
 }
 
+// The only form in which a caught error may be logged, warned, put in a
+// thrown message or a PR comment: `HTTP <status> <type>` when it carries a
+// numeric status (a gh() error), else just its type. Never the message,
+// stack or body: a gh() error keeps the raw response in `responseBody`,
+// and other errors can quote data too (a JSON SyntaxError quotes the text
+// it failed to parse). Output from this harness is public on a consumer.
+function describeError(e) {
+  const type = (e && e.constructor && e.constructor.name) || typeof e;
+  return e && Number.isInteger(e.status) ? `HTTP ${e.status} ${type}` : type;
+}
+
 async function gh(pathname, init = {}) {
   const url = pathname.startsWith("http") ? pathname : `${API_ROOT}${pathname}`;
   // Pull our own options out of `init` BEFORE spreading the rest into
@@ -88,16 +99,30 @@ async function gh(pathname, init = {}) {
       ...fetchInit,
       headers: { ...authHeaders(), ...(fetchInit.headers || {}) },
     });
-    if (res.ok) return res.json();
+    if (res.ok) {
+      try {
+        return await res.json();
+      } catch (e) {
+        if (!(e instanceof SyntaxError)) throw e;
+        // A JSON SyntaxError's message quotes the body it failed to parse,
+        // so rethrow one that carries only the status. Still a SyntaxError:
+        // a caller treats an empty 204 (`/dispatches`) as success that way.
+        const err = new SyntaxError(`GitHub API ${res.status} on ${url}: body is not JSON`);
+        err.status = res.status;
+        throw err;
+      }
+    }
 
     const body = await res.text();
     // Attach the HTTP status as a numeric `status` property so
     // callers can branch on it without parsing the message string
     // (e.g. retry on 409 conflicts in optimistic-concurrency PUTs).
-    // Message kept verbatim for log compatibility.
-    const err = new Error(
-      `GitHub API ${res.status} ${res.statusText} on ${url}: ${body.slice(0, 300)}`,
-    );
+    // The message carries NO response body: this harness runs in the
+    // public CI of consumer repos, and an uncaught error's message lands
+    // in the job log (the `list` reporter), the live-failure PR comment
+    // and the media-roundtrip artifact. A caller that needs the body
+    // reads `err.responseBody`, which none of those print.
+    const err = new Error(`GitHub API ${res.status} ${res.statusText} on ${url}`);
     err.status = res.status;
     err.responseBody = body;
 
@@ -198,7 +223,7 @@ async function waitForCmsPullRequest({
             });
           } catch (e) {
             console.warn(
-              `[waitForCmsPullRequest] could not label PR #${pr.number} automated-test: ${e && e.message}`,
+              `[waitForCmsPullRequest] could not label PR #${pr.number} automated-test: ${describeError(e)}`,
             );
           }
         }
@@ -274,7 +299,7 @@ async function addLabel({
       // POST — worst case we reproduce the old no-event behaviour once,
       // and the verify loop below still guarantees the label itself.
       console.warn(
-        `[addLabel] pre-read of #${prNumber} labels failed (${e && e.message}); POSTing without re-fire check.`,
+        `[addLabel] pre-read of #${prNumber} labels failed (${describeError(e)}); POSTing without re-fire check.`,
       );
     }
     if (names.includes(label)) {
@@ -737,7 +762,7 @@ function makeDeployQueueExtender({
       // A probe failure must never be upgraded to a real miss — we already
       // know the load-bearing fact (the PR has not merged).
       return awaiting(
-        `PR #${prNumber} has not merged; its check-run probe failed (${e && e.message}), so which check is pending is unknown`,
+        `PR #${prNumber} has not merged; its check-run probe failed (${describeError(e)}), so which check is pending is unknown`,
       );
     }
     const pending = runs.find((r) => r.status !== "completed");
@@ -785,7 +810,7 @@ function makeDeployQueueExtender({
       const grant = Math.min(minExtendMs, remaining);
       extendedTotal += grant;
       console.warn(
-        `[deploy-queue] could not probe the ${workflow} lane (${e && e.message}); granting a conservative ${Math.round(grant / 1000)}s extension (ext #${extensionCount + 1}).`,
+        `[deploy-queue] could not probe the ${workflow} lane (${describeError(e)}); granting a conservative ${Math.round(grant / 1000)}s extension (ext #${extensionCount + 1}).`,
       );
       return grant;
     }
@@ -1046,9 +1071,11 @@ function makePreviewCanaryRecoverer({
       });
       recoverer.verdict = { kind: "recovery-merged", realMiss: false };
     } catch (err) {
-      const msg = String((err && err.message) || err);
-      if (/already merged/i.test(msg)) recoverer.verdict = { kind: "merged-awaiting-deploy", realMiss: false };
-      else recoverer.verdict = { kind: "merge-retry", why: msg, realMiss: false }; // transient 405/409 → next round retries
+      // gh() keeps the response body ("Pull Request is already merged")
+      // out of the message, in err.responseBody.
+      const text = `${(err && err.message) || ""} ${(err && err.responseBody) || ""}`;
+      if (/already merged/i.test(text)) recoverer.verdict = { kind: "merged-awaiting-deploy", realMiss: false };
+      else recoverer.verdict = { kind: "merge-retry", why: describeError(err), realMiss: false }; // transient 405/409 → next round retries
     }
     return grant(perDeployMs); // await deploy-preview + URL reflect
   };
@@ -1060,6 +1087,7 @@ module.exports = {
   addLabel,
   countActiveDeployRuns,
   deployLaneActivity,
+  describeError,
   fetchPublicUrl,
   getDefaultBranchHeadSha,
   getFileTextAtRef,

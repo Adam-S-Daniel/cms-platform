@@ -123,9 +123,12 @@ suite can exercise a slow real-time behaviour without waiting on the clock.
 
 | Global | Read by | Default | Purpose |
 |---|---|---|---|
-| `__AUTOSAVE_IDLE_MS` | `autosave-on-hide.js` | `120000` (2 min) | Idle threshold (ms) after which a dirty entry autosaves. The `@admin-write` e2e spec sets it low via `addInitScript` to drive the idle path. |
+| `__AUTOSAVE_IDLE_MS` | `autosave-on-hide.js` | `120000` (2 min) | Idle threshold (ms) after which a dirty entry autosaves. The `@admin-write` e2e spec sets it low via `addInitScript` to drive the idle path. Autosave (idle, tab-hide, pagehide) is skipped while a required text field is empty, so Decap's Save never paints "… IS REQUIRED." errors on an entry the owner has not tried to save (#625 item 3). |
 
 The confirm-wrap (`confirm-wrap-local-backup.js`) + autosave
 (`autosave-on-hide.js`) shims (#161) also expose read-only test surfaces —
 `window.__confirmWrapLocalBackup` and `window.__autosaveOnHide` — for specs to
-assert install / trigger the save-click.
+assert install / trigger the save-click. The confirm-wrap also puts the URL back
+when an editor cancels Decap's leave prompt on a browser Back (#733): Decap
+cannot restore a hash it did not push itself, and its Posts list rows are plain
+anchors.

@@ -241,6 +241,37 @@
     }
   }
 
+  // The undo of hideDecapPublish(), for the error path only (#644). A failed
+  // Publish leaves the slot holding a sentence that says "press Publish once
+  // more", and when plan() offers no button of ours ("unknown", "none") the
+  // only Publish there is to press is Decap's, which the busy state hid.
+  // Restores only what this file hid: the marker plus Decap's selector, never
+  // one-door-publish.js's Status control, which carries the same marker.
+  function showDecapPublish() {
+    var nodes;
+    try {
+      nodes = document.querySelectorAll(DECAP_PUBLISH + "[" + HIDDEN_ATTR + "]");
+    } catch (e) {
+      return;
+    }
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (el.id === BUTTON_ID || (el.closest && el.closest("#" + SLOT_ID))) continue;
+      el.style.removeProperty("display");
+      el.style.removeProperty("visibility");
+      el.style.removeProperty("pointer-events");
+      el.removeAttribute("aria-hidden");
+      el.removeAttribute("tabindex");
+      el.removeAttribute(HIDDEN_ATTR);
+    }
+  }
+
+  // The plan() kinds that put a Publish of our own (or a busy note standing in
+  // for one) on screen, and so are the only ones that may hide Decap's.
+  function replacesDecapPublish(kind) {
+    return kind === "busy" || kind === "disabled" || kind === "confirm" || kind === "publish";
+  }
+
   // ── The publish action ────────────────────────────────────────────────
   async function arm(prNumber, token) {
     var repo = window.CMS_REPO;
@@ -496,6 +527,44 @@
     },
   };
 
+  // ── Explaining "Unpublish" (#625 item 7) ──────────────────────────────
+  // "Published ▾" on a live entry offers Unpublish with no word on what it
+  // does. Decap's Unpublish takes the entry off the site and moves it back to
+  // Drafts, so say so, as a `title` on that one menu item. Additive only: it
+  // touches no other item, never the Publish dropdown, and writes nothing once
+  // set. react-aria-menubutton mounts items only while the menu is open, so a
+  // slow interval applies it (the 500 ms render tick's own cadence).
+  var UNPUBLISHED_TRIGGER_CLASS = "PublishedToolbarButton";
+  var UNPUBLISH_HINT =
+    "Takes this off the site and moves it back to your drafts. " +
+    "Nothing is lost — you can publish it again.";
+
+  function inPublishedDropdown(item) {
+    var el = item.parentElement;
+    for (var depth = 0; el && depth < MENU_DEPTH; depth++, el = el.parentElement) {
+      var trigger = el.querySelector(MENU_TRIGGER);
+      if (!trigger) continue;
+      return String(trigger.getAttribute("class") || "").indexOf(UNPUBLISHED_TRIGGER_CLASS) !== -1;
+    }
+    return false;
+  }
+
+  function explainUnpublish() {
+    var items;
+    try {
+      items = document.querySelectorAll('[role="menuitem"]');
+    } catch (e) {
+      return;
+    }
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      var label = String(item.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (label.indexOf("unpublish") !== 0 || !inPublishedDropdown(item)) continue;
+      if (item.getAttribute("title") !== UNPUBLISH_HINT) item.setAttribute("title", UNPUBLISH_HINT);
+    }
+  }
+  setInterval(explainUnpublish, 500);
+
   // ── Rendering ─────────────────────────────────────────────────────────
   function styleButton(b, primary) {
     b.style.cssText =
@@ -559,13 +628,25 @@
     };
   }
 
+  function siteGated() {
+    var model = window.CMSEntryStatus;
+    if (model && typeof model.isSiteGated === "function") return model.isSiteGated(document);
+    return Boolean(document.getElementById("cms-site-gate-banner"));
+  }
+
   function plan() {
     var p = progress();
     var state = p ? p.get() : null;
     var facts = state && state.ready ? state.facts : null;
 
     if (mode === "busy") {
-      return { kind: "busy", note: "Sending it to " + destination(facts || {}).noun + "…" };
+      // With no facts yet, destination({}) would name production even on a
+      // preview deploy (#644). CMSHostname.destination() is where a publish
+      // from this admin goes, read from its own config, so it is the honest
+      // noun until the poller answers.
+      var noun =
+        facts || !window.CMSHostname ? destination(facts || {}).noun : window.CMSHostname.destination();
+      return { kind: "busy", note: "Sending it to " + noun + "…" };
     }
 
     if (hasUnsavedChanges()) {
@@ -600,6 +681,17 @@
 
     if (mode === "confirm") {
       var dest = destination(facts);
+      // Coming-soon site: do not promise it "appears" in 5 minutes — visitors
+      // keep seeing the coming-soon page (#625 item 1). The gate state is
+      // site-gate-banner.js's banner, read through the shared model helper.
+      if (siteGated()) {
+        return {
+          kind: "confirm",
+          note:
+            "Publish this to " + dest.noun + "? It will be saved to the site, but " +
+            "visitors keep seeing the coming-soon page until the site is switched on.",
+        };
+      }
       if (dest.preview) {
         // No URL: window.LiveURL computes the LIVE site's path, and the
         // preview origin is not derivable from anything this shim may read.
@@ -651,7 +743,10 @@
     if (signature === renderedSignature && slot.firstChild) {
       // Steady state: mutate nothing. In particular do NOT replace the button
       // — a node swapped between mousedown and mouseup eats the click.
-      if (p.kind !== "unknown") hideDecapPublish();
+      // Only a plan that renders a replacement re-hides: this used to say
+      // `!== "unknown"`, which re-hid Decap's control under "none" on every
+      // tick after the first and undid the restore below (#644).
+      if (replacesDecapPublish(p.kind)) hideDecapPublish();
       return;
     }
     renderedSignature = signature;
@@ -659,6 +754,10 @@
     while (slot.firstChild) slot.removeChild(slot.firstChild);
 
     if (lastError) disabledNote(slot, lastError);
+
+    // A failure with no button of ours to retry with: give Decap's back, which
+    // onDecapMenuActivate() routes through doPublish() (see showDecapPublish).
+    if (lastError && !replacesDecapPublish(p.kind)) showDecapPublish();
 
     if (p.kind === "unknown") return; // hide nothing — see plan()
 
