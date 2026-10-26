@@ -307,10 +307,55 @@ jobs:
         run: bundle exec jekyll build --quiet
 
       - name: Apply draft label on new PR
+        # Adds cms/draft (and cms/preview-only off main) only to a Decap-shaped
+        # PR or one that touches site content, decided by
+        # scripts/content-pr-guard.js's shouldApplyDraftLabel. A PR that only
+        # changes instruction files (CLAUDE.md, AGENTS.md), CI, scripts or
+        # dependencies is not a content draft and gets no label. An agent's
+        # content PR on a non-Decap branch still gets it.
         if: github.event.action == 'opened'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
+            const path = require('path');
+            const fs = require('fs');
+
+            // Label only Decap-shaped or content-touching PRs. An
+            // instruction-file or dependency PR is not a content draft
+            // (scripts/content-pr-guard.js's shouldApplyDraftLabel).
+            const { FIXTURE_BRANCH_PREFIX } = require(
+              path.join(process.env.GITHUB_WORKSPACE, '.cms-platform', 'e2e', 'cms-fixture-pr.js'),
+            );
+            const DECAP_BRANCH_PREFIX = `${FIXTURE_BRANCH_PREFIX.split('/')[0]}/`;
+            const { shouldApplyDraftLabel } = require(
+              path.join(process.env.GITHUB_WORKSPACE, '.cms-platform', 'scripts', 'content-pr-guard.js'),
+            );
+
+            const prFiles = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            // Absent on a single-collection site, so a missing file is not an error.
+            let draftSeamYamlText = null;
+            try {
+              draftSeamYamlText = fs.readFileSync('admin/collections.site.yml', 'utf8');
+            } catch (_) {
+              draftSeamYamlText = null;
+            }
+
+            if (!shouldApplyDraftLabel({
+              pr: context.payload.pull_request,
+              changedFiles: prFiles.map((f) => f.filename),
+              seamYamlText: draftSeamYamlText,
+              decapBranchPrefix: DECAP_BRANCH_PREFIX,
+            })) {
+              core.info('Not Decap-shaped and touches no site content; skipping the cms/draft label.');
+              return;
+            }
+
             // Ensure the 'cms/draft' label exists
             try {
               await github.rest.issues.createLabel({
