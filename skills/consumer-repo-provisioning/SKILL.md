@@ -67,7 +67,8 @@ permissions**:
 | **Contents** | **Read and write** | create/delete branch refs — the publish-via-auto-merge **delete-recovery** branch, loop canary branches — and `sweep-stale-cms-prs --delete-branch` |
 | **Pull requests** | **Read and write** | open / label `cms/ready` / comment / close PRs and **enable auto-merge** (nudge, sweep, auto-resolve, the loops, the delete shim) |
 | **Issues** | **Read and write** | `cms-editorial-workflow` drives the editorial-workflow labels and status comments through the **issues** API — `issues.createLabel`, `issues.listComments`, `issues.createComment`, `issues.updateComment`. A PR is an issue to those endpoints, so `Pull requests: write` does NOT cover them |
-| **Actions** | **Read and write** | **read:** the loops poll `deploy-production` run status (`GET /repos/…/actions/workflows/…/runs`). **write:** `regression-review-reaper` rejects superseded review gates via `POST /repos/…/actions/runs/{id}/pending_deployments` (`state=rejected`) |
+| **Actions** | **Read and write** | **read:** the loops poll `deploy-production` run status (`GET /repos/…/actions/workflows/…/runs`), and `regression-review-reaper` lists waiting runs and re-reads `GET /repos/…/actions/runs/{id}/pending_deployments` |
+| **Deployments** | **Read and write** | `regression-review-reaper` rejects superseded review gates via `POST /repos/…/actions/runs/{id}/pending_deployments` (`state=rejected`). Despite the `/actions/` path, GitHub's fine-grained permission table puts this POST under **Deployments: write**; with only `Actions: write` it answers HTTP 403 (cms-platform#788) |
 | **Commit statuses** | **Read** | `cms-automerge-nudge` and `cms-editorial-workflow` call `repos.getCombinedStatusForRef` (`GET /repos/…/commits/{ref}/status`) to decide whether a head sha is green |
 | **Metadata** | **Read** | mandatory — auto-selected for every fine-grained PAT |
 
@@ -75,12 +76,6 @@ permissions**:
 
 - *Workflows* — `CMS_E2E_PAT` never edits `.github/workflows/*`. That single
   omission is the whole reason it stays separate from `CMS_PLATFORM_PAT`.
-- *Deployments* — nothing this token drives touches the deployments API.
-  `pending_deployments` looks like it should, but it is an **Actions** endpoint
-  (`/actions/runs/{id}/pending_deployments`) and is covered by the row above;
-  `repos.createDeployment` / `createDeploymentStatus` live in `deploy-preview`
-  and `deploy-production`, which run on `GITHUB_TOKEN`, not this PAT. Verified
-  2026-09-02 by grepping every caller that receives `CMS_E2E_PAT`.
 - *Checks* — **fine-grained PATs have no Checks permission at all.** The nudge
   does read check-runs (`checks.listForRef`); that read succeeds only because
   all three repos are PUBLIC. The same caveat applies to `Commit statuses`,
@@ -90,7 +85,7 @@ permissions**:
 - Settings → General → **Allow auto-merge** = ON (else the nudge can't enable auto-merge).
 - The PAT's user must be a **configured reviewer of the `regression-review` environment**
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
-  reject its pending deployments even with `Actions: write`.
+  reject its pending deployments even with `Deployments: write`.
 
 ## `CMS_PLATFORM_PAT` — removed, do not create it
 
@@ -332,7 +327,7 @@ that consumer gets no bump until someone dispatches it by hand
 
 ## Quick checklist for a new consumer
 
-- [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Issues R/W** + **Actions R/W** + **Commit statuses R** (+ be a reviewer of the `regression-review` environment)
+- [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Issues R/W** + **Actions R/W** + **Deployments R/W** + **Commit statuses R** (+ be a reviewer of the `regression-review` environment)
 - [ ] `CMS_AUTOMATION_APP_PRIVATE_KEY` (secret) + `CMS_AUTOMATION_APP_ID` (variable) — the CMS automation App, installed on this owner; powers platform-bump and dev-hooks-sync with nothing to rotate; the `dependabot-rearm-sweep.yml` caller passes the key too, so the sweep can refresh a behind workflow-file Dependabot PR (#458)
 - [ ] ~~`CMS_PLATFORM_PAT`~~ — **removed in v0.1.103.** Do not create it. The App above is the only push credential; a caller still passing `gh_token` fails at startup
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
