@@ -2555,6 +2555,55 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     ]);
   });
 
+  // secret_scanning / secret_scanning_push_protection (2026-10-26, parity
+  // with Adam-S-Daniel/repo-settings): read from security_and_analysis on the
+  // repo itself, written as a PATCH of it.
+  test("fetchSecurityAnalysis: secret scanning keys read security_and_analysis; an absent key is a skip", () => {
+    const script = loadScript();
+    const repo = "Owner/Repo";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: { enabled: true },
+      [`repos/${repo}`]: {
+        security_and_analysis: { secret_scanning: { status: "enabled" } },
+      },
+    });
+    const live = script.fetchSecurityAnalysis(repo, null, api, [
+      "secret_scanning",
+      "secret_scanning_push_protection",
+    ]);
+    expect(live.secretScanning).toEqual({ enabled: true });
+    expect(live.secretScanningPushProtection.skipped).toBe(true);
+  });
+
+  test("buildFixPlan: secret scanning is enabled before push protection, each as a security_and_analysis PATCH", () => {
+    const script = loadScript();
+    const manifest = loadManifest();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = ["secret_scanning_push_protection", "secret_scanning"].map(
+      (key) => ({
+        repo,
+        kind: "security-analysis-drift",
+        key,
+        endpoint: "security_and_analysis",
+        live: false,
+        desired: true,
+      }),
+    );
+    const plan = script.buildFixPlan(manifest, [
+      { repo, findings, informational: [], liveRepo: {}, liveRulesets: [] },
+    ]);
+    expect(plan[0].securityWrites).toEqual(
+      ["secret_scanning", "secret_scanning_push_protection"].map((key) => ({
+        endpoint: `repos/${repo}`,
+        method: "PATCH",
+        key,
+        desired: true,
+        body: { security_and_analysis: { [key]: { status: "enabled" } } },
+      })),
+    );
+  });
+
   test("describeFinding: security-analysis-drift names the key and the endpoint", () => {
     const script = loadScript();
     const line = script.describeFinding({
