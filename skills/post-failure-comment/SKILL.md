@@ -7,7 +7,7 @@ description: Wire a workflow's Playwright (or other captured-log) failures into 
 
 ## Why this exists
 
-Workflow logs in this repo are not directly readable by the Claude agent (no `gh` CLI, no logs surface in the GitHub MCP server, `actions/runs/.../logs` returns 403 unauthenticated). When a long-running workflow fails on a PR, the agent has to either ask the user to paste the log or open the run in a browser.
+Reading a workflow log needs an authenticated `gh` (`gh run view <id> --log-failed`) or a connector with Actions tools; `actions/runs/.../logs` returns 403 unauthenticated. An agent without either — a surface with no `gh`, or a GitHub connector with no job-log tool — has to ask the user to paste the log or open the run in a browser.
 
 The composite action at `.github/actions/post-failure-comment/action.yml` solves this: it scrubs the captured log via `gitleaks` and posts (or updates, via marker-based dedup) a PR comment with the failure block. PR comments arrive as `<github-webhook-activity>` events the agent can read directly, and are also fetchable via `mcp__github__pull_request_read`.
 
@@ -175,4 +175,3 @@ All three live together in the action's directory and travel with it (resolved a
 - `.github/actions/post-failure-comment/action.yml` — the composite action.
 - `.github/actions/post-failure-comment/extract-playwright-failures.sh` — awk-based extractor for Playwright `--reporter=list` failure blocks.
 - `.github/actions/post-failure-comment/scrub-secrets.js` — gitleaks-backed scrubber. Replaces detected secrets in-place with `<REDACTED:RuleID>`.
-- AGENTS.md "Failure-comment composite action" — short reference; this skill is the long-form.

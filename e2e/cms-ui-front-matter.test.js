@@ -17,8 +17,12 @@ const { fromJS, List, Map } = coreRequire("immutable");
 
 // The shell's Decap 3.15.1 release contains core 3.17.1, not core 3.15.1:
 // https://github.com/decaporg/decap-cms/blob/bc76c05a80ab70d6b5c7cdaafc7d10cf56939c02/packages/decap-cms-core/package.json
-// Test-only nested overrides retain this core's Immutable 3 and React 19
-// runtime despite newer peer-library declarations; plain npm ci still works.
+// Test-only overrides use Immutable 5 and React 19 with this core's source.
+// The Decap package's shared libraries also need the Immutable override: their
+// newer Immutable 4 peers otherwise conflict with our root Immutable 5 pin.
+// npm 10 cannot resolve $immutable inside that transitive override, so its
+// literal version is locked to the root pin below. The browser diagnostics use
+// the release's precompiled bundle, whose runtime is unaffected by overrides.
 // Use installed upstream source, never a copied serializer or a fake Map.
 // Loading the whole browser application would mount React and require a DOM.
 // This AST loader evaluates its original pure ESM modules and selected functions
@@ -159,6 +163,24 @@ async function uiGeneratedPost(title, collectionName = "posts") {
 test("offline serializer matches the Decap release shipped by the admin shell", () => {
   expect(decapPin(fs.readFileSync(path.join(ROOT, "theme/admin/index.html"), "utf8"))).toBe("3.15.1");
   expect(coreRequire("./package.json").version).toBe("3.17.1");
+});
+
+test("Decap test dependencies resolve the same explicitly overridden Immutable runtime", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+  const lock = JSON.parse(fs.readFileSync(path.join(__dirname, "package-lock.json"), "utf8"));
+  const version = manifest.devDependencies.immutable;
+  expect(manifest.overrides["decap-cms"].immutable).toBe(version);
+  expect(manifest.overrides["decap-cms-core"].immutable).toBe("$immutable");
+  expect(lock.packages[""].devDependencies.immutable).toBe(version);
+  for (const [name, dependency] of Object.entries(lock.packages)) {
+    if (name.endsWith("node_modules/immutable")) expect(dependency.version, name).toBe(version);
+  }
+  // Shared peer libraries are hoisted by npm; test what the source loader
+  // actually receives rather than only asserting the override declarations.
+  for (const name of ["decap-cms-lib-auth", "decap-cms-lib-util", "decap-cms-lib-widgets"]) {
+    const libraryRequire = createRequire(coreRequire.resolve(`${name}/package.json`));
+    expect(libraryRequire("immutable")).toBe(coreRequire("immutable"));
+  }
 });
 
 test("the UI test-post save produces all three YAML exclusion markers", async () => {

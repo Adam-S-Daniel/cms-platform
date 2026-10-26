@@ -4,13 +4,29 @@ title: Tags
 permalink: /tags/
 ---
 <div class="container">
-  <h1>Tags</h1>
+  {%- comment -%} The markup a real consumer's tags index ships (adamdaniel.ai's
+  tags/index.html): tags.spec.js and content-fixtures.js discoverTags read
+  `.page-header h1`, `.tag-list-item`, `a.tag-list-link`, `.tag-list-name`,
+  `.tag-list-count` and the "No tags yet." placeholder (#702). {%- endcomment -%}
+  <div class="page-header">
+    <h1>Tags</h1>
+  </div>
   {%- comment -%} site.all_tags is built by theme/lib/cms-platform-theme/auto_tag_pages.rb,
   which already excludes feed_exclude posts — so a tag carried ONLY by an e2e
   fixture post never appears here. {%- endcomment -%}
+  {% assign tags = site.all_tags %}
+  {% if tags and tags.size > 0 %}
   <ul class="tag-list">
-    {% for tag in site.all_tags %}
-    <li><a href="{{ tag.url | relative_url }}">{{ tag.name }}</a> ({{ tag.count }})</li>
+    {% for tag in tags %}
+    <li class="tag-list-item">
+      <a class="tag-list-link" href="{{ tag.url | relative_url }}">
+        <span class="tag-list-name">{{ tag.name }}</span>
+        <span class="tag-list-count" aria-label="{{ tag.count }} posts">{{ tag.count }}</span>
+      </a>
+    </li>
     {% endfor %}
   </ul>
+  {% else %}
+  <p>No tags yet.</p>
+  {% endif %}
 </div>

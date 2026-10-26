@@ -479,7 +479,24 @@ function planWrites(plan) {
         name: post.name,
         desired: post.body,
       });
-    for (const put of p.actionsPuts || [])
+    for (const put of p.actionsPuts || []) {
+      // The workflow-permissions PUT (#868) carries several drifted keys in
+      // one body (`keys` + `liveByKey`); every other actions PUT carries one
+      // (`key` + `live`). Each drifted key is classified on its own. The
+      // echoed, undrifted field is not a change, so it is not a write.
+      if (Array.isArray(put.keys)) {
+        for (const key of put.keys) {
+          const live = (put.liveByKey || {})[key];
+          writes.push({
+            repo: p.repo,
+            kind: "actions-permission",
+            key,
+            live: live === undefined ? null : live,
+            desired: put.body[key],
+          });
+        }
+        continue;
+      }
       writes.push({
         repo: p.repo,
         kind: "actions-permission",
@@ -487,6 +504,7 @@ function planWrites(plan) {
         live: (put.live === undefined ? null : put.live),
         desired: put.body[put.key],
       });
+    }
     for (const put of p.envPuts || [])
       writes.push({
         repo: p.repo,

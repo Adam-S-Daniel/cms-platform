@@ -230,13 +230,23 @@
   // null is REQUIRED behavior, not a gap: a made-up number here would be the
   // §2.4 defect in a new costume. Before the merge the remaining trip is the
   // rest of the checks PLUS the deploy; after it, the deploy alone.
+  //
+  // It never goes back up and never runs out early (#643). It rounds UP, so
+  // "about 1 minute" lasts the whole last minute: rounding to nearest
+  // declared the estimate run out with half a minute of it left, and after a
+  // merge (a one-minute deploy estimate) that meant "longer than usual" 30 s
+  // in. And after the merge it is also capped by what was left of the whole
+  // trip, from `checksStartedAt`, so a switch of clock at the merge cannot
+  // turn "longer than usual" back into "about 1 minute".
   function remainingMinutes(facts, now) {
     var f = facts || {};
     var elapsed = elapsedMinutes(f.startedAt, now);
     if (elapsed === null) return null;
-    var nominal = f.merged ? DEPLOY_NOMINAL_MIN : CHECKS_NOMINAL_MIN + DEPLOY_NOMINAL_MIN;
-    var left = Math.round(nominal - elapsed);
-    return left >= 1 ? left : null;
+    var trip = CHECKS_NOMINAL_MIN + DEPLOY_NOMINAL_MIN;
+    var left = (f.merged ? DEPLOY_NOMINAL_MIN : trip) - elapsed;
+    var sinceTripStart = f.merged ? elapsedMinutes(f.checksStartedAt, now) : null;
+    if (sinceTripStart !== null) left = Math.min(left, trip - sinceTripStart);
+    return left > 0 ? Math.ceil(left) : null;
   }
 
   function overran(facts, now) {
@@ -284,13 +294,10 @@
   }
 
   // What an in-flight, not-yet-merged publish is waiting on, as "x of y".
-  function waitingOnChecks(checks, destinationName, words) {
+  function waitingOnChecks(checks, destinationName) {
     var total = checks.total || 0;
     var pending = Array.isArray(checks.pending) ? checks.pending : [];
     if (!total) return "the automatic safety checks to start";
-    if (!pending.length) {
-      return "all " + total + " automatic safety checks passed; now " + (words || INTENT_WORDS.show).finish;
-    }
     var names = pending.map(function (key) {
       return checkName(key, destinationName);
     });
@@ -298,6 +305,21 @@
       return "the last of " + total + " automatic safety checks (" + names[0] + ")";
     }
     return pending.length + " of " + total + " automatic safety checks to finish (" + joinNames(names) + ")";
+  }
+
+  // Every check passed and only the merge is left: a finished fact, so it is
+  // its own sentence rather than the object of "It is waiting for", which
+  // read "It is waiting for all 2 automatic safety checks passed" (#643).
+  // Null while any check is pending or none has started.
+  function checksPassed(checks, words) {
+    var total = checks.total || 0;
+    var pending = Array.isArray(checks.pending) ? checks.pending : [];
+    if (!total || pending.length) return null;
+    var subject =
+      total === 1
+        ? "The automatic safety check"
+        : (total === 2 ? "Both " : "All " + total + " ") + "automatic safety checks";
+    return subject + " passed; now " + (words || INTENT_WORDS.show).finish;
   }
 
   // ── Modifiers ─────────────────────────────────────────────────────────
@@ -556,11 +578,14 @@
 
     if (inFlight) {
       var mins = remainingMinutes(f, now);
+      var passed = !f.merged && f.checks ? checksPassed(f.checks, words) : null;
       var waiting = f.merged
         ? dest.noun + " to finish updating"
-        : f.checks
-          ? waitingOnChecks(f.checks, dest.noun, words)
-          : f.waitingOn || "the automatic safety checks to finish";
+        : passed
+          ? passed
+          : f.checks
+            ? waitingOnChecks(f.checks, dest.noun)
+            : f.waitingOn || "the automatic safety checks to finish";
       var when =
         mins !== null
           ? "about " + mins + " minute" + (mins === 1 ? "" : "s") + " left"
@@ -582,7 +607,7 @@
         badge: BADGE.GOING_LIVE,
         label: flightLabel,
         detail:
-          flightLead + " It is waiting for " + waiting + ". " +
+          flightLead + " " + (passed ? "" : "It is waiting for ") + waiting + ". " +
           "You can close this tab — it carries on without you." + later,
         // Checks phase only: once merged, `waiting` is the deploy, not a check.
         // Links `waiting` — the phrase actually in `detail` — not the raw

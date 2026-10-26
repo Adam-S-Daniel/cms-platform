@@ -9,7 +9,11 @@ const { isTestFixturePost } = require("./public-content");
 // Every `<img>` rendered on the public site must be reachable to assistive
 // tech: either it carries a non-empty `alt` (announced as text), or it is
 // explicitly marked decorative via `role="presentation"` or
-// `aria-hidden="true"`. The audit walks the built `_site/sitemap.xml` so
+// `aria-hidden="true"`. The one exception is the post layout's featured
+// image: it sits right under the identical <h1>, so it ships `alt=""`
+// (decorative, #657) rather than making a screen reader say the title twice.
+// Only an `img.featured-image` with the attribute present-and-empty is exempt;
+// a markdown `![](…)` with no alt is still a violation. The audit walks the built `_site/sitemap.xml` so
 // new content is covered automatically — adding a post that ships a bare
 // `<img src="…">` regresses this spec without any test edit.
 //
@@ -175,6 +179,7 @@ test.describe(
             .filter(
               (img) =>
                 !img.alt &&
+                !(img.classList.contains("featured-image") && img.getAttribute("alt") === "") &&
                 img.getAttribute("role") !== "presentation" &&
                 img.getAttribute("aria-hidden") !== "true",
             )

@@ -1,0 +1,161 @@
+# Prepare both consumers' release-candidate draft PRs in one dispatch.
+#
+# release.yml refuses a stable tag unless each consumer has an open DRAFT PR
+# pinned to the exact platform `main` commit being tagged
+# (scripts/release-candidate-gate.js, docs/CONTRIBUTING.md). Those drafts were
+# built and re-pinned by hand. This workflow dispatches each consumer's
+# platform-bump with `candidate_sha` = this run's commit, which makes the same
+# atomic bump to that commit on `candidate/v<version>` and opens (or re-pins)
+# the draft. It then waits for both drafts to pin the commit and prints the
+# exact release.yml dispatch line.
+#
+# It only PREPARES: it neither waits for the consumers' checks nor cuts the
+# release; release.yml's gate decides whether their results are good enough.
+# workflow_dispatch only, so it is never a pull-request check.
+#
+# A consumer accepts `candidate_sha` only once its platform-bump caller (and
+# the reusable that caller pins) come from a release that has candidate mode;
+# until then the dispatch is rejected and this run fails naming the consumer.
+name: Release candidates
+run-name: "release candidates at ${{ github.sha }} — @${{ github.actor }}"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  candidates:
+    runs-on: ubuntu-latest
+    # Not a required context (no PR trigger), so a wall here cancels nothing a
+    # ruleset reads. It bounds the poll below plus checkout and dispatch.
+    timeout-minutes: 20
+    steps:
+      # Mirrors release.yml: the candidate must be the commit release.yml will
+      # tag, and release.yml only tags `main`.
+      - name: Refuse unless dispatched on main
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$GH_REF" != "refs/heads/main" ]; then
+            echo "::error::release candidates must be prepared from main (dispatched ref: ${GH_REF}). Re-run with 'main' selected in the branch dropdown."
+            exit 1
+          fi
+
+      # Only plugin.json is read: the version label the consumers derive too.
+      - name: Check out the candidate commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Dispatch both consumers' candidate bumps and wait for the drafts
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+          # The same per-owner credentials release.yml uses for the bump fanout
+          # and the candidate gate (Actions read/write to dispatch; Contents and
+          # Pull requests read to find the draft). Unlike the fanout, a missing
+          # one FAILS here: a candidate that silently never opens is the
+          # failure this workflow exists to remove.
+          TOKEN_ADAMDANIEL_AI: ${{ secrets.BUMP_DISPATCH_ADAMDANIEL_AI }}
+          TOKEN_JODIDANIEL_COM: ${{ secrets.BUMP_DISPATCH_JODIDANIEL_COM }}
+          POLL_SECONDS: "600"
+          POLL_INTERVAL: "15"
+        run: |
+          set -euo pipefail
+          if ! [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the dispatched commit is not a full 40-character SHA — refusing to dispatch."
+            exit 1
+          fi
+          VERSION="v$(jq -r '.version // ""' plugin.json)"
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::plugin.json does not declare a release version (X.Y.Z) — the release PR must land before its candidates."
+            exit 1
+          fi
+          BRANCH="candidate/$VERSION"
+          REPOS=("Adam-S-Daniel/adamdaniel.ai" "jodidaniel/jodidaniel.com")
+          SECRETS=("BUMP_DISPATCH_ADAMDANIEL_AI" "BUMP_DISPATCH_JODIDANIEL_COM")
+          TOKENS=("$TOKEN_ADAMDANIEL_AI" "$TOKEN_JODIDANIEL_COM")
+
+          missing=0
+          for i in 0 1; do
+            if [ -z "${TOKENS[$i]}" ]; then
+              echo "::error::no ${SECRETS[$i]} secret — cannot dispatch the ${REPOS[$i]} candidate."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+          # gh's error output can quote an API body, so it is discarded; the
+          # message names the likely causes instead.
+          for i in 0 1; do
+            if ! GH_TOKEN="${TOKENS[$i]}" gh workflow run platform-bump.yml -R "${REPOS[$i]}" \
+                 -f candidate_sha="$CANDIDATE_SHA" >/dev/null 2>&1; then
+              echo "::error::could not dispatch platform-bump with candidate_sha in ${REPOS[$i]}. Check ${SECRETS[$i]} (Actions read/write) and that the consumer's platform-bump caller declares the candidate_sha input (it arrives with the first release that has candidate mode)."
+              exit 1
+            fi
+            echo "dispatched the ${REPOS[$i]} candidate bump for $VERSION at $CANDIDATE_SHA"
+          done
+
+          # A draft on the candidate branch counts only once its HEAD's
+          # platform.lock names this commit: an older draft for the same version
+          # stays open, pinned to an older commit, until the re-pin lands.
+          find_candidate() {
+            local repo=$1 token=$2 out num head lock
+            out=$(GH_TOKEN="$token" gh pr list -R "$repo" --state open --head "$BRANCH" --limit 1 \
+              --json number,isDraft,headRefOid \
+              --jq '.[0] | select(.isDraft == true) | "\(.number) \(.headRefOid)"' 2>/dev/null) || out=""
+            num=${out%% *}
+            head=${out#* }
+            if ! [[ "$num" =~ ^[0-9]+$ ]] || ! [[ "$head" =~ ^[0-9a-f]{40}$ ]]; then
+              return 1
+            fi
+            lock=$(GH_TOKEN="$token" gh api "repos/$repo/contents/platform.lock?ref=$head" --jq '.content' 2>/dev/null \
+              | base64 -d 2>/dev/null) || lock=""
+            if ! grep -qxF -- "platform_ref: $CANDIDATE_SHA" <<<"$lock"; then
+              return 1
+            fi
+            printf '%s' "$num"
+          }
+
+          FOUND=("" "")
+          deadline=$((SECONDS + POLL_SECONDS))
+          while :; do
+            for i in 0 1; do
+              if [ -n "${FOUND[$i]}" ]; then continue; fi
+              if num=$(find_candidate "${REPOS[$i]}" "${TOKENS[$i]}"); then
+                FOUND[i]=$num
+                echo "${REPOS[$i]}: draft PR #$num pins $CANDIDATE_SHA"
+              fi
+            done
+            if [ -n "${FOUND[0]}" ] && [ -n "${FOUND[1]}" ]; then
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              for i in 0 1; do
+                if [ -z "${FOUND[$i]}" ]; then
+                  echo "::error::no open draft PR on ${REPOS[$i]}'s $BRANCH pins $CANDIDATE_SHA after ${POLL_SECONDS}s. Read that repo's latest platform-bump run."
+                fi
+              done
+              exit 1
+            fi
+            sleep "$POLL_INTERVAL"
+          done
+
+          {
+            echo "## Release candidates for $VERSION"
+            echo
+            echo "Both drafts pin [\`$CANDIDATE_SHA\`](https://github.com/$GITHUB_REPOSITORY/commit/$CANDIDATE_SHA):"
+            echo
+            echo "- ${REPOS[0]}: https://github.com/${REPOS[0]}/pull/${FOUND[0]}"
+            echo "- ${REPOS[1]}: https://github.com/${REPOS[1]}/pull/${FOUND[1]}"
+            echo
+            echo "When both drafts' checks are green, and while \`main\` is still at this commit, cut the release:"
+            echo
+            echo '```'
+            echo "gh workflow run release.yml -R $GITHUB_REPOSITORY --ref main -f version=$VERSION -f candidate_adamdaniel_ai_pr=${FOUND[0]} -f candidate_jodidaniel_com_pr=${FOUND[1]}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

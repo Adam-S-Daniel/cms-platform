@@ -138,6 +138,191 @@ function gemfileLock(tag) {
   ].join("\n");
 }
 
+test.describe("check-platform-pin-consistency.js — exact candidate SHAs (#526)", () => {
+  const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef01";
+  const declaration = (options = `git: "https://github.com/${SLUG}", ref: "${SHA}"`) =>
+    `gem "cms-platform-theme", ${options}\n`;
+  const lock = (ref = SHA, revision = SHA) => [
+    "GIT", `  remote: https://github.com/${SLUG}`, `  revision: ${revision}`,
+    `  ref: ${ref}`, "  specs:", "    cms-platform-theme (0.1.4)", "", "PLATFORMS", "  ruby", "",
+  ].join("\n");
+  function candidate(gem = declaration(), locked = lock(), canonical = SHA) {
+    const root = mkConsumer();
+    write(root, "platform.lock", platformLock(canonical));
+    write(root, ".github/workflows/deploy.yml", reusableCaller("deploy", canonical));
+    write(root, "Gemfile", gem);
+    write(root, "Gemfile.lock", locked);
+    writeSentinel(root);
+    return run(root);
+  }
+
+  // Exercise the entire dictated caller set, including its secrets and inputs,
+  // rather than accepting a candidate through the degraded single-caller scan.
+  function withCanonicalCandidate(check) {
+    const YAML = require("yaml");
+    const fixture = mkConsumer();
+    const root = path.join(fixture, "consumer");
+    const canonicalDir = path.join(fixture, "canonical");
+    const sourceDir = path.join(__dirname, "..", "examples", "site", ".github", "workflows");
+    const sourceSlug = "Adam-S-Daniel/cms-platform";
+    function rewriteCall(call, candidateRef) {
+      if (typeof call.uses === "string" && call.uses.startsWith(`${sourceSlug}/`)) {
+        const at = call.uses.lastIndexOf("@");
+        call.uses = `${SLUG}${call.uses.slice(sourceSlug.length, at)}@${candidateRef || call.uses.slice(at + 1)}`;
+      }
+      if (candidateRef && call.with && Object.hasOwn(call.with, "platform_ref")) {
+        call.with.platform_ref = candidateRef;
+      }
+    }
+    try {
+      for (const name of fs.readdirSync(sourceDir).filter((name) => /\.ya?ml$/.test(name)).sort()) {
+        const canonical = YAML.parse(fs.readFileSync(path.join(sourceDir, name), "utf8"));
+        const consumer = structuredClone(canonical);
+        for (const [doc, ref] of [[canonical, null], [consumer, SHA]]) {
+          for (const job of Object.values(doc.jobs || {})) {
+            rewriteCall(job, ref);
+            for (const step of job.steps || []) rewriteCall(step, ref);
+          }
+        }
+        write(canonicalDir, name, YAML.stringify(canonical));
+        write(root, `.github/workflows/${name}`, YAML.stringify(consumer));
+      }
+      write(root, "platform.lock", platformLock(SHA));
+      write(root, "Gemfile", declaration());
+      write(root, "Gemfile.lock", lock());
+      writeSentinel(root);
+      const invoke = () => spawnSync(process.execPath, [
+        SCRIPT, "--root", root, "--owner", OWNER, "--repo", REPO,
+        "--canonical-workflows", canonicalDir, "--require-canonical",
+      ], { encoding: "utf8" });
+      const mutateDeploy = (mutate) => {
+        const file = path.join(root, ".github", "workflows", "deploy-production.yml");
+        const doc = YAML.parse(fs.readFileSync(file, "utf8"));
+        mutate(doc.jobs.deploy);
+        fs.writeFileSync(file, YAML.stringify(doc));
+      };
+      check({ invoke, mutateDeploy });
+    } finally {
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
+  }
+
+  test("accepts a full canonical candidate set with verified workflow parity", () => {
+    withCanonicalCandidate(({ invoke }) => {
+      const result = invoke();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("Pins are consistent.");
+      expect(result.stdout + result.stderr).not.toMatch(/NOT VERIFIED|parity skipped|workflow-content: DRIFT/);
+    });
+  });
+
+  for (const [name, mutate, diagnostic] of [
+    ["wrong target path", (job) => { job.uses = `${SLUG}/.github/workflows/other.yml@${SHA}`; }, "workflow-content: DRIFT"],
+    ["wrong repository", (job) => { job.uses = `Acme-Org/other/.github/workflows/deploy-production.yml@${SHA}`; }, "workflow-content: DRIFT"],
+    ["missing required secret", (job) => { delete job.secrets.AWS_ROLE_ARN; }, "workflow-content: DRIFT"],
+    ["wrong candidate ref", (job) => { job.uses = `${SLUG}/.github/workflows/deploy-production.yml@${OTHER_SHA}`; }, OTHER_SHA],
+  ]) {
+    test(`rejects a full canonical candidate set with ${name}`, () => {
+      withCanonicalCandidate(({ invoke, mutateDeploy }) => {
+        mutateDeploy(mutate);
+        const result = invoke();
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        expect(result.stderr).toContain(diagnostic);
+      });
+    });
+  }
+
+  for (const [name, gem] of [
+    ["literal ref", declaration()],
+    ["multiline literal ref", `gem "cms-platform-theme",\n  git: "https://github.com/${SLUG}",\n  ref: "${SHA}"\n`],
+    ["parenthesized call", `gem("cms-platform-theme", git: "https://github.com/${SLUG}.git", ref: "${SHA}")\n`],
+    ["explicit options hash", `gem "cms-platform-theme", {git: "https://github.com/${SLUG}", ref: "${SHA}"}\n`],
+  ]) {
+    test(`accepts an exact candidate SHA with ${name}`, () => {
+      const result = candidate(gem);
+      expect(result.status, result.stderr).toBe(0);
+    });
+  }
+
+  for (const [name, gem] of [
+    ["wrong ref", declaration(`git: "https://github.com/${SLUG}", ref: "${OTHER_SHA}"`)],
+    ["computed ref", `candidate = "${SHA}"\n${declaration(`git: "https://github.com/${SLUG}", ref: candidate`)}`],
+    ["interpolated ref", declaration(`git: "https://github.com/${SLUG}", ref: "#{'${SHA}'}"`)],
+    ["comment-only declaration", `# ${declaration()}`],
+    ["duplicate declarations", declaration() + declaration()],
+    ["duplicate ref options", declaration(`git: "https://github.com/${SLUG}", ref: "${OTHER_SHA}", ref: "${SHA}"`)],
+    ["missing ref", declaration(`git: "https://github.com/${SLUG}"`)],
+    ["tag pin", declaration(`git: "https://github.com/${SLUG}", tag: "${SHA}"`)],
+    ["branch alongside ref", declaration(`git: "https://github.com/${SLUG}", ref: "${SHA}", branch: "main"`)],
+    ["untrusted remote", declaration(`git: "https://example.com/${SLUG}", ref: "${SHA}"`)],
+    ["computed options", `options = {git: "https://github.com/${SLUG}", ref: "${SHA}"}\ngem "cms-platform-theme", **options\n`],
+    ["computed positional constraint", `constraint = ">= 0"\ngem "cms-platform-theme", constraint, git: "https://github.com/${SLUG}", ref: "${SHA}"\n`],
+    ["invalid Ruby syntax", `${declaration()}end\n`],
+  ]) {
+    test(`rejects candidate Gemfile with ${name}`, () => {
+      const result = candidate(gem);
+      expect(result.status, result.stdout).toBe(1);
+      expect(result.stderr).toContain("Gemfile");
+    });
+  }
+
+  for (const [name, locked] of [
+    ["wrong ref", lock(OTHER_SHA)],
+    ["wrong resolved revision", lock(SHA, OTHER_SHA)],
+    ["missing ref", lock().replace(`  ref: ${SHA}\n`, "")],
+    ["missing revision", lock().replace(`  revision: ${SHA}\n`, "")],
+    ["duplicate revision", lock().replace("  specs:", `  revision: ${SHA}\n  specs:`)],
+    ["duplicate source", lock() + lock()],
+    ["tag alongside ref", lock().replace("  specs:", `  tag: ${SHA}\n  specs:`)],
+    ["missing platform source", lock().replace(SLUG, "Acme-Org/other")],
+    ["untrusted remote", lock().replace("https://github.com/", "https://example.com/")],
+  ]) {
+    test(`rejects candidate lockfile with ${name}`, () => {
+      const result = candidate(declaration(), locked);
+      expect(result.status, result.stdout).toBe(1);
+      expect(result.stderr).toContain("Gemfile.lock");
+    });
+  }
+
+  test("keeps stable releases tag-pinned rather than accepting a ref pin", () => {
+    const result = candidate(declaration(), lock(), "v0.1.7");
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stderr).toContain("no tag:");
+  });
+
+  test("fails closed when Ruby cannot parse the candidate Gemfile", () => {
+    const { parseCandidateGemfile } = require(SCRIPT);
+    const rubyBin = mkConsumer();
+    write(rubyBin, "ruby", "#!/bin/sh\nexit 97\n");
+    fs.chmodSync(path.join(rubyBin, "ruby"), 0o755);
+    const previous = process.env.PATH;
+    // Keep the run's claude sentinel ahead of the fixture executable.
+    const [sentinel, ...remaining] = previous.split(path.delimiter);
+    process.env.PATH = [sentinel, rubyBin, ...remaining].join(path.delimiter);
+    try {
+      expect(() => parseCandidateGemfile(declaration(), SLUG)).toThrow("requires Ruby with Ripper");
+    } finally {
+      process.env.PATH = previous;
+      fs.rmSync(rubyBin, { recursive: true, force: true });
+    }
+  });
+
+  test("requires Ruby setup in both jobs running the candidate parser", () => {
+    const YAML = require("yaml");
+    for (const [file, job] of [
+      ["platform-pin-consistency.yml", "pin-consistency"], ["self-ci.yml", "node-unit-lints"],
+    ]) {
+      const workflow = YAML.parse(fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", file), "utf8"));
+      const steps = workflow.jobs[job].steps;
+      const ruby = steps.find((step) => step.uses?.startsWith("ruby/setup-ruby@"));
+      expect(ruby, `${file}/${job}`).toBeTruthy();
+      expect(ruby.with["ruby-version"]).toBe("3.2");
+      expect(steps.indexOf(ruby)).toBeLessThan(steps.findIndex((step) =>
+        typeof step.run === "string" && (step.run.includes("check-platform-pin-consistency.js") || step.run.includes("playwright test"))));
+    }
+  });
+});
+
 test.describe("check-platform-pin-consistency.js — CONSISTENT fixture (#29)", () => {
   test("exits 0 with an OK summary when every reference == platform_ref", () => {
     const root = mkConsumer();
@@ -624,6 +809,39 @@ test.describe("workflow-content parity — a PRERELEASE pin is the same version 
       expect(structuralShape(caller(ref)), `${ref} should normalize like a release pin`).toEqual(
         release,
       );
+    }
+  });
+
+  test("a full candidate SHA normalizes to the same shape as a release pin", () => {
+    for (const slug of ["Adam-S-Daniel/cms-platform", "ADAM-S-DANIEL/CMS-PLATFORM"]) {
+      const withSlug = (ref) => caller(ref).replace("Adam-S-Daniel/cms-platform", slug);
+      expect(structuralShape(withSlug(SHA))).toEqual(structuralShape(withSlug("v0.1.88")));
+    }
+  });
+
+  test("external repository refs retain their exact shape", () => {
+    const external = (ref) => caller(ref).replace("Adam-S-Daniel/cms-platform", "Acme-Org/other");
+    expect(structuralShape(external(SHA))).not.toEqual(structuralShape(external("v0.1.88")));
+    expect(structuralShape(external("v0.1.89-rc.1"))).not.toEqual(structuralShape(external("v0.1.88")));
+  });
+
+  test("hash-looking permissions and secrets retain their exact values", () => {
+    const YAML = require("yaml");
+    const baseline = YAML.parse(caller("v0.1.88"));
+    const otherSha = "abcdef0123456789abcdef0123456789abcdef01";
+    expect(SHA).toHaveLength(40);
+    expect(otherSha).toHaveLength(40);
+    baseline.permissions.contents = SHA;
+    baseline.jobs.x.permissions = { contents: SHA };
+    baseline.jobs.x.secrets = { FIXTURE_VALUE: SHA };
+    for (const mutate of [
+      (doc) => { doc.permissions.contents = otherSha; },
+      (doc) => { doc.jobs.x.permissions.contents = otherSha; },
+      (doc) => { doc.jobs.x.secrets.FIXTURE_VALUE = otherSha; },
+    ]) {
+      const drifted = structuredClone(baseline);
+      mutate(drifted);
+      expect(structuralShape(YAML.stringify(drifted))).not.toEqual(structuralShape(YAML.stringify(baseline)));
     }
   });
 

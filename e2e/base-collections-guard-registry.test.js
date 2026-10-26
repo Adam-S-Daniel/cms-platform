@@ -90,7 +90,7 @@ const ALL_BASE = ["posts", "tags", "projects", "pages", "e2e"];
 // AND genuinely don't need one, each with WHY. The drift lint allows exactly
 // these; anything else flagged-but-unguarded goes RED.
 //
-// EMPTY by design: every spec the comprehensive detector flags is covered
+// Nearly empty by design: every other spec the comprehensive detector flags is covered
 // either by a registry guard (group-2 index-local specs) or a direct inline
 // cap.hasAdminCollection / cap.keepsBaseCollection self-skip (the rendered-
 // config readers: cms-config, cms-permalink-contract, cms-post-list-summary,
@@ -99,7 +99,15 @@ const ALL_BASE = ["posts", "tags", "projects", "pages", "e2e"];
 // opted-out consumer), add it here with a reason — the stale-entry test below
 // will require it to be genuinely flagged-but-unguarded so the allowlist can't
 // rot into a dumping ground.
-const NON_GUARDED = {};
+const NON_GUARDED = {
+  // Mocks every GitHub call and asserts the dashboard's own run-vs-PR-head
+  // logic, so it needs no site content. A single-page consumer DOES run visual
+  // regression and DOES see this dashboard: the duplicate-card bug it locks was
+  // found on jodidaniel.com (#382, 2026-10-06), so guarding it out there would
+  // skip the one consumer that hit it.
+  "admin-reviews-superseded.spec.js":
+    "fully mocked dashboard logic; single-page consumers run visual regression too (jodidaniel.com#382)",
+};
 
 // Re-read the canonical PLATFORM_META_SPECS list from playwright.config.js (the
 // single source of truth for "not consumer-running"), so this lint and the

@@ -49,6 +49,12 @@
       background: radial-gradient(ellipse 70% 50% at 50% 20%, rgba(40,90,255,0.12), transparent 70%);
       pointer-events: none; z-index: 0;
     }
+    /* Print drops the decorative glow: print rendering painted it as a solid,
+       hard-edged bright-blue oval over the header and first card
+       (2026-10-06). */
+    @media print {
+      body::before { display: none; }
+    }
 
     .container {
       position: relative; z-index: 1;
@@ -65,13 +71,19 @@
       letter-spacing: 0.04em; margin: 0;
     }
     .header-actions { display: flex; gap: 0.75rem; align-items: center; }
+    /* Phone width: the buttons get their own row under the title instead of
+       squeezing it ("Back to CMS" broke onto three lines at 393px). */
+    @media (max-width: 600px) {
+      header { flex-wrap: wrap; gap: 0.75rem; }
+      .header-actions { width: 100%; flex-wrap: wrap; }
+    }
 
     .btn {
       display: inline-flex; align-items: center; gap: 0.4rem;
       padding: 0.5rem 1rem; border: 1px solid var(--border-default);
       border-radius: 6px; background: var(--bg-elevated);
       color: var(--text-secondary); font-size: 0.8rem;
-      cursor: pointer; text-decoration: none;
+      cursor: pointer; text-decoration: none; white-space: nowrap;
       transition: border-color 0.2s, background 0.2s;
     }
     .btn:hover { border-color: var(--primary); background: var(--bg-overlay); }
@@ -222,6 +234,11 @@
       border-radius: 50%; animation: spin 0.6s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    .superseded-note {
+      margin: 0 0 1rem; font-size: 0.75rem; color: var(--text-muted);
+    }
+    .superseded-note a { color: var(--primary); }
 
     .toast {
       position: fixed; bottom: 2rem; left: 50%;
@@ -444,10 +461,41 @@
         }
 
         let html = '';
+        let notes = '';
+        // One GET /pulls/{n} per PR, shared by every waiting run of that PR.
+        const prCache = new Map();
         for (const run of runs) {
           if (!Number.isSafeInteger(run.id) || run.id <= 0) continue;
           const prNum = run.pull_requests?.[0]?.number;
-          if (!prNum) continue;
+          if (!Number.isSafeInteger(prNum) || prNum <= 0) continue;
+
+          if (!prCache.has(prNum)) {
+            prCache.set(prNum, ghFetch(`/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNum}`)
+              .then(r => r.json()).catch(() => ({})));
+          }
+          const prData = await prCache.get(prNum);
+          const prTitle = prData.title || `PR #${prNum}`;
+          const prBranch = prData.head?.ref || '';
+          const prHeadSha = prData.head?.sha || '';
+          const prSha = run.head_sha?.slice(0, 7) || '';
+
+          // Pushing a branch past a head whose run still waits at the gate
+          // leaves BOTH runs waiting. Only the run for the PR's CURRENT head
+          // is offered for review; an older one becomes a quiet note with no
+          // Approve, so nobody approves a deploy of code the PR no longer
+          // points at (jodidaniel.com#382: cards for 6a0d723 and f0064cb).
+          // If the PR could not be read there is no head to compare with, so
+          // the run keeps its card, as before.
+          if (prHeadSha && run.head_sha !== prHeadSha) {
+            const runUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/actions/runs/${run.id}`;
+            notes += `
+            <p class="superseded-note" data-run-id="${run.id}" data-pr-num="${prNum}">
+              #${prNum}: the waiting run for ${escapeHtml(prSha)} is superseded by
+              ${escapeHtml(prHeadSha.slice(0, 7))}, the PR's current head, so it is not offered for review.
+              <a href="${runUrl}" target="_blank" rel="noopener">View run</a>
+            </p>`;
+            continue;
+          }
 
           let pendingDeps = [];
           try {
@@ -458,18 +506,6 @@
           } catch { continue; }
 
           if (!pendingDeps.length) continue;
-
-          let prTitle = `PR #${prNum}`;
-          let prBranch = '';
-          let prSha = run.head_sha?.slice(0, 7) || '';
-          try {
-            const prRes = await ghFetch(
-              `/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNum}`
-            );
-            const prData = await prRes.json();
-            prTitle = prData.title || prTitle;
-            prBranch = prData.head?.ref || '';
-          } catch { /* use defaults */ }
 
           const videoUrl = `https://preview-pr${prNum}.${APEX_DOMAIN}/regression.mp4`;
           const diffsUrl = `https://preview-pr${prNum}.${APEX_DOMAIN}/regression.json`;
@@ -486,7 +522,7 @@
                   </h3>
                   <div class="review-meta">
                     <span>${escapeHtml(prBranch)}</span>
-                    <span>${prSha}</span>
+                    <span>${escapeHtml(prSha)}</span>
                     <a href="${previewUrl}" target="_blank" rel="noopener" style="color:var(--primary);">Preview</a>
                   </div>
                 </div>
@@ -495,8 +531,10 @@
               <div class="review-stats" data-diffs-url="${diffsUrl}">
                 <p class="stat-pages-loading">Loading visual-diff stats…</p>
               </div>
+              <!-- #t=0.1: iOS Safari paints nothing for preload="metadata"
+                   until play; seeking a hair in makes it show a first frame. -->
               <div class="review-video">
-                <video controls preload="metadata" src="${videoUrl}"></video>
+                <video controls preload="metadata" src="${videoUrl}#t=0.1"></video>
               </div>
               <div class="review-actions">
                 <button class="btn btn-approve" onclick="approveRun(${run.id}, ${envId})">Approve</button>
@@ -513,11 +551,11 @@
             </div>`;
         }
 
-        list.innerHTML = html || `
+        list.innerHTML = (html || `
           <div class="empty-state">
             <p>&#10003;</p>
             <p>No pending regression reviews.</p>
-          </div>`;
+          </div>`) + notes;
 
         // Per-card visual-diff stats. Fetched separately because each
         // PR has its own regression.json on its preview subdomain — no

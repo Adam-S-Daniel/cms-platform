@@ -303,7 +303,7 @@ test.describe("Decap CMS config invariants", () => {
   // permalink template (each entry sets its own front-matter
   // permalink). The contract is that pages.preview_path matches the
   // PER-ENTRY permalink convention enforced by admin/config.yml's
-  // `pages.permalink.pattern` default ("/pages/<slug>/").
+  // `pages.permalink.pattern` convention ("/pages/<slug>/"), with no default.
 
   function previewPathFor(cfg, collection) {
     const c = findCollection(cfg, collection);
@@ -319,13 +319,14 @@ test.describe("Decap CMS config invariants", () => {
   // (and the divergence between Decap and Jekyll for posts) is now modelled
   // properly in `e2e/cms-permalink-contract.spec.js`.
 
-  test("pages.preview_path matches the permalink default editors are nudged toward", () => {
+  test("pages.preview_path matches the permalink convention without a shared default", () => {
     skipUnlessCollection("pages");
     // Pages don't have a Jekyll-side global permalink template — each
-    // page's front matter sets its own. The contract here is that
-    // admin/config.yml's `pages.permalink.default` produces a path of
-    // the same shape preview_path generates, so an editor who accepts
-    // the default doesn't end up with a "View on Live Site" 404.
+    // page's front matter sets its own. The contract (#639): the field ships
+    // NO shared default (it made every new page collide on one URL) and its
+    // pattern rejects a bare "/pages/", while preview_path keeps the
+    // /pages/<slug>/ convention so a path the pattern accepts and a
+    // "View on Live Site" URL agree.
     const cfg = parseConfig(RENDERED_CONFIG);
     const previewPath = previewPathFor(cfg, "pages");
     expect(previewPath).not.toBeNull();
@@ -334,15 +335,10 @@ test.describe("Decap CMS config invariants", () => {
     expect(decapPreviewURL).toBe("/pages/foo-bar/");
 
     const permalinkField = findField(findCollection(cfg, "pages"), "permalink");
-    const permalinkDefault =
-      permalinkField && permalinkField.default != null ? String(permalinkField.default) : null;
-    expect(
-      permalinkDefault,
-      "pages.permalink should ship a `default:` so the New Page form pre-fills a sensible value",
-    ).not.toBeNull();
-    expect(
-      decapPreviewURL.startsWith(permalinkDefault),
-      `pages preview URL ${decapPreviewURL} must live under the permalink default ${permalinkDefault}`,
-    ).toBe(true);
+    expect(permalinkField, "pages has a permalink field").toBeTruthy();
+    expect(permalinkField.default, "a shared default collides new pages (#639)").toBeUndefined();
+    const re = new RegExp(permalinkField.pattern[0]);
+    expect(re.test("/pages/"), "bare /pages/ is rejected").toBe(false);
+    expect(re.test(decapPreviewURL), "the preview URL shape is accepted").toBe(true);
   });
 });

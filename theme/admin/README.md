@@ -128,4 +128,7 @@ suite can exercise a slow real-time behaviour without waiting on the clock.
 The confirm-wrap (`confirm-wrap-local-backup.js`) + autosave
 (`autosave-on-hide.js`) shims (#161) also expose read-only test surfaces —
 `window.__confirmWrapLocalBackup` and `window.__autosaveOnHide` — for specs to
-assert install / trigger the save-click.
+assert install / trigger the save-click. The confirm-wrap also puts the URL back
+when an editor cancels Decap's leave prompt on a browser Back (#733): Decap
+cannot restore a hash it did not push itself, and its Posts list rows are plain
+anchors.

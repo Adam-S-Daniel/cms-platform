@@ -190,7 +190,7 @@ test.describe("B — switching a live post off is a take-down", () => {
       expect(got.detail, state).toMatch(/^This is on its way off example\.com\./);
     }
     const passed = m.derive(facts({ ...STATES.checksPassed, ...TAKEDOWN }), HOST);
-    expect(passed.waitingOn).toBe("all 3 automatic safety checks passed; now taking it off the site");
+    expect(passed.waitingOn).toBe("All 3 automatic safety checks passed; now taking it off the site");
     const done = m.derive(facts({ ...STATES.done, ...TAKEDOWN }), HOST);
     expect(done.label).toBe("Off the site");
   });
