@@ -110,6 +110,83 @@ test.describe("posts-list-enhance.js reads draft branch tips, not the PR list's 
   });
 });
 
+// #635: Decap kept an em dash, curly quotes and emoji in file and branch
+// names, and the list matched open PRs with an ASCII-only pattern, so such a
+// draft found no PR and its badge fell through to "Live". Branches saved
+// before config.base.yml's ASCII `slug:` options still carry those names, so
+// the list has to keep mapping them. The badge comes from the real
+// entry-status-model.js, so "not Live" is the shipped derivation, not a stub.
+function loadEntryStatus() {
+  const sandbox = { window: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    fs.readFileSync(path.resolve(__dirname, "../theme/admin/entry-status-model.js"), "utf8"),
+    sandbox,
+  );
+  return sandbox.window.CMSEntryStatus;
+}
+
+// What collectCards does with a Posts card's `#/collections/posts/entries/…`
+// href: the card slug is the decoded path segment.
+function cardFor(fileSlug) {
+  const href = `#/collections/posts/entries/${encodeURIComponent(fileSlug)}`;
+  const slug = decodeURIComponent(/#\/collections\/posts\/entries\/([^?#]+)/.exec(href)[1]);
+  return { slug, state: { label: "Published", color: "#1a7f37", live: true } };
+}
+
+const DRAFT_PR = { ...PR, labels: [] };
+const NON_ASCII_SLUGS = [
+  ["an em dash", "2026-10-05-zz-exploratory-test-—-delete-me"],
+  ["curly quotes", "2026-10-05-quoting-“somewhat-less-robust”-isn’t-it"],
+  ["an emoji", "2026-10-05-launch-day-\u{1F680}"],
+];
+
+test.describe("posts-list-enhance.js maps a draft to its PR whatever its branch name holds (#635)", () => {
+  for (const [what, fileSlug] of NON_ASCII_SLUGS) {
+    test(`a draft whose name has ${what} maps to its open PR and reads Draft, not Live`, async () => {
+      const model = loadEntryStatus();
+      const ref = `cms/posts/${fileSlug}`;
+      const { hook } = load(
+        {
+          [PULLS]: [{ ...DRAFT_PR, head: { ref, sha: OLD } }],
+          [REFS]: [{ ref: `refs/heads/${ref}`, object: { sha: NEW } }],
+        },
+        {},
+        { CMSEntryStatus: model },
+      );
+      const map = await hook.fetchOpenPrBySlug("t0k3n");
+      expect(Object.keys(map)).toEqual([fileSlug]);
+      expect(map[fileSlug].number).toBe(42);
+      expect(map[fileSlug].sha, "the branch tip is still found by the raw ref").toBe(NEW);
+
+      const badge = hook.badgeFor(cardFor(fileSlug), { prBySlug: map });
+      expect(badge.label).toBe(model.SHORT_LABELS.draft);
+      expect(badge.label).not.toBe(model.SHORT_LABELS.live);
+    });
+  }
+
+  test("a percent-encoded branch name maps to the decoded file slug", async () => {
+    const fileSlug = NON_ASCII_SLUGS[0][1];
+    const { hook } = load({ [PULLS]: [{ ...DRAFT_PR, head: { ref: `cms/posts/${encodeURIComponent(fileSlug)}`, sha: OLD } }] });
+    const map = await hook.fetchOpenPrBySlug("t0k3n");
+    expect(Object.keys(map)).toEqual([fileSlug]);
+  });
+
+  test("a stray % is kept as written, and other branches are not Posts drafts", async () => {
+    const { hook } = load({
+      [PULLS]: [
+        { ...DRAFT_PR, number: 1, head: { ref: "cms/posts/2026-10-05-100%-done", sha: OLD } },
+        { ...DRAFT_PR, number: 2, head: { ref: "cms/pages/2026-10-05-about", sha: OLD } },
+        { ...DRAFT_PR, number: 3, head: { ref: "feature/cms/posts/2026-10-05-hello", sha: OLD } },
+        { ...DRAFT_PR, number: 4, head: { ref: "main", sha: OLD } },
+      ],
+    });
+    const map = await hook.fetchOpenPrBySlug("t0k3n");
+    expect(Object.keys(map)).toEqual(["2026-10-05-100%-done"]);
+    expect(map["2026-10-05-100%-done"].number).toBe(1);
+  });
+});
+
 // #534: the summary once read "example.com publishing details 3h ago" for any
 // state it did not list — including `inactive`, a state GitHub really sends.
 // Every documented deployment status gets words that are true with "<n> ago"

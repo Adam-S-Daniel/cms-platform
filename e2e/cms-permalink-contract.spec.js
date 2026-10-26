@@ -104,14 +104,16 @@ function jekyllPermalinkFor(jekyllCfg, collection) {
 
 // Substitute `{{year}}`, `{{month}}`, `{{day}}`, `{{slug}}` from the synthetic
 // entry. Mirrors what Decap does when expanding the `slug:` template. The
-// values are zero-padded to match Decap's `date_format: YYYY-MM-DD`.
+// values are zero-padded to match Decap's `date_format: YYYY-MM-DD`. A
+// filter on `{{slug}}` (the `| truncate(80, '-')` length cap, #635) leaves
+// the short synthetic slug unchanged, so it expands the same way.
 function expandSlugTemplate(template, entry) {
   const [year, month, day] = entry.date.split("-");
   return template
     .replace(/\{\{year\}\}/g, year)
     .replace(/\{\{month\}\}/g, month)
     .replace(/\{\{day\}\}/g, day)
-    .replace(/\{\{slug\}\}/g, entry.slug);
+    .replace(/\{\{ *slug(?: \| [^}{]+?)? *\}\}/g, entry.slug);
 }
 
 // Substitute `{{slug}}` in a preview_path with the value Decap actually

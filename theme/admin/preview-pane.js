@@ -30,6 +30,11 @@
  * goes through Decap's own markdown preview, sanitized as before. A body with
  * no such block renders exactly as it did.
  *
+ * Each render also records the entry it drew (current()), so preview-bridge.js
+ * can answer a /preview/ tab that opens on an entry nobody has saved in this
+ * session (#646): a template's `props.entry` is the only public Decap API that
+ * sees an entry it merely loaded.
+ *
  * Uses only Decap's public CMS API (registerPreviewStyle,
  * registerPreviewTemplate, and widgetFor's `values` argument) and the `h` it
  * exposes. Loaded after `decap-cms.js` in the admin shells so `window.CMS`
@@ -84,6 +89,9 @@
   function field(entry, name) {
     return entry && typeof entry.getIn === "function" ? entry.getIn(["data", name]) : undefined;
   }
+
+  // The entry the pane last drew, read by preview-bridge.js on request.
+  var current = null;
 
   // ── Raw HTML embeds (#687) ───────────────────────────────────────────────
   //
@@ -615,6 +623,7 @@
   function makeTemplate(h, collection) {
     return function PreviewTemplate(props) {
       var entry = props.entry;
+      current = { collection: collection, entry: entry };
       var title = field(entry, "title");
       var children = [];
 
@@ -779,5 +788,12 @@
     waitForCMS();
   }
 
-  window.adamdaniel_cms_preview_pane = { formatDate: formatDate, splitBody: splitBody, safeUrl: safeUrl };
+  window.adamdaniel_cms_preview_pane = {
+    formatDate: formatDate,
+    splitBody: splitBody,
+    safeUrl: safeUrl,
+    current: function () {
+      return current;
+    },
+  };
 })();

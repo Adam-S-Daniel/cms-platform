@@ -6,6 +6,23 @@
  *     entry (collection, slug and fields) is broadcast via a same-origin
  *     BroadcastChannel that the `/preview/` page subscribes to, so every
  *     open preview tab updates within a frame of Save being pressed.
+ *   - Answers a `/preview/` tab that has just loaded (#646). The tab posts
+ *     `{ type: "cms-preview-request", collection }` on the same channel;
+ *     when this tab is on that collection's entry editor, it replies with
+ *     the entry in the save broadcast's own shape, so Live Preview on an
+ *     already-saved entry renders it without another Save. The entry comes
+ *     from the in-editor preview pane's latest render (preview-pane.js
+ *     records it; Decap has no public event for an entry it merely
+ *     loaded), else from this tab's last postSave. With the pane toggled
+ *     off and nothing saved in this tab yet there is nothing to send, and
+ *     the preview keeps its empty state.
+ *
+ *     The request crosses a trust boundary, so it is checked before anything
+ *     is sent: the event's origin must be this origin (a BroadcastChannel is
+ *     same-origin by construction; this is the belt to that brace), the
+ *     message a plain object of the request type, and its collection a bare
+ *     name equal to the one the editor route names. An entry whose slug is
+ *     not the route's (a snapshot of an entry left earlier) is never sent.
  *
  * Uses only Decap's public CMS API (`registerEventListener`) — no
  * internal selectors, so it survives Decap minor-version churn.
@@ -32,6 +49,10 @@
   "use strict";
 
   var CHANNEL_NAME = "adamdaniel-cms-preview";
+  var REQUEST_TYPE = "cms-preview-request";
+  // The collection names a /preview/ request may carry; anything else is
+  // dropped unanswered (buildPreviewURL strips to the same characters).
+  var COLLECTION_NAME = /^[A-Za-z0-9_-]{1,64}$/;
   var CMS_READY_TIMEOUT_MS = 30_000;
   var CMS_POLL_INTERVAL_MS = 100;
 
@@ -90,10 +111,14 @@
     }
   }
 
+  // This tab's last save, for a request the preview pane cannot answer.
+  var lastSave = null;
+
   function broadcast(entry) {
     if (!channel) return;
     var payload = readEntry(entry);
     if (!payload) return;
+    lastSave = payload;
     post(payload);
     if (payload.slug || !payload.collection) return;
     // A NEW entry's postSave carries an empty slug: Decap computes it inside
@@ -105,9 +130,84 @@
     var onRoute = function () {
       window.removeEventListener("hashchange", onRoute);
       var slug = slugFromRoute(payload.collection);
-      if (slug) post({ collection: payload.collection, slug: slug, fields: payload.fields });
+      if (!slug) return;
+      var named = { collection: payload.collection, slug: slug, fields: payload.fields };
+      if (lastSave === payload) lastSave = named;
+      post(named);
     };
     window.addEventListener("hashchange", onRoute);
+  }
+
+  // ── /preview/ asks for the entry on load (#646) ──────────────────────
+
+  // The entry editor the route names: { collection, slug }, slug null on
+  // `#/collections/<c>/new`. Null on any other route.
+  function editorRoute() {
+    var m = /^#\/collections\/([^/?#]+)\/(?:entries\/([^?#]+)|new(?:[?#]|$))/.exec(
+      window.location.hash || "",
+    );
+    if (!m) return null;
+    try {
+      return { collection: decodeURIComponent(m[1]), slug: m[2] ? decodeURIComponent(m[2]) : null };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function isTrustedOrigin(origin) {
+    // Some engines leave a same-document message's origin empty; a
+    // BroadcastChannel cannot carry another origin's message at all.
+    return origin === window.location.origin || origin === "";
+  }
+
+  // The collection a well-formed request from this origin asks for, or null.
+  function requestedCollection(event) {
+    if (!event || !isTrustedOrigin(event.origin)) return null;
+    var data = event.data;
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+    if (data.type !== REQUEST_TYPE) return null;
+    if (typeof data.collection !== "string" || !COLLECTION_NAME.test(data.collection)) return null;
+    return data.collection;
+  }
+
+  // A payload is the route's entry when its collection matches and its slug
+  // is the route's (an unsaved new entry has none yet, on either side).
+  function matchesRoute(payload, route) {
+    if (!payload || payload.collection !== route.collection) return false;
+    if (!payload.fields || typeof payload.fields !== "object") return false;
+    return route.slug ? payload.slug === route.slug : !payload.slug;
+  }
+
+  // The entry open in this editor for `collection`, in the broadcast shape.
+  function currentEntry(collection) {
+    var route = editorRoute();
+    if (!route || route.collection !== collection) return null;
+    var pane = window.adamdaniel_cms_preview_pane;
+    var snapshot = pane && typeof pane.current === "function" ? pane.current() : null;
+    if (snapshot && snapshot.collection === collection) {
+      var drawn = readEntry(snapshot.entry);
+      if (drawn) {
+        drawn.collection = drawn.collection || collection;
+        if (matchesRoute(drawn, route)) return drawn;
+      }
+    }
+    return matchesRoute(lastSave, route) ? lastSave : null;
+  }
+
+  function answer(event) {
+    var collection = requestedCollection(event);
+    if (!collection) return;
+    var payload = currentEntry(collection);
+    if (!payload) return;
+    try {
+      post(payload);
+    } catch (_) {
+      // A field value the channel cannot clone: no reply; Save still works.
+    }
+  }
+
+  if (channel && typeof channel.addEventListener === "function") {
+    channel.addEventListener("message", answer);
   }
 
   function registerWithCMS(CMS) {
