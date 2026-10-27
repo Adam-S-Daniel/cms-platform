@@ -9,7 +9,7 @@
  *   - on:  <SplitPane> .Pane1 = form, .Pane2 = PreviewPaneContainer (iframe)
  *   - off: <NoPreviewContainer> form only, no SplitPane at all
  * (EditorInterface `EditorContent`. decap-cms 3.15.1 kept a `previewVisible`
- * flag in localStorage `cms.preview-visible`; 3.17.1 keeps one right-pane
+ * flag in localStorage `cms.preview-visible`; 3.17.x keeps one right-pane
  * mode, "i18n" | "notes" | "preview" | "none", in `cms.right-pane`, and an
  * unset or unavailable mode falls back to the first available pane, which is
  * the preview on these sites.) Both layouts look
@@ -42,7 +42,7 @@
  *
  * ── Selectors ──────────────────────────────────────────────────────────
  * The eye is matched by its `title` inside Decap's `ViewControls` (the label
- * Decap 3.17.1 renders for `editor.editorInterface.togglePreview` in English,
+ * Decap 3.17.3 renders for `editor.editorInterface.togglePreview` in English,
  * the only locale these sites configure). If Decap renames it the match
  * misses and the eye goes back to upstream behavior: degrade-safe. The pane
  * is react-split-pane's `.Pane2` holding Decap's `PreviewPaneContainer`;
