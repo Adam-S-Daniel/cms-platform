@@ -5,14 +5,16 @@
 # This workflow moves that apply into CI. The audit stays exactly as it is —
 # this is additive, and either can be disabled alone.
 #
-# SIX THINGS HERE ARE LOAD-BEARING. Each is a trap, not a preference:
+# SEVEN THINGS HERE ARE LOAD-BEARING. Each is a trap, not a preference:
 #
 #  1. TWO JOBS, BECAUSE THE REVIEWER MUST SEE THE PLAN BEFORE APPROVING.
 #     A GitHub environment gate pauses a job BEFORE its first step, so a plan
 #     printed inside the gated job is invisible at approval time — the reviewer
 #     would be clicking "approve" on an unknown diff. `plan` therefore runs
 #     ungated and writes the full plan to the job summary; the apply lanes are
-#     downstream and run only if `plan` found pending changes.
+#     downstream and run only if `plan` found pending changes. (`plan` does sit
+#     in an environment since #870, `repo-settings-auto`, but that one has no
+#     reviewer, so it never pauses; see note 7.)
 #
 #  2. THE PLAN JOB'S TOKEN CANNOT WRITE — BY CONSTRUCTION, NOT BY TRUST.
 #     `POST /app/installations/{id}/access_tokens` accepts a `permissions` object
@@ -28,7 +30,10 @@
 #     exist does NOT fail — GitHub implicitly creates it with NO protection
 #     rules, and the "required reviewer" gate you think you have is absent. The
 #     gated apply therefore ASKS the API whether the environment really carries
-#     a `required_reviewers` rule and refuses to apply if it does not.
+#     a `required_reviewers` rule and refuses to apply if it does not. Since
+#     #870 the same check (scripts/verify-repo-settings-environment.js) also
+#     requires the `main`-only branch policy of note 7, and every job that
+#     reads the App key runs it against its own environment before that read.
 #
 #  4. THE CONCURRENCY GROUP IS PER OWNER, ON THE APPLY JOBS, NEWEST-WINS.
 #     A run parked at an UN-APPROVED gate is not finished, so it holds its
@@ -82,6 +87,33 @@
 #     issue is closed again the moment the gate resolves — approved, rejected,
 #     or superseded. See scripts/gate-approval-issue.js.
 #
+#  7. THE APP KEY IS READABLE ONLY FROM `main`, VIA BRANCH-SCOPED ENVIRONMENTS.
+#     REPO_SETTINGS_APP_PRIVATE_KEY can write Administration, Actions and Issues
+#     on every repo under both owners. As a REPO secret in this public repo,
+#     any workflow run on any branch could read it, including a PR branch that
+#     edits this file (#870). So every job that reads it declares an
+#     environment whose deployment-branch policy allows ONLY `main`:
+#       - `plan` and `apply-auto` -> `repo-settings-auto` (no reviewer, so no
+#         pause: the branch policy alone is the control, and note 1's plan
+#         still reaches the summary before anyone is asked to approve);
+#       - `apply-gated` -> `repo-settings` (the reviewer gate of note 3, now
+#         also `main`-only).
+#     `close-approval-issue` never reads the key and declares no environment.
+#     The policy only protects ENVIRONMENT secrets: GitHub resolves an
+#     environment secret over a repo secret of the same name
+#     (https://docs.github.com/en/actions/reference/security/secrets), so the
+#     key must live in both environments and NOT at repo level. Owner steps,
+#     once this lands:
+#       a. add REPO_SETTINGS_APP_PRIVATE_KEY as an environment secret in
+#          `repo-settings-auto` AND in `repo-settings` (the current
+#          repo-settings-sync key, or a newly generated one);
+#       b. delete the repo-level REPO_SETTINGS_APP_PRIVATE_KEY;
+#       c. the next scheduled or dispatched run verifies it.
+#     Like note 3, a missing or unscoped environment fails silently (GitHub
+#     creates it on first reference, with no policy), so each job verifies its
+#     environment through the API before it touches the key, and refuses to
+#     continue unless it allows exactly one policy, `branch:main`.
+#
 # WHY A GITHUB APP AND NOT A PAT: the manifest governs repos under TWO owners
 # (Adam-S-Daniel and jodidaniel), and a fine-grained PAT cannot span owners. One
 # App installed on both owners can, and its installation tokens expire in ~1h, so
@@ -95,11 +127,15 @@
 # never deleted (no --prune in v1), and `--fix --yes` re-audits afterwards and
 # exits non-zero if a finding it meant to write is still there.
 #
-# PROVISIONING (all three are required; without them this workflow no-ops with a
-# notice naming them — it never fails red for being un-onboarded):
+# PROVISIONING (without the variable or the key this workflow no-ops with a
+# notice naming them; without a correctly scoped environment it fails red,
+# because then the key would be reachable from other branches, note 7):
 #   - vars.REPO_SETTINGS_APP_CLIENT_ID          (repository VARIABLE on cms-platform)
-#   - secrets.REPO_SETTINGS_APP_PRIVATE_KEY
-#   - a `repo-settings` environment WITH at least one required reviewer
+#   - secrets.REPO_SETTINGS_APP_PRIVATE_KEY     (ENVIRONMENT secret in both
+#                                                environments below, note 7)
+#   - a `repo-settings-auto` environment, deployment branches: `main` only
+#   - a `repo-settings` environment WITH at least one required reviewer,
+#     deployment branches: `main` only
 # The App needs Administration: Read and write, installed on BOTH owners.
 name: Repo settings apply
 
@@ -130,6 +166,9 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Header note 7: `main`-only, NO reviewer (a reviewer here would pause the
+    # plan before its summary exists, undoing note 1). Verified below.
+    environment: repo-settings-auto
     permissions:
       contents: read
       # Header note 6 — the approval issue. `github.token` with issues:write
@@ -145,6 +184,14 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '20'
+
+      # Header note 7, before ANY step reads the key: an environment that is
+      # missing or not `main`-only means the key is not branch-scoped.
+      - name: Verify the environment is main-only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/verify-repo-settings-environment.js --repo "${GITHUB_REPOSITORY}" --environment repo-settings-auto
+
       - name: Install harness deps (for the yaml parser; no browsers)
         working-directory: e2e
         env:
@@ -168,7 +215,7 @@ jobs:
               echo
               echo "Skipping. To enable, provision all three:"
               echo "- \`vars.REPO_SETTINGS_APP_CLIENT_ID\` (repository variable)"
-              echo "- \`secrets.REPO_SETTINGS_APP_PRIVATE_KEY\`"
+              echo "- \`secrets.REPO_SETTINGS_APP_PRIVATE_KEY\` (environment secret in \`repo-settings-auto\` and \`repo-settings\`)"
               echo "- a \`repo-settings\` environment with at least one required reviewer"
               echo
               echo "The daily audit is unaffected and still reports drift."
@@ -281,13 +328,16 @@ jobs:
           fi
 
   # ── the ungated lane ───────────────────────────────────────────────────────
-  # Every planned write is provably non-weakening. NO `environment:`, and
-  # `refuse-weakening` re-checks that claim at write time (header note 5).
+  # Every planned write is provably non-weakening. NO reviewer gate, and
+  # `refuse-weakening` re-checks that claim at write time (header note 5). Its
+  # environment has no reviewer; it is there only so the key stays `main`-only
+  # (header note 7).
   apply-auto:
     needs: plan
     if: needs.plan.outputs.onboarded == 'true' && needs.plan.outputs.pending == 'true' && needs.plan.outputs.gate == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: repo-settings-auto
     concurrency:
       group: repo-settings-apply-${{ matrix.owner }}
       cancel-in-progress: true
@@ -303,6 +353,21 @@ jobs:
             repos: jodidaniel/jodidaniel.com
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # Pinned: the verifier below runs under node, and ubuntu-latest's default
+      # Node moves with the image (actions/runner-images#14748).
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+          package-manager-cache: false
+
+      # Header note 7, before the converge composite reads the key.
+      - name: Verify the environment is main-only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/verify-repo-settings-environment.js --repo "${GITHUB_REPOSITORY}" --environment repo-settings-auto
+
       - uses: ./.github/actions/repo-settings-converge
         with:
           owner: ${{ matrix.owner }}
@@ -320,8 +385,9 @@ jobs:
     if: needs.plan.outputs.onboarded == 'true' && needs.plan.outputs.pending == 'true' && needs.plan.outputs.gate == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # THE GATE. Its required-reviewer rule is verified below — see header note 3;
-    # naming a nonexistent environment would silently create an unprotected one.
+    # THE GATE. Its required-reviewer rule and `main`-only branch policy are
+    # verified below — see header notes 3 and 7; naming a nonexistent
+    # environment would silently create an unprotected one.
     environment: repo-settings
     concurrency:
       group: repo-settings-apply-${{ matrix.owner }}
@@ -341,24 +407,22 @@ jobs:
             repos: jodidaniel/jodidaniel.com
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # Pinned: the verifier below runs under node, and ubuntu-latest's default
+      # Node moves with the image (actions/runner-images#14748).
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+          package-manager-cache: false
 
-      - name: Verify the reviewer gate actually exists
-        # Header note 3: an undeclared environment is auto-created WITHOUT
-        # protection rules, so reaching this step proves nothing on its own.
-        # Ask the API, and refuse to apply if no required_reviewers rule is set.
+      - name: Verify the reviewer gate actually exists and is main-only
+        # Header notes 3 and 7: an undeclared environment is auto-created
+        # WITHOUT protection rules, so reaching this step proves nothing on its
+        # own. Ask the API, and refuse to apply unless a required_reviewers rule
+        # is set and deployments are limited to `main`.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          rules=$(gh api "repos/${GITHUB_REPOSITORY}/environments/repo-settings" \
-            --jq '[.protection_rules[].type] | join(",")' 2>/dev/null || echo "")
-          echo "protection rules: ${rules:-<none>}"
-          case ",${rules}," in
-            *,required_reviewers,*) echo "::notice::reviewer gate present." ;;
-            *)
-              echo "::error::The \`repo-settings\` environment has no required_reviewers rule, so this apply would run UNATTENDED. Refusing. Add at least one required reviewer to the environment, then re-run."
-              exit 1 ;;
-          esac
+        run: node scripts/verify-repo-settings-environment.js --repo "${GITHUB_REPOSITORY}" --environment repo-settings --require-reviewers
 
       - uses: ./.github/actions/repo-settings-converge
         with:

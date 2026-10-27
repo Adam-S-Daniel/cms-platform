@@ -4,8 +4,13 @@
 # THE CONTRACT (see docs/SYNC.md "Repo settings as code"):
 #   - Settings/rulesets change ONLY via a PR to this file followed by a human
 #     running `node scripts/audit-repo-settings.js --fix --yes` (operator `gh`
-#     auth, admin on the target repo). There is NO write credential in CI —
+#     auth, admin on the target repo). The audit holds NO write credential —
 #     by design, so an emergency live flip can never be auto-clobbered.
+#   - The one write credential in CI is the `repo-settings-sync` App key,
+#     REPO_SETTINGS_APP_PRIVATE_KEY, used only by repo-settings-apply.yml. It
+#     is an ENVIRONMENT secret of the `main`-only `repo-settings-auto` and
+#     `repo-settings` environments, never a repo secret, so no other branch's
+#     workflow can read it (#870; that workflow's header note 7).
 #   - The daily `repo-settings-audit` workflow re-reads the live values with
 #     per-owner READ-ONLY PATs (`REPO_SETTINGS_READ_*`, see the
 #     consumer-repo-provisioning skill) and files a `ci`-labelled tracking issue on
@@ -528,6 +533,11 @@ repos:
         # it exists auto-creates an unprotected one, and the workflow's own
         # verification step then refuses to proceed). id 4205216 =
         # Adam-S-Daniel (the account this whole apply path is gated behind).
+        # Its `main`-only deployment-branch policy (#870, the apply workflow's
+        # header note 7) is NOT a managed key here; the workflow verifies it at
+        # run time (scripts/verify-repo-settings-environment.js) and refuses
+        # to apply without it. The same goes for the reviewer-less
+        # `repo-settings-auto` environment, which is undeclared here.
         reviewers:
           - { type: User, id: 4205216 }
         wait_timer: 0

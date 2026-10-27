@@ -6,8 +6,10 @@ description: >-
   and the reviewer-gated one for everything else — run byte-identical steps.
 
   That is the whole point of it being a composite. The two lanes differ in
-  exactly two things: whether an `environment:` gate precedes them, and
-  whether `refuse-weakening` is set. Duplicating ~25 lines of credential
+  exactly two things: whether their `environment:` carries a required
+  reviewer (`repo-settings`) or not (`repo-settings-auto`; both are
+  `main`-only, see the workflow's header note 7), and whether
+  `refuse-weakening` is set. Duplicating ~25 lines of credential
   handling across both would put the fleet's only settings-rewriting shell in
   two places and make "they drifted" a question somebody has to keep asking.
 
@@ -29,7 +31,9 @@ inputs:
     description: "vars.REPO_SETTINGS_APP_CLIENT_ID."
     required: true
   app-private-key:
-    description: "secrets.REPO_SETTINGS_APP_PRIVATE_KEY."
+    description: >-
+      secrets.REPO_SETTINGS_APP_PRIVATE_KEY, an environment secret readable
+      only by the calling job's `main`-only environment (#870).
     required: true
   refuse-weakening:
     description: >-
