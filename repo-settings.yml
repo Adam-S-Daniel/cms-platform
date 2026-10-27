@@ -6,6 +6,15 @@
 #     running `node scripts/audit-repo-settings.js --fix --yes` (operator `gh`
 #     auth, admin on the target repo). The audit holds NO write credential —
 #     by design, so an emergency live flip can never be auto-clobbered.
+#   - ONE exception, and only for label DEFINITIONS: repo-settings' App
+#     (Adam-S-Daniel/repo-settings) creates/updates the labels on its own
+#     allowlist (today only `agent-authored`) here without a human approving
+#     each write, so agents can apply it to the PRs they open on the owner's
+#     behalf (_agent-guidance ADR 0023). Its engine refuses any other name and
+#     every cms-owned one (`ci`, `cms/*`, `decap-cms/*`, `not-decap-created`,
+#     `content-guard/override`); those labels stay owned here. It never deletes
+#     a label and touches nothing else. See docs/SYNC.md "Repo settings as
+#     code" and https://github.com/Adam-S-Daniel/repo-settings/issues/88.
 #   - The one write credential in CI is the `repo-settings-sync` App key,
 #     REPO_SETTINGS_APP_PRIVATE_KEY, used only by repo-settings-apply.yml. It
 #     is an ENVIRONMENT secret of the `main`-only `repo-settings-auto` and
@@ -102,8 +111,10 @@ settings_defaults:
   # This is a DELIBERATE DIVERGENCE from the fleet, not drift. repo-settings'
   # fleet.yml disables squash on every repo it manages, because a squash strands
   # the pre-merge commits on no branch and so breaks any lockfile that pins one
-  # by sha (adam-agentskills' skills.lock). These three repos are `manage: false`
-  # there precisely so that default cannot reach them; they pin nothing by sha,
+  # by sha (adam-agentskills' skills.lock). These three repos are `manage:
+  # ["labels"]` there (label definitions only; before
+  # https://github.com/Adam-S-Daniel/repo-settings/issues/88 it was `manage:
+  # false`), so that default cannot reach them; they pin nothing by sha,
   # and the publish chain would stop working the moment squash went away.
   # Turning it off here is a cms-platform release, not a settings flip: four
   # workflows arm SQUASH explicitly and ~6 e2e lints assert it.

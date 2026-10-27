@@ -74,6 +74,27 @@ permissions:
 # their `uses:` pin (see `on.workflow_call.inputs` above) so the guard's
 # notion of "Decap-shaped" never drifts from the reusable's own version.
 
+# NOTE for the owner (repo-settings#88,
+# https://github.com/Adam-S-Daniel/repo-settings/issues/88): once repo-settings
+# creates the `agent-authored` label, agents applying it to a PR fire a
+# `labeled` event (callers trigger on opened/synchronize/labeled). Audit of
+# that event against this file as of v0.1.164:
+#   - validate-content has no `if:`, so EVERY `labeled` event (any label name)
+#     runs it, with no `concurrency:` block, so it never cancels or is
+#     cancelled; the REQUIRED `editorial / validate-content` context just gets
+#     another independent same-sha run. It is a no-op for `agent-authored`
+#     (the guard keys only off `decap-cms/*` labels and the override label;
+#     the draft-label step is
+#     `opened`-only). Residual risk is not cancellation but a flaky/failing
+#     extra run on a sha that already has a success.
+#   - auto-merge-when-ready's `if:` matches only cms/ready, decap-cms/ready and
+#     decap-cms/pending_publish, so `agent-authored` skips it. Its group
+#     (cms-editorial-auto-merge-<pr>) has cancel-in-progress:false and the job
+#     reports no required context.
+#   - No hazard found: no `labeled` run can cancel a run of a required context.
+#     No other workflow in this repo or examples/site triggers on
+#     pull_request `labeled` (label-non-decap-prs.yml is opened/reopened).
+
 jobs:
   validate-content:
     # NO `concurrency:` block — see the header comment (#1815). Any concurrency

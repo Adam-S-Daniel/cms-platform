@@ -352,6 +352,27 @@ skewed with no guard analogous to `platform-pin-consistency`.
   reads use per-owner fine-grained `REPO_SETTINGS_READ_*` PATs
   (Administration: **Read-only**; minting/verification in the
   `consumer-repo-provisioning` skill), writes are operator-only.
+- **Label definitions are the one write this repo does not approve.**
+  repo-settings (the fleet settings engine, `Adam-S-Daniel/repo-settings`) is
+  set to `manage: ["labels"]` for this repo and both consumers
+  ([repo-settings#88](https://github.com/Adam-S-Daniel/repo-settings/issues/88)):
+  its GitHub App creates/updates the label definitions on its own allowlist —
+  today only `agent-authored` (color `D4C5F9`, "Opened by an AI agent on the
+  owner's behalf") — on every push to its `main` and on its weekly schedule,
+  with no approval in `repo-settings-apply.yml`'s `repo-settings` environment
+  (its own `fleet-apply` environment gates the owner's approval on that side).
+  Why: `agent-authored` marks the PRs and issues agents open for the owner
+  ([_agent-guidance ADR 0023](https://github.com/Adam-S-Daniel/_agent-guidance/blob/main/docs/decisions/0023-mark-agent-contributions.md));
+  where the label does not exist an agent cannot apply it. The owner signed
+  off by asking for #88 (2026-10-27). Bounds: the engine rejects, before any
+  API call, any name not on its allowlist and every cms-owned name (`ci`,
+  `cms/*` including `cms/draft`, `cms/ready` and `cms/preview-only`,
+  `decap-cms/*`, `not-decap-created`, `content-guard/override`); those stay
+  this repo's and human-approved. The writes use a token minted with only
+  Issues: write, narrowed to these repos; the engine never deletes a label and
+  touches nothing else here. Side effect: an agent applying `agent-authored`
+  to a `cms/*` PR fires `pull_request: labeled` into the editorial workflow —
+  see the note above `jobs:` in `.github/workflows/cms-editorial-workflow.yml`.
 - `.github/workflows/repo-settings-apply.yml` — apply-in-CI (#172), the one
   workflow holding a write credential: the `repo-settings-sync` App key,
   `REPO_SETTINGS_APP_PRIVATE_KEY`. It is an **environment** secret of
