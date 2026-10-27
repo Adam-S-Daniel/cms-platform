@@ -17,7 +17,8 @@ name: Label non-Decap PRs (reusable)
 # dependabot/*, claude/*, feat/*, fix/*, chore/*, a human's branch — are NOT
 # Decap-created, so this workflow tags them `not-decap-created`. (The
 # `cms/draft` label is NOT a usable signal: cms-editorial-workflow.yml
-# applies it to EVERY opened PR, dependabot's included.)
+# applies it to every Decap-shaped or content-touching PR, which includes
+# non-Decap content PRs such as an agent's `claude/*` branch adding a post.)
 #
 # Three entry points (declared on the caller):
 #   - pull_request (opened, reopened): tag the single PR as it arrives.

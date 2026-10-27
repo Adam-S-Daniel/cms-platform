@@ -352,6 +352,13 @@ skewed with no guard analogous to `platform-pin-consistency`.
   reads use per-owner fine-grained `REPO_SETTINGS_READ_*` PATs
   (Administration: **Read-only**; minting/verification in the
   `consumer-repo-provisioning` skill), writes are operator-only.
+- `.github/workflows/repo-settings-apply.yml` — apply-in-CI (#172), the one
+  workflow holding a write credential: the `repo-settings-sync` App key,
+  `REPO_SETTINGS_APP_PRIVATE_KEY`. It is an **environment** secret of
+  `repo-settings-auto` (no reviewer) and `repo-settings` (required reviewer),
+  both limited to deployments from `main`, so a workflow on any other branch
+  cannot read it (#870). Each job verifies its environment through the API
+  before it reads the key; the workflow's header note 7 has the design.
 
 **Ratify-or-revert protocol:** when the audit files drift, the same day
 either RATIFY (PR the live value into `repo-settings.yml` with a `# why:`)

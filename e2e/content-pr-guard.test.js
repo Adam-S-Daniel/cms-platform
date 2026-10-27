@@ -20,12 +20,16 @@
 //      the override label name is NOT duplicated as a literal in the
 //      workflow (it must come from the module, not be re-typed).
 const { test, expect } = require("./base");
-const { readWorkflow, parseYaml, jobs } = require("./workflow-yaml-utils");
+const { readWorkflow, parseYaml, jobs, githubScriptBlocks } = require("./workflow-yaml-utils");
+const { parse: parseJs, subtreeHasCall } = require("./spec-ast");
 const {
   COMMENT_MARKER,
   OVERRIDE_LABEL,
   DECAP_BODY_MARKER,
   seamContentDirs,
+  seamContentFiles,
+  isContentPath,
+  shouldApplyDraftLabel,
   isDecapShaped,
   evaluateContentGuard,
 } = require("../scripts/content-pr-guard.js");
@@ -205,6 +209,95 @@ test.describe("content-pr-guard unit — decision logic", () => {
   });
 });
 
+test.describe("content-pr-guard unit — draft label decision", () => {
+  const seam = [
+    "- name: header",
+    "  files:",
+    '    - file: "_data/header.yml"',
+    '    - file: pages/settings.yml',
+    "- name: experience",
+    '  folder: "_experience"',
+  ].join("\n");
+
+  test("seamContentFiles extracts file: values, unquoted, no slash added", () => {
+    expect(seamContentFiles(null)).toEqual([]);
+    expect(seamContentFiles("")).toEqual([]);
+    expect(seamContentFiles(seam)).toEqual(["_data/header.yml", "pages/settings.yml"]);
+  });
+
+  test("isContentPath classifies content versus code and instruction files", () => {
+    const yes = [
+      "_posts/a.md",
+      "_experience/a.md",
+      "_data/header.yml",
+      "_brandnew/x.md",
+      "_drafts/x.md",
+      "assets/images/uploads/p.png",
+    ];
+    const no = [
+      "_includes/x.html",
+      "_layouts/x.html",
+      "_sass/x.scss",
+      "_config.yml",
+      "CLAUDE.md",
+      "AGENTS.md",
+      "docs/a.md",
+      "scripts/x.js",
+      ".github/workflows/x.yml",
+      "assets/css/x.css",
+    ];
+    for (const f of yes) expect(isContentPath(f), f).toBe(true);
+    for (const f of no) expect(isContentPath(f), f).toBe(false);
+  });
+
+  test("isContentPath honors seam file paths outside underscore dirs", () => {
+    expect(isContentPath("config/site.yml")).toBe(false);
+    expect(isContentPath("config/site.yml", { seamYamlText: 'file: "config/site.yml"' })).toBe(true);
+    expect(isContentPath("pages/settings.yml", { seamYamlText: seam })).toBe(true);
+    expect(isContentPath("extra/a.md", { extraContentDirs: ["extra/"] })).toBe(true);
+  });
+
+  test("shouldApplyDraftLabel: instruction-only non-Decap PR gets no label", () => {
+    expect(
+      shouldApplyDraftLabel({
+        pr: pr({ ref: "claude/x" }),
+        changedFiles: ["CLAUDE.md", "AGENTS.md"],
+        decapBranchPrefix: DECAP_BRANCH_PREFIX,
+      }),
+    ).toBe(false);
+  });
+
+  test("shouldApplyDraftLabel: agent content PR on a non-Decap branch is labeled", () => {
+    expect(
+      shouldApplyDraftLabel({
+        pr: pr({ ref: "claude/x" }),
+        changedFiles: ["_posts/x.md"],
+        decapBranchPrefix: DECAP_BRANCH_PREFIX,
+      }),
+    ).toBe(true);
+  });
+
+  test("shouldApplyDraftLabel: Decap-shaped PR is labeled even with no content files", () => {
+    expect(
+      shouldApplyDraftLabel({
+        pr: pr({ ref: "cms/posts/x" }),
+        changedFiles: [],
+        decapBranchPrefix: DECAP_BRANCH_PREFIX,
+      }),
+    ).toBe(true);
+  });
+
+  test("shouldApplyDraftLabel: dependabot Gemfile.lock PR gets no label", () => {
+    expect(
+      shouldApplyDraftLabel({
+        pr: pr({ ref: "dependabot/bundler/x" }),
+        changedFiles: ["Gemfile.lock"],
+        decapBranchPrefix: DECAP_BRANCH_PREFIX,
+      }),
+    ).toBe(false);
+  });
+});
+
 test.describe("content-pr-guard wiring — cms-editorial-workflow.yml", () => {
   const raw = readWorkflow("cms-editorial-workflow.yml");
   const parsed = parseYaml(raw);
@@ -247,6 +340,47 @@ test.describe("content-pr-guard wiring — cms-editorial-workflow.yml", () => {
     expect(step).toBeTruthy();
     expect(step.with.script).toContain("cms-fixture-pr.js");
     expect(step.with.script).toContain("evaluateContentGuard");
+  });
+
+  test("Apply draft label step requires content-pr-guard.js and calls shouldApplyDraftLabel", () => {
+    // Locate the step by its name via the YAML parser, then inspect its script
+    // with an AST: a call node, not a substring, so a comment cannot satisfy it.
+    const job = jobs(raw).find((j) => j.name === "validate-content");
+    const step = (job.value.steps || []).find((s) => s.name === "Apply draft label on new PR");
+    expect(step).toBeTruthy();
+    const block = githubScriptBlocks(raw).find((b) => b.script === step.with.script);
+    expect(block).toBeTruthy();
+    // Wrapped in an async function: github-script bodies use top-level await/return.
+    const ast = parseJs(`(async () => {\n${block.script}\n})`);
+    expect(
+      subtreeHasCall(ast, ({ name, args }) => name === "shouldApplyDraftLabel" && args.length === 1),
+    ).toBe(true);
+    expect(
+      subtreeHasCall(
+        ast,
+        ({ name, args }) =>
+          name === "require" &&
+          args.some(
+            (a) =>
+              a.type === "CallExpression" &&
+              a.arguments.some((x) => x.type === "Literal" && x.value === "content-pr-guard.js"),
+          ),
+      ),
+    ).toBe(true);
+    // The decision must come before the first label write (AST positions).
+    const starts = (pred) => {
+      const out = [];
+      subtreeHasCall(ast, (c) => {
+        if (pred(c)) out.push(c.node.start);
+        return false;
+      });
+      return out;
+    };
+    const decide = starts(({ name }) => name === "shouldApplyDraftLabel");
+    const writes = starts(({ tail }) => tail === "createLabel" || tail === "addLabels");
+    expect(decide.length).toBe(1);
+    expect(writes.length).toBeGreaterThan(0);
+    expect(decide[0]).toBeLessThan(Math.min(...writes));
   });
 
   test("the guard's action pins are byte-identical to the rest of the file", () => {
