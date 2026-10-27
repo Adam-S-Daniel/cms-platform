@@ -55,7 +55,7 @@ jobs:
 
       - name: Set up Ruby for candidate Gemfile parsing
         if: ${{ inputs.prerelease != true }}
-        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a
+        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8
         with:
           ruby-version: "3.2"
 
