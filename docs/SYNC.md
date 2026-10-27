@@ -352,7 +352,7 @@ skewed with no guard analogous to `platform-pin-consistency`.
   reads use per-owner fine-grained `REPO_SETTINGS_READ_*` PATs
   (Administration: **Read-only**; minting/verification in the
   `consumer-repo-provisioning` skill), writes are operator-only.
-- **Label definitions are the one write this repo does not approve.**
+- **This repo does not approve label definitions.**
   repo-settings (the fleet settings engine, `Adam-S-Daniel/repo-settings`) is
   set to `manage: ["labels"]` for this repo and both consumers
   ([repo-settings#88](https://github.com/Adam-S-Daniel/repo-settings/issues/88)):
