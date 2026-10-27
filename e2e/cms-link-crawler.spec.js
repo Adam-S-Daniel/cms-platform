@@ -3,6 +3,7 @@ const { test, expect, TARGET } = require("./base");
 const fs = require("node:fs");
 const path = require("node:path");
 const { guard } = require("./base-collections-guards");
+const cap = require("./site-capabilities");
 const { slugify, postPublicPath, parseFrontMatter } = require("./public-content");
 // SITE_ROOT for the #33 base_collections guard (build-INDEPENDENT source signal).
 const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
@@ -27,7 +28,8 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // payload is interpreted client-side.
 
 const ADMIN_PATH = "/admin/index-local.html";
-const COLLECTIONS = ["posts", "tags", "projects", "pages"];
+// Only the base collections this site keeps (cms.base_collections).
+const COLLECTIONS = cap.linkCrawlerCollections(SITE_ROOT);
 
 const ACCEPTED_STATUSES = new Set([200, 302, 304]);
 

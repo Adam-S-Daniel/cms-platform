@@ -233,6 +233,8 @@ const PLATFORM_META_SPECS = [
   // Both read the platform's own fixture trees / harness internals — they make
   // sense only in the platform self-CI, never in a consumer.
   "site-capabilities.test.js",
+  // Reads the platform fixture-site and the platform spec source.
+  "cms-link-crawler-collections.test.js",
   "base-collections-skip-meta.test.js",
   // UX round 4 package 3: renders theme/assets/css/main.css and the project
   // layout's SOURCE in a static fixture (theme/ tree, absent on a consumer).

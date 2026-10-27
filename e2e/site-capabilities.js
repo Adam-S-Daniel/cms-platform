@@ -100,6 +100,14 @@ function keepsBaseCollection(siteRoot, name) {
   return keep.includes(name);
 }
 
+// The base collections the admin link crawler walks: each one with a sidebar
+// link that the site keeps. A dropped collection has no sidebar link, so
+// waiting for it would time out.
+function linkCrawlerCollections(siteRoot = defaultSiteRoot()) {
+  const names = ["posts", "tags", "projects", "pages"];
+  return names.filter((name) => keepsBaseCollection(siteRoot, name));
+}
+
 // Is this a single-page consumer that opted out of ALL base collections
 // (`cms.base_collections: []`)? This is the coarse "the generic-content specs
 // don't apply at all" gate; finer-grained specs key on keepsBaseCollection /
@@ -400,6 +408,7 @@ module.exports = {
   defaultSiteRoot,
   baseCollectionsKeepList,
   keepsBaseCollection,
+  linkCrawlerCollections,
   isSinglePageConsumer,
   hasSourcePosts,
   hasE2ECanaries,
