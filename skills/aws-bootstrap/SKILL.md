@@ -159,9 +159,6 @@ CloudFormation rolled back and deleted the ACM cert. The cert has `DeletionPolic
 2. Re-run the deploy — the cert will be re-created and DNS-validated via Route53
 3. CloudFront creation waits on the certificate its `!Ref` names (an implicit dependency; the template carries no explicit one)
 
-### `NoSuchOriginRequestPolicy`
-The `CORS-S3Origin` managed origin request policy doesn't exist in all accounts. It is not used — S3 website custom origins don't need it.
-
 ### Stack in `UPDATE_ROLLBACK_COMPLETE`
 Safe to re-run `deploy.sh` — CloudFormation will create a new changeset.
 

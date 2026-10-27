@@ -5,7 +5,7 @@ description: Diagnose and fix Decap's persistent "Decap CMS is adding labels to 
 
 # Editorial-workflow label audit
 
-## The condition (added in v0.1.6)
+## The condition
 
 Decap's editorial workflow stores each entry's column as a PR **label**:
 `decap-cms/draft | decap-cms/pending_review | decap-cms/pending_publish` (the
@@ -101,8 +101,7 @@ delete-recovery PRs, `cms-fixture-pr.js` seed/remove fixture PRs
 writer of `cms/*` PRs must do the same, or a run that fires while its PR is
 mid-flight flags it. The self-heal above cleans up any straggler regardless,
 so a red audit run means self-heal failed and needs investigation — see
-Remediation above. (The transient reds this fixed: `docs/VERSION-HISTORY.md`
-v0.1.48.)
+Remediation above.
 
 Related: stuck `cms/*` PRs that won't auto-merge are the upstream cause — see the
 `cms-stuck-pr-triage` skill for diagnosing the auto-merge failure itself.

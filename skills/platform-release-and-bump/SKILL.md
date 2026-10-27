@@ -32,7 +32,7 @@ gate contract. Then dispatch with both candidate PR numbers:
 gh workflow run release.yml -R Adam-S-Daniel/cms-platform -f version=vX.Y.Z --ref main \
   -f candidate_adamdaniel_ai_pr='<draft-pr-number>' \
   -f candidate_jodidaniel_com_pr='<draft-pr-number>'
-# the release tag == main HEAD; grab its SHA (you need it for the composite pin):
+# the release tag == main HEAD; grab its SHA (only Gemfile.lock's `revision:` needs it; composites are tag-pinned):
 gh api repos/Adam-S-Daniel/cms-platform/git/refs/tags/vX.Y.Z --jq '.object.sha'
 ```
 
