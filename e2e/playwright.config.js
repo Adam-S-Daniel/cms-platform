@@ -163,6 +163,8 @@ const PLATFORM_META_SPECS = [
   // requestAnimationFrame shims) with document.hidden stubbed; same reason.
   "admin-hidden-tab.test.js",
   "admin-publish-duration-copy.test.js",
+  // #649 — AST lint over theme/admin SOURCE (owner-facing copy; platform tree only).
+  "admin-owner-copy-banned-words.test.js",
   "posts-list-branch-tip.test.js",
   // #642 — vm-sandbox posts-list-enhance.js and native-preview-href.js SOURCE
   // on a preview admin; same reason as the entries above.

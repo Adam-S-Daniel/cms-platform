@@ -76,7 +76,7 @@ const PROD_HINTS = {
       "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below.",
     publish_date:
       "Optional. Choose a future date and time (UTC) to publish this post automatically on {{CMS_CURRENT_HOST}}. Only honored when Published is off.",
-    body: "Full post content. Supports Markdown, images, code blocks, and HTML embeds (toolbar → 'HTML Embed' button — drops a block of raw HTML / JS / CSS that round-trips between rich-text and raw modes).",
+    body: "Full post content. Supports Markdown, images, code blocks, and embedded content such as a video or form (use the 'HTML Embed' button in the toolbar).",
   },
   tags: {
     name: "Tag label shown on posts (e.g. 'Machine Learning', 'Python')",

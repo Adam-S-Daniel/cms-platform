@@ -267,7 +267,7 @@ collections:
         label: Body
         widget: markdown
         required: true
-        hint: "Full post content. Supports Markdown, images, code blocks, and HTML embeds (toolbar → 'HTML Embed' button — drops a block of raw HTML / JS / CSS that round-trips between rich-text and raw modes)."
+        hint: "Full post content. Supports Markdown, images, code blocks, and embedded content such as a video or form (use the 'HTML Embed' button in the toolbar)."
         modes:
           - rich_text
           - raw

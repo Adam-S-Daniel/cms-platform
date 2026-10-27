@@ -38,6 +38,17 @@
  * updating BACKUP_STRING to the translated confirm text (or the dialog
  * returns to the user in that locale).
  *
+ * ── Plain-language rewrites (#649) ────────────────────────────────────
+ * Three more Decap confirms are shown to a non-technical owner and say too
+ * little: the delete-a-published-entry confirm does not name the entry or say
+ * it leaves the site, and the in-app "leave this page" guard does not mention
+ * unsaved changes. Each is REWRITTEN (same English-locale exact-match
+ * assumption as above) and then shown through the ORIGINAL native confirm, so
+ * the dialog, its OK/Cancel return value and the e2e dialog auto-accept all
+ * behave as before. The browser's own "Leave site?" prompt (Decap's
+ * beforeunload handler, on tab close or reload) is NOT a window.confirm and
+ * its text cannot be customized by any modern browser, so it is out of reach.
+ *
  * ── The media-library delete confirm (#652) ───────────────────────────
  * The same wrap also REWRITES (never suppresses) Decap's media-library
  * "Delete selected" prompt, `mediaLibrary.mediaLibrary.onDelete`. From inside
@@ -51,9 +62,8 @@
  * is used only if that card is still on screen, else the text is generic.
  *
  * ── What we DO NOT touch ──────────────────────────────────────────────
- * EVERY other window.confirm message (delete confirms, publish/unpublish,
- * media replace, the routing lib's navigation guard, …) is delegated to the
- * ORIGINAL native confirm unchanged — the e2e delete flows depend on the
+ * EVERY other window.confirm message (publish/unpublish, media replace, …)
+ * is delegated to the ORIGINAL native confirm unchanged — the e2e delete flows depend on the
  * native dialog surviving (they auto-accept via page.on("dialog", ...)). We
  * wrap ONLY window.confirm, never window.fetch (publish-via-auto-merge.js
  * owns the single fetch wrap; a second wrap risks the Safari loadEntries
@@ -118,6 +128,41 @@
   var LEAVE_STRING = "Are you sure you want to leave this page?";
 
   var origConfirm = window.confirm.bind(window);
+
+  // The open entry's title, read from the editor's title field; a generic
+  // noun when no editor is open or the field is empty.
+  function entryName() {
+    try {
+      var input = document.querySelector('input[id^="title-field"]');
+      var v = input && typeof input.value === "string" ? input.value.trim() : "";
+      if (v) return "“" + v + "”";
+    } catch {
+      /* no DOM — fall through */
+    }
+    return "this entry";
+  }
+
+  function destinationName() {
+    var d = window.CMSHostname && window.CMSHostname.destination ? window.CMSHostname.destination() : "";
+    return d || "the site";
+  }
+
+  // Exact English Decap strings -> owner-language replacement text.
+  var REWRITES = {
+    "Are you sure you want to delete this published entry?": function () {
+      return "Delete " + entryName() + "? It will be removed from " + destinationName() + ".";
+    },
+    "Are you sure you want to delete this published entry, as well as your unsaved changes from the current session?":
+      function () {
+        return (
+          "Delete " + entryName() + "? It will be removed from " + destinationName() +
+          ", and the changes you have not saved yet will be lost."
+        );
+      },
+    "Are you sure you want to leave this page?": function () {
+      return "You have changes that are not saved yet. If you leave now, you will lose them. Leave anyway?";
+    },
+  };
 
   function cardNameFrom(target) {
     // The click lands on the image, the filename, or the card itself; walk up
@@ -231,14 +276,15 @@
       );
       return false;
     }
-    if (msg === MEDIA_DELETE_STRING) {
-      // Rewrite, then ask the SAME native confirm: OK/Cancel is unchanged.
-      return origConfirm(mediaDeleteMessage());
-    }
-    // Every other confirm (delete / publish / navigation guard / …) goes to
-    // the ORIGINAL native dialog untouched — the e2e delete flows depend on
-    // the native confirm surviving.
-    var answer = origConfirm(msg);
+    // A rewritten confirm (the media-library delete, #652; the delete-published
+    // and leave-page texts, #649) still goes through the ORIGINAL native
+    // dialog, so OK/Cancel is unchanged. Every other confirm (publish /
+    // unpublish / …) is passed through untouched — the e2e delete flows
+    // depend on the native confirm surviving.
+    var text = msg;
+    if (msg === MEDIA_DELETE_STRING) text = mediaDeleteMessage();
+    else if (Object.prototype.hasOwnProperty.call(REWRITES, msg)) text = REWRITES[msg]();
+    var answer = origConfirm(text);
     if (!answer && msg === LEAVE_STRING && inPop) inPop.cancelled = true;
     return answer;
   };
@@ -279,6 +325,7 @@
     installed: true,
     origConfirm: origConfirm,
     backupString: BACKUP_STRING,
+    rewrites: Object.keys(REWRITES),
     mediaDeleteString: MEDIA_DELETE_STRING,
   };
 })();
