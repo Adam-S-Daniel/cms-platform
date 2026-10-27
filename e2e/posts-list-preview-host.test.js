@@ -194,8 +194,12 @@ test.describe("posts-list-enhance.js freshness is the preview's own deployment o
     expect(data.onPreview).toBe(true);
     expect(data.siteDeploy.url).toBe("https://github.com/owner/repo/actions/runs/5");
     expect(calls.some((u) => u.includes("environment=production"))).toBe(false);
+    // #649: the log link sits behind "Advanced" and the state word stays plain.
     expect(hook.publishingBarHTML(data, true)).toBe(
-      'preview-pr7.example.com <a href="https://github.com/owner/repo/actions/runs/5" target="_blank" rel="noopener">updated</a>',
+      "preview-pr7.example.com updated" +
+        '<details class="cms-ple-advanced" data-testid="cms-ple-advanced"><summary>Advanced</summary><span>' +
+        '<a href="https://github.com/owner/repo/actions/runs/5" target="_blank" rel="noopener">View technical details</a>' +
+        "</span></details>",
     );
   });
 });

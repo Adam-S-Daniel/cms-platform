@@ -15,8 +15,9 @@ const CORE = path.dirname(require.resolve("decap-cms-core/package.json"));
 const coreRequire = createRequire(path.join(CORE, "package.json"));
 const { fromJS, List, Map } = coreRequire("immutable");
 
-// The shell's Decap 3.15.1 release contains core 3.17.1, not core 3.15.1:
-// https://github.com/decaporg/decap-cms/blob/bc76c05a80ab70d6b5c7cdaafc7d10cf56939c02/packages/decap-cms-core/package.json
+// The shell's Decap 3.17.3 release contains core 3.20.2, not core 3.17.3:
+// decap-cms@3.17.3 depends on decap-cms-app@3.17.3, which pins
+// decap-cms-core 3.20.2 exactly (both published 2026-10-26).
 // Test-only overrides use Immutable 5 and React 19 with this core's source.
 // The Decap package's shared libraries also need the Immutable override: their
 // newer Immutable 4 peers otherwise conflict with our root Immutable 5 pin.
@@ -161,8 +162,8 @@ async function uiGeneratedPost(title, collectionName = "posts") {
 }
 
 test("offline serializer matches the Decap release shipped by the admin shell", () => {
-  expect(decapPin(fs.readFileSync(path.join(ROOT, "theme/admin/index.html"), "utf8"))).toBe("3.15.1");
-  expect(coreRequire("./package.json").version).toBe("3.17.1");
+  expect(decapPin(fs.readFileSync(path.join(ROOT, "theme/admin/index.html"), "utf8"))).toBe("3.17.3");
+  expect(coreRequire("./package.json").version).toBe("3.20.2");
 });
 
 test("Decap test dependencies resolve the same explicitly overridden Immutable runtime", () => {

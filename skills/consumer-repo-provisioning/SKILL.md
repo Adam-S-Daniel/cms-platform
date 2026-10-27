@@ -282,7 +282,14 @@ one secret per resource owner:
   this mechanism; applying the manifest is a human running
   `node scripts/audit-repo-settings.js --fix --yes` with their own `gh` auth
   (admin on the target repo). An accidental mutation attempt with these
-  tokens 403s — a designed tripwire.
+  tokens 403s — a designed tripwire. The one exception is label
+  *definitions* on repo-settings' allowlist (today only `agent-authored`):
+  repo-settings' own App writes those here without a human approval, using an
+  Issues: write token narrowed to these repos, and its engine refuses every
+  other name and every cms-owned one (`ci`, `cms/*`, `decap-cms/*`,
+  `not-decap-created`, `content-guard/override`). Why and bounds: `docs/SYNC.md`
+  "Repo settings as code" and
+  [repo-settings#88](https://github.com/Adam-S-Daniel/repo-settings/issues/88).
 - Store: `gh secret set REPO_SETTINGS_READ_ADAM_S_DANIEL -R Adam-S-Daniel/cms-platform`
   (and the same for `REPO_SETTINGS_READ_JODIDANIEL`).
 - **Verify each PAT after minting/rotation** — the negative proof matters as

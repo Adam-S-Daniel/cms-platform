@@ -585,11 +585,12 @@ test.describe(
     });
 
     test("#645: one tap previews even when Decap's preview was switched off", async ({ page }) => {
-      // A stored `cms.preview-visible=false` (the eye turned off on a desktop)
-      // means Decap renders no preview pane at all until the eye is tapped.
+      // A stored `cms.right-pane=none` (the eye turned off on a desktop; Decap
+      // 3.17.x keeps one right-pane mode, i18n/notes/preview/none, under that
+      // key) means Decap renders no preview pane at all until the eye is tapped.
       await page.addInitScript(() => {
         try {
-          window.localStorage.setItem("cms.preview-visible", "false");
+          window.localStorage.setItem("cms.right-pane", "none");
         } catch (e) {
           /* storage blocked: the default (on) path is covered above */
         }

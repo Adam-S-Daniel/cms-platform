@@ -10,14 +10,15 @@
 // the browser lane could notice.
 //
 // SCHEMA SOURCE. Copied from the pinned bundle itself
-// (https://unpkg.com/decap-cms@3.15.1/dist/decap-cms.js, the config schema's
+// (https://unpkg.com/decap-cms@3.17.3/dist/decap-cms.js, the config schema's
 // `sortable_fields:{type:"array",items:{oneOf:[{type:"string"},{type:"object",
 // properties:{field:{type:"string"},label:{type:"string"},default_sort:
 // {oneOf:[{type:"boolean"},{type:"string",enum:["asc","desc"]}]}},
 // required:["field"],additionalProperties:!1}]}}`) plus its validator's rule
-// "only one default_sort", not recalled from memory. The first test fails when
-// an admin shell pins another Decap version, so a bump re-reads the schema
-// before it can go green.
+// "only one default_sort", not recalled from memory. Re-read unchanged from the
+// 3.15.1 and 3.17.1 bundles when the shells moved to 3.17.3. The first test
+// fails when an admin shell pins another Decap version, so a bump re-reads
+// the schema before it can go green.
 //
 // YAML is parsed with `yaml`, never matched by regex (AGENTS.md).
 
@@ -27,7 +28,7 @@ const YAML = require("yaml");
 const { test, expect } = require("./base");
 
 const ADMIN = path.resolve(__dirname, "../theme/admin");
-const SCHEMA_VERIFIED_AGAINST = "3.15.1";
+const SCHEMA_VERIFIED_AGAINST = "3.17.3";
 
 // Returns the list of schema violations for one collection's `sortable_fields`
 // value (an empty list means Decap accepts it).

@@ -271,9 +271,11 @@ test.describe("Admin preview/PR links + Check-for-Preview fix", () => {
   test("posts-list-enhance.js: relabelled links, diff URLs, view-published-changes", () => {
     const src = read(PLE);
     // New human labels.
-    expect(src).toContain("preview draft");
-    expect(src).toContain("view draft changes");
-    expect(src).toContain("view published changes");
+    expect(src).toContain("See how your draft will look");
+    expect(src).toContain("view draft changes on GitHub");
+    expect(src).toContain("view published changes on GitHub");
+    // The GitHub links sit behind the Advanced disclosure (#649).
+    expect(src).toContain("advancedLinks.push(");
     // Old bare labels gone (distinctive source fragments) so a
     // regression can't silently restore them.
     expect(src, 'the bare "preview-pr<N>" link label was renamed').not.toContain(">preview-pr");
@@ -291,12 +293,6 @@ test.describe("Admin preview/PR links + Check-for-Preview fix", () => {
     // batched GraphQL query, not a per-row call.
     expect(src).toContain("associatedPullRequests");
     expect(src).toMatch(/var publishedPr = le && le\.pr/);
-    // Order: "view published changes" renders BEFORE "preview draft"
-    // (bits are pushed in source order).
-    expect(
-      src.indexOf("view published changes"),
-      '"view published changes" must be pushed before "preview draft"',
-    ).toBeLessThan(src.indexOf("preview draft"));
     // Gated on a merged PR existing — an unpublished draft (no main
     // history → no le.pr) must not show "view published changes".
     const block = src.slice(src.indexOf("var publishedPr"), src.indexOf("var pr ="));
