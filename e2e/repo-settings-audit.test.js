@@ -2467,6 +2467,143 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
     ]);
   });
 
+  // codeql_default_setup (2026-10-26): GET/PATCH code-scanning/default-setup
+  // with a JSON body, unlike the two bodiless Dependabot keys.
+  test("fetchSecurityAnalysis: codeql_default_setup is read only when declared, as state === configured", () => {
+    const script = loadScript();
+    const repo = "Owner/Repo";
+    const routes = {
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: { enabled: true },
+    };
+    expect(script.fetchSecurityAnalysis(repo, null, fakeApi(routes))).toEqual({
+      vulnerabilityAlerts: { enabled: true },
+      automatedSecurityFixes: { enabled: true },
+    });
+    const on = fakeApi({
+      ...routes,
+      [`repos/${repo}/code-scanning/default-setup`]: { state: "configured", languages: ["actions"] },
+    });
+    expect(
+      script.fetchSecurityAnalysis(repo, null, on, ["codeql_default_setup"]).codeqlDefaultSetup,
+    ).toEqual({ enabled: true });
+    const off = fakeApi({
+      ...routes,
+      [`repos/${repo}/code-scanning/default-setup`]: { state: "not-configured" },
+    });
+    expect(
+      script.fetchSecurityAnalysis(repo, null, off, ["codeql_default_setup"]).codeqlDefaultSetup,
+    ).toEqual({ enabled: false });
+  });
+
+  test("fetchSecurityAnalysis: a 403 or 404 on code-scanning/default-setup is a skip, never 'off'", () => {
+    const script = loadScript();
+    const repo = "Owner/Repo";
+    for (const status of ["403", "404"]) {
+      const api = fakeApi({
+        [`repos/${repo}/vulnerability-alerts`]: () => "",
+        [`repos/${repo}/automated-security-fixes`]: { enabled: true },
+        [`repos/${repo}/code-scanning/default-setup`]: () => {
+          throw new Error(`gh: Not Found (HTTP ${status})`);
+        },
+      });
+      const live = script.fetchSecurityAnalysis(repo, null, api, ["codeql_default_setup"]);
+      expect(live.codeqlDefaultSetup.skipped).toBe(true);
+      expect(live.codeqlDefaultSetup.reason).toMatch(new RegExp(`HTTP ${status}`));
+    }
+  });
+
+  test("buildFixPlan: codeql_default_setup drift is one PATCH with a {state} body, after the Dependabot enables", () => {
+    const script = loadScript();
+    const manifest = loadManifest();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = [
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "codeql_default_setup",
+        endpoint: script.CODEQL_DEFAULT_SETUP_ENDPOINT,
+        live: false,
+        desired: true,
+      },
+      {
+        repo,
+        kind: "security-analysis-drift",
+        key: "vulnerability_alerts",
+        endpoint: script.VULNERABILITY_ALERTS_ENDPOINT,
+        live: false,
+        desired: true,
+      },
+    ];
+    const plan = script.buildFixPlan(manifest, [
+      { repo, findings, informational: [], liveRepo: {}, liveRulesets: [] },
+    ]);
+    expect(plan[0].securityWrites).toEqual([
+      {
+        endpoint: `repos/${repo}/vulnerability-alerts`,
+        method: "PUT",
+        key: "vulnerability_alerts",
+        desired: true,
+      },
+      {
+        endpoint: `repos/${repo}/code-scanning/default-setup`,
+        method: "PATCH",
+        key: "codeql_default_setup",
+        desired: true,
+        body: { state: "configured" },
+      },
+    ]);
+  });
+
+  // secret_scanning / secret_scanning_push_protection (2026-10-26, parity
+  // with Adam-S-Daniel/repo-settings): read from security_and_analysis on the
+  // repo itself, written as a PATCH of it.
+  test("fetchSecurityAnalysis: secret scanning keys read security_and_analysis; an absent key is a skip", () => {
+    const script = loadScript();
+    const repo = "Owner/Repo";
+    const api = fakeApi({
+      [`repos/${repo}/vulnerability-alerts`]: () => "",
+      [`repos/${repo}/automated-security-fixes`]: { enabled: true },
+      [`repos/${repo}`]: {
+        security_and_analysis: { secret_scanning: { status: "enabled" } },
+      },
+    });
+    const live = script.fetchSecurityAnalysis(repo, null, api, [
+      "secret_scanning",
+      "secret_scanning_push_protection",
+    ]);
+    expect(live.secretScanning).toEqual({ enabled: true });
+    expect(live.secretScanningPushProtection.skipped).toBe(true);
+  });
+
+  test("buildFixPlan: secret scanning is enabled before push protection, each as a security_and_analysis PATCH", () => {
+    const script = loadScript();
+    const manifest = loadManifest();
+    const repo = "Adam-S-Daniel/cms-platform";
+    const findings = ["secret_scanning_push_protection", "secret_scanning"].map(
+      (key) => ({
+        repo,
+        kind: "security-analysis-drift",
+        key,
+        endpoint: "security_and_analysis",
+        live: false,
+        desired: true,
+      }),
+    );
+    const plan = script.buildFixPlan(manifest, [
+      { repo, findings, informational: [], liveRepo: {}, liveRulesets: [] },
+    ]);
+    expect(plan[0].securityWrites).toEqual(
+      ["secret_scanning", "secret_scanning_push_protection"].map((key) => ({
+        endpoint: `repos/${repo}`,
+        method: "PATCH",
+        key,
+        desired: true,
+        body: { security_and_analysis: { [key]: { status: "enabled" } } },
+      })),
+    );
+  });
+
   test("describeFinding: security-analysis-drift names the key and the endpoint", () => {
     const script = loadScript();
     const line = script.describeFinding({

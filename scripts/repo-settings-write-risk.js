@@ -175,8 +175,9 @@ function classifyWrite(w) {
       return safe(`Actions permission \`${w.key}\` -> ${JSON.stringify(w.desired)}`);
 
     case "security-analysis":
-      // Dependabot vulnerability alerts / automated security fixes. The
-      // METHOD is the value: PUT enables, DELETE disables. Enabling adds a
+      // Dependabot vulnerability alerts / automated security fixes / CodeQL
+      // default setup. `desired` is the value (for the Dependabot keys the
+      // METHOD carries it: PUT enables, DELETE disables). Enabling adds a
       // protection the repo did not have; disabling removes one, and removing
       // a security control unattended is the single least acceptable write on
       // this whole surface.
