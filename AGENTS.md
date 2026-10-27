@@ -452,9 +452,7 @@ before blaming the deploy chain. → `docs/CI-INVARIANTS.md` (and the
   collections (6 folder ones, all `output:false` except `media`; 4 file ones
   reading `_data/*.yml`), `cms.base_collections: []`, and `_data/settings.yml`
   `site_live` (default `false`) keeping prod coming-soon; go-live is jodidaniel
-  #26. Its CMS automation runs on a **`CMS_E2E_PAT` repo secret**; the
-  mid-2026-07 failures were the sweep bugs fixed in v0.1.49-v0.1.51 (#127,
-  #130).
+  #26. Its CMS automation runs on a **`CMS_E2E_PAT` repo secret**.
 
 ## Operations: the short rules (→ `docs/OPERATIONS.md` for each how-to)
 

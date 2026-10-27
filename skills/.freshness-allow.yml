@@ -31,10 +31,6 @@ allow:
     citation: ResourceExistenceCheck
     reason: CloudFormation error name quoted in a troubleshooting heading, not a template identifier.
     marker: "### `ResourceExistenceCheck` / changeset FAILED"
-  - skill: aws-bootstrap
-    citation: NoSuchOriginRequestPolicy
-    reason: CloudFront error name quoted in a troubleshooting heading, not a template identifier.
-    marker: "### `NoSuchOriginRequestPolicy`"
 
   - skill: browser-testing
     citation: e2e/my-feature.spec.js
@@ -76,14 +72,6 @@ allow:
     citation: sync-action-pin-comments.sh
     reason: Deleted with the version-comment machinery; the skill says so.
     marker: "and `scripts/sync-action-pin-comments.sh` — is **deleted**"
-  - skill: github-actions-sha-pinning
-    citation: .github/ci-runner/Dockerfile
-    reason: Cited only to record that no repo in the fleet has it (measured 2026-08-31).
-    marker: "That coupling does not exist anywhere in the fleet"
-  - skill: github-actions-sha-pinning
-    citation: .github/ci-runner/
-    reason: Cited only to record that no repo in the fleet has it (measured 2026-08-31).
-    marker: "That coupling does not exist anywhere in the fleet"
 
   - skill: preview-environments
     citation: teardown-preview.yml

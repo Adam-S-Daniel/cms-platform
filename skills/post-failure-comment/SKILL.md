@@ -99,7 +99,7 @@ The caller-side gating in the patterns above is the only approach that has been 
 
 1. **Capture the log.** The Playwright invocation must `2>&1 | tee /tmp/<your-log>.log`. The action reads from this path verbatim. If the log is missing or empty, the action emits a "(no log captured)" comment instead of failing.
 2. **Pin a unique marker.** The action wraps `<your-marker>` as `<!-- your-marker -->`. Two workflows MUST NOT share a marker — they will clobber each other's comments. Existing markers in use:
-   - `e2e-failure-summary-<project>` — `e2e-tests.yml` → the `project` matrix job, **scoped per Playwright project** (e.g. `e2e-failure-summary-webkit-iphone16`). The ten matrix jobs post from inside themselves; one shared marker would have them clobber each other, and the project name in the marker says which lane went red before you open a log.
+   - `e2e-failure-summary-<project>` — `e2e-tests.yml` → the `project` matrix job, **scoped per Playwright project** (e.g. `e2e-failure-summary-webkit-iphone16`). The 14 matrix jobs post from inside themselves; one shared marker would have them clobber each other, and the project name in the marker says which lane went red before you open a log.
    - `parity-preview-failure-summary` — `parity-preview.yml`
    - `preview-media-failure-summary` — `preview-media.yml`
    - `host-loop-failure-summary` — `cms-publish-loop-host.yml`
@@ -124,12 +124,12 @@ The caller-side gating in the patterns above is the only approach that has been 
 
 | Step | Gate | Notes |
 |---|---|---|
-| Install gitleaks | `outcome == 'failure'` | Installs to `$HOME/.local/bin` (no sudo). Adds to `$GITHUB_PATH` so subsequent steps see it. |
-| Extract & scrub | `outcome == 'failure'` | Runs `$ACTION_PATH/extract-playwright-failures.sh`; falls back to `tail -c 80000` if the extractor finds nothing. Scrubs via `$ACTION_PATH/scrub-secrets.js` (gitleaks). Truncates to 60 KB. |
-| Post comment | `outcome == 'failure'` AND (`pull_request` event OR `pr-number` set) | Marker-based update-or-create. |
-| Resolve on success | `outcome == 'success'` AND (`pull_request` event OR `pr-number` set) | Replaces an existing failure comment with a "passing on `<sha>`" stub. |
+| Install gitleaks | `inputs.mode == 'post'` | Installs to `$HOME/.local/bin` (no sudo). Adds to `$GITHUB_PATH` so subsequent steps see it. |
+| Extract & scrub | `inputs.mode == 'post'` | Runs `$ACTION_PATH/extract-playwright-failures.sh`; falls back to `tail -c 80000` if the extractor finds nothing. Scrubs via `$ACTION_PATH/scrub-secrets.js` (gitleaks). Truncates to 60 KB. |
+| Post comment | `inputs.mode == 'post'` AND (`pull_request` event OR `pr-number` set) | Marker-based update-or-create. |
+| Resolve on success | `inputs.mode == 'resolve'` AND (`pull_request` event OR `pr-number` set) | Replaces an existing failure comment with a "passing on `<sha>`" stub. |
 
-The action no-ops on `cancelled`, `skipped`, or `null` outcomes — those rarely indicate a real failure that warrants a comment.
+The action takes no outcome input: the caller's `if: failure()` / `if: success()` picks the mode, so a cancelled or skipped job invokes neither.
 
 ## Security: env vars, not interpolation
 
@@ -151,7 +151,7 @@ Triple-check this when:
 - **Missing `pull-requests: write` permission** — the most subtle and most common. The default `GITHUB_TOKEN` is read-only unless explicitly elevated; without elevation the comment-post 403s silently and the workflow looks like it ran the comment step but produced no comment. ALWAYS add `pull-requests: write` to a workflow's `permissions:` block when wiring this action in. Verified by listing PR comments after a deliberately-broken push (see "Testing your wiring" below).
 - **The action's directory isn't on disk** — happens when slotting the action into a one-step workflow that never checks out the repo/path holding `.github/actions/post-failure-comment/`. The extractor + scrubber are co-located in that directory and resolved via `$ACTION_PATH`, so the action dir itself must be present (a `uses: ./...` path can't resolve otherwise). In the reusable platform model the harness checks the platform out into `.cms-platform/` and references `./.cms-platform/.github/actions/post-failure-comment`. A separate site `actions/checkout` is still wanted so the captured log path exists.
 - **Overlapping markers** — copy-pasting from another workflow without changing the marker. Always pick a globally-unique slug.
-- **Wrong outcome source** — `${{ job.status }}` is the canonical source for single-job workflows. For workflows with multiple dependent jobs (like `e2e-tests.yml`'s post-job), pass `${{ needs.<job>.result }}` instead — and remember `needs.<job>.result` only reflects ONE upstream job. If the workflow has multiple matrix jobs that should all gate the comment, AND-combine them in an intermediate step.
+- **Wrong gate** — never pass `${{ job.status }}` into the action (it expands to empty inside a composite's `with:`; see above). Gate each call in the caller with `failure()` / `success()`. For a post-job that depends on other jobs, use `needs.<job>.result` in the caller's `if:` — it reflects only ONE upstream job, so AND-combine multiple matrix jobs in an intermediate step.
 - **Skipping the gate on `pull_request`** — for workflows that ALSO fire on `schedule` or `workflow_dispatch`, the action's `if:` will skip posting (no PR context) but the gitleaks install still runs. To save runtime, add `&& github.event_name == 'pull_request'` to the caller's `if:` or use `pr-number` for explicit-target workflows.
 
 ## When NOT to use this

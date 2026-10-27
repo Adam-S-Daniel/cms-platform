@@ -65,20 +65,19 @@ biggest (~2x chromium's apt time), giving it the widest window to overlap.
 The blast radius is what makes this worth its own step: one lane's install failure
 fails the aggregating gate, a red required check BLOCKS the canary PR, and the loop
 then waits out its whole budget for a merge that can never happen. On 2026-08-07 it
-took out the host loop AND prod-mutate in the same hour (adamdaniel.ai jobs
-92892148211 and 92898220347).
+took out the host loop AND prod-mutate in the same hour.
 
 **Fix:** re-run the failed jobs (`gh run rerun <run-id> --failed`) — the lock is
-gone by then, so the canary PR unblocks and auto-merges on its own. Platform
-v0.1.71+ prevents it: the install composite drops `DPkg::Lock::Timeout` into
+gone by then, so the canary PR unblocks and auto-merges on its own. The install
+composite prevents it: drops `DPkg::Lock::Timeout` into
 `apt.conf.d` so apt WAITS for the lock instead of erroring, and retries back off
-(15 s / 30 s) instead of firing back-to-back into the same window. If you see this
-on v0.1.71 or later, the holder outlasted `apt-lock-timeout-seconds` (300 s) —
+(15 s / 30 s) instead of firing back-to-back into the same window. If you still see this,
+the holder outlasted `apt-lock-timeout-seconds` (300 s) —
 raise it rather than adding more retries.
 
-### 1c. Read the loop's OWN verdict — since v0.1.76 it says whether the PR merged
+### 1c. Read the loop's OWN verdict — it says whether the PR merged
 
-The loop's timeout message now distinguishes "the PR has not merged" from "the
+The loop's timeout message distinguishes "the PR has not merged" from "the
 deploy chain missed", so it usually tells you which leg to triage before you
 enumerate anything:
 
@@ -89,17 +88,12 @@ enumerate anything:
 | `NO deploy-production run fired for your merge — the chain never fired` (`no-deploy-fired`) | the PR **IS** merged and no deploy ran — a genuine trigger problem | the deploy trigger / editorial-workflow, not the PR queue |
 | `your deploy-production run … DID complete, but the URL never served the marker` (`deploy-completed-url-missing`) | S3 sync / CloudFront / cache in the serve layer | not a PR problem at all |
 
-**In a log from BEFORE v0.1.76, `no-deploy-fired` is NOT evidence of a trigger
-problem.** The extender asked only "is the deploy lane idle?", and before the
-merge lands the lane is idle for an entirely innocent reason — nothing can
-deploy yet — so a merely-SLOW auto-merge was reported as "the chain never
-fired". Live instance: adamdaniel.ai run **31107474927** (2026-08-06 host loop)
-killed `cms-tags-lifecycle` at exactly that message after **908 s**, `in-flight:
-0, queued: 0`, while the auto-merge was simply still pending — well inside the
-documented ~30-min latency, and the other two host-loop specs passed in the same
-run. Same class in runs 30915982319 and 30822288078. So on an old log, re-read
-the message as "the URL did not reflect", check whether the PR had merged at
-that timestamp, and triage the queue from §2.
+**In a log from before v0.1.76, `no-deploy-fired` is NOT evidence of a trigger
+problem:** the old extender asked only whether the deploy lane was idle, which it
+is before any merge lands, so a merely slow auto-merge (well inside the ~30-min
+latency) was reported as "the chain never fired". On such a log, re-read the
+message as "the URL did not reflect", check whether the PR had merged at that
+timestamp, and triage the queue from §2.
 
 Two scoping notes worth knowing when a verdict looks absent or vague. **Only 6
 of the 15 extender call sites are PR-anchored** (the forward/create legs,
@@ -161,7 +155,7 @@ gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --paginate \
 # higher-numbered check suite than the green "X / Y" run.
 ```
 
-Measured instance: cms-platform#222 (https://github.com/Adam-S-Daniel/cms-platform/issues/222). On adamdaniel.ai#3001's blocked head `2da05a9`, all six required contexts showed `success`, while bare `e2e`, `parity`, `scan`, `preview-media` and `visual-regression` check runs, all `skipped`, sat in newer check suites. A merge attempt answered `405 … 5 of 6 required status checks are expected.` A nudge cannot clear it, because no new run is triggered. The remedy is a fresh push to the head branch (an empty commit), which starts a clean run set; that cleared both #222 PRs. Triage recommends it rather than pushing.
+Measured instance: cms-platform#222 (https://github.com/Adam-S-Daniel/cms-platform/issues/222). On adamdaniel.ai#3001's blocked head, all six required contexts showed `success`, while bare `e2e`, `parity`, `scan`, `preview-media` and `visual-regression` check runs, all `skipped`, sat in newer check suites. A merge attempt answered `405 … 5 of 6 required status checks are expected.` A nudge cannot clear it, because no new run is triggered. The remedy is a fresh push to the head branch (an empty commit), which starts a clean run set; that cleared both #222 PRs. Triage recommends it rather than pushing.
 
 **Only when neither check finds anything** — every required context is reported and green — read the state as a GitHub merge-state-evaluator caching bug: two auto-merge-enabling label events landed in the same second, GitHub cached the BLOCKED snapshot taken mid-mutation, and no later event re-triggers evaluation. The PR sits green-but-BLOCKED until the nightly sweep closes it.
 
@@ -220,7 +214,8 @@ gh pr merge <N> --auto --merge   # no-op re-enable; re-triggers GitHub's merge-s
 
 ```bash
 gh workflow run cms-publish-loop-host.yml         # or cms-publish-loop-prod.yml / canary-prod.yml
-gh run watch                                       # follow the new run live
+# Capture the run ID from the dispatch output and poll it; see ci-watcher-loops
+# (no `gh run watch` in an unattended watcher, no bare `gh run list --limit 1`).
 ```
 
 The new run opens a fresh `cms/<col>/<slug>` PR on top of current main; with the queue clean it should auto-merge cleanly.

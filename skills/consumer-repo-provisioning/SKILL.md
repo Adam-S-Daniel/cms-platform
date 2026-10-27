@@ -131,8 +131,9 @@ serves every consumer, and nothing is left to rotate.**
 
 1. https://github.com/settings/apps/new — name it something that says what it
    is FOR and trips no scanner keyword (`cms-platform-automation` is fine;
-   never `…-secrets`/`…-token`/`…-key`, see AGENTS.md "A name you choose
-   becomes data a scanner reads"). Uncheck *Webhook → Active*. **Repository
+   never `…-secrets`/`…-token`/`…-key`: gitleaks' `generic-api-key` rule fires on a
+   keyword like secret/token/key/password/credential next to a high-entropy value,
+   and a name lands in generated files such as `skills.lock`). Uncheck *Webhook → Active*. **Repository
    permissions: Contents: Read and write · Pull requests: Read and write ·
    Workflows: Read and write** (Metadata: Read is implied). Nothing else — in
    particular NOT Administration: that is the separate `REPO_SETTINGS_*` App,
