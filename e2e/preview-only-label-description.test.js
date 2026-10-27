@@ -1787,17 +1787,32 @@ test("label creation warnings still allow addLabels", async () => {
   );
   const added = [];
   const warnings = [];
-  const github = { rest: { issues: {
-    createLabel: async () => { throw Object.assign(new Error(PRIVATE_ERROR_TEXT), { status: 500 }); },
-    addLabels: async ({ labels }) => added.push(...labels),
-  } } };
+  const github = {
+    // The step first decides whether the PR gets a draft label at all
+    // (shouldApplyDraftLabel); give it a content-touching PR so it proceeds.
+    paginate: async () => [{ filename: "_posts/x.md" }],
+    rest: {
+      pulls: { listFiles: () => {} },
+      issues: {
+        createLabel: async () => { throw Object.assign(new Error(PRIVATE_ERROR_TEXT), { status: 500 }); },
+        addLabels: async ({ labels }) => added.push(...labels),
+      },
+    },
+  };
   const context = {
     repo: { owner: "owner", repo: "repo" },
-    payload: { pull_request: { number: 7, base: { ref: "feature/x" } } },
+    payload: { pull_request: { number: 7, head: { ref: "claude/x" }, base: { ref: "feature/x" } } },
   };
-  const core = { warning: (m) => warnings.push(String(m)) };
+  const core = { warning: (m) => warnings.push(String(m)), info: () => {} };
+  // The script requires the platform modules through GITHUB_WORKSPACE/.cms-platform.
+  const workspace = path.resolve(__dirname, "..");
+  const platformRequire = (id) =>
+    id.startsWith(workspace) ? require(path.join(workspace, id.slice(workspace.length).replace(/^[\\/]\.cms-platform[\\/]/, ""))) : require(id);
+  const fakeProcess = { env: { GITHUB_WORKSPACE: workspace } };
   const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
-  await new AsyncFunction("github", "context", "core", block.script)(github, context, core);
+  await new AsyncFunction("github", "context", "core", "require", "process", block.script)(
+    github, context, core, platformRequire, fakeProcess,
+  );
   expect(warnings).toHaveLength(3);
   expect(added).toEqual(["cms/draft", PREVIEW_ONLY]);
 });

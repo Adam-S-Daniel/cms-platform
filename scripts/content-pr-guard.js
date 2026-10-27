@@ -75,6 +75,23 @@ function seamContentDirs(seamYamlText) {
   return dirs;
 }
 
+// Top-level underscore directories that are Jekyll machinery, not content.
+const JEKYLL_NON_CONTENT_DIRS = ["_includes/", "_layouts/", "_sass/", "_plugins/", "_site/"];
+
+// Extract every Decap FILE collection path (`file: "_data/header.yml"`) from
+// the seam. Unlike a folder, a file is matched exactly, so no slash is added.
+function seamContentFiles(seamYamlText) {
+  if (!seamYamlText) return [];
+  const files = [];
+  const re = /^\s*(?:-\s+)?file:\s*(.+?)\s*$/gm;
+  let match;
+  while ((match = re.exec(seamYamlText)) !== null) {
+    const file = String(match[1]).trim().replace(/^["']|["']$/g, "").trim();
+    if (file) files.push(file);
+  }
+  return files;
+}
+
 function labelNames(labels) {
   return (labels || []).map((l) => (typeof l === "string" ? l : (l && l.name) || ""));
 }
@@ -88,6 +105,42 @@ function isDecapShaped(pr, decapBranchPrefix) {
   if ((pr && pr.head && pr.head.ref || "").startsWith(decapBranchPrefix)) return true;
   if ((pr && pr.body || "").startsWith(DECAP_BODY_MARKER)) return true;
   return labelNames(pr && pr.labels).some((name) => name.startsWith("decap-cms/"));
+}
+
+// Is this changed path site content (as opposed to code, CI, or instruction
+// files)? Wider than evaluateContentGuard's set on purpose: sites add
+// arbitrary Jekyll collections as siblings of `_posts` (jodidaniel.com has
+// `_expertise`, `_experience`, `_accomplishments`, `_media`, `_education`,
+// `_events`, plus Decap file collections under `_data/`), and a new collection
+// can land before its seam entry exists. So any file inside a top-level
+// underscore directory counts, except Jekyll's own machinery. Root files such
+// as `_config.yml` have no slash and are not content.
+function isContentPath(filePath, { seamYamlText = null, extraContentDirs = [] } = {}) {
+  const dirs = [...BASE_CONTENT_DIRS, ...seamContentDirs(seamYamlText), ...extraContentDirs];
+  if (dirs.some((d) => filePath.startsWith(d))) return true;
+  if (seamContentFiles(seamYamlText).includes(filePath)) return true;
+  const slash = filePath.indexOf("/");
+  if (filePath.startsWith("_") && slash > 0) {
+    return !JEKYLL_NON_CONTENT_DIRS.includes(filePath.slice(0, slash + 1));
+  }
+  return false;
+}
+
+// Should validate-content's "Apply draft label on new PR" step label this PR
+// `cms/draft`? Only a Decap-shaped PR or one touching site content: an
+// instruction-file or dependency PR is not a content draft and must not carry
+// the label. Agent-written content PRs on non-Decap branches still qualify.
+function shouldApplyDraftLabel({
+  pr,
+  changedFiles,
+  seamYamlText = null,
+  decapBranchPrefix,
+  extraContentDirs = [],
+}) {
+  if (isDecapShaped(pr, decapBranchPrefix)) return true;
+  return (changedFiles || []).some((f) =>
+    isContentPath(f, { seamYamlText, extraContentDirs }),
+  );
 }
 
 const FILE_LIST_CAP = 20;
@@ -163,7 +216,11 @@ module.exports = {
   OVERRIDE_LABEL,
   DECAP_BODY_MARKER,
   BASE_CONTENT_DIRS,
+  JEKYLL_NON_CONTENT_DIRS,
   seamContentDirs,
+  seamContentFiles,
+  isContentPath,
+  shouldApplyDraftLabel,
   isDecapShaped,
   evaluateContentGuard,
 };
