@@ -213,7 +213,7 @@ test.describe(
 
       // Flip Published on so Jekyll picks the post up on the rebuild.
       await page
-        .getByLabel(/^Published$/)
+        .getByLabel(/^(Show on site|Published)$/)
         .first()
         .click();
 

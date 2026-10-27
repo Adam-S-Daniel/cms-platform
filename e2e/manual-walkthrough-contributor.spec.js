@@ -135,7 +135,7 @@ const PROBES = [
     async run(page, ctx) {
       // Manual claims: "The Posts edit form renders every field declared
       // in admin/config.yml: Title, URL Slug, Date, Excerpt, Tags,
-      // Featured Image, Published, Publish Date, and the Body markdown
+      // Featured Image, Show on site, Publish Date, and the Body markdown
       // editor." That's 9 documented affordances — same list locked in
       // by `e2e/cms-field-targeting.spec.js` and the canary test in
       // `e2e/cms-smoke.spec.js`.
@@ -155,7 +155,7 @@ const PROBES = [
         "Excerpt",
         "Tags",
         "Featured Image",
-        "Published",
+        "Show on site",
         "Publish Date",
         "Body",
       ];
@@ -166,14 +166,14 @@ const PROBES = [
           .first();
         await expect(
           labelLocator,
-          `Manual section §${ctx.section} (line ${ctx.line}) → documented field "${label}" not rendered in the Posts edit form. The manual lists 9 fields (Title, URL Slug, Date, Excerpt, Tags, Featured Image, Published, Publish Date, Body); update the manual section if "${label}" was intentionally removed from admin/config.yml.`,
+          `Manual section §${ctx.section} (line ${ctx.line}) → documented field "${label}" not rendered in the Posts edit form. The manual lists 9 fields (Title, URL Slug, Date, Excerpt, Tags, Featured Image, Show on site, Publish Date, Body); update the manual section if "${label}" was intentionally removed from admin/config.yml.`,
         ).toBeVisible({ timeout: 5_000 });
       }
       await captureStep(page, {
         section: "Manual probe — entry form",
         step: `c1-${ctx.line}`,
         title: `Posts edit form fields present (manual line ${ctx.line})`,
-        body: "C1 runtime probe: confirms each of the 9 fields documented in the Editing a post section of the manual (Title, URL Slug, Date, Excerpt, Tags, Featured Image, Published, Publish Date, Body) is still rendered when opening a post.",
+        body: "C1 runtime probe: confirms each of the 9 fields documented in the Editing a post section of the manual (Title, URL Slug, Date, Excerpt, Tags, Featured Image, Show on site, Publish Date, Body) is still rendered when opening a post.",
       });
     },
   },

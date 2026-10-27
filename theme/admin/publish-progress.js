@@ -63,10 +63,35 @@
  *   checksUrl         the workflow run behind a failed check, else behind the
  *                     running ones, or null. Free out of the check-runs read
  *                     this tick already makes. See checksUrlFor().
+ *   published         the `published:` value the PR commits, when its diff
+ *                     shows that line (changed, or as context); otherwise
+ *                     absent, and the editor surfaces fill it from the saved
+ *                     toggle (entry-status-model.js's withSavedToggle()).
+ *   publishedBefore   the value the PR REPLACES (a `-published:` line), or
+ *                     null. `true` here with `published: false` is a take-down
+ *                     (#636). See "What the PR changes" below.
+ *   entryIsNew        true when the PR only ADDS the entry's text file, false
+ *                     when it modifies one that already exists, else null.
  *   checksStartedAt   after a merge, the oldest `started_at` among the check
  *                     runs on the merged PR's head, or null: the start of the
  *                     whole trip, so the model's countdown never goes back
  *                     up when its clock switches to the merge (#643).
+ *
+ * ── What the PR changes (#636) ─────────────────────────────────────────
+ * Without these three facts every surface worded a publish as "put this on
+ * the site", including one that saves a `published: false` entry (stays
+ * hidden) and one that switches a live post off (takes it down). They come
+ * from the PR's own file list, `/pulls/<n>/files`, whose `patch` carries the
+ * front matter's `published:` line whenever it changed — and switching an
+ * entry from `published: true` to `false` always changes it. Only text files
+ * are read (an image upload has no front matter), and only an exact
+ * `published: true|false` line counts; an entry whose live version had no
+ * `published:` key at all reads as `publishedBefore: null`, which words the
+ * publish as "stays hidden" — true of a take-down too, where the reverse
+ * guess would tell an editor a never-shown entry is on the site.
+ * The read is cached per PR and head sha, so it costs one request per save,
+ * not one per tick; a failed read is not cached and reports nothing, which
+ * the model words as an ordinary publish (never as a take-down).
  *
  * ── The stall: an armed publish with nothing left to wait for (#371) ────
  * `armed` says the PR is queued to merge itself. Nothing said whether that
@@ -103,7 +128,9 @@
  * 5000/hour budget, alongside deploy-status-pill.js's own ~480. Inside the
  * merge watch, the merged head's check runs and a preview branch's PR number
  * cost one request each, once per merge: both are remembered, as neither
- * changes after the merge.
+ * changes after the merge. The PR's file list (see "What the PR changes") is
+ * read once per PR and head sha on top of that, so it adds one request per
+ * save rather than one per tick.
  *
  * ── After the merge (adamdaniel.ai#3857) ──────────────────────────────
  * Once the PR merges it is no longer open, and deploy-production registers
@@ -320,6 +347,55 @@
     return pr.html_url ? pr.html_url + "/checks" : null;
   }
 
+  // ── What the PR changes (#636) ────────────────────────────────────────
+  // See the header. Pure over GitHub's `/pulls/<n>/files` list, so a test can
+  // feed it canned files.
+  var TEXT_FILE = /\.(md|markdown|mdx|html?|ya?ml|json|toml)$/i;
+  var PUBLISHED_LINE = /^([-+ ])published:[ \t]*(true|false)[ \t]*$/;
+  var NO_CHANGE = { published: null, publishedBefore: null, entryIsNew: null };
+
+  function readEntryChange(files) {
+    var out = { published: null, publishedBefore: null, entryIsNew: null };
+    (Array.isArray(files) ? files : []).forEach(function (file) {
+      if (!file || typeof file.filename !== "string" || !TEXT_FILE.test(file.filename)) return;
+      if (file.status === "added") {
+        if (out.entryIsNew === null) out.entryIsNew = true;
+      } else if (file.status !== "removed") {
+        out.entryIsNew = false;
+      }
+      if (typeof file.patch !== "string") return;
+      file.patch.split("\n").forEach(function (line) {
+        var m = PUBLISHED_LINE.exec(line.replace(/\r$/, ""));
+        if (!m) return;
+        var value = m[2] === "true";
+        if (m[1] !== "+" && out.publishedBefore === null) out.publishedBefore = value;
+        if (m[1] !== "-" && out.published === null) out.published = value;
+      });
+    });
+    return out;
+  }
+
+  var entryChangeCache = { key: null, value: NO_CHANGE };
+
+  async function entryChange(token, prNumber, sha) {
+    if (!prNumber) return NO_CHANGE;
+    var key = prNumber + ":" + (sha || "");
+    if (entryChangeCache.key === key) return entryChangeCache.value;
+    var files = await getJson(API + "/pulls/" + prNumber + "/files?per_page=100", token, "pull files");
+    if (!Array.isArray(files)) return NO_CHANGE; // not cached: the next tick retries
+    entryChangeCache = { key: key, value: readEntryChange(files) };
+    return entryChangeCache.value;
+  }
+
+  // Copies the change onto a facts object. `published` is set only when the
+  // diff showed it, so the editor surfaces can fill it from the saved toggle.
+  function withChange(facts, change) {
+    if (typeof change.published === "boolean") facts.published = change.published;
+    facts.publishedBefore = change.publishedBefore;
+    facts.entryIsNew = change.entryIsNew;
+    return facts;
+  }
+
   // ── Fact gathering ────────────────────────────────────────────────────
   async function gather(token, entry) {
     var prs = await getJson(API + "/pulls?state=open&per_page=100", token, "open pulls");
@@ -337,6 +413,9 @@
       var now = Date.now();
       var watching = Boolean(merge) && now - merge.mergedAt < MERGE_WATCH_MS;
       var checksStartedAt = watching ? await checksStartFor(token, merge.headSha) : null;
+      // What that merge did (#636): a take-down in flight is "Taking down…",
+      // not "Going live…". Only inside the watch window, where it is news.
+      var mergedChange = watching ? await entryChange(token, merge.number, merge.sha) : NO_CHANGE;
       if (watching && merge.previewOnly) {
         // Merged into a feature branch: on its way to that branch's preview,
         // and the live site only when the branch gets there, so production's
@@ -347,7 +426,7 @@
           preview && (preview.sha === merge.sha || preview.createdAt >= merge.mergedAt) ? preview.state : null;
         var previewSettled = previewState === "success" || previewState === "failure" || previewState === "error";
         return {
-          facts: {
+          facts: withChange({
             hasOpenPr: false,
             armed: false,
             merged: !previewSettled,
@@ -362,7 +441,7 @@
             baseRef: merge.baseRef,
             settledSince: noteSettled(null, false, now),
             checksUrl: null,
-          },
+          }, mergedChange),
           prNumber: null,
           prUrl: null,
         };
@@ -391,7 +470,7 @@
         }
       }
       return {
-        facts: {
+        facts: withChange({
           hasOpenPr: false,
           armed: false,
           merged: inFlight,
@@ -406,7 +485,7 @@
           baseRef: null,
           settledSince: noteSettled(null, false, now),
           checksUrl: null,
-        },
+        }, mergedChange),
         prNumber: null,
         prUrl: null,
       };
@@ -513,8 +592,11 @@
       Date.now(),
     );
 
+    // What this PR does to the entry (#636); cached per PR and head sha.
+    var change = await entryChange(token, pr.number, sha);
+
     return {
-      facts: {
+      facts: withChange({
         hasOpenPr: true,
         armed: armed,
         merged: false,
@@ -529,7 +611,7 @@
         baseRef: baseRef,
         settledSince: settledSince,
         checksUrl: checksUrlFor(pr, failedRuns, incomplete),
-      },
+      }, change),
       prNumber: pr.number,
       prUrl: pr.html_url,
     };
@@ -552,6 +634,7 @@
       var baseRef = (pr.base && pr.base.ref) || null;
       var defaultBranch = (pr.base && pr.base.repo && pr.base.repo.default_branch) || null;
       return {
+        number: pr.number || null,
         mergedAt: t,
         sha: pr.merge_commit_sha || null,
         headSha: (pr.head && pr.head.sha) || null,
@@ -698,6 +781,8 @@
     branchFor: branchFor,
     matchesEntry: matchesEntry,
     getToken: getToken,
+    // Pure; exported for e2e/publish-takedown-wording.test.js.
+    readEntryChange: readEntryChange,
   };
 
   function start() {

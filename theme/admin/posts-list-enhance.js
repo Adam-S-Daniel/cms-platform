@@ -1180,10 +1180,10 @@
         }
       } else {
         bits.push(
-          '<span style="color:#8c959f" title="Turn Published ON to preview this draft. ' +
+          '<span style="color:#8c959f" title="Turn Show on site on to preview this draft. ' +
             "A preview follows the same rules as " +
             esc(window.CMSHostname ? window.CMSHostname.canonical() : "the published destination") + ", so an entry " +
-            'with Published OFF is not shown anywhere">draft — Published OFF</span>',
+            'with Show on site off is not shown anywhere">draft — Show on site off</span>',
         );
       }
       advancedLinks.push(

@@ -242,7 +242,7 @@ test.describe(
           section: "First post walkthrough",
           step: "C3.2",
           title: "Open the New Post form",
-          body: "Click **Posts** in the left sidebar, then **New Post**. The form mounts with empty fields for Title, URL Slug, Date, Excerpt, Body, Tags, Featured Image, Published, and Publish Date.",
+          body: "Click **Posts** in the left sidebar, then **New Post**. The form mounts with empty fields for Title, URL Slug, Date, Excerpt, Body, Tags, Featured Image, Show on site, and Publish Date.",
         });
       });
 
@@ -308,7 +308,7 @@ test.describe(
       // through the split publish menu — same shape as
       // `cms-publish-flow.spec.js`.
       await measure("05-save-and-publish", PER_STEP_BUDGET_MS, async () => {
-        const publishedToggle = page.getByLabel(/^Published$/).first();
+        const publishedToggle = page.getByLabel(/^(Show on site|Published)$/).first();
         await publishedToggle.click();
         await page
           .getByRole("button", { name: /^publish$/i })

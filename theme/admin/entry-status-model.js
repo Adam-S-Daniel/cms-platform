@@ -126,6 +126,94 @@
   BADGE_COLORS[BADGE.GOING_LIVE] = "#0969da";
   BADGE_COLORS[BADGE.NEEDS_ATTENTION] = "#cf222e";
 
+  // ── What a publish of THIS entry will do (#636) ───────────────────────
+  // The four badges say where the edit is in the pipeline. They said
+  // nothing about what arrives at the end of it, so an entry saved with
+  // `published: false` read "Going live…" and then "Live" over a page that
+  // 404s, and a post switched OFF read "Click Publish to put it on …" while
+  // the publish was taking it DOWN. The badge key is unchanged (it is still
+  // the pipeline state the list, the colors and the tests key on); the
+  // words come from the intent, which reads the SAVED `published` value:
+  //
+  //   show      `published` is not false (or the collection has no such
+  //             field): the ordinary publish, every sentence as before.
+  //   takedown  saved `published: false` where the live version had
+  //             `published: true` — publishing takes the page down.
+  //   hidden    saved `published: false` otherwise — publishing saves the
+  //             entry and it stays hidden.
+  //
+  // `publishedBefore` is read by publish-progress.js off the PR's own diff
+  // (a `-published: true` line). Unknown is NOT a takedown: the hidden
+  // wording is still true of a takedown ("it will not show"), whereas
+  // take-down wording on a never-shown entry would be false.
+  var TOGGLE_LABEL = "Show on site";
+  var INTENT = { SHOW: "show", TAKEDOWN: "takedown", HIDDEN: "hidden" };
+  var INTENT_WORDS = {
+    show: {
+      gerund: "going live",
+      done: "gone live",
+      finish: "putting it live",
+      finishThis: "putting this live",
+      before: "it goes live",
+    },
+    takedown: {
+      gerund: "coming off the site",
+      done: "come off the site",
+      finish: "taking it off the site",
+      finishThis: "taking this off the site",
+      before: "it comes off the site",
+    },
+    hidden: {
+      gerund: "being saved",
+      done: "been saved",
+      finish: "saving it",
+      finishThis: "saving this",
+      before: "it is saved",
+    },
+  };
+
+  function intentFor(facts) {
+    var f = facts || {};
+    if (f.published !== false) return INTENT.SHOW;
+    return f.publishedBefore === true ? INTENT.TAKEDOWN : INTENT.HIDDEN;
+  }
+
+  // The SAVED toggle, merged in by the surfaces that can read it (the
+  // editor's own switch while nothing is unsaved). A value the poller read
+  // off the PR's diff wins, because that is what was actually committed;
+  // anything that is not a boolean leaves the facts untouched.
+  function withSavedToggle(facts, toggle) {
+    var f = facts || {};
+    if (typeof f.published === "boolean" || typeof toggle !== "boolean") return f;
+    var out = {};
+    for (var k in f) {
+      if (Object.prototype.hasOwnProperty.call(f, k)) out[k] = f[k];
+    }
+    out.published = toggle;
+    return out;
+  }
+
+  // publish-button.js's question, for the two intents that are not an
+  // ordinary publish; null means "ask the ordinary question". Only the
+  // question changes — the buttons keep their names, because the
+  // shared publishViaUi() helper and every loop spec select them by name.
+  function confirmNote(facts, options) {
+    var intent = intentFor(facts);
+    if (intent === INTENT.SHOW) return null;
+    var dest = destination(facts, options);
+    var later = dest.preview ? " " + dest.laterNote : "";
+    if (intent === INTENT.TAKEDOWN) {
+      return (
+        "Take this off " + dest.noun + "? It will disappear " + (dest.preview ? "there " : "") +
+        "in about 5 minutes." + later
+      );
+    }
+    return (
+      "This will be saved but stay hidden — “" + TOGGLE_LABEL + "” is off. Turn on “" +
+      TOGGLE_LABEL + "” and Save to show it on " + dest.noun + ". Publish it hidden?" + later
+    );
+  }
+
   function isFiniteNumber(n) {
     return typeof n === "number" && isFinite(n);
   }
@@ -223,7 +311,7 @@
   // its own sentence rather than the object of "It is waiting for", which
   // read "It is waiting for all 2 automatic safety checks passed" (#643).
   // Null while any check is pending or none has started.
-  function checksPassed(checks) {
+  function checksPassed(checks, words) {
     var total = checks.total || 0;
     var pending = Array.isArray(checks.pending) ? checks.pending : [];
     if (!total || pending.length) return null;
@@ -231,7 +319,7 @@
       total === 1
         ? "The automatic safety check"
         : (total === 2 ? "Both " : "All " + total + " ") + "automatic safety checks";
-    return subject + " passed; now putting it live";
+    return subject + " passed; now " + (words || INTENT_WORDS.show).finish;
   }
 
   // ── Modifiers ─────────────────────────────────────────────────────────
@@ -248,8 +336,8 @@
         key: "hidden",
         label: MODIFIER_LABELS.hidden,
         detail:
-          "You have this switched off, so it will not show on " + host + " even " +
-          "once it is live. Turn “Published” on to show it.",
+          "You have “" + TOGGLE_LABEL + "” switched off, so it will not show on " + host +
+          " even after you publish it. Turn “" + TOGGLE_LABEL + "” on and Save to show it.",
       });
     }
     var when = parseDate(f.publishDate);
@@ -344,8 +432,9 @@
   // window.CMS_SUPPORT_CONTACT, falling back to a generic noun rather than
   // to a broken link. The failed-check branch also links "did not pass" to
   // the run (see "The run link"), for the person the editor asks.
-  function attentionCopy(facts, contact, stalled, dest) {
+  function attentionCopy(facts, contact, stalled, dest, words) {
     var f = facts || {};
+    var w = words || INTENT_WORDS.show;
     var host = dest.canonical;
     var who = contact || "whoever looks after " + host;
     // Ordered before the generic fallback but AFTER every specific cause: a
@@ -364,15 +453,15 @@
       return {
         detail:
           "This is waiting for a person to look at how the pages will change before " +
-          "it goes live. Ask " + who + " to approve the visual review.",
+          w.before + ". Ask " + who + " to approve the visual review.",
         waitingOn: "a person to approve the visual review",
       };
     }
     if (f.checksFailed) {
       return {
         detail:
-          "One of the automatic safety checks did not pass, so this has not gone " +
-          "live. Nothing you typed has been lost. Ask " + who + " to take a look.",
+          "One of the automatic safety checks did not pass, so this has not " + w.done +
+          ". Nothing you typed has been lost. Ask " + who + " to take a look.",
         waitingOn: "an automatic safety check that did not pass",
         link: checksLink(f.checksUrl, "did not pass"),
       };
@@ -404,13 +493,13 @@
       return {
         detail:
           "Every check passed, but " + host + " did not take the update. Nothing " +
-          "you typed has been lost — ask " + who + " to finish putting it live.",
-        waitingOn: "a person to finish putting this live",
+          "you typed has been lost — ask " + who + " to finish " + w.finish + ".",
+        waitingOn: "a person to finish " + w.finishThis,
       };
     }
     return {
       detail:
-        "Something stopped this from going live. Nothing you typed has been lost. " +
+        "Something stopped this from " + w.gerund + ". Nothing you typed has been lost. " +
         "Ask " + who + " to take a look.",
       waitingOn: "a person to take a look",
     };
@@ -452,6 +541,11 @@
     var contact = opts.contact || null;
     var modifiers = modifiersFor(f, now, opts);
     var dest = destination(f, opts);
+    var later = dest.preview ? " " + dest.laterNote : "";
+    // See "What a publish of THIS entry will do" above.
+    var intent = intentFor(f);
+    var words = INTENT_WORDS[intent];
+    var toggleOff = "because “" + TOGGLE_LABEL + "” is off";
 
     // A stall is a stopped publish (see the header): the merge had everything
     // it needed and did not happen, so believing `armed` past that point is
@@ -466,7 +560,7 @@
       stalled;
 
     if (stopped) {
-      var copy = attentionCopy(f, contact, stalled, dest);
+      var copy = attentionCopy(f, contact, stalled, dest, words);
       return {
         badge: BADGE.NEEDS_ATTENTION,
         label: "Needs attention",
@@ -484,7 +578,7 @@
 
     if (inFlight) {
       var mins = remainingMinutes(f, now);
-      var passed = !f.merged && f.checks ? checksPassed(f.checks) : null;
+      var passed = !f.merged && f.checks ? checksPassed(f.checks, words) : null;
       var waiting = f.merged
         ? dest.noun + " to finish updating"
         : passed
@@ -498,13 +592,23 @@
           : overran(f, now)
             ? "taking a little longer than usual"
             : TYPICAL_PHRASE;
+      var flightLabel = {
+        show: "Going live… (" + when + ")",
+        takedown: "Taking down… (" + when + ")",
+        hidden: "Saving, stays hidden (" + when + ")",
+      }[intent];
+      var flightLead = {
+        show: "This is on its way to " + dest.noun + ".",
+        takedown: "This is on its way off " + dest.noun + ".",
+        hidden:
+          "This is being saved to " + dest.noun + ", but it will stay hidden " + toggleOff + ".",
+      }[intent];
       return {
         badge: BADGE.GOING_LIVE,
-        label: "Going live… (" + when + ")",
+        label: flightLabel,
         detail:
-          "This is on its way to " + dest.noun + ". " + (passed ? "" : "It is waiting for ") + waiting + ". " +
-          "You can close this tab — it carries on without you." +
-          (dest.preview ? " " + dest.laterNote : ""),
+          flightLead + " " + (passed ? "" : "It is waiting for ") + waiting + ". " +
+          "You can close this tab — it carries on without you." + later,
         // Checks phase only: once merged, `waiting` is the deploy, not a check.
         // Links `waiting` — the phrase actually in `detail` — not the raw
         // `waitingOn` fact, which the poller no longer sets (it reports
@@ -517,15 +621,38 @@
     }
 
     if (f.hasOpenPr) {
-      return {
-        badge: BADGE.DRAFT,
-        label: "Draft — not on the site yet",
-        detail: opts.gated
+      var draftLabel = "Draft — not on the site yet";
+      var draftDetail;
+      if (intent === INTENT.TAKEDOWN) {
+        draftLabel = "Draft — still on the site";
+        draftDetail =
+          "“" + TOGGLE_LABEL + "” is now off, but this is still on " + dest.noun +
+          ". Click Publish to take it off " + dest.noun + "." + later;
+      } else if (intent === INTENT.HIDDEN) {
+        draftLabel = "Draft — will stay hidden";
+        draftDetail =
+          "This is saved, but it will stay hidden even after you publish, " + toggleOff +
+          ". Turn on “" + TOGGLE_LABEL + "” and Save to show it on " + dest.noun + "." + later;
+      } else if (f.entryIsNew === false) {
+        // An edit to an entry that already exists: the entry may well be on
+        // the site; what is not there yet is this edit.
+        draftLabel = "Draft — changes not on the site yet";
+        draftDetail = opts.gated
+          ? "Your changes are saved, but they are not on " + dest.noun + " yet. Click Publish " +
+            "to add them to the site — " + GATED_NOTE + "."
+          : "Your changes are saved, but they are not on " + dest.noun + " yet. Click Publish " +
+            "to put them on " + dest.noun + "." + later;
+      } else {
+        draftDetail = opts.gated
           ? "This is saved, but it is not on " + dest.noun + " yet. Click Publish to add it to " +
             "the site — " + GATED_NOTE + "."
           : "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
-            "put it on " + dest.noun + "." +
-            (dest.preview ? " " + dest.laterNote : ""),
+            "put it on " + dest.noun + "." + later;
+      }
+      return {
+        badge: BADGE.DRAFT,
+        label: draftLabel,
+        detail: draftDetail,
         detailLink: null,
         waitingOn: null,
         minutesLeft: null,
@@ -533,12 +660,27 @@
       };
     }
 
+    // The pipeline is done. For the two hidden intents "Live" would be the
+    // lie this block exists to stop: the page is not on the site.
+    var doneLabel = "Live";
+    var doneDetail = opts.gated
+      ? "This is saved on " + dest.noun + ", but " + GATED_NOTE + "."
+      : "This is on " + dest.noun + " now." + later;
+    if (intent === INTENT.TAKEDOWN) {
+      doneLabel = "Off the site";
+      doneDetail =
+        "This is no longer on " + dest.noun + ". Turn on “" + TOGGLE_LABEL + "”, Save and " +
+        "publish to show it again." + later;
+    } else if (intent === INTENT.HIDDEN) {
+      doneLabel = "Hidden — not on the site";
+      doneDetail =
+        "This is saved, but it is not shown on " + dest.noun + " " + toggleOff + ". Turn on “" +
+        TOGGLE_LABEL + "”, Save and publish to show it." + later;
+    }
     return {
       badge: BADGE.LIVE,
-      label: "Live",
-      detail: opts.gated
-        ? "This is saved on " + dest.noun + ", but " + GATED_NOTE + "."
-        : "This is on " + dest.noun + " now." + (dest.preview ? " " + dest.laterNote : ""),
+      label: doneLabel,
+      detail: doneDetail,
       detailLink: null,
       waitingOn: null,
       minutesLeft: null,
@@ -557,6 +699,11 @@
     DEPLOY_NOMINAL_MIN: DEPLOY_NOMINAL_MIN,
     STALL_GRACE_MIN: STALL_GRACE_MIN,
     derive: derive,
+    TOGGLE_LABEL: TOGGLE_LABEL,
+    INTENT: INTENT,
+    intentFor: intentFor,
+    withSavedToggle: withSavedToggle,
+    confirmNote: confirmNote,
     isSiteGated: isSiteGated,
     GATED_NOTE: GATED_NOTE,
     isStalled: isStalled,

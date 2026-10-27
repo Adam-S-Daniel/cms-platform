@@ -85,7 +85,7 @@ test.describe(
 
       // Flip Published on so Jekyll includes the page in the build.
       await page
-        .getByLabel(/^Published$/)
+        .getByLabel(/^(Show on site|Published)$/)
         .first()
         .click();
 

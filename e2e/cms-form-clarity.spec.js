@@ -73,9 +73,9 @@ const PROD_HINTS = {
     excerpt: "A short summary shown in post listings and meta tags (≤ 160 chars recommended)",
     featured_image: "Displayed as the post hero image and in social sharing cards",
     published:
-      "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft or schedule it with Publish Date below.",
+      "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. While it is off, Publish saves the post but keeps it hidden — or set a Publish Date below to show it automatically later.",
     publish_date:
-      "Optional. Choose a future date and time (UTC) to publish this post automatically on {{CMS_CURRENT_HOST}}. Only honored when Published is off.",
+      "Optional. Choose a future date and time, in your computer's own time zone, to show this post on {{CMS_CURRENT_HOST}} automatically. Only used while Show on site is off.",
     body: "Full post content. Supports Markdown, images, code blocks, and embedded content such as a video or form (use the 'HTML Embed' button in the toolbar).",
   },
   tags: {
@@ -95,7 +95,7 @@ const PROD_HINTS = {
     permalink:
       "The URL path the page lives at, unique per page, e.g. /pages/about/. Must start and end with a slash. A page is not added to the site menu automatically; link to it from the menu or another page.",
     published:
-      "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. Leave off to keep it as a draft.",
+      "Turn on to show this page on {{CMS_CURRENT_HOST}} when you select Publish. While it is off, Publish saves the page but keeps it hidden.",
     body: "Page content.",
   },
 };
