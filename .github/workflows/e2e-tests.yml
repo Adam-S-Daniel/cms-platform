@@ -141,6 +141,17 @@ jobs:
     # `e2e / project (chromium-desktop-3k-shard-1-of-3)`, not the default
     # rendering of every `include` field.
     name: project (${{ matrix.slot }})
+    # The wall lives HERE, never on the `e2e` gate below (a job killed at its
+    # wall reports `cancelled`, which no merge can get past — #289). It is the
+    # apt phase's only backstop: the install composite deliberately leaves
+    # `install-deps` unbounded (#210), so without this a stalled mirror runs to
+    # GitHub's 360-minute default. adamdaniel.ai PR #4460's chromium-light lane
+    # sat in `apt-get update` from 2026-10-27T20:14Z until that default
+    # cancelled it at 02:15Z, holding the PR's auto-merge for six hours. 45 min
+    # matches self-fixture-e2e.yml's `fixture-e2e-project`: it clears the
+    # composite's bounded download worst case (~35 min) plus a lane's few
+    # minutes of build + tests. e2e/playwright-install-bounded.test.js checks it.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

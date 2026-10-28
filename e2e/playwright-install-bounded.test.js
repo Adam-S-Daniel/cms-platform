@@ -162,6 +162,26 @@ test("no caller's bounded install budget can outlive its own job timeout", () =>
   ).toEqual([]);
 });
 
+test("the consumer e2e matrix carries its own job wall, and its gate carries none", () => {
+  // The budget check above skips a job with no `timeout-minutes` (GitHub then
+  // applies its 360-minute default), so it cannot catch a MISSING wall. On the
+  // consumer e2e matrix that gap is apt's only backstop gone: adamdaniel.ai PR
+  // #4460's chromium-light lane sat in `apt-get update` for six hours until the
+  // default cancelled it, holding the PR's auto-merge the whole time. The wall
+  // belongs on the `project` matrix and never on the `e2e` gate, whose context
+  // a wall would end `cancelled` (#289).
+  const wf = parseYaml(
+    fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "e2e-tests.yml"), "utf8"),
+  );
+  const wall = wf.jobs.project["timeout-minutes"];
+  expect(wall, "e2e-tests.yml's `project` job needs a `timeout-minutes` (apt's only backstop)").toBeGreaterThan(0);
+  expect(wall, "keep the wall well under GitHub's 360-minute default").toBeLessThanOrEqual(60);
+  expect(
+    wf.jobs.e2e["timeout-minutes"],
+    "the `e2e` gate publishes a required context, so it must carry no wall",
+  ).toBeUndefined();
+});
+
 test("the final download attempt is more generous than the early ones", () => {
   // A uniform bound converts a sustained-slow network (the measured case: ~35 KB/s
   // for a whole run, 2340 s to finish) into a RED required check, which blocks a
