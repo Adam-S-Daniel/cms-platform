@@ -92,6 +92,28 @@ description: >-
   during run 39851509261, so it is a floor for other images, not the fix: an
   idle timeout cannot catch a trickle, and that stall evaded it.
 
+  MIRROR-SWITCH FREEZE: A BOUNDED INDEX REFRESH (2026-10-28,
+  docs/E2E-PARALLELISM.md "The mirror-switch freeze"). The offline path covers an
+  exact hit only. Everything else (a cache miss, a restore-keys fallback after an
+  image rotation, a failed offline install) still ran `install-deps`, whose own
+  `apt-get update` froze for six hours on 8 adamdaniel.ai lanes between Oct 7 and
+  Oct 27, every one the same way: azure.archive.ubuntu.com timed out (`Ign:` on
+  all four InRelease files), apt switched to https://archive.ubuntu.com through
+  the image's /etc/apt/apt-mirrors.txt, fetched its InRelease files, printed
+  `Get:5 https://archive.ubuntu.com/ubuntu noble-security InRelease`, and then
+  nothing until GitHub's 360-minute cap. No lane that reached azure froze, and
+  actions/runner-images#15040 reports the same signature upstream. So the online
+  path now runs its OWN `apt-get update`, bounded and retried, and every retry
+  first demotes the image's first mirror so apt starts on a reachable one instead
+  of switching mid-update. Bounding it does not reopen #210: `apt-get update`
+  takes only /var/lib/apt/lists/lock (traced with strace on apt 2.8.3), never
+  /var/lib/dpkg/lock-frontend, and `timeout` runs under sudo so the apt-get it
+  kills is its direct child. With fresh indexes in hand, the packages Playwright
+  reports missing (`install-deps --dry-run`) are installed with a plain
+  `apt-get install`, UNBOUNDED as before, so no second `apt-get update` runs. If
+  every bounded refresh fails, or the install or its check does, the step falls
+  back to today's unbounded `install-deps`; the job wall is its backstop.
+
   Bash, plus `actions/cache/restore` + `actions/cache/save` pinned to a full
   SHA (the fleet SHA-pin convention; no other transitive `uses:`).
 
@@ -162,6 +184,20 @@ inputs:
       not part of that static number — the job timeout is its only backstop.)
     required: false
     default: '1200'
+
+  apt-update-timeout-seconds:
+    description: >-
+      Bound for each ONLINE `apt-get update` attempt (the index refresh the online
+      path runs before installing; the offline exact-hit path runs none). Default
+      60 s is about twice the slowest healthy refresh measured (31 s); a refresh
+      that is only slow because azure timed out costs one retry, which starts on
+      the next mirror and takes seconds. It is safe to bound because `apt-get update` holds only /var/lib/apt/lists/lock,
+      never the dpkg lock, and `timeout` runs under sudo so apt-get is its direct
+      child. Attempts share `attempts`; every attempt after the first demotes the
+      runner's first mirror (see the "MIRROR-SWITCH FREEZE" block in the header).
+      Counted in e2e/playwright-install-bounded.test.js's worst case.
+    required: false
+    default: '60'
 
   apt-deb-cache:
     description: >-
@@ -332,6 +368,7 @@ runs:
         PW_APT_MATCHED_KEY: ${{ steps.debrestore.outputs.cache-matched-key }}
         PW_APT_DEB_DIR: ${{ steps.debkey.outputs.dir }}
         PW_APT_DEB_CACHE: ${{ inputs.apt-deb-cache }}
+        PW_APT_UPDATE_TIMEOUT_S: ${{ inputs.apt-update-timeout-seconds }}
       run: |
         set -uo pipefail
         # `set -e` is deliberately NOT set: it would abort the retry loop on the
@@ -428,7 +465,7 @@ runs:
         }
 
         echo "playwright install for '${PW_INSTALL_BROWSER}': ${PW_INSTALL_ATTEMPTS} attempts per phase;" \
-             "apt phase unbounded (job timeout is its backstop);" \
+             "online apt-get update bound ${PW_APT_UPDATE_TIMEOUT_S}s; apt installs unbounded (job timeout is their backstop);" \
              "download bound ${PW_INSTALL_TIMEOUT_S}s, final attempt ${PW_INSTALL_FINAL_TIMEOUT_S}s."
 
         # OFFLINE APT PATH (2026-10-22, docs/E2E-PARALLELISM.md "Mirror-independent
@@ -507,11 +544,102 @@ runs:
           return 0
         }
 
+        # BOUNDED INDEX REFRESH (2026-10-28, docs/E2E-PARALLELISM.md "The
+        # mirror-switch freeze"). Eight lanes froze for six hours in the
+        # `apt-get update` inside install-deps, every one right after apt switched
+        # from a timed-out azure.archive.ubuntu.com to the image's next mirror.
+        # This update is OURS, so it can be bounded without reopening #210:
+        # `apt-get update` takes only /var/lib/apt/lists/lock, never the dpkg
+        # lock, and `timeout` runs under sudo, so the apt-get it kills is its
+        # direct child and the lists lock dies with it.
+        #
+        # Each retry first demotes the image's first mirror in
+        # /etc/apt/apt-mirrors.txt (lines "URI<TAB>priority:N"), so apt starts on
+        # the next one instead of switching mid-update, which is the step that
+        # froze. The runner VM is per-job, so the edit dies with it.
+        demote_first_mirror() {
+          local list="${PW_APT_MIRROR_LIST:-/etc/apt/apt-mirrors.txt}" rotated
+          [ -f "$list" ] || { echo "no ${list}; nothing to demote."; return 0; }
+          rotated="$(awk -F'\t' 'NF && $1 !~ /^#/ { u[n++] = $1 }
+            END { if (n < 2) exit 1; for (i = 1; i <= n; i++) printf "%s\tpriority:%d\n", u[i % n], i }' "$list")" \
+            || { echo "${list} lists fewer than two mirrors; nothing to demote."; return 0; }
+          printf '%s\n' "$rotated" | "${SUDO[@]}" tee "$list" >/dev/null \
+            || { echo "::warning::could not rewrite ${list}; retrying on the same mirror order."; return 0; }
+          echo "mirror order is now:"; cat "$list"
+        }
+
+        APT_ONLINE_WHY=""
+        apt_update_bounded() {
+          local attempt=1 status backoff
+          while :; do
+            if [ "$attempt" -gt 1 ]; then demote_first_mirror; fi
+            echo "[apt-get update] attempt ${attempt} of ${PW_INSTALL_ATTEMPTS}, bound ${PW_APT_UPDATE_TIMEOUT_S}s:"
+            status=0
+            "${SUDO[@]}" timeout -k 10 "$PW_APT_UPDATE_TIMEOUT_S" apt-get update </dev/null || status=$?
+            if [ "$status" -eq 0 ]; then
+              echo "[apt-get update] succeeded on attempt ${attempt}."
+              return 0
+            fi
+            if [ "$attempt" -ge "$PW_INSTALL_ATTEMPTS" ]; then
+              APT_ONLINE_WHY="apt-get update failed ${PW_INSTALL_ATTEMPTS} time(s), last exit ${status}"
+              return 1
+            fi
+            backoff=$((attempt * 15))
+            if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+              echo "::warning::apt-get update attempt ${attempt} hit its ${PW_APT_UPDATE_TIMEOUT_S}s bound (a frozen mirror switch, not a slow index: healthy refreshes take under 31s). Retrying in ${backoff}s on the next mirror."
+            else
+              echo "::warning::apt-get update attempt ${attempt} exited ${status}. Retrying in ${backoff}s on the next mirror."
+            fi
+            sleep "$backoff"
+            attempt=$((attempt + 1))
+          done
+        }
+
+        # Install what Playwright reports missing against the fresh indexes, with
+        # a plain `apt-get install` (unbounded, a direct child, waiting on the
+        # dpkg lock like every apt here) so install-deps' own second
+        # `apt-get update` never runs. Success is Playwright's own dry-run check.
+        apt_install_missing() {
+          local out status pkgs=()
+          out="$(mktemp)"
+          status=0
+          npx playwright install-deps --dry-run "$PW_INSTALL_BROWSER" >"$out" 2>&1 || status=$?
+          cat "$out"
+          if [ "$status" -eq 0 ]; then rm -f "$out"; return 0; fi
+          # Lines under "Missing system dependencies (N):" are "  <package>".
+          mapfile -t pkgs < <(sed -nE 's/^  ([a-z0-9][a-z0-9.+-]*(:[a-z0-9]+)?)$/\1/p' "$out")
+          rm -f "$out"
+          if [ "${#pkgs[@]}" -eq 0 ]; then
+            APT_ONLINE_WHY="the dry-run check failed (exit ${status}) without naming packages"
+            return 1
+          fi
+          echo "[apt-get install] ${#pkgs[@]} missing packages, UNBOUNDED on purpose (#210):"
+          status=0
+          "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends "${pkgs[@]}" </dev/null || status=$?
+          if [ "$status" -ne 0 ]; then
+            APT_ONLINE_WHY="apt-get install exited ${status}"
+            return 1
+          fi
+          status=0
+          npx playwright install-deps --dry-run "$PW_INSTALL_BROWSER" || status=$?
+          if [ "$status" -ne 0 ]; then
+            APT_ONLINE_WHY="the dry-run check still reports missing packages after the install"
+            return 1
+          fi
+          return 0
+        }
+
+        SUDO=()
+        [ "$(id -u)" -eq 0 ] || SUDO=(sudo)
+
         # PHASE A — apt. Runs first; the download only happens if it succeeded.
         if apt_offline; then
           echo "apt path: offline (exact cache hit) — no apt-get update, no mirror."
+        elif apt_update_bounded && apt_install_missing; then
+          echo "apt path: online (${APT_OFFLINE_WHY}), bounded refresh"
         else
-          echo "apt path: online (${APT_OFFLINE_WHY})"
+          echo "apt path: online (${APT_OFFLINE_WHY}), unbounded install-deps after: ${APT_ONLINE_WHY}"
           run_phase deps "install-deps (apt)" || exit 1
         fi
 
