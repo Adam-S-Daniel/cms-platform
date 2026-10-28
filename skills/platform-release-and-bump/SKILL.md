@@ -17,16 +17,20 @@ pin-consistency guard, issue #29). So a platform change is a 3-step cascade:
 
 The release workflow tags `main` HEAD + creates a GitHub Release. Merge your
 fix and the atomic release-version bump to `main` with independent review and
-confirm `main`'s self-CI is green FIRST. Before cutting a stable release, create
-an open draft PR into `main` in **each** consumer. Keep production pins fixed.
-Pin each draft's `platform.lock`, platform workflow `uses:@` and `platform_ref:`
-inputs to the full platform `main` commit SHA. In `Gemfile`, use `ref: "<SHA>"`
-for the platform theme, and refresh `Gemfile.lock` so its `ref:` and `revision:`
-equal that SHA. Run each consumer's own checks with the candidate e2e caller's
-`target: local` and `browser: all`. Wait for the required checks and actual e2e
-matrix/site verifier work jobs to succeed. Never merge these validation drafts.
-See [`docs/CONTRIBUTING.md`](../../docs/CONTRIBUTING.md) for the complete promotion
-gate contract. Then dispatch with both candidate PR numbers:
+confirm `main`'s self-CI is green FIRST. Before cutting a stable release,
+dispatch `release-candidates.yml` on `main`: it opens (or re-pins) a draft PR in **each** consumer pinned to the exact
+platform `main` commit and prints the `release.yml` dispatch line. Production
+pins stay fixed, and the validation drafts are never merged. It only prepares:
+wait for each draft's required checks and actual e2e matrix/site verifier work
+jobs to succeed. See [`docs/CONTRIBUTING.md`](../../docs/CONTRIBUTING.md) for the
+complete promotion gate contract (including hand-built drafts when a consumer's
+caller predates candidate mode).
+
+```bash
+gh workflow run release-candidates.yml -R Adam-S-Daniel/cms-platform --ref main
+```
+
+Then dispatch `release.yml` with both candidate PR numbers:
 
 ```bash
 gh workflow run release.yml -R Adam-S-Daniel/cms-platform -f version=vX.Y.Z --ref main \

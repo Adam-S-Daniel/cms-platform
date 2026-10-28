@@ -66,7 +66,7 @@ PRs (`cms/*` head refs) deploy under a `cms-{slug}/` prefix instead of
 
 ## Workflow file: `.github/workflows/deploy-preview.yml`
 
-**Triggers:** `pull_request` types `[opened, synchronize, reopened, closed]` targeting `main`
+**Triggers:** the file is `on: workflow_call` only. The `pull_request` trigger (types `[opened, synchronize, reopened, closed]`, targeting `main`), the `paths-ignore` list and the `run-name` live in the site's thin caller (`examples/site/.github/workflows/deploy-preview.yml`); `closed` drives the teardown job.
 
 **Permissions:** `contents: read`, `pull-requests: write`, `id-token: write`
 

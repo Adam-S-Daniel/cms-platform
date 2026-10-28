@@ -43,12 +43,21 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-28 — cms-platform/(13 skills) — edit
+
+- Motivation: the 2026-10-28 prompt-audit sweep (https://github.com/Adam-S-Daniel/cms-platform/issues/900) found stale or contradicted statements in instruction files: preview-environments (deploy-preview.yml is `workflow_call` only), post-failure-comment (e2e marker is per matrix slot; a "prior revisions" note), code-quality (two self-ci lanes missing), platform-release-and-bump (hand-built candidate drafts), admin-config-render (canary "not optional" vs the `base_collections` keep-list), consumer-repo-provisioning (diff-against-prior-version phrasing), cms-stuck-pr-triage / browser-testing / ci-watcher-loops (incident IDs and dated evidence inside rules), aws-bootstrap (obsolete v0.1.125 entry), test-canary (long description).
+- Change: each statement now states the current rule; dated incident evidence moved to `docs/evidence/skill-and-agents-narratives.md` with a one-clause pointer; `skills/.freshness-allow.yml` follows the renamed `CMS_PLATFORM_PAT` heading. The cancel-in-progress:false contradiction between cms-stuck-pr-triage and platform-release-and-bump was resolved separately in PR #902 (PR #901).
+- Eval: outstanding — the skills-evals fixtures for these skills were not run in this change.
+- Outcome: pending merge.
+
+---
+
 ## 2026-10-28 — cms-platform/cms-stuck-pr-triage, platform-release-and-bump — edit
 
 - Motivation: PR #901 found the two skills contradicting each other on what `cancel-in-progress: false` does. GitHub's concurrency docs: one running plus one pending run per group by default (`queue: single`); a newer pending run cancels the older one.
-- Change: cms-stuck-pr-triage no longer says the loops "queue rather than killing each other" and names concurrency eviction as one source of cancelled runs; platform-release-and-bump no longer says the shared group queues any remaining overlap (PR pending).
+- Change: cms-stuck-pr-triage no longer says the loops "queue rather than killing each other" and names concurrency eviction as one source of cancelled runs; platform-release-and-bump no longer says the shared group queues any remaining overlap (PR #902).
 - Eval: none run for this one-paragraph correction.
-- Outcome: pending merge.
+- Outcome: merged 2026-10-28.
 
 ---
 

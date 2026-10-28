@@ -1,6 +1,6 @@
 ---
 name: test-canary
-description: Internal propagation canary for the cms-platform bundle — it carries no guidance and must never be invoked in normal work. It is INTENDED as the marker an automated probe would use to assert that "test-canary" appears in a session's loaded-skill set; that probe is not built and no issue tracks it, so nothing checks for this skill today.
+description: Internal propagation canary for the cms-platform bundle. It carries no guidance; never invoke it in normal work.
 ---
 
 # Test Canary

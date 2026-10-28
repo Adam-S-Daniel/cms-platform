@@ -121,7 +121,7 @@ done
 echo "DONE run=$RUN conclusion=$(gh run view "$RUN" --json conclusion --jq .conclusion 2>/dev/null)"
 ```
 
-Verified 2026-09-30 on Claude Code 2.1.285: a default-timeout Bash watcher (`sleep 7200`) was killed at ~30 min with output ending `[killed]`, one with `timeout: 7200000` (`sleep 9000`) was killed at 2 h, and a 60-min `Monitor` expired at 30 min.
+A default-timeout Bash watcher is killed at about 30 min with output ending `[killed]`, one with `timeout: 7200000` is killed at 2 h, and a 60-min `Monitor` expires at 30 min (measurements: `docs/evidence/skill-and-agents-narratives.md`).
 
 ## When poll intervals matter
 
@@ -138,5 +138,5 @@ Verified 2026-09-30 on Claude Code 2.1.285: a default-timeout Bash watcher (`sle
 
 ## Reference
 
-- The pitfall surfaced on 2026-05-06 while watching `cms-publish-loop-host.yml` after fixes #222 + #227 landed; the chained-capture bug left an agent blind for ~30 minutes.
+- The chained-capture pitfall's incident record: `docs/evidence/skill-and-agents-narratives.md`.
 - Tooling: `Monitor` (preferred for multi-step), `Bash run_in_background` (preferred for single-event), `TaskStop` to kill a hung watcher. In Claude Code, both watcher tools stop at a time limit — see [Claude Code watchers have a time limit](#claude-code-watchers-have-a-time-limit--size-them-and-re-arm-them).
