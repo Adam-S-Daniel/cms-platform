@@ -180,9 +180,11 @@ jobs:
           # The `parity-probe` job's timeout-minutes is 30; keep the composite's
           # worst case under it so a stalled mirror surfaces as this action's
           # diagnostic rather than an opaque job timeout, and still leaves room
-          # for the probe itself. (Locked by
+          # for the probe itself. The worst case now includes the online
+          # path's bounded `apt-get update` (3 x 60 s + backoff, 2026-10-28), so
+          # the final download attempt gives up 240 s to make room. (Locked by
           # e2e/playwright-install-bounded.test.js.)
-          final-timeout-seconds: '900'
+          final-timeout-seconds: '660'
 
       # A DEPENDABOT PR HAS NO PREVIEW, BY DESIGN — so it must not wait for one
       # and must not be failed for its absence (#383). deploy-preview.yml's

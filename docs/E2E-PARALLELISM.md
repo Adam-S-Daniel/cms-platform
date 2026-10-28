@@ -682,6 +682,78 @@ is open, and the percentage stayed `0.0000` through a 20 B/s trickle, so it is
 noisy and still cannot tell a trickle from silence. `Debug::Acquire::http` logs
 every header. Neither was added.
 
+## The mirror-switch freeze: a bounded index refresh (2026-10-28)
+
+The offline path above covers an EXACT hit only. A miss, a restore-keys
+fallback after an image rotation, or a failed offline install still ran
+`install-deps`, and its `apt-get update` is where the remaining hangs were.
+
+**The incidents.** adamdaniel.ai, last 400 e2e runs (Oct 5 to 28): 8 project
+lanes ran to GitHub's 360-minute cap, all in `install-deps (apt)` attempt 1,
+all the same way. Jobs 112946032441, 112946032542, 112946032575 and
+112946032756 (run 37666226493, Oct 7), 113499605707 (Oct 8), 120538353304
+(Oct 23), 121658189238 (Oct 26) and 122441875035 (Oct 27, PR #4460); chromium,
+firefox and webkit; images 20260927, 20261004 and 20261012; four regions:
+
+```
+20:14:29  Get:6-9 packages.microsoft.com ...                        (instant)
+20:14:44  Ign:2-5 http://azure.archive.ubuntu.com/ubuntu noble* InRelease   (x2)
+20:14:46  Hit:2 https://archive.ubuntu.com/ubuntu noble InRelease
+20:14:46  Get:3 https://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+20:14:46  Ign:10-16 http://azure.archive.ubuntu.com/ubuntu noble-updates/* (indexes)
+20:14:46  Get:4 https://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+20:14:46  Get:5 https://archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+02:15:01  ##[error]The operation was canceled.          (6 h, nothing printed)
+```
+
+Every one: azure timed out, apt moved to the image's next mirror through
+`/etc/apt/apt-mirrors.txt` (`URI<TAB>priority:N`, written by runner-images'
+configure-apt-sources.sh), printed the same `Get:5` line, and froze. Six
+lanes that SUCCEEDED in the same runs reached azure directly and fetched every
+index from it in 6-31 s. One of them switched mirrors later, while fetching
+`.deb`s, and recovered in 16 s: only a switch during `apt-get update` froze.
+actions/runner-images#15040 (open, Oct 22) reports the same signature. 7 of the
+8 were exact `.deb` hits, so v0.1.165's offline path would have skipped their
+update; the eighth (firefox, Oct 7) was a restore-keys fallback and would not.
+
+**The change.** The online path runs its OWN `apt-get update`, bounded
+(`apt-update-timeout-seconds`, default 60 s, about twice the slowest healthy
+refresh) and retried (`attempts`). Before every retry it demotes the image's
+first mirror to last, so the retry starts on a mirror that answered instead of
+switching mid-update. Then it installs the packages Playwright's
+`install-deps --dry-run` reports missing with a plain
+`apt-get install -y --no-install-recommends`, unbounded, and accepts it only if
+the dry-run then reports nothing missing. `install-deps` itself, with its
+second `apt-get update`, runs only if every refresh, the install or the check
+fails; the job wall is still its backstop. The log line is
+`apt path: online (<reason>), bounded refresh` or
+`apt path: online (<reason>), unbounded install-deps after: <why>`.
+
+**Why bounding this apt does not reopen #210.** #210 was a killed
+`apt-get install` orphaned behind `npx`, still holding
+`/var/lib/dpkg/lock-frontend`. `apt-get update` opens only
+`/var/lib/apt/lists/lock` (strace, apt 2.8.3 on 24.04), and `timeout` runs
+under sudo, so the apt-get it kills is its direct child. Measured locally
+against an unanswering first mirror: `timeout -k 10 20 apt-get update` exited
+124 at 20 s, no apt-get or method process survived, and the lists lock was
+free. Installs stay unbounded, lint-locked by
+e2e/playwright-install-bounded.test.js (by spelling and by running the real
+bash against stubs).
+
+**Measured locally** (this composite's real bash, Ubuntu 24.04, apt 2.8.3,
+deps-only, cache miss): chromium and firefox, refresh then "All system
+dependencies are installed."; webkit, refresh, 93 missing packages installed by
+name (30.5 MB) and verified, one `apt-get update` in total, 28 s.
+
+*Not reproduced:* the freeze itself. A local mirror list whose first entry
+accepts connections and never answers made apt switch file by file, slowly, and
+not freeze in 15 minutes. The fix does not depend on the mechanism: a frozen
+refresh is cut at 60 s and the retry avoids the switch.
+
+*Budget.* The bounded refresh adds `attempts x 60 s + backoff` (225 s by
+default) to every caller's worst case. parity-preview.yml and preview-media.yml
+(30-minute jobs) now pass `final-timeout-seconds: '660'` to stay under it.
+
 ## Rejected: skipping tests per diff
 
 `e2e/select-specs.js` can narrow the suite to a diff's salient specs, and the

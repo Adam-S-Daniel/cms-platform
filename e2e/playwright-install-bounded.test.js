@@ -85,6 +85,7 @@ function compositeDefaults() {
     attempts: num("attempts", 3),
     timeoutSeconds: num("timeout-seconds", 420),
     finalTimeoutSeconds: num("final-timeout-seconds", 1200),
+    aptUpdateTimeoutSeconds: num("apt-update-timeout-seconds", 60),
   };
 }
 
@@ -101,14 +102,20 @@ function compositeDefaults() {
 // this test still guarantees is the original property: the part of the step we
 // DO bound cannot outlive the job, so the action always gets to print its
 // diagnostic instead of being cut off mid-retry.
+//
+// The one apt command that IS bounded is the online path's own `apt-get update`
+// (2026-10-28, "The mirror-switch freeze"): it holds no dpkg lock, so it counts
+// here, deps-only lanes included, because it runs before the download is skipped.
 function boundedWorstCaseSeconds(withBlock, defaults) {
-  if (String(withBlock["deps-only"]) === "true") return 0; // apt only ⇒ nothing bounded
   const attempts = Number(withBlock.attempts ?? defaults.attempts);
-  const early = Number(withBlock["timeout-seconds"] ?? defaults.timeoutSeconds);
-  const final = Number(withBlock["final-timeout-seconds"] ?? defaults.finalTimeoutSeconds);
+  const update = Number(withBlock["apt-update-timeout-seconds"] ?? defaults.aptUpdateTimeoutSeconds);
   let backoff = 0;
   for (let i = 1; i < attempts; i++) backoff += i * 15;
-  return (attempts - 1) * early + final + backoff;
+  const refresh = attempts * update + backoff;
+  if (String(withBlock["deps-only"]) === "true") return refresh; // no download phase
+  const early = Number(withBlock["timeout-seconds"] ?? defaults.timeoutSeconds);
+  const final = Number(withBlock["final-timeout-seconds"] ?? defaults.finalTimeoutSeconds);
+  return refresh + (attempts - 1) * early + final + backoff;
 }
 
 const { raw, viaComposite } = installSteps();
@@ -231,6 +238,47 @@ test("the apt phase is NOT wrapped in a timeout", () => {
         `orphans apt-get on the dpkg lock and starves every retry (job 92989057569)`,
     ).not.toMatch(/\btimeout\b/);
   }
+});
+
+test("the online apt-get update is bounded under sudo, and no apt-get install is", () => {
+  // THE MIRROR-SWITCH FREEZE (2026-10-28, docs/E2E-PARALLELISM.md). Eight
+  // adamdaniel.ai lanes sat six hours in the `apt-get update` inside
+  // install-deps, each right after apt switched from a timed-out
+  // azure.archive.ubuntu.com to https://archive.ubuntu.com (jobs 112946032441,
+  // 112946032542, 112946032575, 112946032756, 113499605707, 120538353304,
+  // 121658189238, 122441875035). The online path now runs its own update, and
+  // that one may be bounded because it holds only /var/lib/apt/lists/lock.
+  // What must stay true for #210 not to come back: `timeout` runs UNDER sudo
+  // (so the apt-get it kills is its direct child, never a grandchild behind
+  // sudo), and nothing that installs (`apt-get install`, dpkg) is ever bounded.
+  const body = String(compositeStep(/npx playwright/).run);
+  const code = body.split("\n").filter((l) => !/^\s*#/.test(l));
+
+  // The invocation itself, not the log lines that mention it.
+  const update = code.filter((l) => /\bapt-get update\s*(<|\|\||$)/.test(l));
+  expect(update.length, "the online path's own `apt-get update` is missing").toBeGreaterThan(0);
+  for (const line of update) {
+    expect(
+      line,
+      "the update must run as `sudo timeout -k … apt-get update`, so timeout's child IS apt-get",
+    ).toMatch(/"\$\{SUDO\[@\]\}" timeout -k \d+ "\$PW_APT_UPDATE_TIMEOUT_S" apt-get update/);
+  }
+  // A `timeout` INVOCATION (a number or a variable after it) on any line that
+  // installs; prose such as "apt-lock-timeout-seconds" in a message is not one.
+  for (const line of code.filter((l) => /apt-get install|dpkg --configure/.test(l))) {
+    expect(
+      line,
+      `an install must never be bounded — \`${line.trim()}\` would orphan dpkg on its lock (#210)`,
+    ).not.toMatch(/\btimeout\s+(-k\s+\d+\s+)?("\$|\d)/);
+  }
+  // Retries move off the first mirror, which is the switch that froze.
+  expect(body, "every retry must demote the image's first mirror").toMatch(
+    /if \[ "\$attempt" -gt 1 \]; then demote_first_mirror; fi/,
+  );
+  // Fresh indexes in hand, the install must not re-run `apt-get update` via
+  // install-deps: the online path installs Playwright's missing list itself and
+  // reaches the unbounded install-deps only as the fallback.
+  expect(body).toMatch(/elif apt_update_bounded && apt_install_missing; then/);
 });
 
 test("the download phase IS bounded, escalates, and retries", () => {
@@ -472,15 +520,29 @@ const { spawnSync } = require("node:child_process");
 
 const STUBS = {
   // Every stub appends one line to $STUB_LOG, then behaves per its env knob.
+  // STUB_DRYRUN_MISSING lists packages the dry-run reports missing until an
+  // apt-get install (by name) has run; then it reports all installed.
   npx: `echo "npx $*" >> "$STUB_LOG"
 case "$*" in
-  *"install-deps --dry-run"*) exit "\${STUB_DRYRUN_RC:-0}" ;;
+  *"install-deps --dry-run"*)
+    if [ -n "\${STUB_DRYRUN_MISSING:-}" ] && [ ! -e "$STUB_LOG.installed" ]; then
+      echo "Missing system dependencies (2):"
+      for p in $STUB_DRYRUN_MISSING; do echo "  $p"; done
+      exit 1
+    fi
+    exit "\${STUB_DRYRUN_RC:-0}" ;;
   *"install-deps"*) exit "\${STUB_ONLINE_RC:-0}" ;;
   *) exit 0 ;;
 esac`,
   sudo: `echo "sudo $*" >> "$STUB_LOG"
 exec "$@"`,
   "apt-get": `echo "apt-get $*" >> "$STUB_LOG"
+if [ "$1" = "update" ]; then
+  if [ -n "\${STUB_UPDATE_ONCE:-}" ] && [ -e "$STUB_LOG.updated" ]; then exit 0; fi
+  touch "$STUB_LOG.updated"
+  exit "\${STUB_UPDATE_RC:-0}"
+fi
+case "$*" in *--no-download*) ;; *) touch "$STUB_LOG.installed" ;; esac
 exit "\${STUB_APT_RC:-0}"`,
   dpkg: `echo "dpkg $*" >> "$STUB_LOG"
 if [ "$1" = "--audit" ]; then printf '%s' "\${STUB_AUDIT:-}"; fi
@@ -488,6 +550,7 @@ exit 0`,
   // Positive control for the no-timeout invariant: the download phase MUST
   // reach this stub, so a run that logs no timeout call at all is broken.
   timeout: `echo "timeout $*" >> "$STUB_LOG"
+if [ "$1" = "-k" ]; then shift 2; fi
 shift
 exec "$@"`,
   sleep: `echo "sleep $*" >> "$STUB_LOG"`,
@@ -506,6 +569,14 @@ function runInstallStep(env) {
     const debDir = path.join(dir, "debs");
     fs.mkdirSync(debDir);
     for (const f of ["libnss3_3.98_amd64.deb", "xvfb_21.1_amd64.deb"]) fs.writeFileSync(path.join(debDir, f), "");
+    // The runner image's mirror list, in its real "URI<TAB>priority:N" shape.
+    const mirrors = path.join(dir, "apt-mirrors.txt");
+    fs.writeFileSync(
+      mirrors,
+      "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n" +
+        "https://archive.ubuntu.com/ubuntu/\tpriority:2\n" +
+        "https://security.ubuntu.com/ubuntu/\tpriority:3\n",
+    );
     const script = path.join(dir, "step.sh");
     fs.writeFileSync(script, String(step.run));
     const log = path.join(dir, "log");
@@ -523,6 +594,8 @@ function runInstallStep(env) {
         PW_INSTALL_TIMEOUT_S: "420",
         PW_INSTALL_FINAL_TIMEOUT_S: "1200",
         PW_APT_LOCK_TIMEOUT_S: "300",
+        PW_APT_UPDATE_TIMEOUT_S: "60",
+        PW_APT_MIRROR_LIST: mirrors,
         PW_APT_DEB_CACHE: "true",
         PW_APT_DEB_DIR: debDir,
         PW_APT_EXACT_HIT: "",
@@ -534,6 +607,7 @@ function runInstallStep(env) {
       status: r.status,
       out: `${r.stdout}${r.stderr}`,
       calls: fs.readFileSync(log, "utf8").split("\n").filter(Boolean),
+      mirrors: fs.readFileSync(mirrors, "utf8"),
     };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -541,8 +615,12 @@ function runInstallStep(env) {
 }
 
 const isOffline = (c) => /^apt-get install .*--no-download/.test(c);
-const isOnline = (c) => /^npx playwright install-deps chromium$/.test(c);
+// The online path: its own bounded refresh first, today's install-deps only as
+// the fallback.
+const isRefresh = (c) => c === "timeout -k 10 60 apt-get update";
+const isInstallDeps = (c) => /^npx playwright install-deps chromium$/.test(c);
 const isUpdate = (c) => /^apt-get update/.test(c);
+const isByName = (c) => /^apt-get install -y --no-install-recommends (?!.*--no-download)/.test(c);
 
 const SCENARIOS = {
   "exact hit": { PW_APT_EXACT_HIT: "true", PW_APT_MATCHED_KEY: "k-exact" },
@@ -561,6 +639,9 @@ const SCENARIOS = {
   "restore-keys fallback": { PW_APT_EXACT_HIT: "false", PW_APT_MATCHED_KEY: "k-older-image" },
   miss: { PW_APT_EXACT_HIT: "false", PW_APT_MATCHED_KEY: "" },
   "cache disabled": { PW_APT_DEB_CACHE: "false", PW_APT_EXACT_HIT: "", PW_APT_DEB_DIR: "" },
+  "miss, packages missing": { STUB_DRYRUN_MISSING: "libnss3 xvfb" },
+  "miss, every refresh frozen": { STUB_UPDATE_RC: "124" },
+  "miss, first refresh frozen": { STUB_UPDATE_RC: "124", STUB_UPDATE_ONCE: "1" },
 };
 
 test("an EXACT cache hit installs the cached .debs offline: no apt-get update, no install-deps", () => {
@@ -573,7 +654,7 @@ test("an EXACT cache hit installs the cached .debs offline: no apt-get update, n
   expect(offline[0]).toMatch(
     /--no-install-recommends --no-download \S+\/libnss3_3\.98_amd64\.deb \S+\/xvfb_21\.1_amd64\.deb$/,
   );
-  expect(r.calls.filter(isOnline), "the online install-deps must not run after a good offline install").toEqual([]);
+  expect(r.calls.filter(isInstallDeps), "the online install-deps must not run after a good offline install").toEqual([]);
   expect(r.calls.filter(isUpdate), "the offline path never refreshes the index").toEqual([]);
   // Success is Playwright's own verdict, taken AFTER the install.
   const verify = r.calls.indexOf("npx playwright install-deps --dry-run chromium");
@@ -588,8 +669,11 @@ for (const name of ["restore-keys fallback", "miss", "cache disabled"]) {
     const r = runInstallStep(SCENARIOS[name]);
     expect(r.status, r.out).toBe(0);
     expect(r.calls.filter(isOffline), r.calls.join("\n")).toEqual([]);
-    expect(r.calls.filter(isOnline).length, "today's online path must run").toBe(1);
-    expect(r.out).toMatch(/apt path: online \((partial cache hit|cache miss|the apt \.deb cache is disabled)/);
+    expect(r.calls.filter(isRefresh).length, "the online path must refresh the index itself, bounded").toBe(1);
+    expect(r.calls.filter(isInstallDeps), "install-deps' own unbounded update must not run").toEqual([]);
+    expect(r.out).toMatch(
+      /apt path: online \((partial cache hit|cache miss|the apt \.deb cache is disabled)[^\n]*\), bounded refresh/,
+    );
   });
 }
 
@@ -602,9 +686,9 @@ for (const name of [
     const r = runInstallStep(SCENARIOS[name]);
     expect(r.status, `fail-open: the lane must still go green\n${r.out}`).toBe(0);
     const off = r.calls.findIndex(isOffline);
-    const on = r.calls.findIndex(isOnline);
+    const on = r.calls.findIndex(isRefresh);
     expect(off, r.calls.join("\n")).toBeGreaterThanOrEqual(0);
-    expect(on, "the online install-deps must run after an offline failure").toBeGreaterThan(off);
+    expect(on, "the online path must run after an offline failure").toBeGreaterThan(off);
     expect(r.out).toMatch(/apt path: online \(offline failed: /);
     const repair = r.calls.indexOf("dpkg --configure -a");
     if (name.includes("unconfigured")) {
@@ -623,11 +707,58 @@ test("nothing that runs apt or dpkg is ever wrapped in `timeout`, on any path", 
   for (const [name, env] of Object.entries(SCENARIOS)) {
     const r = runInstallStep(env);
     for (const c of r.calls.filter((x) => x.startsWith("timeout "))) {
+      // The one exception is the online path's own `apt-get update`, which holds
+      // no dpkg lock and runs as timeout's direct child (2026-10-28).
+      if (c === "timeout -k 10 60 apt-get update") continue;
       expect(c, `${name}: \`${c}\` puts apt under a bound (job 92989057569)`).not.toMatch(/apt-get|dpkg|install-deps/);
       if (/^timeout \d+ npx playwright install chromium$/.test(c)) sawDownloadBound = true;
     }
   }
   expect(sawDownloadBound, "positive control: the download phase must reach the timeout stub").toBe(true);
+});
+
+test("the online path installs Playwright's missing packages by name, once, and verifies them", () => {
+  const r = runInstallStep(SCENARIOS["miss, packages missing"]);
+  expect(r.status, r.out).toBe(0);
+  expect(r.calls.filter(isByName), r.calls.join("\n")).toEqual([
+    "apt-get install -y --no-install-recommends libnss3 xvfb",
+  ]);
+  // No second `apt-get update`: only the bounded refresh ran one.
+  expect(r.calls.filter(isUpdate)).toEqual(["apt-get update"]);
+  expect(r.calls.filter(isInstallDeps)).toEqual([]);
+  const install = r.calls.findIndex(isByName);
+  expect(r.calls.lastIndexOf("npx playwright install-deps --dry-run chromium"), "verified after").toBeGreaterThan(install);
+  expect(r.calls.findIndex(isRefresh), "the refresh comes first").toBeLessThan(install);
+});
+
+test("one frozen refresh costs one bound: the retry starts on the next mirror and succeeds", () => {
+  const r = runInstallStep(SCENARIOS["miss, first refresh frozen"]);
+  expect(r.status, r.out).toBe(0);
+  expect(r.calls.filter(isRefresh).length).toBe(2);
+  expect(r.mirrors.split("\n")[0], "the image's first mirror is demoted before the retry").toBe(
+    "https://archive.ubuntu.com/ubuntu/\tpriority:1",
+  );
+  expect(r.calls.filter(isInstallDeps)).toEqual([]);
+  expect(r.out).toMatch(/apt path: online \(cache miss\), bounded refresh/);
+});
+
+test("a frozen refresh is retried on the next mirror, and only then falls back to install-deps", () => {
+  // The mirror-switch freeze: every hung lane had timed out on azure first.
+  const r = runInstallStep(SCENARIOS["miss, every refresh frozen"]);
+  expect(r.status, `the fallback must still be able to go green\n${r.out}`).toBe(0);
+  expect(r.calls.filter(isRefresh).length, "one bounded refresh per attempt").toBe(3);
+  expect(r.calls.filter((c) => c === "sleep 15" || c === "sleep 30")).toEqual(["sleep 15", "sleep 30"]);
+  // Two demotions: azure went last, then archive did.
+  expect(r.mirrors).toBe(
+    "https://security.ubuntu.com/ubuntu/\tpriority:1\n" +
+      "http://azure.archive.ubuntu.com/ubuntu/\tpriority:2\n" +
+      "https://archive.ubuntu.com/ubuntu/\tpriority:3\n",
+  );
+  expect(r.calls.findIndex(isInstallDeps), "today's install-deps is the last resort").toBeGreaterThan(
+    r.calls.lastIndexOf("timeout -k 10 60 apt-get update"),
+  );
+  expect(r.out).toMatch(/apt path: online \(cache miss\), unbounded install-deps after: apt-get update failed 3 time\(s\), last exit 124/);
+  expect(r.out).toContain("hit its 60s bound");
 });
 
 test("apt's own transport abandons an idle fetch: Acquire timeouts in the same drop-in, Retries left to the image", () => {
