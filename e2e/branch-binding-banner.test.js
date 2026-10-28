@@ -251,6 +251,13 @@ test.describe("branch-binding-banner.js — the two verdicts (#412)", () => {
     expect(text).toContain(PR_BRANCH);
     expect(text, "the copy names where the change ends up — the production apex").toContain("example.test");
     expect(text).toMatch(/pull request/i);
+    // Each kind of change has its own fate on merge, and the copy names each:
+    // published entries, Media library uploads and deletes ship; drafts do not.
+    expect(text, "names published new or changed entries").toMatch(/New or changed entries you publish/);
+    expect(text, "names Media library uploads").toMatch(/Media library uploads/);
+    expect(text, "names deleted published entries").toMatch(/deleted published entries/);
+    expect(text, "says drafts stay drafts on the production site").toMatch(/Drafts, and images added to them, become drafts on example\.test/);
+    expect(text, "a saved draft does not update the preview, so the copy must not claim it does").not.toMatch(/you save/i);
     expect(
       document.body.classList.contains("cms-notice-band"),
       "body must carry cms-notice-band so admin-notice-band.css makes room for the banner " +

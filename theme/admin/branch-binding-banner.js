@@ -53,7 +53,11 @@
  * ── Where a change made here actually goes ─────────────────────────────
  * Decap's editorial workflow branches off `backend.branch` and merges back
  * into it, so on a preview a Publish updates the PREVIEW, and reaches the
- * production site only when the pull request for that branch merges. The
+ * production site only when the pull request for that branch merges. Media
+ * library uploads and deletes of published entries commit straight to that
+ * branch, so they follow the same path. A saved draft (and any image added
+ * inside it) changes nothing on the preview; after the merge GitHub retargets
+ * its open cms/* PR to production's branch, where it waits as a draft. The
  * copy says exactly that, and links the pull request by its head branch — a
  * GitHub search, the one link derivable from the config alone.
  *
@@ -163,8 +167,8 @@
     text.appendChild(
       document.createTextNode(
         " branch on " + (window.CMSHostname ? window.CMSHostname.current() : "this preview") +
-          ". Anything you save or publish here updates that address only — " +
-          "it reaches " + productionSite() + " when ",
+          ". New or changed entries you publish, Media library uploads and deleted " +
+          "published entries update this preview only, and reach " + productionSite() + " when ",
       ),
     );
     var href = pullRequestUrl(branch);
@@ -179,7 +183,14 @@
     } else {
       text.appendChild(document.createTextNode("its pull request"));
     }
-    text.appendChild(document.createTextNode(" merges."));
+    // A saved draft changes nothing on the preview. When the pull request
+    // merges, GitHub retargets its open cms/* drafts to the merged PR's base,
+    // so they become drafts in the production admin.
+    text.appendChild(
+      document.createTextNode(
+        " merges. Drafts, and images added to them, become drafts on " + productionSite() + ".",
+      ),
+    );
     b.appendChild(text);
 
     document.body.insertBefore(b, document.body.firstChild);
