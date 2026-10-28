@@ -191,8 +191,9 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   (1 running + only the latest pending kept). Fixed by making the three loops'
   push paths disjoint: prod OWNS the shared infra paths on push; media/host
   cover them via their daily cron. So a consumer bump (a `.github/workflows/**`
-  push) now fires at most one loop, and the shared group queues any remaining
-  cron/dispatch time-overlap rather than evicting it. Still: do consumer bumps,
+  push) now fires at most one loop. The shared group still holds only one
+  pending run behind the running one, so a single cron/dispatch overlap waits,
+  but a third arrival evicts whichever run is pending. Still: do consumer bumps,
   THEN let the loops settle before dispatching a validation loop.
 - **A release that changes an `examples/site` caller's `secrets:` map is
   reconciled BY `platform-bump`, in the bump commit.** The pin-consistency
