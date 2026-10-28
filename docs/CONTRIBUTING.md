@@ -241,9 +241,39 @@ run at the target ref in normal and candidate mode alike) adds and drops each
 caller's dictated `with:` keys and `workflow_dispatch` inputs alongside its
 `secrets:` map.
 
-Dispatch the stable release from that same platform `main` revision with
-`candidate_adamdaniel_ai_pr` and `candidate_jodidaniel_com_pr` set to those PR
-numbers. The gate reads immutable consumer heads, validates every platform pin,
+The usual path is one dispatch from the merged release PR to the stable tag
+(#898):
+
+```bash
+gh workflow run release.yml -R Adam-S-Daniel/cms-platform --ref main -f version=vX.Y.Z
+```
+
+With both candidate PR inputs empty and `prerelease` off, `release.yml` first
+refuses unless the ref is `main`, both plugin manifests declare `vX.Y.Z` and no
+such release exists. It then calls `release-candidates.yml` as a reusable
+(`chained: true`), which opens or re-pins both drafts at the dispatched commit
+and outputs their numbers. The `wait-for-candidates` job runs
+[`scripts/release-candidate-wait.js`](../scripts/release-candidate-wait.js):
+every minute it reads each draft's head checks, and once all have completed (or
+one has failed) it runs the release gate. It stops at the first refusal that
+waiting cannot change (a failed, cancelled, skipped or neutral result, or a pin
+or revision problem), naming each failing context with its PR and job link. It
+keeps waiting only while the gate's refusal is a missing or still-running
+result, for up to 90 minutes; at that limit the gate runs once more, and if it
+still refuses, the job fails naming what it was waiting on. Its report is the
+`release-candidate-wait-results` artifact. Only after that job succeeds does the
+`release` job run, with the two draft numbers, so its gate, the
+`release-candidate-results` artifact, the tag, the GitHub Release and the
+`platform-bump` fanout are the same as in a hand-numbered dispatch. Every job
+before `release` has `contents: read`. The release-prep PR's independent review
+stamp (#526) is still a human or independent-agent step before the dispatch.
+To re-run after a failure, fix the consumer and dispatch again; the drafts are
+re-pinned in place.
+
+The hand-numbered path still works: dispatch the stable release from that same
+platform `main` revision with `candidate_adamdaniel_ai_pr` and
+`candidate_jodidaniel_com_pr` set to those PR numbers, and the one-dispatch jobs
+are skipped. Setting only one of them fails the gate. The gate reads immutable consumer heads, validates every platform pin,
 and requires success for the union of manifest and live required contexts plus
 every candidate e2e matrix work job and site verifier work job. It reads both
 check runs and legacy statuses, follows pagination, honors required App bindings,
@@ -276,7 +306,10 @@ remain unmerged. Prereleases bypass this stable promotion gate and remain exclud
 from `releases/latest` and automatic consumer fanout. These deterministic gate
 matrices and workflow ordering are locked by
 [`e2e/release-candidate-gate.test.js`](../e2e/release-candidate-gate.test.js),
-registered as a platform meta spec and run by Self CI's `node-unit-lints` lane.
+registered as a platform meta spec and run by Self CI's `node-unit-lints` lane,
+which also covers the wait script. The one-dispatch chaining in `release.yml`
+and `release-candidates.yml` is locked by
+[`e2e/release-candidates.test.js`](../e2e/release-candidates.test.js).
 
 ### Remediation tracker reconciliation (2026-10-07)
 

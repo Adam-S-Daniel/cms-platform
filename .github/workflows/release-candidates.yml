@@ -11,16 +11,43 @@
 #
 # It only PREPARES: it neither waits for the consumers' checks nor cuts the
 # release; release.yml's gate decides whether their results are good enough.
-# workflow_dispatch only, so it is never a pull-request check.
+# Dispatched by hand or called by release.yml, never a pull-request check.
+#
+# release.yml's one-dispatch mode (a stable release dispatched with no
+# candidate PR numbers) calls this as a reusable with `chained: true`, reads both
+# draft numbers from its outputs, waits for the gate and cuts the release.
 #
 # A consumer accepts `candidate_sha` only once its platform-bump caller (and
 # the reusable that caller pins) come from a release that has candidate mode;
 # until then the dispatch is rejected and this run fails naming the consumer.
 name: Release candidates
-run-name: "release candidates at ${{ github.sha }} — @${{ github.actor }}"
+# A reusable shows its caller's title, so the called branch is never displayed;
+# it exists because every multi-event workflow branches on the trigger.
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('release candidates at {0} — @{1}', github.sha, github.actor) || format('release candidates at {0} (called) — @{1}', github.sha, github.actor) }}"
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      chained:
+        description: 'Set by release.yml: the summary says the release follows instead of printing a dispatch line.'
+        type: boolean
+        default: false
+    secrets:
+      BUMP_DISPATCH_ADAMDANIEL_AI:
+        required: false
+      BUMP_DISPATCH_JODIDANIEL_COM:
+        required: false
+    outputs:
+      version:
+        description: 'The release version the drafts were opened for (vX.Y.Z, from plugin.json).'
+        value: ${{ jobs.candidates.outputs.version }}
+      adamdaniel_ai_pr:
+        description: 'Draft candidate PR number in Adam-S-Daniel/adamdaniel.ai.'
+        value: ${{ jobs.candidates.outputs.adamdaniel_ai_pr }}
+      jodidaniel_com_pr:
+        description: 'Draft candidate PR number in jodidaniel/jodidaniel.com.'
+        value: ${{ jobs.candidates.outputs.jodidaniel_com_pr }}
 
 permissions:
   contents: read
@@ -31,6 +58,10 @@ jobs:
     # Not a required context (no PR trigger), so a wall here cancels nothing a
     # ruleset reads. It bounds the poll below plus checkout and dispatch.
     timeout-minutes: 20
+    outputs:
+      version: ${{ steps.drafts.outputs.version }}
+      adamdaniel_ai_pr: ${{ steps.drafts.outputs.adamdaniel_ai_pr }}
+      jodidaniel_com_pr: ${{ steps.drafts.outputs.jodidaniel_com_pr }}
     steps:
       # Mirrors release.yml: the candidate must be the commit release.yml will
       # tag, and release.yml only tags `main`.
@@ -51,8 +82,10 @@ jobs:
           persist-credentials: false
 
       - name: Dispatch both consumers' candidate bumps and wait for the drafts
+        id: drafts
         env:
           CANDIDATE_SHA: ${{ github.sha }}
+          CHAINED: ${{ inputs.chained == true }}
           # The same per-owner credentials release.yml uses for the bump fanout
           # and the candidate gate (Actions read/write to dispatch; Contents and
           # Pull requests read to find the draft). Unlike the fanout, a missing
@@ -146,6 +179,12 @@ jobs:
           done
 
           {
+            echo "version=$VERSION"
+            echo "adamdaniel_ai_pr=${FOUND[0]}"
+            echo "jodidaniel_com_pr=${FOUND[1]}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
             echo "## Release candidates for $VERSION"
             echo
             echo "Both drafts pin [\`$CANDIDATE_SHA\`](https://github.com/$GITHUB_REPOSITORY/commit/$CANDIDATE_SHA):"
@@ -153,9 +192,13 @@ jobs:
             echo "- ${REPOS[0]}: https://github.com/${REPOS[0]}/pull/${FOUND[0]}"
             echo "- ${REPOS[1]}: https://github.com/${REPOS[1]}/pull/${FOUND[1]}"
             echo
-            echo "When both drafts' checks are green, and while \`main\` is still at this commit, cut the release:"
-            echo
-            echo '```'
-            echo "gh workflow run release.yml -R $GITHUB_REPOSITORY --ref main -f version=$VERSION -f candidate_adamdaniel_ai_pr=${FOUND[0]} -f candidate_jodidaniel_com_pr=${FOUND[1]}"
-            echo '```'
+            if [ "$CHAINED" = "true" ]; then
+              echo "This run's release job waits for both drafts to pass the candidate gate, then cuts $VERSION at this commit."
+            else
+              echo "When both drafts' checks are green, and while \`main\` is still at this commit, cut the release:"
+              echo
+              echo '```'
+              echo "gh workflow run release.yml -R $GITHUB_REPOSITORY --ref main -f version=$VERSION -f candidate_adamdaniel_ai_pr=${FOUND[0]} -f candidate_jodidaniel_com_pr=${FOUND[1]}"
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

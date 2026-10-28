@@ -10,6 +10,11 @@ const { parseCandidateGemfile } = require("./check-platform-pin-consistency");
 const ACTIONS_APP = 15368;
 const SHA = /^[0-9a-f]{40}$/;
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+// The two refusals a candidate still running can produce: no result yet, or a
+// result not yet completed. scripts/release-candidate-wait.js keeps polling on
+// these and stops on any other refusal.
+const MISSING = "A required validation result is missing";
+const NOT_SUCCEEDED = "A required validation result did not succeed";
 function demand(ok, message) { if (!ok) { const error = new Error(message); error.safe = true; throw error; } }
 function safeError(error) { return error?.safe === true ? error.message : "Required data unavailable or invalid"; }
 function yaml(text) {
@@ -159,8 +164,8 @@ function evaluate(checks, statuses, required, head, rows = []) {
       typeof r.url === "string" && /^https:\/\/github\.com\//.test(r.url) ? r.url : null).filter(Boolean) });
   }
   demand(!results.some((r) => ["failure", "error", "cancelled", "timed_out", "action_required", "startup_failure", "stale", "wrong_head"].includes(r.conclusion)), "A consumer result failed or was cancelled or names a different head");
-  demand(rows.every((r) => !r.conclusions.includes("missing")), "A required validation result is missing");
-  demand(rows.every((r) => r.conclusions.every((value) => value === "success")), "A required validation result did not succeed");
+  demand(rows.every((r) => !r.conclusions.includes("missing")), MISSING);
+  demand(rows.every((r) => r.conclusions.every((value) => value === "success")), NOT_SUCCEEDED);
   return rows;
 }
 async function gate({ candidate, platform, version, manifest, prs, read, report = {} }) {
@@ -277,5 +282,5 @@ async function main() {
     catch { console.error("::error::Could not write candidate validation report"); process.exitCode = 1; }
   }
 }
-module.exports = { gate, contexts, consumers, gemPin, workflowPins, workContexts, evaluate, pages };
+module.exports = { gate, contexts, consumers, gemPin, workflowPins, workContexts, evaluate, pages, api, safeError, MISSING, NOT_SUCCEEDED };
 if (require.main === module) main();

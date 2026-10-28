@@ -17,20 +17,26 @@ pin-consistency guard, issue #29). So a platform change is a 3-step cascade:
 
 The release workflow tags `main` HEAD + creates a GitHub Release. Merge your
 fix and the atomic release-version bump to `main` with independent review and
-confirm `main`'s self-CI is green FIRST. Before cutting a stable release,
-dispatch `release-candidates.yml` on `main`: it opens (or re-pins) a draft PR in **each** consumer pinned to the exact
-platform `main` commit and prints the `release.yml` dispatch line. Production
-pins stay fixed, and the validation drafts are never merged. It only prepares:
-wait for each draft's required checks and actual e2e matrix/site verifier work
-jobs to succeed. See [`docs/CONTRIBUTING.md`](../../docs/CONTRIBUTING.md) for the
-complete promotion gate contract (including hand-built drafts when a consumer's
-caller predates candidate mode).
+confirm `main`'s self-CI is green FIRST. Then one dispatch does the rest
+(#898): with both candidate inputs empty, `release.yml` refuses a wrong ref,
+version or existing release, calls `release-candidates.yml` to open (or re-pin)
+a draft PR in **each** consumer pinned to the exact platform `main` commit,
+waits (up to 90 minutes) until the gate passes or stops at the first failure,
+naming it, and then runs the same gate, tag and fanout as below. Production pins
+stay fixed, and the validation drafts are never merged. See
+[`docs/CONTRIBUTING.md`](../../docs/CONTRIBUTING.md) for the complete promotion
+gate contract (including hand-built drafts when a consumer's caller predates
+candidate mode).
 
 ```bash
-gh workflow run release-candidates.yml -R Adam-S-Daniel/cms-platform --ref main
+gh workflow run release.yml -R Adam-S-Daniel/cms-platform -f version=vX.Y.Z --ref main
 ```
 
-Then dispatch `release.yml` with both candidate PR numbers:
+To prepare the drafts separately (`gh workflow run release-candidates.yml -R
+Adam-S-Daniel/cms-platform --ref main`, which prints the dispatch line) or use
+drafts built by hand, wait for each draft's required checks and e2e matrix/site
+verifier work jobs to succeed, then dispatch `release.yml` with both candidate
+PR numbers:
 
 ```bash
 gh workflow run release.yml -R Adam-S-Daniel/cms-platform -f version=vX.Y.Z --ref main \

@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
 const { parseYaml } = require("./workflow-yaml-utils");
 const { gate, evaluate, pages, gemPin } = require("../scripts/release-candidate-gate");
+const { classify, wait, describe } = require("../scripts/release-candidate-wait");
 const ROOT = path.resolve(__dirname, "..");
 const ACTIONS_APP = 15368;
 const platform = "Adam-S-Daniel/cms-platform";
@@ -262,5 +263,128 @@ test("CLI reads only mocked GET endpoints and writes a sanitized report on pass 
     const badReport = spawnSync(process.execPath, ["scripts/release-candidate-gate.js"], { cwd: ROOT, env: { ...env, CANDIDATE_REPORT: path.join(dir, "missing/report.json") }, encoding: "utf8" });
     expect(badReport.status).toBe(1);
     expect(badReport.stderr).toContain("Could not write");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// scripts/release-candidate-wait.js: release.yml's one-dispatch mode (#898).
+// A fake clock: sleep advances it and applies the next fixture change, so each
+// poll sees the consumers one step further along. No real waiting.
+function clocked(steps = []) {
+  let t = 0;
+  const slept = [];
+  return { slept, now: () => t, sleep: async (ms) => { slept.push(ms); t += ms; (steps.shift() || (() => {}))(); } };
+}
+function waitRun({ change, steps, timeoutMs = 10_000, intervalMs = 1_000 } = {}) {
+  const { data, args } = fixture(change);
+  let gateRuns = 0;
+  const read = args.read;
+  const counted = { ...args, read: async (repo, endpoint) => {
+    if (endpoint.endsWith("/rules/branches/main")) gateRuns++;
+    return read(repo, endpoint);
+  } };
+  const clock = clocked((steps || []).map((step) => () => step(data)));
+  return wait({ args: counted, timeoutMs, intervalMs, ...clock }).then((result) => ({ ...result, slept: clock.slept, gateRuns: () => gateRuns }));
+}
+const runsOf = (data, repo = repos[0]) => data[checksKey(repo)].check_runs;
+
+test("wait: both candidates already green pass at once, through the real gate", async () => {
+  const { verdict, report, slept } = await waitRun();
+  expect(verdict.state).toBe("pass");
+  expect(report.ok).toBe(true);
+  expect(slept).toEqual([]);
+});
+test("wait: a check still running keeps polling without running the full gate, then passes", async () => {
+  let runs;
+  const result = await waitRun({
+    change: (data) => { runs = runsOf(data); runs[0].status = "in_progress"; runs[0].conclusion = null; },
+    steps: [() => {}, () => { runs[0].status = "completed"; runs[0].conclusion = "success"; }],
+  });
+  expect(result.verdict.state).toBe("pass");
+  expect(result.slept).toEqual([1_000, 1_000]);
+  // Two polls saw the running check; only the third, settled one ran the gate.
+  expect(result.gateRuns()).toBe(repos.length);
+});
+test("wait: a context with no result yet is waited for, even once every visible check completed", async () => {
+  let missing;
+  const result = await waitRun({
+    change: (data) => { missing = runsOf(data).pop(); },
+    steps: [(data) => { runsOf(data).push(missing); }],
+  });
+  expect(result.verdict.state).toBe("pass");
+  expect(result.slept).toEqual([1_000]);
+});
+test("wait: a failure on one consumer stops at once while the other is still running, naming the context", async () => {
+  const result = await waitRun({ change: (data) => {
+    runsOf(data, repos[0])[0].conclusion = "failure";
+    runsOf(data, repos[1])[0].status = "in_progress";
+  } });
+  expect(result.verdict.state).toBe("fail");
+  expect(result.slept).toEqual([]);
+  expect(result.report.ok).not.toBe(true);
+  const failed = runsOf(fixture().data, repos[0])[0].name;
+  expect(result.verdict.failing).toContainEqual(expect.objectContaining({ repo: repos[0], pr: 1, context: failed, conclusions: ["failure"] }));
+  expect(describe(result.verdict.failing.find((f) => f.context === failed))).toContain(`${repos[0]}#1: "${failed}" is failure`);
+});
+for (const conclusion of ["skipped", "neutral", "cancelled"]) {
+  test(`wait: a required ${conclusion} result is final, not waited on`, async () => {
+    const result = await waitRun({ change: (data) => { runsOf(data)[0].conclusion = conclusion; } });
+    expect(result.verdict.state).toBe("fail");
+    expect(result.slept).toEqual([]);
+  });
+}
+test("wait: an optional failure is final too, and says why", async () => {
+  const result = await waitRun({ change: (data) => {
+    runsOf(data).push({ ...runsOf(data)[0], id: 999, name: "optional-extra", conclusion: "failure" });
+  } });
+  expect(result.verdict.state).toBe("fail");
+  expect(result.verdict.failing).toContainEqual({ repo: repos[0], pr: 1, error: "A consumer result failed or was cancelled or names a different head" });
+});
+test("wait: a structural refusal (a draft not pinned to the candidate) is final", async () => {
+  const result = await waitRun({ change: (data) => {
+    data[`repos/${repos[1]}/contents/platform.lock?ref=${head}`] = file(lock(old));
+  } });
+  expect(result.verdict.state).toBe("fail");
+  expect(result.verdict.failing).toEqual([{ repo: repos[1], pr: 1, error: "Consumer lock does not pin the exact candidate" }]);
+});
+test("wait: at the deadline the gate runs once more and the run times out naming what it waited on", async () => {
+  const result = await waitRun({ timeoutMs: 3_000, change: (data) => { runsOf(data)[0].status = "queued"; runsOf(data)[0].conclusion = null; } });
+  expect(result.verdict.state).toBe("timeout");
+  expect(result.slept).toEqual([1_000, 1_000, 1_000]);
+  expect(result.gateRuns()).toBe(repos.length);
+  expect(result.report.ok).toBe(false);
+  expect(result.verdict.waiting).toContainEqual(expect.objectContaining({ repo: repos[0], pr: 1, context: runsOf(fixture().data)[0].name, conclusions: ["pending"] }));
+});
+test("classify: no consumer entry to explain a refusal is final", () => {
+  expect(classify({ ok: false, error: "Invalid candidate identity" })).toEqual({ state: "fail", failing: [{ error: "Invalid candidate identity" }], waiting: [] });
+  expect(classify({ ok: false, error: "Candidate or production changed during validation", consumers: [{ repo: repos[0], results: [] }] }).state).toBe("fail");
+});
+test("describe: a context name cannot end the annotation and start another workflow command", () => {
+  const line = describe({ repo: repos[0], pr: 1, context: "evil\n::warning::x%", conclusions: ["failure"] });
+  expect(line).not.toContain("\n");
+  expect(line).toContain("evil%0A::warning::x%25");
+});
+test("wait CLI: a failed candidate exits 1 naming it, writes the report and never echoes an API body", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-wait-cli-"));
+  try {
+    fs.writeFileSync(path.join(dir, "gh"), `#!/usr/bin/env node\nconst fs = require('node:fs');\nconst args = process.argv.slice(2);\nif (args[0] !== 'api' || args[1] !== '--method' || args[2] !== 'GET') process.exit(98);\nconst data = JSON.parse(fs.readFileSync(process.env.MOCK_DATA, 'utf8'));\nif (!(args[3] in data)) { console.error('sensitive-response-body'); process.exit(1); }\nprocess.stdout.write(JSON.stringify(data[args[3]]));\n`, { mode: 0o755 });
+    const reportPath = path.join(dir, "report.json");
+    const env = { ...process.env, PATH: [process.env.PATH.split(path.delimiter)[0], dir, ...process.env.PATH.split(path.delimiter).slice(1)].join(path.delimiter), GH_TOKEN: "", TOKEN_ADAMDANIEL_AI: "", TOKEN_JODIDANIEL_COM: "", GH_REPO: platform, CANDIDATE_SHA: candidate, VERSION: "v0.1.160", CANDIDATE_ADAMDANIEL_AI_PR: "1", CANDIDATE_JODIDANIEL_COM_PR: "1", MOCK_DATA: path.join(dir, "data.json"), CANDIDATE_REPORT: reportPath, POLL_SECONDS: "0", POLL_INTERVAL: "1" };
+    fs.writeFileSync(env.MOCK_DATA, JSON.stringify(fixture().data));
+    const pass = spawnSync(process.execPath, ["scripts/release-candidate-wait.js"], { cwd: ROOT, env, encoding: "utf8" });
+    expect(pass.status, pass.stderr).toBe(0);
+    expect(JSON.parse(fs.readFileSync(reportPath)).ok).toBe(true);
+    const { data } = fixture((d) => { d[checksKey()].check_runs[0].conclusion = "failure"; });
+    fs.writeFileSync(env.MOCK_DATA, JSON.stringify(data));
+    const fail = spawnSync(process.execPath, ["scripts/release-candidate-wait.js"], { cwd: ROOT, env, encoding: "utf8" });
+    expect(fail.status).toBe(1);
+    expect(fail.stderr).toContain(`::error::${repos[0]}#1: "${data[checksKey()].check_runs[0].name}" is failure`);
+    expect(JSON.parse(fs.readFileSync(reportPath)).ok).toBe(false);
+    fs.writeFileSync(env.MOCK_DATA, "{}");
+    const unreadable = spawnSync(process.execPath, ["scripts/release-candidate-wait.js"], { cwd: ROOT, env, encoding: "utf8" });
+    expect(unreadable.status).toBe(1);
+    expect(unreadable.stderr).not.toContain("sensitive-response-body");
+    const badPoll = spawnSync(process.execPath, ["scripts/release-candidate-wait.js"], { cwd: ROOT, env: { ...env, POLL_INTERVAL: "x" }, encoding: "utf8" });
+    expect(badPoll.status).toBe(1);
+    expect(badPoll.stderr).toContain("POLL_SECONDS and POLL_INTERVAL must be numbers");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

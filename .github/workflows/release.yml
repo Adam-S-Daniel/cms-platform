@@ -8,6 +8,15 @@
 # touches these. Cutting was previously a manual `git tag` / UI step; this
 # makes it a one-click workflow_dispatch that creates the tag + GitHub Release
 # server-side from the current main HEAD.
+#
+# One-dispatch mode (#898): a STABLE dispatch with BOTH candidate PR inputs
+# empty first runs release-candidates.yml as a reusable (opening both consumer
+# drafts at this commit), waits in `wait-for-candidates` until
+# scripts/release-candidate-gate.js passes for both drafts or one fails, and
+# only then runs the `release` job below with the two draft numbers. The
+# `release` job, its gate, tag, GitHub Release and fanout are the same in both
+# modes. Giving the PR numbers keeps the hand-built path; giving only one fails
+# the gate as before.
 name: Cut release
 run-name: "${{ format('cut {0}{1} — @{2}', inputs.version, inputs.prerelease && ' (prerelease)' || '', github.actor) }}"
 
@@ -23,7 +32,7 @@ on:
         type: boolean
         default: false
       candidate_adamdaniel_ai_pr:
-        description: 'Stable only: open draft candidate PR in Adam-S-Daniel/adamdaniel.ai, pinned to this dispatched platform commit.'
+        description: 'Stable only: open draft candidate PR in Adam-S-Daniel/adamdaniel.ai, pinned to this dispatched platform commit. Leave BOTH candidate inputs empty to open the drafts, wait for them and release in this one run.'
         type: string
         required: false
       candidate_jodidaniel_com_pr:
@@ -35,7 +44,116 @@ permissions:
   contents: write
 
 jobs:
+  # One-dispatch mode only. Refuses before any consumer is touched, with the
+  # same rules the release step enforces again later.
+  preflight:
+    if: ${{ inputs.prerelease != true && inputs.candidate_adamdaniel_ai_pr == '' && inputs.candidate_jodidaniel_com_pr == '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the ref being tagged
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Refuse unless main declares this version and it is unreleased
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_REF: ${{ github.ref }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$GH_REF" != "refs/heads/main" ]; then
+            echo "::error::releases must be cut from main (dispatched ref: ${GH_REF}). Re-run with 'main' selected in the branch dropdown."
+            exit 1
+          fi
+          if ! printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must look like vX.Y.Z (got '${VERSION}')"
+            exit 1
+          fi
+          for manifest in plugin.json .claude-plugin/plugin.json; do
+            declared=$(jq -r '.version // ""' "$manifest")
+            if [ "$declared" != "${VERSION#v}" ]; then
+              echo "::error file=${manifest}::${manifest} declares version '${declared}', not '${VERSION#v}'. Merge the release PR for ${VERSION} first; no candidate was opened."
+              exit 1
+            fi
+          done
+          if gh release view "$VERSION" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "::error::release ${VERSION} already exists"
+            exit 1
+          fi
+
+  candidates:
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-candidates.yml
+    with:
+      chained: true
+    secrets:
+      BUMP_DISPATCH_ADAMDANIEL_AI: ${{ secrets.BUMP_DISPATCH_ADAMDANIEL_AI }}
+      BUMP_DISPATCH_JODIDANIEL_COM: ${{ secrets.BUMP_DISPATCH_JODIDANIEL_COM }}
+
+  # Not a required context (workflow_dispatch only), so this wall cancels
+  # nothing a ruleset reads. It bounds POLL_SECONDS plus setup.
+  wait-for-candidates:
+    needs: candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the ref being tagged
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node for candidate validation
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+
+      - name: Install candidate gate dependencies
+        run: npm ci --prefix e2e --ignore-scripts
+
+      - name: Set up Ruby for candidate Gemfile parsing
+        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8
+        with:
+          ruby-version: "3.2"
+
+      - name: Wait for both candidates to pass the release gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          CANDIDATE_SHA: ${{ github.sha }}
+          CANDIDATE_ADAMDANIEL_AI_PR: ${{ needs.candidates.outputs.adamdaniel_ai_pr }}
+          CANDIDATE_JODIDANIEL_COM_PR: ${{ needs.candidates.outputs.jodidaniel_com_pr }}
+          TOKEN_ADAMDANIEL_AI: ${{ secrets.BUMP_DISPATCH_ADAMDANIEL_AI }}
+          TOKEN_JODIDANIEL_COM: ${{ secrets.BUMP_DISPATCH_JODIDANIEL_COM }}
+          CANDIDATE_REPORT: ${{ runner.temp }}/release-candidate-wait-results.json
+          POLL_SECONDS: "5400"
+          POLL_INTERVAL: "60"
+        run: node scripts/release-candidate-wait.js
+
+      # A different name from the release job's artifact, which stays the record
+      # of the gate run that permits the tag.
+      - name: Upload candidate wait results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: release-candidate-wait-results
+          path: ${{ runner.temp }}/release-candidate-wait-results.json
+          if-no-files-found: error
+          retention-days: 7
+
   release:
+    needs: [preflight, candidates, wait-for-candidates]
+    # Hand-given PR numbers or a prerelease skip preflight and run as before;
+    # in one-dispatch mode only a passed wait lets this run.
+    if: ${{ !cancelled() && (needs.preflight.result == 'skipped' || needs.wait-for-candidates.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       # Needed only by the manifest-version guard inside the next step — the
@@ -66,8 +184,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
           CANDIDATE_SHA: ${{ github.sha }}
-          CANDIDATE_ADAMDANIEL_AI_PR: ${{ inputs.candidate_adamdaniel_ai_pr }}
-          CANDIDATE_JODIDANIEL_COM_PR: ${{ inputs.candidate_jodidaniel_com_pr }}
+          CANDIDATE_ADAMDANIEL_AI_PR: ${{ inputs.candidate_adamdaniel_ai_pr || needs.candidates.outputs.adamdaniel_ai_pr }}
+          CANDIDATE_JODIDANIEL_COM_PR: ${{ inputs.candidate_jodidaniel_com_pr || needs.candidates.outputs.jodidaniel_com_pr }}
           # Existing per-owner dispatch credentials also need consumer Contents,
           # Pull requests and Checks read permissions for candidate validation.
           # Unreadable results fail closed; these credentials never update pins.
