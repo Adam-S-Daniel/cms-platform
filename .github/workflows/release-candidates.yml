@@ -11,7 +11,7 @@
 #
 # It only PREPARES: it neither waits for the consumers' checks nor cuts the
 # release; release.yml's gate decides whether their results are good enough.
-# workflow_dispatch only, so it is never a pull-request check.
+# Dispatched by hand or called by release.yml, never a pull-request check.
 #
 # release.yml's one-dispatch mode (a stable release dispatched with no
 # candidate PR numbers) calls this as a reusable with `chained: true`, reads both
