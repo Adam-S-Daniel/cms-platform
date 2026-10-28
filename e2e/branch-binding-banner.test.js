@@ -157,7 +157,7 @@ const flush = () => new Promise((r) => setImmediate(r));
  * document, and a fetch that answers the served config.yml (and, for the
  * ordering tests, the gate flag's GitHub read).
  */
-function sandboxFor({ production, config, status = 200, gate = null, siteLive = "false" }) {
+function sandboxFor({ production, config, status = 200, gate = null, siteLive = "false", crossPost, pulls = [] }) {
   const document = fakeDocument();
   const fetchCalls = [];
   const sandbox = {
@@ -166,6 +166,7 @@ function sandboxFor({ production, config, status = 200, gate = null, siteLive = 
       CMS_APEX: "example.test",
       CMS_SITE_ORIGIN: "https://example.test",
       CMS_SITE_GATE: gate,
+      CMS_CROSS_POST: crossPost,
       CMSHostname: {
         canonical: () => "example.test",
         current: () => "preview-pr9999.example.test",
@@ -190,6 +191,9 @@ function sandboxFor({ production, config, status = 200, gate = null, siteLive = 
     sessionStorage: { getItem: () => null, setItem() {} },
     fetch(url, init) {
       fetchCalls.push({ url: String(url), init: init || {} });
+      if (String(url).startsWith("https://api.github.com/repos/acme/example/pulls?")) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(pulls) });
+      }
       if (String(url).includes("api.github.com")) {
         return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(`site_live: ${siteLive}\n`) });
       }
@@ -212,8 +216,7 @@ function run(sandbox, file) {
 async function loadShim(opts) {
   const ctx = sandboxFor(opts);
   run(ctx.sandbox, SHIM);
-  await flush();
-  await flush();
+  for (let i = 0; i < 6; i++) await flush();
   return { ...ctx, api: ctx.sandbox.window.CMSBranchBinding, banner: () => ctx.document.getElementById(BANNER_ID) };
 }
 
@@ -271,6 +274,62 @@ test.describe("branch-binding-banner.js — the two verdicts (#412)", () => {
     expect(a.target).toBe("_blank");
     expect(a.rel).toContain("noopener");
   });
+
+  test("names the pull request by its title, linked to the pull request itself", async () => {
+    const { banner, fetchCalls } = await loadShim({
+      production: "main",
+      config: previewConfig,
+      pulls: [{ title: "Bump cms-platform to v9.9.9", html_url: "https://github.com/acme/example/pull/42" }],
+    });
+    const call = fetchCalls.find((c) => c.url.includes("/pulls?"));
+    expect(call.url).toBe(
+      "https://api.github.com/repos/acme/example/pulls?state=open&per_page=1&head=" +
+        encodeURIComponent(`acme:${PR_BRANCH}`),
+    );
+    expect(call.init.headers.Authorization, "sends the editor's Decap token when signed in").toBe("token t0k3n");
+    const b = banner();
+    const a = findAnchor(b);
+    expect(a.textContent).toBe("\u201cBump cms-platform to v9.9.9\u201d");
+    expect(a.href).toBe("https://github.com/acme/example/pull/42");
+    expect(b.textContent, "no 'this pull request' jargon once the title is known").not.toMatch(/pull request/i);
+  });
+
+  test("falls back to the head-branch search when the pull request's link is not on github.com", async () => {
+    const { banner } = await loadShim({
+      production: "main",
+      config: previewConfig,
+      pulls: [{ title: "x", html_url: "javascript:alert(1)" }],
+    });
+    const a = findAnchor(banner());
+    expect(a.textContent).toBe("its pull request");
+    expect(a.href).toContain("https://github.com/acme/example/pulls?q=");
+  });
+
+  test("names the networks a merge cross-posts new posts to, and the Substack leg as a draft", async () => {
+    const { banner } = await loadShim({
+      production: "main",
+      config: previewConfig,
+      crossPost: ["mastodon", "linkedin", "substack"],
+    });
+    expect(banner().textContent).toContain(
+      "On merge, each new post published here is also posted to Mastodon and LinkedIn, " +
+        "and made into a Substack draft for you to paste in.",
+    );
+  });
+
+  test("names only the networks the site lists, and ignores ones the platform does not post to", async () => {
+    const { banner } = await loadShim({ production: "main", config: previewConfig, crossPost: ["mastodon", "bluesky"] });
+    const text = banner().textContent;
+    expect(text).toContain("also posted to Mastodon.");
+    expect(text).not.toMatch(/bluesky|LinkedIn|Substack/i);
+  });
+
+  for (const crossPost of [undefined, [], ["bluesky"]]) {
+    test(`says nothing about cross-posting when the site lists no known network (${JSON.stringify(crossPost)})`, async () => {
+      const { banner } = await loadShim({ production: "main", config: previewConfig, crossPost });
+      expect(banner().textContent).not.toMatch(/On merge|posted to|draft for you/);
+    });
+  }
 
   test("renders once — a second refresh neither duplicates nor recreates the banner", async () => {
     const { document, api, banner } = await loadShim({ production: "main", config: previewConfig });

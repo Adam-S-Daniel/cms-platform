@@ -154,6 +154,13 @@ render.call(lb, File.join(admin_out, 'config-local.yml')) if File.exist?(lb)
 gate = cms['site_gate']
 gate_js = gate.nil? ? 'null' : JSON.generate(gate)
 
+# `cross_post.profiles` (OPTIONAL, top level) — see decap_config_hook.rb's
+# matching block: the networks a site cross-posts to, named by
+# admin/branch-binding-banner.js. Keys only; [] when unset.
+cross_post = cfg['cross_post']
+profiles = cross_post.is_a?(Hash) ? cross_post['profiles'] : nil
+cross_post_js = JSON.generate(profiles.is_a?(Hash) ? profiles.keys.map(&:to_s) : [])
+
 # The branch the config was RENDERED with (`backend.branch` of the config.yml
 # written above, read back with a real YAML parse) — see decap_config_hook.rb's
 # matching block. deploy-preview.yml patches the SERVED copy to the PR branch;
@@ -180,7 +187,7 @@ prod_branch = production_branch(File.join(admin_out, 'config.yml'))
 #    instead of hardcoding it, so the platform stays site-agnostic.
 #    CMS_ADMIN_ORIGIN tells admin/site-hostname.js when this tab is the
 #    separate admin origin, so public-site URLs come from CMS_SITE_ORIGIN.
-js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_ADMIN_ORIGIN=#{admin_origin.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};</script>}
+js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_ADMIN_ORIGIN=#{admin_origin.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};window.CMS_CROSS_POST=#{cross_post_js};</script>}
 shells = Dir.glob(File.join(admin_out, 'index*.html')) +
          Dir.glob(File.join(admin_out, 'reviews', '*.html'))
 shells.each do |h|

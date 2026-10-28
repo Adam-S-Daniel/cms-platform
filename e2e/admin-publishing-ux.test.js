@@ -467,6 +467,19 @@ test.describe("#412 — the branch binding is stated once, from the config", () 
     }
   });
 
+  test("both render paths inject window.CMS_CROSS_POST", () => {
+    for (const p of [
+      path.join(REPO_ROOT, "scripts", "render-decap-config.rb"),
+      path.join(REPO_ROOT, "theme", "lib", "cms-platform-theme", "decap_config_hook.rb"),
+    ]) {
+      expect(
+        fs.readFileSync(p, "utf8").includes("window.CMS_CROSS_POST="),
+        `${path.relative(REPO_ROOT, p)} must inject window.CMS_CROSS_POST — parity alone ` +
+          "cannot catch both paths dropping it together",
+      ).toBe(true);
+    }
+  });
+
   // The two banners are permanent in-flow blocks at the top of <body>, each
   // inserted after its own async read. The gate banner places itself AFTER
   // the branch banner when one is present, so the page reads "you are on a

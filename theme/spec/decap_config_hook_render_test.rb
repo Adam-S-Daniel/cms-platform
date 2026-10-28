@@ -191,6 +191,23 @@ class DecapConfigHookRenderTest < Minitest::Test
     end
   end
 
+  # The preview branch banner names the networks a merge cross-posts new posts
+  # to, from the keys of the site's top-level `cross_post.profiles`.
+  def test_injects_cross_post_networks_from_profiles
+    @site.config["cross_post"] = {
+      "profiles" => { "mastodon" => "https://example.test/@a", "substack" => "https://example.test/s" },
+    }
+    with_default_external(Encoding::UTF_8) { CmsPlatformTheme::DecapConfig.run(@site) }
+    html = File.read(File.join(@dest, "admin", "index.html"), encoding: "utf-8")
+    assert_includes html, 'window.CMS_CROSS_POST=["mastodon","substack"];'
+  end
+
+  def test_injects_an_empty_cross_post_list_when_the_site_has_none
+    with_default_external(Encoding::UTF_8) { CmsPlatformTheme::DecapConfig.run(@site) }
+    html = File.read(File.join(@dest, "admin", "index.html"), encoding: "utf-8")
+    assert_includes html, "window.CMS_CROSS_POST=[];"
+  end
+
   # #517 — `cms.admin_origin` reaches every shell as window.CMS_ADMIN_ORIGIN,
   # lowercased with any trailing slash dropped so admin/site-hostname.js can compare it to
   # location.origin. Unset (every site that has not opted in) injects "".

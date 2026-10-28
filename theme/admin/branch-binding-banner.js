@@ -58,8 +58,10 @@
  * branch, so they follow the same path. A saved draft (and any image added
  * inside it) changes nothing on the preview; after the merge GitHub retargets
  * its open cms/* PR to production's branch, where it waits as a draft. The
- * copy says exactly that, and links the pull request by its head branch — a
- * GitHub search, the one link derivable from the config alone.
+ * copy says exactly that, and names the pull request by its title, linked,
+ * read from the GitHub API. When that read fails it falls back to "its pull
+ * request", linked by its head branch: a GitHub search, the one link
+ * derivable from the config alone.
  *
  * ── In flow, not fixed; first, not last ────────────────────────────────
  * Same placement rule as site-gate-banner.js: a block in normal flow at the
@@ -117,11 +119,78 @@
     return "https://github.com/" + repo + "/pulls?q=" + encodeURIComponent("is:pr head:" + branch);
   }
 
+  // How cross-post.yml treats each network a site lists under
+  // `cross_post.profiles` (injected as window.CMS_CROSS_POST). Substack has no
+  // publish API, so that leg only prepares a draft to paste in by hand.
+  var CROSS_POST_AUTO = { mastodon: "Mastodon", linkedin: "LinkedIn" };
+  var CROSS_POST_DRAFT = { substack: "Substack" };
+
+  function joinNames(names) {
+    if (names.length < 2) return names.join("");
+    return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  }
+
+  // The sentence naming what merging also sends out, or "" when the site
+  // cross-posts nowhere (or the list was not injected).
+  function crossPostSentence() {
+    var keys = Array.isArray(window.CMS_CROSS_POST) ? window.CMS_CROSS_POST : [];
+    var auto = [];
+    var drafts = [];
+    keys.forEach(function (k) {
+      if (Object.prototype.hasOwnProperty.call(CROSS_POST_AUTO, k)) auto.push(CROSS_POST_AUTO[k]);
+      else if (Object.prototype.hasOwnProperty.call(CROSS_POST_DRAFT, k)) drafts.push(CROSS_POST_DRAFT[k]);
+    });
+    if (!auto.length && !drafts.length) return "";
+    var parts = [];
+    if (auto.length) parts.push("posted to " + joinNames(auto));
+    if (drafts.length) parts.push("made into a " + joinNames(drafts) + " draft for you to paste in");
+    return " On merge, each new post published here is also " + parts.join(", and ") + ".";
+  }
+
+  // The open pull request for `branch`, as { title, url }, or null. The
+  // editor's Decap token is sent when they are signed in; a public repo
+  // answers without one. Any failure falls back to the search link above.
+  function openPullRequest(branch) {
+    var repo = window.CMS_REPO;
+    if (!repo) return Promise.resolve(null);
+    var owner = repo.split("/")[0];
+    var headers = { Accept: "application/vnd.github+json" };
+    var token = decapToken();
+    if (token) headers.Authorization = "token " + token;
+    var url =
+      "https://api.github.com/repos/" + repo + "/pulls?state=open&per_page=1&head=" +
+      encodeURIComponent(owner + ":" + branch);
+    return fetch(url, { cache: "no-cache", headers: headers })
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .then(function (list) {
+        var pr = Array.isArray(list) ? list[0] : null;
+        if (!pr || typeof pr.title !== "string" || !pr.title) return null;
+        var href = String(pr.html_url || "");
+        if (href.indexOf("https://github.com/") !== 0) return null;
+        return { title: pr.title, url: href };
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function decapToken() {
+    try {
+      var raw = localStorage.getItem("decap-cms-user");
+      var p = raw ? JSON.parse(raw) : null;
+      return p && p.token ? p.token : null;
+    } catch {
+      return null;
+    }
+  }
+
   function productionSite() {
     return window.CMSHostname ? window.CMSHostname.canonical() : "the published destination";
   }
 
-  function render(branch) {
+  function render(branch, pr) {
     var existing = document.getElementById(BANNER_ID);
     // No readable branch → say nothing rather than guess. The production
     // branch → nothing to say.
@@ -171,13 +240,16 @@
           "published entries update this preview only, and reach " + productionSite() + " when ",
       ),
     );
-    var href = pullRequestUrl(branch);
+    // The pull request by its own title, so the editor can tell what it is
+    // without following the link; the head-branch search when the title could
+    // not be read.
+    var href = pr ? pr.url : pullRequestUrl(branch);
     if (href) {
       var a = document.createElement("a");
       a.href = href;
       a.target = "_blank";
       a.rel = "noopener";
-      a.textContent = "this pull request";
+      a.textContent = pr ? "\u201c" + pr.title + "\u201d" : "its pull request";
       a.style.cssText = "color:#dbe9ff;font-weight:700;text-decoration:underline;";
       text.appendChild(a);
     } else {
@@ -188,7 +260,8 @@
     // so they become drafts in the production admin.
     text.appendChild(
       document.createTextNode(
-        " merges. Drafts, and images added to them, become drafts on " + productionSite() + ".",
+        " merges. Drafts, and images added to them, become drafts on " + productionSite() + "." +
+          crossPostSentence(),
       ),
     );
     b.appendChild(text);
@@ -201,7 +274,12 @@
   }
 
   function refresh() {
-    return servedBranch().then(render);
+    return servedBranch().then(function (branch) {
+      if (branch === null || branch === production) return render(branch, null);
+      return openPullRequest(branch).then(function (pr) {
+        render(branch, pr);
+      });
+    });
   }
 
   // The binding a served config names does not change under a page, so one
