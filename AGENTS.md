@@ -124,7 +124,10 @@ for BOTH consumers, each pinned to the dispatched platform commit's full SHA.
 e2e/site-verifier work jobs while production pins stay fixed. Missing, skipped,
 failed or cancelled validation refuses promotion. One `release-candidates.yml`
 dispatch on `main` prepares both drafts through `platform-bump`'s
-`candidate_sha` mode, once each consumer's caller has it. See
+`candidate_sha` mode, once each consumer's caller has it. A stable `release.yml`
+dispatch with both candidate PR inputs empty chains it: it opens the drafts,
+waits for `scripts/release-candidate-wait.js` to see the gate pass (or stops at
+the first failure), then runs the unchanged release job (#898). See
 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for preparing the drafts and the
 `release-candidate-results` artifact; prereleases bypass this stable gate.
 
