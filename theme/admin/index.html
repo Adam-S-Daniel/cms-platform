@@ -494,33 +494,22 @@
           // the shim's multi-segment delete-ref recovery.
           if (c && c.branch) window.CMS_BACKEND_BRANCH = c.branch;
           if (!c || !c.sha) return;
-          var d = c.iso ? new Date(c.iso) : null;
-          var dateLabel = d
-            ? d.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' })
-            : '';
-          var isPreview = c.branch && c.branch !== 'main';
-
           var a = document.createElement('a');
           a.id = 'cms-commit-pill';
           // Deployment metadata, not content: the visual-regression text
           // check strips [data-visreg-ignore] nodes before diffing (the
-          // deployed sha/date differs between prod and a CI build by
+          // deployed sha differs between prod and a CI build by
           // definition, and must not force the manual review gate).
           a.setAttribute('data-visreg-ignore', '');
           a.href = REPO_URL + '/commit/' + c.sha;
           a.target = '_blank';
           a.rel = 'noopener';
           a.title = 'Deployed commit — opens on GitHub';
-          // On a feature/preview branch the pill leads with the branch
-          // name in amber so it's unmissable that this isn't production
-          // and that any CMS edits made here stay on this branch.
-          a.innerHTML = (isPreview
-            ? '<span style="color:#bf8700;font-weight:600;margin-right:0.5em">' +
-                'PREVIEW: ' + escapeHTML(c.branch) +
-              '</span>'
-            : '') +
-            '<span>' + escapeHTML(c.sha.slice(0, 7)) +
-            (dateLabel ? '  ' + escapeHTML(dateLabel) : '') + '</span>';
+          // The short sha only. On a preview, the branch and the deploy time
+          // are in branch-binding-banner.js's banner at the top of the page
+          // ("You are editing <host>, deployed N ago"), which links the pull
+          // request by title, so the pill no longer repeats them.
+          a.innerHTML = '<span>' + escapeHTML(c.sha.slice(0, 7)) + '</span>';
           // Bottom-right corner, tucked above the floating Live Preview
           // / Reviews links (their `bottom` offsets were bumped up in the
           // <style> block above to make room for this pill stack). Was
@@ -530,36 +519,33 @@
           // fields and leaves the attention-grabbing top of the page
           // alone. `bottom:1.75rem` (rather than the very corner) leaves
           // room for the platform-release pill directly below it.
-          // PREVIEW-branch pills keep their amber accent (and stay
-          // opaque so the branch name is unmistakable); main-branch
-          // pills go more subdued — they're informational, not
-          // actionable.
+          // Subdued everywhere: informational, not actionable.
           a.style.cssText = [
             'position:fixed',
             'bottom:1.75rem',
             'right:0.25rem',
             'z-index:10000',
             'padding:0.15rem 0.45rem',
-            'background:rgba(255,255,255,' + (isPreview ? '0.95' : '0.75') + ')',
-            'border:1px solid ' + (isPreview ? '#bf8700' : 'rgba(208,215,222,0.6)'),
+            'background:rgba(255,255,255,0.75)',
+            'border:1px solid rgba(208,215,222,0.6)',
             'border-radius:3px',
-            'color:' + (isPreview ? '#57606a' : '#8c959f'),
+            'color:#8c959f',
             'font-family:ui-monospace,SFMono-Regular,Menlo,monospace',
             'font-size:0.65rem',
             'letter-spacing:0.03em',
             'text-decoration:none',
-            'opacity:' + (isPreview ? '1' : '0.7'),
+            'opacity:0.7',
             'transition:opacity 0.15s,border-color 0.15s,color 0.15s'
           ].join(';') + ';';
           a.onmouseenter = function () {
-            a.style.borderColor = isPreview ? '#bf8700' : '#0969da';
+            a.style.borderColor = '#0969da';
             a.style.color = '#24292f';
             a.style.opacity = '1';
           };
           a.onmouseleave = function () {
-            a.style.borderColor = isPreview ? '#bf8700' : 'rgba(208,215,222,0.6)';
-            a.style.color = isPreview ? '#57606a' : '#8c959f';
-            a.style.opacity = isPreview ? '1' : '0.7';
+            a.style.borderColor = 'rgba(208,215,222,0.6)';
+            a.style.color = '#8c959f';
+            a.style.opacity = '0.7';
           };
           document.body.appendChild(a);
 

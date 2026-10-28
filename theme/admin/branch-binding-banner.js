@@ -84,6 +84,7 @@
 
   var BANNER_ID = "cms-branch-binding-banner";
   var CONFIG_FILE = "config.yml";
+  var COMMIT_FILE = "commit.json";
   // The characters a plain git ref name is made of. Anything else — a quoted
   // value, whitespace, markup — is not a branch this shim will put on screen.
   var REF_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -186,11 +187,52 @@
     }
   }
 
+  // When this preview was last deployed, in ms since the epoch, or null.
+  // deploy-preview.yml writes `deployed_at` (the deploy's own UTC time, not
+  // the commit's) into commit.json beside this page.
+  function deployedAt() {
+    var url = new URL(COMMIT_FILE, document.baseURI).href;
+    return fetch(url, { cache: "no-cache" })
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .then(function (c) {
+        var t = c && typeof c.deployed_at === "string" ? Date.parse(c.deployed_at) : NaN;
+        return isFinite(t) ? t : null;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  // "3 hours ago", "yesterday", "just now" — the browser's own
+  // Intl.RelativeTimeFormat, so no library is vendored into the admin.
+  // A time in the future (clock skew) reads as "just now".
+  function ago(then, now) {
+    var seconds = Math.max(0, Math.round((now - then) / 1000));
+    if (seconds < 60) return "just now";
+    var units = [
+      ["year", 365 * 86400],
+      ["month", 30 * 86400],
+      ["week", 7 * 86400],
+      ["day", 86400],
+      ["hour", 3600],
+      ["minute", 60],
+    ];
+    for (var i = 0; i < units.length; i++) {
+      if (seconds >= units[i][1]) {
+        var n = Math.floor(seconds / units[i][1]);
+        return new Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(-n, units[i][0]);
+      }
+    }
+    return "just now";
+  }
+
   function productionSite() {
     return window.CMSHostname ? window.CMSHostname.canonical() : "the published destination";
   }
 
-  function render(branch, pr) {
+  function render(branch, pr, deployedMs) {
     var existing = document.getElementById(BANNER_ID);
     // No readable branch → say nothing rather than guess. The production
     // branch → nothing to say.
@@ -224,19 +266,29 @@
 
     var text = document.createElement("span");
     text.style.cssText = "flex:1 1 20rem;min-width:14rem;font-weight:500;";
-    text.appendChild(document.createTextNode("You are editing the "));
-    var code = document.createElement("code");
-    code.textContent = branch;
-    code.style.cssText =
-      "font:600 0.85em ui-monospace,SFMono-Regular,Menlo,monospace;" +
-      "padding:0.05rem 0.35rem;border-radius:3px;background:rgba(255,255,255,0.14);word-break:break-all;";
-    text.appendChild(code);
     // This banner identifies the preview tab the editor opened. Publication
     // copy uses destination(); this tab's identity intentionally uses current().
     text.appendChild(
       document.createTextNode(
-        " branch on " + (window.CMSHostname ? window.CMSHostname.current() : "this preview") +
-          ". New or changed entries you publish, Media library uploads and deleted " +
+        "You are editing " + (window.CMSHostname ? window.CMSHostname.current() : "this preview"),
+      ),
+    );
+    if (deployedMs !== null) {
+      text.appendChild(document.createTextNode(", deployed "));
+      var age = document.createElement("span");
+      age.title = new Date(deployedMs).toLocaleString();
+      text.appendChild(age);
+      var tick = function () {
+        age.textContent = ago(deployedMs, Date.now());
+      };
+      tick();
+      // "3 minutes ago" goes stale while the tab sits open; one text update a
+      // minute keeps it true. Nothing is fetched again.
+      setInterval(tick, 60000);
+    }
+    text.appendChild(
+      document.createTextNode(
+        ". New or changed entries you publish, Media library uploads and deleted " +
           "published entries update this preview only, and reach " + productionSite() + " when ",
       ),
     );
@@ -275,22 +327,23 @@
 
   function refresh() {
     return servedBranch().then(function (branch) {
-      if (branch === null || branch === production) return render(branch, null);
-      return openPullRequest(branch).then(function (pr) {
-        render(branch, pr);
+      if (branch === null || branch === production) return render(branch, null, null);
+      return Promise.all([openPullRequest(branch), deployedAt()]).then(function (r) {
+        render(branch, r[0], r[1]);
       });
     });
   }
 
   // The binding a served config names does not change under a page, so one
-  // read per load is the whole budget — no interval, no observer.
+  // read per load is the whole budget: nothing is re-fetched. (The only timer
+  // re-renders the "deployed N ago" text from the time already read.)
   function start() {
     refresh();
   }
 
   // Exported for e2e/branch-binding-banner.test.js (vm sandbox), the same
   // seam publish-progress.js exposes as window.CMSPublishProgress.
-  window.CMSBranchBinding = { refresh: refresh, parseBranch: parseBranch, BANNER_ID: BANNER_ID };
+  window.CMSBranchBinding = { refresh: refresh, parseBranch: parseBranch, ago: ago, BANNER_ID: BANNER_ID };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", start, { once: true });

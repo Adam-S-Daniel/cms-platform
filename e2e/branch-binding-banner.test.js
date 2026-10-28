@@ -157,7 +157,7 @@ const flush = () => new Promise((r) => setImmediate(r));
  * document, and a fetch that answers the served config.yml (and, for the
  * ordering tests, the gate flag's GitHub read).
  */
-function sandboxFor({ production, config, status = 200, gate = null, siteLive = "false", crossPost, pulls = [] }) {
+function sandboxFor({ production, config, status = 200, gate = null, siteLive = "false", crossPost, pulls = [], commit = null }) {
   const document = fakeDocument();
   const fetchCalls = [];
   const sandbox = {
@@ -191,6 +191,13 @@ function sandboxFor({ production, config, status = 200, gate = null, siteLive = 
     sessionStorage: { getItem: () => null, setItem() {} },
     fetch(url, init) {
       fetchCalls.push({ url: String(url), init: init || {} });
+      if (String(url).endsWith("/commit.json")) {
+        return Promise.resolve(
+          commit === null
+            ? { ok: false, status: 404, json: () => Promise.reject(new Error("404")) }
+            : { ok: true, status: 200, json: () => Promise.resolve(commit) },
+        );
+      }
       if (String(url).startsWith("https://api.github.com/repos/acme/example/pulls?")) {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(pulls) });
       }
@@ -251,7 +258,10 @@ test.describe("branch-binding-banner.js — the two verdicts (#412)", () => {
     expect(b.getAttribute("role")).toBe("status");
     expect(b.getAttribute("data-visreg-ignore"), "UI chrome, excluded from the visual-regression text diff").not.toBeNull();
     const text = b.textContent;
-    expect(text).toContain(PR_BRANCH);
+    expect(text, "opens by naming the preview host the editor is on").toMatch(
+      /^You are editing preview-pr9999\.example\.test\. /,
+    );
+    expect(text, "the branch name is not repeated; the pull request link carries it").not.toContain(PR_BRANCH);
     expect(text, "the copy names where the change ends up — the production apex").toContain("example.test");
     expect(text).toMatch(/pull request/i);
     // Each kind of change has its own fate on merge, and the copy names each:
@@ -303,6 +313,41 @@ test.describe("branch-binding-banner.js — the two verdicts (#412)", () => {
     const a = findAnchor(banner());
     expect(a.textContent).toBe("its pull request");
     expect(a.href).toContain("https://github.com/acme/example/pulls?q=");
+  });
+
+  test("says when the preview was deployed, from commit.json's deployed_at", async () => {
+    const { banner, fetchCalls } = await loadShim({
+      production: "main",
+      config: previewConfig,
+      commit: { sha: "abc", iso: "2019-01-01T00:00:00Z", deployed_at: "2020-01-01T00:00:00Z" },
+    });
+    const call = fetchCalls.find((c) => c.url.endsWith("/commit.json"));
+    expect(call.url).toBe(`${ADMIN_URL}commit.json`);
+    expect(call.init.cache).toBe("no-cache");
+    expect(banner().textContent).toMatch(/^You are editing preview-pr9999\.example\.test, deployed \d+ years ago\. /);
+  });
+
+  for (const commit of [null, { sha: "abc", iso: "2020-01-01T00:00:00Z" }, { deployed_at: "not a date" }]) {
+    test(`leaves out the deploy time when commit.json has no usable deployed_at (${JSON.stringify(commit)})`, async () => {
+      const { banner } = await loadShim({ production: "main", config: previewConfig, commit });
+      expect(banner().textContent, "never falls back to the commit time").toMatch(
+        /^You are editing preview-pr9999\.example\.test\. /,
+      );
+    });
+  }
+
+  test("ago() words an age the way an editor says it", async () => {
+    const { api } = await loadShim({ production: "main", config: previewConfig });
+    const now = Date.parse("2026-10-28T23:00:00Z");
+    const at = (iso) => api.ago(Date.parse(iso), now);
+    expect(at("2026-10-28T22:59:30Z")).toBe("just now");
+    expect(at("2026-10-28T23:05:00Z"), "a future time (clock skew) is not 'in 5 minutes'").toBe("just now");
+    expect(at("2026-10-28T22:59:00Z")).toBe("1 minute ago");
+    expect(at("2026-10-28T22:15:00Z")).toBe("45 minutes ago");
+    expect(at("2026-10-28T20:00:00Z")).toBe("3 hours ago");
+    expect(at("2026-10-27T20:00:00Z")).toBe("yesterday");
+    expect(at("2026-10-24T20:00:00Z")).toBe("4 days ago");
+    expect(at("2026-10-14T20:00:00Z")).toBe("2 weeks ago");
   });
 
   test("names the networks a merge cross-posts new posts to, and the Substack leg as a draft", async () => {
@@ -369,7 +414,7 @@ test.describe("branch-binding-banner.js — the reader mirrors the writer", () =
     const { api, banner } = await loadShim({ production: "main", config: patched });
     expect(api.parseBranch(patched)).toBe(PR_BRANCH);
     expect(banner(), "the real patched config must render the banner").not.toBeNull();
-    expect(banner().textContent).toContain(PR_BRANCH);
+    expect(banner().textContent).toContain("You are editing preview-pr9999.example.test");
   });
 
   test("reads the unpatched template as its production branch — so a production admin stays quiet", async () => {
@@ -445,6 +490,6 @@ test("branch banner names the opened preview tab even when publication has anoth
   await ctx.sandbox.window.CMSBranchBinding.refresh();
   await flush();
   const banner = ctx.document.getElementById(BANNER_ID);
-  expect(banner.textContent).toContain("branch on preview-pr7.example.com.");
+  expect(banner.textContent).toContain("You are editing preview-pr7.example.com.");
   expect(banner.textContent).not.toContain("preview-pr8.example.com");
 });
