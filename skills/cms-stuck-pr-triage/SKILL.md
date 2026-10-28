@@ -242,7 +242,7 @@ This is the same `delete: false` symptom from §6 — the menu rendered, but Dec
 
 - **`WARNING: Error loading config file: open /root/.docker/config.json: permission denied`** at the top of a job log. A benign GHA quirk. Ignore.
 - **Workflow run dispatched against `main` rather than a feature branch.** The cron trigger fires from `main` daily; `workflow_dispatch` from `main` is identical. The user's intuition that "running it from main caused this" is a mis-attribution; the cause is in the open-PR queue regardless of which ref dispatched the run.
-- **Concurrency cancellation.** The publish-loop workflows use `cancel-in-progress: false`, so cron + dispatch + PR runs queue rather than killing each other. A run of "cancelled" runs in the run-list is almost always user-cancellations of stuck runs, not concurrency interference.
+- **Concurrency cancellation, mostly.** The real-prod loops share the `prod-mutating-loop` group with `cancel-in-progress: false`, which protects only the RUNNING loop. GitHub keeps one running and one pending run per group (the default `queue: single`; no workflow here sets `queue:`), so a third arrival cancels the pending one. A "cancelled" run is therefore either a user cancelling a stuck run or a pending run evicted by a newer one; neither is why a PR is stuck. Check which: an evicted run never started its loop job.
 
 ## Why this matters
 
