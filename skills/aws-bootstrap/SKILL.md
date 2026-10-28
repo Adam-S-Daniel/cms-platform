@@ -121,9 +121,6 @@ After deploying, add these as GitHub Actions secrets (repo → Settings → Secr
 
 ## Common errors and fixes
 
-### `Templates with a size greater than 51,200 bytes must be deployed via an S3 Bucket`
-An old copy of `deploy.sh` (v0.1.125, before the minified inline deploy) is running: pull the current platform ref. The current script stops on its own, before any AWS call, if even the minified template is over the limit.
-
 ### `Refusing to execute: the change set above removes or replaces resources`
 Read the lines marked `DESTRUCTIVE`. The usual causes are a live apex without `CREATE_APEX_DNS_RECORDS=true` or a site with an admin host but no `ADMIN_DOMAIN`. Fix the setting and re-run; use `ALLOW_DESTRUCTIVE_CHANGES=1` only when the removal is intended. Nothing was changed, and the refused change set is left on the stack for review.
 

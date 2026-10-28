@@ -64,8 +64,7 @@ biggest (~2x chromium's apt time), giving it the widest window to overlap.
 
 The blast radius is what makes this worth its own step: one lane's install failure
 fails the aggregating gate, a red required check BLOCKS the canary PR, and the loop
-then waits out its whole budget for a merge that can never happen. On 2026-08-07 it
-took out the host loop AND prod-mutate in the same hour.
+then waits out its whole budget for a merge that can never happen (incident: `docs/evidence/skill-and-agents-narratives.md`).
 
 **Fix:** re-run the failed jobs (`gh run rerun <run-id> --failed`) — the lock is
 gone by then, so the canary PR unblocks and auto-merges on its own. The install
@@ -88,29 +87,23 @@ enumerate anything:
 | `NO deploy-production run fired for your merge — the chain never fired` (`no-deploy-fired`) | the PR **IS** merged and no deploy ran — a genuine trigger problem | the deploy trigger / editorial-workflow, not the PR queue |
 | `your deploy-production run … DID complete, but the URL never served the marker` (`deploy-completed-url-missing`) | S3 sync / CloudFront / cache in the serve layer | not a PR problem at all |
 
-**In a log from before v0.1.76, `no-deploy-fired` is NOT evidence of a trigger
-problem:** the old extender asked only whether the deploy lane was idle, which it
-is before any merge lands, so a merely slow auto-merge (well inside the ~30-min
-latency) was reported as "the chain never fired". On such a log, re-read the
-message as "the URL did not reflect", check whether the PR had merged at that
-timestamp, and triage the queue from §2.
+A `no-deploy-fired` verdict means the PR merged and no deploy ran. If the PR had
+not merged at that timestamp, the verdict is stale: triage the queue from §2
+(history of the old verdict: `docs/evidence/skill-and-agents-narratives.md`).
 
-Two scoping notes worth knowing when a verdict looks absent or vague. **Only 6
-of the 15 extender call sites are PR-anchored** (the forward/create legs,
-including the one that failed live); the other 9 stay bare on purpose because no
-PR for that leg is in scope — the delete legs discover their recovered PR inside
-a poll loop without capturing it, and `cms-unpublish-republish` never opens a
-tracked PR at all. A bare leg keeps the pre-#215 behaviour, so it can still emit
-`no-deploy-fired` without having asked the merge question. And the verdict is
+Two scoping notes for a verdict that looks absent or vague. Only the legs that
+open a tracked PR (the forward/create legs) are PR-anchored; the delete legs
+discover their recovered PR inside a poll loop without capturing it, and
+`cms-unpublish-republish` never opens a tracked PR, so those legs stay bare and
+can still emit `no-deploy-fired` without having asked the merge question. And the verdict is
 deliberately **list-free** — it never checks a `requiredContexts` list, because
-there is no single source of one in this repo (the harness default is the bare
-`["validate-content"]`, adamdaniel's nudge lists 6, jodidaniel's 1, and the
-`examples/site` template still ships a stale 9-context list matching no real
-check-run name). "Has the PR merged?" needs none of it, and check-run STATE
-alone separates *awaiting* from *red*. The cost of being list-free: the verdict
-cannot tell a required context that NOTHING publishes from a slow merge. A
-`pr-awaiting-required-check` verdict on a PR whose reported checks are all green
-sends you to §3's required-context comparison, not to a caching diagnosis.
+there is no single source of one in this repo (each consumer's nudge carries its
+own, and the `examples/site` template's list can lag). "Has the PR merged?"
+needs none of it, and check-run STATE alone separates *awaiting* from *red*.
+The cost of being list-free: the verdict cannot tell a required context that
+NOTHING publishes from a slow merge. A `pr-awaiting-required-check` verdict on
+a PR whose reported checks are all green sends you to §3's required-context
+comparison, not to a caching diagnosis.
 
 ### 2. For each BLOCKED PR, find the failing checks and the base it ran against
 

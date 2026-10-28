@@ -43,6 +43,15 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-28 — cms-platform/(13 skills) — edit
+
+- Motivation: the 2026-10-28 prompt-audit sweep (https://github.com/Adam-S-Daniel/cms-platform/issues/900) found stale or contradicted statements in instruction files: preview-environments (deploy-preview.yml is `workflow_call` only), post-failure-comment (e2e marker is per matrix slot; a "prior revisions" note), code-quality (two self-ci lanes missing), platform-release-and-bump (hand-built candidate drafts), admin-config-render (canary "not optional" vs the `base_collections` keep-list), consumer-repo-provisioning (diff-against-prior-version phrasing), cms-stuck-pr-triage / browser-testing / ci-watcher-loops (incident IDs and dated evidence inside rules), aws-bootstrap (obsolete v0.1.125 entry), test-canary (long description).
+- Change: each statement now states the current rule; dated incident evidence moved to `docs/evidence/skill-and-agents-narratives.md` with a one-clause pointer; `skills/.freshness-allow.yml` follows the renamed `CMS_PLATFORM_PAT` heading. The cancel-in-progress:false contradiction between cms-stuck-pr-triage and platform-release-and-bump is left for the owner (not edited) (PR pending).
+- Eval: outstanding — the skills-evals fixtures for these skills were not run in this change.
+- Outcome: pending merge.
+
+---
+
 ## 2026-10-08 — cms-platform/sveltia-cms-playwright-demo — remove
 
 - Motivation: the 2026-10-08 prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found the skill describes Sveltia CMS, which this platform no longer runs (Decap replaced it; browser-testing's "Why not Sveltia" keeps the reason), while its description loads every session. A re-grep found no reference in this repo or its plugin manifests; outside it, consumers' `skills.lock` pin it (their re-pin step), and adamdaniel.ai `docs/SKILLS.md` and skills-evals `DESIGN.md` / `evals/non-coverage.yml` still name it.

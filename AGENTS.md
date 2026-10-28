@@ -445,9 +445,8 @@ before blaming the deploy chain. → `docs/CI-INVARIANTS.md` (and the
 ## Consumers
 
 - **adamdaniel.ai** — consumer 1, user-owned, the dogfood: gem-delivered admin
-  (PR #1883) live on prod, daily editorial-label-audit adopted; a loop
-  co-arrival fix (#1892) narrowed the host publish-loop's push trigger so it
-  stops evicting prod-mutate from `prod-mutating-loop`.
+  and the daily editorial-label-audit; its trigger history is in
+  `docs/evidence/skill-and-agents-narratives.md`.
 - **jodidaniel.com** — consumer 2, org-owned, a SINGLE-PAGE bio: 10 per-section
   collections (6 folder ones, all `output:false` except `media`; 4 file ones
   reading `_data/*.yml`), `cms.base_collections: []`, and `_data/settings.yml`

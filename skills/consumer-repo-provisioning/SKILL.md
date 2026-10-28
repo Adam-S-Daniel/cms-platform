@@ -87,7 +87,7 @@ permissions**:
   (Settings → Environments → required reviewers), or `regression-review-reaper` can't
   reject its pending deployments even with `Deployments: write`.
 
-## `CMS_PLATFORM_PAT` — removed, do not create it
+## `CMS_PLATFORM_PAT` — do not create it
 
 **The CMS automation App below is the only push credential** for the two
 reusables that edit `.github/workflows/*`, `platform-bump` and `dev-hooks-sync`
@@ -108,15 +108,14 @@ and opens its PR on `GITHUB_TOKEN`, which fires no CI. (The removal and the
 consumers' verified cut-over: `docs/VERSION-HISTORY.md` v0.1.103; the deleted
 `dependabot-comment-sync` consumer: `docs/CI-INVARIANTS.md`.)
 
-## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the CMS automation App (replaces `CMS_PLATFORM_PAT`, #238)
+## `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` — the CMS automation App
 
-A **GitHub App** whose installation token does `CMS_PLATFORM_PAT`'s job. Since
-cms-platform#238 the two reusables that hold that credential — `platform-bump`
-and `dev-hooks-sync` — take their push-back credential from the App: when both
-knobs below are set on the consumer, the reusable mints a ~1 h installation
-token per run (`scripts/mint-app-token.js`, pure node + stdlib `crypto`,
-fetched from the platform at the release the bump targets). There is no PAT
-fallback since v0.1.103: without the App, `platform-bump` fails with an
+A **GitHub App** whose installation token is the push-back credential for the
+two reusables that edit `.github/workflows/*`, `platform-bump` and
+`dev-hooks-sync`: when both knobs below are set on the consumer, the reusable
+mints a ~1 h installation token per run (`scripts/mint-app-token.js`, pure node
++ stdlib `crypto`, fetched from the platform at the release the bump targets).
+There is no PAT fallback: without the App, `platform-bump` fails with an
 `::error::` naming both knobs, and `dev-hooks-sync` warns and opens its PR as
 `GITHUB_TOKEN`, which fires no CI.
 
@@ -170,8 +169,8 @@ gh run view <run-id> -R <owner>/<repo> --log | grep -E '::notice::(Minted|No CMS
 ```
 
 `Minted a contents:write,pull_requests:write,workflows:write installation token`
-means the App path is live; on v0.1.103+ it is the ONLY path, and `No CMS
-automation App` is an ERROR there rather than a fallback notice. The
+means the App path is live; it is the ONLY path, and
+`No CMS automation App` is an ERROR for `platform-bump`, not a fallback notice. The
 `No CMS automation App` notice means a knob is missing. A present-but-broken
 key is a red run with `::error::Could not mint` — never a silent PAT fallback,
 so "misconfigured" stays distinguishable from "never onboarded".
@@ -198,7 +197,7 @@ fire all three prod loops onto the shared `prod-mutating-loop` concurrency
 group, which **drops a co-arriving sibling** — a cancelled loop as the price of
 a pin bump. So the App is for the **push-back** credential only.
 
-**Not (yet) a replacement for `CMS_E2E_PAT`.** That token is written verbatim
+**Not a replacement for `CMS_E2E_PAT`.** That token is written verbatim
 into Decap's browser session (`e2e/decap-pat.js`), and Decap's GitHub backend
 gates login on `GET /repos/{owner}/{repo}` reporting `permissions.push` for the
 token's identity — unmeasured for an installation token; `regression-review-
@@ -337,7 +336,7 @@ that consumer gets no bump until someone dispatches it by hand
 
 - [ ] `CMS_E2E_PAT` — fine-grained, this repo: Contents R/W + Pull requests R/W + **Issues R/W** + **Actions R/W** + **Deployments R/W** + **Commit statuses R** (+ be a reviewer of the `regression-review` environment)
 - [ ] `CMS_AUTOMATION_APP_PRIVATE_KEY` (secret) + `CMS_AUTOMATION_APP_ID` (variable) — the CMS automation App, installed on this owner; powers platform-bump and dev-hooks-sync with nothing to rotate; the `dependabot-rearm-sweep.yml` caller passes the key too, so the sweep can refresh a behind workflow-file Dependabot PR (#458)
-- [ ] ~~`CMS_PLATFORM_PAT`~~ — **removed in v0.1.103.** Do not create it. The App above is the only push credential; a caller still passing `gh_token` fails at startup
+- [ ] ~~`CMS_PLATFORM_PAT`~~ — **retired.** Do not create it. The App above is the only push credential; a caller still passing `gh_token` fails at startup
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
 - [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` when `site-params.env` sets them)
 - [ ] Settings → General → **Allow auto-merge** = ON

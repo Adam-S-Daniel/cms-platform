@@ -57,7 +57,10 @@ Both do, in order:
 (the gem ships no `collections.site.yml`). A site adds/overrides content
 collection types there; it's spliced at `# __SITE_COLLECTIONS__`. The platform's
 e2e canary collection + editorial-workflow invariants stay platform-owned
-(they're test infra, not content structure) and are NOT optional.
+(test infra, not content structure): a site cannot override them in the seam.
+The canary is one of the built-in collections the `base_collections` keep-list
+below controls, so a site that sets `base_collections` without `e2e` (or sets
+`[]`) has no canary collection; a spec that needs it must self-skip there.
 
 ## base_collections opt-out (v0.1.7)
 

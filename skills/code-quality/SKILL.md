@@ -17,6 +17,8 @@ description: Reference for the per-language lint + static-analysis + style toolc
 > | `self-ci.yml` → `ruby-theme-specs` | `ruby theme/spec/*_test.rb` | yes |
 > | `self-ci.yml` → `node-unit-lints` | the pure-fs `e2e/*.test.js` lints (every file except `self-ci.yml`'s DENY list) | yes |
 > | `self-ci.yml` → `cfn-lint` | the CloudFormation templates (pinned cfn-lint) | yes |
+| `self-ci.yml` → `plugin-validate` | `claude plugin validate .` over the plugin root | yes |
+| `self-ci.yml` → `python-unit-tests` | `python3 -m pytest scripts/cross_post oauth-proxy -q` | yes |
 > | `self-secrets-scan.yml` | gitleaks on the diff / history | yes |
 > | local pre-commit | `scripts/lint-staged.sh` + `scripts/secrets-scan.sh` (each skips any tool not on `PATH`) | local only |
 >
