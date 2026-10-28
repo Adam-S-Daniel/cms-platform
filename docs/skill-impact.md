@@ -43,6 +43,15 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-10-28 — cms-platform/cms-stuck-pr-triage, platform-release-and-bump — edit
+
+- Motivation: PR #901 found the two skills contradicting each other on what `cancel-in-progress: false` does. GitHub's concurrency docs: one running plus one pending run per group by default (`queue: single`); a newer pending run cancels the older one.
+- Change: cms-stuck-pr-triage no longer says the loops "queue rather than killing each other" and names concurrency eviction as one source of cancelled runs; platform-release-and-bump no longer says the shared group queues any remaining overlap (PR pending).
+- Eval: none run for this one-paragraph correction.
+- Outcome: pending merge.
+
+---
+
 ## 2026-10-08 — cms-platform/sveltia-cms-playwright-demo — remove
 
 - Motivation: the 2026-10-08 prompt audit (https://github.com/Adam-S-Daniel/cms-platform/issues/819) found the skill describes Sveltia CMS, which this platform no longer runs (Decap replaced it; browser-testing's "Why not Sveltia" keeps the reason), while its description loads every session. A re-grep found no reference in this repo or its plugin manifests; outside it, consumers' `skills.lock` pin it (their re-pin step), and adamdaniel.ai `docs/SKILLS.md` and skills-evals `DESIGN.md` / `evals/non-coverage.yml` still name it.
