@@ -415,6 +415,19 @@ test.describe("#17 normalizeInjectedIdentity collapses per-env window.CMS_* iden
     expect(normalizeInjectedIdentity(served)).toBe(normalizeInjectedIdentity(source));
   });
 
+  // The hooks also inject JSON-valued keys: CMS_SITE_GATE is an object
+  // (jodidaniel.com) and CMS_CROSS_POST an array (adamdaniel.ai). A quote
+  // inside an unquoted value must not stop the block from being stripped.
+  test("a block with JSON object and array values is stripped like any other", () => {
+    const source = sourceShellHtml();
+    const block =
+      "<script>window.CMS_REPO=\"jodidaniel/jodidaniel.com\";" +
+      'window.CMS_SITE_GATE={"path":"_data/settings.yml","field":"site_live","label":"Site gate; on"};' +
+      'window.CMS_CROSS_POST=["mastodon","linkedin","substack"];</script>';
+    const served = source.replace("<head>", `<head>\n${block}`);
+    expect(normalizeInjectedIdentity(served)).toBe(normalizeInjectedIdentity(source));
+  });
+
   // A real inline/module script (one with a src, or non-identity statements) is
   // NOT the identity block, so it is NEVER stripped.
   test("a real <script src> module is never mistaken for the identity block", () => {
