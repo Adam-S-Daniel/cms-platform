@@ -289,7 +289,7 @@
     text.appendChild(
       document.createTextNode(
         ". New or changed entries you publish, Media library uploads and deleted " +
-          "published entries update this preview only, and reach " + productionSite() + " when ",
+          "published entries update this preview initially, and reach " + productionSite() + " when ",
       ),
     );
     // The pull request by its own title, so the editor can tell what it is

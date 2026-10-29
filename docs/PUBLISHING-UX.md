@@ -1013,7 +1013,7 @@ any field — so `theme/admin/branch-binding-banner.js` states it once, at the
 top of every screen, on the surface where it is true:
 
 > You are editing the `<branch>` branch from a preview. Anything you save or
-> publish here updates this preview only — it reaches `<apex>` when *this
+> publish here updates this preview initially — it reaches `<apex>` when *this
 > pull request* merges.
 
 Three decisions in it, each with a shorter wrong alternative:
