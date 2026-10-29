@@ -12,8 +12,7 @@ on any of this in a repo other than cms-platform.
 
 The short version: **SHA, and nothing after it — unless the target is this
 account's own platform repo, in which case a release TAG, and nothing after it
-either.** No `uses:` line in any of the three repos carries a version comment
-any more.
+either.** No `uses:` line in any of the three repos carries a version comment.
 
 ## Rule 1: Pin every action by full commit SHA
 
@@ -115,7 +114,7 @@ Within whichever repo you are in, the rules reach every `uses:` line under `.git
 
 ## Dependabot interaction
 
-Dependabot's github-actions ecosystem updates the `@<sha>` ref. It is now the ONLY thing it needs to update, because a third-party pin carries no comment (Rule 2). Nothing about a Dependabot PR needs a follow-up commit any more, and no `workflows`-scoped credential is needed to service one.
+Dependabot's github-actions ecosystem updates the `@<sha>` ref. It is the ONLY thing it needs to update, because a third-party pin carries no comment (Rule 2). Nothing about a Dependabot PR needs a follow-up commit, and no `workflows`-scoped credential is needed to service one.
 
 ### Why a drifted comment can never self-repair
 
@@ -123,7 +122,7 @@ Dependabot's github-actions ecosystem updates the `@<sha>` ref. It is now the ON
 
 ### The cooling-off is MECHANISED on cms-platform (and only there) — flat on `github-actions`, GRADUATED on `npm`
 
-Rule 3 above is a convention a reviewer has to remember. On cms-platform it is now enforced by the bot: `.github/dependabot.yml` gives **both** ecosystems — `github-actions` and the `/e2e` `npm` harness — a minimum package age, but **not the same shape**, because GitHub does not support one of the keys on one of them:
+Rule 3 above is a convention a reviewer has to remember. On cms-platform it is enforced by the bot: `.github/dependabot.yml` gives **both** ecosystems — `github-actions` and the `/e2e` `npm` harness — a minimum package age, but **not the same shape**, because GitHub does not support one of the keys on one of them:
 
 ```yaml
 # github-actions — flat only.
