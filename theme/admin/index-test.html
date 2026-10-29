@@ -229,6 +229,14 @@
       var statusEl = document.getElementById("cms-diagnostic-status");
       var detailEl = document.getElementById("cms-diagnostic-detail");
 
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
       function setStatus(level, label, html) {
         statusEl.className = "badge " + level;
         statusEl.textContent = label;
@@ -276,7 +284,7 @@
             "red",
             "FIELDS DISABLED",
             "<strong>Reproduces the read-only bug:</strong> " +
-              report.join("; ") + ". " +
+              report.map(escapeHtml).join("; ") + ". " +
               "If this URL says EDITABLE on production but a real " +
               "<code>/admin/#/collections/...</code> URL shows fields disabled, " +
               "the bug is in the GitHub-backend code path (auth, workflow PR " +

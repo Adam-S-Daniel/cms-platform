@@ -338,7 +338,7 @@ test.describe("check-platform-pin-consistency.js — CONSISTENT fixture (#29)", 
     const res = run(root);
     expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0);
     const out = `${res.stdout}${res.stderr}`;
-    expect(out).toMatch(new RegExp(`\\b${V.replace(/\./g, "\\.")}\\b`));
+    expect(out).toMatch(new RegExp(`\\b${V.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`));
     // Concise OK summary, not a violation dump.
     expect(out).toMatch(/consistent|all agree|OK/i);
   });

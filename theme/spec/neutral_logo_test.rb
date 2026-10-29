@@ -25,7 +25,7 @@ class NeutralLogoTest < Minitest::Test
   end
 
   def test_is_well_formed_svg
-    assert_match(/\A\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<svg\b/m, @svg,
+    assert_match(/\A\s*(?:<\?xml[^>]*\?>\s*)?<svg\b/, strip_comment(@svg),
                  "must begin with an <svg> root (optionally after an XML decl / comment)")
     assert_match(%r{</svg>\s*\z}m, @svg, "must close the <svg> root")
     assert_includes @svg, "xmlns=\"http://www.w3.org/2000/svg\"", "must declare the SVG namespace"
@@ -62,6 +62,11 @@ class NeutralLogoTest < Minitest::Test
   # Search everything EXCEPT the override comment (which may legitimately mention
   # cms-platform as the shipper of the placeholder).
   def strip_comment(svg)
-    svg.gsub(/<!--.*?-->/m, "")
+    loop do
+      stripped = svg.gsub(/<!--.*?-->/m, "")
+      return stripped if stripped == svg
+
+      svg = stripped
+    end
   end
 end

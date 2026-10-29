@@ -123,7 +123,7 @@ const CMS_IDENTITY_PLACEHOLDER = "__CMS_IDENTITY__";
 // (`<script src="…">`) or an inline script with any other statement does not
 // match, so it survives.
 const INJECTED_IDENTITY_BLOCK =
-  /<script>\s*(?:window\.CMS_[A-Z0-9_]+\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^;]*?)\s*;\s*)+<\/script>\n?/gi;
+  /<script>\s*(?:window\.CMS_[A-Z0-9_]+\s*=\s*(?:(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^;"'\s]+(?:\s+[^;"'\s]+)*)\s*)?;\s*)+<\/script>\n?/gi;
 
 // Normalize the per-env window.CMS_* injection in an admin-shell STRING so the
 // served shell and the local source compare on machinery only. Returns the

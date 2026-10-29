@@ -49,7 +49,7 @@ const BRANCH_PREFIX = arg("branch-prefix", "cms/");
 const LABEL_PREFIX = arg("label-prefix", "decap-cms");
 const FIX = flag("fix");
 const STATUSES = ["draft", "pending_review", "pending_publish"];
-const statusRe = new RegExp(`^${LABEL_PREFIX}/(?:${STATUSES.join("|")})$`);
+const statusRe = new RegExp(`^${LABEL_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(?:${STATUSES.join("|")})$`);
 
 function gh(args) {
   return execFileSync("gh", REPO ? [...args, "--repo", REPO] : args, {

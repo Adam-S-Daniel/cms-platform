@@ -52,7 +52,11 @@ test.describe("scaffolder seeds a neutral placeholder logo (#25)", () => {
     // The leaked brand rendered an "AD" monogram via <text>; a seed must render
     // no word/initials at all.
     expect(logoText).not.toMatch(/<text\b/i);
-    const markup = logoText.replace(/<!--[\s\S]*?-->/g, "");
+    let markup = logoText;
+    for (let prev; prev !== markup; ) {
+      prev = markup;
+      markup = markup.replace(/<!--[\s\S]*?-->/g, "");
+    }
     for (const brand of ["AD", "Adam", "Daniel"]) {
       expect(markup).not.toMatch(new RegExp(`\\b${brand}\\b`, "i"));
     }

@@ -39,7 +39,11 @@ function adminHtmlFiles() {
 // The opening `<script …>` tags that load Decap from unpkg. Comments are
 // stripped first so prose about a tag is never mistaken for one.
 function decapScriptTags(html) {
-  const live = html.replace(/<!--[\s\S]*?-->/g, "");
+  let live = html;
+  for (let prev; prev !== live; ) {
+    prev = live;
+    live = live.replace(/<!--[\s\S]*?-->/g, "");
+  }
   return [...live.matchAll(/<script\b[^>]*\bsrc="https:\/\/unpkg\.com\/decap-cms[^"]*"[^>]*>/g)].map(
     (m) => m[0],
   );

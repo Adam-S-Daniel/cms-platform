@@ -28,6 +28,7 @@ const { test, expect } = require("./base");
 const ADMIN = path.resolve(__dirname, "../theme/admin");
 const SRC = fs.readFileSync(path.join(ADMIN, "draft-media-fallback.js"), "utf8");
 const ORIGIN = "https://site.example.com";
+const isGitHubApi = (url) => new URL(url, ORIGIN).host === "api.github.com";
 
 function loadHelpers() {
   const sandbox = { window: {}, URL };
@@ -243,7 +244,7 @@ test.describe("draft-media-fallback.js runtime", () => {
     rt.fireError(el);
     await settle();
     expect(el.src).toMatch(/^blob:.*IMG_1309\.JPEG-/);
-    expect(rt.fetches.filter((f) => f.url.startsWith("https://api.github.com"))).toEqual([]);
+    expect(rt.fetches.filter((f) => isGitHubApi(f.url))).toEqual([]);
   });
 
   test("otherwise reads the entry's cms/ branch, then the config branch", async () => {
@@ -252,7 +253,7 @@ test.describe("draft-media-fallback.js runtime", () => {
     const el = rt.img(`${ORIGIN}/assets/images/uploads/r.jpeg`);
     rt.fireError(el);
     await settle();
-    const gh = rt.fetches.filter((f) => f.url.startsWith("https://api.github.com"));
+    const gh = rt.fetches.filter((f) => isGitHubApi(f.url));
     expect(gh.map((f) => f.url)).toEqual([
       "https://api.github.com/repos/owner/site/contents/assets/images/uploads/r.jpeg?ref=cms%2Fposts%2Fhello",
       onMain,
@@ -270,7 +271,7 @@ test.describe("draft-media-fallback.js runtime", () => {
     await settle();
     rt.fireError(el);
     await settle();
-    const reads = () => rt.fetches.filter((f) => f.url.startsWith("https://api.github.com")).length;
+    const reads = () => rt.fetches.filter((f) => isGitHubApi(f.url)).length;
     expect(reads()).toBe(2); // the cms/ branch and main, once
     expect(el.src).toBe(`${ORIGIN}/assets/images/uploads/missing.jpeg`);
 
@@ -292,12 +293,12 @@ test.describe("draft-media-fallback.js runtime", () => {
     const noToken = bootRuntime({ hash: "#/collections/posts/entries/hello", token: null });
     noToken.fireError(noToken.img(`${ORIGIN}/assets/images/uploads/r.jpeg`));
     await settle();
-    expect(noToken.fetches.filter((f) => f.url.startsWith("https://api.github.com"))).toEqual([]);
+    expect(noToken.fetches.filter((f) => isGitHubApi(f.url))).toEqual([]);
 
     const local = bootRuntime({ hash: "#/collections/posts/entries/hello", config: `local_backend: true\n${CONFIG}` });
     local.fireError(local.img(`${ORIGIN}/assets/images/uploads/r.jpeg`));
     await settle();
-    expect(local.fetches.filter((f) => f.url.startsWith("https://api.github.com"))).toEqual([]);
+    expect(local.fetches.filter((f) => isGitHubApi(f.url))).toEqual([]);
   });
 });
 

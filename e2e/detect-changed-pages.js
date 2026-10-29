@@ -1,4 +1,4 @@
-const { execFileSync, execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { parseNulPaths } = require("./visual-regression-salient");
@@ -84,8 +84,9 @@ function discoverAllPages(rootDir = ROOT) {
   const useSiteScan = fs.existsSync(siteDir);
 
   if (useSiteScan) {
-    const htmlFiles = execSync(
-      `find ${siteDir} -name 'index.html' -not -path '*/admin/*' -not -path '*/preview/*' -not -path '*/e2e/*'`,
+    const htmlFiles = execFileSync(
+      "find",
+      [siteDir, "-name", "index.html", "-not", "-path", "*/admin/*", "-not", "-path", "*/preview/*", "-not", "-path", "*/e2e/*"],
       { encoding: "utf-8" },
     )
       .trim()

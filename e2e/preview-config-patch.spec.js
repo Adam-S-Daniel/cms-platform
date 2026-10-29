@@ -34,12 +34,12 @@ test.describe("Preview deploy: patch-preview-config.sh", () => {
   });
 
   test("site_url is the full preview subdomain", () => {
-    expect(patched).toMatch(new RegExp(`^site_url: https://${HOST.replace(/\./g, "\\.")}$`, "m"));
+    expect(patched).toMatch(new RegExp(`^site_url: https://${HOST.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
   });
 
   test("display_url matches site_url for the Open Production Site button", () => {
     expect(patched).toMatch(
-      new RegExp(`^display_url: https://${HOST.replace(/\./g, "\\.")}$`, "m"),
+      new RegExp(`^display_url: https://${HOST.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"),
     );
   });
 

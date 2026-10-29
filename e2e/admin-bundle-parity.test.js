@@ -292,12 +292,12 @@ test.describe("#14 outcome matrix (the fix's contract)", () => {
 // The injected <script> the render hooks splice after <head> (one line; values
 // from Ruby's .inspect, i.e. double-quoted). Same 5 keys both render paths
 // inject (AGENTS.md / decap-config-render-parity.test.js).
-function injectedScript({ repo, origin, apex, oauth, title }) {
+function injectedScript({ repo, origin, apex, proxyBaseUrl, title }) {
   return (
     `<script>window.CMS_REPO=${JSON.stringify(repo)};` +
     `window.CMS_SITE_ORIGIN=${JSON.stringify(origin)};` +
     `window.CMS_APEX=${JSON.stringify(apex)};` +
-    `window.CMS_OAUTH_BASE_URL=${JSON.stringify(oauth)};` +
+    `window.CMS_OAUTH_BASE_URL=${JSON.stringify(proxyBaseUrl)};` +
     `window.CMS_SITE_TITLE=${JSON.stringify(title)};</script>`
   );
 }
@@ -341,7 +341,7 @@ const PREVIEW_IDENTITY = {
   repo: "Adam-S-Daniel/adamdaniel.ai",
   origin: "https://preview-pr1913.adamdaniel.ai",
   apex: "adamdaniel.ai",
-  oauth: "https://oauth.adamdaniel.ai",
+  proxyBaseUrl: "https://oauth.adamdaniel.ai",
   title: "Adam Daniel",
 };
 // "LOCAL source" rendered at PROD identity (apex origin) — same machinery,
@@ -350,7 +350,7 @@ const PROD_IDENTITY = {
   repo: "Adam-S-Daniel/adamdaniel.ai",
   origin: "https://adamdaniel.ai",
   apex: "adamdaniel.ai",
-  oauth: "https://oauth.adamdaniel.ai",
+  proxyBaseUrl: "https://oauth.adamdaniel.ai",
   title: "Adam Daniel",
 };
 // "LOCAL source" as the RAW template (un-rendered {{CMS_*}} tokens) — the other
@@ -361,7 +361,7 @@ const TOKEN_IDENTITY = {
   repo: "{{CMS_REPO}}",
   origin: "{{CMS_SITE_URL}}",
   apex: "{{CMS_APEX}}",
-  oauth: "{{CMS_OAUTH_BASE_URL}}",
+  proxyBaseUrl: "{{CMS_OAUTH_BASE_URL}}",
   title: "{{CMS_DISPLAY_URL}}",
 };
 const TOKEN_SHELL = injectedShellHtml(TOKEN_IDENTITY);

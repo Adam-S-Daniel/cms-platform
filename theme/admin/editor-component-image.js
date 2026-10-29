@@ -36,7 +36,7 @@
       var image = data && data.image;
       if (!image) return "";
       var alt = data.alt || "";
-      var title = data.title ? ' "' + data.title.replace(/"/g, '\\"') + '"' : "";
+      var title = data.title ? ' "' + data.title.replace(/[\\"]/g, "\\$&") + '"' : "";
       return "![" + alt + "](" + image + title + ")";
     },
     // Same preview as the stock component; `window.h` is Decap's

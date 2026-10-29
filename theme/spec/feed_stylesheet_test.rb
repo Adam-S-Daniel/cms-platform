@@ -196,6 +196,8 @@ class FeedStylesheetBuildTest < Minitest::Test
     # The page tells a non-reader what to do with the address.
     assert_includes File.read(path), 'copy this address into your feed reader'
     # Same-origin and self-contained: no script, no external fetch.
-    refute_match(%r{<script\b|https?://(?!www\.w3\.org/)}i, File.read(path).gsub(/<!--.*?-->/m, ''))
+    markup = File.read(path)
+    markup = markup.gsub(/<!--.*?-->/m, '') while markup.match?(/<!--.*?-->/m)
+    refute_match(%r{<script\b|https?://(?!www\.w3\.org/)}i, markup)
   end
 end

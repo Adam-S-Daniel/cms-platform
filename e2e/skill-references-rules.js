@@ -70,7 +70,7 @@ const CONTEXT_NAME_RE = /(?<![\w./-])(secrets|vars)\.([A-Za-z_][A-Za-z0-9_]*)\b/
 // (a status literal such as `IN_PROGRESS`, an error code) is LISTED, never
 // failed.
 const LABEL_RE = /\b(?:secrets?|variables?|vars?|env|environment|knobs?|credentials?|tokens?)\b/i;
-const CFN_NAME_RE = /^[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+$/;
+const CFN_NAME_RE = /^[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*$/;
 const DOLLAR_SPAN_RE = /^\$\{?([A-Z][A-Z0-9_]*)\}?$/;
 const ENV_SPAN_RE = /^process\.env\.([A-Z][A-Z0-9_]*)$/;
 const CFN_SUB_RE = /\$\{([A-Za-z][A-Za-z0-9]*)\}/g;

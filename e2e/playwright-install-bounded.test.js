@@ -768,7 +768,7 @@ test("apt's own transport abandons an idle fetch: Acquire timeouts in the same d
   const step = compositeSteps().find((st) => /DPkg::Lock::Timeout/.test(String(st.run || "")));
   const run = String(step.run);
   const val = (key) => {
-    const m = run.match(new RegExp(`'${key.replace(/[.:]/g, "\\$&")} "(\\d+)";'`));
+    const m = run.match(new RegExp(`'${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} "(\\d+)";'`));
     expect(m, `the apt.conf.d drop-in must set ${key}`).toBeTruthy();
     return Number(m[1]);
   };

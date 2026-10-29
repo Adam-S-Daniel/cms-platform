@@ -28,7 +28,12 @@ function anchorsFromHtml(html) {
   const re = /<a\b[^>]*?\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
   let m;
   while ((m = re.exec(html)) !== null) {
-    out.push({ href: m[1], text: m[2].replace(/<[^>]*>/g, "") });
+    let text = m[2];
+    for (let prev; prev !== text; ) {
+      prev = text;
+      text = text.replace(/<[^>]*>/g, "");
+    }
+    out.push({ href: m[1], text });
   }
   return out;
 }

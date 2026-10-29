@@ -32,7 +32,8 @@ module Jekyll
     PROLOG_LENGTH = 512
 
     def self.href(baseurl)
-      base = baseurl.to_s.gsub(%r{\A/+|/+\z}, '')
+      base = baseurl.to_s.sub(%r{\A/+}, '')
+      base = base.chomp('/') while base.end_with?('/')
       path = base.empty? ? ASSET_PATH : "/#{base}#{ASSET_PATH}"
       path.gsub('&', '&amp;').gsub('<', '&lt;').gsub('"', '&quot;')
     end

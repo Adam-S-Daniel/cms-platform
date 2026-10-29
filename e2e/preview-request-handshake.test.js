@@ -37,7 +37,7 @@ const CHANNEL = "adamdaniel-cms-preview";
 // The layout's render script: the inline <script> that subscribes to the
 // channel. Liquid-free, so it runs as written.
 function previewScript() {
-  const blocks = [...LAYOUT.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const blocks = [...LAYOUT.matchAll(/<script>([\s\S]*?)<\/script\b[^>]*>/gi)].map((m) => m[1]);
   const mine = blocks.filter((b) => b.includes("new BroadcastChannel("));
   expect(mine, "preview.html has exactly one render script on the channel").toHaveLength(1);
   return mine[0];
