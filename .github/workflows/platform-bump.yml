@@ -706,8 +706,10 @@ jobs:
 
           # Candidate mode ends here: a DRAFT PR that release.yml's gate reads and
           # nobody merges. It never gets auto-merge, a label, a ready-for-review
-          # flip or the superseded-bump cleanup below; that cleanup only matches
-          # `platform/bump-*`, so a normal bump never closes a candidate either.
+          # flip or the superseded-bump cleanup below. A later STABLE bump closes
+          # the candidate drafts its release supersedes (see the end of this
+          # step); candidate mode itself never closes one, because release.yml's
+          # gate needs the draft open until the tag is cut.
           # An open candidate PR for this version is re-pinned in place: the
           # force-push above moved its head, and a COMMENT records the new SHA,
           # because a body edit fires `pull_request: edited` (#222 above).
@@ -790,3 +792,32 @@ jobs:
           else
             echo "::warning::could not resolve the PR number for $BRANCH — skipping superseded bump-PR cleanup"
           fi
+
+          # Close superseded release-candidate drafts. Candidate mode opens a
+          # `candidate/vX.Y.Z` draft per release for release.yml's gate, and the
+          # gate needs it OPEN until the tag is cut, so candidate mode itself
+          # never closes one. Once a stable bump runs, the tag exists and the
+          # draft for that version (and any older one) has done its job: it pins
+          # the same commit by SHA that this bump pins by tag. Nothing else ever
+          # closed them, so each release left one open draft per consumer
+          # (observed live: adamdaniel.ai had five, v0.1.162 to v0.1.167, on
+          # 2026-10-29). A draft for a version NEWER than $LATEST is a release
+          # still in progress and is left alone. Only draft PRs whose head is
+          # `candidate/v<digits>.<digits>.<digits>` match, and those branches are
+          # produced exclusively by candidate mode, so --delete-branch is safe.
+          # FAIL-OPEN, same rationale as the bump-PR cleanup just above.
+          mapfile -t OLD_CANDIDATES < <(
+            gh pr list --state open --limit 100 --json number,headRefName,isDraft \
+              --jq '.[] | select(.isDraft) | select(.headRefName | test("^candidate/v[0-9]+\\.[0-9]+\\.[0-9]+$")) | "\(.number) \(.headRefName)"' \
+            2>/dev/null || true
+          )
+          for entry in "${OLD_CANDIDATES[@]}"; do
+            [ -z "$entry" ] && continue
+            cand_num="${entry%% *}"
+            cand_ver="${entry##*candidate/}"
+            # Newer than the release this bump targets: still in flight, keep it.
+            [ "$(printf '%s\n%s\n' "$cand_ver" "$LATEST" | sort -V | tail -n 1)" = "$LATEST" ] || continue
+            gh pr close "$cand_num" --delete-branch --comment \
+              "Superseded by the stable bump to $LATEST${NEW_PR:+ (#${NEW_PR})}: the release this candidate validated is tagged, so the draft has done its job." \
+              || echo "::warning::could not close superseded candidate PR #${cand_num} — close it manually"
+          done

@@ -223,7 +223,10 @@ at that commit>` and opens a draft PR titled `Release candidate: cms-platform
 vX.Y.Z (do not merge)`. If that PR is already open, the push re-pins it and a
 comment records the new SHA; the body is not edited (#222), and the PR is put
 back to draft if someone marked it ready. Candidate mode never enables auto-merge,
-adds a label or closes another PR. The workflow then waits up to 10 minutes for
+adds a label or closes another PR. The gate needs the draft open until the tag
+is cut, so the draft is closed later, by the consumer's next stable bump: that
+run closes every open `candidate/vX.Y.Z` draft at or below the release it bumps
+to (deleting its branch) and leaves a newer one alone. The workflow then waits up to 10 minutes for
 an open draft on each consumer whose head's `platform.lock` names the commit, and
 its run summary lists both PRs and the exact `release.yml` dispatch line. It does
 not wait for the consumers' checks; the release gate judges those.

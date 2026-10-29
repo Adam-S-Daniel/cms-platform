@@ -218,6 +218,131 @@ test.describe("platform-bump reusable — closes superseded platform/bump-* PRs"
   });
 });
 
+test.describe("platform-bump reusable — closes superseded release-candidate drafts", () => {
+  // Candidate mode opens a `candidate/vX.Y.Z` draft per release for
+  // release.yml's gate, and the gate needs it open until the tag is cut, so
+  // candidate mode never closes one. Nothing else did either, so each release
+  // left one open draft per consumer (adamdaniel.ai had five on 2026-10-29). A
+  // stable bump now closes the drafts at or below the release it targets. This
+  // EXECUTES the loop, lifted out of the run script, with a stub `gh` whose
+  // `pr list` applies the script's own --jq filter (real jq) to a fixture.
+  const os = require("node:os");
+  const { spawnSync } = require("node:child_process");
+
+  function candidateLoop() {
+    const lines = runStep.run.split("\n");
+    const start = lines.findIndex((l) => /^\s*mapfile -t OLD_CANDIDATES < <\($/.test(l));
+    expect(start, "the run script must enumerate OLD_CANDIDATES").toBeGreaterThan(-1);
+    const indent = lines[start].match(/^\s*/)[0];
+    const end = lines.findIndex((l, i) => i > start && l === `${indent}done`);
+    expect(end, "the candidate loop must close with `done` at its own indent").toBeGreaterThan(start);
+    return lines.slice(start, end + 1).join("\n");
+  }
+
+  function runLoop({ prs, latest = "v0.1.167", newPr = "4489", listFails = false, closeFails = false }) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bump-candidates-"));
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    const fixture = path.join(dir, "prs.json");
+    const log = path.join(dir, "closed.log");
+    fs.writeFileSync(fixture, JSON.stringify(prs));
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1 $2" = "pr list" ]; then',
+        '  [ -n "$LIST_FAILS" ] && exit 1',
+        '  while [ $# -gt 0 ]; do [ "$1" = "--jq" ] && { jq -r "$2" "$FIXTURE"; exit; }; shift; done',
+        "  exit 1",
+        "fi",
+        'if [ "$1 $2" = "pr close" ]; then',
+        '  printf "%s\\n" "$*" >> "$CLOSE_LOG"',
+        '  [ -n "$CLOSE_FAILS" ] && exit 1',
+        "  exit 0",
+        "fi",
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const res = spawnSync("bash", ["-euo", "pipefail", "-c", candidateLoop()], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        FIXTURE: fixture,
+        CLOSE_LOG: log,
+        LATEST: latest,
+        NEW_PR: newPr,
+        LIST_FAILS: listFails ? "1" : "",
+        CLOSE_FAILS: closeFails ? "1" : "",
+      },
+    });
+    const closed = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : [];
+    fs.rmSync(dir, { recursive: true, force: true });
+    return { res, closed, closedNums: closed.map((l) => l.split(" ")[2]) };
+  }
+
+  const pr = (number, headRefName, isDraft = true) => ({ number, headRefName, isDraft });
+
+  test("closes drafts at and below $LATEST, deleting their branches, and keeps a newer one", () => {
+    const { res, closed, closedNums } = runLoop({
+      prs: [
+        pr(4178, "candidate/v0.1.162"),
+        pr(4365, "candidate/v0.1.164"),
+        pr(4488, "candidate/v0.1.167"),
+        pr(4499, "candidate/v0.1.168"),
+        pr(4500, "candidate/v0.2.0"),
+      ],
+    });
+    expect(res.status, res.stderr).toBe(0);
+    expect(closedNums).toEqual(["4178", "4365", "4488"]);
+    for (const line of closed) {
+      expect(line).toContain("--delete-branch");
+      expect(line).toContain("Superseded by the stable bump to v0.1.167 (#4489)");
+    }
+  });
+
+  test("compares versions numerically, not as strings", () => {
+    const { res, closedNums } = runLoop({
+      prs: [pr(1, "candidate/v0.1.99"), pr(2, "candidate/v0.1.100"), pr(3, "candidate/v0.1.101")],
+      latest: "v0.1.100",
+    });
+    expect(res.status, res.stderr).toBe(0);
+    expect(closedNums).toEqual(["1", "2"]);
+  });
+
+  test("leaves non-draft PRs and other branches alone", () => {
+    const { res, closedNums } = runLoop({
+      prs: [
+        pr(10, "candidate/v0.1.160", false),
+        pr(11, "platform/bump-v0.1.160"),
+        pr(12, "candidate/v0.1.160-hotfix"),
+        pr(13, "feature/candidate/v0.1.160"),
+        pr(14, "candidate/v0.1.160"),
+      ],
+    });
+    expect(res.status, res.stderr).toBe(0);
+    expect(closedNums).toEqual(["14"]);
+  });
+
+  test("is fail-open: a failed list or close warns and never fails the bump", () => {
+    const listed = runLoop({ prs: [pr(1, "candidate/v0.1.160")], listFails: true });
+    expect(listed.res.status, listed.res.stderr).toBe(0);
+    expect(listed.closed).toEqual([]);
+    const closing = runLoop({ prs: [pr(1, "candidate/v0.1.160"), pr(2, "candidate/v0.1.161")], closeFails: true });
+    expect(closing.res.status, closing.res.stderr).toBe(0);
+    expect(closing.closedNums).toEqual(["1", "2"]);
+    expect(closing.res.stdout).toContain("::warning::could not close superseded candidate PR #1");
+  });
+
+  test("runs only in stable mode: the candidate-mode branch exits before it", () => {
+    const run = runStep.run;
+    const candidateExit = run.indexOf('echo "Release candidate $CANDIDATE_VERSION: draft PR');
+    expect(candidateExit, "candidate mode's summary line must exist").toBeGreaterThan(-1);
+    expect(run.indexOf("mapfile -t OLD_CANDIDATES")).toBeGreaterThan(candidateExit);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // #315. Seeding moves a wholly-MISSING file INTO a consumer. Two other kinds of
 // consumer-side change a release can require had no mechanism at all, and both
