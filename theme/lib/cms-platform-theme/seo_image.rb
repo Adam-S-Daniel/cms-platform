@@ -14,6 +14,16 @@
 # a site with no images keeps its summary card. jekyll-seo-tag makes the path
 # absolute against `url` + `baseurl`.
 #
+# When the image comes from `featured_image:` and the item also has a
+# non-blank `featured_image_alt:`, `image` is set to the hash form
+# `{ 'path' => ..., 'alt' => ... }` instead, which jekyll-seo-tag reads for
+# og:image:alt / twitter:image:alt (og:image is the same absolute URL either
+# way). The site-wide `default_image` never takes a post's alt. Only on
+# jekyll-seo-tag 2.9.1 or later: 2.9.0 writes image.alt into the meta tags and
+# JSON-LD unescaped, so a quote in the alt would break them; on 2.9.0 the image
+# stays a plain path and only the post's hero <img> (escaped by the layout)
+# carries the alt.
+#
 # Tests: spec/seo_image_build_test.rb
 
 module Jekyll
@@ -27,8 +37,24 @@ module Jekyll
     def self.apply(item, default_image)
       return unless blank?(item.data['image'])
 
-      image = [item.data['featured_image'], default_image].find { |value| value.is_a?(String) && !value.strip.empty? }
-      item.data['image'] = image if image
+      featured = item.data['featured_image']
+      if present_string?(featured)
+        alt = item.data['featured_image_alt']
+        item.data['image'] =
+          present_string?(alt) && image_alt_supported? ? { 'path' => featured, 'alt' => alt.strip } : featured
+      elsif present_string?(default_image)
+        item.data['image'] = default_image
+      end
+    end
+
+    # 2.9.1 added escape_once / seo_json_escape around image.alt.
+    def self.image_alt_supported?
+      spec = Gem.loaded_specs['jekyll-seo-tag']
+      !spec.nil? && spec.version >= Gem::Version.new('2.9.1')
+    end
+
+    def self.present_string?(value)
+      value.is_a?(String) && !value.strip.empty?
     end
   end
 end

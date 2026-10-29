@@ -629,6 +629,8 @@
 
       if (collection === "posts") {
         var image = field(entry, "featured_image");
+        // Decorative (alt="") unless the entry opts in, as post.html does.
+        var alt = String(field(entry, "featured_image_alt") || "").trim();
         var date = formatDate(field(entry, "date"));
         children.push(
           h(
@@ -640,7 +642,7 @@
         children.push(h("h1", null, title || ""));
         if (image) {
           children.push(
-            h("img", { className: "featured-image", src: String(props.getAsset(image)), alt: "" }),
+            h("img", { className: "featured-image", src: String(props.getAsset(image)), alt: alt }),
           );
         }
       } else if (collection === "projects") {

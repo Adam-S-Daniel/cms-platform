@@ -25,6 +25,8 @@ Liquid::Template.register_tag('seo', A11yPolishSeoStandIn)
 class PublicA11yPolishBuildTest < Minitest::Test
   ROOT = File.expand_path('../..', __dir__)
   TITLE = 'A post whose image repeats its title'
+  # Markup characters prove the alt is escaped, not injected.
+  ALT = %(A "hero" <photo> of Tom & Jerry's office)
   PROFILES = {
     'mastodon' => 'https://hachyderm.io/@someone',
     'substack' => 'https://someone.substack.com',
@@ -60,6 +62,24 @@ class PublicA11yPolishBuildTest < Minitest::Test
       title: "#{TITLE}"
       layout: post
       featured_image: /assets/images/uploads/hero.png
+      ---
+      Body.
+    MD
+    File.write(File.join(source, '_posts', '2024-01-02-with-alt.md'), <<~MD)
+      ---
+      title: With alt
+      layout: post
+      featured_image: /assets/images/uploads/hero.png
+      featured_image_alt: #{ALT.inspect}
+      ---
+      Body.
+    MD
+    File.write(File.join(source, '_posts', '2024-01-03-blank-alt.md'), <<~MD)
+      ---
+      title: Blank alt
+      layout: post
+      featured_image: /assets/images/uploads/hero.png
+      featured_image_alt: "   "
       ---
       Body.
     MD
@@ -129,6 +149,27 @@ class PublicA11yPolishBuildTest < Minitest::Test
     assert_equal 1, imgs.length
     assert_equal '', imgs.first.attributes['alt'], 'alt must be present and empty'
     refute_includes imgs.first.attributes['alt'], TITLE
+  end
+
+  # An opt-in `featured_image_alt` describes the hero; the decorative default
+  # above is unchanged when it is absent or blank.
+  def hero(slug)
+    doc = parse(File.read(File.join(@destination, 'blog', slug, 'index.html')))
+    imgs = REXML::XPath.match(doc, "//img[@class='featured-image']")
+    assert_equal 1, imgs.length, slug
+    imgs.first
+  end
+
+  def test_featured_image_alt_is_rendered_escaped_when_set
+    assert_equal ALT, hero('with-alt').attributes['alt']
+    html = File.read(File.join(@destination, 'blog', 'with-alt', 'index.html'))
+    refute_includes html, '<photo>', 'the alt must be HTML-escaped'
+  end
+
+  def test_blank_featured_image_alt_keeps_the_decorative_empty_alt
+    assert_equal '', hero('blank-alt').attributes['alt']
+    html = File.read(File.join(@destination, 'blog', 'blank-alt', 'index.html'))
+    assert_includes html, 'decoding="async" alt="">'
   end
 
   def test_footer_links_to_feed_and_each_configured_profile

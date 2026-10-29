@@ -53,7 +53,9 @@ cms:
   raw XML (#728); readers ignore it, and a feed that already names a stylesheet keeps it
   ([build regression](spec/feed_stylesheet_test.rb)). `seo_image` maps a post's `featured_image:` to the `image:`
   jekyll-seo-tag reads (og:image / twitter:image, large card), falling back to an optional
-  site-wide `default_image:` in `_config.yml`; an explicit `image:` wins.
+  site-wide `default_image:` in `_config.yml`; an explicit `image:` wins. An optional
+  `featured_image_alt:` becomes og:image:alt / twitter:image:alt and the post hero's `alt`
+  (otherwise the hero stays decorative, `alt=""`); the `default_image` never takes it.
   `featured_image_dimensions` gives the post hero `<img>` its `width`/`height`
   (no layout shift): optional `featured_image_width` + `featured_image_height`
   front matter wins, else the size is read from the local image file's header

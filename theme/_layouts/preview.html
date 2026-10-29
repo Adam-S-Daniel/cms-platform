@@ -261,6 +261,15 @@ layout: default
     }
   }
 
+  // Mirrors post.html: the hero is decorative (alt="") unless the entry
+  // carries a non-blank featured_image_alt. Unlike setAttr, an empty value
+  // keeps alt="" rather than removing the attribute.
+  function setHeroAlt(alt) {
+    var el = slot("featured-image");
+    if (!el) return;
+    el.setAttribute("alt", String(alt || "").trim());
+  }
+
   function formatDate(raw) {
     if (!raw) return "";
     var d = new Date(raw);
@@ -345,6 +354,7 @@ layout: default
     if (collection === "posts") {
       setAttr("featured-image", "src", fields.featured_image || "");
       setHeroSize(fields.featured_image_width, fields.featured_image_height);
+      setHeroAlt(fields.featured_image_alt);
       setText("date", formatDate(fields.date));
       setText(
         "reading-time",
