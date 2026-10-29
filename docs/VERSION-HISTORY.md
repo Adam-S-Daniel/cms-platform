@@ -10,9 +10,18 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.166)
+## Version history (v0.1.0 → v0.1.167)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.167 — Preview banner names the deploy, each edit's fate on merge, the PR title and the cross-posts; and the 37 open CodeQL alerts fixed.**
+The first-parent range since v0.1.166 holds two squash commits on main before this release PR: [#912](https://github.com/Adam-S-Daniel/cms-platform/pull/912) and [#913](https://github.com/Adam-S-Daniel/cms-platform/pull/913).
+
+Preview banner. [#912](https://github.com/Adam-S-Daniel/cms-platform/pull/912) opens the preview banner with the host and how long ago it deployed (both deploy workflows and `scripts/write-commit-json.sh` now record `deployed_at` in `commit.json`; the clause is left out rather than fall back to the commit time). It says what each edit does when the pull request merges: published entries, Media library uploads and deleted published entries ship, and drafts stay drafts. It names the pull request by title, and names the cross-posts a merge sends, from a new `window.CMS_CROSS_POST` that both render paths inject from `cross_post.profiles`. The footer keeps only the linked short sha.
+
+Code scanning. [#913](https://github.com/Adam-S-Daniel/cms-platform/pull/913) fixes all 37 open CodeQL default-setup alerts in code, with no dismissals. In shipped code: the image shortcode escapes `\` in a title as well as `"`, the preview pane ends an HTML comment at `--!>` too, `admin/index-test.html` escapes field labels before `innerHTML`, `scripts/audit-editorial-labels.js` regex-escapes `--label-prefix`, `feed_stylesheet.rb` trims trailing slashes without a polynomial regex, `e2e/detect-changed-pages.js` runs `find` without a shell, and `e2e/admin-bundle-parity.js`'s identity-block regex no longer backtracks exponentially. The rest are test hardening (full regex escaping, repeat-until-stable stripping, host comparisons instead of substring checks).
+
+Consumer effect. The banner and the `deployed_at` record reach a site when it adopts v0.1.167. No live consumer verification is claimed in this entry.
 
 **v0.1.166 — Bound the e2e apt index refresh so a mirror switch can't freeze the install step, and a 45-minute wall on consumer e2e project jobs.**
 The first-parent range since v0.1.165 holds two squash commits on main before this release PR: [#906](https://github.com/Adam-S-Daniel/cms-platform/pull/906) and [#909](https://github.com/Adam-S-Daniel/cms-platform/pull/909).
