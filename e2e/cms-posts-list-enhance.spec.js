@@ -57,7 +57,7 @@ const RENDERED_CONFIG = path.join(ADMIN, "config.yml");
 
 const read = (p) => fs.readFileSync(p, "utf8");
 const scriptIdx = (html, file) => {
-  const re = new RegExp(`<script[^>]+src=["']${file.replace(/[.]/g, "\\.")}["'][^>]*>`);
+  const re = new RegExp(`<script[^>]+src=["']${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'][^>]*>`);
   const m = re.exec(html);
   return m ? m.index : -1;
 };

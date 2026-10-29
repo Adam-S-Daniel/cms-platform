@@ -104,7 +104,7 @@ test.describe("Atom feeds", () => {
     // Each post's permalink ends with /blog/<slug>/. The feed's
     // <entry><link href="…"/> should reference the canonical URL.
     expect(body, `feed.xml should reference ${post.url} (the discovered post)`).toMatch(
-      new RegExp(`href="[^"]*${post.url.replace(/\//g, "\\/")}"`),
+      new RegExp(`href="[^"]*${escapeRegExp(post.url)}"`),
     );
     // The post's title should appear in an <entry><title>…</title>. The
     // feed spells it smartified and entity-escaped, so compare decoded text

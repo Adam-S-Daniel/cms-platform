@@ -105,7 +105,11 @@ test.describe("scaffolder seeds a neutral favicon (#325)", () => {
 
   test("seeded favicon is neutral — no site-specific monogram", () => {
     expect(faviconText).not.toMatch(/<text\b/i);
-    const markup = faviconText.replace(/<!--[\s\S]*?-->/g, "");
+    let markup = faviconText;
+    for (let prev; prev !== markup; ) {
+      prev = markup;
+      markup = markup.replace(/<!--[\s\S]*?-->/g, "");
+    }
     for (const brand of ["AD", "Adam", "Daniel"]) {
       expect(markup).not.toMatch(new RegExp(`\\b${brand}\\b`, "i"));
     }

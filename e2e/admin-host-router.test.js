@@ -493,7 +493,11 @@ test.describe("the admin shells load no public-page script (#517)", () => {
   ];
   for (const shell of shells) {
     test(`${shell}: only the Decap bundle comes from off-origin, and no analytics`, () => {
-      const html = fs.readFileSync(path.join(ADMIN_SRC, shell), "utf8").replace(/<!--[\s\S]*?-->/g, "");
+      let html = fs.readFileSync(path.join(ADMIN_SRC, shell), "utf8");
+      for (let prev; prev !== html; ) {
+        prev = html;
+        html = html.replace(/<!--[\s\S]*?-->/g, "");
+      }
       const external = [...html.matchAll(/<script\b[^>]*\bsrc="(https?:\/\/[^"]*)"/g)].map((m) => m[1]);
       for (const src of external) {
         expect(src, `${shell} loads an off-origin script`).toMatch(/^https:\/\/unpkg\.com\/decap-cms@[0-9.]+\/dist\/decap-cms\.js$/);

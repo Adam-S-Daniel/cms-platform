@@ -140,7 +140,14 @@ function isAllowlisted(text) {
   // regression. Allowlist by hostname fragments.
   if (lower.includes("cognito")) return true;
   if (lower.includes("cloudwatch-rum")) return true;
-  if (lower.includes("rum.us-east-1.amazonaws.com")) return true;
+  const hosts = (lower.match(/https?:\/\/[^\s"'<>)]+/g) || []).flatMap((u) => {
+    try {
+      return [new URL(u).hostname];
+    } catch {
+      return [];
+    }
+  });
+  if (hosts.some((h) => h === "rum.us-east-1.amazonaws.com" || h.endsWith(".rum.us-east-1.amazonaws.com"))) return true;
 
   return false;
 }

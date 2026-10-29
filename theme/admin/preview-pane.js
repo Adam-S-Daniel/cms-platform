@@ -120,7 +120,7 @@
       var tag = /^<([A-Za-z]+)/.exec(html)[1];
       return { end: new RegExp("</" + tag + ">", "i"), raw: false };
     }
-    if (html.indexOf("<!--") === 0) return { end: /-->/, raw: false };
+    if (html.indexOf("<!--") === 0) return { end: /--!?>/, raw: false };
     if (html.indexOf("<?") === 0) return { end: /\?>/, raw: false };
     if (/^<![A-Z]/.test(html)) return { end: />/, raw: false };
     if (html.indexOf("<![CDATA[") === 0) return { end: /\]\]>/, raw: false };

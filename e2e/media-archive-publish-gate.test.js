@@ -103,7 +103,7 @@ for (const [file, job, siteDir] of [
     );
     // The preview lane builds into _site_preview; passing _site there would
     // publish into a directory nothing uploads.
-    expect(step.run).toContain(SCRIPT_REL.replace("scripts/", "scripts/"));
+    expect(step.run).toContain(SCRIPT_REL);
     expect(step.run).toContain(siteDir);
     expect(step.if).toContain("media_archive_bucket");
   });

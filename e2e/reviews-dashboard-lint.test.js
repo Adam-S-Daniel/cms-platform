@@ -22,7 +22,7 @@ const DASHBOARD = path.join(__dirname, "..", "theme", "admin", "reviews", "index
 function dashboardScript() {
   const html = fs.readFileSync(DASHBOARD, "utf8");
   // HTML delimiters are lexical tokens. The JavaScript shape is parsed below.
-  const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
+  const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)];
   return scripts.find((script) =>
     parse(script[1]).body.some((node) => node.type === "FunctionDeclaration" && node.id.name === "loadReviews"),
   )[1];

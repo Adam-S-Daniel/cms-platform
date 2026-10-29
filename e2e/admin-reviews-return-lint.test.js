@@ -15,7 +15,7 @@ const SHELL = path.join(__dirname, "..", "theme", "admin", "index.html");
 
 function scriptsOf(file) {
   const html = fs.readFileSync(file, "utf8");
-  return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
+  return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map((m) => m[1]);
 }
 
 // Load cmsReturnHref out of a dashboard's real inline script (declaration

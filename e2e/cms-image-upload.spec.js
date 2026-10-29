@@ -172,7 +172,7 @@ test.describe(
       expect(written).toContain(`title: ${SMOKE_TITLE}`);
       expect(written).toMatch(
         new RegExp(
-          `featured_image:\\s*['"]?${expectedPublicUrl.replace(/[.]/g, "\\$&")}['"]?\\s*$`,
+          `featured_image:\\s*['"]?${expectedPublicUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}['"]?\\s*$`,
           "m",
         ),
       );

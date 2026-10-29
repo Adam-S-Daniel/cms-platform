@@ -201,7 +201,7 @@ function sandboxFor({ production, config, status = 200, gate = null, siteLive = 
       if (String(url).startsWith("https://api.github.com/repos/acme/example/pulls?")) {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(pulls) });
       }
-      if (String(url).includes("api.github.com")) {
+      if (new URL(String(url), "https://site.example.com").host === "api.github.com") {
         return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(`site_live: ${siteLive}\n`) });
       }
       return Promise.resolve({
