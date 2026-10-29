@@ -6,9 +6,9 @@ description: Understand and safely change how the Decap /admin config is built â
 # Admin config render (gem-shipped admin, v0.1.4+)
 
 The Decap `/admin` UI is the ~400-line invariant-heavy CMS config plus JS/HTML
-shells and the `reviews/` dashboards. As of **v0.1.4** it ships **inside the
+shells and the `reviews/` dashboards. It ships **inside the
 `cms-platform-theme` gem** (`theme/admin/`) and is materialized into a site's
-build output by a render step. A consuming site no longer vendors `admin/`; it
+build output by a render step. A consuming site does not vendor `admin/`; it
 keeps only the seam `admin/collections.site.yml`.
 
 Full mechanics live in **`docs/ADMIN-DELIVERY.md`** (AGENTS.md's "Admin

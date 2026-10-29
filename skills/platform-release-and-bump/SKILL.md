@@ -144,7 +144,7 @@ which prints the real one every run.
 
 If it reports a mismatch, a reference was missed (commonly `Gemfile.lock`'s
 `revision:` on jodidaniel, or a stale version token in a LEFTOVER `# vX.Y.Z`
-trailing comment — house style carries none since 2026-08-20). Fix, re-run.
+trailing comment — house style carries none). Fix, re-run.
 Then commit, push, open the PR, and merge once CI is green. adamdaniel's `e2e`
 gate is REQUIRED (wait for the real run, not just the docs-stub); jodidaniel's
 parity/e2e are non-required.
@@ -160,8 +160,8 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
 - **Keep BOTH consumers on the same version.** A platform-infra-only release
   (e.g. a test-harness fix) is still worth bumping both, so they never skew —
   the pin-consistency guard is per-repo, but lockstep across repos is the design.
-- **`platform-bump.yml`** automates step 2 and is dispatched by `release.yml` the moment a release is cut (no cron; re-dispatch by hand if that failed) and is now an
-  **atomic single-version bump** (issue #13 **resolved**, v0.1.23): it rewrites
+- **`platform-bump.yml`** automates step 2 and is dispatched by `release.yml` the moment a release is cut (no cron; re-dispatch by hand if that failed) and is an
+  **atomic single-version bump**: it rewrites
   EVERY version ref in one PR — `platform_ref:` + `platform.lock`, the `uses:@`
   pins, the gem `tag:`, `Gemfile.lock` `tag:` + `revision:` (it resolves the
   release commit sha itself), and any composite `@<tag>` pin — so its PR passes
@@ -182,8 +182,8 @@ report BLOCKED rather than describe partial work as progress. See cms-platform
   `platform-bump` thin caller pins a release that CONTAINS this fix (≥
   v0.1.23); to bump a consumer still on an older caller, do step 2 manually
   (above). **Neither Dependabot ecosystem is wired as a net for a
-  cms-platform reference anymore.** Since #242 the `bundler` ecosystem
-  `ignore`s `cms-platform-theme`, and since #244 the `github-actions`
+  cms-platform reference.** The `bundler` ecosystem
+  `ignore`s `cms-platform-theme`, and the `github-actions`
   ecosystem `ignore`s every `Adam-S-Daniel/cms-platform/*` ref (reusable and
   composite `uses:@<tag>` pins alike) — `platform-bump` is
   the sole bumper of everything a consumer pins to the platform. Dependabot
