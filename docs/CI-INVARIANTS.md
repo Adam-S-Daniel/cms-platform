@@ -232,7 +232,10 @@ per-PR checkout):
   manifest-paths.sh`**, the single source both `dependabot-auto-merge.yml`
   (the per-PR `pull_request` gate) and `dependabot-rearm-sweep.yml` (the
   sweep) call — keep the two call sites in lockstep; a change to the
-  allowlist changes behaviour identically for both.
+  allowlist changes behaviour identically for both. It allows npm and bundler
+  manifests and lockfiles, pip `requirements*.txt` (added for
+  jodidaniel.com#430's security bump), all in any directory, and workflow YAML
+  under `.github/workflows/`.
 - **`self-dependabot-rearm.yml`** dogfoods the sweep on cms-platform's own
   Dependabot PRs (daily cron + `workflow_dispatch`), same pattern as
   `self-secrets-scan.yml` / `self-dependabot-auto-merge.yml`. A consuming site
