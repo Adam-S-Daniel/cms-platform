@@ -47,6 +47,9 @@ const PLATFORM_META_SPECS = [
   "media-archive-publish-gate.test.js",
   // Executes repository-controlled log text in the platform's workflow steps.
   "workflow-command-log.test.js",
+  // Runs the platform's scripts/check-dependabot-manifest-paths.sh against temp
+  // git repos; a consumer has no such script, so it must be testIgnored there.
+  "dependabot-manifest-paths.test.js",
   // Runs the platform reaper workflow's reject step against a stubbed gh (#788).
   "regression-review-reaper-reject-failure.test.js",
   // Platform-internal: admin-JS augmentation + the deploy-preview workflow-shape

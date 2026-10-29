@@ -19,8 +19,9 @@
 # ref not already present locally).
 #
 # Exit 0 + prints "safe=true" when every path changed between the two refs
-# is within the allowlist (npm/bundler manifests + lockfiles, in any
-# directory, plus workflow YAML restricted to .github/workflows/). Exit 1 +
+# is within the allowlist (npm/bundler manifests + lockfiles and pip
+# requirements*.txt files, in any directory, plus workflow YAML restricted to
+# .github/workflows/). Exit 1 +
 # prints "safe=false" (with an `::error file=...` annotation per offender)
 # when a path is outside the allowlist. Exit 2 + prints "safe=false" when the
 # diff cannot be read.
@@ -75,6 +76,14 @@ done
 
 REJECT=0
 for f in "${CHANGED[@]}"; do
+  # Dependabot's pip ecosystem (security updates included, which run even
+  # with no `pip` entry in dependabot.yml) edits requirements files
+  # (jodidaniel.com#430). Not pyproject.toml/setup.py/Pipfile. Matched on the
+  # file name alone: in a `case` glob `*` crosses `/`, so
+  # `*/requirements*.txt` would also pass `requirements-x/any.txt`.
+  if [[ "${f##*/}" == requirements*.txt ]]; then
+    continue
+  fi
   case "$f" in
     package.json|*/package.json|package-lock.json|*/package-lock.json) ;;
     Gemfile|*/Gemfile|Gemfile.lock|*/Gemfile.lock) ;;
