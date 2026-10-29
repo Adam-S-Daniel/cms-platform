@@ -232,11 +232,19 @@ test.describe("Decap CMS config invariants", () => {
     test(`${label}: posts collection exposes title, date, body, tags, featured_image`, () => {
       skipUnlessCollection("posts");
       const posts = findCollection(parseConfig(configPath), "posts");
-      for (const f of ["title", "date", "body", "tags", "featured_image", "published"]) {
+      const required = ["title", "date", "body", "tags", "featured_image", "featured_image_alt"];
+      for (const f of [...required, "published"]) {
         expect(findField(posts, f), `posts.${f} field must exist`).not.toBeNull();
       }
       const featured = findField(posts, "featured_image");
       expect(featured.widget).toBe("image");
+      // Opt-in alt text for the hero: optional, so a post without it keeps
+      // the decorative alt="" (#657), and placed right under the image.
+      const alt = findField(posts, "featured_image_alt");
+      expect(alt.widget).toBe("string");
+      expect(alt.required).toBe(false);
+      const names = posts.fields.map((f) => f && f.name);
+      expect(names.indexOf("featured_image_alt")).toBe(names.indexOf("featured_image") + 1);
     });
 
     test(`${label}: projects collection exposes a multi-image gallery`, () => {

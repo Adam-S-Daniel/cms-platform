@@ -72,6 +72,8 @@ const PROD_HINTS = {
       "URL path on {{CMS_CURRENT_HOST}}. Filled in for you the first time you save, so changing the title later does not move the page. Changing this moves the page to a new address and breaks links people have saved.",
     excerpt: "A short summary shown in post listings and meta tags (≤ 160 chars recommended)",
     featured_image: "Displayed as the post hero image and in social sharing cards",
+    featured_image_alt:
+      "Describe the image for screen readers and search engines. Leave blank if it's purely decorative.",
     published:
       "Turn on to show this post on {{CMS_CURRENT_HOST}} when you select Publish. While it is off, Publish saves the post but keeps it hidden — or set a Publish Date below to show it automatically later.",
     publish_date:

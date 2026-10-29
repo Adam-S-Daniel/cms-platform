@@ -202,6 +202,26 @@ test.describe(
       });
     });
 
+    test("post layout: the hero alt follows featured_image_alt, else stays empty", async ({
+      page,
+    }) => {
+      await page.goto("/preview/?collection=posts");
+      const send = (fields) =>
+        page.evaluate((f) => {
+          window.postMessage({ type: "cms-preview-update", fields: f }, window.location.origin);
+        }, fields);
+      const hero = page.locator(".post-header .featured-image");
+      const image = "/assets/images/uploads/placeholder.svg";
+      await send({ title: "Alt", featured_image: image, featured_image_alt: "A red kite" });
+      await expect(hero).toHaveAttribute("alt", "A red kite");
+      // Clearing the field returns the hero to decorative (#657), not to a
+      // stale value or a missing attribute.
+      await send({ title: "Alt", featured_image: image, featured_image_alt: "  " });
+      await expect(hero).toHaveAttribute("alt", "");
+      await send({ title: "Alt", featured_image: image });
+      await expect(hero).toHaveAttribute("alt", "");
+    });
+
     test("project layout: technology and url_link render", async ({ page }) => {
       await page.goto("/preview/?collection=projects");
       await page.evaluate(() => {

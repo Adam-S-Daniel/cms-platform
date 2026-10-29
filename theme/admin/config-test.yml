@@ -125,6 +125,11 @@ collections:
         label: Featured Image
         widget: image
         required: false
+      - name: featured_image_alt
+        label: Featured Image Alt Text
+        widget: string
+        required: false
+        hint: "Describe the image for screen readers and search engines. Leave blank if it's purely decorative."
       - name: published
         label: Show on site
         widget: boolean

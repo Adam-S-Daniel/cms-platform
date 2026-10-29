@@ -155,6 +155,20 @@ test.describe("preview-pane.js", () => {
     expect(img.props.src).toBe("blob:/a.png");
   });
 
+  test("the hero alt is featured_image_alt when set, else empty (decorative)", () => {
+    const b = boot();
+    const hero = (data) => {
+      const props = { entry: entry(data), widgetFor: () => null, getAsset: String };
+      const tree = b.templates.posts(props);
+      return find(tree, (n) => n.type === "img")[0];
+    };
+    expect(hero({ featured_image: "/a.png", featured_image_alt: "A red kite" }).props.alt).toBe(
+      "A red kite",
+    );
+    expect(hero({ featured_image: "/a.png", featured_image_alt: "  " }).props.alt).toBe("");
+    expect(hero({ featured_image: "/a.png" }).props.alt).toBe("");
+  });
+
   test("a bad date is left as authored; pages and projects render titles", () => {
     const b = boot();
     expect(b.window.adamdaniel_cms_preview_pane.formatDate("soon")).toBe("soon");

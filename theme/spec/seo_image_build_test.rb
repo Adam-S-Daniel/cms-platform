@@ -8,6 +8,7 @@
 # Needs jekyll 4.4.1 and jekyll-seo-tag 2.9.0 (the ruby-theme-specs lane installs both).
 
 require 'minitest/autorun'
+require 'minitest/mock'
 require 'fileutils'
 require 'tmpdir'
 require 'rexml/document'
@@ -21,11 +22,21 @@ require_relative '../lib/cms-platform-theme/rel_me_filter'
 class SeoImageBuildTest < Minitest::Test
   ROOT = File.expand_path('../..', __dir__)
 
+  PHOTO = '/assets/images/uploads/photo.jpg'
+  # Plain text on purpose: the alt tags are asserted only on jekyll-seo-tag
+  # 2.9.1+, and on 2.9.0 (which self-CI pins) the hook leaves them out.
+  ALT = 'A red kite over a green field'
+
   POSTS = {
     'with-featured' => "title: With featured\nfeatured_image: /assets/images/uploads/photo.jpg\n",
     'with-explicit-image' => "title: With explicit image\nfeatured_image: /assets/images/uploads/photo.jpg\nimage: /assets/images/uploads/card.jpg\n",
     'with-blank-featured' => "title: With blank featured\nfeatured_image: \"\"\n",
     'without-image' => "title: Without image\n",
+    'with-featured-alt' => "title: With featured alt\nfeatured_image: #{PHOTO}\nfeatured_image_alt: #{ALT}\n",
+    'with-blank-featured-alt' => "title: With blank alt\nfeatured_image: #{PHOTO}\nfeatured_image_alt: \"  \"\n",
+    'with-explicit-image-and-alt' => "title: With explicit image and alt\nfeatured_image: #{PHOTO}\n" \
+                                     "featured_image_alt: Ignored\nimage: /assets/images/uploads/card.jpg\n",
+    'with-blank-featured-and-alt' => "title: Blank featured, alt\nfeatured_image: \"\"\nfeatured_image_alt: Ignored\n",
   }.freeze
 
   def build(extra_config = {})
@@ -106,6 +117,53 @@ class SeoImageBuildTest < Minitest::Test
     assert_equal [url], values(path, 'property', 'og:image')
     assert_equal [url], values(path, 'name', 'twitter:image')
     assert_equal ['summary_large_image'], card(path)
+  end
+
+  def test_featured_image_alt_becomes_og_and_twitter_image_alt_without_moving_the_image
+    build
+    path = 'blog/with-featured-alt/index.html'
+    url = 'https://example.com/assets/images/uploads/photo.jpg'
+    alt = ALT
+    assert_equal [url], values(path, 'property', 'og:image')
+    assert_equal [url], values(path, 'name', 'twitter:image')
+    assert_equal ['summary_large_image'], card(path)
+    expected = Jekyll::SeoImage.image_alt_supported? ? [alt] : []
+    assert_equal expected, values(path, 'property', 'og:image:alt')
+    assert_equal expected, values(path, 'name', 'twitter:image:alt')
+  end
+
+  # jekyll-seo-tag 2.9.0 writes image.alt unescaped, so the hook must not hand
+  # it one there: the image stays a plain path whatever the alt says.
+  def test_no_image_alt_hash_when_seo_tag_cannot_escape_it
+    item = Struct.new(:data).new({ 'featured_image' => PHOTO, 'featured_image_alt' => 'A "quoted" <alt>' })
+    Jekyll::SeoImage.stub(:image_alt_supported?, false) { Jekyll::SeoImage.apply(item, nil) }
+    assert_equal PHOTO, item.data['image']
+    item = Struct.new(:data).new({ 'featured_image' => PHOTO, 'featured_image_alt' => ALT })
+    Jekyll::SeoImage.stub(:image_alt_supported?, true) { Jekyll::SeoImage.apply(item, nil) }
+    assert_equal({ 'path' => PHOTO, 'alt' => ALT }, item.data['image'])
+  end
+
+  def test_no_image_alt_without_a_featured_image_alt
+    build
+    %w[blog/with-featured/index.html blog/with-blank-featured-alt/index.html
+       blog/with-explicit-image-and-alt/index.html blog/without-image/index.html index.html].each do |path|
+      assert_empty values(path, 'property', 'og:image:alt'), path
+      assert_empty values(path, 'name', 'twitter:image:alt'), path
+    end
+    assert_equal ['https://example.com/assets/images/uploads/photo.jpg'],
+                 values('blog/with-blank-featured-alt/index.html', 'property', 'og:image')
+    assert_equal ['https://example.com/assets/images/uploads/card.jpg'],
+                 values('blog/with-explicit-image-and-alt/index.html', 'property', 'og:image')
+  end
+
+  # The alt describes the post's own image, never the site-wide fallback.
+  def test_the_default_image_never_carries_a_featured_image_alt
+    build('default_image' => '/assets/images/default-share.png')
+    path = 'blog/with-blank-featured-and-alt/index.html'
+    assert_equal ['https://example.com/assets/images/default-share.png'],
+                 values(path, 'property', 'og:image')
+    assert_empty values(path, 'property', 'og:image:alt')
+    assert_empty values(path, 'name', 'twitter:image:alt')
   end
 
   def test_an_explicit_image_wins_over_featured_image
