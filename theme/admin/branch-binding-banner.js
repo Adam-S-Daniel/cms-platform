@@ -53,9 +53,15 @@
  * ── Where a change made here actually goes ─────────────────────────────
  * Decap's editorial workflow branches off `backend.branch` and merges back
  * into it, so on a preview a Publish updates the PREVIEW, and reaches the
- * production site only when the pull request for that branch merges. The
- * copy says exactly that, and links the pull request by its head branch — a
- * GitHub search, the one link derivable from the config alone.
+ * production site only when the pull request for that branch merges. Media
+ * library uploads and deletes of published entries commit straight to that
+ * branch, so they follow the same path. A saved draft (and any image added
+ * inside it) changes nothing on the preview; after the merge GitHub retargets
+ * its open cms/* PR to production's branch, where it waits as a draft. The
+ * copy says exactly that, and names the pull request by its title, linked,
+ * read from the GitHub API. When that read fails it falls back to "its pull
+ * request", linked by its head branch: a GitHub search, the one link
+ * derivable from the config alone.
  *
  * ── In flow, not fixed; first, not last ────────────────────────────────
  * Same placement rule as site-gate-banner.js: a block in normal flow at the
@@ -78,6 +84,7 @@
 
   var BANNER_ID = "cms-branch-binding-banner";
   var CONFIG_FILE = "config.yml";
+  var COMMIT_FILE = "commit.json";
   // The characters a plain git ref name is made of. Anything else — a quoted
   // value, whitespace, markup — is not a branch this shim will put on screen.
   var REF_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -113,11 +120,119 @@
     return "https://github.com/" + repo + "/pulls?q=" + encodeURIComponent("is:pr head:" + branch);
   }
 
+  // How cross-post.yml treats each network a site lists under
+  // `cross_post.profiles` (injected as window.CMS_CROSS_POST). Substack has no
+  // publish API, so that leg only prepares a draft to paste in by hand.
+  var CROSS_POST_AUTO = { mastodon: "Mastodon", linkedin: "LinkedIn" };
+  var CROSS_POST_DRAFT = { substack: "Substack" };
+
+  function joinNames(names) {
+    if (names.length < 2) return names.join("");
+    return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  }
+
+  // The sentence naming what merging also sends out, or "" when the site
+  // cross-posts nowhere (or the list was not injected).
+  function crossPostSentence() {
+    var keys = Array.isArray(window.CMS_CROSS_POST) ? window.CMS_CROSS_POST : [];
+    var auto = [];
+    var drafts = [];
+    keys.forEach(function (k) {
+      if (Object.prototype.hasOwnProperty.call(CROSS_POST_AUTO, k)) auto.push(CROSS_POST_AUTO[k]);
+      else if (Object.prototype.hasOwnProperty.call(CROSS_POST_DRAFT, k)) drafts.push(CROSS_POST_DRAFT[k]);
+    });
+    if (!auto.length && !drafts.length) return "";
+    var parts = [];
+    if (auto.length) parts.push("posted to " + joinNames(auto));
+    if (drafts.length) parts.push("made into a " + joinNames(drafts) + " draft for you to paste in");
+    return " On merge, each new post published here is also " + parts.join(", and ") + ".";
+  }
+
+  // The open pull request for `branch`, as { title, url }, or null. The
+  // editor's Decap token is sent when they are signed in; a public repo
+  // answers without one. Any failure falls back to the search link above.
+  function openPullRequest(branch) {
+    var repo = window.CMS_REPO;
+    if (!repo) return Promise.resolve(null);
+    var owner = repo.split("/")[0];
+    var headers = { Accept: "application/vnd.github+json" };
+    var token = decapToken();
+    if (token) headers.Authorization = "token " + token;
+    var url =
+      "https://api.github.com/repos/" + repo + "/pulls?state=open&per_page=1&head=" +
+      encodeURIComponent(owner + ":" + branch);
+    return fetch(url, { cache: "no-cache", headers: headers })
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .then(function (list) {
+        var pr = Array.isArray(list) ? list[0] : null;
+        if (!pr || typeof pr.title !== "string" || !pr.title) return null;
+        var href = String(pr.html_url || "");
+        if (href.indexOf("https://github.com/") !== 0) return null;
+        return { title: pr.title, url: href };
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function decapToken() {
+    try {
+      var raw = localStorage.getItem("decap-cms-user");
+      var p = raw ? JSON.parse(raw) : null;
+      return p && p.token ? p.token : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // When this preview was last deployed, in ms since the epoch, or null.
+  // deploy-preview.yml writes `deployed_at` (the deploy's own UTC time, not
+  // the commit's) into commit.json beside this page.
+  function deployedAt() {
+    var url = new URL(COMMIT_FILE, document.baseURI).href;
+    return fetch(url, { cache: "no-cache" })
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .then(function (c) {
+        var t = c && typeof c.deployed_at === "string" ? Date.parse(c.deployed_at) : NaN;
+        return isFinite(t) ? t : null;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  // "3 hours ago", "yesterday", "just now" — the browser's own
+  // Intl.RelativeTimeFormat, so no library is vendored into the admin.
+  // A time in the future (clock skew) reads as "just now".
+  function ago(then, now) {
+    var seconds = Math.max(0, Math.round((now - then) / 1000));
+    if (seconds < 60) return "just now";
+    var units = [
+      ["year", 365 * 86400],
+      ["month", 30 * 86400],
+      ["week", 7 * 86400],
+      ["day", 86400],
+      ["hour", 3600],
+      ["minute", 60],
+    ];
+    for (var i = 0; i < units.length; i++) {
+      if (seconds >= units[i][1]) {
+        var n = Math.floor(seconds / units[i][1]);
+        return new Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(-n, units[i][0]);
+      }
+    }
+    return "just now";
+  }
+
   function productionSite() {
     return window.CMSHostname ? window.CMSHostname.canonical() : "the published destination";
   }
 
-  function render(branch) {
+  function render(branch, pr, deployedMs) {
     var existing = document.getElementById(BANNER_ID);
     // No readable branch → say nothing rather than guess. The production
     // branch → nothing to say.
@@ -151,35 +266,56 @@
 
     var text = document.createElement("span");
     text.style.cssText = "flex:1 1 20rem;min-width:14rem;font-weight:500;";
-    text.appendChild(document.createTextNode("You are editing the "));
-    var code = document.createElement("code");
-    code.textContent = branch;
-    code.style.cssText =
-      "font:600 0.85em ui-monospace,SFMono-Regular,Menlo,monospace;" +
-      "padding:0.05rem 0.35rem;border-radius:3px;background:rgba(255,255,255,0.14);word-break:break-all;";
-    text.appendChild(code);
     // This banner identifies the preview tab the editor opened. Publication
     // copy uses destination(); this tab's identity intentionally uses current().
     text.appendChild(
       document.createTextNode(
-        " branch on " + (window.CMSHostname ? window.CMSHostname.current() : "this preview") +
-          ". Anything you save or publish here updates that address only — " +
-          "it reaches " + productionSite() + " when ",
+        "You are editing " + (window.CMSHostname ? window.CMSHostname.current() : "this preview"),
       ),
     );
-    var href = pullRequestUrl(branch);
+    if (deployedMs !== null) {
+      text.appendChild(document.createTextNode(", deployed "));
+      var age = document.createElement("span");
+      age.title = new Date(deployedMs).toLocaleString();
+      text.appendChild(age);
+      var tick = function () {
+        age.textContent = ago(deployedMs, Date.now());
+      };
+      tick();
+      // "3 minutes ago" goes stale while the tab sits open; one text update a
+      // minute keeps it true. Nothing is fetched again.
+      setInterval(tick, 60000);
+    }
+    text.appendChild(
+      document.createTextNode(
+        ". New or changed entries you publish, Media library uploads and deleted " +
+          "published entries update this preview only, and reach " + productionSite() + " when ",
+      ),
+    );
+    // The pull request by its own title, so the editor can tell what it is
+    // without following the link; the head-branch search when the title could
+    // not be read.
+    var href = pr ? pr.url : pullRequestUrl(branch);
     if (href) {
       var a = document.createElement("a");
       a.href = href;
       a.target = "_blank";
       a.rel = "noopener";
-      a.textContent = "this pull request";
+      a.textContent = pr ? "\u201c" + pr.title + "\u201d" : "its pull request";
       a.style.cssText = "color:#dbe9ff;font-weight:700;text-decoration:underline;";
       text.appendChild(a);
     } else {
       text.appendChild(document.createTextNode("its pull request"));
     }
-    text.appendChild(document.createTextNode(" merges."));
+    // A saved draft changes nothing on the preview. When the pull request
+    // merges, GitHub retargets its open cms/* drafts to the merged PR's base,
+    // so they become drafts in the production admin.
+    text.appendChild(
+      document.createTextNode(
+        " merges. Drafts, and images added to them, become drafts on " + productionSite() + "." +
+          crossPostSentence(),
+      ),
+    );
     b.appendChild(text);
 
     document.body.insertBefore(b, document.body.firstChild);
@@ -190,18 +326,24 @@
   }
 
   function refresh() {
-    return servedBranch().then(render);
+    return servedBranch().then(function (branch) {
+      if (branch === null || branch === production) return render(branch, null, null);
+      return Promise.all([openPullRequest(branch), deployedAt()]).then(function (r) {
+        render(branch, r[0], r[1]);
+      });
+    });
   }
 
   // The binding a served config names does not change under a page, so one
-  // read per load is the whole budget — no interval, no observer.
+  // read per load is the whole budget: nothing is re-fetched. (The only timer
+  // re-renders the "deployed N ago" text from the time already read.)
   function start() {
     refresh();
   }
 
   // Exported for e2e/branch-binding-banner.test.js (vm sandbox), the same
   // seam publish-progress.js exposes as window.CMSPublishProgress.
-  window.CMSBranchBinding = { refresh: refresh, parseBranch: parseBranch, BANNER_ID: BANNER_ID };
+  window.CMSBranchBinding = { refresh: refresh, parseBranch: parseBranch, ago: ago, BANNER_ID: BANNER_ID };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", start, { once: true });

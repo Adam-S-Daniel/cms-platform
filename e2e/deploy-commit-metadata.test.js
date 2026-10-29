@@ -64,8 +64,8 @@ for (const wf of ["deploy-preview.yml", "deploy-production.yml"]) {
   const steps = commitJsonScripts(yaml);
   const baseVars =
     wf === "deploy-preview.yml"
-      ? { SHA: "abc1234", ISO: "2026-07-10T12:00:00-04:00", HEAD_REF: "main" }
-      : { SHA: "abc1234", ISO: "2026-07-10T12:00:00-04:00" };
+      ? { SHA: "abc1234", ISO: "2026-07-10T12:00:00-04:00", HEAD_REF: "main", DEPLOYED_AT: "2026-07-10T18:00:00Z" }
+      : { SHA: "abc1234", ISO: "2026-07-10T12:00:00-04:00", DEPLOYED_AT: "2026-07-10T18:00:00Z" };
 
   test(`${wf} writes commit.json`, () => {
     expect(
@@ -111,6 +111,15 @@ for (const wf of ["deploy-preview.yml", "deploy-production.yml"]) {
       }
     });
 
+    test(`${wf} commit.json step #${i + 1} records deployed_at as the deploy's own UTC time`, () => {
+      // Not the commit time: a re-run deploys the same commit again, and the
+      // banner's "deployed N ago" must say when THIS deploy ran.
+      const lines = stripComments(step)
+        .split("\n")
+        .filter((l) => /DEPLOYED_AT=/.test(l));
+      expect(lines.map((l) => l.trim())).toEqual(["DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"]);
+    });
+
     test(`${wf} commit.json step #${i + 1} emits valid JSON with platform fields present or empty`, () => {
       const m = step.match(/\{\s*"sha".*"platform_ref":\s*"\$\{PLATFORM_REF\}"\s*\}/);
       expect(m, `${wf}: couldn't find the commit.json JSON template line`).toBeTruthy();
@@ -121,6 +130,10 @@ for (const wf of ["deploy-preview.yml", "deploy-production.yml"]) {
       const filledJson = JSON.parse(filled);
       expect(filledJson.platform_repo).toBe(FILLED_PLATFORM_FIELDS.PLATFORM_REPO);
       expect(filledJson.platform_ref).toBe(FILLED_PLATFORM_FIELDS.PLATFORM_REF);
+
+      expect(filledJson.deployed_at, "the deploy time the preview banner shows as 'deployed N ago'").toBe(
+        baseVars.DEPLOYED_AT,
+      );
 
       const empty = renderTemplate(line, { ...baseVars, ...EMPTY_PLATFORM_FIELDS });
       expect(() => JSON.parse(empty)).not.toThrow();

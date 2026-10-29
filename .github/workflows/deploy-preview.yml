@@ -190,12 +190,16 @@ jobs:
           mkdir -p ./_site_preview/admin
           SHA="$PR_HEAD_SHA"
           ISO=$(git log -1 --format=%cI HEAD)
+          # When this deploy ran, which is what the preview admin's banner shows
+          # as "deployed N ago". ISO above is the head commit's own time, which
+          # can be hours older (a re-run deploys the same commit again).
+          DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # Tolerant: see deploy-production.yml's identical read — missing
           # file/keys must never fail this step, just omit that pill.
           PLATFORM_REPO=$(grep -m1 '^platform_repo:' platform.lock 2>/dev/null | sed -E 's/^[^:]+:[[:space:]]*//;s/[[:space:]]+$//') || true
           PLATFORM_REF=$(grep -m1 '^platform_ref:' platform.lock 2>/dev/null | sed -E 's/^[^:]+:[[:space:]]*//;s/[[:space:]]+$//') || true
           cat > ./_site_preview/admin/commit.json <<JSON
-          { "sha": "${SHA}", "iso": "${ISO}", "branch": "${HEAD_REF}", "platform_repo": "${PLATFORM_REPO}", "platform_ref": "${PLATFORM_REF}" }
+          { "sha": "${SHA}", "iso": "${ISO}", "branch": "${HEAD_REF}", "deployed_at": "${DEPLOYED_AT}", "platform_repo": "${PLATFORM_REPO}", "platform_ref": "${PLATFORM_REF}" }
           JSON
           printf 'Commit metadata diagnostic: %s\n' "$(escape_workflow_data "$(cat ./_site_preview/admin/commit.json)")"
 

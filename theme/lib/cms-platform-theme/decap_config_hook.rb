@@ -145,6 +145,15 @@ module CmsPlatformTheme
       gate = cms["site_gate"]
       gate_js = gate.nil? ? "null" : JSON.generate(gate)
 
+      # `cross_post.profiles` (OPTIONAL, top level, site-owned) — the networks
+      # cross-post.yml posts a site's new posts to. Merging a preview's pull
+      # request publishes its new posts there too, so
+      # admin/branch-binding-banner.js names them. Only the keys are injected
+      # (`mastodon`, `linkedin`, `substack`); `[]` when the site has none.
+      cross_post = site.config["cross_post"]
+      profiles = cross_post.is_a?(Hash) ? cross_post["profiles"] : nil
+      cross_post_js = JSON.generate(profiles.is_a?(Hash) ? profiles.keys.map(&:to_s) : [])
+
       # The branch the config was RENDERED with — `backend.branch` of the
       # config.yml written above, read back with a real YAML parse so the
       # global and the file cannot disagree. deploy-preview.yml later patches
@@ -159,7 +168,7 @@ module CmsPlatformTheme
       # into BOTH the Decap shells (index*.html) AND the review dashboards
       # (reviews/*.html). Kept in lockstep with the script by
       # e2e/decap-config-render-parity.test.js — update both or the lint fails.
-      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_ADMIN_ORIGIN=#{admin_origin.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};</script>}
+      js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_ADMIN_ORIGIN=#{admin_origin.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};window.CMS_CROSS_POST=#{cross_post_js};</script>}
       shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html"))
       shells.each do |h|
         s = File.read(h, encoding: "utf-8")
