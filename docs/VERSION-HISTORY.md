@@ -10,9 +10,22 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.167)
+## Version history (v0.1.0 → v0.1.168)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.168 — The platform owns the jekyll-seo-tag and jekyll-feed versions, and a bump re-resolves the consumer's Gemfile.lock; opt-in featured image alt text.**
+The first-parent range since v0.1.167 holds ten entries on main before this release PR: five squash commits ([#918](https://github.com/Adam-S-Daniel/cms-platform/pull/918), [#920](https://github.com/Adam-S-Daniel/cms-platform/pull/920), [#921](https://github.com/Adam-S-Daniel/cms-platform/pull/921), [#923](https://github.com/Adam-S-Daniel/cms-platform/pull/923), [#924](https://github.com/Adam-S-Daniel/cms-platform/pull/924)) and five merge commits ([#917](https://github.com/Adam-S-Daniel/cms-platform/pull/917), [#907](https://github.com/Adam-S-Daniel/cms-platform/pull/907), [#919](https://github.com/Adam-S-Daniel/cms-platform/pull/919), [#922](https://github.com/Adam-S-Daniel/cms-platform/pull/922), [#925](https://github.com/Adam-S-Daniel/cms-platform/pull/925)).
+
+Plugin versions. [#924](https://github.com/Adam-S-Daniel/cms-platform/pull/924) gives the theme gemspec floors of jekyll-seo-tag `>= 2.9.1` and jekyll-feed `>= 0.18.0`. On v0.1.167 the consumers resolved different versions: adamdaniel.ai lists both gems itself, so Dependabot had moved it to 2.9.1 and 0.18.0, while jodidaniel.com gets them only through the theme and sat on 2.9.0 and 0.17.0 (2.9.0 writes meta values unescaped; 0.17.0 lets a `]]>` in a post end the feed's CDATA early). `scripts/rewrite-platform-pins.js` now runs `bundle lock --update cms-platform-theme --conservative` after moving a consumer's Gemfile.lock pins, in a throwaway `GEM_HOME` with the lock's own `BUNDLED WITH` Bundler; a failed relock restores every file and fails the bump. `platform-bump.yml` fetches that script at the release it moves to, so this release's bump is the first to relock. `seo_image` drops its 2.9.1 gate, and self-CI and both fixture lockfiles move to the same versions.
+
+Posts. [#920](https://github.com/Adam-S-Daniel/cms-platform/pull/920) adds an optional `featured_image_alt` field: the hero `<img>` renders it escaped, and with an alt set `seo_image` passes `{ path, alt }` so jekyll-seo-tag emits `og:image:alt` and `twitter:image:alt`. A post without it builds byte-identical. Decap's base configs, the `/preview/` page and the preview pane carry the field. [#919](https://github.com/Adam-S-Daniel/cms-platform/pull/919) changes the branch-binding banner to "update this preview initially".
+
+Release machinery. [#918](https://github.com/Adam-S-Daniel/cms-platform/pull/918) makes a consumer's stable bump close every open `candidate/vX.Y.Z` draft at or below the release it adopts and delete its branch; a newer draft is left alone. A consumer runs the `platform-bump.yml` of the release it is leaving, so this applies from the bump after the one to v0.1.168.
+
+Agent tooling. [#923](https://github.com/Adam-S-Daniel/cms-platform/pull/923) delivers the agent-checks git hooks with a dated-phrasing check, [#921](https://github.com/Adam-S-Daniel/cms-platform/pull/921) rewords five skills to state current behavior, [#907](https://github.com/Adam-S-Daniel/cms-platform/pull/907) re-pins `skills.lock`, and [#917](https://github.com/Adam-S-Daniel/cms-platform/pull/917), [#922](https://github.com/Adam-S-Daniel/cms-platform/pull/922) and [#925](https://github.com/Adam-S-Daniel/cms-platform/pull/925) are AGENTS.md and hook syncs from `_agent-guidance`.
+
+Consumer effect. Adopting v0.1.168 moves jodidaniel.com to jekyll-seo-tag 2.9.1 and jekyll-feed 0.18.0 through the bump's relock; adamdaniel.ai's lock gains only the new dependency floors. Both sites' admin forms show the optional alt text field. A local run of the relock on copies of both consumers' v0.1.167 trees moved exactly those lines; no live consumer verification is claimed in this entry.
 
 **v0.1.167 — Preview banner names the deploy, each edit's fate on merge, the PR title and the cross-posts; and the 37 open CodeQL alerts fixed.**
 The first-parent range since v0.1.166 holds four entries on main before this release PR: three squash commits ([#912](https://github.com/Adam-S-Daniel/cms-platform/pull/912), [#913](https://github.com/Adam-S-Daniel/cms-platform/pull/913), [#914](https://github.com/Adam-S-Daniel/cms-platform/pull/914)) and one merge commit ([#915](https://github.com/Adam-S-Daniel/cms-platform/pull/915)).
