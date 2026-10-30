@@ -12,15 +12,20 @@
 //      both consumers commit Gemfile.lock. Frozen bundler materializes a
 //      git-source spec by [name, VERSION] and refuses to rewrite the lock, so a
 //      gemspec version disagreeing with the lock is a hard GemNotFound.
-//   3. platform-bump.yml cannot repair it: it rewrites Gemfile.lock TEXTUALLY
-//      (literal CUR->LATEST plus OLD_SHA->NEW_SHA) and never runs bundler. CUR
-//      is read from platform.lock's `platform_ref:`, so it is v-prefixed
-//      ("v0.1.79") and can never match the bare "0.1.4".
+//   3. platform-bump moves Gemfile.lock's pins TEXTUALLY (CUR->LATEST plus
+//      OLD_SHA->NEW_SHA); CUR is read from platform.lock's `platform_ref:`, so
+//      it is v-prefixed ("v0.1.79") and can never match the bare "0.1.4". Since
+//      the release after v0.1.167 the pin rewrite it fetches at the NEW release
+//      (scripts/rewrite-platform-pins.js) then re-resolves the lock with
+//      `bundle lock --update cms-platform-theme --conservative`, which would
+//      carry a version change into a consumer on a bump; the freeze stays so a
+//      lock that moved any other way cannot disagree.
 //
 // Facts (1) is consumer-side and unreadable from here. Facts (2) and (3) live
-// in this repo, so this lint pins (3) — the one that would silently invalidate
-// the freeze if platform-bump ever grew a `bundle lock` — plus the frozen value
-// itself, so any change trips a test whose message explains the coupling.
+// in this repo, so this lint pins where (3)'s Bundler run lives — the pin
+// rewrite, never platform-bump.yml, which a consumer runs at the release it is
+// LEAVING — plus the frozen value itself, so any change trips a test whose
+// message explains the coupling.
 //
 // PLATFORM-INTERNAL: reads theme/ + .github/workflows/, neither of which exists
 // on a consumer, so it is registered in PLATFORM_META_SPECS.
@@ -46,12 +51,10 @@ test.describe("theme gemspec version is deliberately frozen", () => {
     expect(
       m[1],
       `spec.version is FROZEN at ${FROZEN_VERSION} on purpose — it is NOT stale.\n` +
-        "Both consumers' Gemfile.lock record it (twice each: GIT specs: + CHECKSUMS), their CI\n" +
-        "installs in bundler DEPLOYMENT/frozen mode, and platform-bump.yml rewrites the lock\n" +
-        "textually with a v-prefixed ref so it can never update the bare version. Bumping this\n" +
-        "alone makes `bundle install` fail GemNotFound on adamdaniel.ai AND jodidaniel.com.\n" +
-        "To change it: move the version AND both lockfile occurrences in BOTH consumers in the\n" +
-        "same change, and teach platform-bump.yml to do so (or to run `bundle lock`).\n" +
+        "Both consumers' Gemfile.lock record it (twice each: GIT specs: + CHECKSUMS) and their CI\n" +
+        "installs in bundler DEPLOYMENT/frozen mode, so a lock that disagrees fails GemNotFound on\n" +
+        "adamdaniel.ai AND jodidaniel.com. platform-bump's relock (rewrite-platform-pins.js) would\n" +
+        "move both occurrences on a bump; check both consumers' locks follow before changing it.\n" +
         "See the gemspec header comment.",
     ).toBe(FROZEN_VERSION);
   });
@@ -69,10 +72,12 @@ test.describe("theme gemspec version is deliberately frozen", () => {
     );
   });
 
-  test("platform-bump.yml still cannot update the locked version (the freeze's precondition)", () => {
-    // If platform-bump ever learns to re-resolve the lockfile, the freeze stops
-    // being necessary and this whole invariant should be revisited — so fail
-    // LOUD rather than let the reasoning rot silently.
+  test("platform-bump.yml runs no Bundler itself: the relock lives in the pin rewrite it fetches", () => {
+    // A consumer runs the platform-bump.yml of the release it is LEAVING, so a
+    // `bundle lock` added there would reach no bump until the release after it.
+    // The relock lives in scripts/rewrite-platform-pins.js, fetched at the
+    // release the bump moves TO. Fail LOUD if either half moves, so the freeze
+    // reasoning above is revisited instead of rotting silently.
     // runScripts takes the raw workflow TEXT and returns {script, line}
     // objects — join the `script` fields, not the objects. (Joining the objects
     // yields "[object Object]", which made the two assertions below pass
@@ -90,10 +95,18 @@ test.describe("theme gemspec version is deliberately frozen", () => {
 
     expect(
       /bundle\s+(install|lock|update)/.test(scripts),
-      "platform-bump.yml now runs bundler. The gemspec version freeze exists BECAUSE it could " +
-        "not re-resolve Gemfile.lock. Re-check whether the freeze is still needed, then update " +
-        "the gemspec header and this lint together.",
+      "platform-bump.yml now runs bundler. A consumer runs the platform-bump.yml of the release " +
+        "it is leaving, so the relock belongs in scripts/rewrite-platform-pins.js (fetched at the " +
+        "new release). Move it there, or update the gemspec header and this lint together.",
     ).toBe(false);
+    const { relockCommands } = require("../scripts/rewrite-platform-pins.js");
+    expect(
+      relockCommands("4.0.10").map(([cmd, args]) => [cmd, ...args].join(" ")),
+      "the pin rewrite must re-resolve only the theme gem, conservatively, with the lock's own Bundler",
+    ).toEqual([
+      "gem install bundler --version 4.0.10 --no-document",
+      "bundle _4.0.10_ lock --update cms-platform-theme --conservative",
+    ]);
 
     // CUR is the consumer's previous platform_ref, which is v-prefixed — the
     // reason a literal CUR->LATEST replace can never touch the bare version.

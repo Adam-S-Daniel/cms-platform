@@ -15,15 +15,17 @@ Gem::Specification.new do |spec|
   #      git-source spec by [name, VERSION] and refuses to rewrite the lock
   #      ("Cannot write a changed lockfile while frozen"), so a gemspec version
   #      that disagrees with the lock is a hard GemNotFound, not a re-resolve.
-  #   3. platform-bump.yml cannot repair it: it rewrites Gemfile.lock TEXTUALLY
-  #      (a literal CUR->LATEST replace plus OLD_SHA->NEW_SHA) and never runs
-  #      bundler. CUR comes from platform.lock's `platform_ref:`, so it is
-  #      v-prefixed ("v0.1.79") and can never match the bare "0.1.4".
+  #   3. platform-bump moves the lock's pins TEXTUALLY (tag + revision), and
+  #      the version string is not a pin. Since the release after v0.1.167 the
+  #      script it fetches at the new release (scripts/rewrite-platform-pins.js)
+  #      then runs `bundle lock --update cms-platform-theme --conservative`,
+  #      which WOULD rewrite both lockfile occurrences on a bump. A consumer
+  #      lock that moves any other way (a hand edit, Dependabot) still would not.
   #
   # So the frozen version is what keeps the gemspec and every consumer lockfile
-  # in agreement. If you ever genuinely need to bump it, the version and BOTH
-  # lockfile occurrences in BOTH consumers have to move in the same change, and
-  # platform-bump.yml needs to learn to do that (or to run `bundle lock`).
+  # in agreement without relying on every lock having gone through that relock.
+  # If you ever genuinely need to bump it, check that BOTH consumers' locks
+  # follow (a platform-bump relock does it), and update this comment and the lint.
   # Locked by e2e/gemspec-version-frozen.test.js.
   #
   # This is inert for publication: the gem has never been pushed to RubyGems
@@ -46,7 +48,18 @@ Gem::Specification.new do |spec|
                          "admin/config-local.yml", "admin/commit.json"]
   spec.required_ruby_version = ">= 3.0"
   spec.add_runtime_dependency "jekyll", ">= 4.0", "< 5.0"
-  spec.add_runtime_dependency "jekyll-seo-tag"
-  spec.add_runtime_dependency "jekyll-feed"
+  # Floors, not pins: platform-bump re-resolves a consumer's Gemfile.lock
+  # (`bundle lock --update cms-platform-theme`, in rewrite-platform-pins.js), so
+  # a floor here is what moves a consumer that gets these gems only through this
+  # theme. Without one, a site that lists the gem itself (Dependabot moves it)
+  # and a site that does not (nothing moves it) drift apart on one release.
+  #   jekyll-seo-tag 2.9.1 escapes image.alt and other meta values; 2.9.0 writes
+  #     them raw, so a quote in an alt breaks og:image:alt (seo_image.rb).
+  #   jekyll-feed 0.18.0 splits a "]]>" in post content or a summary out of the
+  #     CDATA section; 0.17.0 lets it end the section early and the feed stops
+  #     being well-formed XML.
+  # jekyll-sitemap has no floor: 1.4.0 (2019) is still its latest release.
+  spec.add_runtime_dependency "jekyll-seo-tag", ">= 2.9.1", "< 3"
+  spec.add_runtime_dependency "jekyll-feed", ">= 0.18.0", "< 1"
   spec.add_runtime_dependency "jekyll-sitemap"
 end
