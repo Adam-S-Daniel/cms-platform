@@ -6,7 +6,7 @@
 # known (front matter, else the image file) and neither, never an empty
 # attribute, when they are not. It decodes async and is never lazy-loaded.
 # Run with: ruby theme/spec/featured_image_dimensions_test.rb
-# Needs jekyll 4.4.1 and jekyll-seo-tag 2.9.0 (the ruby-theme-specs lane installs both).
+# Needs jekyll 4.4.1 and jekyll-seo-tag 2.9.1 (the ruby-theme-specs lane installs both).
 
 require 'minitest/autorun'
 require 'fileutils'

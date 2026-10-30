@@ -225,7 +225,7 @@ jobs:
           gem install liquid --version 4.0.4 --no-document
           gem install jekyll --version 4.4.1 --no-document
           gem install jekyll-sitemap --version 1.4.0 --no-document
-          gem install jekyll-seo-tag --version 2.9.0 --no-document
+          gem install jekyll-seo-tag --version 2.9.1 --no-document
 
       - name: Run theme specs
         run: |

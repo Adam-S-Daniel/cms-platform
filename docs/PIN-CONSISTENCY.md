@@ -248,6 +248,20 @@ prose that names the old version, cms-platform#530), then confirm with
 the bump branch. Caller SEEDING only matters if the release newly dictated a
 workflow the consumer lacks; a release that adds none needs no seeding step.
 
+After moving the pins, the script re-resolves `Gemfile.lock` whenever its
+platform GIT block moved: in the consumer root it installs the lock's own
+`BUNDLED WITH` Bundler into a throwaway `GEM_HOME` and runs
+`bundle _<ver>_ lock --update cms-platform-theme --conservative`, so a floor the
+theme gemspec adds (jekyll-seo-tag `>= 2.9.1`) reaches a consumer that gets that
+gem only through the theme, and nothing else moves. It needs `ruby`/`gem` on
+`PATH` (the runner's system Ruby) and network to rubygems.org and GitHub. A
+failed relock, or one that leaves the lock pinned anywhere but `--to` at
+`--new-sha`, restores every file and exits 1 naming the command. It lives in the
+script, not in `platform-bump.yml`, because a consumer runs the reusable at the
+release it is LEAVING (next section) while the script is fetched at the new
+release's commit, so the release that adds a floor is the first bump to honor
+it. Tests that cannot reach the network set `CMS_PIN_REWRITE_NO_RELOCK=1`.
+
 The Bundler pins' KEY follows `--to`: a full 40-hex commit SHA (a release
 candidate, `docs/CONTRIBUTING.md`) is written `ref: "<sha>"` in the `Gemfile`
 and `revision: <sha>` + `ref: <sha>` in the `Gemfile.lock` platform GIT block,

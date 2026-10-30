@@ -359,6 +359,11 @@ jobs:
           # ($NEW_SHA), not the movable tag, and it is ALL OR NOTHING: on any file it cannot
           # rewrite safely it writes nothing and exits non-zero, which fails
           # this step — a bump that moved some pins is worse than none.
+          # When Gemfile.lock moved, the script then re-resolves it with Bundler,
+          # conservatively, so a new theme gemspec floor reaches the lock (see
+          # its header). That lives in the script, not here: a consumer runs
+          # THIS file at the release it is leaving, the script at the new one.
+          # A failed re-resolve restores every file and fails this step too.
           # A first adoption has no platform.lock, so no $CUR and no pin to move
           # (the fallback below writes the lock).
           if [ -n "$CUR" ]; then

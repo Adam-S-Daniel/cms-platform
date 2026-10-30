@@ -5,15 +5,17 @@
 # `image:`, but posts carry `featured_image:`, so no page had og:image /
 # twitter:image and shared links showed no picture.
 # Run with: ruby theme/spec/seo_image_build_test.rb
-# Needs jekyll 4.4.1 and jekyll-seo-tag 2.9.0 (the ruby-theme-specs lane installs both).
+# Needs jekyll 4.4.1 and jekyll-seo-tag 2.9.1 (the ruby-theme-specs lane installs both).
 
 require 'minitest/autorun'
-require 'minitest/mock'
 require 'fileutils'
 require 'tmpdir'
+require 'cgi'
 require 'rexml/document'
 require 'rexml/parsers/pullparser'
 require 'jekyll'
+# The gemspec's floor: 2.9.1 escapes image.alt, which the alt tests below prove.
+gem 'jekyll-seo-tag', '>= 2.9.1'
 require 'jekyll-seo-tag'
 require_relative '../lib/cms-platform-theme/seo_image'
 require_relative '../lib/cms-platform-theme/cachebust_filter'
@@ -23,16 +25,16 @@ class SeoImageBuildTest < Minitest::Test
   ROOT = File.expand_path('../..', __dir__)
 
   PHOTO = '/assets/images/uploads/photo.jpg'
-  # Plain text on purpose: the alt tags are asserted only on jekyll-seo-tag
-  # 2.9.1+, and on 2.9.0 (which self-CI pins) the hook leaves them out.
-  ALT = 'A red kite over a green field'
+  # A quote, angle brackets and an ampersand: jekyll-seo-tag 2.9.0 wrote these
+  # raw, so the quote ended the content attribute early.
+  ALT = 'A "red" kite <over> a green field & sky'
 
   POSTS = {
     'with-featured' => "title: With featured\nfeatured_image: /assets/images/uploads/photo.jpg\n",
     'with-explicit-image' => "title: With explicit image\nfeatured_image: /assets/images/uploads/photo.jpg\nimage: /assets/images/uploads/card.jpg\n",
     'with-blank-featured' => "title: With blank featured\nfeatured_image: \"\"\n",
     'without-image' => "title: Without image\n",
-    'with-featured-alt' => "title: With featured alt\nfeatured_image: #{PHOTO}\nfeatured_image_alt: #{ALT}\n",
+    'with-featured-alt' => "title: With featured alt\nfeatured_image: #{PHOTO}\nfeatured_image_alt: '#{ALT}'\n",
     'with-blank-featured-alt' => "title: With blank alt\nfeatured_image: #{PHOTO}\nfeatured_image_alt: \"  \"\n",
     'with-explicit-image-and-alt' => "title: With explicit image and alt\nfeatured_image: #{PHOTO}\n" \
                                      "featured_image_alt: Ignored\nimage: /assets/images/uploads/card.jpg\n",
@@ -123,24 +125,16 @@ class SeoImageBuildTest < Minitest::Test
     build
     path = 'blog/with-featured-alt/index.html'
     url = 'https://example.com/assets/images/uploads/photo.jpg'
-    alt = ALT
     assert_equal [url], values(path, 'property', 'og:image')
     assert_equal [url], values(path, 'name', 'twitter:image')
     assert_equal ['summary_large_image'], card(path)
-    expected = Jekyll::SeoImage.image_alt_supported? ? [alt] : []
-    assert_equal expected, values(path, 'property', 'og:image:alt')
-    assert_equal expected, values(path, 'name', 'twitter:image:alt')
-  end
-
-  # jekyll-seo-tag 2.9.0 writes image.alt unescaped, so the hook must not hand
-  # it one there: the image stays a plain path whatever the alt says.
-  def test_no_image_alt_hash_when_seo_tag_cannot_escape_it
-    item = Struct.new(:data).new({ 'featured_image' => PHOTO, 'featured_image_alt' => 'A "quoted" <alt>' })
-    Jekyll::SeoImage.stub(:image_alt_supported?, false) { Jekyll::SeoImage.apply(item, nil) }
-    assert_equal PHOTO, item.data['image']
-    item = Struct.new(:data).new({ 'featured_image' => PHOTO, 'featured_image_alt' => ALT })
-    Jekyll::SeoImage.stub(:image_alt_supported?, true) { Jekyll::SeoImage.apply(item, nil) }
-    assert_equal({ 'path' => PHOTO, 'alt' => ALT }, item.data['image'])
+    # Attribute values from the parse (entities left as written), decoded: an
+    # unescaped quote would have ended the attribute early instead.
+    assert_equal [ALT], values(path, 'property', 'og:image:alt').map { |v| CGI.unescapeHTML(v) }
+    assert_equal [ALT], values(path, 'name', 'twitter:image:alt').map { |v| CGI.unescapeHTML(v) }
+    html = File.read(File.join(@destination, path))
+    refute_includes html, ALT, 'the raw alt must never reach the page unescaped'
+    assert_includes html, 'content="A &quot;red&quot; kite &lt;over&gt; a green field &amp; sky"'
   end
 
   def test_no_image_alt_without_a_featured_image_alt

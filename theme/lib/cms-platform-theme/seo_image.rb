@@ -18,11 +18,10 @@
 # non-blank `featured_image_alt:`, `image` is set to the hash form
 # `{ 'path' => ..., 'alt' => ... }` instead, which jekyll-seo-tag reads for
 # og:image:alt / twitter:image:alt (og:image is the same absolute URL either
-# way). The site-wide `default_image` never takes a post's alt. Only on
-# jekyll-seo-tag 2.9.1 or later: 2.9.0 writes image.alt into the meta tags and
-# JSON-LD unescaped, so a quote in the alt would break them; on 2.9.0 the image
-# stays a plain path and only the post's hero <img> (escaped by the layout)
-# carries the alt.
+# way). The site-wide `default_image` never takes a post's alt. This relies on
+# jekyll-seo-tag 2.9.1 or later, which escapes image.alt in the meta tags and
+# JSON-LD (2.9.0 wrote it raw, so a quote broke them); the gemspec's floor
+# guarantees it, and platform-bump's relock carries the floor to every consumer.
 #
 # Tests: spec/seo_image_build_test.rb
 
@@ -40,17 +39,10 @@ module Jekyll
       featured = item.data['featured_image']
       if present_string?(featured)
         alt = item.data['featured_image_alt']
-        item.data['image'] =
-          present_string?(alt) && image_alt_supported? ? { 'path' => featured, 'alt' => alt.strip } : featured
+        item.data['image'] = present_string?(alt) ? { 'path' => featured, 'alt' => alt.strip } : featured
       elsif present_string?(default_image)
         item.data['image'] = default_image
       end
-    end
-
-    # 2.9.1 added escape_once / seo_json_escape around image.alt.
-    def self.image_alt_supported?
-      spec = Gem.loaded_specs['jekyll-seo-tag']
-      !spec.nil? && spec.version >= Gem::Version.new('2.9.1')
     end
 
     def self.present_string?(value)

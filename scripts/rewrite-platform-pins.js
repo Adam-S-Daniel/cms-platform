@@ -53,17 +53,38 @@
 // ALL OR NOTHING. Every file is computed before any is written; one failure
 // (unparseable YAML, a pin that cannot be spliced safely) writes nothing.
 //
+// THEN RE-RESOLVE Gemfile.lock. Moving the theme gem's `tag:`/`revision:` text
+// does not move what the NEW gemspec requires: jodidaniel.com got
+// jekyll-seo-tag only through cms-platform-theme and sat on 2.9.0 while
+// adamdaniel.ai, which lists the gem itself, had 2.9.1. So when the platform
+// GIT block moved, this runs, in --root,
+//     gem install bundler --version <BUNDLED WITH> (into a temporary GEM_HOME)
+//     bundle _<BUNDLED WITH>_ lock --update cms-platform-theme --conservative
+// `--conservative` keeps every other locked gem where it is unless the new
+// gemspec rules it out (without it Bundler also unlocks the theme's whole
+// dependency tree: sass-embedded, google-protobuf, ...). The lock must still
+// pin --to at --new-sha afterwards. It lives HERE, not in platform-bump.yml,
+// because a consumer runs the platform-bump.yml of the release it is leaving,
+// while this script is fetched at the release it is moving to, so the release
+// that adds a gemspec floor is the first one whose bump honors it. A relock
+// that fails restores every file this run wrote and exits 1, naming the command.
+// Tests that cannot reach rubygems.org set CMS_PIN_REWRITE_NO_RELOCK=1; nothing
+// else should.
+//
 // Usage:
 //   node scripts/rewrite-platform-pins.js --from vOLD --to vNEW
 //        [--new-sha <40-hex>] [--slug OWNER/REPO] [--root DIR]
 // With a 40-hex --to, --new-sha defaults to it and may not name another commit.
-// Prints `REWROTE <file>: <n> pin(s)` per changed file and a closing SUMMARY.
+// Prints `REWROTE <file>: <n> pin(s)` per changed file, `RELOCKED Gemfile.lock`
+// after a re-resolve, and a closing SUMMARY.
 // Exit codes: 0 done (including "nothing to move"), 1 a file could not be
-// rewritten (nothing written), 2 bad usage.
+// rewritten or the relock failed (nothing left written), 2 bad usage.
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 function loadYaml() {
   const candidates = [
@@ -379,14 +400,91 @@ function rewriteTree(opts) {
     try {
       const src = fs.readFileSync(abs, "utf8");
       const r = rewriteText(t.kind, src, { ...opts, slug });
-      if (r.text !== src) results.push({ abs, rel: t.rel, text: r.text, count: r.count });
+      if (r.text !== src) results.push({ abs, rel: t.rel, text: r.text, count: r.count, src });
     } catch (e) {
       errors.push(`${t.rel}: ${e.message}`);
     }
   }
   if (errors.length) return { changed: [], errors };
-  for (const r of results) fs.writeFileSync(r.abs, r.text);
+  for (const r of results) {
+    if (opts.originals) opts.originals.push({ abs: r.abs, text: r.src });
+    fs.writeFileSync(r.abs, r.text);
+  }
   return { changed: results.map(({ rel, count }) => ({ rel, count })), errors };
+}
+
+// ── Re-resolving Gemfile.lock (see the header) ───────────────────────────────
+
+const NO_RELOCK_ENV = "CMS_PIN_REWRITE_NO_RELOCK";
+const THEME_GEM = "cms-platform-theme";
+const VERSION_RE = /^[0-9]+(\.[0-9A-Za-z]+)*$/;
+
+// The Bundler version the lock was written with, or null when it names none.
+function bundledWith(lockText) {
+  const m = /^BUNDLED WITH\r?\n[ \t]+(\S+)/m.exec(lockText);
+  return m && VERSION_RE.test(m[1]) ? m[1] : null;
+}
+
+// The commands relock() runs, in order, as [command, args]. Exported so a test
+// can name them without running Bundler.
+function relockCommands(bundlerVersion) {
+  const pinned = bundlerVersion ? [`_${bundlerVersion}_`] : [];
+  const cmds = [];
+  if (bundlerVersion) cmds.push(["gem", ["install", "bundler", "--version", bundlerVersion, "--no-document"]]);
+  cmds.push(["bundle", [...pinned, "lock", "--update", THEME_GEM, "--conservative"]]);
+  return cmds;
+}
+
+function restore(originals) {
+  for (const o of originals) fs.writeFileSync(o.abs, o.text);
+}
+
+// Runs relockCommands() in `root` and checks the result. Returns null on
+// success, or the one-line reason it failed (which always names the command).
+function relock({ root, to, newSha, slug }) {
+  const dir = path.resolve(root || ".");
+  const lockPath = path.join(dir, "Gemfile.lock");
+  const version = bundledWith(fs.readFileSync(lockPath, "utf8"));
+  // A throwaway GEM_HOME: the runner's system Ruby may not let us write its own
+  // gem directory, and the lock names the Bundler that must rewrite it.
+  const gemHome = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), "cms-pin-relock-"));
+  const env = {
+    ...process.env,
+    GEM_HOME: gemHome,
+    GEM_PATH: gemHome,
+    PATH: `${path.join(gemHome, "bin")}${path.delimiter}${process.env.PATH || ""}`,
+    BUNDLE_GEMFILE: path.join(dir, "Gemfile"),
+    BUNDLE_FROZEN: "false",
+    BUNDLE_DEPLOYMENT: "false",
+  };
+  try {
+    for (const [cmd, cmdArgs] of relockCommands(version)) {
+      const shown = `\`${[cmd, ...cmdArgs].join(" ")}\``;
+      const r = spawnSync(cmd, cmdArgs, { cwd: dir, env, encoding: "utf8" });
+      if (r.stdout) process.stderr.write(r.stdout);
+      if (r.stderr) process.stderr.write(r.stderr);
+      if (r.error) return `relock: ${shown} could not run in ${dir} (${r.error.code || r.error.message})`;
+      if (r.status !== 0) {
+        const why = r.status === null ? `was killed by ${r.signal}` : `exited ${r.status}`;
+        return `relock: ${shown} ${why} in ${dir}`;
+      }
+    }
+  } finally {
+    fs.rmSync(gemHome, { recursive: true, force: true });
+  }
+  // The relock must leave the platform pinned exactly where the rewrite put it.
+  let blocks;
+  try {
+    blocks = gemfileLockBlocks(fs.readFileSync(lockPath, "utf8"), slug);
+  } catch (e) {
+    return `relock: Gemfile.lock no longer reads after \`bundle lock\` (${e.message})`;
+  }
+  const ok = blocks.length > 0 && blocks.every((b) =>
+    b.tag && b.tag.ref === to && b.tag.key === bundlerKey(to) && (!newSha || (b.revision && b.revision.sha === newSha)));
+  if (!ok) {
+    return `relock: after \`bundle lock --update ${THEME_GEM} --conservative\` the Gemfile.lock platform GIT block no longer pins ${bundlerKey(to)}: ${to}${newSha ? ` at revision ${newSha}` : ""}`;
+  }
+  return null;
 }
 
 function cli(argv) {
@@ -428,13 +526,25 @@ function cli(argv) {
     process.stdout.write(`SUMMARY: --from equals --to (${from}); nothing to move\n`);
     return 0;
   }
-  const { changed, errors } = rewriteTree({ from, to, newSha, slug: args.slug, root: args.root });
+  const originals = [];
+  const { changed, errors } = rewriteTree({ from, to, newSha, slug: args.slug, root: args.root, originals });
   if (errors.length) {
     for (const e of errors) process.stdout.write(`ERROR ${e}\n`);
     process.stdout.write(`SUMMARY: ${errors.length} file(s) could not be rewritten; NOTHING was written\n`);
     return 1;
   }
   for (const c of changed) process.stdout.write(`REWROTE ${c.rel}: ${c.count} pin(s)\n`);
+  if (changed.some((c) => c.rel === "Gemfile.lock") && process.env[NO_RELOCK_ENV] !== "1") {
+    const err = relock({ root: args.root, to, newSha, slug: args.slug || DEFAULT_SLUG });
+    if (err) {
+      restore(originals);
+      process.stdout.write(`ERROR ${err}\n`);
+      process.stdout.write(`::error::${err}\n`);
+      process.stdout.write("SUMMARY: the Gemfile.lock relock failed; every file was restored, NOTHING was written\n");
+      return 1;
+    }
+    process.stdout.write("RELOCKED Gemfile.lock: re-resolved cms-platform-theme (conservative)\n");
+  }
   const total = changed.reduce((n, c) => n + c.count, 0);
   process.stdout.write(`SUMMARY: moved ${total} pin(s) in ${changed.length} file(s) from ${from} to ${to}\n`);
   return 0;
@@ -442,4 +552,4 @@ function cli(argv) {
 
 if (require.main === module) process.exit(cli(process.argv.slice(2)));
 
-module.exports = { rewriteText, rewriteTree, cli };
+module.exports = { rewriteText, rewriteTree, cli, relockCommands, bundledWith, NO_RELOCK_ENV };

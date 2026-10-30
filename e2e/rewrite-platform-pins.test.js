@@ -157,7 +157,7 @@ function rewrite(root, extra = []) {
   return spawnSync(
     process.execPath,
     [REWRITE, "--root", root, "--slug", SLUG, "--from", OLD, "--to", NEW, "--new-sha", NEW_SHA, ...extra],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: HERMETIC_ENV },
   );
 }
 
@@ -170,6 +170,11 @@ function checker(root, canon) {
 }
 
 const out = (r) => `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`;
+
+// These fixtures' Gemfile.lock is not a real lock and the tests must not reach
+// rubygems.org or GitHub, so every run here skips the Bundler relock; the
+// relock's own tests (below) stub `gem` and `bundle` instead.
+const HERMETIC_ENV = { ...process.env, CMS_PIN_REWRITE_NO_RELOCK: "1" };
 
 test.describe("rewrite-platform-pins.js — only pins move (#530)", () => {
   test("every pin moves and every decoy stays, byte-for-byte", () => {
@@ -236,7 +241,7 @@ test.describe("rewrite-platform-pins.js — only pins move (#530)", () => {
       const r = spawnSync(
         process.execPath,
         [REWRITE, "--root", root, "--from", OLD, "--to", NEW, ...extra],
-        { encoding: "utf8" },
+        { encoding: "utf8", env: HERMETIC_ENV },
       );
       expect(r.status, `${extra.join(" ")}\n${out(r)}`).toBe(2);
     }
@@ -248,6 +253,7 @@ test.describe("rewrite-platform-pins.js — edge cases the main fixture cannot r
   const run = (root, from, to, extra = []) =>
     spawnSync(process.execPath, [REWRITE, "--root", root, "--slug", SLUG, "--from", from, "--to", to, ...extra], {
       encoding: "utf8",
+      env: HERMETIC_ENV,
     });
 
   test("a version that changes LENGTH moves every pin (offsets shift, so edits apply back to front)", () => {
@@ -352,6 +358,7 @@ test.describe("rewrite-platform-pins.js — a commit-SHA target writes Bundler's
   const run = (root, from, to, extra = []) =>
     spawnSync(process.execPath, [REWRITE, "--root", root, "--slug", SLUG, "--from", from, "--to", to, ...extra], {
       encoding: "utf8",
+      env: HERMETIC_ENV,
     });
 
   for (const [label, from, fromSha, to, extra, toSha] of [
@@ -509,7 +516,7 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
     return lines.slice(start, end + 1).join("\n");
   }
 
-  function runBlock(files, cur, latest = NEW) {
+  function runBlock(files, cur, latest = NEW, extraEnv = {}) {
     const root = materialize(files);
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-rewrite-bin-"));
     fs.writeFileSync(
@@ -522,14 +529,15 @@ test.describe("platform-bump.yml — runs the rewrite (#530)", () => {
       cwd: root,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH}`,
+        ...HERMETIC_ENV,
+        PATH: [bin, extraEnv.PATH_PREFIX, process.env.PATH].filter(Boolean).join(":"),
         NODE_PATH: path.join(__dirname, "node_modules"),
         RUNNER_TEMP: fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-rewrite-tmp-")),
         PLATFORM: SLUG,
         CUR: cur,
         LATEST: latest,
         NEW_SHA,
+        ...extraEnv,
       },
     });
     return { res, root };
@@ -683,7 +691,7 @@ esac
       const res = spawnSync("/bin/bash", ["-euo", "pipefail", "-c", lines.slice(start, end + 1).join("\n")], {
         cwd: root, encoding: "utf8",
         env: {
-          PATH: bin, HOME: scratch, NODE_PATH: path.join(__dirname, "node_modules"),
+          PATH: bin, HOME: scratch, NODE_PATH: path.join(__dirname, "node_modules"), CMS_PIN_REWRITE_NO_RELOCK: "1",
           RUNNER_TEMP: path.join(scratch, "tmp"), PLATFORM: SLUG, LATEST: NEW, CUR: OLD, CANDIDATE_SHA: "",
           INITIAL_SHA: initial, TAG_TYPE: type, DEREFERENCED_SHA: dereferenced,
           STUB_LOG: log, REWRITE_SCRIPT: REWRITE,
@@ -735,6 +743,27 @@ esac
     expect(rewriteBlock()).toMatch(/npm install --prefix "\$PIN_TOOLS" --no-save --no-package-lock --ignore-scripts yaml@2\.9\.1/);
   });
 
+  test("the step's unchanged command relocks Gemfile.lock: no new flag, so an OLD platform-bump.yml gets it", () => {
+    // A consumer runs the platform-bump.yml of the release it is LEAVING, and
+    // that file's command line is fixed. The relock has to come from the script
+    // fetched at $NEW_SHA alone.
+    const stubs = relockStubs();
+    const files = tree(OLD, OLD_SHA);
+    files["Gemfile.lock"] += "\nBUNDLED WITH\n  4.0.10\n";
+    const { res, root } = runBlock(files, OLD, NEW, {
+      CMS_PIN_REWRITE_NO_RELOCK: "",
+      PATH_PREFIX: stubs.bin,
+      RELOCK_LOG: stubs.log,
+    });
+    expect(res.status, out(res)).toBe(0);
+    expect(res.stdout).toContain("RELOCKED Gemfile.lock");
+    expect(stubs.calls().map((c) => c.args)).toEqual([
+      "gem install bundler --version 4.0.10 --no-document",
+      "bundle _4.0.10_ lock --update cms-platform-theme --conservative",
+    ]);
+    expect(stubs.calls().every((c) => c.cwd === fs.realpathSync(root))).toBe(true);
+  });
+
   test("a rewrite failure fails the step", () => {
     const files = tree(OLD, OLD_SHA);
     files[".github/workflows/broken.yml"] = "jobs: [unclosed\n";
@@ -742,5 +771,134 @@ esac
     expect(res.status, out(res)).not.toBe(0);
     expect(res.stdout).toMatch(/::error::the pin rewrite could not move every pin/);
     expect(snapshot(root, Object.keys(files))).toEqual(files);
+  });
+});
+
+// Stub `gem` and `bundle` for the relock tests: each call appends
+// `<cwd>\t<GEM_HOME>\t<name> <args>` to $RELOCK_LOG. `bundle` then does what
+// $STUB_BUNDLE says: `resolve` (default) bumps the fixture lock's
+// jekyll-seo-tag 2.9.0 to 2.9.1 the way a real re-resolve would; `fail` exits
+// 7; `drift` moves the platform revision off the commit the rewrite pinned.
+function relockStubs() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-relock-stubs-"));
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  const log = path.join(dir, "calls");
+  const record = (name) => `printf '%s\\t%s\\t%s\\n' "$PWD" "$GEM_HOME" "${name} $*" >> "$RELOCK_LOG"`;
+  fs.writeFileSync(path.join(bin, "gem"), `#!/bin/bash\n${record("gem")}\nexit 0\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "bundle"), `#!/bin/bash
+${record("bundle")}
+case "\${STUB_BUNDLE:-resolve}" in
+  fail) echo "Could not find gem 'jekyll-seo-tag (>= 2.9.1)'" >&2; exit 7 ;;
+  drift) /bin/sed -i 's/^  revision: .*/  revision: ${"4".repeat(40)}/' Gemfile.lock ;;
+  *) /bin/sed -i 's/^    jekyll-seo-tag (2\\.9\\.0)$/    jekyll-seo-tag (2.9.1)/' Gemfile.lock ;;
+esac
+`, { mode: 0o755 });
+  const calls = () =>
+    fs.existsSync(log)
+      ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => {
+        const [cwd, gemHome, args] = l.split("\t");
+        return { cwd, gemHome, args };
+      })
+      : [];
+  return { bin, log, calls };
+}
+
+test.describe("rewrite-platform-pins.js — re-resolves Gemfile.lock after moving the theme pin", () => {
+  // A bump that only rewrites the theme gem's tag/revision text never moves
+  // what the new gemspec requires: jodidaniel.com, which gets jekyll-seo-tag
+  // only through cms-platform-theme, stayed on 2.9.0 while adamdaniel.ai had
+  // 2.9.1. These run the real script against stub `gem`/`bundle`, so they
+  // reach no network; the real Bundler run is proved by hand (see the PR).
+  const BUNDLED = "4.0.10";
+  const lockWithBundler = (pin, sha, bundled = BUNDLED) =>
+    `${gemfileLock(pin, sha)}\nGEM\n  remote: https://rubygems.org/\n  specs:\n    jekyll-seo-tag (2.9.0)\n${
+      bundled ? `\nBUNDLED WITH\n  ${bundled}\n` : ""}`;
+  const relockTree = (bundled) => ({ ...tree(OLD, OLD_SHA), "Gemfile.lock": lockWithBundler(OLD, OLD_SHA, bundled) });
+  const CMD = `bundle _${BUNDLED}_ lock --update cms-platform-theme --conservative`;
+
+  function run(files, env = {}) {
+    const root = materialize(files);
+    const stubs = relockStubs();
+    const r = spawnSync(
+      process.execPath,
+      [REWRITE, "--root", root, "--slug", SLUG, "--from", OLD, "--to", NEW, "--new-sha", NEW_SHA],
+      {
+        encoding: "utf8",
+        env: { ...process.env, CMS_PIN_REWRITE_NO_RELOCK: "", PATH: `${stubs.bin}:${process.env.PATH}`,
+          RELOCK_LOG: stubs.log, ...env },
+      },
+    );
+    return { r, root, calls: stubs.calls() };
+  }
+
+  test("runs the lock's own Bundler, conservatively, in --root, from a throwaway GEM_HOME", () => {
+    const { r, root, calls } = run(relockTree());
+    expect(r.status, out(r)).toBe(0);
+    expect(calls.map((c) => c.args)).toEqual([`gem install bundler --version ${BUNDLED} --no-document`, CMD]);
+    for (const c of calls) {
+      expect(c.cwd).toBe(fs.realpathSync(root));
+      expect(c.gemHome, "a temporary GEM_HOME outside the consumer").toMatch(/cms-pin-relock-/);
+      expect(c.gemHome.startsWith(root)).toBe(false);
+    }
+    expect(fs.existsSync(calls[0].gemHome), "the temporary GEM_HOME is removed afterwards").toBe(false);
+    const lock = fs.readFileSync(path.join(root, "Gemfile.lock"), "utf8");
+    expect(lock, "Bundler's re-resolve is kept").toContain("    jekyll-seo-tag (2.9.1)\n");
+    expect(lock).toContain(`  revision: ${NEW_SHA}\n  tag: ${NEW}\n`);
+    expect(r.stdout).toMatch(/^RELOCKED Gemfile\.lock/m);
+    expect(r.stdout).toMatch(/^SUMMARY: moved 8 pin\(s\)/m);
+  });
+
+  test("a lock with no BUNDLED WITH relocks with whatever `bundle` is on PATH", () => {
+    const { r, calls } = run(relockTree(null));
+    expect(r.status, out(r)).toBe(0);
+    expect(calls.map((c) => c.args)).toEqual(["bundle lock --update cms-platform-theme --conservative"]);
+  });
+
+  test("a relock that fails exits 1, names the command, and restores every file", () => {
+    const files = relockTree();
+    const { r, root } = run(files, { STUB_BUNDLE: "fail" });
+    expect(r.status, out(r)).toBe(1);
+    expect(r.stdout).toContain(`ERROR relock: \`${CMD}\` exited 7 in ${root}`);
+    expect(r.stdout).toContain(`::error::relock: \`${CMD}\` exited 7`);
+    expect(r.stdout).toContain("NOTHING was written");
+    expect(r.stdout).not.toMatch(/^RELOCKED/m);
+    expect(r.stderr, "Bundler's own output reaches the log").toContain("Could not find gem");
+    expect(snapshot(root, Object.keys(files))).toEqual(files);
+  });
+
+  test("a missing `bundle` fails the same way, never silently skipping the relock", () => {
+    const files = relockTree();
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "cms-pin-relock-nobin-"));
+    const { r, root } = run(files, { PATH: empty });
+    expect(r.status, out(r)).toBe(1);
+    expect(r.stdout).toMatch(/ERROR relock: `gem install bundler --version 4\.0\.10 --no-document` could not run in .* \(ENOENT\)/);
+    expect(snapshot(root, Object.keys(files))).toEqual(files);
+  });
+
+  test("a relock that moves the platform pin off the release commit is refused and undone", () => {
+    const files = relockTree();
+    const { r, root } = run(files, { STUB_BUNDLE: "drift" });
+    expect(r.status, out(r)).toBe(1);
+    expect(r.stdout).toContain(`no longer pins tag: ${NEW} at revision ${NEW_SHA}`);
+    expect(snapshot(root, Object.keys(files))).toEqual(files);
+  });
+
+  test("CMS_PIN_REWRITE_NO_RELOCK=1 skips it (tests only), and a tree whose lock did not move never relocks", () => {
+    const skipped = run(relockTree(), { CMS_PIN_REWRITE_NO_RELOCK: "1" });
+    expect(skipped.r.status, out(skipped.r)).toBe(0);
+    expect(skipped.calls).toEqual([]);
+    expect(skipped.r.stdout).not.toMatch(/^RELOCKED/m);
+
+    const noLock = relockTree();
+    delete noLock["Gemfile.lock"];
+    const none = run(noLock);
+    expect(none.r.status, out(none.r)).toBe(0);
+    expect(none.calls).toEqual([]);
+
+    const elsewhere = { ...relockTree(), "Gemfile.lock": lockWithBundler("v0.1.1", OLD_SHA) };
+    const unmoved = run(elsewhere);
+    expect(unmoved.r.status, out(unmoved.r)).toBe(0);
+    expect(unmoved.calls).toEqual([]);
   });
 });

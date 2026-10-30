@@ -7,7 +7,7 @@
 # excerpt. jekyll-seo-tag owns the tag (page.description, else the excerpt,
 # else site.description), so the layout must add none of its own.
 # Run with: ruby theme/spec/seo_meta_description_build_test.rb
-# Needs jekyll 4.4.1 and jekyll-seo-tag 2.9.0 (the ruby-theme-specs lane installs both).
+# Needs jekyll 4.4.1 and jekyll-seo-tag 2.9.1 (the ruby-theme-specs lane installs both).
 
 require 'minitest/autorun'
 require 'fileutils'
