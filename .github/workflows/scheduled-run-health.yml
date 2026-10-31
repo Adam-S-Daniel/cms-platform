@@ -97,6 +97,14 @@ on:
       # someone remembers to flip it, the same "silence reads as health"
       # failure this audit exists to close.
       push_scan:     { type: boolean, default: true }
+      # THE OTHER-EVENT LANE (2026-10-31): failing workflow_dispatch,
+      # workflow_run, repository_dispatch and dynamic runs on the default
+      # branch. Default on, for the same reason as push_scan.
+      other_scan:    { type: boolean, default: true }
+      # The label that queues the tracking issue for the fleet worker, which
+      # turns it into a fix PR (_agent-guidance docs/routines/fleet-worker.md).
+      # Empty turns that off.
+      work_label:    { type: string, default: "agent-ready" }
       # THE STALENESS LANE (#313). Days without a SUCCESS before a scheduled
       # workflow is reported. String for the same reason as window_hours.
       # Default TRUE / on, for the same reason push_scan is: the repos that
@@ -247,6 +255,8 @@ jobs:
           AUDIT_LABEL: ${{ inputs.issue_label }}
           AUDIT_DRY_RUN: ${{ inputs.dry_run }}
           AUDIT_PUSH_SCAN: ${{ inputs.push_scan }}
+          AUDIT_OTHER_SCAN: ${{ inputs.other_scan }}
+          AUDIT_WORK_LABEL: ${{ inputs.work_label }}
           AUDIT_STALE_DAYS: ${{ inputs.stale_days }}
           AUDIT_STALE_SCAN: ${{ inputs.stale_scan }}
         run: |
@@ -262,6 +272,8 @@ jobs:
           args=(--repo "$AUDIT_REPO" --window-hours "$AUDIT_WINDOW_HOURS" --label "$AUDIT_LABEL")
           if [[ "$AUDIT_DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
           if [[ "$AUDIT_PUSH_SCAN" != "true" ]]; then args+=(--no-push-scan); fi
+          if [[ "$AUDIT_OTHER_SCAN" != "true" ]]; then args+=(--no-other-scan); fi
+          if [[ -n "$AUDIT_WORK_LABEL" ]]; then args+=(--work-label "$AUDIT_WORK_LABEL"); fi
           args+=(--stale-days "$AUDIT_STALE_DAYS")
           if [[ "$AUDIT_STALE_SCAN" != "true" ]]; then args+=(--no-stale-scan); fi
           node .cms-platform/scripts/audit-scheduled-runs.js "${args[@]}"
