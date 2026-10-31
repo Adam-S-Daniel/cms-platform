@@ -63,6 +63,16 @@
 # caller is pinned to has been superseded for longer than `behind_days`, so
 # a caller nothing is moving shows up in its OWN audit instead of staying
 # silent. See docs/FLEET-CALLER-CURRENCY.md.
+#
+# A LOCKFILE COPY EXISTS: Adam-S-Daniel/_agent-guidance's
+# .github/workflows/scheduled-run-health-reusable.yml. A reusable is covered
+# by the lockfile of the repo that defines it, and this repo has none (ADR
+# 0024 in _agent-guidance), so fleet repos with an actions.lock call that copy
+# instead. It runs this repo's audit scripts, but the workflow around them is
+# duplicated. Its daily parity check (scripts/check-health-reusable-parity.js
+# there) compares the copy with this file at the latest release and goes red
+# on drift. If you add an input, change the audit or currency step, fetch a
+# new script or change permissions here, make the same change there.
 name: Scheduled-run health audit (reusable)
 
 on:
