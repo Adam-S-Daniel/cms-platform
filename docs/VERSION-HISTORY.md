@@ -10,9 +10,20 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.168)
+## Version history (v0.1.0 → v0.1.169)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.169 — The scheduled-run health audit reports failing dispatch and workflow_run runs, and queues its issues for the fleet worker.**
+The first-parent range since v0.1.168 holds five entries on main before this release PR: two squash commits ([#931](https://github.com/Adam-S-Daniel/cms-platform/pull/931), [#932](https://github.com/Adam-S-Daniel/cms-platform/pull/932)) and three merge commits ([#927](https://github.com/Adam-S-Daniel/cms-platform/pull/927), [#929](https://github.com/Adam-S-Daniel/cms-platform/pull/929), [#930](https://github.com/Adam-S-Daniel/cms-platform/pull/930)).
+
+Health audit. [#932](https://github.com/Adam-S-Daniel/cms-platform/pull/932) makes `scripts/audit-scheduled-runs.js` the fleet's one detector of failing workflow runs. A new lane reports failing `workflow_dispatch`, `workflow_run`, `repository_dispatch` and `dynamic` runs on the default branch, with the same run-id dedupe, runner-starvation suppression and close gate as the push lane (reusable input `other_scan`, default on). `--work-label` (reusable input `work_label`, default `agent-ready`) labels a new tracking issue, and an open one when new findings land on it unless it already carries `agent-ready`, `agent-working`, `agent-blocked` or `on-hold`, so the hourly fleet worker in `_agent-guidance` picks it up. The issue body and each comment end with a "To check" list, one item per failing workflow. Before opening a new issue, the audit drops runs that a tracking issue closed inside the window already reported, so a fix PR that closes the issue does not get the same runs filed again.
+
+Docs. [#931](https://github.com/Adam-S-Daniel/cms-platform/pull/931) points AGENTS.md at ADR 0024 (no `actions.lock` here or in either consumer) and at the lockfile-safe copy of the health reusable in `_agent-guidance`.
+
+Agent tooling. [#929](https://github.com/Adam-S-Daniel/cms-platform/pull/929) and [#930](https://github.com/Adam-S-Daniel/cms-platform/pull/930) deliver the guidance-load-record Stop hook from `_agent-guidance`, and [#927](https://github.com/Adam-S-Daniel/cms-platform/pull/927) re-pins `skills.lock`.
+
+Consumer effect. A consumer's `scheduled-run-health` caller runs the reusable at the release it pins, so adopting v0.1.169 turns on the new lane and the `agent-ready` label for that site. No live consumer verification is claimed in this entry.
 
 **v0.1.168 — The platform owns the jekyll-seo-tag and jekyll-feed versions, and a bump re-resolves the consumer's Gemfile.lock; opt-in featured image alt text.**
 The first-parent range since v0.1.167 holds eleven entries on main before this release PR: five squash commits ([#918](https://github.com/Adam-S-Daniel/cms-platform/pull/918), [#920](https://github.com/Adam-S-Daniel/cms-platform/pull/920), [#921](https://github.com/Adam-S-Daniel/cms-platform/pull/921), [#923](https://github.com/Adam-S-Daniel/cms-platform/pull/923), [#924](https://github.com/Adam-S-Daniel/cms-platform/pull/924)) and six merge commits ([#917](https://github.com/Adam-S-Daniel/cms-platform/pull/917), [#907](https://github.com/Adam-S-Daniel/cms-platform/pull/907), [#919](https://github.com/Adam-S-Daniel/cms-platform/pull/919), [#922](https://github.com/Adam-S-Daniel/cms-platform/pull/922), [#925](https://github.com/Adam-S-Daniel/cms-platform/pull/925), [#928](https://github.com/Adam-S-Daniel/cms-platform/pull/928)).
