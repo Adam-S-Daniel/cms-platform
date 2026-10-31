@@ -78,6 +78,34 @@
  * suppressed count + workflow names are still emitted as a `::notice::`, so a
  * systemic runner outage stays visible instead of becoming invisible.
  *
+ * OTHER DEFAULT-BRANCH RUNS ARE THE SAME BLIND SPOT AGAIN (2026-10-31): a
+ * `workflow_dispatch`, `workflow_run`, `repository_dispatch` or `dynamic` run
+ * on the default branch has no PR either. skills-evals' routine-eval-fire.yml
+ * runs only by dispatch, from a scheduled sweep, so its failures reached no
+ * lane at all. The other-event lane lists those events on the default branch
+ * and reports them in their own section, through the same run-id dedupe,
+ * starvation suppression and close gate as the push lane. It replaced a
+ * separate daily routine that read every workflow's latest run fleet-wide.
+ * `release` is left out on purpose: its runs carry the tag, not a branch.
+ *
+ * THE ISSUE IS ALSO A WORK ITEM (2026-10-31). With `--work-label agent-ready`
+ * the tracking issue carries that label too, so the fleet worker (an hourly
+ * routine in _agent-guidance) turns it into a fix PR. The issue lists one
+ * "To check" item per failing workflow, which is the scope the worker works.
+ * The label is added when the issue is opened, and when new findings land on
+ * an open issue that carries no work-state label yet (`agent-ready`,
+ * `agent-working`, `agent-blocked` or `on-hold`), so an issue already being
+ * worked or held is never re-queued.
+ *
+ * A FIX PR CLOSES THE ISSUE, SO A NEW ISSUE SKIPS WHAT IT REPORTED. A worker
+ * PR that says `Closes #n` closes the tracking issue when it merges, while the
+ * failures it fixed are still inside the scan window. Opening a fresh issue
+ * for them would hand the worker an already-fixed failure. So before opening
+ * one, the audit reads the tracking issues closed inside the window and drops
+ * every run id, dead workflow and stale workflow they already reported. A
+ * workflow that is still broken fails again on its next run, under a new run
+ * id, and is reported then.
+ *
  * EXIT CODE CONTRACT: exit 0 when the audit COMPLETED (even when failures
  * were found — the tracking issue is the alert channel); non-zero only when
  * the audit itself could not do its job (API/permission failure). A red
@@ -88,7 +116,8 @@
  * Usage:
  *   node scripts/audit-scheduled-runs.js [--repo owner/name] \
  *     [--window-hours 48] [--label ci] [--dry-run] [--no-push-scan]
- *     [--stale-days 14] [--no-stale-scan]
+ *     [--stale-days 14] [--no-stale-scan] [--no-other-scan]
+ *     [--work-label agent-ready]
  *
  * Requires a gh-authenticated environment (GH_TOKEN or gh auth) with
  * actions: read (list runs) + issues: write (open/comment/close).
@@ -141,6 +170,12 @@ const BAD_CONCLUSIONS = ["failure", "startup_failure", "timed_out"];
 // a day); every run id is still recorded in the hidden run-ids block, so the
 // dedupe stays exact even for capped-away runs.
 const MAX_LINKS_PER_WORKFLOW = 5;
+// The non-PR events whose default-branch runs the other-event lane scans
+// (see the file header). `push` and `schedule` have lanes of their own.
+const OTHER_DEFAULT_BRANCH_EVENTS = ["workflow_dispatch", "workflow_run", "repository_dispatch", "dynamic"];
+// Labels that mean the fleet worker has taken the issue, or must not. The
+// work label is only added to an issue that carries none of them.
+const WORK_STATE_LABELS = ["agent-ready", "agent-working", "agent-blocked", "on-hold"];
 // Workflow `state` values that mean "this cron cannot fire any more".
 // `deleted` and `disabled_fork` are deliberate EXCLUSIONS: a deleted workflow
 // was removed on purpose (its file is gone) and disabled_fork is a fork-only
@@ -249,7 +284,8 @@ function sinceIso(nowMs, windowHours) {
 // though the API query already narrows by event — defense in depth against a
 // query param being dropped.
 function isAlertRun(run, event = "schedule") {
-  return !!run && run.event === event && BAD_CONCLUSIONS.includes(run.conclusion);
+  const events = Array.isArray(event) ? event : [event];
+  return !!run && events.includes(run.event) && BAD_CONCLUSIONS.includes(run.conclusion);
 }
 
 function filterAlertRuns(runs, since, event = "schedule") {
@@ -685,7 +721,7 @@ function renderFindings(runs, noun = "scheduled run") {
 // push-only) report does not claim findings it never saw. `pushRuns` defaults
 // to `[]` and `defaultBranch` is only read when a push section is actually
 // rendered, so every existing call site stays byte-identical.
-function renderSections(runs, dead, pushRuns, defaultBranch, stale) {
+function renderSections(runs, dead, pushRuns, defaultBranch, stale, otherRuns) {
   const out = [];
   if ((runs || []).length > 0) {
     out.push(
@@ -702,6 +738,16 @@ function renderSections(runs, dead, pushRuns, defaultBranch, stale) {
         `\`${BAD_CONCLUSIONS.join("` / `")}\`):`,
       "",
       renderFindings(pushRuns, "default-branch push run"),
+    );
+  }
+  if ((otherRuns || []).length > 0) {
+    if (out.length > 0) out.push("");
+    out.push(
+      `**Failing default-branch runs of other events** (` +
+        `\`${OTHER_DEFAULT_BRANCH_EVENTS.join("` / `")}\` on \`${defaultBranch}\` ending in ` +
+        `\`${BAD_CONCLUSIONS.join("` / `")}\`):`,
+      "",
+      renderFindings(otherRuns, "default-branch run"),
     );
   }
   if ((dead || []).length > 0) {
@@ -730,11 +776,48 @@ function renderSections(runs, dead, pushRuns, defaultBranch, stale) {
   return out;
 }
 
-function buildIssueBody({ repo, windowHours, runs, dead, pushRuns, defaultBranch, stale, nowIso }) {
+// The work list the fleet worker takes as its scope: one item per workflow
+// with a finding, failing-run workflows first (newest breakage on top), then
+// dead, then stale ones. A workflow in several lanes is listed once.
+function renderToCheck(runs, dead, pushRuns, stale, otherRuns) {
+  const items = [];
+  const seen = new Set();
+  const add = (key, text) => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(`- [ ] ${text}`);
+  };
+  const failing = [...(runs || []), ...(pushRuns || []), ...(otherRuns || [])];
+  for (const [name] of groupByWorkflow(failing)) {
+    add(name, `\`${name}\`: find the root cause of its failing runs above and fix it.`);
+  }
+  for (const wf of dead || []) {
+    const name = workflowKey(wf);
+    add(name, `\`${name}\`: it can no longer fire (\`${wf.state}\`); re-enable it, or remove it if it is no longer wanted.`);
+  }
+  for (const wf of stale || []) {
+    const name = workflowKey(wf);
+    add(name, `\`${name}\`: find why it no longer succeeds and fix it.`);
+  }
+  return items;
+}
+
+function buildIssueBody({
+  repo,
+  windowHours,
+  runs,
+  dead,
+  pushRuns,
+  defaultBranch,
+  stale,
+  otherRuns,
+  nowIso,
+}) {
   const deadList = dead || [];
   const pushList = pushRuns || [];
   const staleList = stale || [];
-  const lines = [MARKER, hiddenRunIdsBlock([...(runs || []), ...pushList])];
+  const otherList = otherRuns || [];
+  const lines = [MARKER, hiddenRunIdsBlock([...(runs || []), ...pushList, ...otherList])];
   if (deadList.length > 0) lines.push(hiddenDeadWorkflowsBlock(deadList));
   if (staleList.length > 0) lines.push(hiddenStaleWorkflowsBlock(staleList));
   lines.push(
@@ -742,39 +825,50 @@ function buildIssueBody({ repo, windowHours, runs, dead, pushRuns, defaultBranch
     "The daily **scheduled-run health audit** found workflow runs needing",
     `attention on \`${repo}\` (last ${windowHours}h, scanned at ${nowIso}).`,
     "",
-    "Neither a scheduled run nor a default-branch push run has a PR to go red",
-    "on — this issue is the alert.",
+    "Neither a scheduled run nor a default-branch run has a PR to go red on —",
+    "this issue is the alert.",
     "",
-    ...renderSections(runs, deadList, pushList, defaultBranch, staleList),
+    ...renderSections(runs, deadList, pushList, defaultBranch, staleList, otherList),
     "",
-    "**What to do:** open the links, fix the root cause, and leave this issue",
-    "open — the audit comments any NEW findings here (never a new issue) and",
-    `closes it automatically once a full ${windowHours}h window passes clean.`,
+    "## To check",
+    "",
+    ...renderToCheck(runs, deadList, pushList, staleList, otherList),
+    "",
+    "**What to do:** open the links and fix the root cause. When this issue is",
+    "labeled `agent-ready`, the fleet worker turns it into a fix PR. The audit",
+    "comments any NEW findings here while the issue is open, and closes it",
+    `once a full ${windowHours}h window passes clean. A fix PR may close it`,
+    "sooner; failures that come back are filed in a new issue.",
     "",
     "_Filed automatically by the `scheduled-run-health` workflow (cms-platform)._",
   );
   return lines.join("\n");
 }
 
-function buildComment({ windowHours, runs, dead, pushRuns, defaultBranch, stale, nowIso }) {
+function buildComment({ windowHours, runs, dead, pushRuns, defaultBranch, stale, otherRuns, nowIso }) {
   const deadList = dead || [];
   const pushList = pushRuns || [];
   const staleList = stale || [];
-  const lines = [hiddenRunIdsBlock([...(runs || []), ...pushList])];
+  const otherList = otherRuns || [];
+  const lines = [hiddenRunIdsBlock([...(runs || []), ...pushList, ...otherList])];
   if (deadList.length > 0) lines.push(hiddenDeadWorkflowsBlock(deadList));
   if (staleList.length > 0) lines.push(hiddenStaleWorkflowsBlock(staleList));
   lines.push(
     "",
     `New findings in the last ${windowHours}h (scanned at ${nowIso}):`,
     "",
-    ...renderSections(runs, deadList, pushList, defaultBranch, staleList),
+    ...renderSections(runs, deadList, pushList, defaultBranch, staleList, otherList),
+    "",
+    "## To check",
+    "",
+    ...renderToCheck(runs, deadList, pushList, staleList, otherList),
   );
   return lines.join("\n");
 }
 
 function buildCloseComment({ windowHours, nowIso }) {
   return (
-    `No failing scheduled runs, no failing default-branch push runs, no ` +
+    `No failing scheduled runs, no failing default-branch runs, no ` +
     `disabled scheduled workflows, and no scheduled workflow without a recent ` +
     `success in the last ${windowHours}h (scanned at ${nowIso}) — closing. The ` +
     "audit will reopen a fresh tracking issue if any returns."
@@ -886,6 +980,23 @@ function listPushRuns(repo, defaultBranch, since) {
   return listRunsForEvent(repo, "push", since, `&branch=${encodeURIComponent(defaultBranch)}`);
 }
 
+// Default-branch runs of every event in OTHER_DEFAULT_BRANCH_EVENTS created
+// since `since`, one listing per event (a branch-only listing would also
+// return every scheduled run and hit the 1,000-result cap on a busy repo).
+// `truncated` is TRUE when ANY event's listing was truncated.
+function listOtherDefaultBranchRuns(repo, defaultBranch, since, listFn = listRunsForEvent) {
+  const runs = [];
+  let truncated = false;
+  let totalCount = 0;
+  for (const event of OTHER_DEFAULT_BRANCH_EVENTS) {
+    const listing = listFn(repo, event, since, `&branch=${encodeURIComponent(defaultBranch)}`);
+    runs.push(...listing.runs);
+    totalCount += Number(listing.totalCount) || 0;
+    truncated = truncated || listing.truncated;
+  }
+  return { runs, totalCount, truncated };
+}
+
 // One page of a run's jobs. EXPLICITLY paginated like every other list call
 // here: a bare /jobs returns 30, so a big matrix would have the starvation
 // predicate evaluated on a PARTIAL job set — silently wrong. Exported so the
@@ -968,6 +1079,30 @@ function findTrackingIssue(repo, label) {
   );
 }
 
+// Tracking issues CLOSED (by the audit's clean window or by a fix PR) and
+// updated since `since` — the ones whose findings a NEW issue must not
+// repeat (see the file header). `since` filters on updated_at, which a close
+// always bumps.
+function findRecentlyClosedTrackingIssues(repo, label, since) {
+  const res = JSON.parse(
+    ghApi(
+      `repos/${repo}/issues?state=closed&labels=${encodeURIComponent(label)}` +
+        `&since=${encodeURIComponent(since)}&per_page=100`,
+    ),
+  );
+  return (Array.isArray(res) ? res : []).filter(
+    (i) => !i.pull_request && typeof i.body === "string" && i.body.includes(MARKER),
+  );
+}
+
+// Whether to queue `issue` for the fleet worker: a work label is set and the
+// issue carries none of WORK_STATE_LABELS (nor the work label itself).
+function needsWorkLabel(issue, workLabel) {
+  if (!workLabel) return false;
+  const names = ((issue && issue.labels) || []).map((l) => (typeof l === "string" ? l : l && l.name));
+  return !names.some((n) => n === workLabel || WORK_STATE_LABELS.includes(n));
+}
+
 function listIssueComments(repo, number) {
   const comments = [];
   for (let page = 1; page <= 10; page++) {
@@ -983,14 +1118,15 @@ function listIssueComments(repo, number) {
 // Best-effort: POST the label so issue creation can attach it. 422 (already
 // exists) is the normal case after day one — swallow every failure; the issue
 // POST auto-creates missing labels anyway when the token has push access.
-function ensureLabel(repo, label) {
+function ensureLabel(
+  repo,
+  label,
+  description = "Automated CI health tracking (scheduled-run health audit)",
+  color = "d93f0b",
+) {
   try {
     ghApi(`repos/${repo}/labels`, {
-      fields: [
-        `name=${label}`,
-        "color=d93f0b",
-        "description=Automated CI health tracking (scheduled-run health audit)",
-      ],
+      fields: [`name=${label}`, `color=${color}`, `description=${description}`],
     });
   } catch {
     /* already exists / races are fine */
@@ -1014,6 +1150,9 @@ function main() {
     return 2;
   }
   const label = arg("label", "ci");
+  // Empty = do not queue the issue for the fleet worker (the CLI default, so a
+  // hand run never labels anything); the reusable passes `agent-ready`.
+  const workLabel = arg("work-label", "");
   const dryRun = flag("dry-run");
   // Opt-out only — the reusable's `push_scan` input defaults to TRUE (see its
   // header), so the CLI's default is "scan". A deliberate opt-out is not an
@@ -1023,6 +1162,8 @@ function main() {
   // Same opt-out-only shape as the push lane, and the same reasoning: an
   // opt-in-off default would leave exactly the repos that need this uncovered.
   const staleScanDisabled = flag("no-stale-scan");
+  // Same opt-out-only shape as the push lane.
+  const otherScanDisabled = flag("no-other-scan");
   const staleDays = Number.parseInt(arg("stale-days", String(DEFAULT_STALE_DAYS)), 10);
   if (!Number.isInteger(staleDays) || staleDays <= 0) {
     console.error(
@@ -1047,7 +1188,8 @@ function main() {
   // never as "no push runs to report".
   let defaultBranch = null;
 
-  let failures, starved, pushFailures, pushStarved, issue;
+  let failures, starved, pushFailures, pushStarved, otherFailures, otherStarved, issue;
+  let otherListingTruncated = false;
   let scheduledRuns = [];
   let stale = [];
   let staleProbeFailed = false;
@@ -1103,6 +1245,23 @@ function main() {
       pushFailures = [];
       pushStarved = [];
     }
+    if (!otherScanDisabled && defaultBranch) {
+      const otherListing = listOtherDefaultBranchRuns(repo, defaultBranch, since);
+      otherListingTruncated = otherListing.truncated;
+      if (otherListingTruncated) {
+        console.error(
+          `::error title=Scheduled-run health::${repo} other-event run listing on ` +
+            `\`${defaultBranch}\` is TRUNCATED. Treating the result as UNKNOWN, not as healthy.`,
+        );
+      }
+      const otherCandidates = filterAlertRuns(otherListing.runs, since, OTHER_DEFAULT_BRANCH_EVENTS);
+      const otherSplit = partitionStarvedRuns(otherCandidates, (r) => listRunJobs(repo, r.id));
+      otherFailures = otherSplit.alertable;
+      otherStarved = otherSplit.suppressed;
+    } else {
+      otherFailures = [];
+      otherStarved = [];
+    }
 
     issue = findTrackingIssue(repo, label);
   } catch (e) {
@@ -1114,6 +1273,7 @@ function main() {
   // A deliberate `--no-push-scan` is the one exception: skipped ON PURPOSE
   // is not "could not tell".
   const pushProbeFailed = !pushScanDisabled && (metaProbeFailed || !defaultBranch);
+  const otherProbeFailed = !otherScanDisabled && (metaProbeFailed || !defaultBranch);
 
   // Dead cron-bearing workflows — the runs query cannot see these (they emit
   // nothing). Reuses the SAME repo-metadata read above (no extra API call);
@@ -1187,9 +1347,11 @@ function main() {
     code === 0 &&
     (deadProbeFailed ||
       pushProbeFailed ||
+      otherProbeFailed ||
       staleProbeFailed ||
       scheduleListingTruncated ||
-      pushListingTruncated)
+      pushListingTruncated ||
+      otherListingTruncated)
       ? 1
       : code;
 
@@ -1206,6 +1368,13 @@ function main() {
     const workflows = [...new Set(pushStarved.map(workflowKey))].join(", ");
     console.log(
       `::notice title=Scheduled-run health::Suppressed ${pushStarved.length} push run(s) that never got a runner (cancelled before assignment): ${workflows}.`,
+    );
+  }
+
+  if (otherStarved.length > 0) {
+    const workflows = [...new Set(otherStarved.map(workflowKey))].join(", ");
+    console.log(
+      `::notice title=Scheduled-run health::Suppressed ${otherStarved.length} default-branch run(s) that never got a runner (cancelled before assignment): ${workflows}.`,
     );
   }
 
@@ -1229,6 +1398,7 @@ function main() {
 
   const summary =
     `${failures.length} failing scheduled run(s) + ${pushFailures.length} failing push run(s) ` +
+    `+ ${otherFailures.length} failing other default-branch run(s) ` +
     `in the last ${windowHours}h on ${repo}` +
     (dead.length > 0 ? ` + ${dead.length} disabled scheduled workflow(s)` : "") +
     (stale.length > 0 ? ` + ${stale.length} workflow(s) with no recent success` : "");
@@ -1237,6 +1407,7 @@ function main() {
     failures.length === 0 &&
     dead.length === 0 &&
     pushFailures.length === 0 &&
+    otherFailures.length === 0 &&
     stale.length === 0
   ) {
     // NEVER close on an unknown answer — that is the #258 bug exactly: the
@@ -1246,9 +1417,11 @@ function main() {
       issue &&
       (deadProbeFailed ||
         pushProbeFailed ||
+        otherProbeFailed ||
         staleProbeFailed ||
         scheduleListingTruncated ||
-        pushListingTruncated)
+        pushListingTruncated ||
+        otherListingTruncated)
     ) {
       const unknownParts = [];
       if (deadProbeFailed) unknownParts.push("the dead-workflow check");
@@ -1256,6 +1429,8 @@ function main() {
       if (staleProbeFailed) unknownParts.push("the no-recent-success check");
       if (scheduleListingTruncated) unknownParts.push("the schedule-run listing (truncated)");
       if (pushListingTruncated) unknownParts.push("the push-run listing (truncated)");
+      if (otherProbeFailed) unknownParts.push("the other default-branch run check");
+      if (otherListingTruncated) unknownParts.push("the other default-branch run listing (truncated)");
       console.log(
         `::notice title=Scheduled-run health::Leaving tracking issue #${issue.number} OPEN — ` +
           `no failing runs, but ${unknownParts.join(" and ")} did not complete, so a clean ` +
@@ -1282,15 +1457,50 @@ function main() {
         }
       }
     }
-    console.log(`OK — ${summary}. All scheduled and push workflows healthy.`);
+    console.log(`OK — ${summary}. All scheduled and default-branch workflows healthy.`);
     return done(0);
   }
 
   // Findings: the ISSUE is the alert; this run stays green once it is filed.
   if (!issue) {
+    // Drop what a tracking issue closed inside the window already reported
+    // (see the file header): a fix PR closes the issue while the runs it
+    // fixed are still in the window.
+    let closedRuns, closedDead, closedStale;
+    try {
+      const texts = [];
+      for (const closed of findRecentlyClosedTrackingIssues(repo, label, since)) {
+        texts.push(closed.body, ...listIssueComments(repo, closed.number).map((c) => c.body));
+      }
+      closedRuns = extractReportedRunIds(texts);
+      closedDead = extractReportedDeadWorkflows(texts);
+      closedStale = extractReportedStaleWorkflows(texts);
+    } catch (e) {
+      console.error(`audit-scheduled-runs: failed to read recently closed tracking issues: ${e.message}`);
+      return 1;
+    }
+    failures = failures.filter((r) => !closedRuns.has(String(r.id)));
+    pushFailures = pushFailures.filter((r) => !closedRuns.has(String(r.id)));
+    otherFailures = otherFailures.filter((r) => !closedRuns.has(String(r.id)));
+    dead = dead.filter((w) => !closedDead.has(workflowKey(w)));
+    stale = stale.filter((w) => !closedStale.has(workflowKey(w)));
+    if (
+      failures.length === 0 &&
+      dead.length === 0 &&
+      pushFailures.length === 0 &&
+      otherFailures.length === 0 &&
+      stale.length === 0
+    ) {
+      console.log(
+        `OK — ${summary}; all already reported on a tracking issue closed in the last ` +
+          `${windowHours}h. Nothing new.`,
+      );
+      return done(0);
+    }
     console.log(`::notice title=Scheduled-run health::${summary} — opening the tracking issue.`);
     if (!dryRun) {
       ensureLabel(repo, label);
+      if (workLabel) ensureLabel(repo, workLabel, "Ready for the fleet worker to pick up", "0e8a16");
       try {
         const created = JSON.parse(
           ghApi(`repos/${repo}/issues`, {
@@ -1304,9 +1514,11 @@ function main() {
                 pushRuns: pushFailures,
                 defaultBranch,
                 stale,
+                otherRuns: otherFailures,
                 nowIso,
               })}`,
               `labels[]=${label}`,
+              ...(workLabel ? [`labels[]=${workLabel}`] : []),
             ],
           }),
         );
@@ -1317,8 +1529,8 @@ function main() {
       }
     } else {
       console.log(
-        `(dry-run) would open "${ISSUE_TITLE}" [${label}] with:\n` +
-          renderSections(failures, dead, pushFailures, defaultBranch, stale).join("\n"),
+        `(dry-run) would open "${ISSUE_TITLE}" [${label}${workLabel ? `, ${workLabel}` : ""}] with:\n` +
+          renderSections(failures, dead, pushFailures, defaultBranch, stale, otherFailures).join("\n"),
       );
     }
     console.log(`ALERT FILED — ${summary}.`);
@@ -1340,6 +1552,7 @@ function main() {
   // second hidden channel — see hiddenRunIdsBlock).
   const fresh = failures.filter((r) => !reported.has(String(r.id)));
   const freshPush = pushFailures.filter((r) => !reported.has(String(r.id)));
+  const freshOther = otherFailures.filter((r) => !reported.has(String(r.id)));
   // A dead workflow stays dead for as long as nobody re-enables it, so it is
   // reported ONCE per tracking issue — re-comment it daily and the alert
   // becomes the noise it exists to cut through.
@@ -1352,6 +1565,7 @@ function main() {
     fresh.length === 0 &&
     freshDead.length === 0 &&
     freshPush.length === 0 &&
+    freshOther.length === 0 &&
     freshStale.length === 0
   ) {
     console.log(
@@ -1359,7 +1573,8 @@ function main() {
     );
     return done(0);
   }
-  const newCount = fresh.length + freshDead.length + freshPush.length + freshStale.length;
+  const newCount =
+    fresh.length + freshDead.length + freshPush.length + freshOther.length + freshStale.length;
   console.log(
     `::notice title=Scheduled-run health::${summary} — ${newCount} new; ` +
       `commenting on issue #${issue.number}.`,
@@ -1375,17 +1590,24 @@ function main() {
             pushRuns: freshPush,
             defaultBranch,
             stale: freshStale,
+            otherRuns: freshOther,
             nowIso,
           })}`,
         ],
       });
+      // Queue it for the fleet worker unless it is already queued, being
+      // worked, blocked or held (see the file header).
+      if (needsWorkLabel(issue, workLabel)) {
+        ensureLabel(repo, workLabel, "Ready for the fleet worker to pick up", "0e8a16");
+        ghApi(`repos/${repo}/issues/${issue.number}/labels`, { fields: [`labels[]=${workLabel}`] });
+      }
     } catch (e) {
       console.error(`audit-scheduled-runs: failed to comment on issue #${issue.number}: ${e.message}`);
       return 1;
     }
   } else {
     console.log(
-      `(dry-run) would comment:\n${renderSections(fresh, freshDead, freshPush, defaultBranch, freshStale).join("\n")}`,
+      `(dry-run) would comment:\n${renderSections(fresh, freshDead, freshPush, defaultBranch, freshStale, freshOther).join("\n")}`,
     );
   }
   console.log(
@@ -1402,6 +1624,8 @@ module.exports = {
   MARKER,
   ISSUE_TITLE,
   BAD_CONCLUSIONS,
+  OTHER_DEFAULT_BRANCH_EVENTS,
+  WORK_STATE_LABELS,
   MAX_LINKS_PER_WORKFLOW,
   DEAD_WORKFLOW_STATES,
   SELF_EVIDENCING_CRON_STATES,
@@ -1430,6 +1654,10 @@ module.exports = {
   listRunsForEvent,
   listScheduledRuns,
   listPushRuns,
+  listOtherDefaultBranchRuns,
+  findRecentlyClosedTrackingIssues,
+  needsWorkLabel,
+  renderToCheck,
   pageThroughListing,
   isListingTruncated,
   hiddenDeadWorkflowsBlock,

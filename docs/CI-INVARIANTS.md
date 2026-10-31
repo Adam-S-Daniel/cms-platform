@@ -291,6 +291,22 @@ layer:
   sparse-checked-out by the reusable, which passes
   `--repo ${{ github.repository }}` explicitly (no git repo in the workspace
   — the editorial-label-audit v0.1.16 trap).
+- **The fleet's one detector, and a work queue (2026-10-31).** A third lane
+  (`other_scan`, default on) scans default-branch runs of `workflow_dispatch`,
+  `workflow_run`, `repository_dispatch` and `dynamic`: skills-evals'
+  dispatch-only `routine-eval-fire.yml` failed where no lane looked. The
+  reusable's `work_label` input (default `agent-ready`) labels the tracking
+  issue for the fleet worker, an hourly routine in `_agent-guidance`
+  (`docs/routines/fleet-worker.md`) that turns `agent-ready` issues into fix
+  PRs. It is added when the issue opens, and when new findings land on an open
+  issue that carries no `agent-ready`, `agent-working`, `agent-blocked` or
+  `on-hold` label. The body and each comment end in a `## To check` list, one
+  item per workflow, which is the scope the worker works. A fix PR that says
+  `Closes #n` closes the issue while its runs are still in the window, so
+  before opening a new issue the audit drops whatever a tracking issue closed
+  inside the window already reported. This replaced a separate daily routine
+  that read every workflow's latest run fleet-wide and opened fix PRs itself;
+  detection now lives in one place and every fix goes through an issue.
 - **Why 48h for a daily audit:** GitHub throttles crons on these repos
   (measured: `*/5` fires every 45-90 min; daily crons run 4-5h late), so two
   consecutive daily audit runs can be ~29h apart — a 24-25h window would

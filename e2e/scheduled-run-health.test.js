@@ -970,14 +970,21 @@ function closeCalls(log) {
   return callsOf(log).filter((argv) => argv.includes("PATCH") && argv.includes("state=closed"));
 }
 
-function runAudit(stubDir, { spawnGh = false } = {}) {
+function runAudit(stubDir, { spawnGh = false, args = [] } = {}) {
   const preload = spawnGh ? [] : ["--require", path.join(stubDir, "preload.cjs")];
-  const res = spawnSync(process.execPath, [...preload, SCRIPT_PATH, "--repo", "o/r"], {
+  const res = spawnSync(process.execPath, [...preload, SCRIPT_PATH, "--repo", "o/r", ...args], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${stubDir}${path.delimiter}${process.env.PATH}` },
   });
   return { code: res.status, out: `${res.stdout || ""}${res.stderr || ""}` };
 }
+
+// The other-event lane (workflow_dispatch / workflow_run / repository_dispatch
+// / dynamic on the default branch) answers empty in every lifecycle test that
+// is about another lane.
+const EMPTY_OTHER_EVENT_ROUTES = ["workflow_dispatch", "workflow_run", "repository_dispatch", "dynamic"].map(
+  (event) => ["has", `actions/runs?event=${event}`, JSON.stringify({ workflow_runs: [], total_count: 0 })],
+);
 
 const DEAD_WORKFLOW = {
   id: 99,
@@ -1009,6 +1016,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       // Push lane (#279): zero failing push runs, so it stays out of this
       // dead-workflow-specific test's assertions.
       ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [] })],
+      ...EMPTY_OTHER_EVENT_ROUTES,
       [
         "has",
         "issues?state=open&labels=",
@@ -1047,6 +1055,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       // Push lane (#279): zero failing push runs, so it stays out of this
       // dead-workflow-specific test's assertions.
       ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [] })],
+      ...EMPTY_OTHER_EVENT_ROUTES,
       [
         "has",
         "issues?state=open&labels=",
@@ -1141,6 +1150,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
     const { dir, log } = ghStubDir([
       ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
       ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [PUSH_RUN] })],
+      ...EMPTY_OTHER_EVENT_ROUTES,
       ["has", "actions/runs/601/jobs", JSON.stringify({ jobs: [job()] })],
       ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
       [
@@ -1175,6 +1185,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
     const { dir, log } = ghStubDir([
       ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
       ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [] })],
+      ...EMPTY_OTHER_EVENT_ROUTES,
       ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
       [
         "has",
@@ -1235,6 +1246,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
     const { dir, log } = ghStubDir([
       ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [] })],
       ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [PUSH_RUN] })],
+      ...EMPTY_OTHER_EVENT_ROUTES,
       ["has", "actions/runs/601/jobs", JSON.stringify({ jobs: [job()] })],
       ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
       [
@@ -1281,6 +1293,7 @@ test.describe("audit-scheduled-runs.js — main() lifecycle (#258 regression)", 
       // Push lane stays genuinely clean (total_count 0, 0 collected) so this
       // test isolates the schedule-lane truncation, not a second one.
       ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [], total_count: 0 })],
+      ...EMPTY_OTHER_EVENT_ROUTES,
       ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
       [
         "has",
@@ -1584,5 +1597,232 @@ test.describe("audit-scheduled-runs.js — no-recent-success lane (#313)", () =>
     expect(r.probeFailed).toBe(false);
     expect(r.stale).toHaveLength(1);
     expect(r.stale[0].reason).toMatch(/last succeeded 1 day\(s\) ago/);
+  });
+});
+
+// ── The audit as the fleet's one detector (2026-10-31) ──────────────────────
+// It replaced a daily routine that read every workflow's latest run in every
+// repo and opened fix PRs itself. These lock the three things that took over
+// that routine's job: the other-event lane, the work label that queues the
+// issue for the fleet worker, and the closed-issue dedupe that keeps a merged
+// fix from being re-filed as new work.
+test.describe("audit-scheduled-runs.js — detection that feeds the fleet worker", () => {
+  const recent = () => new Date(Date.now() - 3600_000).toISOString();
+  const DISPATCH_RUN = () =>
+    run({
+      id: 701,
+      event: "workflow_dispatch",
+      path: ".github/workflows/routine-eval-fire.yml",
+      conclusion: "failure",
+      html_url: "https://github.com/o/r/actions/runs/701",
+      run_started_at: recent(),
+      created_at: recent(),
+    });
+  const routesWith = (dispatchRuns, issueRoutes) => [
+    ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [], total_count: 0 })],
+    ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [], total_count: 0 })],
+    [
+      "has",
+      "actions/runs?event=workflow_dispatch",
+      JSON.stringify({ workflow_runs: dispatchRuns, total_count: dispatchRuns.length }),
+    ],
+    ...EMPTY_OTHER_EVENT_ROUTES,
+    ["has", "actions/runs/701/jobs", JSON.stringify({ jobs: [job()] })],
+    ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
+    ...issueRoutes,
+    ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
+  ];
+  const posted = (log, endpoint) =>
+    callsOf(log).filter((argv) => argv[1] === endpoint && !argv.includes("GET"));
+
+  test("isAlertRun takes a list of events for the other-event lane", () => {
+    const { isAlertRun, filterAlertRuns, OTHER_DEFAULT_BRANCH_EVENTS } = loadScript();
+    expect(OTHER_DEFAULT_BRANCH_EVENTS).toEqual([
+      "workflow_dispatch",
+      "workflow_run",
+      "repository_dispatch",
+      "dynamic",
+    ]);
+    expect(isAlertRun(run({ event: "workflow_dispatch" }), OTHER_DEFAULT_BRANCH_EVENTS)).toBe(true);
+    expect(isAlertRun(run({ event: "push" }), OTHER_DEFAULT_BRANCH_EVENTS)).toBe(false);
+    expect(isAlertRun(run({ event: "pull_request" }), OTHER_DEFAULT_BRANCH_EVENTS)).toBe(false);
+    expect(isAlertRun(run({ event: "schedule" }))).toBe(true);
+    expect(
+      filterAlertRuns([run({ event: "dynamic" }), run({ event: "release" })], "", OTHER_DEFAULT_BRANCH_EVENTS),
+    ).toHaveLength(1);
+  });
+
+  test("the other-event listing asks for each event on the default branch and ORs truncation", () => {
+    const { listOtherDefaultBranchRuns } = loadScript();
+    const calls = [];
+    const res = listOtherDefaultBranchRuns("o/r", "main", "2026-10-30T00:00:00Z", (repo, event, since, extra) => {
+      calls.push([event, extra]);
+      return { runs: [run({ event })], totalCount: 1, truncated: event === "dynamic" };
+    });
+    expect(calls).toEqual([
+      ["workflow_dispatch", "&branch=main"],
+      ["workflow_run", "&branch=main"],
+      ["repository_dispatch", "&branch=main"],
+      ["dynamic", "&branch=main"],
+    ]);
+    expect(res.runs).toHaveLength(4);
+    expect(res.truncated).toBe(true);
+  });
+
+  test("the To check list has one item per workflow, across every lane", () => {
+    const { renderToCheck } = loadScript();
+    const items = renderToCheck(
+      [run({ id: 1, path: ".github/workflows/a.yml" }), run({ id: 2, path: ".github/workflows/a.yml" })],
+      [{ path: ".github/workflows/d.yml", state: "disabled_inactivity" }],
+      [run({ id: 3, event: "push", path: ".github/workflows/a.yml" })],
+      [{ path: ".github/workflows/s.yml", reason: "no successful run" }],
+      [run({ id: 4, event: "workflow_dispatch", path: ".github/workflows/o.yml" })],
+    );
+    expect(items).toHaveLength(4);
+    expect(items.every((i) => i.startsWith("- [ ] `"))).toBe(true);
+    expect(items.join("\n")).toMatch(/a\.yml.*\n.*o\.yml|o\.yml.*\n.*a\.yml/);
+    expect(items.join("\n")).toContain("`d.yml`: it can no longer fire (`disabled_inactivity`)");
+    expect(items.join("\n")).toContain("`s.yml`: find why it no longer succeeds");
+  });
+
+  test("needsWorkLabel queues only an issue nothing has claimed or held", () => {
+    const { needsWorkLabel } = loadScript();
+    const issue = (...names) => ({ labels: names.map((name) => ({ name })) });
+    expect(needsWorkLabel(issue("ci"), "agent-ready")).toBe(true);
+    for (const held of ["agent-ready", "agent-working", "agent-blocked", "on-hold"]) {
+      expect(needsWorkLabel(issue("ci", held), "agent-ready"), held).toBe(false);
+    }
+    expect(needsWorkLabel(issue("ci"), "")).toBe(false);
+  });
+
+  test("a failing dispatch run on the default branch opens the issue, labeled for the worker, with To check", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir(
+      routesWith(
+        [DISPATCH_RUN()],
+        [
+          ["has", "issues?state=open&labels=", "[]"],
+          ["has", "issues?state=closed&labels=", "[]"],
+          ["eq", "repos/o/r/labels", "{}"],
+          ["eq", "repos/o/r/issues", JSON.stringify({ number: 9, html_url: "https://github.com/o/r/issues/9" })],
+        ],
+      ),
+    );
+    const { code, out } = runAudit(dir, { args: ["--work-label", "agent-ready"] });
+    expect(code, out).toBe(0);
+    const opened = posted(log, "repos/o/r/issues");
+    expect(opened, out).toHaveLength(1);
+    const argv = opened[0];
+    expect(argv).toContain("labels[]=ci");
+    expect(argv).toContain("labels[]=agent-ready");
+    const body = argv.find((a) => a.startsWith("body="));
+    expect(body).toContain(MARKER);
+    expect(body).toContain("Failing default-branch runs of other events");
+    expect(body).toContain("## To check");
+    expect(body).toContain("- [ ] `routine-eval-fire.yml`");
+    expect(body).toContain("<!-- run-ids: 701 -->");
+  });
+
+  test("without --work-label the opened issue carries only the audit label", () => {
+    const { dir, log } = ghStubDir(
+      routesWith(
+        [DISPATCH_RUN()],
+        [
+          ["has", "issues?state=open&labels=", "[]"],
+          ["has", "issues?state=closed&labels=", "[]"],
+          ["eq", "repos/o/r/labels", "{}"],
+          ["eq", "repos/o/r/issues", JSON.stringify({ number: 9, html_url: "x" })],
+        ],
+      ),
+    );
+    const { code, out } = runAudit(dir);
+    expect(code, out).toBe(0);
+    const argv = posted(log, "repos/o/r/issues")[0];
+    expect(argv.filter((a) => a.startsWith("labels[]="))).toEqual(["labels[]=ci"]);
+  });
+
+  test("runs a recently CLOSED tracking issue reported are not filed again", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir(
+      routesWith(
+        [DISPATCH_RUN()],
+        [
+          ["has", "issues?state=open&labels=", "[]"],
+          [
+            "has",
+            "issues?state=closed&labels=",
+            JSON.stringify([{ number: 5, body: `${MARKER}\nfixed alert` }]),
+          ],
+          // The run was reported in a COMMENT on the closed issue, not its body.
+          ["has", "issues/5/comments?per_page", JSON.stringify([{ body: "<!-- run-ids: 701 -->" }])],
+        ],
+      ),
+    );
+    const { code, out } = runAudit(dir, { args: ["--work-label", "agent-ready"] });
+    expect(code, out).toBe(0);
+    expect(posted(log, "repos/o/r/issues"), out).toHaveLength(0);
+    expect(out).toContain("closed in the last 48h");
+  });
+
+  test("new findings on an unclaimed open issue add the work label; on a claimed one they do not", () => {
+    const { MARKER } = loadScript();
+    for (const [labels, expectLabel] of [
+      [[{ name: "ci" }], true],
+      [[{ name: "ci" }, { name: "agent-working" }], false],
+      [[{ name: "ci" }, { name: "on-hold" }], false],
+    ]) {
+      const { dir, log } = ghStubDir(
+        routesWith(
+          [DISPATCH_RUN()],
+          [
+            [
+              "has",
+              "issues?state=open&labels=",
+              JSON.stringify([{ number: 7, body: `${MARKER}\nprevious alert`, labels }]),
+            ],
+            ["has", "issues/7/comments?per_page", "[]"],
+            ["has", "issues/7/comments", "{}"],
+            ["has", "issues/7/labels", "[]"],
+            ["eq", "repos/o/r/labels", "{}"],
+          ],
+        ),
+      );
+      const { code, out } = runAudit(dir, { args: ["--work-label", "agent-ready"] });
+      expect(code, out).toBe(0);
+      const comment = posted(log, "repos/o/r/issues/7/comments").find((a) =>
+        a.some((x) => x.startsWith("body=")),
+      );
+      expect(comment, out).toBeTruthy();
+      expect(comment.find((x) => x.startsWith("body="))).toContain("## To check");
+      const labelled = posted(log, "repos/o/r/issues/7/labels");
+      expect(labelled.length > 0, `${JSON.stringify(labels)}\n${out}`).toBe(expectLabel);
+      if (expectLabel) expect(labelled[0]).toContain("labels[]=agent-ready");
+    }
+  });
+
+  test("an other-event listing that fails to resolve the default branch keeps the issue OPEN and reds the audit", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir([
+      ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [], total_count: 0 })],
+      ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
+      ["has", "issues?state=open&labels=", JSON.stringify([{ number: 7, body: `${MARKER}\nx` }])],
+      ["eq", "repos/o/r", JSON.stringify({ private: false })],
+    ]);
+    const { code, out } = runAudit(dir);
+    expect(closeCalls(log), out).toEqual([]);
+    expect(out).toContain("the other default-branch run check");
+    expect(code, out).toBe(1);
+  });
+
+  test("the reusable wires other_scan and work_label from inputs, built in SHELL from env", () => {
+    const doc = parseYaml(readWorkflow("scheduled-run-health.yml"));
+    const inputs = doc.on.workflow_call.inputs;
+    expect(inputs.other_scan).toEqual({ type: "boolean", default: true });
+    expect(inputs.work_label).toEqual({ type: "string", default: "agent-ready" });
+    const step = doc.jobs.audit.steps.find((s) => s.name === "Audit scheduled-run health");
+    expect(step.env.AUDIT_OTHER_SCAN).toBe("${{ inputs.other_scan }}");
+    expect(step.env.AUDIT_WORK_LABEL).toBe("${{ inputs.work_label }}");
+    expect(step.run).toContain('if [[ "$AUDIT_OTHER_SCAN" != "true" ]]; then args+=(--no-other-scan); fi');
+    expect(step.run).toContain('if [[ -n "$AUDIT_WORK_LABEL" ]]; then args+=(--work-label "$AUDIT_WORK_LABEL"); fi');
   });
 });
