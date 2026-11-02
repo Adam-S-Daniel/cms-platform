@@ -8,6 +8,8 @@ name: agent-checks
 run-name: "${{ github.event_name == 'pull_request' && format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) || github.event_name == 'push' && format('push — {0}', github.ref_name) || format('dispatch — {0}', github.ref_name) }}"
 
 on:
+  # `edited` re-runs the check when the description changes: the runner's
+  # pr-tldr rule reads the description from this event's payload.
   pull_request:
     types: [opened, edited, reopened, synchronize]
   push:
