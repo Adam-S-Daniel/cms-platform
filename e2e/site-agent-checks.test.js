@@ -317,19 +317,19 @@ test.describe("site-agent-checks — the dictated thin caller", () => {
     expect(typeof runName === "string" && runName.includes("${{") && runName.includes("}}")).toBe(true);
   });
 
-  // SEQUENCING (#371): a required context nothing publishes blocks every PR.
-  // Flip this to its positive twin only after both consumers report
-  // `agent-checks / agent-checks` from the seeded caller.
-  test("the context is NOT required yet: not in consumer-main, not in the nudge template", () => {
+  // SEQUENCING (#371): a required context nothing publishes blocks every PR,
+  // so this became required only after both consumers reported
+  // `agent-checks / agent-checks` from the seeded caller. Its positive twin:
+  // the ruleset and the nudge template both name it.
+  test("the context is required: in consumer-main and in the nudge template", () => {
     const manifest = parseYaml(fs.readFileSync(MANIFEST_PATH, "utf8")) || {};
-    expect(requiredContexts(manifest, "consumer-main")).not.toContain(CONTEXT);
+    expect(requiredContexts(manifest, "consumer-main")).toContain(CONTEXT);
     const nudge = parseYaml(fs.readFileSync(NUDGE_PATH, "utf8")) || {};
     const listed = Object.values(nudge.jobs || {})
       .map((j) => String(((j && j.with) || {}).required_contexts || ""))
       .join("\n")
       .split("\n")
       .map((l) => l.trim());
-    expect(listed).toContain("site-verify / site-verify");
-    expect(listed).not.toContain(CONTEXT);
+    expect(listed).toContain(CONTEXT);
   });
 });

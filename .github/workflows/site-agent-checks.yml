@@ -46,10 +46,12 @@
 # `if:`, so an `edited` event (the caller fires on it, for pr-tldr) can never
 # SKIP a job and withdraw the context (#222).
 #
-# NOT REQUIRED YET, on purpose (#371 sequencing, as #377 did): release + bump so
-# the caller lands → confirm `agent-checks / agent-checks` reports on both
-# consumers → only then add it to repo-settings.yml's consumer-main required
-# set AND the cms-automerge-nudge template's `required_contexts`.
+# REQUIRED on consumer-main, in the #371 order (as #377 did): the v0.1.170
+# release + bump landed the caller, `agent-checks / agent-checks` reported
+# green on both consumers (adamdaniel.ai#4582, jodidaniel.com#463 and the
+# Decap PRs adamdaniel.ai#4585-#4588), and only then did repo-settings.yml's
+# consumer-main required set and the cms-automerge-nudge template's
+# `required_contexts` add it.
 name: Site agent-checks (reusable)
 
 on:

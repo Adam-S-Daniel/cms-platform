@@ -1680,10 +1680,13 @@ seeds on the next bump (#315). Locked by `e2e/site-agent-checks.test.js`.
   `FIXTURE_BRANCH_PREFIX`) or an author of type `Bot` turns a refusal into a
   `::warning` and exits 0; the runner still runs. A human's other PRs keep the
   runner's exit code. It is a nuisance filter, not a security boundary.
-- **Not required yet** (#371). The same order as `site-verify`: release, bump,
-  confirm `agent-checks / agent-checks` reports on both consumers, then add it
-  to `repo-settings.yml`'s `consumer-main` required set and the nudge
-  template's `required_contexts`, and flip the test's sequencing guard.
+- **Required on `consumer-main`** (#371 order, as `site-verify`): the v0.1.170
+  release and bump landed the caller, `agent-checks / agent-checks` reported
+  green on both consumers (the bumps adamdaniel.ai#4582 and jodidaniel.com#463,
+  and the Decap PRs adamdaniel.ai#4585 through #4588), and only then did
+  `repo-settings.yml`'s `consumer-main` required set and the nudge template's
+  `required_contexts` add it. Each consumer's own nudge list follows at its next `platform-bump`
+  (#315); until then GitHub's merge refusal covers the gap (#284).
 
 ## `secrets.*` is not allowed in a step-level `if:` (startup failure, not a flake)
 
