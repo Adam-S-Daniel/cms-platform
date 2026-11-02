@@ -9,6 +9,7 @@ run-name: "${{ github.event_name == 'pull_request' && format('PR #{0} — {1}', 
 
 on:
   pull_request:
+    types: [opened, edited, reopened, synchronize]
   push:
     branches: [main, master]
   workflow_dispatch:
