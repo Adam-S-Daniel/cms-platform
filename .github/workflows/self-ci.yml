@@ -19,8 +19,10 @@
 #                                                      (hard-fail)
 #   4. claude plugin validate over this repo's plugin ROOT (hard-fail)
 #   5. cfn-lint over the CloudFormation templates      (hard-fail since #525)
-#   6. python-unit-tests: scripts/cross_post's and oauth-proxy's pytest suites
-#                                                      (hard-fail)
+#   6. python-unit-tests: scripts/cross_post's, scripts/skill_gates' and
+#      oauth-proxy's pytest suites (hard-fail), plus (pull_request only, when
+#      skills/, docs/skill-impact.md or scripts/skill_gates/ changed) the
+#      skill graduation and touch gates               (warn-only for now)
 #
 # ALL SIX job ids are REQUIRED status contexts (repo-settings.yml ->
 # `ruleset_library.platform-main`, which also requires self-secrets-scan.yml's
@@ -475,10 +477,11 @@ jobs:
           [ "$missing" -eq 0 ] || exit 1
           cfn-lint "${templates[@]}"
 
-  # ── 6. python-unit-tests — the pytest suites (cross_post + oauth-proxy) ──
-  # cross_post.py (cms-platform#442) and the OAuth proxy's lambda.py are the
-  # platform-owned Python with pytest suites instead of a node *.test.js lint,
-  # so they get their own job rather than folding into node-unit-lints.
+  # ── 6. python-unit-tests — the pytest suites + the skill gates ─────────
+  # cross_post.py (cms-platform#442), the OAuth proxy's lambda.py and
+  # skill_gates/check_skill_gates.py are the platform-owned Python with pytest
+  # suites instead of a node *.test.js lint, so they get their own job rather
+  # than folding into node-unit-lints.
   # oauth-proxy/test_lambda.py used to run nowhere in CI, though it guards the
   # login popup's token handoff. A REQUIRED context since #525
   # (repo-settings.yml's `platform-main`), so a failing security suite blocks
@@ -489,6 +492,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The PR merge commit plus its two parents, not full history
+          # (cms-platform#541). The skill gates diff the merge commit against
+          # its first parent (the base tip), whose merge base is that parent
+          # by construction, so no deepening (e2e/ensure-merge-base.js) is
+          # needed. Locked by e2e/salience-checkout-depth.test.js.
+          fetch-depth: 2
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -503,5 +513,60 @@ jobs:
       - name: Install test dependencies
         run: python3 -m pip install --user 'pytest==9.1.1' 'pyyaml==6.0.3' 'markdown-it-py==4.2.0' 'mdurl==0.1.2'
 
-      - name: Run cross_post and oauth-proxy tests
-        run: python3 -m pytest scripts/cross_post oauth-proxy -q
+      - name: Run cross_post, skill_gates and oauth-proxy tests
+        run: python3 -m pytest scripts/cross_post scripts/skill_gates oauth-proxy -q
+
+      # The skill graduation and touch gates, WARN-ONLY for now: the rules
+      # are in docs/skill-impact.md's header (adam-agentskills#66,
+      # skills-evals#60). A created, edited or removed skills/<skill>/SKILL.md
+      # needs a new docs/skill-impact.md entry whose Eval line is in an
+      # accepted form, and that file stays append-only. `--warn-only` turns
+      # every finding, and a check that could not run, into a `::warning::`
+      # plus a step-summary section, and exits 0; the `|| echo` turns even a
+      # crash before the script's own handling into a warning. Dropping
+      # `--warn-only` (and the `||`) is the follow-up that makes it enforcing.
+      #
+      # In THIS job so no new required context is needed: python-unit-tests is
+      # already one (repo-settings.yml `platform-main`), and it already
+      # installs markdown-it-py. Only on pull_request: the gate judges a PR's
+      # own change. Salience is decided here, in-job, never with `on.paths` (a
+      # required context must always report): a PR that touches none of
+      # skills/, docs/skill-impact.md and scripts/skill_gates/ skips the gate
+      # step and the job still reports its pytest result.
+      #
+      # Both steps read the checkout's merge commit (refs/pull/N/merge):
+      # HEAD^1 is the base tip and HEAD^2 the PR head, so `HEAD^1 HEAD` is
+      # exactly what merging the PR changes and needs no event payload and no
+      # deeper history. A HEAD that is not that merge commit, or a diff that
+      # fails, runs the gate (fail-safe), which in warn-only mode reports the
+      # problem as a warning. NUL-delimited and `--no-renames`
+      # (e2e/salience-git-paths.test.js), so a skill moved out of skills/ is
+      # still seen. Locked by scripts/skill_gates/tests/test_workflow_wiring.py,
+      # which runs both scripts against depth-2 clones.
+      - name: Detect skill-gate salient changes
+        id: skill_gates_salient
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -uo pipefail
+          list="${RUNNER_TEMP}/skill-gates-changed"
+          run=true
+          if git rev-parse -q --verify 'HEAD^2^{commit}' > /dev/null \
+            && git diff --name-only -z --no-renames 'HEAD^1' HEAD > "$list"; then
+            run=false
+            while IFS= read -r -d '' f; do
+              case "$f" in
+                skills/*|docs/skill-impact.md|scripts/skill_gates/*) run=true; break ;;
+              esac
+            done < "$list"
+          else
+            echo "::warning title=skill-gates::HEAD is not the PR merge commit or its diff failed; running the skill gates (fail-safe)"
+          fi
+          echo "salient: ${run}"
+          echo "salient=${run}" >> "$GITHUB_OUTPUT"
+
+      - name: Check skill graduation and touch gates (warn-only)
+        if: ${{ github.event_name == 'pull_request' && steps.skill_gates_salient.outputs.salient == 'true' }}
+        run: |
+          set -uo pipefail
+          python3 scripts/skill_gates/check_skill_gates.py --warn-only --base 'HEAD^1' --head HEAD \
+            || echo "::warning title=skill-gates::the skill gates exited $? in warn-only mode; see the log above"
