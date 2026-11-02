@@ -1653,6 +1653,38 @@ Measured before shipping: at jodidaniel.com `main`, `bundle exec jekyll build`
 production`; 9 `note` lines are assertion groups that do not arm while
 `site_live: false`, so coverage roughly doubles at go-live (jodidaniel#26).
 
+## A consumer's fleet `agent-checks` runner runs through `site-agent-checks.yml` (_agent-guidance#313)
+
+Both consumers carry the fleet's `.githooks/agent-checks` runner (delivered by
+the `_agent-guidance` sync), and no CI workflow ran it: the sync's own
+`agent-checks.yml` would be a `workflow-set: EXTRA` on a consumer
+(adamdaniel.ai#4346). Same remedy as `site-verify.yml`: the
+`site-agent-checks.yml` reusable plus a dictated thin caller,
+`examples/site/.github/workflows/agent-checks.yml`, which `platform-bump`
+seeds on the next bump (#315). Locked by `e2e/site-agent-checks.test.js`.
+
+- **The reusable is not named `agent-checks.yml`** because this repo's own
+  `.github/workflows/agent-checks.yml` is the platform's self workflow (the
+  fleet template). The caller keeps the fleet's file name and job id, so the
+  context is `agent-checks / agent-checks` (work job `checks`, gate job
+  `agent-checks`: the #285/#289 shape).
+- **The caller fires on `edited`**, the one consumer caller that does: the
+  runner's pr-tldr rule reads the PR description from the event payload, so a
+  description edit must re-run it. #222's hazard is a job SKIPPED on `edited`,
+  so nothing in the pair carries an `if:` except the gate's `always()`, and
+  the caller is in `e2e/workflow-retarget-edited.test.js`'s `EDITED_REQUIRED`.
+- **Decap and bot PRs only warn.** Decap opens content PRs on a `cms/` head
+  branch under a human account with no TLDR in the description, so the
+  runner's own bot exemption misses them. A head branch starting `cms/` (the
+  prefix `label-non-decap-prs.yml` derives from `e2e/cms-fixture-pr.js`'s
+  `FIXTURE_BRANCH_PREFIX`) or an author of type `Bot` turns a refusal into a
+  `::warning` and exits 0; the runner still runs. A human's other PRs keep the
+  runner's exit code. It is a nuisance filter, not a security boundary.
+- **Not required yet** (#371). The same order as `site-verify`: release, bump,
+  confirm `agent-checks / agent-checks` reports on both consumers, then add it
+  to `repo-settings.yml`'s `consumer-main` required set and the nudge
+  template's `required_contexts`, and flip the test's sequencing guard.
+
 ## `secrets.*` is not allowed in a step-level `if:` (startup failure, not a flake)
 
 GitHub rejects `if: secrets.X == ''` (and `!=`) on a step at parse time with

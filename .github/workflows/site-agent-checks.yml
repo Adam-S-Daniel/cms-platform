@@ -1,0 +1,133 @@
+# Site agent-checks (reusable) — run the fleet's `.githooks/agent-checks`
+# runner over a consumer pull request.
+#
+# THE GAP (_agent-guidance#313, adamdaniel.ai#4346). The _agent-guidance sync
+# delivers `.githooks/agent-checks` (the fleet's commit-time rules) into every
+# fleet repo, plus a self-contained `agent-checks.yml` workflow that runs it in
+# CI. A consumer site may carry only the workflows this platform dictates —
+# check-platform-pin-consistency.js's workflow-SET parity flags any other as
+# `workflow-set: EXTRA` on a REQUIRED check — so on adamdaniel.ai and
+# jodidaniel.com the runner shipped and nothing ran it. Same shape as #377
+# (`site-verify.yml`): the reusable lives here and its thin caller,
+# `examples/site/.github/workflows/agent-checks.yml`, is platform-dictated, so
+# `platform-bump.yml` seeds it into every consumer on the next bump (#315).
+#
+# NAMED `site-agent-checks.yml`, not `agent-checks.yml`: this repo's own
+# `.github/workflows/agent-checks.yml` is the platform's SELF workflow (the
+# fleet template, delivered by the sync), and a reusable cannot share its path.
+# The consumer-side caller keeps the fleet's file name and job id, so the
+# context a site publishes is `agent-checks / agent-checks`.
+#
+# CONVENTION, NOT CONFIGURATION. No inputs, no secrets. If the caller's tree
+# has `.githooks/agent-checks`, this runs `ci <base> <head>` over the PR's
+# commits exactly as the fleet template does; otherwise it prints a notice and
+# succeeds. The runner reads GITHUB_EVENT_NAME / GITHUB_EVENT_PATH itself for
+# its pr-tldr rule (the description must begin with `## TLDR`).
+#
+# WARN-ONLY FOR DECAP AND BOT PULL REQUESTS. Decap CMS opens every content PR
+# on a `cms/<collection>/<slug>` head branch under a HUMAN account (user type
+# `User`), with a generated description that carries no TLDR, so the runner's
+# own bot exemption never applies to it. A refusal on such a PR would red every
+# editor's publish. So when the head branch starts with `cms/` — the same
+# prefix test label-non-decap-prs.yml's `isDecap` makes, derived there from
+# e2e/cms-fixture-pr.js's FIXTURE_BRANCH_PREFIX; e2e/site-agent-checks.test.js
+# holds the two equal — or the author's type is `Bot`, a refusal becomes a
+# `::warning` and the job succeeds. The runner still RUNS, so its findings are
+# visible on the PR. A human non-Decap PR keeps the runner's real exit code.
+# This is a nuisance filter, not a security boundary: anyone can name a branch
+# `cms/…`, and the runner's checks are guidance, not a guard against hostile
+# code.
+#
+# JOB SHAPE, dictated by e2e/required-context-cancellable.test.js's four causes
+# (docs/CI-INVARIANTS.md, #285 / #289). `checks` does the work and carries the
+# wall; `agent-checks` is a GATE — `needs: checks`, `if: always()`, no
+# `timeout-minutes`, no `concurrency` — that translates the work job's result
+# into the one context a ruleset can name. No job or step carries any other
+# `if:`, so an `edited` event (the caller fires on it, for pr-tldr) can never
+# SKIP a job and withdraw the context (#222).
+#
+# NOT REQUIRED YET, on purpose (#371 sequencing, as #377 did): release + bump so
+# the caller lands → confirm `agent-checks / agent-checks` reports on both
+# consumers → only then add it to repo-settings.yml's consumer-main required
+# set AND the cms-automerge-nudge template's `required_contexts`.
+name: Site agent-checks (reusable)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # The WORK job. Its conclusion is required by nothing, so the wall lives here.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The CALLER's tree, with full history: the runner checks every path any
+      # commit in base..head added or changed. No credential is left behind.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The runner calls node (pr-tldr reads the event payload; dated-phrasing
+      # runs markdown-it), so pin it instead of inheriting the image's
+      # (e2e/workflow-runtime-pinned.test.js).
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+
+      - name: Run the commit-time checks over this change
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .githooks/agent-checks ]; then
+            echo "::notice title=agent-checks::No .githooks/agent-checks in this repo — nothing to run (this is not an error)."
+            exit 0
+          fi
+          # Decap's head-branch convention, the same test label-non-decap-prs.yml
+          # makes; and a bot author. Either makes a refusal a warning.
+          warn_only=""
+          case "${HEAD_REF:-}" in
+            cms/*) warn_only="a Decap CMS pull request (head branch under cms/)" ;;
+          esac
+          if [ "${AUTHOR_TYPE:-}" = "Bot" ]; then
+            warn_only="a bot's pull request"
+          fi
+          rc=0
+          bash .githooks/agent-checks ci "$BASE" "$HEAD_SHA" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            exit 0
+          fi
+          if [ -n "$warn_only" ]; then
+            echo "::warning title=agent-checks::agent-checks refused (exit $rc), but this is $warn_only, so the refusal is a warning, not a failure. Its messages are above."
+            exit 0
+          fi
+          exit "$rc"
+
+  # The GATE: the job a ruleset would name (`agent-checks / agent-checks`
+  # through the dictated caller). NO `timeout-minutes`, NO `concurrency`.
+  # `if: always()` so a failed or cancelled `checks` still produces a RED here
+  # rather than a skip.
+  agent-checks:
+    needs: checks
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on the checks job
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+        run: |
+          set -euo pipefail
+          echo "checks job result: ${CHECKS_RESULT}"
+          if [ "${CHECKS_RESULT}" != "success" ]; then
+            echo "::error::agent-checks did not succeed (${CHECKS_RESULT}) — see the checks job above for the refusal(s)."
+            exit 1
+          fi
+          echo "agent-checks passed (or warned only, or the repo has no runner)."

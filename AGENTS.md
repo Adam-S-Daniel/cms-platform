@@ -149,7 +149,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 | `docs/CONSUMER-COMPATIBILITY.md` | an e2e spec, an org OAuth save failure, bundle parity, a nudge's contexts. |
 | `docs/PIN-CONSISTENCY.md` | pin consistency, the pin-comment lint, `platform-bump.yml`. |
 | `docs/FLEET-CALLER-CURRENCY.md` | how a fleet repo's `scheduled-run-health` caller stays current: the self-resolving checkout, the currency lane, a fleet repo's cms-platform Dependabot `ignore`. |
-| `docs/CI-INVARIANTS.md` | a required check, a scheduled workflow, the label audit, `site-verify.yml`, the webServer, a loop. |
+| `docs/CI-INVARIANTS.md` | a required check, a scheduled workflow, the label audit, `site-verify.yml`, `site-agent-checks.yml`, the webServer, a loop. |
 | `docs/E2E-PARALLELISM.md` | e2e workers, sharding, the browser install. |
 | `docs/CONTENT-PUBLISH-LATENCY.md` | a content-only e2e lane (shelved), a post's time-to-live. |
 | `docs/PUBLISHING-UX.md` | what an editor sees of publish/status, or a spec that publishes. |
