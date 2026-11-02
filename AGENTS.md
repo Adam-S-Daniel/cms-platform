@@ -354,13 +354,6 @@ cache only the default branch saves (consumers seed it daily with
 `warm-e2e-apt-cache.yml`). All of it rests on counter-intuitive worker-count,
 shard and apt measurements that are easy to undo. → `docs/E2E-PARALLELISM.md`.
 
-## E2E local webServer: decap readiness + :4000 crash resilience
-
-decap-server is probed by open TCP port, not a `url:` check, and the `:4000`
-static server must not be bare `serve` (a racy ENOENT once cascaded into an
-85-test failure). → `docs/CI-INVARIANTS.md` before touching
-`e2e/playwright.config.js`'s local `webServer`.
-
 ## A cancelled required check blocks the merge (#1815, #285, #289)
 
 **The invariant is the OUTCOME: NO REQUIRED CONTEXT MAY END `cancelled`** —
@@ -385,13 +378,6 @@ on protection-REDUCING writes (`scripts/repo-settings-write-risk.js`). →
 left the canonical set, and RECONCILES the nudge's `required_contexts` — all in
 the bump commit, or pin-consistency fails (`workflow-set: EXTRA`/`MISSING`). →
 `docs/PIN-CONSISTENCY.md`.
-
-## Admin-bundle parity is bump-aware (#14)
-
-The parity check must tell a legitimate gem-bump lag (prod still serving the old
-bundle) from real drift, and the `window.CMS_*` injection must be normalized out
-of the byte compare. → `docs/CONSUMER-COMPATIBILITY.md` before changing
-`e2e/admin-bundle-parity.js`.
 
 ## Self-CI lanes
 

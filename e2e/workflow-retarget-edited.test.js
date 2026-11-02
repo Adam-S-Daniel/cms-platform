@@ -123,6 +123,10 @@ const EDITED_REQUIRED = {
     "#526: the review stamp lands by editing the PR body, which changes no SHA; " +
     "without `edited` the required `release-review-gate` stays red until an " +
     "unrelated push (locked by e2e/self-release-review-gate.test.js)",
+  [path.join(".github", "workflows", "agent-checks.yml")]:
+    "_agent-guidance#400: the runner's pr-tldr rule reads the PR description " +
+    "from the event payload, so a description edit must re-run the required " +
+    "`agent-checks`; its one job has no `if:`, so an edited run replaces the verdict",
 };
 
 for (const file of candidateWorkflowPaths()) {
