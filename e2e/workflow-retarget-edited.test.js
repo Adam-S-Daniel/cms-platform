@@ -127,6 +127,12 @@ const EDITED_REQUIRED = {
     "_agent-guidance#400: the runner's pr-tldr rule reads the PR description " +
     "from the event payload, so a description edit must re-run the required " +
     "`agent-checks`; its one job has no `if:`, so an edited run replaces the verdict",
+  [path.join("examples", "site", ".github", "workflows", "agent-checks.yml")]:
+    "_agent-guidance#400: the runner's pr-tldr rule reads the PR description from " +
+    "the event payload, so a description edit must re-run it; the caller's one job " +
+    "has no `if:` and the reusable's only `if:` is the gate's `always()`, so an " +
+    "`edited` run replaces the verdict instead of withdrawing it (locked by " +
+    "e2e/site-agent-checks.test.js)",
 };
 
 for (const file of candidateWorkflowPaths()) {

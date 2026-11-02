@@ -1,0 +1,36 @@
+# Thin caller — copied into a site repo as `.github/workflows/agent-checks.yml`.
+# Owns the PR trigger + run-name; delegates to the platform's reusable, which
+# runs the fleet's `.githooks/agent-checks` runner over the PR's commits when
+# the site has one, and prints a notice and succeeds when it does not
+# (_agent-guidance#313). A Decap CMS PR (`cms/` head branch) or a bot's PR only
+# warns. There is nothing to configure: no inputs, no secrets.
+#
+# The file name and job id match the fleet's own agent-checks workflow, so the
+# published context is `agent-checks / agent-checks`, and the _agent-guidance
+# sync (which writes its template only where the file is absent) leaves this
+# platform-dictated caller alone.
+#
+# `edited` IS declared, deliberately: the runner's pr-tldr rule reads the PR
+# description from the event payload, so it must re-run when the description
+# changes. That is safe here where it is not on other callers (#222) because
+# this job has no `if:` and the reusable's only `if:` is the gate's `always()`:
+# an `edited` run REPLACES the verdict, it never skips and withdraws it
+# (e2e/workflow-retarget-edited.test.js's EDITED_REQUIRED).
+#
+# NO `paths-ignore`: the runner checks every path the PR's commits touch.
+name: agent-checks
+run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # The job name is the first half of the published context —
+  # `agent-checks / agent-checks` — so it must stay `agent-checks`.
+  agent-checks:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/site-agent-checks.yml@v0.1.169
