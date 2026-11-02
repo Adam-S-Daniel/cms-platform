@@ -16,7 +16,8 @@
 // Failing CLOSED is a behavior, not a shape: the last describe EXECUTES every
 // step that calls the helper with a `node` that fails, and requires the step
 // to exit non-zero without writing an output that reads as "nothing salient".
-// detect-changed-pages.js (the `generate` job) calls the helper itself.
+// detect-changed-pages.js (the `generate` job) calls the helper itself;
+// self-ci.yml's python-unit-tests (the skill gates) diffs only HEAD^1..HEAD.
 const { test, expect } = require("./base");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -29,6 +30,9 @@ const JOBS = [
   { workflow: "visual-regression.yml", job: "generate", diffStep: null },
   { workflow: "parity-preview.yml", job: "parity-probe", diffStep: "select" },
   { workflow: "preview-media.yml", job: "media-probe", diffStep: "salient" },
+  // Diffs the merge commit against its first parent (HEAD^1 HEAD), whose merge
+  // base is HEAD^1 by construction, so it needs depth 2 and no helper.
+  { workflow: "self-ci.yml", job: "python-unit-tests", diffStep: null },
 ];
 
 const isCheckout = (s) => typeof s.uses === "string" && s.uses.startsWith("actions/checkout@");

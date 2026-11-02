@@ -24,17 +24,53 @@ consumer's step, not the editing PR's.
 ## YYYY-MM-DD — <bundle>/<skill> — <create|edit|rename|remove|rejected>
 - Motivation: one line — the incident, pattern, or issue that prompted it
 - Change: one line — what changed (PR #NNN)
-- Eval: the skill's eval result (exit code + counts), or "none — no eval
-  exists yet", or "exempt (DESIGN.md non-coverage table)"
-- Outcome: merged YYYY-MM-DD, or rejected YYYY-MM-DD — one line why. The
-  full proposal survives in the closed PR; link it rather than pasting it.
+- Eval: the eval evidence the gates below ask for, in one of the forms below
+- Outcome: merged YYYY-MM-DD, or rejected YYYY-MM-DD, or pending merge — one
+  line why. The full proposal survives in the closed PR; link it rather than
+  pasting it.
 ```
+
+`<bundle>` is `cms-platform`. An entry covering several skills names each one,
+comma-separated (`cms-platform/a, b`); an aggregate such as `(13 skills)` is a
+valid heading but names no skill, so it satisfies no gate.
+
+The Eval line's accepted forms:
+
+- **a run**: the pass counts (`21/21`) or the skills-evals routine run id
+  (`20261026T211234Z-1b7681`) of an eval run against this change;
+- **`exempt (DESIGN.md non-coverage table)`**: only for a skill the
+  skills-evals coverage census lists as `skipped`;
+- **a first fixture**: a link to the skills-evals pull request adding
+  `evals/<skill>/`, only for a skill the census lists as `gap` (no fixture
+  yet). `none — no eval exists yet` is not accepted: add the first fixture;
+- **a green graduation arm**, for a `create`: `with_skill X/Y, without_skill
+  A/B` with X > 0 and X/Y >= A/B, plus the run id or a results link.
+
+A line that negates its own evidence (`not run`, `not yet run (target 8/8)`,
+`skipped, previous 21/21`, `not exempt`, `outstanding`) shows no run.
 
 Rules:
 
 - **A rejected proposal is the highest-value entry.** Record it even when it
   feels like noise — especially then.
-- **Append-only.** A wrong entry gets a correcting entry, not an edit.
+- **Graduation gate.** A new skill (`skills/<skill>/SKILL.md` added) needs a
+  `create` entry whose Eval line shows a green graduation arm.
+- **Touch gate.** An edited SKILL.md needs a new entry naming the skill (any
+  kind but `rejected`). What its Eval line must show depends on the census:
+  `covered` — a run; `skipped` — a run or `exempt`; `gap` — a run or the first
+  fixture.
+- **Removal.** A removed skill needs a `remove` entry.
+- **Rename.** A renamed skill directory is a new skill and a removed one: a
+  `create` entry for the new name (with its graduation arm) plus a `remove`
+  entry for the old name.
+- **Append-only.** A wrong entry gets a correcting entry, not an edit. That
+  includes a later eval result and an Outcome update (`pending merge` to
+  `merged`): each is a NEW entry, never an edit of the old one.
+- **Checked on every PR** that changes `skills/` or this file, by
+  `scripts/skill_gates/check_skill_gates.py` in self-CI's python-unit-tests
+  job. It reports findings as warnings for now (`--warn-only`); it does not
+  dispatch an eval, it reads the Eval line. When the census cannot be read, an
+  edit whose Eval line shows nothing is a warning even in enforcing mode.
 - **This repo is public and scanned.** Nothing sensitive in an entry, ever;
   a sensitive rejection is recorded by PR link alone.
 
