@@ -10,9 +10,20 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.169)
+## Version history (v0.1.0 → v0.1.170)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.170 — Consumer sites get a platform-dictated agent-checks caller, and agent-checks re-runs on PR description edits.**
+The first-parent range since v0.1.169 holds four entries on main before this release PR: two squash commits ([#940](https://github.com/Adam-S-Daniel/cms-platform/pull/940), [#941](https://github.com/Adam-S-Daniel/cms-platform/pull/941)) and two merge commits ([#939](https://github.com/Adam-S-Daniel/cms-platform/pull/939), [#938](https://github.com/Adam-S-Daniel/cms-platform/pull/938)).
+
+Consumer agent-checks. [#941](https://github.com/Adam-S-Daniel/cms-platform/pull/941) adds the reusable `site-agent-checks.yml` and the dictated thin caller `examples/site/.github/workflows/agent-checks.yml`, which publishes the `agent-checks / agent-checks` context. The consumers' own `agent-checks.yml` was removed earlier because platform-pin-consistency rejects a workflow the platform does not dictate, so the caller now comes from the platform and `platform-bump` seeds it. The work job runs the consumer's `.githooks/agent-checks ci` over the pull request's range; on a Decap pull request (head branch under `cms/`) or a bot's pull request a failure becomes a warning and the job succeeds, so Decap publishing and bot bumps are never blocked. The `agent-checks` gate job runs under `if: always()` with no concurrency group or timeout, and the caller fires on `edited` (registered in the #222 `EDITED_REQUIRED` map) so a fixed description re-runs it. The context is not required by either consumer's ruleset in this release.
+
+Agent-checks on edits. [#940](https://github.com/Adam-S-Daniel/cms-platform/pull/940) adds `edited` to this repo's own `agent-checks.yml` so the TLDR rule re-runs after a description fix, registers it in `EDITED_REQUIRED`, and trims two pointer-only AGENTS.md sections to stay inside the size budget.
+
+Agent tooling. [#938](https://github.com/Adam-S-Daniel/cms-platform/pull/938) syncs AGENTS.md from `_agent-guidance`, and [#939](https://github.com/Adam-S-Daniel/cms-platform/pull/939) re-pins `skills.lock`.
+
+Consumer effect. Adopting v0.1.170 adds `.github/workflows/agent-checks.yml` to each consumer through the bump's seeding. No live consumer verification is claimed in this entry.
 
 **v0.1.169 — The scheduled-run health audit reports failing dispatch and workflow_run runs, and queues its issues for the fleet worker.**
 The first-parent range since v0.1.168 holds five entries on main before this release PR: two squash commits ([#931](https://github.com/Adam-S-Daniel/cms-platform/pull/931), [#932](https://github.com/Adam-S-Daniel/cms-platform/pull/932)) and three merge commits ([#927](https://github.com/Adam-S-Daniel/cms-platform/pull/927), [#929](https://github.com/Adam-S-Daniel/cms-platform/pull/929), [#930](https://github.com/Adam-S-Daniel/cms-platform/pull/930)).
