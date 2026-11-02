@@ -114,9 +114,15 @@ checks on a plain PR). It runs six FAST lanes on `pull_request` + `push` to `mai
    #525). The cfn-lint version is pinned, so a new upstream rule reaches the lane
    only through a deliberate bump; it carried `continue-on-error` before #525,
    when it was unpinned, and every listed template must exist.
-6. **python-unit-tests** — `python3 -m pytest scripts/cross_post oauth-proxy -q`
-   (the cross-post suite plus the OAuth proxy's `oauth-proxy/test_lambda.py`;
-   hard-fail; REQUIRED since #525).
+6. **python-unit-tests** — `python3 -m pytest scripts/cross_post scripts/skill_gates oauth-proxy -q`
+   (the cross-post suite, the skill-gates suite and the OAuth proxy's
+   `oauth-proxy/test_lambda.py`; hard-fail; REQUIRED since #525). On a pull
+   request that changes `skills/` or `docs/skill-impact.md` (an in-job salience
+   step; the job always reports), it then runs
+   `scripts/skill_gates/check_skill_gates.py --base <base sha> --head <head sha>`,
+   the skill graduation and touch gates (AGENTS.md "Skill changes are recorded,
+   and evals gate them"). Run it locally against your branch with
+   `python3 scripts/skill_gates/check_skill_gates.py --base origin/main --head HEAD`.
 
 `self-secrets-scan.yml` (#126) runs alongside it as its own workflow,
 gitleaks-scanning the platform repo's diff on `pull_request`, incrementally on

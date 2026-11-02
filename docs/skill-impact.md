@@ -35,6 +35,11 @@ Rules:
 - **A rejected proposal is the highest-value entry.** Record it even when it
   feels like noise — especially then.
 - **Append-only.** A wrong entry gets a correcting entry, not an edit.
+- **Checked on every PR** that changes `skills/` or this file, by
+  `scripts/skill_gates/check_skill_gates.py` (the graduation and touch gates
+  in AGENTS.md; its docstring lists the Eval forms it accepts). Name each
+  skill in the heading (`<bundle>/a, b`): an aggregate such as `(13 skills)`
+  satisfies no gate.
 - **This repo is public and scanned.** Nothing sensitive in an entry, ever;
   a sensitive rejection is recorded by PR link alone.
 

@@ -19,7 +19,9 @@
 #                                                      (hard-fail)
 #   4. claude plugin validate over this repo's plugin ROOT (hard-fail)
 #   5. cfn-lint over the CloudFormation templates      (hard-fail since #525)
-#   6. python-unit-tests: scripts/cross_post's and oauth-proxy's pytest suites
+#   6. python-unit-tests: scripts/cross_post's, scripts/skill_gates' and
+#      oauth-proxy's pytest suites, plus (pull_request only, when skills/ or
+#      docs/skill-impact.md changed) the skill graduation and touch gates
 #                                                      (hard-fail)
 #
 # ALL SIX job ids are REQUIRED status contexts (repo-settings.yml ->
@@ -475,10 +477,11 @@ jobs:
           [ "$missing" -eq 0 ] || exit 1
           cfn-lint "${templates[@]}"
 
-  # ── 6. python-unit-tests — the pytest suites (cross_post + oauth-proxy) ──
-  # cross_post.py (cms-platform#442) and the OAuth proxy's lambda.py are the
-  # platform-owned Python with pytest suites instead of a node *.test.js lint,
-  # so they get their own job rather than folding into node-unit-lints.
+  # ── 6. python-unit-tests — the pytest suites + the skill gates ─────────
+  # cross_post.py (cms-platform#442), the OAuth proxy's lambda.py and
+  # skill_gates/check_skill_gates.py are the platform-owned Python with pytest
+  # suites instead of a node *.test.js lint, so they get their own job rather
+  # than folding into node-unit-lints.
   # oauth-proxy/test_lambda.py used to run nowhere in CI, though it guards the
   # login popup's token handoff. A REQUIRED context since #525
   # (repo-settings.yml's `platform-main`), so a failing security suite blocks
@@ -489,6 +492,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The skill-gates salience diff and the gate itself both need the
+          # PR's merge-base with its base branch.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -503,5 +510,55 @@ jobs:
       - name: Install test dependencies
         run: python3 -m pip install --user 'pytest==9.1.1' 'pyyaml==6.0.3' 'markdown-it-py==4.2.0' 'mdurl==0.1.2'
 
-      - name: Run cross_post and oauth-proxy tests
-        run: python3 -m pytest scripts/cross_post oauth-proxy -q
+      - name: Run cross_post, skill_gates and oauth-proxy tests
+        run: python3 -m pytest scripts/cross_post scripts/skill_gates oauth-proxy -q
+
+      # The skill graduation and touch gates (AGENTS.md "Skill changes are
+      # recorded, and evals gate them"; adam-agentskills#66, skills-evals#60):
+      # a created, edited or removed skills/<skill>/SKILL.md needs a new
+      # docs/skill-impact.md entry whose Eval line is in an accepted form, and
+      # that file stays append-only. The accepted forms are in the script's
+      # docstring.
+      #
+      # In THIS job so no new required context is needed: python-unit-tests is
+      # already one (repo-settings.yml `platform-main`), and it already
+      # installs markdown-it-py. Only on pull_request: the gate judges a PR's
+      # own diff. Salience is decided here, in-job, never with `on.paths` (a
+      # required context must always report): a PR that touches neither
+      # skills/ nor docs/skill-impact.md skips the gate step and the job still
+      # reports its pytest result. A diff that cannot be computed runs the
+      # gate (fail-safe), which then names the problem itself. SHAs come from
+      # the event payload file, never `${{ github.event.* }}` in a script (the
+      # rendered command is echoed); NUL-delimited and `--no-renames`
+      # (e2e/salience-git-paths.test.js), so a skill moved out of skills/ is
+      # still seen. Locked by scripts/skill_gates/tests/test_workflow_wiring.py.
+      - name: Detect skill-gate salient changes
+        id: skill_gates_salient
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          base="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
+          head="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+          list="${RUNNER_TEMP}/skill-gates-changed"
+          run=true
+          if [ -n "$base" ] && [ -n "$head" ] \
+            && git diff --name-only -z --no-renames "${base}...${head}" > "$list"; then
+            run=false
+            while IFS= read -r -d '' f; do
+              case "$f" in
+                skills/*|docs/skill-impact.md) run=true; break ;;
+              esac
+            done < "$list"
+          else
+            echo "::warning::could not compute the PR diff; running the skill gates (fail-safe)"
+          fi
+          echo "salient: ${run}"
+          echo "salient=${run}" >> "$GITHUB_OUTPUT"
+
+      - name: Check skill graduation and touch gates
+        if: ${{ github.event_name == 'pull_request' && steps.skill_gates_salient.outputs.salient == 'true' }}
+        run: |
+          set -euo pipefail
+          base="$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")"
+          head="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+          python3 scripts/skill_gates/check_skill_gates.py --base "$base" --head "$head"
