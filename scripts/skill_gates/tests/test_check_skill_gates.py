@@ -120,11 +120,13 @@ def census_file(tmp_path: Path, status: str, skill: str = SKILL) -> Path:
     return path
 
 
-def gate(repo: Path, census="none", base="main", head="pr", env=None):
-    full_env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS"}
+def gate(repo: Path, census="none", base="main", head="pr", env=None, extra=()):
+    full_env = {k: v for k, v in os.environ.items()
+                if k not in ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY")}
     full_env.update(env or {})
     proc = subprocess.run(
-        [sys.executable, str(SCRIPT), "--base", base, "--head", head, "--census", str(census)],
+        [sys.executable, str(SCRIPT), "--base", base, "--head", head, "--census", str(census),
+         *extra],
         cwd=repo, capture_output=True, text=True, env=full_env)
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -223,6 +225,47 @@ def test_covered_touch_counts_but_starting_none_fails(tmp_path):
     touch(repo, "`none` — the old 3/3 run predates this edit")
     code, out = gate(repo, census_file(tmp_path, "covered"))
     assert code == 1, out
+
+
+NEGATED = ("not yet run (target 8/8)", "skipped, previous 21/21", "not exempt; outstanding",
+           "did not run; routine run `20261030T101010Z-0a1b2c` predates this edit",
+           "nothing run yet, 3/3 planned")
+
+
+def test_negated_eval_lines_show_no_run():
+    for text in NEGATED:
+        assert csg.is_negated(text), text
+        assert not csg.is_ran(text), text
+        assert not csg.is_exempt(text), text
+    # Words that only look like negations do not void a run.
+    for text in ("exit 0, 21/21, no regression", "3/3; no runner errors",
+                 "routine run `20261026T211234Z-1b7681`, 6/7; judge skipped"):
+        assert csg.is_ran(text), text
+
+
+def test_negated_touch_of_a_covered_skill_fails(tmp_path):
+    for n, text in enumerate(NEGATED):
+        root = tmp_path / f"case{n}"
+        root.mkdir()
+        repo = make_repo(root)
+        touch(repo, text)
+        code, out = gate(repo, census_file(root, "covered"))
+        assert code == 1, (text, out)
+        assert "census lists the skill as covered" in out, out
+
+
+def test_not_exempt_touch_of_a_skipped_skill_fails(tmp_path):
+    repo = make_repo(tmp_path)
+    touch(repo, "not exempt; outstanding")
+    code, out = gate(repo, census_file(tmp_path, "skipped"))
+    assert code == 1, out
+
+
+def test_gap_touch_not_run_with_first_fixture_passes(tmp_path):
+    repo = make_repo(tmp_path)
+    touch(repo, "not run; first fixture in https://github.com/Adam-S-Daniel/skills-evals/pull/9")
+    code, out = gate(repo, census_file(tmp_path, "gap"))
+    assert code == 0, out
 
 
 def test_skipped_touch_exempt_passes(tmp_path):
@@ -499,6 +542,15 @@ def test_create_green_without_run_id_fails(tmp_path):
     assert code == 1, out
 
 
+def test_create_negated_green_fails(tmp_path):
+    repo = make_repo(tmp_path)
+    create(repo, "not yet run (target with_skill objective 8/8, without_skill 1/8, "
+                 "routine run `20261031T120000Z-abc123`)")
+    code, out = gate(repo)
+    assert code == 1, out
+    assert "green with_skill arm" in out
+
+
 def test_create_exempt_fails(tmp_path):
     """No machine-bound bundle here: `exempt` never graduates a skill."""
     repo = make_repo(tmp_path)
@@ -553,6 +605,29 @@ def test_renamed_skill_dir_is_a_create_and_a_remove(tmp_path):
     assert code == 1, out
     assert f"{BUNDLE}/widget-buffer: a new skill has no new `create` entry" in out
     assert f"{BUNDLE}/{SKILL}: SKILL.md was removed" in out
+
+
+def test_rename_with_create_and_remove_entries_passes(tmp_path):
+    """docs/skill-impact.md: a rename is a `create` entry for the new name
+    (with its graduation arm) plus a `remove` entry for the old one."""
+    repo = make_repo(tmp_path)
+    _write(skill_dir(repo, "widget-buffer") / "SKILL.md",
+           (skill_dir(repo, SKILL) / "SKILL.md").read_text(encoding="utf-8"))
+    remove_skill(repo)
+    impact(repo, entry("create", ROUTINE_EVAL, skill="widget-buffer"),
+           entry("remove", "renamed to widget-buffer"), OLD_ENTRY, OTHER_OLD)
+    commit(repo)
+    code, out = gate(repo)
+    assert code == 0, out
+
+
+def test_rename_arrow_heading_is_reported_with_the_create_remove_rule(tmp_path):
+    repo = make_repo(tmp_path)
+    impact(repo, entry("rename", "none", skill=f"{SKILL} → widget-buffer"), OLD_ENTRY, OTHER_OLD)
+    commit(repo)
+    code, out = gate(repo)
+    assert code == 1, out
+    assert "a rename is a `create` entry for the new name plus a `remove` entry" in out
 
 
 def test_rewording_an_old_entry_fails(tmp_path):
@@ -632,6 +707,80 @@ def insert_like_the_loop(repo: Path, new: str) -> None:
     head = "\n".join(lines[:rule + 1]).rstrip("\n")
     rest = "\n".join(lines[rule + 1:]).lstrip("\n")
     _write(path, f"{head}\n\n{new}\n{rest}")
+
+
+def test_outcome_update_in_place_fails(tmp_path):
+    """Updating an old entry's Outcome (pending -> merged) is an edit too."""
+    repo = make_repo(tmp_path)
+    impact(repo, OLD_ENTRY.replace("merged 2026-01-02", "merged 2026-01-03"), OTHER_OLD)
+    commit(repo)
+    code, out = gate(repo)
+    assert code == 1, out
+
+
+# ---------------------------------------------------------------------------
+# warn-only mode and the step summary
+# ---------------------------------------------------------------------------
+
+def test_warn_only_reports_failures_as_warnings_and_exits_0(tmp_path):
+    repo = make_repo(tmp_path)
+    touch(repo, "not run; wording only")
+    census = census_file(tmp_path, "covered")
+    code, out = gate(repo, census)
+    assert code == 1, out  # enforcing: the same change fails
+    code, out = gate(repo, census, extra=("--warn-only",))
+    assert code == 0, out
+    assert "skill-gates (warning): cms-platform/widget-polisher: the Eval line shows no eval run" in out
+    assert "1 finding(s) that would fail once enforcing" in out
+
+
+def test_warn_only_annotates_failures_under_actions(tmp_path):
+    repo = make_repo(tmp_path)
+    remove_skill(repo)
+    commit(repo)
+    code, out = gate(repo, env={"GITHUB_ACTIONS": "true"}, extra=("--warn-only",))
+    assert code == 0, out
+    assert "::warning title=skill-gates::cms-platform/widget-polisher: SKILL.md was removed" in out
+
+
+def test_warn_only_turns_a_check_that_cannot_run_into_a_warning(tmp_path):
+    repo = make_repo(tmp_path)
+    code, out = gate(repo, base="0" * 40)
+    assert code == 2, out
+    code, out = gate(repo, base="0" * 40, extra=("--warn-only",))
+    assert code == 0, out
+    assert "skill-gates (warning): the check could not run" in out
+    assert "merge-base" in out
+
+
+def test_warn_only_outside_a_git_repo_exits_0(tmp_path):
+    code, out = gate(tmp_path, base="HEAD^1", head="HEAD", extra=("--warn-only",))
+    assert code == 0, out
+    assert "could not run" in out
+
+
+def test_step_summary_is_written_in_both_modes(tmp_path):
+    repo = make_repo(tmp_path)
+    remove_skill(repo)
+    commit(repo)
+    for mode, extra, label in (("warn", ("--warn-only",), "would fail once enforcing"),
+                               ("enforce", (), "failures")):
+        summary = tmp_path / f"summary-{mode}.md"
+        gate(repo, env={"GITHUB_STEP_SUMMARY": str(summary)}, extra=extra)
+        text = summary.read_text(encoding="utf-8")
+        assert text.startswith("## Skill gates ("), text
+        assert f"**1 {label}:**" in text, text
+        assert "SKILL.md was removed" in text
+        assert "the header of `docs/skill-impact.md`" in text
+
+
+def test_step_summary_records_a_check_that_cannot_run(tmp_path):
+    repo = make_repo(tmp_path)
+    summary = tmp_path / "summary.md"
+    code, _ = gate(repo, base="0" * 40, env={"GITHUB_STEP_SUMMARY": str(summary)},
+                   extra=("--warn-only",))
+    assert code == 0
+    assert "the check could not run" in summary.read_text(encoding="utf-8")
 
 
 def test_retire_loop_entry_passes(tmp_path):

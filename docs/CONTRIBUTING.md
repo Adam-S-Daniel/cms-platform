@@ -117,11 +117,13 @@ checks on a plain PR). It runs six FAST lanes on `pull_request` + `push` to `mai
 6. **python-unit-tests** — `python3 -m pytest scripts/cross_post scripts/skill_gates oauth-proxy -q`
    (the cross-post suite, the skill-gates suite and the OAuth proxy's
    `oauth-proxy/test_lambda.py`; hard-fail; REQUIRED since #525). On a pull
-   request that changes `skills/` or `docs/skill-impact.md` (an in-job salience
-   step; the job always reports), it then runs
-   `scripts/skill_gates/check_skill_gates.py --base <base sha> --head <head sha>`,
-   the skill graduation and touch gates (AGENTS.md "Skill changes are recorded,
-   and evals gate them"). Run it locally against your branch with
+   request that changes `skills/`, `docs/skill-impact.md` or
+   `scripts/skill_gates/` (an in-job salience step; the job always reports), it
+   then runs `scripts/skill_gates/check_skill_gates.py --warn-only --base HEAD^1
+   --head HEAD` on the PR merge commit: the skill graduation and touch gates,
+   whose rules are in `docs/skill-impact.md`'s header. Warn-only for now: its
+   findings are `::warning::` lines and a step-summary section, never a
+   failure. Run it locally, enforcing, with
    `python3 scripts/skill_gates/check_skill_gates.py --base origin/main --head HEAD`.
 
 `self-secrets-scan.yml` (#126) runs alongside it as its own workflow,

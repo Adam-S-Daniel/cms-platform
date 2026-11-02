@@ -258,8 +258,8 @@ deleted in v0.1.83. → `docs/SYNC.md` § Skills, `docs/VERSION-HISTORY.md` v0.1
 
 ### Skill changes are recorded, and evals gate them
 
-PR-time, in python-unit-tests: `scripts/skill_gates/check_skill_gates.py`
-(rules in its docstring; adam-agentskills#66).
+The rules are in `docs/skill-impact.md`'s header; python-unit-tests checks
+them (warn-only for now) with `scripts/skill_gates/check_skill_gates.py`.
 
 ## Every cross-post target gets text in ITS format, never raw Markdown
 
@@ -411,7 +411,7 @@ no-op for anyone but Dependabot. → `docs/CONTRIBUTING.md`.
 
 | PR/push workflow | Salient paths |
 |---|---|
-| `self-ci.yml`, `self-secrets-scan.yml` | all (required; no filter; skill gates in-job: `skills/`, `docs/skill-impact.md`) |
+| `self-ci.yml`, `self-secrets-scan.yml` | all (required; no filter; skill gates in-job: `skills/`, `docs/skill-impact.md`, `scripts/skill_gates/`) |
 | `self-fixture-e2e.yml` | in-job deny-list: all but `docs/`, `infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE`, `*.md` outside `e2e/fixture-site/` and `e2e/fixture-site-singlepage/`; push to main always |
 | `self-release-review-gate.yml` | all (required; in-job: enforces only on a release-bearing PR, success otherwise) |
 | `self-dependabot-auto-merge.yml` | all (an actuator, skipped unless Dependabot) |

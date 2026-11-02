@@ -4,8 +4,9 @@ and touch gates on a pull request, from what the pull request itself records.
 
 Why this exists
 ----------------
-docs/skill-impact.md and AGENTS.md ("Skill changes are recorded, and evals
-gate them") set the rules for any change to a skill under `skills/`:
+The header of docs/skill-impact.md states the rules for any change to a skill
+under `skills/` (AGENTS.md "Skill changes are recorded, and evals gate them"
+points there):
 
 - every skill-content change appends an entry to docs/skill-impact.md, in the
   same pull request;
@@ -13,7 +14,10 @@ gate them") set the rules for any change to a skill under `skills/`:
 - touch gate: a pull request that edits an existing SKILL.md runs that
   skill's eval or adds its first fixture, unless the skill is in
   skills-evals' deliberate non-coverage table;
-- docs/skill-impact.md is append-only: a wrong entry gets a correcting entry.
+- a removal has a `remove` entry; a renamed skill directory is a create plus
+  a remove, each with its own entry;
+- docs/skill-impact.md is append-only: a wrong entry, a later eval result or
+  an Outcome update is a new entry.
 
 Until this script they were prose only, and the impact log shows edits landing
 with "Eval: outstanding" (Adam-S-Daniel/adam-agentskills#66 item 3, "Both
@@ -31,12 +35,15 @@ result instead: the `- Eval:` line of the pull request's new impact entry.
 
 What it diffs
 --------------
-`git merge-base <base> <head>`, never `<base>` itself. In CI `--base` is the
-base branch's CURRENT tip (`pull_request.base.sha`), which can be ahead of
-where the branch forked; diffing from it would attribute main's own later
-skill edits (and their impact entries) to this pull request. A merge-base
-that cannot be resolved (a shallow checkout, an unknown sha) exits 2 with a
-named error rather than guessing. Every file is read from the git object
+`git merge-base <base> <head>`, never `<base>` itself: a `<base>` ahead of
+where the branch forked would otherwise attribute the base's own later skill
+edits (and their impact entries) to the branch. In CI, self-ci.yml passes
+`--base HEAD^1 --head HEAD` on the pull request's merge commit (the base tip
+and the merge result), so the merge-base is HEAD^1 by construction and a
+`fetch-depth: 2` checkout is enough (cms-platform#541). Locally,
+`--base origin/main --head HEAD` works the same way. A merge-base that cannot
+be resolved (a shallow checkout, an unknown sha) exits 2 with a named error
+rather than guessing. Every file is read from the git object
 store (`git show <rev>:<path>`), never from the working tree.
 
 Only `skills/<skill>/SKILL.md` counts: create (absent at the merge-base,
@@ -51,7 +58,9 @@ line: an entry is an h2 heading `<YYYY-MM-DD> — cms-platform/<skills> —
 excluded), so the example heading inside the "Entry format" code fence is a
 `fence` token and is never read as an entry. `<skills>` is one skill name, a
 comma-separated list of them (`a, b`), or an aggregate such as `(13 skills)`,
-which is a valid entry that names no skill and so satisfies no gate. A NEW h2
+which is a valid entry that names no skill and so satisfies no gate. A
+`rename` entry naming `old → new` is not a form this check reads: record a
+rename as a `create` and a `remove` entry. A NEW h2
 that starts with a date but does not have that shape fails, naming the
 heading. The Eval text is the inline content of the list item that starts
 with `Eval:` (a wrapped bullet's continuation lines are the same inline
@@ -71,8 +80,13 @@ create and remove gates never consult it (a brand-new skill is never in it).
 Accepted Eval forms
 --------------------
 - RAN: a pass count such as `21/21` or a routine run id such as
-  `20261026T211234Z-1b7681`, and the line does not start with `none`, `not
-  run` or `outstanding`.
+  `20261026T211234Z-1b7681`, and the line does not negate it.
+- A negation anywhere in the line (`none` at its start, `not run`, `not yet
+  run`, `never run`, `did not run`, `no run`, `nothing run`, `not exempt`,
+  `outstanding`, `skipped` other than `judge skipped`) voids RAN, EXEMPT and
+  GREEN for that line;
+  FIRST_FIXTURE still counts (`not run; first fixture in ...` is the natural
+  gap form).
 - FIRST_FIXTURE: a skills-evals pull request link (`skills-evals/pull/N`) or
   the path `evals/<skill>/`.
 - EXEMPT: the word `exempt`.
@@ -86,13 +100,21 @@ skills-evals' retirement pull requests (`retire-skill/<skill>`,
 scripts/retire_skill.py) write a `remove` entry and pass as written; the
 tests pin that format.
 
+Warn-only mode
+---------------
+`--warn-only` reports every failure as a warning and always exits 0, even
+when the check could not run (exit 2 otherwise) or crashed. self-ci.yml runs
+it that way for now; dropping the flag makes it enforcing. When
+`$GITHUB_STEP_SUMMARY` is set, the findings are also written there as
+Markdown, in both modes.
+
 Usage:
   python3 scripts/skill_gates/check_skill_gates.py --base <rev> --head <rev> \\
-      [--census <path|https-url|none>]
+      [--census <path|https-url|none>] [--warn-only]
 
-Exit 0: every rule met (warnings may print). Exit 1: one or more failures,
-all listed. Exit 2: the check could not run (git error, unresolvable
-merge-base).
+Exit 0: every rule met (warnings may print), or `--warn-only`. Exit 1: one or
+more failures, all listed. Exit 2: the check could not run (git error,
+unresolvable merge-base).
 """
 
 import argparse
@@ -128,7 +150,15 @@ _AGGREGATE = re.compile(r"^\(\d+ skills\)$")
 # Lexical tokens inside one already-parsed Eval text.
 _COUNT = re.compile(r"(?<![\d.])(\d+)/(\d+)(?!\d|\.\d)")
 _RUN_ID = re.compile(r"\b\d{8}T\d{6}Z(?:-[0-9a-f]{6})?\b")
-_NOT_RUN = re.compile(r"^[\s`]*(?:none|not run|outstanding)\b", re.IGNORECASE)
+_NEGATION = re.compile(
+    r"^[\s`]*none\b"
+    r"|\b(?:not|never)(?:\s+(?:yet|been|re-?run|be))*\s+(?:re-?)?run\b"
+    r"|n't(?:\s+(?:yet|been))*\s+(?:re-?)?run\b"
+    r"|\b(?:nothing|no)\s+(?:evals?\s+)?(?:re-?)?run\b"
+    r"|\bnot\s+exempt\b"
+    r"|\boutstanding\b"
+    r"|(?<!judge )\bskipped\b",
+    re.IGNORECASE)
 _EVALS_PR = re.compile(r"skills-evals/pull/\d+")
 _EXEMPT = re.compile(r"\bexempt\b", re.IGNORECASE)
 _RESULTS_LINK = re.compile(r"https://\S*eval-results\S*")
@@ -214,8 +244,11 @@ def _parse_heading(heading: str) -> Tuple[Optional[dict], Optional[str]]:
         skills = [s.strip() for s in names.split(",")]
         bad = [s for s in skills if not _SKILL_NAME.match(s)]
         if bad:
+            hint = ("; a rename is a `create` entry for the new name plus a `remove` entry "
+                    "for the old one" if any("→" in s or "->" in s for s in bad)
+                    else " (list several as `a, b`)")
             return None, (f"names {', '.join(repr(s) for s in bad)}, not a skill directory "
-                          "name (list several as `a, b`)")
+                          f"name{hint}")
     return {"date": date, "bundle": bundle, "skills": skills, "kind": kind}, None
 
 
@@ -292,8 +325,12 @@ def append_only_violations(head: List[dict], base: List[dict]) -> List[str]:
 # Eval evidence
 # ---------------------------------------------------------------------------
 
+def is_negated(text: str) -> bool:
+    return bool(_NEGATION.search(text))
+
+
 def is_ran(text: str) -> bool:
-    return bool(not _NOT_RUN.match(text) and (_COUNT.search(text) or _RUN_ID.search(text)))
+    return bool(not is_negated(text) and (_COUNT.search(text) or _RUN_ID.search(text)))
 
 
 def is_first_fixture(text: str, skill: str) -> bool:
@@ -301,10 +338,12 @@ def is_first_fixture(text: str, skill: str) -> bool:
 
 
 def is_exempt(text: str) -> bool:
-    return bool(_EXEMPT.search(text))
+    return bool(not is_negated(text) and _EXEMPT.search(text))
 
 
 def is_green(text: str) -> bool:
+    if is_negated(text):
+        return False
     w, wo = _WITH.search(text), _WITHOUT.search(text)
     if not w or not wo:
         return False
@@ -406,7 +445,7 @@ def check_create(rep, added, skill):
     if any(is_green(e["eval"]) for e in entries):
         return
     rep.fail(who, "the `create` entry's Eval line does not show a green with_skill arm",
-             "AGENTS.md's graduation gate requires a green `with_skill` arm before a skill graduates",
+             "docs/skill-impact.md's graduation gate requires a green `with_skill` arm before a skill graduates",
              "Run the skill's fixtures through the skills-evals eval routine and write "
              "`with_skill objective X/Y, without_skill A/B` (X > 0, X/Y >= A/B) with the run id "
              "or results link on the Eval line")
@@ -431,19 +470,19 @@ def check_touch(rep, added, skill, census, census_why):
     if status == "covered":
         if not ran:
             rep.fail(who, "the Eval line shows no eval run, and the census lists the skill as covered",
-                     "AGENTS.md's touch gate requires a covered skill's eval to run on every SKILL.md edit",
+                     "docs/skill-impact.md's touch gate requires a covered skill's eval to run on every SKILL.md edit",
                      run_fix[0].upper() + run_fix[1:])
     elif status == "skipped":
         if not (ran or exempt):
             rep.fail(who, "the Eval line shows neither an eval run nor `exempt`, and the census "
                      "lists the skill as deliberately not covered",
-                     "AGENTS.md exempts a skill in the non-coverage table, but the entry must say so",
+                     "docs/skill-impact.md accepts `exempt` for a skill in the non-coverage table, but the entry must say so",
                      "Write `exempt (DESIGN.md non-coverage table)` on the Eval line, or " + run_fix)
     elif status == "gap":
         if not (ran or first):
             rep.fail(who, "the Eval line shows neither an eval run nor a first fixture, and the "
                      "census lists the skill as having no fixture",
-                     "AGENTS.md's touch gate requires either a run or the skill's first fixture",
+                     "docs/skill-impact.md's touch gate requires either a run or the skill's first fixture",
                      "Link the skills-evals pull request adding `evals/" + skill + "/` on the Eval "
                      "line, or " + run_fix)
     elif not (ran or exempt or first):
@@ -457,7 +496,7 @@ def check_touch(rep, added, skill, census, census_why):
                  "so the touch gate could not decide it; missing data never blocks")
 
 
-def run(base: str, head: str, census_source: str) -> Tuple[int, List[str]]:
+def run(base: str, head: str, census_source: str) -> Tuple[int, List[str], Report]:
     out: List[str] = []
     point = merge_base(base, head)
     created, removed, touched = skill_changes(skill_blobs(point), skill_blobs(head))
@@ -513,17 +552,35 @@ def run(base: str, head: str, census_source: str) -> Tuple[int, List[str]]:
         out.append(f"skill-gates: merge-base {point[:12]}; checked {len(created)} created, "
                    f"{len(touched)} edited, {len(removed)} removed skill(s) "
                    f"against {len(added)} new impact entr{'y' if len(added) == 1 else 'ies'}")
-    annotate = os.environ.get("GITHUB_ACTIONS") == "true"
-    for w in rep.warnings:
-        if annotate:
-            esc = w.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-            out.append(f"::warning title=skill-gates::{esc}")
-        else:
-            out.append(f"skill-gates (warning): {w}")
-    out.extend(rep.failures)
-    if rep.failures:
-        out.append(f"skill-gates: {len(rep.failures)} failure(s)")
-    return (1 if rep.failures else 0), out
+    return (1 if rep.failures else 0), out, rep
+
+
+def _annotation(text: str) -> str:
+    esc = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::warning title=skill-gates::{esc}"
+
+
+def _write_summary(head_line: str, failures: List[str], warnings: List[str],
+                   warn_only: bool) -> None:
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    mode = "warn-only" if warn_only else "enforcing"
+    lines = [f"## Skill gates ({mode})", "", head_line, ""]
+    if failures:
+        label = "would fail once enforcing" if warn_only else "failures"
+        lines += [f"**{len(failures)} {label}:**", ""] + [f"- {f.removeprefix('skill-gates: ')}" for f in failures] + [""]
+    if warnings:
+        lines += [f"**{len(warnings)} warning(s):**", ""] + [f"- {w}" for w in warnings] + [""]
+    if not failures and not warnings:
+        lines += ["No findings.", ""]
+    rules = "Rules: the header of `docs/skill-impact.md`."
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines + [rules, ""]))
+    except OSError as exc:
+        print(f"skill-gates: could not write the step summary ({type(exc).__name__})",
+              file=sys.stderr)
 
 
 def main(argv=None) -> int:
@@ -532,15 +589,48 @@ def main(argv=None) -> int:
     ap.add_argument("--head", required=True)
     ap.add_argument("--census", default=DEFAULT_CENSUS,
                     help="path or https URL of the coverage census, or `none`")
+    ap.add_argument("--warn-only", action="store_true",
+                    help="report failures and errors as warnings and always exit 0")
     args = ap.parse_args(argv)
+    annotate = os.environ.get("GITHUB_ACTIONS") == "true"
+
+    def warn(text: str) -> None:
+        print(_annotation(text) if annotate else f"skill-gates (warning): {text}")
+
     try:
-        code, lines = run(args.base, args.head, args.census)
+        code, lines, rep = run(args.base, args.head, args.census)
     except GateError as exc:
-        print(f"skill-gates: error: {exc}", file=sys.stderr)
-        return 2
-    for line in lines:
-        print(line)
-    return code
+        error = f"the check could not run: {exc}"
+    except Exception as exc:  # a crash; enforcing mode lets the traceback show
+        if not args.warn_only:
+            raise
+        error = f"the check crashed: {type(exc).__name__}: {exc}"
+    else:
+        for line in lines:
+            print(line)
+        for w in rep.warnings:
+            warn(w)
+        if args.warn_only:
+            for f in rep.failures:
+                warn(f.removeprefix("skill-gates: "))
+            if rep.failures:
+                print(f"skill-gates: {len(rep.failures)} finding(s) that would fail once "
+                      "enforcing; warn-only, so exit 0")
+        else:
+            for f in rep.failures:
+                print(f)
+            if rep.failures:
+                print(f"skill-gates: {len(rep.failures)} failure(s)")
+        _write_summary(lines[0], rep.failures, rep.warnings, args.warn_only)
+        return 0 if args.warn_only else code
+
+    # The check could not run.
+    _write_summary(error, [], [], args.warn_only)
+    if args.warn_only:
+        warn(error)
+        return 0
+    print(f"skill-gates: error: {error}", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
