@@ -277,6 +277,7 @@
     scan: "the scan for passwords or keys pasted in by mistake",
     "prerelease-guard":
       "the check that {{destination}} will be built with a finished version of its publishing system, not a trial one",
+    "agent-checks": "a housekeeping check on how the change is described",
     reap: "a housekeeping step",
     preview: "building the preview",
     "auto-merge": "the automatic publish step",

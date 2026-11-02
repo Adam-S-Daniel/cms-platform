@@ -436,6 +436,15 @@ ruleset_library:
             # missing-check trap to stub. Added ONLY after both consumers published
             # it: jodidaniel.com#236 and adamdaniel.ai#3464 (2026-09-01, v0.1.98).
             - context: site-verify / site-verify
+            # why: the fleet's agent-checks runner (TLDR rule and the rest), run by
+            # the platform-dictated caller (site-agent-checks.yml, #941). A Decap
+            # PR (head under cms/) or a bot's PR only warns, so publishing and bot
+            # bumps never block on it. Its caller carries no path filter and fires
+            # on `edited`, so a fixed description re-runs it. Added ONLY after both
+            # consumers published it green: the v0.1.170 bumps adamdaniel.ai#4582
+            # and jodidaniel.com#463 (bot PRs) and the Decap PRs
+            # adamdaniel.ai#4585-#4588 (2026-11-02).
+            - context: agent-checks / agent-checks
     bypass_actors: []
 
   # consumer-main-jodidaniel-DRIFTED removed 2026-07-22 (phase 2, #172):
