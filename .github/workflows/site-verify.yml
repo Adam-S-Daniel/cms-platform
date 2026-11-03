@@ -82,7 +82,7 @@ jobs:
 
       - name: Set up Ruby
         if: steps.detect.outputs.verifier == 'true' || steps.detect.outputs.selftests == 'true'
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
         with:
           # Tracks deploy-preview.yml's `ruby_version` default, so the tree
           # this verifies is built by the same Ruby that builds the deploys.
