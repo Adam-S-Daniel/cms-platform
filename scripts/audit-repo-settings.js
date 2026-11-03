@@ -1256,11 +1256,20 @@ function buildComment({ findings, informational, nowIso }) {
   ].join("\n");
 }
 
-function buildCloseComment({ nowIso }) {
+function buildCloseComment({ nowIso, runUrl }) {
   return (
-    `Live settings match repo-settings.yml again (scanned at ${nowIso}) — closing. ` +
+    `Live settings match repo-settings.yml again (scanned at ${nowIso}` +
+    (runUrl ? `, clean run: ${runUrl}` : "") +
+    ") — closing. " +
     "The audit will reopen a fresh tracking issue if they drift apart again."
   );
+}
+
+// The URL of THIS audit run, for the close comment. Empty outside Actions.
+function runUrlFromEnv(env) {
+  const { GITHUB_SERVER_URL: server, GITHUB_REPOSITORY: repo, GITHUB_RUN_ID: id } =
+    env || {};
+  return server && repo && id ? `${server}/${repo}/actions/runs/${id}` : "";
 }
 
 // ── manifest loading / validation ───────────────────────────────────────────
@@ -1761,9 +1770,9 @@ function fetchEnvironments(repo, declaredNames, token, api = ghApi) {
   return out;
 }
 
-function findTrackingIssue(label) {
+function findTrackingIssue(label, api = ghApi) {
   const res = JSON.parse(
-    ghApi(
+    api(
       `repos/${ISSUE_REPO}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`,
     ),
   );
@@ -1777,11 +1786,11 @@ function findTrackingIssue(label) {
   );
 }
 
-function listIssueComments(number) {
+function listIssueComments(number, api = ghApi) {
   const comments = [];
   for (let page = 1; page <= 10; page++) {
     const batch = JSON.parse(
-      ghApi(
+      api(
         `repos/${ISSUE_REPO}/issues/${number}/comments?per_page=100&page=${page}`,
       ),
     );
@@ -1792,9 +1801,9 @@ function listIssueComments(number) {
 }
 
 // Best-effort label creation (422 already-exists is the normal case).
-function ensureLabel(label) {
+function ensureLabel(label, api = ghApi) {
   try {
-    ghApi(`repos/${ISSUE_REPO}/labels`, {
+    api(`repos/${ISSUE_REPO}/labels`, {
       fields: [
         `name=${label}`,
         "color=d93f0b",
@@ -1927,10 +1936,45 @@ function printReport(results) {
   }
 }
 
-function runIssueLifecycle({ findings, informational, label, dryRun, nowIso }) {
+// The apply workflow (repo-settings-apply.yml) converges the same drift this
+// audit reports, and both fire on the same manifest push. An audit that scans
+// while an apply is mid-flight reads the not-yet-converged state and files an
+// alert the apply is about to make false (#949, filed a minute before the
+// apply fixed it). `queued` and `in_progress` only: a run parked at the
+// reviewer gate has status `waiting` and may sit for days, and drift must
+// still be reported then. Returns the in-flight run URLs. A lookup failure
+// THROWS; the caller treats that as "not applying" (file the alert), because
+// a missed alert costs more than a premature one.
+const APPLY_WORKFLOW_FILE = "repo-settings-apply.yml";
+const APPLY_IN_FLIGHT_STATUSES = ["in_progress", "queued"];
+
+function findApplyRunsInFlight(api = ghApi) {
+  const urls = [];
+  for (const status of APPLY_IN_FLIGHT_STATUSES) {
+    const res = JSON.parse(
+      api(
+        `repos/${ISSUE_REPO}/actions/workflows/${APPLY_WORKFLOW_FILE}/runs?status=${status}&per_page=100`,
+      ),
+    );
+    for (const run of (res && res.workflow_runs) || []) {
+      if (run && typeof run.html_url === "string") urls.push(run.html_url);
+    }
+  }
+  return urls;
+}
+
+function runIssueLifecycle({
+  findings,
+  informational,
+  label,
+  dryRun,
+  nowIso,
+  api = ghApi,
+  env = process.env,
+}) {
   let issue;
   try {
-    issue = findTrackingIssue(label);
+    issue = findTrackingIssue(label, api);
   } catch (e) {
     console.error(
       `repo-settings-audit: failed to look up the tracking issue: ${e.message}`,
@@ -1944,10 +1988,12 @@ function runIssueLifecycle({ findings, informational, label, dryRun, nowIso }) {
       );
       if (!dryRun) {
         try {
-          ghApi(`repos/${ISSUE_REPO}/issues/${issue.number}/comments`, {
-            fields: [`body=${buildCloseComment({ nowIso })}`],
+          api(`repos/${ISSUE_REPO}/issues/${issue.number}/comments`, {
+            fields: [
+              `body=${buildCloseComment({ nowIso, runUrl: runUrlFromEnv(env) })}`,
+            ],
           });
-          ghApi(`repos/${ISSUE_REPO}/issues/${issue.number}`, {
+          api(`repos/${ISSUE_REPO}/issues/${issue.number}`, {
             method: "PATCH",
             fields: ["state=closed", "state_reason=completed"],
           });
@@ -1967,15 +2013,32 @@ function runIssueLifecycle({ findings, informational, label, dryRun, nowIso }) {
 
   // Drift: the ISSUE is the alert; this run stays green once it is filed.
   const summary = `${findings.length} drift finding(s) across ${new Set(findings.map((f) => f.repo)).size} repo(s)`;
+  let applying = [];
+  try {
+    applying = findApplyRunsInFlight(api);
+  } catch (e) {
+    console.error(
+      `::warning title=Repo settings::could not check for an apply run in progress (${e && e.message ? e.message.split("\n")[0] : "error"}); reporting drift anyway.`,
+    );
+  }
+  if (applying.length) {
+    // Nothing is filed or commented; the next audit (daily, or the next
+    // manifest push) re-checks, and closes the issue if the apply converged.
+    console.log(
+      `::notice title=Repo settings::${summary}, but a ${APPLY_WORKFLOW_FILE} run is in progress ` +
+        `(${applying.join(", ")}); deferring the alert to the next audit.`,
+    );
+    return 0;
+  }
   if (!issue) {
     console.log(
       `::notice title=Repo settings::${summary} — opening the tracking issue.`,
     );
     if (!dryRun) {
-      ensureLabel(label);
+      ensureLabel(label, api);
       try {
         const created = JSON.parse(
-          ghApi(`repos/${ISSUE_REPO}/issues`, {
+          api(`repos/${ISSUE_REPO}/issues`, {
             fields: [
               `title=${ISSUE_TITLE}`,
               `body=${buildIssueBody({ findings, informational, nowIso })}`,
@@ -2005,7 +2068,7 @@ function runIssueLifecycle({ findings, informational, label, dryRun, nowIso }) {
   try {
     reported = extractReportedFingerprints([
       issue.body,
-      ...listIssueComments(issue.number).map((c) => c.body),
+      ...listIssueComments(issue.number, api).map((c) => c.body),
     ]);
   } catch (e) {
     console.error(
@@ -2025,7 +2088,7 @@ function runIssueLifecycle({ findings, informational, label, dryRun, nowIso }) {
   );
   if (!dryRun) {
     try {
-      ghApi(`repos/${ISSUE_REPO}/issues/${issue.number}/comments`, {
+      api(`repos/${ISSUE_REPO}/issues/${issue.number}/comments`, {
         fields: [`body=${buildComment({ findings, informational, nowIso })}`],
       });
     } catch (e) {
@@ -2819,6 +2882,10 @@ module.exports = {
   buildIssueBody,
   buildComment,
   buildCloseComment,
+  runUrlFromEnv,
+  findApplyRunsInFlight,
+  runIssueLifecycle,
+  APPLY_WORKFLOW_FILE,
   buildFixPlan,
   printFixPlan,
   printReport,

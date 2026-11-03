@@ -3571,3 +3571,160 @@ test.describe("the plan says WHAT the actor and the ruleset are (#397 review)", 
     expect(put.context.url).toBe("https://github.com/Adam-S-Daniel/adamdaniel.ai/rules/15756474");
   });
 });
+
+// ── tracking-issue lifecycle vs an in-flight apply (#954) ────────────────────
+// runIssueLifecycle takes an injectable `api` (default: the gh-backed one), so
+// the whole lifecycle runs here against a recording fake with no network.
+test.describe("audit-repo-settings.js — issue lifecycle and the apply workflow (#954)", () => {
+  const NOW = "2026-11-03T09:17:00Z";
+  const ISSUE_ENDPOINT = (s) =>
+    `repos/${s.ISSUE_REPO}/issues?state=open&labels=ci&per_page=100`;
+  const RUNS = (s, status) =>
+    `repos/${s.ISSUE_REPO}/actions/workflows/${s.APPLY_WORKFLOW_FILE}/runs?status=${status}&per_page=100`;
+  const FINDING = [
+    { repo: "o/r", kind: "flag-drift", key: "has_wiki", live: true, desired: false },
+  ];
+
+  // Recording fake: routes GETs by exact endpoint, records every write.
+  function lifecycleApi(s, { issue = null, applyRuns = {}, applyThrows = false } = {}) {
+    const calls = [];
+    const api = (endpoint, opts = {}) => {
+      calls.push({ endpoint, method: opts.method || (opts.fields ? "POST" : "GET"), fields: opts.fields });
+      if (endpoint === ISSUE_ENDPOINT(s)) return JSON.stringify(issue ? [issue] : []);
+      for (const status of ["in_progress", "queued"]) {
+        if (endpoint === RUNS(s, status)) {
+          if (applyThrows) throw new Error("HTTP 403: Resource not accessible");
+          return JSON.stringify({ workflow_runs: applyRuns[status] || [] });
+        }
+      }
+      if (endpoint.endsWith("/comments?per_page=100&page=1")) return JSON.stringify([]);
+      return JSON.stringify({ number: 99, html_url: "https://github.com/o/r/issues/99" });
+    };
+    return { api, calls };
+  }
+  const writes = (calls) => calls.filter((c) => c.method !== "GET");
+  const quiet = (fn) => {
+    const log = console.log;
+    const err = console.error;
+    console.log = () => {};
+    console.error = () => {};
+    try {
+      return fn();
+    } finally {
+      console.log = log;
+      console.error = err;
+    }
+  };
+  const open = (s) => ({ number: 949, body: `${s.MARKER}\nold body` });
+  const run = (s, api, over = {}) =>
+    quiet(() =>
+      s.runIssueLifecycle({
+        findings: FINDING,
+        informational: [],
+        label: "ci",
+        dryRun: false,
+        nowIso: NOW,
+        api,
+        env: {},
+        ...over,
+      }),
+    );
+
+  test("drift with an apply run in progress files NOTHING (the #949 shape)", () => {
+    const s = loadScript();
+    const { api, calls } = lifecycleApi(s, {
+      applyRuns: { in_progress: [{ html_url: "https://github.com/o/r/actions/runs/1" }] },
+    });
+    expect(run(s, api)).toBe(0);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  test("a QUEUED apply run defers too; a run parked at the reviewer gate (status `waiting`) is never asked about", () => {
+    const s = loadScript();
+    const queued = lifecycleApi(s, {
+      applyRuns: { queued: [{ html_url: "https://github.com/o/r/actions/runs/2" }] },
+    });
+    expect(run(s, queued.api)).toBe(0);
+    expect(writes(queued.calls)).toEqual([]);
+    expect(s.findApplyRunsInFlight(queued.api)).toEqual(["https://github.com/o/r/actions/runs/2"]);
+    // `waiting` can last for days; deferring on it would mute the alert.
+    expect(queued.calls.some((c) => c.endpoint.includes("status=waiting"))).toBe(false);
+  });
+
+  test("drift with an existing issue and an apply in flight does not comment either", () => {
+    const s = loadScript();
+    const { api, calls } = lifecycleApi(s, {
+      issue: open(s),
+      applyRuns: { in_progress: [{ html_url: "https://github.com/o/r/actions/runs/1" }] },
+    });
+    expect(run(s, api)).toBe(0);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  test("drift with no apply in flight still opens the tracking issue", () => {
+    const s = loadScript();
+    const { api, calls } = lifecycleApi(s);
+    expect(run(s, api)).toBe(0);
+    const w = writes(calls);
+    expect(w).toHaveLength(2); // label create + issue create
+    expect(w[1].endpoint).toBe(`repos/${s.ISSUE_REPO}/issues`);
+  });
+
+  test("an unreadable apply-run list fails OPEN: the alert is still filed", () => {
+    const s = loadScript();
+    const { api, calls } = lifecycleApi(s, { applyThrows: true });
+    expect(run(s, api)).toBe(0);
+    expect(writes(calls).some((c) => c.endpoint === `repos/${s.ISSUE_REPO}/issues`)).toBe(true);
+  });
+
+  test("a clean scan comments (linking the clean run) and closes the open tracking issue, even with an apply in flight", () => {
+    const s = loadScript();
+    const { api, calls } = lifecycleApi(s, {
+      issue: open(s),
+      applyRuns: { in_progress: [{ html_url: "https://github.com/o/r/actions/runs/1" }] },
+    });
+    const env = {
+      GITHUB_SERVER_URL: "https://github.com",
+      GITHUB_REPOSITORY: "Adam-S-Daniel/cms-platform",
+      GITHUB_RUN_ID: "123456",
+    };
+    expect(run(s, api, { findings: [], env })).toBe(0);
+    const w = writes(calls);
+    expect(w.map((c) => c.endpoint)).toEqual([
+      `repos/${s.ISSUE_REPO}/issues/949/comments`,
+      `repos/${s.ISSUE_REPO}/issues/949`,
+    ]);
+    expect(w[0].fields[0]).toContain(
+      "clean run: https://github.com/Adam-S-Daniel/cms-platform/actions/runs/123456",
+    );
+    expect(w[1]).toMatchObject({ method: "PATCH", fields: ["state=closed", "state_reason=completed"] });
+  });
+
+  test("--dry-run closes and files nothing", () => {
+    const s = loadScript();
+    const open949 = lifecycleApi(s, { issue: open(s) });
+    expect(run(s, open949.api, { findings: [], dryRun: true })).toBe(0);
+    expect(writes(open949.calls)).toEqual([]);
+  });
+
+  test("buildCloseComment omits the run link outside Actions; runUrlFromEnv needs all three vars", () => {
+    const s = loadScript();
+    expect(s.buildCloseComment({ nowIso: NOW })).not.toContain("clean run");
+    expect(s.runUrlFromEnv({})).toBe("");
+    expect(s.runUrlFromEnv({ GITHUB_SERVER_URL: "https://github.com", GITHUB_REPOSITORY: "o/r" })).toBe("");
+  });
+
+  test("the audit workflow can read the apply workflow's runs and has no write-credential trigger", () => {
+    const { parseYaml, events } = require("./workflow-yaml-utils");
+    const doc = parseYaml(
+      fs.readFileSync(
+        path.resolve(__dirname, "../.github/workflows/repo-settings-audit.yml"),
+        "utf8",
+      ),
+    );
+    expect(doc.permissions).toMatchObject({ contents: "read", issues: "write", actions: "read" });
+    // `issues: write` under workflow_run breaks the trust-boundary lint.
+    expect(events(doc.on)).not.toContain("workflow_run");
+    expect(fs.existsSync(path.resolve(__dirname, "../.github/workflows", require(SCRIPT_PATH).APPLY_WORKFLOW_FILE))).toBe(true);
+  });
+});
