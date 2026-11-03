@@ -307,6 +307,11 @@ layer:
   inside the window already reported. This replaced a separate daily routine
   that read every workflow's latest run fleet-wide and opened fix PRs itself;
   detection now lives in one place and every fix goes through an issue.
+- **Cron cadence is best-effort, so never depend on it.** On a busy repo a
+  `*/5 * * * *` schedule was measured firing at 45-90 minute gaps, and daily and
+  weekly crons lag tens of minutes or more. A spec, timeout or budget must not
+  assume a cron backstop fires soon; anything that has to happen within minutes
+  needs an event-triggered path.
 - **Why 48h for a daily audit:** GitHub throttles crons on these repos
   (measured: `*/5` fires every 45-90 min; daily crons run 4-5h late), so two
   consecutive daily audit runs can be ~29h apart — a 24-25h window would
@@ -1020,6 +1025,12 @@ SAME "no deploy fired" symptom as a reflect miss. `confirmEditorDelete`
 (`e2e/cms-editor-ui.js`) now arms + awaits that `POST /git/trees` as
 dispatch-proof. Distinguish the two: a CREATE/reflect miss vs a DELETE no-op —
 see the `browser-testing` skill ("Native window.confirm()" → dispatch proof).
+
+That git-data path is the ONLY route the UI takes: it never calls
+`DELETE /repos/.../contents/<path>` (which the e2e token's direct-push rejection
+answers with 422), so the shim's contents-DELETE recovery path is unused by this
+flow and `cms-delete-published.spec.js` validates the user-facing contract, not
+the shim.
 
 **The #21 finding (triple-verified — trust it):** the 2099 e2e canary's OWN
 `/blog/<slug>/` page **builds correctly** and is correctly excluded from public
