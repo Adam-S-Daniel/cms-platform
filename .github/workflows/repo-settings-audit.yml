@@ -15,6 +15,13 @@
 # credential in CI — applying the manifest is a human running
 # `node scripts/audit-repo-settings.js --fix --yes` with their own gh auth.
 #
+# The audit DEFERS filing/commenting while a repo-settings-apply run is queued
+# or in progress (it reads the apply's not-yet-converged state otherwise, #954)
+# and closes its own open issue on any clean scan, linking that run. A
+# `workflow_run` trigger on the apply was rejected: the trust-boundary lint
+# forbids `issues: write` under it. The daily cron and the manifest-push
+# trigger are the re-checks.
+#
 # The audit run stays GREEN when it files/updates the alert (the issue is
 # the channel); red means the AUDIT itself broke (missing/expired
 # REPO_SETTINGS_READ_* PAT, API failure) — "red needs a human", the
@@ -52,6 +59,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read # list in-flight repo-settings-apply runs: defer the alert while one converges (#954)
 
 concurrency:
   group: repo-settings-audit

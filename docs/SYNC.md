@@ -348,7 +348,9 @@ skewed with no guard analogous to `platform-pin-consistency`.
   non-allowlisted field is fix-SKIPPED — the lossy-PUT guard). Anti-flap
   normalization is fixture-locked by `e2e/repo-settings-audit.test.js`.
 - `.github/workflows/repo-settings-audit.yml` — daily scheduled audit, plus
-  a push-triggered run on manifest changes. **No write credential in CI** —
+  a push-triggered run on manifest changes. It defers filing or commenting while a
+  `repo-settings-apply.yml` run is queued or in progress, and closes its own
+  tracking issue (linking the clean run) on any clean scan (#954). **No write credential in CI** —
   reads use per-owner fine-grained `REPO_SETTINGS_READ_*` PATs
   (Administration: **Read-only**; minting/verification in the
   `consumer-repo-provisioning` skill), writes are operator-only.
