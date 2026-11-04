@@ -50,13 +50,14 @@ def slugify(s: str, max_len: int = 60) -> str:
 
 
 def _clean(s, cap: int) -> str:
-    """One line, no control characters, capped."""
+    """One line, no control or format characters (bidi overrides, zero-width
+    joiners, ...), capped. safe_md adds its own word joiners after this runs."""
     out = []
     for ch in str(s or ""):
         cat = unicodedata.category(ch)
         if cat in ("Zl", "Zp") or ch in "\n\r\t":
             out.append(" ")
-        elif cat != "Cc":
+        elif cat not in ("Cc", "Cf"):
             out.append(ch)
     return " ".join("".join(out).split())[:cap].rstrip()
 
@@ -170,13 +171,19 @@ def render_pr(candidate: Candidate, kind: str, entry: Entry, verdict: Verdict,
     return title, body
 
 
-def render_digest(site_name: str, new_prs, unconfirmed) -> tuple[str, str] | None:
-    if not new_prs and not unconfirmed:
+def render_digest(site_name: str, new_prs, unconfirmed, would_open=()) -> tuple[str, str] | None:
+    """The run's email. `new_prs` is (pr title, PR URL, admin URL) per opened PR;
+    `would_open` is (candidate, entry) per confirmed find in email-only mode;
+    `unconfirmed` is (candidate, reasons)."""
+    if not new_prs and not would_open and not unconfirmed:
         return None
     site = _clean(site_name, 100)
     if new_prs:
         n = len(new_prs)
         subject = f"{n} new {'find' if n == 1 else 'finds'} for {site} to review"
+    elif would_open:
+        n = len(would_open)
+        subject = f"{n} confirmed {'find' if n == 1 else 'finds'} for {site} (email-only mode)"
     else:
         n = len(unconfirmed)
         subject = f"{n} unconfirmed {'find' if n == 1 else 'finds'} for {site}"
@@ -186,6 +193,14 @@ def render_digest(site_name: str, new_prs, unconfirmed) -> tuple[str, str] | Non
         for title, pr_url, admin_url in new_prs:
             lines += [f"- {_clean(title, 200)}", f"  Pull request: {_clean(pr_url, 500)}",
                       f"  Admin: {_clean(admin_url, 500)}"]
+        lines.append("")
+    if would_open:
+        lines += ["Confirmed, and would open a pull request in live mode (email-only mode "
+                  "is on, so none was opened):", ""]
+        for cand, entry in would_open:
+            lines += [f"- {_clean(cand.title, 200)} ({_clean(cand.outlet, 100)}, "
+                      f"{_clean(cand.date, 10)})", f"  {_clean(cand.primary_url, 500)}",
+                      f"  Would add: {_clean(entry.path, 200)}"]
         lines.append("")
     if unconfirmed:
         lines += ["Found but not confirmed (no pull request was opened):", ""]

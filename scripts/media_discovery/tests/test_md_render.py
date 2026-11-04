@@ -172,3 +172,30 @@ def test_digest():
     only_unconfirmed = render_digest("S", [], [(make_candidate(), [])])
     assert only_unconfirmed[0] == "1 unconfirmed find for S"
     assert render_digest("S", [("t", "u", "a")] * 3, [])[0] == "3 new finds for S to review"
+
+
+def test_format_characters_are_stripped_before_safe_md_adds_word_joiners():
+    # U+202E RIGHT-TO-LEFT OVERRIDE, U+200B ZERO WIDTH SPACE, U+2066 LEFT-TO-RIGHT
+    # ISOLATE and a word joiner smuggled in by the page itself: all category Cf.
+    raw = "Open‮ Data​ in⁦ Practice⁠ @octocat"
+    f = front(render_entry(make_candidate(title=raw), "press", CFG))
+    assert f["title"] == "Open Data in Practice @octocat"
+    out = safe_md(raw)
+    assert out == f"Open Data in Practice @{WORD_JOINER}octocat"
+    assert out.count(WORD_JOINER) == 1 and "‮" not in out and "​" not in out
+
+
+def test_digest_lists_would_open_finds_in_email_only_mode():
+    c = make_candidate()
+    e = render_entry(c, "past_talk", CFG)
+    subject, text = render_digest("Example Site", [], [], [(c, e)])
+    assert subject == "1 confirmed find for Example Site (email-only mode)"
+    assert "would open a pull request in live mode" in text
+    assert "Would add: _media/1-open-data-in-practice.md" in text
+    assert c.primary_url in text
+    subject, text = render_digest("S", [], [(make_candidate(), ["x"])], [(c, e), (c, e)])
+    assert subject == "2 confirmed finds for S (email-only mode)"
+    assert "Found but not confirmed" in text
+    # Opened PRs still lead the subject when both are present.
+    assert render_digest("S", [("t", "u", "a")], [], [(c, e)])[0] == \
+        "1 new find for S to review"

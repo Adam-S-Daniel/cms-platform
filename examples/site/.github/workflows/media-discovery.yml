@@ -1,0 +1,48 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/media-discovery.yml`. Owns the weekly schedule +
+# workflow_dispatch + run-name; delegates to the platform's reusable, which
+# asks Claude to find new talks, podcasts, press, articles and briefs about the
+# site's person, checks each against two independent sources, and opens one
+# /admin "In review" entry per confirmed find. See docs/MEDIA-DISCOVERY.md.
+#
+# A site WITHOUT `.github/media-discovery.yml` gets a green no-op run in
+# seconds. To turn it on, add that file, then:
+#   - secret ANTHROPIC_API_KEY — the Claude API key (without it: a notice).
+#   - secrets MEDIA_DISCOVERY_SMTP_USER (also the From address),
+#     MEDIA_DISCOVERY_SMTP_PASSWORD and MEDIA_DISCOVERY_MAIL_TO
+#     (comma-separated) — the weekly digest email (without them: a notice).
+#   - variable MEDIA_DISCOVERY_MODE — `live` opens PRs; anything else, or
+#     unset, is email-only (the digest lists what it WOULD open).
+#   - live mode also needs the CMS automation App: variable
+#     CMS_AUTOMATION_APP_ID + secret CMS_AUTOMATION_APP_PRIVATE_KEY.
+#   - variable MEDIA_DISCOVERY_REVIEWERS (optional) — comma-separated GitHub
+#     logins requested as reviewers on each PR.
+# The reusable reads the variables itself (`vars` resolves to this repo's), so
+# there is no `with:` key for them. Keep `platform_ref` equal to the `@vX.Y.Z`
+# pin on the `uses:` line.
+name: Media discovery
+run-name: >-
+  ${{ github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  schedule:
+    # Mondays 13:00 UTC = 8 AM EST / 9 AM EDT.
+    - cron: '0 13 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  media-discovery:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/media-discovery.yml@v0.1.171
+    with:
+      platform_ref: v0.1.171
+    secrets:
+      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+      smtp_user: ${{ secrets.MEDIA_DISCOVERY_SMTP_USER }}
+      smtp_password: ${{ secrets.MEDIA_DISCOVERY_SMTP_PASSWORD }}
+      mail_to: ${{ secrets.MEDIA_DISCOVERY_MAIL_TO }}

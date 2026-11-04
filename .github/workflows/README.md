@@ -99,6 +99,25 @@ detects the post, prints one `::notice::`, and does nothing else — the
 caller template's own defaults, so a freshly-adopted site gets a harmless
 no-op.
 
+## `media-discovery.yml`
+
+Weekly: asks Claude to search the web for new talks, podcasts, press,
+articles and briefs about the site's person, re-fetches and corroborates every
+source, and (in live mode) opens one Decap editorial-workflow PR per confirmed
+find, plus one digest email per run. A site without
+`.github/media-discovery.yml` gets a green no-op. Mode, reviewers and the App id
+come from the caller's `vars`. Full write-up: `docs/MEDIA-DISCOVERY.md`.
+
+| Input | Required | Default | Notes |
+|---|---|---|---|
+| `platform_ref` | ✓ | — | pin to the `uses:` ref |
+
+| Secret | Required | Notes |
+|---|---|---|
+| `anthropic_api_key` | | the caller's `ANTHROPIC_API_KEY`; unset is a `::notice::` and a no-op |
+| `app_private_key` | | the caller's `CMS_AUTOMATION_APP_PRIVATE_KEY`; live mode only |
+| `smtp_user`, `smtp_password`, `mail_to` | | the caller's `MEDIA_DISCOVERY_SMTP_USER` / `_SMTP_PASSWORD` / `_MAIL_TO`; unset means no email, with a `::notice::` |
+
 ## Permissions
 
 Reusable workflows are capped by the **caller's** `GITHUB_TOKEN` permissions, so
