@@ -10,9 +10,24 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.170)
+## Version history (v0.1.0 → v0.1.171)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.171 — The scheduled-run health audit lists every run on a busy repo instead of reading the API's 1,000-result cap as truncation.**
+The first-parent range since v0.1.170 holds seventeen entries on main before this release PR: six squash commits ([#945](https://github.com/Adam-S-Daniel/cms-platform/pull/945), [#948](https://github.com/Adam-S-Daniel/cms-platform/pull/948), [#955](https://github.com/Adam-S-Daniel/cms-platform/pull/955), [#960](https://github.com/Adam-S-Daniel/cms-platform/pull/960), [#961](https://github.com/Adam-S-Daniel/cms-platform/pull/961), [#962](https://github.com/Adam-S-Daniel/cms-platform/pull/962)) and eleven merge commits ([#944](https://github.com/Adam-S-Daniel/cms-platform/pull/944), [#947](https://github.com/Adam-S-Daniel/cms-platform/pull/947), [#950](https://github.com/Adam-S-Daniel/cms-platform/pull/950), [#951](https://github.com/Adam-S-Daniel/cms-platform/pull/951), [#956](https://github.com/Adam-S-Daniel/cms-platform/pull/956), [#957](https://github.com/Adam-S-Daniel/cms-platform/pull/957), [#958](https://github.com/Adam-S-Daniel/cms-platform/pull/958), [#964](https://github.com/Adam-S-Daniel/cms-platform/pull/964), [#965](https://github.com/Adam-S-Daniel/cms-platform/pull/965), [#959](https://github.com/Adam-S-Daniel/cms-platform/pull/959), [#967](https://github.com/Adam-S-Daniel/cms-platform/pull/967)).
+
+Health audit. [#967](https://github.com/Adam-S-Daniel/cms-platform/pull/967) (closes [#966](https://github.com/Adam-S-Daniel/cms-platform/issues/966)) fixes `scripts/audit-scheduled-runs.js` on a repo with more than 1,000 matching runs in the window. The runs-list API returns at most 1,000 results for a filtered query, so skills-evals' default-branch `workflow_run` listing (about 2,500 runs in 48 hours) read as truncated and the audit went red every day. A truncated listing now splits its `created` window in halves (`created=A..B`, both ends inclusive) and lists each half, recursing until each piece fits or is one second wide. Runs are deduplicated by id, and a piece that still cannot fit keeps the listing truncated, so it never reads as healthy.
+
+Consumer rulesets. [#948](https://github.com/Adam-S-Daniel/cms-platform/pull/948) makes `agent-checks / agent-checks` a required check on both consumers' `main` ruleset.
+
+Repo-settings audit. [#955](https://github.com/Adam-S-Daniel/cms-platform/pull/955) defers drift alerts while a `repo-settings-apply.yml` run is queued or in progress, and links the clean run when it closes a drift issue.
+
+CI and docs. [#945](https://github.com/Adam-S-Daniel/cms-platform/pull/945) adds the skill graduation and touch gates, warn-only. [#959](https://github.com/Adam-S-Daniel/cms-platform/pull/959) adds two CI facts to `docs/CI-INVARIANTS.md`.
+
+Dependencies and agent tooling. [#960](https://github.com/Adam-S-Daniel/cms-platform/pull/960), [#961](https://github.com/Adam-S-Daniel/cms-platform/pull/961) and [#962](https://github.com/Adam-S-Daniel/cms-platform/pull/962) are Dependabot bumps. [#944](https://github.com/Adam-S-Daniel/cms-platform/pull/944), [#947](https://github.com/Adam-S-Daniel/cms-platform/pull/947), [#951](https://github.com/Adam-S-Daniel/cms-platform/pull/951), [#956](https://github.com/Adam-S-Daniel/cms-platform/pull/956), [#958](https://github.com/Adam-S-Daniel/cms-platform/pull/958), [#964](https://github.com/Adam-S-Daniel/cms-platform/pull/964) and [#965](https://github.com/Adam-S-Daniel/cms-platform/pull/965) sync agent hooks and checks from `_agent-guidance`, and [#950](https://github.com/Adam-S-Daniel/cms-platform/pull/950) and [#957](https://github.com/Adam-S-Daniel/cms-platform/pull/957) re-pin `skills.lock`.
+
+Consumer effect. A consumer's `scheduled-run-health` caller runs the reusable at the release it pins, so adopting v0.1.171 brings the window split to that site; `_agent-guidance`'s lockfile-safe copy picks it up when its `.github/health-audit-platform-ref` moves to v0.1.171. No live consumer verification is claimed in this entry.
 
 **v0.1.170 — Consumer sites get a platform-dictated agent-checks caller, and agent-checks re-runs on PR description edits.**
 The first-parent range since v0.1.169 holds seven entries on main before this release PR: two squash commits ([#940](https://github.com/Adam-S-Daniel/cms-platform/pull/940), [#941](https://github.com/Adam-S-Daniel/cms-platform/pull/941)) and five merge commits ([#934](https://github.com/Adam-S-Daniel/cms-platform/pull/934), [#936](https://github.com/Adam-S-Daniel/cms-platform/pull/936), [#937](https://github.com/Adam-S-Daniel/cms-platform/pull/937), [#939](https://github.com/Adam-S-Daniel/cms-platform/pull/939), [#938](https://github.com/Adam-S-Daniel/cms-platform/pull/938)).
