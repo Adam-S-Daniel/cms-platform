@@ -307,6 +307,10 @@ layer:
   inside the window already reported. This replaced a separate daily routine
   that read every workflow's latest run fleet-wide and opened fix PRs itself;
   detection now lives in one place and every fix goes through an issue.
+- **Cron cadence is best-effort, so never depend on it.** A spec, timeout or
+  budget must not assume a cron backstop fires soon (the measured lag is in the
+  next bullet); anything that has to happen within minutes needs an
+  event-triggered path.
 - **Why 48h for a daily audit:** GitHub throttles crons on these repos
   (measured: `*/5` fires every 45-90 min; daily crons run 4-5h late), so two
   consecutive daily audit runs can be ~29h apart — a 24-25h window would
@@ -1013,13 +1017,24 @@ URL never reflects, `e2e/deploy-pill.js#waitForChangeReflected` asks the
 waiting (backlog draining) or give up (real miss).
 
 **The DELETE leg (v0.1.17, #45):** the loops also DELETE the canary via the
-editor and wait for `/blog/<slug>/` to 404. A "Delete published entry" commits
-DIRECT to main via the git data API (`POST …/git/trees`), but the old call site
+editor and wait for `/blog/<slug>/` to 404. A "Delete published entry" goes
+through the git data API (`POST …/git/trees`), but the old call site
 had no proof the dispatch fired, so a silent no-op surfaced 900s later as the
 SAME "no deploy fired" symptom as a reflect miss. `confirmEditorDelete`
 (`e2e/cms-editor-ui.js`) now arms + awaits that `POST /git/trees` as
 dispatch-proof. Distinguish the two: a CREATE/reflect miss vs a DELETE no-op —
 see the `browser-testing` skill ("Native window.confirm()" → dispatch proof).
+
+That git data path is the only route the UI takes; it never calls
+`DELETE /repos/.../contents/<path>`. `POST /git/trees` and `POST /git/commits`
+succeed, but the main-branch ruleset rejects the final
+`PATCH /git/refs/heads/main` with 422. The delete-ref matcher in
+`theme/admin/publish-via-auto-merge.js` catches that 422, opens a `cms/` PR at
+the deletion commit labeled `cms/ready`, and auto-merge lands it once the
+required checks pass. The older `DELETE /contents` intercept and
+`delete-via-pr.yml` were removed. So `cms-delete-published.spec.js` exercises
+the shim's delete-ref recovery as part of the user-facing contract (the URL
+404s).
 
 **The #21 finding (triple-verified — trust it):** the 2099 e2e canary's OWN
 `/blog/<slug>/` page **builds correctly** and is correctly excluded from public
