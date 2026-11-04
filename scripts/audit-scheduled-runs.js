@@ -936,11 +936,53 @@ function ghApi(endpoint, { method, fields } = {}) {
 // prefixed fragment (e.g. `&branch=main` for the push lane) — kept as a
 // separate exported function, like runJobsEndpoint below, so the shape stays
 // unit-assertable without shelling out to gh.
-function runsForEventEndpoint(repo, event, since, page, extraQuery = "") {
+// `until`, when given, bounds the window on both ends (`created=A..B`, both
+// inclusive) for the window split below (#966); without it the shape is the
+// open-ended `>=since` query every earlier caller used.
+function runsForEventEndpoint(repo, event, since, page, extraQuery = "", until = null) {
+  const created = until ? `${since}..${until}` : ">=" + since;
   return (
     `repos/${repo}/actions/runs?event=${encodeURIComponent(event)}&created=` +
-    `${encodeURIComponent(">=" + since)}${extraQuery}&per_page=100&page=${page}`
+    `${encodeURIComponent(created)}${extraQuery}&per_page=100&page=${page}`
   );
+}
+
+// The runs-list API returns at most 1,000 results for a filtered query, so a
+// busy repo (skills-evals: 2,500 default-branch workflow_run runs in 48h)
+// read as TRUNCATED every day however many pages were asked for (#966). When
+// a listing comes back short of its own total_count, split its created window
+// in half and list each half, recursing until each piece fits or is one
+// second wide. `listRange(sinceIso, untilIso)` returns { items, totalCount,
+// capExhausted } for one inclusive window; it is injected so the split is
+// unit-testable with no network. The halves are [a, mid] and [mid+1s, b], so
+// no run is listed twice; ids are deduplicated anyway. `truncated` is TRUE
+// when any piece that could not be split further was still truncated.
+const SPLIT_MAX_DEPTH = 12;
+function toIsoSeconds(ms) {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function listWindowSplitting(listRange, sinceMs, untilMs, depth = 0) {
+  const { items, totalCount, capExhausted } = listRange(toIsoSeconds(sinceMs), toIsoSeconds(untilMs));
+  const truncated = isListingTruncated(items.length, totalCount, capExhausted);
+  if (!truncated || untilMs - sinceMs < 2000 || depth >= SPLIT_MAX_DEPTH) {
+    return { items, totalCount, truncated };
+  }
+  const mid = sinceMs + Math.floor((untilMs - sinceMs) / 2000) * 1000;
+  const left = listWindowSplitting(listRange, sinceMs, mid, depth + 1);
+  const right = listWindowSplitting(listRange, mid + 1000, untilMs, depth + 1);
+  const seen = new Set();
+  const merged = [];
+  for (const item of [...left.items, ...right.items]) {
+    const key = item && item.id != null ? item.id : item;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return {
+    items: merged,
+    totalCount: (Number(left.totalCount) || 0) + (Number(right.totalCount) || 0),
+    truncated: left.truncated || right.truncated,
+  };
 }
 
 // All runs of `event` created since `since` (optionally narrowed by
@@ -952,15 +994,33 @@ function runsForEventEndpoint(repo, event, since, page, extraQuery = "") {
 // whether from this loop's own page cap or the runs-list API's separate
 // 1,000-result cap for a filtered query, OR the page cap was exhausted with
 // no total_count at all to check against (see pageThroughListing above).
-function listRunsForEvent(repo, event, since, extraQuery = "") {
-  const { items, totalCount, capExhausted } = pageThroughListing(
-    (page) => JSON.parse(ghApi(runsForEventEndpoint(repo, event, since, page, extraQuery))),
+//
+// The first query is the open-ended `>=since` one; only when it is truncated
+// is the window [since, now] split (#966, listWindowSplitting above).
+// `opts.fetchPage(endpoint)` and `opts.nowMs` are injectable for tests.
+function listRunsForEvent(repo, event, since, extraQuery = "", opts = {}) {
+  const fetchPage = opts.fetchPage || ((endpoint) => JSON.parse(ghApi(endpoint)));
+  const nowMs = opts.nowMs != null ? opts.nowMs : Date.now();
+  const first = pageThroughListing(
+    (page) => fetchPage(runsForEventEndpoint(repo, event, since, page, extraQuery)),
     "workflow_runs",
   );
+  if (!isListingTruncated(first.items.length, first.totalCount, first.capExhausted)) {
+    return { runs: first.items, totalCount: first.totalCount, truncated: false };
+  }
+  const split = listWindowSplitting(
+    (a, b) =>
+      pageThroughListing(
+        (page) => fetchPage(runsForEventEndpoint(repo, event, a, page, extraQuery, b)),
+        "workflow_runs",
+      ),
+    Date.parse(since),
+    nowMs,
+  );
   return {
-    runs: items,
-    totalCount,
-    truncated: isListingTruncated(items.length, totalCount, capExhausted),
+    runs: split.items,
+    totalCount: Math.max(Number(first.totalCount) || 0, split.items.length),
+    truncated: split.truncated,
   };
 }
 
@@ -1652,6 +1712,7 @@ module.exports = {
   workflowScheduledRunsEndpoint,
   runsForEventEndpoint,
   listRunsForEvent,
+  listWindowSplitting,
   listScheduledRuns,
   listPushRuns,
   listOtherDefaultBranchRuns,

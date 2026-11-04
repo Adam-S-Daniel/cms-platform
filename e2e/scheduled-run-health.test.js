@@ -444,6 +444,85 @@ test.describe("audit-scheduled-runs.js — listing truncation (#425)", () => {
   });
 });
 
+// #966: skills-evals has ~2,500 default-branch workflow_run runs in 48h, so the
+// API's 1,000-result cap made that listing TRUNCATED every day. The fake API
+// below applies the same cap: it filters by the `created` query, returns at
+// most 1,000 of the matches, and reports the true total_count.
+test.describe("audit-scheduled-runs.js — window split past the 1,000-result cap (#966)", () => {
+  const SINCE = "2026-11-02T00:00:00Z";
+  const NOW = Date.parse("2026-11-04T00:00:00Z");
+  function fakeApi(count) {
+    const start = Date.parse(SINCE);
+    const span = NOW - start;
+    const all = Array.from({ length: count }, (_, i) =>
+      run({ id: i + 1, created_at: new Date(start + Math.floor((i * span) / count)).toISOString() }),
+    );
+    const calls = [];
+    const fetchPage = (endpoint) => {
+      calls.push(endpoint);
+      const q = new URL(`https://api.example.com/${endpoint}`).searchParams;
+      const created = q.get("created");
+      const page = Number(q.get("page"));
+      let lo;
+      let hi = Infinity;
+      if (created.startsWith(">=")) lo = Date.parse(created.slice(2));
+      else {
+        const [a, b] = created.split("..");
+        lo = Date.parse(a);
+        hi = Date.parse(b) + 999; // both ends inclusive, to the second
+      }
+      const matches = all.filter((r) => {
+        const t = Date.parse(r.created_at);
+        return t >= lo && t <= hi;
+      });
+      const capped = matches.slice(0, 1000);
+      return { workflow_runs: capped.slice((page - 1) * 100, page * 100), total_count: matches.length };
+    };
+    return { fetchPage, calls };
+  }
+
+  test("a listing under the cap makes one query, unsplit", () => {
+    const { listRunsForEvent } = loadScript();
+    const api = fakeApi(250);
+    const res = listRunsForEvent("o/r", "workflow_run", SINCE, "&branch=main", { fetchPage: api.fetchPage, nowMs: NOW });
+    expect(res.runs).toHaveLength(250);
+    expect(res.truncated).toBe(false);
+    expect(api.calls.every((c) => c.includes(encodeURIComponent(">=" + SINCE)))).toBe(true);
+  });
+
+  test("2,500 runs in the window are all collected once, and the listing is not truncated", () => {
+    const { listRunsForEvent } = loadScript();
+    const api = fakeApi(2500);
+    const res = listRunsForEvent("o/r", "workflow_run", SINCE, "&branch=main", { fetchPage: api.fetchPage, nowMs: NOW });
+    expect(res.truncated).toBe(false);
+    expect(res.runs).toHaveLength(2500);
+    expect(new Set(res.runs.map((r) => r.id)).size).toBe(2500);
+    expect(res.totalCount).toBe(2500);
+    expect(api.calls.some((c) => c.includes(encodeURIComponent("..")))).toBe(true);
+    expect(api.calls.every((c) => c.includes("&branch=main"))).toBe(true);
+  });
+
+  test("a one-second window still over the cap stays TRUNCATED, never healthy", () => {
+    const { listWindowSplitting } = loadScript();
+    const listRange = () => ({ items: Array.from({ length: 1000 }, (_, i) => ({ id: i })), totalCount: 1200, capExhausted: true });
+    const t = Date.parse(SINCE);
+    const res = listWindowSplitting(listRange, t, t + 1000);
+    expect(res.truncated).toBe(true);
+  });
+
+  test("the bounded endpoint uses an inclusive created range; the open one is unchanged", () => {
+    const { runsForEventEndpoint } = loadScript();
+    expect(runsForEventEndpoint("o/r", "push", SINCE, 1, "&branch=main", "2026-11-03T00:00:00Z")).toBe(
+      "repos/o/r/actions/runs?event=push&created=" +
+        encodeURIComponent(`${SINCE}..2026-11-03T00:00:00Z`) +
+        "&branch=main&per_page=100&page=1",
+    );
+    expect(runsForEventEndpoint("o/r", "push", SINCE, 1, "&branch=main")).toBe(
+      `repos/o/r/actions/runs?event=push&created=${encodeURIComponent(">=" + SINCE)}&branch=main&per_page=100&page=1`,
+    );
+  });
+});
+
 /*
  * RUNNER STARVATION: GitHub reports the RUN as `failure` when its job(s) were
  * cancelled before a runner was ever assigned, so BAD_CONCLUSIONS (a RUN-level
