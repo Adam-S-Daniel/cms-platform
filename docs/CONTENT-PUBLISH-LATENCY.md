@@ -18,8 +18,9 @@ against `main` at v0.1.125 (`0c3b80c`), constraint 1 (`structuralShape()` still
 excludes `on:`, and the bump still never edits an existing caller's `on:`
 block), constraint 3 (`site_live: false`) and every row of the defect table were
 re-checked by reading the source, and still held; nothing was built or run. The
-defect table was last reconciled with live trackers on 2026-10-07: three
-trackers are closed, and two have acceptance work pending. See the dated parent
+defect table was last reconciled with live trackers on 2026-11-03: three
+trackers are closed, row 8.5 has its remaining evidence, and row 8.4 waits on
+one consumer stylesheet change and the owner's acceptance. See the dated parent
 reconciliation below. The baseline timings and other constraints were not
 re-measured; re-check them before relying on them.
 
@@ -160,27 +161,28 @@ Proven on PR 3941: diffing the two `_site` trees gave exactly the new post,
 
 ## Defects found that outlive the shelving
 
-As of 2026-10-07, rows 8.1-8.3 are closed per their live trackers:
+As of 2026-11-03, rows 8.1-8.3 are closed per their live trackers:
 [cms-platform#539](https://github.com/Adam-S-Daniel/cms-platform/issues/539),
 [jodidaniel.com#306](https://github.com/jodidaniel/jodidaniel.com/issues/306), and
 [adamdaniel.ai#3970](https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3970).
-Rows 8.4 and 8.5 remain open for acceptance. This reconciliation records tracker
-state and does not independently revalidate consumer behavior. Row 8.4 needs the
-consumer page or owner-accepted fixture and served-CSS evidence described
-below. Row 8.5 still needs evidence that previews, parity, and salience
-outcomes remain unchanged on both consumers, plus comparable workflow run and
-job durations. The parent tracker,
+Row 8.5's missing evidence, that salience, parity and media outcomes are
+unchanged on both consumers, is now recorded in
+[the full-vs-shallow comparison](evidence/2026-11-03-merge-base-full-vs-shallow.md):
+239 real PRs, zero differences. Row 8.4's spec now checks the iframe ratio on
+every layout; it needs jodidaniel.com to carry the ratio rule
+([jodidaniel.com#470](https://github.com/jodidaniel/jodidaniel.com/pull/470))
+and the owner's acceptance of fixture-plus-consumer-CI evidence. The parent tracker,
 [cms-platform#529](https://github.com/Adam-S-Daniel/cms-platform/issues/529)
 groups the defects; its remaining completion checkboxes are unchecked (the
 "Create one issue per defect" checkbox is checked), and parent completion
 awaits child evidence. Its GitHub body was not edited during this reconciliation.
 
-### Parent checklist reconciliation (2026-10-07)
+### Parent checklist reconciliation (2026-11-03)
 
 - [x] One tracker is linked for each defect row.
 - [ ] Resolve each defect with its own evidence and regression checks. Rows
-  8.1-8.3 are closed per live tracker state; this run did not independently
-  revalidate consumer behavior. Acceptance for rows 8.4 and 8.5 remains pending.
+  8.1-8.3 are closed per live tracker state. Row 8.5 has its consumer
+  outcome evidence. Row 8.4 waits on jodidaniel.com#470 and owner acceptance.
 - [x] Link all five resulting trackers from the design document.
 - [x] Keep the shelved lane outside this tracking-only scope.
 
@@ -190,8 +192,8 @@ awaits child evidence. Its GitHub body was not edited during this reconciliation
 | Quoted paths reach the salience check | `visual-regression.yml` `detect`, `e2e/detect-changed-pages.js` | A salient file with a non-ASCII name read as non-salient. Harmless in practice only because the affected names were under `_posts/`. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** both readers now take NUL-delimited paths (`git diff --name-only -z`), so accented, spaced, quoted and newline names classify correctly; so do `preview-media.yml` and `e2e/select-specs.js`, which shared the defect. | [cms-platform#539](https://github.com/Adam-S-Daniel/cms-platform/issues/539) |
 | Site verifier is mostly unarmed | jodidaniel.com `scripts/verify-build-artifacts.rb` | With the gate closed, most assertion groups printed "did NOT run"; they ran only on a tree with `site_live: true`. **Fixed and closed 2026-10-04 by [jodidaniel.com#313](https://github.com/jodidaniel/jodidaniel.com/pull/313), which verifies the open-gate build too.** | [jodidaniel.com#306](https://github.com/jodidaniel/jodidaniel.com/issues/306) |
 | Site verify is a no-op | adamdaniel.ai `site-verify` | The site had no verifier script, so the required check succeeded in about 7 s without building. **Fixed and closed 2026-10-04 by [adamdaniel.ai#4006](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4006), a site-owned post-build verifier.** | [adamdaniel.ai#3970](https://github.com/Adam-S-Daniel/adamdaniel.ai/issues/3970) |
-| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolled the whole page on a phone, and an author could not fix it from the CMS. **Rule added by [cms-platform#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555), released in v0.1.126. The follow-up scales dimensioned iframes at a default 16:9 ratio; authors may override `aspect-ratio` inline for other formats, while interactive frames without both dimensions keep their authored height. The proportional iframe and fixture follow-up shipped in v0.1.157 via [cms-platform PR #804](https://github.com/Adam-S-Daniel/cms-platform/pull/804). [The overflow spec](https://github.com/Adam-S-Daniel/cms-platform/blob/main/e2e/responsive-overflow.spec.js) now runs in `chromium-desktop-1080`, the required fixture public lane, as well as `chromium-mobile` on consumers. It checks four viewport widths, table scroll reachability and containment, and iframe content accessibility on the theme and site-owned fixture layouts. Iframe sizing ratios are checked only when `homeUsesThemeLayout()`; the ratio assertion therefore does not prove sizing on a consumer's own layout. A site-owned layout must adopt these rules in its own stylesheet because it does not load the theme CSS; the single-page fixture models that seam. Historical local consumer-layout evidence and the dated static CSS inspection are recorded below. The tracker stays open: the owner's 2026-10-05 review found neither consumer had a built page with a bare Markdown table or fixed-width iframe, so closure needs a consumer page or owner acceptance of fixtures plus served CSS ([owner comment](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705)). Consumer stylesheet adoption and owner acceptance were not revalidated in this reconciliation.** | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
-| Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** a `fetch-depth: 2` checkout plus `e2e/ensure-merge-base.js`, which deepens only until the merge base is proven. Measured on adamdaniel.ai `pull_request` runs, three before (v0.1.125) and three after (v0.1.126), medians: `detect` 16 s to 9 s (checkout 10 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483694/job/111374795291), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052769/job/111385134290)); `parity-probe` 28 s to 16 s (checkout 10 s to 1 s; noisy, the first runs took 69-71 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483680/job/111374795567), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052742/job/111385134369)); `media-probe` 19 s to 13 s (checkout 9 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483634/job/111374795274), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052774/job/111385134381)). [Second-consumer checkout evidence](#second-consumer-checkout-evidence-541) for jodidaniel.com is recorded below; #541 remains open for further consumer validation. | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
+| No `table` or `iframe` rule | `theme/assets/css/main.css` | A wide Markdown table or fixed-width iframe scrolled the whole page on a phone, and an author could not fix it from the CMS. **Rule added by [cms-platform#555](https://github.com/Adam-S-Daniel/cms-platform/pull/555), released in v0.1.126. The follow-up scales dimensioned iframes at a default 16:9 ratio; authors may override `aspect-ratio` inline for other formats, while interactive frames without both dimensions keep their authored height. The proportional iframe and fixture follow-up shipped in v0.1.157 via [cms-platform PR #804](https://github.com/Adam-S-Daniel/cms-platform/pull/804). [The overflow spec](https://github.com/Adam-S-Daniel/cms-platform/blob/main/e2e/responsive-overflow.spec.js) now runs in `chromium-desktop-1080`, the required fixture public lane, as well as `chromium-mobile` on consumers. It checks four viewport widths, table scroll reachability and containment, and iframe content accessibility on the theme and site-owned fixture layouts. Since 2026-11-03 the iframe sizing ratios are checked on every layout, not only when `homeUsesThemeLayout()`: a site-owned layout does not load the theme CSS, so it must carry the rules in its own stylesheet, and the single-page fixture now does. jodidaniel.com lacked the ratio rule; [jodidaniel.com#470](https://github.com/jodidaniel/jodidaniel.com/pull/470) adds it (locally: 4 passed on its build with the rule, 3 failed without it). Historical local consumer-layout evidence and the dated static CSS inspection are recorded below. The tracker stays open: the owner's 2026-10-05 review found neither consumer had a built page with a bare Markdown table or fixed-width iframe, so closure needs a consumer page or owner acceptance of fixtures plus served CSS ([owner comment](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705)). Owner acceptance is still pending.** | [cms-platform#540](https://github.com/Adam-S-Daniel/cms-platform/issues/540) |
+| Full-history checkouts on the critical path | `visual-regression.yml` `detect`, `parity-preview.yml`, `preview-media.yml` | 14-20 s each on adamdaniel.ai. They set the 56 s floor under every content PR, independent of E2E. **Fixed in v0.1.126 by [cms-platform#565](https://github.com/Adam-S-Daniel/cms-platform/pull/565):** a `fetch-depth: 2` checkout plus `e2e/ensure-merge-base.js`, which deepens only until the merge base is proven. Measured on adamdaniel.ai `pull_request` runs, three before (v0.1.125) and three after (v0.1.126), medians: `detect` 16 s to 9 s (checkout 10 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483694/job/111374795291), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052769/job/111385134290)); `parity-probe` 28 s to 16 s (checkout 10 s to 1 s; noisy, the first runs took 69-71 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483680/job/111374795567), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052742/job/111385134369)); `media-probe` 19 s to 13 s (checkout 9 s to 1 s, [before](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37181483634/job/111374795274), [after](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/37185052774/job/111385134381)). [Second-consumer checkout evidence](#second-consumer-checkout-evidence-541) for jodidaniel.com is recorded below. Outcome equivalence on both consumers: [239 real PRs diffed both ways, zero differences](evidence/2026-11-03-merge-base-full-vs-shallow.md). | [cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541) |
 
 ### Second-consumer checkout evidence (#541)
 
@@ -274,16 +276,18 @@ These samples do not establish a speedup. The pre-change checkout was
 already 1-2 seconds, while the post-change history helper took 4 seconds in
 the bump `detect` job. The remaining evidence gap is that these samples include
 no executed media-resolution test, skip broader parity cases, and do not hold
-the content and media workload identical before and after. Keep
-[cms-platform#541](https://github.com/Adam-S-Daniel/cms-platform/issues/541)
-open.
+the content and media workload identical before and after.
 
-Further validation needs owner authorization for controlled preview PRs or
-dispatches; those actions are not authorized as unattended package work. A
-useful comparison would cover non-rendering, render-salient, and actual
-uploaded-media fixtures, comparing full-history and shallow merge-base runs
-with the same base, head, and net diff, and recording test counts plus job and
-step links. This is proposed evidence, not work authorized or completed here.
+**Closed on 2026-11-03** by holding the workload identical offline instead of
+re-running workflows. The only thing #565 changed is how these jobs obtain
+`git diff origin/<base>...HEAD`; salience, parity selection and the media gate
+are pure functions of that list, and the preview build does not read it.
+[The comparison](evidence/2026-11-03-merge-base-full-vs-shallow.md) rebuilt
+the merge commit of 181 recently merged PRs (95 on adamdaniel.ai, including 67
+`cms/*` posts and 10 media-salient changes; 86 on jodidaniel.com, 34 of them
+visual-salient) plus 58 long-lived-branch cases, diffed each with full history
+and with the depth-2 checkout plus `ensure-merge-base.js`, and found zero
+differences in the file list or any of the three outcomes.
 
 ### Local candidate verification for responsive content (#540)
 
@@ -339,10 +343,19 @@ but no dimensioned-iframe sizing rule. [Its home page](https://jodidaniel.com/)
 returned HTTP 200; Python's HTMLParser found one inline style block and no
 linked stylesheets, and that inline CSS lacks a dimensioned-iframe selector.
 No browser assertions were run against either live consumer page, and no
-owner acceptance was recorded at that inspection. The remaining work is site-owned CSS adoption
-where needed and the
-[owner's requested acceptance evidence](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705):
-representative pages or owner acceptance of fixtures plus served CSS.
+owner acceptance was recorded at that inspection.
+
+**2026-11-03:** `responsive-overflow.spec.js` now asserts the iframe ratios on
+every layout, so each consumer's own CI (`chromium-mobile`) checks its served
+layout and stylesheet after the bump that carries it. Local runs with the
+change: the theme fixture and the single-page fixture each 4 passed (the
+single-page fixture 4 failed with its ratio rule removed); a jodidaniel.com
+build with [jodidaniel.com#470](https://github.com/jodidaniel/jodidaniel.com/pull/470)
+4 passed, and with its `main` stylesheet 3 failed at 360, 390 and 768 px. Merge
+that PR before the release carrying the spec. The remaining item is the
+[owner's acceptance](https://github.com/Adam-S-Daniel/cms-platform/issues/540#issuecomment-5986221705)
+of fixture-plus-consumer-CI evidence in place of a live page with a bare table
+and a fixed-width iframe.
 
 Also noted: neither consumer has a `tests/` directory, though jodidaniel.com's
 deploy callers already list `tests/**`.
