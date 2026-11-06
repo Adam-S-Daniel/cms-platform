@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  Email-to-draft poller. Fastmail has no webhooks, so a Lambda polls Fastmail
+  over JMAP once a minute and fires a GitHub repository_dispatch (event_type
+  email-draft) at the site repo mapped to each mailbox holding a new message.
+  The site's workflow does all validation and processing. The poller never
+  sees an email address: a Fastmail rule files each posting address into its
+  own mailbox, and routes are by mailbox path. Deploy with deploy.sh.
+
+Parameters:
+
+  Routes:
+    Type: String
+    Description: >
+      JSON array of routes, e.g.
+      [{"mailbox": "Create draft/example.com", "repo": "<owner>/<repo>"}].
+      mailbox is the full /-separated mailbox path; an optional
+      fastmailTokenSecretArn on a route overrides FastmailTokenSecretArn.
+
+  FastmailTokenSecretArn:
+    Type: String
+    AllowedPattern: '^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$'
+    Description: "Secrets Manager ARN whose SecretString is the Fastmail API token"
+
+  GitHubAppSecretArn:
+    Type: String
+    AllowedPattern: '^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$'
+    Description: >
+      Secrets Manager ARN whose SecretString is JSON
+      {"client_id": "...", "private_key": "-----BEGIN ..."} for the GitHub App
+      installed on every routed repo.
+
+  ExtraFastmailTokenSecretArns:
+    Type: String
+    Default: ""
+    Description: >
+      Comma-separated ARNs of any per-route fastmailTokenSecretArn (a second
+      Fastmail account). Empty when every route uses FastmailTokenSecretArn.
+
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: >
+      When set, an SNS topic with an email subscription to this address
+      receives the alarms (confirm the subscription email AWS sends).
+
+Conditions:
+  HasExtraSecrets: !Not [!Equals [!Ref ExtraFastmailTokenSecretArns, ""]]
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Resources:
+
+  # ── Log group (created before the function, so the first scheduled run
+  #    cannot race the stack into a "log group already exists" failure) ────
+  PollerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-poller"
+      RetentionInDays: 30
+
+  # ── Lambda function ──────────────────────────────────────────────────────
+  PollerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: "Polls Fastmail (JMAP) and dispatches email-draft events to site repos"
+      CodeUri: src/
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Architectures:
+        - arm64
+      MemorySize: 256
+      Timeout: 50
+      # One poll at a time: an overlapping run could dispatch a message the
+      # first run has not yet keyworded.
+      ReservedConcurrentExecutions: 1
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: !Ref PollerLogGroup
+      # The next scheduled minute is the retry; async retries would only
+      # queue behind the concurrency limit of one.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+        MaximumEventAgeInSeconds: 60
+      Environment:
+        Variables:
+          ROUTES: !Ref Routes
+          FASTMAIL_TOKEN_SECRET_ARN: !Ref FastmailTokenSecretArn
+          GITHUB_APP_SECRET_ARN: !Ref GitHubAppSecretArn
+      Policies:
+        - Statement:
+            - Sid: ReadPollerSecrets
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !If
+                - HasExtraSecrets
+                - !Split
+                  - ","
+                  - !Sub "${FastmailTokenSecretArn},${GitHubAppSecretArn},${ExtraFastmailTokenSecretArns}"
+                - - !Ref FastmailTokenSecretArn
+                  - !Ref GitHubAppSecretArn
+      Events:
+        EveryMinute:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 minute)
+            Description: "Poll Fastmail for new email-draft messages"
+
+  # ── Alerting ─────────────────────────────────────────────────────────────
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      DisplayName: "email-draft-poller alarms"
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # A failing route throws, so Errors counts failed polls. Three of five
+  # minutes rides out one transient GitHub or Fastmail blip.
+  ErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "email-draft-poller invocations are failing (see its summary log line)"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PollerFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlertEmail, [!Ref AlertTopic], !Ref AWS::NoValue]
+      OKActions: !If [HasAlertEmail, [!Ref AlertTopic], !Ref AWS::NoValue]
+
+  # The schedule stopped (rule disabled, function throttled to zero): no
+  # invocations at all reads as breaching, not as "nothing to report".
+  NoInvocationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "email-draft-poller has not run for 15 minutes"
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PollerFunction
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: !If [HasAlertEmail, [!Ref AlertTopic], !Ref AWS::NoValue]
+      OKActions: !If [HasAlertEmail, [!Ref AlertTopic], !Ref AWS::NoValue]
+
+Outputs:
+
+  FunctionName:
+    Description: "Poller function name (for aws lambda invoke)"
+    Value: !Ref PollerFunction
+
+  LogGroupName:
+    Description: "Where each invocation's one-line JSON summary goes"
+    Value: !Ref PollerLogGroup
+
+  AlertTopicArn:
+    Condition: HasAlertEmail
+    Description: "SNS topic the alarms notify"
+    Value: !Ref AlertTopic

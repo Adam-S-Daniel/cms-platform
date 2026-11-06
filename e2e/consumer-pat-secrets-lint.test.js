@@ -42,7 +42,18 @@ const ALLOWED_PATS = new Set(["CMS_E2E_PAT", "CMS_PLATFORM_PAT"]);
 //   (see docs/CROSS-POSTING.md). It authenticates LinkedIn's API, never
 //   GitHub's, so like the Mastodon token it has nothing to consolidate onto
 //   CMS_E2E_PAT/CMS_PLATFORM_PAT.
-const NON_PAT_SERVICE_TOKENS = new Set(["MASTODON_ACCESS_TOKEN", "LINKEDIN_ACCESS_TOKEN"]);
+//
+//   FASTMAIL_API_TOKEN — email-draft.yml's Fastmail API token (scopes Email +
+//   Email submission, see docs/EMAIL-DRAFTS.md): it reads the one email the
+//   poller dispatched, replies to the owner and files the email. It
+//   authenticates Fastmail's JMAP API, never GitHub's (the draft pull request
+//   rides the CMS automation App's minted token), so like the two above it has
+//   nothing to consolidate onto CMS_E2E_PAT/CMS_PLATFORM_PAT.
+const NON_PAT_SERVICE_TOKENS = new Set([
+  "MASTODON_ACCESS_TOKEN",
+  "LINKEDIN_ACCESS_TOKEN",
+  "FASTMAIL_API_TOKEN",
+]);
 
 // Every `secrets.<NAME>` reference whose NAME looks like a PAT (ends in _PAT or
 // _TOKEN, or contains PAT), across all template files. Returns Map<name, files[]>.

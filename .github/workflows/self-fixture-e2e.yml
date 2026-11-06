@@ -192,7 +192,7 @@ jobs:
           is_salient() {
             case "$1" in
               e2e/fixture-site/*|e2e/fixture-site-singlepage/*) return 0 ;;
-              docs/*|infrastructure/*|oauth-proxy/*|scripts/cross_post/*|LICENSE) return 1 ;;
+              docs/*|infrastructure/*|oauth-proxy/*|scripts/cross_post/*|scripts/email_draft/*|LICENSE) return 1 ;;
               *.md) return 1 ;;
               *) return 0 ;;
             esac

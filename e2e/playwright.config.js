@@ -783,6 +783,9 @@ const PLATFORM_META_SPECS = [
   // SOURCE configs and runs theme/admin/draft-media-fallback.js, absent on a
   // consumer.
   "decap-slug-ascii-config.test.js",
+  // Email-to-draft poller: imports infrastructure/email-draft-poller/src/index.mjs
+  // and parses its SAM template, neither of which a consumer has.
+  "email-draft-poller.test.js",
 ];
 
 // A single regex matching any PLATFORM_META_SPEC basename. Each name is

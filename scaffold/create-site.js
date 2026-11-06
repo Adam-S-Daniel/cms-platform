@@ -353,6 +353,10 @@ keep_files:
 cms:
   repository: ${owner}/${repo}
   oauth_base_url: ""
+  # Email-to-draft (docs/EMAIL-DRAFTS.md): an email the owner sends to a secret
+  # posting address becomes a /admin draft. Off unless set to true.
+  # email_drafts:
+  #   enabled: false
 
 # Profiles this site cross-posts to. Each becomes a <link rel="me"> in <head>
 # (the theme's rel-me.html), which lets Mastodon mark the site as verified on

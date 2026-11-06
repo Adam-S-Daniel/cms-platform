@@ -1,0 +1,253 @@
+# Reusable: turn an email the site owner sends to a secret posting address
+# into a Decap editorial-workflow DRAFT (a `cms/posts/<entry>` pull request
+# labeled `decap-cms/draft`). Nothing goes live from here: the owner reviews
+# the draft in /admin and selects Publish, exactly as for a post written there.
+#
+# THE CHAIN. A Fastmail rule files mail sent to the posting address into its
+# own mailbox; the poller Lambda (infrastructure/email-draft-poller/) lists
+# that mailbox and fires a `repository_dispatch` of type `email-draft` with
+# `client_payload.email_id` (a JMAP id) at the site repo; the site's thin
+# caller (examples/site/.github/workflows/email-draft.yml) calls this
+# reusable; `scripts/email_draft/email_draft.py process` fetches the raw
+# message over JMAP, verifies it, builds the post and opens the draft, then
+# replies to the owner and files the email under `Processed` or `Failed`.
+# Full write-up, threat model and setup: docs/EMAIL-DRAFTS.md.
+#
+# `scripts/email_draft/` lives in THIS repo, so the job checks the platform
+# out into `.cms-platform/` (the dot-dir every reusable that runs a
+# platform-owned script uses; Jekyll ignores it) at `inputs.platform_ref`, and
+# runs the script there against the SITE's own `_config.yml` (the site
+# checkout stays at the workspace root). The caller pins `platform_ref` to the
+# same release as its `uses:@` line.
+#
+# THE FLAG IS READ BY THE SCRIPT, NOT HERE. `process` reads
+# `cms.email_drafts.enabled` (default false) from the site's `_config.yml`;
+# with it off it replies "turned off" and files the email under `Failed`, and
+# drafts nothing. A second gate in this file would be a second source of
+# truth that could disagree with the script, so there is none.
+#
+# THE PULL REQUEST MUST BE OPENED BY THE CMS AUTOMATION APP, never by
+# `github.token`. GitHub does not start workflows for events a GITHUB_TOKEN
+# causes, so a draft opened with it would never get the site's required checks
+# and Publish could never merge it. The App token is minted with
+# scripts/mint-app-token.js exactly as platform-bump.yml and
+# dependabot-rearm-sweep.yml mint theirs: App id from the CALLER's
+# `vars.CMS_AUTOMATION_APP_ID` (a reusable's `vars` resolve to the caller's),
+# key from the `app_private_key` secret, scoped DOWN at mint time to this one
+# repository and `contents=write,pull_requests=write` (the draft writes a
+# branch, blobs and a pull request; it never touches `.github/workflows/*`,
+# so no `workflows`). Without the App the mint step fails loudly, naming both
+# knobs, and the failure step below replies to the owner.
+#
+# LOGS ARE PUBLIC on a public site repo. The first step masks both addresses
+# and the Fastmail token before anything else runs, every input reaches a
+# `run:` block through `env:` (never a `${{ }}` interpolation, which the runner
+# echoes), and the script itself logs only step names, check names, counts,
+# HTTP statuses and error class names. The run-name in the thin caller names
+# only the event, never the email id.
+#
+# ON FAILURE THE OWNER STILL HEARS ABOUT IT. `process` replies and files the
+# email under `Failed` on every failure it can reach, and exits 1 so the run
+# is red (the fleet's scheduled-run-health audit lists a red
+# repository_dispatch run on the default branch). A step that fails BEFORE
+# `process` runs (checkout, install, token mint) cannot reply through it, so
+# the final `if: failure()` step runs `notify-failure` with a reason naming
+# that step. It is skipped when `process` itself ran, so the owner never gets
+# two replies for one email, when the email id failed validation (there is no
+# message to reply to), and on a dry run (which sends nothing).
+#
+# CONCURRENCY: `email-draft` is not a required status context anywhere (it
+# runs on `repository_dispatch` / `workflow_dispatch`, never on a pull
+# request), so the "no `concurrency` on a required-context publisher" rule
+# (AGENTS.md, "A cancelled required check blocks the merge") does not apply.
+# The group is PER EMAIL ID, never one shared group: GitHub keeps only one
+# PENDING run per group and cancels the older pending one, and the poller
+# fires one dispatch per new email in the same minute and marks each email
+# dispatched, so a shared group would silently drop the middle email of any
+# burst of three. Per id, distinct emails run side by side, and the case the
+# group exists for, the poller re-sending an email whose `$cms-dispatched`
+# keyword write failed, queues behind the first run and then finds the draft
+# already open (the duplicate check), instead of racing it to open two.
+name: Email to draft (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      email_id:
+        description: >-
+          The JMAP id of the email to turn into a draft (the poller's
+          `client_payload.email_id`). Validated against `^[A-Za-z0-9_-]{1,255}$`
+          before use.
+        type: string
+        required: true
+      dry_run:
+        description: >-
+          Verify the email and log the plan; create no branch or pull request,
+          send no reply, move no email.
+        type: boolean
+        default: false
+      platform_repo:
+        description: "owner/name of the platform repo holding scripts/email_draft."
+        type: string
+        default: Adam-S-Daniel/cms-platform
+      platform_ref:
+        description: "Tag/sha of the platform repo to fetch the script from (pin to the same ref as this workflow's `uses:`)."
+        type: string
+        default: main
+    secrets:
+      FASTMAIL_API_TOKEN:
+        description: "Fastmail API token with the Email and Email submission scopes."
+        required: false
+      EMAIL_DRAFT_ADDRESS:
+        description: "The secret posting address mail is sent to."
+        required: false
+      EMAIL_DRAFT_SENDER:
+        description: "The owner's own address: the only accepted sender, and the only reply recipient."
+        required: false
+      app_private_key:
+        description: "The CMS automation GitHub App's private key (with vars.CMS_AUTOMATION_APP_ID on the caller). Required: the draft pull request must be App-created so the site's required checks run on it."
+        required: false
+
+# Reads only: the site checkout and the platform checkout. Every write (the
+# draft branch, the pull request, its label) goes through the App token.
+permissions:
+  contents: read
+
+concurrency:
+  group: email-draft-${{ inputs.email_id }}
+  cancel-in-progress: false
+
+jobs:
+  email-draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Mask the addresses and the Fastmail token
+        env:
+          FASTMAIL_API_TOKEN: ${{ secrets.FASTMAIL_API_TOKEN }}
+          EMAIL_DRAFT_ADDRESS: ${{ secrets.EMAIL_DRAFT_ADDRESS }}
+          EMAIL_DRAFT_SENDER: ${{ secrets.EMAIL_DRAFT_SENDER }}
+        run: |
+          for value in "$FASTMAIL_API_TOKEN" "$EMAIL_DRAFT_ADDRESS" "$EMAIL_DRAFT_SENDER"; do
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+          # Name (never print) any unset secret; the script logs only a count.
+          [ -n "$FASTMAIL_API_TOKEN" ] || echo "::warning::secret FASTMAIL_API_TOKEN is not set"
+          [ -n "$EMAIL_DRAFT_ADDRESS" ] || echo "::warning::secret EMAIL_DRAFT_ADDRESS is not set"
+          [ -n "$EMAIL_DRAFT_SENDER" ] || echo "::warning::secret EMAIL_DRAFT_SENDER is not set"
+
+      - name: Validate the email id
+        id: validate
+        env:
+          EMAIL_ID: ${{ inputs.email_id }}
+        run: |
+          if ! [[ "$EMAIL_ID" =~ ^[A-Za-z0-9_-]{1,255}$ ]]; then
+            echo "::error::email_id is not a JMAP id (want 1-255 of A-Z a-z 0-9 _ -)"
+            exit 1
+          fi
+
+      - name: Checkout site
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Checkout platform scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ inputs.platform_repo }}
+          ref: ${{ inputs.platform_ref }}
+          sparse-checkout: |
+            scripts/email_draft/
+            scripts/mint-app-token.js
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+          persist-credentials: false
+
+      # Pinned: mint-app-token.js runs under node, and ubuntu-latest's default
+      # Node moves from 22 to 24 with Ubuntu 26.04
+      # (actions/runner-images#14748).
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+          package-manager-cache: false
+
+      # Ubuntu's system pip refuses installs (PEP 668), hence setup-python.
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+
+      - name: Mint the CMS automation App token
+        id: app
+        env:
+          APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
+        run: |
+          set -euo pipefail
+          # FAIL LOUD: a draft opened with github.token gets no required
+          # checks, so Publish could never merge it. There is no fallback.
+          if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
+            echo "::error::No CMS automation App on this repo. email-draft REQUIRES it: set the vars.CMS_AUTOMATION_APP_ID variable and the CMS_AUTOMATION_APP_PRIVATE_KEY secret (see the consumer-repo-provisioning skill)."
+            exit 1
+          fi
+          node .cms-platform/scripts/mint-app-token.js \
+            --owner "${GITHUB_REPOSITORY%%/*}" --repo "${GITHUB_REPOSITORY#*/}" \
+            --repositories "${GITHUB_REPOSITORY#*/}" \
+            --permissions contents=write,pull_requests=write
+
+      # Pinned exactly in requirements.txt (PyYAML included). dkimpy 1.1.8
+      # ships only an sdist, built here through PEP 517 (--use-pep517).
+      - name: Install email-draft dependencies
+        run: python3 -m pip install --user --use-pep517 -r .cms-platform/scripts/email_draft/requirements.txt
+
+      - name: Turn the email into a draft
+        id: process
+        env:
+          EMAIL_ID: ${{ inputs.email_id }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FASTMAIL_API_TOKEN: ${{ secrets.FASTMAIL_API_TOKEN }}
+          EMAIL_DRAFT_ADDRESS: ${{ secrets.EMAIL_DRAFT_ADDRESS }}
+          EMAIL_DRAFT_SENDER: ${{ secrets.EMAIL_DRAFT_SENDER }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          args=(process --email-id "$EMAIL_ID" --site-root .)
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 .cms-platform/scripts/email_draft/email_draft.py "${args[@]}"
+
+      # Best effort, and only for a failure `process` could not report itself
+      # (see the header). Never fails the run on its own: notify-failure
+      # always exits 0, and the run is already red.
+      - name: Tell the owner the run failed
+        if: >-
+          ${{ failure() && steps.validate.outcome == 'success' &&
+          steps.process.outcome != 'failure' && !inputs.dry_run }}
+        env:
+          EMAIL_ID: ${{ inputs.email_id }}
+          FASTMAIL_API_TOKEN: ${{ secrets.FASTMAIL_API_TOKEN }}
+          EMAIL_DRAFT_ADDRESS: ${{ secrets.EMAIL_DRAFT_ADDRESS }}
+          EMAIL_DRAFT_SENDER: ${{ secrets.EMAIL_DRAFT_SENDER }}
+          APP_OUTCOME: ${{ steps.app.outcome }}
+        run: |
+          if [ "$APP_OUTCOME" = "failure" ]; then
+            reason="The site could not get its GitHub credential (the token mint step failed)."
+          else
+            reason="A setup step failed before the email could be read (checkout or install)."
+          fi
+          script=.cms-platform/scripts/email_draft/email_draft.py
+          if [ ! -f "$script" ]; then
+            echo "::warning::email-draft could not tell the owner: the platform checkout failed"
+            exit 0
+          fi
+          # email_draft.py imports every module (dkimpy included) even for
+          # notify-failure, so retry the install the failed run may have
+          # skipped. Its exit status is ignored: this step is best effort.
+          if ! python3 -c 'import dkim, dns, yaml' 2>/dev/null; then
+            python3 -m pip install --user --use-pep517 \
+              -r .cms-platform/scripts/email_draft/requirements.txt || true
+          fi
+          python3 "$script" notify-failure --email-id "$EMAIL_ID" --reason "$reason" || true

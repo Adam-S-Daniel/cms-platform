@@ -114,9 +114,11 @@ checks on a plain PR). It runs six FAST lanes on `pull_request` + `push` to `mai
    #525). The cfn-lint version is pinned, so a new upstream rule reaches the lane
    only through a deliberate bump; it carried `continue-on-error` before #525,
    when it was unpinned, and every listed template must exist.
-6. **python-unit-tests** — `python3 -m pytest scripts/cross_post scripts/skill_gates oauth-proxy -q`
-   (the cross-post suite, the skill-gates suite and the OAuth proxy's
-   `oauth-proxy/test_lambda.py`; hard-fail; REQUIRED since #525). On a pull
+6. **python-unit-tests** — `python3 -m pytest scripts/cross_post scripts/skill_gates oauth-proxy scripts/email_draft -q`
+   (the cross-post suite, the skill-gates suite, the OAuth proxy's
+   `oauth-proxy/test_lambda.py` and the email-to-draft suite, after installing
+   `scripts/email_draft/requirements.txt` with `--use-pep517`; hard-fail;
+   REQUIRED since #525). On a pull
    request that changes `skills/`, `docs/skill-impact.md` or
    `scripts/skill_gates/` (an in-job salience step; the job always reports), it
    then runs `scripts/skill_gates/check_skill_gates.py --warn-only --base HEAD^1
@@ -153,8 +155,8 @@ the admin legs, asserted by the one shard whose `--list` holds it, a public test
 that runs only where the leg's `/` shape holds on the public ones), so a future
 skip cannot read green. An early salience step
 skips the work, with success, on a PR that touches only `docs/`,
-`infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE` or `*.md`
-outside the fixtures. The REQUIRED context is the `fixture-e2e` gate (`needs:` +
+`infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `scripts/email_draft/`,
+`LICENSE` or `*.md` outside the fixtures. The REQUIRED context is the `fixture-e2e` gate (`needs:` +
 `if: always()`, no wall), which is red unless every matrix leg succeeded; the
 public legs joined that matrix rather than adding a context, so the required set
 did not change. The lane needs no secrets and touches no

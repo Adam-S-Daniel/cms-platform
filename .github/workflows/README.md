@@ -99,6 +99,32 @@ detects the post, prints one `::notice::`, and does nothing else — the
 caller template's own defaults, so a freshly-adopted site gets a harmless
 no-op.
 
+## `email-draft.yml`
+
+Turns an email the site owner sent to a secret posting address into a Decap
+editorial-workflow draft (never a published post). A thin caller triggered by
+`repository_dispatch` (`email-draft`, fired by the
+`infrastructure/email-draft-poller/` Lambda) or by hand passes the JMAP email
+id; the job verifies the sender's DKIM signature and Fastmail's own
+authentication results, opens the draft with the CMS automation App's token,
+and replies to the owner. Does nothing until the site's `_config.yml` sets
+`cms.email_drafts.enabled: true`. Full write-up, threat model and setup:
+`docs/EMAIL-DRAFTS.md`.
+
+| Input | Required | Default | Notes |
+|---|---|---|---|
+| `email_id` | ✓ | — | JMAP id, validated against `^[A-Za-z0-9_-]{1,255}$` |
+| `dry_run` | | `false` | verify and log the plan; create, send and move nothing |
+| `platform_repo` | | `Adam-S-Daniel/cms-platform` | where `scripts/email_draft/` lives |
+| `platform_ref` | | `main` | pin to the `uses:` ref |
+
+| Secret | Required | Notes |
+|---|---|---|
+| `FASTMAIL_API_TOKEN` | ✓ in practice | Fastmail token with the Email and Email submission scopes |
+| `EMAIL_DRAFT_ADDRESS` | ✓ in practice | the secret posting address |
+| `EMAIL_DRAFT_SENDER` | ✓ in practice | the owner's address: the only accepted sender and the only reply recipient |
+| `app_private_key` | ✓ in practice | CMS automation App key, with `vars.CMS_AUTOMATION_APP_ID` on the caller; the mint step fails without it |
+
 ## Permissions
 
 Reusable workflows are capped by the **caller's** `GITHUB_TOKEN` permissions, so

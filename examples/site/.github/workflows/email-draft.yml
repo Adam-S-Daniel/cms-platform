@@ -1,0 +1,66 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/email-draft.yml`. Owns the repository_dispatch /
+# workflow_dispatch triggers and the run-name; delegates the work to the
+# platform's reusable workflow, which turns an email the owner sent to the
+# site's secret posting address into a Decap draft in /admin (never a
+# published post). Keep `platform_ref` equal to the `@vX.Y.Z` pin on the
+# `uses:` line. Full setup: docs/EMAIL-DRAFTS.md in cms-platform.
+#
+# WITH THE FLAG OFF NOTHING IS DRAFTED. The reusable reads
+# `cms.email_drafts.enabled` from this site's `_config.yml` (default false);
+# until it is `true`, a dispatched email gets a "turned off" reply and is
+# filed under `Failed`.
+#
+# PER-SITE SETUP:
+#   - `_config.yml`: `cms.email_drafts.enabled: true` (and a `url:`).
+#   - Fastmail: a rule filing mail sent to the posting address into its own
+#     mailbox, with `Processed` and `Failed` child mailboxes, and an API token
+#     with the Email and Email submission scopes.
+#   - The poller route: deploy infrastructure/email-draft-poller/ (its
+#     deploy.sh) pointed at this repo; it fires `repository_dispatch` with
+#     event type `email-draft` and `client_payload.email_id`.
+#   - Secrets: FASTMAIL_API_TOKEN, EMAIL_DRAFT_ADDRESS (the posting address),
+#     EMAIL_DRAFT_SENDER (the owner's own address: the only accepted sender
+#     and the only reply recipient), and CMS_AUTOMATION_APP_PRIVATE_KEY with
+#     the vars.CMS_AUTOMATION_APP_ID variable (the draft pull request must be
+#     App-created so this site's required checks run on it).
+#
+# The run-name names the event only: an email id is not a secret, but nothing
+# from the payload belongs in a public run list.
+name: Email to draft
+run-name: >-
+  ${{ github.event_name == 'repository_dispatch'
+        && 'email received'
+   || format('manual — @{0}', github.actor) }}
+
+on:
+  repository_dispatch:
+    types: [email-draft]
+  workflow_dispatch:
+    inputs:
+      email_id:
+        description: 'JMAP id of the email to turn into a draft (re-run one email)'
+        type: string
+        required: true
+      dry_run:
+        description: 'Verify and log the plan; create nothing, send nothing'
+        type: boolean
+        default: true
+
+# Reads only: every write goes through the CMS automation App's token, which
+# the reusable mints itself.
+permissions:
+  contents: read
+
+jobs:
+  email-draft:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/email-draft.yml@v0.1.171
+    with:
+      email_id: ${{ github.event.client_payload.email_id || inputs.email_id }}
+      dry_run: ${{ inputs.dry_run || false }}
+      platform_ref: v0.1.171
+    secrets:
+      FASTMAIL_API_TOKEN: ${{ secrets.FASTMAIL_API_TOKEN }}
+      EMAIL_DRAFT_ADDRESS: ${{ secrets.EMAIL_DRAFT_ADDRESS }}
+      EMAIL_DRAFT_SENDER: ${{ secrets.EMAIL_DRAFT_SENDER }}
+      app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}

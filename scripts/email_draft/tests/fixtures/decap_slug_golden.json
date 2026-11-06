@@ -1,0 +1,122 @@
+{
+  "generated_by": "scripts/email_draft/tests/generate_slug_golden.cjs",
+  "decap_cms": "3.17.3",
+  "decap_cms_core": "3.20.2",
+  "template": "{{year}}-{{month}}-{{day}}-{{slug | truncate(80, '-')}}",
+  "slug": {
+    "encoding": "ascii",
+    "clean_accents": true,
+    "sanitize_replacement": "-"
+  },
+  "date_utc": "2026-11-06",
+  "cases": [
+    [
+      "Hello World",
+      "2026-11-06-hello-world"
+    ],
+    [
+      "  Leading and trailing  ",
+      "2026-11-06-leading-and-trailing"
+    ],
+    [
+      "ZZ Exploratory test — delete me",
+      "2026-11-06-zz-exploratory-test-delete-me"
+    ],
+    [
+      "“Quoted” isn’t 🚀 Café naïve",
+      "2026-11-06-quoted-isn-t-cafe-naive"
+    ],
+    [
+      "Don't stop: it's 3.14 o'clock!",
+      "2026-11-06-dont-stop-its-3-14-oclock"
+    ],
+    [
+      "Ünïcödé Ærøskøbing straße Łódź",
+      "2026-11-06-unicode-aeroskobing-strasse-lodz"
+    ],
+    [
+      "İstanbul ΟΔΟΣ 日本語のタイトル",
+      "2026-11-06-i-stanbul"
+    ],
+    [
+      "a/b\\c?d*e<f>g|h\"i:j",
+      "2026-11-06-a-b-c-d-e-f-g-h-i-j"
+    ],
+    [
+      "con",
+      "2026-11-06-"
+    ],
+    [
+      "lpt1.txt",
+      "2026-11-06-lpt1-txt"
+    ],
+    [
+      "Trailing dots...",
+      "2026-11-06-trailing-dots"
+    ],
+    [
+      "under_score and ~tilde",
+      "2026-11-06-under_score-and-~tilde"
+    ],
+    [
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "2026-11-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ],
+    [
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "2026-11-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ],
+    [
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "2026-11-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ],
+    [
+      "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+      "2026-11-06-word-word-word-word-word-word-word-word-word-word-word-word-word-word-word-word"
+    ],
+    [
+      "A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A Z",
+      "2026-11-06-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-z"
+    ],
+    [
+      "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀",
+      "2026-11-06-"
+    ],
+    [
+      "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "2026-11-06-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    ],
+    [
+      "éééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "2026-11-06-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e-e"
+    ],
+    [
+      "CaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCaféCafé",
+      "2026-11-06-cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe"
+    ],
+    [
+      "Ⅻ roman numeral",
+      "2026-11-06-roman-numeral"
+    ],
+    [
+      "tab\tand\nnewline",
+      "2026-11-06-tab-and-newline"
+    ],
+    [
+      "MiXeD CaSe 123",
+      "2026-11-06-mixed-case-123"
+    ],
+    [
+      "--dashes--everywhere--",
+      "2026-11-06-dashes-everywhere"
+    ],
+    [
+      "ﬁ ligature and ﬀ",
+      "2026-11-06-fi-ligature-and-ff"
+    ],
+    [
+      "Ǆ titlecase ǅ",
+      "2026-11-06-dz-titlecase-dz"
+    ]
+  ]
+}
