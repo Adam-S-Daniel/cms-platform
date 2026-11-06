@@ -235,7 +235,7 @@ def test_fetch_failure_exits_1_without_reply(site, dns, now, world, capsys):
 def test_missing_env_exits_1(site, dns, now, world, capsys):
     env = {k: v for k, v in ENV.items() if k != "GH_TOKEN"}
     assert run(site, dns, now, env=env) == 1
-    assert "missing_env_count=1" in assert_clean(capsys)
+    assert "reason=missing-env" in assert_clean(capsys)
 
 
 def test_bad_config_exits_1(tmp_path, dns, now, world, capsys):

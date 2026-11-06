@@ -212,10 +212,9 @@ def process(
     out=None,
 ) -> int:
     """Run the whole flow; return the exit code. See the module docstring."""
-    missing = [k for k in REQUIRED_ENV if not env.get(k)]
-    if missing:
-        # A count, not the names: the workflow's first step names any unset secret.
-        log(f"step=config result=fail missing_env_count={len(missing)}", out)
+    if not all(env.get(k) for k in REQUIRED_ENV):
+        # No names or values here: the workflow's first step names any unset secret.
+        log("step=config result=fail reason=missing-env", out)
         return 1
     try:
         config = load_config(site_root)
