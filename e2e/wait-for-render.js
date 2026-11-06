@@ -29,16 +29,26 @@
  * captures settle before either is screenshotted, so neither can win a race
  * the other loses.
  *
+ * SECOND INCIDENT (adamdaniel.ai PR #4658, also pins-only): `/tools/evals/`
+ * embeds `<iframe src="/assets/tools/skills-evals/">` whose JS fetches a ~2.3 MB
+ * JSON file. Prod's networkidle wait timed out at 8s and the DOM-quiescence leg
+ * only observed the MAIN frame, so the iframe was never waited on and prod was
+ * captured still showing "Loading the latest results." (21% diff). Fixes: the
+ * network bound is now 20s, and quiescence runs in EVERY frame.
+ *
  * Bounded and NON-FATAL by construction: every wait here has an upper bound
  * and never throws. A page that never settles (a polling widget, a stalled
  * prod round trip) just falls back to today's un-settled screenshot — it must
  * never fail the visual-regression job, which gates a required check.
  */
 
-// Bound on the initial "let the network go quiet" wait. Generous relative to
-// a normal page load; a page that is still fetching after this long is not
-// going to finish before the job needs its screenshot anyway.
-const NETWORK_IDLE_TIMEOUT_MS = 8_000;
+// Bound on the initial "let the network go quiet" wait. Raised from 8s to 20s
+// after adamdaniel.ai PR #4658: the `/tools/evals/` page embeds a tool that
+// fetches a multi-MB JSON file, which took longer than 8s over the network on
+// the prod side, so networkidle timed out and prod was captured mid-load. A
+// page still fetching after this long is not going to finish before the job
+// needs its screenshot anyway.
+const NETWORK_IDLE_TIMEOUT_MS = 20_000;
 
 // How long the DOM must go without a mutation before we call it settled.
 const QUIET_PERIOD_MS = 400;
@@ -57,6 +67,33 @@ if (QUIET_PERIOD_MS >= QUIESCENCE_TIMEOUT_MS) {
   );
 }
 
+// Serialized into the browser and run in each frame: it must not reference any
+// outer-scope variable. `document` is the frame's own document.
+function observeQuiescence({ quietMs, boundMs }) {
+  return new Promise((resolve) => {
+    let timer = setTimeout(resolve, quietMs);
+    const observer = new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(resolve, quietMs);
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    });
+    // The overall bound: fires regardless of how often mutations keep
+    // resetting the quiet timer above, so a page that never stops
+    // mutating (a ticking clock widget, a polling script) still
+    // resolves instead of hanging this evaluate indefinitely.
+    setTimeout(() => {
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve();
+    }, boundMs);
+  });
+}
+
 // Wait for `page` to look settled before it is screenshotted: network idle,
 // then no DOM mutations for QUIET_PERIOD_MS. Page-agnostic — no selectors, no
 // widget cooperation required. `log` defaults to console.warn so a stalled
@@ -69,36 +106,19 @@ async function waitForRenderSettled(page, log = (msg) => console.warn(msg)) {
       log(`[wait-for-render] networkidle timed out (${e.message}) — capturing anyway`),
     );
 
-  await page
-    .evaluate(
-      ({ quietMs, boundMs }) =>
-        new Promise((resolve) => {
-          let timer = setTimeout(resolve, quietMs);
-          const observer = new MutationObserver(() => {
-            clearTimeout(timer);
-            timer = setTimeout(resolve, quietMs);
-          });
-          observer.observe(document.documentElement, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            characterData: true,
-          });
-          // The overall bound: fires regardless of how often mutations keep
-          // resetting the quiet timer above, so a page that never stops
-          // mutating (a ticking clock widget, a polling script) still
-          // resolves instead of hanging this evaluate indefinitely.
-          setTimeout(() => {
-            observer.disconnect();
-            clearTimeout(timer);
-            resolve();
-          }, boundMs);
-        }),
-      { quietMs: QUIET_PERIOD_MS, boundMs: QUIESCENCE_TIMEOUT_MS },
-    )
-    .catch((e) =>
-      log(`[wait-for-render] DOM-quiescence wait failed (${e.message}) — capturing anyway`),
-    );
+  // Every frame, not just the main one: an iframe (an embedded tool) paints its
+  // own content after its own fetch, and the main frame's observer cannot see
+  // it. A fake page without `frames` falls back to itself.
+  const frames = typeof page.frames === "function" ? page.frames() : [page];
+  await Promise.all(
+    frames.map((frame) =>
+      frame
+        .evaluate(observeQuiescence, { quietMs: QUIET_PERIOD_MS, boundMs: QUIESCENCE_TIMEOUT_MS })
+        .catch((e) =>
+          log(`[wait-for-render] DOM-quiescence wait failed (${e.message}) — capturing anyway`),
+        ),
+    ),
+  );
 }
 
 module.exports = {

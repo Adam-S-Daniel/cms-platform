@@ -88,3 +88,49 @@ test("waitForRenderSettled passes the exported constants through to page calls",
   expect(seen.quietMs).toBe(QUIET_PERIOD_MS);
   expect(seen.boundMs).toBe(QUIESCENCE_TIMEOUT_MS);
 });
+
+test("quiescence runs once in EACH frame, not on the page itself", async () => {
+  const calls = [];
+  const mkFrame = (name) => ({
+    evaluate: (fn, arg) => {
+      calls.push({ name, arg });
+      return Promise.resolve();
+    },
+  });
+  const page = {
+    waitForLoadState: () => Promise.resolve(),
+    evaluate: () => {
+      throw new Error("page.evaluate must not be called when frames() is available");
+    },
+    frames: () => [mkFrame("main"), mkFrame("iframe")],
+  };
+  const logged = [];
+  await waitForRenderSettled(page, (msg) => logged.push(msg));
+  const expectedArg = { quietMs: QUIET_PERIOD_MS, boundMs: QUIESCENCE_TIMEOUT_MS };
+  expect(calls.map((c) => c.name)).toEqual(["main", "iframe"]);
+  for (const c of calls) expect(c.arg).toEqual(expectedArg);
+  expect(logged).toEqual([]);
+});
+
+test("one failing frame logs once and never throws", async () => {
+  const page = {
+    waitForLoadState: () => Promise.resolve(),
+    frames: () => [
+      { evaluate: () => Promise.reject(new Error("frame was detached")) },
+      { evaluate: () => Promise.resolve() },
+    ],
+  };
+  const logged = [];
+  await expect(waitForRenderSettled(page, (msg) => logged.push(msg))).resolves.toBeUndefined();
+  expect(logged.length).toBe(1);
+  expect(logged[0]).toContain("DOM-quiescence wait failed");
+});
+
+test("the regression config's per-test timeout covers the waits plus the goto bound", () => {
+  // Requiring the config is side-effect free: it only builds an object with
+  // defineConfig.
+  const config = require("./playwright.regression.config.js");
+  expect(config.timeout).toBeGreaterThanOrEqual(
+    NETWORK_IDLE_TIMEOUT_MS + QUIESCENCE_TIMEOUT_MS + 30_000,
+  );
+});

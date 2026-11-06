@@ -14,6 +14,10 @@ const SITE_ROOT =
 
 module.exports = defineConfig({
   testDir: ".",
+  // Each test can now spend up to goto (30s) + 0.5s + 20s networkidle + 5s
+  // quiescence, which can exceed Playwright's 30s default per-test timeout; a
+  // timed-out test would lose its screenshot and be scored "different".
+  timeout: 90_000,
   testMatch: /regression-video\.spec\.js/,
   webServer: {
     command: `npx serve "${SITE_ROOT}/_site" -l 4000 --no-clipboard`,
