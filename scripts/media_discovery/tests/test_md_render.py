@@ -1,3 +1,5 @@
+import re
+import string
 from datetime import date
 
 import pytest
@@ -6,13 +8,13 @@ from md_fixtures import CFG, PAGE_A, PAGE_B, make_candidate, page
 
 from media_discovery.config import load_config
 from media_discovery.corroborate import verify
-from media_discovery.render import (WORD_JOINER, render_digest, render_entry, render_pr,
+from media_discovery.render import (WORD_JOINER, _clean, render_digest, render_entry, render_pr,
                                     safe_md, slugify)
 
 
 def front(entry):
     assert entry.content.startswith("---\n") and entry.content.endswith("\n---\n")
-    return yaml.safe_load(entry.content.split("---\n")[1])
+    return yaml.safe_load(entry.content[len("---\n"):-len("---\n")])
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -39,9 +41,9 @@ def test_media_entry():
     e = render_entry(c, "podcast", CFG)
     assert (e.collection, e.slug, e.path, e.branch) == (
         "media", "1-say-hi-now", "_media/1-say-hi-now.md", "cms/media/1-say-hi-now")
-    assert [ln.split(":")[0] for ln in e.content.splitlines()[1:-1]] == [
+    assert list(front(e)) == [
         "category", "title", "source", "date_display", "article_url", "weight"]
-    assert "weight: 1\n" in e.content
+    assert type(front(e)["weight"]) is int
     assert front(e) == {
         "category": "Podcasts & Interviews", "title": 'Say "Hi" \\ now',
         "source": "Example Radio", "date_display": "May 2026",
@@ -71,25 +73,13 @@ def test_event_entry_round_trip():
     assert (e.collection, e.slug, e.branch) == (
         "events", "2026-12-03-data-next", "cms/events/2026-12-03-data-next")
     assert e.path == "_events/2026-12-03-data-next.md"
-    assert [ln.split(":")[0] for ln in e.content.splitlines()[1:-1]] == [
+    assert list(front(e)) == [
         "title", "org", "start_date", "date_display", "location", "session", "event_url"]
+    assert type(front(e)["start_date"]) is str
     assert front(e) == {
         "title": "Data \u2013 Next", "org": "Example Summit", "start_date": "2026-12-03",
         "date_display": "December 3, 2026", "location": "Springfield: Hall A",
         "session": "Panel #2", "event_url": c.primary_url}
-
-
-@pytest.mark.parametrize("kind,field", [
-    ("press", "title"), ("press", "outlet"),
-    ("upcoming_talk", "title"), ("upcoming_talk", "outlet"),
-    ("upcoming_talk", "location"), ("upcoming_talk", "session"),
-])
-@pytest.mark.parametrize("bad", ["<script>alert(1)</script>", "Hall > Room", "a<b"])
-def test_markup_in_web_text_is_rejected(kind, field, bad):
-    kw = {"date": "2026-12-03"} if kind == "upcoming_talk" else {}
-    c = make_candidate(kind=kind, **{field: bad}, **kw)
-    with pytest.raises(ValueError, match="HTML markup"):
-        render_entry(c, kind, CFG)
 
 
 def test_ampersand_in_title_still_renders():
@@ -125,16 +115,48 @@ def test_values_have_no_newlines_or_control_chars_and_are_capped():
 
 def test_safe_md_neutralizes_mentions_and_references():
     out = safe_md("Closes #12 thanks @octocat, see GH-7 and https://example.com/x")
-    assert out == (f"Closes #{WORD_JOINER}12 thanks @{WORD_JOINER}octocat, see "
-                   f"GH-{WORD_JOINER}7 and https:/{WORD_JOINER}/example.com/x")
+    assert out == (f"Closes \\#{WORD_JOINER}12 thanks \\@{WORD_JOINER}octocat\\, see "
+                   f"GH\\-{WORD_JOINER}7 and https\\:\\/{WORD_JOINER}\\/example\\.com\\/x")
     assert "#12" not in out and "@octocat" not in out
 
 
-def test_safe_md_escapes_markup_and_caps():
-    out = safe_md("<b>[x](y)|`z`\x07\n#tag")
-    assert out == "&lt;b&gt;\\[x\\](y)\\|\\`z\\` #tag"
+def test_safe_md_escapes_every_ascii_punctuation_character():
+    # CommonMark 0.31.2 section 2.4: any ASCII punctuation character may be escaped.
+    assert len(string.punctuation) == 32
+    for ch in string.punctuation:
+        assert safe_md(f"a{ch}b").replace(WORD_JOINER, "") == f"a\\{ch}b", ch
+    assert safe_md("<b>[x](y)|`z`\x07\n*tag*") == "\\<b\\>\\[x\\]\\(y\\)\\|\\`z\\` \\*tag\\*"
+    assert "<script>" not in safe_md("<script>alert(1)</script>")
+    assert "<" not in re.sub(r"\\<", "", safe_md("<script>x</script>"))
     assert len(safe_md("a" * 1000)) == 600
     assert safe_md("\\|") == "\\\\\\|"
+
+
+def test_safe_md_word_joiners_survive_the_escaping():
+    out = safe_md("@octocat #12 GH-3 https://example.com")
+    assert out == (f"\\@{WORD_JOINER}octocat \\#{WORD_JOINER}12 GH\\-{WORD_JOINER}3 "
+                   f"https\\:\\/{WORD_JOINER}\\/example\\.com")
+
+
+HOSTILE = [
+    'He said "hi" \\ bye', "key: value # not a comment", "- dash start", "&anchor *alias",
+    "!!python/object:os.system", "{{ site.x }} {% raw %}", "<script>alert(1)</script>",
+    "'single' quotes", "@user #12 GH-3 https://example.com", "true", "null", "2026-12-03",
+    "[a, b]", "| literal", "> folded", "caf\u00e9 \u2013 \u4e2d", "a\u202eb\nc",
+]
+
+
+@pytest.mark.parametrize("value", HOSTILE)
+def test_front_matter_round_trips_hostile_values(value):
+    want = _clean(value, 300)
+    m = front(render_entry(make_candidate(kind="press", title=value, outlet=value),
+                           "press", CFG))
+    assert m["title"] == want and m["source"] == want
+    ev = front(render_entry(
+        make_candidate(kind="upcoming_talk", date="2026-12-03", title=value, outlet=value,
+                       location=value, session=value), "upcoming_talk", CFG))
+    assert [ev[k] for k in ("title", "org", "location", "session")] == [want] * 4
+    assert ev["start_date"] == "2026-12-03" and type(ev["start_date"]) is str
 
 
 def build_pr(**kw):
@@ -154,8 +176,8 @@ def test_pr_shape():
     assert not body.startswith("Automatically generated by Decap CMS")
     assert lines[2] == "## TLDR"
     assert lines[4].startswith("Found by the weekly media search: Open Data in Practice, "
-                               "Example Summit, 2026-03-12. Publish it in /admin")
-    assert "| <https://events.example.com/talks/open-data> | example.com | " \
+                               "Example Summit, 2026\\-03\\-12. Publish it in /admin")
+    assert "| <https://events.example.com/talks/open-data> | example\\.com | " \
            "Northwind Legal |" in body
     assert "## Why the model thinks it is this person" in body
     assert body.rstrip().endswith("<https://admin.example.com/#/collections/media>")
@@ -199,7 +221,7 @@ def test_format_characters_are_stripped_before_safe_md_adds_word_joiners():
     f = front(render_entry(make_candidate(title=raw), "press", CFG))
     assert f["title"] == "Open Data in Practice @octocat"
     out = safe_md(raw)
-    assert out == f"Open Data in Practice @{WORD_JOINER}octocat"
+    assert out == f"Open Data in Practice \\@{WORD_JOINER}octocat"
     assert out.count(WORD_JOINER) == 1 and "‮" not in out and "​" not in out
 
 

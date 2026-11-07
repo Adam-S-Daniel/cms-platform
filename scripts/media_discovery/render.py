@@ -1,9 +1,12 @@
 """Render the content file, PR body and digest email for a confirmed candidate."""
 
 import re
+import string
 import unicodedata
 from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
+
+import yaml
 
 from .candidate import Candidate, parse_date
 from .config import Config
@@ -62,10 +65,6 @@ def _clean(s, cap: int) -> str:
     return " ".join("".join(out).split())[:cap].rstrip()
 
 
-def _q(s, cap: int = VALUE_MAX) -> str:
-    return '"' + _clean(s, cap).replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
 def _month_year(d) -> str:
     return f"{MONTHS[d.month - 1]} {d.year}"
 
@@ -82,18 +81,8 @@ def _event_display(start, end) -> str:
             f"{MONTHS[end.month - 1]} {end.day}, {end.year}")
 
 
-def _reject_markup(*values) -> None:
-    """Site layouts print these fields as HTML, so web text with markup is refused."""
-    if any(c in _clean(v, VALUE_MAX) for v in values for c in "<>"):
-        raise ValueError("its text contains HTML markup")
-
-
 def render_entry(candidate: Candidate, kind: str, cfg: Config) -> Entry:
     collection, category = KIND_TARGET[kind]
-    if collection == "events":
-        _reject_markup(candidate.title, candidate.outlet, candidate.location, candidate.session)
-    else:
-        _reject_markup(candidate.title, candidate.outlet)
     if collection == "events":
         if len(candidate.date) != 10:
             raise ValueError("an event needs a full YYYY-MM-DD date")
@@ -101,41 +90,51 @@ def render_entry(candidate: Candidate, kind: str, cfg: Config) -> Entry:
         end = parse_date(candidate.end_date) if candidate.end_date else None
         slug = f"{candidate.date}-{slugify(candidate.title)}"
         fields = [
-            ("title", _q(candidate.title)),
-            ("org", _q(candidate.outlet)),
-            ("start_date", _q(candidate.date)),
-            ("date_display", _q(_event_display(start, end))),
-            ("location", _q(candidate.location)),
-            ("session", _q(candidate.session)),
-            ("event_url", _q(candidate.primary_url, 2000)),
+            ("title", _clean(candidate.title, VALUE_MAX)),
+            ("org", _clean(candidate.outlet, VALUE_MAX)),
+            ("start_date", _clean(candidate.date, VALUE_MAX)),
+            ("date_display", _clean(_event_display(start, end), VALUE_MAX)),
+            ("location", _clean(candidate.location, VALUE_MAX)),
+            ("session", _clean(candidate.session, VALUE_MAX)),
+            ("event_url", _clean(candidate.primary_url, 2000)),
         ]
         folder = cfg.collections.events.folder
     else:
         weight = cfg.collections.media.weight
         slug = f"{weight}-{slugify(candidate.title)}"
         fields = [
-            ("category", _q(category)),
-            ("title", _q(candidate.title)),
-            ("source", _q(candidate.outlet)),
-            ("date_display", _q(_month_year(parse_date(candidate.date)))),
-            ("article_url", _q(candidate.primary_url, 2000)),
-            ("weight", str(weight)),
+            ("category", _clean(category, VALUE_MAX)),
+            ("title", _clean(candidate.title, VALUE_MAX)),
+            ("source", _clean(candidate.outlet, VALUE_MAX)),
+            ("date_display", _clean(_month_year(parse_date(candidate.date)), VALUE_MAX)),
+            ("article_url", _clean(candidate.primary_url, 2000)),
+            ("weight", weight),
         ]
         folder = cfg.collections.media.folder
-    body = "\n".join(f"{k}: {v}" for k, v in fields)
+    # PyYAML does the quoting (including date-looking strings such as start_date).
+    body = yaml.safe_dump(dict(fields), sort_keys=False, allow_unicode=True,
+                          default_flow_style=False, width=10**9)
     return Entry(collection, slug, f"{folder}/{slug}.md", f"cms/{collection}/{slug}",
-                 f"---\n{body}\n---\n")
+                 f"---\n{body}---\n")
+
+
+ASCII_PUNCTUATION = re.compile("([" + re.escape(string.punctuation) + "])")
 
 
 def safe_md(s, cap: int = 600) -> str:
-    """Neutralize untrusted web text for a PR body or email: no markup, no @-mentions,
-    no issue references or closing keywords (a word joiner breaks each trigger)."""
+    """Encode untrusted web text for a Markdown PR body or email.
+
+    Backslash-escapes every ASCII punctuation character, as CommonMark 0.31.2
+    section 2.4 (Backslash escapes) specifies, so no character can start markup,
+    HTML or a link. GitHub's mention, issue-reference and autolink processing runs
+    on the rendered text and backslashes do not stop it, so a word joiner is
+    inserted first (after `@`, after `#` before a digit, after `GH-`, inside `://`);
+    the joiner is not ASCII, so the escaping pass leaves it in place."""
     text = _clean(s, cap)
-    text = text.replace("\\", "\\\\").replace("<", "&lt;").replace(">", "&gt;")
-    text = re.sub(r"([\[\]|`])", r"\\\1", text)
     text = text.replace("@", "@" + WORD_JOINER)
     text = re.sub(r"(#|gh-)(?=\d)", lambda m: m.group(1) + WORD_JOINER, text, flags=re.I)
-    return text.replace("://", ":/" + WORD_JOINER + "/")
+    text = text.replace("://", ":/" + WORD_JOINER + "/")
+    return ASCII_PUNCTUATION.sub(r"\\\1", text)
 
 
 def _link(url: str) -> str:

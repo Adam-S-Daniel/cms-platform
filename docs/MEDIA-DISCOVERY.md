@@ -92,14 +92,15 @@ different cluster from it.
 
 **Rendering** (`render.py`). Kinds map to a collection and media category:
 upcoming talks go to the events folder (slug `<YYYY-MM-DD>-<title-slug>`; an
-event without a full date cannot be rendered and is reported as unconfirmed; a
-find whose title, outlet, location or session contains `<` or `>` is never
-turned into an entry, because site layouts print those fields as HTML),
+event without a full date cannot be rendered and is reported as unconfirmed),
 everything else to the media folder (slug `<weight>-<title-slug>`, categories
 Talks & Panels, Podcasts & Interviews, Press Coverage, Articles & Commentary,
 Briefs, Testimony & Reports). Every value is one line, with control and
-Unicode format characters (bidi overrides, zero-width characters) removed,
-quoted, and capped at 300 characters. The branch is `cms/<collection>/<slug>`,
+Unicode format characters (bidi overrides, zero-width characters) removed and
+capped at 300 characters. The front matter is written with PyYAML, which does
+the quoting, and holds the source's raw text: it is not HTML-escaped. Those
+fields come from web pages, so a consuming site must escape them where it
+prints them (Liquid `| escape` in HTML text and attributes). The branch is `cms/<collection>/<slug>`,
 which is what makes Decap treat the PR as one of its own entries.
 
 ## Site configuration: `.github/media-discovery.yml`
@@ -220,4 +221,6 @@ tokens, 5 continuations) bound the worst case.
   recipient before the CLI runs.
 - **Safe PR bodies** (`render.safe_md`): web text in a PR body is escaped so
   it cannot render HTML or links, @-mention anyone, reference an issue, or
-  close one with a closing keyword (a word joiner breaks each trigger).
+  close one with a closing keyword. Every ASCII punctuation character is
+  backslash-escaped per CommonMark 0.31.2 section 2.4, and GitHub word
+  joiners break each mention, reference and autolink trigger.
