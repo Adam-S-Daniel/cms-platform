@@ -92,7 +92,9 @@ different cluster from it.
 
 **Rendering** (`render.py`). Kinds map to a collection and media category:
 upcoming talks go to the events folder (slug `<YYYY-MM-DD>-<title-slug>`; an
-event without a full date cannot be rendered and is reported as unconfirmed),
+event without a full date cannot be rendered and is reported as unconfirmed; a
+find whose title, outlet, location or session contains `<` or `>` is never
+turned into an entry, because site layouts print those fields as HTML),
 everything else to the media folder (slug `<weight>-<title-slug>`, categories
 Talks & Panels, Podcasts & Interviews, Press Coverage, Articles & Commentary,
 Briefs, Testimony & Reports). Every value is one line, with control and

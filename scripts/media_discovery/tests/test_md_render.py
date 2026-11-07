@@ -79,6 +79,24 @@ def test_event_entry_round_trip():
         "session": "Panel #2", "event_url": c.primary_url}
 
 
+@pytest.mark.parametrize("kind,field", [
+    ("press", "title"), ("press", "outlet"),
+    ("upcoming_talk", "title"), ("upcoming_talk", "outlet"),
+    ("upcoming_talk", "location"), ("upcoming_talk", "session"),
+])
+@pytest.mark.parametrize("bad", ["<script>alert(1)</script>", "Hall > Room", "a<b"])
+def test_markup_in_web_text_is_rejected(kind, field, bad):
+    kw = {"date": "2026-12-03"} if kind == "upcoming_talk" else {}
+    c = make_candidate(kind=kind, **{field: bad}, **kw)
+    with pytest.raises(ValueError, match="HTML markup"):
+        render_entry(c, kind, CFG)
+
+
+def test_ampersand_in_title_still_renders():
+    e = render_entry(make_candidate(kind="press", title="Crowell & Moring"), "press", CFG)
+    assert front(e)["title"] == "Crowell & Moring"
+
+
 def event_display(**kw):
     c = make_candidate(kind="upcoming_talk", **kw)
     return front(render_entry(c, "upcoming_talk", CFG))["date_display"]

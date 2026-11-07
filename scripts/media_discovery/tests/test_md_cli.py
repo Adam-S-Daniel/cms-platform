@@ -191,6 +191,23 @@ def test_live_run_opens_one_pr_and_emails_the_digest(site):
     assert "digest emailed to 2 recipient(s)" in h.stdout
 
 
+def test_markup_in_a_title_is_unconfirmed_and_opens_no_pr(site):
+    hostile = {**CONFIRMED, "title": "<script>alert(1)</script>"}
+    h = Harness(site, candidates=[hostile])
+    real = h.fetch
+
+    def fetch(url):  # both sources carry the title, so the claim itself is confirmed
+        p = real(url)
+        return page(url, p.text.replace("Open Data in Practice", hostile["title"]), p.status)
+    h.fetch = fetch
+    h.run()
+    assert h.code == 0
+    assert h.gh.opened == [] and "prs_opened=0" in h.stdout and "unconfirmed=1" in h.stdout
+    [(_, body, _)] = h.sent
+    assert "HTML markup" in body and "Would add" not in body
+    h.assert_counts_only()
+
+
 def test_today_and_the_existing_items_reach_the_model(site):
     h = Harness(site).run()
     content = h.client.calls[0]["messages"][0]["content"]

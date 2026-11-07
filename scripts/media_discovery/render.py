@@ -82,8 +82,18 @@ def _event_display(start, end) -> str:
             f"{MONTHS[end.month - 1]} {end.day}, {end.year}")
 
 
+def _reject_markup(*values) -> None:
+    """Site layouts print these fields as HTML, so web text with markup is refused."""
+    if any(c in _clean(v, VALUE_MAX) for v in values for c in "<>"):
+        raise ValueError("its text contains HTML markup")
+
+
 def render_entry(candidate: Candidate, kind: str, cfg: Config) -> Entry:
     collection, category = KIND_TARGET[kind]
+    if collection == "events":
+        _reject_markup(candidate.title, candidate.outlet, candidate.location, candidate.session)
+    else:
+        _reject_markup(candidate.title, candidate.outlet)
     if collection == "events":
         if len(candidate.date) != 10:
             raise ValueError("an event needs a full YYYY-MM-DD date")
