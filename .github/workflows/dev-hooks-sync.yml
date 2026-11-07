@@ -2,8 +2,10 @@
 # consuming site. A site calls this on a schedule (or dispatch); it opens a PR
 # when the site's guard files drift from the platform at the pinned ref.
 # Platform-authoritative: each listed file is overwritten to match the platform
-# exactly. Centralizes the secrets-scan + lint-staged pre-commit guards so every
-# consumer (and every future scaffolded site) carries the same checks (issue #116).
+# exactly. Centralizes the secrets-scan + lint-staged + liquid-escape-lint
+# pre-commit guards so every consumer (and every future scaffolded site)
+# carries the same checks (issue #116). site-verify.yml runs the escaping lint
+# in CI once this sync has delivered it.
 name: Dev-hooks sync (reusable)
 
 on:
@@ -95,6 +97,8 @@ jobs:
           FILES=(
             scripts/secrets-scan.sh
             scripts/lint-staged.sh
+            scripts/liquid-escape-lint.sh
+            scripts/liquid-escape-lint.rb
             scripts/setup-hooks.sh
             .githooks/pre-commit
             .gitconfig-fragment
@@ -107,7 +111,7 @@ jobs:
             mkdir -p "$(dirname "$f")"
             cp "$src" "$f"
           done
-          chmod +x scripts/secrets-scan.sh scripts/lint-staged.sh scripts/setup-hooks.sh .githooks/pre-commit
+          chmod +x scripts/secrets-scan.sh scripts/lint-staged.sh scripts/liquid-escape-lint.sh scripts/liquid-escape-lint.rb scripts/setup-hooks.sh .githooks/pre-commit
           rm -rf .cms-platform
           if git diff --quiet -- "${FILES[@]}"; then
             echo "dev-hooks already in sync with ${PLATFORM}@${REF}"; exit 0
@@ -121,6 +125,6 @@ jobs:
           git push -f origin "$BRANCH"
           gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" \
             --title "Sync pre-commit guards from ${PLATFORM}@${REF}" \
-            --body "Automated dev-hooks sync from \`${PLATFORM}@${REF}\`. Platform-authoritative: secrets-scan + lint-staged + the local-wiring setup-hooks.sh." \
+            --body "Automated dev-hooks sync from \`${PLATFORM}@${REF}\`. Platform-authoritative: secrets-scan + lint-staged + liquid-escape-lint + the local-wiring setup-hooks.sh." \
           || gh pr edit "$BRANCH" --title "Sync pre-commit guards from ${PLATFORM}@${REF}" \
             --body "Automated dev-hooks sync from \`${PLATFORM}@${REF}\`."

@@ -17,7 +17,7 @@ permalink: /blog/
   <ul class="post-list">
     {% for post in published_posts %}
     <li class="post-item">
-      <h3 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h3>
+      <h3 class="post-title"><a href="{{ post.url | relative_url | escape }}">{{ post.title | escape }}</a></h3>
       {% if post.tags %}
       <div class="post-tags">
         {% include tag-pills.html tags=post.tags indent="        " %}

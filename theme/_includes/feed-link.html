@@ -2,7 +2,7 @@
   Small RSS/Atom feed link. Pass `href` (root-relative) and `label`.
   Renders as a single icon with a screen-reader label and a tooltip.
 {%- endcomment -%}
-<a class="feed-link" href="{{ include.href | relative_url }}" title="{{ include.label }}" aria-label="{{ include.label }}">
+<a class="feed-link" href="{{ include.href | relative_url | escape }}" title="{{ include.label | escape }}" aria-label="{{ include.label | escape }}">
   {%- comment -%}
     width/height are kept as HTML attributes (not just CSS) so the icon
     stays small even if main.css hasn't reached the visitor yet — without
