@@ -118,8 +118,14 @@ class CloudwatchRumIncludeRenderTest < Minitest::Test
     assert_equal 1, html.scan("<script").length, html
     assert_includes html, %(data-cwr-app-monitor-id="x&quot;&gt;&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;")
     assert_includes html, %(data-cwr-region="a&amp;b")
-    body = html[%r{<script\b[^>]*>(.*)</script\s*>}im, 1]
-    refute_nil body, html
+    # Slice by position rather than a tag regexp (CodeQL rb/bad-tag-filter):
+    # the include renders exactly one script element, asserted above.
+    lower = html.downcase
+    open_end = lower.index(">", lower.index("<script").to_i)
+    close = lower.rindex("</script")
+    refute_nil open_end, html
+    refute_nil close, html
+    body = html[(open_end + 1)...close]
     refute_includes body, "alert(1)"
     refute_includes body, "a&b"
   end
