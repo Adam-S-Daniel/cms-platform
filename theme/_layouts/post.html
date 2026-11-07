@@ -11,14 +11,14 @@ layout: default
         <time class="post-date" datetime="{{ page.date | date_to_xmlschema }}">
           {{ page.date | date: "%B %-d, %Y" }}
         </time>
-        <span class="post-reading-time">{{ reading_time }} min read</span>
+        <span class="post-reading-time">{{ reading_time | escape }} min read</span>
         {% if page.tags %}
         <div class="post-tags">
           {% include tag-pills.html tags=page.tags %}
         </div>
         {% endif %}
       </div>
-      <h1>{{ page.title }}</h1>
+      <h1>{{ page.title | escape }}</h1>
       {% if page.featured_image and page.featured_image != "" %}
       {%- comment -%}
         width/height come from front matter or the image file
@@ -29,8 +29,8 @@ layout: default
         featured_image_alt.
       {%- endcomment %}
       {%- assign _hero_alt = page.featured_image_alt | strip %}
-      <img class="featured-image" src="{{ page.featured_image | relative_url }}"
-        {%- if page.featured_image_width and page.featured_image_height %} width="{{ page.featured_image_width }}" height="{{ page.featured_image_height }}"{% endif %} decoding="async" alt="{{ _hero_alt | escape }}">
+      <img class="featured-image" src="{{ page.featured_image | relative_url | escape }}"
+        {%- if page.featured_image_width and page.featured_image_height %} width="{{ page.featured_image_width | escape }}" height="{{ page.featured_image_height | escape }}"{% endif %} decoding="async" alt="{{ _hero_alt | escape }}">
       {% endif %}
     </header>
 

@@ -1,6 +1,6 @@
 <header class="site-header">
   <div class="container">
-    <a class="site-logo" href="{{ '/' | relative_url }}">{{ site.title }}</a>
+    <a class="site-logo" href="{{ '/' | relative_url }}">{{ site.title | escape }}</a>
     {%- comment -%}
       Show "Blog" only on a site that HAS a blog index. This link used to be
       unconditional, so a consumer with no blog served it on every
@@ -32,7 +32,7 @@
       {%- assign _nav_prefix = page.url | slice: 0, _nav_href.size -%}
       {%- assign _tag_nav_href = '/tags/' -%}
       {%- assign _tag_nav_prefix = page.url | slice: 0, _tag_nav_href.size -%}
-      <a href="{{ _nav_href | relative_url }}"
+      <a href="{{ _nav_href | relative_url | escape }}"
          {%- if page.url == _nav_href %} class="active" aria-current="page"
          {%- elsif _nav_prefix == _nav_href or _tag_nav_prefix == _tag_nav_href %} class="active" aria-current="true"
          {%- endif %}>Blog</a>

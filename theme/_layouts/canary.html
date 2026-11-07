@@ -9,10 +9,10 @@ layout: default
 -->
 {% assign baseline = page.canary_baseline | default: "E2E canary entry" %}
 <article class="canary-entry"
-         data-canary-id="{{ page.canary_id }}"
+         data-canary-id="{{ page.canary_id | escape }}"
          data-canary-baseline="{{ baseline | escape }}">
   <header>
-    <h1>{{ page.title }}</h1>
+    <h1>{{ page.title | escape }}</h1>
     <p class="canary-note">
       <strong>This URL is reserved for automated end-to-end tests.</strong>
       It exists at a stable address so test runs can verify that admin

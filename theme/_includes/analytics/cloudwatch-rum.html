@@ -1,8 +1,15 @@
 {%- assign _rum = site.analytics.cloudwatch_rum -%}
 {%- if jekyll.environment == "production" and _rum.app_monitor_id and _rum.app_monitor_id != "" -%}
 {%- assign _region = _rum.region | default: "us-east-1" -%}
-<script>
-(function() {
+{%- comment -%}
+  The loader's values ride on its own script element as data- attributes,
+  HTML-escaped, and the script reads them from document.currentScript.dataset.
+  No Liquid filter encodes a value fully for a script body (`jsonify` leaves a
+  closing script tag intact), so nothing is printed inside it
+  (scripts/liquid-escape-lint.rb).
+{%- endcomment -%}
+<script data-cwr-app-monitor-id="{{ _rum.app_monitor_id | escape }}" data-cwr-region="{{ _region | escape }}" data-cwr-identity-pool-id="{{ _rum.identity_pool_id | escape }}" data-cwr-client="{{ '/assets/js/aws-rum-web/cwr-1.25.0.js' | relative_url | escape }}">
+(function(cfg) {
   // Honor `?rum=off` / `?rum=on` query-param triggers so users can opt
   // their devices in/out by visiting a URL once. Persists in
   // localStorage; survives until the user clears site data. Used by
@@ -37,19 +44,19 @@
   // the data plane endpoint below.
   (function(n,i,v,r,s,c,x,z){x=window.AwsRumClient={q:[],n:n,i:i,v:v,r:r,c:c};window[n]=function(c,p){x.q.push({c:c,p:p});};z=document.createElement('script');z.async=true;z.src=s;document.head.insertBefore(z,document.head.getElementsByTagName('script')[0]);})(
     'cwr',
-    '{{ _rum.app_monitor_id }}',
+    cfg.cwrAppMonitorId,
     '1.0.0',
-    '{{ _region }}',
-    '{{ '/assets/js/aws-rum-web/cwr-1.25.0.js' | relative_url }}',
+    cfg.cwrRegion,
+    cfg.cwrClient,
     {
       sessionSampleRate: 1,
-      identityPoolId: "{{ _rum.identity_pool_id }}",
-      endpoint: "https://dataplane.rum.{{ _region }}.amazonaws.com",
+      identityPoolId: cfg.cwrIdentityPoolId,
+      endpoint: "https://dataplane.rum." + cfg.cwrRegion + ".amazonaws.com",
       telemetries: ["performance","errors","http"],
       allowCookies: false,
       enableXRay: false
     }
   );
-})();
+})(document.currentScript.dataset);
 </script>
 {%- endif -%}

@@ -83,7 +83,7 @@ function assert404Contract(label, text) {
   // own <meta name="robots"> reading the front-matter field directly.
   expect(fmField(text, "robots"), `${label}: front-matter robots`).toMatch(/noindex\s*,\s*nofollow/);
   expect(text, `${label}: must emit its own <meta name="robots"> (no layout does it now)`).toMatch(
-    /<meta\s+name="robots"\s+content="\{\{\s*page\.robots\s*\}\}"/,
+    /<meta\s+name="robots"\s+content="\{\{\s*page\.robots\s*\|\s*escape\s*\}\}"/,
   );
   // It must link back home so a lost visitor has a way out.
   expect(text, `${label}: links back to the homepage`).toMatch(/['"]\s*\/\s*['"]\s*\|\s*relative_url/);

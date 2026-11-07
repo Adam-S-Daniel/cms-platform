@@ -30,7 +30,7 @@
   every format a site might legitimately point at.
 {%- endcomment -%}
 {%- if site.cms.favicon_url -%}
-<link rel="icon" href="{{ site.cms.favicon_url }}">
+<link rel="icon" href="{{ site.cms.favicon_url | escape }}">
 {%- else -%}
 <link rel="icon" type="image/svg+xml" href="{{ '/assets/favicon.svg' | relative_url }}">
 {%- endif -%}

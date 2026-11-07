@@ -3,8 +3,8 @@ layout: default
 title: Home
 ---
 <div class="container">
-  <h1>{{ site.title }}</h1>
-  <p>{{ site.description }}</p>
+  <h1>{{ site.title | escape }}</h1>
+  <p>{{ site.description | escape }}</p>
 
   {%- comment -%} Exclude e2e test-fixture canaries (feed_exclude is stamped by
   exclude_e2e_posts.rb on any `e2e-`-slug or `test_fixture: true` post). They
@@ -22,7 +22,7 @@ title: Home
   <ul class="post-list">
     {% for post in published_posts %}
     <li class="post-item">
-      <h3 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h3>
+      <h3 class="post-title"><a href="{{ post.url | relative_url | escape }}">{{ post.title | escape }}</a></h3>
     </li>
     {% endfor %}
   </ul>
@@ -38,7 +38,7 @@ index.html); tags.spec.js expects it whenever /tags/ lists a tag (#702). {%- end
     <h2>Tags</h2>
     <div class="tag-cloud">
       {% for tag in all_tags %}
-      <a class="tag-pill" href="{{ tag.url | relative_url }}">{{ tag.name }}<span class="tag-cloud-count" aria-hidden="true"> · {{ tag.count }}</span></a>
+      <a class="tag-pill" href="{{ tag.url | relative_url | escape }}">{{ tag.name | escape }}<span class="tag-cloud-count" aria-hidden="true"> · {{ tag.count | escape }}</span></a>
       {% endfor %}
     </div>
     <p><a href="{{ '/tags/' | relative_url }}">All Tags →</a></p>

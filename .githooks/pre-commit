@@ -7,3 +7,4 @@ set -e
 ROOT="$(git rev-parse --show-toplevel)"
 "$ROOT/scripts/secrets-scan.sh"
 "$ROOT/scripts/lint-staged.sh"
+"$ROOT/scripts/liquid-escape-lint.sh"
