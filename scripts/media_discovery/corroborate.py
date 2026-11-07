@@ -77,6 +77,23 @@ def _supports(candidate: Candidate, norm_text: str, *, need_title: bool) -> bool
     return (has_title or has_outlet) and re.search(rf"(?<!\d){year}(?!\d)", norm_text) is not None
 
 
+def _domain(*urls: str) -> str:
+    """Registrable domain of the first URL that has a host, else "" (never raises)."""
+    for url in urls:
+        try:
+            return registrable_domain(url)
+        except ValueError:
+            continue
+    return ""
+
+
+def _blocked(url: str, blocked_domains) -> bool:
+    try:
+        return is_blocked(url, blocked_domains)
+    except ValueError:
+        return False  # a hostless address is unusable, not blocked
+
+
 def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> Verdict:
     urls = list(dict.fromkeys([candidate.primary_url, *candidate.supporting_urls]))
     reasons: list[str] = []
@@ -88,13 +105,20 @@ def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> 
         page = pages.get(url)
         is_primary = url == candidate.primary_url
         if page is None:
-            sources.append(SourceResult(url, registrable_domain(url), None, False, False, -1))
+            sources.append(SourceResult(url, _domain(url), None, False, False, -1))
             qualified.append(False)
             reasons.append(f"not fetched: {url}")
             continue
-        domain = registrable_domain(page.final_url or url)
-        blocked = is_blocked(url, cfg.sources.blocked_domains) or is_blocked(
-            page.final_url or url, cfg.sources.blocked_domains)
+        final = page.final_url or url
+        domain = _domain(final, url)
+        if not _domain(final) or not _domain(url):
+            # Never echo a hostless address: name the candidate's own URL instead.
+            sources.append(SourceResult(url, domain, None, False, False, -1))
+            qualified.append(False)
+            reasons.append(f"{url}: unusable address")
+            continue
+        blocked = (_blocked(url, cfg.sources.blocked_domains)
+                   or _blocked(final, cfg.sources.blocked_domains))
         ok_status = 200 <= page.status < 300
         identity = check_identity(page.text, cfg.person) if ok_status else None
         norm = normalize(page.text)

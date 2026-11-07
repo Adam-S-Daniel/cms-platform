@@ -46,6 +46,14 @@ def test_blocked_via_final_url_does_not_count():
     assert not v.confirmed
 
 
+def test_hostless_final_url_is_unusable_not_a_crash():
+    v = verify(make_candidate(), pages(a=PAGE_A, b=PAGE_B) | {
+        PRIMARY: page(PRIMARY, "", status=0, final="http:///x")}, CFG)
+    assert not v.confirmed
+    assert f"{PRIMARY}: unusable address" in v.reasons
+    assert "http:///x" not in " ".join(v.reasons)
+
+
 def test_blocked_primary_fails():
     cfg = load_config("person: {names: [Pat Rivera], identity_markers: [Northwind Legal]}\n"
                       "sources: {blocked_domains: [example.com]}")
