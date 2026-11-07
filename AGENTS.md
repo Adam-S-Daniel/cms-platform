@@ -154,6 +154,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 | `docs/CONTENT-PUBLISH-LATENCY.md` | a content-only e2e lane (shelved), a post's time-to-live. |
 | `docs/PUBLISHING-UX.md` | what an editor sees of publish/status, or a spec that publishes. |
 | `docs/CROSS-POSTING.md` | `cross-post.yml`, `scripts/cross_post/cross_post.py`, Mastodon dedupe, the LinkedIn leg and its 60-day token, the Substack paste-by-hand leg. |
+| `docs/MEDIA-DISCOVERY.md` | `media-discovery.yml`: checks, config, secrets. |
 | `docs/CONTRIBUTING.md` | the definition of done, self-CI lanes, porting a workflow, the AST-lint rule. |
 | `docs/OPERATIONS.md` | approving a gate, dispatching a loop, reading a failed run, verifying and linting locally. |
 | `docs/VERSION-HISTORY.md` | whether something was already fixed. |
@@ -412,7 +413,7 @@ no-op for anyone but Dependabot. → `docs/CONTRIBUTING.md`.
 | PR/push workflow | Salient paths |
 |---|---|
 | `self-ci.yml`, `self-secrets-scan.yml` | all (required; no filter; skill gates in-job: `skills/`, `docs/skill-impact.md`, `scripts/skill_gates/`) |
-| `self-fixture-e2e.yml` | in-job deny-list: all but `docs/`, `infrastructure/`, `oauth-proxy/`, `scripts/cross_post/`, `LICENSE`, `*.md` outside `e2e/fixture-site/` and `e2e/fixture-site-singlepage/`; push to main always |
+| `self-fixture-e2e.yml` | in-job deny-list: all but `docs/`, `infrastructure/`, `oauth-proxy/`, `scripts/{cross_post,media_discovery}/`, `LICENSE`, `*.md` outside `e2e/fixture-site*/`; push to main always |
 | `self-release-review-gate.yml` | all (required; in-job: enforces only on a release-bearing PR, success otherwise) |
 | `self-dependabot-auto-merge.yml` | all (an actuator, skipped unless Dependabot) |
 | `repo-settings-pat-verify.yml` | its own file (`on.paths`; not required) |

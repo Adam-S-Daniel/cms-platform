@@ -1,0 +1,221 @@
+# Reusable: weekly media discovery. Claude searches the web for new talks,
+# podcasts, press, articles and briefs about the site's person; code re-fetches
+# every source, runs the identity and two-independent-sources checks, and opens
+# ONE Decap editorial-workflow PR per confirmed find (branch
+# `cms/<collection>/<slug>`, labels `decap-cms/pending_review` +
+# `media-discovery`). It shows in /admin as "In review", and only a human
+# Publish merges it. One digest email per run lists the new PRs and the finds
+# that did not check out. See docs/MEDIA-DISCOVERY.md.
+#
+# A consuming site calls this from the thin caller in
+# examples/site/.github/workflows/media-discovery.yml, which owns the weekly
+# schedule, workflow_dispatch and the run-name. `scripts/media_discovery/`
+# lives in THIS repo, so the job checks the platform out into `.cms-platform/`
+# at `inputs.platform_ref` (pin it to the same tag as the caller's `uses:`).
+#
+# UNCONFIGURED SITES PASS IN SECONDS. The first step after the site checkout
+# looks for `.github/media-discovery.yml`; without it every later step is
+# skipped and the run is green (adamdaniel.ai carries this caller but no
+# config). The CLI also fails soft, with a `::notice::` naming the knob, when
+# the Anthropic key or the SMTP secrets are missing.
+#
+# MODE comes from the CALLER repo's variable `vars.MEDIA_DISCOVERY_MODE`
+# (`vars` in a reusable resolves to the caller's): `live` opens PRs, anything
+# else (or unset) is `email-only`, which emails what it WOULD open. Live mode
+# also needs the CMS automation App (`vars.CMS_AUTOMATION_APP_ID` + the
+# caller's CMS_AUTOMATION_APP_PRIVATE_KEY secret, passed as app_private_key);
+# without it the run drops to email-only with a notice. It never falls back to
+# GITHUB_TOKEN for the PR writes: a PR that token opens starts no workflows, so
+# its required checks would never report and Publish could never merge it.
+# The App token is minted with contents=write,pull_requests=write and narrowed
+# to this one repository.
+#
+# PUBLIC LOGS. The CLI prints counts only. Nothing from `inputs`, `vars`,
+# `secrets` or `github.event` is interpolated into a `run:` body (it would be
+# echoed); each goes through `env:`. The mail recipients and SMTP user are
+# masked one by one before the CLI runs (a secret holding a comma-separated
+# list is masked only as a whole).
+#
+# CONCURRENCY: not a required status context anywhere (schedule and dispatch
+# only), so the "no concurrency on a required-context publisher" rule does not
+# apply. The group serializes a dispatch that overlaps the weekly run, so two
+# runs cannot race to propose the same find; it is evaluated in the CALLER's
+# repository, so sites do not block each other.
+name: Media discovery (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform_ref:
+        description: "Tag/sha of Adam-S-Daniel/cms-platform to run scripts/media_discovery from (pin to the same ref as this workflow's `uses:`)."
+        type: string
+        required: true
+    secrets:
+      anthropic_api_key:
+        required: false
+      app_private_key:
+        required: false
+      smtp_user:
+        required: false
+      smtp_password:
+        required: false
+      mail_to:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: media-discovery
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout site
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Detect the media discovery config
+        id: detect
+        run: |
+          if [ -f .github/media-discovery.yml ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::media discovery is not configured for this site (no .github/media-discovery.yml); nothing to do"
+          fi
+
+      - name: Checkout platform scripts
+        if: steps.detect.outputs.configured == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Adam-S-Daniel/cms-platform
+          ref: ${{ inputs.platform_ref }}
+          path: .cms-platform
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/media_discovery
+            scripts/mint-app-token.js
+          sparse-checkout-cone-mode: false
+
+      # Ubuntu's system pip refuses installs (PEP 668), hence setup-python.
+      - name: Set up Python
+        if: steps.detect.outputs.configured == 'true'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+
+      # Pins: anthropic 2.3.0 (2026-10-23) and PyYAML 6.0.3 (2025-09-25), each
+      # the newest release at least 7 days old as of 2026-11-04.
+      - name: Install media discovery dependencies
+        if: steps.detect.outputs.configured == 'true'
+        run: python3 -m pip install --user 'anthropic==2.3.0' 'pyyaml==6.0.3'
+
+      - name: Read the site's name and admin URL
+        id: site
+        if: steps.detect.outputs.configured == 'true'
+        run: |
+          python3 - <<'PY'
+          import os
+          import yaml
+
+          try:
+              with open("_config.yml", encoding="utf-8") as fh:
+                  cfg = yaml.safe_load(fh) or {}
+          except (OSError, yaml.YAMLError):
+              cfg = {}
+          if not isinstance(cfg, dict):
+              cfg = {}
+          cms = cfg.get("cms") if isinstance(cfg.get("cms"), dict) else {}
+          origin = str(cms.get("admin_origin") or cfg.get("url") or "").strip().rstrip("/")
+          admin = origin + "/admin/" if origin.startswith("https://") else ""
+          title = cfg.get("title")
+          name = title.strip() if isinstance(title, str) and title.strip() else \
+              os.environ["GITHUB_REPOSITORY"].split("/", 1)[1]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"admin_url={' '.join(admin.split())}\n")
+              out.write(f"site_name={' '.join(name.split())}\n")
+          PY
+
+      - name: Choose the mode
+        id: mode
+        if: steps.detect.outputs.configured == 'true'
+        env:
+          REQUESTED_MODE: ${{ vars.MEDIA_DISCOVERY_MODE }}
+          APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
+        run: |
+          if [ "$REQUESTED_MODE" != "live" ]; then
+            echo "mode=email-only" >> "$GITHUB_OUTPUT"
+          elif [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
+            echo "::notice::MEDIA_DISCOVERY_MODE is live but the CMS automation App is not configured (set vars.CMS_AUTOMATION_APP_ID and the CMS_AUTOMATION_APP_PRIVATE_KEY secret); running email-only"
+            echo "mode=email-only" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=live" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Pinned: mint-app-token.js runs under node, and ubuntu-latest's default
+      # Node moves from 22 to 24 with Ubuntu 26.04 (actions/runner-images#14748).
+      - name: Set up Node
+        if: steps.detect.outputs.configured == 'true' && steps.mode.outputs.mode == 'live'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+          package-manager-cache: false
+
+      - name: Mint the CMS automation App token
+        id: app
+        if: steps.detect.outputs.configured == 'true' && steps.mode.outputs.mode == 'live'
+        env:
+          APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
+        run: |
+          set -euo pipefail
+          node .cms-platform/scripts/mint-app-token.js \
+            --owner "${GITHUB_REPOSITORY%%/*}" --repo "${GITHUB_REPOSITORY#*/}" \
+            --repositories "${GITHUB_REPOSITORY#*/}" \
+            --permissions contents=write,pull_requests=write
+
+      - name: Run media discovery
+        if: steps.detect.outputs.configured == 'true'
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          READ_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.anthropic_api_key }}
+          MEDIA_DISCOVERY_SMTP_USER: ${{ secrets.smtp_user }}
+          MEDIA_DISCOVERY_SMTP_PASSWORD: ${{ secrets.smtp_password }}
+          MEDIA_DISCOVERY_MAIL_TO: ${{ secrets.mail_to }}
+          MEDIA_DISCOVERY_REVIEWERS: ${{ vars.MEDIA_DISCOVERY_REVIEWERS }}
+          MEDIA_DISCOVERY_ADMIN_URL: ${{ steps.site.outputs.admin_url }}
+          MEDIA_DISCOVERY_SITE_NAME: ${{ steps.site.outputs.site_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "$MEDIA_DISCOVERY_SMTP_USER" ]; then
+            echo "::add-mask::$MEDIA_DISCOVERY_SMTP_USER"
+          fi
+          IFS=',' read -ra recipients <<< "$MEDIA_DISCOVERY_MAIL_TO"
+          for r in "${recipients[@]}"; do
+            r="${r#"${r%%[![:space:]]*}"}"
+            r="${r%"${r##*[![:space:]]}"}"
+            if [ -n "$r" ]; then
+              echo "::add-mask::$r"
+            fi
+          done
+          # The PR writes use the App token only; GITHUB_TOKEN is handed over
+          # just for the read-only duplicate check in email-only mode.
+          if [ "$MODE" = "live" ] && [ -n "$APP_TOKEN" ]; then
+            export GITHUB_TOKEN="$APP_TOKEN"
+          else
+            MODE=email-only
+            export GITHUB_TOKEN="$READ_TOKEN"
+          fi
+          export PYTHONPATH="$GITHUB_WORKSPACE/.cms-platform/scripts"
+          python3 -m media_discovery run \
+            --site-root "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" --mode "$MODE"
