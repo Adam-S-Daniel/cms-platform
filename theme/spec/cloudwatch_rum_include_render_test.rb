@@ -118,7 +118,7 @@ class CloudwatchRumIncludeRenderTest < Minitest::Test
     assert_equal 1, html.scan("<script").length, html
     assert_includes html, %(data-cwr-app-monitor-id="x&quot;&gt;&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;")
     assert_includes html, %(data-cwr-region="a&amp;b")
-    body = html[%r{<script[^>]*>(.*)</script>}m, 1]
+    body = html[%r{<script\b[^>]*>(.*)</script\s*>}im, 1]
     refute_nil body, html
     refute_includes body, "alert(1)"
     refute_includes body, "a&b"
