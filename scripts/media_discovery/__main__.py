@@ -105,8 +105,8 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
     api_key = env.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         say("::notice::media discovery is configured but ANTHROPIC_API_KEY is empty: add the "
-            "ANTHROPIC_API_KEY repository secret (the caller passes it as anthropic_api_key); "
-            "skipping this run")
+            "MEDIA_DISCOVERY_ANTHROPIC_API_KEY repository secret (the caller passes it as "
+            "anthropic_api_key); skipping this run")
         return 0
 
     today = args.today or date.today()

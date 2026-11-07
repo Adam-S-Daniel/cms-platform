@@ -21,6 +21,8 @@ Media discovery encoding. [#978](https://github.com/Adam-S-Daniel/cms-platform/p
 
 Digest From address. The digest's From address can now be set with the optional `MEDIA_DISCOVERY_MAIL_FROM` secret (`mail_from` on the reusable), so it can differ from the SMTP login, as with a Fastmail alias. Unset or invalid, it stays the SMTP login, and an invalid value is never printed.
 
+Purpose-named API key secret. The thin caller now reads the Claude API key from the site secret `MEDIA_DISCOVERY_ANTHROPIC_API_KEY` instead of `ANTHROPIC_API_KEY`, so the secret's name says what it is for. The reusable's `anthropic_api_key` input is unchanged, and `platform-bump` carries the caller change. Neither consumer had set the old secret.
+
 Consumer effect. A site that turns on live mode must escape `_events` and `_media` fields in its layouts. jodidaniel.com does ([jodidaniel.com#478](https://github.com/jodidaniel/jodidaniel.com/pull/478)); adamdaniel.ai has no discovery config, so nothing changes there. The thin caller now passes the new optional secret `mail_from` (`platform-bump` carries the caller change); a site that does not set `MEDIA_DISCOVERY_MAIL_FROM` behaves as before. No live consumer verification is claimed in this entry.
 
 **v0.1.172 — Sites get a weekly media-discovery job that proposes new talks and press for human review.**

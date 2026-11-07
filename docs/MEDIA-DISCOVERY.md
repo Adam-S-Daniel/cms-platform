@@ -136,7 +136,7 @@ problem) instead of being ignored.
 
 | Knob | Kind | Needed for | Without it |
 | --- | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | secret (passed as `anthropic_api_key`) | any run | `::notice::` naming it; green no-op |
+| `MEDIA_DISCOVERY_ANTHROPIC_API_KEY` | secret (passed as `anthropic_api_key`) | any run | `::notice::` naming it; green no-op |
 | `MEDIA_DISCOVERY_SMTP_USER` | secret (`smtp_user`) | the email; the From address unless `MEDIA_DISCOVERY_MAIL_FROM` is set | `::notice::` naming it; no email |
 | `MEDIA_DISCOVERY_SMTP_PASSWORD` | secret (`smtp_password`) | the email | `::notice::` naming it; no email |
 | `MEDIA_DISCOVERY_MAIL_TO` | secret (`mail_to`) | the email; comma-separated recipients | `::notice::` naming it; no email |

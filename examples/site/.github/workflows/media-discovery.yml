@@ -7,7 +7,7 @@
 #
 # A site WITHOUT `.github/media-discovery.yml` gets a green no-op run in
 # seconds. To turn it on, add that file, then:
-#   - secret ANTHROPIC_API_KEY — the Claude API key (without it: a notice).
+#   - secret MEDIA_DISCOVERY_ANTHROPIC_API_KEY — the Claude API key (without it: a notice).
 #   - secrets MEDIA_DISCOVERY_SMTP_USER (the From address unless
 #     MEDIA_DISCOVERY_MAIL_FROM is set), MEDIA_DISCOVERY_SMTP_PASSWORD and
 #     MEDIA_DISCOVERY_MAIL_TO (comma-separated) — the weekly digest email
@@ -44,7 +44,7 @@ jobs:
     with:
       platform_ref: v0.1.173
     secrets:
-      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      anthropic_api_key: ${{ secrets.MEDIA_DISCOVERY_ANTHROPIC_API_KEY }}
       app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
       smtp_user: ${{ secrets.MEDIA_DISCOVERY_SMTP_USER }}
       smtp_password: ${{ secrets.MEDIA_DISCOVERY_SMTP_PASSWORD }}

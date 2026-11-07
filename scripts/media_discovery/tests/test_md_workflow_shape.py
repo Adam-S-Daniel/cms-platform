@@ -194,7 +194,7 @@ def test_caller_pins_the_current_release_twice_alike(caller):
 def test_caller_passes_exactly_the_documented_secrets(caller):
     [job] = caller["jobs"].values()
     assert job["secrets"] == {
-        "anthropic_api_key": "${{ secrets.ANTHROPIC_API_KEY }}",
+        "anthropic_api_key": "${{ secrets.MEDIA_DISCOVERY_ANTHROPIC_API_KEY }}",
         "app_private_key": "${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}",
         "smtp_user": "${{ secrets.MEDIA_DISCOVERY_SMTP_USER }}",
         "smtp_password": "${{ secrets.MEDIA_DISCOVERY_SMTP_PASSWORD }}",

@@ -226,7 +226,8 @@ def test_unconfigured_site_is_a_no_op(tmp_path):
 def test_missing_api_key_names_the_knob_and_passes(site):
     env = {k: v for k, v in ENV.items() if k != "ANTHROPIC_API_KEY"}
     h = Harness(site, env=env).run()
-    assert h.code == 0 and "ANTHROPIC_API_KEY" in h.stdout and h.client.calls == []
+    assert h.code == 0 and h.client.calls == []
+    assert "MEDIA_DISCOVERY_ANTHROPIC_API_KEY repository secret" in h.stdout
 
 
 def test_invalid_config_fails(site):
