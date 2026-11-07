@@ -146,16 +146,20 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
         if is_duplicate(cand, existing, seen):
             counts["duplicates"] += 1
             continue
-        kind = effective_kind(cand, today)
-        urls = list(dict.fromkeys([cand.primary_url, *cand.supporting_urls]))
-        verdict = verify(cand, {u: fetcher(u) for u in urls}, cfg)
-        if not verdict.confirmed:
-            unconfirmed.append((cand, verdict.reasons))
-            continue
         try:
-            entry = render_entry(cand, kind, cfg)
-        except ValueError as exc:
-            unconfirmed.append((cand, [f"confirmed, but it cannot become an entry: {exc}"]))
+            kind = effective_kind(cand, today)
+            urls = list(dict.fromkeys([cand.primary_url, *cand.supporting_urls]))
+            verdict = verify(cand, {u: fetcher(u) for u in urls}, cfg)
+            if not verdict.confirmed:
+                unconfirmed.append((cand, verdict.reasons))
+                continue
+            try:
+                entry = render_entry(cand, kind, cfg)
+            except ValueError as exc:
+                unconfirmed.append((cand, [f"confirmed, but it cannot become an entry: {exc}"]))
+                continue
+        except Exception:  # noqa: BLE001 - one bad candidate must not end the run; no text logged
+            unconfirmed.append((cand, ["internal error while checking"]))
             continue
         seen |= _urls(cand)
         counts["confirmed"] += 1

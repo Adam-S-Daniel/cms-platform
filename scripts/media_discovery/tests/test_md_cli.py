@@ -279,6 +279,24 @@ def test_github_error_still_emails_then_fails(site):
     h.assert_counts_only()
 
 
+def test_a_crashing_candidate_does_not_abort_the_run(site):
+    h = Harness(site, candidates=[CONFIRMED, UNCONFIRMED])
+    real = h.fetch
+
+    def fetch(url):
+        if url == UNCONFIRMED["primary_url"]:
+            raise RuntimeError("boom Pat Rivera https://solo.example.com/claim")
+        return real(url)
+    h.fetch = fetch
+    h.run()
+    assert h.code == 0
+    assert "unconfirmed=1" in h.stdout and "prs_opened=1" in h.stdout
+    [(_, body, _)] = h.sent
+    assert "internal error while checking" in body
+    assert "boom" not in h.stdout and "Traceback" not in h.stdout
+    h.assert_counts_only()
+
+
 def test_smtp_error_fails_without_quoting_it(site):
     def send(*a, **kw):
         raise OSError("550 owner@example.com rejected")
