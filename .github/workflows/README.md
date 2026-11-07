@@ -114,7 +114,7 @@ come from the caller's `vars`. Full write-up: `docs/MEDIA-DISCOVERY.md`.
 
 | Secret | Required | Notes |
 |---|---|---|
-| `anthropic_api_key` | | the caller's `ANTHROPIC_API_KEY`; unset is a `::notice::` and a no-op |
+| `anthropic_api_key` | | the caller's `MEDIA_DISCOVERY_ANTHROPIC_API_KEY`; unset is a `::notice::` and a no-op |
 | `app_private_key` | | the caller's `CMS_AUTOMATION_APP_PRIVATE_KEY`; live mode only |
 | `smtp_user`, `smtp_password`, `mail_to` | | the caller's `MEDIA_DISCOVERY_SMTP_USER` / `_SMTP_PASSWORD` / `_MAIL_TO`; unset means no email, with a `::notice::` |
 

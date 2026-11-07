@@ -143,6 +143,7 @@ HOSTILE = [
     "!!python/object:os.system", "{{ site.x }} {% raw %}", "<script>alert(1)</script>",
     "'single' quotes", "@user #12 GH-3 https://example.com", "true", "null", "2026-12-03",
     "[a, b]", "| literal", "> folded", "caf\u00e9 \u2013 \u4e2d", "a\u202eb\nc",
+    "1,000", "+1,000", "0,1", "0o17", "1e5", "1.5e3",
 ]
 
 
@@ -157,6 +158,23 @@ def test_front_matter_round_trips_hostile_values(value):
                        location=value, session=value), "upcoming_talk", CFG))
     assert [ev[k] for k in ("title", "org", "location", "session")] == [want] * 4
     assert ev["start_date"] == "2026-12-03" and type(ev["start_date"]) is str
+
+
+def test_every_string_value_is_double_quoted_and_weight_is_plain():
+    for entry in (render_entry(make_candidate(kind="press", title="1,000", outlet="1e5"),
+                               "press", CFG),
+                  render_entry(make_candidate(kind="upcoming_talk", date="2026-12-03",
+                                              title="0o17", outlet="x", location="y",
+                                              session="z"), "upcoming_talk", CFG)):
+        events = list(yaml.parse(entry.content[len("---\n"):-len("---\n")]))
+        scalars = [e for e in events if isinstance(e, yaml.ScalarEvent)]
+        pairs = list(zip(scalars[0::2], scalars[1::2]))
+        assert pairs and all(k.style is None for k, _ in pairs)
+        for key, val in pairs:
+            if key.value == "weight":
+                assert val.style is None
+            else:
+                assert val.style == '"', key.value
 
 
 def build_pr(**kw):

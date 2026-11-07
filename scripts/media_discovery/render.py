@@ -81,6 +81,19 @@ def _event_display(start, end) -> str:
             f"{MONTHS[end.month - 1]} {end.day}, {end.year}")
 
 
+class _DoubleQuoted(str):
+    """A string value that must be emitted double-quoted."""
+
+
+class _FrontMatterDumper(yaml.SafeDumper):
+    pass
+
+
+_FrontMatterDumper.add_representer(
+    _DoubleQuoted,
+    lambda dumper, data: dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style='"'))
+
+
 def render_entry(candidate: Candidate, kind: str, cfg: Config) -> Entry:
     collection, category = KIND_TARGET[kind]
     if collection == "events":
@@ -112,8 +125,11 @@ def render_entry(candidate: Candidate, kind: str, cfg: Config) -> Entry:
         ]
         folder = cfg.collections.media.folder
     # PyYAML does the quoting (including date-looking strings such as start_date).
-    body = yaml.safe_dump(dict(fields), sort_keys=False, allow_unicode=True,
-                          default_flow_style=False, width=10**9)
+    # Every string VALUE is double-quoted so YAML 1.1 (Jekyll) and 1.2 (Decap) loaders
+    # keep text such as 1,000 or 1e5 as text; keys stay plain.
+    values = {k: _DoubleQuoted(v) if isinstance(v, str) else v for k, v in fields}
+    body = yaml.dump(values, Dumper=_FrontMatterDumper, sort_keys=False, allow_unicode=True,
+                     default_flow_style=False, width=10**9)
     return Entry(collection, slug, f"{folder}/{slug}.md", f"cms/{collection}/{slug}",
                  f"---\n{body}---\n")
 
@@ -122,7 +138,7 @@ ASCII_PUNCTUATION = re.compile("([" + re.escape(string.punctuation) + "])")
 
 
 def safe_md(s, cap: int = 600) -> str:
-    """Encode untrusted web text for a Markdown PR body or email.
+    """Encode untrusted web text for a Markdown PR body.
 
     Backslash-escapes every ASCII punctuation character, as CommonMark 0.31.2
     section 2.4 (Backslash escapes) specifies, so no character can start markup,
