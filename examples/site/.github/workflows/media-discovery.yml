@@ -8,9 +8,12 @@
 # A site WITHOUT `.github/media-discovery.yml` gets a green no-op run in
 # seconds. To turn it on, add that file, then:
 #   - secret ANTHROPIC_API_KEY — the Claude API key (without it: a notice).
-#   - secrets MEDIA_DISCOVERY_SMTP_USER (also the From address),
-#     MEDIA_DISCOVERY_SMTP_PASSWORD and MEDIA_DISCOVERY_MAIL_TO
-#     (comma-separated) — the weekly digest email (without them: a notice).
+#   - secrets MEDIA_DISCOVERY_SMTP_USER (the From address unless
+#     MEDIA_DISCOVERY_MAIL_FROM is set), MEDIA_DISCOVERY_SMTP_PASSWORD and
+#     MEDIA_DISCOVERY_MAIL_TO (comma-separated) — the weekly digest email
+#     (without them: a notice).
+#   - secret MEDIA_DISCOVERY_MAIL_FROM (optional) — the From address, when it
+#     differs from the SMTP login (the account must be allowed to send as it).
 #   - variable MEDIA_DISCOVERY_MODE — `live` opens PRs; anything else, or
 #     unset, is email-only (the digest lists what it WOULD open).
 #   - live mode also needs the CMS automation App: variable
@@ -46,3 +49,4 @@ jobs:
       smtp_user: ${{ secrets.MEDIA_DISCOVERY_SMTP_USER }}
       smtp_password: ${{ secrets.MEDIA_DISCOVERY_SMTP_PASSWORD }}
       mail_to: ${{ secrets.MEDIA_DISCOVERY_MAIL_TO }}
+      mail_from: ${{ secrets.MEDIA_DISCOVERY_MAIL_FROM }}

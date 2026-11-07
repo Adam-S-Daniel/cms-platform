@@ -307,6 +307,31 @@ def test_smtp_error_fails_without_quoting_it(site):
     h.assert_counts_only()
 
 
+def test_mail_from_overrides_the_from_address_only(site):
+    h = Harness(site, env={**ENV, "MEDIA_DISCOVERY_MAIL_FROM": " alerts@example.com "}).run()
+    [(_, _, kw)] = h.sent
+    assert kw["mail_from"] == "alerts@example.com" and kw["user"] == "bot@example.com"
+    assert "::warning::" not in h.stdout
+
+
+def test_mail_from_unset_or_blank_uses_the_smtp_user(site):
+    for env in (ENV, {**ENV, "MEDIA_DISCOVERY_MAIL_FROM": "  "}):
+        h = Harness(site, env=env).run()
+        [(_, _, kw)] = h.sent
+        assert kw["mail_from"] == "bot@example.com" and "MAIL_FROM" not in h.stdout
+
+
+@pytest.mark.parametrize("bad", ["a@example.com, b@example.com", "not-an-address",
+                                 "Name <a@example.com>, <b@example.com>", "a b@example.com"])
+def test_invalid_mail_from_falls_back_and_is_never_printed(site, bad):
+    h = Harness(site, env={**ENV, "MEDIA_DISCOVERY_MAIL_FROM": bad}).run()
+    [(_, _, kw)] = h.sent
+    assert h.code == 0 and kw["mail_from"] == "bot@example.com"
+    assert ("::warning::MEDIA_DISCOVERY_MAIL_FROM is not a single email address; "
+            "sending from the SMTP login") in h.stdout
+    assert bad not in h.stdout and "a@example.com" not in h.stdout
+
+
 def test_bad_repo_argument(site):
     out = io.StringIO()
     code = main(["run", "--site-root", str(site), "--repo", "nope", "--mode", "live"],

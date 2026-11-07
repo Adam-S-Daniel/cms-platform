@@ -137,9 +137,10 @@ problem) instead of being ignored.
 | Knob | Kind | Needed for | Without it |
 | --- | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | secret (passed as `anthropic_api_key`) | any run | `::notice::` naming it; green no-op |
-| `MEDIA_DISCOVERY_SMTP_USER` | secret (`smtp_user`) | the email; also the From address | `::notice::` naming it; no email |
+| `MEDIA_DISCOVERY_SMTP_USER` | secret (`smtp_user`) | the email; the From address unless `MEDIA_DISCOVERY_MAIL_FROM` is set | `::notice::` naming it; no email |
 | `MEDIA_DISCOVERY_SMTP_PASSWORD` | secret (`smtp_password`) | the email | `::notice::` naming it; no email |
 | `MEDIA_DISCOVERY_MAIL_TO` | secret (`mail_to`) | the email; comma-separated recipients | `::notice::` naming it; no email |
+| `MEDIA_DISCOVERY_MAIL_FROM` | secret (`mail_from`) | optional: the From address, when it differs from the SMTP login; the account must be allowed to send as it (for example a Fastmail alias). A value that is not a single email address is ignored with a `::warning::` naming this knob | the SMTP login is the From address |
 | `MEDIA_DISCOVERY_MODE` | variable | `live` opens PRs | email-only |
 | `MEDIA_DISCOVERY_REVIEWERS` | variable | comma-separated GitHub logins requested on each PR | no reviewers requested |
 | `CMS_AUTOMATION_APP_ID` | variable | live mode (the PR-writing App) | email-only, with a `::notice::` |
