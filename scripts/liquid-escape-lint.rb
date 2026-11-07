@@ -13,12 +13,16 @@
 #
 #   HTML text or attribute value, XML   escape, escape_once, xml_escape,
 #                                       cgi_escape, url_encode, slugify
-#   inside <![CDATA[ ]]>                numbers only: drop the CDATA section
-#                                       and use `| xml_escape` instead
-#   inside <script> or <style>          numbers only: no Liquid filter encodes
-#                                       fully for these (`jsonify` leaves
-#                                       `</script>` intact), so data goes in a
-#                                       data- attribute with `| escape`
+#   inside <script>                     a number, or JSON as
+#                                       `| jsonify | replace: "<", "\u003c"`
+#                                       (`jsonify` alone leaves `</script>`
+#                                       intact); otherwise a data- attribute
+#                                       with `| escape`
+#   inside a {% capture %} that builds  jsonify (the capture is then checked
+#     JSON (any value ends in jsonify)    where it prints, like any value)
+#   inside <style> or <![CDATA[ ]]>     numbers only: drop the CDATA section
+#                                       for `| xml_escape`; move style data to
+#                                       an HTML attribute
 #   anywhere                            numeric and date filters, whose output
 #                                       carries no markup (size, plus, date, ...)
 #
@@ -32,7 +36,8 @@
 #     checked like any other output.
 #   - `{{ content }}`: Jekyll's rendered page body, markup by design.
 #   - a variable `{% capture %}`d in the same template: its body is checked
-#     here, so it is markup built from already-encoded parts.
+#     here, so it is markup built from already-encoded parts. A capture that
+#     builds JSON is NOT exempt: it is encoded where it prints.
 #   - an entry in the repo's `.liquid-escape-allowlist.txt` (below).
 #
 # HOW IT READS A TEMPLATE. It parses with the `liquid` gem (the AST, never a
@@ -44,6 +49,7 @@
 #
 # ALLOWLIST. `.liquid-escape-allowlist.txt` at the repo root, one entry per
 # line: `<path> | <the output's markup, as the finding prints it> | <reason>`.
+# The markup may contain ` | ` (its filters); the reason may not.
 # The reason is required: an entry is a decision that this output is markup on
 # purpose (an editor's Markdown through `markdownify`, say), and the reason is
 # its record. Blank lines and lines starting with `#` are ignored. An entry
@@ -129,13 +135,14 @@ module LiquidEscapeLint
       @src = src
       @findings = []
       @captured = []
+      @json_captures = []
       @raw_before = +""
     end
 
     def run
       template = Liquid::Template.parse(LiquidEscapeLint.strip_front_matter(@src), line_numbers: true)
       collect_captures(template.root)
-      walk(template.root, capture_depth: 0)
+      walk(template.root)
       self
     end
 
@@ -150,22 +157,37 @@ module LiquidEscapeLint
 
     def collect_captures(node)
       children(node).each do |c|
-        @captured << c.instance_variable_get(:@to) if c.is_a?(Liquid::Capture)
+        if c.is_a?(Liquid::Capture)
+          name = c.instance_variable_get(:@to)
+          @captured << name
+          @json_captures << name if variables(c).any? { |v| v.filters.last&.first == "jsonify" }
+        end
         collect_captures(c) unless c.is_a?(String) || c.is_a?(Liquid::Variable)
       end
     end
 
-    def walk(node, capture_depth:)
+    def variables(node)
+      children(node).flat_map do |c|
+        next [] if c.is_a?(String) || c.is_a?(Liquid::Comment) || c.is_a?(Liquid::Raw)
+        next [c] if c.is_a?(Liquid::Variable)
+
+        variables(c)
+      end
+    end
+
+    def walk(node, capture: nil)
       children(node).each do |c|
         case c
         when String
           @raw_before << c
         when Liquid::Variable
-          check(c)
+          check(c, capture)
         when Liquid::Comment, Liquid::Raw
           next
+        when Liquid::Capture
+          walk(c, capture: c.instance_variable_get(:@to))
         else
-          walk(c, capture_depth: capture_depth)
+          walk(c, capture: capture)
         end
       end
     end
@@ -188,7 +210,7 @@ module LiquidEscapeLint
       last[2].downcase.to_sym
     end
 
-    def check(var)
+    def check(var, capture)
       filters = var.filters.map(&:first)
       final = filters.last
       name = var.name
@@ -199,28 +221,46 @@ module LiquidEscapeLint
       return if literal?(name) && filters.empty?
       return if literal?(name) && ctx == :html && literal_args?(var)
       return if filters.empty? && lookup_name(name) == "content"
-      return if filters.empty? && @captured.include?(lookup_name(name))
+      json_capture = @json_captures.include?(lookup_name(name))
+      return if filters.empty? && @captured.include?(lookup_name(name)) && !json_capture
 
       ok, need =
-        case ctx
-        when :script
-          [NUMERIC.include?(final),
-           "be a number (it is inside <script>, where no Liquid filter encodes fully: `jsonify` " \
-           "leaves `</script>` intact); put the value in a data- attribute with `| escape` and read " \
-           "it from `document.currentScript.dataset`"]
-        when :cdata
-          [NUMERIC.include?(final),
-           "not print inside <![CDATA[ ]]> (no filter encodes `]]>` there); drop the CDATA " \
-           "section and end the output in `| xml_escape`"]
-        when :style
-          [NUMERIC.include?(final), "be a number (it is inside <style>); move the value to an HTML attribute with `| escape`"]
+        if capture && @json_captures.include?(capture)
+          [final == "jsonify" || NUMERIC.include?(final),
+           "end in `| jsonify` (it builds the JSON captured as `#{capture}`)"]
         else
-          [HTML_ENCODERS.include?(final) || INERT.include?(final),
-           "end in an HTML encoder such as `| escape`#{final ? " (`#{final}` does not HTML-encode)" : ''}"]
+          case ctx
+          when :script
+            [NUMERIC.include?(final) || script_safe_json?(var, json_capture),
+             "be a number, or JSON ending in `| jsonify | replace: \"<\", \"\\u003c\"` (it is inside " \
+             "<script>, and `jsonify` alone leaves `</script>` intact); or put the value in a data- " \
+             "attribute with `| escape` and read it from `document.currentScript.dataset`"]
+          when :cdata
+            [NUMERIC.include?(final),
+             "not print inside <![CDATA[ ]]> (no filter encodes `]]>` there); drop the CDATA " \
+             "section and end the output in `| xml_escape`"]
+          when :style
+            [NUMERIC.include?(final),
+             "be a number (it is inside <style>); move the value to an HTML attribute with `| escape`"]
+          else
+            [HTML_ENCODERS.include?(final) || INERT.include?(final),
+             "end in an HTML encoder such as `| escape`#{final ? " (`#{final}` does not HTML-encode)" : ''}"]
+          end
         end
       return if ok
 
       @findings << Finding.new(@path, line, markup, "must #{need}")
+    end
+
+    # JSON made safe for a script body: `jsonify` (or a capture whose values
+    # all end in `jsonify`), then `<` replaced by the JSON escape `\u003c`, so
+    # no `</script` or `<!--` can form. Liquid string literals keep the
+    # backslash, so the JSON parser reads `\u003c` back as `<`.
+    def script_safe_json?(var, json_capture)
+      last_name, last_args = var.filters.last
+      return false unless last_name == "replace" && last_args == ["<", "\\u003c"]
+
+      json_capture || var.filters[0..-2].any? { |f| f.first == "jsonify" }
     end
 
     def literal?(name)
@@ -250,7 +290,12 @@ module LiquidEscapeLint
     File.readlines(file, chomp: true).each_with_index.filter_map do |line, i|
       next if line.strip.empty? || line.lstrip.start_with?("#")
 
-      path, markup, reason = line.split(" | ", 3).map { |s| s&.strip }
+      # The markup itself may hold ` | ` (a filter chain), so the path is the
+      # first field, the reason the last, and the markup all between.
+      parts = line.split(" | ").map(&:strip)
+      path = parts.first
+      reason = parts.size >= 3 ? parts.last : nil
+      markup = parts.size >= 3 ? parts[1..-2].join(" | ") : nil
       if path.to_s.empty? || markup.to_s.empty? || reason.to_s.empty?
         warn "liquid-escape-lint: #{ALLOWLIST}:#{i + 1}: needs `<path> | <markup> | <reason>`"
         exit 2

@@ -62,6 +62,22 @@ class LiquidEscapeLintTest < Minitest::Test
     assert_includes findings(src).first.message, "data- attribute"
   end
 
+  def test_json_in_a_script_body_is_jsonify_then_lt_escaped
+    src = <<~'LIQUID'
+      {%- capture ld -%}{"name":{{ page.title | jsonify }},"n":{{ ps | size }}}{%- endcapture -%}
+      <script type="application/ld+json">{{ ld | replace: "<", "\u003c" }}</script>
+      <script>var t = {{ page.title | jsonify | replace: "<", "\u003c" }};</script>
+    LIQUID
+    assert_empty flagged(src)
+  end
+
+  def test_a_json_capture_is_not_exempt_and_its_values_must_be_jsonify
+    assert_equal ["ld"], flagged(%({% capture ld %}{"a":{{ x | jsonify }}}{% endcapture %}<script>{{ ld }}</script>))
+    assert_equal ["y"], flagged(%({% capture ld %}{"a":{{ x | jsonify }},"b":"{{ y }}"}{% endcapture %}<p>{{ ld | escape }}</p>))
+    assert_equal ["x | replace: \"<\", \"\\u003c\""],
+                 flagged(%(<script>var a = {{ x | replace: "<", "\\u003c" }};</script>))
+  end
+
   def test_a_script_tags_own_attributes_are_html_context
     assert_empty flagged(%(<script src="{{ x | relative_url | escape }}"></script><p>{{ y | escape }}</p>))
     assert_equal ["y"], flagged(%(<script src="a.js"></script><p>{{ y }}</p>))
@@ -111,14 +127,16 @@ class LiquidEscapeLintTest < Minitest::Test
 
   def test_the_allowlist_suppresses_a_reasoned_entry_and_reports_a_stale_one
     dir = git_repo(
-      "_layouts/a.html" => "<p>{{ post.excerpt }}</p>",
-      ".liquid-escape-allowlist.txt" => "# c\n_layouts/a.html | post.excerpt | rendered excerpt\n"
+      "_layouts/a.html" => "<p>{{ post.excerpt }}</p>{{ about.lead | markdownify }}",
+      ".liquid-escape-allowlist.txt" => "# c\n_layouts/a.html | post.excerpt | rendered excerpt\n" \
+                                        "_layouts/a.html | about.lead | markdownify | the owner's Markdown\n"
     )
     out, st = run_all(dir)
     assert st.success?, out
 
     File.write(File.join(dir, ".liquid-escape-allowlist.txt"),
-               "_layouts/a.html | post.excerpt | rendered excerpt\n_layouts/a.html | gone | old\n")
+               "_layouts/a.html | post.excerpt | rendered excerpt\n" \
+               "_layouts/a.html | about.lead | markdownify | the owner's Markdown\n_layouts/a.html | gone | old\n")
     out, st = run_all(dir)
     refute st.success?
     assert_includes out, "matches no output"
