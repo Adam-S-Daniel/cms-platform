@@ -10,9 +10,16 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.172)
+## Version history (v0.1.0 → v0.1.173)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.173 — Media discovery encodes web-derived text for each context it reaches instead of trusting it.**
+The first-parent range since v0.1.172 holds one entry on main before this release PR: one squash commit ([#978](https://github.com/Adam-S-Daniel/cms-platform/pull/978)).
+
+Media discovery encoding. [#978](https://github.com/Adam-S-Daniel/cms-platform/pull/978) stops `scripts/media_discovery/` from trusting text it took from the web. Front matter is now written with PyYAML (`yaml.safe_dump`) holding the source's raw text, instead of hand-built double quoting. PR bodies backslash-escape every ASCII punctuation character per CommonMark 0.31.2 §2.4, after inserting GitHub word joiners. HTML escaping is the consuming site's job where it prints the fields (Liquid `| escape`), which `docs/MEDIA-DISCOVERY.md` now states.
+
+Consumer effect. A site that turns on live mode must escape `_events` and `_media` fields in its layouts. jodidaniel.com does ([jodidaniel.com#478](https://github.com/jodidaniel/jodidaniel.com/pull/478)); adamdaniel.ai has no discovery config, so nothing changes there. No live consumer verification is claimed in this entry.
 
 **v0.1.172 — Sites get a weekly media-discovery job that proposes new talks and press for human review.**
 The first-parent range since v0.1.171 holds four entries on main before this release PR: two squash commits ([#971](https://github.com/Adam-S-Daniel/cms-platform/pull/971), [#972](https://github.com/Adam-S-Daniel/cms-platform/pull/972)) and two merge commits ([#963](https://github.com/Adam-S-Daniel/cms-platform/pull/963), [#970](https://github.com/Adam-S-Daniel/cms-platform/pull/970)).
