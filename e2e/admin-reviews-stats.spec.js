@@ -165,6 +165,74 @@ test.describe(
       });
     });
 
+    // #982: regression.json is fetched from a preview deploy, so its values
+    // are data, never markup. A string where a count belongs renders as text.
+    test("renders regression.json values as text, not markup", async ({ page }) => {
+      await page.addInitScript((token) => {
+        localStorage.setItem("gh_reviews_token", token);
+      }, FAKE_TOKEN);
+
+      await page.route("https://api.github.com/**", async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        if (path === "/user") {
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ login: "escape-spec-user" }),
+          });
+        }
+        if (path.endsWith("/actions/runs")) {
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              workflow_runs: [
+                {
+                  id: 7777,
+                  name: "Visual Regression",
+                  path: ".github/workflows/visual-regression.yml",
+                  head_sha: "fedcba9876543210",
+                  pull_requests: [{ number: PR_NUMBER }],
+                },
+              ],
+            }),
+          });
+        }
+        if (path.endsWith("/pending_deployments")) {
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify([{ environment: { id: 3 } }]),
+          });
+        }
+        if (path.endsWith(`/pulls/${PR_NUMBER}`)) {
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ title: "Escaping PR", head: { ref: "cms/draft-escape" } }),
+          });
+        }
+        return route.fulfill({ status: 404, body: "{}" });
+      });
+
+      const markup = '<img id="injected-stat" src="x">';
+      await page.route(REGRESSION_JSON_RE(PR_NUMBER), async (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            totals: { visuallyDifferent: markup, potentiallyAffected: 0, new: 0, identical: 0 },
+            pages: [],
+          }),
+        }),
+      );
+
+      await page.goto("/admin/reviews/");
+      const value = page.locator(".review-card .stat-card.stat-different .stat-value");
+      await expect(value).toHaveText(markup);
+      await expect(page.locator("#injected-stat")).toHaveCount(0);
+    });
+
     test("falls back gracefully when regression.json is unavailable", async ({ page }) => {
       await page.addInitScript((token) => {
         localStorage.setItem("gh_reviews_token", token);

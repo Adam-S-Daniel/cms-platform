@@ -234,12 +234,14 @@
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;");
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
       }
 
       function setStatus(level, label, html) {
         statusEl.className = "badge " + level;
         statusEl.textContent = label;
+        // eslint-disable-next-line no-unsanitized/property -- both callers below pass static markup, with the DOM-derived report entries run through escapeHtml().
         if (html) detailEl.innerHTML = html;
       }
 

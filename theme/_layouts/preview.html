@@ -228,6 +228,7 @@ layout: default
 
   function setHTML(name, html) {
     var el = slot(name);
+    // eslint-disable-next-line no-unsanitized/property -- the editor's own Markdown rendered by marked, which the published page renders as the same HTML; onMessage() accepts updates only from trusted origins.
     if (el) el.innerHTML = html == null ? "" : html;
   }
 

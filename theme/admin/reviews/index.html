@@ -512,6 +512,9 @@
           const previewUrl = `https://preview-pr${prNum}.${APEX_DOMAIN}/`;
           const prUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/pull/${prNum}`;
           const envId = pendingDeps[0]?.environment?.id;
+          // envId lands in an attribute and an onclick handler, so it must
+          // be the integer the API documents, like run.id and prNum above.
+          if (!Number.isSafeInteger(envId) || envId <= 0) continue;
 
           html += `
             <div class="review-card" data-run-id="${run.id}" data-env-id="${envId}" data-pr-num="${prNum}">
@@ -551,6 +554,7 @@
             </div>`;
         }
 
+        // eslint-disable-next-line no-unsanitized/property -- `html` and `notes` are built above from static markup, validated integers (run.id, prNum, envId) and escapeHtml()'d API strings.
         list.innerHTML = (html || `
           <div class="empty-state">
             <p>&#10003;</p>
@@ -592,14 +596,15 @@
 
         const grid = cards.map(c => `
           <div class="stat-card ${c.cls}">
-            <p class="stat-label">${c.label}</p>
-            <p class="stat-value">${c.value}</p>
+            <p class="stat-label">${escapeHtml(c.label)}</p>
+            <p class="stat-value">${escapeHtml(c.value)}</p>
           </div>`).join('');
 
         const pagesLine = visuallyDifferentPages.length
           ? `<p class="stat-pages">${visuallyDifferentPages.map(escapeHtml).join(' · ')}</p>`
           : '';
 
+        // eslint-disable-next-line no-unsanitized/property -- `grid` and `pagesLine` hold static markup plus escapeHtml()'d values from regression.json; every class name is a literal above.
         node.innerHTML = `<div class="stat-grid">${grid}</div>${pagesLine}`;
       } catch {
         // Don't make the dashboard scary just because the JSON 404s — older
@@ -670,10 +675,16 @@
       }
     }
 
+    // Encodes all five characters, quotes included: the values land in
+    // double-quoted attributes as well as text. (A textContent/innerHTML
+    // round trip encodes neither quote, so it is not an attribute escaper.)
     function escapeHtml(str) {
-      const d = document.createElement('div');
-      d.textContent = str;
-      return d.innerHTML;
+      return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     init();
