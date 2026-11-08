@@ -61,6 +61,8 @@ on:
         required: false
       mail_to:
         required: false
+      mail_from:
+        required: false
 
 permissions:
   contents: read
@@ -192,6 +194,7 @@ jobs:
           MEDIA_DISCOVERY_SMTP_USER: ${{ secrets.smtp_user }}
           MEDIA_DISCOVERY_SMTP_PASSWORD: ${{ secrets.smtp_password }}
           MEDIA_DISCOVERY_MAIL_TO: ${{ secrets.mail_to }}
+          MEDIA_DISCOVERY_MAIL_FROM: ${{ secrets.mail_from }}
           MEDIA_DISCOVERY_REVIEWERS: ${{ vars.MEDIA_DISCOVERY_REVIEWERS }}
           MEDIA_DISCOVERY_ADMIN_URL: ${{ steps.site.outputs.admin_url }}
           MEDIA_DISCOVERY_SITE_NAME: ${{ steps.site.outputs.site_name }}
@@ -199,6 +202,9 @@ jobs:
           set -euo pipefail
           if [ -n "$MEDIA_DISCOVERY_SMTP_USER" ]; then
             echo "::add-mask::$MEDIA_DISCOVERY_SMTP_USER"
+          fi
+          if [ -n "$MEDIA_DISCOVERY_MAIL_FROM" ]; then
+            echo "::add-mask::$MEDIA_DISCOVERY_MAIL_FROM"
           fi
           IFS=',' read -ra recipients <<< "$MEDIA_DISCOVERY_MAIL_TO"
           for r in "${recipients[@]}"; do

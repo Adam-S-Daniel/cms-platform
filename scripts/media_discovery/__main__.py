@@ -13,6 +13,7 @@ import argparse
 import os
 import sys
 from datetime import date
+from email.utils import getaddresses
 from pathlib import Path
 
 from . import llm
@@ -30,6 +31,18 @@ LABELS = ["decap-cms/pending_review", "media-discovery"]
 SMTP_PORT = 465
 DEFAULT_SMTP_HOST = "smtp.fastmail.com"
 MODES = ("email-only", "live")
+
+
+def _single_address(value: str) -> str | None:
+    """The one plain address in `value`, or None when it is not exactly one."""
+    found = getaddresses([value])
+    if len(found) != 1 or "," in value:
+        return None
+    address = found[0][1].strip()
+    local, _, domain = address.partition("@")
+    if not local or not domain or "@" in domain or any(c.isspace() for c in address):
+        return None
+    return address
 
 
 def _split(value: str | None) -> list[str]:
@@ -92,8 +105,8 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
     api_key = env.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         say("::notice::media discovery is configured but ANTHROPIC_API_KEY is empty: add the "
-            "ANTHROPIC_API_KEY repository secret (the caller passes it as anthropic_api_key); "
-            "skipping this run")
+            "MEDIA_DISCOVERY_ANTHROPIC_API_KEY repository secret (the caller passes it as "
+            "anthropic_api_key); skipping this run")
         return 0
 
     today = args.today or date.today()
@@ -203,12 +216,22 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
             say("::notice::digest not emailed: set " + ", ".join(missing or
                 ["MEDIA_DISCOVERY_MAIL_TO"]) + " (repository secrets)")
         else:
+            smtp_user = knobs["MEDIA_DISCOVERY_SMTP_USER"].strip()
+            mail_from = smtp_user
+            requested_from = env.get("MEDIA_DISCOVERY_MAIL_FROM", "").strip()
+            if requested_from:
+                valid_from = _single_address(requested_from)
+                if valid_from:
+                    mail_from = valid_from
+                else:
+                    say("::warning::MEDIA_DISCOVERY_MAIL_FROM is not a single email address; "
+                        "sending from the SMTP login")
             try:
                 send(*digest, host=env.get("MEDIA_DISCOVERY_SMTP_HOST", "").strip()
                      or DEFAULT_SMTP_HOST, port=SMTP_PORT,
-                     user=knobs["MEDIA_DISCOVERY_SMTP_USER"].strip(),
+                     user=smtp_user,
                      password=knobs["MEDIA_DISCOVERY_SMTP_PASSWORD"],
-                     mail_from=knobs["MEDIA_DISCOVERY_SMTP_USER"].strip(), mail_to=recipients)
+                     mail_from=mail_from, mail_to=recipients)
             except Exception as exc:  # noqa: BLE001 - SMTP errors can quote addresses
                 say(f"::error::sending the digest failed ({_describe(exc)})")
                 return 1

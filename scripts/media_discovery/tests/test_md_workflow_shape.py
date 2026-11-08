@@ -59,7 +59,7 @@ def test_is_a_workflow_call_with_the_expected_interface(reusable):
         "description": call["inputs"]["platform_ref"]["description"],
         "type": "string", "required": True}}
     assert call["secrets"] == {name: {"required": False} for name in (
-        "anthropic_api_key", "app_private_key", "smtp_user", "smtp_password", "mail_to")}
+        "anthropic_api_key", "app_private_key", "smtp_user", "smtp_password", "mail_to", "mail_from")}
 
 
 def test_permissions_are_contents_read_only(reusable):
@@ -148,6 +148,7 @@ def test_cli_env_names_the_documented_knobs(reusable):
     assert env["MEDIA_DISCOVERY_SMTP_USER"] == "${{ secrets.smtp_user }}"
     assert env["MEDIA_DISCOVERY_SMTP_PASSWORD"] == "${{ secrets.smtp_password }}"
     assert env["MEDIA_DISCOVERY_MAIL_TO"] == "${{ secrets.mail_to }}"
+    assert env["MEDIA_DISCOVERY_MAIL_FROM"] == "${{ secrets.mail_from }}"
     assert env["MEDIA_DISCOVERY_REVIEWERS"] == "${{ vars.MEDIA_DISCOVERY_REVIEWERS }}"
     assert env["MEDIA_DISCOVERY_ADMIN_URL"] == "${{ steps.site.outputs.admin_url }}"
 
@@ -193,9 +194,10 @@ def test_caller_pins_the_current_release_twice_alike(caller):
 def test_caller_passes_exactly_the_documented_secrets(caller):
     [job] = caller["jobs"].values()
     assert job["secrets"] == {
-        "anthropic_api_key": "${{ secrets.ANTHROPIC_API_KEY }}",
+        "anthropic_api_key": "${{ secrets.MEDIA_DISCOVERY_ANTHROPIC_API_KEY }}",
         "app_private_key": "${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}",
         "smtp_user": "${{ secrets.MEDIA_DISCOVERY_SMTP_USER }}",
         "smtp_password": "${{ secrets.MEDIA_DISCOVERY_SMTP_PASSWORD }}",
         "mail_to": "${{ secrets.MEDIA_DISCOVERY_MAIL_TO }}",
+        "mail_from": "${{ secrets.MEDIA_DISCOVERY_MAIL_FROM }}",
     }
