@@ -14,14 +14,18 @@ re-derive, or when reconciling a consumer to the latest release.
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
 
-**v0.1.173 — Media discovery encodes web-derived text for each context it reaches instead of trusting it.**
-The first-parent range since v0.1.172 holds one entry on main before this release PR: one squash commit ([#978](https://github.com/Adam-S-Daniel/cms-platform/pull/978)).
+**v0.1.173 — Media discovery and every Liquid template encode untrusted text for the context it prints in, and a lint enforces it for templates.**
+The first-parent range since v0.1.172 holds three entries on main before this release PR: two squash commits ([#978](https://github.com/Adam-S-Daniel/cms-platform/pull/978), [#980](https://github.com/Adam-S-Daniel/cms-platform/pull/980)) and one merge commit ([#975](https://github.com/Adam-S-Daniel/cms-platform/pull/975), a `skills.lock` re-pin).
 
 Media discovery encoding. [#978](https://github.com/Adam-S-Daniel/cms-platform/pull/978) stops `scripts/media_discovery/` from trusting text it took from the web. Front matter is now written with PyYAML (`yaml.safe_dump`) holding the source's raw text, instead of hand-built double quoting. PR bodies backslash-escape every ASCII punctuation character per CommonMark 0.31.2 §2.4, after inserting GitHub word joiners. HTML escaping is the consuming site's job where it prints the fields (Liquid `| escape`), which `docs/MEDIA-DISCOVERY.md` now states. Every string value is now written double-quoted, so Jekyll's YAML 1.1 loader and Decap's YAML 1.2 loader read text such as `1,000` or `1e5` as text rather than a number (found in this release's independent review).
 
 Digest From address. The digest's From address can now be set with the optional `MEDIA_DISCOVERY_MAIL_FROM` secret (`mail_from` on the reusable), so it can differ from the SMTP login, as with a Fastmail alias. Unset or invalid, it stays the SMTP login, and an invalid value is never printed.
 
 Purpose-named API key secret. The thin caller now reads the Claude API key from the site secret `MEDIA_DISCOVERY_ANTHROPIC_API_KEY` instead of `ANTHROPIC_API_KEY`, so the secret's name says what it is for. The reusable's `anthropic_api_key` input is unchanged. `platform-bump` carries the caller's `secrets:` map but not its setup comment, so a consumer's comment needs a hand edit; jodidaniel.com's is [jodidaniel.com#482](https://github.com/jodidaniel/jodidaniel.com/pull/482). jodidaniel.com had not yet set the old secret.
+
+Liquid output escaping. [#980](https://github.com/Adam-S-Daniel/cms-platform/pull/980) adds `scripts/liquid-escape-lint.rb`, which parses templates with the `liquid` gem and fails any `{{ }}` that does not end in an encoder for where it prints (`escape` and its relatives in HTML and XML; only numbers inside `<script>`, `<style>` or CDATA). A literal, `{{ content }}`, a same-file `capture`, or an entry in the repo's `.liquid-escape-allowlist.txt` passes. The theme, the e2e fixture sites and the scaffolder are fixed; `analytics/cloudwatch-rum.html` now passes its values as escaped `data-` attributes. The lint runs pre-commit (`scripts/liquid-escape-lint.sh`, delivered by `dev-hooks-sync.yml`) and in `site-verify.yml`, which fetches the platform's copy at `job.workflow_sha`.
+
+Consumer effect of the lint. `site-verify` now fails a consumer whose templates do not pass. Both consumers were fixed before this release: [adamdaniel.ai#4697](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4697) and [jodidaniel.com#481](https://github.com/jodidaniel/jodidaniel.com/pull/481).
 
 Consumer effect. A site that turns on live mode must escape `_events` and `_media` fields in its layouts. jodidaniel.com does ([jodidaniel.com#478](https://github.com/jodidaniel/jodidaniel.com/pull/478)); adamdaniel.ai has no discovery config, so nothing changes there. The thin caller now passes the new optional secret `mail_from` (`platform-bump` carries the caller change); a site that does not set `MEDIA_DISCOVERY_MAIL_FROM` behaves as before. No live consumer verification is claimed in this entry.
 
