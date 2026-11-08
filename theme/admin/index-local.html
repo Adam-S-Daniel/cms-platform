@@ -261,12 +261,13 @@
           a.target = '_blank';
           a.rel = 'noopener';
           a.title = 'Deployed commit — opens on GitHub';
+          // eslint-disable-next-line no-unsanitized/property -- static markup with branch, sha and date each passed through escapeHTML(); the plugin cannot follow the conditional.
           a.innerHTML = (isPreview
             ? '<span style="color:#bf8700;font-weight:600;margin-right:0.5em">PREVIEW: ' +
-                String(c.branch).replace(/[<>&"']/g, '') + '</span>'
+                escapeHTML(c.branch) + '</span>'
             : '') +
-            '<span>' + c.sha.slice(0, 7) +
-            (dateLabel ? '  ' + dateLabel : '') + '</span>';
+            '<span>' + escapeHTML(String(c.sha).slice(0, 7)) +
+            (dateLabel ? '  ' + escapeHTML(dateLabel) : '') + '</span>';
           a.style.cssText = 'position:fixed;top:60px;right:12px;z-index:10000;padding:0.25rem 0.55rem;background:rgba(255,255,255,0.95);border:1px solid ' + (isPreview ? '#bf8700' : '#d0d7de') + ';border-radius:4px;color:#57606a;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.7rem;letter-spacing:0.04em;text-decoration:none;box-shadow:0 1px 3px rgba(0,0,0,0.08);';
           document.body.appendChild(a);
 

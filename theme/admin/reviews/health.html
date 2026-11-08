@@ -586,6 +586,7 @@
         WORKFLOWS.map((wf) => fetchWorkflowStatus(wf).then((payload) => ({ wf, payload }))),
       );
 
+      // eslint-disable-next-line no-unsanitized/property -- renderCard() returns static markup with every API or config value passed through escapeHtml(); indicator.cls is one of indicatorFor()'s literal class names.
       list.innerHTML = results.map(({ wf, payload }) => renderCard(wf, payload)).join('');
 
       const lastRefresh = document.getElementById('last-refresh');
@@ -594,10 +595,16 @@
       }
     }
 
+    // Encodes all five characters, quotes included: the values land in
+    // double-quoted attributes as well as text. (A textContent/innerHTML
+    // round trip encodes neither quote, so it is not an attribute escaper.)
     function escapeHtml(str) {
-      const d = document.createElement('div');
-      d.textContent = str == null ? '' : String(str);
-      return d.innerHTML;
+      return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     init();

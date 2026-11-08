@@ -45,6 +45,23 @@ if [ "${#JS[@]}" -gt 0 ]; then
   fi
 fi
 
+# ── HTML sinks: eslint-plugin-no-unsanitized (cms-platform#982) ──────
+# Refuses innerHTML/insertAdjacentHTML/document.write and friends fed a value
+# that has not been through a declared escaper. Its toolchain and config live
+# in the platform's e2e/ harness, so this runs only in the platform repo, and
+# only after `cd e2e && npm ci`. CI's gate is e2e/html-sink-lint.test.js.
+SINK_CONFIG=e2e/eslint.html-sinks.config.mjs
+if [ -f "$SINK_CONFIG" ]; then
+  mapfile -t SINK < <(filter '^(theme/.*\.(js|html)|scaffold/.*\.js)$')
+  if [ "${#SINK[@]}" -gt 0 ]; then
+    if [ -x e2e/node_modules/.bin/eslint ]; then
+      e2e/node_modules/.bin/eslint -c "$SINK_CONFIG" "${SINK[@]}" || RC=1
+    else
+      note "eslint for HTML sinks (run 'cd e2e && npm ci')"
+    fi
+  fi
+fi
+
 # ── Python: ruff (lint + format) ─────────────────────────────────────
 mapfile -t PY < <(filter '\.py$')
 if [ "${#PY[@]}" -gt 0 ]; then

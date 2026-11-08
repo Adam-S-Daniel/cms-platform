@@ -288,7 +288,6 @@
       pill.style.color = "#0969da";
       pill.style.borderColor = "#0969da";
       pill.title = "View publishing details for " + dest;
-      // eslint-disable-next-line no-unsanitized/property -- the SVG markup is static and the destination is HTML-escaped before interpolation.
       pill.innerHTML =
         '<svg width="10" height="10" viewBox="0 0 24 24" style="vertical-align:-1px;margin-right:0.4em" aria-hidden="true">' +
         '<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="40 20" stroke-linecap="round">' +
@@ -302,7 +301,6 @@
       pill.style.color = "#cf222e";
       pill.style.borderColor = "#cf222e";
       pill.title = "View why the update to " + dest + " did not finish";
-      // eslint-disable-next-line no-unsanitized/property -- the surrounding markup is static and the destination is HTML-escaped before interpolation.
       pill.innerHTML =
         "<span>⚠ Update to " + escapeHtml(dest) + " did not finish — view details</span>";
       pill.style.display = "";

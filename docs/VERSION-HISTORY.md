@@ -10,9 +10,18 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.173)
+## Version history (v0.1.0 → v0.1.174)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.174 — JavaScript that writes HTML takes escaped values only, and a lint enforces it.**
+The first-parent range since v0.1.173 holds one entry on main before this release PR: the merge commit of [#983](https://github.com/Adam-S-Daniel/cms-platform/pull/983), the `_agent-guidance` sync that delivers the fleet's `.githooks/agent-checks` runner. This release PR carries [#982](https://github.com/Adam-S-Daniel/cms-platform/issues/982) itself.
+
+HTML sink lint. `e2e/eslint.html-sinks.config.mjs` runs `eslint-plugin-no-unsanitized` (4.1.5, with eslint 10.14.0 and `eslint-plugin-html` 8.2.1 in `e2e/package.json`) over `theme/**/*.js`, the inline scripts of `theme/**/*.html` and `scaffold/**/*.js`. An `innerHTML`/`outerHTML` assignment or an `insertAdjacentHTML`/`document.write` call whose value is not a literal or a call to `escapeHTML`, `escapeHtml` or `esc` fails. `scripts/lint-staged.sh` runs it on staged files once `e2e/` is installed, and `e2e/html-sink-lint.test.js` runs it in the required node-unit-lints lane. That spec also fails a disable with no reason and runs every declared escaper to check that it encodes `& < > " '`. See `docs/CI-INVARIANTS.md`.
+
+Escaping fixes in the admin. The reviews dashboards' `escapeHtml` (`/admin/reviews/` and `/admin/reviews/health.html`) was a `textContent`/`innerHTML` round trip, which encodes no quotes, but its output landed in double-quoted attributes. It is now a five-character encoder. The reviews dashboard also escapes the `regression.json` values it reads from a preview deploy, and skips a pending deployment whose environment id is not a positive integer. `index-local.html`'s commit pill encodes the branch, sha and date, and `index-test.html`'s escaper encodes `'`.
+
+Consumer effect. None to act on. The admin pages above ship in the gem. A consumer's copy of `lint-staged.sh` has no `e2e/`, so it skips the new step, and the consumer e2e install grows by the three lint packages.
 
 **v0.1.173 — Media discovery and every Liquid template encode untrusted text for the context it prints in, and a lint enforces it for templates.**
 The first-parent range since v0.1.172 holds three entries on main before this release PR: two squash commits ([#978](https://github.com/Adam-S-Daniel/cms-platform/pull/978), [#980](https://github.com/Adam-S-Daniel/cms-platform/pull/980)) and one merge commit ([#975](https://github.com/Adam-S-Daniel/cms-platform/pull/975), a `skills.lock` re-pin).

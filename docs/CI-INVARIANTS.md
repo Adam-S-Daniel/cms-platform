@@ -1702,6 +1702,36 @@ Two decisions that are not obvious from the code:
   own `.liquid-escape-allowlist.txt` (`<path> | <markup> | <reason>`), never a
   filter that only looks like an encoder. A stale entry fails the run.
 
+## JavaScript HTML sinks take escaped values only: `eslint.html-sinks.config.mjs` (#982)
+
+The same rule for JavaScript that writes HTML. `eslint-plugin-no-unsanitized`
+refuses any `innerHTML`/`outerHTML` assignment and any `insertAdjacentHTML`,
+`document.write` or similar call whose value is not a literal or a call to a
+declared escaper. Its config, `e2e/eslint.html-sinks.config.mjs`, turns on no
+other rule and covers browser code only: `theme/**/*.js`, the inline scripts of
+`theme/**/*.html` (through `eslint-plugin-html`) and `scaffold/**/*.js`. The
+toolchain lives in `e2e/package.json`, since this repo has no root one. Two
+places run it:
+
+- **Pre-commit**, on staged files, from `scripts/lint-staged.sh`, once `cd e2e
+  && npm ci` has installed it. A consumer has no `e2e/`, so its copy skips the
+  step silently.
+- **The required `node-unit-lints` lane**: `e2e/html-sink-lint.test.js` lints
+  the whole set, and is in `PLATFORM_META_SPECS`.
+
+Three decisions that are not obvious from the code:
+
+- **An escaper is a name in `ESCAPERS`, and the spec runs each definition.**
+  Every function with that name in the linted files must encode all five of
+  `& < > " '`, because these helpers feed quoted attributes as well as text. A
+  `textContent`/`innerHTML` round trip encodes neither quote, which is why the
+  reviews dashboards' old `escapeHtml` was replaced.
+- **A sink the plugin cannot follow takes an inline disable with a reason**
+  (`// eslint-disable-next-line no-unsanitized/property -- <why>`); the spec
+  fails on a bare one, and `reportUnusedDisableDirectives` fails a stale one.
+- **Node-only scripts and test files are out of scope**: the first have no
+  DOM, and the second build fixtures from literals and are served to no one.
+
 ## A consumer's fleet `agent-checks` runner runs through `site-agent-checks.yml` (_agent-guidance#313)
 
 Both consumers carry the fleet's `.githooks/agent-checks` runner (delivered by

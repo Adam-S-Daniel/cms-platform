@@ -35,6 +35,8 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // basenames; the regex below matches them anywhere under the testDir.
 const CONSUMER = !!process.env.SITE_ROOT;
 const PLATFORM_META_SPECS = [
+  // #982: lints the platform's theme/ and scaffold/ browser code for HTML sinks.
+  "html-sink-lint.test.js",
   // #755: platform admin SOURCE; the browser spec uses the offline caret config,
   // and unit checks run in node-unit-lints.
   "decap-caret-selection.spec.js",
