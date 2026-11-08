@@ -14,7 +14,7 @@ layout: default
   {%- assign _feed_label = 'Subscribe to “' | append: tag_label | append: '” posts (Atom feed)' -%}
   <div class="page-header">
     <div class="page-header-with-feed">
-      <h1 class="tag-title">{{ tag_label }}</h1>
+      <h1 class="tag-title">{{ tag_label | escape }}</h1>
       {%- comment -%} An e2e / test-fixture tag (#689) has no feed (tag_feeds.rb skips it). {%- endcomment -%}
       {%- unless page.feed_exclude == true -%}
       {% include feed-link.html href=_tag_feed label=_feed_label %}
@@ -57,9 +57,9 @@ layout: default
         <time class="post-date" datetime="{{ post.date | date_to_xmlschema }}">
           {{ post.date | date: "%B %-d, %Y" }}
         </time>
-        <span class="post-reading-time">{{ reading_time }} min read</span>
+        <span class="post-reading-time">{{ reading_time | escape }} min read</span>
       </div>
-      <h2 class="post-title"><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h2>
+      <h2 class="post-title"><a href="{{ post.url | relative_url | escape }}">{{ post.title | escape }}</a></h2>
       {% if post.excerpt %}
       <p class="post-excerpt">{{ post.excerpt }}</p>
       {% endif %}

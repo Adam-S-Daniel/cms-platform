@@ -1,0 +1,3 @@
+# scripts/liquid-escape-lint.rb allowlist: Liquid outputs that print markup on
+# purpose. One per line: `<path> | <markup, as the finding prints it> | <reason>`.
+theme/_layouts/tag.html | post.excerpt | Jekyll's rendered excerpt: HTML the post's own Markdown produced, rendered by Jekyll's converter

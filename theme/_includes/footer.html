@@ -26,6 +26,6 @@
       {%- endif -%}
       {%- endfor %}
     </nav>
-    <p>&copy; {{ 'now' | date: "%Y" }} {{ site.author.name | default: site.title }}</p>
+    <p>&copy; {{ 'now' | date: "%Y" }} {{ site.author.name | default: site.title | escape }}</p>
   </div>
 </footer>

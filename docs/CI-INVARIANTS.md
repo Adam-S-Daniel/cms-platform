@@ -1668,6 +1668,40 @@ Measured before shipping: at jodidaniel.com `main`, `bundle exec jekyll build`
 production`; 9 `note` lines are assertion groups that do not arm while
 `site_live: false`, so coverage roughly doubles at go-live (jodidaniel#26).
 
+## Liquid output is encoded where it prints: `liquid-escape-lint.rb`
+
+The owner's rule (_agent-guidance#467): untrusted data is escaped or encoded,
+with a well-established library or built-in, in the manner each output context
+needs, just before it is placed there; rejecting input is not a substitute.
+In a Jekyll template the built-ins are Liquid's filters, so
+`scripts/liquid-escape-lint.rb` parses every tracked `.html`/`.xml` template
+with the `liquid` gem and refuses any `{{ ... }}` that does not END in an
+encoder for its context (the file's header has the table). Three places run it:
+
+- **Pre-commit**, on staged files: `scripts/liquid-escape-lint.sh`, wired into
+  `.githooks/pre-commit` and `.gitconfig-fragment`, and delivered to every
+  consumer by `dev-hooks-sync.yml` with the other guards. It skips with a
+  notice where Ruby or the gem is missing, like `lint-staged.sh`.
+- **`site-verify.yml`**, the gate on consumers (`site-verify / site-verify` is
+  required on consumer-main): it fetches the platform's copy at
+  `job.workflow_sha` (the #424 shape) and runs `--all .` with the site's bundle.
+- **This repo's `ruby-theme-specs` lane**: `theme/spec/liquid_escape_lint_test.rb`
+  pins the rules and runs `--all` over this repo, so the theme gem's layouts,
+  the e2e fixture sites and the scaffolder's seeds stay clean.
+
+Two decisions that are not obvious from the code:
+
+- **Inside `<script>`, only a number or JSON made script-safe prints.**
+  `jsonify` alone leaves a closing script tag intact, so JSON must end in
+  `| jsonify | replace: "<", "\u003c"` (a capture that builds JSON from
+  `jsonify`'d values may stand in for the `jsonify`, as jodidaniel.com's
+  JSON-LD does). Anything else goes on a `data-` attribute with `| escape` and
+  the script reads `document.currentScript.dataset`, as
+  `analytics/cloudwatch-rum.html` does. `<style>` and CDATA take numbers only.
+- **Markup on purpose is an allowlist entry with a reason**, in the repo's
+  own `.liquid-escape-allowlist.txt` (`<path> | <markup> | <reason>`), never a
+  filter that only looks like an encoder. A stale entry fails the run.
+
 ## A consumer's fleet `agent-checks` runner runs through `site-agent-checks.yml` (_agent-guidance#313)
 
 Both consumers carry the fleet's `.githooks/agent-checks` runner (delivered by

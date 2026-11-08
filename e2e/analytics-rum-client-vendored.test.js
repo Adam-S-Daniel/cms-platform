@@ -37,35 +37,34 @@ const APP_MONITOR = "11111111-2222-3333-4444-555555555555";
 const POOL = "us-west-2:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const REGION = "us-west-2";
 
-// The include's <script> body with each Liquid output tag replaced by what
-// Jekyll would print for a production site with an empty baseurl. A tag not
-// in this table fails the test, so a new value cannot slip into the loader
-// unexamined.
+// The include's <script> body plus the dataset its opening tag carries, with
+// each Liquid output tag replaced by what Jekyll would print for a production
+// site with an empty baseurl. A tag not in this table fails the test, so a new
+// value cannot slip into the loader unexamined, and the body may hold none:
+// the values ride on data- attributes (scripts/liquid-escape-lint.rb).
 function renderedLoader() {
   const src = fs.readFileSync(INCLUDE, "utf8");
-  const open = src.indexOf("<script>");
+  const open = src.indexOf("<script");
+  const openEnd = src.indexOf(">", open);
   const close = src.indexOf("</script>");
   expect(open, "the include carries one inline <script>").toBeGreaterThanOrEqual(0);
   expect(src.indexOf("<script", open + 1), "and only one").toBe(-1);
-  const body = src.slice(open + "<script>".length, close);
+  const body = src.slice(openEnd + 1, close);
+  expect(body, "the script body prints no Liquid output").not.toContain("{{");
   const values = {
-    "_rum.app_monitor_id": APP_MONITOR,
-    "_rum.identity_pool_id": POOL,
-    _region: REGION,
-    [`'${ASSET_PATH}' | relative_url`]: ASSET_PATH,
+    "_rum.app_monitor_id | escape": APP_MONITOR,
+    "_rum.identity_pool_id | escape": POOL,
+    "_region | escape": REGION,
+    [`'${ASSET_PATH}' | relative_url | escape`]: ASSET_PATH,
   };
-  let out = "";
-  let at = 0;
-  for (;;) {
-    const start = body.indexOf("{{", at);
-    if (start < 0) break;
-    const end = body.indexOf("}}", start);
-    const expr = body.slice(start + 2, end).trim();
-    expect(Object.keys(values), `unexpected Liquid output tag {{ ${expr} }}`).toContain(expr);
-    out += body.slice(at, start) + values[expr];
-    at = end + 2;
+  const dataset = {};
+  const attrs = src.slice(open, openEnd);
+  for (const m of attrs.matchAll(/data-([a-z-]+)="\{\{ (.*?) \}\}"/g)) {
+    expect(Object.keys(values), `unexpected Liquid output tag {{ ${m[2]} }}`).toContain(m[2]);
+    const key = m[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    dataset[key] = values[m[2]];
   }
-  return out + body.slice(at);
+  return { body, dataset };
 }
 
 // Run the loader against a hand-built browser and return what it did.
@@ -93,7 +92,9 @@ function boot({ search = "", webdriver = false, stored = {} } = {}) {
     },
   };
   win.window = win;
-  vm.runInNewContext(renderedLoader(), win);
+  const { body, dataset } = renderedLoader();
+  win.document.currentScript = { dataset };
+  vm.runInNewContext(body, win);
   return { win, inserted, storage };
 }
 

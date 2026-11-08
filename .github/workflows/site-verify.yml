@@ -19,7 +19,8 @@
 #
 # CONVENTION, NOT CONFIGURATION. There are NO inputs. If the caller's tree has
 # `scripts/verify-build-artifacts.rb`, this builds the site and runs it;
-# otherwise it prints a notice and succeeds. Independently, it runs the fixed
+# otherwise it prints a notice and succeeds. It always runs the platform's
+# `scripts/liquid-escape-lint.rb` over the site's templates. Independently, it runs the fixed
 # self-test list (`scripts/test-verify-build-artifacts.rb`) when present, using
 # the site's bundle before building. Both consumers have verifiers;
 # adamdaniel.ai also has verifier self-tests. Nothing to misconfigure.
@@ -80,8 +81,46 @@ jobs:
             echo "selftests=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # The escaping lint is the PLATFORM's script, fetched at the commit this
+      # reusable was called at, the way scheduled-run-health.yml fetches its
+      # audit (#424): the caller's own synced copy could be stale or edited.
+      # `toJSON(job)` because actionlint does not yet type job.workflow_*
+      # (rhysd/actionlint#647); values reach the step only through env.
+      - name: Resolve the platform commit this reusable was called at
+        id: self
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          repo=$(jq -r '.workflow_repository // ""' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB_CONTEXT")
+          if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::the job context carries no usable workflow_repository ('${repo}'); refusing to guess which platform commit to run."
+            exit 1
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the job context carries no usable workflow_sha ('${sha}'); refusing to guess which platform commit to run."
+            exit 1
+          fi
+          {
+            echo "repository=$repo"
+            echo "sha=$sha"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Fetch the escaping lint from the platform
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ steps.self.outputs.repository }}
+          ref: ${{ steps.self.outputs.sha }}
+          path: .cms-platform
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/liquid-escape-lint.rb
+          sparse-checkout-cone-mode: false
+
+      # Unconditional: the escaping lint runs on every site, and it parses
+      # with the site bundle's `liquid` gem.
       - name: Set up Ruby
-        if: steps.detect.outputs.verifier == 'true' || steps.detect.outputs.selftests == 'true'
         uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
         with:
           # Tracks deploy-preview.yml's `ruby_version` default, so the tree
@@ -117,6 +156,15 @@ jobs:
         # The script's own contract: `ok`/`FAIL` per assertion, exit 1 on any
         # FAIL. Its output is the finding; nothing here re-summarises it.
         run: ruby scripts/verify-build-artifacts.rb
+
+      - name: Lint Liquid output escaping
+        # Every `{{ ... }}` in the site's HTML/XML templates must end in a
+        # filter that encodes for where it prints (_agent-guidance#467). The
+        # pre-commit hook (delivered by dev-hooks-sync.yml) runs the same
+        # script on staged files; this is the gate, since a hook can be
+        # skipped. A site's reasoned exceptions live in its own
+        # `.liquid-escape-allowlist.txt`.
+        run: bundle exec ruby .cms-platform/scripts/liquid-escape-lint.rb --all .
 
   # The GATE. This is the job a ruleset names (`site-verify / site-verify`
   # through the dictated caller). It carries NO `timeout-minutes` and NO

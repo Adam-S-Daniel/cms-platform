@@ -24,11 +24,13 @@ const SCAFFOLDER = path.join(ROOT, "scaffold", "create-site.js");
 const CANONICAL = [
   "scripts/secrets-scan.sh",
   "scripts/lint-staged.sh",
+  "scripts/liquid-escape-lint.sh",
+  "scripts/liquid-escape-lint.rb",
   "scripts/setup-hooks.sh",
   ".githooks/pre-commit",
   ".gitconfig-fragment",
 ];
-const PATH_RE = /(scripts\/[a-z-]+\.sh|\.githooks\/pre-commit|\.gitconfig-fragment)/g;
+const PATH_RE = /(scripts\/[a-z-]+\.(?:sh|rb)|\.githooks\/pre-commit|\.gitconfig-fragment)/g;
 
 // Pull the file paths out of a bash `MARKER( ... )` or js `MARKER[ ... ]` block.
 function pathsInBlock(text, marker) {
@@ -89,7 +91,7 @@ test.describe("dev-hooks centralization (#116)", () => {
   test("the canonical pre-commit chain has secrets-scan + lint-staged and NOT the skills-mirror guard (P7)", () => {
     const frag = fs.readFileSync(path.join(ROOT, ".gitconfig-fragment"), "utf8");
     const pre = fs.readFileSync(path.join(ROOT, ".githooks", "pre-commit"), "utf8");
-    for (const g of ["secrets-scan.sh", "lint-staged.sh"]) {
+    for (const g of ["secrets-scan.sh", "lint-staged.sh", "liquid-escape-lint.sh"]) {
       expect(frag, `.gitconfig-fragment missing ${g}`).toContain(g);
       expect(pre, `.githooks/pre-commit missing ${g}`).toContain(g);
     }
