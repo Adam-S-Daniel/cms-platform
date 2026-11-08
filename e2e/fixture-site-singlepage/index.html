@@ -3,8 +3,8 @@ layout: home
 title: Home
 ---
 <div class="container">
-  <h1>{{ site.title }}</h1>
-  <p>{{ site.description }}</p>
+  <h1>{{ site.title | escape }}</h1>
+  <p>{{ site.description | escape }}</p>
   <p>
     A single-page consuming site. It opts out of the platform's generic
     collections via <code>cms.base_collections: []</code>, so it has no blog,

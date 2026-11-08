@@ -104,23 +104,43 @@ class CloudwatchRumIncludeRenderTest < Minitest::Test
     html = render_include(env: "production", rum: configured)
     assert_equal 1, html.scan("<script").length, html
     assert_includes html, "window.AwsRumClient"
-    assert_includes html, "'#{APP_MONITOR}'"
-    assert_includes html, %(identityPoolId: "#{POOL}")
-    assert_includes html, "'us-west-2'"
-    assert_includes html, %(endpoint: "https://dataplane.rum.us-west-2.amazonaws.com")
+    assert_includes html, %(data-cwr-app-monitor-id="#{APP_MONITOR}")
+    assert_includes html, %(data-cwr-identity-pool-id="#{POOL}")
+    assert_includes html, %(data-cwr-region="us-west-2")
+    assert_includes html, %(endpoint: "https://dataplane.rum." + cfg.cwrRegion + ".amazonaws.com")
+  end
+
+  # The values print only in attributes, HTML-escaped; nothing from the site's
+  # config lands in the script body, where no Liquid filter encodes fully.
+  def test_config_values_are_html_escaped_into_attributes_only
+    rum = configured.merge("app_monitor_id" => %(x"></script><script>alert(1)</script>), "region" => "a&b")
+    html = render_include(env: "production", rum: rum)
+    assert_equal 1, html.scan("<script").length, html
+    assert_includes html, %(data-cwr-app-monitor-id="x&quot;&gt;&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;")
+    assert_includes html, %(data-cwr-region="a&amp;b")
+    # Slice by position rather than a tag regexp (CodeQL rb/bad-tag-filter):
+    # the include renders exactly one script element, asserted above.
+    lower = html.downcase
+    open_end = lower.index(">", lower.index("<script").to_i)
+    close = lower.rindex("</script")
+    refute_nil open_end, html
+    refute_nil close, html
+    body = html[(open_end + 1)...close]
+    refute_includes body, "alert(1)"
+    refute_includes body, "a&b"
   end
 
   def test_the_client_loads_same_origin_at_the_vendored_version
     assert_equal "cwr-#{PROVENANCE.fetch("version")}.js", PROVENANCE.fetch("file")
     html = render_include(env: "production", rum: configured, baseurl: "/sub")
-    assert_includes html, "'/sub#{client_path}'"
+    assert_includes html, %(data-cwr-client="/sub#{client_path}")
     refute_includes html, "client.rum."
     refute_match %r{https?://[^'"]*cwr}, html
   end
 
   def test_region_defaults_to_us_east_1
     html = render_include(env: "production", rum: configured(region: nil))
-    assert_includes html, %(endpoint: "https://dataplane.rum.us-east-1.amazonaws.com")
+    assert_includes html, %(data-cwr-region="us-east-1")
   end
 
   def test_production_with_an_empty_app_monitor_renders_nothing
@@ -149,7 +169,7 @@ class CloudwatchRumIncludeRenderTest < Minitest::Test
     head = html[%r{<head>.*</head>}m]
     refute_nil head, html
     assert_includes head, "window.AwsRumClient"
-    assert_includes head, "'#{client_path}'"
+    assert_includes head, %(data-cwr-client="#{client_path}")
     refute_includes render_layout(env: "development"), "AwsRumClient"
   end
 

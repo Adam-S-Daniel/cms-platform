@@ -19,9 +19,9 @@ permalink: /tags/
   <ul class="tag-list">
     {% for tag in tags %}
     <li class="tag-list-item">
-      <a class="tag-list-link" href="{{ tag.url | relative_url }}">
-        <span class="tag-list-name">{{ tag.name }}</span>
-        <span class="tag-list-count" aria-label="{{ tag.count }} posts">{{ tag.count }}</span>
+      <a class="tag-list-link" href="{{ tag.url | relative_url | escape }}">
+        <span class="tag-list-name">{{ tag.name | escape }}</span>
+        <span class="tag-list-count" aria-label="{{ tag.count | escape }} posts">{{ tag.count | escape }}</span>
       </a>
     </li>
     {% endfor %}

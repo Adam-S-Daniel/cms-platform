@@ -82,6 +82,11 @@ const isSetupRuby = (s) => /^ruby\/setup-ruby@/.test(String(s.uses || ""));
 const isBuild = (s) => /\bjekyll build\b/.test(stepRun(s));
 const isRunVerifier = (s) => stepRun(s).includes(`ruby ${VERIFIER_PATH}`);
 const isRunSelfTests = (s) => s.name === "Run the site's verifier self-tests";
+const ESCAPE_LINT_PATH = "scripts/liquid-escape-lint.rb";
+const isEscapeLint = (s) => stepRun(s).includes(`ruby .cms-platform/${ESCAPE_LINT_PATH} --all .`);
+const isResolveSelf = (s) => s.id === "self";
+const isFetchPlatform = (s) =>
+  isCheckout(s) && s.with && s.with.path === ".cms-platform";
 
 // Every scratch dir this file makes, reaped in afterAll — this runs in the
 // REQUIRED lane on every developer machine and CI runner, forever.
@@ -199,9 +204,9 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     }
   });
 
-  test("the work job's steps are checkout → detect → setup-ruby → self-tests → build → verifier", () => {
+  test("the work job's steps are checkout → detect → platform fetch → setup-ruby → self-tests → build → verifier → escape lint", () => {
     const steps = workSteps();
-    const checkout = findStep(steps, isCheckout, "a checkout of the CALLER's tree");
+    const checkout = findStep(steps, (s) => isCheckout(s) && !isFetchPlatform(s), "a checkout of the CALLER's tree");
     expect(
       checkout.with,
       "the checkout names no `repository:` — the tree under test is the caller's own",
@@ -211,24 +216,39 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     const selfTests = findStep(steps, isRunSelfTests, "a verifier self-test step");
     const build = findStep(steps, isBuild, "a `jekyll build` step");
     const verifier = findStep(steps, isRunVerifier, `a \`ruby ${VERIFIER_PATH}\` step`);
-    const order = [checkout, detect, ruby, selfTests, build, verifier].map((s) => steps.indexOf(s));
+    const self = findStep(steps, isResolveSelf, "a step with id `self` resolving the platform commit");
+    const fetch = findStep(steps, isFetchPlatform, "a checkout of the platform into .cms-platform");
+    const escapeLint = findStep(
+      steps,
+      isEscapeLint,
+      `a \`ruby .cms-platform/${ESCAPE_LINT_PATH} --all .\` step`,
+    );
+    const order = [checkout, detect, self, fetch, ruby, selfTests, build, verifier, escapeLint].map((s) =>
+      steps.indexOf(s),
+    );
     expect(order, "and they run in dependency order").toEqual([...order].sort((a, b) => a - b));
 
     // Ruby supports either script independently. The build and verifier need
     // the verifier; self-tests inspect their fixed paths and report absence.
     const gated = `steps.detect.outputs.verifier == 'true'`;
-    expect(ruby.if).toBe(`${gated} || steps.detect.outputs.selftests == 'true'`);
+    // The escaping lint runs on every site, so Ruby is always set up.
+    expect(escapeLint["continue-on-error"], "an escaping finding must fail the work job").toBeUndefined();
+    // The platform copy is fetched at the commit this reusable was called at,
+    // never a caller-chosen ref (the #424 shape).
+    expect(fetch.with.repository).toBe("${{ steps.self.outputs.repository }}");
+    expect(fetch.with.ref).toBe("${{ steps.self.outputs.sha }}");
+    expect(String(self.env && self.env.JOB_CONTEXT)).toBe("${{ toJSON(job) }}");
     for (const s of [build, verifier]) {
       expect(
         String(s.if || ""),
         `step ${JSON.stringify(s.name || s.uses)} must run only when the verifier is present`,
       ).toBe(gated);
     }
-    for (const s of [checkout, detect, selfTests]) {
+    for (const s of [checkout, detect, self, fetch, ruby, selfTests, escapeLint]) {
       expect(s.if, `step ${JSON.stringify(s.name || s.uses)} must be unconditional`).toBeUndefined();
     }
     expect(selfTests["continue-on-error"], "self-test failures must fail the work job").toBeUndefined();
-    expect(steps.length, "no other step: there is nothing else this job should do").toBe(6);
+    expect(steps.length, "no other step: there is nothing else this job should do").toBe(9);
   });
 
   test("the detect script BEHAVES: false + notice when absent, true when present (executed)", () => {

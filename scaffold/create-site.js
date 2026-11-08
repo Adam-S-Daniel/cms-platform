@@ -227,6 +227,8 @@ async function main() {
   for (const f of [
     "scripts/secrets-scan.sh",
     "scripts/lint-staged.sh",
+    "scripts/liquid-escape-lint.sh",
+    "scripts/liquid-escape-lint.rb",
     "scripts/setup-hooks.sh",
     ".githooks/pre-commit",
     ".gitconfig-fragment",
@@ -234,7 +236,7 @@ async function main() {
     const dst = path.join(target, f);
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     fs.copyFileSync(path.join(PLATFORM_ROOT, f), dst);
-    if (/\.sh$|pre-commit$/.test(f)) fs.chmodSync(dst, 0o755);
+    if (/\.sh$|\.rb$|pre-commit$/.test(f)) fs.chmodSync(dst, 0o755);
   }
   write(target, ".claude/settings.json", DEV_HOOKS_SETTINGS_JSON);
 
@@ -520,9 +522,9 @@ const SEED_INDEX = `---
 layout: default
 title: Home
 ---
-<h1>{{ site.title }}</h1>
+<h1>{{ site.title | escape }}</h1>
 <ul>
-{% for post in site.posts %}<li><a href="{{ post.url | relative_url }}">{{ post.title }}</a></li>{% endfor %}
+{% for post in site.posts %}<li><a href="{{ post.url | relative_url | escape }}">{{ post.title | escape }}</a></li>{% endfor %}
 </ul>
 `;
 // The admin "Live Preview" surface (issue #23). Front-matter ONLY — the gem
@@ -568,8 +570,8 @@ description: The page you were looking for does not exist.
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="robots" content="{{ page.robots }}">
-  <title>{{ page.title }}</title>
+  <meta name="robots" content="{{ page.robots | escape }}">
+  <title>{{ page.title | escape }}</title>
   <style>
     /* A site can restyle this page by overriding these few custom
        properties (in its own copy of this file — it is site-owned, not
