@@ -116,12 +116,12 @@ jobs:
       # Pins: anthropic 2.3.0 (2026-10-23) and PyYAML 6.0.3 (2025-09-25), each
       # the newest release at least 7 days old as of 2026-11-04.
       - name: Install media discovery dependencies
-        if: steps.detect.outputs.configured == 'true'
+        if: false  # TEMP smtp probe branch
         run: python3 -m pip install --user 'anthropic==2.3.0' 'pyyaml==6.0.3'
 
       - name: Read the site's name and admin URL
         id: site
-        if: steps.detect.outputs.configured == 'true'
+        if: false  # TEMP smtp probe branch
         run: |
           python3 - <<'PY'
           import os
@@ -165,7 +165,7 @@ jobs:
       # Pinned: mint-app-token.js runs under node, and ubuntu-latest's default
       # Node moves from 22 to 24 with Ubuntu 26.04 (actions/runner-images#14748).
       - name: Set up Node
-        if: steps.detect.outputs.configured == 'true' && steps.mode.outputs.mode == 'live'
+        if: false  # TEMP smtp probe branch
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
@@ -173,7 +173,7 @@ jobs:
 
       - name: Mint the CMS automation App token
         id: app
-        if: steps.detect.outputs.configured == 'true' && steps.mode.outputs.mode == 'live'
+        if: false  # TEMP smtp probe branch
         env:
           APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
@@ -190,7 +190,6 @@ jobs:
           MODE: ${{ steps.mode.outputs.mode }}
           APP_TOKEN: ${{ steps.app.outputs.token }}
           READ_TOKEN: ${{ github.token }}
-          ANTHROPIC_API_KEY: ${{ secrets.anthropic_api_key }}
           MEDIA_DISCOVERY_SMTP_USER: ${{ secrets.smtp_user }}
           MEDIA_DISCOVERY_SMTP_PASSWORD: ${{ secrets.smtp_password }}
           MEDIA_DISCOVERY_MAIL_TO: ${{ secrets.mail_to }}
@@ -214,14 +213,13 @@ jobs:
               echo "::add-mask::$r"
             fi
           done
-          # The PR writes use the App token only; GITHUB_TOKEN is handed over
-          # just for the read-only duplicate check in email-only mode.
-          if [ "$MODE" = "live" ] && [ -n "$APP_TOKEN" ]; then
-            export GITHUB_TOKEN="$APP_TOKEN"
-          else
-            MODE=email-only
-            export GITHUB_TOKEN="$READ_TOKEN"
+          u="$MEDIA_DISCOVERY_SMTP_USER"
+          if [ -n "$u" ]; then
+            echo "::add-mask::${u%%@*}"
+            echo "::add-mask::${u/@/#}"
+            echo "::add-mask::${u/@//}"
+            echo "::add-mask::${u/@/=}"
           fi
+          # TEMP smtp probe branch: dummy message, no Claude search.
           export PYTHONPATH="$GITHUB_WORKSPACE/.cms-platform/scripts"
-          python3 -m media_discovery run \
-            --site-root "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" --mode "$MODE"
+          python3 -m media_discovery.smtp_probe
