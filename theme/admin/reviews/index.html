@@ -187,6 +187,10 @@
     .status-waiting {
       background: rgba(40,90,255,0.15); color: var(--primary);
     }
+    .status-decided {
+      background: rgba(34,194,122,0.15); color: var(--success);
+    }
+    .btn:disabled { opacity: 0.5; cursor: default; }
 
     .stat-grid {
       display: grid;
@@ -434,6 +438,11 @@
       }
     }
 
+    // Run ids decided from this page. GitHub may keep listing them as waiting
+    // for a few seconds, so the list hides them and the refresh is delayed.
+    const decidedRuns = new Set();
+    const REFRESH_AFTER_DECISION_MS = 4000;
+
     async function loadReviews() {
       const list = document.getElementById('reviews-list');
 
@@ -447,8 +456,10 @@
         // API returns THAT as `name` — a name filter silently drops every
         // run, so the dashboard showed "No pending reviews" while a run
         // sat waiting (observed live on adamdaniel.ai#2554).
+        // A run this tab just decided can still read `waiting` for a few
+        // seconds; keep its card marked as decided instead of offering it again.
         const runs = (runsData.workflow_runs || []).filter(r =>
-          r.path === '.github/workflows/visual-regression.yml'
+          r.path === '.github/workflows/visual-regression.yml' && !decidedRuns.has(r.id)
         );
 
         if (runs.length === 0) {
@@ -540,7 +551,7 @@
                 <video controls preload="metadata" src="${videoUrl}#t=0.1"></video>
               </div>
               <div class="review-actions">
-                <button class="btn btn-approve" onclick="approveRun(${run.id}, ${envId})">Approve</button>
+                <button class="btn btn-approve" onclick="approveRun(${run.id}, ${envId}, this)">Approve</button>
                 <button class="btn btn-reject" onclick="toggleReject(this)">Request Changes</button>
               </div>
               <div class="reject-form">
@@ -620,59 +631,67 @@
         ? 'block' : 'none';
     }
 
-    async function approveRun(runId, envId) {
+    // Shared by Approve and Submit Rejection. Both buttons are disabled for
+    // the whole request so a second tap cannot send a second POST, and a
+    // success marks the card locally rather than trusting an immediate reload.
+    async function decideRun(card, runId, envId, state, comment, doneToast, doneLabel) {
+      const buttons = card.querySelectorAll('button');
+      buttons.forEach(b => { b.disabled = true; });
+      const markDecided = (label) => {
+        decidedRuns.add(runId);
+        const badge = card.querySelector('.status-badge');
+        if (badge) {
+          badge.textContent = label;
+          badge.classList.remove('status-waiting');
+          badge.classList.add('status-decided');
+        }
+        setTimeout(loadReviews, REFRESH_AFTER_DECISION_MS);
+      };
       try {
         const res = await ghFetch(
           `/repos/${REPO_OWNER}/${REPO_NAME}/actions/runs/${runId}/pending_deployments`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              environment_ids: [envId],
-              state: 'approved',
-              comment: 'Approved via admin review dashboard',
-            }),
+            body: JSON.stringify({ environment_ids: [envId], state, comment }),
           }
         );
         if (res.ok) {
-          showToast('Regression approved');
-          await loadReviews();
-        } else {
-          const data = await res.json();
-          showToast(`Failed: ${data.message || res.status}`, 5000);
+          showToast(doneToast);
+          markDecided(doneLabel);
+          return;
         }
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 422) {
+          // Typically a gate someone already decided (a repeat tap, or another
+          // tab). If the run no longer waits, say so instead of "Failed".
+          const runRes = await ghFetch(`/repos/${REPO_OWNER}/${REPO_NAME}/actions/runs/${runId}`);
+          const run = runRes.ok ? await runRes.json().catch(() => null) : null;
+          if (run && run.status !== 'waiting') {
+            showToast('Already decided');
+            markDecided('Already decided');
+            return;
+          }
+        }
+        showToast(`Failed: ${data.message || res.status}`, 5000);
       } catch (err) {
         showToast(`Error: ${err.message}`, 5000);
       }
+      buttons.forEach(b => { b.disabled = false; });
     }
 
-    async function rejectRun(runId, envId, btn) {
+    function approveRun(runId, envId, btn) {
+      return decideRun(
+        btn.closest('.review-card'), runId, envId, 'approved',
+        'Approved via admin review dashboard', 'Regression approved', 'Approved'
+      );
+    }
+
+    function rejectRun(runId, envId, btn) {
       const card = btn.closest('.review-card');
       const comment = card.querySelector('.reject-form textarea').value.trim()
         || 'Changes requested via admin review dashboard';
-      try {
-        const res = await ghFetch(
-          `/repos/${REPO_OWNER}/${REPO_NAME}/actions/runs/${runId}/pending_deployments`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              environment_ids: [envId],
-              state: 'rejected',
-              comment,
-            }),
-          }
-        );
-        if (res.ok) {
-          showToast('Changes requested');
-          await loadReviews();
-        } else {
-          const data = await res.json();
-          showToast(`Failed: ${data.message || res.status}`, 5000);
-        }
-      } catch (err) {
-        showToast(`Error: ${err.message}`, 5000);
-      }
+      return decideRun(card, runId, envId, 'rejected', comment, 'Changes requested', 'Changes requested');
     }
 
     // Encodes all five characters, quotes included: the values land in
