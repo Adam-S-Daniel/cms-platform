@@ -3,7 +3,7 @@ from datetime import date
 from md_fixtures import CFG, PAGE_A, PAGE_B, make_candidate, page
 
 from media_discovery.config import load_config
-from media_discovery.corroborate import classify_timing, effective_kind, verify
+from media_discovery.corroborate import Problem, classify_timing, effective_kind, verify
 
 PRIMARY = "https://events.example.com/talks/open-data"
 SECOND = "https://news.example.org/summit-recap"
@@ -114,3 +114,20 @@ def test_effective_kind_ignores_model_label_for_talks_only():
                           date(2026, 11, 4)) == "upcoming_talk"
     assert effective_kind(make_candidate(kind="press", date="2030-01-01"),
                           date(2026, 11, 4)) == "press"
+
+
+def test_problems_name_each_failure_for_the_digest():
+    v = verify(make_candidate(), {PRIMARY: page(PRIMARY, PAGE_A),
+                                  SECOND: page(SECOND, "Pat Rivera, Northwind Legal. 2026")}, CFG)
+    assert v.problems == [Problem("no-match", SECOND), Problem("no-second-source")]
+    unreadable = page(PRIMARY, "", status=415)
+    unreadable.unreadable_type = True
+    v = verify(make_candidate(), {PRIMARY: unreadable, SECOND: page(SECOND, PAGE_B, status=406)},
+               CFG)
+    assert v.problems == [Problem("unreadable-type", PRIMARY),
+                          Problem("http-status", SECOND, "406")]
+    v = verify(make_candidate(), pages(b=PAGE_B.replace("Northwind Legal", "")), CFG)
+    assert v.problems == [Problem("identity", SECOND, "no-identity-marker"),
+                          Problem("no-second-source")]
+    v = verify(make_candidate(), {PRIMARY: page(PRIMARY, PAGE_A)}, CFG)
+    assert v.problems == [Problem("not-fetched", SECOND), Problem("no-second-source")]

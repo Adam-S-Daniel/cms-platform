@@ -96,7 +96,7 @@ def test_plain_text_is_kept_and_charset_honored():
 def test_other_content_types_are_415_with_no_text(ctype):
     op = Opener({"https://a.example.com/f": Resp(b"%PDF-1.7", ctype)})
     page = fetch("https://a.example.com/f", opener=op, resolver=resolver_for({}))
-    assert (page.status, page.text) == (415, "")
+    assert (page.status, page.text, page.unreadable_type) == (415, "", True)
 
 
 def test_body_read_is_capped_at_3_mb():

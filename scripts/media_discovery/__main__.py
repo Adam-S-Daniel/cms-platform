@@ -15,10 +15,11 @@ import sys
 from datetime import date
 from email.utils import getaddresses
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import llm
 from .config import ConfigError, load_config
-from .corroborate import effective_kind, verify
+from .corroborate import Problem, effective_kind, verify
 from .dedupe import is_duplicate, load_existing
 from .domains import normalize_url
 from .fetch import fetch
@@ -63,6 +64,12 @@ def _urls(candidate) -> set[str]:
         except ValueError:
             pass
     return out
+
+
+def _site_label(admin_url: str, site_name: str) -> str:
+    """The site's own host (jodidaniel.com) when the admin URL gives one, else its name."""
+    host = urlsplit(admin_url).hostname or ""
+    return host.removeprefix("www.") or site_name
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -164,35 +171,34 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
             urls = list(dict.fromkeys([cand.primary_url, *cand.supporting_urls]))
             verdict = verify(cand, {u: fetcher(u) for u in urls}, cfg)
             if not verdict.confirmed:
-                unconfirmed.append((cand, verdict.reasons))
+                unconfirmed.append((cand, verdict.problems))
                 continue
             try:
                 entry = render_entry(cand, kind, cfg)
             except ValueError as exc:
-                unconfirmed.append((cand, [f"confirmed, but it cannot become an entry: {exc}"]))
+                unconfirmed.append((cand, [Problem("no-entry", detail=str(exc))]))
                 continue
         except Exception:  # noqa: BLE001 - one bad candidate must not end the run; no text logged
-            unconfirmed.append((cand, ["internal error while checking"]))
+            unconfirmed.append((cand, [Problem("internal-error")]))
             continue
         seen |= _urls(cand)
         counts["confirmed"] += 1
         if mode != "live":
-            would_open.append((cand, entry))
+            would_open.append(cand)
             continue
         title, body = render_pr(cand, kind, entry, verdict, review_link)
         try:
             opened = gh.open_entry_pr(args.repo, entry, title, body, LABELS, reviewers)
         except GitHubError as exc:
             failure = failure or str(exc)
-            unconfirmed.append((cand, [f"confirmed, but the pull request could not be opened "
-                                       f"(HTTP {exc.status})"]))
+            unconfirmed.append((cand, [Problem("draft-failed", detail=str(exc.status))]))
             continue
         if opened is None:
             counts["duplicates"] += 1
             continue
         counts["prs_opened"] += 1
         reviewer_misses += not opened.reviewers_requested
-        new_prs.append((title, opened.url, review_link))
+        new_prs.append(cand)
     counts["unconfirmed"] = len(unconfirmed)
 
     say(f"media-discovery: mode={mode} candidates={len(candidates)} dropped={dropped} "
@@ -201,7 +207,9 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
         say(f"::warning::{reviewer_misses} pull request(s) opened without the requested reviewers "
             "(check MEDIA_DISCOVERY_REVIEWERS: each must be a collaborator)")
 
-    digest = render_digest(site_name, new_prs, unconfirmed, would_open)
+    digest = render_digest(_site_label(admin_url, site_name), cfg.person.names[0], new_prs,
+                           unconfirmed, would_open, review_link=admin_url and review_link,
+                           preview=mode != "live")
     if digest is None:
         say("media-discovery: nothing new; no email")
     elif args.no_email:

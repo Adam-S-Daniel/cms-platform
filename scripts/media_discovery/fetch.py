@@ -79,7 +79,7 @@ def _body(resp, final_url: str, url: str) -> FetchedPage:
     content_type = headers.get_content_type() if headers is not None else ""
     status = getattr(resp, "status", None) or resp.getcode()
     if content_type not in ACCEPTED_TYPES:
-        return FetchedPage(url, final_url, 415, "")
+        return FetchedPage(url, final_url, 415, "", unreadable_type=True)
     raw = resp.read(MAX_BYTES)
     charset = headers.get_content_charset() or "utf-8"
     try:
