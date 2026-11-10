@@ -12,10 +12,20 @@ const { readWorkflow } = require("./workflow-yaml-utils");
 test.describe("editorial-label-audit passes the repo to the audit script", () => {
   const raw = readWorkflow("editorial-label-audit.yml");
 
-  test("the audit run step passes --repo ${{ github.repository }}", () => {
+  test("the audit run step passes --repo from an env var set to github.repository", () => {
     // The script call must include `--repo` wired to github.repository (the
     // caller's repo in a reusable) — not rely on a git checkout that isn't there.
-    expect(raw).toMatch(/--repo\s+"?\$\{\{\s*github\.repository\s*\}\}"?/);
+    // The value reaches the script through env:, never pasted into run: (#981).
+    expect(raw).toMatch(/REPO:\s*\$\{\{\s*github\.repository\s*\}\}/);
+    expect(raw).toMatch(/--repo\s+"\$REPO"/);
+  });
+
+  test("caller-controlled inputs reach the script through env:, not the run: text (#981)", () => {
+    expect(raw).toMatch(/BRANCH_PREFIX:\s*\$\{\{\s*inputs\.branch_prefix\s*\}\}/);
+    expect(raw).toMatch(/LABEL_PREFIX:\s*\$\{\{\s*inputs\.label_prefix\s*\}\}/);
+    expect(raw).toMatch(/--branch-prefix\s+"\$BRANCH_PREFIX"/);
+    expect(raw).toMatch(/--label-prefix\s+"\$LABEL_PREFIX"/);
+    expect(raw).not.toMatch(/--(?:branch|label)-prefix\s+"?\$\{\{/);
   });
 
   test("self-heal wiring: fix input (default true) → --fix flag + pull-requests: write", () => {
