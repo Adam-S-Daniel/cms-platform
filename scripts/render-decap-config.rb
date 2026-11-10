@@ -179,7 +179,7 @@ end
 prod_branch = production_branch(File.join(admin_out, 'config.yml'))
 
 # 2. inject window.CMS_* into the built admin HTML shells (read by admin/*.js
-#    and admin/reviews/*.html). Both the Decap shells (index*.html) and the
+#    and admin/reviews/*.html; media-search.html reads CMS_REPO too). Both the Decap shells (index*.html) and the
 #    visual-regression review dashboards (reviews/index.html, reviews/health.html)
 #    derive their site identity from these globals — REPO_OWNER/REPO_NAME from
 #    CMS_REPO, APEX_DOMAIN from CMS_APEX, OAUTH_URL from CMS_OAUTH_BASE_URL,
@@ -189,7 +189,8 @@ prod_branch = production_branch(File.join(admin_out, 'config.yml'))
 #    separate admin origin, so public-site URLs come from CMS_SITE_ORIGIN.
 js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_ADMIN_ORIGIN=#{admin_origin.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};window.CMS_CROSS_POST=#{cross_post_js};</script>}
 shells = Dir.glob(File.join(admin_out, 'index*.html')) +
-         Dir.glob(File.join(admin_out, 'reviews', '*.html'))
+         Dir.glob(File.join(admin_out, 'reviews', '*.html')) +
+         Dir.glob(File.join(admin_out, 'media-search.html'))
 shells.each do |h|
   s = File.read(h)
   # Skip only if the file already DEFINES the identity (a prior render, or a
