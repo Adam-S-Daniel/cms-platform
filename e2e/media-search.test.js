@@ -350,4 +350,46 @@ test.describe("media-search: GitHub flow with a fake fetch", () => {
     });
     expect((await rejection(a.currentUser())).status).toBe(401);
   });
+  test.describe("reasonParts: a reason about another page leads with that page's title", () => {
+    const PRED = "mentions Jodi Daniel, but doesn't name this item the way the search expected.";
+    test("a title becomes the link text and the predicate follows", () => {
+      expect(
+        MS.reasonParts({ url: "https://www.example.com/a", title: "Annual Meeting 2026", text: PRED }),
+      ).toEqual({ lead: "Annual Meeting 2026", href: "https://www.example.com/a", predicate: PRED });
+    });
+    test("no title (or a blank one) falls back to the host without www.", () => {
+      for (const title of [undefined, "", "   ", 5]) {
+        expect(MS.reasonParts({ url: "https://www.example.com/a", title, text: PRED })).toEqual({
+          lead: "A page on example.com",
+          href: "https://www.example.com/a",
+          predicate: PRED,
+        });
+      }
+    });
+    test("a non-http URL is plain text with no link", () => {
+      const got = MS.reasonParts({ url: "javascript:alert(1)", title: "Evil", text: PRED });
+      expect(got).toEqual({ lead: "Evil", href: null, predicate: PRED });
+      expect(MS.reasonParts({ url: "ftp://example.com/x", text: PRED }).href).toBeNull();
+      expect(MS.reasonParts({ url: "ftp://example.com/x", text: PRED }).lead).toBe("Another page");
+    });
+    test("older full sentences lose their 'Another page' or 'The main link' prefix", () => {
+      expect(MS.reasonParts({ url: "https://example.com/", text: "Another page " + PRED }).predicate).toBe(PRED);
+      expect(MS.reasonParts({ url: "https://example.com/", text: "another page " + PRED }).predicate).toBe(PRED);
+      expect(MS.reasonParts({ main: true, text: "The main link " + PRED })).toEqual({
+        lead: "The main link",
+        href: null,
+        predicate: PRED,
+      });
+    });
+    test("a main-link reason never links, even with a url", () => {
+      const got = MS.reasonParts({ main: true, url: "https://example.com/", text: PRED });
+      expect(got).toEqual({ lead: "The main link", href: null, predicate: PRED });
+    });
+    test("a long title is capped at 90 characters with an ellipsis", () => {
+      const got = MS.reasonParts({ url: "https://example.com/", title: "x".repeat(200), text: PRED });
+      expect(got.lead).toHaveLength(90);
+      expect(got.lead.endsWith("\u2026")).toBe(true);
+      expect(MS.reasonParts({ url: "https://example.com/", title: "y".repeat(90), text: PRED }).lead).toHaveLength(90);
+    });
+  });
 });

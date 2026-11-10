@@ -118,6 +118,30 @@
     return parsed.href;
   }
 
+  // ── Reasons ──────────────────────────────────────────────────────────
+  // One line of "Why we're not sure", as { lead, href, predicate }: the
+  // sentence is `lead` (linked to `href` when there is one) then `predicate`.
+  // A reason about the main link leads with "The main link" and never links
+  // (the card already has "Open the page"). A reason about another page leads
+  // with that page's title, linked. `text` is a bare predicate, or an older
+  // full sentence starting "Another page " or "The main link ". Title and
+  // URL are untrusted: the title is capped for display and the URL must pass
+  // safeUrl, else the lead is plain text.
+  var TITLE_MAX = 90;
+  function reasonParts(r) {
+    var predicate = String((r && r.text) || "").trim().replace(/^(Another page|The main link)\s+/i, "");
+    if (r && r.main) return { lead: "The main link", href: null, predicate: predicate };
+    var href = safeUrl(r && r.url);
+    var title = typeof (r && r.title) === "string" ? r.title.replace(/\s+/g, " ").trim() : "";
+    if (title.length > TITLE_MAX) title = title.slice(0, TITLE_MAX - 1).trimEnd() + "\u2026";
+    var lead = title;
+    if (!lead) {
+      var host = href ? new URL(href).hostname.replace(/^www\./i, "") : "";
+      lead = host ? "A page on " + host : "Another page";
+    }
+    return { lead: lead, href: href, predicate: predicate };
+  }
+
   // ── Findings and decisions ───────────────────────────────────────────
   function emptyDecisions() {
     return { version: 1, decisions: {} };
@@ -571,6 +595,7 @@
     formatDateRange: formatDateRange,
     formatTimestamp: formatTimestamp,
     safeUrl: safeUrl,
+    reasonParts: reasonParts,
     normalizeDecisions: normalizeDecisions,
     mergeDecision: mergeDecision,
     removeDecision: removeDecision,
@@ -682,14 +707,10 @@
 
   function reasonList(f) {
     var items = (f.reasons || []).filter(function (r) { return r && r.text; }).map(function (r) {
-      var li = el("li", { text: r.text });
-      if (!r.main) {
-        var open = extLink(r.url, "Open that page");
-        if (open) {
-          li.appendChild(document.createTextNode(" "));
-          li.appendChild(open);
-        }
-      }
+      var parts = reasonParts(r);
+      var li = el("li", {});
+      li.appendChild(parts.href ? extLink(parts.href, parts.lead) : document.createTextNode(parts.lead));
+      li.appendChild(document.createTextNode(" " + parts.predicate));
       return li;
     });
     if (!items.length) return null;
