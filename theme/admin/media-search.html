@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
   <meta name="robots" content="noindex" />
-  <title>Media search</title>
+  <title>New mentions</title>
   <!-- window.CMS_REPO (and the other CMS_* globals) are injected into <head>
        at build by scripts/render-decap-config.rb and the theme gem's
        decap_config_hook.rb, like the other admin pages. The page's logic is
@@ -55,6 +55,7 @@
     .ms-wrap { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
     .ms-back { display: inline-block; margin-bottom: 1.5rem; }
     h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 0.35rem; font-weight: 650; }
+    .ms-intro { margin: 0 0 0.35rem; color: var(--muted); }
     .ms-searched { margin: 0 0 1.75rem; color: var(--muted); min-height: 1.55em; }
     a, .ms-link { color: var(--accent); text-underline-offset: 0.2em; }
     a:focus-visible, button:focus-visible, #ms-status:focus-visible {
@@ -150,7 +151,8 @@
 <body>
   <div class="ms-wrap" id="ms-app">
     <a class="ms-back ms-link" href="/admin/">&larr; Back to the website editor</a>
-    <h1>Media search</h1>
+    <h1>New mentions</h1>
+    <p class="ms-intro">New mentions of you on the web to add to your site.</p>
     <p class="ms-searched" id="ms-searched"></p>
 
     <p id="ms-status" role="status" aria-live="polite" tabindex="-1"></p>

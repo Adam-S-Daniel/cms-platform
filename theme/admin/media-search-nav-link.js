@@ -1,5 +1,5 @@
 /*
- * admin/media-search-nav-link.js — PRODUCTION SHELL ONLY. Puts "Media search"
+ * admin/media-search-nav-link.js — PRODUCTION SHELL ONLY. Puts "New mentions"
  * in Decap's top app-bar nav, right after "Reviews" (or after "Contents"
  * when there is no Reviews item), at every width.
  *
@@ -74,7 +74,7 @@
       icon.appendChild(svg);
       a.appendChild(icon);
     }
-    a.appendChild(document.createTextNode("Media search"));
+    a.appendChild(document.createTextNode("New mentions"));
     li.appendChild(a);
     return li;
   }

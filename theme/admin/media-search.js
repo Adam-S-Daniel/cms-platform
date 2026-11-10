@@ -1,7 +1,7 @@
 /*
- * admin/media-search.js — the "Media search" page (/admin/media-search.html).
+ * admin/media-search.js — the "New mentions" page (/admin/media-search.html).
  *
- * The weekly media search writes its finds to a data file on a results
+ * The weekly search for new mentions writes its finds to a data file on a results
  * branch. This page lets the site owner decide, find by find, whether it
  * belongs on the site. "Add to site" opens the SAME draft the website
  * editor's own "new entry" flow opens (so it shows up in the editor's
@@ -321,7 +321,7 @@
       "",
       "## TLDR",
       "",
-      "Found by the weekly media search and added from the Media search page: " + safeMd(finding.title, 300) +
+      "Found by the weekly search for new mentions and added from the New mentions page: " + safeMd(finding.title, 300) +
         ", " + safeMd(finding.outlet, 300) + ", " + safeMd(finding.date, 300) +
         ". Publish it in /admin to add it to the site, or delete it there to reject it.",
       "",

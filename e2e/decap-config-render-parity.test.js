@@ -73,7 +73,7 @@ test.describe("Decap-config render parity (deploy script vs theme-gem hook)", ()
     ).toBe(true);
   });
 
-  test("both inject into the Media search page too (it reads window.CMS_REPO)", () => {
+  test("both inject into the New mentions page too (it reads window.CMS_REPO)", () => {
     expect(injectsMediaSearch(scriptSrc()), "render-decap-config.rb must glob media-search.html").toBe(true);
     expect(injectsMediaSearch(hookSrc()), "decap_config_hook.rb must glob media-search.html").toBe(true);
   });
