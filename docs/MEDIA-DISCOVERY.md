@@ -29,7 +29,12 @@ Publish.
    strict schema is a convenience, not the check.
 3. **Skip duplicates** (`dedupe.is_duplicate`).
 4. **Re-fetch** every URL the model cited (`fetch.fetch`) and **corroborate**
-   (`corroborate.verify`).
+   (`corroborate.verify`). If a candidate is not confirmed, the sources that
+   failed in a way a browser can fix (HTTP 403, 406, 429 or 503, an identity
+   check that found no name, or no match) are re-fetched once in headless
+   Chromium (`browser.py`, Playwright) and verified again; the better verdict
+   wins. The run line adds `browser_retries` (candidates retried) and
+   `browser_rescued` (of those, confirmed by the retry).
 5. **Propose.** Each confirmed find becomes one pull request shaped exactly
    like a Decap editorial-workflow entry (live mode), or a line in the email
    (email-only mode).
@@ -77,6 +82,8 @@ date, a bare month counting as the month's last day) is today or later, and
   `application/pdf`, or as `application/octet-stream` starting `%PDF-`) is read
   with pypdf: at most 15 MB and its first 40 pages; an encrypted or malformed
   one counts as unreadable, never as a crash;
+- (the retry above only changes how the page is fetched: a page the browser
+  rendered must pass every rule here, unchanged;)
 - neither the cited URL nor the final URL after redirects is on a blocked
   domain (compared by registrable domain);
 - **identity** (`identity.py`): one of the configured names appears as a whole
@@ -228,6 +235,18 @@ tokens, 5 continuations) bound the worst case.
   check resolves the host and urllib resolves it again to connect, so DNS
   rebinding is not caught; fetched text is never logged, which bounds the
   impact.
+- **Browser retry** (`browser.py`): plain headless Chromium with Playwright's
+  default user agent; it renders JavaScript and sends ordinary browser
+  headers, with no stealth, fingerprint spoofing or bot-check or CAPTCHA
+  workaround. Every request, including redirects and subresources, must pass
+  the same public-address check as `fetch.py` (`route_allowed`); images,
+  media and fonts are aborted, service workers are blocked, downloads are not
+  accepted, and a navigation is capped at 25 seconds plus up to 5 for network
+  idle. When Playwright or Chromium is missing the retry is skipped and the
+  run continues. `python3 -m media_discovery.fetch_probe --findings FILE
+  --site-root DIR` compares both fetchers on a findings.json with no Claude
+  API; it prints per-URL indexes, statuses, lengths and identity reason codes
+  only.
 - **Counts-only logs.** The repository and its Actions logs are public. The
   CLI prints counts and fixed messages only: never a title, name, URL, quote or
   address. API, GitHub and SMTP errors are reported by class and HTTP status,

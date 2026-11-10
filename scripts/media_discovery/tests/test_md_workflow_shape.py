@@ -166,7 +166,18 @@ def test_dependencies_are_installed_pinned(reusable):
     [install] = [s for s in steps(reusable) if "pip install" in s.get("run", "")]
     words = shell_words(install["run"])
     assert "anthropic==2.3.0" in words and "pyyaml==6.0.3" in words and "pypdf==6.21.4" in words
+    assert "playwright==1.64.1" in words
     assert all("==" in w for w in words[words.index("--user") + 1:])
+
+
+def test_chromium_is_installed_after_the_pinned_playwright(reusable):
+    all_steps = steps(reusable)
+    [pip] = [i for i, s in enumerate(all_steps) if "pip install" in s.get("run", "")]
+    [browser] = [i for i, s in enumerate(all_steps) if "playwright install" in s.get("run", "")]
+    assert pip < browser
+    assert shell_words(all_steps[browser]["run"]) == [
+        "python3", "-m", "playwright", "install", "--with-deps", "chromium"]
+    assert CONFIGURED in all_steps[browser]["if"]
 
 
 def test_third_party_actions_are_full_sha_pinned(reusable):
