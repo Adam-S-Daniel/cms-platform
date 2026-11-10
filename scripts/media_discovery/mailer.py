@@ -6,6 +6,9 @@ import ssl
 from email.message import EmailMessage
 
 SMTP_TIMEOUT_SECONDS = 30
+# Port 465 speaks TLS from the first byte; any other port (587) starts plain
+# and upgrades with STARTTLS before the login.
+IMPLICIT_TLS_PORT = 465
 # smtplib.SMTP.login's own preference order; login() tries each in turn.
 AUTH_PREFERENCE = ("CRAM-MD5", "PLAIN", "LOGIN")
 REPLY_MAX_CHARS = 300
@@ -68,7 +71,8 @@ def _login(smtp, user: str, password: str, *, host: str, port: int) -> None:
     each reply. The list is restored afterwards.
     """
     secrets = (user, user.partition("@")[0], password)
-    lines = [f"server: {host} port {port} (implicit TLS)"]
+    tls = "implicit TLS" if port == IMPLICIT_TLS_PORT else "STARTTLS"
+    lines = [f"server: {host} port {port} ({tls})"]
     version = getattr(getattr(smtp, "sock", None), "version", None)
     if callable(version):
         lines.append(f"TLS: {version()}")
@@ -103,7 +107,7 @@ def _login(smtp, user: str, password: str, *, host: str, port: int) -> None:
 
 
 def send_digest(subject: str, body: str, *, host: str, port: int, user: str, password: str,
-                mail_from: str, mail_to: list[str], smtp_factory=smtplib.SMTP_SSL) -> None:
+                mail_from: str, mail_to: list[str], smtp_factory=None) -> None:
     if not mail_to:
         raise ValueError("no recipients")
     msg = EmailMessage()
@@ -111,7 +115,14 @@ def send_digest(subject: str, body: str, *, host: str, port: int, user: str, pas
     msg["From"] = mail_from
     msg["To"] = ", ".join(mail_to)
     msg.set_content(body)
-    with smtp_factory(host, port, timeout=SMTP_TIMEOUT_SECONDS,
-                      context=ssl.create_default_context()) as smtp:
+    context = ssl.create_default_context()
+    if port == IMPLICIT_TLS_PORT:
+        smtp = (smtp_factory or smtplib.SMTP_SSL)(host, port, timeout=SMTP_TIMEOUT_SECONDS,
+                                                  context=context)
+    else:
+        smtp = (smtp_factory or smtplib.SMTP)(host, port, timeout=SMTP_TIMEOUT_SECONDS)
+    with smtp:
+        if port != IMPLICIT_TLS_PORT:
+            smtp.starttls(context=context)  # raises if the server does not offer it
         _login(smtp, user, password, host=host, port=port)
         smtp.send_message(msg)

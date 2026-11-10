@@ -11,6 +11,7 @@ class FakeSMTP:
 
     def __init__(self, host, port, timeout=None, context=None):
         self.args = (host, port, timeout, context)
+        self.events = []
         self.logged_in = None
         self.sent = []
         self.closed = False
@@ -28,7 +29,11 @@ class FakeSMTP:
     def ehlo_or_helo_if_needed(self):
         pass
 
+    def starttls(self, context=None):
+        self.events.append(("starttls", context))
+
     def login(self, user, password):
+        self.events.append(("login",))
         self.logged_in = (user, password)
 
     def send_message(self, msg):
@@ -57,6 +62,20 @@ def test_sends_one_plain_text_message_over_tls():
     assert msg["To"] == "a@example.com, b@example.net"
     assert msg.get_content_type() == "text/plain" and not msg.is_multipart()
     assert msg.get_content() == "Line one\nLine two\n"
+
+
+def test_port_587_upgrades_with_verified_starttls_before_the_login():
+    smtp = send(port=587)
+    host, port, timeout, context = smtp.args
+    assert (host, port, timeout, context) == ("smtp.example.com", 587, 30, None)
+    (step, tls), login = smtp.events
+    assert step == "starttls" and login == ("login",)
+    assert isinstance(tls, ssl.SSLContext) and tls.verify_mode == ssl.CERT_REQUIRED
+    assert tls.check_hostname and len(smtp.sent) == 1
+
+
+def test_port_465_never_sends_starttls():
+    assert send(port=465).events == [("login",)]
 
 
 def test_no_recipients_is_an_error_before_connecting():

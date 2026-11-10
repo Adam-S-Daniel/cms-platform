@@ -146,7 +146,8 @@ problem) instead of being ignored.
 | `CMS_AUTOMATION_APP_ID` | variable | live mode (the PR-writing App) | email-only, with a `::notice::` |
 | `CMS_AUTOMATION_APP_PRIVATE_KEY` | secret (`app_private_key`) | live mode | email-only, with a `::notice::` |
 
-The SMTP host defaults to `smtp.fastmail.com` on port 465 (implicit TLS); the
+The SMTP host defaults to `smtp.fastmail.com` on port 587, upgraded with
+STARTTLS before the login (the setup Fastmail gives its own mail clients); the
 CLI reads `MEDIA_DISCOVERY_SMTP_HOST` if a different host is ever needed. The
 reusable derives the `/admin` link from `_config.yml` (`cms.admin_origin`, else
 `url`, plus `/admin/`) and the site name from `title` (else the repository

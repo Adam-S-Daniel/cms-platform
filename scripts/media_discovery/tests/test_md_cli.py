@@ -185,7 +185,7 @@ def test_live_run_opens_one_pr_and_emails_the_digest(site):
     assert "https://github.example.com/o/r/pull/1" in body
     assert "Lonely Claim" in body and "no independent second source" in body
     assert "Data Futures Forum" in body and "an event needs a full YYYY-MM-DD date" in body
-    assert kw == dict(host="smtp.fastmail.com", port=465, user="bot@example.com", password="pw",
+    assert kw == dict(host="smtp.fastmail.com", port=587, user="bot@example.com", password="pw",
                       mail_from="bot@example.com",
                       mail_to=["owner@example.com", "editor@example.net"])
     assert "digest emailed to 2 recipient(s)" in h.stdout
@@ -312,7 +312,7 @@ def test_a_refused_smtp_login_prints_the_redacted_server_replies(site):
     from media_discovery.mailer import SMTPLoginError
 
     def send(*a, **kw):
-        raise SMTPLoginError(["server: smtp.fastmail.com port 465 (implicit TLS)",
+        raise SMTPLoginError(["server: smtp.fastmail.com port 587 (STARTTLS)",
                               "AUTH PLAIN: 535 5.7.8 Authentication failed"])
     h = Harness(site)
     h.send = send

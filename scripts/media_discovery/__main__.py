@@ -28,7 +28,7 @@ from .render import render_digest, render_entry, render_pr
 
 CONFIG_PATH = ".github/media-discovery.yml"
 LABELS = ["decap-cms/pending_review", "media-discovery"]
-SMTP_PORT = 465
+SMTP_PORT = 587  # STARTTLS, as Fastmail's own client setups use
 DEFAULT_SMTP_HOST = "smtp.fastmail.com"
 MODES = ("email-only", "live")
 
