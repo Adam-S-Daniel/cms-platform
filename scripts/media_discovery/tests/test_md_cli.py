@@ -308,6 +308,21 @@ def test_smtp_error_fails_without_quoting_it(site):
     h.assert_counts_only()
 
 
+def test_a_refused_smtp_login_prints_the_redacted_server_replies(site):
+    from media_discovery.mailer import SMTPLoginError
+
+    def send(*a, **kw):
+        raise SMTPLoginError(["server: smtp.fastmail.com port 465 (implicit TLS)",
+                              "AUTH PLAIN: 535 5.7.8 Authentication failed"])
+    h = Harness(site)
+    h.send = send
+    h.run()
+    assert h.code == 1
+    assert "media-discovery: smtp AUTH PLAIN: 535 5.7.8 Authentication failed" in h.stdout
+    assert "::error::sending the digest failed (SMTPLoginError" in h.stdout
+    h.assert_counts_only()
+
+
 def test_mail_from_overrides_the_from_address_only(site):
     h = Harness(site, env={**ENV, "MEDIA_DISCOVERY_MAIL_FROM": " alerts@example.com "}).run()
     [(_, _, kw)] = h.sent

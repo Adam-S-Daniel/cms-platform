@@ -23,7 +23,7 @@ from .dedupe import is_duplicate, load_existing
 from .domains import normalize_url
 from .fetch import fetch
 from .github_api import GitHub, GitHubError
-from .mailer import send_digest
+from .mailer import SMTPLoginError, send_digest
 from .render import render_digest, render_entry, render_pr
 
 CONFIG_PATH = ".github/media-discovery.yml"
@@ -232,6 +232,13 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
                      user=smtp_user,
                      password=knobs["MEDIA_DISCOVERY_SMTP_PASSWORD"],
                      mail_from=mail_from, mail_to=recipients)
+            except SMTPLoginError as exc:
+                # The mailer has already redacted addresses and credentials.
+                for line in exc.lines:
+                    say(f"media-discovery: smtp {line}")
+                say("::error::sending the digest failed (SMTPLoginError: the server refused "
+                    "the login; its replies are above)")
+                return 1
             except Exception as exc:  # noqa: BLE001 - SMTP errors can quote addresses
                 say(f"::error::sending the digest failed ({_describe(exc)})")
                 return 1
