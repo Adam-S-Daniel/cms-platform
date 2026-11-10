@@ -1059,9 +1059,15 @@ function runAudit(stubDir, { spawnGh = false, args = [] } = {}) {
 }
 
 // The other-event lane (workflow_dispatch / workflow_run / repository_dispatch
-// / dynamic on the default branch) answers empty in every lifecycle test that
-// is about another lane.
-const EMPTY_OTHER_EVENT_ROUTES = ["workflow_dispatch", "workflow_run", "repository_dispatch", "dynamic"].map(
+// / dynamic on the default branch) and the PR lane (pull_request) answer empty
+// in every lifecycle test that is about another lane.
+const EMPTY_OTHER_EVENT_ROUTES = [
+  "workflow_dispatch",
+  "workflow_run",
+  "repository_dispatch",
+  "dynamic",
+  "pull_request",
+].map(
   (event) => ["has", `actions/runs?event=${event}`, JSON.stringify({ workflow_runs: [], total_count: 0 })],
 );
 
@@ -1903,5 +1909,272 @@ test.describe("audit-scheduled-runs.js — detection that feeds the fleet worker
     expect(step.env.AUDIT_WORK_LABEL).toBe("${{ inputs.work_label }}");
     expect(step.run).toContain('if [[ "$AUDIT_OTHER_SCAN" != "true" ]]; then args+=(--no-other-scan); fi');
     expect(step.run).toContain('if [[ -n "$AUDIT_WORK_LABEL" ]]; then args+=(--work-label "$AUDIT_WORK_LABEL"); fi');
+  });
+});
+
+// ── The PR lane (2026-11-10) ────────────────────────────────────────────────
+// A red check on a PR nobody is looking at (a Dependabot PR, a bot's PR, a PR
+// whose session ended) used to be flagged only by a daily Claude routine that
+// was retired. These lock what replaced it: which PRs count as red, which are
+// skipped, and that the lane rides the same issue, dedupe and close gate.
+test.describe("audit-scheduled-runs.js — pull requests left red", () => {
+  const NOW = Date.parse("2026-11-10T12:00:00Z");
+  const hoursAgo = (h) => new Date(NOW - h * 3600_000).toISOString();
+  const prRun = (overrides = {}) =>
+    run({
+      id: 900,
+      event: "pull_request",
+      status: "completed",
+      conclusion: "failure",
+      workflow_id: 11,
+      path: ".github/workflows/ci.yml",
+      head_sha: "bbb",
+      head_branch: "feature",
+      pull_requests: [{ number: 12 }],
+      run_started_at: hoursAgo(30),
+      created_at: hoursAgo(30),
+      updated_at: hoursAgo(29),
+      html_url: "https://github.com/o/r/actions/runs/900",
+      ...overrides,
+    });
+
+  test("a workflow whose newest run on the PR's newest head failed a day ago makes the PR red", () => {
+    const { findRedPullRequests, DEFAULT_PR_RED_HOURS } = loadScript();
+    expect(DEFAULT_PR_RED_HOURS).toBe(24);
+    const red = findRedPullRequests([prRun()], NOW);
+    expect(red).toHaveLength(1);
+    expect(red[0]).toMatchObject({ number: 12, headSha: "bbb", dependabot: false });
+    expect(red[0].runs.map((r) => r.id)).toEqual([900]);
+  });
+
+  test("a failure younger than the threshold, or still running, is not red yet", () => {
+    const { findRedPullRequests } = loadScript();
+    expect(findRedPullRequests([prRun({ updated_at: hoursAgo(23) })], NOW)).toEqual([]);
+    expect(findRedPullRequests([prRun({ updated_at: hoursAgo(23) })], NOW, 12)).toHaveLength(1);
+    // A re-run still in progress on the same head supersedes the failure.
+    expect(
+      findRedPullRequests(
+        [prRun(), prRun({ id: 901, status: "in_progress", conclusion: null, run_started_at: hoursAgo(2), created_at: hoursAgo(2) })],
+        NOW,
+      ),
+    ).toEqual([]);
+  });
+
+  test("a newer success of the same workflow on the same head clears it; another workflow does not", () => {
+    const { findRedPullRequests } = loadScript();
+    const success = (overrides) =>
+      prRun({ id: 902, conclusion: "success", run_started_at: hoursAgo(26), created_at: hoursAgo(26), updated_at: hoursAgo(25), ...overrides });
+    expect(findRedPullRequests([prRun(), success()], NOW)).toEqual([]);
+    const red = findRedPullRequests([prRun(), success({ workflow_id: 12, path: ".github/workflows/lint.yml" })], NOW);
+    expect(red).toHaveLength(1);
+    expect(red[0].runs.map((r) => r.id)).toEqual([900]);
+  });
+
+  test("a failure on an older head is history once the PR has a newer head", () => {
+    const { findRedPullRequests } = loadScript();
+    const newer = prRun({
+      id: 903,
+      head_sha: "ccc",
+      conclusion: "success",
+      workflow_id: 12,
+      path: ".github/workflows/lint.yml",
+      run_started_at: hoursAgo(28),
+      created_at: hoursAgo(28),
+      updated_at: hoursAgo(27),
+    });
+    expect(findRedPullRequests([prRun(), newer], NOW)).toEqual([]);
+  });
+
+  test("fork PRs, other events and BAD_CONCLUSIONS outsiders are never red", () => {
+    const { findRedPullRequests } = loadScript();
+    expect(findRedPullRequests([prRun({ pull_requests: [] })], NOW)).toEqual([]);
+    expect(findRedPullRequests([prRun({ event: "push" })], NOW)).toEqual([]);
+    expect(findRedPullRequests([prRun({ conclusion: "cancelled" })], NOW)).toEqual([]);
+    expect(findRedPullRequests([prRun({ conclusion: "timed_out" })], NOW)).toHaveLength(1);
+  });
+
+  test("a Dependabot branch is marked, and its To check item says to fix it elsewhere", () => {
+    const { findRedPullRequests, renderToCheck } = loadScript();
+    const red = findRedPullRequests([prRun({ head_branch: "dependabot/npm_and_yarn/x-1.2.3" })], NOW);
+    expect(red[0].dependabot).toBe(true);
+    const [item] = renderToCheck([], [], [], [], [], red);
+    expect(item).toBe(
+      "- [ ] PR #12 (Dependabot): find why `ci.yml` fails on it and fix the cause in a separate PR; never push to a Dependabot branch.",
+    );
+    const [plain] = renderToCheck([], [], [], [], [], findRedPullRequests([prRun()], NOW));
+    expect(plain).toMatch(/^- \[ \] PR #12: find why `ci\.yml` fails on it and fix it\. Push to its branch only if an agent opened the PR/);
+  });
+
+  test("redPullRequestState reads open, closed, draft, on-hold, or unknown", () => {
+    const { redPullRequestState } = loadScript();
+    const pr = (o) => ({ pull_request: {}, state: "open", labels: [], ...o });
+    expect(redPullRequestState(pr())).toBe("open");
+    expect(redPullRequestState(pr({ state: "closed" }))).toBe("closed");
+    expect(redPullRequestState(pr({ draft: true }))).toBe("draft");
+    expect(redPullRequestState(pr({ labels: [{ name: "on-hold" }] }))).toBe("on-hold");
+    expect(redPullRequestState({ state: "open" })).toBe("unknown");
+    expect(redPullRequestState(pr({ state: undefined }))).toBe("unknown");
+    expect(redPullRequestState(null)).toBe("unknown");
+  });
+
+  test("the rendered section names the PR and the workflow, never its title or branch", () => {
+    const { renderSections, findRedPullRequests } = loadScript();
+    const red = findRedPullRequests([prRun({ head_branch: "x`](https://example.com)", display_title: "evil" })], NOW);
+    const text = renderSections([], [], [], "main", [], [], red, "o/r", 24).join("\n");
+    expect(text).toContain("**Pull requests with a check red for 24h or more.**");
+    expect(text).toContain(
+      "- [#12](https://github.com/o/r/pull/12): [`ci.yml` failure](https://github.com/o/r/actions/runs/900)",
+    );
+    expect(text).not.toContain("example.com");
+    expect(text).not.toContain("evil");
+    // No PR findings: the sections are exactly what they were before the lane.
+    expect(renderSections([run()], [], [], "main")).toEqual(renderSections([run()], [], [], "main", [], [], [], "o/r"));
+  });
+
+  test("dropReportedRedPullRequests keeps only runs not yet reported", () => {
+    const { dropReportedRedPullRequests } = loadScript();
+    const prs = [
+      { number: 1, runs: [{ id: 5 }, { id: 6 }] },
+      { number: 2, runs: [{ id: 7 }] },
+    ];
+    expect(dropReportedRedPullRequests(prs, new Set(["5", "7"]))).toEqual([{ number: 1, runs: [{ id: 6 }] }]);
+  });
+
+  // Lifecycle: the real CLI against the gh stub. Times are relative to the
+  // wall clock the CLI reads, but only as "about 30 hours ago": the threshold
+  // is 24h, so the result does not depend on when the test runs.
+  const liveHoursAgo = (h) => new Date(Date.now() - h * 3600_000).toISOString();
+  const LIVE_PR_RUN = () =>
+    prRun({ run_started_at: liveHoursAgo(30), created_at: liveHoursAgo(30), updated_at: liveHoursAgo(29) });
+  const lifecycleRoutes = (prRoutes, issueRoutes) => [
+    ["has", "actions/runs?event=schedule", JSON.stringify({ workflow_runs: [], total_count: 0 })],
+    ["has", "actions/runs?event=push", JSON.stringify({ workflow_runs: [], total_count: 0 })],
+    ...prRoutes,
+    ...EMPTY_OTHER_EVENT_ROUTES,
+    ["has", "actions/runs/900/jobs", JSON.stringify({ jobs: [job({ conclusion: "failure" })] })],
+    ["has", "actions/workflows?per_page", JSON.stringify({ workflows: [] })],
+    ...issueRoutes,
+    ["eq", "repos/o/r", JSON.stringify({ private: false, default_branch: "main" })],
+  ];
+  const prListing = (runs) => [
+    "has",
+    "actions/runs?event=pull_request",
+    JSON.stringify({ workflow_runs: runs, total_count: runs.length }),
+  ];
+  const posts = (log, endpoint) => callsOf(log).filter((argv) => argv[1] === endpoint && !argv.includes("GET"));
+
+  test("a PR red for a day opens the tracking issue with its run, section and To check item", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir(
+      lifecycleRoutes(
+        [prListing([LIVE_PR_RUN()]), ["eq", "repos/o/r/issues/12", JSON.stringify({ pull_request: {}, state: "open", labels: [] })]],
+        [
+          ["has", "issues?state=open&labels=", "[]"],
+          ["has", "issues?state=closed&labels=", "[]"],
+          ["eq", "repos/o/r/labels", "{}"],
+          ["eq", "repos/o/r/issues", JSON.stringify({ number: 9, html_url: "https://github.com/o/r/issues/9" })],
+        ],
+      ),
+    );
+    const { code, out } = runAudit(dir, { args: ["--work-label", "agent-ready"] });
+    expect(code, out).toBe(0);
+    // The listing reaches back windowHours + pr-red-hours (72h by default).
+    const listing = callsOf(log).find((argv) => String(argv[1]).includes("event=pull_request"));
+    const created = decodeURIComponent(String(listing[1]).match(/created=([^&]+)/)[1]);
+    const since = Date.parse(created.replace(/^>=/, ""));
+    expect(Math.abs(Date.now() - 72 * 3600_000 - since), created).toBeLessThan(10 * 60_000);
+    const opened = posts(log, "repos/o/r/issues");
+    expect(opened, out).toHaveLength(1);
+    const body = opened[0].find((a) => a.startsWith("body="));
+    expect(body).toContain(MARKER);
+    expect(body).toContain("<!-- run-ids: 900 -->");
+    expect(body).toContain("Pull requests with a check red for 24h or more");
+    expect(body).toContain("- [ ] PR #12: find why `ci.yml` fails on it");
+    expect(out).toContain("1 pull request(s) red for 24h+");
+  });
+
+  test("a closed, draft or on-hold PR is not reported, and a clean issue still closes", () => {
+    const { MARKER } = loadScript();
+    for (const answer of [
+      { pull_request: {}, state: "closed", labels: [] },
+      { pull_request: {}, state: "open", draft: true, labels: [] },
+      { pull_request: {}, state: "open", labels: [{ name: "on-hold" }] },
+    ]) {
+      const { dir, log } = ghStubDir(
+        lifecycleRoutes(
+          [prListing([LIVE_PR_RUN()]), ["eq", "repos/o/r/issues/12", JSON.stringify(answer)]],
+          [
+            ["has", "issues?state=open&labels=", JSON.stringify([{ number: 7, body: `${MARKER}\nold` }])],
+            ["has", "issues/7/comments", "{}"],
+            ["eq", "repos/o/r/issues/7", "{}"],
+          ],
+        ),
+      );
+      const { code, out } = runAudit(dir);
+      expect(code, `${JSON.stringify(answer)}\n${out}`).toBe(0);
+      expect(closeCalls(log), out).toHaveLength(1);
+      expect(out).toContain("Not reporting red pull request(s)");
+    }
+  });
+
+  test("a PR state that cannot be read keeps the issue OPEN, reds the audit, and keeps the other lanes", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir(
+      lifecycleRoutes(
+        [prListing([LIVE_PR_RUN()]), ["eq", "repos/o/r/issues/12", null]],
+        [["has", "issues?state=open&labels=", JSON.stringify([{ number: 7, body: `${MARKER}\nold` }])]],
+      ),
+    );
+    const { code, out } = runAudit(dir);
+    expect(closeCalls(log), out).toEqual([]);
+    expect(out).toContain("Could not check o/r for pull requests left red");
+    expect(out).toContain("the red pull request check");
+    expect(code, out).toBe(1);
+  });
+
+  test("a PR already reported on the open issue is not commented again", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir(
+      lifecycleRoutes(
+        [prListing([LIVE_PR_RUN()]), ["eq", "repos/o/r/issues/12", JSON.stringify({ pull_request: {}, state: "open", labels: [] })]],
+        [
+          ["has", "issues?state=open&labels=", JSON.stringify([{ number: 7, body: `${MARKER}\n<!-- run-ids: 900 -->` }])],
+          ["has", "issues/7/comments?per_page", "[]"],
+        ],
+      ),
+    );
+    const { code, out } = runAudit(dir);
+    expect(code, out).toBe(0);
+    expect(posts(log, "repos/o/r/issues/7/comments"), out).toEqual([]);
+    expect(closeCalls(log), out).toEqual([]);
+    expect(out).toContain("Nothing new");
+  });
+
+  test("a red PR a recently CLOSED tracking issue reported is not filed again", () => {
+    const { MARKER } = loadScript();
+    const { dir, log } = ghStubDir(
+      lifecycleRoutes(
+        [prListing([LIVE_PR_RUN()]), ["eq", "repos/o/r/issues/12", JSON.stringify({ pull_request: {}, state: "open", labels: [] })]],
+        [
+          ["has", "issues?state=open&labels=", "[]"],
+          ["has", "issues?state=closed&labels=", JSON.stringify([{ number: 5, body: `${MARKER}\n<!-- run-ids: 900 -->` }])],
+          ["has", "issues/5/comments?per_page", "[]"],
+        ],
+      ),
+    );
+    const { code, out } = runAudit(dir);
+    expect(code, out).toBe(0);
+    expect(posts(log, "repos/o/r/issues"), out).toEqual([]);
+    expect(out).toContain("closed in the last 48h");
+  });
+
+  test("--no-pr-scan never lists pull_request runs, and --pr-red-hours must be a positive integer", () => {
+    const { dir, log } = ghStubDir(
+      lifecycleRoutes([], [["has", "issues?state=open&labels=", "[]"]]),
+    );
+    const { code, out } = runAudit(dir, { args: ["--no-pr-scan"] });
+    expect(code, out).toBe(0);
+    expect(callsOf(log).some((argv) => String(argv[1]).includes("event=pull_request"))).toBe(false);
+    expect(runAudit(dir, { args: ["--pr-red-hours", "0"] }).code).toBe(2);
   });
 });
