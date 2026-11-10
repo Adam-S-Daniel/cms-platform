@@ -107,6 +107,8 @@ const NON_GUARDED = {
   // skip the one consumer that hit it.
   "admin-reviews-superseded.spec.js":
     "fully mocked dashboard logic; single-page consumers run visual regression too (jodidaniel.com#382)",
+  "admin-reviews-decision.spec.js":
+    "fully mocked dashboard logic; every consumer with a regression-review gate shows this dashboard (cms-platform#911)",
 };
 
 // Re-read the canonical PLATFORM_META_SPECS list from playwright.config.js (the

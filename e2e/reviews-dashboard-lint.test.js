@@ -62,6 +62,7 @@ test("each pending review has its own named, labeled rejection comment", async (
     REPO_OWNER: "example",
     REPO_NAME: "reviews",
     APEX_DOMAIN: "example.com",
+    decidedRuns: new Set(),
     document: { getElementById: () => list },
     escapeHtml: (text) => String(text),
     ghFetch: async (url) => ({
