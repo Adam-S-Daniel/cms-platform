@@ -165,7 +165,7 @@ def test_platform_scripts_come_from_platform_ref_into_dot_cms_platform(reusable)
 def test_dependencies_are_installed_pinned(reusable):
     [install] = [s for s in steps(reusable) if "pip install" in s.get("run", "")]
     words = shell_words(install["run"])
-    assert "anthropic==2.3.0" in words and "pyyaml==6.0.3" in words
+    assert "anthropic==2.3.0" in words and "pyyaml==6.0.3" in words and "pypdf==6.21.4" in words
     assert all("==" in w for w in words[words.index("--user") + 1:])
 
 
