@@ -177,7 +177,7 @@ def render_pr(candidate: Candidate, kind: str, entry: Entry, verdict: Verdict,
         "",
         "## TLDR",
         "",
-        f"Found by the weekly media search: {safe_md(candidate.title)}, "
+        f"Found by the weekly search for new mentions: {safe_md(candidate.title)}, "
         f"{safe_md(candidate.outlet)}, {safe_md(candidate.date)}. Publish it in /admin to add "
         "it to the site, or delete it there to reject it.",
         "",
@@ -278,10 +278,6 @@ def _why(cand: Candidate, problems, person: str) -> list[str]:
     return ["Why:", "", *lines]
 
 
-def _plural(n: int, one: str, many: str) -> str:
-    return f"{n} {one if n == 1 else many}"
-
-
 def render_digest(site_label: str, person_name: str, new_drafts, unconfirmed, would_add=(),
                   *, review_link: str = "", preview: bool = False) -> tuple[str, str] | None:
     """The run's email, in plain words for a non-technical reader.
@@ -297,10 +293,10 @@ def render_digest(site_label: str, person_name: str, new_drafts, unconfirmed, wo
     person = _clean(person_name, 100) or "this person"
     parts = []
     if ready:
-        parts.append(_plural(len(ready), "new item", "new items") + " for the site")
+        parts.append(f"{len(ready)} to add")
     if unconfirmed:
         parts.append(f"{len(unconfirmed)} to double-check")
-    subject = f"{site} media search: {', '.join(parts)}" + (" (preview)" if preview else "")
+    subject = f"{site} new mentions: {', '.join(parts)}" + (" (preview)" if preview else "")
 
     lines = [f"This is the regular search for new mentions of {person} to add to {site}.", ""]
     if preview:

@@ -40,7 +40,7 @@ Publish.
    (email-only mode).
 6. **Email** one digest, written for a non-technical reader
    (`render.render_digest`): the subject starts with the site's host and
-   "media search", the body lists each confirmed find as a draft addition in
+   "new mentions", the body lists each confirmed find as a draft addition in
    the website editor (or, in email-only mode, a "preview run", as what would
    be drafted), then every find that did not check out with a plain-English
    reason per page (`corroborate.Problem`). Each URL sits alone on its own

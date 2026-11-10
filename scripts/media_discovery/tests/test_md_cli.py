@@ -201,7 +201,7 @@ def test_live_run_opens_one_pr_and_emails_the_digest(site):
     assert set(PAGES) <= set(h.fetched)
 
     [(subject, body, kw)] = h.sent
-    assert subject == "site.example.com media search: 1 new item for the site, 2 to double-check"
+    assert subject == "site.example.com new mentions: 1 to add, 2 to double-check"
     # A non-technical reader gets the editor's review page, not the pull request.
     assert "https://site.example.com/admin/#/workflow" in body
     assert "github.example.com" not in body and "pull request" not in body.lower()
@@ -226,7 +226,7 @@ def test_email_only_lists_would_open_and_opens_nothing(site):
     assert "mode=email-only" in h.stdout and "prs_opened=0" in h.stdout
     assert h.gh.opened == []
     [(subject, body, _)] = h.sent
-    assert subject == ("site.example.com media search: 1 new item for the site, "
+    assert subject == ("site.example.com new mentions: 1 to add, "
                        "2 to double-check (preview)")
     assert "nothing on the website was changed" in body and "PREVIEW RUN VS. NORMAL RUN" in body
     assert "Open Data in Practice" in body
