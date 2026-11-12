@@ -129,9 +129,9 @@ npx playwright test --debug --project chromium-desktop-1080
 ## Parallelism
 
 - `fullyParallel: true` — tests across all projects and within files run concurrently
-- Playwright auto-detects worker count from CPU cores
+- Locally, with `PW_WORKERS` unset, Playwright picks its default worker count from the CPU cores; CI sets `150%` (`CI_WORKERS` in `e2e/ci-matrix.js`)
 - The `webServer` builds Jekyll once; all workers share port 4000
-- Every consumer caller passes `browser: all` to the platform's reusable, so each of the 10 project jobs installs only ITS OWN engine (resolved via `e2e/ci-matrix.js --engine <project>`), not one shared engine for the whole run. Every project job runs at the SAME worker count (`150%` — 6 on a 4-vCPU runner); it is not a per-project table. `--shard` splits only the two admin projects, three ways each: it balances by test COUNT, so sharding the whole suite (per-test durations span 5 ms → 90 s) stays rejected, but the tests inside one admin project are of similar weight. See `docs/E2E-PARALLELISM.md` for the measurements.
+- Every consumer caller passes `browser: all` to the platform's reusable, so each of the 14 project jobs installs only ITS OWN engine (resolved via `e2e/ci-matrix.js --engine <project>`), not one shared engine for the whole run. Every project job runs at the SAME worker count (`150%` — 6 on a 4-vCPU runner); it is not a per-project table. `--shard` splits only the two admin projects, three ways each: it balances by test COUNT, so sharding the whole suite (per-test durations span 5 ms → 90 s) stays rejected, but the tests inside one admin project are of similar weight. See `docs/E2E-PARALLELISM.md` for the measurements.
 
 ## Screenshots and video
 

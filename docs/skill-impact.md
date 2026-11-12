@@ -79,6 +79,24 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-11-12 — cms-platform/aws-bootstrap — edit
+
+- Motivation: the prompt-audit findings in https://github.com/Adam-S-Daniel/cms-platform/issues/989: a history narrative inside a rule and an inline code span broken across a line.
+- Change: the rule stays with a pointer to the v0.1.13 entry in `docs/VERSION-HISTORY.md`, and the `deploy.sh` code span is on one line. Frontmatter untouched.
+- Eval: exempt (DESIGN.md non-coverage table)
+- Outcome: pending merge.
+
+---
+
+## 2026-11-12 — cms-platform/code-quality, github-actions-sha-pinning, browser-testing — edit
+
+- Motivation: the prompt-audit findings in https://github.com/Adam-S-Daniel/cms-platform/issues/989: a stale pytest command and two un-prefixed table rows (code-quality), a stale reusable count (github-actions-sha-pinning), a worker-count and job-count that contradict the same file and `e2e/ci-matrix.js` (browser-testing).
+- Change: code-quality now names the four pytest paths `self-ci.yml` runs; github-actions-sha-pinning drops the count of reusables; browser-testing says CI runs 14 jobs at `150%` workers. Frontmatter untouched.
+- Eval: outstanding — the skills-evals fixtures for these skills were not run in this change.
+- Outcome: pending merge.
+
+---
+
 ## 2026-10-28 — cms-platform/(13 skills) — edit
 
 - Motivation: the 2026-10-28 prompt-audit sweep (https://github.com/Adam-S-Daniel/cms-platform/issues/900) found stale or contradicted statements in instruction files: preview-environments (deploy-preview.yml is `workflow_call` only), post-failure-comment (e2e marker is per matrix slot; a "prior revisions" note), code-quality (two self-ci lanes missing), platform-release-and-bump (hand-built candidate drafts), admin-config-render (canary "not optional" vs the `base_collections` keep-list), consumer-repo-provisioning (diff-against-prior-version phrasing), cms-stuck-pr-triage / browser-testing / ci-watcher-loops (incident IDs and dated evidence inside rules), aws-bootstrap (obsolete v0.1.125 entry), test-canary (long description).

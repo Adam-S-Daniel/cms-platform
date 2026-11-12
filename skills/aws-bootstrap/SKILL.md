@@ -45,12 +45,11 @@ nonzero TTL makes CloudFront **negative-cache** that 404 (re-cached on each
 poll), so after the page lands on S3 + the `/*` invalidation the reflect-poll
 still reads the stale cached 404 → "URL never reflected". The
 `CachingOptimized` policy ignores query strings, so e2e-side cache-busting can't
-help — the TTL has to be 0 in the template. (The incident and the 300 → 0 fix:
-cms#21 / adamdaniel#1815, v0.1.13 / cms#39 in `docs/VERSION-HISTORY.md`.)
+help — the TTL has to be 0 in the template. (The incident and the 300 → 0 fix: v0.1.13 in `docs/VERSION-HISTORY.md`.)
 
 **A template change reaches a LIVE distribution only through a stack
-redeploy:** `bash
-infrastructure/bootstrap/deploy.sh` for that site. Direct live-distribution
+redeploy:**
+`bash infrastructure/bootstrap/deploy.sh` for that site. Direct live-distribution
 mutation is denied by the auto-mode classifier — go via the template + stack
 deploy. Verify:
 
