@@ -283,8 +283,8 @@ Decap re-runs its label migration — the persistent "adding labels to N of your
 Editorial Workflow entries" dialog — on **every** `/admin` load while an open
 `cms/*` PR is missing its `decap-cms/<status>` label.
 `scripts/audit-editorial-labels.js --fix` (the reusable's default since v0.1.48)
-SELF-HEALS and fails only when a fix didn't stick: detect-only went red daily
-for a week (PR #2387) with the dialog on prod. The caller MUST pass `--repo
+SELF-HEALS and fails only when a fix didn't stick (why detect-only was the wrong
+contract: `docs/CI-INVARIANTS.md`). The caller MUST pass `--repo
 ${{ github.repository }}` (v0.1.16) and `pull-requests: write`. →
 `docs/CI-INVARIANTS.md`.
 
