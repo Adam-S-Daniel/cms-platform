@@ -21,6 +21,7 @@ function injectedGlobals(src) {
   return new Set([...src.matchAll(/window\.CMS_([A-Z0-9_]+)\s*=/g)].map((m) => m[1]));
 }
 const injectsIndex = (src) => /Dir\.glob\([^\n]*index\*\.html/.test(src);
+const injectsMediaSearch = (src) => /Dir\.glob\([^\n]*media-search\.html/.test(src);
 const injectsReviews = (src) => /Dir\.glob\([^\n]*reviews[^\n]*\*\.html/.test(src);
 
 test.describe("Decap-config render parity (deploy script vs theme-gem hook)", () => {
@@ -70,5 +71,10 @@ test.describe("Decap-config render parity (deploy script vs theme-gem hook)", ()
       injectsIndex(hookText) && injectsReviews(hookText),
       "decap_config_hook.rb must glob index*.html + reviews/*.html",
     ).toBe(true);
+  });
+
+  test("both inject into the Media search page too (it reads window.CMS_REPO)", () => {
+    expect(injectsMediaSearch(scriptSrc()), "render-decap-config.rb must glob media-search.html").toBe(true);
+    expect(injectsMediaSearch(hookSrc()), "decap_config_hook.rb must glob media-search.html").toBe(true);
   });
 });

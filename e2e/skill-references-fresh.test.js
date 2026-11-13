@@ -2,7 +2,7 @@
 // repo's skills/*/SKILL.md and the tree they cite.
 //
 // cms-platform#408. A reference-heavy skill (aws-bootstrap,
-// preview-environments, consumer-repo-provisioning, …) fails by going STALE:
+// preview-environments, …) fails by going STALE:
 // a workflow renamed, a secret retired, a template output moved. An A/B eval
 // measures nothing useful there (skills-evals' DESIGN.md non-coverage table),
 // so the instrument is this lint, in the repo where the cited things live.
@@ -69,7 +69,7 @@ const SKIP_REASON =
 
 // The skills #408 names first. Each must yield checked citations, or the
 // lint has silently stopped extracting from the files it exists for.
-const REFERENCE_HEAVY = ["aws-bootstrap", "preview-environments", "consumer-repo-provisioning"];
+const REFERENCE_HEAVY = ["aws-bootstrap", "preview-environments"];
 
 function skillNames() {
   return fs
