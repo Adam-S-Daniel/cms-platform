@@ -75,7 +75,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete plan.
 ## Required GitHub secrets (per consumer site)
 
 Each consumer repo needs two hand-made PATs plus three AWS values. The **canonical,
-versioned spec — with the exact fine-grained permissions for each — lives in the
+versioned spec — with the exact fine-grained permissions for each — lives in
 `docs/CONSUMER-PROVISIONING.md`** in this repo.
 At a glance:
 

@@ -11,6 +11,19 @@ emitted by the bootstrap stack (see the `aws-bootstrap` skill). This file is the
 single source of truth; it lives in `cms-platform`'s `docs/` and is never copied
 into a consumer repo.
 
+## Symptoms
+
+Find the symptom, then read the section that fixes it:
+
+| Symptom | Section |
+|---|---|
+| `GH_TOKEN env var is required` | `CMS_E2E_PAT` (a workflow ran without its PAT secret) |
+| `Input required and not supplied: github-token` | `CMS_E2E_PAT` |
+| a `startup_failure` on a required secret | `CMS_E2E_PAT`, then `AWS deploy secrets` |
+| auto-merge, nudge, sweep or auto-resolve not running | `CMS_E2E_PAT` (the PAT permissions and the `regression-review` reviewer), then `Quick checklist for a new consumer` (the auto-merge repo setting) |
+| a loop probing the wrong URL or bucket | `Repository variables (not secrets)` |
+| platform-bump failing `refusing to allow ... to update workflow ... without 'workflows' permission` | `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` |
+
 > **Policy: fine-grained PATs only — never classic PATs.** Every token below is
 > a [fine-grained personal access token](https://github.com/settings/personal-access-tokens)
 > scoped to the single consumer repo with the minimal permissions in its table.

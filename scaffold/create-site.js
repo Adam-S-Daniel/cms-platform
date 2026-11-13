@@ -683,8 +683,8 @@ Next:
        ALLOW_STACK_CREATE=1 bash infrastructure/bootstrap/deploy.sh   # first bootstrap creates the stack;
                                                                       # later redeploys drop the flag
        bash oauth-proxy/deploy.sh                # committed delegating wrapper (scope repo,read:user,workflow)
-  5. Add GitHub secrets (exact fine-grained PAT permissions: see the
-     docs/CONSUMER-PROVISIONING.md in cms-platform):
+  5. Add GitHub secrets (exact fine-grained PAT permissions: see
+     https://github.com/Adam-S-Daniel/cms-platform/blob/main/docs/CONSUMER-PROVISIONING.md):
        - CMS_E2E_PAT      this repo: Contents R/W, Pull requests R/W, Actions R/W, Deployments R/W; PAT user = reviewer of the regression-review env
        - CMS_AUTOMATION_APP_PRIVATE_KEY (+ the CMS_AUTOMATION_APP_ID variable, step 6) -- the CMS
                           automation GitHub App; powers platform-bump + dev-hooks-sync, nothing to rotate
