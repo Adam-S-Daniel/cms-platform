@@ -700,9 +700,15 @@ async function reopenForPublishedDelete(
 // admin-no-occlusion.spec.js).
 const MEDIA_LIBRARY_TOP_SELECTOR = '[class*="LibraryTop"]';
 
-// The top-nav button that opens the global media library overlay.
+// The top-nav button that opens the global media library overlay. Its name
+// is "Images & files" on a production shell, where theme/admin/
+// media-library-labels.js relabels Decap's "Media" tab (#1003), and Decap's
+// own "Media" on shells that do not load that script (index-local.html,
+// index-test.html). Anchored, so a control that merely mentions either name
+// does not match.
+const MEDIA_LIBRARY_BUTTON_NAME = /^(?:Images & files|Media)$/;
 function mediaLibraryButton(page) {
-  return page.getByRole("button", { name: "Media", exact: true }).first();
+  return page.getByRole("button", { name: MEDIA_LIBRARY_BUTTON_NAME }).first();
 }
 
 // The media library modal's header container (Upload / Delete-selected /
